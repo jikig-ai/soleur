@@ -18,6 +18,16 @@ import {
   bundleAndExec,
   VITEST_TIMEOUT_MS,
 } from "./helpers/bundled-server";
+import {
+  BELOW_PDFJS_ENGINES_FLOOR,
+  emitPdfjsEngineFloorDiagnostic,
+} from "./helpers/engines-floor";
+
+// Engine-floor guard (#3439). See `test/helpers/engines-floor.ts` and the
+// sibling `pdf-text-extract.test.ts` for the rationale — the bundled CJS
+// also imports pdfjs-dist and trips the same `process.getBuiltinModule`
+// floor on Node <22.3.
+emitPdfjsEngineFloorDiagnostic("pdf-text-extract.bundled-server.test");
 
 interface PdfExtractOk {
   text: string;
@@ -28,7 +38,7 @@ interface PdfExtractError {
   error: string;
 }
 
-describe("pdf-text-extract bundled-server (production CJS path)", () => {
+describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("pdf-text-extract bundled-server (production CJS path)", () => {
   it(
     "extracts text from a fixture PDF when bundled with the production build:server flags",
     async () => {
