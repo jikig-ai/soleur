@@ -21,7 +21,6 @@ import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card
 import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
 import { ToolUseChip } from "@/components/chat/tool-use-chip";
 import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
-import { LeaderAvatar } from "@/components/leader-avatar";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
   InteractivePromptResponsePayload,
@@ -629,14 +628,22 @@ export function ChatSurface({
           })()}
 
           {isClassifying && (
+            // Reuses MessageBubble's tool_use treatment (active border + Working
+            // badge + ToolStatusChip) so the routing chip matches every
+            // subsequent in-flight assistant turn rather than rendering a
+            // distinct flat row. Outer wrapper preserves the routing-chip
+            // testid for existing presence/absence assertions.
             <div className="flex justify-start" data-testid="routing-chip">
-              <div className="flex items-center gap-2 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3">
-                <LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />
-                <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-                <span className="text-sm text-soleur-text-secondary">
-                  Soleur Concierge is routing to the right experts...
-                </span>
-              </div>
+              <MessageBubble
+                role="assistant"
+                content=""
+                leaderId={CC_ROUTER_LEADER_ID}
+                messageState="tool_use"
+                toolLabel="Routing to the right experts..."
+                getDisplayName={getDisplayName}
+                getIconPath={getIconPath}
+                variant={variant}
+              />
             </div>
           )}
 
