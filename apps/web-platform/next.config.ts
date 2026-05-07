@@ -13,7 +13,11 @@ const nextConfig: NextConfig = {
   // Custom server handles HTTP — disable standalone output
   output: undefined,
   // Allow WebSocket upgrade on the same port
-  serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws"],
+  // pdfjs-dist's legacy entry contains a Node-only DOMMatrix polyfill
+  // block that runs at module init. Bundling reorders the init and
+  // breaks the polyfill (Sentry e8225a569fcd4b07a460b5b1bb2a5ee7) — keep
+  // it external so Node's loader evaluates it as a discrete ESM module.
+  serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws", "pdfjs-dist"],
   experimental: {
     // SECURITY: restrict Server Action origins for defense-in-depth
     serverActions: {

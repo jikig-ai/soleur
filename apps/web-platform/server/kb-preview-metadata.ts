@@ -84,10 +84,19 @@ export async function readPdfMetadata(
     // Legacy entry provides a fake worker for Node so GlobalWorkerOptions
     // does not need to be set. isEvalSupported: false avoids Function()
     // usage inside the parser — irrelevant for metadata-only reads but
-    // keeps behavior identical to the browser SSR-safe config. Buffer is
-    // a Uint8Array subclass; pdfjs accepts it directly, no wrapping copy.
+    // keeps behavior identical to the browser SSR-safe config.
+    //
+    // pdfjs-dist@5.4.296 explicitly REJECTS Buffer ("Please provide binary
+    // data as Uint8Array, rather than Buffer."), even though Buffer is a
+    // Uint8Array subclass — the check is `instanceof Buffer === false`.
+    // Mirror the no-copy view from `pdf-text-extract.ts:124-132` (#3342).
+    const data = new Uint8Array(
+      buffer.buffer,
+      buffer.byteOffset,
+      buffer.byteLength,
+    );
     const doc = await pdfjs.getDocument({
-      data: buffer,
+      data,
       isEvalSupported: false,
     }).promise;
     try {
