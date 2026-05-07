@@ -13,6 +13,16 @@ const nextConfig: NextConfig = {
   // Custom server handles HTTP — disable standalone output
   output: undefined,
   // Allow WebSocket upgrade on the same port
+  // NOTE: `pdfjs-dist` is intentionally NOT in this list, despite the
+  // bundling-reorder bug it causes in the custom server (Sentry
+  // e8225a569fcd4b07a460b5b1bb2a5ee7 — fixed via esbuild
+  // `--external:pdfjs-dist` in `package.json:scripts.build:server`).
+  // Adding it here breaks `components/kb/pdf-preview.tsx`'s client-side
+  // `new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url)`
+  // worker reference at `next build` time. If a Sentry event surfaces
+  // from the Next.js Route Handler path (`app/api/kb/share/route.ts` →
+  // `kb-share.ts` → `readPdfMetadata`), revisit with a different
+  // mechanism (`transpilePackages`, restructure the worker URL, etc.).
   serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws"],
   experimental: {
     // SECURITY: restrict Server Action origins for defense-in-depth
