@@ -12,7 +12,7 @@
 // gone — tests that asserted `toBeNull()` now assert `result.error === <class>`
 // so the next Sentry event diagnoses itself.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 
 import {
   extractPdfText,
@@ -241,35 +241,6 @@ describe("extractPdfText", () => {
   });
 });
 
-// 2026-05-07 follow-up to #3429: direct lazy_import_failed coverage.
-// Folds in #3438 — previously the lazy_import_failed branch in extractPdfText
-// had no direct unit test (only an indirect path via runtime engine drift).
-// Mocking the legacy pdfjs entry to throw at import time exercises the catch
-// in extractPdfText:107-118 and asserts the typed error class surfaces.
-describe("extractPdfText lazy_import_failed (#3438)", () => {
-  it("returns { error: 'lazy_import_failed' } when the dynamic import throws", async () => {
-    vi.resetModules();
-    vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
-      throw new Error("synthetic-import-failure");
-    });
-    // Re-import after the mock is registered so the lazy `import("pdfjs-dist/...")`
-    // inside extractPdfText resolves to the rejecting factory. The function
-    // catches the import rejection and returns the typed shape — no try/catch
-    // needed at the call site.
-    const { extractPdfText: extractWithBrokenImport } = await import(
-      "@/server/pdf-text-extract"
-    );
-    const buf = Buffer.from("%PDF-1.4\nfake-bytes");
-    const result = await extractWithBrokenImport(buf, 50_000);
-    expect(result).not.toBeNull();
-    expect(result && "error" in result).toBe(true);
-    if (!result || !("error" in result)) return;
-    expect(result.error).toBe("lazy_import_failed");
-    vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
-    vi.resetModules();
-  });
-});
-
 // 2026-05-07 follow-up to #3429: extractPdfMetadata bridge fix.
 // Metadata-only pdfjs read on the soft-route path. When extractPdfText
 // raises `oversized_buffer` for a >24MB PDF, the resolver calls this
@@ -277,6 +248,11 @@ describe("extractPdfText lazy_import_failed (#3438)", () => {
 // iteration). PDFs with `numPages > LARGE_PDF_PAGE_THRESHOLD` route to the
 // new HARD class `too_many_pages` to avoid the Read-fanout idle-reaper
 // timeout described in #3429.
+//
+// NOTE: pdfjs-mock-based tests (timeout, lazy_import_failed) live in the
+// sibling file `pdf-text-extract-mocked.test.ts` so vitest's per-file
+// isolation prevents the module mocks from leaking into the real-pdfjs
+// tests below.
 describe("extractPdfMetadata (#3429)", () => {
   it("exports the threshold and ceiling constants with sensible values", () => {
     expect(LARGE_PDF_PAGE_THRESHOLD).toBe(150);
@@ -313,44 +289,5 @@ describe("extractPdfMetadata (#3429)", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("parse_error");
-  });
-
-  it("returns { ok: false, reason: 'timeout' } when getDocument exceeds METADATA_READ_TIMEOUT_MS, and calls loadingTask.destroy() once", async () => {
-    // Mock pdfjs to return a never-resolving loadingTask. The race against
-    // METADATA_READ_TIMEOUT_MS must win, the function must return the
-    // timeout shape, and loadingTask.destroy() must be invoked once to
-    // release the worker + xref allocation. Use fake timers so the test
-    // does NOT pay 3s wall-clock per run.
-    vi.resetModules();
-    const destroySpy = vi.fn(() => Promise.resolve());
-    vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
-      getDocument: vi.fn(() => ({
-        // Never resolves — `Promise.race` must pick the timeout.
-        promise: new Promise(() => {}),
-        destroy: destroySpy,
-      })),
-    }));
-    const { extractPdfMetadata: extractWithMockedPdfjs } = await import(
-      "@/server/pdf-text-extract"
-    );
-
-    vi.useFakeTimers();
-    try {
-      const buf = Buffer.from("%PDF-1.4\nfake-bytes-but-pdfjs-mocked");
-      const promise = extractWithMockedPdfjs(buf);
-      // Advance past the timeout so the `Promise.race` resolves with the
-      // timeout sentinel. `advanceTimersByTimeAsync` flushes microtasks
-      // between tick boundaries so the race winner observes correctly.
-      await vi.advanceTimersByTimeAsync(METADATA_READ_TIMEOUT_MS + 100);
-      const result = await promise;
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.reason).toBe("timeout");
-      expect(destroySpy).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
-      vi.resetModules();
-    }
   });
 });

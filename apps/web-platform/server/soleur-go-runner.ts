@@ -138,6 +138,15 @@ export function buildPdfGatedDirective(
 export const PDF_UNREADABLE_DIRECTIVE_LEAD =
   "The user is currently viewing a PDF document at";
 
+// 2026-05-07 follow-up to #3429: lead substring for the page-count gate
+// directive (large-PDF bridge fix). Distinct from the gated and
+// unreadable leads — the page-count refusal names the count and offers
+// chapter-share / TOC-paste recovery, so the model has a concrete next
+// step instead of the silent timeout that fires when the SDK Read tool's
+// 20-page cap is exceeded by a 400+ page PDF.
+export const PDF_TOO_LONG_DIRECTIVE_LEAD =
+  "that's too long for me to read in one go";
+
 /**
  * Build a content-grounded "I cannot read this PDF" directive when the
  * in-process extractor surfaces a typed failure class. Replaces
@@ -173,6 +182,40 @@ const UNREADABLE_COPY_GENERIC = {
   suggestionClause:
     "Could you paste the text excerpt you'd like me to work with?",
 } as const;
+
+/**
+ * Build the page-count gate directive (#3429 bridge fix). Routed when the
+ * resolver detected `oversized_buffer` AND a metadata-only pdfjs read
+ * reported `numPages > LARGE_PDF_PAGE_THRESHOLD`. Naming the page count
+ * makes the refusal specific (CPO sign-off requirement: "I see N pages —
+ * too long" preserves the concierge identity vs a generic "I can't").
+ *
+ * The returned string contains `PDF_TOO_LONG_DIRECTIVE_LEAD` as a
+ * load-bearing substring (test-asserted) and offers two recovery paths:
+ * share a chapter (page range) or paste the table of contents.
+ *
+ * `numPages` is sanitized: clamped to [0, 99999] and floored. Defends
+ * against attacker-shaped numPages from a malformed PDF and bounds the
+ * prompt-byte budget.
+ */
+export function buildPdfTooLongDirective(
+  artifactPath: string,
+  numPages: number,
+  noAskClause: string,
+): string {
+  const safeN = Math.max(
+    0,
+    Math.min(Math.floor(Number(numPages) || 0), 99999),
+  );
+  return (
+    `The user is currently viewing: ${artifactPath}\n\n` +
+    `I see ${safeN} pages — ${PDF_TOO_LONG_DIRECTIVE_LEAD}. ` +
+    "Share a chapter, or paste the table of contents and I'll point you at the right section. " +
+    "The user can paste the relevant text directly into this chat or re-upload via the paperclip. " +
+    "Do not propose installing dependencies, do not run shell commands, and do not attempt to discover or open the file via other tools. " +
+    `${noAskClause}`
+  );
+}
 
 /**
  * Maps each `PdfExtractErrorClass` to user-facing copy. Exhaustive against
@@ -213,6 +256,15 @@ function unreadableCopyForClass(
           "Could you try re-uploading it, or paste the section you want me to work with?",
       };
     case "lazy_import_failed":
+      return UNREADABLE_COPY_GENERIC;
+    case "too_many_pages":
+      // The runner routes `too_many_pages` through `buildPdfTooLongDirective`
+      // (page-count-aware copy with chapter-share guidance), NOT through
+      // this generic unreadable factory. This branch exists solely to
+      // satisfy the `: never` exhaustiveness rail on `PdfExtractErrorClass`.
+      // If a future caller forces the unreadable-factory route on
+      // `too_many_pages` (defensive fallback only), the user gets the
+      // safe generic copy rather than misleading "image-only" framing.
       return UNREADABLE_COPY_GENERIC;
     case "read_failed":
       // The PDF was reachable from the workspace path but the in-process
@@ -289,6 +341,13 @@ export const PDF_SOFT_FAILURE_LITERALS = [
 export const PDF_HARD_FAILURE_LITERALS = [
   "encrypted",
   "empty_text",
+  // 2026-05-07 follow-up to #3429: large-PDF page-count gate. See
+  // `buildPdfTooLongDirective` below. Routes to its OWN directive lead
+  // (`PDF_TOO_LONG_DIRECTIVE_LEAD`), distinct from the generic
+  // `PDF_UNREADABLE_DIRECTIVE_LEAD`. The runner branches on this class
+  // explicitly in `buildSoleurGoSystemPrompt` so the page count from
+  // `documentExtractMeta.numPages` is interpolated into the directive.
+  "too_many_pages",
 ] as const satisfies readonly PdfExtractErrorClass[];
 
 const PDF_SOFT_FAILURE_CLASSES: ReadonlySet<PdfExtractErrorClass> = new Set(
@@ -589,12 +648,19 @@ export interface DispatchArgs {
   /**
    * 2026-05-06 follow-up to #3338. Set when the in-process PDF extractor
    * surfaced a typed failure class (`oversized_buffer | encrypted |
-   * corrupted | parse_error | empty_text | lazy_import_failed`). The
-   * runner picks `buildPdfUnreadableDirective` over `buildPdfGatedDirective`
-   * so the model emits a content-grounded "I can't read this PDF" reply
-   * instead of falling back to the apt-get / find / pdftotext cascade.
+   * corrupted | parse_error | empty_text | lazy_import_failed |
+   * read_failed | too_many_pages`). The runner picks
+   * `buildPdfUnreadableDirective`, `buildPdfGatedDirective`, or
+   * `buildPdfTooLongDirective` based on the partition.
    */
   documentExtractError?: PdfExtractErrorClass;
+  /**
+   * 2026-05-07 follow-up to #3429. Per-failure structured metadata.
+   * Currently only set with `too_many_pages` (`numPages`); the runner
+   * injects the page count into the directive copy so the user sees
+   * "I see {N} pages — too long" instead of a generic refusal.
+   */
+  documentExtractMeta?: { numPages?: number };
   /**
    * 2026-05-06 follow-up — Bug A1 fix. The agent's SDK Query is configured
    * with `cwd = workspacePath`, but Read instructions in the system
@@ -637,6 +703,8 @@ export interface QueryFactoryArgs {
   documentContent?: string;
   /** 2026-05-06 follow-up: typed extractor failure class. See `DispatchArgs.documentExtractError`. */
   documentExtractError?: PdfExtractErrorClass;
+  /** 2026-05-07 follow-up: per-failure metadata. See `DispatchArgs.documentExtractMeta`. */
+  documentExtractMeta?: { numPages?: number };
   /** 2026-05-06 Bug A1: absolute-path Read directive support. See `DispatchArgs.workspacePath`. */
   workspacePath?: string;
 }
@@ -767,6 +835,12 @@ export interface BuildSoleurGoSystemPromptArgs {
    * was the proximate cause of the apt-get / find / pdftotext cascade.
    */
   documentExtractError?: PdfExtractErrorClass;
+  /**
+   * 2026-05-07 follow-up to #3429. Per-failure structured metadata.
+   * Currently only `numPages` (used by the `too_many_pages` HARD class
+   * to interpolate the count into `buildPdfTooLongDirective`).
+   */
+  documentExtractMeta?: { numPages?: number };
 }
 
 // Hoisted: parity with agent-runner.ts MAX_INLINE_BYTES (~12-15K tokens).
@@ -890,6 +964,20 @@ export function buildSoleurGoSystemPrompt(
             artifactDirective = buildPdfGatedDirective(
               safeArtifactPath,
               absoluteReadPath,
+              NO_ASK,
+            );
+          } else if (safeErrorClass === "too_many_pages") {
+            // 2026-05-07 follow-up to #3429: page-count gate. The
+            // resolver surfaces this when oversized_buffer fires AND
+            // numPages > LARGE_PDF_PAGE_THRESHOLD. `numPages` flows
+            // through `documentExtractMeta` so the directive can name
+            // the count specifically. Defensive default to 0 if the
+            // upstream forgot to populate (factory clamps invalid
+            // values to 0).
+            const safeNumPages = args.documentExtractMeta?.numPages ?? 0;
+            artifactDirective = buildPdfTooLongDirective(
+              safeArtifactPath,
+              safeNumPages,
               NO_ASK,
             );
           } else {
@@ -1517,6 +1605,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
             documentKind: args.documentKind,
             documentContent: args.documentContent,
             documentExtractError: args.documentExtractError,
+            documentExtractMeta: args.documentExtractMeta,
             workspacePath: args.workspacePath,
           }),
           resumeSessionId,
@@ -1529,6 +1618,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           documentKind: args.documentKind,
           documentContent: args.documentContent,
           documentExtractError: args.documentExtractError,
+          documentExtractMeta: args.documentExtractMeta,
           workspacePath: args.workspacePath,
         });
       } catch (err) {

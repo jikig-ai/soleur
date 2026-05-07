@@ -9,12 +9,24 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
-const { fetchUserWorkspacePathSpy, extractPdfTextSpy, reportSilentFallbackSpy } =
-  vi.hoisted(() => ({
-    fetchUserWorkspacePathSpy: vi.fn(),
-    extractPdfTextSpy: vi.fn(),
-    reportSilentFallbackSpy: vi.fn(),
-  }));
+const {
+  fetchUserWorkspacePathSpy,
+  extractPdfTextSpy,
+  extractPdfMetadataSpy,
+  reportSilentFallbackSpy,
+} = vi.hoisted(() => ({
+  fetchUserWorkspacePathSpy: vi.fn(),
+  extractPdfTextSpy: vi.fn(),
+  // 2026-05-07 follow-up to #3429: the resolver now imports
+  // `extractPdfMetadata` for the page-count gate on the oversized_buffer
+  // soft-route. Default the spy to a fail-closed shape so existing tests
+  // (which never set it) fall through to the pre-#3429 routing.
+  extractPdfMetadataSpy: vi.fn(async () => ({
+    ok: false,
+    reason: "parse_error" as const,
+  })),
+  reportSilentFallbackSpy: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
@@ -35,6 +47,13 @@ vi.mock("@/server/observability", () => ({
 
 vi.mock("@/server/pdf-text-extract", () => ({
   extractPdfText: extractPdfTextSpy,
+  extractPdfMetadata: extractPdfMetadataSpy,
+  // The resolver imports the threshold constant for the page-count gate.
+  // Stubbed at the same value as the source so the gate behaves
+  // identically under the mock.
+  LARGE_PDF_PAGE_THRESHOLD: 150,
+  METADATA_READ_BYTE_CEILING_BYTES: 60 * 1024 * 1024,
+  METADATA_READ_TIMEOUT_MS: 3000,
 }));
 
 import { resolveConciergeDocumentContext } from "@/server/cc-dispatcher";
