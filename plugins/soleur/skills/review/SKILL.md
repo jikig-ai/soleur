@@ -503,7 +503,24 @@ this really cross-cutting?") for findings the PR itself introduced.
 
 #### Step 3: Summary Report
 
-After creating all GitHub issues, present comprehensive summary:
+**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output. If either is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
+
+**Compact progress marker (pipeline mode):**
+
+```markdown
+## Review Phase Complete
+
+- **Findings:** N total — N1 P1 / N2 P2 / N3 P3
+- **Fixed inline:** N (commits: <sha>, <sha>, …)
+- **Filed as scope-out:** N (#NNN, #NNN — criteria listed below)
+- **Agents run:** <comma-separated list>
+
+[Optional 1-line table of scope-out issues with criteria, if any.]
+```
+
+After emitting the marker, the calling skill's continuation gate takes over — control returns to one-shot step 5 / work Phase 4 in the SAME response.
+
+**Direct invocation summary (interactive mode only — no `soleur:work` or `soleur:one-shot` in conversation):** Use the verbose summary template below.
 
 ````markdown
 ## Code Review Complete
@@ -595,7 +612,7 @@ After creating all GitHub issues, present comprehensive summary:
 
 ### 6. Exit Gate
 
-**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps.
+**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable.
 
 **If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
 
