@@ -120,6 +120,7 @@ export async function resolveLeaderDocumentContext(args: {
           errorClass: "read_failed",
           errno,
           pathBasename: basename,
+          feature: LEADER_FEATURE_TAG,
         },
       });
       // ENOENT is the expected "user deleted/renamed the file" case;
@@ -159,6 +160,7 @@ export async function resolveLeaderDocumentContext(args: {
           truncated: null,
           textBytes: 0,
           pathBasename: path.basename(contextPath),
+          feature: LEADER_FEATURE_TAG,
         },
       });
       const op =
@@ -195,6 +197,7 @@ export async function resolveLeaderDocumentContext(args: {
             numPages: meta.ok ? meta.numPages : null,
             reason: meta.ok ? null : meta.reason,
             pathBasename: path.basename(contextPath),
+            feature: LEADER_FEATURE_TAG,
           },
         });
         if (meta.ok && meta.numPages > LARGE_PDF_PAGE_THRESHOLD) {
@@ -225,6 +228,7 @@ export async function resolveLeaderDocumentContext(args: {
         truncated: result.truncated,
         textBytes: result.text.length,
         pathBasename: path.basename(contextPath),
+        feature: LEADER_FEATURE_TAG,
       },
     });
     if (result.text.length > 0) {
