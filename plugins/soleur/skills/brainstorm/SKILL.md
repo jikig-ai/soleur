@@ -34,7 +34,7 @@ fi
 
 Read `CLAUDE.md` if it exists - apply project conventions during brainstorming.
 
-**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, and `knowledge-base/` exists, create the worktree immediately (pulling Phase 3 forward) so that dialogue and file writes happen on a feature branch. Derive the feature name from the feature description (kebab-case). Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`, then `cd .worktrees/feat-<name>`. Set `WORKTREE_CREATED_EARLY=true` so Phase 3 skips worktree creation. If `knowledge-base/` does not exist, abort with: "Error: brainstorm cannot run on main/master without knowledge-base/. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
+**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, and `knowledge-base/` exists, create the worktree immediately (pulling Phase 3 forward) so that dialogue and file writes happen on a feature branch. Derive the feature name from the feature description (kebab-case). Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`, then `cd .worktrees/feat-<name>`, then **immediately** run `bash ../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr` from inside the worktree to push the branch and open a draft PR before any further work. Set `WORKTREE_CREATED_EARLY=true` so Phase 3 skips worktree creation AND skips the duplicate `draft-pr` step. If `knowledge-base/` does not exist, abort with: "Error: brainstorm cannot run on main/master without knowledge-base/. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI). **Why push immediately:** an unpushed feature branch can be wiped by a concurrent session's `cleanup-merged` sweep — the Phase 3 race-window warning applies the same way at Phase 0, just with a longer exposure (Phase 0.1, 0.25, 0.5, 1.0, 1.1, 1.2, and 2 all happen before Phase 3 today). See `knowledge-base/project/learnings/2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md`.
 
 **Plugin loader constraint:** Before proposing namespace changes (bare commands, command-to-skill migration), verify plugin loader constraints -- bare namespace commands are not supported, and commands/skills have different frontmatter and argument handling.
 
@@ -222,7 +222,7 @@ Use **AskUserQuestion tool** to ask which approach the user prefers.
 
 **IMPORTANT:** Create the worktree BEFORE writing any files so all artifacts go on the feature branch.
 
-**If `WORKTREE_CREATED_EARLY=true`** (worktree was created in Phase 0 branch safety check), skip steps 1-2 below and proceed to step 3 (set worktree path).
+**If `WORKTREE_CREATED_EARLY=true`** (worktree was created AND pushed via `draft-pr` in Phase 0 branch safety check), skip steps 1-2 AND step 4 below; proceed to step 3 (set worktree path) and continue from Phase 3.5.
 
 **Check for knowledge-base directory:**
 
