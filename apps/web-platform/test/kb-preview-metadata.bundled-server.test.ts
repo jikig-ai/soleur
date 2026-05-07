@@ -5,82 +5,28 @@
 // `extractPdfText` was added. The bug has likely been latent here at
 // WARN level via `warnSilentFallback({ op: "preview-pdf-parse" })`.
 
-import { describe, it, expect } from "vitest";
-import { build as esbuildBuild } from "esbuild";
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { describe, expect, it } from "vitest";
 import { join } from "node:path";
+import {
+  bundleAndExec,
+  VITEST_TIMEOUT_MS,
+} from "./helpers/bundled-server";
 
-function parseExternalsAndTarget(): { externals: string[]; target: string } {
-  const pkgPath = join(__dirname, "..", "package.json");
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-  const script: string = pkg.scripts["build:server"];
-  const externals = Array.from(
-    script.matchAll(/--external:([^\s]+)/g),
-    (m) => m[1],
-  );
-  const target = script.match(/--target=([^\s]+)/)?.[1] ?? "node22";
-  return { externals, target };
-}
-
-async function bundleAndExec(entryRelToTest: string): Promise<{
-  stdout: string;
-  stderr: string;
-  status: number | null;
-}> {
-  const { externals, target } = parseExternalsAndTarget();
-  // Outfile inside apps/web-platform/dist/ so Node's upward node_modules
-  // resolution finds @sentry/nextjs, pino, etc. (declared as externals).
-  const appRoot = join(__dirname, "..");
-  const outDir = join(appRoot, "dist", "test-bundle");
-  mkdirSync(outDir, { recursive: true });
-  const tmp = mkdtempSync(join(outDir, "metadata-"));
-  const outfile = join(tmp, "entry-bundle.cjs");
-  const entry = join(__dirname, entryRelToTest);
-
-  try {
-    await esbuildBuild({
-      entryPoints: [entry],
-      bundle: true,
-      platform: "node",
-      target,
-      outfile,
-      external: externals,
-      format: "cjs",
-      logLevel: "silent",
-    });
-
-    const res = spawnSync(process.execPath, [outfile], {
-      encoding: "utf8",
-      timeout: 25_000,
-      cwd: appRoot,
-    });
-
-    return {
-      stdout: res.stdout ?? "",
-      stderr: res.stderr ?? "",
-      status: res.status,
-    };
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+interface PdfPreviewShape {
+  kind: "pdf";
+  numPages: number;
+  width: number;
+  height: number;
 }
 
 describe("kb-preview-metadata bundled-server (production CJS path)", () => {
   it(
     "reads PDF metadata from a fixture when bundled with the production build:server flags",
     async () => {
-      const result = await bundleAndExec("./fixtures/metadata-entry.ts");
+      const entry = join(__dirname, "fixtures", "metadata-entry.ts");
+      const result = await bundleAndExec(entry, "metadata");
 
-      const m = result.stdout.match(/<<<RESULT_BEGIN>>>(.*?)<<<RESULT_END>>>/s);
-      const parsed = m
-        ? (JSON.parse(m[1]) as
-            | { kind: "pdf"; numPages: number; width: number; height: number }
-            | null
-            | { error: string })
-        : null;
-
-      const failureContext = {
+      const ctx = {
         stdout: result.stdout.slice(0, 800),
         stderr: result.stderr.slice(0, 800),
         status: result.status,
@@ -88,20 +34,19 @@ describe("kb-preview-metadata bundled-server (production CJS path)", () => {
 
       expect(
         result.stderr.includes("DOMMatrix is not defined"),
-        `unexpected DOMMatrix error in bundle: ${JSON.stringify(failureContext)}`,
+        `unexpected DOMMatrix error: ${JSON.stringify(ctx)}`,
       ).toBe(false);
 
-      // RED before fix: `readPdfMetadata` returns null via warnSilentFallback.
+      // Loud, positive assertion: metadata extracted with the expected
+      // shape. Pre-fix this path returned `null` via warnSilentFallback.
       expect(
-        parsed,
-        `metadata returned null/error: ${JSON.stringify(failureContext)}`,
-      ).not.toBeNull();
-
-      if (parsed && "kind" in parsed) {
-        expect(parsed.kind).toBe("pdf");
-        expect(parsed.numPages).toBe(1);
-      }
+        result.parsed,
+        `metadata returned wrong shape: ${JSON.stringify({ parsed: result.parsed, ...ctx })}`,
+      ).toMatchObject({
+        kind: "pdf",
+        numPages: 1,
+      } satisfies Partial<PdfPreviewShape>);
     },
-    45_000,
+    VITEST_TIMEOUT_MS,
   );
 });

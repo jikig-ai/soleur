@@ -17,6 +17,9 @@ const nextConfig: NextConfig = {
   // block that runs at module init. Bundling reorders the init and
   // breaks the polyfill (Sentry e8225a569fcd4b07a460b5b1bb2a5ee7) — keep
   // it external so Node's loader evaluates it as a discrete ESM module.
+  // Load-bearing for `app/api/kb/share/route.ts` → `server/kb-share.ts`
+  // → `readPdfMetadata` (the Route Handler is bundled by Next.js webpack,
+  // independent of the custom-server esbuild path).
   serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws", "pdfjs-dist"],
   experimental: {
     // SECURITY: restrict Server Action origins for defense-in-depth

@@ -13,6 +13,7 @@
 
 import type { Readable } from "node:stream";
 import { warnSilentFallback } from "@/server/observability";
+import { toPdfjsData } from "./pdfjs-input";
 
 /**
  * Preview input cap. Smaller than MAX_BINARY_SIZE (50 MB) because pdfjs and
@@ -83,20 +84,10 @@ export async function readPdfMetadata(
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     // Legacy entry provides a fake worker for Node so GlobalWorkerOptions
     // does not need to be set. isEvalSupported: false avoids Function()
-    // usage inside the parser — irrelevant for metadata-only reads but
-    // keeps behavior identical to the browser SSR-safe config.
-    //
-    // pdfjs-dist@5.4.296 explicitly REJECTS Buffer ("Please provide binary
-    // data as Uint8Array, rather than Buffer."), even though Buffer is a
-    // Uint8Array subclass — the check is `instanceof Buffer === false`.
-    // Mirror the no-copy view from `pdf-text-extract.ts:124-132` (#3342).
-    const data = new Uint8Array(
-      buffer.buffer,
-      buffer.byteOffset,
-      buffer.byteLength,
-    );
+    // usage inside the parser. pdfjs-dist@5+ rejects Buffer; the shared
+    // `toPdfjsData` helper produces a no-copy Uint8Array view (#3342).
     const doc = await pdfjs.getDocument({
-      data,
+      data: toPdfjsData(buffer),
       isEvalSupported: false,
     }).promise;
     try {
