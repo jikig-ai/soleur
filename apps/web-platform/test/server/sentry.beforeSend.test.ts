@@ -228,4 +228,32 @@ describe("SENTRY_SENSITIVE_KEYS export", () => {
       expect(lower).toContain(k);
     }
   });
+
+  it("includes dev-only sign-in password env-var keys (R3)", () => {
+    const lower = SENTRY_SENSITIVE_KEYS.map((k) => k.toLowerCase());
+    for (const k of [
+      "dev_user_1_password",
+      "dev_user_2_password",
+      "dev_user_3_password",
+    ]) {
+      expect(lower).toContain(k);
+    }
+  });
+
+  it("redacts DEV_USER_*_PASSWORD env-var-shaped keys at any depth", () => {
+    const event = {
+      extra: {
+        env: {
+          DEV_USER_1_PASSWORD: "super-secret-dev-1",
+          DEV_USER_2_PASSWORD: "super-secret-dev-2",
+          DEV_USER_3_PASSWORD: "super-secret-dev-3",
+        },
+      },
+    };
+    const json = JSON.stringify(scrubSentryEvent(event));
+    expect(json).not.toContain("super-secret-dev-1");
+    expect(json).not.toContain("super-secret-dev-2");
+    expect(json).not.toContain("super-secret-dev-3");
+    expect(json).toContain("[Redacted]");
+  });
 });

@@ -24,6 +24,11 @@ ARG SENTRY_ORG
 ARG SENTRY_PROJECT
 
 RUN npm run build
+# R3 (feat-dev-signin-bypass): post-build tripwire that fails the prd
+# image if dev-only sign-in symbols leak into client chunks or the RSC
+# manifest. Scope is documented inside the script — server-bundle
+# inclusion of the route handler is by-design and not flagged here.
+RUN bash scripts/assert-dev-signin-eliminated.sh
 RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
 RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
