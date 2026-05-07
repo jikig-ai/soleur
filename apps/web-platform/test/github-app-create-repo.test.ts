@@ -106,7 +106,7 @@ describe("createRepo", () => {
     );
   });
 
-  test("user installation: routes to /user/repos", async () => {
+  test("user installation: routes to template /generate", async () => {
     const installationId = uniqueInstallationId();
 
     // Mock 1: GET /app/installations/{id} — getInstallationAccount
@@ -119,14 +119,14 @@ describe("createRepo", () => {
     // Mock 2: POST /app/installations/{id}/access_tokens
     mockTokenResponse();
 
-    // Mock 3: POST /user/repos — repo creation
+    // Mock 3: POST /repos/jikig-ai/kb-template/generate — repo creation
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 201,
       json: async () => ({
         name: "my-repo",
         full_name: "alice/my-repo",
-        private: false,
+        private: true,
         description: "Knowledge base managed by Soleur",
         language: null,
         updated_at: new Date().toISOString(),
@@ -134,16 +134,113 @@ describe("createRepo", () => {
       }),
     });
 
-    const result = await createRepo(installationId, "my-repo", false);
+    const result = await createRepo(installationId, "my-repo", true);
 
     expect(result).toEqual({
       repoUrl: "https://github.com/alice/my-repo",
       fullName: "alice/my-repo",
     });
 
-    // Verify the repo creation URL is /user/repos
+    // Verify the repo creation URL is /repos/jikig-ai/kb-template/generate
     const repoCreateCall = mockFetch.mock.calls[2];
-    expect(repoCreateCall[0]).toBe("https://api.github.com/user/repos");
+    expect(repoCreateCall[0]).toBe(
+      "https://api.github.com/repos/jikig-ai/kb-template/generate",
+    );
+
+    // Verify body shape: owner is the user's login, private flag forwarded
+    const body = JSON.parse(repoCreateCall[1].body);
+    expect(body).toEqual({
+      owner: "alice",
+      name: "my-repo",
+      private: true,
+      include_all_branches: false,
+      description: "Knowledge base managed by Soleur",
+    });
+  });
+
+  test("user installation: forwards private:false when isPrivate=false", async () => {
+    const installationId = uniqueInstallationId();
+
+    mockInstallationAccountResponse({
+      login: "bob",
+      id: 3,
+      type: "User",
+    });
+    mockTokenResponse();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        name: "public-repo",
+        full_name: "bob/public-repo",
+        private: false,
+        description: "Knowledge base managed by Soleur",
+        language: null,
+        updated_at: new Date().toISOString(),
+        html_url: "https://github.com/bob/public-repo",
+      }),
+    });
+
+    await createRepo(installationId, "public-repo", false);
+
+    const repoCreateCall = mockFetch.mock.calls[2];
+    const body = JSON.parse(repoCreateCall[1].body);
+    expect(body.private).toBe(false);
+    expect(body.owner).toBe("bob");
+  });
+
+  test("user installation: throws GitHubApiError(422) when template not marked is_template", async () => {
+    const installationId = uniqueInstallationId();
+
+    mockInstallationAccountResponse({
+      login: "alice",
+      id: 2,
+      type: "User",
+    });
+    mockTokenResponse();
+    // GitHub returns 422 when /generate target is not a template repo
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: async () =>
+        JSON.stringify({
+          message: "Validation Failed",
+          errors: [{ message: "is not a template repository" }],
+        }),
+    });
+
+    await expect(
+      createRepo(installationId, "my-repo", true),
+    ).rejects.toSatisfy((err: unknown) => {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).statusCode).toBe(422);
+      expect((err as GitHubApiError).message).toMatch(/template/);
+      return true;
+    });
+  });
+
+  test("user installation: throws GitHubApiError(404) when template repo missing", async () => {
+    const installationId = uniqueInstallationId();
+
+    mockInstallationAccountResponse({
+      login: "alice",
+      id: 2,
+      type: "User",
+    });
+    mockTokenResponse();
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => JSON.stringify({ message: "Not Found" }),
+    });
+
+    await expect(
+      createRepo(installationId, "my-repo", true),
+    ).rejects.toSatisfy((err: unknown) => {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).statusCode).toBe(404);
+      return true;
+    });
   });
 
   test("throws GitHubApiError with statusCode 422 for duplicate name", async () => {

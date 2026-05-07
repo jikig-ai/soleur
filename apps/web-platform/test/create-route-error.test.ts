@@ -128,6 +128,19 @@ describe("POST /api/repo/create — error handling", () => {
     expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
+  test("user installation: returns 500 and calls Sentry when template generate returns 404 (template missing)", async () => {
+    // User installation flow routes to /repos/jikig-ai/kb-template/generate.
+    // 404 from /generate means the template repo is missing or private —
+    // operator-side issue, not user-correctable. Route handler maps to
+    // HTTP 500 with Sentry capture so ops triages.
+    const err = new GitHubApiError("Not Found", 404);
+    mockCreateRepo.mockRejectedValue(err);
+
+    const res = await POST(makeRequest({ name: "my-repo", private: true }));
+    expect(res.status).toBe(500);
+    expect(mockCaptureException).toHaveBeenCalledWith(err);
+  });
+
   test("returns 500 and calls Sentry for GitHubApiError with 500 status", async () => {
     const err = new GitHubApiError("GitHub server error", 500);
     mockCreateRepo.mockRejectedValue(err);
