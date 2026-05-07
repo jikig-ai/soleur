@@ -40,12 +40,7 @@ The right invariant is: **the workflow poll ceiling must be re-measured every ti
 
 ## Prevention
 
-PR-time checklist when editing `apps/web-platform/infra/ci-deploy.sh`:
-
-1. **Did this change add a new phase that runs after `flock -n 200` succeeds?** Examples: a new `docker run`, `docker pull`, image-prune, container-swap, extended health probe, sandbox verify, plugin seed.
-2. **If yes, measure the new 95th-percentile end-to-end deploy duration on prod** — either by triggering 5 deploys back-to-back and reading `end_ts - start_ts` from `/hooks/deploy-status`, or by extracting durations from the workflow log's elapsed-time annotation across the last 10 successful runs.
-3. **If the new p95 + 25% headroom exceeds the current `STATUS_POLL_MAX_ATTEMPTS × STATUS_POLL_INTERVAL_S`** in `.github/workflows/web-platform-release.yml`, bump the ceiling in the same PR. Bump `HEALTH_POLL_*` symmetrically per the alignment invariant.
-4. **Add the new phase's name and observed duration** to the comment block above `STATUS_POLL_MAX_ATTEMPTS` so the next engineer reading the file can size the ceiling against the current phase list, not against the original phase list.
+When a PR adds a new phase to `apps/web-platform/infra/ci-deploy.sh` that runs after `flock -n 200` succeeds (new `docker run`, `docker pull`, container-swap, extended health probe, sandbox verify, plugin seed): after merge, read `elapsed=` from the next 3 successful deploy logs. If any exceeds 75% of `STATUS_POLL_MAX_ATTEMPTS × STATUS_POLL_INTERVAL_S`, bump the ceiling in a follow-up PR (and `HEALTH_POLL_*` symmetrically per the alignment invariant). The elapsed-time annotation is the load-bearing signal — let it fire before another false-negative incident does.
 
 ## Observability
 

@@ -40,9 +40,6 @@ PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 # signal. We persist structured state to /var/lock/ci-deploy.state so that the
 # /hooks/deploy-status webhook endpoint (cat-deploy-state.sh) can surface it.
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
-# START_TS is consumed by .github/workflows/web-platform-release.yml's
-# Verify-deploy-script-completion step for elapsed-time annotation (#3398).
-# Schema-stable: do NOT rename or drop without updating that workflow.
 START_TS=$(date +%s)
 # These are populated as the script parses SSH_ORIGINAL_COMMAND; surfaced in state.
 COMPONENT=""

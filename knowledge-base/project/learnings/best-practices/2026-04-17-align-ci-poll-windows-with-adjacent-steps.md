@@ -76,11 +76,7 @@ untrusted-input interpolations. Filed as GitHub issue for hook improvement.
 
 ## 2026-05-07 update
 
-The 300s ceiling set in PR #2523 proved insufficient 6 weeks later (#3398 incidents on 2026-05-06: runs 25461549363, 25463360079). Both ran the full 60 attempts in `running` state while the prod-side deploy was healthy — image v0.66.10 (PR #3391) and v0.67.0 (PR-B/#3395) became live on prod within 11 min of the deploy webhook POST. The realistic deploy duration grew because new safety phases were added to `ci-deploy.sh` between #2523 and #3398 (canary boot + 3-layer canary probe set, plugin seed, sandbox bwrap verify).
-
-Raised to 900s in the #3398 PR with `STATUS_POLL_MAX_ATTEMPTS=180 × INTERVAL_S=5` and matching `HEALTH_POLL_MAX_ATTEMPTS=90 × INTERVAL_S=10`. The per-attempt elapsed-time annotation added in the same PR (parses `start_ts` from the state file's JSON body via `jq`) will surface the next ceiling drift in the workflow log directly, before it produces an incident.
-
-The original 300s reasoning above is preserved as historical record. The refreshed prevention checklist now includes: **when a new phase is added to `ci-deploy.sh` (any new `docker run`, `docker pull`, or extended health probe), measure its 95th-percentile end-to-end duration on prod and update the workflow poll ceiling in the same PR.** See `knowledge-base/project/learnings/best-practices/2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`.
+300s outgrew the realistic deploy window (#3398). Recurrence pattern + script-side phase-addition prevention checklist live in `2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`. Original 300s reasoning above preserved as historical record.
 
 ## See Also
 
