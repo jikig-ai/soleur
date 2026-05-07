@@ -58,7 +58,11 @@ describe("ChatSurface — Soleur Concierge visibility in routing panel (#3251)",
     expect(chip.querySelector(".message-bubble-active")).not.toBeNull();
     expect(within(chip).getByText("Working")).toBeInTheDocument();
 
-    // Routing prose preserved (now rendered as the toolLabel inside the bubble body)
+    // Routing prose preserved (now rendered as the toolLabel inside the bubble body).
+    // The doubled-header regression (#3225) is guarded by message-bubble-header.test.tsx
+    // against the real titleContainsName branch — this test mock returns id.toUpperCase()
+    // for getDisplayName so the production "Concierge" → "Soleur Concierge" promotion is
+    // not exercised here.
     expect(
       within(chip).getByText(/routing to the right experts/i),
     ).toBeInTheDocument();
