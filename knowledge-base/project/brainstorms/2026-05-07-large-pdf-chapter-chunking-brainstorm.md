@@ -15,6 +15,8 @@ Brainstorm for #3436 — durable fix for the trust-breach surfaced in #3429 (sil
 
 Implementation blocks on PR #3430 (bridge fix, WIP) and #3437 (leader-path symmetry, parallel session) merging — both introduce the partition rails and shared-resolver seam this work depends on.
 
+**[Updated 2026-05-07 — same day]** Both prerequisites landed during the brainstorm session (PR #3430 merged 12:49 as `c502e0a5`; PR #3442 closing #3437 merged 14:25 as `c8949366`). Status changed from `blocked` to `ready`. Note: #3442 shipped `apps/web-platform/server/leader-document-resolver.ts` as a parallel resolver (not the CTO-recommended shared `resolvePdfArtifactContext`); spec FR2 updated to extend both resolvers in parallel, with FR2.alt offering a shared-resolver refactor as a plan-time decision.
+
 ## What We're Building
 
 A new resolution path in the Concierge PDF flow that:

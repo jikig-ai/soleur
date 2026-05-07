@@ -1,12 +1,15 @@
 ---
 title: Chapter-Chunking PDF Resolver
 issue: 3436
-related: 3429, 3430, 3437
+related: 3429, 3430, 3437, 3442
 brainstorm: knowledge-base/project/brainstorms/2026-05-07-large-pdf-chapter-chunking-brainstorm.md
-status: blocked
-blocked_on: 3430, 3437
+status: ready
+unblocked_on: 2026-05-07
 brand_survival_threshold: single-user incident
 ---
+
+> **[Updated 2026-05-07]** — Prerequisites landed during the brainstorm session. PR #3430 (bridge fix) merged at 12:49 (`c502e0a5`); #3442 (leader symmetry, closes #3437) merged at 14:25 (`c8949366`). However, #3442 shipped `apps/web-platform/server/leader-document-resolver.ts` as a **parallel** resolver rather than a shared module, so the CTO-recommended shared `resolvePdfArtifactContext` does not exist. FR2 is updated below to reflect this reality. Plan-time decision: extend both resolvers in parallel, OR fold in the shared-resolver refactor as part of this work (FR2.alt below).
+
 
 # Chapter-Chunking PDF Resolver
 
@@ -40,7 +43,8 @@ The Concierge PDF flow today inlines PDF text up to `CONCIERGE_INLINE_CAP_BYTES`
 ## Functional Requirements
 
 - **FR1 — Outline extraction.** `pdf-text-extract.ts` exposes `extractPdfOutline(buffer): Promise<PdfOutline | null>` that returns a normalized chapter list `{ title, pageStart, pageEnd, depth }[]` derived from `pdfjs.getDocument().getOutline()`. Returns `null` when the PDF has no bookmarks or the outline is too shallow to be useful (heuristic: ≥3 entries OR top-level entries cover ≥80% of pages).
-- **FR2 — Resolver shape.** `resolvePdfArtifactContext` (shared module from #3437) returns one of: `{ kind: "inlined", text }` (≤inline cap), `{ kind: "chapter-chunked", outline, fullExtractedText }` (>inline cap, has outline), `{ kind: "directive", directive }` (no outline OR extraction failure → bridge directive).
+- **FR2 — Resolver shape.** Each resolver (`kb-document-resolver.ts` for Concierge, `leader-document-resolver.ts` for Leader, both shipped via #3430 + #3442) gets a new return variant `{ kind: "chapter-chunked", outline, fullExtractedText }` for "extracted but too long, has outline." Existing variants `{ kind: "inlined", text }` and `{ kind: "directive", directive }` are preserved as-is.
+- **FR2.alt — Optional shared-resolver refactor.** Plan-time may choose to extract a shared `resolvePdfArtifactContext` module covering both Concierge + Leader, folding the chapter-chunked variant into the shared shape. CTO's original recommendation; deferred at #3442 implementation time. Plan-time tradeoff: one larger PR vs duplicated chapter-chunking logic across two resolvers. Recommendation: keep duplicated for v1 to keep the PR scoped; file a follow-up to extract shared module when a third consumer or third variant arrives.
 - **FR3 — Chapter routing.** When `kind === "chapter-chunked"` and the user's turn is a question, the runner invokes a Sonnet-200K routing turn with prompt: "Given this TOC and user question, return the chapter title most likely to contain the answer, or 'AMBIGUOUS' if multiple chapters apply." On `AMBIGUOUS`, the response surfaces "I can answer from chapter X or chapter Y — which would you like?" without firing the answer turn.
 - **FR4 — Chapter content attachment.** The selected chapter's text is attached as a `document` content block on the user message with `cache_control: { type: "ephemeral" }`. Subsequent turns within the same chapter reuse the cache; chapter switches incur a fresh cache write.
 - **FR5 — Loaded-chapter surfacing.** Every assistant response generated from a chapter-chunked context begins with a system-injected prefix `[Answering from chapter X: "<title>"]` so the founder sees which chapter was used and can correct ("actually try chapter 7").
@@ -57,7 +61,7 @@ The Concierge PDF flow today inlines PDF text up to `CONCIERGE_INLINE_CAP_BYTES`
 - **TR5 — Failure tagging.** New `PdfExtractErrorClass` member `outline_unusable` (treated as soft failure → routes to bridge directive). Outline extraction failures (pdfjs internal) → existing `parse_error` class.
 - **TR6 — Cache-eligible vs cache-bust.** Each chapter switch re-keys the document content block (different bytes), incurring a fresh cache write. Document this in user-facing copy: "switching chapters re-loads context (one-time cost)."
 - **TR7 — Brand-survival threshold.** This work is tagged `single-user incident`. Plan must include a `## User-Brand Impact` section per `hr-weigh-every-decision-against-target-user-impact`. `user-impact-reviewer` agent must sign off pre-merge.
-- **TR8 — Sequencing.** Implementation does not start until #3430 (bridge) and #3437 (leader symmetry / shared resolver seam) are merged to main. This spec is captured now to lock the design.
+- **TR8 — Sequencing.** ~~Implementation does not start until #3430 (bridge) and #3437 (leader symmetry / shared resolver seam) are merged to main.~~ **[Resolved 2026-05-07]** Both prerequisites landed during the brainstorm session; implementation may proceed.
 
 ## Acceptance Criteria
 
