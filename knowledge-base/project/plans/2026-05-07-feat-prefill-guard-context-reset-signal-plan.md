@@ -14,6 +14,28 @@ adr: ADR-025
 
 # Plan: Surface prefill-guard fires to model + user (context-reset signal)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-07
+**Sections enhanced:** Files-to-Edit (added 2 sites), Phases 3, 4, 6 (verification rails), Sharp Edges, Risks
+**Research agents used:** Explore × 2 (SDK retry + Zod proof shape; chat-surface render), learnings-researcher (3-pattern grep precedent + WS variant family), agent-native-reviewer (MCP parity gap)
+
+### Key Improvements
+
+1. **Found 2 missing exhaustiveness rails:** plan listed 3 sites; codebase has 4. Added `lib/ws-known-types.ts` (`KNOWN_WS_MESSAGE_TYPES` Set + `_forward`/`_backward` rails at lines 76-77) and `lib/chat-state-machine.ts` (`applyStreamEvent` reducer at line 277, where the discriminated-union exhaustive switch actually lives — `ws-client.ts` is dispatcher only).
+2. **`_SchemaCovers` proof is bidirectional.** `_SchemaCoversForward` AND `_SchemaCoversBackward` (ws-zod-schemas.ts:472-479). One-way update fails `tsc --noEmit`. Plan now spells this out.
+3. **`Promise.all([...])` wraps applyPrefillGuard at cc-dispatcher.ts:477-486.** Implementer must thread the new return fields through the array destructure, not a sequential await.
+4. **`conversationId` empty-string fallback was dead code.** Verified always-present at agent-runner.ts:1157 (required `startAgentSession` parameter). Plan simplified — no runtime fallback, no `prefill-guard-conversationid-missing` Sentry op.
+5. **Added `cq-union-widening-grep-three-patterns` verification step** (Phase 6.1a) — three-pattern grep + `vi.mock("../server/observability")` sweep. Compiler does NOT catch if-ladder consumers.
+6. **Sentry op-naming constraint sharpened** — if future WS-path Sentry emit added, MUST use distinct op (`context-reset-signal-sent`), never `prefill-guard`, to preserve #3269's >10/7d threshold accuracy.
+7. **Agent-native parity gap acknowledged** — WS event is browser-bound; future `get_session_state` MCP tool needs write-side persistence. Tracked in **#3423** (close before option (c) enters build).
+
+### New Considerations Discovered
+
+- SDK `query()` retries are internal to the returned `Query` AsyncGenerator (`sdk.d.ts:1678-1681` + `api_retry` subtype 1769-1776). `applyPrefillGuard` is genuinely re-entered per dispatcher call only — `wsEmitted` boolean is purely defensive (kept for clarity, not correctness).
+- The `fanout_truncated` schema at `ws-zod-schemas.ts:286-290` is the verbatim shape precedent — `z.strictObject` (not `z.object`), included in `flatTypeSchema` at line 431.
+- `chat-state-machine.ts:277 applyStreamEvent` is the single reducer site where TS exhaustiveness will fail compilation if `context_reset` is missing from the `switch (msg.type)`.
+
 ## Overview
 
 PR #3263 landed a prefill-guard at the SDK call boundary in `apps/web-platform/server/agent-prefill-guard.ts`. When the persisted Claude Agent SDK session ends with `assistant`, the guard drops `resume:` so the SDK starts a fresh server-side session — preventing an HTTP 400 ("model does not support assistant message prefill") from reaching the user. Trade-off: the model has zero memory of prior turns, the user has no UI signal.
@@ -46,10 +68,12 @@ ADR-025 (committed in the brainstorm phase, before this plan was written) docume
 ## Files to Edit
 
 - `apps/web-platform/server/agent-prefill-guard.ts` — extend `ApplyPrefillGuardResult` with `contextResetNotice?: string`; add tool_use detection (`last.message.content[].type === "tool_use"`); return tool-aware notice variant.
-- `apps/web-platform/server/cc-dispatcher.ts` — at line 479 consume `contextResetNotice` from guard result; at line 597 append to `args.systemPrompt`; emit WS `context_reset` via `sendToClient` exactly once.
+- `apps/web-platform/server/cc-dispatcher.ts` — at line 477-486 the `applyPrefillGuard` call is wrapped in `Promise.all([...])` with other prep tasks; the destructure of `safeResumeSessionId / contextResetNotice / reason` lands in the same `Promise.all` result-array. At line 597 append the notice to `args.systemPrompt`. Emit WS `context_reset` via `sendToClient` exactly once between guard-result and the SDK call. **`sendToClient` signature** (verified): `sendToClient(userId: string, message: WSMessage): boolean` from `apps/web-platform/server/ws-handler.ts:419` — return `false` indicates delivery failed (treat as no-op; do NOT retry).
 - `apps/web-platform/server/agent-runner.ts` — at line 1157 consume notice; append to `systemPrompt` accumulator **after all conditional accumulator branches finish (last `+=` is at ~line 1047 inside the `installationId && repoUrl && owner && repo` GitHub-read-access block) and BEFORE the `query({` call at ~line 1166**. Verify exact insertion point at work time — line 1170 is inside the `query({})` object literal, NOT in the accumulator. Emit WS `context_reset` via `sendToClient` exactly once. The `wsEmitted` boolean is defensive only — `applyPrefillGuard` is awaited before `sdkQuery({...})` and SDK retries re-enter `query()` (not the guard), so the helper is naturally per-fire.
 - `apps/web-platform/lib/types.ts` — at line 189 add `ContextReset` variant to `WSMessage` discriminated union: `{ type: "context_reset"; reason: "prefill-guard" | "tool_use_orphan"; conversationId: string }`.
-- `apps/web-platform/lib/ws-zod-schemas.ts` — at the union (lines 440-444) add `contextResetSchema` (z.object with `type: z.literal("context_reset")`, `reason: z.union([z.literal("prefill-guard"), z.literal("tool_use_orphan")])`, `conversationId: z.string()`); update `_SchemaCovers` proof.
+- `apps/web-platform/lib/ws-zod-schemas.ts` — at the discriminated union add `contextResetSchema = z.strictObject({ type: z.literal("context_reset"), reason: z.union([z.literal("prefill-guard"), z.literal("tool_use_orphan")]), conversationId: z.string() })` (mirror `fanoutTruncatedSchema` at lines 286-290 verbatim shape). Add to `flatTypeSchema` at line 431. The `_SchemaCovers` proof at lines 472-479 is **bidirectional** (`_SchemaCoversForward` + `_SchemaCoversBackward`); a one-way update is insufficient — the new variant must satisfy both directions or `tsc --noEmit` fails.
+- `apps/web-platform/lib/ws-known-types.ts` — add `"context_reset"` to the `KNOWN_WS_MESSAGE_TYPES` Set literal (~line 26). The `_forward`/`_backward` exhaustiveness rails at lines 76-77 enforce parity with `AllowedWSMessageType`.
+- `apps/web-platform/lib/chat-state-machine.ts` — extend `applyStreamEvent` (`function` declaration at line 277) to accept the new `context_reset` variant. This is the reducer site that `ws-client.ts:175` calls into; the `WSMessage` discriminated-union exhaustive switch lives here, not in `ws-client.ts`.
 - `apps/web-platform/lib/ws-client.ts` — in the `onmessage` switch (lines 512-651) add a `case "context_reset":` that forwards to the client store / chat-surface props (mirrors `workflow_ended` ingestion path, NOT the no-op `fanout_truncated` path).
 - `apps/web-platform/components/chat/chat-surface.tsx` — in the message-type dispatcher switch (lines 505-599) add a `context_reset` case that renders an inline rounded badge using the `workflow_ended` pattern at lines 563-587. Render reads from a new `CONTEXT_RESET_COPY` const (Phase 4.5) keyed by `message.reason`. Both copy strings live in the const, not inline at the render site.
 - `apps/web-platform/test/agent-prefill-guard.test.ts` — add scenarios for `contextResetNotice` populated/empty across all branches; tool-aware variant on `tool_use` trailing.
@@ -109,7 +133,7 @@ Any non-object / null / undefined / unrecognized shape returns `false` (degrades
 
 3.2. Locate the systemPrompt accumulator's terminal append point. **Verified at plan time:** the last conditional `+=` lands at line 1047 inside the `installationId && repoUrl && owner && repo` GitHub-read-access block; the `query({...})` call begins at line 1166. The notice append MUST land **after all conditional accumulator branches finish AND BEFORE line 1166** — line 1170 is inside the `query({})` object literal and cannot accept a statement. Insert at the first column-0 line after line 1047's branch closes and before the `query({` site. Append shape: `if (contextResetNotice) systemPrompt += \`\n\n${contextResetNotice}\`;`. Verify the exact insertion point at work time by re-reading lines 1040-1170 — accumulator structure may have drifted.
 
-3.3. WS emit identical to dispatcher path: `if (reason && conversationId) sendToClient(userId, { type: "context_reset", reason, conversationId })`. If `conversationId` is unavailable in scope, **do NOT emit** the WS event and call `reportSilentFallback(null, { feature: "agent-runner", op: "prefill-guard-conversationid-missing", extra: {...} })`. Empty-string fallback would either fail the Zod `z.string()` schema (silent client-side parse failure, no render) or pass while being malformed — both worse than a no-emit + Sentry signal.
+3.3. WS emit identical to dispatcher path: `if (reason) sendToClient(userId, { type: "context_reset", reason, conversationId })`. **`conversationId` is verified always-present at agent-runner.ts:1157** (required parameter to `startAgentSession`, threaded through to the guard call). The empty-string fallback prescription has been dropped — it was guarding against an impossible code path. If a future refactor makes `conversationId` optional, surface the gap via TypeScript (declare it required at the call site), not via runtime fallback.
 
 ### Phase 4 — WS taxonomy + Zod parser
 
@@ -117,7 +141,11 @@ Any non-object / null / undefined / unrecognized shape returns `false` (degrades
 
 4.2. `lib/ws-zod-schemas.ts` — define `contextResetSchema = z.object({ type: z.literal("context_reset"), reason: z.union([z.literal("prefill-guard"), z.literal("tool_use_orphan")]), conversationId: z.string() })`. Add to the discriminated-union in `wsMessageSchema`. Update the `_SchemaCovers` proof.
 
-4.3. `lib/ws-client.ts` — in the `onmessage` switch (lines 512-651), add `case "context_reset":` that propagates the message to the message store (whatever convention `workflow_ended` uses — Explore reports it ingests via `stream_event` action or similar on lines 538/543). Pattern-match the existing `workflow_ended` ingestion path verbatim — this is the canonical inline-notice precedent. Do NOT mirror `fanout_truncated` (lines 650-651), which is currently a no-op.
+4.3. `lib/ws-client.ts` — in the `onmessage` switch (lines 512-651), add `case "context_reset":` that forwards via `applyStreamEvent(prev, conversationId, msg)` (line 175 pattern). The actual reducer logic for the variant lives in `chat-state-machine.ts` (Phase 4.3a below); `ws-client.ts` is purely the dispatcher.
+
+4.3a. `lib/chat-state-machine.ts` — extend `applyStreamEvent` (line 277) to handle `context_reset`. The function returns the new state; for a one-shot lifecycle notice, append the message to the conversation's message stream (no other state mutation). Mirror `workflow_ended` reducer path. This is where the exhaustive `switch (msg.type)` lives — TypeScript will fail compilation if `context_reset` is missing from the switch, since `WSMessage` widens here.
+
+4.3b. `lib/ws-known-types.ts` — add `"context_reset"` to the `KNOWN_WS_MESSAGE_TYPES` Set (line 26). The `_forward`/`_backward` exhaustiveness rails at lines 76-77 will fail compilation if omitted.
 
 4.4. `components/chat/chat-surface.tsx` — in the message-type switch (lines 505-599), add a `case "context_reset":` rendering an inline rounded badge mirroring the `workflow_ended` pattern at lines 563-587. Use `data-message-type="context_reset"`. Tailwind classes: `rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3` (verify against the `workflow_ended` line's exact classes at work time). Branch on `message.reason` to render the appropriate copy variant.
 
@@ -169,6 +197,18 @@ The render in 4.4 reads `CONTEXT_RESET_COPY[message.reason]`. Tests (Phase 5) im
 ### Phase 6 — Verification + ship
 
 6.1. Run `npm run test` (or the verified test command from `package.json scripts.test`) for the web-platform package. All new + existing prefill-guard tests pass.
+
+6.1a. **Three-pattern grep per `cq-union-widening-grep-three-patterns`** — after `WSMessage` widens with `context_reset`, run all three consumer patterns and document zero hits in the PR body:
+
+```bash
+rg "const _exhaustive: never" apps/web-platform/{lib,server,components}/
+rg '\.type === "' apps/web-platform/{lib,server,components}/ | grep -v node_modules
+rg '\?\.type === "' apps/web-platform/{lib,server,components}/ | grep -v node_modules
+```
+
+Any if-ladder hit not covered by an exhaustive switch must be widened in the same PR. Compiler does NOT flag if-ladders.
+
+6.1b. **`vi.mock("../server/observability")` sweep** — if Phase 2/3 introduces new imports from `@/server/observability` (e.g., `reportSilentFallback`), grep `apps/web-platform/test/` for `vi.mock("../server/observability")` factories and update each to export the new symbols. Test stubs that omit the new export crash with "is not a function" at first run.
 
 6.2. Manual QA via `apps/web-platform` dev: simulate a guard fire by injecting an assistant-final persisted session in `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, then send a follow-up message. Verify (i) chat strip renders with the prefill-guard copy, (ii) model response acknowledges context loss, (iii) Sentry shows one `op:prefill-guard` warn (no double-count). Capture screenshot for PR.
 
@@ -255,7 +295,8 @@ Copywriter delivered final copy (verbatim in Files to Edit). Both `reason` varia
 - **`SessionMessage.message` is typed `unknown`.** Per `sdk.d.ts:2563`, the SDK declines to constrain the message shape — Phase 1.2's `isToolUseTrailing` guard is the runtime contract. Any non-object / null / unrecognized shape returns `false` (degrades to generic notice; never throws). Tests 5.1 cover the null/undefined/non-object branch — do not skip them.
 - **systemPrompt accumulator drift in `agent-runner.ts`.** Last `+=` is at line 1047 (verified at plan time, inside the GitHub-read-access conditional); the `query({...})` call is at line 1166. The notice must land between those two anchors, not at the prose-anchored "~1170" — line 1170 is inside the `query({})` object literal. Re-read 1040-1170 at work time before inserting; refactors to the accumulator may shift both anchors.
 - **`conversationId` availability — do NOT empty-string fallback.** If `conversationId` is missing in scope at the WS emit site, **do NOT emit** the WS event and call `reportSilentFallback` with `op: "prefill-guard-conversationid-missing"`. Empty-string would either fail the Zod `z.string()` schema (silent client parse failure, no render) or pass while being semantically malformed. Both worse than no-emit + Sentry signal.
-- **Sentry double-count avoidance.** Existing `op:prefill-guard` warn = operator-side signal; new WS event = user-side signal. Do not add a second Sentry emit on the WS path (TR7).
+- **Sentry double-count avoidance.** Existing `op:prefill-guard` warn = operator-side signal; new WS event = user-side signal. Do not add a second Sentry emit on the WS path (TR7). If a future operator wants Sentry instrumentation on WS-emit success/failure, MUST use a distinct op (e.g., `op: "context-reset-signal-sent"`) — never `op: "prefill-guard"` — to keep #3269's >10/7d trigger threshold accurate.
+- **Agent-native parity gap (acknowledged).** WS `context_reset` is browser-bound; an external MCP-driven agent cannot subscribe. Acceptable today (no `apps/web-platform/server/mcp/` exists), but the WS event is fire-and-forget — a future `get_session_state` MCP tool (option (c) from #3269) will only see resets that occurred AFTER (c) shipped unless write-side persistence lands first. **Tracked in #3423** — to close BEFORE (c) enters the build queue.
 
 ## Risks
 

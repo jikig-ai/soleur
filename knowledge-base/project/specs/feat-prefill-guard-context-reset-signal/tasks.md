@@ -38,7 +38,7 @@ requires_cpo_signoff: true
 - 3.2. At line 479 (existing `applyPrefillGuard` call), destructure `contextResetNotice` and `reason` from the result.
 - 3.3. At line 597 (`systemPrompt: args.systemPrompt`) append the notice when present: `systemPrompt: contextResetNotice ? \`${args.systemPrompt}\n\n${contextResetNotice}\` : args.systemPrompt`.
 - 3.4. After the guard call (line 479 area) and before the SDK call, when `reason && conversationId`, emit `sendToClient(userId, { type: "context_reset", reason, conversationId })` exactly once. Use a local `wsEmitted` boolean (defensive — helper isn't re-entered on SDK retry, but explicit single-emit is cheap).
-- 3.5. If `conversationId` unavailable: skip emit + `reportSilentFallback(null, { feature: "cc-concierge", op: "prefill-guard-conversationid-missing", extra: { userId, conversationId } })`. Do NOT empty-string fallback.
+- 3.5. The `applyPrefillGuard` call is wrapped in `Promise.all([...])` at cc-dispatcher.ts:477-486 — destructure the new return fields from the Promise.all result-array, not a sequential await.
 - 3.6. Run dispatcher tests (1.2) — confirm GREEN.
 
 ## Phase 4: GREEN — wire `agent-runner.ts` call site
@@ -46,22 +46,26 @@ requires_cpo_signoff: true
 - 4.1. Read `apps/web-platform/server/agent-runner.ts` lines 1040-1170 (the accumulator's last `+=` site through the `query({` call) to identify the exact insertion line for the notice append.
 - 4.2. At line 1157 (existing `applyPrefillGuard` call), destructure `contextResetNotice` + `reason`.
 - 4.3. Insert the notice append AFTER all conditional accumulator branches (last verified at line 1047) and BEFORE the `query({` call (line 1166): `if (contextResetNotice) systemPrompt += \`\n\n${contextResetNotice}\`;`. Verify the chosen line is at column 0 (top-level statement scope), not inside the `query({})` object literal.
-- 4.4. Add the WS emit + conversationId fallback per plan §3.3, identical pattern to dispatcher (`feature: "agent-runner"`).
+- 4.4. Add the WS emit identical to dispatcher: `if (reason) sendToClient(userId, { type: "context_reset", reason, conversationId })`. `conversationId` is verified always-present at agent-runner.ts:1157 (required `startAgentSession` parameter).
 - 4.5. Run runner tests (1.3) — confirm GREEN.
 
-## Phase 5: GREEN — WS taxonomy (types + Zod + client + render)
+## Phase 5: GREEN — WS taxonomy (4 exhaustiveness sites + reducer + render)
 
 - 5.1. `apps/web-platform/lib/types.ts` — add the `ContextReset` variant to `WSMessage` near the `session_resumed`/`session_ended` cluster.
-- 5.2. `apps/web-platform/lib/ws-zod-schemas.ts` — define `contextResetSchema` (z.object with `type: z.literal("context_reset")`, `reason: z.union([z.literal("prefill-guard"), z.literal("tool_use_orphan")])`, `conversationId: z.string()`). Add to the discriminated-union in `wsMessageSchema`. Update the `_SchemaCovers` proof.
-- 5.3. `apps/web-platform/lib/ws-client.ts` — in the `onmessage` switch (lines 511-651), add a `case "context_reset":` that propagates the message to the chat-surface store via the same path `workflow_ended` uses (NOT the `fanout_truncated` no-op path).
-- 5.4. Create `apps/web-platform/components/chat/chat-copy.ts` (or export from `chat-surface.tsx`) with the `CONTEXT_RESET_COPY` const per plan §4.5.
-- 5.5. `apps/web-platform/components/chat/chat-surface.tsx` — add `case "context_reset":` rendering the inline rounded badge using `workflow_ended` Tailwind classes at lines 563-587 as precedent. Read copy via `CONTEXT_RESET_COPY[message.reason]`. Use `data-message-type="context_reset"`.
-- 5.6. Run WS protocol + RTL render + ws-known-types tests (1.4, 1.5, 1.6) — confirm GREEN.
+- 5.2. `apps/web-platform/lib/ws-zod-schemas.ts` — define `contextResetSchema = z.strictObject({ type: z.literal("context_reset"), reason: z.union([z.literal("prefill-guard"), z.literal("tool_use_orphan")]), conversationId: z.string() })` (mirror `fanoutTruncatedSchema` at lines 286-290 verbatim shape). Add to `flatTypeSchema` at line 431. The `_SchemaCovers` proof at lines 472-479 is **bidirectional** — both `_SchemaCoversForward` and `_SchemaCoversBackward` must compile.
+- 5.3. `apps/web-platform/lib/ws-known-types.ts` — add `"context_reset"` to the `KNOWN_WS_MESSAGE_TYPES` Set literal (line 26). The `_forward`/`_backward` exhaustiveness rails at lines 76-77 will fail `tsc --noEmit` if omitted.
+- 5.4. `apps/web-platform/lib/chat-state-machine.ts` — extend `applyStreamEvent` (line 277) with a `context_reset` case in the `switch (msg.type)`. This is the actual reducer site (TS exhaustive switch lives here, not in `ws-client.ts`). Append the message to the conversation's message stream; no other state mutation (single-shot lifecycle notice).
+- 5.5. `apps/web-platform/lib/ws-client.ts` — in the `onmessage` switch (~line 175), confirm the `applyStreamEvent` call propagates `context_reset` automatically (since the reducer in 5.4 handles it). Add a `case "context_reset":` only if the dispatcher needs explicit branching beyond reducer forwarding.
+- 5.6. Create `apps/web-platform/components/chat/chat-copy.ts` (or export from `chat-surface.tsx`) with the `CONTEXT_RESET_COPY` const per plan §4.5.
+- 5.7. `apps/web-platform/components/chat/chat-surface.tsx` — add `case "context_reset":` rendering the inline rounded badge using the `workflow_ended` Tailwind precedent at lines 563-587 (`rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3` outer; `text-sm text-soleur-text-primary` inner). Discriminator is `msg.type` (verbatim pattern at line 505 switch). Read copy via `CONTEXT_RESET_COPY[msg.reason]`. Use `data-message-type="context_reset"`.
+- 5.8. Run WS protocol + RTL render + ws-known-types tests (1.4, 1.5, 1.6) — confirm GREEN.
 
 ## Phase 6: REFACTOR + verification
 
 - 6.1. Run the full web-platform test suite. All tests pass (existing + new).
-- 6.2. Run `tsc --noEmit` for web-platform. No type errors. Pay attention to `_SchemaCovers` proof — it will fail compilation if the new variant is omitted from the Zod union.
+- 6.1a. **Three-pattern grep** per `cq-union-widening-grep-three-patterns`: run `rg "const _exhaustive: never" apps/web-platform/{lib,server,components}/`, `rg '\.type === "' apps/web-platform/{lib,server,components}/`, and `rg '\?\.type === "' apps/web-platform/{lib,server,components}/`. Any if-ladder hit not covered by an exhaustive switch must be widened in the same PR. Document zero-hit confirmation in PR body.
+- 6.1b. **`vi.mock("../server/observability")` sweep** if Phase 2/3 introduces new imports from `@/server/observability`. Update each mock factory; missing exports crash with "is not a function" at first run.
+- 6.2. Run `tsc --noEmit` for web-platform. No type errors. The bidirectional `_SchemaCovers` proof (`_SchemaCoversForward` + `_SchemaCoversBackward`), the `_forward`/`_backward` rails in `ws-known-types.ts`, and the `applyStreamEvent` exhaustive switch all fail compilation if the new variant is omitted from any of the 4 sites.
 - 6.3. Manual QA: simulate a prefill-guard fire by injecting an assistant-final persisted session JSONL fixture; trigger Concierge follow-up; verify (i) inline notice renders with prefill-guard copy, (ii) model response acknowledges reset, (iii) Sentry shows ONE `op:prefill-guard` warn (no double-count from a stray WS-emit Sentry path).
 - 6.4. Manual QA: repeat 6.3 with a tool_use-trailing fixture; verify tool-aware copy renders and model refuses any "yes do that" follow-up.
 - 6.5. Capture screenshots for both `reason` variants. Attach to PR #3419 comment.
