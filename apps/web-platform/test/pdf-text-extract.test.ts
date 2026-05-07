@@ -14,7 +14,13 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import { extractPdfText } from "@/server/pdf-text-extract";
+import {
+  extractPdfText,
+  extractPdfMetadata,
+  LARGE_PDF_PAGE_THRESHOLD,
+  METADATA_READ_BYTE_CEILING_BYTES,
+  METADATA_READ_TIMEOUT_MS,
+} from "@/server/pdf-text-extract";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import {
   BELOW_PDFJS_ENGINES_FLOOR,
@@ -249,6 +255,56 @@ describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfText", () => {
     if (!isOk(result)) return;
     expect(result.pageCount).toBe(600);
     expect(result.truncated).toBe(true);
+  });
+});
+
+// 2026-05-07 follow-up to #3429: extractPdfMetadata bridge fix.
+// Metadata-only pdfjs read on the soft-route path. When extractPdfText
+// raises `oversized_buffer` for a >24MB PDF, the resolver calls this
+// function to obtain numPages cheaply (xref-only, no per-page text
+// iteration). PDFs with `numPages > LARGE_PDF_PAGE_THRESHOLD` route to the
+// new HARD class `too_many_pages` to avoid the Read-fanout idle-reaper
+// timeout described in #3429.
+//
+// `skipIf(BELOW_PDFJS_ENGINES_FLOOR)` because the "valid 3-page PDF" test
+// calls real pdfjs which needs Node ≥22.3 / 20.16 per the engines field.
+// The mock-based timeout test lives in `pdf-text-extract-mocked.test.ts`.
+describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfMetadata (#3429)", () => {
+  it("exports the threshold and ceiling constants with sensible values", () => {
+    expect(LARGE_PDF_PAGE_THRESHOLD).toBe(150);
+    expect(METADATA_READ_BYTE_CEILING_BYTES).toBe(40 * 1024 * 1024);
+    expect(METADATA_READ_TIMEOUT_MS).toBe(3000);
+  });
+
+  it("returns { ok: false, reason: 'oversized' } when buffer exceeds METADATA_READ_BYTE_CEILING_BYTES — short-circuits before pdfjs runs", async () => {
+    // Allocate a buffer one byte over the ceiling. The function MUST
+    // short-circuit BEFORE invoking pdfjs (otherwise the test would pay
+    // pdfjs xref-build cost). Wall-clock <50ms is the cheapest proxy
+    // for "no parser invocation".
+    const oversized = Buffer.alloc(METADATA_READ_BYTE_CEILING_BYTES + 1);
+    const start = Date.now();
+    const result = await extractPdfMetadata(oversized);
+    const elapsed = Date.now() - start;
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("oversized");
+    expect(elapsed).toBeLessThan(50);
+  });
+
+  it("returns { ok: true, numPages } for a valid 3-page PDF", async () => {
+    const buf = makeMinimalPdf(["p1", "p2", "p3"]);
+    const result = await extractPdfMetadata(buf);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.numPages).toBe(3);
+  });
+
+  it("returns { ok: false, reason: 'parse_error' } on a buffer with no PDF header", async () => {
+    const garbage = Buffer.from("this is definitely not a PDF file");
+    const result = await extractPdfMetadata(garbage);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("parse_error");
   });
 });
 

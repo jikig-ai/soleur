@@ -69,6 +69,7 @@ import {
   resolveConciergeDocumentContext,
   _resetWorkspacePathCacheForTests,
 } from "./kb-document-resolver";
+import type { DocumentExtractMeta } from "./kb-document-resolver";
 import type { PdfExtractErrorClass } from "./pdf-text-extract";
 
 // Re-export so existing call sites keep working.
@@ -775,6 +776,15 @@ export interface DispatchSoleurGoArgs {
    */
   documentExtractError?: PdfExtractErrorClass;
   /**
+   * 2026-05-07 follow-up to #3429. Per-failure metadata. Currently only
+   * `numPages` (interpolated by `buildPdfTooLongDirective` for the
+   * page-count gate's "I see {N} pages" copy). Without plumbing through
+   * here, the runner reads `?? 0` and the user sees "I see 0 pages" on
+   * every triggering case. Caught by the user-impact-reviewer review of
+   * PR #3430.
+   */
+  documentExtractMeta?: DocumentExtractMeta;
+  /**
    * 2026-05-06 follow-up — Bug A1 fix. Resolved workspace path threaded
    * from the ws-handler through `runner.dispatch` →
    * `buildSoleurGoSystemPrompt` so PDF gated + text-too-large directives
@@ -819,6 +829,7 @@ export async function dispatchSoleurGo(
     documentKind,
     documentContent,
     documentExtractError,
+    documentExtractMeta,
     workspacePath: callerWorkspacePath,
     attachments,
   } = args;
@@ -1061,6 +1072,7 @@ export async function dispatchSoleurGo(
       documentKind,
       documentContent,
       documentExtractError,
+      documentExtractMeta,
       // 2026-05-06 Bug A1 fix — thread workspacePath through so the
       // runner builds the system prompt with workspace-absolute Read
       // instructions. Falls back to the locally-resolved value (set by

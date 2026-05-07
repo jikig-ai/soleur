@@ -9,12 +9,24 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
-const { fetchUserWorkspacePathSpy, extractPdfTextSpy, reportSilentFallbackSpy } =
-  vi.hoisted(() => ({
-    fetchUserWorkspacePathSpy: vi.fn(),
-    extractPdfTextSpy: vi.fn(),
-    reportSilentFallbackSpy: vi.fn(),
-  }));
+const {
+  fetchUserWorkspacePathSpy,
+  extractPdfTextSpy,
+  extractPdfMetadataSpy,
+  reportSilentFallbackSpy,
+} = vi.hoisted(() => ({
+  fetchUserWorkspacePathSpy: vi.fn(),
+  extractPdfTextSpy: vi.fn(),
+  // 2026-05-07 follow-up to #3429: the resolver now imports
+  // `extractPdfMetadata` for the page-count gate on the oversized_buffer
+  // soft-route. Default the spy to a fail-closed shape so existing tests
+  // (which never set it) fall through to the pre-#3429 routing.
+  extractPdfMetadataSpy: vi.fn(async () => ({
+    ok: false,
+    reason: "parse_error" as const,
+  })),
+  reportSilentFallbackSpy: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
@@ -33,9 +45,20 @@ vi.mock("@/server/observability", () => ({
   warnSilentFallback: vi.fn(),
 }));
 
-vi.mock("@/server/pdf-text-extract", () => ({
-  extractPdfText: extractPdfTextSpy,
-}));
+vi.mock("@/server/pdf-text-extract", async () => {
+  // Spread the real module so threshold constants (LARGE_PDF_PAGE_THRESHOLD
+  // etc.) stay in lockstep with the source — hardcoded test-side values
+  // silently desync on a production threshold shift. Override only the
+  // two functions whose behavior the test drives via spies.
+  const actual = await vi.importActual<typeof import("@/server/pdf-text-extract")>(
+    "@/server/pdf-text-extract",
+  );
+  return {
+    ...actual,
+    extractPdfText: extractPdfTextSpy,
+    extractPdfMetadata: extractPdfMetadataSpy,
+  };
+});
 
 import { resolveConciergeDocumentContext } from "@/server/cc-dispatcher";
 import { _resetWorkspacePathCacheForTests } from "@/server/kb-document-resolver";
