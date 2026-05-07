@@ -64,6 +64,7 @@ describe("buildHealthResponse", () => {
     const response = await buildHealthResponse();
     expect(response.status).toBe("ok");
     expect(response).toHaveProperty("version");
+    expect(response).toHaveProperty("build_sha");
     expect(response).toHaveProperty("uptime");
     expect(response).toHaveProperty("memory");
   });
@@ -74,10 +75,24 @@ describe("buildHealthResponse", () => {
     expect(response.build_sha).toBe("dev");
   });
 
-  it("includes build_sha from BUILD_SHA env var when set", async () => {
-    process.env.BUILD_SHA = "abc1234deadbeef";
+  it("includes build_sha as 'dev' when BUILD_SHA is empty string", async () => {
+    // Pins behavior on the `||` (vs `??`) coalescing in buildHealthResponse —
+    // an empty BUILD_SHA build-arg must surface as "dev", not as the empty
+    // string the workflow gate would treat as a mid-swap retry. Without this
+    // test, a refactor `process.env.BUILD_SHA || "dev"` → `?? "dev"` would
+    // silently change the wire contract and pass the suite.
+    process.env.BUILD_SHA = "";
     const response = await buildHealthResponse();
-    expect(response.build_sha).toBe("abc1234deadbeef");
+    expect(response.build_sha).toBe("dev");
+  });
+
+  it("includes build_sha from BUILD_SHA env var when set", async () => {
+    // Sentinel chosen to be visibly non-SHA-shaped (no real commit SHA can
+    // be all-zeros or all-uppercase ASCII letters), so a code path that
+    // hardcodes the build-arg's default value cannot accidentally match.
+    process.env.BUILD_SHA = "TEST-SHA-NOT-A-REAL-COMMIT";
+    const response = await buildHealthResponse();
+    expect(response.build_sha).toBe("TEST-SHA-NOT-A-REAL-COMMIT");
   });
 
   it("reports supabase status", async () => {
