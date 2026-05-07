@@ -21,9 +21,11 @@ import { INTERACTIVE_PROMPT_KINDS } from "@/lib/types";
 /**
  * Server→client `interactive_prompt.kind` values this build can emit.
  * Re-exported from the canonical `INTERACTIVE_PROMPT_KINDS` tuple so
- * the manifest cannot drift from the WSMessage union.
+ * the manifest cannot drift from the WSMessage union. The re-export
+ * preserves the `as const` literal-tuple type so consumers retain
+ * autocomplete and exhaustive-switch coverage.
  */
-export const WS_PROMPT_KINDS: readonly string[] = INTERACTIVE_PROMPT_KINDS;
+export const WS_PROMPT_KINDS = INTERACTIVE_PROMPT_KINDS;
 
 /**
  * Client→server message types this build accepts that are intended as

@@ -276,29 +276,32 @@ describe("agent-runner — disconnect-after-result race (#3463)", () => {
 
     await startAgentSession("user-1", "conv-1", "cpo");
 
-    // Flow on the bug-fixed path:
-    //   1. result branch writes `waiting_for_user` (no `.in()` guard;
-    //      that write must win the race).
-    //   2. abort branch writes `failed` BUT threads the
-    //      `onlyIfStatusIn: ["active"]` guard so the row stays at
-    //      whatever the result branch wrote.
-    const waitingWrite = updates.find(
-      (u) => u.patch.status === "waiting_for_user",
-    );
-    expect(waitingWrite).toBeDefined();
-    expect(waitingWrite?.ins).toEqual([]);
+    // Project the captured updates onto only the fields under test
+    // (status + .in() predicates). A failure prints the entire
+    // sequence so a future regression report tells the reader which
+    // write went stomp-mode instead of "expected undefined to be
+    // defined" (test-design review recommendation #2).
+    const projected = updates.map((u) => ({
+      status: u.patch.status,
+      ins: u.ins,
+    }));
 
-    const abortFailedWrite = updates.find(
-      (u) =>
-        u.patch.status === "failed" &&
-        u.ins.some(
-          (entry) =>
-            entry.column === "status" &&
-            entry.values.length === 1 &&
-            entry.values[0] === "active",
-        ),
-    );
-    expect(abortFailedWrite).toBeDefined();
+    // Flow on the bug-fixed path:
+    //   1. result branch's primary `waiting_for_user` write — must
+    //      have NO `.in()` guard (that write must win the race; a
+    //      guard would re-introduce the bug from the other side).
+    //   2. abort branch's `failed` write — MUST thread the
+    //      `onlyIfStatusIn: ["active"]` guard so the row stays at
+    //      whatever the result branch wrote (the load-bearing fix
+    //      for #3463).
+    expect(projected).toContainEqual({
+      status: "waiting_for_user",
+      ins: [],
+    });
+    expect(projected).toContainEqual({
+      status: "failed",
+      ins: [{ column: "status", values: ["active"] }],
+    });
   });
 
   test("classifier maps SessionAbortError('disconnected') to non-user-requested (regression for the abort branch's nextStatus ternary)", () => {

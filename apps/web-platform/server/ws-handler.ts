@@ -357,7 +357,11 @@ export async function tryLedgerDivergenceRecovery(
     // rows are the load-bearing case where the user-visible row flips
     // from Executing to failed. `expectMatch: false` because both classes
     // include benign zero-row outcomes (archived row, already-terminal,
-    // hard-deleted).
+    // hard-deleted). #3463: `onlyIfStatusIn: ["active"]` narrows the
+    // race surface where divergence detection ran ≤Xms before a
+    // legitimate result-branch flipped the row to `waiting_for_user` —
+    // without the guard the recovery path stomps a healthy terminal
+    // state to `failed`.
     await Promise.all(
       reapable.map((cid) =>
         updateConversationFor(
@@ -370,6 +374,7 @@ export async function tryLedgerDivergenceRecovery(
               ? "start_session-recovery-finalize-orphan"
               : "start_session-recovery-finalize-stale-heartbeat",
             expectMatch: false,
+            onlyIfStatusIn: ["active"],
           },
         ).catch(() => undefined),
       ),
