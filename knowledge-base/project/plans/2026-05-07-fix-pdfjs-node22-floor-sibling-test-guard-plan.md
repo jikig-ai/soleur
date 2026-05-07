@@ -2,12 +2,13 @@
 type: bug-fix
 classification: developer-environment-alignment
 issue: 3439
+also_closes: [3438]
 branch: feat-one-shot-3439-pdfjs-node22-floor
 requires_cpo_signoff: false
 deepened_on: 2026-05-07
 ---
 
-# fix: align dev-env Node floor + extend pdfjs engine-floor guard to sibling test suites (#3439)
+# fix: align dev-env Node floor + extend pdfjs engine-floor guard + cover lazy_import_failed (#3439, #3438)
 
 ## Enhancement Summary
 
@@ -72,7 +73,7 @@ No L3/network-outage signal in this issue (no SSH/firewall/timeout patterns), so
 
 - `apps/web-platform/test/pdf-text-extract.bundled-server.test.ts` — wrap the existing `describe(...)` in a `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)`, with the same dev/CI branch as `pdf-text-extract.test.ts:62-75`.
 - `apps/web-platform/test/kb-preview-metadata.bundled-server.test.ts` — same wrap.
-- `apps/web-platform/test/pdf-text-extract.test.ts` — refactor lines 20-75 (the `supportsGetBuiltinModule()` helper + `BELOW_PDFJS_ENGINES_FLOOR` const + diagnostic + dev/CI branch) into a shared helper at `apps/web-platform/test/helpers/engines-floor.ts`. Import and use the helper here. Diagnostic remains test-file-specific (each diagnostic names its own file).
+- `apps/web-platform/test/pdf-text-extract.test.ts` — (a) refactor lines 20-75 (the `supportsGetBuiltinModule()` helper + `BELOW_PDFJS_ENGINES_FLOOR` const + diagnostic + dev/CI branch) into a shared helper at `apps/web-platform/test/helpers/engines-floor.ts`. Import and use the helper here. Diagnostic remains test-file-specific (each diagnostic names its own file). (b) Add one new `it(...)` (per #3438) that uses `vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", ...)` to throw at module init, asserts `result.error === "lazy_import_failed"`, and asserts `reportSilentFallback` was called with the expected `feature`/`extra` shape. Place this test **outside** the `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)` block so it runs on Node 21 too — the mock short-circuits the real import; `process.getBuiltinModule` is never reached.
 - `apps/web-platform/test/README.md` — add a 4-line bullet under existing content explaining the engine-floor skip behavior (dev = yellow skip + stderr diagnostic; CI = red throw at module init) and pointing at `apps/web-platform/.nvmrc`.
 - `.nvmrc` (root) — leave as `22` (no edit). The major-version pin resolves to latest 22.x via `nvm install 22`, which always satisfies the 22.3 floor. Documented in README.
 - `apps/web-platform/README.md` — append a one-line pointer to the new `apps/web-platform/.nvmrc` at the **end of the existing line 7 paragraph** (which already names "Node.js ≥ 22.3" and explains the `process.getBuiltinModule` mechanism — verified in deepen pass; do NOT introduce duplicate prose).
@@ -161,8 +162,9 @@ No L3/network-outage signal in this issue (no SSH/firewall/timeout patterns), so
 - [ ] `apps/web-platform/test/README.md` documents the engine-floor skip behavior.
 - [ ] `tsc --noEmit` clean from `apps/web-platform/`.
 - [ ] Full unit suite on Node 22 via `cd apps/web-platform && npm run test:ci` (matches `scripts/test-all.sh:64`): no regressions vs. main (`2885 passed | 30 skipped` per PR #3431's verified baseline).
+- [ ] New `it("returns lazy_import_failed when pdfjs module init throws", ...)` test added to `apps/web-platform/test/pdf-text-extract.test.ts` outside the `describe.skipIf` block. Uses `vi.doMock` to simulate module-init failure; asserts `result.error === "lazy_import_failed"` AND `reportSilentFallback` was called with `feature: "pdf-text-extract"` (or matching `feature` slug at `pdf-text-extract.ts:107-115`) and the expected `extra` shape. Test passes on Node 21.7.3 and Node 22.x (the `vi.doMock` mocks the real import).
 - [ ] `Closes #3439` on its own line in PR body.
-- [ ] `Ref #3438` (NOT `Closes`) in PR body — overlap acknowledged but not folded in (see Open Code-Review Overlap below).
+- [ ] `Closes #3438` on its own line in PR body — folded in per user request (lazy_import_failed direct test).
 
 ### Post-merge (operator)
 
@@ -170,9 +172,7 @@ No L3/network-outage signal in this issue (no SSH/firewall/timeout patterns), so
 
 ## Open Code-Review Overlap
 
-One open scope-out touches the file this plan edits:
-
-- **#3438** — "review: add direct lazy_import_failed test for extractPdfText (PR #3431)". Touches `apps/web-platform/test/pdf-text-extract.test.ts`. **Disposition: Acknowledge.** This plan refactors lines 20-75 of that file (extracting the inline guard into the new shared helper); it does NOT modify or extend the production extractor's lazy-import catch branch (`server/pdf-text-extract.ts:106-118`), which is the surface #3438 wants to test. The scope-out's `pre-existing-unrelated` co-sign holds against this plan: production extractor is unchanged, the catch branch is unchanged, and the refactor only relocates the engine-floor *avoidance* logic. Re-evaluate #3438 when the lazy-import branch is next touched (per its own re-evaluation trigger). Reference #3438 in the PR body as `Ref #3438` so cross-linking exists; do NOT use `Closes`.
+- **#3438** — "review: add direct lazy_import_failed test for extractPdfText (PR #3431)". Touches `apps/web-platform/test/pdf-text-extract.test.ts`. **Disposition: Folded in (per user request 2026-05-07).** Adding the proposed `vi.doMock` test (~15-20 lines) is mechanically compatible with this plan: same file, same helpers, the new test sits outside the `describe.skipIf` block exactly as #3438 prescribes. The marginal cost is a single `it(...)` block; the marginal benefit is closing a P3 coverage gap on the production extractor's `lazy_import_failed` discriminated-union branch and emptying a deferred-scope-out queue entry. PR body uses `Closes #3438`.
 
 ## Test Strategy
 
@@ -208,7 +208,6 @@ No cross-domain implications detected — test-only refactor + dev-tooling align
 
 ## Out of Scope
 
-- Direct unit test of the `lazy_import_failed` catch branch in `server/pdf-text-extract.ts` — tracked by **#3438**, scope-out criterion `pre-existing-unrelated`.
 - Auto-installing Node 22.3+ for contributors below the floor (e.g., a `lefthook` pre-commit that runs `nvm install 22.3.0`). Out of scope; contributor opt-in is the convention.
 - Hardening the `bundleAndExec` helper to short-circuit on Node <22.3. The skip belongs at the test-file level so the diagnostic surfaces with the test.
 - Raising `engines.node` to `>=22.3.0` only (dropping the `>=20.16.0` branch). Out of scope — the dual-branch declaration matches Node's dual-LTS support window and is the upstream pdfjs-dist published floor.
@@ -248,6 +247,42 @@ No cross-domain implications detected — test-only refactor + dev-tooling align
    Then change `describe(...)` to `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)(...)`.
 5. Same change to `apps/web-platform/test/kb-preview-metadata.bundled-server.test.ts` with label `"kb-preview-metadata.bundled-server.test"`.
 6. Re-run all three modes (Node 22, Node 21 dev, Node 21 CI=1).
+
+### Phase 2.5 — Add lazy_import_failed direct test (closes #3438)
+
+5a. After the `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)` block in `apps/web-platform/test/pdf-text-extract.test.ts`, add a new top-level `describe("extractPdfText lazy_import_failed", ...)` (no `skipIf` — runs on all Node versions). Inside it, one `it("returns lazy_import_failed when pdfjs module init throws", ...)`:
+
+```ts
+import { reportSilentFallback } from "@/server/observability";
+
+vi.mock("@/server/observability", async () => {
+  const actual = await vi.importActual<typeof import("@/server/observability")>(
+    "@/server/observability",
+  );
+  return { ...actual, reportSilentFallback: vi.fn() };
+});
+
+describe("extractPdfText lazy_import_failed", () => {
+  it("returns lazy_import_failed when pdfjs module init throws", async () => {
+    vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
+      throw new Error("simulated module-init failure");
+    });
+    vi.resetModules();
+    const { extractPdfText } = await import("../server/pdf-text-extract");
+    const result = await extractPdfText(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+    expect(result.error).toBe("lazy_import_failed");
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: expect.stringContaining("pdf") }),
+    );
+    vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+  });
+});
+```
+
+The exact `feature` slug + `extra` keys are read from `apps/web-platform/server/pdf-text-extract.ts:107-115` during implementation; the assertion shape is loose (`stringContaining("pdf")` + `objectContaining`) to avoid brittleness.
+
+5b. Verify on Node 21.7.3: this single new test passes (the rest of the file is skipped). On Node 22.x: the new test passes alongside the original 9.
 
 ### Phase 3 — Dev-tooling alignment
 
@@ -294,7 +329,7 @@ npx tsc --noEmit
 - Issue #3439 — this plan closes it.
 - PR #3431 — engine-floor guard for `pdf-text-extract.test.ts` (the precedent this plan extends).
 - PR #3391 — `engines.node` pin in `apps/web-platform/package.json` (already merged; the issue's first remediation is already done).
-- Issue #3438 — open code-review scope-out for direct `lazy_import_failed` test; acknowledged not folded in (see Open Code-Review Overlap).
+- Issue #3438 — code-review scope-out for direct `lazy_import_failed` test; **folded in** per user request 2026-05-07 (see Open Code-Review Overlap).
 - Learning `knowledge-base/project/learnings/2026-04-18-pdfjs-metadata-on-node-without-canvas.md` — original pdfjs/Node-version-floor incident.
 - Learning `knowledge-base/project/learnings/2026-05-07-pdfjs-dist-bundling-reorder-breaks-node-init.md` — the bundled-server regression rail this plan does NOT change.
 - AGENTS.md `hr-weigh-every-decision-against-target-user-impact` — User-Brand Impact threshold-none scope-out.
