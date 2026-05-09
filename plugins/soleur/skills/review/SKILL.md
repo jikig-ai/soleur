@@ -67,9 +67,9 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts:
 
    ```bash
-   git diff --name-only origin/main...HEAD > /tmp/review-changed.txt
-   git diff --name-status origin/main...HEAD > /tmp/review-status.txt
-   git diff --numstat origin/main...HEAD > /tmp/review-numstat.txt
+   git diff --name-only origin/main...HEAD > .git/review-changed.txt
+   git diff --name-status origin/main...HEAD > .git/review-status.txt
+   git diff --numstat origin/main...HEAD > .git/review-numstat.txt
    ```
 
 2. Check for override: scan `$ARGUMENTS` for "deep review" or "full review". Also run `gh pr view --json body,title --jq '.body + " " + .title'` and check for the same phrases. If override detected, skip classification and spawn all 8 agents.
@@ -84,7 +84,8 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
      class = lockfile-only → 2 agents (git-history-analyzer + security-sentinel)
    Else if total_files > 0 AND total_lines > 0 AND
           (deleted_files * 100 / total_files) >= 80 AND
-          (deleted_lines * 100 / total_lines) >= 80:
+          (deleted_lines * 100 / total_lines) >= 80 AND
+          zero source-code extensions are present in the diff:
      class = deletion-dominated → 2 agents (git-history-analyzer + security-sentinel)
    Else if any changed file has a source-code extension:
      class = code → 8 agents
@@ -92,29 +93,31 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
      class = non-code → 4 agents
    ```
 
+   The "zero source-code extensions" guard on `deletion-dominated` closes a piggyback class: a 1000-line cleanup PR that adds a 50-line `.ts` file would otherwise route to 2 agents and bypass pattern-recognition / code-quality / architecture / data-integrity / performance / agent-native review on the new source file. Mirroring `lockfile-only`'s `$has_source` empty requirement keeps the savings on legitimate orphan-cleanup PRs while routing any deletion-dominated PR with new source code through the full 8-agent path.
+
    Source-code extensions: `.ts`, `.tsx`, `.js`, `.jsx`, `.rb`, `.py`, `.go`, `.rs`, `.swift`, `.kt`, `.java`, `.c`, `.cpp`, `.cs`, `.php`, `.sh`, `.bash`, `.zsh`, `.mjs`, `.cjs` — any file containing executable logic. Non-code: `.md`, `.txt`, `.yml`, `.yaml`, `.toml`, `.json`, `.css`, `.html`, `.njk`, `.svg`, `.png`, `.jpg`, `.gif`, `.pen`, `LICENSE`, `CHANGELOG*`, `.github/**` workflow files, and plugin/agent/skill definition files (`plugins/**/*.md`, `agents/**/*.md`).
 
    Compute the predicates inline (`set -uo pipefail` — drop the `e` so legitimately-empty greps don't abort):
 
    ```bash
-   total_files=$(wc -l < /tmp/review-changed.txt)
-   deleted_files=$(grep -cE '^D' /tmp/review-status.txt || true)
-   added_lines=$(awk 'BEGIN{s=0} {if ($1 != "-") s += $1} END{print s}' /tmp/review-numstat.txt)
-   deleted_lines=$(awk 'BEGIN{s=0} {if ($2 != "-") s += $2} END{print s}' /tmp/review-numstat.txt)
+   total_files=$(wc -l < .git/review-changed.txt)
+   deleted_files=$(grep -cE '^D' .git/review-status.txt || true)
+   added_lines=$(awk 'BEGIN{s=0} {if ($1 != "-") s += $1} END{print s}' .git/review-numstat.txt)
+   deleted_lines=$(awk 'BEGIN{s=0} {if ($2 != "-") s += $2} END{print s}' .git/review-numstat.txt)
    total_lines=$((added_lines + deleted_lines))
 
    LOCKFILE_RE='(^|/)(package-lock\.json|bun\.lock|yarn\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|poetry\.lock|uv\.lock)$'
    ALLOWED_NONLOCK_RE='^(knowledge-base/|.*\.md$)'
    SOURCE_RE='\.(ts|tsx|js|jsx|rb|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|mjs|cjs)$'
 
-   non_lock_files=$(grep -vE "$LOCKFILE_RE" /tmp/review-changed.txt || true)
+   non_lock_files=$(grep -vE "$LOCKFILE_RE" .git/review-changed.txt || true)
    non_lock_non_doc=$(printf '%s\n' "$non_lock_files" | grep -vE "$ALLOWED_NONLOCK_RE" | grep -v '^$' || true)
-   has_source=$(grep -E "$SOURCE_RE" /tmp/review-changed.txt | head -1 || true)
-   any_lockfile=$(grep -E "$LOCKFILE_RE" /tmp/review-changed.txt | head -1 || true)
+   has_source=$(grep -E "$SOURCE_RE" .git/review-changed.txt | head -1 || true)
+   any_lockfile=$(grep -E "$LOCKFILE_RE" .git/review-changed.txt | head -1 || true)
    ```
 
    - `lockfile-only` matches when `$non_lock_non_doc` is empty AND `$any_lockfile` is non-empty AND `$has_source` is empty.
-   - `deletion-dominated` matches when `total_files > 0` AND `total_lines > 0` AND `(deleted_files * 100 / total_files) >= 80` AND `(deleted_lines * 100 / total_lines) >= 80`. Bash arithmetic evaluates left-to-right; multiply-first avoids the integer-truncation-to-zero trap. Note: `git diff --name-only` does not distinguish added/deleted paths, so `$has_source` may match a path that is itself a deletion — this is intentionally conservative for `lockfile-only` (we want zero source-file activity in either direction) and orthogonal for `deletion-dominated` (the predicate is line-and-file-percentage, not extension-based).
+   - `deletion-dominated` matches when `total_files > 0` AND `total_lines > 0` AND `(deleted_files * 100 / total_files) >= 80` AND `(deleted_lines * 100 / total_lines) >= 80` AND `$has_source` is empty. Bash arithmetic evaluates left-to-right; multiply-first avoids the integer-truncation-to-zero trap. Note: `git diff --name-only` does not distinguish added/deleted paths, so `$has_source` may match a path that is itself a deletion — this is intentionally conservative (we want zero source-file activity in either direction) and prevents a piggyback attack where a backdoor `.ts` file rides along on a bulk-deletion cleanup PR.
 
 4. Announce the classification result before spawning agents.
 
