@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-05-04
-last_reviewed: 2026-05-04
+last_updated: 2026-05-09
+last_reviewed: 2026-05-09
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -67,7 +67,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-04-23)
+## Current State (2026-05-09)
 
 | Dimension | Status |
 |-----------|--------|
@@ -75,7 +75,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
 | Phase 3 (Make it Sticky) | Near-complete. 1 open, 168 closed (milestone). All features shipped. Only remaining: QA gate (#2108). Previously "Not started" items (#1944, #2341, #2342, #2344, #2550, #2662) confirmed closed. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
-| Phase 4 (Validate + Scale) | In progress. 28 open, 68 closed (milestone). Marketing Gate substantially complete (21 of 40 items closed). Multi-User Readiness Gate complete (MU1-MU3 all closed). Remaining open: M3 (#1051 marketing strategy), M4 (#1445 recruitment templates), and Phase 4 core validation issues. |
+| Phase 4 (Validate + Scale) | In progress. 54 open, 70 closed (milestone). Marketing Gate substantially complete (21 of 40 items closed). Multi-User Readiness Gate complete (MU1-MU3 all closed). Remaining open: M3 (#1051 marketing strategy), M4 (#1445 recruitment templates), Phase 4 core validation issues, plus internal engineering-tooling work (e.g. #3493 AGENTS.md change-class loader, un-deferred 2026-05-09). Internal-tooling issues live in Phase 4 milestone for sequencing but are not customer-facing roadmap rows. |
 | Phase 5 (Desktop Native App) | Defined. 6 open, 0 closed. Trigger-gated on user demand. Note: #2625 (A/B test Solo cap) is in this milestone but not yet in roadmap table. |
 | Post-MVP / Later | 326 open, 600 closed. |
 | Beta users | 0 |
