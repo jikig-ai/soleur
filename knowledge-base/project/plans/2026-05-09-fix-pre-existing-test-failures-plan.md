@@ -63,9 +63,10 @@ Rationale: this PR closes a tracking issue for failures that no longer reproduce
 - [x] **Verified at deepen-time:** `cd apps/web-platform && npx vitest run test/chat-page.test.tsx test/chat-page-resume.test.tsx test/chat-surface-sidebar.test.tsx test/chat-surface-sidebar-wrap.test.tsx test/kb-chat-sidebar.test.tsx test/kb-chat-sidebar-a11y.test.tsx test/kb-chat-sidebar-banner-dismiss.test.tsx test/kb-chat-sidebar-quote.test.tsx` — 8 files / 74 tests / 0 fail at HEAD `2acfa25c`. Re-run at `/work` time to confirm no drift.
 - [x] **Verified at deepen-time:** full vitest suite — 363 files / 3956 pass / 51 skipped / 0 fail. Re-run at `/work` time. Capture the pass/fail/skip summary in the PR body.
 - [x] **Identified at deepen-time:** PR #3240 (commit `228e2454`, merged 2026-05-05) is the primary fixer for `chat-surface-sidebar.test.tsx` (brand rename + assertion tightening); cumulative chat-surface refactors (#3237, #3308, #3315, #3469) collapsed the kb-chat-sidebar render topology to one filename site. Cite in PR body + #3035 close-comment.
-- [ ] **Updated AC (deepen-time falsification):** grep results for bare-filename `getByText` are documented in PR body (4 surviving matches across 3 files; all tests pass; disposition = ACKNOWLEDGE not fold-in). Do NOT require absence of bare matches — the original AC's premise (test-query narrowing was the fix) was wrong.
-- [ ] PR body uses `Closes #3035` on its own body line (per AGENTS.md `wg-use-closes-n-in-pr-body-not-title-to`).
-- [ ] PR body uses `Ref #3035` everywhere else (e.g., commit message, summary) to avoid double-closure.
+- [x] **Updated AC (deepen-time falsification):** grep results for bare-filename `getByText` are documented in PR body (4 surviving matches across 3 files; all tests pass; disposition = ACKNOWLEDGE not fold-in). Do NOT require absence of bare matches — the original AC's premise (test-query narrowing was the fix) was wrong.
+- [x] **Re-verified at /work time (2026-05-09):** 8 affected test files = 8 passed / 74 tests / 0 fail. Full suite = 363 passed / 7 skipped / 3956 passed / 51 skipped / 0 failed. Worktree commit `09f68a0d` on branch `feat-one-shot-3035-pre-existing-test-failures`.
+- [ ] PR body uses `Closes #3035` on its own body line (per AGENTS.md `wg-use-closes-n-in-pr-body-not-title-to`). [deferred to ship phase]
+- [ ] PR body uses `Ref #3035` everywhere else (e.g., commit message, summary) to avoid double-closure. [deferred to ship phase]
 
 ### Post-merge (operator)
 
