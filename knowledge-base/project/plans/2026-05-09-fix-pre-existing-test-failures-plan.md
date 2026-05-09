@@ -3,6 +3,10 @@ issue: 3035
 type: fix-test
 classification: verification-and-close
 requires_cpo_signoff: false
+date: 2026-05-09
+branch: feat-one-shot-3035-pre-existing-test-failures
+worktree: .worktrees/feat-one-shot-3035-pre-existing-test-failures
+spec: knowledge-base/project/specs/feat-one-shot-3035-pre-existing-test-failures/tasks.md
 ---
 
 # fix(test): pre-existing chat-page + kb-chat-sidebar test failures on main
@@ -123,6 +127,7 @@ Merge log between baseline `62581167` (issue-filing) and `cc138d11` (worktree HE
 | `d0e648b5` | #3419 | feat(cc-concierge): surface prefill-guard fires to model + user via context_reset | No |
 | `2fad9a66` | #3427 | fix(chat): unify concierge routing chip with active-bubble + Working badge | No |
 | `79662d2c` | #3308 | fix(theme): tokenize remaining web-platform surfaces for light mode | No |
+| `f683ec08` | #3315 | feat(theme): relocate toggle to sidebar header — pill + collapsed cycle button | No |
 
 **Primary fixer: PR #3240** (commit `228e2454`, merged 2026-05-05). Body excerpt: *"`apps/web-platform/test/chat-surface-sidebar.test.tsx` negative-space assertion tightened to header scope (the original 'Command Center' string was unique by accident; 'Dashboard' is not)."* The brand rename + assertion tightening directly addresses the same-class duplicate-text symptom for the `chat-surface-sidebar.test.tsx` file (1 of 8 affected files in #3035).
 

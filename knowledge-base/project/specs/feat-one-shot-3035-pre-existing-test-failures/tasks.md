@@ -8,11 +8,11 @@ Type: verify-and-close (issue already resolved by intermediate PRs)
 
 ## Phase 0 — Re-verify on /work HEAD (mechanical)
 
-- [ ] 0.1 Run the 8 affected test files; expect 8/8 + 74/74 pass
-  - Command: `cd apps/web-platform && npx vitest run test/chat-page.test.tsx test/chat-page-resume.test.tsx test/chat-surface-sidebar.test.tsx test/chat-surface-sidebar-wrap.test.tsx test/kb-chat-sidebar.test.tsx test/kb-chat-sidebar-a11y.test.tsx test/kb-chat-sidebar-banner-dismiss.test.tsx test/kb-chat-sidebar-quote.test.tsx`
-- [ ] 0.2 Run the full vitest suite; expect 0 failures
-  - Command: `cd apps/web-platform && npx vitest run --reporter=basic`
-- [ ] 0.3 Capture pass/fail/skip summary for the PR body
+- [x] 0.1 Run the 8 affected test files; expect 8/8 + 74/74 pass — DONE at worktree commit `09f68a0d`: 8 files / 74 tests / 0 fail
+  - Command: `cd apps/web-platform && ./node_modules/.bin/vitest run test/chat-page.test.tsx test/chat-page-resume.test.tsx test/chat-surface-sidebar.test.tsx test/chat-surface-sidebar-wrap.test.tsx test/kb-chat-sidebar.test.tsx test/kb-chat-sidebar-a11y.test.tsx test/kb-chat-sidebar-banner-dismiss.test.tsx test/kb-chat-sidebar-quote.test.tsx`
+- [x] 0.2 Run the full vitest suite; expect 0 failures — DONE at worktree commit `09f68a0d`: 363 files / 3956 tests / 0 fail
+  - Command: `cd apps/web-platform && ./node_modules/.bin/vitest run --reporter=basic`
+- [x] 0.3 Capture pass/fail/skip summary for the PR body — captured in plan AC line 67
 
 ## Phase 1 — PR + close (mechanical)
 
