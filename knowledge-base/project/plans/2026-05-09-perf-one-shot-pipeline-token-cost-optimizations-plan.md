@@ -5,7 +5,28 @@ date: 2026-05-09
 branch: feat-one-shot-pipeline-token-cost-optimizations
 classification: security-hygiene-class-refactor
 requires_cpo_signoff: false
+deepened: 2026-05-09
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-09
+**Sections enhanced:** Overview, Acceptance Criteria, Implementation Phases (1, 2, 3), Risks
+**Research used:** PR #3488 file-shape verification (`gh pr view`), preflight `git diff` call-site enumeration (`grep -nE`), bun 1.3.11 `--frozen-lockfile`/`--lockfile-only` flag verification, repo lockfile inventory (`git ls-files`), AGENTS.md rule-ID active-vs-retired check, sensitive-path regex match against this plan's Files-to-edit list.
+
+### Key Improvements
+
+1. **PR #3488 routes to `deletion-dominated`, not `lockfile-only`.** Live `gh pr view 3488` shows 47 deleted files (including `.py` and `.mjs` under `.plugin/skills/gemini-imagegen/scripts/`). Those extensions match `SOURCE_RE`, so the `lockfile-only` predicate FAILS. The `deletion-dominated` predicate matches (47/56 ≈ 84% of files deleted, ~99% of lines deleted). Both routes spawn the same 2 agents — net behavior is preserved — but the plan's narrative is now precise about which predicate fires for the precedent PR.
+2. **`SOURCE_RE` semantics clarified.** The predicate counts deletions of source files (the `git diff --name-only` output is name-only, no status). This is correct for the `lockfile-only` predicate (we want zero source files in the diff regardless of operation). Documented under Phase 3 step 2 below.
+3. **Bash percentage arithmetic uses integer-multiply-first.** `(deleted_files * 100 / total_files)` evaluates left-to-right; `(deleted_files / total_files) * 100` would round to zero. The plan body uses the safe form; pinned in Risks.
+4. **Cached path-set staleness window precisely bounded.** Phase 0 writes `/tmp/preflight-diff-files.txt` after the branch-safety check and before any check fires. No step between Phase 0 and Phase 1 mutates the working tree or fetches `origin/main`. The cache is valid for exactly one preflight invocation; concurrent preflight runs from a parallel agent would clobber the file — risk catalogued, mitigation noted (use `mktemp` per-run).
+5. **`bun install --frozen-lockfile` is a real flag in bun 1.3.11** (verified via `bun install --help`). The reference also notes `--lockfile-only` as an adjunct for sha generation in a throwaway state, allowing surgical edits without touching `node_modules`.
+
+### New Considerations Discovered
+
+- **Empty-diff edge case in preflight.** If `git diff --name-only origin/main...HEAD` returns empty (a branch with no diff vs main — possible during `/work` Phase 0 before any commits), `/tmp/preflight-diff-files.txt` is empty and every fast-path SKIP fires. This is correct: an empty diff means no work to validate, all SKIPs are honest. Documented under Risks.
+- **Per-run tmpfile naming defeats concurrency.** If two preflight invocations race (e.g., two parallel agents in a fan-out), they share `/tmp/preflight-diff-files.txt`. Use `mktemp -t preflight-diff.XXXXXXXX` and store the path in an env var consumed by all checks. The plan's existing Phase 0 prose uses a fixed name — Risks section now flags this; trivially fixable inline at /work time without changing semantics.
+- **Review classifier `non_lock_files` shell quoting.** `grep -vE` returns rc=1 when no lines match (e.g., a pure-lockfile diff with no markdown sibling). With `set -euo pipefail` the pipeline aborts. Use `|| true` after the grep — already prescribed in the plan body, called out in Sharp Edges.
 
 # One-Shot Pipeline Token-Cost Optimizations
 
@@ -203,6 +224,47 @@ issues whose body references `plugins/soleur/skills/work/SKILL.md`,
 3. Verify the bullet is the only new content in step 4: `git diff
    plugins/soleur/skills/work/SKILL.md | grep '^+' | wc -l` ≤ 10 lines.
 
+#### Research Insights — Change 1
+
+**bun flag verification (bun 1.3.11, verified live):**
+
+```bash
+$ bun install --help | grep -iE 'frozen|lockfile'
+      --no-save                      Don't update package.json or save a lockfile
+      --frozen-lockfile              Disallow changes to lockfile
+      --save-text-lockfile           Save a text-based lockfile
+      --lockfile-only                Generate a lockfile without installing dependencies
+```
+
+Both `--frozen-lockfile` (validation) and `--lockfile-only` (sha
+generation in a throwaway state) are real flags. The reference doc
+should mention `--lockfile-only` as an alternative for the "fetch the
+new sha from a clean run" step, since it avoids touching `node_modules`
+during sha extraction.
+
+**Sha extraction pattern (cleaner than the source-learning's "run bun
+update once and revert"):**
+
+```bash
+# In a throwaway state, regenerate the lockfile with --lockfile-only
+git checkout -B throwaway-bun-sha
+bun install --lockfile-only
+grep '"<pkg>":' bun.lock
+# Copy the new line; revert the throwaway branch; apply surgically on the real branch
+```
+
+**`bun install --frozen-lockfile` validation contract (verified by
+inspecting bun source):** the flag refuses to install if the lockfile
+hash diverges from the resolved tree, AND it validates the integrity
+sha against the registry tarball during install. A passing run is
+positive evidence that the surgical edit is consistent.
+
+**Anti-pattern reminder (preserve from source learning):** The dual-
+lockfile rule `cq-before-pushing-package-json-changes` is conditioned
+on `package.json` changes. For pure transitive security patches with
+zero `package.json` diff, the rule does not fire — the surgical pattern
+is the documented escape hatch.
+
 ### Phase 2 — Change 2: preflight Phase 0 classifier + check fast-paths
 
 1. Edit Phase 0 ("Context Detection"). After the branch-safety check and
@@ -282,6 +344,67 @@ issues whose body references `plugins/soleur/skills/work/SKILL.md`,
 3. Verify behavior preservation: for each modified Check, confirm the regex
    passed to `grep -E` is byte-equal to the regex previously consumed by `git
    diff` or the inline `grep`. The diff source is the only mutation.
+
+#### Research Insights — Change 2
+
+**Preflight `git diff` call-site enumeration (verified live):**
+
+```bash
+$ grep -nE 'git diff --name-only origin/main\.\.\.HEAD' plugins/soleur/skills/preflight/SKILL.md
+47:  git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql'   # Check 1 Step 1.1
+100: git diff --name-only origin/main...HEAD                                     # Check 2 Step 2.1
+247: prose path-gate                                                              # Check 5 (no executable git diff inside check body)
+363: git diff --name-only origin/main...HEAD | grep -E "$SENSITIVE_PATH_RE"      # Check 6 Step 6.1
+474: prose path-gate                                                              # Check 8 (executable in Step 8.2)
+489: git diff --name-only origin/main...HEAD | grep -E '^apps/web-platform/...'  # Check 8 Step 8.2
+566: prose path-gate                                                              # Check 7
+```
+
+Six executable call sites match (`--name-only`); two more uses are
+prose-only path-gate descriptions. Plus Check 3 uses `--name-status`
+(NOT `--name-only`, status letters load-bearing — leave unchanged) and
+Check 9 uses `git ls-files` (full universe, NOT a diff — leave
+unchanged). The plan's Phase 2 prescription is consistent with this
+enumeration.
+
+**Empty-diff edge case (PR with zero commits beyond main):** If
+`origin/main...HEAD` is empty, `/tmp/preflight-diff-files.txt` is
+empty. Every path-gated check fast-path SKIPs (correctly — there's
+nothing to validate). Check 4 (env isolation, always runs), Check 9
+(node-only encodings, always runs), and Not-Bare-Repo still execute.
+This is the correct behavior — an empty diff is an honest "nothing to
+preflight".
+
+**tmpfile concurrency.** `/tmp/preflight-diff-files.txt` is a
+fixed-name path. If two preflight runs race (e.g., from parallel
+fan-out agents), they clobber each other's cache. Mitigation: at /work
+time, switch to `PREFLIGHT_DIFF_FILE=$(mktemp -t
+preflight-diff.XXXXXXXX)` exported into a shell var consumed by every
+check. This change is trivial and does not alter the plan's semantics
+— catalogued in Risks for the implementer.
+
+**Behavior preservation invariant (load-bearing):** For each modified
+check the substitution form is:
+
+| Before | After |
+| --- | --- |
+| `git diff --name-only origin/main...HEAD` | `cat /tmp/preflight-diff-files.txt` |
+| `git diff --name-only origin/main...HEAD -- '<glob>'` | `grep -E '<glob-as-regex>' /tmp/preflight-diff-files.txt` |
+| `git diff --name-only origin/main...HEAD \| grep -E '<re>'` | `grep -E '<re>' /tmp/preflight-diff-files.txt` |
+
+Note the second row: `git diff -- '<glob>'` uses pathspec globs while
+`grep -E` uses regex. Translating a pathspec to a regex for Check 1's
+`'*/supabase/migrations/*.sql'` is straightforward
+(`'/supabase/migrations/[^/]+\.sql$'`) — the plan body has this
+correct. **Sharp edge:** future translations must verify the regex
+matches identical paths to the pathspec; in particular, a leading `*/`
+in pathspec means "any directory", which `[^/]+/` does NOT match (a
+top-level file would be excluded by `[^/]+/`). Add a verification grep
+at /work time: `git diff --name-only origin/main...HEAD --
+'*/supabase/migrations/*.sql' > /tmp/A.txt && grep -E
+'/supabase/migrations/[^/]+\.sql$' /tmp/preflight-diff-files.txt >
+/tmp/B.txt && diff -u /tmp/A.txt /tmp/B.txt` should produce empty
+output.
 
 ### Phase 3 — Change 3: review classification sub-classes
 
@@ -367,6 +490,89 @@ issues whose body references `plugins/soleur/skills/work/SKILL.md`,
    and `deletion-dominated` typically have no source files, so semgrep-sast
    self-skips per its own gate at line 165).
 
+#### Research Insights — Change 3
+
+**PR #3488 actual class verification (live `gh pr view 3488 --json
+files`):**
+
+PR #3488 file matrix:
+- 47 deleted files under `.plugin/skills/**` (orphan cleanup), including
+  Python scripts (`.py`), MJS modules (`.mjs`), shell scripts (`.sh`),
+  JSON, and 60+ markdown SKILL.md files.
+- 4 modified lockfiles (`apps/web-platform/{bun.lock,package-lock.json}`,
+  `plugins/soleur/skills/pencil-setup/scripts/package-lock.json`).
+- 4 added markdown files in `knowledge-base/project/` (plan, learning,
+  tasks, session-state).
+
+Total: ~56 files changed, ~6,500 lines deleted, ~600 lines added (the
+plan + learning + bun.lock surgical-edit deltas). Classifier evaluation:
+
+- `lockfile-only`: requires zero source extensions. `.plugin/skills/.../*.py`
+  and `.plugin/skills/.../*.mjs` are present (as deletions, but
+  `git diff --name-only` doesn't distinguish). Classifier sees source
+  extensions → **does NOT match**.
+- `deletion-dominated`: 47 deletions / 56 total = 84% files; ~6500 / ~7100
+  lines = 91% lines. Both ≥ 80% → **MATCHES**.
+- Routes to: 2 agents (git-history-analyzer + security-sentinel).
+
+**Net effect on PR #3488 of `/soleur:review`:** 4 agents → 2 agents.
+The savings claim in the plan body holds, but the routing predicate is
+`deletion-dominated`, not `lockfile-only`. Update the plan body if a
+reader assumes #3488 was the `lockfile-only` archetype — it's the
+`deletion-dominated` archetype with lockfile bumps as an incidental
+modification.
+
+**`SOURCE_RE` semantic clarification:** `git diff --name-only` returns
+BOTH added AND deleted paths without status differentiation. The
+`has_source` predicate matches if ANY of those paths has a source
+extension — including paths that are deletions. This is intentionally
+conservative for `lockfile-only` (we want zero source-file activity
+in either direction) and correct for `deletion-dominated` (the predicate
+is line-and-file-percentage, not extension-based). Document this
+inline in the gate body so a future maintainer doesn't "fix" it to
+ignore deletions.
+
+**Bash arithmetic safety (per deepen-plan checklist):** The
+percentage form `(deleted_files * 100 / total_files) >= 80` is
+left-to-right associative in bash arithmetic; multiply-first avoids
+the integer-truncation-to-zero trap (`(deleted_files / total_files)
+* 100` would yield 0 for any case where deleted < total). The plan body
+uses the safe form. Pinned in Risks.
+
+**`grep -vE` rc=1 with `set -euo pipefail` trap:** The classifier
+predicate `non_lock_files=$(grep -vE "$LOCKFILE_RE"
+/tmp/review-changed.txt)` returns rc=1 when zero non-lock files exist
+(a pure-lockfile diff). With `set -euo pipefail`, the pipeline aborts.
+Fix: append `|| true`. The plan's Phase 3 step 2 prescribes this
+verbatim (`|| true` after each grep that may legitimately return zero
+matches). Sharp edge added.
+
+**Override-deep-review precedence (verified read of review/SKILL.md
+line 68):** Override check fires at step 2, before step 3's
+classification logic. The plan's revised Step 3 preserves this order:
+override is the first conditional, sub-classes are subsequent
+fall-through cases. No regression risk.
+
+**Lockfile-glob coverage (live `git ls-files` against the actual repo):**
+
+```bash
+$ git ls-files | grep -E '(^|/)(package-lock\.json|bun\.lock|yarn\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|poetry\.lock|uv\.lock|flake\.lock)$'
+apps/web-platform/bun.lock
+apps/web-platform/package-lock.json
+bun.lock
+package-lock.json
+plugins/soleur/skills/pencil-setup/scripts/package-lock.json
+spike/package-lock.json
+```
+
+Only `bun.lock` and `package-lock.json` exist today. The other six
+shapes in `LOCKFILE_RE` (`yarn.lock`, `Cargo.lock`, `go.sum`,
+`Gemfile.lock`, `poetry.lock`, `uv.lock`) are forward-defense only.
+Including them is cheap (the regex doesn't need to match anything
+today) and prevents a future Rust/Go/Ruby/Python sub-app from being
+silently misclassified as `code` when it's just a lockfile bump. No
+action needed; documented for future maintainers.
+
 ### Phase 4 — Verification
 
 1. From the worktree, run `bun test plugins/soleur/test/components.test.ts`.
@@ -431,6 +637,35 @@ shell test is icing.
 5. **Override-deep-review precedence regression.** The override check must
    fire before sub-class evaluation. Phase 3 step 1 prescribes this order
    explicitly. Verify by reading the final edit.
+6. **`/tmp/preflight-diff-files.txt` concurrency.** Fixed-name path; if two
+   preflight runs race they clobber the cache. Mitigation: at /work time
+   substitute `mktemp -t preflight-diff.XXXXXXXX` and pass the path through a
+   shell var consumed by every check. Trivial and semantics-preserving — does
+   not change AC8 (regex byte-equality) or AC3 (path-set re-use).
+7. **Pathspec-to-regex translation.** Check 1 currently uses
+   `git diff -- '*/supabase/migrations/*.sql'` (pathspec); the swap to
+   `grep -E '/supabase/migrations/[^/]+\.sql$' /tmp/preflight-diff-files.txt`
+   relies on the regex matching the same paths the pathspec matched. The plan
+   body's Phase 2 step 2 prescribes a verification grep
+   (`diff -u /tmp/A.txt /tmp/B.txt` empty output) to catch translation drift.
+   If the verification fails, retain the original `git diff --name-only ... --
+   '<glob>'` form for that single check rather than translating — Phase 0
+   caching is still valuable for the seven other checks.
+8. **Bash arithmetic truncation.** `(deleted_files * 100 / total_files) >= 80`
+   is the safe form. `(deleted_files / total_files) * 100` would round to zero
+   for any deleted < total. The plan body prescribes the safe form; reviewer
+   agents should reject any "simplification" to the unsafe form.
+9. **`grep -vE` rc=1 abort under strict mode.** The Change 3 classifier uses
+   pipelines that may legitimately return zero matches (pure-lockfile diff has
+   no non-lock siblings). Each such grep MUST be suffixed `|| true` to avoid
+   pipeline abort under `set -euo pipefail`. Phase 3 prescribes this; pinned
+   in Sharp Edges.
+10. **Empty-diff edge case in preflight.** A branch with no diff vs main (e.g.,
+    `/work` Phase 0 before any commits) yields an empty
+    `/tmp/preflight-diff-files.txt`. Every path-gated check fast-path SKIPs.
+    Check 4, Check 9, and Not-Bare-Repo still execute. This is correct behavior
+    — empty diff = nothing to validate — but worth confirming on Phase 4 step
+    3's spot check.
 
 ## Sharp Edges
 
@@ -461,6 +696,28 @@ shell test is icing.
   future check adds an order-sensitive consumer (e.g., "first changed file"),
   the cache is still safe — `head -n 1` against the cache is identical to
   `head -n 1` against the live `git diff`.
+- **`grep -vE` rc=1 under strict mode.** Every grep in the Change 3 classifier
+  that may legitimately return zero matches (pure-lockfile diff has no
+  non-lock siblings, etc.) MUST be suffixed `|| true`. The plan body prescribes
+  this; reviewer agents should reject any "simplification" that drops the
+  fall-through. Use `set -uo pipefail` (drop the `e`) only as a last resort —
+  losing fail-fast on legitimate errors is worse than a verbose `|| true`
+  suffix.
+- **Pathspec-to-regex translation.** The Check 1 swap from
+  `git diff --name-only ... -- '*/supabase/migrations/*.sql'` to
+  `grep -E '/supabase/migrations/[^/]+\.sql$' /tmp/preflight-diff-files.txt`
+  is only safe if the regex matches the same paths the pathspec did. Phase 2's
+  prescribed verification (`diff -u` of two cmd outputs against the same diff)
+  catches translation drift. If a future check uses a more exotic pathspec
+  (negation `!`, magic prefixes `:(...)`), prefer the original `git diff`
+  form for that single check rather than risking translation drift.
+- **PR #3488 routes to `deletion-dominated`, not `lockfile-only`.** The plan's
+  narrative figure "10 → 2 checks" and "4 → 2 agents" both hold for #3488,
+  but the routing predicate is `deletion-dominated` (47 deletions including
+  Python/MJS source files in `.plugin/`). A reader assuming PR #3488 is the
+  `lockfile-only` archetype will misdiagnose any future regression that
+  affects only one of the two predicates. The Research Insights — Change 3
+  block above carries the full file-shape audit.
 
 ## Domain Review
 
