@@ -12,12 +12,12 @@ plan: ../../plans/2026-05-09-fix-retired-rule-id-sweep-cq-gh-issue-label-verify-
 - [ ] 1.2 Edit `plugins/soleur/skills/drain-labeled-backlog/SKILL.md:30` — drop `(rule cq-gh-issue-label-verify-name)`; the skill itself owns the convention now, so the inline rationale ("Validated against `gh label list` before querying") is sufficient.
 - [ ] 1.3 Edit `plugins/soleur/skills/drain-labeled-backlog/SKILL.md:64` — same pattern as 1.2.
 - [ ] 1.4 Edit `plugins/soleur/skills/plan/SKILL.md:721` — rewrite the `Cited rule:` parenthetical to drop the retired ID. Add a brief note that the convention now lives in `deepen-plan/SKILL.md:556` AC. Preserve `**Why:** PR #3378` verbatim.
-- [ ] 1.5 Edit `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md:375` — remove all 5 retired rule IDs from the `AGENTS.md rules:` enumeration. Replace each with a pointer to its canonical owner (`plugins/soleur/skills/ship/references/ci-workflow-authoring.md` for the 4 GitHub Actions rules; planning skills for the label-verify rule).
+- [ ] 1.5 Edit `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md:375` — remove **all 6** retired rule IDs from the `AGENTS.md rules:` enumeration (deepen-plan widened from 5 to 6 after verifying `cq-gh-issue-create-milestone-takes-title` is also retired). Replace each with a pointer to its canonical owner: `plugins/soleur/skills/ship/references/ci-workflow-authoring.md` for the 4 GitHub Actions rules; planning skills (`plan/SKILL.md`, `deepen-plan/SKILL.md:556`) for the label-verify rule; inline `gh` discoverability note for the milestone rule.
 
 ## Phase 2 — Verification
 
 - [ ] 2.1 Run `grep -rEn "cq-gh-issue-label-verify-name" --include="*.md" plugins/ knowledge-base/engineering/` and confirm zero hits.
-- [ ] 2.2 Run `grep -E "(cq-ci-steps-polling-json-endpoints-under|cq-workflow-pattern-duplication-bug-propagation|hr-in-github-actions-run-blocks-never-use|hr-github-actions-workflow-notifications)" knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` and confirm zero hits.
+- [ ] 2.2 Run `grep -E "(cq-ci-steps-polling-json-endpoints-under|cq-workflow-pattern-duplication-bug-propagation|hr-in-github-actions-run-blocks-never-use|hr-github-actions-workflow-notifications|cq-gh-issue-create-milestone-takes-title)" knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` and confirm zero hits as **active citations** (post-sweep these IDs may still appear inside `(ex-…)` breadcrumb context — that's expected; they should NOT appear in the form of the original `AGENTS.md rules:` enumeration).
 - [ ] 2.3 Run `lefthook run pre-commit` and confirm pass.
 - [ ] 2.4 Verify `plugins/soleur/skills/ship/references/ci-workflow-authoring.md` still exists (the canonical replacement for the 4 GitHub Actions rules in 1.5).
 
