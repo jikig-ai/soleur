@@ -56,16 +56,23 @@ requires_cpo_signoff: false
 Resolve all 18 open Dependabot alerts on `main` with a minimal security-hygiene PR.
 
 The dominant finding from investigation is that **12 of 18 alerts live in `.plugin/`**, a
-fully-orphaned directory left behind by an early OpenHands port (PR #1802/#1803/#1804).
-That port was superseded by `.openhands/` (PR #1805 `f449cb6a` — "refactor: migrate 63
-OpenHands agents to .openhands/skills/ format"), and the deprecation is documented in
-`knowledge-base/project/learnings/workflow-patterns/2026-04-09-openhands-plugin-agent-porting.md`
-("**Superseded:** The `.openhands-plugin/agents/` format was an intermediate step. All
-63 agents were migrated to `.openhands/skills/<name>/SKILL.md`"). The active OpenHands
-integration lives in `.openhands/` (`hooks/`, `hooks.json`, `skills/`).
+fully-orphaned directory left behind by an abandoned OpenHands plugin distribution port
+(PRs #1802 "port 15 GREEN skills" and #1804 "port 6 core pipeline skills"). The parent
+issue #1779 ("feat: build OpenHands plugin manifest and distribution package") — which
+would have produced the `plugin.json`, installer, and binding manifest needed to consume
+`.plugin/skills/*` — was closed on 2026-04-09 with the comment **"Won't do for now"**.
+The 21 ported skills under `.plugin/skills/` were never wired into any installer; canonical
+copies of every pipeline skill remain at `plugins/soleur/skills/*` (the live Claude Code
+plugin location). Separately, on the same day, PR #1805 (`f449cb6a` — "refactor: migrate
+63 OpenHands agents to .openhands/skills/ format") migrated **agents** from
+`plugins/soleur/.openhands-plugin/agents/<name>.md` to `.openhands/skills/<name>/SKILL.md`,
+producing the live `.openhands/` integration (`hooks/`, `hooks.json`, `skills/`). PR #1805
+did NOT touch `.plugin/`; the two trees are unrelated. The `.plugin/` tree at HEAD contains
+only orphaned `skills/` (no `plugin.json`, no `hooks/`, no installer).
 
 Deleting `.plugin/` therefore removes 12 alerts at the source — not by patching code we
-ship, but by deleting code we never ship.
+ship, but by deleting code we never shipped (and the abandonment of issue #1779 means we
+never will, at least not from this directory).
 
 The remaining 6 alerts split as:
 
@@ -114,7 +121,7 @@ were never reachable from any deployed surface.
 
 | Spec claim (input description) | Reality (codebase) | Plan response |
 |---|---|---|
-| `.plugin/` "looks like a stale duplicate" of `plugins/soleur/skills/pencil-setup/scripts/` | `.plugin/` is the SUPERSEDED OpenHands "agents-flat" port from PR #1802/#1803/#1804; replaced by `.openhands/` in PR #1805. Zero references from any active code path. Documented in `knowledge-base/project/learnings/workflow-patterns/2026-04-09-openhands-plugin-agent-porting.md`. | Confirmed orphaned — delete entire `.plugin/` directory (not just `.plugin/skills/pencil-setup/scripts/`). |
+| `.plugin/` "looks like a stale duplicate" of `plugins/soleur/skills/pencil-setup/scripts/` | `.plugin/` is an abandoned OpenHands plugin distribution port from PR #1802/#1804. The parent distribution issue #1779 was closed "won't do for now" on 2026-04-09; the skill files were ported but the installer/manifest work was abandoned. Pipeline skills under `.plugin/skills/` were never migrated to `.openhands/skills/`; canonical copies remain at `plugins/soleur/skills/*`. Zero references from any active code path. PR #1805 (a separate same-day commit) migrated the 63 advisory agents to `.openhands/skills/`, but did not touch `.plugin/`. | Confirmed orphaned — delete entire `.plugin/` directory (not just `.plugin/skills/pencil-setup/scripts/`). |
 | Spec mentions only `pencil-setup/scripts/package-lock.json` under `.plugin/` | `.plugin/` contains 22 skill subdirectories. The OTHER skills do not have alerts today, but they are equally orphaned (e.g., `.plugin/skills/gemini-imagegen` had a `pillow` Dependabot bump in PR #2163 — same pattern). | Delete the **entire** `.plugin/` directory in one commit, not just the pencil-setup subtree. This prevents future bot churn against orphan paths. |
 | Spec implies remaining `apps/web-platform` fast-uri alert needs a "transitive dep bump" | `fast-uri@3.1.0` is installed via `ajv@8.18.0` (transitive under multiple top-level packages: ajv-formats, ajv-keywords, sharp, schema-utils). Top-level semver allows `fast-uri@^3.0.1`, so a scoped `npm update fast-uri` will bump in-range to `3.1.2` without touching unrelated packages. | Use `npm update fast-uri` (scoped) — NOT `npm update`. Mirror with `bun update fast-uri`. |
 | Spec says "bump remaining transitive deps" | Three packages need bumping in `pencil-setup/scripts/`: `fast-uri`, `hono`, `ip-address`. fast-uri (`^3.0.1` in ajv) and hono (`^4.11.4` in SDK) are caret-ranged and bump in place. **ip-address is exactly-pinned by `express-rate-limit@8.3.1` at `"10.1.0"` — `npm update ip-address` is a no-op.** Bumping `express-rate-limit` to 8.5.1 (latest) pulls `ip-address: "^10.2.0"` transitively. | Run `npm update fast-uri hono express-rate-limit` (NOT `npm update ip-address`) in `plugins/soleur/skills/pencil-setup/scripts/`. The `express-rate-limit` upgrade fixes the ip-address alert by transitive substitution. |
@@ -142,14 +149,16 @@ CRO, CTO, COO, CLO, CFO concerns at this scope.
 
 ## Files to Delete
 
-- `.plugin/` (entire directory) — superseded by `.openhands/` (PR #1805); unreachable from
-  any active code path. Verified by:
+- `.plugin/` (entire directory) — abandoned OpenHands plugin distribution port (PRs #1802
+  and #1804); parent distribution issue #1779 closed "won't do for now" on 2026-04-09.
+  Pipeline skills were never migrated; canonical copies remain at `plugins/soleur/skills/*`.
+  Unreachable from any active code path. Verified by:
   1. `grep -rn "\.plugin/"` across `apps/`, `plugins/`, `scripts/`, `.github/`, `docs/`
      returns zero matches outside `.plugin/` itself and `knowledge-base/` historical docs.
-  2. The active OpenHands integration lives in `.openhands/{hooks,skills,hooks.json}`.
-  3. `git log -- .plugin/` last meaningful change is `771cd7ee` (Dependabot bump);
-     last feature commit is `95768099` from the original port (PR #1804) before the
-     supersedure.
+  2. The live OpenHands integration lives in `.openhands/{hooks,skills,hooks.json}` (from
+     PR #1805 — a same-day but unrelated migration of advisory agents, not pipeline skills).
+  3. `git log -- .plugin/` last meaningful human change is `95768099` from the original
+     port (PR #1804) on 2026-04-09; everything after is Dependabot bumps only.
 
 ## Files to Create
 
