@@ -42,7 +42,7 @@ export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-white"
+        className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
       >
         Disconnect
       </button>
@@ -50,12 +50,12 @@ export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
   }
 
   return (
-    <div className="rounded-xl border border-neutral-700/50 bg-neutral-900/50 p-6">
-      <h3 className="mb-2 text-lg font-semibold text-white">
+    <div className="rounded-xl border border-soleur-border-default/50 bg-soleur-bg-surface-1/50 p-6">
+      <h3 className="mb-2 text-lg font-semibold text-soleur-text-primary">
         Disconnect repository
       </h3>
-      <p className="mb-4 text-sm text-neutral-400">
-        This will unlink <span className="font-mono text-white">{repoName}</span>{" "}
+      <p className="mb-4 text-sm text-soleur-text-secondary">
+        This will unlink <span className="font-mono text-soleur-text-primary">{repoName}</span>{" "}
         from your account. Your workspace files will be removed. You can reconnect
         a repository at any time.
       </p>
@@ -69,7 +69,7 @@ export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
           type="button"
           onClick={handleDisconnect}
           disabled={isDisconnecting}
-          className="rounded-lg border border-neutral-700 bg-neutral-800 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isDisconnecting ? "Disconnecting..." : "Confirm Disconnect"}
         </button>
@@ -79,7 +79,7 @@ export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
             setIsOpen(false);
             setError(null);
           }}
-          className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-white"
+          className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           Cancel
         </button>

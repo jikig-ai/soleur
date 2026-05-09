@@ -12,13 +12,17 @@
 // V2 follow-ups tracked in #2853 backlog (V2-13: tier-classify in-process
 // MCP servers for cc-soleur-go path — referenced in factory body).
 
+import { randomUUID } from "crypto";
 import path from "path";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
-import type { WSMessage, Conversation } from "@/lib/types";
+import { applyPrefillGuard } from "./agent-prefill-guard";
+
+import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
 import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
+import { persistAndDownloadAttachments } from "./attachment-pipeline";
 
 /**
  * Runtime allowlist for `Conversation["status"]`. Mirrors the type union
@@ -65,6 +69,8 @@ import {
   resolveConciergeDocumentContext,
   _resetWorkspacePathCacheForTests,
 } from "./kb-document-resolver";
+import type { DocumentExtractMeta } from "./kb-document-resolver";
+import type { PdfExtractErrorClass } from "./pdf-text-extract";
 
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
@@ -196,6 +202,48 @@ function mirrorWithDebounce(
 let _registry: PendingPromptRegistry | null = null;
 let _reaperInterval: ReturnType<typeof setInterval> | null = null;
 const REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Hard-block list for the cc-soleur-go path (#3338).
+ *
+ * Two SDK options govern tool surface, with DIFFERENT semantics
+ * (sdk.d.ts:855-892):
+ *   - `allowedTools`: AUTO-APPROVE list — pre-approves without canUseTool.
+ *   - `disallowedTools`: HARD-BLOCK list — removes from model context entirely.
+ *   - `tools`: closed allowlist of available built-ins (alternative to
+ *     disallowedTools).
+ *
+ * The cc-router's job is to dispatch via the Skill tool to a routed sub-skill;
+ * it never needs Bash, Edit, or Write itself. We add Bash/Edit/Write to
+ * `disallowedTools` so the model literally cannot emit them — without this,
+ * Bash falls through to `canUseTool` and pops the review_gate modal in the
+ * end-user Concierge surface (the bug this PR fixes).
+ *
+ * The auto-approve list (`CC_PATH_ALLOWED_TOOLS`) is kept as a separate
+ * concern: it eliminates a `canUseTool` round-trip for read-only tools
+ * (Read, Glob, Grep, LS, NotebookRead, TodoWrite, ExitPlanMode) the cc-router
+ * legitimately uses on its own. This is auto-approve, not restriction.
+ *
+ * Routed sub-skills load their own toolset via the soleur plugin and the
+ * legacy domain-leader path (`agent-runner.ts startAgentSession`), so this
+ * narrowing is scoped to the cc-router only — exploration within routed
+ * workflows is unaffected.
+ */
+const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
+  "Read",
+  "Glob",
+  "Grep",
+  "LS",
+  "NotebookRead",
+  "TodoWrite",
+  "ExitPlanMode",
+];
+
+/**
+ * Tools removed from the cc-router's surface entirely. Adds to the
+ * canonical `[WebSearch, WebFetch]` shared with the legacy path.
+ */
+const CC_PATH_DISALLOWED_TOOLS: readonly string[] = ["Bash", "Edit", "Write"];
 
 export function getPendingPromptRegistry(): PendingPromptRegistry {
   if (_registry) return _registry;
@@ -423,12 +471,43 @@ export const realSdkQueryFactory: QueryFactory = async (
     getUserServiceTokens(args.userId),
   ]);
 
-  // Defense-in-depth: strip stale pre-approved file-tool entries from
-  // the workspace's `.claude/settings.json` so they cannot bypass
-  // `canUseTool` (permission chain step 4 before step 5). Idempotent.
-  // Async per #2918 — the lock keyed on workspacePath prevents the
-  // legacy + cc paths from racing on the same workspace.
-  await patchWorkspacePermissions(workspacePath);
+  // Workspace-permissions patch and the #3250 prefill-guard probe both
+  // depend on `workspacePath` but not on each other — parallelize so the
+  // probe doesn't add latency to cold-start dispatch. See plan
+  // §"Sharp Edges" and `agent-prefill-guard.ts` for the guard contract.
+  const [, prefillGuardResult] = await Promise.all([
+    patchWorkspacePermissions(workspacePath),
+    applyPrefillGuard({
+      resumeSessionId: args.resumeSessionId,
+      workspacePath,
+      userId: args.userId,
+      conversationId: args.conversationId,
+      feature: "cc-concierge",
+      leaderId: CC_ROUTER_LEADER_ID,
+    }),
+  ]);
+  const {
+    safeResumeSessionId,
+    contextResetNotice,
+    reason: contextResetReason,
+  } = prefillGuardResult;
+
+  // #3269 — context-reset signal. The notice is appended to systemPrompt
+  // for THIS SDK call only (single-turn; not persisted across turns).
+  // The WS event is the user-side signal; emitted exactly once per guard
+  // fire. SDK retries are internal to the returned Query AsyncGenerator
+  // (sdk.d.ts:1678-1681) and re-enter `query()`, not the factory — so
+  // `applyPrefillGuard` is naturally per-fire and a single emit suffices.
+  if (contextResetReason) {
+    defaultSendToClient(args.userId, {
+      type: "context_reset",
+      reason: contextResetReason,
+      conversationId: args.conversationId,
+    });
+  }
+  const effectiveSystemPrompt = contextResetNotice
+    ? `${args.systemPrompt}\n\n${contextResetNotice}`
+    : args.systemPrompt;
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
@@ -537,9 +616,17 @@ export const realSdkQueryFactory: QueryFactory = async (
         pluginPath,
         apiKey,
         serviceTokens,
-        systemPrompt: args.systemPrompt,
-        resumeSessionId: args.resumeSessionId,
+        systemPrompt: effectiveSystemPrompt,
+        resumeSessionId: safeResumeSessionId,
         mcpServers: {},
+        // #3338 — auto-approve the cc-router's read-only tool surface so they
+        // don't pay a canUseTool round-trip per call. This is auto-approve,
+        // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
+        allowedTools: [...CC_PATH_ALLOWED_TOOLS],
+        // #3338 — HARD-BLOCK Bash/Edit/Write at the SDK level so the model
+        // cannot emit them (no review_gate modal can appear). Merged with
+        // the canonical [WebSearch, WebFetch] disallowed list.
+        extraDisallowedTools: CC_PATH_DISALLOWED_TOOLS,
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning
         // 2026-04-17-log-injection-unicode-line-separators.md) and
@@ -681,6 +768,43 @@ export interface DispatchSoleurGoArgs {
   artifactPath?: string;
   documentKind?: "pdf" | "text";
   documentContent?: string;
+  /**
+   * 2026-05-06 follow-up to #3338. Set by `resolveConciergeDocumentContext`
+   * when the in-process PDF extractor surfaced a typed failure class. The
+   * runner emits `buildPdfUnreadableDirective` (content-grounded reply)
+   * instead of `buildPdfGatedDirective` (apt-get-cascade-prone Read path).
+   */
+  documentExtractError?: PdfExtractErrorClass;
+  /**
+   * 2026-05-07 follow-up to #3429. Per-failure metadata. Currently only
+   * `numPages` (interpolated by `buildPdfTooLongDirective` for the
+   * page-count gate's "I see {N} pages" copy). Without plumbing through
+   * here, the runner reads `?? 0` and the user sees "I see 0 pages" on
+   * every triggering case. Caught by the user-impact-reviewer review of
+   * PR #3430.
+   */
+  documentExtractMeta?: DocumentExtractMeta;
+  /**
+   * 2026-05-06 follow-up — Bug A1 fix. Resolved workspace path threaded
+   * from the ws-handler through `runner.dispatch` →
+   * `buildSoleurGoSystemPrompt` so PDF gated + text-too-large directives
+   * can inject workspace-absolute Read paths. Required by the SDK Read
+   * tool's `file_path` "absolute path" contract; passing relative paths
+   * triggered the sandbox-deny path that produced the user-facing
+   * "outside my workspace boundary" reply (#3376).
+   */
+  workspacePath?: string;
+  /**
+   * Attachment refs uploaded via the chat-input paperclip flow. When
+   * non-empty, `dispatchSoleurGo` (a) inserts a `messages` row to
+   * satisfy the `message_attachments.message_id` FK, (b) calls the
+   * shared attachment-pipeline helper to persist metadata + download
+   * files into `<workspace>/attachments/<convId>/`, and (c) augments
+   * `userMessage` with the resulting `attachmentContext` text so the
+   * agent can `Read` the on-disk paths. Mirrors the legacy
+   * `agent-runner.ts:sendUserMessage` flow exactly. See #3254.
+   */
+  attachments?: AttachmentRef[];
 }
 
 /**
@@ -696,7 +820,7 @@ export async function dispatchSoleurGo(
   const {
     userId,
     conversationId,
-    userMessage,
+    userMessage: rawUserMessage,
     currentRouting,
     sessionId,
     sendToClient,
@@ -704,7 +828,78 @@ export async function dispatchSoleurGo(
     artifactPath,
     documentKind,
     documentContent,
+    documentExtractError,
+    documentExtractMeta,
+    workspacePath: callerWorkspacePath,
+    attachments,
   } = args;
+
+  // Verify conversation ownership AND bump `last_active` in a single
+  // round-trip. `updateConversationFor` with `expectMatch: true` runs the
+  // UPDATE scoped to (id, user_id) and returns `ok: false` when zero rows
+  // matched — that's our 404 signal. Sentry mirroring on failure happens
+  // inside the wrapper, so we only translate to the throw here. Routes
+  // through the canonical wrapper per the R8 lint rule.
+  const ownership = await updateConversationFor(
+    userId,
+    conversationId,
+    { last_active: new Date().toISOString() },
+    {
+      feature: "cc-dispatcher",
+      op: "verify-conversation-ownership",
+      expectMatch: true,
+    },
+  );
+  if (!ownership.ok) {
+    throw new Error("Conversation not found");
+  }
+
+  // #3254 — persist a `messages` row for every cc turn so
+  // `message_attachments.message_id` can be FK'd. The legacy single-leader
+  // path has always done this in `agent-runner.ts:sendUserMessage`; the
+  // cc path silently dropped attachments because no parent message existed.
+  // The SDK's session-id resume mechanism still owns transcript replay
+  // for the agent — these rows are for attachment metadata durability and
+  // for `api-messages.ts` history hydration on tab reload.
+  const messageId = randomUUID();
+  const { error: insertErr } = await supabase().from("messages").insert({
+    id: messageId,
+    conversation_id: conversationId,
+    role: "user",
+    content: rawUserMessage,
+    tool_calls: null,
+    leader_id: null,
+  });
+  if (insertErr) {
+    reportSilentFallback(insertErr, {
+      feature: "cc-dispatcher",
+      op: "persist-user-message",
+      extra: { userId, conversationId },
+    });
+    throw new Error(`Failed to save user message: ${insertErr.message}`);
+  }
+
+  // Persist attachment metadata + download files into the workspace.
+  // Mirrors `agent-runner.ts:sendUserMessage` exactly via the shared
+  // helper. On any per-file download failure, the helper omits that file
+  // from the `attachmentContext` text — partial success is preferred over
+  // a hard turn failure. Validation/INSERT errors propagate to the outer
+  // dispatch catch, which mirrors via `mirrorWithDebounce` (no inner
+  // try/catch — that would double-mirror and bypass the dispatch
+  // debounce, flooding Sentry on a misconfigured Storage URL).
+  let userMessage = rawUserMessage;
+  if (attachments && attachments.length > 0) {
+    const { attachmentContext } = await persistAndDownloadAttachments({
+      supabase: supabase(),
+      userId,
+      conversationId,
+      messageId,
+      attachments,
+    });
+    if (attachmentContext) {
+      userMessage = `${rawUserMessage}\n\n${attachmentContext}`;
+    }
+  }
 
   const runner = getSoleurGoRunner(sendToClient);
 
@@ -731,8 +926,52 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // Per-turn assistant text accumulator. Reset to "" inside
+  // `saveAssistantMessage` after each turn boundary, so a turn that ends in
+  // `result` with zero text correctly skips the insert without consuming the
+  // previous turn's data. Mirrors the pattern at `agent-runner.ts:1079` so
+  // `api-messages.ts` returns BOTH user and assistant rows on resume —
+  // without this the cc path's history is user-only and the resumed thread
+  // re-renders the routing chip as if the question were unanswered.
+  let accumulatedAssistantText = "";
+
+  async function saveAssistantMessage(): Promise<void> {
+    // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
+    // mutate `fullText` while this insert is in flight (single async loop
+    // serializes onText/onTextTurnEnd, but the await yields the microtask).
+    const fullText = accumulatedAssistantText;
+    accumulatedAssistantText = "";
+    if (!fullText) return;
+
+    const { error } = await supabase().from("messages").insert({
+      id: randomUUID(),
+      conversation_id: conversationId,
+      role: "assistant",
+      content: fullText,
+      tool_calls: null,
+      leader_id: CC_ROUTER_LEADER_ID,
+    });
+    if (error) {
+      // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
+      // — a misconfigured Supabase RLS for one user could otherwise emit one
+      // Sentry event per assistant turn (10 turns/conv × 100 active convs =
+      // 1000 events/hr).
+      mirrorWithDebounce(
+        error,
+        {
+          feature: "cc-dispatcher",
+          op: "save-assistant-message-failed",
+          extra: { userId, conversationId, length: fullText.length },
+        },
+        userId,
+        "save-assistant-message-failed",
+      );
+    }
+  }
+
   const events: DispatchEvents = {
     onText: (text) => {
+      accumulatedAssistantText += text;
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -756,6 +995,8 @@ export async function dispatchSoleurGo(
       );
     },
     onTextTurnEnd: () => {
+      // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
+      void saveAssistantMessage();
       // Per-turn boundary → terminal stream event for the cc_router bubble.
       // Without this, the client reducer keeps the bubble in
       // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown
@@ -830,6 +1071,13 @@ export async function dispatchSoleurGo(
       artifactPath,
       documentKind,
       documentContent,
+      documentExtractError,
+      documentExtractMeta,
+      // 2026-05-06 Bug A1 fix — thread workspacePath through so the
+      // runner builds the system prompt with workspace-absolute Read
+      // instructions. Falls back to the locally-resolved value (set by
+      // the `.then` above) when the caller didn't pre-resolve it.
+      workspacePath: callerWorkspacePath ?? workspacePath,
     });
   } catch (err) {
     const errorClass =
@@ -862,7 +1110,7 @@ export async function dispatchSoleurGo(
     } else {
       sendToClient(userId, {
         type: "error",
-        message: "Command Center router is unavailable — try again shortly.",
+        message: "Dashboard router is unavailable — try again shortly.",
       });
     }
     // Belt-and-suspenders: drain ccBashGates here too. The runner's

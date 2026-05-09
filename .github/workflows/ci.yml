@@ -33,6 +33,20 @@ jobs:
       - name: Lint conversations update callsites (R8 wrapper enforcement)
         run: bash scripts/lint-conversations-update-callsites.sh
 
+  # PR-B §1.6 — Service-role allowlist gate. Rejects any importer of
+  # `createServiceClient` / `getServiceClient` in apps/web-platform/{server,lib}
+  # that is not enumerated in apps/web-platform/.service-role-allowlist.
+  # Replaces the rejected ESLint custom rule (per DHH cut #1, simplicity #6).
+  # CODEOWNERS pins the allowlist file so this gate cannot be self-defeated.
+  service-role-allowlist-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Service-role allowlist gate
+        run: bash apps/web-platform/scripts/service-role-allowlist-gate.sh
+      - name: Service-role allowlist gate self-test
+        run: bash apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
+
   rule-metrics-shape:
     runs-on: ubuntu-latest
     steps:
@@ -108,6 +122,11 @@ jobs:
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
           bun-version-file: ".bun-version"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

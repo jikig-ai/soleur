@@ -51,13 +51,13 @@ export function Sheet({
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
 
   const desktopClasses =
-    "z-40 flex h-full w-[380px] shrink-0 flex-col border-l border-neutral-800 bg-neutral-950 shadow-2xl";
+    "z-40 flex h-full w-[380px] shrink-0 flex-col border-l border-soleur-border-default bg-soleur-bg-base shadow-2xl";
 
   const mobileHeight =
     dragHeight !== null ? dragHeight : Math.round(vh * MOBILE_HEIGHT_VH);
 
   const mobileClasses =
-    "fixed bottom-0 left-0 right-0 z-40 flex flex-col rounded-t-2xl border-t border-neutral-800 bg-neutral-950 shadow-2xl";
+    "fixed bottom-0 left-0 right-0 z-40 flex flex-col rounded-t-2xl border-t border-soleur-border-default bg-soleur-bg-base shadow-2xl";
 
   function onPointerDown(e: React.PointerEvent<HTMLButtonElement>) {
     if (isDesktop) return;
@@ -105,7 +105,7 @@ export function Sheet({
           type="button"
           aria-label="Resize panel"
           title="Drag to close"
-          className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-neutral-700 touch-none"
+          className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-soleur-bg-surface-2 touch-none"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}

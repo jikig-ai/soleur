@@ -1,0 +1,474 @@
+# GitHub App drift-guard: detects H_C-class drift (silent App swap) before
+# users hit broken auth. Mints an RS256 JWT inline (no third-party Action),
+# calls https://api.github.com/app, and asserts response.id +
+# response.client_id match expected sentinels byte-for-byte.
+#
+# Brand-survival threshold: single-user incident. A silent swap of the
+# GitHub App backing OAuth means every sign-in attempt routes to a
+# different App's consent screen — one user's broken sign-in IS the
+# brand-ending incident. Three labels split the failure modes:
+#   - ci/auth-broken      : drift detected (App swap, key rotation, etc.)
+#   - ci/guard-broken     : guard itself malfunctioned (bad PEM, network)
+#   - security/leak-suspected : log scan suggests credential leak
+#
+# Security: PEM is base64-decoded into $RUNNER_TEMP (mode 0o600), masked
+# line-by-line via `::add-mask::`, then `rm -f`d in cleanup. The runner
+# is ephemeral (cloud VM, COW filesystem) so `shred` is theater. The
+# leak tripwire is the load-bearing post-step control: greps the captured
+# step output for any PEM-block header or JWT-shaped string.
+#
+# Trap dossier (silent failures caught at plan-review):
+#   P1-1: openssl base64 -A trails newline -> use base64 -w 0 + tr -d '=\n'
+#   P1-2: gh api sends `Authorization: token`, App-JWT requires Bearer
+#         -> use curl with --header @<(printf 'Authorization: Bearer %s')
+#   P1-3: title prefix collision with oauth-probe -> distinct prefixes
+#   P0-1: --argjson iss "$APP_ID" crashes on non-numeric -> validate first
+#   P0-2: record_failure conflated mode/label -> 3-output shape
+#   P0-3: if: failure() dead under continue-on-error -> use steps.<id>.outcome
+#
+# See:
+#   - knowledge-base/project/specs/feat-3187-gh-app-drift-guard/spec.md
+#   - knowledge-base/project/plans/2026-05-05-feat-github-app-drift-guard-plan.md
+#   - knowledge-base/engineering/ops/runbooks/github-app-drift.md
+#   - knowledge-base/project/learnings/best-practices/2026-05-05-workflow-jwt-mint-silent-failure-traps.md
+#
+# Ref #3187.
+
+name: "Scheduled: GitHub App Drift-Guard"
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-github-app-drift-guard
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift-check:
+    if: github.repository == 'jikig-ai/soleur'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (sparse, for notify-ops-email)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          sparse-checkout: |
+            .github/actions
+          sparse-checkout-cone-mode: false
+
+      - name: Defensively create labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create ci/guard-broken --repo "$GH_REPO" \
+            --description "Synthetic CI guard malfunctioned" \
+            --color D93F0B 2>/dev/null || true
+          gh label create security/leak-suspected --repo "$GH_REPO" \
+            --description "Workflow log scan suggests credential leak" \
+            --color B60205 2>/dev/null || true
+          gh label create ci/auth-broken --repo "$GH_REPO" \
+            --description "Synthetic CI probe detected an auth-flow regression" \
+            --color B60205 2>/dev/null || true
+
+      - id: check
+        name: Drift check (mint JWT, call /app, assert)
+        env:
+          APP_ID: ${{ secrets.GH_APP_DRIFTGUARD_APP_ID }}
+          PRIVATE_KEY_B64: ${{ secrets.GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 }}
+          EXPECTED_CLIENT_ID: ${{ secrets.OAUTH_PROBE_GITHUB_CLIENT_ID }}
+        run: |
+          # NOT set -e — we collect failure modes and emit them as outputs.
+          # set -e would abort on the first non-zero, defeating the whole
+          # 3-output failure-routing model. Mirror of oauth-probe:67.
+          set -uo pipefail
+          exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1
+
+          failure_mode=""
+          failure_detail=""
+          failure_label=""
+
+          record_failure() {
+            local mode="$1"
+            local detail="$2"
+            local label="$3"
+            # Allowlist routing labels. A typo (e.g., "ci/auth-borken")
+            # would silently route to the case-default at the issue-create
+            # step; warn here so the typo surfaces at write-time.
+            case "$label" in
+              ci/auth-broken|ci/guard-broken) ;;
+              *)
+                echo "::warning::record_failure called with unknown label '$label' — routing as ci/guard-broken"
+                label="ci/guard-broken"
+                ;;
+            esac
+            if [[ -z "$failure_mode" ]]; then
+              failure_mode="$mode"
+              failure_detail="$detail"
+              failure_label="$label"
+            fi
+          }
+
+          b64url() {
+            base64 -w 0 | tr '+/' '-_' | tr -d '=\n'
+          }
+
+          mint_jwt() {
+            # Local pipefail so a partial-output silent-success in the
+            # openssl|b64url pipeline does NOT produce a malformed JWT
+            # while the outer step's `JWT=$(mint_jwt) || …` capture
+            # treats it as success. Pipe stderr to a step-scoped log so
+            # record_failure can include the actual openssl error.
+            set -o pipefail
+            # JWT lifetime: GitHub's hard cap on App-JWT exp is 10 minutes.
+            # 540s forward + 60s back-buffer for clock skew = 600s window
+            # (still under the 10min cap). Constants are local so the
+            # contract test can extract and re-run mint_jwt in isolation
+            # without depending on script-level state.
+            # https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+            local backdate_s=60
+            local lifetime_s=540
+            local now header payload unsigned signature
+            now=$(date +%s)
+            header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+            payload=$(jq -nc \
+              --argjson iss "$APP_ID" \
+              --argjson iat "$((now - backdate_s))" \
+              --argjson exp "$((now + lifetime_s))" \
+              '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+            unsigned="${header}.${payload}"
+            signature=$(printf '%s' "$unsigned" | \
+              openssl dgst -sha256 -sign "$KEY_FILE" -binary 2>"${RUNNER_TEMP:-/tmp}/mint-stderr.log" | b64url)
+            printf '%s.%s\n' "$unsigned" "$signature"
+          }
+
+          if [[ -z "${APP_ID:-}" ]]; then
+            record_failure "missing_app_id" \
+              "GH_APP_DRIFTGUARD_APP_ID secret is not set" \
+              "ci/guard-broken"
+          elif ! [[ "$APP_ID" =~ ^[1-9][0-9]+$ ]]; then
+            record_failure "app_id_not_numeric" \
+              "GH_APP_DRIFTGUARD_APP_ID is not a positive integer" \
+              "ci/guard-broken"
+          fi
+
+          if [[ -z "${EXPECTED_CLIENT_ID:-}" ]]; then
+            record_failure "missing_expected_client_id" \
+              "OAUTH_PROBE_GITHUB_CLIENT_ID secret is not set" \
+              "ci/guard-broken"
+          fi
+
+          KEY_FILE=""
+          RESPONSE_FILE=""
+          if [[ -z "$failure_mode" ]]; then
+            if [[ -z "${PRIVATE_KEY_B64:-}" ]]; then
+              record_failure "missing_private_key" \
+                "GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 secret is not set" \
+                "ci/guard-broken"
+            else
+              umask 077
+              KEY_FILE=$(mktemp -p "$RUNNER_TEMP" app.pem.XXXXXX)
+              if ! printf '%s' "$PRIVATE_KEY_B64" | base64 -d > "$KEY_FILE" 2>/dev/null; then
+                record_failure "pem_b64_decode_failed" \
+                  "GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 did not base64-decode" \
+                  "ci/guard-broken"
+              else
+                while IFS= read -r line; do
+                  [[ -n "$line" ]] && echo "::add-mask::$line"
+                done < "$KEY_FILE"
+                if ! openssl rsa -in "$KEY_FILE" -check -noout 2>/dev/null; then
+                  record_failure "pem_shape_invalid" \
+                    "Decoded PRIVATE_KEY_B64 is not a valid RSA PEM" \
+                    "ci/guard-broken"
+                fi
+              fi
+            fi
+          fi
+
+          if [[ -z "$failure_mode" ]]; then
+            export KEY_FILE
+            JWT=$(mint_jwt) || {
+              mint_err=$(head -c 200 "$RUNNER_TEMP/mint-stderr.log" 2>/dev/null || true)
+              record_failure "jwt_mint_failed" \
+                "openssl/jq pipeline returned non-zero: ${mint_err:-no stderr captured}" \
+                "ci/guard-broken"
+            }
+            if [[ -n "${JWT:-}" ]]; then
+              echo "::add-mask::$JWT"
+            else
+              # Defensive: if mint failed silently but record_failure didn't
+              # fire (e.g., subshell-success-with-empty-output), surface it.
+              [[ -z "$failure_mode" ]] && record_failure "jwt_mint_empty" \
+                "mint_jwt produced empty output despite zero exit status" \
+                "ci/guard-broken"
+            fi
+          fi
+
+          # Re-check failure_mode after the mint block — defensive against
+          # the JWT scope leak between if-blocks. A future intermediate
+          # block that touches failure_mode would otherwise leave $JWT
+          # stale at the curl call site.
+          if [[ -z "$failure_mode" && -n "${JWT:-}" ]]; then
+            RESPONSE_FILE=$(mktemp -p "$RUNNER_TEMP" app-response.XXXXXX)
+            HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
+              -o "$RESPONSE_FILE" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              --header @<(printf 'Authorization: Bearer %s' "$JWT") \
+              https://api.github.com/app) || HTTP_CODE="network_error"
+
+            if [[ "$HTTP_CODE" == "network_error" ]]; then
+              record_failure "github_api_network" \
+                "curl https://api.github.com/app -> network error" \
+                "ci/guard-broken"
+            elif [[ "$HTTP_CODE" == "401" ]]; then
+              # 401 has two equally-plausible causes that route differently:
+              # (a) App swapped/deleted/suspended (true drift -> ci/auth-broken)
+              # (b) our PEM is stale relative to GitHub-side rotation
+              #     (guard malfunction -> ci/guard-broken). Operator triage
+              #     decides via the runbook's 401-disambiguation procedure.
+              # We default to ci/auth-broken because (a) is more likely AND
+              # has higher user impact; (b) is recoverable by re-syncing
+              # Doppler→GH secrets.
+              record_failure "github_app_401" \
+                "GET /app -> 401 Bad credentials. Either App ID ${APP_ID} was deleted/suspended/swapped (drift) OR our PEM is stale vs GitHub-side rotation (guard mis-bootstrap). See runbook 401-disambiguation." \
+                "ci/auth-broken"
+            elif [[ "$HTTP_CODE" != "200" ]]; then
+              record_failure "github_api_http" \
+                "GET /app -> HTTP ${HTTP_CODE}" \
+                "ci/guard-broken"
+            elif ! jq -e . "$RESPONSE_FILE" >/dev/null 2>&1; then
+              record_failure "github_api_invalid_json" \
+                "GET /app -> non-JSON body (HTTP ${HTTP_CODE})" \
+                "ci/guard-broken"
+            else
+              ACTUAL_ID=$(jq -r '.id // empty' "$RESPONSE_FILE")
+              ACTUAL_CLIENT_ID=$(jq -r '.client_id // empty' "$RESPONSE_FILE")
+
+              if [[ -z "$ACTUAL_ID" || -z "$ACTUAL_CLIENT_ID" ]]; then
+                record_failure "github_api_missing_fields" \
+                  "GET /app response missing id or client_id field" \
+                  "ci/guard-broken"
+              elif [[ "$ACTUAL_ID" != "$APP_ID" ]]; then
+                record_failure "app_id_mismatch" \
+                  "GitHub App database ID drift: expected ${APP_ID}, got ${ACTUAL_ID}" \
+                  "ci/auth-broken"
+              elif [[ "$ACTUAL_CLIENT_ID" != "$EXPECTED_CLIENT_ID" ]]; then
+                record_failure "client_id_mismatch" \
+                  "GitHub App client_id drift: expected ${EXPECTED_CLIENT_ID}, got ${ACTUAL_CLIENT_ID}" \
+                  "ci/auth-broken"
+              fi
+            fi
+          fi
+
+          # Sanitize for $GITHUB_OUTPUT: strip CR/LF/form-feed/vertical-tab/
+          # DEL plus NEL (U+0085) and Unicode line/paragraph separators
+          # (U+2028/U+2029). The latter two render as line breaks in markdown
+          # issue bodies and could be used to forge ::warning:: annotations
+          # or break the key=value contract for $GITHUB_OUTPUT. Bash's
+          # ${var//[$'…']/} doesn't reliably cover multi-byte UTF-8; pipe
+          # through sed for the explicit byte sequences. Mirror of
+          # oauth-probe's strip_log_injection (yaml :84-90).
+          strip_log_injection() {
+            # First pass: ASCII control chars via tr (single-byte safe).
+            # Second pass: explicit UTF-8 byte sequences for U+0085 (C2 85),
+            # U+2028 (E2 80 A8), U+2029 (E2 80 A9) via sed.
+            tr -d '\r\n\f\v\x7f' | sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'
+          }
+          fail_mode_safe=$(printf '%s' "$failure_mode" | strip_log_injection)
+          fail_detail_safe=$(printf '%s' "$failure_detail" | strip_log_injection)
+          fail_label_safe=$(printf '%s' "$failure_label" | strip_log_injection)
+          {
+            echo "failure_mode=${fail_mode_safe}"
+            echo "failure_detail=${fail_detail_safe}"
+            echo "failure_label=${fail_label_safe}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ -n "$fail_mode_safe" ]]; then
+            echo "::warning::Drift-guard failed: ${fail_mode_safe} — ${fail_detail_safe} (label=${fail_label_safe})"
+          else
+            echo "Drift-guard passed."
+          fi
+
+      - id: tripwire
+        name: Leak tripwire (PEM/JWT scan of step output)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          LOG="$RUNNER_TEMP/step-output.log"
+          if [[ ! -f "$LOG" ]]; then
+            echo "No step-output.log captured."
+            exit 0
+          fi
+
+          # Strip runner-directive lines before scanning. The drift step
+          # registers `::add-mask::<line>` for each PEM line and for the
+          # minted JWT, plus the workflow may emit `::warning::`/`::error::`
+          # directives. `tee -a` captures these to step-output.log BEFORE
+          # the runner consumes them, so the file contains
+          # `::add-mask::-----BEGIN RSA PRIVATE KEY-----` and
+          # `::add-mask::eyJ...JWT...`. These are mask REGISTRATIONS, not
+          # leaks — the runner replaces matched values in the displayed
+          # log. Filtering `^::` lines before grepping is correct: a real
+          # leak via plain `echo` would still match (it would appear on a
+          # non-`::`-prefixed line). The filter only hides values that we
+          # already explicitly registered for masking.
+          #
+          # Three alternations:
+          #   PEM block header (covers RSA, PKCS#8, EC, OPENSSH; rejects PUBLIC KEY)
+          #   base64-of-PEM ("LS0tLS1CRUdJTi…" — what PRIVATE_KEY_B64 itself looks like)
+          #   JWT segment prefix (eyJ + 20+ base64url chars)
+          # The base64-of-PEM alternation catches a future-PR mistake where
+          # someone echoes $PRIVATE_KEY_B64 directly without decoding (the
+          # decoded PEM would be masked, but the un-decoded base64 form
+          # bypasses the line-by-line ::add-mask:: registration).
+          if grep -v '^::' "$LOG" | grep -E "BEGIN [A-Z ]*PRIVATE KEY|LS0tLS1CRUdJTi[A-Za-z0-9+/]|eyJ[A-Za-z0-9_-]{20,}" >/dev/null; then
+            echo "::error::Leak tripwire fired."
+
+            BODY_FILE=$(mktemp)
+            NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+            {
+              printf '## Leak tripwire fired\n\n'
+              printf 'A PEM-block header or JWT-shaped string was found in this run'\''s captured step output. Treat as credential leak suspected until proven otherwise.\n\n'
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### What to do\n\n'
+              printf '1. Open the run log and inspect the offending lines (do NOT paste them here).\n'
+              printf '2. If a real credential leaked: rotate the GitHub App private key immediately (see runbook).\n'
+              printf '3. Update the workflow to mask whatever path leaked.\n\n'
+              printf '**Tracks:** #3187\n'
+            } > "$BODY_FILE"
+
+            gh issue create --repo "$GH_REPO" \
+              --title "[security/leak-suspected] GitHub App drift-guard log-leak tripwire" \
+              --label "security/leak-suspected" \
+              --label "ci/guard-broken" \
+              --label "priority/p1-high" \
+              --body-file "$BODY_FILE" || true
+
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+          echo "Leak tripwire passed."
+
+      - name: File or comment on tracking issue (failure)
+        if: steps.check.outputs.failure_mode != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAILURE_MODE: ${{ steps.check.outputs.failure_mode }}
+          FAILURE_DETAIL: ${{ steps.check.outputs.failure_detail }}
+          FAILURE_LABEL: ${{ steps.check.outputs.failure_label }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUNBOOK_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/github-app-drift.md
+        run: |
+          set -euo pipefail
+
+          case "$FAILURE_LABEL" in
+            ci/auth-broken)
+              ISSUE_TITLE="[ci/auth-broken] GitHub App drift-guard fired"
+              ;;
+            ci/guard-broken)
+              ISSUE_TITLE="[ci/guard-broken] GitHub App drift-guard malfunctioned"
+              ;;
+            *)
+              # Belt-and-suspenders: record_failure already allowlists the
+              # label. If we reach this branch, the routing pipeline drifted —
+              # surface a warning AND default to ci/guard-broken so an
+              # operator sees the issue rather than a silent dead-letter.
+              echo "::warning::Issue-create step received unknown FAILURE_LABEL='${FAILURE_LABEL}', defaulting to ci/guard-broken"
+              ISSUE_TITLE="[ci/guard-broken] GitHub App drift-guard malfunctioned"
+              FAILURE_LABEL="ci/guard-broken"
+              ;;
+          esac
+
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          BODY_FILE=$(mktemp)
+          trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## GitHub App drift-guard failed\n\n'
+            printf -- '- **Failure mode:** `%s`\n' "$FAILURE_MODE"
+            printf -- '- **Detail:** %s\n' "$FAILURE_DETAIL"
+            printf -- '- **Routed to:** `%s`\n' "$FAILURE_LABEL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What to do\n\nSee [github-app-drift.md runbook](%s).\n\n' "$RUNBOOK_URL"
+            printf '**Tracks:** #3187\n'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+            --label "$FAILURE_LABEL" \
+            --search 'in:title "GitHub App drift-guard"' \
+            --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Existing tracking issue #$EXISTING — adding comment."
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Drift-guard failed again at ${NOW} — \`${FAILURE_MODE}\`: ${FAILURE_DETAIL}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" \
+              --title "$ISSUE_TITLE" \
+              --label "$FAILURE_LABEL" \
+              --label "priority/p1-high" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - id: notify
+        name: Notify ops on failure
+        if: steps.check.outputs.failure_mode != '' || steps.tripwire.outcome == 'failure'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "[Soleur Ops] GitHub App drift-guard: ${{ steps.check.outputs.failure_mode || 'leak-suspected' }}"
+          body: |
+            <p><strong>Failure mode:</strong> ${{ steps.check.outputs.failure_mode || 'leak_tripwire_fired' }}</p>
+            <p><strong>Detail:</strong> ${{ steps.check.outputs.failure_detail || 'PEM or JWT-shaped string found in step output' }}</p>
+            <p><strong>Label:</strong> ${{ steps.check.outputs.failure_label || 'security/leak-suspected' }}</p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Run log</a></p>
+            <p>Runbook: <a href="https://github.com/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/github-app-drift.md">github-app-drift.md</a></p>
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Auto-close stale issue (drift-guard green)
+        if: steps.check.outputs.failure_mode == '' && steps.tripwire.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          for label in ci/auth-broken ci/guard-broken; do
+            STALE=$(gh issue list --repo "$GH_REPO" --state open \
+              --label "$label" \
+              --search 'in:title "GitHub App drift-guard"' \
+              --json number --jq '.[0].number // empty' 2>/dev/null) || STALE=""
+
+            if [[ -n "$STALE" ]]; then
+              echo "Closing stale tracking issue #$STALE (label=$label)."
+              gh issue close "$STALE" --repo "$GH_REPO" \
+                --comment "Drift-guard green at ${NOW}. id + client_id matched expected sentinels; leak tripwire passed. Run: ${RUN_URL}"
+            fi
+          done
+
+      - name: Cleanup PEM and response file (best-effort)
+        if: always()
+        run: |
+          # Cleanup all step-scoped temp files (PEM, response body, mint stderr).
+          # rm -f, not shred — runners are ephemeral cloud VMs on COW
+          # filesystems; shred adds no security here. See runbook.
+          rm -f "$RUNNER_TEMP"/app.pem.* \
+                "$RUNNER_TEMP"/app-response.* \
+                "$RUNNER_TEMP/mint-stderr.log" 2>/dev/null || true

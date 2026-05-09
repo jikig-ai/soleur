@@ -8,6 +8,7 @@ function emptyState(): ChatState {
     activeStreams: new Map(),
     workflow: { state: "idle" },
     spawnIndex: new Map(),
+    streamState: "idle",
   };
 }
 
@@ -53,6 +54,7 @@ describe("chatReducer", () => {
       activeStreams: new Map([["cpo", 0]]),
       workflow: { state: "idle" },
       spawnIndex: new Map(),
+      streamState: "idle",
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -75,6 +77,7 @@ describe("chatReducer", () => {
       spawnIndex: new Map([
         ["s-1", { messageIdx: 0, childIdx: 0 }],
       ]),
+      streamState: "idle",
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -112,6 +115,7 @@ describe("chatReducer", () => {
       activeStreams: new Map([["cpo", 0]]),
       workflow: { state: "idle" },
       spawnIndex: new Map(),
+      streamState: "idle",
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 

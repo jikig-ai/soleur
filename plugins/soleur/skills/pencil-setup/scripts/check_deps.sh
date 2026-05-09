@@ -435,7 +435,10 @@ attempt_headless_install() {
     return 1
   fi
   echo "  [installing] Headless CLI to ~/.local..."
-  if "$npm_bin" install --prefix "$HOME/.local" @anthropic-ai/pencil-cli 2>&1; then
+  # Package name is @pencil.dev/cli (not @anthropic-ai/pencil-cli — that 404s).
+  # The detect_headless_cli function on line 182 already expects @pencil.dev/cli
+  # in the symlink target; the previous install command was inconsistent.
+  if "$npm_bin" install --prefix "$HOME/.local" @pencil.dev/cli 2>&1; then
     detect_headless_cli && return 0
     echo "  [FAILED] Install succeeded but binary not found"
   else

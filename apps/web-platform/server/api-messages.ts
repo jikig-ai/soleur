@@ -69,10 +69,21 @@ export async function handleConversationMessages(
     return;
   }
 
-  // Load messages
+  // Load messages — joined with `message_attachments` so the chat surface
+  // can rehydrate attachment chips on reload (#3254). The relation is
+  // FK'd via `message_attachments.message_id`; an empty array is the
+  // expected shape for messages without attachments.
   const { data: messages, error: msgErr } = await supabase
     .from("messages")
-    .select("id, role, content, leader_id, created_at")
+    .select(
+      // `status` and `usage` (added in migration 040) carry the
+      // aborted-turn marker + token cost + completed-actions snapshot
+      // so PR2's history reload can render the marker for partial
+      // assistant text persisted on Stop or tab-close. Without these
+      // here, the live WS-subscriber would see the marker once and a
+      // page reload would silently drop it (G2 disclosure regression).
+      "id, role, content, leader_id, created_at, status, usage, message_attachments(id, storage_path, filename, content_type, size_bytes)",
+    )
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
@@ -87,18 +98,19 @@ export async function handleConversationMessages(
     return;
   }
 
-  // Diagnostic breadcrumb gated on the pathological case only: a 200 with
-  // zero messages for a row that ownership-checked successfully is the H1
-  // signal (row mismatch or genuinely empty thread). Logging on every
-  // success would burn the 100-entry breadcrumb buffer with noise that
-  // displaces useful UI/navigation context when an unrelated error fires
-  // later in the same request scope.
+  // 200 with zero messages on an ownership-checked row — diagnostic for
+  // the empty-banner class. `warning` (raised from `info` in #3267) so it
+  // survives Sentry's per-event downsampling. Some baseline noise from
+  // fresh-but-not-yet-written conversations is accepted.
+  // TODO(#3267): if this co-fires with client `history-fetch-no-session`
+  // for the same conversationId, add an `X-Resumed-Count` header so the
+  // WS-handler's `messageCount` can be cross-checked (H4 disambiguation).
   const messageCount = messages?.length ?? 0;
   if (messageCount === 0) {
     Sentry.addBreadcrumb({
       category: "kb-chat",
       message: "history-fetch-success-empty",
-      level: "info",
+      level: "warning",
       data: { conversationId, count: 0 },
     });
   }

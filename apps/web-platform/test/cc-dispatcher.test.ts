@@ -1,9 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockReportSilentFallback, mockFetchUserWorkspacePath } = vi.hoisted(() => ({
+const {
+  mockReportSilentFallback,
+  mockFetchUserWorkspacePath,
+  mockMessagesInsert,
+  mockUpdateConversationFor,
+} = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
+  mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
+  mockUpdateConversationFor: vi.fn().mockResolvedValue({ ok: true }),
 }));
+
+vi.mock("@/server/conversation-writer", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/server/conversation-writer")
+  >("@/server/conversation-writer");
+  return {
+    ...actual,
+    updateConversationFor: mockUpdateConversationFor,
+  };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
@@ -25,6 +42,28 @@ vi.mock("@/server/kb-document-resolver", async () => {
     fetchUserWorkspacePath: mockFetchUserWorkspacePath,
   };
 });
+
+// #3254 — `dispatchSoleurGo` now persists a `messages` row per turn
+// (so `message_attachments.message_id` FK can be satisfied for cc-path
+// attachments). Stub the service-role client so existing tests that
+// don't care about the new insert keep passing without spinning a real
+// Supabase up.
+vi.mock("@/lib/supabase/service", () => ({
+  serverUrl: () => "https://test.supabase.co",
+  createServiceClient: () => ({
+    from: (table: string) => {
+      if (table === "messages") {
+        return { insert: mockMessagesInsert };
+      }
+      // `conversations` writes go through `updateConversationFor` which is
+      // mocked above; service-client should never see a direct .from("conversations").
+      throw new Error(`unexpected table in cc-dispatcher.test.ts: ${table}`);
+    },
+    storage: {
+      from: () => ({ download: vi.fn() }),
+    },
+  }),
+}));
 
 import {
   getPendingPromptRegistry,
@@ -51,6 +90,12 @@ describe("cc-dispatcher singletons + orchestration", () => {
     __resetDispatcherForTests();
     mockReportSilentFallback.mockClear();
     mockFetchUserWorkspacePath.mockReset();
+    mockMessagesInsert.mockClear();
+    // Default: every messages-insert succeeds; tests that need a failure
+    // can override per-call.
+    mockMessagesInsert.mockResolvedValue({ error: null });
+    mockUpdateConversationFor.mockClear();
+    mockUpdateConversationFor.mockResolvedValue({ ok: true });
     // Default: a stable stub workspace path so existing tests that don't
     // care about the workspace-resolve path still get a deterministic value.
     mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
@@ -475,6 +520,97 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(arg.documentKind).toBe("pdf");
   });
 
+  it("KB Concierge: forwards documentExtractError to runner.dispatch (Hypothesis A regression — PR #3353)", async () => {
+    // Pin the end-to-end thread: when ws-handler resolves
+    // `{ documentExtractError: <class> }` and spreads it into
+    // `dispatchSoleurGo`, the dispatcher MUST forward the field to
+    // `runner.dispatch`. Without this pin a future refactor that
+    // explicitly enumerates fields (instead of `...documentArgs`) would
+    // silently drop the extractor failure class and re-introduce the
+    // apt-get cascade — the bug PR #3353 closes.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const dispatchSpy = vi.fn(async (_args: unknown) => ({ queryReused: false }));
+    const stubRunner = {
+      dispatch: dispatchSpy,
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchSoleurGo({
+      userId: "u-extract-err",
+      conversationId: "conv-extract-err",
+      userMessage: "summarize this document",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+      artifactPath: "knowledge-base/scanned.pdf",
+      documentKind: "pdf",
+      documentExtractError: "empty_text",
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const arg = dispatchSpy.mock.calls[0][0] as {
+      documentExtractError?: string;
+    };
+    expect(arg.documentExtractError).toBe("empty_text");
+  });
+
+  it("KB Concierge: forwards documentExtractMeta to runner.dispatch (#3429 wire-drop regression — caught by user-impact-reviewer on PR #3430)", async () => {
+    // Pin the resolver→dispatcher→runner thread for the page-count gate's
+    // numPages payload. Pre-fix, dispatchSoleurGo destructured fields
+    // explicitly and forgot `documentExtractMeta`, so even though the
+    // resolver populated `{ numPages: 403 }`, the runner saw `undefined`
+    // and the user-facing copy fell back to "I see 0 pages". This test
+    // pins the field's survival across the dispatcher hop so a future
+    // field addition can't silently re-introduce the same defect class.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const dispatchSpy = vi.fn(async (_args: unknown) => ({ queryReused: false }));
+    const stubRunner = {
+      dispatch: dispatchSpy,
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchSoleurGo({
+      userId: "u-meta",
+      conversationId: "conv-meta",
+      userMessage: "summarize this document",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+      artifactPath: "knowledge-base/big-book.pdf",
+      documentKind: "pdf",
+      documentExtractError: "too_many_pages",
+      documentExtractMeta: { numPages: 403 },
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const arg = dispatchSpy.mock.calls[0][0] as {
+      documentExtractError?: string;
+      documentExtractMeta?: { numPages?: number };
+    };
+    expect(arg.documentExtractError).toBe("too_many_pages");
+    expect(arg.documentExtractMeta).toEqual({ numPages: 403 });
+  });
+
   it("KB Concierge: emits stream_end{leaderId:cc_router} when runner fires events.onTextTurnEnd", async () => {
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
     const stubRunner = {
@@ -553,7 +689,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(errorCalls.length).toBeGreaterThan(0);
     const errMsg = errorCalls[0][1] as { errorCode?: string; message?: string };
     expect(errMsg.errorCode).toBeUndefined();
-    expect(errMsg.message).toContain("Command Center router is unavailable");
+    expect(errMsg.message).toContain("Dashboard router is unavailable");
   });
 
   // ---------------------------------------------------------------------------
@@ -783,5 +919,183 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(frame.label).not.toBe("Read");
     expect(frame.label).toBe("Reading file...");
     expect(frame.label).not.toContain(absolutePath);
+  });
+
+  // ---------------------------------------------------------------------------
+  // dispatchSoleurGo assistant-message persistence (Continue Thread regression)
+  //
+  // Mirrors `agent-runner.ts:saveMessage(... "assistant" ...)`. The cc path
+  // historically dropped the assistant write, so `api-messages.ts` returned
+  // user-only history on resume → `chat-surface.tsx isClassifying === true` →
+  // the routing chip rendered on every resumed thread (PR #3251 surfaced
+  // the symptom by renaming the chip).
+  // ---------------------------------------------------------------------------
+
+  type AssistantPersistenceEvents = {
+    onText: (text: string) => void;
+    onTextTurnEnd?: () => void;
+  };
+
+  function makeAssistantPersistenceStubRunner(args: {
+    onDispatch: (events: AssistantPersistenceEvents) => Promise<void> | void;
+  }) {
+    return {
+      dispatch: vi.fn(
+        async (a: { events: AssistantPersistenceEvents }) => {
+          await Promise.resolve();
+          await args.onDispatch(a.events);
+          return { queryReused: false };
+        },
+      ),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+  }
+
+  function assistantInsertCalls(
+    insertMock: ReturnType<typeof vi.fn>,
+  ): Array<Record<string, unknown>> {
+    return insertMock.mock.calls
+      .map((c) => c[0] as { role?: string } & Record<string, unknown>)
+      .filter((row) => row && row.role === "assistant");
+  }
+
+  function mirrorCallsForOp(
+    mirrorMock: ReturnType<typeof vi.fn>,
+    op: string,
+  ): Array<unknown[]> {
+    return mirrorMock.mock.calls.filter(([, ctx]) => {
+      const c = ctx as { feature?: string; op?: string } | undefined;
+      return c?.feature === "cc-dispatcher" && c?.op === op;
+    });
+  }
+
+  it("T1: persists assistant message via supabase().from('messages').insert when onTextTurnEnd fires", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("Hello ");
+          events.onText("world.");
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-persist-1",
+      conversationId: "conv-persist-1",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // `void saveAssistantMessage()` is fire-and-forget; wait for the insert
+    // to land rather than counting microtasks (which silently invalidates
+    // the test if the helper's await chain grows).
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+
+    const assistantRows = assistantInsertCalls(mockMessagesInsert);
+    expect(assistantRows[0]).toEqual(
+      expect.objectContaining({
+        conversation_id: "conv-persist-1",
+        role: "assistant",
+        content: "Hello world.",
+        leader_id: "cc_router",
+      }),
+    );
+  });
+
+  it("T2: does NOT insert assistant row when no text was emitted (tool-only turn)", async () => {
+    // RED-cycle note: this test passed vacuously before T1's GREEN — the
+    // pre-fix dispatcher never inserted assistant rows at all. Its load-bearing
+    // role is forward: catches a future regression where the
+    // `if (!fullText) return` empty-text guard is dropped.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          // No onText calls — simulate a tool-only turn that ends in `result`.
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-empty-turn",
+      conversationId: "conv-empty-turn",
+      userMessage: "run a tool",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // No assistant row should ever be inserted — flush microtasks and assert
+    // the count stays at 0.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
+  });
+
+  it("T3: mirrors save-assistant-message-failed to Sentry on insert error and does NOT throw", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    // Role-aware mock — does not depend on insert ordering between user and
+    // assistant rows. If the dispatcher is ever refactored to write the user
+    // row in a different position, this test still drives the assistant
+    // failure-path deterministically.
+    mockMessagesInsert.mockImplementation(
+      async (row: { role?: string }) =>
+        row?.role === "assistant"
+          ? { error: { message: "db down" } }
+          : { error: null },
+    );
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("text");
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await expect(
+      dispatchSoleurGo({
+        userId: "u-mirror-fail",
+        conversationId: "conv-mirror-fail",
+        userMessage: "hi",
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient,
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+      }),
+    ).resolves.not.toThrow();
+
+    await vi.waitFor(() =>
+      expect(
+        mirrorCallsForOp(mockReportSilentFallback, "save-assistant-message-failed"),
+      ).toHaveLength(1),
+    );
+
+    // The mirrored error MUST be the underlying Supabase error, not undefined
+    // — defends against a future refactor that drops the err arg.
+    const mirrorCall = mirrorCallsForOp(
+      mockReportSilentFallback,
+      "save-assistant-message-failed",
+    )[0]!;
+    expect(mirrorCall[0]).toBeTruthy();
+    expect(mirrorCall[0]).toMatchObject({ message: "db down" });
   });
 });

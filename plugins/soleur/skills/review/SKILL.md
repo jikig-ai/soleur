@@ -322,6 +322,34 @@ Flag any unverified CLI invocation as **P1 (docs-trust)** — NOT P3 polish. A
 fabricated CLI command on a high-intent landing page breaks first-touch
 trust (#1810/#2550).
 
+### 4.6. Build-step Gate Claim Verification
+
+When a review agent claims that a build-step CI gate (e.g., post-Eleventy
+`grep -rEn ... _site/`, post-Webpack chunk regex, post-`tsc` output scan)
+will fail on rendered output, **rebuild the artifact directory BEFORE
+running the gate locally**. Never run the gate against an existing
+`_site/`, `dist/`, `build/`, or `.next/` from a prior session — those
+predate the source change under review and return false-pass (zero
+matches) even when the rendered output post-rebuild contains the flagged
+strings.
+
+The verification command order is non-negotiable:
+
+```bash
+<rebuild command> && <literal CI gate command>
+```
+
+Examples:
+- Eleventy: `npx @11ty/eleventy --quiet && grep -rEn '<regex>' _site/`
+- Next.js: `bun run build && grep -rEn '<regex>' .next/`
+
+If the rebuild step is unfamiliar, read the corresponding `.github/workflows/`
+job to find the exact build command the gate runs against — match it, do
+not invent one. A stale-artifact false-pass is the most common dismissal
+class for build-output gates (PR #3296 → #3347 hotfix). Treat any agent
+finding of the form "rendered/built artifact X contains Y" as a
+fresh-build-required claim by default.
+
 ### 5. Findings Synthesis and GitHub Issue Creation
 
 <critical_requirement>
@@ -395,6 +423,18 @@ flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
 proceed with filing. Any other first-line content is treated as `DISSENT`
 (fail-safe toward fix-inline).
 
+**Write-time self-check:** Before invoking `gh issue create --label
+deferred-scope-out`, scroll up in the conversation and confirm the most
+recent `code-simplicity-reviewer` Task reply begins with `CONCUR` for THIS
+finding. If no such Task exists in this conversation, or the reply begins
+with anything other than `CONCUR`, STOP — invoke the agent first. Filing
+first and co-signing second is a protocol violation even when the agent
+eventually returns CONCUR; the gate exists for the DISSENT case, and
+filing-first leaves a publicly-visible issue that has to be closed if the
+agent dissents. See learning
+`knowledge-base/project/learnings/best-practices/2026-05-05-extracted-bash-functions-need-self-contained-state.md`
+Pattern 3.
+
 **Rationale:** One agent's "scope-out is fine here" can be wrong in the same
 way a single test can miss a bug. Requiring a second, simplicity-biased agent
 to co-sign blocks the most common regression pattern: an agent-author pair
@@ -463,7 +503,24 @@ this really cross-cutting?") for findings the PR itself introduced.
 
 #### Step 3: Summary Report
 
-After creating all GitHub issues, present comprehensive summary:
+**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output. If either is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
+
+**Compact progress marker (pipeline mode):**
+
+```markdown
+## Review Phase Complete
+
+- **Findings:** N total — N1 P1 / N2 P2 / N3 P3
+- **Fixed inline:** N (commits: <sha>, <sha>, …)
+- **Filed as scope-out:** N (#NNN, #NNN — criteria listed below)
+- **Agents run:** <comma-separated list>
+
+[Optional 1-line table of scope-out issues with criteria, if any.]
+```
+
+After emitting the marker, the calling skill's continuation gate takes over — control returns to one-shot step 5 / work Phase 4 in the SAME response.
+
+**Direct invocation summary (interactive mode only — no `soleur:work` or `soleur:one-shot` in conversation):** Use the verbose summary template below.
 
 ````markdown
 ## Code Review Complete
@@ -555,7 +612,7 @@ After creating all GitHub issues, present comprehensive summary:
 
 ### 6. Exit Gate
 
-**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps.
+**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable.
 
 **If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
 
@@ -613,6 +670,10 @@ When flagging a skill description word-budget overrun, the tokenizer MUST match 
 When a review agent reports branch-scope regressions (claims the PR reverts merged commits, touches files outside the PR's linked issue/directory, or shows a file list materially larger than expected), verify with `git diff origin/main...HEAD --name-only` (three-dot) before accepting. Two-dot variants like `git diff main..HEAD` show commits on `main` since the fork point (NOT commits on HEAD) and produce wildly different file lists when the branch is behind main — a common agent failure mode that surfaces as a false-positive P0. See `knowledge-base/project/learnings/2026-04-22-markdown-table-parser-papercuts-and-review-diff-direction.md`.
 
 When a review agent recommends ADDING a field, header, or schema element to a security-relevant surface (wire schema, redaction filter, log scrubber, error envelope), grep the diff scope for `// See #N` provenance comments referencing prior REMOVALS of the same artifact BEFORE applying the fix. A `Pn` rating reflects local severity; it does not auto-override deliberate cross-cutting decisions encoded in code comments. If a prior PR removed the field as a security/privacy mitigation, flip disposition to `contested-design` scope-out with the prior issue # named in the filing — code-simplicity-reviewer reliably co-signs when the threat-model context is surfaced. See `knowledge-base/project/learnings/2026-05-05-agent-native-recommendation-vs-prior-security-removal.md`.
+
+ADRs documenting an *already-chosen-and-shipping* architecture fail `architectural-pivot` — the criterion requires the *fix itself* to change a cross-codebase pattern, and an ADR for the path you're already shipping is documentation work, not pattern-changing work. Inline-absorb ADRs of this shape (~1 markdown file under `knowledge-base/engineering/architecture/decisions/`) rather than scoping them out. Symmetric rule: when `code-simplicity-reviewer` DISSENTs by naming a *different* criterion that fits, re-file under that criterion (fresh concur cycle) rather than absorbing inline — the dissent is on the label, not on the underlying deferral. See `knowledge-base/project/learnings/2026-05-06-scope-out-criterion-misclassification-adr-not-architectural-pivot.md`.
+
+When a reviewer prescribes ADDING a defensive wrapper (try/catch around an SDK call, a typeof guard, a validation step, a retry envelope) citing a single in-tree precedent, grep the same file/module for ≥3 sibling unwrapped invocations of the same primitive BEFORE applying. If precedent is consistent and the new code mirrors it, the wrapper recommendation is precedent-contradicting — reject with a one-line disposition citing the unwrapped sites. The cited precedent may be helper-internal (boot-path safety) and not generalize to call-site code. Cost of verification: one grep. Cost of applying a precedent-contradicting wrapper: a commit that future reviewers will roll back when they apply the same heuristic. See `knowledge-base/project/learnings/2026-05-05-phase-1-instrumentation-when-prior-fix-visibly-missed.md` (#3287 review's false-positive P1 on a `Sentry.addBreadcrumb` call that mirrored 5 in-file precedents).
 
 ### Important: P1 Findings Block Merge
 

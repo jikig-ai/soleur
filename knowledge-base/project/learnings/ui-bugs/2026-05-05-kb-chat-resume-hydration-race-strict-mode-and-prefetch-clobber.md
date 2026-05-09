@@ -215,3 +215,5 @@ Three rules that compound across React + observability + state-flow:
 - `apps/web-platform/test/api-messages-handler.test.ts` — 5 cases (mockQueryChain)
 
 PR #3237 · Issue #3241
+
+**Same-week follow-up:** same surface, two new failure paths surfaced after merge — see `2026-05-05-kb-chat-continuing-banner-h1-h5-residual-races.md` (PR #3267). H1 (silent no-session at fetch time) and H5 (post-teardown `ws.onmessage` observability gap) were not exercised by this PR's `vi.useFakeTimers` harness.

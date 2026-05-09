@@ -1,3 +1,21 @@
+> **⚠️ PARTIALLY SUPERSEDED — 2026-05-07**
+>
+> The "Key Insight" claim that **`/user/repos` works for user installations**
+> is **FALSE**. `POST /user/repos` is a UAT-only endpoint and rejects GitHub
+> App installation tokens with `403 Resource not accessible by integration`,
+> regardless of installation type. The 2026-04-06 work only verified the org
+> path (`POST /orgs/{org}/repos`); the user path was test-mocked at 201 and
+> never actually exercised end-to-end.
+>
+> The corrected mental model: **installation tokens never have a user
+> identity context, regardless of whether the installation is on a user or
+> an organization account.** User-account repo creation must route through
+> `POST /repos/{template_owner}/{template_repo}/generate` (template-generate
+> accepts installation tokens) or through a UAT obtained via OAuth.
+>
+> See: `2026-05-07-github-app-user-installation-cannot-post-user-repos.md`
+> and PR #3399 for the corrected implementation and live API verification.
+
 # Learning: GitHub App org repo creation requires endpoint routing and administration permission
 
 ## Problem

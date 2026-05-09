@@ -19,17 +19,17 @@ export async function ApiUsageSection({ userId }: ApiUsageSectionProps) {
   return (
     <section
       aria-labelledby="api-usage-heading"
-      className="mt-6 rounded-lg border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+      className="mt-6 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6 shadow-sm"
     >
       <header className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h2
             id="api-usage-heading"
-            className="text-lg font-semibold text-zinc-900 dark:text-zinc-100"
+            className="text-lg font-semibold text-soleur-text-primary"
           >
             API Usage
           </h2>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="mt-1 text-sm text-soleur-text-secondary">
             Actual spend on your Anthropic key. No markup, no middle layer —
             you pay the API directly.
           </p>
@@ -74,17 +74,17 @@ function ErrorState() {
 function EmptyState() {
   return (
     <div className="flex flex-col items-start gap-3 py-6">
-      <p className="text-base font-medium text-zinc-900 dark:text-zinc-100">
+      <p className="text-base font-medium text-soleur-text-primary">
         No API calls yet this month.
       </p>
-      <p className="max-w-prose text-sm text-zinc-600 dark:text-zinc-400">
+      <p className="max-w-prose text-sm text-soleur-text-secondary">
         Every conversation you run here bills straight to your Anthropic
         key. Start one and costs show up in this table the moment the
         response lands.
       </p>
       <Link
         href="/dashboard"
-        className="inline-flex items-center rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:ring-offset-2 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+        className="inline-flex items-center rounded-md bg-soleur-accent-gold-fill px-3 py-1.5 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized focus:ring-offset-2"
       >
         Start a conversation
       </Link>
@@ -112,22 +112,22 @@ function UsageBody({
 
   return (
     <div>
-      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+      <p className="text-sm font-medium text-soleur-text-primary">
         {formatUsd(mtdTotalUsd)} in {monthName} · {mtdCount}{" "}
         {conversationsLabel}
       </p>
       {zeroMtdWithHistory && (
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-xs text-soleur-text-muted">
           Showing your last {MAX_USAGE_ROWS} conversations with cost.
           Nothing billed this month yet.
         </p>
       )}
 
-      <div className="mt-4 overflow-hidden rounded-md border border-zinc-200 dark:border-zinc-800">
+      <div className="mt-4 overflow-hidden rounded-md border border-soleur-border-default">
         <UsageList rows={rows} />
       </div>
 
-      <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+      <p className="mt-3 text-xs text-soleur-text-muted">
         Figures come straight from the Anthropic SDK response. Cross-check
         any row in your Anthropic Console under Usage — the numbers will
         match to the cent.
@@ -138,30 +138,30 @@ function UsageBody({
 
 function UsageList({ rows }: { rows: ApiUsageRow[] }) {
   return (
-    <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
+    <ul className="divide-y divide-soleur-border-default">
       {rows.map((row) => (
         <li
           key={row.id}
           className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3"
         >
-          <span className="flex-1 min-w-[180px] text-sm text-zinc-900 dark:text-zinc-100">
+          <span className="flex-1 min-w-[180px] text-sm text-soleur-text-primary">
             <span className="font-medium">[{row.domainLabel}]</span>
-            <span className="mx-1 text-zinc-400" aria-hidden="true">
+            <span className="mx-1 text-soleur-text-secondary" aria-hidden="true">
               ·
             </span>
-            <span className="text-zinc-600 dark:text-zinc-400">
+            <span className="text-soleur-text-secondary">
               {relativeTime(row.createdAt.toISOString())}
             </span>
           </span>
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">
-            <span className="text-zinc-400">Input </span>
+          <span className="text-xs text-soleur-text-secondary">
+            <span className="text-soleur-text-muted">Input </span>
             {row.inputTokens.toLocaleString("en-US")}
           </span>
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">
-            <span className="text-zinc-400">Output </span>
+          <span className="text-xs text-soleur-text-secondary">
+            <span className="text-soleur-text-muted">Output </span>
             {row.outputTokens.toLocaleString("en-US")}
           </span>
-          <span className="min-w-[72px] text-right text-sm font-medium tabular-nums text-zinc-900 dark:text-zinc-100">
+          <span className="min-w-[72px] text-right text-sm font-medium tabular-nums text-soleur-text-primary">
             {formatUsd(row.costUsd)}
           </span>
         </li>

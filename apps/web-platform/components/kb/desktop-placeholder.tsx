@@ -9,13 +9,13 @@ export function DesktopPlaceholder() {
           fill="none"
           stroke="currentColor"
           strokeWidth="1"
-          className="mx-auto mb-3 text-neutral-600"
+          className="mx-auto mb-3 text-soleur-text-muted"
         >
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M14 2v6h6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <p className="text-sm text-neutral-500">Select a file to view</p>
-        <p className="mt-1 text-xs text-neutral-600">
+        <p className="text-sm text-soleur-text-muted">Select a file to view</p>
+        <p className="mt-1 text-xs text-soleur-text-muted">
           Choose a file from the sidebar to preview its contents
         </p>
       </div>

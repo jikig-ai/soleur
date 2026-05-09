@@ -48,9 +48,15 @@ describe("ChatSurface variant=\"sidebar\"", () => {
     return render(<ChatSurface variant="sidebar" conversationId="abc" />);
   }
 
-  it("does NOT render the full-mode Command Center header", async () => {
-    await renderSidebar();
-    expect(screen.queryByText("Command Center")).toBeNull();
+  it("does NOT render the full-mode Dashboard header", async () => {
+    const { container } = await renderSidebar();
+    // Scope to the <header> element — `queryByText("Dashboard")` would also
+    // match aria-labels, route labels, or breadcrumb chrome rendered into
+    // the sidebar test wrapper (the original "Command Center" string was
+    // unique by accident; "Dashboard" is not). The chat-surface header
+    // span renders only inside the `isFull && (...)` block.
+    const header = container.querySelector("header");
+    expect(header?.textContent ?? "").not.toContain("Dashboard");
   });
 
   it("does NOT render the mobile back-to-dashboard arrow", async () => {

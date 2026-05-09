@@ -41,6 +41,12 @@ const {
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
+  // Drift-guard for #3250: `realSdkQueryFactory` calls `getSessionMessages`
+  // when `args.resumeSessionId` is set. Returning `[]` keeps the guard's
+  // empty-history branch from blocking these tests and matches the
+  // behavior asserted by the prefill-guard test file's empty-history
+  // scenario.
+  getSessionMessages: vi.fn().mockResolvedValue([]),
   tool: vi.fn(),
   createSdkMcpServer: vi.fn(),
 }));
@@ -257,6 +263,41 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.disallowedTools).toEqual(
       expect.arrayContaining(["WebSearch", "WebFetch"]),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // T6b (#3338): cc path HARD-BLOCKS Bash/Edit/Write via disallowedTools so
+  // the model cannot emit them — no review_gate WS event reaches the
+  // user-facing Concierge surface. The auto-approve `allowedTools` list pins
+  // read-only tools (Read/Glob/Grep/LS/NotebookRead/TodoWrite/ExitPlanMode)
+  // so they bypass canUseTool. SDK semantics per sdk.d.ts:855-892:
+  //   - allowedTools = auto-approve (NOT restriction)
+  //   - disallowedTools = hard-block (removes from model's context)
+  // Pin BOTH invariants so a future regression that flips one cannot silently
+  // re-introduce the apt-get/find Bash modal cascade.
+  // -------------------------------------------------------------------------
+  it("T6b: disallowedTools HARD-BLOCKS Bash/Edit/Write on the cc path (#3338)", async () => {
+    await realSdkQueryFactory(makeArgs());
+    const opts = mockQuery.mock.calls[0][0].options;
+    expect(Array.isArray(opts.disallowedTools)).toBe(true);
+    expect(opts.disallowedTools).toEqual(
+      expect.arrayContaining(["Bash", "Edit", "Write", "WebSearch", "WebFetch"]),
+    );
+    // Auto-approve list narrows to read-only safe tools — order-tolerant
+    // closed-set match so widening the list requires an explicit test edit.
+    expect(Array.isArray(opts.allowedTools)).toBe(true);
+    const sorted = [...opts.allowedTools].sort();
+    expect(sorted).toEqual(
+      [
+        "ExitPlanMode",
+        "Glob",
+        "Grep",
+        "LS",
+        "NotebookRead",
+        "Read",
+        "TodoWrite",
+      ],
     );
   });
 

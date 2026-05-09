@@ -20,7 +20,6 @@ docs-site
 documentation
 engineering
 implementation-patterns
-infrastag
 infrastructure
 integration-issues
 learnings
@@ -55,4 +54,5 @@ verification
 workflow
 workflow-issues
 workflow-patterns
+workflow-traps
 workflow-violations

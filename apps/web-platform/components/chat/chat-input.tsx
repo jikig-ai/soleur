@@ -5,9 +5,11 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect as reactUseLa
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? reactUseLayoutEffect : useEffect;
 import type { AttachmentRef } from "@/lib/types";
+import type { StreamState } from "@/lib/ws-client";
 import { validateFiles } from "@/lib/validate-files";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
 import { safeSession } from "@/lib/safe-session";
+import { detectImagePlaceholders } from "@/lib/image-placeholder-detect";
 
 interface PendingAttachment {
   id: string;
@@ -44,6 +46,17 @@ interface ChatInputProps {
    *  Per `cq-jsdom-no-layout-gated-assertions`, the test hook is the
    *  textarea's `placeholder` attribute, which is structural. */
   workflowEnded?: boolean;
+  /** #3448 PR2: per-turn stream lifecycle. When `"streaming"` or
+   *  `"stopping"`, the Send button is replaced by a Stop button that
+   *  invokes `onStop`. While `"stopping"`, the Stop button is disabled and
+   *  labeled "Stopping…" until `session_ended` lands and the parent flips
+   *  this back to `"idle"`. Defaults to `"idle"` for callers that do not
+   *  yet thread the lifecycle (chat-input is reused outside the chat
+   *  surface — e.g. the KB sidebar passes the value directly). */
+  streamState?: StreamState;
+  /** #3448 PR2: invoked when the user clicks Stop. Wired to
+   *  `useWebSocket.abort()` by ChatSurface. */
+  onStop?: () => void;
 }
 
 export function ChatInput({
@@ -59,7 +72,30 @@ export function ChatInput({
   draftKey,
   atMentionVisible = false,
   workflowEnded = false,
+  streamState = "idle",
+  onStop,
 }: ChatInputProps) {
+  // #3448 PR2 (review fix): exhaustive narrowing on the StreamState union
+  // per AGENTS.md `cq-union-widening-grep-three-patterns`. A future widening
+  // (e.g., adding `"queued"`) fails build here instead of silently flowing
+  // into the Send branch.
+  const buttonMode: "send" | "stop" | "stopping" = (() => {
+    switch (streamState) {
+      case "idle":
+        return "send";
+      case "streaming":
+        return "stop";
+      case "stopping":
+        return "stopping";
+      default: {
+        const _exhaustive: never = streamState;
+        void _exhaustive;
+        return "send";
+      }
+    }
+  })();
+  const showStop = buttonMode !== "send";
+  const isStopping = buttonMode === "stopping";
   const disabled = rawDisabled || workflowEnded;
   const placeholder = workflowEnded
     ? "This conversation has ended"
@@ -454,6 +490,24 @@ export function ChatInput({
       if (files.length > 0) {
         e.preventDefault();
         validateAndAddFiles(files);
+        return;
+      }
+
+      // #3254 — guard against `[Image #N]` SDK-CLI placeholders flattened
+      // to `text/plain`. The image bytes never reached the clipboard;
+      // accepting the text would persist a known-broken artifact and
+      // trigger a hallucinated agent response. Server-side strip is the
+      // backstop; this is a friendlier UX layer.
+      const text = e.clipboardData.getData("text/plain") ?? "";
+      if (text.length > 0) {
+        const { count } = detectImagePlaceholders(text);
+        if (count > 0) {
+          e.preventDefault();
+          const noun = count === 1 ? "image placeholder" : "image placeholders";
+          setAttachError(
+            `Pasted text contained ${count} ${noun} — paste the image file directly.`,
+          );
+        }
       }
     },
     [validateAndAddFiles],
@@ -480,7 +534,7 @@ export function ChatInput({
             <div
               key={att.id}
               data-testid="attachment-preview"
-              className="relative flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-800 px-2 py-1.5"
+              className="relative flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
             >
               {att.preview ? (
                 <img
@@ -489,19 +543,19 @@ export function ChatInput({
                   className="h-8 w-8 rounded object-cover"
                 />
               ) : (
-                <div className="flex h-8 w-8 items-center justify-center rounded bg-neutral-700 text-xs text-neutral-400">
+                <div className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary">
                   PDF
                 </div>
               )}
               <div className="flex flex-col">
-                <span className="max-w-[120px] truncate text-xs text-neutral-300">
+                <span className="max-w-[120px] truncate text-xs text-soleur-text-secondary">
                   {att.file.name}
                 </span>
                 {att.error ? (
                   <span className="text-xs text-red-400">{att.error}</span>
                 ) : att.progress > 0 && att.progress < 100 ? (
                   <div className="mt-0.5 flex items-center gap-1.5">
-                    <div className="h-1 w-16 overflow-hidden rounded-full bg-neutral-700">
+                    <div className="h-1 w-16 overflow-hidden rounded-full bg-soleur-bg-surface-2">
                       <div
                         className="h-full bg-amber-500"
                         style={{
@@ -510,7 +564,7 @@ export function ChatInput({
                         }}
                       />
                     </div>
-                    <span className="text-[10px] tabular-nums text-neutral-400">
+                    <span className="text-[10px] tabular-nums text-soleur-text-secondary">
                       {att.progress}%
                     </span>
                   </div>
@@ -521,7 +575,7 @@ export function ChatInput({
               <button
                 type="button"
                 onClick={() => removeAttachment(att.id)}
-                className="ml-1 rounded p-0.5 text-neutral-500 hover:text-neutral-300"
+                className="ml-1 rounded p-0.5 text-soleur-text-muted hover:text-soleur-text-secondary"
                 aria-label={`Remove ${att.file.name}`}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -547,7 +601,7 @@ export function ChatInput({
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || isUploading}
-          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-neutral-700 text-neutral-400 transition-colors hover:border-neutral-500 hover:text-white disabled:opacity-50"
+          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-soleur-border-default text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary disabled:opacity-50"
           aria-label="Attach file"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -579,7 +633,7 @@ export function ChatInput({
             rows={1}
             data-quote-flashing={flashQuote ? "true" : undefined}
             className={
-              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[72px] max-h-[140px] overflow-y-auto transition-shadow" +
+              "w-full resize-none rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2.5 pr-12 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none disabled:opacity-50 min-h-[72px] max-h-[140px] overflow-y-auto transition-shadow" +
               (flashQuote ? " ring-2 ring-amber-400" : "")
             }
           />
@@ -588,31 +642,51 @@ export function ChatInput({
             type="button"
             onClick={handleAtButtonClick}
             disabled={disabled}
-            className="absolute bottom-2.5 right-2 rounded-md p-1 text-neutral-500 transition-colors hover:text-neutral-300 disabled:opacity-50 md:hidden"
+            className="absolute bottom-2.5 right-2 rounded-md p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
             aria-label="Mention a leader"
           >
             <span className="text-sm font-medium">@</span>
           </button>
         </div>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
-          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-white transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
-          aria-label="Send message"
-        >
-          {isUploading ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
-              <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
-            </svg>
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="19" x2="12" y2="5" />
-              <polyline points="5 12 12 5 19 12" />
-            </svg>
-          )}
-        </button>
+        {showStop ? (
+          // #3448 PR2: Stop button replaces Send while a turn is in flight
+          // (`streaming`) and stays mounted but disabled while waiting for
+          // the server's `session_ended` ack (`stopping`). The accessible
+          // name + visible label both transition to "Stopping…" so the
+          // user has a single source of truth on the Stop affordance.
+          <button
+            type="button"
+            onClick={onStop}
+            disabled={isStopping || onStop === undefined}
+            className="flex h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border border-amber-700/50 bg-soleur-bg-surface-2 px-3 text-soleur-text-primary transition-colors hover:border-amber-600 hover:bg-soleur-bg-surface-1 disabled:opacity-60"
+            aria-label={isStopping ? "Stopping" : "Stop"}
+            data-testid="chat-stop-button"
+          >
+            <span className="text-xs font-medium">
+              {isStopping ? "Stopping…" : "Stop"}
+            </span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
+            className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
+            aria-label="Send message"
+          >
+            {isUploading ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+                <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5" />
+                <polyline points="5 12 12 5 19 12" />
+              </svg>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );

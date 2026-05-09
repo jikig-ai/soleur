@@ -251,9 +251,9 @@ test.describe("ConversationsRail e2e (Phase 5a — mock-supabase)", () => {
     const otherAria = await otherRow.first().getAttribute("aria-current");
     expect(otherAria).toBeNull();
 
-    // Footer "View all in Command Center" routes to /dashboard.
+    // Footer "View all in Dashboard" routes to /dashboard.
     await page
-      .getByRole("link", { name: /view all in command center/i })
+      .getByRole("link", { name: /view all in dashboard/i })
       .first()
       .click();
     await page.waitForURL("**/dashboard", { timeout: 10_000 });

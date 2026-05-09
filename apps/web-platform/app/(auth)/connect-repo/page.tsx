@@ -14,7 +14,10 @@ import { SelectProjectState } from "@/components/connect-repo/select-project-sta
 import { NoProjectsState } from "@/components/connect-repo/no-projects-state";
 import { SettingUpState } from "@/components/connect-repo/setting-up-state";
 import { ReadyState } from "@/components/connect-repo/ready-state";
-import { FailedState } from "@/components/connect-repo/failed-state";
+import {
+  CREATE_FAILED_ERROR_CODE,
+  FailedState,
+} from "@/components/connect-repo/failed-state";
 import { InterruptedState } from "@/components/connect-repo/interrupted-state";
 import { GitHubResolveState } from "@/components/connect-repo/github-resolve-state";
 
@@ -192,6 +195,7 @@ export default function ConnectRepoPage() {
           if (!createRes.ok) {
             const data = await createRes.json().catch(() => null);
             setSetupError(data?.error ?? "Failed to create repository");
+            setSetupErrorCode(CREATE_FAILED_ERROR_CODE);
             setState("failed");
             return;
           }
@@ -516,8 +520,9 @@ export default function ConnectRepoPage() {
         setState("github_redirect");
         return;
       }
-      // Other errors → show failed state
+      // Other errors → show failed state with the create-flow escape hatch
       setSetupError(errorData?.error ?? "Failed to create repository");
+      setSetupErrorCode(CREATE_FAILED_ERROR_CODE);
       setState("failed");
       return;
     } catch {

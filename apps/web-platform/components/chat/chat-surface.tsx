@@ -20,11 +20,14 @@ import { SubagentGroup } from "@/components/chat/subagent-group";
 import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card";
 import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
 import { ToolUseChip } from "@/components/chat/tool-use-chip";
+import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
+import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
   InteractivePromptResponsePayload,
   InteractivePromptPayload,
 } from "@/lib/types";
 import type { ChatInteractivePromptMessage } from "@/lib/chat-state-machine";
+import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
@@ -202,6 +205,8 @@ export function ChatSurface({
     workflow,
     workflowEndedAt,
     historyLoading,
+    streamState,
+    abort,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -297,6 +302,58 @@ export function ChatSurface({
     }
   }, [status]);
 
+  // #3448 PR2 — Esc keyboard shortcut with focus guard.
+  //
+  // Mounts a `document`-level keydown listener only while a turn is in
+  // flight (`streaming`) or already aborting (`stopping`, so a quick second
+  // Esc is harmlessly ignored by `abort()`'s own no-op-while-stopping
+  // guard rather than racing the Stop button into a stale state).
+  //
+  // Esc-while-typing guard (plan §"Plan-time additions from SpecFlow"):
+  // when the user is mid-sentence in the chat textarea, Esc must NOT
+  // abort — the textarea's native Esc handling (clear autocomplete, blur)
+  // is the more frequent intent. We treat "focused on a textarea with
+  // content" as the suppressing condition; an empty textarea, an unfocused
+  // textarea, or focus on any other element falls through to abort.
+  //
+  // Per AGENTS.md `cq-ref-removal-sweep-cleanup-closures`, the effect's
+  // cleanup MUST return removeEventListener — orphaned listeners survive
+  // unmount and would re-fire abort on a freshly-mounted bubble's first
+  // Esc. The test `task 5.7` is the regression gate for this.
+  useEffect(() => {
+    if (streamState !== "streaming" && streamState !== "stopping") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const target = document.activeElement;
+      // Review fix (security): the original guard only suppressed Esc on
+      // a non-empty <textarea>. That left native UA Esc semantics (close
+      // autocomplete, clear, blur, dismiss dialog) shadowed for:
+      //   - <input type="text"> and friends (KB filename input, search box,
+      //     dialog text inputs),
+      //   - any [contenteditable] element (rich-text widgets),
+      //   - elements inside an open Radix/Headless `[role="dialog"]`
+      //     where Esc is the established close gesture.
+      // For all three, Esc-mid-stream now defers to the local handler:
+      // user closes the dialog / clears the input WITHOUT also burning
+      // their billable turn. Stop via the on-screen button still works.
+      if (target instanceof HTMLElement) {
+        if (target.closest('[role="dialog"]')) return;
+        if (target.isContentEditable) return;
+        const hasContent =
+          (target instanceof HTMLInputElement &&
+            target.type !== "checkbox" &&
+            target.type !== "radio" &&
+            target.value.length > 0) ||
+          (target instanceof HTMLTextAreaElement && target.value.length > 0);
+        if (hasContent) return;
+      }
+      e.preventDefault();
+      abort();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [streamState, abort]);
+
   useEffect(() => {
     if (sessionConfirmed && msgParam && !initialMsgSent) {
       sendMessage(msgParam);
@@ -362,11 +419,20 @@ export function ChatSurface({
   // Review F10: gate the legacy `isClassifying` chip on the lifecycle bar
   // being idle — once the bar takes over routing/active/ended, the legacy
   // chip must not double-render with the bar.
+  // Defense-in-depth: never render the routing chip while the history fetch
+  // is in flight (`historyLoading`) or after a confirmed resume of a prior
+  // thread (`resumedFrom`). Either signal proves the user-only message
+  // snapshot does not represent an unanswered question — the assistant row is
+  // still in transit, or it was never persisted (legacy cc-path conversations
+  // pre-#3286). Without this gate, "Continue thread" would re-render the chip
+  // on every resumed thread that already has an answer.
   const isClassifying =
     hasUserMessage &&
     !hasAssistantMessage &&
     routeSource === null &&
-    workflow.state === "idle";
+    workflow.state === "idle" &&
+    !historyLoading &&
+    resumedFrom === null;
 
   // Review F3: workflow has ended either in-memory (this session) or in the
   // persisted DB column (reload of an already-ended conversation).
@@ -390,12 +456,12 @@ export function ChatSurface({
   return (
     <div className={rootClass}>
       {isFull && (
-        <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3 md:px-6">
+        <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
           <div className="flex items-center gap-3">
             <a
               href="/dashboard"
               aria-label="Back to dashboard"
-              className="flex items-center text-neutral-400 hover:text-white md:hidden"
+              className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary md:hidden"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6" />
@@ -403,29 +469,26 @@ export function ChatSurface({
             </a>
 
             {activeLeaderIds.length > 0 && (
-              <span className="text-sm text-neutral-400 md:hidden">
+              <span className="text-sm text-soleur-text-secondary md:hidden">
                 {activeLeaderIds.map((id) => getDisplayName(id)).join(", ")} responding
               </span>
             )}
 
-            <span className="hidden text-sm font-semibold text-white md:inline">
-              Command Center
+            <span className="hidden text-sm font-semibold text-soleur-text-primary md:inline">
+              Dashboard
             </span>
           </div>
           <StatusIndicator status={status} disconnectReason={disconnectReason} />
         </header>
       )}
 
-      {routeSource && respondingLeaders.length > 0 && (
-        <div className={`border-b border-neutral-800/50 px-4 py-2 ${isFull ? "md:px-6" : ""}`}>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-800/50 px-3 py-1 text-xs text-neutral-400">
-            {routeSource === "auto" ? (
-              <>Auto-routed to {respondingLeaders.map((id) => getDisplayName(id)).join(", ")}</>
-            ) : (
-              <>Directed to @{respondingLeaders.map((id) => getDisplayName(id)).join(", @")}</>
-            )}
-          </span>
-        </div>
+      {routeSource && respondingLeaders.some((id) => id !== CC_ROUTER_LEADER_ID) && (
+        <RoutedLeadersStrip
+          routeSource={routeSource}
+          routedLeaders={respondingLeaders}
+          getDisplayName={getDisplayName}
+          isFull={isFull}
+        />
       )}
 
       {status === "reconnecting" && (
@@ -476,7 +539,7 @@ export function ChatSurface({
 
         {messages.length === 0 && !isClassifying && !lastError && !historyLoading && (
           <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-neutral-400">
+            <p className="text-sm text-soleur-text-secondary">
               Send a message to get started
             </p>
           </div>
@@ -509,6 +572,8 @@ export function ChatSurface({
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
                       variant={variant}
+                      status={msg.status}
+                      usage={msg.usage}
                     />
                   );
                   break;
@@ -555,9 +620,9 @@ export function ChatSurface({
                   body = (
                     <div
                       data-message-type="workflow_ended"
-                      className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-4 py-3"
+                      className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3"
                     >
-                      <p className="text-sm text-neutral-200">
+                      <p className="text-sm text-soleur-text-primary">
                         Workflow{" "}
                         <span className="font-semibold">{msg.workflow}</span>{" "}
                         ended:{" "}
@@ -572,7 +637,7 @@ export function ChatSurface({
                         </span>
                       </p>
                       {msg.summary ? (
-                        <p className="mt-1 text-xs text-neutral-400">{msg.summary}</p>
+                        <p className="mt-1 text-xs text-soleur-text-secondary">{msg.summary}</p>
                       ) : null}
                     </div>
                   );
@@ -586,6 +651,21 @@ export function ChatSurface({
                       toolLabel={msg.toolLabel}
                       leaderId={msg.leaderId}
                     />
+                  );
+                  break;
+                case "context_reset":
+                  // #3269 — inline lifecycle notice mirroring `workflow_ended`
+                  // shape. Copy is read from `CONTEXT_RESET_COPY[msg.reason]`
+                  // (single source of truth shared with the RTL test).
+                  body = (
+                    <div
+                      data-message-type="context_reset"
+                      className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3"
+                    >
+                      <p className="text-sm text-soleur-text-primary">
+                        {CONTEXT_RESET_COPY[msg.reason]}
+                      </p>
+                    </div>
                   );
                   break;
                 default: {
@@ -604,13 +684,22 @@ export function ChatSurface({
           })()}
 
           {isClassifying && (
-            <div className="flex justify-start">
-              <div className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-3">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-                <span className="text-sm text-neutral-400">
-                  Routing to the right experts...
-                </span>
-              </div>
+            // Reuses MessageBubble's tool_use treatment (active border + Working
+            // badge + ToolStatusChip) so the routing chip matches every
+            // subsequent in-flight assistant turn rather than rendering a
+            // distinct flat row. Outer wrapper preserves the routing-chip
+            // testid for existing presence/absence assertions.
+            <div className="flex justify-start" data-testid="routing-chip">
+              <MessageBubble
+                role="assistant"
+                content=""
+                leaderId={CC_ROUTER_LEADER_ID}
+                messageState="tool_use"
+                toolLabel="Routing to the right experts..."
+                getDisplayName={getDisplayName}
+                getIconPath={getIconPath}
+                variant={variant}
+              />
             </div>
           )}
 
@@ -620,23 +709,23 @@ export function ChatSurface({
       </div>
 
       {isFull && (activeLeaderIds.length > 0 || (usageData && usageData.totalCostUsd > 0)) && (
-        <div className="hidden border-t border-neutral-800/50 px-4 py-1.5 md:block md:px-6">
-          <p className="text-xs text-neutral-500">
+        <div className="hidden border-t border-soleur-border-default/50 px-4 py-1.5 md:block md:px-6">
+          <p className="text-xs text-soleur-text-muted">
             {activeLeaderIds.length > 0 && (
               <>{activeLeaderIds.length} leaders responding</>
             )}
             {usageData && usageData.totalCostUsd > 0 && (
-              <span className="text-neutral-400">
+              <span className="text-soleur-text-secondary">
                 {activeLeaderIds.length > 0 && " · "}
                 ~${usageData.totalCostUsd.toFixed(4)}
-                <span className="text-neutral-500 ml-1">estimated</span>
+                <span className="text-soleur-text-muted ml-1">estimated</span>
               </span>
             )}
           </p>
         </div>
       )}
 
-      <div className={`shrink-0 border-t border-neutral-800 bg-neutral-950 py-3 ${inputPadX} ${isFull ? "safe-bottom md:px-6" : ""}`}>
+      <div className={`shrink-0 border-t border-soleur-border-default bg-soleur-bg-base py-3 ${inputPadX} ${isFull ? "safe-bottom md:px-6" : ""}`}>
         <div className={`relative min-w-0 ${widthWrapper}`}>
           <AtMentionDropdown
             query={atQuery}
@@ -673,21 +762,23 @@ export function ChatSurface({
             quoteRef={quoteRef}
             focusRef={focusRef}
             draftKey={draftKey}
+            streamState={streamState}
+            onStop={abort}
           />
         </div>
         {!isFull && usageData && usageData.totalCostUsd > 0 && (
-          <div className="mt-1 px-1 text-xs text-neutral-500">
+          <div className="mt-1 px-1 text-xs text-soleur-text-muted">
             ~${usageData.totalCostUsd.toFixed(4)} estimated
           </div>
         )}
         {isFull && (
-          <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-neutral-400">
+          <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-soleur-text-secondary">
             <span className="md:hidden">
               {activeLeaderIds.length > 0 && (
                 <>{activeLeaderIds.length} leaders responding</>
               )}
               {usageData && usageData.totalCostUsd > 0 && (
-                <span className="text-neutral-400">
+                <span className="text-soleur-text-secondary">
                   {activeLeaderIds.length > 0 && " · "}
                   ~${usageData.totalCostUsd.toFixed(4)} est.
                 </span>

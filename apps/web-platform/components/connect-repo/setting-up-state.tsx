@@ -19,13 +19,13 @@ export function SettingUpState({ steps }: SettingUpStateProps) {
         <h1 className={`${serif.className} text-4xl font-semibold`}>
           Setting up your AI team...
         </h1>
-        <p className="text-base text-neutral-400">
+        <p className="text-base text-soleur-text-secondary">
           This usually takes less than a minute.
         </p>
       </div>
 
       {/* Progress bar */}
-      <div className="h-1 overflow-hidden rounded-full bg-neutral-800">
+      <div className="h-1 overflow-hidden rounded-full bg-soleur-bg-surface-2">
         <div
           className="h-full rounded-full transition-all duration-700 ease-out"
           style={{
@@ -48,18 +48,18 @@ export function SettingUpState({ steps }: SettingUpStateProps) {
               <CheckCircleIcon className="h-5 w-5 shrink-0 text-green-400" />
             )}
             {step.status === "active" && (
-              <SpinnerIcon className="h-5 w-5 shrink-0 text-amber-500/70" />
+              <SpinnerIcon className="h-5 w-5 shrink-0 text-soleur-accent-gold-fg/70" />
             )}
             {step.status === "pending" && (
-              <div className="h-5 w-5 shrink-0 rounded-full border-2 border-neutral-600" />
+              <div className="h-5 w-5 shrink-0 rounded-full border-2 border-soleur-border-default" />
             )}
             <span
               className={`text-sm ${
                 step.status === "done"
-                  ? "text-neutral-300"
+                  ? "text-soleur-text-secondary"
                   : step.status === "active"
-                    ? "text-neutral-100"
-                    : "text-neutral-400"
+                    ? "text-soleur-text-primary"
+                    : "text-soleur-text-secondary"
               }`}
             >
               {step.label}
@@ -70,14 +70,14 @@ export function SettingUpState({ steps }: SettingUpStateProps) {
 
       {/* What happens next */}
       <Card>
-        <h3 className="mb-2 text-sm font-medium text-neutral-200">What happens next</h3>
-        <p className="text-xs text-neutral-500">
+        <h3 className="mb-2 text-sm font-medium text-soleur-text-primary">What happens next</h3>
+        <p className="text-xs text-soleur-text-muted">
           Your AI team — marketing, engineering, legal, finance, and more —
           will have full context on your project from the first conversation.
         </p>
       </Card>
 
-      <p className="text-center text-xs text-neutral-500">
+      <p className="text-center text-xs text-soleur-text-muted">
         Your code stays in your GitHub account. Your AI team reads it —
         you decide what changes get made.
       </p>

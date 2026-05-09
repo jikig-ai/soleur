@@ -112,6 +112,24 @@ export interface UpdateConversationOptions {
    * baseline contract.
    */
   expectMatch?: boolean;
+  /**
+   * Status-column guard: when provided, the wrapper appends
+   * `.in("status", onlyIfStatusIn)` to the composite-key UPDATE. A row
+   * whose current `status` is not in the set is left untouched and the
+   * call returns 0-rows-affected.
+   *
+   * Pair with `expectMatch: false` (the default) for race-window
+   * narrowing: e.g., the abort branch's `failed`-write must not stomp a
+   * row already at `waiting_for_user` written by a concurrent result
+   * branch (#3463). For those sites a 0-rows outcome IS the success
+   * case and must NOT mirror to Sentry — the existing `expectMatch:
+   * false` semantics already do the right thing.
+   *
+   * `expectMatch: true` together with `onlyIfStatusIn` keeps the strict
+   * "row must match" contract: a row excluded by the guard surfaces as
+   * failure (mirrored to Sentry) just like a missing composite key.
+   */
+  onlyIfStatusIn?: ReadonlyArray<Conversation["status"]>;
 }
 
 export interface UpdateConversationResult {
@@ -141,9 +159,13 @@ export async function updateConversationFor(
     .eq("id", conversationId)
     .eq("user_id", userId);
 
+  const guardedQuery = options.onlyIfStatusIn
+    ? baseQuery.in("status", options.onlyIfStatusIn as readonly string[])
+    : baseQuery;
+
   const result = options.expectMatch
-    ? await baseQuery.select("id")
-    : await baseQuery;
+    ? await guardedQuery.select("id")
+    : await guardedQuery;
   const error = result.error;
   const data = options.expectMatch
     ? (result as { data: { id: string }[] | null }).data

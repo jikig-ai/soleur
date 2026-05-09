@@ -1,0 +1,7 @@
+## Description
+
+Some change here.
+
+```text
+- [ ] Resolved #5678 inside a code fence — markdown invisible to GitHub parser
+```

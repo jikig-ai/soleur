@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-26
-last_reviewed: 2026-03-26
+last_updated: 2026-05-05
+last_reviewed: 2026-05-05
 review_cadence: quarterly
 owner: CMO
 depends_on:
@@ -174,7 +174,9 @@ Two registers share the same brand identity (bold, mission-driven, precise). The
 
 ### Color Palette
 
-The visual identity follows the **Solar Forge** direction: raw power being shaped by one person's judgment. Energy against darkness.
+The visual identity follows the **Solar Forge** direction: raw power being shaped by one person's judgment. Energy against darkness. Two formally-approved palettes ship together: **Solar Forge** (dark, default) and **Solar Radiance** (light, forge at dawn). The system theme toggle picks between them; never invert tokens at runtime.
+
+#### Solar Forge (dark, default)
 
 | Role | Hex | Usage |
 |------|-----|-------|
@@ -188,7 +190,61 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 | Text Secondary | `#848484` | Subheadlines, descriptions |
 | Text Tertiary | `#6A6A6A` | Captions, metadata, timestamps |
 
-**Light mode (Solar Radiance):** A warm cream and amber/gold counterpart palette is under exploration but not yet confirmed. Do not use in production until formally defined.
+#### Solar Radiance (light)
+
+**Approved for production.** Use these token names in CSS custom properties and Tailwind theme config; never raw hex in components.
+
+**Backgrounds**
+
+| Token | Hex | oklch | Usage |
+|-------|-----|-------|-------|
+| `--bg-base` | `#FBF7EE` | `oklch(0.973 0.014 90)` | Page and canvas background. Warm cream, not stark white -- preserves the Solar metaphor. |
+| `--bg-surface-1` | `#F4EEDF` | `oklch(0.945 0.022 88)` | Cards, panels, primary elevation. |
+| `--bg-surface-2` | `#EDE4CC` | `oklch(0.910 0.034 87)` | Inset wells, secondary elevation, hover states. |
+| `--bg-accent-surface` | `#F8EFD4` | `oklch(0.948 0.041 91)` | Honey wash for promoted regions (highlight banners, "what's new" cards). |
+
+**Text**
+
+| Token | Hex | oklch | Usage |
+|-------|-----|-------|-------|
+| `--text-primary` | `#1A1612` | `oklch(0.180 0.008 60)` | Headlines, body text. "Forge ink" -- warm near-black, not pure black. |
+| `--text-secondary` | `#5C5043` | `oklch(0.405 0.018 65)` | Subheadlines, descriptions. |
+| `--text-muted` | `#6F6353` | `oklch(0.475 0.020 65)` | Captions, metadata, timestamps. Tuned darker than naive taupe to clear AA body. |
+| `--text-on-accent` | `#1A1612` | `oklch(0.180 0.008 60)` | Text placed on the gold CTA gradient. Forge ink on gold = 8:1. Never use white on gold; it fails AA. |
+
+**Borders / dividers**
+
+| Token | Hex | oklch | Usage |
+|-------|-----|-------|-------|
+| `--border-default` | `#D8C9A6` | `oklch(0.835 0.045 88)` | Subtle dividers, card borders. Decorative -- exempt from WCAG 1.4.11 (3:1 only required when the border is the sole indicator of a UI component boundary). |
+| `--border-emphasized` | `#9B8857` | `oklch(0.610 0.058 84)` | Active inputs, focused tabs, structural rules where the border conveys state. Hits 3.0-3.2:1 across all surfaces. |
+
+**Accents**
+
+| Token | Hex | oklch | Usage |
+|-------|-----|-------|-------|
+| `--accent-gold-fill` | `#C9A962` | `oklch(0.740 0.097 85)` | Same gold as dark mode. Use as a fill color (CTA gradient stop, badge background, icon fill on dark surface). Do **not** use as foreground text on light surfaces -- contrast against cream is 2.1:1. |
+| `--accent-gold-fg` | `#9C7A2E` | `oklch(0.560 0.103 75)` | The light-mode gold for foreground use: icons, ALL-CAPS section labels, link color, gold-on-light text. 3.2-3.7:1 (≥ AA non-text and large text). |
+| `--accent-gold-text` | `#7A5E1F` | `oklch(0.460 0.095 72)` | Deeper bronze for body-weight text that must read as gold (rare; prefer `--accent-gold-fg` for ALL-CAPS labels). 4.8-5.7:1. |
+| `--accent-gradient-start` | `#D4B36A` | `oklch(0.770 0.103 86)` | CTA gradient (left/top). Pairs with text-on-accent. |
+| `--accent-gradient-end` | `#B8923E` | `oklch(0.660 0.108 76)` | CTA gradient (right/bottom). Pairs with text-on-accent. |
+
+**WCAG AA verification (Solar Radiance)**
+
+Body text target ≥ 4.5:1, large text & UI components ≥ 3:1. All ratios sRGB-computed.
+
+| Foreground | `--bg-base` | `--bg-surface-1` | `--bg-surface-2` | `--bg-accent-surface` |
+|---|---|---|---|---|
+| `--text-primary` | 16.82 | 15.54 | 14.19 | 15.67 |
+| `--text-secondary` | 7.32 | 6.76 | 6.17 | 6.82 |
+| `--text-muted` | 5.48 | 5.06 | 4.62 | 5.10 |
+| `--accent-gold-fg` (large/UI) | 3.75 | 3.46 | 3.16 | 3.49 |
+| `--accent-gold-text` (body) | 5.70 | 5.26 | 4.81 | 5.30 |
+| `--border-emphasized` (UI) | 3.24 | 3.00 | 2.74 | 3.02 |
+
+`--text-on-accent` (`#1A1612`) on the CTA gradient: **8.00:1** at the start stop, **6.18:1** at the end stop -- AA body throughout the gradient.
+
+`--border-emphasized` on `--bg-surface-2` is 2.74:1 (below 3:1). Mitigation: when the emphasized border is the sole indicator of a UI state, also apply a thicker stroke (2px) or pair with a `--accent-gold-fg` accent. Designer review required before shipping a component that places emphasized borders directly on surface-2.
 
 ### Typography
 
@@ -202,12 +258,14 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 
 ### Style
 
-- **Metaphor:** A forge. Raw power being shaped by one person's judgment. Energy against darkness.
-- **Corners:** Sharp (0px border-radius). Architectural precision. No rounded corners.
-- **Logo:** Gold Circle -- a circular gold stroke containing a serif "S", paired with the spaced-out "SOLEUR" wordmark.
-- **Imagery:** Dark backgrounds with gold accents. Minimal, structural. No stock photos of people shaking hands.
-- **Motion:** Subtle, purposeful. No bouncing or playful animations. Think: light emerging from darkness.
-- **Density:** Generous whitespace. Let the content breathe. The emptiness is part of the power.
+- **Metaphor (dark / Solar Forge):** A forge. Raw power being shaped by one person's judgment. Energy against darkness.
+- **Metaphor (light / Solar Radiance):** A forge at dawn. Same forge, same gold, first light catching the metal. Embers visible as warmth, not blaze. The ambition is unchanged -- the moment is emergence, not eruption. Cream is parchment, not paper; gold is sunlit, not lit-from-behind.
+- **Corners:** Sharp (0px border-radius) in both palettes. Architectural precision. No rounded corners.
+- **Logo:** Gold Circle -- a circular gold stroke containing a serif "S", paired with the spaced-out "SOLEUR" wordmark. In Solar Radiance, the stroke uses `--accent-gold-fg` (`#9C7A2E`) so the logo reads cleanly against cream; the wordmark uses `--text-primary`.
+- **Imagery (dark):** Dark backgrounds with gold accents. Minimal, structural. No stock photos of people shaking hands.
+- **Imagery (light):** Cream/parchment backgrounds with bronzed-gold accents. Same minimal, structural language -- never beige corporate, never airy "wellness app." If a screenshot or render is shipped in both modes, the composition stays identical and only the surface tokens swap. No stock photos.
+- **Motion:** Subtle, purposeful. No bouncing or playful animations. Dark mode reads as "light emerging from darkness"; light mode reads as "structure catching daylight" -- the same restraint, mirrored.
+- **Density:** Generous whitespace. Let the content breathe. The emptiness is part of the power. Holds in both palettes.
 
 ## Channel Notes
 

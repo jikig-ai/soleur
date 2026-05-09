@@ -26,6 +26,8 @@ ADAPTER_FILES=(
   "sanitize-filename.mjs"
   "pencil-response-classify.mjs"
   "pencil-save-gate.mjs"
+  "package.json"
+  "package-lock.json"
 )
 
 if [[ ! -f "$REPO_ADAPTER_DIR/pencil-mcp-adapter.mjs" ]]; then

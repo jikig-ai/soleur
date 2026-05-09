@@ -96,11 +96,11 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-        <p className="text-sm text-neutral-400">Unable to preview this PDF</p>
+        <p className="text-sm text-soleur-text-secondary">Unable to preview this PDF</p>
         <a
           href={src}
           download={filename}
-          className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-4 py-2 text-sm font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300"
+          className="inline-flex items-center gap-2 rounded-lg border border-soleur-border-emphasized px-4 py-2 text-sm font-medium text-soleur-accent-gold-fg transition-colors hover:border-amber-400 hover:text-soleur-accent-gold-text"
         >
           Download {filename}
         </a>
@@ -112,18 +112,18 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
     <div className="flex min-h-0 h-full flex-col gap-3 p-4">
       {showDownload && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-neutral-400">{filename}</span>
+          <span className="text-sm text-soleur-text-secondary">{filename}</span>
           <a
             href={src}
             download={filename}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+            className="rounded-md border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
           >
             Download
           </a>
         </div>
       )}
 
-      <div ref={containerRef} className="min-h-0 flex-1 flex items-center justify-center overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
+      <div ref={containerRef} className="min-h-0 flex-1 flex items-center justify-center overflow-auto rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50">
         <Document
           file={src}
           options={PDF_DOCUMENT_OPTIONS}
@@ -138,16 +138,16 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
           className="flex items-center justify-center"
           loading={
             <div className="flex flex-col items-center justify-center gap-3 p-8">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-soleur-border-default border-t-amber-400" />
               {loadProgress && loadProgress.total > 0 && (
                 <div className="w-48 text-center">
-                  <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-800">
+                  <div className="h-1 w-full overflow-hidden rounded-full bg-soleur-bg-surface-2">
                     <div
                       className="h-full bg-amber-400 transition-[width] duration-150"
                       style={{ width: `${Math.min(100, (loadProgress.loaded / loadProgress.total) * 100)}%` }}
                     />
                   </div>
-                  <p className="mt-2 text-xs text-neutral-500">
+                  <p className="mt-2 text-xs text-soleur-text-muted">
                     Loading {Math.round(loadProgress.loaded / 1024)}KB / {Math.round(loadProgress.total / 1024)}KB
                   </p>
                 </div>
@@ -173,17 +173,17 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
           <button
             onClick={() => setPageNumber((p) => Math.max(p - 1, 1))}
             disabled={pageNumber <= 1}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-md border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Previous
           </button>
-          <span className="text-xs text-neutral-400">
+          <span className="text-xs text-soleur-text-secondary">
             Page {pageNumber} of {numPages}
           </span>
           <button
             onClick={() => setPageNumber((p) => Math.min(p + 1, numPages))}
             disabled={pageNumber >= numPages}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-md border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Next
           </button>
