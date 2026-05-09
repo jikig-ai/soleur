@@ -24,6 +24,33 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 **Branch safety check (defense-in-depth):** If the branch is `main` or `master`, abort immediately with: "Error: preflight cannot run on main/master. Checkout a feature branch first."
 
+### Step 0.1: Compute changed-file path-set (diff classifier)
+
+Run `git diff --name-only origin/main...HEAD` ONCE up-front and cache the result so each path-gated check re-uses the same path-set instead of re-running diff. Skill convention forbids `$()` command substitution — write the diff to a tmpfile so checks can `grep -E` the predicate they care about.
+
+```bash
+git diff --name-only origin/main...HEAD > .git/preflight-diff-files.txt
+```
+
+If the command fails (e.g., offline, no remote), every path-gated check falls back to its existing `git diff` form — operators do not need to handle this case explicitly. Between Phase 0 and Phase 1 nothing mutates the working tree or fetches `origin/main`, so the cache is valid for the duration of one preflight invocation. The cache lives at `.git/preflight-diff-files.txt` (per-worktree, user-owned, gitignored by `.git/`'s own scope) — this isolates concurrent preflight runs across sibling worktrees and avoids the `/tmp/` symlink-clobber class that affects fixed-name shared paths on multi-user hosts.
+
+**Fast-path SKIP overview.** For diffs whose path-set matches a recognized "guaranteed-SKIP" shape, the relevant check returns SKIP at its first step without further work. The predicates below are the existing inner predicates of each check — only the diff source is changed.
+
+| Check | Fast-path SKIP predicate (against `.git/preflight-diff-files.txt`) |
+| --- | --- |
+| 1 (Migrations) | Zero matches for `(^\|/)supabase/migrations/.*\.sql$`. |
+| 2 (Sec headers) | Zero matches for `\.(tsx\|css\|html)$`, `middleware\.ts$`, `next\.config\.`, `\.tf$`, `Dockerfile`, `nginx`, `\.github/workflows/`. |
+| 3 (Lockfiles) | Existing predicate (uses `--name-status`, status letters load-bearing — does NOT use the cached path-set; see Sharp Edges). |
+| 4 (Env isolation) | Always runs (no fast-path SKIP). |
+| 5 (Bundle host) | Zero matches for the listed Supabase client/validator paths, `Dockerfile`, `reusable-release.yml`, or `verify-required-secrets.sh`. |
+| 6 (Brand-survival) | Zero matches for the canonical sensitive-path regex. |
+| 7 (Canary) | `apps/web-platform/infra/ci-deploy.sh` not in path-set. |
+| 8 (SW cache bump) | No `fix(`/`fix:`/`hotfix` commit subject AND zero client-bundle surface matches. |
+| 9 (Node-only encodings) | Always runs (uses `git ls-files`, full-universe scan — does NOT use the cached path-set; see Sharp Edges). |
+| Not-Bare-Repo | Always runs. |
+
+For PR #3488-class diffs (lockfile bumps + orphan-cleanup deletions), Checks 1, 2, 5, 6, 7, 8 fast-skip → Checks 3 (lockfile fires), 4 (env isolation always), 9 (always), Not-Bare-Repo (always) execute. Of those four, only Check 3 and Check 9 do "real work" against the diff; Check 4 and Not-Bare-Repo are constant-cost.
+
 ## Phase 1: Run All Checks in Parallel
 
 Run these six checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
@@ -43,11 +70,15 @@ git rev-parse --is-bare-repository
 
 **Step 1.1: Detect new migration files in this branch.**
 
+Re-use the cached path-set from Phase 0 Step 0.1 (`.git/preflight-diff-files.txt`):
+
 ```bash
-git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql'
+grep -E '(^|/)supabase/migrations/.*\.sql$' .git/preflight-diff-files.txt
 ```
 
-If no migration files are found, return **SKIP**.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > /tmp/A.txt && grep -E '(^|/)supabase/migrations/.*\.sql$' .git/preflight-diff-files.txt > /tmp/B.txt && diff -u /tmp/A.txt /tmp/B.txt`.
+
+If no migration files are found (grep rc=1), return **SKIP**.
 
 **Step 1.2: Parse migration SQL for table/column pairs.**
 
@@ -96,13 +127,15 @@ curl -sf "<SUPABASE_URL>/rest/v1/<table>?select=<column>&limit=1" -H "apikey: <S
 
 **Step 2.1: Detect relevant file changes.**
 
+Re-use the cached path-set from Phase 0 Step 0.1:
+
 ```bash
-git diff --name-only origin/main...HEAD
+cat .git/preflight-diff-files.txt
 ```
 
 Check if any changed files match these patterns: `.tsx`, `.css`, `.html`, `middleware.ts`, `next.config.*`, `.tf`, `Dockerfile`, `nginx*`, `.github/workflows/*`.
 
-If no relevant files changed, return **SKIP**.
+If no relevant files changed, return **SKIP** (fast-path — no Doppler fetch needed when the diff has no client-bundle, infra, or workflow surface).
 
 **Step 2.2: Get production URL from Doppler.**
 
@@ -244,7 +277,7 @@ Otherwise **PASS**.
 
 ### Check 5: Production Bundle Supabase Host
 
-**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains any of `apps/web-platform/lib/supabase/client.ts`, `apps/web-platform/lib/supabase/validate-url.ts`, `apps/web-platform/lib/supabase/validate-anon-key.ts`, `apps/web-platform/Dockerfile`, `.github/workflows/reusable-release.yml`, or `apps/web-platform/scripts/verify-required-secrets.sh`. Otherwise return **SKIP** with note: "No build-arg surface changes detected."
+**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`.git/preflight-diff-files.txt`) contains any of `apps/web-platform/lib/supabase/client.ts`, `apps/web-platform/lib/supabase/validate-url.ts`, `apps/web-platform/lib/supabase/validate-anon-key.ts`, `apps/web-platform/Dockerfile`, `.github/workflows/reusable-release.yml`, or `apps/web-platform/scripts/verify-required-secrets.sh`. Otherwise return **SKIP** with note: "No build-arg surface changes detected." The path predicate is identical to the original `git diff --name-only origin/main...HEAD` form — only the diff source is changed.
 
 **Note:** Complements Check 4. Check 4 enforces Doppler dev/prd isolation; Check 5 covers the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` and `secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY` in `reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md` (URL class) and `knowledge-base/project/learnings/bug-fixes/2026-04-28-anon-key-test-fixture-leaked-into-prod-build.md` (anon-key class).
 
@@ -360,10 +393,10 @@ The canonical sensitive-path regex (single source of truth, mirrored verbatim in
 SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
 
 set -uo pipefail
-git diff --name-only origin/main...HEAD | grep -E "$SENSITIVE_PATH_RE"
+grep -E "$SENSITIVE_PATH_RE" .git/preflight-diff-files.txt
 ```
 
-Run as two separate Bash calls (assignment, then the piped `git`/`grep`). The regex covers every Next.js attack surface (`middleware.ts`, every `app/api/**` route, security/CSP/auth/session/legal libraries, infra Terraform under `apps/*/infra/`, all Doppler-aware shell scripts, and every credential-handling workflow even when `doppler` is not in the filename).
+Run as two separate Bash calls (assignment, then the `grep`). The path-set comes from the cached file written by Phase 0 Step 0.1 — the regex itself is byte-identical to the form previously consumed by `git diff --name-only origin/main...HEAD | grep -E "$SENSITIVE_PATH_RE"`. The regex covers every Next.js attack surface (`middleware.ts`, every `app/api/**` route, security/CSP/auth/session/legal libraries, infra Terraform under `apps/*/infra/`, all Doppler-aware shell scripts, and every credential-handling workflow even when `doppler` is not in the filename).
 
 If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive paths touched."
 
@@ -471,7 +504,7 @@ If `RESULT=PASS_INCIDENT` or `RESULT=PASS_AGGREGATE`: **PASS**.
 
 ### Check 8: Service Worker Cache Bump on Client-Bundle Regression Fix
 
-**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` includes BOTH a regression-fix marker (a commit subject starting with `fix(`, `fix:`, or `hotfix`) AND any file under `apps/web-platform/lib/supabase/`, `apps/web-platform/sentry.client.config.ts`, `apps/web-platform/lib/auth/`, `apps/web-platform/lib/byok/`, or `apps/web-platform/components/error-boundary-view.tsx`. Otherwise return **SKIP** with note: "No client-bundle regression-fix surface detected."
+**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`.git/preflight-diff-files.txt`) AND the commit log together satisfy BOTH a regression-fix marker (a commit subject starting with `fix(`, `fix:`, or `hotfix`) AND any file under `apps/web-platform/lib/supabase/`, `apps/web-platform/sentry.client.config.ts`, `apps/web-platform/lib/auth/`, `apps/web-platform/lib/byok/`, or `apps/web-platform/components/error-boundary-view.tsx`. Otherwise return **SKIP** with note: "No client-bundle regression-fix surface detected." The path predicate is identical to the original `git diff --name-only origin/main...HEAD` form — only the diff source is changed.
 
 **Rationale:** Content-hashed Next.js chunks normally invalidate cache automatically — new content → new filename → SW cache miss → fresh fetch. But the SW at `apps/web-platform/public/sw.js` uses a cache-first strategy under a single `CACHE_NAME` for `/_next/static/**`, and old broken chunks remain cached under their old filenames until either (a) browser eviction, or (b) the activate handler purges them via a `CACHE_NAME` bump. After PR #3014 deployed v0.58.0 with a corrected validator, users still saw the dashboard error.tsx because their SW was serving cached PR #3007 chunks. Without bumping `CACHE_NAME`, a regression fix to the inlined client bundle relies on every user manually clearing site data — unacceptable for an auth-tree outage.
 
@@ -485,11 +518,13 @@ If empty, return **SKIP** with note: "No fix(...) commit on branch."
 
 **Step 8.2: Detect client-bundle surface in diff.**
 
+Re-use the cached path-set from Phase 0 Step 0.1:
+
 ```bash
-git diff --name-only origin/main...HEAD | grep -E '^apps/web-platform/(lib/(supabase|auth|byok)/|sentry\.client\.config\.ts|components/error-boundary-view\.tsx)' | head -1
+grep -E '^apps/web-platform/(lib/(supabase|auth|byok)/|sentry\.client\.config\.ts|components/error-boundary-view\.tsx)' .git/preflight-diff-files.txt | head -1
 ```
 
-If empty, return **SKIP** with note: "No client-bundle surface touched."
+The regex is byte-identical to the form previously piped from `git diff --name-only origin/main...HEAD`. If empty, return **SKIP** with note: "No client-bundle surface touched."
 
 **Step 8.3: Compare `CACHE_NAME` against `origin/main`.**
 
@@ -563,7 +598,7 @@ The current ban-list (extend as new classes are discovered):
 
 ### Check 7: Canary Probe Set Covers Authenticated Surface
 
-**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise return **SKIP** with note: "ci-deploy.sh untouched."
+**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`.git/preflight-diff-files.txt`) contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise return **SKIP** with note: "ci-deploy.sh untouched." The path predicate is identical to the original `git diff --name-only origin/main...HEAD` form — only the diff source is changed.
 
 **Rationale:** The legacy canary probed only `/health`, which is middleware-bypassed and never imports `lib/supabase/client.ts`. A broken inlined `NEXT_PUBLIC_SUPABASE_*` value would pass canary and ship to prod (PR #3014 incident class). The canary contract — documented in `knowledge-base/engineering/ops/runbooks/canary-probe-set.md` — requires probes for every public route (`/login`) AND auth-gated entry (`/dashboard`) PLUS a body-content sentinel rejection.
 
