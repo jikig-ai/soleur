@@ -298,6 +298,28 @@ export async function tryLedgerDivergenceRecovery(
     // `failed` synchronously so the dashboard "Active conversations" rail
     // truths up, and surfaces the divergence to Sentry.
     //
+    // WHY THIS BRANCH IS MOSTLY INACTIVE IN STEADY STATE (#3372):
+    // `acquire_conversation_slot` (migration 029 ~line 131) runs the IDENTICAL
+    // lazy-sweep predicate (`last_heartbeat_at < now() - 120 s`) inside its
+    // own transaction BEFORE the count-check. When the RPC returns `cap_hit`,
+    // every surviving slot has already been swept clean — so this SELECT finds
+    // stale rows only in a narrow boundary race (~50–200 ms between the RPC's
+    // transaction commit and the moment this helper's SELECT executes). The
+    // remaining value of this branch is therefore:
+    //   1. Sentry observability: the RPC's lazy sweep is silent; this SELECT
+    //      surfaces boundary-race reaps as Sentry events.
+    //   2. Synchronous status flip: the lazy sweep deletes the slot but does
+    //      NOT update the `conversations` row — the dashboard "Executing" state
+    //      stays stuck until the async reaper (≤60 s). This branch flips it to
+    //      `failed` immediately.
+    //   3. Defense-in-depth: if the RPC's lazy sweep is ever refactored away,
+    //      this branch becomes the primary stale-slot reaper without any code
+    //      change here.
+    // Decision: keep at 120 s (option C). Re-evaluate if any of the four
+    // sibling threshold sites change, the async reaper interval changes, or
+    // Sentry shows staleHeartbeatCount > 1% of cap-hit events at scale (which
+    // would confirm the branch is load-bearing, not just boundary-race defense).
+    //
     // THRESHOLD-COUPLING: 120 s here matches the four pre-existing sites:
     //   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
     //   (2) migration 029 line ~224 (pg_cron user_concurrency_slots_sweep)
