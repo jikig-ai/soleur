@@ -27,8 +27,8 @@ Use `/soleur:review` to file new scope-outs. Use this skill to close existing la
 
 Optional flags (any subset):
 
-- `--label <name>` — which GitHub label drives the backlog query. Default: `deferred-scope-out`. Pass `code-review` to drain unresolved review findings; pass any other label for a custom drain. Validated against `gh label list` before querying (rule `cq-gh-issue-label-verify-name`).
-- `--milestone "<title>"` — which milestone to drain. Default: `Post-MVP / Later` (where 15+ of the open scope-outs live at plan time). Takes the milestone **title**, never a numeric ID (rule `cq-gh-issue-create-milestone-takes-title`).
+- `--label <name>` — which GitHub label drives the backlog query. Default: `deferred-scope-out`. Pass `code-review` to drain unresolved review findings; pass any other label for a custom drain. Validated against `gh label list` before querying so an invalid name fails fast with a readable error rather than a silent empty cluster.
+- `--milestone "<title>"` — which milestone to drain. Default: `Post-MVP / Later` (where 15+ of the open scope-outs live at plan time). Takes the milestone **title**, never a numeric ID — `gh issue create` rejects numeric milestone IDs with a clear error.
 - `--top-n N` — how many clusters to consider. Default: `1`.
 - `--min-cluster-size M` — minimum issues in a cluster before the skill will pick it. Default: `3`.
 - `--dry-run` — print the selected cluster and the one-shot scope argument that would be built, without delegating.
@@ -61,7 +61,7 @@ bash plugins/soleur/skills/drain-labeled-backlog/scripts/group-by-area.sh \
 
 The helper:
 
-- Validates the label exists via `gh label list` (rule `cq-gh-issue-label-verify-name`) and the milestone title exists via `gh api ...milestones` + `grep -Fxq` before querying.
+- Validates the label exists via `gh label list` and the milestone title exists via `gh api ...milestones` + `grep -Fxq` before querying. Both checks fail fast on invalid input rather than producing a silent empty cluster.
 - Uses two-stage piping (`gh --json ... | jq`), never `gh --jq` with `--arg` (learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`).
 - Parses each issue body for file paths matching `(ts|tsx|js|jsx|py|rb|go|md|sh|yml|yaml|sql|tf|njk)` extensions via a non-capturing regex.
 - Assigns each issue to an **area** = top two path segments (e.g., `apps/web-platform`, `plugins/soleur`) of its most-referenced file path.

@@ -80,21 +80,21 @@ Queried `gh issue list --label code-review --state open --json number,title,body
 
 ### Pre-merge (PR)
 
-- [ ] `plugins/soleur/commands/go.md:40` — `cq-gh-issue-label-verify-name` citation removed; rationale inlined ("verified via `gh label list`") or replaced with a pointer to the convention's living home in the planning skills. No AGENTS.md attribution remains.
-- [ ] `plugins/soleur/skills/drain-labeled-backlog/SKILL.md:30` and `:64` — both citations removed. Replace with inline rationale referencing `gh label list` validation. The drain-labeled-backlog skill now owns this convention; no upstream attribution needed.
-- [ ] `plugins/soleur/skills/plan/SKILL.md:721` — the `Cited rule: cq-gh-issue-label-verify-name (...)` parenthetical is rewritten to drop the retired ID. Add a brief note that the convention now lives in the deepen-plan AC (line 556). The `**Why:** PR #3378` block is preserved verbatim.
-- [ ] `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md:375` — **all 6 retired rule IDs** removed from the `AGENTS.md rules:` enumeration (the issue scope was 1 ID; deepen-plan widened to 6 after `grep "^${id} " scripts/retired-rule-ids.txt` confirmed each was retired). Each replaced with a pointer to its canonical owner per `scripts/retired-rule-ids.txt`:
+- [x] `plugins/soleur/commands/go.md:40` — `cq-gh-issue-label-verify-name` citation removed; rationale inlined ("verified via `gh label list`") or replaced with a pointer to the convention's living home in the planning skills. No AGENTS.md attribution remains.
+- [x] `plugins/soleur/skills/drain-labeled-backlog/SKILL.md:30` and `:64` — both citations removed. Replace with inline rationale referencing `gh label list` validation. The drain-labeled-backlog skill now owns this convention; no upstream attribution needed.
+- [x] `plugins/soleur/skills/plan/SKILL.md:721` — the `Cited rule: cq-gh-issue-label-verify-name (...)` parenthetical is rewritten to drop the retired ID. Add a brief note that the convention now lives in the deepen-plan AC (line 556). The `**Why:** PR #3378` block is preserved verbatim.
+- [x] `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md:375` — **all 6 retired rule IDs** removed from the `AGENTS.md rules:` enumeration (the issue scope was 1 ID; deepen-plan widened to 6 after `grep "^${id} " scripts/retired-rule-ids.txt` confirmed each was retired). Each replaced with a pointer to its canonical owner per `scripts/retired-rule-ids.txt`:
   - `hr-in-github-actions-run-blocks-never-use` → `plugins/soleur/skills/ship/references/ci-workflow-authoring.md` (verified: file exists, 25 lines, contains the rule under `(ex-…)` breadcrumb at line 9)
   - `hr-github-actions-workflow-notifications` → same reference (line 10)
   - `cq-ci-steps-polling-json-endpoints-under` → same reference (line 14)
   - `cq-workflow-pattern-duplication-bug-propagation` → same reference (line 16)
   - `cq-gh-issue-label-verify-name` → drop AGENTS.md attribution; convention now lives in `plan/SKILL.md` Sharp Edges + `deepen-plan/SKILL.md:556` AC.
   - `cq-gh-issue-create-milestone-takes-title` → drop AGENTS.md attribution; the constraint is discoverable via `gh`'s own clear error (per the retirement breadcrumb: "gh rejects numeric milestone/no-subcommand with clear error"). Inline a one-clause note pointing to `gh issue create --milestone "<title>"` usage if the runbook still benefits from a callout, or drop entirely if context already covers it.
-- [ ] Verification grep passes: `grep -rEn "cq-gh-issue-label-verify-name" --include="*.md" plugins/ knowledge-base/engineering/` returns zero hits after the sweep. (Citations under `knowledge-base/project/{learnings,plans}/**` are out of scope and remain.)
-- [ ] Sibling-retired-ID verification grep passes for the runbook line: `grep -E "(cq-ci-steps-polling-json-endpoints-under|cq-workflow-pattern-duplication-bug-propagation|hr-in-github-actions-run-blocks-never-use|hr-github-actions-workflow-notifications|cq-gh-issue-create-milestone-takes-title)" knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` returns zero hits.
-- [ ] Plan-internal rule-ID self-check: every `\b(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]+\b` token in the **edited files** (after the sweep) that is cited as **active rationale** must resolve to an active AGENTS.md rule. Tokens that appear as **subjects of replacement** (e.g., the retired ID being removed from a citation, named in a `(ex-…)` breadcrumb) are exempt — they are documenting the retirement, not citing as live.
-- [ ] `lefthook run pre-commit` passes (covers `lint-rule-ids.py`, markdown lint, etc.).
-- [ ] PR body uses `Closes #3489` on its own body line. No auto-close keywords elsewhere in title or body. (Per `wg-use-closes-n-in-pr-body-not-title-to`.)
+- [x] Verification grep passes: `grep -rEn "cq-gh-issue-label-verify-name" --include="*.md" plugins/ knowledge-base/engineering/` returns zero hits after the sweep. (Citations under `knowledge-base/project/{learnings,plans}/**` are out of scope and remain.)
+- [x] Sibling-retired-ID verification grep passes for the runbook line: `grep -E "(cq-ci-steps-polling-json-endpoints-under|cq-workflow-pattern-duplication-bug-propagation|hr-in-github-actions-run-blocks-never-use|hr-github-actions-workflow-notifications|cq-gh-issue-create-milestone-takes-title)" knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md` returns zero hits.
+- [x] Plan-internal rule-ID self-check: every `\b(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]+\b` token in the **edited files** (after the sweep) that is cited as **active rationale** must resolve to an active AGENTS.md rule. Tokens that appear as **subjects of replacement** (e.g., the retired ID being removed from a citation, named in a `(ex-…)` breadcrumb) are exempt — they are documenting the retirement, not citing as live.
+- [x] `lefthook run pre-commit` passes (covers `lint-rule-ids.py`, markdown lint, etc.).
+- [x] PR body uses `Closes #3489` on its own body line. No auto-close keywords elsewhere in title or body. (Per `wg-use-closes-n-in-pr-body-not-title-to`.)
 
 ### Post-merge (operator)
 
