@@ -129,7 +129,10 @@ Doppler service tokens are per-config. If the `prd_scheduled` service token was
 rotated between fires, the Cloud setup script's `eval $(doppler secrets
 download ...)` silently exports an empty environment and every subsequent
 invocation fails before reaching the audit-issue step. See
-`cq-doppler-service-tokens-are-per-config`.
+`plugins/soleur/skills/ship/references/ci-workflow-authoring.md` for the full
+authoring rule (use config-specific GitHub secret names like
+`DOPPLER_TOKEN_PRD_SCHEDULED`, never bare `DOPPLER_TOKEN` — service tokens
+silently ignore the `-c` flag).
 
 **Verify:** `doppler configs tokens --project soleur --config prd_scheduled`.
 Confirm a non-revoked token exists and its value matches the Cloud task env

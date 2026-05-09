@@ -37,7 +37,7 @@ Optional flags (any subset):
 
 ### 1. Prerequisites check
 
-Verify `gh`, `jq`, `python3` are on PATH. If any is missing, abort with installation guidance. Verify the current directory is a git repository with `git -C . rev-parse --git-dir >/dev/null 2>&1` (rule `hr-before-running-git-commands-on-a`).
+Verify `gh`, `jq`, `python3` are on PATH. If any is missing, abort with installation guidance. Verify the current directory is a git repository with `git -C . rev-parse --git-dir >/dev/null 2>&1` — `git` errors clearly on non-repo paths (`fatal: not a git repository`), so a fail-fast precheck beats a confusing downstream error.
 
 ### 2. Resolve milestone
 
@@ -136,7 +136,7 @@ Follows the same pattern as `plan`, `review`, and `ship` skills.
 
 - The helper skips issues whose bodies name zero file paths. That is intentional — area grouping requires at least one path. If an issue has no paths but belongs to a cluster thematically, add a `Location:` line to its body and re-run.
 - Sub-grouping by second-level directory is NOT implemented (YAGNI). Current backlogs never exceed 10 issues in a single top-level area. If that changes, track as a follow-up issue before adding the branch; don't build for cases that don't exist.
-- `--milestone` takes the title literally (quote it). A numeric ID fails with `milestone 'N' not found` (rule `cq-gh-issue-create-milestone-takes-title`).
+- `--milestone` takes the title literally (quote it). A numeric ID fails with `milestone 'N' not found` — `gh issue create` rejects numeric milestone IDs with a clear error, so the failure is loud rather than silent.
 - Rule `rf-review-finding-default-fix-inline` governs the opposite direction (new findings default to fix-inline); this skill drains existing scope-outs. The two rules are complementary.
 - When writing a data-reshape shell script that fetches JSON and groups it, default to a single pure-jq pipeline before reaching for python/awk. Multi-language serialization round-trips add dependencies, silent-fallback error paths, and ~2x the LOC without reshape capability jq already provides.
 - `jq scan(...)` returns the **captured group** when the regex contains a capture, otherwise the full match. Alternations inside `scan` MUST be non-capturing: `(?:ts|tsx|js)` not `(ts|tsx|js)`. Otherwise `scan("[A-Za-z_./\\-]+\\.(?:ts|js)\\b")` returns full paths, whereas the capturing form would return just the extension.
