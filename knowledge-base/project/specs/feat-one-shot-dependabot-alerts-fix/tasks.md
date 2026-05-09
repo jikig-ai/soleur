@@ -20,10 +20,18 @@ PR: #3488
 
 ## Phase 3: Bump deps in `plugins/soleur/skills/pencil-setup/scripts/`
 
-- [ ] 3.1 `cd plugins/soleur/skills/pencil-setup/scripts/ && npm update fast-uri hono ip-address`
-- [ ] 3.2 Verify `fast-uri >= 3.1.2`, `hono >= 4.12.18`, `ip-address >= 10.1.1` in `package-lock.json`
-- [ ] 3.3 Confirm no `bun.lock` exists in this directory (only `package-lock.json` regen needed)
-- [ ] 3.4 `git diff --stat plugins/soleur/skills/pencil-setup/scripts/` shows ONLY `package-lock.json`
+- [ ] 3.1 `cd plugins/soleur/skills/pencil-setup/scripts/ && npm update fast-uri hono express-rate-limit`
+       **NOTE:** Use `express-rate-limit` not `ip-address`. `express-rate-limit@8.3.1`
+       pins `ip-address` at exact `"10.1.0"`, so `npm update ip-address` is a no-op.
+       Bumping `express-rate-limit` to 8.5.1 pulls `ip-address: "^10.2.0"` transitively.
+- [ ] 3.2 Verify `fast-uri >= 3.1.2`, `hono >= 4.12.18`, `ip-address >= 10.1.1`,
+       and `express-rate-limit >= 8.5.1` in `package-lock.json`
+- [ ] 3.3 Verify the express-rate-limit pin for ip-address changed from `"10.1.0"` (exact)
+       to a caret/tilde range:
+       `grep -A6 '"node_modules/express-rate-limit"' package-lock.json | grep ip-address`
+       should show e.g. `"ip-address": "^10.2.0"`.
+- [ ] 3.4 Confirm no `bun.lock` exists in this directory (only `package-lock.json` regen needed)
+- [ ] 3.5 `git diff --stat plugins/soleur/skills/pencil-setup/scripts/` shows ONLY `package-lock.json`
 
 ## Phase 4: Verify
 

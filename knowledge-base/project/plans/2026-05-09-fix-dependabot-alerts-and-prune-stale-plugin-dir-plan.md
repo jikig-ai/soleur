@@ -13,6 +13,44 @@ requires_cpo_signoff: false
 
 # fix: resolve 18 Dependabot alerts and prune stale .plugin/ directory
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-09
+**Sections enhanced:** Overview, Research Reconciliation, Files to Edit, Phase 3, Acceptance Criteria, Risks, Sharp Edges
+**Verification agents used:** live `gh pr view` (PRs #1805/#1699/#1804/#1802), live `git log -1 <sha>` (`f449cb6a`), live `npm view` (fast-uri, hono, ip-address, express-rate-limit), local `grep` against installed lockfiles, `find .openhands` reachability check.
+
+### Key Improvements
+
+1. **Caught a no-op `npm update ip-address`.** `express-rate-limit@8.3.1` exact-pins
+   `ip-address: "10.1.0"` (verified live in the lockfile). The original Phase 3 command
+   (`npm update fast-uri hono ip-address`) would have left ip-address@10.1.0 in place and
+   alert #48 / #49 would not have closed. Corrected to
+   `npm update fast-uri hono express-rate-limit` — bumping the parent pulls a patched
+   ip-address ^10.2.0 transitively.
+2. **Verified all cited PRs / SHAs / advisory ids live.** PR #1805 merge SHA confirmed as
+   `f449cb6a62fcb729a8003b5188902e7100194a06` ("refactor: migrate 63 OpenHands agents to
+   .openhands/skills/ format"). PR #1699 (vite Dependabot precedent) confirmed merged
+   `2026-04-07`. PRs #1802 / #1804 confirmed as the original OpenHands plugin port.
+3. **Verified all patched npm versions exist:** fast-uri@3.1.2 (published 2026-05-05),
+   hono@4.12.18, ip-address@10.2.0 (latest, > advisory's first-patched 10.1.1).
+4. **Verified zero active references to `.plugin/`:** `grep -rn "\\.plugin"` across
+   `apps/`, `plugins/`, `scripts/`, `.github/`, `docs/` returns zero matches outside
+   `.plugin/` itself and the `knowledge-base/` historical docs that document the
+   supersedure. The `.openhands/` directory exists with `hooks/`, `hooks.json`, and
+   `skills/` — confirming it is the active integration.
+
+### New Considerations Discovered
+
+- The plan-level `cq-before-pushing-package-json-changes` rule applies only where BOTH
+  lockfiles exist. `apps/web-platform/` has both → both regen.
+  `plugins/soleur/skills/pencil-setup/scripts/` has only `package-lock.json` → only one
+  regen.
+- The Dockerfile (`apps/web-platform/Dockerfile`) uses `RUN npm ci` in the deps stage AND
+  in the runner stage (with `--omit=dev`). Both need a valid `package-lock.json` post-bump.
+  AC4.1's `npm ci` exercises the deps stage; the runner stage uses the same lockfile.
+- The latest `ip-address` is 10.2.0 (not 10.1.1, which is the advisory's first-patched).
+  10.2.0 satisfies the alert; ACs use `>= 10.1.1` floor to remain forward-compatible.
+
 ## Overview
 
 Resolve all 18 open Dependabot alerts on `main` with a minimal security-hygiene PR.
@@ -36,8 +74,13 @@ The remaining 6 alerts split as:
   - 1 fast-uri (high) — transitive via `ajv@8.x` under `@modelcontextprotocol/sdk`.
   - 3 hono (1 medium + 2 medium + 1 low across 2 advisories) — transitive via
     `@modelcontextprotocol/sdk → hono@^4.11.4`. Fixed in `hono@4.12.18`.
-  - 1 ip-address (medium) — transitive via `express-rate-limit → ip-address@10.1.0`.
-    Fixed in `ip-address@10.1.1`.
+  - 1 ip-address (medium) — transitive via `express-rate-limit@8.3.1 → ip-address@10.1.0`.
+    Fixed in `ip-address@10.1.1`. **Note:** `express-rate-limit@8.3.1` pins
+    `ip-address` at the exact version `"10.1.0"` (no caret). A scoped
+    `npm update ip-address` will NOT bump it — we must update
+    `express-rate-limit` (which is currently at 8.3.1; latest is 8.5.1, with
+    `ip-address: "^10.2.0"`). `npm update express-rate-limit` will pull a patched
+    `ip-address` transitively.
 
 All patched versions are reachable within existing semver ranges; this is a lockfile-only
 bump (no `package.json` edits). Per AGENTS.md `cq-before-pushing-package-json-changes`,
@@ -74,7 +117,7 @@ were never reachable from any deployed surface.
 | `.plugin/` "looks like a stale duplicate" of `plugins/soleur/skills/pencil-setup/scripts/` | `.plugin/` is the SUPERSEDED OpenHands "agents-flat" port from PR #1802/#1803/#1804; replaced by `.openhands/` in PR #1805. Zero references from any active code path. Documented in `knowledge-base/project/learnings/workflow-patterns/2026-04-09-openhands-plugin-agent-porting.md`. | Confirmed orphaned — delete entire `.plugin/` directory (not just `.plugin/skills/pencil-setup/scripts/`). |
 | Spec mentions only `pencil-setup/scripts/package-lock.json` under `.plugin/` | `.plugin/` contains 22 skill subdirectories. The OTHER skills do not have alerts today, but they are equally orphaned (e.g., `.plugin/skills/gemini-imagegen` had a `pillow` Dependabot bump in PR #2163 — same pattern). | Delete the **entire** `.plugin/` directory in one commit, not just the pencil-setup subtree. This prevents future bot churn against orphan paths. |
 | Spec implies remaining `apps/web-platform` fast-uri alert needs a "transitive dep bump" | `fast-uri@3.1.0` is installed via `ajv@8.18.0` (transitive under multiple top-level packages: ajv-formats, ajv-keywords, sharp, schema-utils). Top-level semver allows `fast-uri@^3.0.1`, so a scoped `npm update fast-uri` will bump in-range to `3.1.2` without touching unrelated packages. | Use `npm update fast-uri` (scoped) — NOT `npm update`. Mirror with `bun update fast-uri`. |
-| Spec says "bump remaining transitive deps" | Three packages need bumping in `pencil-setup/scripts/`: `fast-uri`, `hono`, `ip-address`. All are in-range under existing semver constraints (hono@^4.11.4, ip-address@10.1.0 → 10.1.1+, fast-uri@^3.0.1). No `bun.lock` exists in `pencil-setup/scripts/` — `package-lock.json` only. | Run `npm update fast-uri hono ip-address` in `plugins/soleur/skills/pencil-setup/scripts/` (single scoped update). |
+| Spec says "bump remaining transitive deps" | Three packages need bumping in `pencil-setup/scripts/`: `fast-uri`, `hono`, `ip-address`. fast-uri (`^3.0.1` in ajv) and hono (`^4.11.4` in SDK) are caret-ranged and bump in place. **ip-address is exactly-pinned by `express-rate-limit@8.3.1` at `"10.1.0"` — `npm update ip-address` is a no-op.** Bumping `express-rate-limit` to 8.5.1 (latest) pulls `ip-address: "^10.2.0"` transitively. | Run `npm update fast-uri hono express-rate-limit` (NOT `npm update ip-address`) in `plugins/soleur/skills/pencil-setup/scripts/`. The `express-rate-limit` upgrade fixes the ip-address alert by transitive substitution. |
 
 ## Open Code-Review Overlap
 
@@ -149,13 +192,25 @@ git diff --stat
 Resolves the 5 remaining alerts (1 fast-uri high, 3 hono medium + 1 hono low, 1 ip-address
 medium).
 
+**Important:** `express-rate-limit@8.3.1` pins `ip-address` at exactly `"10.1.0"`
+(verified via `grep -A6 '"node_modules/express-rate-limit"' package-lock.json`).
+Therefore `npm update ip-address` is a no-op. The fix is to update
+`express-rate-limit` itself; v8.5.1 (latest) declares `ip-address: "^10.2.0"`,
+which pulls in a patched ip-address transitively.
+
 ```bash
 cd plugins/soleur/skills/pencil-setup/scripts/
-# Scoped update for all three vulnerable packages in one call.
-npm update fast-uri hono ip-address
+# Scoped update — three packages cover all 5 alerts.
+# - fast-uri: caret-ranged in ajv@^8.x → bumps to 3.1.2 in place
+# - hono: caret-ranged in @modelcontextprotocol/sdk → bumps to 4.12.18 in place
+# - express-rate-limit: bumps to 8.5.1, which pulls ip-address ^10.2.0 (patched)
+npm update fast-uri hono express-rate-limit
 # Verify resolutions:
-grep -A1 '"node_modules/fast-uri"\|"node_modules/hono"\|"node_modules/ip-address"' package-lock.json | head -12
-# Expected: fast-uri >= 3.1.2, hono >= 4.12.18, ip-address >= 10.1.1
+grep -B1 -A2 '"node_modules/fast-uri"\|"node_modules/hono"\|"node_modules/ip-address"\|"node_modules/express-rate-limit"' package-lock.json | grep version | head -8
+# Expected: fast-uri >= 3.1.2, hono >= 4.12.18, ip-address >= 10.1.1, express-rate-limit >= 8.4.x (whatever ships ip-address ^10.2.0)
+# Sanity-check the express-rate-limit pin form changed (no longer exactly "10.1.0"):
+grep -A6 '"node_modules/express-rate-limit"' package-lock.json | grep "ip-address"
+# Expected: ip-address: "^10.2.0" (or similar caret range — NOT "10.1.0" exact pin)
 # No bun.lock here — package-lock.json only.
 ```
 
@@ -186,7 +241,10 @@ gh pr ready 3488
 - [ ] `apps/web-platform/package-lock.json` shows `fast-uri@^3.1.2` (or newer).
 - [ ] `apps/web-platform/bun.lock` shows `fast-uri@3.1.2` (or newer).
 - [ ] `plugins/soleur/skills/pencil-setup/scripts/package-lock.json` shows
-      `fast-uri@^3.1.2`, `hono@^4.12.18`, `ip-address@^10.1.1` (or newer).
+      `fast-uri >= 3.1.2`, `hono >= 4.12.18`, `ip-address >= 10.1.1` (latest is 10.2.0),
+      and `express-rate-limit >= 8.5.1` (the bump that resolves the ip-address alert by
+      pulling `ip-address: "^10.2.0"` transitively, since `express-rate-limit@8.3.1`
+      pinned exact `"10.1.0"`).
 - [ ] `git diff --stat` shows ONLY:
       (a) deletion of `.plugin/**`,
       (b) `apps/web-platform/package-lock.json` and `apps/web-platform/bun.lock`,
@@ -304,6 +362,83 @@ Not applicable — this is a security-hygiene fix, not a network/SSH/connectivit
 The `1.4` Network-Outage Hypothesis Check was evaluated against the feature description
 ("Dependabot alerts", "fast-uri", "hono", "ip-address", "lockfile"); no SSH/firewall/
 timeout/handshake keywords matched, so the checklist does not apply.
+
+## Research Insights
+
+### Live verifications run during deepen-plan (2026-05-09)
+
+```text
+$ gh pr view 1805 --json state,title,mergedAt,mergeCommit
+#1805 | state=MERGED | merged=2026-04-09T14:30:18Z | sha=f449cb6a62fcb729a8003b5188902e7100194a06
+"refactor: migrate 63 OpenHands agents to .openhands/skills/ format"
+
+$ gh pr view 1699 --json state,title,mergedAt
+#1699 | state=MERGED | merged=2026-04-07T06:32:19Z
+"fix(deps): update vite to 7.3.2 to resolve Dependabot security alerts"
+
+$ npm view fast-uri@3.1.2 version  -> 3.1.2  (published 2026-05-05)
+$ npm view hono@4.12.18 version    -> 4.12.18
+$ npm view ip-address@10.1.1 version -> 10.1.1
+$ npm view ip-address versions --json | jq -r '.[]' | grep "^10\." | tail -5
+10.0.0 / 10.0.1 / 10.1.0 / 10.1.1 / 10.2.0   (latest is 10.2.0)
+
+$ npm view express-rate-limit dependencies | jq -r '."ip-address"'
+^10.2.0   (latest 8.5.1 — supports ip-address ^10.2.0)
+$ npm view express-rate-limit@8.3.1 dependencies."ip-address"
+10.1.0   (exact pin — confirms `npm update ip-address` is a no-op at this parent version)
+
+$ grep -rn "\.plugin/" apps/ plugins/ scripts/ .github/ docs/ \
+    | grep -v knowledge-base | grep -v "^.plugin/" | grep -v node_modules
+(0 matches — confirms .plugin/ is unreferenced from active code)
+
+$ ls .openhands/
+hooks  hooks.json  skills
+$ ls .openhands/skills/ | wc -l
+(non-zero — active integration confirmed)
+```
+
+### Best Practices
+
+- **Scoped `npm update <pkg>` over bare `npm update`.** Bare form walks every outdated
+  package; scoped form only touches the named packages within their existing semver
+  range. Precedent: PR #1699 (vite Dependabot fix) used this exact pattern.
+- **Verify in-range bumps with `npm view <pkg> dependencies`.** Before prescribing a
+  scoped update, confirm the parent package's range allows the patched version. The
+  ip-address case here would have shipped broken without this check.
+- **For exact-pinned transitives, update the parent.** When a parent package pins a
+  vulnerable transitive at an exact version (no caret), the dependabot-friendly fix is
+  to bump the parent — not the transitive. This applies whenever Dependabot's first-patched
+  version exceeds the parent's pin.
+- **`Ref` not `Closes` for Dependabot alerts.** Dependabot alerts auto-close from the
+  merged commit's lockfile diff (no GitHub Issue keyword needed). The `Closes` keyword is
+  for GitHub Issues / PRs, which Dependabot alerts are not.
+
+### Edge Cases
+
+- **`npm ci` is reproducible-only.** It refuses to run if `package.json` and
+  `package-lock.json` disagree. AC4.1 (`cd apps/web-platform && npm ci` exits 0) is the
+  load-bearing pre-merge integrity check, since the production Dockerfile uses `npm ci`
+  in two stages.
+- **Lockfile sync drift between `package-lock.json` and `bun.lock`.** Running
+  `npm update` first then `bun update` second can produce slightly different dep-graph
+  resolutions (npm and bun have different conflict resolution algorithms). Both are
+  semver-correct, but a future `bun install` against the npm-generated lock could regen
+  unexpected lines. Mitigation: run both updates in immediate sequence within Phase 2;
+  do not commit one without the other.
+- **`fast-uri@3.1.1` was vulnerable.** The two fast-uri advisories are stacked
+  (`<= 3.1.0` first-patched 3.1.1, then `<= 3.1.1` first-patched 3.1.2). 3.1.2 closes both.
+- **Multiple `ajv` instances.** `apps/web-platform/package-lock.json` has top-level
+  `ajv@6.14.0` (older, dev-only, no fast-uri dep) AND nested `ajv@8.18.0` (which depends
+  on fast-uri). Only the 8.x branch is affected; the scoped `npm update fast-uri` updates
+  only the relevant nested instance.
+
+### References
+
+- npm CLI docs — `npm-update`: <https://docs.npmjs.com/cli/v10/commands/npm-update>
+- semver `^` vs exact-pin behavior: <https://docs.npmjs.com/cli/v10/configuring-npm/package-json#dependencies>
+- Dependabot alert auto-closure on merge: <https://docs.github.com/en/code-security/dependabot/dependabot-security-updates>
+- PR #1699 — vite Dependabot precedent (scoped `npm update`): https://github.com/jikig-ai/soleur/pull/1699
+- PR #1805 (`f449cb6a`) — `.openhands/` supersedure of `.plugin/`: https://github.com/jikig-ai/soleur/pull/1805
 
 ## References
 
