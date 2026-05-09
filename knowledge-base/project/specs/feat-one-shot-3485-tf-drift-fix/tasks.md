@@ -17,7 +17,7 @@ This is an ops-remediation runbook. No code changes, no PR for code. Tasks are t
 - [ ] 1.3 Export R2 creds (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` from Doppler `prd_terraform`)
 - [ ] 1.4 Run `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -detailed-exitcode -no-color -input=false -var="ssh_key_path=$HOME/.ssh/id_ed25519.pub"`
 - [ ] 1.5 Confirm exit code 2 with EXACTLY two resources: `~ cloudflare_ruleset.seo_response_headers` and `-/+ terraform_data.deploy_pipeline_fix`. ABORT if any third resource appears.
-- [ ] 1.6 Identify the Drift B source: `git log -1 --pretty=format:'%H %s' main -- ci-deploy.sh webhook.service cat-deploy-state.sh canary-bundle-claim-check.sh hooks.json.tmpl` — record for Phase 7 close-out.
+- [ ] 1.6 Re-confirm Drift B source (deepen pre-confirmed: #3398/#3400, commit `b1a7c7ec`, 2026-05-07 10:14 — `ci-deploy.sh` poll-ceiling bump to 900s). Re-run `git log -1 --pretty=format:'%H %ai %s' main -- apps/web-platform/infra/{ci-deploy.sh,webhook.service,cat-deploy-state.sh,canary-bundle-claim-check.sh,hooks.json.tmpl}` to confirm no newer trigger-file commit landed since 2026-05-09 plan time.
 
 ## Phase 2 — Apply Drift A (`seo_response_headers`) — REQUIRES PER-COMMAND OPERATOR ACK
 
@@ -31,7 +31,7 @@ This is an ops-remediation runbook. No code changes, no PR for code. Tasks are t
 
 - [ ] 3.1 Re-confirm freeze: `gh pr list --state open --json autoMergeRequest --jq '.[] | select(.autoMergeRequest != null)'` returns empty
 - [ ] 3.2 Verify SSH agent: `ssh-add -l | grep -i ed25519`
-- [ ] 3.3 L3 firewall pre-check (per `hr-ssh-diagnosis-verify-firewall`): `curl -s ifconfig.me/ip` AND `hcloud firewall describe web-platform-firewall --output json | jq -r '.rules[] | select(.protocol == "tcp" and (.port // "") | tostring | contains("22")) | .source_ips[]'` — operator IP must appear in source list. Run `/soleur:admin-ip-refresh` if not.
+- [ ] 3.3 L3 firewall pre-check (per `hr-ssh-diagnosis-verify-firewall`): `curl -s ifconfig.me/ip` AND `hcloud firewall describe soleur-web-platform --output json | jq -r '.rules[] | select(.protocol == "tcp" and (.port // "") == "22") | .source_ips[]'` — operator IP must appear in source list. Run `/soleur:admin-ip-refresh` if not. (Firewall name is `soleur-web-platform`, NOT `web-platform-firewall` — verified `apps/web-platform/infra/firewall.tf:2`.)
 - [ ] 3.4 Show exact apply command, wait for explicit per-command `go` from operator (Phase 2's ack does NOT stretch)
 - [ ] 3.5 Run `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=false -var="ssh_key_path=$HOME/.ssh/id_ed25519.pub"` (no `-auto-approve`; operator types `yes` interactively)
 - [ ] 3.6 Confirm "Apply complete! Resources: 1 added, 0 changed, 1 destroyed."
@@ -49,9 +49,9 @@ This is an ops-remediation runbook. No code changes, no PR for code. Tasks are t
 
 ## Phase 5 — Verify Drift A semantics via Cloudflare API
 
-- [ ] 5.1 Source `CLOUDFLARE_ZONE_ID` and `CF_API_TOKEN` from Doppler `prd_terraform`
-- [ ] 5.2 GET `/zones/${CLOUDFLARE_ZONE_ID}/rulesets/51e84830aab949aeb0c1df8282efa07d`, `jq` for the api.soleur.ai rule
-- [ ] 5.3 Confirm `description` ends with `(no-op until proxied — see #3379)` AND `set_config` is `noindex, nofollow`
+- [ ] 5.1 Source `CF_ZONE_ID` and `CF_API_TOKEN` from Doppler `prd_terraform` (NOT `CLOUDFLARE_ZONE_ID` — Terraform var is `var.cf_zone_id` per `variables.tf:80`)
+- [ ] 5.2 GET `/zones/${CF_ZONE_ID}/rulesets/51e84830aab949aeb0c1df8282efa07d`, `jq` for the api.soleur.ai rule
+- [ ] 5.3 Confirm `description` ends with `(no-op until proxied — see #3379)` AND `header_value` is `noindex, nofollow` (jq path is `.action_parameters.headers[] | select(.name == "X-Robots-Tag") | .value` — `headers` is an ARRAY, not a map)
 - [ ] 5.4 If description still pre-apply: re-run Phase 2
 
 ## Phase 6 — Re-verify both drifts gone

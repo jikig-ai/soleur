@@ -11,6 +11,29 @@ requires_cpo_signoff: false
 
 > **Ops-remediation runbook.** No code change, no PR. Operator runs two consecutive `terraform apply -target=...` invocations against `prd_terraform`, then closes #3485. Each apply is per-command-ack gated per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`. The `deploy_pipeline_fix` half follows `knowledge-base/project/plans/2026-04-30-fix-terraform-drift-deploy-pipeline-fix-3061-plan.md` verbatim, including the file+systemd contract verification (NOT the legacy HTTP-200 probe).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-09
+**Sections enhanced:** Overview (Drift B source PR/SHA confirmed live), Phase 3 (Hetzner firewall name corrected), Phase 5 (Cloudflare zone-id var + jq path corrected), Acceptance Criteria (live label-existence check), Research Insights (5 new findings live-verified)
+**Research sources:** `git log -1 main -- <5 trigger files>`, `apps/web-platform/infra/.terraform.lock.hcl`, `apps/web-platform/infra/{firewall,seo-rulesets,outputs,variables}.tf`, `.github/workflows/scheduled-terraform-drift.yml`, `gh label list`, `gh issue view {3043,3379}`, learnings 2026-04-29 / 2026-04-24 / 2026-04-19 / 2026-04-06 / 2026-04-19-admin-ip / 2026-04-22-admin-ip-followthrough / 2026-04-18-cloudflare-default-bypasses-dynamic-paths / 2026-04-21-cloudflare-waf-ua-allowlist-and-narrow-token.
+
+### Key Improvements
+
+1. **Drift B source PR/SHA confirmed live.** `git log -1 --pretty=format:'%H %ai %s' main -- ci-deploy.sh webhook.service cat-deploy-state.sh canary-bundle-claim-check.sh hooks.json.tmpl` returns `b1a7c7ec 2026-05-07 10:14:30 +0200 fix(ci): bump web-platform-release deploy poll ceiling to 900s (#3398) (#3400)`. The plan's "suspected source" is now confirmed source — close-out comment can name #3398/#3400 outright. The next-most-recent touch is `1edf7a62` (#3045/#3046, 2026-04-29) which was already remediated by #3061's apply, so the unaccounted delta is exactly the b1a7c7ec edit.
+2. **Hetzner firewall name corrected.** `apps/web-platform/infra/firewall.tf:2` declares `name = "soleur-web-platform"` (NOT `web-platform-firewall` as the initial draft of Phase 3 wrote). `hcloud firewall describe web-platform-firewall` would have returned "firewall not found." Phase 3 SSH source-list pre-check now uses the correct name.
+3. **Cloudflare zone-id source corrected.** Phase 5 initial draft cited `${CLOUDFLARE_ZONE_ID}` env var; the actual variable is `cf_zone_id` (`apps/web-platform/infra/variables.tf:80`), Doppler-backed key `CF_ZONE_ID`. Operator pulls via `doppler secrets get CF_ZONE_ID -p soleur -c prd_terraform --plain`. The `cf_api_token` is `CF_API_TOKEN` (`variables.tf:56`).
+4. **Cloudflare API jq path corrected.** Initial Phase 5 jq path was `headers["x_robots_tag"].value`; the actual `action_parameters` shape (verified in `apps/web-platform/infra/seo-rulesets.tf:303-308`) is a `headers` ARRAY of objects with `name`/`operation`/`value`. Corrected jq filter selects the array element where `name == "X-Robots-Tag"`.
+5. **GitHub label existence verified live.** Per AGENTS.md `cq-gh-issue-label-verify-name` and the deepen-plan quality check on prescribed labels: `gh label list --limit 200 | grep -E "^(infra-drift|domain/engineering|chore|priority/p3-low|priority/p2-medium)\s"` returns all five — issue #3485 already carries `infra-drift`; if a follow-up is filed against #3043 (gate-fire follow-through), `domain/engineering` + `chore` + `priority/p3-low` are valid.
+6. **Provider/version pins verified live.** `apps/web-platform/infra/.terraform.lock.hcl` confirms `cloudflare 4.52.7` (constraints `~> 4.0`) and `hcloud 1.60.1` (constraints `~> 1.49`); `.github/workflows/scheduled-terraform-drift.yml:24` pins `TERRAFORM_VERSION: "1.10.5"`. Operator must match `terraform v1.10.5` locally — Phase 1.2 already requires this.
+7. **#3043 follow-through context (post-deepen citation).** `#3043` is OPEN as of 2026-05-09 and explicitly says "First PR after merge that touches any of the 4 [now 5] trigger files [...] should fire the new `/ship` Phase 5.5 [...] Operator confirms the gate fires." If `/ship` did NOT surface the apply on #3398/#3400 (i.e., #3398's PR body has no "deploy_pipeline_fix-drift-gate" tag), this remediation is the proof-point #3043 was waiting for — Phase 7.4 records that as a closure signal for #3043.
+
+### New Considerations Discovered
+
+- **`/ship` Phase 5.5 gate possibly skipped on #3398/#3400.** The drift cron filed #3485 12 h post-merge instead of the apply being scheduled at PR-merge time. Two possible causes: (a) the `/ship` skill wasn't invoked on #3398 (operator merged via a non-`/ship` path), or (b) the gate fired but the apply was deferred and forgotten. Phase 7.4 explicitly checks the source PR for the gate tag; if absent, file against #3043 with `process gap` (gate not consulted) rather than `regex gap` (gate consulted but missed the file).
+- **Drift A's `id`/`ref` regenerate is NOT a Terraform bug.** Per `apps/web-platform/infra/seo-rulesets.tf:294-308`, the `cloudflare_ruleset` `rules` block carries server-assigned `id` and `ref` fields. Editing ANY field of a rule (including description) causes Cloudflare's API to mint a new `id`/`ref` on PUT — Terraform shows them as `(known after apply)` but they are not state corruption. The state will stabilize on the new IDs after Phase 2 apply; subsequent plans (Phase 6) will exit 0.
+- **Apply order also limits Cloudflare API blast radius.** Drift A is constrained to a single Transform Rule row inside one ruleset. Even if the Cloudflare API rejects partial mid-PUT (it shouldn't — rulesets are PUT atomically per `2026-04-03-github-ruleset-put-replaces-entire-payload.md` analog for CF), the worst case is the entire `seo_response_headers` ruleset rolling back to pre-apply state — which is the current (drifted) state. No semantic regression.
+- **L3 firewall pre-check fires by resource shape, not symptom.** Per the deepen-plan Phase 4.5 trigger ("any resource whose definition contains `provisioner "file"`, `provisioner "remote-exec"`, or a `connection { type = "ssh" ... }` block"), `terraform_data.deploy_pipeline_fix` qualifies on all three. Verified in `server.tf:227-232` (connection) and `server.tf:233-262` (file + remote-exec provisioners). Phase 3.3's pre-check is non-skippable; the firewall name fix above makes the `hcloud firewall describe` command actually work.
+
 ## Overview
 
 The Phase 1 pre-apply check of the #3371 remediation runbook (`knowledge-base/project/plans/2026-05-09-fix-terraform-drift-seo-page-redirects-3371-plan.md`) discovered that the original target of #3371 (`cloudflare_ruleset.seo_page_redirects`) is **already in state** (`id 68dfde060e28478ebd419926fb1107de`) and serving 301s for all 10 source URLs. #3371 was closed.
@@ -134,7 +157,8 @@ But `terraform plan` against `prd_terraform` reports `Plan: 1 to add, 1 to chang
 
   ```bash
   curl -s ifconfig.me/ip
-  hcloud firewall describe web-platform-firewall --output json | jq -r '.rules[] | select(.protocol == "tcp" and (.port // "") | tostring | contains("22")) | .source_ips[]'
+  # Firewall name is "soleur-web-platform" (apps/web-platform/infra/firewall.tf:2), NOT "web-platform-firewall".
+  hcloud firewall describe soleur-web-platform --output json | jq -r '.rules[] | select(.protocol == "tcp" and (.port // "") == "22") | .source_ips[]'
   ```
 
   If the operator's IP is NOT in the SSH source list, run `/soleur:admin-ip-refresh` (per AGENTS.md `hr-ssh-diagnosis-verify-firewall` runbook `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`) BEFORE invoking apply. This avoids the #3061 misdiagnosis class (SSH `connection reset by peer` mistakenly attributed to sshd/fail2ban when the cause was admin-IP drift).
@@ -181,16 +205,30 @@ But `terraform plan` against `prd_terraform` reports `Plan: 1 to add, 1 to chang
 
 ### Phase 5 — Verify Drift A semantics (≤ 2 min)
 
-- [ ] Confirm the Cloudflare ruleset still serves the noindex header on `api.soleur.ai`. The header is a no-op until that subdomain is proxied (per #3379), so the Cloudflare API is the source of truth for "the rule is installed":
+- [ ] Confirm the Cloudflare ruleset still serves the noindex header on `api.soleur.ai`. The header is a no-op until that subdomain is proxied (per #3379), so the Cloudflare API is the source of truth for "the rule is installed". The Doppler-backed Terraform variable is `var.cf_zone_id` (`apps/web-platform/infra/variables.tf:80`), key `CF_ZONE_ID`; API token is `CF_API_TOKEN` (`variables.tf:56`):
 
   ```bash
-  doppler run -p soleur -c prd_terraform -- \
-    curl -s "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/rulesets/51e84830aab949aeb0c1df8282efa07d" \
+  CF_ZONE_ID=$(doppler secrets get CF_ZONE_ID -p soleur -c prd_terraform --plain)
+  CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN -p soleur -c prd_terraform --plain)
+  curl -s "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/rulesets/51e84830aab949aeb0c1df8282efa07d" \
     -H "Authorization: Bearer ${CF_API_TOKEN}" \
-    | jq -r '.result.rules[] | select(.expression | contains("api.soleur.ai")) | "description=\(.description)\nexpression=\(.expression)\naction=\(.action)\nset_config=\(.action_parameters.headers["x_robots_tag"].value)"'
+    | jq -r '
+        .result.rules[]
+        | select(.expression | contains("api.soleur.ai"))
+        | "description=\(.description)",
+          "expression=\(.expression)",
+          "action=\(.action)",
+          (.action_parameters.headers // [] | .[] | select(.name == "X-Robots-Tag") | "header_value=\(.value)")
+      '
   ```
 
-  Expected: `description=X-Robots-Tag: noindex, nofollow on api.soleur.ai GET responses (no-op until proxied — see #3379)`, `set_config=noindex, nofollow`. (Operator may need to source `CLOUDFLARE_ZONE_ID` from `terraform output` or Doppler.)
+  Expected output:
+  - `description=X-Robots-Tag: noindex, nofollow on api.soleur.ai GET responses (no-op until proxied — see #3379)`
+  - `expression=(http.host eq "api.soleur.ai" and http.request.method eq "GET")`
+  - `action=rewrite`
+  - `header_value=noindex, nofollow`
+
+  Note: `action_parameters.headers` is an ARRAY of `{name, operation, value}` objects (verified in `apps/web-platform/infra/seo-rulesets.tf:303-308`), NOT a map keyed by header name. The jq `select(.name == "X-Robots-Tag")` is load-bearing.
 - [ ] If the description still shows the pre-apply string, re-run Phase 2.
 
 ### Phase 6 — Re-verify both drifts are gone (≤ 2 min)
@@ -206,7 +244,7 @@ But `terraform plan` against `prd_terraform` reports `Plan: 1 to add, 1 to chang
   gh issue close 3485 --comment "Applied two consecutive targeted applies against prd_terraform:
 
   1. \`terraform apply -target=cloudflare_ruleset.seo_response_headers\` — description-only no-op (#3378 / 556fa567). Cloudflare API verified: rule \`391ba663fba04bb4bc30fca0d6f172c7\` now carries the (no-op until proxied — see #3379) suffix.
-  2. \`terraform apply -target=terraform_data.deploy_pipeline_fix\` — recurring #3061 class (11th occurrence). Triggered by <PR>/<commit-SHA-from-Phase-1>. Verified via file+systemd contract: sha256 match on ci-deploy.sh, canary-bundle-claim-check.sh, cat-deploy-state.sh; \`systemctl is-active webhook\` returned \`active\`.
+  2. \`terraform apply -target=terraform_data.deploy_pipeline_fix\` — recurring #3061 class (11th occurrence). Triggered by #3398/#3400 (commit \`b1a7c7ec\`, 2026-05-07 — \`ci-deploy.sh\` poll-ceiling bump to 900s). Verified via file+systemd contract: sha256 match on ci-deploy.sh, canary-bundle-claim-check.sh, cat-deploy-state.sh; \`systemctl is-active webhook\` returned \`active\`.
 
   \`terraform plan\` now exits 0 (No changes). Drift workflow re-triggered: <run-id>."
   ```
@@ -240,7 +278,8 @@ This plan produces NO code changes — it is a remediation runbook. There is no 
 - [ ] Server-side sha256 of `/usr/local/bin/cat-deploy-state.sh` equals local `apps/web-platform/infra/cat-deploy-state.sh` sha256.
 - [ ] `systemctl is-active webhook` returns `active`.
 - [ ] `https://soleur.ai/health` returns HTTP 200.
-- [ ] Issue #3485 is closed via `gh issue close` with a comment naming the source PR/SHA for Drift B (NOT auto-closed via `Closes #3485` in any PR — there is no PR; per `cq-when-a-pr-has-post-merge-operator-actions`).
+- [ ] Issue #3485 is closed via `gh issue close` with a comment naming the source PR/SHA for Drift B (#3398/#3400, `b1a7c7ec`) (NOT auto-closed via `Closes #3485` in any PR — there is no PR; per `cq-when-a-pr-has-post-merge-operator-actions`).
+- [ ] If a follow-up against #3043 is filed (gate-fire follow-through), labels `domain/engineering`, `chore`, `priority/p3-low`, and `infra-drift` are valid (verified live via `gh label list --limit 200` per `cq-gh-issue-label-verify-name`).
 
 ## Risks & Non-Goals
 
@@ -250,7 +289,7 @@ This plan produces NO code changes — it is a remediation runbook. There is no 
 - **SSH agent not loaded for Drift B.** Apply requires the production SSH private key in the agent. Mitigation: Phase 3 explicitly verifies `ssh-add -l`.
 - **Admin IP drift causing SSH `connection reset` (per AGENTS.md `hr-ssh-diagnosis-verify-firewall`).** Same misdiagnosis class that produced #2681. Phase 3 includes the L3 firewall pre-check before any sshd/service-layer hypothesis.
 - **Webhook restart window (~30 s).** `systemctl restart webhook` causes ~2 s deploy-webhook unavailability; the file-provisioner upload phase before that takes ~10 s during which a script is partially rolled out. Total apply-side window is ~30 s. Safe because no deploy should be in-flight; Phase 3 explicitly checks merge-queued PRs and the operator freezes merges before running apply.
-- **Doppler `prd_terraform` config drift.** If the config is missing `CF_API_TOKEN`, `HCLOUD_TOKEN`, `WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_DEPLOY_CLIENT_ID`, `CF_ACCESS_DEPLOY_CLIENT_SECRET`, `CLOUDFLARE_ZONE_ID`, or the AWS R2 keys, the plan or apply fails at refresh. Mitigation: Phase 1's plan surfaces missing vars before either apply.
+- **Doppler `prd_terraform` config drift.** If the config is missing `CF_API_TOKEN`, `CF_ZONE_ID`, `HCLOUD_TOKEN`, `WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_DEPLOY_CLIENT_ID`, `CF_ACCESS_DEPLOY_CLIENT_SECRET`, or the AWS R2 keys (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), the plan or apply fails at refresh. Mitigation: Phase 1's plan surfaces missing vars before either apply.
 - **Provider version drift in CI vs. operator.** CI uses `TERRAFORM_VERSION: 1.10.5` (`scheduled-terraform-drift.yml`). Operator's local `terraform version` should match. Mitigation: Phase 1 verifies.
 - **Drift A before Drift B is the intentional order.** Drift A (Cloudflare description) is the smallest blast-radius and has no SSH dependency, so applying it first separates the (well-understood) ruleset apply from the (SSH-dependent) deploy-pipeline apply. If Drift A fails, the operator can pause without having mutated the prod webhook host.
 - **`-target` flag warning is benign here.** `terraform apply -target=...` prints "The -target option is not for routine use" — for *this* class (intentionally drifted single resources matching the `/ship` Phase 5.5 gate), `-target` is the documented form.
