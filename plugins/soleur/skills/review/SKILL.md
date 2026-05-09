@@ -64,16 +64,65 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 
 Before spawning review agents, classify the PR to avoid spawning agents whose expertise is irrelevant to the change.
 
-1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files.
+1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts:
+
+   ```bash
+   git diff --name-only origin/main...HEAD > /tmp/review-changed.txt
+   git diff --name-status origin/main...HEAD > /tmp/review-status.txt
+   git diff --numstat origin/main...HEAD > /tmp/review-numstat.txt
+   ```
+
 2. Check for override: scan `$ARGUMENTS` for "deep review" or "full review". Also run `gh pr view --json body,title --jq '.body + " " + .title'` and check for the same phrases. If override detected, skip classification and spawn all 8 agents.
-3. Apply a single judgment on the file list: **Does this PR contain source code files?** Source code includes: `.ts`, `.js`, `.jsx`, `.tsx`, `.rb`, `.py`, `.go`, `.rs`, `.swift`, `.kt`, `.java`, `.c`, `.cpp`, `.cs`, `.php`, `.sh`, `.bash`, `.zsh` — any file that contains executable logic. Non-code includes: `.md`, `.txt`, `.yml`, `.yaml`, `.toml`, `.json`, `.css`, `.html`, `.njk`, `.svg`, `.png`, `.jpg`, `.gif`, `.pen`, `LICENSE`, `CHANGELOG*`, `.github/**` workflow files, and plugin/agent/skill definition files (`plugins/**/*.md`, `agents/**/*.md`).
+3. Apply the four-class decision tree below in order; **first match wins** (override always trumps):
+
+   ```text
+   If $ARGUMENTS or PR body/title contains "deep review" / "full review":
+     class = code (full override) → 8 agents
+   Else if every changed file matches the lockfile glob OR
+          (lockfile glob + optional knowledge-base/** or *.md edit)
+          AND zero source-code extensions are present:
+     class = lockfile-only → 2 agents (git-history-analyzer + security-sentinel)
+   Else if total_files > 0 AND total_lines > 0 AND
+          (deleted_files * 100 / total_files) >= 80 AND
+          (deleted_lines * 100 / total_lines) >= 80:
+     class = deletion-dominated → 2 agents (git-history-analyzer + security-sentinel)
+   Else if any changed file has a source-code extension:
+     class = code → 8 agents
+   Else:
+     class = non-code → 4 agents
+   ```
+
+   Source-code extensions: `.ts`, `.tsx`, `.js`, `.jsx`, `.rb`, `.py`, `.go`, `.rs`, `.swift`, `.kt`, `.java`, `.c`, `.cpp`, `.cs`, `.php`, `.sh`, `.bash`, `.zsh`, `.mjs`, `.cjs` — any file containing executable logic. Non-code: `.md`, `.txt`, `.yml`, `.yaml`, `.toml`, `.json`, `.css`, `.html`, `.njk`, `.svg`, `.png`, `.jpg`, `.gif`, `.pen`, `LICENSE`, `CHANGELOG*`, `.github/**` workflow files, and plugin/agent/skill definition files (`plugins/**/*.md`, `agents/**/*.md`).
+
+   Compute the predicates inline (`set -uo pipefail` — drop the `e` so legitimately-empty greps don't abort):
+
+   ```bash
+   total_files=$(wc -l < /tmp/review-changed.txt)
+   deleted_files=$(grep -cE '^D' /tmp/review-status.txt || true)
+   added_lines=$(awk 'BEGIN{s=0} {if ($1 != "-") s += $1} END{print s}' /tmp/review-numstat.txt)
+   deleted_lines=$(awk 'BEGIN{s=0} {if ($2 != "-") s += $2} END{print s}' /tmp/review-numstat.txt)
+   total_lines=$((added_lines + deleted_lines))
+
+   LOCKFILE_RE='(^|/)(package-lock\.json|bun\.lock|yarn\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|poetry\.lock|uv\.lock)$'
+   ALLOWED_NONLOCK_RE='^(knowledge-base/|.*\.md$)'
+   SOURCE_RE='\.(ts|tsx|js|jsx|rb|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|mjs|cjs)$'
+
+   non_lock_files=$(grep -vE "$LOCKFILE_RE" /tmp/review-changed.txt || true)
+   non_lock_non_doc=$(printf '%s\n' "$non_lock_files" | grep -vE "$ALLOWED_NONLOCK_RE" | grep -v '^$' || true)
+   has_source=$(grep -E "$SOURCE_RE" /tmp/review-changed.txt | head -1 || true)
+   any_lockfile=$(grep -E "$LOCKFILE_RE" /tmp/review-changed.txt | head -1 || true)
+   ```
+
+   - `lockfile-only` matches when `$non_lock_non_doc` is empty AND `$any_lockfile` is non-empty AND `$has_source` is empty.
+   - `deletion-dominated` matches when `total_files > 0` AND `total_lines > 0` AND `(deleted_files * 100 / total_files) >= 80` AND `(deleted_lines * 100 / total_lines) >= 80`. Bash arithmetic evaluates left-to-right; multiply-first avoids the integer-truncation-to-zero trap. Note: `git diff --name-only` does not distinguish added/deleted paths, so `$has_source` may match a path that is itself a deletion — this is intentionally conservative for `lockfile-only` (we want zero source-file activity in either direction) and orthogonal for `deletion-dominated` (the predicate is line-and-file-percentage, not extension-based).
+
 4. Announce the classification result before spawning agents.
 
 #### Parallel Agents to review the PR:
 
 <parallel_tasks>
 
-**If the PR contains source code files (or override detected), spawn all 8 agents:**
+**If override is detected (`deep review` / `full review`), spawn all 8 agents regardless of class:**
 
 1. Task git-history-analyzer(PR content)
 2. Task pattern-recognition-specialist(PR content)
@@ -84,7 +133,9 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 7. Task agent-native-reviewer(PR content) - Verify new features are agent-accessible
 8. Task code-quality-analyst(PR content) - Detect code smells and produce refactoring roadmap
 
-**If the PR contains NO source code files (non-code only), spawn 4 agents:**
+**Else if class is `code` (any source-code extension and not `deletion-dominated`/`lockfile-only`), spawn all 8 agents (existing behavior).**
+
+**Else if class is `non-code` (no source files, not `lockfile-only` or `deletion-dominated`), spawn 4 agents:**
 
 1. Task git-history-analyzer(PR content)
 2. Task pattern-recognition-specialist(PR content)
@@ -93,7 +144,14 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
 Skipped for non-code PRs: architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer. These agents analyze source code structure, runtime performance, database integrity, and agent accessibility — none are relevant to documentation, configuration, or CI changes.
 
-Announce: "Change classified as **[code/non-code]**. Spawning [N]/8 review agents. [If non-code: Skipped: architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer — not relevant to non-code changes. Use 'deep review' to force full pipeline.]"
+**Else if class is `lockfile-only` or `deletion-dominated` (and override not detected), spawn 2 agents:**
+
+1. Task git-history-analyzer(PR content) - Verify deletion/bump rationale matches cited PRs and issues
+2. Task security-sentinel(PR content) - Lockfile bumps and bulk deletions can introduce supply-chain or removal-related risk
+
+Skipped for `lockfile-only` / `deletion-dominated` PRs: pattern-recognition-specialist, code-quality-analyst, architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer. Lockfile diffs and bulk deletions do not contain semantic patterns or quality regressions for the pattern/quality agents to find; architecture/perf/integrity/agent-native agents have no source code to analyze. Use `deep review` to force full pipeline.
+
+Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Spawning [N]/8 review agents. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
 
 </parallel_tasks>
 
