@@ -233,7 +233,32 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 ### Empty Case
 
-If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Knowledge Base Integration.
+If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Phase 1.6.
+
+<!-- phase-1.6-start -->
+## Phase 1.6: Token-Efficiency Analysis (sequential, advisory)
+
+Run the cost-efficiency report:
+
+```bash
+bash "$(git rev-parse --show-toplevel)/plugins/soleur/skills/compound/scripts/token-efficiency-report.sh"
+```
+
+Prints a top-3 cost table and emits `te-*` `warn` telemetry to `.claude/.rule-incidents.jsonl` on outliers. Proposals route through Phase 1.5 step 7's Accept/Skip/Edit gate.
+
+### Rubric
+
+- Floor: `wc -c AGENTS.md` × 25 turns.
+- Payload: sum SKILL.md bytes from `.skill-invocations.jsonl` (filter session_id).
+- Envelopes: sum `total_tokens` from `.session-tokens.jsonl` (session_id + `ts < compound_entry_ts` self-exclusion).
+- Lines: `git diff --shortstat`. Skip <50.
+- Triggers: subagent >100k → `te-subagent-overshoot`; payload >200k → `te-skill-payload-floor`; ratio >2k/line → `te-agents-md-turn-cost` (gated off until #3497).
+- Phase budget: ≤1.5k tokens (script is bash-executed, not tokenized).
+
+### Sharp Edge
+
+> Advisory. Only large outliers (subagent >100k OR payload >200k) warrant a follow-up issue. Smaller drifts compound through the weekly aggregator's longitudinal trend.
+<!-- phase-1.6-end -->
 
 ## Knowledge Base Integration
 
