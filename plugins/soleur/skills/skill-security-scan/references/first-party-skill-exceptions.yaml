@@ -1,0 +1,28 @@
+# First-party skill exceptions for skill-security-scan calibration.
+#
+# Per-slug, per-category exception list for legitimate first-party patterns
+# that trip detection. Empty seed; populated as exceptions arise via CODEOWNER
+# PRs. Reviewer responsibility: "is this exception load-bearing or a workaround
+# for a real bug?"
+#
+# Exceptions are NOT a general bypass. They downgrade HIGH-RISK to REVIEW for
+# the named slug + category only. REVIEW findings remain visible.
+#
+# Format:
+#
+#   exceptions:
+#     - skill: <slug>             # must match ^[a-z][a-z0-9-]*$
+#       category: <category-id>   # one of: code-execution, prompt-injection,
+#                                 #         supply-chain, filesystem-boundary,
+#                                 #         telemetry-surface
+#       justification: <reason>   # free-text; documented load-bearing rationale
+#       reviewer: <email>         # CODEOWNER who approved the exception
+#       added_in_pr: <number>     # PR number where the exception was added
+#       added_at: <ISO-8601>      # date the exception was added
+#
+# Calibration AC: 0% HIGH-RISK + <5% REVIEW on plugins/soleur/skills/**/SKILL.md.
+# Allowlist (regex-patterns.md, first-party-allowlist.yaml) is the FIRST line of
+# defense. This exceptions file is the SECOND line, used only when allowlist
+# expansion is not viable.
+
+exceptions: []
