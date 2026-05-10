@@ -82,13 +82,54 @@ That framing collapses the cost of the second future lift to "add a registry row
 
 - **First-instance-of-category gate:** When a brainstorm spec proposes a registry-table-shaped artifact (NOTICE, ADR registry, vendor list), add a Sharp Edges item: "If this is the first instance, write the policy general; instantiate per-case via the table."
 
+## Plan Session Insights (round 2 — 2026-05-10 plan + 5-agent review)
+
+The plan session for #3517 surfaced five further design-pattern insights worth compounding:
+
+### 6. 5-agent plan-review found load-bearing issues 3-agent review missed
+
+The `soleur:plan-review` skill spec invokes 3 reviewers (DHH / Kieran / code-simplicity). Adding **architecture-strategist** and **spec-flow-analyzer** to the parallel batch caught issues none of the 3 surfaced:
+
+- **Spec-flow-analyzer P1.1:** banner emitted to stderr is invisible to agent runtimes — the entire user-protection thesis collapses if banner doesn't reach stdout.
+- **Spec-flow-analyzer P1.2:** drift detection compares blob SHAs without upgrade-vs-downgrade directionality — auto-PR would *downgrade* content on upstream rollback.
+- **Architecture-strategist P1:** lefthook glob and NOTICE `lifted-files` are dual sources of truth — a 6th file added to NOTICE without lefthook update escapes commit-time integrity entirely.
+
+**Pattern:** when threshold is `single-user incident` (per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`), plan-review should grow optional architecture-strategist + spec-flow-analyzer slots. The 3-agent baseline catches overengineering and convention drift; the 5-agent panel catches blast-radius and flow gaps.
+
+### 7. Operator-protection signals from CLI tools must emit to stdout, not stderr
+
+Agent runtimes (Claude Code skill harness, MCP servers, the Bash tool's output capture) frequently surface only stdout in the agent's chat context. Stderr is swallowed.
+
+**Pattern:** any CLI tool emitting an operator-protection signal (warning banner, posture-fail line, deprecation notice, staleness alert) MUST emit to **stdout**, not stderr. Reserve stderr for diagnostic noise the agent doesn't need to act on.
+
+The original spec FR6 specified "prepend to all output" without disambiguating; the existing `gdpr-gate.sh` writes everything to stderr (`>&2`); the runtime banner inherited that convention by default. Spec-flow-analyzer caught the regression before merge.
+
+### 8. Sourcing bash helpers under `set -euo pipefail` aborts the caller
+
+`gdpr-gate.sh` sets `set -euo pipefail` (line 18). The original plan proposed `source notice-frontmatter.sh` to load the parser. If the parser uses `set -e` internally (which AGENTS.md/AC3 mandates) and any function fails — missing frontmatter, malformed YAML, parser deleted — the **caller** aborts via inherited `set -e`, violating the gate's always-exit-0 advisory contract.
+
+**Pattern:** subshell exec (`x=$(bash helper.sh subcommand 2>/dev/null || echo "fallback")`) is the safe primitive for non-trivial helpers in `set -e` callers. `source` is for tight, no-fail utility functions (e.g., `incidents.sh`).
+
+### 9. Drift detectors comparing remote vs local versions need directionality
+
+A blob-SHA-comparing drift detector that flags any non-equal pair will auto-PR a *downgrade* when upstream force-pushes / reverts to an earlier commit. The remediation is `git merge-base --is-ancestor <upstream-new> <our-pin>` — exit 0 means upstream is now older, which is rollback, not drift.
+
+**Pattern:** any drift detector comparing remote-current vs locally-pinned versions must distinguish (a) upstream-newer (legitimate drift, auto-PR candidate), (b) upstream-older (rollback, human-review-only), (c) upstream-renamed (404 + redirect resolution), (d) upstream-deleted/archived (fork-or-drop ADR).
+
+### 10. Phase 0.25 roadmap-freshness shortcut held up; reinforces #3525
+
+The brainstorm session soft-skipped Phase 0.25 (roadmap-freshness reconciliation) because the topic was governance-only. The plan session followed suit. No issues surfaced. The deferred edit at #3525 (early-exit clause for non-roadmap-affecting topics) remains the right call.
+
 ## Cross-References
 
 - Brainstorm document: `knowledge-base/project/brainstorms/2026-05-10-gosprinto-pin-policy-brainstorm.md`
+- Plan: `knowledge-base/project/plans/2026-05-10-feat-content-vendoring-pin-policy-plan.md`
+- Tasks: `knowledge-base/project/specs/feat-gosprinto-pin-policy/tasks.md`
 - Spec: `knowledge-base/project/specs/feat-gosprinto-pin-policy/spec.md`
 - Tracking issue: #3517
 - Draft PR: #3521
 - Source PR (the lift): #3501
+- Scope-out issues filed during plan-review: #3526 (vendor-diff-scan defer), #3527 (ADR defer), #3528 (compliance/critical dilution), #3529 (vendor-pins consolidation)
 - Prior brainstorm (where Q3 was deferred): `knowledge-base/project/brainstorms/2026-05-09-gdpr-gate-skill-brainstorm.md`
 - Prior learning (vendor-branded skill evaluation): `knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md`
 - Related learning (Explore agent false-negative class): `knowledge-base/project/learnings/2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites.md`
