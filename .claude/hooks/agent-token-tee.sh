@@ -40,6 +40,13 @@
 # Kill-switch: short-circuit before any work.
 [[ "${SOLEUR_DISABLE_AGENT_TOKEN_TEE:-}" == "1" ]] && exit 0
 
+# `set -u` catches typos in variable names that would otherwise silently
+# produce empty fields and drop envelopes. `-e` and `-o pipefail` are
+# intentionally NOT set: this hook is fire-and-forget per the PostToolUse
+# contract, and a single jq failure must not block tool dispatch — every
+# critical pipe has its own `2>/dev/null || exit 0` fallback.
+set -u
+
 # Repo-root resolution (canonicalize via cd -P / pwd -P so symlinked .claude/
 # does not produce two disjoint flock inodes — same precedent as
 # skill-invocation-logger.sh).
@@ -56,7 +63,11 @@ INPUT="$(cat)"
 # Read all relevant fields in one jq pass with defensive fallbacks.
 # Output: TAB-separated tool_name, session_id, subagent_type, total_tokens,
 # tool_uses, duration_ms. Empty fields collapse to "" / "0".
-read -r TOOL_NAME SESSION_ID SUBAGENT_TYPE TOTAL_TOKENS TOOL_USES DURATION_MS < <(
+# IFS=$'\t' is REQUIRED — `subagent_type` may contain spaces (e.g.,
+# "soleur:engineering:review:security-sentinel" is space-free, but the model
+# can supply arbitrary strings); default IFS would split on spaces and shift
+# all subsequent fields.
+IFS=$'\t' read -r TOOL_NAME SESSION_ID SUBAGENT_TYPE TOTAL_TOKENS TOOL_USES DURATION_MS < <(
   echo "$INPUT" | jq -r '[
     (.tool_name // ""),
     (.session_id // ""),
@@ -70,6 +81,16 @@ read -r TOOL_NAME SESSION_ID SUBAGENT_TYPE TOTAL_TOKENS TOOL_USES DURATION_MS < 
 # Match guard: only fire on Agent tool. Hook matcher should already filter
 # but we double-check (cheap) so a stray non-Agent input fails silently.
 [[ "$TOOL_NAME" != "Agent" ]] && exit 0
+
+# Sanitize SUBAGENT_TYPE before storing. The model controls this string; we
+# strip control chars (0x00-0x1f, 0x7f) and Unicode line/paragraph separators
+# (U+2028/U+2029 — see cq-regex-unicode-separators-escape-only) and cap length
+# at 64 chars to prevent log-viewer-rendered phantom JSONL entries if this
+# telemetry is ever piped to a UI/Sentry surface.
+SUBAGENT_TYPE="$(printf '%s' "$SUBAGENT_TYPE" \
+  | tr -d '\000-\037\177' \
+  | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')"
+SUBAGENT_TYPE="${SUBAGENT_TYPE:0:64}"
 
 # Skip when totalTokens is 0 or absent — per R1 mitigation, treat zero-token
 # envelopes as Claude Code shape drift, not a real zero-cost subagent. Better

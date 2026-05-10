@@ -169,12 +169,15 @@ if [[ ! -f "$LOG" ]]; then
 else
   LINES=$(wc -l < "$LOG")
   VALID=$(jq -c '.session_id' "$LOG" 2>/dev/null | wc -l)
+  UNIQ=$(jq -r '.session_id' "$LOG" 2>/dev/null | sort -u | wc -l)
   if [[ "$LINES" -ne 50 ]]; then
     fail "expected 50 lines, got $LINES (interleaving / torn writes?)"
   elif [[ "$VALID" -ne 50 ]]; then
     fail "expected 50 parseable lines, got $VALID"
+  elif [[ "$UNIQ" -ne 50 ]]; then
+    fail "expected 50 unique session_ids, got $UNIQ (drops + duplicates?)"
   else
-    pass "50 lines, all parse as JSON"
+    pass "50 lines, all parse, all session_ids distinct"
   fi
 fi
 rm -rf "$ROOT"
@@ -230,6 +233,34 @@ elif ! jq -e '.total_tokens == 12345 and .tool_uses == 0 and .duration_ms == 0' 
   fail "expected total_tokens=12345, tool_uses=0, duration_ms=0; got $(cat "$LOG")"
 else
   pass "defensive fallback to 0 for missing tool_uses / duration_ms"
+fi
+rm -rf "$ROOT"
+
+
+# ------------------------------------------------------------------------
+# Test 10: SUBAGENT_TYPE length cap (>64 chars truncates).
+# Length cap is the simplest assertion to verify in the test environment.
+# Control-char and U+2028/U+2029 stripping is exercised by code review +
+# the hooks shell sanitizer (tr -d + sed) — embedding those bytes in test
+# JSON is fragile because (a) the Edit tool rewrites U+2028/U+2029 in
+# source files per cq-regex-unicode-separators-escape-only, and (b) bare
+# control bytes in JSON are spec-invalid so jq rejects the input.
+# ------------------------------------------------------------------------
+echo "Test 10: SUBAGENT_TYPE length cap"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LONG_NAME="overflow-name-$(printf 'x%.0s' {1..120})"   # 134 chars, ≫64
+fixture_canonical "sess-10" "$LONG_NAME" 50000 1 1000 \
+  | AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK"
+LOG=$(logfile_for "$ROOT")
+if [[ ! -f "$LOG" ]]; then
+  fail "no log file"
+else
+  STORED_LEN=$(jq -r ".subagent_type | length" "$LOG" 2>/dev/null)
+  if [[ -z "$STORED_LEN" ]] || (( STORED_LEN > 64 )); then
+    fail "subagent_type not capped at 64 chars (got \"$STORED_LEN\")"
+  else
+    pass "length capped to $STORED_LEN chars (<=64)"
+  fi
 fi
 rm -rf "$ROOT"
 
