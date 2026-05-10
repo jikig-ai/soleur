@@ -1,0 +1,49 @@
+name: skill-security-scan / continuous calibration
+
+# Continuous Phase 7 calibration check (#2719).
+#
+# Runs on every push to main AND on every PR that modifies the rule pack
+# or the bash scripts. Asserts:
+#   - 0% of plugins/soleur/skills/**/SKILL.md emit HIGH-RISK
+#   - <5% emit REVIEW
+#
+# Catches rule-pack-update-induced regressions on first-party content
+# continuously, not just at #2719 merge time.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'plugins/soleur/skills/skill-security-scan/references/rules/**'
+      - 'plugins/soleur/skills/skill-security-scan/references/first-party-allowlist.yaml'
+      - 'plugins/soleur/skills/skill-security-scan/references/redirect-domains.yaml'
+      - 'plugins/soleur/skills/skill-security-scan/references/regex-patterns.md'
+      - 'plugins/soleur/skills/skill-security-scan/scripts/**'
+      - 'plugins/soleur/test/skill-security-scan.test.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  calibration:
+    name: corpus calibration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Run self-test
+        env:
+          CI: 'true'
+        run: bash plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
+
+      - name: Run bun test (per-category fixtures + corpus)
+        run: bun test plugins/soleur/test/skill-security-scan.test.ts

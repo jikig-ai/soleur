@@ -1,0 +1,102 @@
+name: skill-security-scan / pre-merge required check
+
+# Layer C of the defense-in-depth gate (#2719).
+#
+# Runs on every pull_request synchronize event against `main`. For each new
+# SKILL.md / agent MD file added in the PR diff, runs the scanner and asserts:
+#   1. If verdict is HIGH-RISK, a corresponding override artifact MUST exist
+#      under knowledge-base/security/skill-overrides/.
+#   2. If an override artifact exists, parse-override.sh MUST validate it
+#      (frontmatter schema, slug regex, rule_pack_sha256 freshness).
+#
+# Required status check on `main` branch protection (mitigates R15).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scan:
+    name: skill-security-scan PR gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Identify added SKILL/agent files in PR diff
+        id: diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          added=$(git diff --name-only --diff-filter=A "$BASE_SHA"..."$HEAD_SHA" | \
+            grep -E '^(plugins/soleur/skills/[^/]+/SKILL\.md|plugins/soleur/agents/.+\.md|\.claude/skills/.+/SKILL\.md|\.claude/agents/.+\.md)$' || true)
+          {
+            echo "added<<EOF"
+            echo "$added"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$added" ]; then
+            echo "no_new_skills=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_new_skills=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate override artifacts (if any)
+        if: steps.diff.outputs.no_new_skills == 'false'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          out=$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" || echo '{"matched":[],"invalid_schema":[{"reason":"parser failed"}],"stale_findings":[]}')
+          echo "$out" | jq .
+          if [ "$(echo "$out" | jq '.invalid_schema | length')" -gt 0 ]; then
+            echo "::error::Invalid override artifact(s) in PR. Fix schema before merge."
+            echo "$out" | jq '.invalid_schema'
+            exit 1
+          fi
+          if [ "$(echo "$out" | jq '.stale_findings | length')" -gt 0 ]; then
+            echo "::error::Stale override artifact(s): rule_pack_sha256 mismatch."
+            echo "$out" | jq '.stale_findings'
+            exit 1
+          fi
+
+      - name: Run scanner against each added SKILL/agent
+        if: steps.diff.outputs.no_new_skills == 'false'
+        env:
+          ADDED: ${{ steps.diff.outputs.added }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI: 'true'
+        run: |
+          set -euo pipefail
+          override_count=$(git diff --name-only --diff-filter=A "$BASE_SHA"..."$HEAD_SHA" | grep -cE '^knowledge-base/security/skill-overrides/' || true)
+          override_count="${override_count:-0}"
+          fail=0
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            [ ! -f "$path" ] && continue
+            verdict=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')
+            echo "::notice file=$path::skill-security-scan verdict: $verdict"
+            if [ "$verdict" = "HIGH-RISK" ] && [ "$override_count" -lt 1 ]; then
+              echo "::error file=$path::HIGH-RISK without override artifact under knowledge-base/security/skill-overrides/"
+              fail=1
+            fi
+          done <<< "$ADDED"
+          exit $fail
