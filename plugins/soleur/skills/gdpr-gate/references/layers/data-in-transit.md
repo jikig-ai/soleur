@@ -324,7 +324,7 @@ Flag when:
 
 Why it matters: Each new non-EEA processor is a Chapter V transfer. Without a Standard Contractual Clauses (SCC) or adequacy basis recorded in `compliance-posture.md`, the transfer lacks a lawful basis and is a regulator-complaint-shaped failure surface.
 
-Adequacy short-list (2026): EU/EEA, UK, Switzerland, Canada (commercial), Japan, South Korea, New Zealand, Argentina. US transfers require Data Privacy Framework participation OR SCCs.
+Adequacy short-list (2026, non-exhaustive): EU/EEA, UK, Switzerland, Canada (commercial), Japan, South Korea, New Zealand, Argentina, Israel, Uruguay, Faroe Islands, Andorra, Guernsey, Isle of Man, Jersey. US transfers require Data Privacy Framework participation OR SCCs.
 
 Fix pattern: every new non-EEA vendor MUST land a Vendor DPA row in `compliance-posture.md` (operator-managed, gate never writes the row). The gate emits `Important` severity on detection so the row gap is visible at design time.
 

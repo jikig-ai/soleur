@@ -204,7 +204,7 @@ Why it matters: GDPR Art. 20 is enforceable independently of Art. 15 access requ
 
 Fix pattern:
 ```javascript
-// Minimum viable CCPA data export
+// Minimum viable GDPR Art. 20 + CCPA data export
 app.get('/api/account/export', auth, async (req, res) => {
   const userId = req.user.id
 

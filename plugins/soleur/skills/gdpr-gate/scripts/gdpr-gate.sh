@@ -19,15 +19,24 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-# shellcheck source=/dev/null
-source "$REPO_ROOT/.claude/hooks/lib/incidents.sh"
+# Source telemetry helper if present. Downstream installs of the Soleur plugin
+# may not ship .claude/hooks/lib/incidents.sh — preserve the always-exit-0
+# advisory contract by no-op'ing emit_incident in that case rather than
+# letting `set -e` abort before the breadcrumb.
+INCIDENTS_LIB="$REPO_ROOT/.claude/hooks/lib/incidents.sh"
+if [[ -f "$INCIDENTS_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$INCIDENTS_LIB"
+else
+  emit_incident() { :; }
+fi
 
 # Single source of truth — mirrors SKILL.md §"Path globs (canonical)".
 CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)'
 
 matched=()
 for f in "$@"; do
-  if echo "$f" | grep -qE "$CANONICAL_REGEX"; then
+  if [[ "$f" =~ $CANONICAL_REGEX ]]; then
     matched+=("$f")
   fi
 done

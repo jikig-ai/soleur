@@ -104,8 +104,14 @@ Run, in order:
        --body "<finding text + link to PR>"
 
   2. Edit knowledge-base/legal/compliance-posture.md and append a row to the
-     Active Items table:
-       | <date> | <check_id> | #<issue> | <one-line summary> | <owner> |
+     Active Compliance Items table. The canonical schema is:
+
+       | Item                 | Issue     | Status | Deadline | Notes                              |
+       | <one-line summary>   | #<issue>  | OPEN   | -        | <check_id>; <date>; <context>      |
+
+     `<check_id>` is the gdpr-gate finding identifier (e.g., GDPR-Art-9). Date
+     and remediation context belong in Notes — the table itself uses 5 fixed
+     columns.
 
   3. git add knowledge-base/legal/compliance-posture.md
      git commit -m "compliance: register Art. 9 finding for #<issue>"
@@ -166,6 +172,7 @@ Canonical disambiguation prose lives in `plugins/soleur/skills/review/SKILL.md` 
 ## Sharp edges
 
 - Hook layer is **advisory only** (`exit 0`). Operators expecting `lefthook` to block will be surprised — the blocking enforcement is at `/soleur:ship` Phase 5.5, post-PR.
+- The lefthook breadcrumb does NOT fire when lefthook itself is bypassed: `git commit --no-verify`, GitHub web-UI edits, fork PRs whose authors don't have lefthook installed, or agent commits on machines without `lefthook install`. In those paths the only enforcement is `/soleur:ship` Phase 5.5's critical-finding-acknowledgment gate (post-PR). Plan Phase 2.7 + work Phase 2 exit gates run regardless of lefthook because they live inside the skill, not the hook layer.
 - The `*auth*` regex match is intentionally broad — false-positives on `auth-error.ts` etc. are accepted because output is advisory and cheap.
 - Lifted upstream files are pinned to commit `7b58d68461cb1fc033a063e34cc9de63d0b4144b`. Upstream drift is tracked by the v2 follow-up issue per the plan AC-PM-2.
 - The gate transmits column NAMES to the model (Anthropic). This is itself a Chapter V transfer; it falls under Anthropic's existing DPA recorded in `compliance-posture.md` Vendor DPAs. Row values are never sent — see "Prompt template" above.

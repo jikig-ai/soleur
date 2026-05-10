@@ -180,6 +180,21 @@ describe("gdpr-gate output format (AC20)", () => {
   });
 });
 
+describe("gdpr-gate canonical-regex parity (single source of truth)", () => {
+  test("hook script CANONICAL_REGEX matches the test's literal", () => {
+    const hookContent = readFileSync(HOOK_SH, "utf8");
+    // The bash regex literal is single-quoted: CANONICAL_REGEX='...'
+    const m = hookContent.match(/^CANONICAL_REGEX='([^']+)'/m);
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe(CANONICAL_REGEX_SOURCE);
+  });
+
+  test("SKILL.md documents the same regex literal", () => {
+    const skillContent = readFileSync(SKILL_MD, "utf8");
+    expect(skillContent).toContain(CANONICAL_REGEX_SOURCE);
+  });
+});
+
 describe("gdpr-gate lefthook hook (AC6, AC7)", () => {
   test("scripts/gdpr-gate.sh exists", () => {
     expect(existsSync(HOOK_SH)).toBe(true);
@@ -265,17 +280,15 @@ new file mode 100644
     expect(estimatedTokens).toBeLessThanOrEqual(4000);
   });
 
-  test.skipIf(!process.env.ANTHROPIC_API_KEY)(
-    "(live) Anthropic SDK input_tokens ≤ 4000 AND output_tokens ≤ 1500 (skipped — no SDK installed in plugin test context, deferred to v2)",
-    () => {
-      // Live API verification deferred: the @anthropic-ai/sdk is not a
-      // dependency of the plugin test context, and adding it for a single
-      // budget assertion exceeds the AC24 cost-benefit. The heuristic above
-      // covers the budget invariant deterministically. v2 follow-up issue
-      // tracks adding an end-to-end live-API budget test if telemetry shows
-      // the heuristic drifting from real usage.
-      expect(true).toBe(true);
-    },
+  // Live API verification deferred per AC24: the @anthropic-ai/sdk is not a
+  // dependency of the plugin test context, and adding it for a single budget
+  // assertion exceeds the cost-benefit. The heuristic above covers the budget
+  // invariant deterministically. v2 follow-up issue tracks adding an end-to-end
+  // live-API budget test if telemetry shows the heuristic drifting from real
+  // usage. test.todo (no body) avoids the vacuous-skip-stub anti-pattern per
+  // cq-write-failing-tests-before.
+  test.todo(
+    "(live) Anthropic SDK input_tokens ≤ 4000 AND output_tokens ≤ 1500 — v2 follow-up",
   );
 });
 

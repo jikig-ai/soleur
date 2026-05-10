@@ -104,9 +104,17 @@ pre-commit:
         - "apps/web-platform/supabase/migrations/*.sql"
         - "apps/web-platform/lib/auth/*.ts"
         - "apps/web-platform/lib/auth/**/*.ts"
+        - "apps/web-platform/lib/auth/*.tsx"
+        - "apps/web-platform/lib/auth/**/*.tsx"
+        - "apps/web-platform/lib/auth/*.js"
+        - "apps/web-platform/lib/auth/**/*.js"
         - "apps/web-platform/server/*auth*.ts"
+        - "apps/web-platform/server/*auth*.tsx"
+        - "apps/web-platform/server/*auth*.js"
         - "apps/web-platform/app/api/*.ts"
         - "apps/web-platform/app/api/**/*.ts"
+        - "apps/web-platform/app/api/*.tsx"
+        - "apps/web-platform/app/api/**/*.tsx"
         - "*.sql"
       run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
     bun-test:
