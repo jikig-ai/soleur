@@ -204,6 +204,26 @@ describe("gdpr-gate canonical-regex parity (single source of truth)", () => {
     const skillContent = readFileSync(SKILL_MD, "utf8");
     expect(skillContent).toContain(CANONICAL_REGEX_SOURCE);
   });
+
+  test("repo-scan.sh awk extraction yields the same regex byte-for-byte (Architecture M1)", () => {
+    // The repo-scan.sh walker extracts the canonical regex from SKILL.md at
+    // runtime instead of redefining it. Run the SAME awk script repo-scan.sh
+    // uses and assert the extraction matches the test's literal. If SKILL.md
+    // prose drifts (heading rename, fence-shape change, regex reformat),
+    // this test fails the same way the runtime walker would — and well
+    // before any operator hits it via `--repo-scan`.
+    const awkScript = `
+      /^## Path globs \\(canonical\\)/ { found = 1; next }
+      found && /^\`\`\`/ { in_block = !in_block; next }
+      found && in_block && /^[[:space:]]*\\^/ { print; exit }
+    `;
+    const result = Bun.spawnSync(["awk", awkScript, SKILL_MD], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const extracted = result.stdout.toString().trim();
+    expect(extracted).toBe(CANONICAL_REGEX_SOURCE);
+  });
 });
 
 describe("gdpr-gate lefthook hook (AC6, AC7)", () => {
@@ -353,10 +373,13 @@ describe("gdpr-gate NOTICE attribution (AC2, AC-LIFT-5)", () => {
     const seen = new Map<string, string>();
     for (const f of LIFTED_REFS) {
       // Find the table row that mentions the file path. Soleur path appears
-      // first in the row, then the upstream path, then the SHA cell. The row
-      // ends with `|`, so capture a 40-char hex blob SHA between pipes.
+      // first in the row, then the upstream path, then the SHA cell. Anchor
+      // on `^|` (start-of-row) to defend against future column reorders that
+      // could otherwise let a non-row match (e.g. an inline backtick path
+      // mention in prose) match the SHA cell.
       const re = new RegExp(
-        `\\\`${f.replace(/[/.-]/g, "\\$&")}\\\`[^\\n]*?\\|\\s*\\\`([0-9a-f]{40})\\\`\\s*\\|`,
+        `^\\|\\s*\\\`${f.replace(/[/.-]/g, "\\$&")}\\\`[^\\n]*?\\|\\s*\\\`([0-9a-f]{40})\\\`\\s*\\|`,
+        "m",
       );
       const m = content.match(re);
       expect(m, `NOTICE row missing or malformed for ${f}`).not.toBeNull();
@@ -371,6 +394,23 @@ describe("gdpr-gate NOTICE attribution (AC2, AC-LIFT-5)", () => {
         `Duplicate blob SHA ${sha} between ${previous} and ${f}`,
       ).toBeUndefined();
       seen.set(sha, f);
+    }
+  });
+
+  test("every NOTICE-listed lifted file exists on disk (Architecture M4)", () => {
+    // Defends against a future rename/delete that updates the file but
+    // leaves a phantom NOTICE row claiming attribution for a non-existent
+    // path. Cheap fs-presence check; mirrors the legal-hygiene contract
+    // that NOTICE accurately describes the lifted corpus.
+    for (const f of LIFTED_REFS) {
+      const abs = resolve(SKILL_DIR, f);
+      expect(existsSync(abs), `LIFTED_REFS path missing on disk: ${f}`).toBe(
+        true,
+      );
+    }
+    // Symmetric: legacy archive must exist as long as NOTICE references it.
+    if (readFileSync(NOTICE, "utf8").includes("legacy/legal-consent-v1-prose.md")) {
+      expect(existsSync(resolve(SKILL_DIR, LEGACY_ARCHIVE))).toBe(true);
     }
   });
 });

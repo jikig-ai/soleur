@@ -109,8 +109,7 @@ Flag when:
 Why it matters: Art. 35 requires a Data Protection Impact Assessment **before** processing where a high risk is likely. Failing to run a DPIA is itself an Art. 35 violation (and indirectly an Art. 5(2) accountability violation) regardless of whether harm materialises. The CNIL, ICO, and BfDI have all issued fines for missing DPIAs.
 
 Fix pattern:
-- Run the DPIA template in `legal-audit` skill BEFORE the feature ships.
-- Document the Art. 35(7) elements: description, necessity assessment, risk assessment, mitigations.
+- Run an Art. 35(7)-shaped DPIA before the feature ships. Required elements: (i) systematic description of the processing operations and purposes, (ii) assessment of necessity and proportionality, (iii) assessment of risks to data-subject rights and freedoms, (iv) measures envisaged to address the risks. Track the assessment in `compliance-posture.md` Active Items.
 - Consult `clo` and (for high-risk residual) the supervisory authority under Art. 36.
 
 Regulation: GDPR Art. 35; Art. 36; Recitals 84, 89–96; EDPB Guidelines on DPIA (WP 248 rev.01).

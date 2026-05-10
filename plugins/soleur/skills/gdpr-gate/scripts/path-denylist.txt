@@ -16,15 +16,21 @@
 #     (relative to the repo root, forward-slash-separated, no leading `./`).
 #
 # v2 surface (7 patterns, verified at plan-write time per AC-DENYLIST-2):
-#   1. .env* at any depth          — NFR-014 explicit.
+#   1. .env* / .envrc at any depth — NFR-014 explicit. Pattern covers
+#                                   `.env`, `.env.local`, `.env.production`,
+#                                   `.envrc` (direnv files often hold
+#                                   `export KEY=...` lines).
 #   2. secrets/ at any depth       — defense-in-depth; intent-driven name.
 #   3. .pem / .key / .crt / etc.   — defense-in-depth; private-key shapes.
+#                                   Matched case-insensitively by repo-scan.sh
+#                                   (`shopt -s nocasematch`) so `.PEM`/`.KEY`
+#                                   filenames are also blocked.
 #   4. test snapshot/golden dirs   — realistic-shape fixtures.
 #   5. web-platform test fixtures  — known fixture root.
 #   6. skill reference catalogues  — gate's own layer files.
 #   7. plan / spec markdown        — design docs, not regulated data.
 
-^\.env(\..+)?$|/\.env(\..+)?$
+(^|/)\.env(\.[^/]*|rc)?$
 (^|/)secrets/
 \.(pem|key|crt|p8|pfx|jks|keystore|asc|ppk)$
 (^|/)__synthesized__/|(^|/)__goldens__/|(^|/)__snapshots__/|\.snap$

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -207,10 +208,28 @@ describe("D3.ci-refusal — CI + ALLOW_PATHS exits 1 unconditionally", () => {
     );
   });
 
-  test("CI alone (no ALLOW_PATHS) does NOT trigger refusal", () => {
-    // Sanity: the refusal must be conditional on BOTH being set.
-    const { exitCode } = runScan(sandbox, { CI: "true" });
+  test("CI alone (no ALLOW_PATHS) does NOT trigger refusal — happy path runs", () => {
+    // Sanity: the refusal must be conditional on BOTH being set. Also assert
+    // the happy path actually produces output, otherwise a script that
+    // silently exits 0 with empty stdout would also pass.
+    const { exitCode, stdout } = runScan(sandbox, { CI: "true" });
     expect(exitCode).toBe(0);
+    expect(stdout).toContain("apps/web-platform/lib/auth/dev-mode.ts");
+  });
+
+  test("CI=\"\" (empty) is treated as not-CI even with ALLOW_PATHS set", () => {
+    // L-2: defensive against developers who export `CI=` and assume
+    // CI-refusal still protects them. Also covers `CI=0` / `CI=false`.
+    for (const ciValue of ["", "0", "false"]) {
+      const { exitCode, stderr } = runScan(sandbox, {
+        CI: ciValue,
+        GDPR_GATE_REPO_SCAN_ALLOW_PATHS: "README.md",
+      });
+      // README.md is not deny-listed → first-clause failure, NOT CI refusal.
+      expect(stderr).not.toContain("refused in CI environment");
+      // Exit 1 expected because README.md fails the non-blocked check.
+      expect(exitCode).toBe(1);
+    }
   });
 });
 
@@ -263,18 +282,163 @@ describe("Canonical-regex source-of-truth — repo-scan.sh extracts, never redef
 });
 
 describe("Path deny-list file structure", () => {
-  test("path-denylist.txt has the 7 patterns from the plan", () => {
+  test("path-denylist.txt has at least 7 patterns (plan-canonical floor)", () => {
     const content = readFileSync(PATH_DENYLIST, "utf8");
     const patterns = content
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l.length > 0 && !l.startsWith("#"));
-    // Plan §"Path deny-list" enumerates exactly 7 patterns.
-    expect(patterns.length).toBe(7);
+    // Plan §"Path deny-list" enumerates 7 canonical patterns; future v2.x
+    // additions may grow this. Floor (>= 7) prevents accidental deletion;
+    // ceiling (<= 20) prevents bloat without churn-gating legitimate growth.
+    expect(patterns.length).toBeGreaterThanOrEqual(7);
+    expect(patterns.length).toBeLessThanOrEqual(20);
     // Spot-check the load-bearing pattern fragments.
     expect(content).toMatch(/\\\.env/);
+    expect(content).toMatch(/envrc/);
     expect(content).toMatch(/secrets\//);
     expect(content).toMatch(/pem/);
     expect(content).toMatch(/__synthesized__|__goldens__|__snapshots__/);
+    expect(content).toMatch(/test\/fixtures/);
+    expect(content).toMatch(/skills\/.+\/references/);
+    expect(content).toMatch(/plans|specs/);
+  });
+});
+
+describe("D6 — symlink refusal", () => {
+  let sandbox: string;
+
+  beforeEach(() => {
+    sandbox = createSandboxRepo([
+      "apps/web-platform/lib/auth/dev-mode.ts",
+    ]);
+    // Create a symlink under a canonical-regex-matching path. The link
+    // target is `.env` (also under the regulated-data tree). Without D6,
+    // git ls-files would emit the link path AND the downstream consumer
+    // would silently follow the link to read .env content.
+    writeFileSync(join(sandbox, "secret.env"), "SECRET=very-real\n");
+    symlinkSync(
+      "../../../secret.env",
+      join(sandbox, "apps/web-platform/lib/auth/cred-link.ts"),
+    );
+    Bun.spawnSync(["git", "-C", sandbox, "add", "."], {
+      env: gitCleanEnv(),
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  });
+
+  afterEach(() => {
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  test("symlinked candidate paths are excluded from stdout", () => {
+    const { stdout } = runScan(sandbox);
+    expect(stdout).not.toContain("cred-link.ts");
+  });
+
+  test("symlinked paths emit `# blocked: <path> (symlink)` audit line", () => {
+    const { stderr } = runScan(sandbox);
+    expect(stderr).toContain(
+      "# blocked: apps/web-platform/lib/auth/cred-link.ts (symlink)",
+    );
+  });
+});
+
+describe("D1 case-insensitive — uppercase PEM/KEY blocked", () => {
+  let sandbox: string;
+
+  beforeEach(() => {
+    sandbox = createSandboxRepo([
+      // Canonical regex matches `.*\.sql$`; combine with .PEM/.KEY shapes
+      // by using files that match BOTH canonical regex AND deny pattern 3.
+      // .pem files don't match canonical regex (intentional — defense-in-
+      // depth). To test case-insensitive deny matching we need the file to
+      // reach the deny check, which means hitting canonical regex first.
+      // Easiest path: nested under apps/web-platform/lib/auth/ (canonical).
+      "apps/web-platform/lib/auth/cert.PEM.ts",
+      "apps/web-platform/lib/auth/key-data.KEY.ts",
+      "apps/web-platform/lib/auth/normal.ts",
+    ]);
+  });
+
+  afterEach(() => {
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  test("uppercase .PEM / .KEY paths are NOT denied because canonical regex pre-filters", () => {
+    // Sanity: this test documents the pre-filter ordering. The .PEM/.KEY
+    // patterns in path-denylist.txt match `\.([Pp][Ee][Mm]|...)$` only when
+    // the filename ENDS in .PEM/.KEY. The fixture files end in .ts, so they
+    // don't match deny pattern 3 — the test asserts they pass through.
+    const { stdout } = runScan(sandbox);
+    expect(stdout).toContain(
+      "apps/web-platform/lib/auth/cert.PEM.ts",
+    );
+    expect(stdout).toContain(
+      "apps/web-platform/lib/auth/normal.ts",
+    );
+  });
+
+  test("case-insensitive deny match: file ending in .PEM IS blocked under .pem pattern", () => {
+    // Direct test: path-denylist.txt pattern 3 must match .PEM
+    // (uppercase) when the script applies `shopt -s nocasematch`. We
+    // manufacture a fixture matching canonical regex (`.*\.sql$` branch)
+    // AND ending in a literal uppercase PEM-like extension.
+    const sandbox2 = createSandboxRepo([
+      "apps/web-platform/lib/auth/dev-mode.ts",
+    ]);
+    // Add a file ending in .PEM that ALSO matches canonical regex. The
+    // canonical regex's `.*\.sql$` branch requires .sql; instead, use the
+    // `apps/web-platform/lib/auth/` prefix branch which matches any file
+    // under that dir. So `apps/web-platform/lib/auth/secret.PEM` matches
+    // canonical (prefix) AND deny pattern 3 (extension, case-insensitive).
+    writeFileSync(
+      join(sandbox2, "apps/web-platform/lib/auth/secret.PEM"),
+      "-----BEGIN EXAMPLE KEY-----\n",
+    );
+    Bun.spawnSync(["git", "-C", sandbox2, "add", "."], {
+      env: gitCleanEnv(),
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const { stdout, stderr } = runScan(sandbox2);
+    expect(stdout).not.toContain("secret.PEM");
+    expect(stderr).toContain(
+      "# blocked: apps/web-platform/lib/auth/secret.PEM",
+    );
+    rmSync(sandbox2, { recursive: true, force: true });
+  });
+});
+
+describe("D1 .envrc — direnv files blocked under .env pattern", () => {
+  let sandbox: string;
+
+  beforeEach(() => {
+    sandbox = createSandboxRepo(["apps/web-platform/lib/auth/dev-mode.ts"]);
+    // Place .envrc under a canonical-regex-matching path so it reaches the
+    // deny-list. canonical-regex doesn't match `.envrc` directly, so we
+    // mount it under apps/web-platform/lib/auth/ (which prefix-matches).
+    writeFileSync(
+      join(sandbox, "apps/web-platform/lib/auth/.envrc"),
+      "export AWS_SECRET_ACCESS_KEY=very-real\n",
+    );
+    Bun.spawnSync(["git", "-C", sandbox, "add", "."], {
+      env: gitCleanEnv(),
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  });
+
+  afterEach(() => {
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  test(".envrc files are denied under pattern 1", () => {
+    const { stdout, stderr } = runScan(sandbox);
+    expect(stdout).not.toContain(".envrc");
+    expect(stderr).toContain(
+      "# blocked: apps/web-platform/lib/auth/.envrc",
+    );
   });
 });
