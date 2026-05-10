@@ -191,10 +191,10 @@ for f in "$ACTIVE" "$ROOT"/.claude/.test-*.jsonl "$ROOT"/.claude/.test-*.jsonl.g
   esac
   TOTAL_LINES=$((TOTAL_LINES + C))
 done
-if [[ "$TOTAL_LINES" -lt 100 ]]; then
-  fail "torn writes: only $TOTAL_LINES of 100 lines preserved across rotation"
+if [[ "$TOTAL_LINES" -ne 100 ]]; then
+  fail "non-exact write count: $TOTAL_LINES of 100 lines preserved (torn or duplicated)"
 else
-  pass "$TOTAL_LINES (≥100) lines preserved across concurrent writers + rotation"
+  pass "$TOTAL_LINES (=100) lines preserved across concurrent writers + rotation"
 fi
 rm -rf "$ROOT"
 

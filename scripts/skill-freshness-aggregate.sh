@@ -123,6 +123,7 @@ if [[ -s "$INVOCATIONS_MERGED" ]]; then
     [ split("\n")[]
       | select(length > 0)
       | (fromjson? // empty)
+      | select(.schema == 1)
       | select(.error != null)
     ]
     | reduce .[] as $e ({};
@@ -135,10 +136,17 @@ if [[ -s "$INVOCATIONS_MERGED" ]]; then
   drops_total=$(jq -r 'add // 0' <<< "$drops_counts_json" 2>/dev/null || echo 0)
   drops_total=${drops_total:-0}
   bad_lines=$(( bad_lines - drops_total ))
-  [[ "$bad_lines" -lt 0 ]] && bad_lines=0
+  if [[ "$bad_lines" -lt 0 ]]; then
+    echo "::warning::bad_lines underflow ($bad_lines) on $INVOCATIONS — drops_total=$drops_total exceeds parsed-line gap. Clamping to 0." >&2
+    bad_lines=0
+  fi
 
   if [[ "$bad_lines" -gt 0 ]]; then
     echo "::warning::Dropped $bad_lines malformed line(s) from $INVOCATIONS (+ archives)" >&2
+  fi
+  if [[ "$drops_total" -gt 0 ]]; then
+    drops_breakdown=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$drops_counts_json" 2>/dev/null || echo "")
+    echo "Filtered $drops_total telemetry-drop sentinel row(s) from $INVOCATIONS (+ archives) — see summary.drops_*_count [${drops_breakdown}]" >&2
   fi
 
   if [[ -n "$parsed_records" ]]; then

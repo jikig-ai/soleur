@@ -126,9 +126,17 @@ unset _incidents_rotator
 _emit_drop_sentinel() {
   local active="${1:-}" hook_event="${2:-}" class="${3:-}"
   [[ -z "$active" || -z "$hook_event" || -z "$class" ]] && return 0
+  # Belt-and-suspenders input shape gate: even though every in-tree caller
+  # passes a hard-coded literal, a typo or future caller drift could embed
+  # a `"` / `\` / newline and silently corrupt every downstream JSONL row.
+  # Allow-listing the safe character set bounds the blast radius to "drop
+  # the sentinel" rather than "poison the stream".
+  [[ "$hook_event" =~ ^[A-Za-z_]+$ ]] || return 0
+  [[ "$class" =~ ^[a-z_]+$ ]] || return 0
   local ts
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" || ts="1970-01-01T00:00:00Z"
-  # Pre-formatted JSON. Class is from a known-safe enum (caller responsibility).
+  # Pre-formatted JSON. Class is from a known-safe enum (caller responsibility,
+  # also enforced by the regex above).
   # No jq. Single-line. Lands well under 4 KiB even with large hook_event values.
   local sentinel="{\"schema\":1,\"hook_event\":\"${hook_event}\",\"error\":\"${class}\",\"ts\":\"${ts}\"}"
   # Best-effort append. Non-blocking flock; on contention or fs error, drop
@@ -171,7 +179,7 @@ _emit_drop_sentinel() {
 #         rule_id as the primary join key — but keeps forensic context if
 #         AGENTS.md is ever rebased with new ids).
 emit_incident() {
-  local rule_id="${1:-}" event="${2:-}" prefix="${3:-}" cmd="${4:-}"
+  local rule_id="${1:-}" event="${2:-}" prefix="${3:-}" cmd="${4:-}" hook_event="${5:-PreToolUse}"
   [[ -z "$rule_id" || -z "$event" ]] && return 0
 
   # Cap cmd length so a single JSONL line stays well under a 4KB kernel
@@ -194,7 +202,7 @@ emit_incident() {
   # proceed — telemetry never blocks the calling hook.
   if declare -F rotate_if_needed >/dev/null 2>&1; then
     if ! rotate_if_needed "$file" 2>/dev/null; then
-      _emit_drop_sentinel "$file" "PreToolUse" "rotation_fail"
+      _emit_drop_sentinel "$file" "$hook_event" "rotation_fail"
     fi
   fi
 
@@ -210,7 +218,7 @@ emit_incident() {
     --argjson s "$SCHEMA_VERSION" \
     '{schema:$s, timestamp:$ts, rule_id:$r, event_type:$e, rule_text_prefix:$p, command_snippet:$c}' \
     2>/dev/null) || {
-      _emit_drop_sentinel "$file" "PreToolUse" "jq_fail"
+      _emit_drop_sentinel "$file" "$hook_event" "jq_fail"
       return 0
     }
 

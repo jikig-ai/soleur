@@ -123,16 +123,17 @@ if [[ -s "$INCIDENTS_MERGED" ]]; then
     valid_lines=$(echo "$valid_stream" | jq -s 'length' 2>/dev/null || echo 0)
     valid_lines=${valid_lines:-0}
   fi
-  # Sentinel counts — separate jq pass over the same merged stream. No
-  # SCHEMA_VERSION gate here intentionally: sentinels currently always
-  # land at schema 1 (helper hard-coded) and a future schema bump would
-  # tighten this. Counts are total (active + archives). Computed BEFORE
-  # the bad_lines warning so we can net sentinels out — they're filtered
-  # intentionally, not malformed.
+  # Sentinel counts — separate jq pass over the same merged stream. The
+  # `select(.schema == 1)` gate matches the valid_stream filter symmetrically
+  # so a future schema-v2 sentinel doesn't silently bucket into v1 counters.
+  # Counts are total (active + archives). Computed BEFORE the bad_lines
+  # warning so we can net sentinels out — they're filtered intentionally,
+  # not malformed.
   drops_counts_json=$(jq -R -s '
     [ split("\n")[]
       | select(length > 0)
       | (fromjson? // empty)
+      | select(.schema == 1)
       | select(.error != null)
     ]
     | reduce .[] as $e ({};
@@ -143,10 +144,24 @@ if [[ -s "$INCIDENTS_MERGED" ]]; then
   drops_total=$(jq -r 'add // 0' <<< "$drops_counts_json" 2>/dev/null || echo 0)
   drops_total=${drops_total:-0}
   bad_lines=$(( total_lines - valid_lines - drops_total ))
-  [[ "$bad_lines" -lt 0 ]] && bad_lines=0
+  if [[ "$bad_lines" -lt 0 ]]; then
+    # Negative arithmetic implies a counting drift (sentinels overcounted
+    # vs total_lines, e.g., a torn sentinel that wc-counted as 1 line but
+    # also matched the drops filter). Surface it instead of silently
+    # masking — exactly the silent-data-corruption class this PR exists to
+    # prevent.
+    echo "::warning::bad_lines underflow ($bad_lines) on $INCIDENTS — total=$total_lines valid=$valid_lines drops=$drops_total. Clamping to 0." >&2
+    bad_lines=0
+  fi
   if [[ "$bad_lines" -gt 0 ]]; then
     # GitHub Actions picks up `::warning::` for workflow annotations; harmless locally.
     echo "::warning::Dropped $bad_lines malformed line(s) from $INCIDENTS (+ archives) (kept $valid_lines)" >&2
+  fi
+  if [[ "$drops_total" -gt 0 ]]; then
+    # Visibility for interactive consumers (agent debugging, manual cron
+    # runs). Filter is invisible to the script's stdout otherwise.
+    drops_breakdown=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$drops_counts_json" 2>/dev/null || echo "")
+    echo "Filtered $drops_total telemetry-drop sentinel row(s) from $INCIDENTS (+ archives) — see summary.drops_*_count [${drops_breakdown}]" >&2
   fi
   if [[ "$valid_lines" -gt 0 ]]; then
     # fire_count increments on any recognized event_type (deny, bypass,
