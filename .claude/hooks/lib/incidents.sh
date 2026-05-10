@@ -46,13 +46,14 @@ fi
 unset _incidents_constants
 
 # Source the shared log rotator. Idempotent (function definitions only); the
-# fail-soft guard mirrors the constants source above so a missing helper does
-# not break incident emission.
+# fail-soft guard mirrors the constants source above. `2>/dev/null || true`
+# matches the leaf-hook callers so a malformed helper never leaks stderr to
+# Claude Code's hook stdout/stderr capture.
 # shellcheck source=/dev/null
 _incidents_rotator="$(dirname "${BASH_SOURCE[0]}")/log-rotation.sh"
 if [[ -f "$_incidents_rotator" ]]; then
   # shellcheck source=/dev/null
-  source "$_incidents_rotator"
+  source "$_incidents_rotator" 2>/dev/null || true
 fi
 unset _incidents_rotator
 

@@ -24,6 +24,14 @@
 # Public API:
 #   rotate_if_needed <jsonl-path> [size-bytes] [age-days]
 #
+# The caller MUST pass a canonicalized absolute path (cd -P / pwd -P resolved)
+# so flock targets the same inode as concurrent writers on the same logical
+# file. All three production callers (incidents.sh, skill-invocation-logger.sh,
+# agent-token-tee.sh) canonicalize their repo-root via `cd -P + pwd -P` —
+# follow that pattern in any new caller. `stat` and the cat redirect both use
+# `-L`/path-following semantics so a symlinked sink rotates on the target's
+# size/mtime rather than the link's metadata.
+#
 # Defaults:
 #   size-bytes = $LOG_ROTATION_SIZE_BYTES (or 5 MB)
 #   age-days   = $LOG_ROTATION_AGE_DAYS   (or 30)
@@ -32,7 +40,11 @@
 # Kill-switch: LOG_ROTATION_DISABLE=1 short-circuits before any work.
 # Test override: LOG_ROTATION_UNIQ_SUFFIX overrides the collision suffix.
 #
-# Exit code: always 0 (fire-and-forget — never blocks the calling hook).
+# Exit code: always 0 (fire-and-forget — never blocks the calling hook). On
+# archive-write failure (disk-full, permission-denied), the active file is
+# preserved intact (truncate gated on cat success), the partial archive is
+# removed, and ONE stderr warning is emitted per process (rate-limited via
+# /tmp/log-rotation-warned-$$ — mirrors the pattern at incidents.sh:130-138).
 
 LOG_ROTATION_SIZE_BYTES_DEFAULT=$((5 * 1024 * 1024))   # 5 MB
 LOG_ROTATION_AGE_DAYS_DEFAULT=30
@@ -51,8 +63,10 @@ rotate_if_needed() {
   local timeout_s="${LOG_ROTATION_FLOCK_TIMEOUT_S:-$LOG_ROTATION_FLOCK_TIMEOUT_S_DEFAULT}"
 
   # Pre-check (cheap, no lock): >99% of calls exit here.
+  # `stat -L` dereferences symlinks so a relocated sink (operator-symlinked to
+  # tmpfs / larger volume) rotates on the target's size/mtime, not the link's.
   local size mtime now age_seconds age_threshold_seconds
-  read -r size mtime < <(stat -c "%s %Y" "$active" 2>/dev/null) || return 0
+  read -r size mtime < <(stat -L -c "%s %Y" "$active" 2>/dev/null) || return 0
   now=$(date -u +%s 2>/dev/null) || return 0
   age_seconds=$(( now - mtime ))
   age_threshold_seconds=$(( age_threshold_days * 86400 ))
@@ -97,27 +111,44 @@ rotate_if_needed() {
       exit 0
     fi
     # Re-check inside lock (TOCTOU defense — a peer writer may have rotated
-    # between our pre-check and our acquire).
+    # between our pre-check and our acquire). `stat -L` parity with the
+    # outer pre-check.
     local s2 m2 now2 age2
-    read -r s2 m2 < <(stat -c "%s %Y" "$active" 2>/dev/null) || exit 0
+    read -r s2 m2 < <(stat -L -c "%s %Y" "$active" 2>/dev/null) || exit 0
     now2=$(date -u +%s 2>/dev/null) || exit 0
     age2=$(( now2 - m2 ))
     if (( s2 <= size_threshold )) && (( age2 <= age_threshold_seconds )); then
       exit 0
     fi
     # Copy first, truncate only on success. Preserves data on disk-full / OOM:
-    # if cat fails, $active stays intact and the next call retries.
+    # if cat fails, $active stays intact and the next call retries. We exit 11
+    # to signal "rotation attempted but archive write failed" so the outer
+    # scope can emit a one-shot warn AND clean up any partial archive bytes.
     if cat "$active" >> "$archive" 2>/dev/null; then
       : > "$active"
       exit 10
     fi
-    exit 0
+    exit 11
   ) 9>>"$active" 2>/dev/null || rotated=$?
 
-  # gzip outside the lock — concurrent writers don't wait on compression.
-  # Failure leaves the .jsonl archive intact, readable by aggregators.
-  if [[ "$rotated" == "10" ]]; then
-    gzip -f "$archive" 2>/dev/null || true
-  fi
+  case "$rotated" in
+    10)
+      # gzip outside the lock — concurrent writers don't wait on compression.
+      # Failure leaves the .jsonl archive intact, readable by aggregators.
+      gzip -f "$archive" 2>/dev/null || true
+      ;;
+    11)
+      # Archive write failed mid-copy. Clean up the partial archive so the
+      # next attempt starts clean (otherwise the collision-suffix branch fires
+      # and orphans the partial forever). Then warn ONCE per process via the
+      # marker pattern at incidents.sh:130-138.
+      rm -f "$archive" 2>/dev/null || true
+      local _log_rotation_warned_marker="/tmp/log-rotation-warned-$$"
+      if [[ ! -f "$_log_rotation_warned_marker" ]]; then
+        echo "[log-rotation] warning: failed to archive $active (disk full? permissions?)" >&2
+        : > "$_log_rotation_warned_marker" 2>/dev/null || true
+      fi
+      ;;
+  esac
   return 0
 }

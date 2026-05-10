@@ -254,6 +254,34 @@ t8_te_prefix_arbitrary_id() {
   rm -rf "$root"
 }
 
+# --- T9: archive-spanning input (#3508) -----------------------------------
+# Per-write rotation moves data into `.claude/.rule-incidents-YYYY-MM*.jsonl.gz`.
+# The aggregator must merge active + archives so events that were rotated out
+# still count toward fire_count / first_seen / last_hit.
+t9_archive_spanning_input() {
+  local root; root=$(make_fixture_repo)
+
+  # Active file: one recent event for rule A.
+  write_event "$root" hr-rule-a-synthetic-test deny "2026-05-01T10:00:00Z"
+
+  # Archive .gz: an older event for the same rule (would be invisible without
+  # the merge step).
+  local archive="$root/.claude/.rule-incidents-2026-04.jsonl"
+  printf '{"schema":1,"timestamp":"%s","rule_id":"%s","event_type":"%s","rule_text_prefix":"x","command_snippet":""}\n' \
+    "2026-04-01T08:00:00Z" "hr-rule-a-synthetic-test" "deny" > "$archive"
+  gzip -f "$archive"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+
+  # Both events should count: hit_count = 2, first_seen = the older archived ts.
+  assert_eq "T9 archived events count toward hit_count" "2" \
+    "$(jq -r '.rules[] | select(.id == "hr-rule-a-synthetic-test") | .hit_count' < "$metrics")"
+  assert_eq "T9 first_seen reflects archived event" "2026-04-01T08:00:00Z" \
+    "$(jq -r '.rules[] | select(.id == "hr-rule-a-synthetic-test") | .first_seen' < "$metrics")"
+  rm -rf "$root"
+}
+
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
@@ -262,6 +290,7 @@ t5_empty_jsonl_exits_zero
 t6_te_prefix_not_orphan
 t7_te_plus_orphan_isolates_real_orphan
 t8_te_prefix_arbitrary_id
+t9_archive_spanning_input
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

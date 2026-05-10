@@ -203,6 +203,31 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 7: archive-spanning input (#3508)
+# Per-write rotation moves data into `.skill-invocations-YYYY-MM*.jsonl.gz`.
+# The aggregator must merge active + archives so older invocations still
+# count toward last_invoked + invocation_count.
+# ------------------------------------------------------------------------
+echo "Test 7: archive-spanning input"
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
+# Active file: a recent invocation for alpha
+printf '{"schema":1,"ts":"%s","skill":"alpha"}\n' "$(ts_days_ago 5)" \
+  > "$ROOT/.claude/.skill-invocations.jsonl"
+# Archive .gz: an older invocation for alpha that was rotated out
+ARCH="$ROOT/.claude/.skill-invocations-2026-04.jsonl"
+printf '{"schema":1,"ts":"%s","skill":"alpha"}\n' "$(ts_days_ago 60)" > "$ARCH"
+gzip -f "$ARCH"
+
+OUT=$(SKILL_FRESHNESS_REPO_ROOT="$ROOT" bash "$AGGREGATOR" --dry-run)
+ALPHA_COUNT=$(echo "$OUT" | jq -r '.skills[] | select(.name == "alpha") | .invocation_count')
+if [[ "$ALPHA_COUNT" -ne 2 ]]; then
+  fail "expected 2 invocations (active + archive), got $ALPHA_COUNT"
+else
+  pass "archived invocations counted alongside active"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

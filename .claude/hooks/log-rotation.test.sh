@@ -328,6 +328,69 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 13: stat -L dereferences symlinks (sink can be relocated via symlink)
+# ------------------------------------------------------------------------
+echo "Test 13: rotation follows symlinks (stat -L)"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+TARGET_DIR="$(mktemp -d)"
+ROOTS+=("$TARGET_DIR")
+TARGET="$TARGET_DIR/real.jsonl"
+LINK="$ROOT/.claude/.test.jsonl"
+dd if=/dev/zero bs=1024 count=6144 2>/dev/null | tr '\0' 's' > "$TARGET"
+ln -sf "$TARGET" "$LINK"
+(
+  source_helper
+  rotate_if_needed "$LINK"
+)
+TARGET_SIZE=$(wc -c < "$TARGET")
+if [[ "$TARGET_SIZE" -ne 0 ]]; then
+  fail "symlink target not truncated (size=$TARGET_SIZE)"
+elif ! compgen -G "$ROOT/.claude/.test-*.jsonl.gz" > /dev/null; then
+  fail "no archive created via symlink"
+else
+  pass "symlinked sink rotated correctly"
+fi
+rm -rf "$ROOT" "$TARGET_DIR"
+ROOTS=("${ROOTS[@]:0:${#ROOTS[@]}-2}")
+
+# ------------------------------------------------------------------------
+# Test 14: archive-write failure → warn-once + partial cleanup
+# ------------------------------------------------------------------------
+echo "Test 14: archive-write failure emits one warn, removes partial"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+ACTIVE="$ROOT/.claude/.test.jsonl"
+ARCHIVE_DIR="$ROOT/.claude"
+dd if=/dev/zero bs=1024 count=6144 2>/dev/null | tr '\0' 'w' > "$ACTIVE"
+ORIG_SIZE=$(wc -c < "$ACTIVE")
+if [[ $(id -u) -eq 0 ]]; then
+  pass "skipped under root (chmod 0500 ineffective)"
+else
+  # Clear any prior warn marker for this test process so we measure THIS run
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+  chmod 0500 "$ARCHIVE_DIR"
+  STDERR=$(
+    (
+      source_helper
+      rotate_if_needed "$ACTIVE"
+    ) 2>&1 >/dev/null
+  ) || true
+  chmod 0700 "$ARCHIVE_DIR"
+  POST_SIZE=$(wc -c < "$ACTIVE")
+  PARTIAL_COUNT=$(compgen -G "$ROOT/.claude/.test-*" | wc -l || true)
+  if [[ "$POST_SIZE" -ne "$ORIG_SIZE" ]]; then
+    fail "active mutated despite archive failure (orig=$ORIG_SIZE, now=$POST_SIZE)"
+  elif [[ "$PARTIAL_COUNT" -ne 0 ]]; then
+    fail "partial archive left behind ($PARTIAL_COUNT files)"
+  elif ! grep -q '\[log-rotation\] warning' <<< "$STDERR"; then
+    fail "no stderr warning emitted (got: $STDERR)"
+  else
+    pass "active intact, no partial archive, one stderr warning"
+  fi
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

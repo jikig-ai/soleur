@@ -84,19 +84,27 @@ own write flock. The rotator:
    valid; truncate is gated on cat success so disk-full leaves data intact.
 5. `gzip -f "$archive"` outside the lock.
 
-Defaults: 5 MB size threshold, 30-day age threshold. Per-call override:
+Defaults: 5 MB size threshold, 30-day age threshold, 5-second flock timeout.
+Per-call override:
 
 ```bash
 rotate_if_needed "$file" 1048576 7   # 1 MB / 7 days
 ```
 
-Per-process env override:
+Per-process env overrides:
 
-```bash
-LOG_ROTATION_SIZE_BYTES=1048576 LOG_ROTATION_AGE_DAYS=7 ...
-```
+| Var | Default | Purpose |
+|---|---|---|
+| `LOG_ROTATION_SIZE_BYTES` | 5242880 | Size threshold in bytes |
+| `LOG_ROTATION_AGE_DAYS` | 30 | Age threshold in days |
+| `LOG_ROTATION_FLOCK_TIMEOUT_S` | 5 | flock acquire timeout (seconds) |
+| `LOG_ROTATION_DISABLE` | _(unset)_ | Set to `1` to short-circuit all rotation |
+| `LOG_ROTATION_UNIQ_SUFFIX` | `$(date +%H%M%S%N)` | Test-only collision suffix override |
 
-Kill-switch: `LOG_ROTATION_DISABLE=1` short-circuits before any work.
+On archive-write failure (disk full, permission denied), the helper preserves
+the active file, removes the partial archive, and emits ONE stderr warning
+per process — `[log-rotation] warning: failed to archive <path> ...`. Mirrors
+the warn-once pattern at `incidents.sh:130-138`.
 
 ### Aggregator rotator (defense-in-depth)
 
