@@ -1,0 +1,338 @@
+# Weekly upstream-content drift detector (#3517).
+#
+# Reads NOTICE frontmatter at plugins/soleur/skills/gdpr-gate/NOTICE, fetches
+# upstream blob SHAs via `gh api repos/<o>/<r>/contents/<path>?ref=main`, and
+# classifies any drift via plugins/soleur/skills/gdpr-gate/scripts/vendor-drift-classify.sh.
+# On security-relevant or LICENSE drift the workflow performs an inline 3-way
+# merge (`git merge-file --diff3`), bumps NOTICE pinned-commit, blob-sha
+# entries, and last-verified, and opens a PR via the bot-pr-with-synthetic-checks
+# composite. Conflict markers short-circuit auto-merge and route to human review.
+#
+# Trap dossier:
+#   - Cron `'17 11 * * MON'`: off-peak, off-cluster (top-of-hour drops by GH
+#     Actions during peak; precedent scheduled-skill-freshness.yml dodges 0 9 1).
+#   - actions/checkout pinned to 40-char SHA per
+#     2026-02-27-github-actions-sha-pinning-workflow.md.
+#   - All `${{ ... }}` expansions used in `run:` blocks are routed through
+#     `env:` to avoid script-injection patterns flagged by GitHub workflow
+#     security guidance.
+#   - `Ensure labels exist` is idempotent (`|| true`); creates the 6 labels the
+#     classifier maps onto.
+#   - `gh api` against the public upstream repo works with the default
+#     GITHUB_TOKEN; rate-limit / 5xx is caught by the `if: failure()` step.
+#   - 3-way merge inline lets the conflict-marker grep run on the same step's
+#     working tree.
+#   - NOTICE-bump runs BEFORE PR creation: bumped values are part of the bot's
+#     commit, so merging the PR ratifies the bump (no separate human edit step).
+#   - `CAP_PER_RUN: '3'` caps issues filed per run (precedent: scheduled-skill-freshness).
+
+name: "Scheduled: Content Vendor Drift"
+
+on:
+  schedule:
+    - cron: '17 11 * * MON'
+  workflow_dispatch:
+
+concurrency:
+  group: schedule-content-vendor-drift
+  cancel-in-progress: false
+
+permissions:
+  # contents:        push the re-vendor branch (`ci/vendor-drift-<DATE>`).
+  # pull-requests:   create the PR object + apply labels.
+  # issues:          open vendor/cron-failure / vendor/upstream-rollback /
+  #                  vendor/upstream-archived tracking issues.
+  # checks:          bot-pr-with-synthetic-checks posts synthetic check-runs.
+  contents: write
+  issues: write
+  pull-requests: write
+  checks: write
+
+jobs:
+  drift-detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CAP_PER_RUN: '3'
+      NOTICE_FILE: plugins/soleur/skills/gdpr-gate/NOTICE
+      PARSER: plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh
+      CLASSIFIER: plugins/soleur/skills/gdpr-gate/scripts/vendor-drift-classify.sh
+      SKILL_PREFIX: plugins/soleur/skills/gdpr-gate
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create compliance/critical \
+            --description "Compliance Critical (Art. 9, missing lawful basis, etc.)" \
+            --color "B60205" 2>/dev/null || true
+          gh label create vendor/pin-drift \
+            --description "Upstream content drift detected on pinned bundle" \
+            --color "FBCA04" 2>/dev/null || true
+          gh label create vendor/license-changed \
+            --description "Upstream license file modified — escalate" \
+            --color "B60205" 2>/dev/null || true
+          gh label create vendor/upstream-archived \
+            --description "Upstream repo archived — fork-or-drop ADR required" \
+            --color "B60205" 2>/dev/null || true
+          gh label create vendor/upstream-rollback \
+            --description "Upstream HEAD is an ancestor of pinned SHA — needs human review" \
+            --color "FBCA04" 2>/dev/null || true
+          gh label create vendor/cron-failure \
+            --description "Vendor-drift workflow failed (gh api 5xx, rate-limit, etc.)" \
+            --color "B60205" 2>/dev/null || true
+
+      - name: Detect drift and stage re-vendor branch
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          UPSTREAM=$(bash "$PARSER" field upstream)
+          PINNED_SHA=$(bash "$PARSER" field pinned-commit)
+          OWNER_REPO="${UPSTREAM#github.com/}"
+
+          echo "Upstream: $UPSTREAM"
+          echo "Pinned commit: $PINNED_SHA"
+
+          # Pre-flight: probe the repo to disambiguate archived / renamed / 404.
+          set +e
+          REPO_META=$(gh api "repos/$OWNER_REPO" 2>/dev/null)
+          REPO_RC=$?
+          set -e
+          DRIFT_FLAGS=""
+          if [[ "$REPO_RC" -ne 0 ]]; then
+            DRIFT_FLAGS="--archived"
+          else
+            ARCHIVED=$(printf '%s' "$REPO_META" | jq -r '.archived // false')
+            FULL_NAME=$(printf '%s' "$REPO_META" | jq -r '.full_name // empty')
+            if [[ "$ARCHIVED" == "true" ]]; then
+              DRIFT_FLAGS="--archived"
+            elif [[ -n "$FULL_NAME" && "$FULL_NAME" != "$OWNER_REPO" ]]; then
+              DRIFT_FLAGS="--renamed"
+              echo "Upstream renamed: $OWNER_REPO -> $FULL_NAME"
+            fi
+          fi
+
+          AGG_DIFF=$(mktemp)
+          : > "$AGG_DIFF"
+          DRIFT_DETECTED=0
+
+          while IFS= read -r line; do
+            UPSTREAM_PATH="${line%%:*}"
+            OLD_SHA="${line##*:}"
+
+            set +e
+            CURRENT_SHA=$(gh api "repos/$OWNER_REPO/contents/$UPSTREAM_PATH?ref=main" --jq .sha 2>/dev/null)
+            FETCH_RC=$?
+            set -e
+
+            if [[ "$FETCH_RC" -ne 0 ]] || [[ -z "$CURRENT_SHA" || "$CURRENT_SHA" == "null" ]]; then
+              echo "WARN: could not resolve upstream blob for $UPSTREAM_PATH (rc=$FETCH_RC)" >&2
+              DRIFT_FLAGS="--renamed"
+              DRIFT_DETECTED=1
+              continue
+            fi
+
+            if [[ "$CURRENT_SHA" != "$OLD_SHA" ]]; then
+              echo "Drift on $UPSTREAM_PATH: $OLD_SHA -> $CURRENT_SHA"
+              DRIFT_DETECTED=1
+              OLD_BLOB=$(mktemp)
+              NEW_BLOB=$(mktemp)
+              gh api "repos/$OWNER_REPO/git/blobs/$OLD_SHA" --jq .content | base64 -d > "$OLD_BLOB"
+              gh api "repos/$OWNER_REPO/git/blobs/$CURRENT_SHA" --jq .content | base64 -d > "$NEW_BLOB"
+              diff -u "$OLD_BLOB" "$NEW_BLOB" \
+                | sed -e "1s|.*|--- a/$UPSTREAM_PATH|" -e "2s|.*|+++ b/$UPSTREAM_PATH|" \
+                >> "$AGG_DIFF" || true
+              rm -f "$OLD_BLOB" "$NEW_BLOB"
+            fi
+          done < <(bash "$PARSER" upstream-files)
+
+          if [[ "$DRIFT_DETECTED" -eq 0 && -z "$DRIFT_FLAGS" ]]; then
+            echo "No drift detected. Exiting cleanly."
+            echo "drift=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          NEW_UPSTREAM_SHA=$(gh api "repos/$OWNER_REPO/commits/main" --jq .sha 2>/dev/null || echo "")
+
+          # Classify (rollback detection vs upstream history is best-effort
+          # locally; for this workflow rollback is signaled in the runbook
+          # via workflow_dispatch + manual SHA inspection).
+          set +e
+          if [[ -n "$DRIFT_FLAGS" ]]; then
+            bash "$CLASSIFIER" "$DRIFT_FLAGS" < "$AGG_DIFF"
+          else
+            bash "$CLASSIFIER" < "$AGG_DIFF"
+          fi
+          CLASSIFY_RC=$?
+          set -e
+
+          echo "Classifier exit code: $CLASSIFY_RC"
+          echo "classify_rc=$CLASSIFY_RC" >> "$GITHUB_OUTPUT"
+          echo "new_sha=$NEW_UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+
+          case "$CLASSIFY_RC" in
+            0)   LABELS="" ;;
+            10)  LABELS="vendor/pin-drift,compliance/critical" ;;
+            11)  LABELS="vendor/license-changed,compliance/critical" ;;
+            12)  LABELS="vendor/upstream-archived,compliance/critical" ;;
+            13)  LABELS="vendor/pin-drift" ;;
+            15)  LABELS="vendor/upstream-rollback,needs-human-review" ;;
+            16)  LABELS="vendor/upstream-archived,needs-human-review" ;;
+            *)   LABELS="vendor/pin-drift" ;;
+          esac
+          echo "labels=$LABELS" >> "$GITHUB_OUTPUT"
+
+          if [[ "$CLASSIFY_RC" == "0" ]]; then
+            echo "drift=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          DATE_SUFFIX=$(date -u +%Y-%m-%d)
+          BRANCH="ci/vendor-drift-$DATE_SUFFIX"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          # Inline 3-way merge per lifted file (alignment via `paste`).
+          paste <(bash "$PARSER" lifted-files) <(bash "$PARSER" upstream-files) \
+            | while IFS=$'\t' read -r LOCAL_LINE UPSTREAM_LINE; do
+                REL_PATH="${LOCAL_LINE%%:*}"
+                UPSTREAM_PATH="${UPSTREAM_LINE%%:*}"
+                OLD_UP_SHA="${UPSTREAM_LINE##*:}"
+                LIFTED_PATH="$SKILL_PREFIX/$REL_PATH"
+
+                set +e
+                CURRENT_UP_SHA=$(gh api "repos/$OWNER_REPO/contents/$UPSTREAM_PATH?ref=main" --jq .sha 2>/dev/null)
+                set -e
+                [[ -z "$CURRENT_UP_SHA" || "$CURRENT_UP_SHA" == "null" ]] && continue
+                [[ "$CURRENT_UP_SHA" == "$OLD_UP_SHA" ]] && continue
+
+                OLD_BLOB=$(mktemp)
+                NEW_BLOB=$(mktemp)
+                gh api "repos/$OWNER_REPO/git/blobs/$OLD_UP_SHA" --jq .content | base64 -d > "$OLD_BLOB"
+                gh api "repos/$OWNER_REPO/git/blobs/$CURRENT_UP_SHA" --jq .content | base64 -d > "$NEW_BLOB"
+
+                git merge-file --diff3 "$LIFTED_PATH" "$OLD_BLOB" "$NEW_BLOB" || true
+                rm -f "$OLD_BLOB" "$NEW_BLOB"
+
+                NEW_LOCAL_SHA=$(git hash-object --no-filters "$LIFTED_PATH")
+                NOTICE_FILE="$NOTICE_FILE" REL_PATH="$REL_PATH" \
+                NEW_LOCAL_SHA="$NEW_LOCAL_SHA" CURRENT_UP_SHA="$CURRENT_UP_SHA" \
+                python3 - <<'PYEOF'
+          import os, re
+          path = os.environ["NOTICE_FILE"]
+          rel = os.environ["REL_PATH"]
+          new_local = os.environ["NEW_LOCAL_SHA"]
+          new_upstream = os.environ["CURRENT_UP_SHA"]
+          with open(path) as f:
+              src = f.read()
+          pattern = re.compile(
+              r'(- path: ' + re.escape(rel) + r'\n(?:    .+\n)+?)',
+              re.MULTILINE,
+          )
+          def fix_block(m):
+              block = m.group(1)
+              block = re.sub(r'(local-blob-sha:\s*)[0-9a-f]+', r'\g<1>' + new_local, block)
+              block = re.sub(r'(upstream-blob-sha:\s*)[0-9a-f]+', r'\g<1>' + new_upstream, block)
+              return block
+          new_src = pattern.sub(fix_block, src, count=1)
+          with open(path, 'w') as f:
+              f.write(new_src)
+          PYEOF
+              done
+
+          TODAY=$(date -u +%Y-%m-%d)
+          if [[ -n "$NEW_UPSTREAM_SHA" ]]; then
+            sed -i "s|^pinned-commit: .*|pinned-commit: $NEW_UPSTREAM_SHA|" "$NOTICE_FILE"
+          fi
+          sed -i "s|^last-verified: .*|last-verified: $TODAY|" "$NOTICE_FILE"
+
+          # Conflict-marker gate.
+          CONFLICT_FOUND=0
+          while IFS= read -r line; do
+            REL_PATH="${line%%:*}"
+            if grep -q '<<<<<<<' "$SKILL_PREFIX/$REL_PATH" 2>/dev/null; then
+              CONFLICT_FOUND=1
+            fi
+          done < <(bash "$PARSER" lifted-files)
+          if (( CONFLICT_FOUND )); then
+            LABELS="$LABELS,needs-human-review"
+            echo "labels=$LABELS" >> "$GITHUB_OUTPUT"
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "drift=detected" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Open re-vendor PR
+        if: steps.detect.outputs.drift == 'detected'
+        uses: ./.github/actions/bot-pr-with-synthetic-checks
+        env:
+          CLASSIFY_RC: ${{ steps.detect.outputs.classify_rc }}
+          DRIFT_LABELS: ${{ steps.detect.outputs.labels }}
+        with:
+          add-paths: |
+            plugins/soleur/skills/gdpr-gate/NOTICE
+            plugins/soleur/skills/gdpr-gate/references/fields.md
+            plugins/soleur/skills/gdpr-gate/references/leakage-vectors.md
+            plugins/soleur/skills/gdpr-gate/references/layers/api-layer.md
+            plugins/soleur/skills/gdpr-gate/references/layers/data-in-transit.md
+            plugins/soleur/skills/gdpr-gate/references/layers/data-lifecycle.md
+          branch-prefix: ci/vendor-drift-
+          commit-message: "chore(vendor-drift): re-vendor gosprinto/compliance-skills"
+          pr-title-prefix: "chore(vendor-drift): re-vendor gosprinto/compliance-skills"
+          pr-body: "Automated re-vendor on upstream drift. Resolution path: knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified bumped at PR-creation time. Classifier exit and labels set in commit metadata."
+          change-summary: "Re-vendor on upstream drift detection — see runbook"
+          gh-token: ${{ github.token }}
+
+      - name: Apply labels to drift PR
+        if: steps.detect.outputs.drift == 'detected' && steps.detect.outputs.labels != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRIFT_LABELS: ${{ steps.detect.outputs.labels }}
+        run: |
+          set -euo pipefail
+          PR_NUM=$(gh pr list --search "head:ci/vendor-drift-" --json number,headRefName \
+            --jq 'sort_by(.number) | reverse | .[0].number')
+          if [[ -n "$PR_NUM" ]]; then
+            IFS=',' read -ra LABEL_ARR <<< "$DRIFT_LABELS"
+            for label in "${LABEL_ARR[@]}"; do
+              [[ -n "$label" ]] || continue
+              gh pr edit "$PR_NUM" --add-label "$label" 2>/dev/null || true
+            done
+          fi
+
+      - name: File cron-failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TODAY=$(date -u +%Y-%m-%d)
+          TITLE="[vendor-drift] cron failed on $TODAY"
+          # Idempotency: phrase-search for existing issue with same prefix.
+          EXISTING=$(gh issue list --label vendor/cron-failure \
+                                   --search "\"vendor-drift cron failed\" in:title" \
+                                   --state open --limit 5 --json number --jq 'length')
+          if [[ "$EXISTING" -gt 0 ]]; then
+            echo "Existing vendor/cron-failure issue open — skipping create."
+            exit 0
+          fi
+          BODY=$(printf 'Workflow: scheduled-content-vendor-drift.yml\nRun: %s/%s/actions/runs/%s\n\nThe vendor-drift workflow failed during the cron run. Likely causes: gh api 5xx, rate-limit, or upstream-side outage. Investigate via the run link above; if persistent, check the runbook at knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md cron-failure section.' \
+                     "$SERVER_URL" "$REPO" "$RUN_ID")
+          gh issue create \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --label "vendor/cron-failure"

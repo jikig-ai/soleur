@@ -1,6 +1,15 @@
 import { describe, test, expect } from "bun:test";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  mkdtempSync,
+  writeFileSync,
+} from "node:fs";
 import { resolve, join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const SKILL_DIR = resolve(REPO_ROOT, "plugins/soleur/skills/gdpr-gate");
@@ -290,6 +299,100 @@ new file mode 100644
   test.todo(
     "(live) Anthropic SDK input_tokens ≤ 4000 AND output_tokens ≤ 1500 — v2 follow-up",
   );
+});
+
+describe("gdpr-gate runtime staleness banner (FR6, AC6a-d)", () => {
+  // The hook prepends a staleness banner to STDOUT (not stderr) when the
+  // NOTICE last-verified date is >30 days old, and additionally emits a
+  // POSTURE_FAIL line at >90 days. Parser failure / NOTICE missing /
+  // future-dated → days_stale=999 → banner fires. Gate exits 0 in all paths
+  // (advisory contract preserved).
+  //
+  // STDOUT is load-bearing per AC6d: agent runtimes (Claude Code skill harness,
+  // MCP servers) frequently swallow stderr.
+  function makeNoticeAt(daysAgo: number): string {
+    const date = new Date(Date.now() - daysAgo * 86_400_000);
+    const iso = date.toISOString().slice(0, 10);
+    const tmp = mkdtempSync(join(tmpdir(), "gdpr-gate-notice-"));
+    const path = join(tmp, "NOTICE");
+    writeFileSync(
+      path,
+      `---\nupstream: github.com/test/synth\npinned-commit: ${"0".repeat(40)}\nlast-verified: ${iso}\nregistry: knowledge-base/engineering/policies/content-vendoring.md\nlifted-files:\n  - path: references/dummy.md\n    upstream-path: pii/dummy.md\n    upstream-blob-sha: ${"0".repeat(40)}\n    local-blob-sha: ${"0".repeat(40)}\n    status: active\n---\n\n# NOTICE (test fixture)\n`,
+    );
+    return path;
+  }
+
+  function runHook(
+    env: Record<string, string> = {},
+    args: string[] = ["scratch.md"],
+  ): { stdout: string; stderr: string; exitCode: number } {
+    const result = spawnSync("bash", [HOOK_SH, ...args], {
+      env: { ...process.env, ...env },
+      encoding: "utf8",
+    });
+    return {
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
+      exitCode: result.status ?? -1,
+    };
+  }
+
+  test("(AC6a) >30d stale: banner appears on STDOUT, gate exits 0", () => {
+    const notice = makeNoticeAt(35);
+    const { stdout, exitCode } = runHook({ NOTICE_FILE: notice });
+    expect(stdout).toMatch(/gdpr-gate rules \d+ days stale/);
+    expect(exitCode).toBe(0);
+  });
+
+  test("(AC6b) >90d stale: banner + POSTURE_FAIL on STDOUT, gate exits 0", () => {
+    const notice = makeNoticeAt(95);
+    const { stdout, exitCode } = runHook({ NOTICE_FILE: notice });
+    expect(stdout).toMatch(/gdpr-gate rules \d+ days stale/);
+    expect(stdout).toMatch(/POSTURE_FAIL/);
+    expect(exitCode).toBe(0);
+  });
+
+  test("(AC6c) NOTICE missing → days_stale=999, banner + POSTURE_FAIL fire, exit 0", () => {
+    const { stdout, exitCode } = runHook({
+      NOTICE_FILE: "/nonexistent/path/NOTICE",
+    });
+    expect(stdout).toMatch(/999 days stale/);
+    expect(stdout).toMatch(/POSTURE_FAIL/);
+    expect(exitCode).toBe(0);
+  });
+
+  test("(AC6c) NOTICE future-dated → days_stale=999, banner fires, exit 0", () => {
+    const future = makeNoticeAt(-365);
+    const { stdout, exitCode } = runHook({ NOTICE_FILE: future });
+    expect(stdout).toMatch(/999 days stale/);
+    expect(exitCode).toBe(0);
+  });
+
+  test("fresh NOTICE (today) → NO staleness banner, exit 0", () => {
+    const fresh = makeNoticeAt(0);
+    const { stdout, exitCode } = runHook({ NOTICE_FILE: fresh });
+    expect(stdout).not.toMatch(/days stale/);
+    expect(exitCode).toBe(0);
+  });
+
+  test("(AC6d) banner emits to STDOUT, not stderr — agent runtimes swallow stderr", () => {
+    const notice = makeNoticeAt(35);
+    const { stdout, stderr } = runHook({ NOTICE_FILE: notice });
+    expect(stdout).toMatch(/days stale/);
+    expect(stderr).not.toMatch(/days stale/);
+  });
+
+  test("staleness check independent of regulated-data regex match", () => {
+    // Pass a non-regulated path; banner must still fire because the check
+    // runs unconditionally on every hook invocation.
+    const notice = makeNoticeAt(35);
+    const { stdout, stderr } = runHook(
+      { NOTICE_FILE: notice },
+      ["docs/about.md"],
+    );
+    expect(stdout).toMatch(/days stale/);
+    expect(stderr).not.toMatch(/regulated-data path touched/);
+  });
 });
 
 describe("gdpr-gate NOTICE attribution (AC2)", () => {
