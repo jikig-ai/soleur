@@ -75,6 +75,13 @@ Both the active and archived files are gitignored (see `.gitignore`).
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
 
+### Telemetry-only hooks (PostToolUse, no deny semantics)
+
+| Hook | Sink | Purpose |
+|---|---|---|
+| `skill-invocation-logger.sh` | `.claude/.skill-invocations.jsonl` | Records every Skill tool call (session_id + skill name) for the monthly skill-freshness aggregator. |
+| `agent-token-tee.sh` | `.claude/.session-tokens.jsonl` | Records every Task/Agent invocation envelope (session_id + subagent_type + total_tokens + duration) for compound Phase 1.6 token-efficiency analysis. Kill-switch: `SOLEUR_DISABLE_AGENT_TOKEN_TEE=1`. Issue #3494. |
+
 ## macOS note
 
 `flock` is not installed by default on macOS. Dev machines need:

@@ -181,7 +181,14 @@ report=$(jq -n \
     # Surfacing these prevents silent data loss when a hook emits a rule_id
     # that was renamed / removed / never tagged (e.g., historical sentinel names).
     ($enriched | map(.id)) as $known_ids
-    | ($counts | keys | map(select(. as $id | ($known_ids | index($id)) | not))) as $orphan_ids
+    | ($counts | keys
+        | map(select(. as $id | ($known_ids | index($id)) | not))
+        # LOAD-BEARING: te-* prefix reserved for token-efficiency telemetry
+        # (issue #3494, compound Phase 1.6). Removing this filter breaks the
+        # weekly cron — every Phase 1.6 outlier would fail orphan-gate.
+        # Tests T6/T7/T8 in scripts/rule-metrics-aggregate.test.sh cover this.
+        # AGENTS.md section prefixes are hr|wg|cq|rf|pdr|cm; te- cannot collide.
+        | map(select(startswith("te-") | not))) as $orphan_ids
     | {
         schema: $schema,
         generated_at: $generated_at,
