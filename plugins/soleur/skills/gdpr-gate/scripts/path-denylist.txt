@@ -1,0 +1,33 @@
+# gdpr-gate `--repo-scan` path deny-list.
+#
+# Single source of truth for paths the repo-scan walker MUST NOT read or
+# forward to the model. Every pattern below is a bash `[[ =~ ]]` extended
+# regex — NOT a shell glob. Patterns that look like globs (e.g. `*.pem`)
+# silently fail to match.
+#
+# `repo-scan.sh` sets `LC_ALL=POSIX` for locale-determinism, but contributors
+# editing patterns should still verify on both Linux and macOS — character
+# classes for non-ASCII bytes still differ between bash builds.
+#
+# Format:
+#   - One pattern per line.
+#   - `#` lines are comments. Blank lines ignored.
+#   - Patterns are matched against the path as `git ls-files` reports it
+#     (relative to the repo root, forward-slash-separated, no leading `./`).
+#
+# v2 surface (7 patterns, verified at plan-write time per AC-DENYLIST-2):
+#   1. .env* at any depth          — NFR-014 explicit.
+#   2. secrets/ at any depth       — defense-in-depth; intent-driven name.
+#   3. .pem / .key / .crt / etc.   — defense-in-depth; private-key shapes.
+#   4. test snapshot/golden dirs   — realistic-shape fixtures.
+#   5. web-platform test fixtures  — known fixture root.
+#   6. skill reference catalogues  — gate's own layer files.
+#   7. plan / spec markdown        — design docs, not regulated data.
+
+^\.env(\..+)?$|/\.env(\..+)?$
+(^|/)secrets/
+\.(pem|key|crt|p8|pfx|jks|keystore|asc|ppk)$
+(^|/)__synthesized__/|(^|/)__goldens__/|(^|/)__snapshots__/|\.snap$
+^apps/web-platform/test/fixtures/
+^plugins/soleur/skills/[^/]+/references/
+^knowledge-base/(project/)?(plans|specs)/.*\.md$
