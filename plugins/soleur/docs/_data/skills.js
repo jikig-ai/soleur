@@ -46,7 +46,7 @@ const SKILL_CATEGORIES = {
   "spec-templates": "Development",
   "user-story-writer": "Development",
 
-  // Review & Planning (9)
+  // Review & Planning (10)
   architecture: "Review & Planning",
   brainstorm: "Review & Planning",
   "competitive-analysis": "Review & Planning",
@@ -56,6 +56,7 @@ const SKILL_CATEGORIES = {
   "plan-review": "Review & Planning",
   "product-roadmap": "Review & Planning",
   review: "Review & Planning",
+  "skill-security-scan": "Review & Planning",
 
   // Workflow (21)
   "agent-browser": "Workflow",

@@ -202,6 +202,30 @@ The packaging script will:
 
 If validation fails, the script will report the errors and exit without creating a package. Fix any validation errors and run the packaging command again.
 
+### Step 5b: Security scan (cooperative-fast-path)
+
+After `package_skill.py` validates the structure but BEFORE the zip is
+distributed, invoke the `skill-security-scan` advisory gate against the
+newly-scaffolded SKILL.md:
+
+```bash
+bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < <skill-folder>/SKILL.md
+```
+
+Operator handling:
+
+- **`LOW-RISK`** — proceed with packaging.
+- **`REVIEW`** — present findings as informational; ask operator to confirm
+  before packaging.
+- **`HIGH-RISK`** — present findings + override instructions referencing
+  [skill-security-scan/references/override-mechanism.md](../skill-security-scan/references/override-mechanism.md).
+  Block packaging until either (a) the SKILL.md is revised, or (b) a valid
+  override artifact is committed under `knowledge-base/security/skill-overrides/`.
+
+The PreToolUse hook on `Write` (`.claude/hooks/skill-security-scan-write.sh`)
+is the load-bearing gate at the tool layer — this Step 5b is the
+operator-friendly cooperative-fast-path that surfaces findings early.
+
 ### Step 6: Iterate
 
 After testing the skill, users may request improvements. Often this happens right after using the skill, with fresh context of how the skill performed.
