@@ -86,11 +86,25 @@ fi
 # Per-line parse via `jq -R 'fromjson?'` so a single malformed line from a
 # crash-mid-write or OOM does NOT abort the whole weekly aggregation. Bad
 # lines are dropped with a stderr warning; valid lines are still counted.
+#
+# Archive-spanning input (#3508): per-write rotation moves data from the
+# active file into `.rule-incidents-YYYY-MM*.jsonl.gz`. Merge active + all
+# archives into a single materialized tmpfile so the aggregator window is not
+# truncated by rotation cadence. Order doesn't matter — counts are commutative
+# and `last_hit`/`first_seen` are computed from event timestamps.
+INCIDENTS_MERGED="$_tmpdir/incidents-merged.jsonl"
+: > "$INCIDENTS_MERGED"
+[[ -s "$INCIDENTS" ]] && cat "$INCIDENTS" >> "$INCIDENTS_MERGED"
+for _gz in "$REPO_ROOT"/.claude/.rule-incidents-*.jsonl.gz; do
+  [[ -e "$_gz" ]] || continue
+  zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true
+done
+
 jq_counts='{}'
-if [[ -s "$INCIDENTS" ]]; then
-  total_lines=$(wc -l < "$INCIDENTS")
+if [[ -s "$INCIDENTS_MERGED" ]]; then
+  total_lines=$(wc -l < "$INCIDENTS_MERGED")
   # Tolerant parse: fromjson? yields null on parse failure; select(.) drops nulls.
-  valid_stream=$(jq -R 'fromjson? | select(.)' < "$INCIDENTS" 2>/dev/null || echo "")
+  valid_stream=$(jq -R 'fromjson? | select(.)' < "$INCIDENTS_MERGED" 2>/dev/null || echo "")
   valid_lines=0
   if [[ -n "$valid_stream" ]]; then
     # `|| echo 0` + `${…:-0}` protect the arithmetic below from a failed
@@ -103,7 +117,7 @@ if [[ -s "$INCIDENTS" ]]; then
   bad_lines=$(( total_lines - valid_lines ))
   if [[ "$bad_lines" -gt 0 ]]; then
     # GitHub Actions picks up `::warning::` for workflow annotations; harmless locally.
-    echo "::warning::Dropped $bad_lines malformed line(s) from $INCIDENTS (kept $valid_lines)" >&2
+    echo "::warning::Dropped $bad_lines malformed line(s) from $INCIDENTS (+ archives) (kept $valid_lines)" >&2
   fi
   if [[ "$valid_lines" -gt 0 ]]; then
     # fire_count increments on any recognized event_type (deny, bypass,

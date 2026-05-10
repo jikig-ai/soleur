@@ -61,11 +61,74 @@ Deferred to v2 until the dataset shows it: `--force` on main, `--no-gpg-sign`,
 
 ## Rotation
 
-`scripts/rule-metrics-aggregate.sh` runs weekly (via
-`.github/workflows/rule-metrics-aggregate.yml`). After a successful roll-up it
-gzips `.claude/.rule-incidents.jsonl` to
-`.claude/.rule-incidents-YYYY-MM.jsonl.gz` and truncates the active file.
-Both the active and archived files are gitignored (see `.gitignore`).
+Three telemetry sinks under `.claude/` rotate via a shared helper at
+`.claude/hooks/lib/log-rotation.sh`:
+
+| Sink | Owner |
+|---|---|
+| `.claude/.rule-incidents.jsonl` | `lib/incidents.sh::emit_incident` (#2213) |
+| `.claude/.skill-invocations.jsonl` | `skill-invocation-logger.sh` (#3122) |
+| `.claude/.session-tokens.jsonl` | `agent-token-tee.sh` (#3494) |
+
+### Per-write rotator (primary)
+
+Each writer calls `rotate_if_needed "$file"` immediately before acquiring its
+own write flock. The rotator:
+
+1. Pre-checks size and mtime without holding a lock (>99% of calls exit here).
+2. Acquires `flock -w 5 -x 9` against `$file`.
+3. Re-checks inside the lock (TOCTOU defense — a peer writer may have rotated
+   between the pre-check and the acquire).
+4. `cat "$active" >> "$archive"` then `: > "$active"` — copy-then-truncate,
+   NOT atomic-rename. Inode is preserved so concurrent writers' flocks remain
+   valid; truncate is gated on cat success so disk-full leaves data intact.
+5. `gzip -f "$archive"` outside the lock.
+
+Defaults: 5 MB size threshold, 30-day age threshold, 5-second flock timeout.
+Per-call override:
+
+```bash
+rotate_if_needed "$file" 1048576 7   # 1 MB / 7 days
+```
+
+Per-process env overrides:
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LOG_ROTATION_SIZE_BYTES` | 5242880 | Size threshold in bytes |
+| `LOG_ROTATION_AGE_DAYS` | 30 | Age threshold in days |
+| `LOG_ROTATION_FLOCK_TIMEOUT_S` | 5 | flock acquire timeout (seconds) |
+| `LOG_ROTATION_DISABLE` | _(unset)_ | Set to `1` to short-circuit all rotation |
+| `LOG_ROTATION_UNIQ_SUFFIX` | `$(date +%H%M%S%N)` | Test-only collision suffix override |
+
+On archive-write failure (disk full, permission denied), the helper preserves
+the active file, removes the partial archive, and emits ONE stderr warning
+per process — `[log-rotation] warning: failed to archive <path> ...`. Mirrors
+the warn-once pattern at `incidents.sh:130-138`.
+
+### Aggregator rotator (defense-in-depth)
+
+`scripts/rule-metrics-aggregate.sh` retains its weekly `AGGREGATOR_ROTATE=1`
+block. In steady state it sees an already-rotated empty file — its
+`[[ -s "$INCIDENTS" ]]` guard skips quietly. Kept as a CI-side safety net for
+operator scenarios where the per-write rotator never fires (long-idle
+machines that never trigger a hook between aggregations).
+
+All active and archived files are gitignored under wildcards
+(`.claude/.rule-incidents*`, `.claude/.skill-invocations*`,
+`.claude/.session-tokens*`).
+
+### Library API
+
+```bash
+# shellcheck source=lib/log-rotation.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/log-rotation.sh"
+
+rotate_if_needed <jsonl-path> [size-bytes] [age-days]
+```
+
+Always exits 0. Fire-and-forget — never blocks the calling hook even if the
+helper itself errors.
 
 ## Hook roster
 

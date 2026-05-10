@@ -164,6 +164,53 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 7: rotation engages when file exceeds size threshold
+# ------------------------------------------------------------------------
+echo "Test 7: per-write rotation engages on size threshold"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+# Pre-fill the log to just over 1 KB; set threshold to 1 KB so the next
+# write triggers rotation. Pre-content is JSON-shaped so it survives the
+# aggregator's `fromjson?` parse tolerance.
+for i in $(seq 1 50); do
+  printf '{"schema":1,"ts":"2026-01-01T00:00:00Z","skill":"pre-%d","session_id":"x","hook_event":"PreToolUse"}\n' "$i" >> "$LOG"
+done
+PRE_SIZE=$(wc -c < "$LOG")
+echo '{"tool_name":"Skill","tool_input":{"skill":"soleur:rotate-trigger"}}' \
+  | LOG_ROTATION_SIZE_BYTES=1024 SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
+POST_SIZE=$(wc -c < "$LOG")
+ARCHIVE_COUNT=$(compgen -G "$ROOT/.claude/.skill-invocations-*.jsonl.gz" | wc -l)
+if [[ "$ARCHIVE_COUNT" -ne 1 ]]; then
+  fail "expected 1 archive, got $ARCHIVE_COUNT (pre-size=$PRE_SIZE)"
+elif [[ "$POST_SIZE" -ge "$PRE_SIZE" ]]; then
+  fail "active file not truncated by rotation (pre=$PRE_SIZE, post=$POST_SIZE)"
+elif ! jq -e '.skill == "soleur:rotate-trigger"' "$LOG" >/dev/null 2>&1; then
+  fail "post-rotation write did not land in active file"
+else
+  pass "rotation triggered, archive created, post-rotate write landed"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 8: rotation respects LOG_ROTATION_DISABLE kill-switch
+# ------------------------------------------------------------------------
+echo "Test 8: rotation kill-switch suppresses rotation"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+for i in $(seq 1 50); do
+  printf '{"schema":1,"ts":"2026-01-01T00:00:00Z","skill":"pre-%d","session_id":"x","hook_event":"PreToolUse"}\n' "$i" >> "$LOG"
+done
+echo '{"tool_name":"Skill","tool_input":{"skill":"soleur:no-rotate"}}' \
+  | LOG_ROTATION_SIZE_BYTES=1024 LOG_ROTATION_DISABLE=1 SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
+ARCHIVE_COUNT=$(compgen -G "$ROOT/.claude/.skill-invocations-*.jsonl.gz" | wc -l || true)
+if [[ "$ARCHIVE_COUNT" -ne 0 ]]; then
+  fail "rotation triggered despite LOG_ROTATION_DISABLE=1 ($ARCHIVE_COUNT archives)"
+else
+  pass "no rotation when LOG_ROTATION_DISABLE=1"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

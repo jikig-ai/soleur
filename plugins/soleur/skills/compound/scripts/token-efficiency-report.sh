@@ -45,13 +45,37 @@ else
 fi
 SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 
+# Archive-spanning input (#3508): per-write rotation may move the most-recent
+# session's envelopes/skills into `.<sink>-YYYY-MM*.jsonl.gz`. Materialize
+# active + all archives into tmpfiles so session-scoped lookups don't miss
+# data that lived in active 5 MB ago. Order doesn't matter — every consumer
+# below filters by session_id and computes from per-event timestamps.
+TE_TMPDIR="${TE_TMPDIR:-$(mktemp -d)}"
+trap 'rm -rf "$TE_TMPDIR" "$SHORTSTAT_TMP"' EXIT INT TERM
+SESSION_TOKENS_MERGED="$TE_TMPDIR/session-tokens-merged.jsonl"
+SKILL_INVOCATIONS_MERGED="$TE_TMPDIR/skill-invocations-merged.jsonl"
+: > "$SESSION_TOKENS_MERGED"
+: > "$SKILL_INVOCATIONS_MERGED"
+[[ -s "$REPO_ROOT/.claude/.session-tokens.jsonl" ]] && \
+  cat "$REPO_ROOT/.claude/.session-tokens.jsonl" >> "$SESSION_TOKENS_MERGED"
+for _gz in "$REPO_ROOT"/.claude/.session-tokens-*.jsonl.gz; do
+  [[ -e "$_gz" ]] || continue
+  zcat "$_gz" 2>/dev/null >> "$SESSION_TOKENS_MERGED" || true
+done
+[[ -s "$REPO_ROOT/.claude/.skill-invocations.jsonl" ]] && \
+  cat "$REPO_ROOT/.claude/.skill-invocations.jsonl" >> "$SKILL_INVOCATIONS_MERGED"
+for _gz in "$REPO_ROOT"/.claude/.skill-invocations-*.jsonl.gz; do
+  [[ -e "$_gz" ]] || continue
+  zcat "$_gz" 2>/dev/null >> "$SKILL_INVOCATIONS_MERGED" || true
+done
+
 # Session-id fallback (per pattern-recognition review): when neither env var
 # is set (e.g., direct script invocation outside a Claude Code session),
 # read the most recent session_id from the session-tokens telemetry. The
 # hook always records it; this makes the writer/reader contract symmetric.
-if [[ -z "$SESSION_ID" && -f "$REPO_ROOT/.claude/.session-tokens.jsonl" ]]; then
+if [[ -z "$SESSION_ID" && -s "$SESSION_TOKENS_MERGED" ]]; then
   SESSION_ID=$(jq -r 'select(.schema == 1) | .session_id' \
-    "$REPO_ROOT/.claude/.session-tokens.jsonl" 2>/dev/null \
+    "$SESSION_TOKENS_MERGED" 2>/dev/null \
     | tail -1)
 fi
 
@@ -103,9 +127,9 @@ AGENTS_FLOOR=$((AGENTS_BYTES * TURN_COUNT_PROXY))
 #      runs are counted as "session work" — slight overcount, acceptable
 #      because the alternative (head -1) excludes legitimate work between
 #      runs.
-SKILL_INVOCATIONS="$REPO_ROOT/.claude/.skill-invocations.jsonl"
+SKILL_INVOCATIONS="$SKILL_INVOCATIONS_MERGED"
 COMPOUND_ENTRY_TS=""
-if [[ -f "$SKILL_INVOCATIONS" && -n "$SESSION_ID" ]]; then
+if [[ -s "$SKILL_INVOCATIONS" && -n "$SESSION_ID" ]]; then
   COMPOUND_ENTRY_TS=$(jq -r --arg s "$SESSION_ID" \
     'select(.session_id == $s and .skill == "soleur:compound") | .ts' \
     "$SKILL_INVOCATIONS" 2>/dev/null | sort | tail -1)
@@ -114,7 +138,7 @@ fi
 PAYLOAD_TOTAL=0
 LARGEST_SKILL=""
 LARGEST_SKILL_BYTES=0
-if [[ -f "$SKILL_INVOCATIONS" && -n "$SESSION_ID" ]]; then
+if [[ -s "$SKILL_INVOCATIONS" && -n "$SESSION_ID" ]]; then
   while IFS= read -r skill; do
     [[ -z "$skill" ]] && continue
     # Validate skill-id shape (per security + code-quality review):
@@ -154,11 +178,11 @@ fi
 # full-file scans of .session-tokens.jsonl. Adds `select(.schema == 1)`
 # gate (per data-integrity review) so a future schema-2 line with renamed
 # fields silently drops out of the count rather than corrupting it.
-SESSION_TOKENS="$REPO_ROOT/.claude/.session-tokens.jsonl"
+SESSION_TOKENS="$SESSION_TOKENS_MERGED"
 MAX_ENVELOPE=0
 SUM_ENVELOPES=0
 TOP_OFFENDER=""
-if [[ -f "$SESSION_TOKENS" && -n "$SESSION_ID" ]]; then
+if [[ -s "$SESSION_TOKENS" && -n "$SESSION_ID" ]]; then
   cts="${COMPOUND_ENTRY_TS:-9999-12-31T23:59:59Z}"
   # IFS=$'\t' so a TOP_OFFENDER with spaces (subagent_type can contain them)
   # doesn't shift fields — same defensive pattern used by the hook reader.

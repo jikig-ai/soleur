@@ -58,6 +58,19 @@ ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 mkdir -p "$(dirname "$file")" 2>/dev/null || exit 0
 [[ -f "$file" ]] || : > "$file" 2>/dev/null || exit 0
 
+# Rotate before writing. Source the helper fail-soft and call it with full
+# error suppression so a rotator hiccup never blocks the hook.
+# shellcheck source=/dev/null
+_rotator="$(dirname "${BASH_SOURCE[0]}")/lib/log-rotation.sh"
+if [[ -f "$_rotator" ]]; then
+  # shellcheck source=/dev/null
+  source "$_rotator" 2>/dev/null || true
+  if declare -F rotate_if_needed >/dev/null 2>&1; then
+    rotate_if_needed "$file" 2>/dev/null || true
+  fi
+fi
+unset _rotator
+
 # Build line via jq -nc (single-line JSON), fail-soft.
 line="$(jq -nc \
   --arg ts "$ts" \
