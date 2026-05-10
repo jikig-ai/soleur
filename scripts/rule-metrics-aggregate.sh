@@ -180,8 +180,12 @@ report=$(jq -n \
     # Orphan events: rule_ids in the jsonl that don'"'"'t match any AGENTS.md id.
     # Surfacing these prevents silent data loss when a hook emits a rule_id
     # that was renamed / removed / never tagged (e.g., historical sentinel names).
+    # `te-` prefix is reserved for token-efficiency telemetry (issue #3494).
+    # AGENTS.md section prefixes are hr|wg|cq|rf|pdr|cm; te- cannot collide.
     ($enriched | map(.id)) as $known_ids
-    | ($counts | keys | map(select(. as $id | ($known_ids | index($id)) | not))) as $orphan_ids
+    | ($counts | keys
+        | map(select(. as $id | ($known_ids | index($id)) | not))
+        | map(select(startswith("te-") | not))) as $orphan_ids
     | {
         schema: $schema,
         generated_at: $generated_at,
