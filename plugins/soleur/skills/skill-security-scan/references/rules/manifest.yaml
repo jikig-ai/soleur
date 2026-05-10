@@ -1,0 +1,36 @@
+# skill-security-scan rule-pack manifest (SHA-pinned, R13 mitigation)
+#
+# `run-scan.sh` recomputes sha256sum of each declared file at scan time. A
+# mismatch fail-closes the scan to REVIEW with reason "rule pack tampered."
+# This prevents a poisoned rule pack from silently passing malicious skills.
+#
+# SHA computation: `sha256sum <file>` over raw bytes. .gitattributes pins LF
+# line-endings via `text=auto` so SHAs are reproducible cross-platform.
+#
+# Rule-pack edits MUST recompute SHAs in the same commit. Use:
+#
+#   bash scripts/run-self-test.sh --regenerate-manifest
+#
+# (CI rejects --regenerate-manifest when env CI=true to prevent accidental
+# bypass.)
+#
+# Format: each entry under `files:` declares a rule-pack file path RELATIVE
+# to the skill's references/ directory.
+
+version: "0.1.0"
+semgrep_min_version: "1.0.0"  # advisory pin; semgrep is not at runtime path today
+files:
+  - path: rules/code-exec.yaml
+    sha256: c0e18f5c2776b6ff108658a4afab5e7f6df37b02091e112f62dff47a84094fe6
+  - path: rules/filesystem-boundary.yaml
+    sha256: 745630fd4daee1f3f3100da8f99c2de65b59da18c72ce36d5c4316c86ba4929f
+  - path: rules/supply-chain.yaml
+    sha256: 8029585439b94cea97135ec3d1691f67ec50dcb158a8bbd0a9ec17e9f4d0d30b
+  - path: first-party-allowlist.yaml
+    sha256: dc86465adea5997a31bc856c69fabd198562d939eb65f42e41d1a51d1af3dc05
+  - path: redirect-domains.yaml
+    sha256: 663ad234c823c1b2b1a861c57e82f4ad6b2b12785f8bea444e4434bada694552
+  - path: typosquat-targets.yaml
+    sha256: 7881969a5126453f9e3442ea14c3f0dd45e59cf229564e558eee847cbd1c9ddd
+  - path: regex-patterns.md
+    sha256: b0850d2c5c2bc695616b89a0eb89a47f3118fad2d07ce12e22ba970bde98caae

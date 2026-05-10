@@ -1,0 +1,65 @@
+# Typosquat-target seed list (vendored).
+#
+# Levenshtein distance <= 2 from any name here triggers a REVIEW finding in
+# check-supply-chain.sh. Seeded with high-velocity packages most commonly
+# typosquatted. Expand via follow-up issue (filed during deferral tracking).
+#
+# Format: ecosystem-keyed lists.
+
+PyPI:
+  - requests
+  - urllib3
+  - boto3
+  - numpy
+  - pandas
+  - django
+  - flask
+  - pytest
+  - pyyaml
+  - cryptography
+  - pillow
+  - sqlalchemy
+  - tensorflow
+  - torch
+  - openai
+  - anthropic
+  - matplotlib
+  - scikit-learn
+  - python-dateutil
+  - setuptools
+
+npm:
+  - react
+  - react-dom
+  - lodash
+  - express
+  - axios
+  - typescript
+  - eslint
+  - webpack
+  - next
+  - vue
+  - angular
+  - jquery
+  - moment
+  - underscore
+  - chalk
+  - commander
+  - debug
+  - inquirer
+  - openai
+  - "@anthropic-ai/sdk"
+
+Go:
+  - cobra
+  - gin
+  - testify
+  - viper
+  - mux
+
+crates.io:
+  - serde
+  - tokio
+  - reqwest
+  - clap
+  - rayon

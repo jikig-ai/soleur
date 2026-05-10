@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
+# Category 4: filesystem boundary violations.
+
 set -euo pipefail
-# TODO Phase 2.4: semgrep generic + targeted regex for path traversal,
-# symlink-out-of-bounds, write attempts to credential dotfiles, read of
-# credential paths.
-echo '{"verdict":"LOW-RISK","findings":[],"category":"filesystem-boundary"}'
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/lib.sh"
+
+YAML="$SCRIPT_DIR/../references/rules/filesystem-boundary.yaml"
+
+tmp="$(stdin_to_tempfile)"
+trap 'rm -f "$tmp"' EXIT
+
+findings="$(apply_yaml_rules "$YAML" "$tmp" || true)"
+
+verdict="$(echo "$findings" | findings_to_verdict)"
+findings_json="$(echo "$findings" | build_findings_array)"
+
+emit_result "$verdict" "filesystem-boundary" "$findings_json"

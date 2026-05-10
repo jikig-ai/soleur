@@ -1,6 +1,176 @@
 #!/usr/bin/env bash
+# run-scan.sh — orchestrate the five category checks, aggregate verdict,
+# emit markdown findings + mandatory disclaimer footer, write .scan-meta.json
+# (with PII redaction).
+#
+# Stdin: SKILL.md content. Or: positional file path.
+# Stdout: markdown findings table + disclaimer footer.
+# Exit code: 0 always (advisory).
+
 set -euo pipefail
-# TODO Phase 3: orchestrate 5 category scripts in parallel via xargs -P 5,
-# aggregate verdict (max-severity wins), emit markdown findings + mandatory
-# disclaimer footer, write .scan-meta.json with PII redaction.
-echo '{"verdict":"REVIEW","findings":[],"category":"unimplemented","reason":"run-scan.sh stub"}'
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCANNER_VERSION="0.1.0"
+
+# Resolve input file
+if [ "$#" -ge 1 ] && [ -f "$1" ]; then
+  INPUT="$1"
+  CLEANUP=""
+else
+  INPUT="$(mktemp -t skill-scan-input-XXXXXX)"
+  CLEANUP="$INPUT"
+  cat > "$INPUT"
+fi
+trap '[ -n "$CLEANUP" ] && rm -f "$CLEANUP"' EXIT
+
+# ---------------------------------------------------------------------------
+# Self-defense: rule-pack SHA validation (per Phase 5)
+# ---------------------------------------------------------------------------
+manifest="$SKILL_DIR/references/rules/manifest.yaml"
+rule_pack_sha="unknown"
+rule_pack_version="unknown"
+if [ -f "$manifest" ]; then
+  rule_pack_version="$(awk '/^version:/ { gsub(/^version:[[:space:]]*"?|"?$/, ""); print; exit }' "$manifest")"
+  # Compute current manifest SHA over the manifest file itself for traceability.
+  rule_pack_sha="$(sha256sum "$manifest" | cut -d' ' -f1)"
+  # Validate per-file SHAs declared in manifest. Tampered file → flag and
+  # short-circuit to REVIEW. Manifest format: list of `- path:`/`sha256:`
+  # tuples relative to the rules/ directory.
+  tampered=""
+  while IFS= read -r line; do
+    case "$line" in
+      *path:*)
+        cur_path="${line#*path:}"
+        cur_path="${cur_path// /}"
+        cur_path="${cur_path//\"/}"
+        cur_path="${cur_path//\'/}"
+        ;;
+      *sha256:*)
+        cur_sha="${line#*sha256:}"
+        cur_sha="${cur_sha// /}"
+        cur_sha="${cur_sha//\"/}"
+        cur_sha="${cur_sha//\'/}"
+        actual="$(sha256sum "$SKILL_DIR/references/$cur_path" 2>/dev/null | cut -d' ' -f1 || echo "")"
+        if [ -n "$actual" ] && [ "$actual" != "$cur_sha" ]; then
+          tampered+="$cur_path "
+        fi
+        cur_path=""
+        ;;
+    esac
+  done < "$manifest"
+  if [ -n "$tampered" ]; then
+    cat <<EOF
+# skill-security-scan verdict: REVIEW
+
+**Self-defense:** rule pack tampered. Files with SHA mismatch:
+
+$(echo "$tampered" | tr ' ' '\n' | grep -v '^$' | sed 's/^/  - /')
+
+Re-run with \`scripts/run-self-test.sh --regenerate-manifest\` (dev) or fix
+the rule pack before scanning.
+
+---
+Advisory static analysis only. LOW-RISK does not constitute a security audit,
+certification, or warranty of safety. The skill executes in your environment
+under your account; you remain responsible for review.
+
+Scanner version: $SCANNER_VERSION  Rule pack: ${rule_pack_sha:0:12}  Scanned: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+EOF
+    exit 0
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Run the five category checks. Each consumes stdin (the SKILL.md content)
+# and emits a JSON document on stdout. We collect into a temp dir.
+# ---------------------------------------------------------------------------
+results_dir="$(mktemp -dt skill-scan-results-XXXXXX)"
+trap '[ -n "$CLEANUP" ] && rm -f "$CLEANUP"; rm -rf "$results_dir"' EXIT
+
+run_category() {
+  local script="$1" out="$2"
+  bash "$SCRIPT_DIR/$script" < "$INPUT" > "$out" 2>/dev/null || \
+    echo '{"verdict":"REVIEW","category":"unknown","findings":[{"rule_id":"check-failed","severity":"REVIEW","line":0,"snippet":"category script error"}]}' > "$out"
+}
+
+run_category check-codeexec.sh           "$results_dir/code-execution.json" &
+run_category check-prompt-injection.sh   "$results_dir/prompt-injection.json" &
+run_category check-supply-chain.sh       "$results_dir/supply-chain.json" &
+run_category check-filesystem-boundary.sh "$results_dir/filesystem-boundary.json" &
+run_category check-telemetry-surface.sh  "$results_dir/telemetry-surface.json" &
+wait
+
+# Aggregate verdict (max-severity wins).
+agg_verdict="LOW-RISK"
+for f in "$results_dir"/*.json; do
+  v="$(jq -r '.verdict' "$f" 2>/dev/null || echo "REVIEW")"
+  case "$v" in
+    HIGH-RISK) agg_verdict="HIGH-RISK"; break ;;
+    REVIEW)    [ "$agg_verdict" = "LOW-RISK" ] && agg_verdict="REVIEW" ;;
+  esac
+done
+
+# Build findings_summary JSON (with PII redaction).
+findings_summary='{}'
+for f in "$results_dir"/*.json; do
+  cat="$(jq -r '.category' "$f")"
+  body="$(jq '{verdict, findings}' "$f")"
+  # PII redaction (per GDPR-DataMin-1): email, IPv4, IBAN-shape.
+  body_redacted="$(echo "$body" | sed -E '
+    s/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/<email>/g;
+    s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/<ip>/g;
+    s/\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4,}\b/<iban>/g
+  ')"
+  findings_summary="$(echo "$findings_summary" | jq --arg c "$cat" --argjson b "$body_redacted" '. + {($c): $b}')"
+done
+
+# Write .scan-meta.json next to input (or to runtime dir for stdin).
+ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+meta_dir="${XDG_RUNTIME_DIR:-/tmp}/skill-security-scan-$$"
+mkdir -p "$meta_dir"
+meta_path="$meta_dir/.scan-meta.json"
+jq -n \
+  --arg sv "$SCANNER_VERSION" \
+  --arg rpv "$rule_pack_version" \
+  --arg sha "$rule_pack_sha" \
+  --arg v "$agg_verdict" \
+  --arg ts "$ts" \
+  --argjson fs "$findings_summary" \
+  '{scanner_version: $sv, rule_pack_version: $rpv, rule_pack_sha256: $sha, verdict: $v, timestamp: $ts, findings_summary: $fs}' \
+  > "$meta_path"
+
+# Emit markdown findings table + mandatory disclaimer.
+echo "# skill-security-scan verdict: $agg_verdict"
+echo ""
+echo "| Category | Verdict | Findings |"
+echo "|---|---|---|"
+for f in "$results_dir"/*.json; do
+  cat="$(jq -r '.category' "$f")"
+  v="$(jq -r '.verdict' "$f")"
+  n="$(jq -r '.findings | length' "$f")"
+  echo "| $cat | $v | $n |"
+done
+echo ""
+echo "Per-finding details (operator-facing, unredacted):"
+echo ""
+for f in "$results_dir"/*.json; do
+  v="$(jq -r '.verdict' "$f")"
+  if [ "$v" != "LOW-RISK" ]; then
+    cat="$(jq -r '.category' "$f")"
+    echo "## $cat ($v)"
+    echo ""
+    jq -r '.findings[] | "- **\(.rule_id)** (\(.severity)) line \(.line): `\(.snippet)`"' "$f"
+    echo ""
+  fi
+done
+echo ".scan-meta.json written to: $meta_path"
+echo ""
+cat <<EOF
+---
+Advisory static analysis only. LOW-RISK does not constitute a security audit,
+certification, or warranty of safety. The skill executes in your environment
+under your account; you remain responsible for review.
+
+Scanner version: $SCANNER_VERSION  Rule pack: ${rule_pack_sha:0:12}  Scanned: $ts
+EOF
