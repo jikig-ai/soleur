@@ -1,0 +1,201 @@
+name: "Scheduled (once): gdpr-gate preflight Check 10 — 50d eval (#3516)"
+
+on:
+  schedule:
+    - cron: '0 9 29 6 *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: schedule-once-gdpr-gate-preflight-eval-50d
+  cancel-in-progress: false
+
+env:
+  ISSUE_NUMBER: "3516"
+  COMMENT_ID: "4415647777"
+  FIRE_DATE: "2026-06-29"
+  WORKFLOW_NAME: "scheduled-gdpr-gate-preflight-eval-50d.yml"
+  EXPECTED_AUTHOR: "deruelle"
+  EXPECTED_CREATED_AT: "2026-05-10T15:27:18Z"
+
+jobs:
+  run-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: One-time fire (with self-neutralization)
+        uses: anthropics/claude-code-action@476e359e6203e73dad705c8b322e333fabbd7416 # v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: true
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: >-
+            --max-turns 25
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep
+          prompt: |
+            ## Neutralization primitive (referenced by D3 abort, preflight-failure abort, and the Final step)
+
+            To **neutralize** the workflow (prevent any future cron fires), do
+            the following IN ORDER. The previous mechanism `gh workflow disable
+            "$WORKFLOW_NAME"` was removed in #3153 — `claude-code-action`'s App
+            installation token does not honor `actions: write`, so the disable
+            returns 403 regardless of the workflow's declared permissions.
+
+            1. **Idempotency precheck.** Read `.github/workflows/$WORKFLOW_NAME`.
+               If the `on:` block has already had `schedule:` removed (or only
+               contains `workflow_dispatch:`), the workflow is already
+               neutralized — skip to step 6 (success, no-op).
+            2. **Edit YAML.** Use the Read+Edit tools (NOT shell `sed`/`awk` —
+               shell-based YAML mutation has a long history of corrupting
+               workflow files in CI) to remove the `schedule:` key and its
+               child list under `on:`. Leave any other triggers
+               (`workflow_dispatch:`, etc.) intact. If `schedule:` is the ONLY
+               trigger, replace the entire `on:` block with `on:\n  workflow_dispatch:`
+               so the file remains a valid GHA workflow that can be manually
+               invoked for forensic purposes.
+            3. **Stage and guard against no-op commit.**
+               `git add .github/workflows/$WORKFLOW_NAME` then
+               `git diff --cached --quiet`. If the diff is empty (exit 0), the
+               file was already neutralized between step 1 and step 2 — skip
+               to step 6.
+            4. **Configure git identity, then commit.**
+               ```bash
+               git config user.name "github-actions[bot]"
+               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+               git commit -m "chore(schedule): neutralize one-time workflow $WORKFLOW_NAME (post-fire cleanup, #$ISSUE_NUMBER)"
+               ```
+            5. **Push — direct first, PR fallback.**
+               - **5a.** Try direct push:
+                 `git push origin HEAD:$DEFAULT_BRANCH`.
+                 If exit 0, neutralization succeeded — go to step 6.
+               - **5b.** If direct push fails (branch protection / required
+                 status checks): first check whether a stale neutralization
+                 PR already exists for this workflow:
+                 `EXISTING=$(gh pr list --search "head:chore/neutralize-$WORKFLOW_NAME" --state open --json url --jq '.[0].url // empty')`.
+                 If `$EXISTING` is non-empty, treat as a successful handoff —
+                 go to step 6 without opening a duplicate. Otherwise create
+                 an ephemeral branch
+                 `chore/neutralize-$WORKFLOW_NAME-$(date -u +%Y%m%d%H%M%S)`,
+                 push it, then open a PR via
+                 `gh pr create --base "$DEFAULT_BRANCH" --head "$BRANCH" --title "chore(schedule): neutralize $WORKFLOW_NAME" --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER. Removes the schedule: trigger from the generated --once workflow file."`.
+                 Then attempt auto-merge:
+                 `gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+                 If `merge.err` contains `auto-merge is not allowed`, the PR
+                 is open and waiting on a human reviewer; that is still a
+                 successful neutralization handoff (D3 catches any re-fire
+                 before the PR lands).
+            6. **Success.** No fallback comment posted; the task-result
+               comment from the main work suffices.
+            7. **Both legs failed.** If step 5a errored AND step 5b
+               PR-creation errored (NOT auto-merge — auto-merge unavailability
+               is acceptable), post the fallback comment to issue
+               #$ISSUE_NUMBER with this exact body:
+               "Workflow ran but auto-cleanup failed (direct push: <err>; PR
+               create: <err>). Operator action required: edit
+               `.github/workflows/$WORKFLOW_NAME` to remove the `schedule:`
+               trigger."
+
+            ## Pre-flight (abort with observation comment if any check fails)
+
+            1. **Date guard (PRIMARY cross-year defense, D3):**
+               First, refuse to run if `$FIRE_DATE` is empty or malformed:
+               `[[ "$FIRE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "FIRE_DATE empty or malformed: '$FIRE_DATE'"; <invoke neutralization primitive>; exit 0; }`
+               Then assert the calendar match:
+               `[[ "$(date -u +%F)" == "$FIRE_DATE" ]]` must be true. If false,
+               invoke the Neutralization primitive above and exit 0. Take no
+               other action.
+            2. **Idempotency:** if the workflow's `on:` block no longer
+               contains `schedule:` (already neutralized), exit 0 immediately.
+            3. **Repo not archived:**
+               `[[ "$(gh repo view --json isArchived --jq .isArchived)" == "false" ]]`.
+            4. **Issue OPEN + same repo:** fetch
+               `gh issue view "$ISSUE_NUMBER" --json state,repository_url`. The state
+               must be OPEN, and `repository_url` must end in `$REPO`.
+            5. **Comment exists + matches issue:**
+               `gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq .issue_url`
+               must end in `/issues/$ISSUE_NUMBER`.
+            6. **Comment-author pin (D5, FIRST half):** the comment's author MUST equal `$EXPECTED_AUTHOR`.
+               `actual_author=$(gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq .user.login)`
+               then `[[ "$actual_author" == "$EXPECTED_AUTHOR" ]]`.
+            7. **Comment-immutability pin (D5, SECOND half):** the comment MUST NOT have been edited after authoring.
+               `meta=$(gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq '"\(.created_at)\t\(.updated_at)"')`
+               then verify `created_at == EXPECTED_CREATED_AT` AND `created_at == updated_at`.
+
+            If ANY pre-flight check fails: post a single observation comment to issue
+            #$ISSUE_NUMBER naming which check failed, then invoke the
+            Neutralization primitive above and exit 0.
+
+            ## Task
+
+            Fetch the documented task spec from the referenced comment:
+
+            `body=$(gh api "repos/$REPO/issues/comments/$COMMENT_ID" --jq .body)`
+
+            If `$body` is empty (`[[ -z "$body" ]]`), treat as a pre-flight failure: post observation comment "comment body is empty", invoke the Neutralization primitive, exit 0.
+
+            Otherwise execute the documented work as instructed by `$body`. When complete, post results as a follow-up comment on issue #$ISSUE_NUMBER (re-verify `gh issue view "$ISSUE_NUMBER" --json repository_url` matches `$REPO` immediately before posting).
+
+            ## Final step (mandatory, last)
+
+            Invoke the Neutralization primitive above. This is D4 — the
+            secondary self-cleanup. D3 (the date guard above) is the primary
+            cross-year defense.
+
+            ## Post-fire verification (in-prompt observation) — #3403
+
+            After the Neutralization primitive completes, also post an
+            observable signal into the issue thread. Read the workflow file
+            back from the default branch via the contents API:
+
+            ```bash
+            CONTENT=$(gh api "repos/$REPO/contents/.github/workflows/$WORKFLOW_NAME" --jq .content | base64 -d)
+            STILL_HAS_SCHEDULE=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*schedule:' || true)
+            HAS_DISPATCH=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*workflow_dispatch:' || true)
+            ```
+
+            Expected post-neutralization state: `STILL_HAS_SCHEDULE == 0` AND
+            `HAS_DISPATCH >= 1`. If verification FAILS, post a follow-up
+            comment to issue #$ISSUE_NUMBER:
+
+            "Workflow neutralization claimed success but post-fire
+            verification shows `schedule:` still present (or
+            `workflow_dispatch:` removed) on the default branch. Manual
+            intervention required: edit `.github/workflows/$WORKFLOW_NAME` to
+            remove the `schedule:` trigger."
+
+      - name: Post-fire verification (#3403)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          STILL_HAS_SCHEDULE=99
+          HAS_DISPATCH=0
+          for attempt in 1 2 3; do
+            CONTENT=$(gh api "repos/$REPO/contents/.github/workflows/$WORKFLOW_NAME" --jq .content 2>/dev/null | base64 -d || true)
+            STILL_HAS_SCHEDULE=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*schedule:' || true)
+            HAS_DISPATCH=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*workflow_dispatch:' || true)
+            if [[ "$STILL_HAS_SCHEDULE" == "0" && "$HAS_DISPATCH" -ge "1" ]]; then
+              echo "::notice::Post-fire verification passed (attempt $attempt)."
+              exit 0
+            fi
+            echo "Attempt $attempt: schedule=$STILL_HAS_SCHEDULE dispatch=$HAS_DISPATCH — retrying after replication lag."
+            sleep 10
+          done
+          echo "::error::Post-fire verification failed: schedule=$STILL_HAS_SCHEDULE dispatch=$HAS_DISPATCH"
+          exit 1
