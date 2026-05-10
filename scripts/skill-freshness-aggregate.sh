@@ -91,17 +91,33 @@ total_skills=$(echo "$inventory_json" | jq -r 'length')
 # schema-version pinning at the consumer boundary. `fromjson?` swallows
 # parse errors (returns empty), `select(.schema == 1 ...)` drops anything
 # that isn't a v1 record. One jq fork regardless of file size.
+#
+# Archive-spanning input (#3508): per-write rotation moves data into
+# `.skill-invocations-YYYY-MM*.jsonl.gz`. Concatenate active + archives so
+# the 365-day window is not silently truncated by rotation. Order is
+# irrelevant — the parser computes `last_invoked` and counts from the
+# event-level `ts`/`skill` fields.
+INVOCATIONS_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$INVOCATIONS_TMPDIR"' EXIT
+INVOCATIONS_MERGED="$INVOCATIONS_TMPDIR/invocations-merged.jsonl"
+: > "$INVOCATIONS_MERGED"
+[[ -f "$INVOCATIONS" && -s "$INVOCATIONS" ]] && cat "$INVOCATIONS" >> "$INVOCATIONS_MERGED"
+for _gz in "$REPO_ROOT"/.claude/.skill-invocations-*.jsonl.gz; do
+  [[ -e "$_gz" ]] || continue
+  zcat "$_gz" 2>/dev/null >> "$INVOCATIONS_MERGED" || true
+done
+
 bad_lines=0
 parsed_count=0
-if [[ -f "$INVOCATIONS" ]]; then
-  total_lines=$(wc -l < "$INVOCATIONS" 2>/dev/null || echo 0)
-  parsed_records=$(jq -c -R 'fromjson? | select(.schema == 1 and .skill != null and (.ts | type) == "string")' < "$INVOCATIONS" 2>/dev/null || true)
+if [[ -s "$INVOCATIONS_MERGED" ]]; then
+  total_lines=$(wc -l < "$INVOCATIONS_MERGED" 2>/dev/null || echo 0)
+  parsed_records=$(jq -c -R 'fromjson? | select(.schema == 1 and .skill != null and (.ts | type) == "string")' < "$INVOCATIONS_MERGED" 2>/dev/null || true)
   parsed_count=$(printf '%s' "$parsed_records" | grep -c '^' || true)
   bad_lines=$((total_lines - parsed_count))
   [[ "$bad_lines" -lt 0 ]] && bad_lines=0
 
   if [[ "$bad_lines" -gt 0 ]]; then
-    echo "::warning::Dropped $bad_lines malformed line(s) from $INVOCATIONS" >&2
+    echo "::warning::Dropped $bad_lines malformed line(s) from $INVOCATIONS (+ archives)" >&2
   fi
 
   if [[ -n "$parsed_records" ]]; then

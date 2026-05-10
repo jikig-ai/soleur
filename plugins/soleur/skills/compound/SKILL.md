@@ -233,7 +233,32 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 ### Empty Case
 
-If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Knowledge Base Integration.
+If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Phase 1.6.
+
+<!-- phase-1.6-start -->
+## Phase 1.6: Token-Efficiency Analysis (sequential, advisory)
+
+Run the cost-efficiency report:
+
+```bash
+bash "$(git rev-parse --show-toplevel)/plugins/soleur/skills/compound/scripts/token-efficiency-report.sh"
+```
+
+Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` on outliers (rolled up into `knowledge-base/project/rule-metrics.json` by weekly cron). Proposals route through Phase 1.5 step 7's gate.
+
+### Rubric
+
+- Floor: `wc -c AGENTS.md` × 25 turns.
+- Payload: SKILL.md bytes from `.skill-invocations.jsonl` (session_id).
+- Envelopes: `total_tokens` from `.session-tokens.jsonl` (R6 self-exclusion).
+- Lines: `git diff --shortstat`. Skip <50.
+- Triggers: subagent >100k → `te-subagent-overshoot`; payload >200k → `te-skill-payload-floor`; ratio >2k/line → `te-agents-md-turn-cost` (gated, #3497).
+- Budget: ≤1.5k tokens/fire (script bash-exec).
+
+### Sharp Edges
+
+> Advisory. Only large outliers (subagent >100k OR payload >200k) warrant follow-up. Activation lag: PostToolUse hook fires on next session restart post-merge.
+<!-- phase-1.6-end -->
 
 ## Knowledge Base Integration
 

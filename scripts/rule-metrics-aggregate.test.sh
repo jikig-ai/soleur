@@ -147,31 +147,94 @@ t3_orphan_rule_id_exits_nonzero() {
   rm -rf "$root"
 }
 
-# --- T4: rule-prune.sh uses fire_count predicate -------------------------
-# Rule B has hit_count=0 but fire_count>0 (applied events). Old predicate would
-# list it as a prune candidate; new predicate must NOT.
-t4_rule_prune_uses_fire_count() {
+# --- T4: rule-prune.sh excludes rules with fire events ------------------
+# Negative half of the rule-prune predicate: Rule B has hit_count=0 but
+# fire_count>0 (applied events). Old predicate would list it as a prune
+# candidate; new predicate must NOT.
+#
+# T4b (below) covers the positive half (fire_count=0 AND non-null first_seen
+# IS a candidate) by crafting rule-metrics.json directly, bypassing the
+# aggregator's event→first_seen coupling.
+t4_rule_prune_excludes_rules_with_fire_events() {
   local root; root=$(make_fixture_repo)
   # Ancient applied → fire_count>0, hit_count=0. Ancient first_seen defeats
-  # the recency gate under BOTH old and new predicates, isolating the
-  # hit_count → fire_count switch as the sole signal that keeps B out.
+  # the recency gate, isolating the hit_count → fire_count switch as the sole
+  # signal that keeps B out of candidates.
   write_event "$root" hr-rule-b-synthetic-test applied "2025-12-01T10:00:00Z"
-  # Rule A: zero events → fire_count=0 → still a prune candidate.
+  # Rule A is intentionally not seeded here; T4 only asserts B's exclusion.
+  # Rule A's positive-emission case is covered by t4b, which crafts metrics
+  # directly because PR #3156's `first_seen != null` filter makes the
+  # zero-event-AND-non-null-first_seen state unreachable from event seeding
+  # (the aggregator only sets first_seen when an event also increments
+  # fire_count). See issue #3507 and
+  # knowledge-base/project/learnings/2026-05-10-rule-prune-null-first-seen-skip-invalidates-positive-prune-candidate-fixture.md.
 
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1
 
   local candidates
   candidates=$(RULE_METRICS_ROOT="$root" bash "$PRUNE" --dry-run --weeks=0 2>/dev/null || true)
 
-  local saw_a=0 saw_b=0
-  echo "$candidates" | grep -q 'hr-rule-a-synthetic-test' && saw_a=1
-  echo "$candidates" | grep -q 'hr-rule-b-synthetic-test' && saw_b=1
-
-  if [[ "$saw_a" -eq 1 && "$saw_b" -eq 0 ]]; then
-    echo "PASS: T4 rule-prune candidates use fire_count (A listed, B not)"
+  if ! echo "$candidates" | grep -q 'hr-rule-b-synthetic-test'; then
+    echo "PASS: T4 rule-prune excludes rules with fire events (B with applied events excluded)"
     PASS=$((PASS + 1))
   else
-    echo "FAIL: T4 rule-prune candidates wrong (saw_a=$saw_a saw_b=$saw_b)"
+    echo "FAIL: T4 rule-prune still flags Rule B despite applied events (fire_count switch broken)"
+    echo "  candidates: $candidates"
+    FAIL=$((FAIL + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
+  rm -rf "$root"
+}
+
+# --- T4b: rule-prune.sh emits candidates for zero-fire rules with first_seen ---
+# Positive half of the rule-prune predicate. Crafts rule-metrics.json directly
+# (bypassing the aggregator) so a rule with fire_count=0 AND non-null first_seen
+# is reachable in the fixture — the only state that satisfies the post-#3156
+# candidate predicate `(fire_count == 0) AND (first_seen != null) AND (first_seen < cutoff)`.
+# Without this test, a regression that flips the `first_seen != null` filter to
+# `first_seen == null` (or drops the predicate entirely) would silently produce
+# no candidates and T4 alone would still pass. See issue #3507.
+t4b_rule_prune_emits_candidates_with_first_seen() {
+  local root; root=$(make_fixture_repo)
+  # Craft a metrics file directly. The aggregator's write path cannot produce
+  # `fire_count=0` AND non-null `first_seen` (every event_type that sets
+  # first_seen also increments fire_count), so we synthesize it.
+  cat > "$root/knowledge-base/project/rule-metrics.json" <<'EOF'
+{
+  "schema": 1,
+  "generated_at": "2026-05-10T00:00:00Z",
+  "rules": [
+    {
+      "id": "hr-rule-a-synthetic-test",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": "2024-01-01T00:00:00Z",
+      "rule_text_prefix": "Rule A synthetic."
+    }
+  ],
+  "summary": {
+    "total_rules_tagged": 1,
+    "rules_unused_over_8w": 1,
+    "rules_bypassed_over_baseline": 0,
+    "orphan_rule_ids": []
+  }
+}
+EOF
+
+  local candidates
+  candidates=$(RULE_METRICS_ROOT="$root" bash "$PRUNE" --dry-run --weeks=0 2>/dev/null || true)
+
+  if echo "$candidates" | grep -q 'hr-rule-a-synthetic-test'; then
+    echo "PASS: T4b rule-prune emits candidates for zero-fire rules with first_seen (A listed)"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: T4b rule-prune did not list Rule A despite fire_count=0 + non-null first_seen"
     echo "  candidates: $candidates"
     FAIL=$((FAIL + 1))
   fi
@@ -192,11 +255,106 @@ t5_empty_jsonl_exits_zero() {
   rm -rf "$root"
 }
 
+# --- T6: te-* synthetic-prefix events are NOT flagged as orphans ----------
+# Issue #3494 reserves `te-` for token-efficiency telemetry emitted by
+# compound Phase 1.6. These rule_ids exist by design without an AGENTS.md
+# bullet — the orphan-detection jq filter must exclude them.
+t6_te_prefix_not_orphan() {
+  local root; root=$(make_fixture_repo)
+  # Only te-* events; no real orphan.
+  write_event "$root" te-subagent-overshoot warn "2026-04-25T10:00:00Z"
+  write_event "$root" te-skill-payload-floor warn "2026-04-25T11:00:00Z"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T6 te-* only → exit 0"        "0" "$exit_code"
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T6 te-* events not in orphans" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  # Per-id counts still preserved in the counts map (verifiable via stage A
+  # output). Aggregator stores per-id stats keyed by rule_id; te-* IDs are
+  # absent from `rules` (which joins with AGENTS.md) but present in the
+  # underlying count map. We assert by re-reading the jsonl directly.
+  local te_count
+  te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl")
+  assert_eq "T6 te-subagent-overshoot fired" "1" "$te_count"
+  rm -rf "$root"
+}
+
+# --- T7: mixed te-* + real-orphan → only real orphan flagged --------------
+t7_te_plus_orphan_isolates_real_orphan() {
+  local root; root=$(make_fixture_repo)
+  write_event "$root" te-agents-md-turn-cost warn "2026-04-25T10:00:00Z"
+  write_event "$root" hr-rule-orphan-not-in-fixture deny "2026-04-25T11:00:00Z"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  if [[ "$exit_code" -eq 0 ]]; then
+    echo "FAIL: T7 expected non-zero exit (real orphan present)"
+    FAIL=$((FAIL + 1))
+  else
+    echo "PASS: T7 mixed te-* + real orphan → exit $exit_code"
+    PASS=$((PASS + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
+  rm -rf "$root"
+}
+
+# --- T8: te-* unknown sub-id (e.g., new outlier from #3493 follow-up) -----
+# Any rule_id starting with `te-` is exempt from orphan detection — not just
+# the three currently emitted. This guards against future te-* additions
+# silently failing the cron until AGENTS.md gets edited (which it shouldn't).
+t8_te_prefix_arbitrary_id() {
+  local root; root=$(make_fixture_repo)
+  write_event "$root" te-future-outlier-tbd warn "2026-04-25T10:00:00Z"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T8 arbitrary te-* exits 0"  "0" "$exit_code"
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T8 orphan list empty"        "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T9: archive-spanning input (#3508) -----------------------------------
+# Per-write rotation moves data into `.claude/.rule-incidents-YYYY-MM*.jsonl.gz`.
+# The aggregator must merge active + archives so events that were rotated out
+# still count toward fire_count / first_seen / last_hit.
+t9_archive_spanning_input() {
+  local root; root=$(make_fixture_repo)
+
+  # Active file: one recent event for rule A.
+  write_event "$root" hr-rule-a-synthetic-test deny "2026-05-01T10:00:00Z"
+
+  # Archive .gz: an older event for the same rule (would be invisible without
+  # the merge step).
+  local archive="$root/.claude/.rule-incidents-2026-04.jsonl"
+  printf '{"schema":1,"timestamp":"%s","rule_id":"%s","event_type":"%s","rule_text_prefix":"x","command_snippet":""}\n' \
+    "2026-04-01T08:00:00Z" "hr-rule-a-synthetic-test" "deny" > "$archive"
+  gzip -f "$archive"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+
+  # Both events should count: hit_count = 2, first_seen = the older archived ts.
+  assert_eq "T9 archived events count toward hit_count" "2" \
+    "$(jq -r '.rules[] | select(.id == "hr-rule-a-synthetic-test") | .hit_count' < "$metrics")"
+  assert_eq "T9 first_seen reflects archived event" "2026-04-01T08:00:00Z" \
+    "$(jq -r '.rules[] | select(.id == "hr-rule-a-synthetic-test") | .first_seen' < "$metrics")"
+  rm -rf "$root"
+}
+
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
-t4_rule_prune_uses_fire_count
+t4_rule_prune_excludes_rules_with_fire_events
+t4b_rule_prune_emits_candidates_with_first_seen
 t5_empty_jsonl_exits_zero
+t6_te_prefix_not_orphan
+t7_te_plus_orphan_isolates_real_orphan
+t8_te_prefix_arbitrary_id
+t9_archive_spanning_input
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

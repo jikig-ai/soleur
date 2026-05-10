@@ -45,6 +45,18 @@ fi
 : "${SCHEMA_VERSION:=1}"
 unset _incidents_constants
 
+# Source the shared log rotator. Idempotent (function definitions only); the
+# fail-soft guard mirrors the constants source above. `2>/dev/null || true`
+# matches the leaf-hook callers so a malformed helper never leaks stderr to
+# Claude Code's hook stdout/stderr capture.
+# shellcheck source=/dev/null
+_incidents_rotator="$(dirname "${BASH_SOURCE[0]}")/log-rotation.sh"
+if [[ -f "$_incidents_rotator" ]]; then
+  # shellcheck source=/dev/null
+  source "$_incidents_rotator" 2>/dev/null || true
+fi
+unset _incidents_rotator
+
 # --- emit_incident <rule_id> <event_type> <prefix> [command_snippet] -------
 # event_type ∈ {deny, bypass, applied, warn}
 #   deny    — PreToolUse hook blocked an operation (prevents a violation).
@@ -52,6 +64,15 @@ unset _incidents_constants
 #   applied — a skill/agent explicitly invoked the rule's enforcement path
 #             (e.g., ship Phase 5.5 reached its conditional gates).
 #   warn    — advisory hook surfaced a concern without blocking (docs-cli-verify).
+#
+# Synthetic rule_id namespace convention:
+#   Callers MAY use a `<prefix>-*` rule_id when the rule_id describes a
+#   measurement (not an AGENTS.md rule) AND the aggregator's orphan-gate
+#   has been extended to exempt that prefix. Currently reserved:
+#     `te-*` — token-efficiency telemetry (issue #3494, compound Phase 1.6).
+#   See scripts/rule-metrics-aggregate.sh's orphan-detection block for the
+#   exclusion pattern. Adding a new synthetic prefix requires a parallel
+#   exclusion line + tests in scripts/rule-metrics-aggregate.test.sh.
 # Aggregator counting semantics (scripts/rule-metrics-aggregate.sh):
 #   hit_count    = deny
 #   bypass_count = bypass
@@ -81,6 +102,13 @@ emit_incident() {
   # Create parent dir (first run) and file (needed by flock on the file itself).
   mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
   [[ -f "$file" ]] || : > "$file" 2>/dev/null || return 0
+
+  # Rotate before writing. The helper holds its own flock briefly; ordering
+  # (rotate → release → write) avoids nested-flock semantics. Failure is
+  # swallowed — telemetry never blocks the calling hook.
+  if declare -F rotate_if_needed >/dev/null 2>&1; then
+    rotate_if_needed "$file" 2>/dev/null || true
+  fi
 
   # flock on the file itself; jq -nc emits single-line JSON.
   local line

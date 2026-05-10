@@ -86,11 +86,25 @@ fi
 # Per-line parse via `jq -R 'fromjson?'` so a single malformed line from a
 # crash-mid-write or OOM does NOT abort the whole weekly aggregation. Bad
 # lines are dropped with a stderr warning; valid lines are still counted.
+#
+# Archive-spanning input (#3508): per-write rotation moves data from the
+# active file into `.rule-incidents-YYYY-MM*.jsonl.gz`. Merge active + all
+# archives into a single materialized tmpfile so the aggregator window is not
+# truncated by rotation cadence. Order doesn't matter — counts are commutative
+# and `last_hit`/`first_seen` are computed from event timestamps.
+INCIDENTS_MERGED="$_tmpdir/incidents-merged.jsonl"
+: > "$INCIDENTS_MERGED"
+[[ -s "$INCIDENTS" ]] && cat "$INCIDENTS" >> "$INCIDENTS_MERGED"
+for _gz in "$REPO_ROOT"/.claude/.rule-incidents-*.jsonl.gz; do
+  [[ -e "$_gz" ]] || continue
+  zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true
+done
+
 jq_counts='{}'
-if [[ -s "$INCIDENTS" ]]; then
-  total_lines=$(wc -l < "$INCIDENTS")
+if [[ -s "$INCIDENTS_MERGED" ]]; then
+  total_lines=$(wc -l < "$INCIDENTS_MERGED")
   # Tolerant parse: fromjson? yields null on parse failure; select(.) drops nulls.
-  valid_stream=$(jq -R 'fromjson? | select(.)' < "$INCIDENTS" 2>/dev/null || echo "")
+  valid_stream=$(jq -R 'fromjson? | select(.)' < "$INCIDENTS_MERGED" 2>/dev/null || echo "")
   valid_lines=0
   if [[ -n "$valid_stream" ]]; then
     # `|| echo 0` + `${…:-0}` protect the arithmetic below from a failed
@@ -103,7 +117,7 @@ if [[ -s "$INCIDENTS" ]]; then
   bad_lines=$(( total_lines - valid_lines ))
   if [[ "$bad_lines" -gt 0 ]]; then
     # GitHub Actions picks up `::warning::` for workflow annotations; harmless locally.
-    echo "::warning::Dropped $bad_lines malformed line(s) from $INCIDENTS (kept $valid_lines)" >&2
+    echo "::warning::Dropped $bad_lines malformed line(s) from $INCIDENTS (+ archives) (kept $valid_lines)" >&2
   fi
   if [[ "$valid_lines" -gt 0 ]]; then
     # fire_count increments on any recognized event_type (deny, bypass,
@@ -181,7 +195,14 @@ report=$(jq -n \
     # Surfacing these prevents silent data loss when a hook emits a rule_id
     # that was renamed / removed / never tagged (e.g., historical sentinel names).
     ($enriched | map(.id)) as $known_ids
-    | ($counts | keys | map(select(. as $id | ($known_ids | index($id)) | not))) as $orphan_ids
+    | ($counts | keys
+        | map(select(. as $id | ($known_ids | index($id)) | not))
+        # LOAD-BEARING: te-* prefix reserved for token-efficiency telemetry
+        # (issue #3494, compound Phase 1.6). Removing this filter breaks the
+        # weekly cron — every Phase 1.6 outlier would fail orphan-gate.
+        # Tests T6/T7/T8 in scripts/rule-metrics-aggregate.test.sh cover this.
+        # AGENTS.md section prefixes are hr|wg|cq|rf|pdr|cm; te- cannot collide.
+        | map(select(startswith("te-") | not))) as $orphan_ids
     | {
         schema: $schema,
         generated_at: $generated_at,
