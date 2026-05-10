@@ -4,9 +4,30 @@ branch: feat-one-shot-3507-rule-metrics-t4
 type: bug
 classification: test-fix
 requires_cpo_signoff: false
+related_prs: [3156, 2213, 2876, 3123]
 ---
 
 # fix(scripts): T4 in rule-metrics-aggregate.test.sh fails after rule-prune null-first_seen skip (#3507)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-10
+**Sections enhanced:** Overview, Research Reconciliation, Acceptance Criteria, Implementation Phase 2, Risks
+**Research used:** live `gh pr view` verification of all four cited PRs (#3156, #2213, #2876, #3123 — all MERGED, titles match), live AGENTS.md grep of all six cited rule IDs (all active, none retired), repro-on-main confirmed (`PASS=18 FAIL=1 TOTAL=19`), sibling-test sweep (`tests/scripts/test-rule-metrics-aggregate.sh`, `tests/commands/test-sync-rule-prune.sh`, `scripts/test-all.sh`), CI-invocation grep (`.github/workflows/ci.yml`).
+
+### Key Improvements
+
+1. **Confirmed: failing test is local-dev only.** `scripts/rule-metrics-aggregate.test.sh` is NOT invoked by `scripts/test-all.sh` or any GitHub workflow — `tests/scripts/test-rule-metrics-aggregate.sh` (different path, different fixture style) is the CI-wired suite. This explains why the failure was discovered only when manually reproducing per the issue body, and reinforces the `User-Brand Impact: none` assessment.
+2. **Confirmed: no sibling-test coupling.** `tests/commands/test-sync-rule-prune.sh` T4 sets `first_seen:$seen` non-null in its crafted JSON, so it is unaffected by #3156's null-first_seen filter. `tests/scripts/test-rule-metrics-aggregate.sh` T7 (malformed first_seen) asserts on the aggregator-side `rules_unused_over_8w` predicate (different code path) and is also unaffected. The fix is correctly scoped to the single failing T4 in `scripts/rule-metrics-aggregate.test.sh`.
+3. **Confirmed: cited PRs and rule IDs are real and active.** All four `related_prs` resolve to MERGED PRs with the titles claimed in the plan body. All six AGENTS.md rule citations resolve to live `[id: ...]` lines (none in `scripts/retired-rule-ids.txt`).
+4. **Reconciliation row added** for the issue body's hypothesis vs. actual cause (issue speculated env-var or week-0 floor; reality is the upstream `first_seen != null` filter from #3156).
+
+### New Considerations Discovered
+
+- **No CI regression risk.** The failing test is not run by `test-all.sh` or any workflow. A green pre-commit run is achievable post-fix, but the failure does not block PRs in main today. (Issue body framed it as "fails on main"; that is true at the `bash scripts/rule-metrics-aggregate.test.sh` invocation level, not at the gate level.)
+- **Documentation coupling: the prescribed comment in `t4_rule_prune_uses_fire_count` is the only forward-looking signal.** If a future PR reverts #3156 or adds a non-fire event_type that sets `first_seen`, the comment is what tells the next author to restore the positive assertion. No additional drift-guard is added — the assertion is itself the smoke check.
+
+
 
 ## Overview
 
@@ -35,6 +56,7 @@ This plan keeps T4's load-bearing assertion (the `hit_count → fire_count` pred
 | "T4 short-circuits to `No prune candidates` before the fire_count predicate is evaluated" — implies the predicate is broken or the env var is broken | The predicate is correct; what changed is an *upstream* `first_seen != null` filter (PR #3156) that excludes Rule A (zero events → null first_seen) from candidate selection. Rule B is correctly excluded by the fire_count predicate, exactly as T4 intends. | Reframe the fix: don't restore the unreachable positive assertion (`saw_a=1`). Update the test's expectation to match post-#3156 semantics — assert only that Rule B is excluded. |
 | "Either the recency gate broke (week-0 floor is misclassifying ancient timestamps as recent), OR `RULE_METRICS_ROOT` env override stopped propagating after a refactor." | Neither hypothesis is correct. `RULE_METRICS_ROOT` propagates correctly (`scripts/rule-prune.sh:52` reads it before all gates). The recency gate is intentionally tighter, not broken. | Document the actual cause in the PR description and in a learning file. |
 | "Root cause documented in PR description" (acceptance criterion) | n/a — work to do | Phase 4 PR-body acceptance criterion. |
+| "Fails on main" (implied: blocks CI / merge gates) | The test is NOT invoked by `scripts/test-all.sh` and is not referenced as an executable step in any `.github/workflows/*.yml`. CI's `ci.yml:62-69` references the file in a comment ("validated by scripts/rule-metrics-aggregate.test.sh") but the actually-invoked sibling is `tests/scripts/test-rule-metrics-aggregate.sh`. The `bash scripts/rule-metrics-aggregate.test.sh` failure is real but local-dev-only. | No urgency adjustment, but the User-Brand Impact threshold of `none` is correctly grounded — there is no production blast radius and no merge-gate blast radius. |
 
 ## User-Brand Impact
 
@@ -104,6 +126,67 @@ In `scripts/rule-metrics-aggregate.test.sh`, edit the `t4_rule_prune_uses_fire_c
   ```
 
 - The new pass condition: `saw_b=0`. The new fail message: `FAIL: T4 rule-prune still flags Rule B despite applied events (fire_count switch broken)`. Bump the `PASS`/`FAIL` accounting accordingly.
+
+#### Research Insights — Phase 2 grounding
+
+**Live PR verification (2026-05-10).** All four cited PRs in this plan resolve via `gh pr view`:
+
+```
+$ gh pr view 3156 --json state,title,mergedAt
+{"mergedAt":"2026-05-04T10:47:50Z","state":"MERGED","title":"fix(rule-prune): skip rules with null first_seen instead of treating as stale"}
+$ gh pr view 2213 --json state,title
+{"state":"MERGED","title":"feat(rule-utility): telemetry, weekly aggregator, and /soleur:sync rule-prune"}
+$ gh pr view 2876 --json state,title
+{"state":"MERGED","title":"chore(telemetry): close rule-metrics emit_incident coverage gap"}
+$ gh pr view 3123 --json state,title
+{"state":"MERGED","title":"feat(rule-prune): scheduled quarterly retirement-proposal PR (C2)"}
+```
+
+**Live AGENTS.md rule-ID verification (2026-05-10).** All six rule-ID citations in this plan resolve to active `[id: ...]` lines in `AGENTS.md` and none appear in `scripts/retired-rule-ids.txt`:
+
+- `cq-rule-ids-are-immutable` — active (Code Quality section)
+- `wg-before-every-commit-run-compound-skill` — active (Workflow Gates)
+- `wg-use-closes-n-in-pr-body-not-title-to` — active (Workflow Gates, scanner-enforced)
+- `rf-review-finding-default-fix-inline` — active (Review & Feedback)
+- `pdr-do-not-route-on-trivial-messages-yes` — active (Passive Domain Routing)
+- `wg-after-marking-a-pr-ready-run-gh-pr-merge` — active (Workflow Gates)
+
+**Live repro of T4 failure on this worktree (2026-05-10):**
+
+```
+$ bash scripts/rule-metrics-aggregate.test.sh
+... (T1-T3 PASS) ...
+FAIL: T4 rule-prune candidates wrong (saw_a=0 saw_b=0)
+  candidates: No prune candidates (fire_count=0 for >=0w).
+... (T5 PASS) ...
+PASS=18 FAIL=1 TOTAL=19
+```
+
+Aggregator output for the T4 fixture confirms `first_seen=null` on Rule A:
+
+```json
+{ "id": "hr-rule-a-synthetic-test", "fire_count": 0, "first_seen": null, ... }
+{ "id": "hr-rule-b-synthetic-test", "fire_count": 1, "first_seen": "2025-12-01T10:00:00Z", ... }
+```
+
+This matches the predicate in `scripts/rule-prune.sh:85-94` (`first_seen != null AND fromdateiso8601 < cutoff`) and confirms Rule A is excluded by the null-first_seen branch, not the fire_count branch — exactly as the reconciliation row above describes.
+
+**Sibling-test sweep (does the same coupling exist elsewhere?):**
+
+- `tests/scripts/test-rule-metrics-aggregate.sh` T7 (malformed first_seen) asserts on the **aggregator-side** `summary.rules_unused_over_8w` (different code path, different predicate). Comment at line 175 explicitly documents "hr-rule-b and cm-rule-c remain unused (null first_seen + fire_count=0)" — i.e., the aggregator-side predicate INCLUDES null-first_seen rules in the unused bucket, which is the opposite of `rule-prune.sh`'s predicate. Not affected by #3156.
+- `tests/commands/test-sync-rule-prune.sh` T4 (line 91-93) crafts JSON with `first_seen:$seen` (non-null, recent) explicitly, so it exercises the `rule-prune.sh` predicate's recency gate, not the null-first_seen filter. Not affected by #3156.
+- No other `*.test.sh` or `tests/**.sh` file references `first_seen` together with a fire_count=0 zero-event seed pattern.
+
+Conclusion: the fix is correctly scoped to the single failing T4 in `scripts/rule-metrics-aggregate.test.sh`. No other test files need changes.
+
+**CI-invocation grep — confirms local-dev-only impact:**
+
+```
+$ grep -n "rule-metrics-aggregate.test" scripts/test-all.sh .github/workflows/*.yml
+.github/workflows/ci.yml:66:          # #2866 are validated by scripts/rule-metrics-aggregate.test.sh —
+```
+
+The single match is a comment in `ci.yml`. The actually-invoked test is `tests/scripts/test-rule-metrics-aggregate.sh` (sibling, different fixtures). `scripts/test-all.sh` runs `bash tests/scripts/test-rule-metrics-aggregate.sh` (line 57 of test-all.sh), not the failing one. This grounds the User-Brand Impact threshold at `none` and confirms the fix is non-urgent from a CI-blast-radius perspective.
 
 ### Phase 3 — Re-run the suite, confirm green
 
