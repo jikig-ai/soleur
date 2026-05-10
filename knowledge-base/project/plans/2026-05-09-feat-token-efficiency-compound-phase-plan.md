@@ -397,17 +397,17 @@ Each test file follows the pattern of its sibling (`skill-invocation-logger.test
 
 ### Pre-merge (PR)
 
-- [ ] All files in `## Files to Create` and `## Files to Edit` lists land per spec.
-- [ ] All hook unit tests + aggregator orphan-gate tests + Phase 1.6 unit tests pass (Phase 4 scenarios 1–10).
-- [ ] Aggregator: `te-*` events do NOT trigger orphan-gate (`exit 5`); only real fabricated/typo rule_ids do.
-- [ ] Phase 1.6 SKILL.md addition (sentinel-delimited) ≤ **1200** chars; inline rubric ≤25 lines.
-- [ ] **No `references/token-efficiency-rubric.md` file created** (explicitly rejected per brainstorm).
-- [ ] **No per-session learning files written under `knowledge-base/project/learnings/efficiency/`** (explicitly rejected — telemetry-only capture).
-- [ ] No AGENTS.md rule added; work is `[skill-enforced: compound Phase 1.6]`.
-- [ ] **Recursive-bias self-exclusion:** Phase 1.6 only counts subagent envelopes with `ts < compound_entry_ts` (verified by test scenario 7+8 + dedicated R6 regression test).
-- [ ] Live integration test passes: real >50-line-diff branch + planted 120k envelope → `te-subagent-overshoot` written to `.rule-incidents.jsonl`.
-- [ ] PR body includes a `## Changelog` section per plugin AGENTS.md.
-- [ ] PR body uses `Closes #3494` on its own line; `Ref #3493` and `Ref #3497` for the catalog and tuning issues.
+- [x] All files in `## Files to Create` and `## Files to Edit` lists land per spec.
+- [x] All hook unit tests + aggregator orphan-gate tests + Phase 1.6 unit tests pass (Phase 4 scenarios 1–10). Note: pre-existing T4 in `rule-metrics-aggregate.test.sh` tracked in #3507; T6/T7/T8 new and pass.
+- [x] Aggregator: `te-*` events do NOT trigger orphan-gate (`exit 5`); only real fabricated/typo rule_ids do.
+- [x] Phase 1.6 SKILL.md addition (sentinel-delimited) ≤ **1200** chars; inline rubric ≤25 lines. Actual: 1162 bytes.
+- [x] **No `references/token-efficiency-rubric.md` file created** (explicitly rejected per brainstorm).
+- [x] **No per-session learning files written under `knowledge-base/project/learnings/efficiency/`** (explicitly rejected — telemetry-only capture).
+- [x] No AGENTS.md rule added; work is `[skill-enforced: compound Phase 1.6]`. Verified `git diff main...HEAD -- AGENTS.md` is empty.
+- [x] **Recursive-bias self-exclusion:** Phase 1.6 only counts subagent envelopes with `ts < compound_entry_ts` (verified by R6 regression test, scenario 12).
+- [x] Live integration test passes: real >50-line-diff branch + planted 120k envelope → `te-subagent-overshoot` written to `.rule-incidents.jsonl`.
+- [ ] PR body includes a `## Changelog` section per plugin AGENTS.md. _(handled in ship phase)_
+- [ ] PR body uses `Closes #3494` on its own line; `Ref #3493` and `Ref #3497` for the catalog and tuning issues. _(handled in ship phase)_
 
 ### Post-merge (operator)
 
