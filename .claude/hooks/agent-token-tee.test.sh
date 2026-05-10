@@ -19,11 +19,16 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
 ROOTS=()
-trap 'for r in "${ROOTS[@]}"; do rm -rf "$r"; done' EXIT
+trap 'for r in "${ROOTS[@]:-}"; do [[ -n "$r" ]] && rm -rf "$r"; done' EXIT
 
 make_root() {
   local dir
   dir="$(mktemp -d)"
+  # Canonicalize via cd -P + pwd -P so test path matches the hook's
+  # production resolution. Without this, a symlinked tmpdir (macOS
+  # /tmp -> /private/tmp) would expose the disjoint-flock-inode race
+  # the hook exists to prevent.
+  dir="$(cd -P "$dir" && pwd -P)"
   mkdir -p "$dir/.claude"
   echo "$dir"
 }

@@ -33,6 +33,9 @@ REPO_ROOT="$(cd -P "$SCRIPT_DIR/../../../../.." 2>/dev/null && pwd -P)"
 make_fixture() {
   local root
   root=$(mktemp -d)
+  # Canonicalize per test-design review: matches the script's repo-root
+  # resolution and exercises the symlink-tmp-aware code path.
+  root="$(cd -P "$root" && pwd -P)"
   mkdir -p "$root/.claude" "$root/plugins/soleur/skills/find-skills" "$root/plugins/soleur/skills/foo"
   printf '# Agent Instructions\n\n## Hard Rules\n\n- A synthetic rule for tests [id: hr-rule-x].\n' \
     > "$root/AGENTS.md"
