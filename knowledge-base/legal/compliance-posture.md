@@ -35,6 +35,20 @@ Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-mem
 
 ## Active Compliance Items
 
+<!--
+Row schema (canonical for gdpr-gate critical-finding handshake — operator-acknowledged write only; the gate NEVER writes here directly):
+
+| Item                       | Issue        | Status              | Deadline | Notes                                                            |
+|----------------------------|--------------|---------------------|----------|------------------------------------------------------------------|
+| <one-line summary>         | #<number>    | OPEN | IN-PROGRESS | <date>   | <check_id from gdpr-gate, e.g. GDPR-Art-9; remediation context>  |
+
+Contract (mirrors plugins/soleur/skills/gdpr-gate/SKILL.md §"Critical-finding escalation flow"):
+- The `clo` agent reads this section during legal posture assessments.
+- `/soleur:gdpr-gate` Critical findings prompt the operator to (1) `gh issue create --label compliance/critical`, (2) append a row here referencing the issue number + check_id, (3) commit with `compliance: register Art. 9 finding for #<issue>`.
+- `/soleur:ship` Phase 5.5 gdpr-gate critical-finding-acknowledgment gate verifies every PR-referenced `compliance/critical` issue has a row here before merge.
+- Status moves OPEN → IN-PROGRESS → resolved (move to Completed Compliance Work).
+-->
+
 | Item | Issue | Status | Deadline | Notes |
 |------|-------|--------|----------|-------|
 | T&C blanket statement contradictions | #736 | OPEN | - | Identified during #670 review |
