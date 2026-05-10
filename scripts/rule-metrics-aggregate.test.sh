@@ -147,31 +147,94 @@ t3_orphan_rule_id_exits_nonzero() {
   rm -rf "$root"
 }
 
-# --- T4: rule-prune.sh uses fire_count predicate -------------------------
-# Rule B has hit_count=0 but fire_count>0 (applied events). Old predicate would
-# list it as a prune candidate; new predicate must NOT.
-t4_rule_prune_uses_fire_count() {
+# --- T4: rule-prune.sh excludes rules with fire events ------------------
+# Negative half of the rule-prune predicate: Rule B has hit_count=0 but
+# fire_count>0 (applied events). Old predicate would list it as a prune
+# candidate; new predicate must NOT.
+#
+# T4b (below) covers the positive half (fire_count=0 AND non-null first_seen
+# IS a candidate) by crafting rule-metrics.json directly, bypassing the
+# aggregator's event→first_seen coupling.
+t4_rule_prune_excludes_rules_with_fire_events() {
   local root; root=$(make_fixture_repo)
   # Ancient applied → fire_count>0, hit_count=0. Ancient first_seen defeats
-  # the recency gate under BOTH old and new predicates, isolating the
-  # hit_count → fire_count switch as the sole signal that keeps B out.
+  # the recency gate, isolating the hit_count → fire_count switch as the sole
+  # signal that keeps B out of candidates.
   write_event "$root" hr-rule-b-synthetic-test applied "2025-12-01T10:00:00Z"
-  # Rule A: zero events → fire_count=0 → still a prune candidate.
+  # Rule A is intentionally not seeded here; T4 only asserts B's exclusion.
+  # Rule A's positive-emission case is covered by t4b, which crafts metrics
+  # directly because PR #3156's `first_seen != null` filter makes the
+  # zero-event-AND-non-null-first_seen state unreachable from event seeding
+  # (the aggregator only sets first_seen when an event also increments
+  # fire_count). See issue #3507 and
+  # knowledge-base/project/learnings/2026-05-10-rule-prune-null-first-seen-skip-invalidates-positive-prune-candidate-fixture.md.
 
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1
 
   local candidates
   candidates=$(RULE_METRICS_ROOT="$root" bash "$PRUNE" --dry-run --weeks=0 2>/dev/null || true)
 
-  local saw_a=0 saw_b=0
-  echo "$candidates" | grep -q 'hr-rule-a-synthetic-test' && saw_a=1
-  echo "$candidates" | grep -q 'hr-rule-b-synthetic-test' && saw_b=1
-
-  if [[ "$saw_a" -eq 1 && "$saw_b" -eq 0 ]]; then
-    echo "PASS: T4 rule-prune candidates use fire_count (A listed, B not)"
+  if ! echo "$candidates" | grep -q 'hr-rule-b-synthetic-test'; then
+    echo "PASS: T4 rule-prune excludes rules with fire events (B with applied events excluded)"
     PASS=$((PASS + 1))
   else
-    echo "FAIL: T4 rule-prune candidates wrong (saw_a=$saw_a saw_b=$saw_b)"
+    echo "FAIL: T4 rule-prune still flags Rule B despite applied events (fire_count switch broken)"
+    echo "  candidates: $candidates"
+    FAIL=$((FAIL + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
+  rm -rf "$root"
+}
+
+# --- T4b: rule-prune.sh emits candidates for zero-fire rules with first_seen ---
+# Positive half of the rule-prune predicate. Crafts rule-metrics.json directly
+# (bypassing the aggregator) so a rule with fire_count=0 AND non-null first_seen
+# is reachable in the fixture — the only state that satisfies the post-#3156
+# candidate predicate `(fire_count == 0) AND (first_seen != null) AND (first_seen < cutoff)`.
+# Without this test, a regression that flips the `first_seen != null` filter to
+# `first_seen == null` (or drops the predicate entirely) would silently produce
+# no candidates and T4 alone would still pass. See issue #3507.
+t4b_rule_prune_emits_candidates_with_first_seen() {
+  local root; root=$(make_fixture_repo)
+  # Craft a metrics file directly. The aggregator's write path cannot produce
+  # `fire_count=0` AND non-null `first_seen` (every event_type that sets
+  # first_seen also increments fire_count), so we synthesize it.
+  cat > "$root/knowledge-base/project/rule-metrics.json" <<'EOF'
+{
+  "schema": 1,
+  "generated_at": "2026-05-10T00:00:00Z",
+  "rules": [
+    {
+      "id": "hr-rule-a-synthetic-test",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": "2024-01-01T00:00:00Z",
+      "rule_text_prefix": "Rule A synthetic."
+    }
+  ],
+  "summary": {
+    "total_rules_tagged": 1,
+    "rules_unused_over_8w": 1,
+    "rules_bypassed_over_baseline": 0,
+    "orphan_rule_ids": []
+  }
+}
+EOF
+
+  local candidates
+  candidates=$(RULE_METRICS_ROOT="$root" bash "$PRUNE" --dry-run --weeks=0 2>/dev/null || true)
+
+  if echo "$candidates" | grep -q 'hr-rule-a-synthetic-test'; then
+    echo "PASS: T4b rule-prune emits candidates for zero-fire rules with first_seen (A listed)"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: T4b rule-prune did not list Rule A despite fire_count=0 + non-null first_seen"
     echo "  candidates: $candidates"
     FAIL=$((FAIL + 1))
   fi
@@ -257,7 +320,8 @@ t8_te_prefix_arbitrary_id() {
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
-t4_rule_prune_uses_fire_count
+t4_rule_prune_excludes_rules_with_fire_events
+t4b_rule_prune_emits_candidates_with_first_seen
 t5_empty_jsonl_exits_zero
 t6_te_prefix_not_orphan
 t7_te_plus_orphan_isolates_real_orphan
