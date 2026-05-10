@@ -74,10 +74,8 @@ References NFR IDs from `knowledge-base/engineering/architecture/nfr-register.md
 |---|---|---|---|---|---|
 | NFR-014 (Security — secrets handling, if present) | Skill must not read `.env*` or fixtures matching secret-scan ignore | gdpr-gate Skill | N/A | Implemented | v1 inspects only diffs/plans operator pasted; `repo-scan` mode deferred to v2 |
 | NFR-026 (Encryption-in-transit, if present) | Haiku call to Anthropic over HTTPS | Agent Runtime -> Anthropic | Implemented | Implemented (no change) | Reuses existing TLS path |
-| NFR-027 (Auditability / observability, if present) | Gate fires emit incident telemetry on Critical findings only | Hook Engine -> `.claude/.rule-incidents.jsonl` | Partial (general rule firings) | Improves to Implemented for compliance-class findings | New rule ID `cq-gdpr-gate-critical-finding` (created at implementation time) |
-| NFR-030 (Data lifecycle — never-delete, if present) | DSAR-deletability check at design time | Skills -> Knowledge Base (advisory) | Not Implemented | Implemented (advisory) | Mirrors AP-009 alignment; gate is advisory not enforcement, so this is a partial improvement |
 
-If specific NFR IDs above don't match the current register exactly, the implementation phase should reconcile against the live `nfr-register.md` and adjust. The intent is captured: this decision moves the data-protection / observability posture forward at the design layer.
+Reconciled at amendment time (2026-05-10). NFR-027 / NFR-030 rows dropped — see Amendments section below. **Auditability/observability** is covered by existing `.claude/hooks/lib/incidents.sh` telemetry (`emit_incident hr-gdpr-gate-on-regulated-data-surfaces applied …` in the lefthook hook); no new NFR is added because the existing telemetry pattern already covers compliance-class findings.
 
 ## Principle Alignment
 
@@ -88,7 +86,7 @@ References AP-NNN IDs from `knowledge-base/engineering/architecture/principles-r
 | AP-004 | Agent-native parity | Aligned | Gate is invocable by both human and agent; output format is conversation-readable for both |
 | AP-006 | All knowledge in committed repo files | Aligned | Skill + references + ADR all live in repo; no Claude Code memory writes |
 | AP-007 | Exhaust automation before manual steps | Aligned | Hook layer + Haiku call automate detection; only escalation to `clo` is human-touched |
-| AP-009 | Never delete user data | Aligned | DSAR-deletability check enforces correct cascade design; no data deletion by the gate itself |
+| AP-009 | Never delete user data | Aligned | Gate's DSAR-deletability check (Art. 17) flags missing cascade paths or anonymisation migrations at design time. Gate never deletes data itself; never-delete framing carried over from earlier-draft NFR-030 row (now dropped) lives here. |
 | AP-011 | ADRs for architecture decisions | Aligned | This ADR is itself the satisfaction |
 | AP-012 | New vendor checklist | N/A | No new vendor introduced |
 
@@ -127,3 +125,16 @@ C4Component
     Rel(operator, kb, "Acknowledged write", "File I/O")
     Rel(ship, kb, "Phase 5.5 verifies entries", "File I/O")
 ```
+
+## Amendments
+
+### 2026-05-10 — NFR table reconciliation (PR #3501)
+
+Reconciled the NFR Impacts table against the live `knowledge-base/engineering/architecture/nfr-register.md` per the implementation plan's Research Reconciliation §3.2/3.3. Status remains `active`.
+
+- **NFR-027 row dropped.** Live register: NFR-027 is "Encryption At-Rest", not auditability. The gate's auditability surface is covered by the existing `.claude/hooks/lib/incidents.sh` telemetry pattern; no new NFR is required.
+- **NFR-030 row dropped.** Live register: NFR-030 is "Data Accuracy"; never-delete is **AP-009** (a principle), not an NFR. The never-delete framing has been moved into the AP-009 alignment rationale above.
+- **Auditability/observability** added to the NFR Impacts narrative (between table and §Principle Alignment) as a non-NFR Consequences-class concern.
+- **AP-009 alignment rationale** extended to absorb the never-delete framing originally drafted as NFR-030.
+
+Plan: `knowledge-base/project/plans/2026-05-10-feat-gdpr-gate-skill-plan.md` §Research Reconciliation gaps #2/#3.

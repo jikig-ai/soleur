@@ -91,6 +91,24 @@ pre-commit:
         - "apps/web-platform/server/**/*.ts"
         - "scripts/lint-conversations-update-callsites.sh"
       run: bash scripts/lint-conversations-update-callsites.sh
+    # gdpr-gate advisory hook (per AGENTS.md hr-gdpr-gate-on-regulated-data-surfaces).
+    # ALWAYS exits 0 — prints a one-line stderr breadcrumb when staged paths
+    # match the canonical regulated-data regex. Glob list is in path-array
+    # form to avoid gobwas `**` semantics
+    # (see 2026-03-21-lefthook-gobwas-glob-double-star.md). Mirrors the
+    # canonical regex in plugins/soleur/skills/gdpr-gate/SKILL.md and
+    # scripts/gdpr-gate.sh.
+    gdpr-gate-advisory:
+      priority: 6
+      glob:
+        - "apps/web-platform/supabase/migrations/*.sql"
+        - "apps/web-platform/lib/auth/*.ts"
+        - "apps/web-platform/lib/auth/**/*.ts"
+        - "apps/web-platform/server/*auth*.ts"
+        - "apps/web-platform/app/api/*.ts"
+        - "apps/web-platform/app/api/**/*.ts"
+        - "*.sql"
+      run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
     bun-test:
       priority: 6
       glob: "*.{ts,tsx,js,jsx}"

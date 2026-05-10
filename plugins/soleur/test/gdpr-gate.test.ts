@@ -145,9 +145,10 @@ describe("gdpr-gate output format (AC20)", () => {
     const content = readFileSync(SKILL_MD, "utf8");
     // Operator-acknowledgment prompt is required.
     expect(content).toMatch(/operator[- ]acknowledg/i);
-    // Auto-write phrasing is forbidden.
-    expect(content).not.toMatch(
-      /(automatically writes?|auto[- ]writes?|silently writes?) to .*compliance-posture/i,
+    // Explicit negation of the auto-write contract is required (the gate must
+    // declare it does NOT auto-write).
+    expect(content).toMatch(
+      /(never|does not|do not|never auto-?write|gate (does not|never)) (auto-?write|automatically write|writes?|modif)/i,
     );
   });
 
@@ -200,13 +201,16 @@ describe("gdpr-gate lefthook hook (AC6, AC7)", () => {
   test("lefthook.yml registers gdpr-gate-advisory pre-commit hook with priority 6", () => {
     const lefthook = readFileSync(resolve(REPO_ROOT, "lefthook.yml"), "utf8");
     expect(lefthook).toMatch(/gdpr-gate-advisory/);
-    // Priority field appears under the new entry.
-    const block = lefthook
-      .split(/\n(?=\s+[a-z][\w-]*:\s*$)/m)
-      .find((b) => /gdpr-gate-advisory/.test(b));
-    expect(block).toBeDefined();
-    expect(block!).toMatch(/priority:\s*6/);
-    expect(block!).toMatch(/scripts\/gdpr-gate\.sh/);
+    // Extract the gdpr-gate-advisory block: starts at the command key (4-space
+    // indented `gdpr-gate-advisory:`) and runs until the next 4-space-indented
+    // sibling key.
+    const m = lefthook.match(
+      /^ {4}gdpr-gate-advisory:\n(?: {6}.*\n|\n)+/m,
+    );
+    expect(m).not.toBeNull();
+    const block = m![0];
+    expect(block).toMatch(/priority:\s*6/);
+    expect(block).toMatch(/scripts\/gdpr-gate\.sh/);
   });
 });
 
