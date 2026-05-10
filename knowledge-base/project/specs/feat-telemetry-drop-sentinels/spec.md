@@ -74,19 +74,20 @@ Each of the three hook scripts emits a sentinel on each detectable drop class:
   (when the line builder returns non-zero), `rotation_fail` (when
   `rotate_if_needed` reports failure).
 - `.claude/hooks/skill-invocation-logger.sh` — emits on `jq_fail`,
-  `rotation_fail`. The `flock_timeout` class is N/A unless a timeout is
-  added; the plan must decide whether to add a 5s timeout for parity. If
-  added, emit on it. If not, document in the sentinel-schema header that
-  this hook has no `flock_timeout` site.
+  `rotation_fail`. The `flock_timeout` class is N/A — the hook keeps its
+  indefinite `flock -x 9` (decided in plan-review 2026-05-10: adding a
+  timeout for parity is gold-plating; no operator has reported a wedged
+  session). Documented in the sentinel-schema header.
 - `.claude/hooks/lib/incidents.sh::emit_incident` — emits on `jq_fail`,
   `rotation_fail`. The `flock_timeout` class is N/A (uses indefinite
   `flock -x 9`). Keep the existing rate-limited per-`$$` stderr warning;
   sentinel emission is additive.
 
 Sentinel emission MUST itself be fail-soft: a fixed pre-formatted string
-(no jq), one short append under flock with a 1-second timeout (shorter than
-the data-write 5-second timeout to bound total hook latency). On sentinel
-write failure, do nothing (no recursive sentinel).
+(no jq), one append under non-blocking `flock -n`. On contention or fs
+error, drop the sentinel silently (no recursive sentinel). `flock_timeout`
+counts under sustained contention are a strict LOWER BOUND — sentinel's
+non-blocking flock fails for the same reason the data flock did.
 
 ### FR3: Aggregator Drop Counts
 
@@ -108,7 +109,8 @@ Aggregators MUST filter sentinel lines out of their data-line aggregations
 ### FR4: Compound Phase 1.6 Render
 
 `token-efficiency-report.sh` (or its caller in compound Phase 1.6) renders a
-single line in the top-3 cost table when total drops in the analysis window
+single line ABOVE the top-3 cost table (a quality-of-data caveat on the
+entire table, NOT a row in it) when total drops in the analysis window
 > 0:
 
 ```
