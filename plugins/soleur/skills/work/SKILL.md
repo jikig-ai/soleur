@@ -374,6 +374,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Create new tasks if scope expands
    - Keep user informed of major milestones
 
+8. **GDPR / Compliance Gate (single pass, end of Phase 2)**
+
+   [skill-enforced: gdpr-gate at work Phase 2 exit]
+
+   After the per-task RED/GREEN/REFACTOR loop completes and before Phase 2.5, run `/soleur:gdpr-gate` once against the cumulative diff `git diff main...HEAD`. Same advisory-only output and Critical-finding escalation as plan Phase 2.7. **Never per-task** — token budget is ≤4k per invocation, single pass per phase per ADR-026 TR3.
+
+   Skip silently if the cumulative diff does not match the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex.
+
 ### Phase 2.5: Research Validation Loop (knowledge-base deliverables only)
 
 Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754). When a research sprint produces recommendations, run the cascade-validate loop [id: wg-when-a-research-sprint-produces] [skill-enforced: work Phase 2.5]. **"Findings written" is NOT done — "findings applied, validated, and all documents reflect the final state" is done.** The full body of that rule lives here; AGENTS.md retains a one-line pointer preserving the `[id: ...]` tag.

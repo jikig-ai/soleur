@@ -248,6 +248,22 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `user-impact-reviewer`: Enumerates concrete user-facing artifacts exposed by the change (`user.email`, `workspace.name`, `api_key.token`, `conversation.id`, `message.body`, `billing.amount`, `oauth.installation_id`, etc.) AND a concrete exposure vector per artifact (cross-tenant read, RLS bypass, credential leak in logs, data loss on rollback, double-charge on retry, silent drop on degraded fallback). Rejects generic boilerplate (e.g., "users experience a bug", "error state", `TBD`/`TODO` placeholders). Coexists with security-sentinel — security-sentinel handles OWASP/CWE scanning across all PRs; user-impact-reviewer handles user-facing-outcome enumeration when the plan declares the brand-survival threshold as `single-user incident`.
 
+**If the diff matches `hr-gdpr-gate-on-regulated-data-surfaces`:**
+
+16. Skill gdpr-gate(diff + plan path) — Audit regulated-data design at review time, in addition to plan-phase and work-phase invocations. Self-invokes the same skill so reviewers see findings in PR review context.
+
+**When to run gdpr-gate at review time:**
+
+- `git diff main...HEAD --name-only | grep -E "$CANONICAL_REGEX"` returns at least one match (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
+
+**What this agent checks:**
+
+- `gdpr-gate`: Deterministic Art. 9 / RoPA / lawful-basis pattern checks. Output is advisory-only; Critical findings (Art. 9) escalate to operator-acknowledged write to `compliance-posture.md` Active Items + GitHub issue with label `compliance/critical`.
+
+#### Boundary disambiguation — gdpr-gate vs. data-integrity-guardian vs. security-sentinel {#boundaries}
+
+Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; use `data-integrity-guardian` for migration safety and judgment-based PII review; use `security-sentinel` for OWASP/CWE security-of-processing flaws. The three reviewers complement each other and may all fire on the same PR — gdpr-gate scans for regulatory-design gaps, data-integrity-guardian scans for ID-mapping and value-swap migration risks, security-sentinel scans for OWASP/CWE vulnerabilities. This is the **canonical disambiguation prose**; sibling agent files reference back here as the single source of truth.
+
 </conditional_agents>
 
 ### 2. Rate Limit Fallback

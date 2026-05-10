@@ -39,11 +39,11 @@ Soleur's compliance posture is mature at the document layer (`legal-audit`, `leg
 
 ### FR1: Plan-phase invocation
 
-`gdpr-gate` is invoked by `/soleur:plan` Phase 2.6 (alongside the existing user-impact gate). Input: the plan document + the FR/TR sections being authored. Output: advisory findings inline in the conversation, formatted as Critical/Important/Suggestion (matching `/review` and `/preflight` voice — no ⚡/🔴/🟡/🟢 emoji branding).
+`gdpr-gate` is invoked by `/soleur:plan` **Phase 2.7** (between User-Brand Impact at Phase 2.6 and SpecFlow at Phase 3 — preserves existing skill-enforced rule-tag invariants per Research Reconciliation gap #10). Input: the plan document + the FR/TR sections being authored. Output: advisory findings inline in the conversation, formatted as Critical/Important/Suggestion (matching `/review` and `/preflight` voice — no ⚡/🔴/🟡/🟢 emoji branding).
 
 ### FR2: Work-phase invocation
 
-`gdpr-gate` is invoked at `/soleur:work` Phase 2 exit (after TDD GREEN, before REFACTOR) AND via lefthook pre-commit on path globs: `migrations/**`, `*schema*`, `*auth*`, `forms/**`, `app/api/**`, `**/*.prisma`, `**/*.sql`. Hook layer is regex-only (zero LLM cost) and only triggers the skill invocation.
+`gdpr-gate` is invoked at `/soleur:work` **Phase 2 exit (single pass after all per-task RED/GREEN/REFACTOR loops complete, before Phase 2.5)**. Single pass per phase per ADR-026 TR3 — token budget ≤4k per invocation. AND via lefthook pre-commit on the canonical regex path-array (single source of truth in `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)"). Earlier-draft globs `forms/**` and `**/*.prisma` were dropped (zero matches in this repo per Research Reconciliation gaps #4-5); `*auth*` was tightened to bounded paths. Hook layer is regex-only (zero LLM cost) and only triggers the skill invocation.
 
 ### FR3: Mandatory disclaimer
 
