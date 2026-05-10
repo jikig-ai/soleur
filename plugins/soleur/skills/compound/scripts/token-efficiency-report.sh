@@ -197,6 +197,38 @@ if [[ -s "$SESSION_TOKENS" && -n "$SESSION_ID" ]]; then
   SUM_ENVELOPES="${SUM_ENVELOPES:-0}"
 fi
 
+# ---- Drop-sentinel counts (issue #3509) ---------------------------------
+# Sentinels in SESSION_TOKENS_MERGED carry `error` but no `session_id`, so
+# they're already excluded from the envelope-sum filter above. A separate
+# jq pass counts them by class for the "envelopes incomplete" caveat line
+# rendered above the cost table when total drops > 0. Counts span active +
+# archives (already merged into SESSION_TOKENS_MERGED above).
+DROPS_JQ_FAIL=0
+DROPS_FLOCK_TIMEOUT=0
+DROPS_ROTATION_FAIL=0
+if [[ -s "$SESSION_TOKENS_MERGED" ]]; then
+  IFS=$'\t' read -r DROPS_JQ_FAIL DROPS_FLOCK_TIMEOUT DROPS_ROTATION_FAIL < <(
+    jq -r -R -s '
+      [ split("\n")[]
+        | select(length > 0)
+        | (fromjson? // empty)
+        | select(.error != null)
+      ]
+      | reduce .[] as $e ({};
+          .[$e.error] = ((.[$e.error] // 0) + 1)
+        )
+      | [ (.["jq_fail"] // 0),
+          (.["flock_timeout"] // 0),
+          (.["rotation_fail"] // 0) ]
+      | @tsv
+    ' < "$SESSION_TOKENS_MERGED" 2>/dev/null
+  ) || true
+  DROPS_JQ_FAIL="${DROPS_JQ_FAIL:-0}"
+  DROPS_FLOCK_TIMEOUT="${DROPS_FLOCK_TIMEOUT:-0}"
+  DROPS_ROTATION_FAIL="${DROPS_ROTATION_FAIL:-0}"
+fi
+DROPS_TOTAL=$((DROPS_JQ_FAIL + DROPS_FLOCK_TIMEOUT + DROPS_ROTATION_FAIL))
+
 # ---- Compute ratio (always; emit gated by flag) -------------------------
 RATIO_X1000=0
 if (( SUM_ENVELOPES > 0 && LINES > 0 )); then
@@ -243,6 +275,19 @@ fi
 LINE_AGENTS="AGENTS.md floor (×${TURN_COUNT_PROXY}t):${AGENTS_FLOOR}"
 LINE_PAYLOAD="Skill payload sum:${PAYLOAD_TOTAL}"
 LINE_SUBAGENTS="Subagent envelopes (sum):${SUM_ENVELOPES}"
+
+# Render above-table caveat line when sentinels were dropped (issue #3509).
+# Suppress entirely when total = 0; per-class breakdown shows only non-zero
+# classes; always plural ("drops").
+if (( DROPS_TOTAL > 0 )); then
+  parts=()
+  (( DROPS_JQ_FAIL       > 0 )) && parts+=("jq_fail=${DROPS_JQ_FAIL}")
+  (( DROPS_FLOCK_TIMEOUT > 0 )) && parts+=("flock_timeout=${DROPS_FLOCK_TIMEOUT}")
+  (( DROPS_ROTATION_FAIL > 0 )) && parts+=("rotation_fail=${DROPS_ROTATION_FAIL}")
+  breakdown=$(IFS=,; echo "${parts[*]}")
+  echo "Subagent envelopes incomplete: ${DROPS_TOTAL} drops (${breakdown})."
+  echo
+fi
 
 cat <<MD
 ### Phase 1.6: token-efficiency report

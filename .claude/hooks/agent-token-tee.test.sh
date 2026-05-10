@@ -297,6 +297,123 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 12: jq_fail drop emits sentinel + same exit (issue #3509)
+# ------------------------------------------------------------------------
+# Induce jq_fail by overriding `jq` on PATH with a wrapper that fails the
+# line-build pass (`jq -nc ...`) but delegates everything else to real jq.
+# A natural induction via fixture data is not safe here: any non-numeric
+# `totalTokens` triggers a `[[ -eq 0 ]]` arithmetic error under `set -u`
+# (bash 5.2 unbound-variable behavior in arithmetic context) and exits
+# the hook early, before the line-build call.
+echo "Test 12: jq_fail drop sentinel"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+FAKE_BIN=$(mktemp -d); ROOTS+=("$FAKE_BIN")
+REAL_JQ=$(command -v jq)
+cat > "$FAKE_BIN/jq" <<EOF
+#!/usr/bin/env bash
+# Fake jq: fails when invoked with -n / -nc / -cn (line-build pass);
+# otherwise delegates to the real jq.
+for a in "\$@"; do
+  case "\$a" in
+    -n|-nc|-cn|--null-input) exit 1 ;;
+  esac
+done
+exec "$REAL_JQ" "\$@"
+EOF
+chmod +x "$FAKE_BIN/jq"
+fixture_canonical "sess-jq" "Explore" 5000 1 100 \
+  | PATH="$FAKE_BIN:$PATH" AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK"
+if [[ ! -f "$LOG" ]]; then
+  fail "no log file (expected sentinel-only line)"
+elif ! jq -e 'select(.error == "jq_fail" and .hook_event == "PostToolUse" and .schema == 1)' "$LOG" >/dev/null 2>&1; then
+  fail "expected jq_fail sentinel line; got: $(cat "$LOG")"
+elif jq -e 'select(.session_id == "sess-jq")' "$LOG" >/dev/null 2>&1; then
+  fail "data line written despite jq_fail (should be sentinel-only): $(cat "$LOG")"
+else
+  pass "jq_fail sentinel emitted, no data line"
+fi
+rm -rf "$ROOT" "$FAKE_BIN"
+
+# ------------------------------------------------------------------------
+# Test 13: flock_timeout drops envelope, preserves stderr echo, attempts sentinel
+# ------------------------------------------------------------------------
+# Hold a sibling exclusive lock on the sink for 7s while invoking the hook
+# with the default `flock -w 5` timeout. The hook times out, drops the
+# envelope, and attempts to emit a flock_timeout sentinel via the helper's
+# non-blocking `flock -n` path.
+#
+# Strict-lower-bound caveat (per `_emit_drop_sentinel` no-recursion contract):
+# under SUSTAINED contention the sentinel itself silently drops because the
+# same lock still blocks. The hook's operator-facing invariant is the stderr
+# echo. This test asserts:
+#   1. Stderr echo present (operator-visible signal preserved).
+#   2. No data line in the log (envelope was actually dropped).
+# Sentinel landing is best-effort and validated by the helper's standalone
+# test in tests/hooks/test_incidents.sh.
+echo "Test 13: flock_timeout drops envelope + preserves stderr echo"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+: > "$LOG"   # so flock has a file to lock against
+(
+  flock -x 9
+  sleep 7
+) 9>>"$LOG" &
+HOLDER=$!
+sleep 0.3
+STDERR=$(
+  fixture_canonical "sess-flockto" "Explore" 5000 1 100 \
+    | AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK" 2>&1 >/dev/null
+) || true
+kill "$HOLDER" 2>/dev/null || true
+wait "$HOLDER" 2>/dev/null || true
+if ! grep -q "flock timeout" <<< "$STDERR"; then
+  fail "expected stderr 'flock timeout' echo, got: $STDERR"
+elif [[ -s "$LOG" ]] && jq -e 'select(.session_id == "sess-flockto")' "$LOG" >/dev/null 2>&1; then
+  fail "data line written despite flock timeout: $(cat "$LOG")"
+else
+  pass "flock_timeout: data line dropped, stderr echo preserved"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 14: rotation_fail drop emits sentinel + active file preserved (issue #3509)
+# ------------------------------------------------------------------------
+# chmod 0500 .claude/ to force the rotator's archive write to fail. The hook
+# detects rotate_if_needed's non-zero return, emits the sentinel into the
+# (still-writable, since chmod is on the dir not the file) active log, and
+# proceeds with the data write.
+echo "Test 14: rotation_fail drop sentinel"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+# Pre-fill the log past the 1 KB threshold so rotation triggers.
+for i in $(seq 1 30); do
+  printf '{"schema":1,"ts":"2026-01-01T00:00:00Z","session_id":"sess-pre-%d","subagent_type":"Explore","total_tokens":1000,"tool_uses":1,"duration_ms":500,"hook_event":"PostToolUse"}\n' "$i" >> "$LOG"
+done
+PRE_LINES=$(wc -l < "$LOG")
+if [[ $(id -u) -eq 0 ]]; then
+  pass "skipped under root (chmod 0500 ineffective)"
+else
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+  chmod 0500 "$ROOT/.claude"
+  fixture_canonical "sess-rotfail" "Explore" 5000 1 100 \
+    | LOG_ROTATION_SIZE_BYTES=1024 AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK" 2>/dev/null
+  chmod 0700 "$ROOT/.claude"
+  POST_LINES=$(wc -l < "$LOG")
+  if ! jq -e 'select(.error == "rotation_fail" and .hook_event == "PostToolUse")' "$LOG" >/dev/null 2>&1; then
+    fail "no rotation_fail sentinel; log=$(cat "$LOG")"
+  elif (( POST_LINES <= PRE_LINES )); then
+    fail "active not preserved (pre=$PRE_LINES post=$POST_LINES)"
+  elif compgen -G "$ROOT/.claude/.session-tokens-*.jsonl.gz" >/dev/null; then
+    fail "archive created despite chmod (test scaffolding broken)"
+  else
+    pass "rotation_fail sentinel emitted, active preserved, no archive"
+  fi
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

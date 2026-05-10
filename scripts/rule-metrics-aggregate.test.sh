@@ -345,6 +345,60 @@ t9_archive_spanning_input() {
   rm -rf "$root"
 }
 
+# --- T10: sentinel lines (issue #3509) -----------------------------------
+# Sentinels carry no rule_id and no event_type — discriminator is `error`
+# key presence. The aggregator's valid_stream filter MUST drop sentinels
+# BEFORE the reduce so a `"null"` rule_id never enters $known_ids (and
+# therefore never trips the orphan gate). Drop counts surface as separate
+# summary fields populated from a parallel jq pass.
+t10_sentinels_excluded_from_data_and_counted_in_summary() {
+  local root; root=$(make_fixture_repo)
+  # One real deny event for Rule A (so we have a known reference count).
+  write_event "$root" hr-rule-a-synthetic-test deny "2026-04-25T10:00:00Z"
+  # Two sentinel lines (jq_fail + rotation_fail) — no rule_id, no event_type.
+  printf '{"schema":1,"hook_event":"PreToolUse","error":"jq_fail","ts":"2026-04-25T11:00:00Z"}\n' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  printf '{"schema":1,"hook_event":"PreToolUse","error":"rotation_fail","ts":"2026-04-25T12:00:00Z"}\n' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T10 sentinels do not trip orphan gate" "0" "$exit_code"
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  # No "null" rule_id row — sentinels never entered the reduce.
+  local null_rows
+  null_rows=$(jq -r '.rules | map(select(.id == null or .id == "null")) | length' < "$metrics")
+  assert_eq "T10 no null rule_id row in rules[]" "0" "$null_rows"
+  # Orphan list still empty (Rule A is the only real rule_id seen, and it
+  # exists in synthetic AGENTS.md).
+  assert_eq "T10 orphan_rule_ids empty"           "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  # Drop counts surfaced.
+  assert_eq "T10 drops_jq_fail_count == 1"        "1" \
+    "$(jq -r '.summary.drops_jq_fail_count' < "$metrics")"
+  assert_eq "T10 drops_rotation_fail_count == 1"  "1" \
+    "$(jq -r '.summary.drops_rotation_fail_count' < "$metrics")"
+  # Rule A's data-line counting is unaffected by the sentinels.
+  assert_eq "T10 Rule A hit_count unchanged"      "1" \
+    "$(rule_field "$metrics" hr-rule-a-synthetic-test hit_count)"
+  rm -rf "$root"
+}
+
+# --- T11: archived sentinel (gzipped) is merged + counted ----------------
+t11_archived_sentinel_counted() {
+  local root; root=$(make_fixture_repo)
+  # A sentinel that lives only in the .gz archive.
+  local archive="$root/.claude/.rule-incidents-2026-04.jsonl"
+  printf '{"schema":1,"hook_event":"PreToolUse","error":"jq_fail","ts":"2026-04-15T08:00:00Z"}\n' > "$archive"
+  gzip -f "$archive"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T11 archived sentinel counted" "1" \
+    "$(jq -r '.summary.drops_jq_fail_count' < "$metrics")"
+  rm -rf "$root"
+}
+
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
@@ -355,6 +409,8 @@ t6_te_prefix_not_orphan
 t7_te_plus_orphan_isolates_real_orphan
 t8_te_prefix_arbitrary_id
 t9_archive_spanning_input
+t10_sentinels_excluded_from_data_and_counted_in_summary
+t11_archived_sentinel_counted
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

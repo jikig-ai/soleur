@@ -208,16 +208,16 @@ For each of `agent-token-tee.sh`, `skill-invocation-logger.sh`, `incidents.sh::e
 
 ### Pre-merge (PR)
 
-- [ ] `_emit_drop_sentinel` function exists in `.claude/hooks/lib/incidents.sh` with header banner documenting schema, three covered classes, fs_error scope-out (#3523), discriminator (`error` key presence), no-recursion contract, aggregator filter contract, compound Phase 3.5 contract, and the strict-lower-bound caveat for `flock_timeout`.
-- [ ] All three hooks emit sentinels on each applicable drop class per the per-hook map. `flock_timeout` only present in `agent-token-tee.sh`. `skill-invocation-logger.sh` and `incidents.sh::emit_incident` keep indefinite `flock` (no `flock_timeout` site).
-- [ ] `.claude/hooks/lib/log-rotation.sh` returns 1 on archive-write failure; header updated; existing `|| true` callers unaffected.
-- [ ] `scripts/rule-metrics-aggregate.sh` filters `.rule_id != null` AND `select(.schema == 1)` at L107; orphan-gate behavior unchanged; `drops_jq_fail_count` and `drops_rotation_fail_count` populated in summary.
-- [ ] `scripts/skill-freshness-aggregate.sh` exposes `drops_jq_fail_count` and `drops_rotation_fail_count`; existing filter unchanged.
-- [ ] `plugins/soleur/skills/compound/scripts/token-efficiency-report.sh` exposes all three `drops_<class>_count` fields; render line emitted above top-3 cost table when total drops > 0; suppressed when 0; format pinned by golden-file test.
-- [ ] `plugins/soleur/skills/compound/SKILL.md` Phase 3.5 prose explicitly states filter intent (`event_type ∈ {deny, bypass}`, ignore lines with `error` set).
-- [ ] Spec updated: FR4 says "above the top-3 cost table"; FR2's `flock_timeout` claim updated to N/A for two of three hooks.
-- [ ] Test coverage: agent-token-tee.test.sh has 3 fixtures (jq_fail, flock_timeout, rotation_fail); skill-invocation-logger.test.sh has 2 (jq_fail, rotation_fail); test_incidents.sh has 2 emit_incident fixtures + 1 `_emit_drop_sentinel` standalone test; log-rotation.test.sh asserts new return code; rule-metrics test asserts no `"null"` rule_id + drop counts + archived-sentinel; skill-freshness test asserts drop counts + sentinels excluded from `skills[]`; token-efficiency-report test asserts render-line behavior + archived sentinel.
-- [ ] All existing tests still pass (no regression on data-line counting).
+- [x] `_emit_drop_sentinel` function exists in `.claude/hooks/lib/incidents.sh` with header banner documenting schema, three covered classes, fs_error scope-out (#3523), discriminator (`error` key presence), no-recursion contract, aggregator filter contract, compound Phase 3.5 contract, and the strict-lower-bound caveat for `flock_timeout`.
+- [x] All three hooks emit sentinels on each applicable drop class per the per-hook map. `flock_timeout` only present in `agent-token-tee.sh`. `skill-invocation-logger.sh` and `incidents.sh::emit_incident` keep indefinite `flock` (no `flock_timeout` site).
+- [x] `.claude/hooks/lib/log-rotation.sh` returns 1 on archive-write failure; header updated; existing `|| true` callers unaffected.
+- [x] `scripts/rule-metrics-aggregate.sh` filters `.rule_id != null` AND `select(.schema == 1)` at L107; orphan-gate behavior unchanged; `drops_jq_fail_count` and `drops_rotation_fail_count` populated in summary.
+- [x] `scripts/skill-freshness-aggregate.sh` exposes `drops_jq_fail_count` and `drops_rotation_fail_count`; existing filter unchanged.
+- [x] `plugins/soleur/skills/compound/scripts/token-efficiency-report.sh` exposes all three `drops_<class>_count` fields; render line emitted above top-3 cost table when total drops > 0; suppressed when 0; format pinned by golden-file test.
+- [x] `plugins/soleur/skills/compound/SKILL.md` Phase 3.5 prose explicitly states filter intent (`event_type ∈ {deny, bypass}`, ignore lines with `error` set).
+- [x] Spec updated: FR4 says "above the top-3 cost table"; FR2's `flock_timeout` claim updated to N/A for two of three hooks.
+- [x] Test coverage: agent-token-tee.test.sh has 3 fixtures (jq_fail, flock_timeout, rotation_fail); skill-invocation-logger.test.sh has 2 (jq_fail, rotation_fail); test_incidents.sh has 2 emit_incident fixtures + 1 `_emit_drop_sentinel` standalone test; log-rotation.test.sh asserts new return code; rule-metrics test asserts no `"null"` rule_id + drop counts + archived-sentinel; skill-freshness test asserts drop counts + sentinels excluded from `skills[]`; token-efficiency-report test asserts render-line behavior + archived sentinel.
+- [x] All existing tests still pass (no regression on data-line counting).
 - [ ] PR body uses `Closes #3509` (this PR resolves the issue).
 - [ ] PR body uses `Ref #3523` (the deferred fs-error monitor follow-up — must NOT auto-close).
 
