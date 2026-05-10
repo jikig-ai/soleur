@@ -1,4 +1,46 @@
+---
+upstream: github.com/goSprinto/compliance-skills
+pinned-commit: 7b58d68461cb1fc033a063e34cc9de63d0b4144b
+last-verified: 2026-05-10
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+  # Each entry pins TWO blob SHAs:
+  #   upstream-blob-sha — the file as it exists upstream at `pinned-commit`.
+  #     Used by the drift workflow to detect upstream content changes.
+  #   local-blob-sha    — the file as it exists in this repo (after the
+  #     attribution-header line and any documented Soleur extensions). Used
+  #     by the lefthook `vendor-pin-integrity` gate to detect silent local
+  #     edits. Computed via `git hash-object --no-filters`.
+  - path: references/fields.md
+    upstream-path: pii-detector/patterns/fields.md
+    upstream-blob-sha: c1bb748fe00a53b283efe66ec937fa39437d2efc
+    local-blob-sha: 68675dd747fcbc74bb84c99eaa14983c9c5a6b24
+    status: active-eu-extended
+  - path: references/leakage-vectors.md
+    upstream-path: pii-detector/rules/leakage-vectors.md
+    upstream-blob-sha: 15a46e529e789930149f4b9bce875bfe5c53e478
+    local-blob-sha: 8d1d7fc44183e866e128707c3e91e7b63ce835fd
+    status: active-verbatim
+  - path: references/layers/api-layer.md
+    upstream-path: pii-detector/layers/api-layer.md
+    upstream-blob-sha: 9d3202175c1d0225f60a912c489dbdacf4df491c
+    local-blob-sha: 802fc866e320bebeecae2f8e53658253853ab5f9
+    status: active-verbatim
+  - path: references/layers/data-in-transit.md
+    upstream-path: pii-detector/layers/data-in-transit.md
+    upstream-blob-sha: 6c9eeabf17d1f0ed5660f5eb54d91587c81214ef
+    local-blob-sha: 2ce203e9c041c1b1992ff9f7f636fdd63a667a44
+    status: active-eu-extended
+  - path: references/layers/data-lifecycle.md
+    upstream-path: pii-detector/layers/data-lifecycle.md
+    upstream-blob-sha: a073ef24a0527c2c3a6d738b65ea3ef9d6194abe
+    local-blob-sha: 29357a020bfa0e61f91dd529070fe3eb7cd251da
+    status: active-soleur-rewritten
+---
+
 # NOTICE
+
+The frontmatter above is the canonical machine-readable form; the table below is the human-readable form. Drift between them is a bug.
 
 `gdpr-gate` lifts five reference files from [gosprinto/compliance-skills](https://github.com/goSprinto/compliance-skills) under the MIT license. The lifted files carry a per-file attribution header and are listed below with upstream blob SHAs pinned at commit `7b58d68461cb1fc033a063e34cc9de63d0b4144b` (verified 2026-05-10).
 
