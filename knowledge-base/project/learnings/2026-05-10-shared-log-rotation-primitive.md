@@ -129,8 +129,21 @@ local rotated=0
   is invisible to the outer `gzip` call. Compute the archive path BEFORE
   entering the subshell. Same pitfall as `rule-metrics-aggregate.sh:288`.
 
+## Session Errors
+
+1. **Subshell exit code 10 tripped `set -e` in caller.** First test run hung silently at Test 2 because the helper's flock subshell exits 10 on success-rotated, and `set -euo pipefail` in the test file killed the script on the first non-zero subshell return. **Recovery:** capture via `( ... ) || rotated=$?` (conditional context — set-e exempt). **Prevention:** when a function signals via exit code, document at the call-site that the caller must capture in a conditional. Tracked as Lesson 2 above.
+
+2. **PR #3495 merged mid-/work.** Required rebase onto origin/main with conflict resolution in `.gitignore` (broadened wildcards already on main vs. our additive consolidation). **Recovery:** committed WIP, rebased, resolved conflict, picked up post-rebase agent-token-tee.sh wiring. **Prevention:** the plan's Phase 0 reconcile gate fired at /work time and surfaced the dependency cleanly — this is the gate working as designed, not a workflow violation. Documenting here so future similar PRs (built on top of an open dependency PR) explicitly check `gh pr view <dep>` at /work time before each phase.
+
+3. **Filed scope-out issue #3514 BEFORE getting code-simplicity-reviewer concur** — direct violation of the "Write-time self-check" rule in `plugins/soleur/skills/review/SKILL.md` §5. **Recovery:** code-simplicity-reviewer DISSENTed; I closed the issue and flipped to fix-inline (3-line shell-out from Python emitter to the shared bash rotator). **Prevention:** the rule is correct; I didn't follow it. The discoverable failure mode (DISSENT after filing) made the issue self-correcting — this is the scenario the rule explicitly anticipates ("filing first and co-signing second is a protocol violation even when the agent eventually returns CONCUR"). No skill edit needed; learning entry is the discoverability anchor.
+
+4. **Bash CWD reset between tool calls.** When a `cd` happens inside a Bash invocation, subsequent Bash calls revert to the repo bare root. One test run failed because the worktree path was not preserved. **Recovery:** chained `cd <worktree-path> && <cmd>` in single calls. **Prevention:** already covered by AGENTS.md `cq-when-running-test-lint-budget-commands` (now retired, see `2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md` session errors); the lesson is durable.
+
+5. **Shellcheck SC2094 on intentional flock-against-self.** The pattern `( flock -x 9; cat "$active" >> "$archive" ) 9>>"$active"` opens fd 9 against the same file the body reads — informational shellcheck warning. **Recovery:** added `# shellcheck disable=SC2094` matching the precedent at `scripts/rule-metrics-aggregate.sh:291-295`. **Prevention:** when porting an existing flock-against-self pattern, copy the disable comment too — not just the body.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-05-10-feat-shared-log-rotation-primitive-plan.md`
 - Issue: #3508
 - Rebased on top of: PR #3495 (merged during /work)
+- Filed-then-closed: #3514 (Python emit_incident scope-out — flipped to inline fix)
