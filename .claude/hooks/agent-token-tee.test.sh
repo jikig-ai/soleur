@@ -270,6 +270,33 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 11: per-write rotation engages on size threshold (#3508).
+# ------------------------------------------------------------------------
+echo "Test 11: rotation engages on size threshold"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+LOG=$(logfile_for "$ROOT")
+# Pre-fill the log with valid JSONL just over 1 KB so the next write triggers
+# rotation under a 1 KB threshold.
+for i in $(seq 1 30); do
+  printf '{"schema":1,"ts":"2026-01-01T00:00:00Z","session_id":"sess-pre-%d","subagent_type":"Explore","total_tokens":1000,"tool_uses":1,"duration_ms":500,"hook_event":"PostToolUse"}\n' "$i" >> "$LOG"
+done
+PRE_SIZE=$(wc -c < "$LOG")
+fixture_canonical "sess-rotate-trigger" \
+  | LOG_ROTATION_SIZE_BYTES=1024 AGENT_TOKEN_TEE_REPO_ROOT="$ROOT" bash "$HOOK"
+POST_SIZE=$(wc -c < "$LOG")
+ARCHIVE_COUNT=$(compgen -G "$ROOT/.claude/.session-tokens-*.jsonl.gz" | wc -l)
+if [[ "$ARCHIVE_COUNT" -ne 1 ]]; then
+  fail "expected 1 archive, got $ARCHIVE_COUNT (pre-size=$PRE_SIZE)"
+elif [[ "$POST_SIZE" -ge "$PRE_SIZE" ]]; then
+  fail "active not truncated by rotation (pre=$PRE_SIZE, post=$POST_SIZE)"
+elif ! jq -e '.session_id == "sess-rotate-trigger"' "$LOG" >/dev/null 2>&1; then
+  fail "post-rotation envelope did not land in active file"
+else
+  pass "rotation triggered, archive created, post-rotate envelope landed"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

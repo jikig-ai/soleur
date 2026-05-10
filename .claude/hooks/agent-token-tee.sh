@@ -105,6 +105,19 @@ ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 mkdir -p "$(dirname "$file")" 2>/dev/null || exit 0
 [[ -f "$file" ]] || : > "$file" 2>/dev/null || exit 0
 
+# Rotate before writing. Source the shared rotator fail-soft; failure leaves
+# the file unrotated (a new rotation attempt fires on the next hook invocation).
+# shellcheck source=/dev/null
+_rotator="$(dirname "${BASH_SOURCE[0]}")/lib/log-rotation.sh"
+if [[ -f "$_rotator" ]]; then
+  # shellcheck source=/dev/null
+  source "$_rotator" 2>/dev/null || true
+  if declare -F rotate_if_needed >/dev/null 2>&1; then
+    rotate_if_needed "$file" 2>/dev/null || true
+  fi
+fi
+unset _rotator
+
 line="$(jq -nc \
   --arg ts "$ts" \
   --arg sid "$SESSION_ID" \

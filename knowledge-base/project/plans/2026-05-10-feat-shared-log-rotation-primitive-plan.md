@@ -96,8 +96,8 @@ This plan extracts the rotation logic into `.claude/hooks/lib/log-rotation.sh` a
 **Files to read (no edits):** `.gitignore`, `.claude/hooks/lib/incidents.sh`, `.claude/hooks/skill-invocation-logger.sh`, `scripts/rule-metrics-aggregate.sh`.
 
 **Acceptance:**
-- [ ] PR #3495 state recorded in commit message / spec.md.
-- [ ] `## Open Code-Review Overlap` filled (even if "None").
+- [x] PR #3495 state recorded in commit message / spec.md.
+- [x] `## Open Code-Review Overlap` filled (even if "None").
 
 ### Phase 1 — Author shared rotator helper
 
@@ -286,10 +286,10 @@ rotate_if_needed() {
 **Why exit-code-10 signal:** the subshell cannot export variables back to the outer scope (see Sharp Edge above). We use the exit code as a 1-bit channel ("rotated" / "did nothing") to gate the gzip step outside the lock. `gzip` outside the lock keeps the critical section minimal — concurrent writers don't wait on compression.
 
 **Acceptance:**
-- [ ] `bash -n .claude/hooks/lib/log-rotation.sh` parses cleanly.
-- [ ] `shellcheck .claude/hooks/lib/log-rotation.sh` passes (verified: `shellcheck 0.10.0` available at `/home/jean/.local/bin/shellcheck`).
-- [ ] Helper exits 0 on every malformed input it receives (file does not exist, file is empty, file is not writable, gzip missing, flock missing — see macOS note in `README.md:80`).
-- [ ] `stat -c "%s %Y"` form works on both GNU coreutils and uutils-coreutils 0.2.x (verified locally; sibling hooks already rely on `stat`).
+- [x] `bash -n .claude/hooks/lib/log-rotation.sh` parses cleanly.
+- [x] `shellcheck .claude/hooks/lib/log-rotation.sh` passes (verified: `shellcheck 0.10.0` available at `/home/jean/.local/bin/shellcheck`).
+- [x] Helper exits 0 on every malformed input it receives (file does not exist, file is empty, file is not writable, gzip missing, flock missing — see macOS note in `README.md:80`).
+- [x] `stat -c "%s %Y"` form works on both GNU coreutils and uutils-coreutils 0.2.x (verified locally; sibling hooks already rely on `stat`).
 
 ### Phase 2 — Wire all three sinks to the helper
 
@@ -343,8 +343,8 @@ The writers' existing pattern is:
 - `.claude/hooks/agent-token-tee.sh` (only if PR #3495 already merged at /work time; otherwise this edit is **deferred to a fast-follow PR right after #3495 merges**)
 
 **Acceptance:**
-- [ ] All three writers source the helper without explosion when the helper is missing (`|| true` guard intact).
-- [ ] The aggregator's existing `AGGREGATOR_ROTATE=1` block in `scripts/rule-metrics-aggregate.sh:275-298` is **retained** as a secondary rotator for the weekly cron path (defense-in-depth — the aggregator runs in CI where the operator-side rotator never fires).
+- [x] All three writers source the helper without explosion when the helper is missing (`|| true` guard intact).
+- [x] The aggregator's existing `AGGREGATOR_ROTATE=1` block in `scripts/rule-metrics-aggregate.sh:275-298` is **retained** as a secondary rotator for the weekly cron path (defense-in-depth — the aggregator runs in CI where the operator-side rotator never fires).
 
 ### Phase 3 — Update `.gitignore` if needed (post-#3495 reconcile)
 
@@ -359,9 +359,9 @@ The writers' existing pattern is:
 - `.gitignore` (conditional on Phase 0 reconcile output).
 
 **Acceptance:**
-- [ ] After Phase 3, `git check-ignore .claude/.session-tokens-2026-05.jsonl.gz` exits 0.
-- [ ] After Phase 3, `git check-ignore .claude/.skill-invocations-2026-05.jsonl.gz` exits 0.
-- [ ] After Phase 3, `git check-ignore .claude/.rule-incidents-2026-05.jsonl.gz` exits 0.
+- [x] After Phase 3, `git check-ignore .claude/.session-tokens-2026-05.jsonl.gz` exits 0.
+- [x] After Phase 3, `git check-ignore .claude/.skill-invocations-2026-05.jsonl.gz` exits 0.
+- [x] After Phase 3, `git check-ignore .claude/.rule-incidents-2026-05.jsonl.gz` exits 0.
 
 ### Phase 4 — Test scenarios (TDD per `cq-write-failing-tests-before`)
 
@@ -397,8 +397,8 @@ The writers' existing pattern is:
 - **T16:** `rule-metrics-aggregate.test.sh` — verify the existing `AGGREGATOR_ROTATE=1` path still works (defense-in-depth — the bash-side rotator does not eliminate the aggregator's rotator). The aggregator's rotator sees an empty file (rotation already happened at write time) and skips per its own `[[ -s "$INCIDENTS" ]]` guard at line 275 — assert that this code path is reached and no error is emitted.
 
 **Acceptance:**
-- [ ] All 16 tests pass locally (T15 conditional on PR #3495 merge state).
-- [ ] CI test step (whatever workflow runs `bash .claude/hooks/*.test.sh`) is green.
+- [x] All 16 tests pass locally (T15 included — PR #3495 merged during /work, agent-token-tee.sh wired in same PR).
+- [x] CI test step (whatever workflow runs `bash .claude/hooks/*.test.sh`) is green.
 
 ### Phase 5 — Documentation
 
@@ -408,8 +408,8 @@ The writers' existing pattern is:
 2. **`knowledge-base/project/learnings/2026-05-10-shared-log-rotation-primitive.md`** — capture the design decisions (atomic-rename vs cat-truncate, why per-write not per-cron, why source-not-exec, the macOS flock note).
 
 **Acceptance:**
-- [ ] README.md describes both the per-write helper and the aggregator's defense-in-depth role.
-- [ ] Learning file links back to issue #3508 and PR #3495.
+- [x] README.md describes both the per-write helper and the aggregator's defense-in-depth role.
+- [x] Learning file links back to issue #3508 and PR #3495.
 
 ## Files to Edit
 
@@ -433,15 +433,15 @@ The writers' existing pattern is:
 
 ### Pre-merge (PR)
 
-- [ ] `.claude/hooks/lib/log-rotation.sh` exists, exports `rotate_if_needed`, exits 0 on every malformed input.
-- [ ] All three writers (`incidents.sh::emit_incident`, `skill-invocation-logger.sh`, `agent-token-tee.sh` if applicable) call `rotate_if_needed "$file"` before constructing the JSONL line.
-- [ ] Default thresholds: 5 MB size, 30 days age — overridable via `LOG_ROTATION_SIZE_BYTES` and `LOG_ROTATION_AGE_DAYS`.
-- [ ] Concurrency-correct rotation: rotation uses `cat → archive` + `truncate-in-place` inside the flock — preserves inode so flock semantics hold across rotator and concurrent writers. Truncate is gated on cat success (data-preserving on disk-full / OOM).
-- [ ] Kill-switch: `LOG_ROTATION_DISABLE=1` short-circuits the helper.
-- [ ] Test scenarios T1-T12 pass (T13-T15 conditional on writer scope; T16 verifies aggregator interop).
-- [ ] `.gitignore` covers all three rotation suffixes (`.session-tokens*`, `.skill-invocations*`, `.rule-incidents*` or equivalent).
-- [ ] `.claude/hooks/README.md` documents the per-write rotator, the aggregator's defense-in-depth role, env-var configuration, and the macOS flock note.
-- [ ] No regression on existing aggregator rotation: `bash scripts/rule-metrics-aggregate.test.sh` green.
+- [x] `.claude/hooks/lib/log-rotation.sh` exists, exports `rotate_if_needed`, exits 0 on every malformed input.
+- [x] All three writers (`incidents.sh::emit_incident`, `skill-invocation-logger.sh`, `agent-token-tee.sh`) call `rotate_if_needed "$file"` before constructing the JSONL line.
+- [x] Default thresholds: 5 MB size, 30 days age — overridable via `LOG_ROTATION_SIZE_BYTES` and `LOG_ROTATION_AGE_DAYS`.
+- [x] Concurrency-correct rotation: rotation uses `cat → archive` + `truncate-in-place` inside the flock — preserves inode so flock semantics hold across rotator and concurrent writers. Truncate is gated on cat success (data-preserving on disk-full / OOM).
+- [x] Kill-switch: `LOG_ROTATION_DISABLE=1` short-circuits the helper.
+- [x] Test scenarios T1-T15 pass; T16 verifies aggregator interop (T4 in `rule-metrics-aggregate.test.sh` is pre-existing pass-through tracked in #3507).
+- [x] `.gitignore` covers all three rotation suffixes (`.session-tokens*`, `.skill-invocations*`, `.rule-incidents*` wildcards).
+- [x] `.claude/hooks/README.md` documents the per-write rotator, the aggregator's defense-in-depth role, env-var configuration, and the macOS flock note.
+- [x] No new regression on existing aggregator rotation (T4 is pre-existing — confirmed by running on clean main clone).
 
 ### Post-merge (operator)
 
