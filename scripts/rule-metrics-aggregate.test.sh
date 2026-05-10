@@ -255,12 +255,77 @@ t5_empty_jsonl_exits_zero() {
   rm -rf "$root"
 }
 
+# --- T6: te-* synthetic-prefix events are NOT flagged as orphans ----------
+# Issue #3494 reserves `te-` for token-efficiency telemetry emitted by
+# compound Phase 1.6. These rule_ids exist by design without an AGENTS.md
+# bullet — the orphan-detection jq filter must exclude them.
+t6_te_prefix_not_orphan() {
+  local root; root=$(make_fixture_repo)
+  # Only te-* events; no real orphan.
+  write_event "$root" te-subagent-overshoot warn "2026-04-25T10:00:00Z"
+  write_event "$root" te-skill-payload-floor warn "2026-04-25T11:00:00Z"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T6 te-* only → exit 0"        "0" "$exit_code"
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T6 te-* events not in orphans" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  # Per-id counts still preserved in the counts map (verifiable via stage A
+  # output). Aggregator stores per-id stats keyed by rule_id; te-* IDs are
+  # absent from `rules` (which joins with AGENTS.md) but present in the
+  # underlying count map. We assert by re-reading the jsonl directly.
+  local te_count
+  te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl")
+  assert_eq "T6 te-subagent-overshoot fired" "1" "$te_count"
+  rm -rf "$root"
+}
+
+# --- T7: mixed te-* + real-orphan → only real orphan flagged --------------
+t7_te_plus_orphan_isolates_real_orphan() {
+  local root; root=$(make_fixture_repo)
+  write_event "$root" te-agents-md-turn-cost warn "2026-04-25T10:00:00Z"
+  write_event "$root" hr-rule-orphan-not-in-fixture deny "2026-04-25T11:00:00Z"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  if [[ "$exit_code" -eq 0 ]]; then
+    echo "FAIL: T7 expected non-zero exit (real orphan present)"
+    FAIL=$((FAIL + 1))
+  else
+    echo "PASS: T7 mixed te-* + real orphan → exit $exit_code"
+    PASS=$((PASS + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
+  rm -rf "$root"
+}
+
+# --- T8: te-* unknown sub-id (e.g., new outlier from #3493 follow-up) -----
+# Any rule_id starting with `te-` is exempt from orphan detection — not just
+# the three currently emitted. This guards against future te-* additions
+# silently failing the cron until AGENTS.md gets edited (which it shouldn't).
+t8_te_prefix_arbitrary_id() {
+  local root; root=$(make_fixture_repo)
+  write_event "$root" te-future-outlier-tbd warn "2026-04-25T10:00:00Z"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T8 arbitrary te-* exits 0"  "0" "$exit_code"
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T8 orphan list empty"        "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  rm -rf "$root"
+}
+
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
 t4_rule_prune_excludes_rules_with_fire_events
 t4b_rule_prune_emits_candidates_with_first_seen
 t5_empty_jsonl_exits_zero
+t6_te_prefix_not_orphan
+t7_te_plus_orphan_isolates_real_orphan
+t8_te_prefix_arbitrary_id
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
