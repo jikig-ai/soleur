@@ -35,6 +35,8 @@ __pycache__/
 .claude/.rule-incidents-*.jsonl.gz
 .claude/.skill-invocations.jsonl
 .claude/.skill-invocations-*.jsonl.gz
+.claude/.session-tokens.jsonl
+.claude/.session-tokens-*.jsonl.gz
 # Stray Claude Code subagent worktree markers — must never be committed (#2905)
 /.claude/worktrees/
 .playwright-mcp/
