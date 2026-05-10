@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: "This skill should be used when creating, refining, or auditing Claude Code Skills. It provides expert guidance on SKILL.md structure, creating new skills from scratch, improving existing skills, packaging for distribution, and skill best practices."
+description: "This skill should be used when creating, refining, or auditing Claude Code Skills, including SKILL.md structure, scaffolding, packaging, and best practices."
 license: Complete terms in LICENSE.txt
 ---
 
