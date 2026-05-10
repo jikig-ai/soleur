@@ -244,20 +244,20 @@ Run the cost-efficiency report:
 bash "$(git rev-parse --show-toplevel)/plugins/soleur/skills/compound/scripts/token-efficiency-report.sh"
 ```
 
-Prints a top-3 cost table and emits `te-*` `warn` telemetry to `.claude/.rule-incidents.jsonl` on outliers. Proposals route through Phase 1.5 step 7's Accept/Skip/Edit gate.
+Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` on outliers (rolled up into `knowledge-base/project/rule-metrics.json` by weekly cron). Proposals route through Phase 1.5 step 7's gate.
 
 ### Rubric
 
 - Floor: `wc -c AGENTS.md` × 25 turns.
-- Payload: sum SKILL.md bytes from `.skill-invocations.jsonl` (filter session_id).
-- Envelopes: sum `total_tokens` from `.session-tokens.jsonl` (session_id + `ts < compound_entry_ts` self-exclusion).
+- Payload: SKILL.md bytes from `.skill-invocations.jsonl` (session_id).
+- Envelopes: `total_tokens` from `.session-tokens.jsonl` (R6 self-exclusion).
 - Lines: `git diff --shortstat`. Skip <50.
-- Triggers: subagent >100k → `te-subagent-overshoot`; payload >200k → `te-skill-payload-floor`; ratio >2k/line → `te-agents-md-turn-cost` (gated off until #3497).
-- Phase budget: ≤1.5k tokens (script is bash-executed, not tokenized).
+- Triggers: subagent >100k → `te-subagent-overshoot`; payload >200k → `te-skill-payload-floor`; ratio >2k/line → `te-agents-md-turn-cost` (gated, #3497).
+- Budget: ≤1.5k tokens/fire (script bash-exec).
 
-### Sharp Edge
+### Sharp Edges
 
-> Advisory. Only large outliers (subagent >100k OR payload >200k) warrant a follow-up issue. Smaller drifts compound through the weekly aggregator's longitudinal trend.
+> Advisory. Only large outliers (subagent >100k OR payload >200k) warrant follow-up. Activation lag: PostToolUse hook fires on next session restart post-merge.
 <!-- phase-1.6-end -->
 
 ## Knowledge Base Integration

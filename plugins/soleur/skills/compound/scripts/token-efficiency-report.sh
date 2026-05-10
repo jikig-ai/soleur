@@ -17,15 +17,25 @@
 
 set -euo pipefail
 
-# ---- Flags + thresholds --------------------------------------------------
+# ---- Flags + thresholds (all env-overridable for #3497 tuning) ----------
+# Per code-quality review: defining these as `${VAR:=default}` lets the
+# tuning PR ship a config change without code edits.
 : "${RATIO_EMIT_ENABLED:=0}"
-SUBAGENT_OVERSHOOT_TOKENS=100000
-SKILL_PAYLOAD_FLOOR_BYTES=200000
-RATIO_THRESHOLD_X1000=2000        # 2k tokens/line × 1000 scaling
-SKIP_LINES_THRESHOLD=50
-TURN_COUNT_PROXY=25               # fixed approximation; refined via #3497
+: "${SUBAGENT_OVERSHOOT_TOKENS:=100000}"
+: "${SKILL_PAYLOAD_FLOOR_BYTES:=200000}"
+: "${RATIO_THRESHOLD_X1000:=2000}"      # 2k tokens/line × 1000 scaling
+: "${SKIP_LINES_THRESHOLD:=50}"
+: "${TURN_COUNT_PROXY:=25}"             # fixed approximation; refined via #3497
+
 FIXTURE_MODE=0
 [[ "${1:-}" == "--fixture-mode" ]] && FIXTURE_MODE=1
+
+# Per-run tempfile via mktemp + EXIT trap. `$$` is the parent PID and is
+# predictable across concurrent runs in shared shells (per code-quality +
+# pattern-recognition review). Trap registered before any work so SIGINT/
+# SIGTERM mid-script doesn't leak.
+SHORTSTAT_TMP="$(mktemp -t te-shortstat.XXXXXX)"
+trap 'rm -f "$SHORTSTAT_TMP"' EXIT INT TERM
 
 # ---- Repo-root + session resolution -------------------------------------
 if [[ -n "${TE_REPORT_REPO_ROOT:-}" ]]; then
@@ -35,7 +45,20 @@ else
 fi
 SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 
+# Session-id fallback (per pattern-recognition review): when neither env var
+# is set (e.g., direct script invocation outside a Claude Code session),
+# read the most recent session_id from the session-tokens telemetry. The
+# hook always records it; this makes the writer/reader contract symmetric.
+if [[ -z "$SESSION_ID" && -f "$REPO_ROOT/.claude/.session-tokens.jsonl" ]]; then
+  SESSION_ID=$(jq -r 'select(.schema == 1) | .session_id' \
+    "$REPO_ROOT/.claude/.session-tokens.jsonl" 2>/dev/null \
+    | tail -1)
+fi
+
 # ---- Skip rule (lines<50 → exit early; R7 merge-base fallback) ----------
+# `timeout 5s` bounds the git diff per performance review — a stale long-
+# running branch can produce a multi-second shortstat that would otherwise
+# silently extend the report's runtime via the `2>/dev/null` mask.
 LINES=0
 (
   cd "$REPO_ROOT" 2>/dev/null || exit 0
@@ -46,14 +69,13 @@ LINES=0
       || git rev-list --max-parents=0 HEAD 2>/dev/null \
       || git rev-parse HEAD)"
   fi
-  git diff --shortstat "$DIFF_BASE" 2>/dev/null
-) > /tmp/te-shortstat.$$ 2>/dev/null || true
+  timeout 5s git diff --shortstat "$DIFF_BASE" 2>/dev/null
+) > "$SHORTSTAT_TMP" 2>/dev/null || true
 
-if [[ -s /tmp/te-shortstat.$$ ]]; then
-  LINES=$(grep -oE '[0-9]+ (insertion|deletion)' /tmp/te-shortstat.$$ \
+if [[ -s "$SHORTSTAT_TMP" ]]; then
+  LINES=$(grep -oE '[0-9]+ (insertion|deletion)' "$SHORTSTAT_TMP" \
     | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
 fi
-rm -f /tmp/te-shortstat.$$
 
 if (( LINES < SKIP_LINES_THRESHOLD )); then
   echo "### Phase 1.6: skipped (small diff: $LINES lines changed)"
@@ -66,6 +88,21 @@ AGENTS_BYTES=0
 AGENTS_FLOOR=$((AGENTS_BYTES * TURN_COUNT_PROXY))
 
 # ---- Signal 2: skill-payload sum (R6 self-exclusion via compound_entry_ts)
+#
+# R6 self-exclusion modes (per architecture review):
+#   1. Normal (compound invoked via Skill tool): the PreToolUse Skill hook
+#      records soleur:compound's entry timestamp; we filter envelopes to
+#      ts < compound_entry_ts. Tight closed loop.
+#   2. Direct script invocation (operator runs `bash …/token-efficiency-
+#      report.sh`): no compound entry exists. cts falls through to
+#      9999-12-31 (fail-open). All session subagents counted; documented
+#      below — caller knows they're outside compound and accepts double-
+#      counting compound's own children if compound was somehow run.
+#   3. Repeat compound invocation in one session: `sort | tail -1` picks
+#      the LATEST entry. Envelopes between first and second compound
+#      runs are counted as "session work" — slight overcount, acceptable
+#      because the alternative (head -1) excludes legitimate work between
+#      runs.
 SKILL_INVOCATIONS="$REPO_ROOT/.claude/.skill-invocations.jsonl"
 COMPOUND_ENTRY_TS=""
 if [[ -f "$SKILL_INVOCATIONS" && -n "$SESSION_ID" ]]; then
@@ -80,6 +117,11 @@ LARGEST_SKILL_BYTES=0
 if [[ -f "$SKILL_INVOCATIONS" && -n "$SESSION_ID" ]]; then
   while IFS= read -r skill; do
     [[ -z "$skill" ]] && continue
+    # Validate skill-id shape (per security + code-quality review):
+    # rejects path-traversal sequences (`../`), shell metacharacters, and
+    # `find -path` glob chars (`*`, `?`). Allows lowercase alphanumerics +
+    # hyphens with optional `<plugin>:<skill>` namespace.
+    [[ "$skill" =~ ^[a-z0-9_-]+(:[a-z0-9_-]+)?$ ]] || continue
     skill_md=""
     case "$skill" in
       soleur:*) skill_md="$REPO_ROOT/plugins/soleur/skills/${skill#soleur:}/SKILL.md" ;;
@@ -101,28 +143,34 @@ if [[ -f "$SKILL_INVOCATIONS" && -n "$SESSION_ID" ]]; then
         LARGEST_SKILL_BYTES=$bytes
       fi
     fi
-  done < <(jq -r --arg s "$SESSION_ID" \
-    'select(.session_id == $s) | .skill' "$SKILL_INVOCATIONS" 2>/dev/null \
+  done < <(timeout 5s jq -r --arg s "$SESSION_ID" \
+    'select(.schema == 1 and .session_id == $s) | .skill' \
+    "$SKILL_INVOCATIONS" 2>/dev/null \
     | sort -u)
 fi
 
 # ---- Signal 3: subagent envelopes (R6: ts < compound_entry_ts) ----------
+# Single jq pass + awk reduction (per performance review) — avoids two
+# full-file scans of .session-tokens.jsonl. Adds `select(.schema == 1)`
+# gate (per data-integrity review) so a future schema-2 line with renamed
+# fields silently drops out of the count rather than corrupting it.
 SESSION_TOKENS="$REPO_ROOT/.claude/.session-tokens.jsonl"
 MAX_ENVELOPE=0
 SUM_ENVELOPES=0
 TOP_OFFENDER=""
 if [[ -f "$SESSION_TOKENS" && -n "$SESSION_ID" ]]; then
   cts="${COMPOUND_ENTRY_TS:-9999-12-31T23:59:59Z}"
-  TOP_LINE=$(jq -r --arg s "$SESSION_ID" --arg cts "$cts" \
-    'select(.session_id == $s and .ts < $cts) | "\(.total_tokens) \(.subagent_type)"' \
-    "$SESSION_TOKENS" 2>/dev/null | sort -nr | head -1)
-  if [[ -n "$TOP_LINE" ]]; then
-    MAX_ENVELOPE="${TOP_LINE%% *}"
-    TOP_OFFENDER="${TOP_LINE#* }"
-  fi
-  SUM_ENVELOPES=$(jq -r --arg s "$SESSION_ID" --arg cts "$cts" \
-    'select(.session_id == $s and .ts < $cts) | .total_tokens' \
-    "$SESSION_TOKENS" 2>/dev/null | awk '{s+=$1} END {print s+0}')
+  # IFS=$'\t' so a TOP_OFFENDER with spaces (subagent_type can contain them)
+  # doesn't shift fields — same defensive pattern used by the hook reader.
+  IFS=$'\t' read -r MAX_ENVELOPE TOP_OFFENDER SUM_ENVELOPES < <(
+    timeout 5s jq -r --arg s "$SESSION_ID" --arg cts "$cts" \
+      'select(.schema == 1 and .session_id == $s and .ts < $cts)
+       | [(.total_tokens // 0), (.subagent_type // "")] | @tsv' \
+      "$SESSION_TOKENS" 2>/dev/null \
+      | awk -F'\t' 'BEGIN{m=0;s=0;t=""} {s+=$1; if($1>m){m=$1;t=$2}} END{printf "%d\t%s\t%d\n", m, t, s}'
+  ) || true
+  MAX_ENVELOPE="${MAX_ENVELOPE:-0}"
+  SUM_ENVELOPES="${SUM_ENVELOPES:-0}"
 fi
 
 # ---- Compute ratio (always; emit gated by flag) -------------------------
@@ -132,12 +180,15 @@ if (( SUM_ENVELOPES > 0 && LINES > 0 )); then
 fi
 
 # ---- Outlier detection — emit incidents.sh warn -------------------------
+# Lib resolution: REPO_ROOT first (production + most fixtures), then the
+# upstream repo via `git rev-parse` from this script's location (covers
+# fixture-mode tests that run from a throwaway repo without the lib).
+# Avoids the 5-segment relative-path trap flagged by pattern review.
 INCIDENTS_LIB="$REPO_ROOT/.claude/hooks/lib/incidents.sh"
 if [[ ! -f "$INCIDENTS_LIB" ]]; then
-  # Fixture mode may run from a throwaway repo without the lib symlinked.
-  # Source from the original repo via this script's location.
-  SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-  INCIDENTS_LIB="$SELF_DIR/../../../../../.claude/hooks/lib/incidents.sh"
+  SELF_REPO="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null \
+    && git rev-parse --show-toplevel 2>/dev/null)"
+  [[ -n "$SELF_REPO" ]] && INCIDENTS_LIB="$SELF_REPO/.claude/hooks/lib/incidents.sh"
 fi
 # shellcheck source=/dev/null
 [[ -f "$INCIDENTS_LIB" ]] && source "$INCIDENTS_LIB"
