@@ -45,6 +45,17 @@ fi
 : "${SCHEMA_VERSION:=1}"
 unset _incidents_constants
 
+# Source the shared log rotator. Idempotent (function definitions only); the
+# fail-soft guard mirrors the constants source above so a missing helper does
+# not break incident emission.
+# shellcheck source=/dev/null
+_incidents_rotator="$(dirname "${BASH_SOURCE[0]}")/log-rotation.sh"
+if [[ -f "$_incidents_rotator" ]]; then
+  # shellcheck source=/dev/null
+  source "$_incidents_rotator"
+fi
+unset _incidents_rotator
+
 # --- emit_incident <rule_id> <event_type> <prefix> [command_snippet] -------
 # event_type ∈ {deny, bypass, applied, warn}
 #   deny    — PreToolUse hook blocked an operation (prevents a violation).
@@ -90,6 +101,13 @@ emit_incident() {
   # Create parent dir (first run) and file (needed by flock on the file itself).
   mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
   [[ -f "$file" ]] || : > "$file" 2>/dev/null || return 0
+
+  # Rotate before writing. The helper holds its own flock briefly; ordering
+  # (rotate → release → write) avoids nested-flock semantics. Failure is
+  # swallowed — telemetry never blocks the calling hook.
+  if declare -F rotate_if_needed >/dev/null 2>&1; then
+    rotate_if_needed "$file" 2>/dev/null || true
+  fi
 
   # flock on the file itself; jq -nc emits single-line JSON.
   local line

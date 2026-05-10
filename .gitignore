@@ -31,11 +31,12 @@ __pycache__/
 .mcp.local.json
 .claude/soleur-welcomed.local
 .claude/ralph-loop.*.local.md
-.claude/.rule-incidents.jsonl
-.claude/.rule-incidents-*.jsonl.gz
+# Telemetry sinks rotated by .claude/hooks/lib/log-rotation.sh — wildcard
+# covers `.<sink>.jsonl`, `.<sink>-YYYY-MM.jsonl`, `.<sink>-YYYY-MM.jsonl.gz`,
+# and any HHMMSSN-suffixed collision archive.
+.claude/.rule-incidents*
 .claude/.skill-invocations*
 .claude/.session-tokens*
-.claude/.rule-incidents*
 # Stray Claude Code subagent worktree markers — must never be committed (#2905)
 /.claude/worktrees/
 .playwright-mcp/
