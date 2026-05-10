@@ -42,3 +42,11 @@ Specifically for `rule-prune.sh`-class predicates: any test that seeds a rule wi
 
 - `tests/scripts/test-rule-metrics-aggregate.sh` T7 (malformed first_seen) asserts on the **aggregator-side** `summary.rules_unused_over_8w` predicate (different code path, includes null-first_seen rules). Not affected by #3156.
 - `tests/commands/test-sync-rule-prune.sh` T4 (line 91-93) crafts JSON with `first_seen:$seen` (non-null, recent) explicitly — exercises the recency gate, not the null-first_seen filter. Not affected by #3156.
+
+## Session Errors
+
+1. **`tee .git/review-changed.txt` failed in worktree** — Recovery: read `git diff --name-only` output directly; the file write is non-load-bearing in the review classification flow. Prevention: review/SKILL.md's classification commands could drop the `.git/review-*.txt` writes since the diff output is consumed inline anyway, or use `mktemp` paths instead of `.git/` (a file in worktrees, not a directory).
+
+2. **Code-quality reviewer false positive on missing `TOTAL=$((TOTAL + 1))`** — Recovery: ran `grep -n "TOTAL=" scripts/rule-metrics-aggregate.test.sh` before applying; line 184 already had the increment. Prevention: already documented in review/SKILL.md "Sharp Edges" — verify reviewer claims about file content via Read/grep before acting. This particular failure mode (claiming a missing line that exists) is closely related to the "broken link" sharp edge already covered.
+
+3. **Plan's "orthogonal smoke" risk-acceptance overruled by multi-agent review** — Recovery: added T4b with directly-crafted `rule-metrics.json` to cover `rule-prune.sh`'s positive emission path. Prevention: when a plan's risk section justifies dropping a positive assertion by claiming "the orthogonal test still covers it", verify the orthogonal test exercises **the same code path**, not a sibling predicate that happens to share a field name. In this PR: the plan claimed T2's `summary.rules_unused_over_8w` predicate covered the same `fire_count`-zero state, but T2 runs in the aggregator and T4 runs in the prune script — different code paths, same field. A test-design reviewer caught the gap that the plan author missed. Plan/deepen-plan skills should explicitly ask "does the cited orthogonal coverage hit the *same script* or only the same field?"
