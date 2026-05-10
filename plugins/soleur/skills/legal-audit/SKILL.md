@@ -7,6 +7,8 @@ description: "This skill should be used when auditing existing legal documents f
 
 Scan a project's existing legal documents and audit them for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. Findings are displayed inline in the conversation.
 
+**Cross-reference:** If `gdpr-gate` flags a new PII column (Art. 9 or otherwise), run this skill against the privacy policy to verify the disclosure landed.
+
 ## Phase 0: Discovery
 
 Scan the project for existing legal documents. Search common locations:

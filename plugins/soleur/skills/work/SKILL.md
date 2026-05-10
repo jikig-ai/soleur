@@ -103,6 +103,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Read the work document completely
    - Review any references or links provided in the plan
    - Before proceeding, verify the plan does not contradict conventions in AGENTS.md and constitution.md: file format (markdown tables not YAML), kebab-case naming, directory structure (agents recurse, skills flat), required frontmatter fields, shell script conventions
+   - **Plan-quoted numbers are preconditions to verify, not facts.** When the plan quotes a current measurement (`bun test … reports X`, `wc -c < AGENTS.md = N`, "cumulative ~Y words; ~Z headroom", `git ls-files | wc -l`), re-run the measurement at /work start before depending on it. Plans authored hours-or-days earlier observe a moving target; parallel branches landing in `main` invalidate the measurement. PR #3501 plan claimed `~186 word headroom` against an actual `15` and required inline trim of the gate description. See `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.
    - **Interactive mode only:** If anything is unclear or ambiguous, ask clarifying questions now. Get user approval to proceed. **Do not skip this** - better to ask questions now than build the wrong thing.
    - **Pipeline mode:** Skip clarifying questions and approval. Proceed directly to step 2.
 
@@ -373,6 +374,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Note any blockers or unexpected discoveries
    - Create new tasks if scope expands
    - Keep user informed of major milestones
+
+8. **GDPR / Compliance Gate (single pass, end of Phase 2)**
+
+   [skill-enforced: gdpr-gate at work Phase 2 exit]
+
+   After the per-task RED/GREEN/REFACTOR loop completes and before Phase 2.5, run `/soleur:gdpr-gate` once against the cumulative diff `git diff main...HEAD`. Same advisory-only output and Critical-finding escalation as plan Phase 2.7. **Never per-task** — token budget is ≤4k per invocation, single pass per phase per ADR-026 TR3.
+
+   Skip silently if the cumulative diff does not match the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex.
 
 ### Phase 2.5: Research Validation Loop (knowledge-base deliverables only)
 

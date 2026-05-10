@@ -392,6 +392,14 @@ If the threshold resolves to `none` AND the diff touches a sensitive path (canon
 
 **Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped for months because every existing gate weighed the decision on technical and convenience axes only. The framing-time enforcement here, combined with deepen-plan Phase 4.6 (halt on missing section), preflight Check 6 (ship-time gate), and the `user-impact-reviewer` conditional agent, closes the workflow-level loop.
 
+### 2.7. GDPR / Compliance Gate
+
+[skill-enforced: gdpr-gate at plan Phase 2.7]
+
+If the plan touches regulated-data surfaces (per the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex — schemas, migrations, auth flows, API routes, `.sql` files), invoke `/soleur:gdpr-gate` against the plan doc + the FR/TR sections being authored. Output is advisory-only with mandatory disclaimer; Critical findings (Art. 9 special-category, missing lawful basis, Art. 30 trigger) prompt operator-acknowledged write to `compliance-posture.md` Active Items + GitHub issue with label `compliance/critical`.
+
+Skip silently if no regulated-data surface is touched.
+
 ### 3. SpecFlow Analysis
 
 **If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
