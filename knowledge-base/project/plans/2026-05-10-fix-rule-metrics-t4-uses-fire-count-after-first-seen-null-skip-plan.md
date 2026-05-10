@@ -74,11 +74,11 @@ This plan keeps T4's load-bearing assertion (the `hit_count → fire_count` pred
 
 ### Pre-merge (PR)
 
-- [ ] T4 passes locally: `bash scripts/rule-metrics-aggregate.test.sh` exits 0 with `PASS=19 FAIL=0` (or equivalent — exact PASS count depends on how T4's assertions are restructured; see Phase 2).
-- [ ] T4's load-bearing invariant (Rule B with `applied` events is NOT listed as a prune candidate, isolating the `hit_count → fire_count` switch from PR #2213/#2876) is still asserted.
-- [ ] T4 has an inline comment naming PR #3156 (or the post-#3156 semantic) as the reason the positive `saw_a=1` assertion was dropped, with a one-line breadcrumb to issue #3507.
-- [ ] Confirmed pre-existing — running the test on `main` (commit `4b601ad5` or later) reproduces the `saw_a=0 saw_b=0` failure shown in the issue.
-- [ ] No changes to `scripts/rule-prune.sh` or `scripts/rule-metrics-aggregate.sh` — the fix is fixture/assertion-only.
+- [x] T4 passes locally: `bash scripts/rule-metrics-aggregate.test.sh` exits 0 with `PASS=19 FAIL=0` (or equivalent — exact PASS count depends on how T4's assertions are restructured; see Phase 2).
+- [x] T4's load-bearing invariant (Rule B with `applied` events is NOT listed as a prune candidate, isolating the `hit_count → fire_count` switch from PR #2213/#2876) is still asserted.
+- [x] T4 has an inline comment naming PR #3156 (or the post-#3156 semantic) as the reason the positive `saw_a=1` assertion was dropped, with a one-line breadcrumb to issue #3507.
+- [x] Confirmed pre-existing — running the test on `main` (commit `4b601ad5` or later) reproduces the `saw_a=0 saw_b=0` failure shown in the issue.
+- [x] No changes to `scripts/rule-prune.sh` or `scripts/rule-metrics-aggregate.sh` — the fix is fixture/assertion-only.
 - [ ] `Closes #3507` on its own line in PR body (per `wg-use-closes-n-in-pr-body-not-title-to`).
 - [ ] PR description names the root cause (PR #3156 tightened the prune predicate; T4's positive assertion is unsatisfiable under the new semantic).
 

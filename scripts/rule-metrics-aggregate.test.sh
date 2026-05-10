@@ -153,25 +153,31 @@ t3_orphan_rule_id_exits_nonzero() {
 t4_rule_prune_uses_fire_count() {
   local root; root=$(make_fixture_repo)
   # Ancient applied → fire_count>0, hit_count=0. Ancient first_seen defeats
-  # the recency gate under BOTH old and new predicates, isolating the
-  # hit_count → fire_count switch as the sole signal that keeps B out.
+  # the recency gate, isolating the hit_count → fire_count switch as the sole
+  # signal that keeps B out of candidates.
   write_event "$root" hr-rule-b-synthetic-test applied "2025-12-01T10:00:00Z"
-  # Rule A: zero events → fire_count=0 → still a prune candidate.
 
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1
 
   local candidates
   candidates=$(RULE_METRICS_ROOT="$root" bash "$PRUNE" --dry-run --weeks=0 2>/dev/null || true)
 
-  local saw_a=0 saw_b=0
-  echo "$candidates" | grep -q 'hr-rule-a-synthetic-test' && saw_a=1
+  # NOTE: We assert only that Rule B is NOT a candidate (fire_count>0 → excluded
+  # by the rule-prune predicate, the original #2213/#2876 invariant). We do NOT
+  # assert that Rule A IS a candidate, because PR #3156 added a `first_seen != null`
+  # filter to scripts/rule-prune.sh: a rule with zero events has null first_seen
+  # and is correctly skipped. The aggregator's write path has no event_type that
+  # sets first_seen without also incrementing fire_count, so a rule with
+  # fire_count=0 AND non-null first_seen is unreachable from event seeding.
+  # See issue #3507 for the analysis.
+  local saw_b=0
   echo "$candidates" | grep -q 'hr-rule-b-synthetic-test' && saw_b=1
 
-  if [[ "$saw_a" -eq 1 && "$saw_b" -eq 0 ]]; then
-    echo "PASS: T4 rule-prune candidates use fire_count (A listed, B not)"
+  if [[ "$saw_b" -eq 0 ]]; then
+    echo "PASS: T4 rule-prune candidates use fire_count (B with applied events excluded)"
     PASS=$((PASS + 1))
   else
-    echo "FAIL: T4 rule-prune candidates wrong (saw_a=$saw_a saw_b=$saw_b)"
+    echo "FAIL: T4 rule-prune still flags Rule B despite applied events (fire_count switch broken)"
     echo "  candidates: $candidates"
     FAIL=$((FAIL + 1))
   fi
