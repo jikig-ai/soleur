@@ -258,13 +258,17 @@ test.describe("ConversationsRail e2e (Phase 5a — mock-supabase)", () => {
       .click();
     await page.waitForURL("**/dashboard", { timeout: 10_000 });
 
-    // Sign-out smoke check: the click must complete and the app must
-    // redirect to /login. The try/finally in handleSignOut ensures
-    // signOut() runs even if removeAllChannels rejects — the user-visible
-    // contract is "click sign out → land on /login," and this assertion
-    // gates that contract. WS-teardown semantics are exercised by the
-    // Phase 5b integration test against a real Supabase WS endpoint.
+    // Sign-out smoke check: clicking sidebar "Sign out" now opens a
+    // confirmation modal (PR #3576); clicking the modal's confirm button
+    // runs the existing teardown contract and redirects to /login. The
+    // user-visible contract is "click sign out → confirm → land on /login,"
+    // and this assertion gates that contract. WS-teardown semantics are
+    // exercised by the Phase 5b integration test against a real Supabase
+    // WS endpoint.
     await page.getByRole("button", { name: /sign out/i }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.waitFor({ state: "visible", timeout: 5_000 });
+    await dialog.getByRole("button", { name: "Sign out" }).click();
     await page.waitForURL("**/login", { timeout: 10_000 });
   });
 });
