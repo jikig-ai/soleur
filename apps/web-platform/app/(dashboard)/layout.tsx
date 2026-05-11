@@ -84,10 +84,9 @@ export function PaymentWarningBanner({
   );
 }
 
-const NAV_ITEMS = [
+export const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: GridIcon },
   { href: "/dashboard/kb", label: "Knowledge Base", icon: BookIcon },
-  { href: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 const ADMIN_NAV_ITEMS = [
@@ -335,6 +334,21 @@ export default function DashboardLayout({
             <StatusIcon className="h-4 w-4 shrink-0" />
             <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
           </a>
+          <Link
+            href="/dashboard/settings"
+            title={collapsed ? "Settings" : undefined}
+            aria-current={
+              pathname.startsWith("/dashboard/settings") ? "page" : undefined
+            }
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+              pathname.startsWith("/dashboard/settings")
+                ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
+            } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+          >
+            <SettingsIcon className="h-4 w-4 shrink-0" />
+            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Settings</span>
+          </Link>
           <button
             onClick={() => setSignOutModalOpen(true)}
             title={collapsed ? "Sign out" : undefined}
