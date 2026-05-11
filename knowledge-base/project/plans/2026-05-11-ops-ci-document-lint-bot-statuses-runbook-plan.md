@@ -7,9 +7,36 @@ parent_pr: 3543
 parent_issue: 2719
 classification: docs-only
 requires_cpo_signoff: false
+deepened: 2026-05-11
 ---
 
 # Plan: Document `lint-bot-statuses` Runbook (R15 follow-up D3)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Sections enhanced:** Research Reconciliation (expanded), Phase 1 (Filled content notes), Risks (new live-state findings), Sharp Edges (5 → 8)
+**Research surfaces consulted:** direct read of sibling runbooks, `scripts/lint-bot-synthetic-completeness.sh`, `scripts/lint-bot-synthetic-statuses.sh`, `.github/workflows/ci.yml`, `lefthook.yml`, live `gh run list` / `gh run view` invocations against the actual CI run
+
+### Key Improvements
+
+1. **Identified broken-link drift in `main`.** The existing parent runbook `skill-security-scan-required-check.md:33` uses `gh run list --workflow=lint-bot-statuses.yml` — but there is no `lint-bot-statuses.yml` file; it's a **job** inside `ci.yml`. The new runbook MUST provide the canonical correct invocation (verified live below) AND Phase 2 MUST fix the broken citation in the parent runbook (added as edit-target).
+2. **Canonical operator-debug invocation verified live.** The correct way to verify the job ran green:
+
+   ```bash
+   gh run list --workflow=ci.yml --branch=main --limit=1 --json databaseId --jq '.[0].databaseId'
+   gh run view <run-id> --json jobs --jq '.jobs[] | select(.name == "lint-bot-statuses")'
+   ```
+
+   Output verified on `main` 2026-05-11: `{"conclusion":"success","databaseId":75347492121,"name":"lint-bot-statuses"}`.
+3. **Lefthook integration: confirmed absent.** `lefthook.yml` does NOT invoke `lint-bot-synthetic-completeness.sh` or `lint-bot-synthetic-statuses.sh`. The lint is CI-only — operators editing a `scheduled-*.yml` workflow cannot pre-flight locally without manual invocation. The runbook MUST call this out under "How to extend".
+4. **Hardcoded `PATTERN="scheduled-*.yml"` scope.** Both lint scripts hardcode the filename glob. A `gh pr create` inside a non-`scheduled-*` workflow (e.g., a future `monthly-*.yml`, `hourly-*.yml`, or one-off `release-*.yml`) is invisible to the lint. The runbook MUST document this scope so operators don't assume universal coverage.
+5. **CodeQL exclusion is structural, not config-omission.** The runbook MUST cite the comment block in `scripts/required-checks.txt` explaining why `CodeQL` is intentionally omitted (the ruleset pins it to `integration_id: 57789`, which a `github-actions[bot]`-posted synthetic cannot satisfy). This is the most common operator confusion vector when staring at a 4-entry config.
+
+### New Considerations Discovered
+
+- **The runbook is itself an enforcement-broken-link surface.** Three sibling runbooks now reference each other; if a future PR moves any of them, the cross-link bidirection breaks silently. No git hook validates cross-links between runbooks. Mitigation: keep cross-references symbol-stable (filename, not deep anchors).
+- **The lint covers PR-creation only, not bot-PR runtime drift.** A bot workflow whose synthetic-posting `gh api` calls return non-2xx at runtime (e.g., token scope regression) will deadlock auto-merge identically to a missing synthetic — but the lint is green. Documented as a "what this lint is NOT" boundary so the next operator with a stuck bot PR doesn't re-read the runbook expecting an answer.
 
 Closes #3546. Documentation-only follow-up to PR #3543 (R15 mitigation for #2719). Adds a runbook entry under `knowledge-base/engineering/ops/runbooks/` describing the `lint-bot-statuses` CI gate's enforcement footprint: what it guards, what it skips, how to diagnose a failure, how to extend it.
 
@@ -146,21 +173,43 @@ Read this runbook when:
 
 **Filled content notes for the author at /work time:**
 
-- The "What this lint is (and isn't)" section MUST explicitly state: it is a PR-time pre-commit-shaped guard against bot-PR auto-merge deadlock, NOT a code-quality lint and NOT a runtime check on the bot's actual PR — those run later, in the bot workflow itself.
+- The "What this lint is (and isn't)" section MUST explicitly state: it is a PR-time pre-commit-shaped guard against bot-PR auto-merge deadlock, NOT a code-quality lint and NOT a runtime check on the bot's actual PR — those run later, in the bot workflow itself. **Add:** it is also NOT a runtime check on the bot workflow's synthetic-posting `gh api` calls; a token-scope regression that makes the API call 4xx will deadlock auto-merge identically while the lint stays green (see Risks).
 - The "as-built behavior" subsection for completeness must call out: the parser preserves internal whitespace (multi-word check names like `"skill-security-scan PR gate"` are one check, not three), it strips a single matching pair of surrounding double quotes from config entries, and it strips trailing `#`-comments. Reference the learning file `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md` as the cautionary tale.
 - The "as-built behavior" subsection for the App-token escape hatch must explain the `has_shell_pr_create` heuristic: `gh pr create` inside a YAML `run:` block triggers the synthetic-check requirement; `gh pr create` inside a `prompt:` block (claude-code-action) is exempt because the App token re-triggers real CI.
+- **NEW:** the "as-built behavior" subsection MUST document the hardcoded scope: `PATTERN="scheduled-*.yml"` in both scripts. Bot workflows that don't match the `scheduled-*` glob (hypothetical `monthly-*.yml`, `hourly-*.yml`, ad-hoc `release-*.yml` using `GITHUB_TOKEN` + `gh pr create`) are invisible to the lint. Operators introducing a new bot-PR pattern outside this glob must either rename to `scheduled-<name>.yml` or expand the script's `PATTERN` (in a separate PR with a test).
+- **NEW:** the "as-built behavior" subsection MUST cite the comment block in `scripts/required-checks.txt` explaining why `CodeQL` is intentionally omitted. Verbatim phrasing target: "CodeQL is intentionally omitted because the CI Required ruleset pins it to integration_id 57789 (GitHub Advanced Security app); a synthetic posted by github-actions[bot] (integration_id 15368) cannot satisfy the match. The default-setup neutral conclusion satisfies the requirement on bot PRs — see `codeql-bot-coverage.md`."
+- **NEW:** the "Drift triage" section MUST include the canonical operator-debug commands verified live on 2026-05-11:
+
+  ```bash
+  # Find the most recent CI run on main
+  RUN_ID=$(gh run list --workflow=ci.yml --branch=main --limit=1 \
+    --json databaseId --jq '.[0].databaseId')
+
+  # Inspect the lint-bot-statuses job specifically
+  gh run view "$RUN_ID" --json jobs \
+    --jq '.jobs[] | select(.name == "lint-bot-statuses")'
+
+  # If red, fetch the job log
+  gh run view --job "$(gh run view "$RUN_ID" --json jobs \
+    --jq '.jobs[] | select(.name == "lint-bot-statuses") | .databaseId')" --log
+  ```
+
+  Do NOT prescribe `gh run list --workflow=lint-bot-statuses.yml` — there is no such workflow file (this is exactly the broken citation in `skill-security-scan-required-check.md:33` that Phase 2 fixes).
 - The "Drift triage" section must enumerate the five failure modes named in the acceptance criterion above, each with: error-message shape, root-cause guess, fix path.
 - The "How to extend" section must include the three-step recipe for adding a new required check (with exact commands using `grep -F` for verification, no shell substitution in the doc per project convention).
+- **NEW:** the "How to extend" section MUST state that the lint is **CI-only**: `lefthook.yml` does NOT invoke `lint-bot-synthetic-completeness.sh` or `lint-bot-synthetic-statuses.sh`. Operators editing a `scheduled-*.yml` workflow should run `bash scripts/lint-bot-synthetic-completeness.sh && bash scripts/lint-bot-synthetic-statuses.sh` manually before pushing to avoid a roundtrip through CI red.
 
-### Phase 2 — Bidirectional cross-references
+### Phase 2 — Bidirectional cross-references + parent runbook fix
 
 **Files to edit:**
 
-- `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md` — verify line 30-ish reference (`lint-bot-statuses is green on main`) and ensure it links to the new runbook path.
+- `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md` — TWO edits:
+  - **Fix the broken citation** at the `**lint-bot-statuses is green on main.**` block. The current text uses `gh run list --workflow=lint-bot-statuses.yml` which is a nonexistent file. Replace with the canonical two-step invocation documented in the new runbook's Drift triage section (`gh run list --workflow=ci.yml … --jq '.[0].databaseId'` then `gh run view "$RUN_ID" --json jobs --jq '.jobs[] | select(.name == "lint-bot-statuses")'`).
+  - **Add the bidirectional cross-link** to the new runbook.
 - `knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md` — add row in `## Cross-references` pointing to the new runbook.
 - `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md` — add row in cross-references section pointing to the new runbook.
 
-These three edits are mechanical link additions, ~1-3 lines each.
+Mechanical link additions are ~1-3 lines each. The broken-citation fix in the parent runbook is the only edit that materially changes operator behavior — call it out in the PR body so the reviewer doesn't gloss past it as "another link tweak."
 
 ### Phase 3 — Verification
 
@@ -175,13 +224,22 @@ head -10 knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md | grep -F 
 grep -l 'lint-bot-statuses.md' knowledge-base/engineering/ops/runbooks/*.md | wc -l
 # Expect: ≥ 3 (skill-security-scan-required-check, codeql-bot-coverage, ruleset-bypass-drift)
 
-# 3. The runbook itself links to its `on_page_for` script and the sibling lint.
+# 3. The broken `--workflow=lint-bot-statuses.yml` citation is gone from the parent runbook.
+! grep -F 'gh run list --workflow=lint-bot-statuses.yml' \
+  knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md
+# Expect: exit 0 (no match) after Phase 2 fix.
+
+# 4. The new runbook contains the canonical operator-debug invocation (verified live 2026-05-11).
+grep -F 'gh run view' knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md
+grep -F 'select(.name == "lint-bot-statuses")' knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md
+
+# 5. The runbook itself links to its `on_page_for` script and the sibling lint.
 grep -F 'scripts/lint-bot-synthetic-completeness.sh' knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md
 grep -F 'scripts/lint-bot-synthetic-statuses.sh' knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md
 grep -F 'scripts/required-checks.txt' knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md
 grep -F '.github/actions/bot-pr-with-synthetic-checks/action.yml' knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md
 
-# 4. CI lint still passes (sanity — this PR does not touch the lint or any
+# 6. CI lint still passes (sanity — this PR does not touch the lint or any
 # scheduled workflow, but verify nothing accidentally got included).
 bash scripts/lint-bot-synthetic-statuses.sh
 bash scripts/lint-bot-synthetic-completeness.sh
@@ -191,7 +249,7 @@ No new tests required — this is documentation only, and the lint behavior bein
 
 ## Files to Edit
 
-- `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md` — verify/normalize the existing cross-reference to `lint-bot-statuses` so it links to the new runbook path.
+- `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md` — TWO edits: (1) replace the broken `gh run list --workflow=lint-bot-statuses.yml` citation with the canonical `ci.yml`-job-scoped invocation; (2) add cross-reference link to the new runbook.
 - `knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md` — add cross-reference row.
 - `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md` — add cross-reference row.
 
@@ -229,6 +287,9 @@ Per `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex (schemas, migratio
 - **Documentation drift.** The runbook restates behavior that lives in two shell scripts. If the scripts diverge from the runbook in a future PR, the runbook becomes a stale source. **Mitigation:** `on_page_for: scripts/lint-bot-synthetic-completeness.sh` frontmatter makes the runbook discoverable from the script via `rg`. The runbook does not duplicate the parser regex or the exact exit codes — those live in the script. The runbook describes the contract (what the script gates, why) at a level less brittle to refactor.
 - **The runbook claims behavior that is not literally true if the parser regresses.** The strip-all-whitespace bug from #3543 (now fixed) is the canonical example. **Mitigation:** the runbook treats the parser's whitespace-preservation rule as documented invariant and cross-references the learning file. A future regression that violates the invariant will fail `plugins/soleur/test/lint-bot-synthetic-statuses.test.sh` (or its sibling that should exist for completeness — see Test Strategy below).
 - **Cross-reference completeness.** Three sibling runbooks need updating; missing one leaves the new runbook orphaned in one direction. **Mitigation:** Phase 3 verification grep counts mentioning files ≥ 3.
+- **NEW: Operator-debug invocation drift.** The parent runbook `skill-security-scan-required-check.md` line 33 currently uses `gh run list --workflow=lint-bot-statuses.yml`, which fails silently with `unknown workflow` — there is no `lint-bot-statuses.yml` file. The first operator who hit this would have wasted 5-20 minutes trying to find the file. Phase 2 fixes this drift inline with the broken-citation edit. **Mitigation cost:** ~2 lines changed in the parent runbook; bundled in the same PR so the broken citation never co-exists with the new correct runbook.
+- **NEW: Silent scope gap on non-`scheduled-*` bot workflows.** Both lint scripts hardcode `PATTERN="scheduled-*.yml"`. A future bot workflow named `monthly-foo.yml`, `hourly-bar.yml`, or `release-baz.yml` that creates PRs via `GITHUB_TOKEN` is invisible to the lint. **Mitigation:** the runbook documents the scope explicitly under "How to extend" so the next operator either (a) renames to `scheduled-*` or (b) opens a scoped follow-up to widen the script's `PATTERN` with a test. The plan does NOT propose widening — that's a behavior-change PR with its own `requires_cpo_signoff` framing.
+- **NEW: Runtime-vs-PR-time scope confusion.** The lint guards against missing-synthetic at PR time; it does NOT catch a bot workflow whose synthetic-posting `gh api` calls return 4xx at runtime (token-scope regression, rate-limit, API outage). Both failure modes produce the same operator-observable symptom (bot PR stuck in auto-merge queue). **Mitigation:** the runbook's "What this lint is (and isn't)" section explicitly draws this boundary so the operator with a stuck bot PR doesn't re-read the lint runbook expecting the answer — they should instead check the bot workflow's run log directly.
 
 ## Test Strategy
 
@@ -265,6 +326,12 @@ If the runbook author finds during writing that the script's documented behavior
 5. Avoid prescribing exact line numbers when cross-referencing the lint scripts (`scripts/lint-bot-synthetic-completeness.sh:32`). Per constitution §Code Style "Code comments referencing other code MUST use grep-stable symbol anchors", use symbol-stable references — e.g., "the config-line parser in `lint-bot-synthetic-completeness.sh` (the `while IFS= read -r line` loop)".
 
 6. A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. The threshold for this plan is `none`; the docs-only justification is recorded inline. Do not leave the section blank.
+
+7. **NEW: Operator-debug commands must be verified live.** The plan's "Drift triage" section embeds `gh run view --json jobs --jq '.jobs[] | select(.name == "lint-bot-statuses")'`. Verified live on 2026-05-11 against run `25668576113` → `{"conclusion":"success","databaseId":75347492121,"name":"lint-bot-statuses"}`. Do NOT propagate the broken `gh run list --workflow=lint-bot-statuses.yml` invocation from the parent runbook — that's exactly the drift this PR fixes.
+
+8. **NEW: The runbook is operator-doc, not API doc.** Do not embed the exact bash regex from `lint-bot-synthetic-completeness.sh` (`grep -qE "\-f name=${escaped}([[:space:]]|$)"` etc.) in the runbook. The contract is "the lint checks for synthetic-posting via `-f name=…` or `-f context=…`"; the regex implementation belongs in the script and changes are caught by `plugins/soleur/test/lint-bot-synthetic-statuses.test.sh`. Embedding the regex creates a documented-API surface that has no test coverage.
+
+9. **NEW: When the parent runbook's `lint-bot-statuses` citation is fixed, double-check the surrounding shell snippet's `--branch=main --limit=1 --json status,conclusion` arguments still apply. The corrected invocation is `--workflow=ci.yml` (not the file `lint-bot-statuses.yml`) followed by a second `gh run view --json jobs --jq '...'` call. The two-step shape is unavoidable: GitHub's CLI does not expose a job-scoped `run list` query.
 
 ## References
 
