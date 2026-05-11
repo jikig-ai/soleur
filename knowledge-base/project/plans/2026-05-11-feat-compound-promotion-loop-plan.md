@@ -925,6 +925,23 @@ Original plan: AC1-AC19. With spec-flow additions: **AC1-AC25** (added AC20-AC25
 
 - No new files; FR10/FR11/FR12 logic lives in `scripts/compound-promote.sh` (driver-side) and the claude-code-action prompt (LLM-side).
 
+## GDPR-Gate Findings (plan-time invocation)
+
+Invoked: `/soleur:gdpr-gate "feat-compound-promotion-loop plan + spec ..."` on 2026-05-11.
+
+**No Critical findings.** No new SQL/migrations/auth flows; canonical regex matches no files in the change set.
+
+| `check_id` | Severity | Resolution |
+|---|---|---|
+| `GDPR-Chapter-V` — Anthropic processor not in compliance-posture.md Vendor DPAs | Important | **AC26 (NEW):** verify Anthropic DPA row present in `compliance-posture.md` before merge of #3559. File separate `compliance/improvement` issue for the pre-existing systemic gap (Anthropic is processor for the gdpr-gate skill itself + every claude-code-action workflow; the row should exist independent of #2720). Block ship until row lands. |
+| `LC-04` — DPIA reminder for self-improving cascading surface | Suggestion | Add `compliance-posture.md` Active Item: "DPIA assessment for compound-promotion-loop (Art. 35 candidate): defer until first 4 weeks of operation generate empirical processing-volume data. Re-evaluate post-bootstrap." Phase 4 already adds an Active Item for #2720; extend the Notes column to mention DPIA candidacy. |
+| `TS-04` — Test fixture synthesized-PII assertion | Suggestion | **AC27 (NEW):** Phase 2 fixture files contain ONLY synthesized PII (`@example.com`, zero-UUIDs). Test asserts no real-PII regex patterns appear in `tests/fixtures/compound-promote/`. |
+| `LC-01` — Operator consent inline disclosure | Suggestion | **Phase 4 update:** add a 4-line inline comment to `promotion-config.yml.example` documenting (a) data sent to Anthropic, (b) public-repo PR-body quoting, (c) pre-promotion gdpr-scan, (d) kill-switch path. |
+
+### Updated AC count (post-gdpr-gate)
+
+Original plan: AC1-AC19. With spec-flow additions: AC20-AC25. With gdpr-gate additions: **AC26-AC27**. Total: AC1-AC27.
+
 ## Pre-submission checklist (filled at /work completion)
 
 - [x] Title is searchable: `feat: compound promotion loop (self-healing CI sweep)`.
