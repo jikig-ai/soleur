@@ -94,6 +94,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
   it("persists session_id via updateConversationFor when runner fires onSessionIdCaptured", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+    const onSessionIdPersisted = vi.fn();
 
     const stubRunner = {
       dispatch: vi.fn(async (args: { events: { onSessionIdCaptured?: (id: string) => void } }) => {
@@ -116,6 +117,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
       currentRouting: { kind: "soleur_go_pending" },
       sendToClient,
       persistActiveWorkflow,
+      onSessionIdPersisted,
     });
 
     const calls = persistSessionIdCalls();
@@ -125,6 +127,10 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
     expect(conversationId).toBe("conv-writer-1");
     expect(patch).toEqual({ session_id: "sess-Y" });
     expect(opts.expectMatch).toBe(true);
+    // Cache-update callback fires synchronously so the next chat-case
+    // warm-cache turn forwards the just-persisted value (Perf F1).
+    expect(onSessionIdPersisted).toHaveBeenCalledTimes(1);
+    expect(onSessionIdPersisted).toHaveBeenCalledWith("sess-Y");
   });
 
   it("does NOT re-write when runner does not fire onSessionIdCaptured", async () => {
@@ -158,6 +164,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
   it("clears stale session_id when runner throws non-KeyInvalidError with sessionId provided", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+    const onSessionIdPersisted = vi.fn();
 
     const stubRunner = {
       dispatch: vi.fn(async () => {
@@ -181,6 +188,7 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
       sessionId: "sess-stale",
       sendToClient,
       persistActiveWorkflow,
+      onSessionIdPersisted,
     });
 
     const calls = clearStaleSessionIdCalls();
@@ -189,6 +197,10 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
     expect(userId).toBe("u-stale-1");
     expect(conversationId).toBe("conv-stale-1");
     expect(patch).toEqual({ session_id: null });
+    // Cache-update callback fires alongside the DB clear so the next
+    // chat-case warm-cache turn does not forward the stale value.
+    expect(onSessionIdPersisted).toHaveBeenCalledTimes(1);
+    expect(onSessionIdPersisted).toHaveBeenCalledWith(null);
   });
 
   it("does NOT clear session_id when runner throws KeyInvalidError", async () => {
@@ -220,6 +232,18 @@ describe("cc-dispatcher — session_id writer (#3266 Phase 4)", () => {
     });
 
     expect(clearStaleSessionIdCalls()).toHaveLength(0);
+    // Positive-control: the KeyInvalidError branch must surface
+    // errorCode=key_invalid to the client. Without this, a regression
+    // that fell through to the stale-clear branch could still pass the
+    // "does NOT clear" assertion vacuously.
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, msg]) =>
+        msg && typeof msg === "object" && (msg as { type?: string }).type === "error",
+    );
+    expect(errorCalls.length).toBeGreaterThan(0);
+    expect((errorCalls[0]![1] as { errorCode?: string }).errorCode).toBe(
+      "key_invalid",
+    );
   });
 
   it("does NOT clear session_id when runner throws non-KeyInvalidError but no sessionId was provided", async () => {

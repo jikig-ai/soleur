@@ -805,6 +805,18 @@ export interface DispatchSoleurGoArgs {
    * `agent-runner.ts:sendUserMessage` flow exactly. See #3254.
    */
   attachments?: AttachmentRef[];
+  /**
+   * #3266 — fire-and-forget hook that the dispatcher invokes after a
+   * successful `persistCcSessionId` and after a `clearCcSessionId`. The
+   * ws-handler uses it to mutate the in-process `ClientSession.sessionId`
+   * cache so a subsequent chat-case warm-cache turn forwards the
+   * just-persisted value (instead of the stale `null` seeded on
+   * materialization). Without this, runner-reap-during-live-WS scenarios
+   * use `args.sessionId = null` on the next cold-Query construction,
+   * defeating the prefill guard's history-probe branch. Receives `null`
+   * on the stale-clear path.
+   */
+  onSessionIdPersisted?: (sessionId: string | null) => void;
 }
 
 /**
@@ -852,6 +864,11 @@ async function clearCcSessionId(args: {
   userId: string;
   conversationId: string;
 }): Promise<void> {
+  // Default `expectMatch: false` — a concurrent close/archive race
+  // (legitimate 0-rows outcome) is silent success here, matching legacy
+  // `agent-runner.ts` stale-clear parity. The composite-key invariant
+  // (`.eq("id", ...).eq("user_id", ...)`) is enforced inside the wrapper
+  // regardless. Real DB errors still mirror to Sentry.
   const { ok, error } = await updateConversationFor(
     args.userId,
     args.conversationId,
@@ -859,7 +876,6 @@ async function clearCcSessionId(args: {
     {
       feature: "cc-dispatcher",
       op: "clear-stale-session-id",
-      expectMatch: true,
     },
   );
   if (!ok) {
@@ -895,6 +911,7 @@ export async function dispatchSoleurGo(
     documentExtractMeta,
     workspacePath: callerWorkspacePath,
     attachments,
+    onSessionIdPersisted,
   } = args;
 
   // Verify conversation ownership AND bump `last_active` in a single
@@ -1121,9 +1138,15 @@ export async function dispatchSoleurGo(
       // the aggregate conversation cost reader lands.
     },
     onSessionIdCaptured: (capturedSessionId) => {
-      // #3266 — fire-and-forget persist. The user's current turn does
-      // NOT depend on this write; failure mirrors to Sentry inside
-      // `updateConversationFor`.
+      // #3266 — fire-and-forget DB persist + synchronous in-process cache
+      // update. The cache update is load-bearing for the
+      // runner-reap-but-WS-alive scenario: on the next chat-case turn the
+      // ws-handler's warm-cache branch forwards `session.sessionId` to
+      // `dispatchSoleurGo`, and a stale `null` would defeat the prefill
+      // guard's history-probe activation. Fires synchronously BEFORE the
+      // async DB write commits so the next turn can read the value even
+      // if the user fires a follow-up before persistence lands.
+      onSessionIdPersisted?.(capturedSessionId);
       void persistCcSessionId({
         userId,
         conversationId,
@@ -1183,12 +1206,21 @@ export async function dispatchSoleurGo(
     } else {
       // #3266 R7 — stale-resume cleanup. The dispatch was attempted with
       // a persisted session_id but the runner rejected for a reason
-      // other than KeyInvalidError (missing session file, schema drift,
-      // SDK internal). Clear the stale value so the next cold-Query
-      // construction does NOT retry the same bad session_id. Mirrors
-      // legacy `agent-runner.ts` stale-clear behavior. Fire-and-forget;
-      // the user-facing generic-error message lands either way.
+      // other than KeyInvalidError. Plan §R7 documents this trade-off:
+      // the predicate is broad ("any non-KeyInvalidError"), which means
+      // a transient backend error (network blip, BYOK fetch failure,
+      // workspace patch failure) will also clear a legitimate session_id
+      // and force a cold-start on the next turn. Acceptable cost: the
+      // SDK rebuilds from the persisted `messages` rows on next dispatch
+      // and the prefill guard's history-probe handles assistant-
+      // terminated threads — at most one turn of degraded latency.
+      // Narrowing to typed SDK error classes is tracked separately and
+      // is out of scope for the activation PR. Fire-and-forget; the
+      // user-facing generic-error message lands either way. Update the
+      // in-process cache alongside the DB write so the next chat-case
+      // warm-cache turn does not forward the now-stale value.
       if (sessionId) {
+        onSessionIdPersisted?.(null);
         void clearCcSessionId({ userId, conversationId });
       }
       sendToClient(userId, {

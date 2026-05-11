@@ -199,6 +199,66 @@ describe("soleur-go-runner — onSessionIdCaptured (#3266 Phase 3)", () => {
     await flush();
   });
 
+  it("does NOT fire on warm-resume cold-Query (state seeded with sessionId; SDK echoes same value)", async () => {
+    // Steady-state scenario: cc-dispatcher's previous cold-Query persisted
+    // sess-W to DB; ws-handler now forwards it back as args.sessionId on
+    // the next cold-Query construction. The SDK echoes the same value in
+    // its first result. The runner must NOT re-fire the writer.
+    const mock = createMockQuery();
+    const factory = vi.fn<QueryFactory>(() => mock.query);
+    const runner = createSoleurGoRunner({ queryFactory: factory });
+    const events = makeEvents();
+    const persist = vi.fn().mockResolvedValue(undefined);
+
+    await runner.dispatch({
+      conversationId: "c-cap-warm",
+      userId: "u1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: persist,
+      sessionId: "sess-W",
+    });
+
+    mock.emit(makeResult({ sessionId: "sess-W" }));
+    await flush();
+
+    expect(events.onSessionIdCaptured).not.toHaveBeenCalled();
+
+    mock.finish();
+    await flush();
+  });
+
+  it("fires on SDK rebind within the same state (state had sess-A, SDK returns sess-B)", async () => {
+    // Defensive: should not happen in practice (SDK does not reuse
+    // session_ids across Queries) but a rebind MUST fire to keep the
+    // persisted value aligned with the runner's in-memory state.
+    const mock = createMockQuery();
+    const factory = vi.fn<QueryFactory>(() => mock.query);
+    const runner = createSoleurGoRunner({ queryFactory: factory });
+    const events = makeEvents();
+    const persist = vi.fn().mockResolvedValue(undefined);
+
+    await runner.dispatch({
+      conversationId: "c-cap-rebind",
+      userId: "u1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: persist,
+      sessionId: "sess-A",
+    });
+
+    mock.emit(makeResult({ sessionId: "sess-B" }));
+    await flush();
+
+    expect(events.onSessionIdCaptured).toHaveBeenCalledTimes(1);
+    expect(events.onSessionIdCaptured).toHaveBeenCalledWith("sess-B");
+
+    mock.finish();
+    await flush();
+  });
+
   it("does NOT fire when the runner never observes a non-empty session_id", async () => {
     const mock = createMockQuery();
     const factory = vi.fn<QueryFactory>(() => mock.query);

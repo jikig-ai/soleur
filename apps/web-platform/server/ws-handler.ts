@@ -951,6 +951,20 @@ export async function dispatchSoleurGoForConversation(
     attachments,
     workspacePath,
     sessionId,
+    // #3266 — refresh the in-process `ClientSession.sessionId` cache
+    // alongside the DB write/clear so a subsequent chat-case warm-cache
+    // turn forwards the just-persisted value. Without this, runner-reap-
+    // while-WS-alive uses the stale seeded `null` on the next cold-Query
+    // construction and the prefill guard's history-probe branch never
+    // activates. Guards on `liveSession.conversationId === conversationId`
+    // to avoid clobbering a value bound to a different conversation that
+    // the user switched to mid-dispatch.
+    onSessionIdPersisted: (nextSessionId) => {
+      const liveSession = sessions.get(userId);
+      if (liveSession && liveSession.conversationId === conversationId) {
+        liveSession.sessionId = nextSessionId;
+      }
+    },
     ...documentArgs,
   });
 }
