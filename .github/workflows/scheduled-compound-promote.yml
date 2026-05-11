@@ -240,16 +240,40 @@ jobs:
             # Synthetic checks — inlined so the draft PR can be marked ready
             # without waiting for CI on bot-authored content. Mirrors the
             # bot-pr-with-synthetic-checks composite's check set.
+            # NOTE: each `-f name=<literal>` is enumerated explicitly so
+            # scripts/lint-bot-synthetic-completeness.sh (literal grep, not
+            # bash-aware) can match each required-check name. A shell-loop
+            # over a list would post the same synthetics at runtime but the
+            # linter would FAIL. Mirrors scripts/required-checks.txt.
             COMMIT_SHA=$(git rev-parse HEAD)
-            for check in test dependency-review e2e "skill-security-scan PR gate"; do
-              gh api "repos/${REPO}/check-runs" \
-                -f name="$check" \
-                -f head_sha="$COMMIT_SHA" \
-                -f status=completed \
-                -f conclusion=success \
-                -f "output[title]=Bot PR" \
-                -f "output[summary]=self-healing/auto promotion — operator review required"
-            done
+            gh api "repos/${REPO}/check-runs" \
+              -f name=test \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=Bot PR" \
+              -f "output[summary]=self-healing/auto promotion — operator review required"
+            gh api "repos/${REPO}/check-runs" \
+              -f name=dependency-review \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=Bot PR" \
+              -f "output[summary]=self-healing/auto promotion — operator review required"
+            gh api "repos/${REPO}/check-runs" \
+              -f name=e2e \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=Bot PR" \
+              -f "output[summary]=self-healing/auto promotion — operator review required"
+            gh api "repos/${REPO}/check-runs" \
+              -f name="skill-security-scan PR gate" \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=Bot PR" \
+              -f "output[summary]=self-healing/auto promotion — operator review required"
             gh api "repos/${REPO}/check-runs" \
               -f name=cla-check \
               -f head_sha="$COMMIT_SHA" \
