@@ -126,10 +126,10 @@ None. (Verified via `gh issue list --label code-review --state open --json numbe
 
 ### Pre-merge (PR)
 
-- [ ] `knowledge-base/legal/compliance-posture.md` line 2 reads `last_updated: 2026-05-10`
-- [ ] No other lines in `compliance-posture.md` modified (verify via `git diff --stat` showing exactly 1 file, exactly 1 insertion + 1 deletion)
-- [ ] PR body uses `Closes #3519` (issue auto-closes at merge — there is no post-merge step)
-- [ ] `/soleur:gdpr-gate` invocation skipped per AGENTS.md `hr-gdpr-gate-on-regulated-data-surfaces`: the canonical regex covers schemas, migrations, auth flows, API routes, `.sql` files — none match a frontmatter-only edit to a docs-tree markdown file. The compliance-posture.md file itself is the *output* of the gdpr-gate handshake, not a regulated-data surface.
+- [x] `knowledge-base/legal/compliance-posture.md` line 2 reads `last_updated: 2026-05-10`
+- [x] No other lines in `compliance-posture.md` modified (verify via `git diff --stat` showing exactly 1 file, exactly 1 insertion + 1 deletion)
+- [x] PR body uses `Closes #3519` (issue auto-closes at merge — there is no post-merge step)
+- [x] `/soleur:gdpr-gate` invocation skipped per AGENTS.md `hr-gdpr-gate-on-regulated-data-surfaces`: the canonical regex covers schemas, migrations, auth flows, API routes, `.sql` files — none match a frontmatter-only edit to a docs-tree markdown file. The compliance-posture.md file itself is the *output* of the gdpr-gate handshake, not a regulated-data surface.
 
 ### Post-merge (operator)
 
