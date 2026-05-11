@@ -14,6 +14,24 @@ set -euo pipefail
 
 REPO="jikig-ai/soleur"
 RULESET_NAME="CI Required"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+CANONICAL_BYPASS_FILE="${SCRIPT_DIR}/ci-required-ruleset-canonical-bypass-actors.json"
+
+# bypass_actors source-of-truth lives in a sibling JSON file shared with
+# .github/workflows/scheduled-ruleset-bypass-audit.yml (#3544). Editing
+# the array here is a workflow violation -- update the JSON instead so
+# the audit's canonical reference stays in sync. R10 Sharp Edge ("JSON
+# payload via heredoc into a file, then --input \"\$payload\"") still
+# applies; the canonical JSON is read via jq --slurpfile and merged
+# into the heredoc payload below.
+if [[ ! -f "$CANONICAL_BYPASS_FILE" ]]; then
+  echo "ERROR: canonical bypass_actors file not found: $CANONICAL_BYPASS_FILE" >&2
+  exit 1
+fi
+if ! jq -e 'type == "array"' "$CANONICAL_BYPASS_FILE" >/dev/null 2>&1; then
+  echo "ERROR: $CANONICAL_BYPASS_FILE is not a JSON array" >&2
+  exit 1
+fi
 
 # Pre-flight: verify bot workflows on main already have synthetic test status
 main_content=$(gh api "repos/${REPO}/contents/.github/workflows/scheduled-weekly-analytics.yml" --jq '.content' 2>/dev/null || true)
@@ -30,11 +48,14 @@ if [[ -n "$existing" ]]; then
   exit 0
 fi
 
-# Write payload to temp file to avoid shell escaping issues (per institutional learning)
+# Write payload to temp file to avoid shell escaping issues (per institutional learning).
+# bypass_actors is sourced from the canonical JSON file via --slurpfile so it
+# stays in sync with the daily audit's reference (#3544).
 payload=$(mktemp)
-trap 'rm -f "$payload"' EXIT
+skeleton=$(mktemp)
+trap 'rm -f "$payload" "$skeleton"' EXIT
 
-cat > "$payload" << 'EOF'
+cat > "$skeleton" << 'EOF'
 {
   "name": "CI Required",
   "target": "branch",
@@ -67,21 +88,12 @@ cat > "$payload" << 'EOF'
         ]
       }
     }
-  ],
-  "bypass_actors": [
-    {
-      "actor_id": null,
-      "actor_type": "OrganizationAdmin",
-      "bypass_mode": "pull_request"
-    },
-    {
-      "actor_id": 5,
-      "actor_type": "RepositoryRole",
-      "bypass_mode": "pull_request"
-    }
   ]
 }
 EOF
+
+# Merge canonical bypass_actors into the skeleton.
+jq --slurpfile bypass "$CANONICAL_BYPASS_FILE" '. + {bypass_actors: $bypass[0]}' "$skeleton" > "$payload"
 
 echo "Creating '${RULESET_NAME}' ruleset on ${REPO}..."
 result=$(gh api "repos/${REPO}/rulesets" -X POST --input "$payload")
