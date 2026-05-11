@@ -1,22 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Lint: scheduled workflows that create PRs via GITHUB_TOKEN must post
-# synthetic check-runs for ALL required checks.
+# Lint: bot workflows that create PRs via GITHUB_TOKEN must post synthetic
+# check-runs for ALL required checks.
 #
 # Bot PRs created via GITHUB_TOKEN do not trigger CI (GitHub prevents
 # infinite loops). Without synthetic check-runs for every required check,
 # auto-merge is permanently blocked.
 #
+# Scope is content-based (since #3548): the lint walks every workflow in
+# .github/workflows/, exempts skill-security-scan-pr-trailer.yml (real CI,
+# not a bot workflow), and applies a two-part predicate:
+#
+#   (1) `gh pr create` appears inside a shell `run:` block (not a prompt:
+#       block, not a YAML-level comment). The existing has_shell_pr_create
+#       helper handles this.
+#   (2) `gh api .../check-runs` appears inside a shell `run:` block — i.e.,
+#       the workflow posts synthetic check-runs inline rather than via the
+#       shared bot-pr-with-synthetic-checks composite action. Composite-
+#       action consumers are covered by the action's CHECK_NAMES list and
+#       are intentionally exempt from this lint.
+#
 # Workflows where `gh pr create` only appears inside claude-code-action
 # prompt blocks are exempt -- the App token (app/claude) triggers real CI.
+# These print a `skip:` line for operator visibility.
 #
-# Refs: #826, #1468
+# Refs: #826, #1468, #3543, #3548
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKFLOW_DIR="${WORKFLOW_DIR:-.github/workflows}"
 CONFIG_FILE="${CONFIG_FILE:-${SCRIPT_DIR}/required-checks.txt}"
-PATTERN="scheduled-*.yml"
 
 # --- Load required checks from config ---
 
@@ -56,24 +69,27 @@ echo "---"
 # Returns 0 (true) if gh pr create appears in a YAML run: block,
 # returns 1 (false) if it only appears in prompt: blocks or similar.
 
-has_shell_pr_create() {
-  local file="$1"
+# run_block_contains scans `file` for `pattern` (literal substring) inside
+# shell `run:` blocks. Returns 0 iff pattern is found on a line within any
+# run: block. Used as the load-bearing distinguisher between header-comment
+# mentions (e.g., "synthetic check-runs satisfy") and real inline calls
+# (`gh api .../check-runs`). YAML-level `#` comments and `prompt:` blocks
+# are excluded by construction.
+run_block_contains() {
+  local file="$1" pattern="$2"
   local in_run=false
   local run_indent=0
 
   while IFS= read -r wfline; do
-    # Detect `run:` lines -- YAML shell steps
     if [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]?\|?[[:space:]]*$ ]] || \
        [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]+[^\|] ]]; then
       in_run=true
-      # Capture indentation level of the run: key
       local prefix="${BASH_REMATCH[1]}"
       run_indent=${#prefix}
       continue
     fi
 
     if $in_run; then
-      # Check if we've left the run: block (a new YAML key at same or lesser indent)
       if [[ "$wfline" =~ ^([[:space:]]*)[a-zA-Z_-]+: ]]; then
         local key_prefix="${BASH_REMATCH[1]}"
         if [[ ${#key_prefix} -le $run_indent ]]; then
@@ -82,7 +98,46 @@ has_shell_pr_create() {
         fi
       fi
 
-      if [[ "$wfline" == *"gh pr create"* ]]; then
+      if [[ "$wfline" == *"$pattern"* ]]; then
+        return 0
+      fi
+    fi
+  done < "$file"
+
+  return 1
+}
+
+has_shell_pr_create() {
+  run_block_contains "$1" "gh pr create"
+}
+
+# Returns 0 iff the file contains `gh api ... check-runs` on the same line
+# inside a shell `run:` block. Both `gh api` and `check-runs` must co-occur
+# on the line (mirrors scheduled-content-publisher.yml's multi-line shape
+# where each `gh api` call repeats both tokens on its continuation lines).
+# A naive `grep -q check-runs` would false-positive on header comments
+# like rule-metrics-aggregate.yml's "synthetic check-runs satisfy" line.
+has_inline_check_runs_post() {
+  local file="$1" in_run=false run_indent=0
+  while IFS= read -r wfline; do
+    if [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]?\|?[[:space:]]*$ ]] || \
+       [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]+[^\|] ]]; then
+      in_run=true
+      local prefix="${BASH_REMATCH[1]}"
+      run_indent=${#prefix}
+      continue
+    fi
+
+    if $in_run; then
+      if [[ "$wfline" =~ ^([[:space:]]*)[a-zA-Z_-]+: ]]; then
+        local key_prefix="${BASH_REMATCH[1]}"
+        if [[ ${#key_prefix} -le $run_indent ]]; then
+          in_run=false
+          continue
+        fi
+      fi
+
+      if [[ "$wfline" == *"gh api"* && "$wfline" == *"check-runs"* ]]; then
         return 0
       fi
     fi
@@ -97,17 +152,30 @@ failures=0
 checked=0
 skipped=0
 
-for file in "$WORKFLOW_DIR"/$PATTERN; do
+for file in "$WORKFLOW_DIR"/*.yml; do
   [[ -f "$file" ]] || continue
+
+  # Exclude skill-security-scan-pr-trailer.yml: real CI workflow on
+  # pull_request_target, not a bot PR-creator. Matches the exclusion in
+  # scripts/audit-bot-codeql-coverage.sh.
+  [[ "$file" == *skill-security-scan-pr-trailer* ]] && continue
 
   # Only check files that create PRs (anywhere in the file)
   grep -q "gh pr create" "$file" || continue
 
   # Check if gh pr create appears in a shell run: block
   if ! has_shell_pr_create "$file"; then
-    # gh pr create only in prompt: blocks (App token handles CI)
+    # gh pr create only in prompt: blocks (App token handles CI) or in
+    # YAML-level comments (e.g., pr-auto-close-scanner.yml).
     skipped=$((skipped + 1))
-    echo "skip: $file (PR creation via claude-code-action App token)"
+    echo "skip: $file (no shell-level PR creation — App token or comment-only)"
+    continue
+  fi
+
+  # Composite-action consumers do not post synthetics inline — coverage is
+  # provided by .github/actions/bot-pr-with-synthetic-checks/action.yml.
+  # Skip silently; the action itself ensures correctness for these files.
+  if ! has_inline_check_runs_post "$file"; then
     continue
   fi
 
@@ -145,7 +213,7 @@ if [[ "$checked" -eq 0 && "$skipped" -gt 0 ]]; then
 fi
 
 if [[ "$checked" -eq 0 ]]; then
-  echo "No scheduled workflows with shell-based PR creation found."
+  echo "No bot workflows with inline synthetic check-runs posting found."
   exit 0
 fi
 

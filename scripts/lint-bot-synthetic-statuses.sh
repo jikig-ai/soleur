@@ -1,22 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Lint: scheduled workflows that create PRs must NOT use [skip ci].
+# Lint: bot workflows that create PRs must NOT use [skip ci].
 #
 # [skip ci] prevents CI from running on the PR, which means the
 # required "test" Check Run is never created and auto-merge is
 # permanently blocked.
 #
-# Refs: #826, #827, #842, #1014
+# Scope is content-based (since #3548): walks every workflow in
+# .github/workflows/ and exempts skill-security-scan-pr-trailer.yml
+# (real CI, not a bot workflow). Any file with `gh pr create` is in
+# scope regardless of filename prefix.
+#
+# Refs: #826, #827, #842, #1014, #3548
 
 WORKFLOW_DIR="${WORKFLOW_DIR:-.github/workflows}"
-PATTERN="scheduled-*.yml"
 
 failures=0
 checked=0
 
-for file in "$WORKFLOW_DIR"/$PATTERN; do
+for file in "$WORKFLOW_DIR"/*.yml; do
   [[ -f "$file" ]] || continue
+
+  # Exclude skill-security-scan-pr-trailer.yml: real CI workflow on
+  # pull_request_target, not a bot PR-creator. Mirrors the exclusion in
+  # lint-bot-synthetic-completeness.sh and audit-bot-codeql-coverage.sh.
+  [[ "$file" == *skill-security-scan-pr-trailer* ]] && continue
 
   # Only check files that create PRs
   grep -q "gh pr create" "$file" || continue
@@ -39,5 +48,5 @@ if [[ "$failures" -gt 0 ]]; then
   exit 1
 fi
 
-echo "All $checked scheduled bot workflow(s) pass (no [skip ci])."
+echo "All $checked bot workflow(s) pass (no [skip ci])."
 exit 0

@@ -44,7 +44,7 @@ output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "0" "$rc" "exits 0 when no [skip ci] present"
 assert_contains "$output" "ok:" "reports passing file"
-assert_contains "$output" "All 1 scheduled" "reports summary"
+assert_contains "$output" "All 1 bot workflow(s)" "reports summary"
 echo ""
 
 # Test 2: File with [skip ci] in commit message fails
@@ -162,6 +162,52 @@ output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "1" "$rc" "exits 1 when multiple files have [skip ci]"
 assert_contains "$output" "2 workflow(s)" "reports correct failure count"
+echo ""
+
+# Test 8: Non-scheduled-prefixed file with gh pr create and [skip ci] fails (#3548).
+# Locks in the widened content-based enumeration: bot workflows whose
+# filename does not start with `scheduled-` must still be caught.
+echo "Test 8: monthly-foo.yml with [skip ci] fails (widened scope)"
+WF=$(setup_wf_dir "test8")
+cat > "$WF/monthly-foo.yml" << 'YAML'
+name: MonthlyFoo
+on: schedule
+jobs:
+  run:
+    steps:
+      - run: |
+          git commit -m "ops: monthly audit [skip ci]"
+          gh pr create --title "test"
+YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
+rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+assert_eq "1" "$rc" "exits 1 for non-scheduled-prefixed file with [skip ci]"
+assert_contains "$output" "monthly-foo.yml" "names the non-scheduled file"
+echo ""
+
+# Test 9: skill-security-scan-pr-trailer.yml is excluded by name (#3548).
+echo "Test 9: skill-security-scan-pr-trailer.yml is excluded"
+WF=$(setup_wf_dir "test9")
+cat > "$WF/skill-security-scan-pr-trailer.yml" << 'YAML'
+name: skill-security-scan PR trailer
+on: pull_request_target
+jobs:
+  run:
+    steps:
+      - run: |
+          git commit -m "trailer [skip ci]"
+          gh pr create --title "test"
+YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
+rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+assert_eq "0" "$rc" "exits 0 — trailer file is excluded from the lint"
+if [[ "$output" == *"skill-security-scan-pr-trailer.yml"* ]]; then
+  echo "  FAIL: trailer file leaked into output"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: trailer file silently excluded"
+  PASS=$((PASS + 1))
+fi
 echo ""
 
 print_results
