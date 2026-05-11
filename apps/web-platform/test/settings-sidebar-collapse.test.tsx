@@ -155,13 +155,26 @@ describe("Settings sidebar collapse", () => {
       expect(navEl?.className).not.toMatch(/\bpx-4\b/);
     });
 
-    it("content area uses a reduced left padding when sidebar is collapsed", async () => {
+    it("collapsed content area pl matches sidebar-width + open-padding to keep centered text stationary", async () => {
       render(<SettingsShell><div>content</div></SettingsShell>);
       await userEvent.click(screen.getByLabelText("Collapse settings nav"));
       const expandBtn = screen.getByLabelText("Expand settings nav");
       const contentArea = expandBtn.parentElement;
       expect(contentArea).not.toBeNull();
-      expect(contentArea?.className).toMatch(/\bmd:pl-(?:6|8)\b/);
+      // Sidebar = w-48 (12rem) + open pad = md:px-10 (2.5rem) → collapsed pl must equal 14.5rem
+      // so the `mx-auto max-w-2xl` inner content's screen-x position is identical in both states.
+      expect(contentArea?.className).toMatch(/(?:^|\s)md:pl-\[14\.5rem\](?:\s|$)/);
+    });
+
+    it("content area transitions padding in sync with sidebar width (200ms ease-out)", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      const contentArea = expandBtn.parentElement;
+      expect(contentArea).not.toBeNull();
+      expect(contentArea?.className).toMatch(/(?:^|\s)md:transition-\[padding\](?:\s|$)/);
+      expect(contentArea?.className).toMatch(/\bmd:duration-200\b/);
+      expect(contentArea?.className).toMatch(/\bmd:ease-out\b/);
     });
   });
 });
