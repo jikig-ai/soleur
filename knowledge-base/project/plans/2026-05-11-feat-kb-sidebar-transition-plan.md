@@ -486,9 +486,9 @@ number,title,body --limit 200` and grepped each entry's body against the
 - [ ] Mobile (<768 px) `hidden`/`block` class swap on `<aside>` is unchanged.
       `kb-sidebar-collapse.test.tsx` "preserves mobile class-swap behavior"
       asserts this and must stay green.
-- [ ] `bun run --cwd apps/web-platform test
+- [x] `bun run --cwd apps/web-platform test
       apps/web-platform/test/kb-sidebar-collapse.test.tsx` is green.
-- [ ] `bun run --cwd apps/web-platform tsc --noEmit` is green.
+- [x] `bun run --cwd apps/web-platform tsc --noEmit` is green.
 
 ### Post-merge (operator)
 

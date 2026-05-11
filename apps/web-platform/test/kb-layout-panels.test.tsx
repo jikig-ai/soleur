@@ -127,19 +127,19 @@ describe("KbLayout — resizable panels", () => {
     });
   });
 
-  it("renders three Panels when chat is active: sidebar, doc viewer, chat", async () => {
+  it("renders two Panels when chat is active: doc viewer + chat (sidebar is an <aside>, not a Panel)", async () => {
     await renderLayout();
     await waitFor(() => {
       const panels = screen.getAllByTestId("panel");
-      expect(panels.length).toBe(3);
+      expect(panels.length).toBe(2);
     });
   });
 
-  it("renders two Separators when chat is active", async () => {
+  it("renders one Separator when chat is active (between doc and chat; sidebar no longer drag-resizes)", async () => {
     await renderLayout();
     await waitFor(() => {
       const separators = screen.getAllByTestId("panel-separator");
-      expect(separators.length).toBe(2);
+      expect(separators.length).toBe(1);
     });
   });
 
@@ -150,13 +150,12 @@ describe("KbLayout — resizable panels", () => {
     });
   });
 
-  it("sidebar Panel uses percentage sizes (string format, not px)", async () => {
+  it("file-tree sidebar is an <aside> with md:w-72 (not a resizable Panel)", async () => {
     await renderLayout();
     await waitFor(() => {
-      const sidebar = capturedPanelProps.find(
-        (p) => (p.defaultSize === "18%" || p.defaultSize === "22%") && p.minSize === "10%" && p.maxSize === "30%",
-      );
-      expect(sidebar).toBeTruthy();
+      const aside = document.querySelector("aside");
+      expect(aside).not.toBeNull();
+      expect(aside?.className).toMatch(/\bmd:w-72\b/);
     });
   });
 
@@ -189,10 +188,11 @@ describe("KbLayout — resizable panels", () => {
     await renderLayout();
     await waitFor(() => {
       // At KB root, contextPath is null, so the chat panel + its separator are
-      // not rendered at all. Only 2 panels (sidebar + doc) and 1 separator.
+      // not rendered at all. Only the doc Panel remains inside the inner Group;
+      // the sidebar is an <aside> sibling and isn't counted as a Panel.
       expect(screen.queryByText("Close panel")).toBeNull();
-      expect(screen.getAllByTestId("panel").length).toBe(2);
-      expect(screen.getAllByTestId("panel-separator").length).toBe(1);
+      expect(screen.getAllByTestId("panel").length).toBe(1);
+      expect(screen.queryAllByTestId("panel-separator").length).toBe(0);
     });
   });
 

@@ -35,71 +35,67 @@ interface KbDesktopLayoutProps {
 
 export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
   const {
-    sidebarPanelRef,
     chatPanelRef,
     showChat,
     contextPath,
     closeSidebar,
-    setKbCollapsed,
     kbCollapsed,
     isContentView,
     toggleKbCollapsed,
   } = state;
 
   return (
-    <Group orientation="horizontal" className="h-full">
-      {/* Sidebar panel */}
-      <Panel
-        panelRef={sidebarPanelRef}
-        defaultSize={showChat ? "18%" : "22%"}
-        minSize="10%"
-        maxSize="30%"
-        collapsible
-        collapsedSize="0%"
-        onResize={(size) => {
-          setKbCollapsed(size.asPercentage < 1);
-        }}
+    <div className="flex h-full">
+      {/* File-tree sidebar — animated width transition mirrors SettingsShell.
+          Padding lives on the inner wrapper (NOT the aside) so md:w-0 +
+          box-border collapses fully (#3585). Transition classes are
+          unconditional so React keeps the animation across state changes
+          (#3573). */}
+      <aside
+        inert={kbCollapsed || undefined}
+        className={`hidden shrink-0 border-r border-soleur-border-default md:block md:overflow-hidden md:transition-[width] md:duration-200 md:ease-out ${
+          kbCollapsed ? "md:w-0 md:border-r-0" : "md:w-72"
+        }`}
       >
-        <div className="min-w-0 h-full overflow-y-auto border-r border-soleur-border-default">
+        <div className="w-72 h-full">
           <KbSidebarShell onCollapse={toggleKbCollapsed} />
         </div>
-      </Panel>
+      </aside>
 
-      <ResizeHandle />
+      {/* Doc viewer + (optional) chat — resizable against each other. */}
+      <Group orientation="horizontal" className="h-full flex-1 min-w-0">
+        <Panel minSize="40%">
+          <div className="relative min-w-0 flex flex-1 flex-col h-full">
+            <KbDocShell
+              collapsed={kbCollapsed}
+              isContentView={isContentView}
+              onExpand={toggleKbCollapsed}
+            >
+              {children}
+            </KbDocShell>
+          </div>
+        </Panel>
 
-      {/* Document viewer panel — fills remaining space */}
-      <Panel minSize="40%">
-        <div className="relative min-w-0 flex flex-1 flex-col h-full">
-          <KbDocShell
-            collapsed={kbCollapsed}
-            isContentView={isContentView}
-            onExpand={toggleKbCollapsed}
-          >
-            {children}
-          </KbDocShell>
-        </div>
-      </Panel>
-
-      {/* Chat panel — only rendered when active, with its preceding Separator */}
-      {showChat && contextPath && (
-        <>
-          <ResizeHandle />
-          <Panel
-            panelRef={chatPanelRef}
-            defaultSize="22%"
-            minSize="20%"
-            maxSize="40%"
-          >
-            <div className="min-w-0 h-full border-l border-soleur-border-default">
-              <KbChatContent
-                contextPath={contextPath}
-                onClose={closeSidebar}
-                visible={true}
-              />
-            </div>
-          </Panel>
-        </>
-      )}
-    </Group>
+        {showChat && contextPath && (
+          <>
+            <ResizeHandle />
+            <Panel
+              panelRef={chatPanelRef}
+              defaultSize="22%"
+              minSize="20%"
+              maxSize="40%"
+            >
+              <div className="min-w-0 h-full border-l border-soleur-border-default">
+                <KbChatContent
+                  contextPath={contextPath}
+                  onClose={closeSidebar}
+                  visible={true}
+                />
+              </div>
+            </Panel>
+          </>
+        )}
+      </Group>
+    </div>
   );
 }

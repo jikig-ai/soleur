@@ -39,10 +39,10 @@ export interface UseKbLayoutStateResult {
   showChat: boolean;
   openSidebar: () => void;
   closeSidebar: () => void;
-  // Panel refs (desktop only — but owned here so the toggle + resize closures
-  // share identity with the render side). Typed via ReturnType to avoid
-  // depending on the non-exported PanelImperativeHandle name.
-  sidebarPanelRef: ReturnType<typeof usePanelRef>;
+  // Chat panel ref — owned here so the toggle + resize closures share
+  // identity with the render side. The file-tree sidebar is no longer a
+  // Panel (it's a CSS-transitioning <aside>), so only the chat panel
+  // needs an imperative handle.
   chatPanelRef: ReturnType<typeof usePanelRef>;
 }
 
@@ -50,7 +50,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const pathname = usePathname();
   const router = useRouter();
   const isDesktop = useMediaQuery("(min-width: 768px)");
-  const sidebarPanelRef = usePanelRef();
   const chatPanelRef = usePanelRef();
   const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
@@ -151,16 +150,8 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   }, [pathname]);
 
   const toggleKbCollapsed = useCallback(() => {
-    if (isDesktop) {
-      if (sidebarPanelRef.current?.isCollapsed()) {
-        sidebarPanelRef.current.expand();
-      } else {
-        sidebarPanelRef.current?.collapse();
-      }
-    } else {
-      setKbCollapsed((prev) => !prev);
-    }
-  }, [isDesktop, sidebarPanelRef]);
+    setKbCollapsed((prev) => !prev);
+  }, []);
 
   // Cmd+B / Ctrl+B toggles KB file tree sidebar (only on KB routes, not in inputs)
   useEffect(() => {
@@ -302,7 +293,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     showChat,
     openSidebar,
     closeSidebar,
-    sidebarPanelRef,
     chatPanelRef,
   };
 }
