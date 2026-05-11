@@ -727,7 +727,7 @@ gh run watch
 - [ ] **AC20:** With `enabled: true` + a synthetic learnings-corpus addition (5+ similar test learnings), a `gh workflow run` opens exactly ONE draft `self-healing/auto` PR with the provenance trailer. *(post-merge)*
 - [ ] **AC21:** Closing the test PR (without merge) → next `gh workflow run` within the same week respects per-week cap (open count counts toward cap). *(post-merge)*
 - [ ] **AC22:** `promotion-log.md` rows are append-only; live state derivable via `gh pr view` of linked PRs. *(post-merge integration test)*
-- [ ] **AC23:** Anthropic processor row exists in `knowledge-base/legal/compliance-posture.md` Vendor DPAs (separate compliance/improvement issue lands first; #2720 ship blocked until then — AC26 from gdpr-gate findings). *(SHIP BLOCKER per user instructions; tracked in compliance-posture Active Items)*
+- [ ] **AC23:** Anthropic processor row exists in `knowledge-base/legal/compliance-posture.md` Vendor DPAs (separate compliance/improvement issue lands first; #2720 ship blocked until then — AC26 from gdpr-gate findings). *(SHIP BLOCKER — tracking issue: #3594; #2720 cannot ship until #3594 PR lands the row.)*
 - [x] **AC24:** Test fixtures contain ONLY synthesized PII (`@example.com`, zero-UUIDs); no real-PII regex patterns appear (AC27 from gdpr-gate findings).
 
 ## Risks
