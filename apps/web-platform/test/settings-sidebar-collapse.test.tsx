@@ -152,7 +152,21 @@ describe("Settings sidebar collapse", () => {
       expect(navEl?.className).toMatch(/\bmd:w-0\b/);
       expect(navEl?.className).toMatch(/\bmd:overflow-hidden\b/);
       expect(navEl?.className).toMatch(/\bmd:border-r-0\b/);
-      expect(navEl?.className).not.toMatch(/\bpx-4\b/);
+    });
+
+    it("nav padding is constant across open/collapsed so inner content doesn't jump to (0, 0) when collapsing", async () => {
+      const { rerender } = render(<SettingsShell><div>content</div></SettingsShell>);
+      const navEl = document.querySelector("nav");
+      expect(navEl?.className).toMatch(/\bpx-4\b/);
+      expect(navEl?.className).toMatch(/\bpy-5\b/);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      rerender(<SettingsShell><div>content</div></SettingsShell>);
+      const navCollapsed = document.querySelector("nav");
+      // Padding MUST remain across the toggle — width animates while overflow-hidden
+      // clips the still-padded inner content. Removing the padding on collapse causes
+      // the SETTINGS label + nav items to flash to (0, 0) at the start of the transition.
+      expect(navCollapsed?.className).toMatch(/\bpx-4\b/);
+      expect(navCollapsed?.className).toMatch(/\bpy-5\b/);
     });
 
     it("collapsed content area pl matches sidebar-width + open-padding to keep centered text stationary", async () => {
