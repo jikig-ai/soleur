@@ -129,7 +129,7 @@ jobs:
               fi
 
               # Compose a 500-char trimmed, newline-stripped detail.
-              detail_trim=$(echo "$output" | tr '\n' ' ' | head -c 500)
+              detail_trim=$(printf '%s' "$output" | tr '\n' ' ' | head -c 500)
               detail_safe=$(strip_log_injection "$detail_trim")
 
               if [[ "$probe_exit" -eq 0 && "$has_subscribed" == "no" ]] \
