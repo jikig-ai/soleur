@@ -1,5 +1,5 @@
 name: 'Anthropic Preflight'
-description: 'Probe the Anthropic Messages API with a 1-token request before an expensive claude-code-action step. Sets ok=false if the monthly spend cap is exhausted; exits non-zero on unexpected failures.'
+description: 'Probe the Anthropic Messages API with a 1-token request before an expensive claude-code-action step. Sets ok=false if the API is unavailable for billing reasons (spend cap exhausted or credit balance too low) or transient (5xx/network); exits non-zero on unexpected failures.'
 
 inputs:
   anthropic-api-key:
@@ -8,7 +8,7 @@ inputs:
 
 outputs:
   ok:
-    description: 'true if the API is usable; false if the monthly cap is exhausted. Step fails (exit 1) for unexpected errors.'
+    description: 'true if the API is usable; false if the API is unavailable for billing reasons (spend cap exhausted or credit balance too low) or transient (5xx/network). Step fails (exit 1) for unexpected errors.'
     value: ${{ steps.check.outputs.ok }}
 
 runs:

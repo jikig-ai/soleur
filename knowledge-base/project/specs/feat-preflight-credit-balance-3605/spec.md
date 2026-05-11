@@ -89,7 +89,7 @@ previously blocked on credit balance; now unblocked by 2026-05-11 top-up.
 
 ## Files
 
-- `.github/actions/anthropic-preflight/action.yml` (lines 41-48 region)
+- `.github/actions/anthropic-preflight/action.yml` (lines 1-2, 9-11 action-metadata description; lines 41-51 comment + grep + warning region)
 
 ## Source
 
