@@ -11,11 +11,11 @@ Derived from `knowledge-base/project/plans/2026-05-11-fix-cc-hardening-safe-bash
 
 ## Phase 1 — Extract `safe-bash.ts` (Finding 1)
 
-- [ ] 1.1 Create `apps/web-platform/server/safe-bash.ts` with regex constants + `isBashCommandSafe`.
-- [ ] 1.2 Keep `NEAR_MISS_STATE: WeakMap<CanUseToolContext, ...>` in `permission-callback.ts` (cyclic-import avoidance).
-- [ ] 1.3 Update `permission-callback.ts` to import + re-export the symbols.
-- [ ] 1.4 Move `permission-callback-safe-bash.test.ts` import path to `@/server/safe-bash`.
-- [ ] 1.5 Run `bun test apps/web-platform/test/permission-callback-safe-bash.test.ts apps/web-platform/test/permission-callback-bash-batch.test.ts` — 0 regressions.
+- [x] 1.1 Create `apps/web-platform/server/safe-bash.ts` with regex constants + `isBashCommandSafe`.
+- [x] 1.2 Keep `NEAR_MISS_STATE: WeakMap<CanUseToolContext, ...>` in `permission-callback.ts` (cyclic-import avoidance).
+- [x] 1.3 Update `permission-callback.ts` to import + re-export the symbols.
+- [x] 1.4 Move `permission-callback-safe-bash.test.ts` import path to `@/server/safe-bash`.
+- [x] 1.5 Run `bun test apps/web-platform/test/permission-callback-safe-bash.test.ts apps/web-platform/test/permission-callback-bash-batch.test.ts` — 0 regressions.
 - [ ] 1.6 Commit `refactor(safe-bash): extract regex allowlist module from permission-callback`.
 
 ## Phase 2 — `mirrorWithDebounce` extraction (Findings 2 + #3369)
