@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-05
+last_updated: 2026-05-10
 ---
 
 # Legal Compliance Posture
