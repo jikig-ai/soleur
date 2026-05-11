@@ -87,7 +87,6 @@ export function PaymentWarningBanner({
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: GridIcon },
   { href: "/dashboard/kb", label: "Knowledge Base", icon: BookIcon },
-  { href: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 const ADMIN_NAV_ITEMS = [
@@ -134,6 +133,7 @@ export default function DashboardLayout({
   }, []);
 
   const navItems = isAdmin ? [...NAV_ITEMS, ...ADMIN_NAV_ITEMS] : NAV_ITEMS;
+  const settingsActive = pathname.startsWith("/dashboard/settings");
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -157,8 +157,9 @@ export default function DashboardLayout({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if ((e.target as HTMLElement)?.isContentEditable) return;
-      // Only fire on routes that are NOT KB, Settings, or chat. On chat
-      // pages the ConversationsRail owns Cmd/Ctrl+B for its own collapse.
+      // Only fire on routes that are NOT KB, Settings, or chat. ConversationsRail
+      // owns the keystroke on chat routes; SettingsShell owns it under
+      // /dashboard/settings — both have their own inner collapse state.
       if (
         pathname.startsWith("/dashboard/kb") ||
         pathname.startsWith("/dashboard/settings") ||
@@ -281,6 +282,7 @@ export default function DashboardLayout({
                 key={item.href}
                 href={item.href}
                 title={collapsed ? item.label : undefined}
+                aria-current={active ? "page" : undefined}
                 className={`flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                   active
                     ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
@@ -335,6 +337,19 @@ export default function DashboardLayout({
             <StatusIcon className="h-4 w-4 shrink-0" />
             <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
           </a>
+          <Link
+            href="/dashboard/settings"
+            title={collapsed ? "Settings" : undefined}
+            aria-current={settingsActive ? "page" : undefined}
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+              settingsActive
+                ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
+            } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+          >
+            <SettingsIcon className="h-4 w-4 shrink-0" />
+            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Settings</span>
+          </Link>
           <button
             onClick={() => setSignOutModalOpen(true)}
             title={collapsed ? "Sign out" : undefined}
