@@ -32,7 +32,6 @@ export interface UseKbLayoutStateResult {
   error: KbContextValue["error"];
   hasTreeContent: boolean;
   kbCollapsed: boolean;
-  setKbCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
   toggleKbCollapsed: () => void;
   // Chat state
   contextPath: string | null;
@@ -287,7 +286,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     error,
     hasTreeContent,
     kbCollapsed,
-    setKbCollapsed,
     toggleKbCollapsed,
     contextPath,
     showChat,

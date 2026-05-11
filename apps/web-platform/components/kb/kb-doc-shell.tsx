@@ -47,7 +47,9 @@ export function KbDocShell({
         </button>
       )}
       <div
-        className={`min-h-0 flex-1 overflow-y-auto md:transition-[padding] md:duration-200 md:ease-out ${collapsed ? "md:pl-10" : ""}`}
+        className={`min-h-0 flex-1 overflow-y-auto md:transition-[padding] md:duration-200 md:ease-out ${
+          collapsed ? "pl-10 md:pl-[18rem]" : ""
+        }`}
       >
         <KbErrorBoundary>
           {isContentView ? children : <DesktopPlaceholder />}
