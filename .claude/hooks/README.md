@@ -125,3 +125,24 @@ Per-session manifests at `.claude/.session-manifests/<session_id>.json` carry
 the three fields `{timestamp, change_class, rule_ids_loaded}` — sufficient for
 SOC 2 CC6.1/CC7.2 evidence ("which rules were in context at session X").
 The directory is gitignored.
+
+### Sharp Edges (SessionStart hook design)
+
+- **`set -e` between classifier and emit is a `single-user incident` vector.**
+  Any SessionStart hook that emits `hookSpecificOutput.additionalContext`
+  MUST guarantee non-empty output on every error path. A non-zero exit from
+  `mkdir -p`, `jq`, `git`, or a disk-full manifest write makes Claude Code
+  inject zero additional context — the agent boots with only the pointer
+  index and NO rule bodies, including compliance-tier rules.
+  `session-rules-loader.sh` uses `set -uo pipefail` + `trap ERR
+  emit_core_only_fallback` to keep the agent in a safe-degraded state
+  instead of a no-rules state.
+- **Envelope `cwd` is untrusted.** Assert
+  `git rev-parse --is-inside-work-tree` against the resolved `REPO_ROOT`
+  before writing files relative to it; otherwise a crafted envelope
+  redirects manifest writes to any operator-writable directory.
+- **Envelope `session_id` is untrusted as a filename component.** Sanitize
+  to `[A-Za-z0-9._-]` and reject `.`/`..`/empty. Substring matching against
+  the parent directory is insufficient.
+- **Symlinked sidecars are an injection vector.** Reject `[[ -L ]]` reads
+  before concatenating into `additionalContext`.
