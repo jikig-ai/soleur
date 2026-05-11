@@ -14,7 +14,7 @@ The headline fix in PR #3286 (`saveAssistantMessage` at `cc-dispatcher.ts:1018-1
 
 1. **Cross-tenant dedup invariants are untested.** A subtle bug in stream-end persistence could surface User A's assistant turn in User B's tab — a GDPR Art. 33/34 notifiable breach at brand-survival threshold. Today there is no two-user matrix test asserting tenant isolation under concurrent load.
 2. **Partial assistant text is lost on abort.** `saveAssistantMessage` fires only on `onTextTurnEnd`. If the SDK aborts mid-turn (Stop button, runner runaway, container kill, internal_error), accumulated text never persists. The legacy single-leader path writes `status:"aborted"` rows via migration 040; the cc path does not.
-3. **SDK retry can double-render an assistant turn.** If the SDK re-emits text blocks during an internal retry, `accumulatedAssistantText` accrues a duplicate prefix and INSERTs a row with doubled content.
+3. ~~**SDK retry can double-render an assistant turn.**~~ **CUT in rev-2** — no SDK retry path exists in code (DHH + Simplicity grep evidence, 2026-05-11). The W2 `workflowEnded` flag covers the related late-onTextTurnEnd-after-abort race more simply than a per-turn latch.
 4. **`messages.usage` is null on the cc path** (W4-narrowed). AC11 verification on 2026-05-11 confirmed `messages.status` IS populated on cc rows (`status:"complete"`). The remaining Stage-3 deferral at `cc-dispatcher.ts:1137-1139` is `usage` jsonb only.
 
 8. **Routing preamble leaks into persisted assistant content** (W8, new from AC11 verification). The cc path's `saveAssistantMessage` accumulates every `onText` chunk including hidden router telemetry (e.g., `"Routing to soleur:go — classifying this as a simple connectivity/verification ping."`). The UI filters these chunks live but DB persistence captures them. On reload, hydration renders text the user never saw streamed — a "message changed after reload" trust-class failure (CPO: MEDIUM trust damage, "implies tampering, not loss"). Evidence: assistant row `f511ec09-0960-412f-ae3e-c33d502900c5` in conversation `36df3694-9f0c-4e1e-905f-c0846b52749e` carries both the preamble and the user-visible reply concatenated.
@@ -53,17 +53,27 @@ Synthesized-fixture test (per `cq-test-fixtures-synthesized-only`) constructs tw
 
 `dispatchSoleurGo` flushes any non-empty `accumulatedAssistantText` from `onWorkflowEnded` when the workflow status is non-`completed` (`runner_runaway`, `idle_timeout`, `internal_error`, user-Stop). Flushed row writes `status:"aborted"` and any partial `usage` data available at that point. Container-kill loss is accepted residual; documented in PR-A description.
 
-### FR4: SDK-retry idempotency latch (W3, PR-A)
+### ~~FR4: SDK-retry idempotency latch (W3, PR-A)~~ — CUT in rev-2
 
-Per-`(conversationId, turnIndex)` in-process latch keyed by an internal turn counter prevents `saveAssistantMessage` from writing twice within a single turn. Latch resets on `onTextTurnEnd` completion. No DB constraint.
+**Cut per DHH + Simplicity grep evidence (2026-05-11 plan-review):** No SDK retry path exists in `soleur-go-runner.ts` or `cc-dispatcher.ts`. The only retry-adjacent code is a benign client-WS-layer comment about "retry after success" (already idempotent at that layer). W3 protected against a re-emission path that isn't in the codebase. The W2 `workflowEnded` flag in FR3 covers the late-onTextTurnEnd race that Kieran flagged as P0-1 — simpler than a per-turn latch. If SDK retry behavior ever surfaces in the future, file a new workstream then.
 
-### FR5: `usage` parity on cc path (W4-narrowed, PR-A)
+### FR5: `usage` parity on cc path (W4-narrowed, PR-A) — rev-2 feature-flagged
 
-`status` is already written: `status:"complete"` on `onTextTurnEnd` (AC11-verified 2026-05-11). FR3 flush path adds `status:"aborted"`. The remaining gap is `usage` jsonb — populate from whatever cost/token data is available at the persistence boundary; if unavailable, write `null` not a placeholder. Removes the Stage-3 deferral comment at `cc-dispatcher.ts:1137-1139`.
+`status` is already written: `status:"complete"` on `onTextTurnEnd` (AC11-verified 2026-05-11). FR3 flush path adds `status:"aborted"`. The remaining gap is `usage` jsonb — populate from whatever cost/token data is available at the persistence boundary; if unavailable, write `null` not a placeholder. Removes the Stage-3 deferral comment at `cc-dispatcher.ts:1136-1139`.
 
-### FR5b: Filter routing preamble from persisted assistant content (W8, PR-A)
+**Feature flag (rev-2, per GDPR plan-time audit BLOCK 4 / Art. 13(3)):** Gate W4 behind `CC_PERSIST_USAGE` env-driven boolean. Default `false`. Flips to `true` only after PR-C Privacy Policy §4.7 refresh ships. This ensures the new personal-data category (token counts + cost) is not persisted before user-facing disclosure.
 
-`saveAssistantMessage` MUST filter SDK router-telemetry text chunks before INSERT so the persisted `content` matches what the live UI rendered. Cite the existing UI filter logic and apply the same predicate at the persistence boundary. Acceptance: synthesized fixture in which the SDK emits a routing preamble followed by a user-visible reply; assert persisted `content` matches only the user-visible portion.
+**Race protection (rev-2, per Kieran P0-3 + GDPR BLOCK 2):** `pendingTurnUsage` carries a `turnIndex` tag captured synchronously at `onResult` and validated at `onTextTurnEnd`. A stale `onResult` for a previous turn cannot attach to a later row. Orphan usage (usage captured + content empty on abort) is DROPPED with `usage_orphan_dropped` Sentry mirror per `cq-silent-fallback-must-mirror-to-sentry`.
+
+### FR5b: Align persisted assistant content with UI render via replace-not-append (W8, PR-A) — rev-2
+
+`saveAssistantMessage` MUST mirror the UI's REPLACE semantic at `chat-state-machine.ts:477` (`applyStreamEvent` case `"stream"`). The persisted `content` reflects the LATEST `SDKAssistantMessage` emission within a turn — not the concatenation of all emissions. Implementation: change `accumulatedAssistantText += text` to `accumulatedAssistantText = text` in `events.onText` (cc-dispatcher.ts:1054).
+
+**Invariant:** the value of `accumulatedAssistantText` at the instant `onTextTurnEnd` fires is what persists. No reordering, no merge.
+
+**Falsifiable proof:** T-W8-emission-order test asserts that even with reversed SDK emission order, persistence matches UI render (both reflect the LATEST emission). Drift between persistence and UI stays zero regardless of emission ordering.
+
+**Note (rev-2):** This supersedes the filter-by-predicate approach in spec rev-1. The filter approach required a sentinel the SDK doesn't reliably emit (router preamble is model-generated narration, not a structured marker). Replace-not-append guarantees persistence-to-UI parity by construction.
 
 ### FR6: Hydration regression test (W4, PR-A)
 
