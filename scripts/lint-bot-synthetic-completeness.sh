@@ -33,6 +33,13 @@ while IFS= read -r line; do
   line="${line%%#*}"
   line="${line#"${line%%[![:space:]]*}"}"
   line="${line%"${line##*[![:space:]]}"}"
+  # Strip a single matching pair of surrounding double quotes — operators
+  # may write `"foo bar"` to make the spaces explicit; the grep patterns
+  # below match the workflow's `-f name="foo bar"` form independently.
+  if [[ "$line" == \"*\" ]]; then
+    line="${line#\"}"
+    line="${line%\"}"
+  fi
   [[ -z "$line" ]] && continue
   required_checks+=("$line")
 done < "$CONFIG_FILE"

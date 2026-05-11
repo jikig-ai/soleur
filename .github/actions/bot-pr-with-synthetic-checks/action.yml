@@ -109,11 +109,9 @@ runs:
         # Synthetic checks — satisfies CI Required + CLA Required rulesets on
         # main. Use the Checks API (/check-runs), NOT Statuses API; rulesets
         # require Check Runs from integration_id 15368.
-        # The quoted "skill-security-scan PR gate" token is intentional —
-        # the check name has spaces; unquoted bash splits it into 3 tokens
-        # ("skill-security-scan", "PR", "gate") and posts wrong check-run
-        # names that the ruleset never matches. See #3542 R10, Sharp Edge §9.
-        for check in test dependency-review e2e "skill-security-scan PR gate"; do
+        # Array literal preserves multi-word names; do not flatten. (#3542 R10)
+        CHECK_NAMES=(test dependency-review e2e "skill-security-scan PR gate")
+        for check in "${CHECK_NAMES[@]}"; do
           gh api "repos/${REPO}/check-runs" \
             -f name="$check" \
             -f head_sha="$COMMIT_SHA" \

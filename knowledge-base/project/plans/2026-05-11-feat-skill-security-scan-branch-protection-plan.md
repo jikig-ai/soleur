@@ -44,6 +44,8 @@ This plan executes the R15 mitigation: add `skill-security-scan PR gate` to the 
 
 **If this leaks (mis-merged ruleset bypasses every required check, not just the new one), the user's workflow is exposed via:** total enforcement collapse on `main`. Every check currently required (`test`, `dependency-review`, `e2e`, `CodeQL`) becomes advisory until the misconfiguration is rolled back. This is the dominant failure mode of the GitHub Ruleset PUT API: it replaces the entire payload (learning `2026-04-03-github-ruleset-put-replaces-entire-payload.md`). An incomplete payload that omits `bypass_actors` or `conditions` silently strips them.
 
+**If the new check's `integration_id` is wrong or unenforced, the gate is spoofable:** without the `integration_id: 15368` (github-actions[bot]) constraint, any GitHub App with `checks: write` (e.g., a third-party CI integration installed by a future operator) can post a passing `skill-security-scan PR gate` check-run from outside the trust boundary. The post-PUT verification block in `scripts/update-ci-required-ruleset.sh` asserts the new row's `integration_id` equals 15368 and fails exit 2 on mismatch (rollback required).
+
 **Brand-survival threshold:** `single-user incident`. Carry-forward from `2026-05-10-skill-security-scan-brainstorm.md` Phase 0.1 (operator selected three brand-survival outcomes simultaneously: credential leak | cross-tenant data exposure | trust-breach via false-negative). The branch-protection gate is the load-bearing trust-boundary the brainstorm framed Layer C against; collapse of Layer C collapses the brand-survival commitment.
 
 CPO sign-off carry-forward from the originating plan (`requires_cpo_signoff: true` set there, no new product decisions in this plan).
