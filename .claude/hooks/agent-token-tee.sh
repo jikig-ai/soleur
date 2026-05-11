@@ -105,15 +105,30 @@ ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 mkdir -p "$(dirname "$file")" 2>/dev/null || exit 0
 [[ -f "$file" ]] || : > "$file" 2>/dev/null || exit 0
 
-# Rotate before writing. Source the shared rotator fail-soft; failure leaves
-# the file unrotated (a new rotation attempt fires on the next hook invocation).
+# Source the sentinel helper so drop sites can emit per-class telemetry
+# (issue #3509). Fail-soft: if the lib is missing, define a no-op shim so
+# call sites stay shape-stable.
+# shellcheck source=/dev/null
+_incidents="$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
+if [[ -f "$_incidents" ]]; then
+  # shellcheck source=/dev/null
+  source "$_incidents" 2>/dev/null || true
+fi
+unset _incidents
+declare -F _emit_drop_sentinel >/dev/null 2>&1 || _emit_drop_sentinel() { :; }
+
+# Rotate before writing. Source the shared rotator fail-soft; on
+# archive-write failure (return 1) emit a rotation_fail sentinel and
+# proceed — the active file is intact and the data write still lands.
 # shellcheck source=/dev/null
 _rotator="$(dirname "${BASH_SOURCE[0]}")/lib/log-rotation.sh"
 if [[ -f "$_rotator" ]]; then
   # shellcheck source=/dev/null
   source "$_rotator" 2>/dev/null || true
   if declare -F rotate_if_needed >/dev/null 2>&1; then
-    rotate_if_needed "$file" 2>/dev/null || true
+    if ! rotate_if_needed "$file" 2>/dev/null; then
+      _emit_drop_sentinel "$file" "PostToolUse" "rotation_fail"
+    fi
   fi
 fi
 unset _rotator
@@ -127,16 +142,31 @@ line="$(jq -nc \
   --argjson dm "$DURATION_MS" \
   --argjson schema 1 \
   '{schema:$schema, ts:$ts, session_id:$sid, subagent_type:$sub, total_tokens:$tt, tool_uses:$tu, duration_ms:$dm, hook_event:"PostToolUse"}' \
-  2>/dev/null)" || exit 0
+  2>/dev/null)" || {
+    # Line-build jq failed (malformed input that survived the parse pass,
+    # transient jq failure, etc.). Emit a jq_fail sentinel and exit silently
+    # — never block tool dispatch. See _emit_drop_sentinel header in lib/incidents.sh.
+    _emit_drop_sentinel "$file" "PostToolUse" "jq_fail"
+    exit 0
+  }
 
-# Append under flock with 5s timeout (plan Sharp Edge #9). On contention
-# timeout, log to stderr and exit 0 — never block tool dispatch.
+# Append under flock with 5s timeout (plan Sharp Edge #9). The subshell
+# signals a timeout via exit code 99 (a non-overlapping value) so the
+# operator-visible stderr echo and sentinel emit can run OUTSIDE the
+# subshell — the subshell's own stderr is redirected to /dev/null below
+# to swallow file-open errors, which would otherwise also swallow the
+# operator echo. Never block tool dispatch.
+write_rc=0
 (
   if ! flock -w 5 -x 9; then
-    echo "agent-token-tee: flock timeout, dropping envelope (sid=$SESSION_ID)" >&2
-    exit 0
+    exit 99
   fi
   printf '%s\n' "$line" >&9
-) 9>>"$file" 2>/dev/null || true
+) 9>>"$file" 2>/dev/null || write_rc=$?
+
+if [[ "$write_rc" == "99" ]]; then
+  echo "agent-token-tee: flock timeout, dropping envelope (sid=$SESSION_ID)" >&2
+  _emit_drop_sentinel "$file" "PostToolUse" "flock_timeout"
+fi
 
 exit 0

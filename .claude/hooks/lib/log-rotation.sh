@@ -40,11 +40,21 @@
 # Kill-switch: LOG_ROTATION_DISABLE=1 short-circuits before any work.
 # Test override: LOG_ROTATION_UNIQ_SUFFIX overrides the collision suffix.
 #
-# Exit code: always 0 (fire-and-forget — never blocks the calling hook). On
-# archive-write failure (disk-full, permission-denied), the active file is
-# preserved intact (truncate gated on cat success), the partial archive is
-# removed, and ONE stderr warning is emitted per process (rate-limited via
-# /tmp/log-rotation-warned-$$ — mirrors the pattern at incidents.sh:130-138).
+# Exit codes:
+#   0 — no-op (below threshold, missing file, kill-switch, lock-acquire
+#       timeout) OR a successful rotation. Existing fire-and-forget callers
+#       using `|| true` swallow this either way.
+#   1 — archive-write failure (disk-full, permission-denied). The active file
+#       is preserved intact (truncate gated on cat success), the partial
+#       archive is removed, and ONE stderr warning is emitted per process
+#       (rate-limited via /tmp/log-rotation-warned-$$ — mirrors the pattern
+#       at incidents.sh:130-138).
+#
+# Sentinel-aware callers (issue #3509) branch on the non-zero return to emit
+# a `rotation_fail` drop sentinel before falling through to the data write:
+#   if ! rotate_if_needed "$file"; then
+#     _emit_drop_sentinel "$file" "$HOOK_EVENT_LITERAL" rotation_fail
+#   fi
 
 LOG_ROTATION_SIZE_BYTES_DEFAULT=$((5 * 1024 * 1024))   # 5 MB
 LOG_ROTATION_AGE_DAYS_DEFAULT=30
@@ -141,13 +151,15 @@ rotate_if_needed() {
       # Archive write failed mid-copy. Clean up the partial archive so the
       # next attempt starts clean (otherwise the collision-suffix branch fires
       # and orphans the partial forever). Then warn ONCE per process via the
-      # marker pattern at incidents.sh:130-138.
+      # marker pattern at incidents.sh:130-138, and signal the failure to
+      # sentinel-aware callers via a non-zero return (issue #3509).
       rm -f "$archive" 2>/dev/null || true
       local _log_rotation_warned_marker="/tmp/log-rotation-warned-$$"
       if [[ ! -f "$_log_rotation_warned_marker" ]]; then
         echo "[log-rotation] warning: failed to archive $active (disk full? permissions?)" >&2
         : > "$_log_rotation_warned_marker" 2>/dev/null || true
       fi
+      return 1
       ;;
   esac
   return 0

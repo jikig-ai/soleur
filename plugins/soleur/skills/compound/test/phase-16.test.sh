@@ -269,6 +269,98 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# Scenario 15: telemetry-drop sentinels — render line above table when N>0
+# Sentinels carry `error` but no `session_id` so the existing data filter
+# already excludes them. A separate jq pass counts by class and renders an
+# "envelopes incomplete" line ABOVE the existing top-3 cost table when the
+# total > 0, with a per-class breakdown showing only non-zero classes.
+# ------------------------------------------------------------------------
+plant_sentinel() {
+  local root="$1" class="$2" ts="${3:-2026-04-25T11:00:00Z}"
+  printf '{"schema":1,"hook_event":"PostToolUse","error":"%s","ts":"%s"}\n' \
+    "$class" "$ts" >> "$root/.claude/.session-tokens.jsonl"
+}
+
+echo "Scenario 15: render line shows when total drops > 0"
+ROOT=$(make_fixture); ROOTS+=("$ROOT")
+plant_envelope "$ROOT" "sess-15" "general-purpose" 5000
+plant_sentinel "$ROOT" "jq_fail"
+plant_sentinel "$ROOT" "jq_fail"
+plant_sentinel "$ROOT" "flock_timeout"
+plant_sentinel "$ROOT" "rotation_fail"
+OUT=$(run_script "$ROOT" "sess-15")
+# The line must appear BEFORE the "### Phase 1.6: token-efficiency report" header.
+# `|| true` guards against pipefail when grep finds nothing.
+LINE_IDX=$(echo "$OUT" | grep -n "Subagent envelopes incomplete" | head -1 | cut -d: -f1 || true)
+HEADER_IDX=$(echo "$OUT" | grep -n "Phase 1.6: token-efficiency report" | head -1 | cut -d: -f1 || true)
+if [[ -z "$LINE_IDX" ]]; then
+  fail "no 'Subagent envelopes incomplete' line in output: $OUT"
+elif [[ -z "$HEADER_IDX" || "$LINE_IDX" -ge "$HEADER_IDX" ]]; then
+  fail "drops line at $LINE_IDX is not above header at $HEADER_IDX"
+elif ! echo "$OUT" | grep -q "4 drops"; then
+  fail "expected total '4 drops' in line: $OUT"
+elif ! echo "$OUT" | grep -qE "jq_fail=2"; then
+  fail "expected per-class 'jq_fail=2': $OUT"
+elif ! echo "$OUT" | grep -qE "flock_timeout=1"; then
+  fail "expected per-class 'flock_timeout=1': $OUT"
+elif ! echo "$OUT" | grep -qE "rotation_fail=1"; then
+  fail "expected per-class 'rotation_fail=1': $OUT"
+else
+  pass "drops line above table; total + per-class breakdown correct"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Scenario 16: render line absent when total drops = 0
+# ------------------------------------------------------------------------
+echo "Scenario 16: render line absent when total = 0"
+ROOT=$(make_fixture); ROOTS+=("$ROOT")
+plant_envelope "$ROOT" "sess-16" "general-purpose" 5000
+OUT=$(run_script "$ROOT" "sess-16")
+if echo "$OUT" | grep -q "Subagent envelopes incomplete"; then
+  fail "drops line emitted when total=0: $OUT"
+else
+  pass "no drops line when total = 0"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Scenario 17: per-class breakdown shows only non-zero classes
+# ------------------------------------------------------------------------
+echo "Scenario 17: only non-zero classes appear in breakdown"
+ROOT=$(make_fixture); ROOTS+=("$ROOT")
+plant_envelope "$ROOT" "sess-17" "general-purpose" 5000
+plant_sentinel "$ROOT" "jq_fail"
+OUT=$(run_script "$ROOT" "sess-17")
+if ! echo "$OUT" | grep -qE "1 drops? \(jq_fail=1\)"; then
+  fail "expected '1 drop(s) (jq_fail=1)' breakdown only: $OUT"
+elif echo "$OUT" | grep -q "flock_timeout="; then
+  fail "zero-class flock_timeout in breakdown: $OUT"
+elif echo "$OUT" | grep -q "rotation_fail="; then
+  fail "zero-class rotation_fail in breakdown: $OUT"
+else
+  pass "single-class breakdown; zero classes suppressed"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Scenario 18: archived sentinel (gzipped) counted across rotations
+# ------------------------------------------------------------------------
+echo "Scenario 18: archived sentinel counted"
+ROOT=$(make_fixture); ROOTS+=("$ROOT")
+plant_envelope "$ROOT" "sess-18" "general-purpose" 5000
+ARCH="$ROOT/.claude/.session-tokens-2026-04.jsonl"
+printf '{"schema":1,"hook_event":"PostToolUse","error":"flock_timeout","ts":"2026-04-15T08:00:00Z"}\n' > "$ARCH"
+gzip -f "$ARCH"
+OUT=$(run_script "$ROOT" "sess-18")
+if ! echo "$OUT" | grep -qE "1 drops? \(flock_timeout=1\)"; then
+  fail "archived sentinel not counted: $OUT"
+else
+  pass "archived sentinel counted across rotations"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

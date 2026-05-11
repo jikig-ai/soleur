@@ -101,10 +101,19 @@ for _gz in "$REPO_ROOT"/.claude/.rule-incidents-*.jsonl.gz; do
 done
 
 jq_counts='{}'
+# Drop-sentinel counts (issue #3509). Sentinels carry `error` but no
+# `rule_id` / `event_type`; the valid_stream filter below excludes them
+# from the reduce. A separate jq pass populates these counts.
+drops_counts_json='{}'
 if [[ -s "$INCIDENTS_MERGED" ]]; then
   total_lines=$(wc -l < "$INCIDENTS_MERGED")
-  # Tolerant parse: fromjson? yields null on parse failure; select(.) drops nulls.
-  valid_stream=$(jq -R 'fromjson? | select(.)' < "$INCIDENTS_MERGED" 2>/dev/null || echo "")
+  # Tolerant parse: fromjson? yields null on parse failure; select(.) drops
+  # nulls. select(.schema == 1) pins the consumer-side schema gate (issue
+  # #3509 plan Sharp Edge #2). select(.rule_id != null) drops sentinels —
+  # they have `error` but no `rule_id`, and entering the reduce would create
+  # a `"null"` key that poisons $known_ids and trips the orphan gate.
+  valid_stream=$(jq -R 'fromjson? | select(.) | select(.schema == 1) | select(.rule_id != null)' \
+    < "$INCIDENTS_MERGED" 2>/dev/null || echo "")
   valid_lines=0
   if [[ -n "$valid_stream" ]]; then
     # `|| echo 0` + `${…:-0}` protect the arithmetic below from a failed
@@ -114,10 +123,45 @@ if [[ -s "$INCIDENTS_MERGED" ]]; then
     valid_lines=$(echo "$valid_stream" | jq -s 'length' 2>/dev/null || echo 0)
     valid_lines=${valid_lines:-0}
   fi
-  bad_lines=$(( total_lines - valid_lines ))
+  # Sentinel counts — separate jq pass over the same merged stream. The
+  # `select(.schema == 1)` gate matches the valid_stream filter symmetrically
+  # so a future schema-v2 sentinel doesn't silently bucket into v1 counters.
+  # Counts are total (active + archives). Computed BEFORE the bad_lines
+  # warning so we can net sentinels out — they're filtered intentionally,
+  # not malformed.
+  drops_counts_json=$(jq -R -s '
+    [ split("\n")[]
+      | select(length > 0)
+      | (fromjson? // empty)
+      | select(.schema == 1)
+      | select(.error != null)
+    ]
+    | reduce .[] as $e ({};
+        .[$e.error] = ((.[$e.error] // 0) + 1)
+      )
+  ' < "$INCIDENTS_MERGED" 2>/dev/null || echo '{}')
+  drops_counts_json=${drops_counts_json:-'{}'}
+  drops_total=$(jq -r 'add // 0' <<< "$drops_counts_json" 2>/dev/null || echo 0)
+  drops_total=${drops_total:-0}
+  bad_lines=$(( total_lines - valid_lines - drops_total ))
+  if [[ "$bad_lines" -lt 0 ]]; then
+    # Negative arithmetic implies a counting drift (sentinels overcounted
+    # vs total_lines, e.g., a torn sentinel that wc-counted as 1 line but
+    # also matched the drops filter). Surface it instead of silently
+    # masking — exactly the silent-data-corruption class this PR exists to
+    # prevent.
+    echo "::warning::bad_lines underflow ($bad_lines) on $INCIDENTS — total=$total_lines valid=$valid_lines drops=$drops_total. Clamping to 0." >&2
+    bad_lines=0
+  fi
   if [[ "$bad_lines" -gt 0 ]]; then
     # GitHub Actions picks up `::warning::` for workflow annotations; harmless locally.
     echo "::warning::Dropped $bad_lines malformed line(s) from $INCIDENTS (+ archives) (kept $valid_lines)" >&2
+  fi
+  if [[ "$drops_total" -gt 0 ]]; then
+    # Visibility for interactive consumers (agent debugging, manual cron
+    # runs). Filter is invisible to the script's stdout otherwise.
+    drops_breakdown=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$drops_counts_json" 2>/dev/null || echo "")
+    echo "Filtered $drops_total telemetry-drop sentinel row(s) from $INCIDENTS (+ archives) — see summary.drops_*_count [${drops_breakdown}]" >&2
   fi
   if [[ "$valid_lines" -gt 0 ]]; then
     # fire_count increments on any recognized event_type (deny, bypass,
@@ -190,6 +234,7 @@ report=$(jq -n \
   --arg generated_at "$GENERATED_AT" \
   --argjson enriched "$stage_enriched" \
   --argjson counts "$jq_counts" \
+  --argjson drops "$drops_counts_json" \
   --argjson cutoff "$UNUSED_CUTOFF_EPOCH" '
     # Orphan events: rule_ids in the jsonl that don'"'"'t match any AGENTS.md id.
     # Surfacing these prevents silent data loss when a hook emits a rule_id
@@ -221,7 +266,13 @@ report=$(jq -n \
           rules_bypassed_over_baseline: ($enriched
             | map(select(.bypass_count > 0))
             | length),
-          orphan_rule_ids: $orphan_ids
+          orphan_rule_ids: $orphan_ids,
+          # Telemetry-drop sentinel counts (issue #3509). Per-class counts
+          # default to 0 when the class has no occurrences. emit_incident
+          # has no `flock_timeout` site (indefinite flock per plan-review),
+          # so that field is intentionally absent for this sink.
+          drops_jq_fail_count: ($drops["jq_fail"] // 0),
+          drops_rotation_fail_count: ($drops["rotation_fail"] // 0)
         }
       }
   ')
