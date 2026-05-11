@@ -33,4 +33,4 @@ files:
   - path: typosquat-targets.yaml
     sha256: 7881969a5126453f9e3442ea14c3f0dd45e59cf229564e558eee847cbd1c9ddd
   - path: regex-patterns.md
-    sha256: da4715fb199365481c334db2dfc5d33cb1be0b3c47dc46b6b3f30d226cd09ae2
+    sha256: 0d24f5920b2221aadbac3a650b6ebd0983a73032083840e46826d6818b117f9f

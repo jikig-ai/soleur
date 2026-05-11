@@ -124,6 +124,11 @@ hosts and approved utm campaign IDs.
 
 ---
 
+## Maintainer notes
+
+- **Manifest resync is one-pass.** When editing multiple rule-pack files in the same change (e.g., `code-exec.yaml` + this `regex-patterns.md`), run `bash scripts/run-self-test.sh --regenerate-manifest` ONCE after ALL edits are complete — not after each individual edit. Resyncing midway leaves later edits unsigned and the scanner's self-defense correctly fail-loud short-circuits to HIGH-RISK with "rule pack tampered". Recovery is one re-run, but the symptom (clean fixtures emit HIGH-RISK) looks like a calibration regression. See `knowledge-base/project/learnings/2026-05-11-security-regex-bypass-class-coverage.md` §Session Errors #3.
+- **Bypass-class enumeration is required for new rules.** Beyond "regex catches the canonical example" and "calibration corpus is clean", every new shell-execution rule MUST be tested against the bypass classes in the checklist at the bottom of [the bypass-class learning](../../../../knowledge-base/project/learnings/2026-05-11-security-regex-bypass-class-coverage.md). Lock the bypass coverage in via a per-rule_id count assertion in `plugins/soleur/test/skill-security-scan.test.ts` so a future regex regression cannot silently lose a bypass class while aggregate verdict stays green.
+
 ## Provenance
 
 Pattern taxonomy adapted from `alirezarezvani/claude-skills` (skill-security-auditor),
