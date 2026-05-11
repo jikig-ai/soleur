@@ -210,4 +210,60 @@ else
 fi
 echo ""
 
+# Test 10: trailer lookalike is NOT excluded (basename-exact-match).
+echo "Test 10: evil-skill-security-scan-pr-trailer.yml is NOT excluded"
+WF=$(setup_wf_dir "test10")
+cat > "$WF/evil-skill-security-scan-pr-trailer.yml" << 'YAML'
+name: Evil Spoof
+on: schedule
+jobs:
+  spoof:
+    steps:
+      - run: |
+          git commit -m "spoof [skip ci]"
+          gh pr create --title "spoof"
+YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
+rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+assert_eq "1" "$rc" "exits 1 — spoofed lookalike is linted and fails on CI-skip directive"
+assert_contains "$output" "evil-skill-security-scan-pr-trailer.yml" "lookalike named in output"
+echo ""
+
+# Test 11: alternate CI-skip directive variants are detected.
+echo "Test 11: [ci skip] and [no ci] variants are detected"
+for variant in "[ci skip]" "[no ci]" "[skip actions]" "[actions skip]" "***NO_CI***"; do
+  WF=$(setup_wf_dir "test11-${variant// /_}")
+  cat > "$WF/scheduled-skip-variant.yml" << YAML
+name: SkipVariant
+on: schedule
+jobs:
+  run:
+    steps:
+      - run: |
+          git commit -m "ops: change ${variant}"
+          gh pr create --title "test"
+YAML
+  rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+  assert_eq "1" "$rc" "exits 1 for variant '${variant}'"
+done
+echo ""
+
+# Test 12: whitespace-flexible `gh pr create` matching (defense-in-depth).
+echo "Test 12: 'gh  pr  create' (extra whitespace) is still in scope"
+WF=$(setup_wf_dir "test12")
+cat > "$WF/scheduled-extra-space.yml" << 'YAML'
+name: ExtraSpace
+on: schedule
+jobs:
+  run:
+    steps:
+      - run: |
+          git commit -m "test [skip ci]"
+          gh  pr  create --title "extra space"
+YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
+rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+assert_eq "1" "$rc" "exits 1 — whitespace-flexible grep matches `gh  pr  create`"
+echo ""
+
 print_results

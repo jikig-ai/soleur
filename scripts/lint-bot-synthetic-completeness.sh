@@ -69,20 +69,34 @@ echo "---"
 # Returns 0 (true) if gh pr create appears in a YAML run: block,
 # returns 1 (false) if it only appears in prompt: blocks or similar.
 
-# run_block_contains scans `file` for `pattern` (literal substring) inside
-# shell `run:` blocks. Returns 0 iff pattern is found on a line within any
-# run: block. Used as the load-bearing distinguisher between header-comment
-# mentions (e.g., "synthetic check-runs satisfy") and real inline calls
+# scan_run_blocks walks the file once, calling a predicate function per
+# line that lives inside a shell `run:` block. Returns 0 iff the predicate
+# returns 0 for any in-run line; returns 1 otherwise. Used as the
+# load-bearing distinguisher between header-comment mentions
+# (e.g., "synthetic check-runs satisfy") and real inline calls
 # (`gh api .../check-runs`). YAML-level `#` comments and `prompt:` blocks
 # are excluded by construction.
-run_block_contains() {
-  local file="$1" pattern="$2"
+#
+# Known limitation: the `run:` regex also matches YAML keys named `run:`
+# at the JOB level (`jobs:\n  run:\n    steps:...`). In practice this is
+# benign — the inner step-level `run:` resets run_indent to a deeper level
+# and the load-bearing predicates (`gh pr create`, `gh api ... check-runs`)
+# are themselves uncommon outside shell contexts. Tracked in the follow-up
+# scope-out issue for a future YAML-aware rewrite.
+scan_run_blocks() {
+  local file="$1" predicate="$2"
   local in_run=false
   local run_indent=0
 
   while IFS= read -r wfline; do
-    if [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]?\|?[[:space:]]*$ ]] || \
-       [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]+[^\|] ]]; then
+    # Match `run:` followed by an optional YAML block-scalar style indicator
+    # (`|`, `|-`, `|+`, `>`, `>-`, `>+`) and end-of-line — OR `run:` followed
+    # by an inline scalar (not starting with a block-scalar indicator).
+    # `run: |-` is the canonical idiom in many GitHub Actions style guides;
+    # a regex that matches only `|` and bare scalars produces a silent false-
+    # negative on every `|-` / `|+` / `>` block.
+    if [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]*([\|\>][-+]?)?[[:space:]]*$ ]] || \
+       [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]+[^\|\>[:space:]] ]]; then
       in_run=true
       local prefix="${BASH_REMATCH[1]}"
       run_indent=${#prefix}
@@ -98,52 +112,44 @@ run_block_contains() {
         fi
       fi
 
-      if [[ "$wfline" == *"$pattern"* ]]; then
+      if "$predicate" "$wfline"; then
         return 0
       fi
     fi
   done < "$file"
 
   return 1
+}
+
+# Line-level predicate: `gh pr create` invocation. Whitespace-flexible so
+# `gh  pr  create` (multiple spaces, tabs) does not silently escape.
+_is_gh_pr_create_line() {
+  [[ "$1" =~ gh[[:space:]]+pr[[:space:]]+create ]]
+}
+
+# Line-level predicate: same-line `gh api` + `check-runs` (the canonical
+# inline synthetic-posting shape, e.g.,
+# `gh api "repos/.../check-runs" \`). Both tokens required on the same
+# line — a naive `check-runs` substring would false-positive on header
+# comments like rule-metrics-aggregate.yml's "synthetic check-runs satisfy".
+_is_inline_check_runs_post_line() {
+  [[ "$1" == *"gh api"* && "$1" == *"check-runs"* ]]
 }
 
 has_shell_pr_create() {
-  run_block_contains "$1" "gh pr create"
+  scan_run_blocks "$1" _is_gh_pr_create_line
 }
 
-# Returns 0 iff the file contains `gh api ... check-runs` on the same line
-# inside a shell `run:` block. Both `gh api` and `check-runs` must co-occur
-# on the line (mirrors scheduled-content-publisher.yml's multi-line shape
-# where each `gh api` call repeats both tokens on its continuation lines).
-# A naive `grep -q check-runs` would false-positive on header comments
-# like rule-metrics-aggregate.yml's "synthetic check-runs satisfy" line.
 has_inline_check_runs_post() {
-  local file="$1" in_run=false run_indent=0
-  while IFS= read -r wfline; do
-    if [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]?\|?[[:space:]]*$ ]] || \
-       [[ "$wfline" =~ ^([[:space:]]*)run:[[:space:]]+[^\|] ]]; then
-      in_run=true
-      local prefix="${BASH_REMATCH[1]}"
-      run_indent=${#prefix}
-      continue
-    fi
+  scan_run_blocks "$1" _is_inline_check_runs_post_line
+}
 
-    if $in_run; then
-      if [[ "$wfline" =~ ^([[:space:]]*)[a-zA-Z_-]+: ]]; then
-        local key_prefix="${BASH_REMATCH[1]}"
-        if [[ ${#key_prefix} -le $run_indent ]]; then
-          in_run=false
-          continue
-        fi
-      fi
-
-      if [[ "$wfline" == *"gh api"* && "$wfline" == *"check-runs"* ]]; then
-        return 0
-      fi
-    fi
-  done < "$file"
-
-  return 1
+# Exact-basename match for the CI-not-bot exclusion. Substring matching
+# (`*skill-security-scan-pr-trailer*`) would silently exclude attacker- or
+# typo-introduced files like `evil-skill-security-scan-pr-trailer.yml` or
+# `skill-security-scan-pr-trailer-v2.yml`.
+is_excluded_workflow() {
+  [[ "$(basename "$1")" == "skill-security-scan-pr-trailer.yml" ]]
 }
 
 # --- Scan workflows ---
@@ -158,10 +164,11 @@ for file in "$WORKFLOW_DIR"/*.yml; do
   # Exclude skill-security-scan-pr-trailer.yml: real CI workflow on
   # pull_request_target, not a bot PR-creator. Matches the exclusion in
   # scripts/audit-bot-codeql-coverage.sh.
-  [[ "$file" == *skill-security-scan-pr-trailer* ]] && continue
+  is_excluded_workflow "$file" && continue
 
-  # Only check files that create PRs (anywhere in the file)
-  grep -q "gh pr create" "$file" || continue
+  # Only check files that create PRs (anywhere in the file). Whitespace-
+  # flexible so `gh  pr  create` (extra spaces or tabs) does not bypass.
+  grep -qE "gh[[:space:]]+pr[[:space:]]+create" "$file" || continue
 
   # Check if gh pr create appears in a shell run: block
   if ! has_shell_pr_create "$file"; then

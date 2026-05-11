@@ -23,7 +23,7 @@ Read this runbook when:
 **Is:** a pre-merge gate that prevents bot PRs from being created in a state that would deadlock auto-merge. Specifically:
 
 1. [`scripts/lint-bot-synthetic-statuses.sh`](../../../../scripts/lint-bot-synthetic-statuses.sh) rejects `[skip ci]` markers in any `.github/workflows/*.yml` (excluding `skill-security-scan-pr-trailer.yml`) that calls `gh pr create`. `[skip ci]` suppresses the `test` Check Run, and a missing required check blocks auto-merge forever.
-2. [`scripts/lint-bot-synthetic-completeness.sh`](../../../../scripts/lint-bot-synthetic-completeness.sh) verifies every bot workflow whose shell `run:` block calls `gh pr create` AND posts synthetic check-runs inline (`gh api .../check-runs`) covers every entry in [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt). Bot PRs authored by `GITHUB_TOKEN` do NOT trigger CI (GitHub's anti-loop guard), so without synthetic postings the required-check rules on the `CI Required` ruleset (#14145388) never go green. Composite-action consumers (5 workflows using [`.github/actions/bot-pr-with-synthetic-checks`](../../../../.github/actions/bot-pr-with-synthetic-checks/action.yml)) are intentionally exempt — coverage is provided by the action itself.
+2. [`scripts/lint-bot-synthetic-completeness.sh`](../../../../scripts/lint-bot-synthetic-completeness.sh) verifies every bot workflow whose shell `run:` block calls `gh pr create` AND posts synthetic check-runs inline (`gh api .../check-runs`) covers every entry in [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt). Bot PRs authored by `GITHUB_TOKEN` do NOT trigger CI (GitHub's anti-loop guard), so without synthetic postings the required-check rules on the `CI Required` ruleset (#14145388) never go green. Composite-action consumers (workflows using [`.github/actions/bot-pr-with-synthetic-checks`](../../../../.github/actions/bot-pr-with-synthetic-checks/action.yml)) are intentionally exempt — coverage is provided by the action itself.
 
 **Is not:**
 
@@ -42,7 +42,7 @@ Walks every `.github/workflows/*.yml` (excluding `skill-security-scan-pr-trailer
 Walks every `.github/workflows/*.yml` (excluding `skill-security-scan-pr-trailer.yml`) and applies a two-part content-based predicate. A workflow is in scope iff:
 
 1. **`gh pr create` appears inside a shell `run:` block** (the `has_shell_pr_create` helper walks YAML indentation). `prompt:` blocks of `claude-code-action` steps print a `skip:` line — `app/claude` triggers real CI, so synthetics are unnecessary. YAML-level `#` comments (e.g., `pr-auto-close-scanner.yml`) also print `skip:`.
-2. **`gh api .../check-runs` appears inside a shell `run:` block** (the `has_inline_check_runs_post` helper, same YAML walker). Composite-action consumers (5 workflows using `bot-pr-with-synthetic-checks`) do not match this predicate and are silently skipped — coverage is provided by the action itself. Bare-substring `check-runs` mentions in header comments (e.g., `rule-metrics-aggregate.yml` line 4: "synthetic check-runs satisfy") do NOT trip the lint.
+2. **`gh api .../check-runs` appears inside a shell `run:` block** (the `has_inline_check_runs_post` helper, same YAML walker). Composite-action consumers (workflows using `bot-pr-with-synthetic-checks`) do not match this predicate and are silently skipped — coverage is provided by the action itself. Bare-substring `check-runs` mentions in header comments (e.g., `rule-metrics-aggregate.yml` line 4: "synthetic check-runs satisfy") do NOT trip the lint.
 
 For each in-scope workflow:
 
@@ -70,13 +70,21 @@ cla-check
 2. [`.github/actions/bot-pr-with-synthetic-checks/action.yml`](../../../../.github/actions/bot-pr-with-synthetic-checks/action.yml) — extend the `CHECK_NAMES` array so every composite-action consumer picks up the new synthetic automatically.
 3. Update this runbook's "as of 2026-05-11" config block above.
 
-Inline-pattern bot workflows (the 3 `scheduled-*.yml` files that don't use the composite action — see `codeql-bot-coverage.md` for the inventory) post synthetics directly. Each one must be edited to add the new `gh api ... check-runs -f name=<NEW>` block. The lint will fail-loud at PR time if any is missed.
+Inline-pattern bot workflows post synthetics directly (`gh api ... check-runs -f name=<NAME>` in a shell `run:` block). To enumerate them at any point in time, run:
+
+```bash
+grep -L 'uses:.*bot-pr-with-synthetic-checks' .github/workflows/*.yml \
+  | xargs grep -lE 'gh[[:space:]]+pr[[:space:]]+create' 2>/dev/null \
+  | xargs -I{} sh -c 'grep -q "gh api.*check-runs" "{}" && echo "{}"'
+```
+
+Each one must be edited to add the new `gh api ... check-runs -f name=<NEW>` block. The lint will fail-loud at PR time if any is missed.
 
 ## Drift triage
 
 | Symptom | Failing script | Likely cause | Fix |
 |---|---|---|---|
-| `FAIL: <file> contains [skip ci]` | statuses | A bot workflow was edited to add `[skip ci]` to a commit message inside `gh pr create` | Remove `[skip ci]`. Bot PRs need CI (or synthetics) to satisfy the ruleset. |
+| `FAIL: <file> contains a CI-skip directive` | statuses | A bot workflow was edited to add `[skip ci]` / `[ci skip]` / `[no ci]` / `[skip actions]` / `[actions skip]` / `***NO_CI***` to a commit message inside `gh pr create` | Remove the directive. Bot PRs need CI (or synthetics) to satisfy the ruleset. |
 | `FAIL: <file> is missing synthetic check-runs for: <names>` | completeness | A new required check was added to `required-checks.txt` but the bot workflow wasn't updated — OR — a new bot workflow was added without synthetics | Add `-f name=<check>` (or `-f context=<check>`) to a `gh api .../check-runs` call in the workflow's shell `run:` block. Use the composite action if possible (see "How to extend"). |
 | `FAIL: config parser` / unexpected blank lines | completeness (parser) | A regression in the config loader (e.g., strip-all-whitespace bug fixed in PR #3543) — multi-word check names like `skill-security-scan PR gate` were collapsed to `skill-security-scanPRgate` | Verify `bash scripts/lint-bot-synthetic-completeness.sh` locally; if the lint passes but CI fails, suspect a parser regression. See learning `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`. |
 | New bot workflow with shell `gh pr create` but no synthetics | completeness | A bot workflow author posted PR-creation logic before adding synthetic check-runs | Add the synthetic-posting block OR refactor to use [`.github/actions/bot-pr-with-synthetic-checks`](../../../../.github/actions/bot-pr-with-synthetic-checks/action.yml). |
@@ -140,7 +148,7 @@ Per #3546: re-evaluate this runbook's coverage after the **2nd** lint failure th
 - [`codeql-bot-coverage.md`](codeql-bot-coverage.md) — sibling audit; covers the empirical runtime-drift question this lint does NOT answer.
 - [`ruleset-bypass-drift.md`](ruleset-bypass-drift.md) — sibling audit; covers `bypass_actors` on the same ruleset.
 - [`.github/workflows/ci.yml`](../../../../.github/workflows/ci.yml) — the `lint-bot-statuses` job definition.
-- [`.github/actions/bot-pr-with-synthetic-checks/action.yml`](../../../../.github/actions/bot-pr-with-synthetic-checks/action.yml) — composite action consumed by 5 of 8 bot workflows.
+- [`.github/actions/bot-pr-with-synthetic-checks/action.yml`](../../../../.github/actions/bot-pr-with-synthetic-checks/action.yml) — composite action consumed by most bot workflows; enumerate with `grep -l 'bot-pr-with-synthetic-checks' .github/workflows/*.yml`.
 - [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt) — source-of-truth check list.
 - [`plugins/soleur/test/lint-bot-synthetic-statuses.test.sh`](../../../../plugins/soleur/test/lint-bot-synthetic-statuses.test.sh) — fixture-based test harness.
 - [`plugins/soleur/test/lint-bot-synthetic-completeness.test.sh`](../../../../plugins/soleur/test/lint-bot-synthetic-completeness.test.sh) — fixture-based test harness (added #3548; covers widened content-based scope).

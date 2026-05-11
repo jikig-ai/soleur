@@ -297,4 +297,106 @@ else
 fi
 echo ""
 
+# Test (i): trailer-lookalike must NOT be excluded (basename-exact-match guard).
+# Locks in the security hardening: substring exclusion would silently exempt
+# typo- or attacker-introduced look-alikes; exact basename comparison rejects them.
+echo "Test (i): evil-skill-security-scan-pr-trailer.yml is NOT excluded"
+WF=$(setup_wf_dir "i")
+CONF="$TMPDIR_BASE/i/required-checks.txt"
+setup_config_file "$CONF"
+cat > "$WF/evil-skill-security-scan-pr-trailer.yml" << 'YAML'
+name: Evil Spoof
+on: schedule
+jobs:
+  spoof:
+    steps:
+      - name: Spoof
+        run: |
+          gh pr create --title "spoof"
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name=test
+YAML
+output=$(WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" 2>&1) || true
+rc=0; WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+assert_eq "1" "$rc" "(i) exits 1 — spoofed lookalike is linted and fails for missing synthetics"
+assert_contains "$output" "evil-skill-security-scan-pr-trailer.yml" "(i) lookalike named in output"
+echo ""
+
+# Test (j): whitespace-flexible `gh pr create` detection. A workflow that uses
+# extra spaces or tabs between tokens must still be enumerated. Locks in the
+# regex hardening against trivial visual-equivalence bypasses.
+echo "Test (j): 'gh  pr  create' (extra whitespace) is detected"
+WF=$(setup_wf_dir "j")
+CONF="$TMPDIR_BASE/j/required-checks.txt"
+setup_config_file "$CONF"
+cat > "$WF/scheduled-extra-space.yml" << 'YAML'
+name: ExtraSpace
+on: schedule
+jobs:
+  run:
+    steps:
+      - run: |
+          gh  pr  create --title "extra space"
+YAML
+output=$(WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" 2>&1) || true
+rc=0; WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+# No synthetics → should be skipped (composite-consumer-shaped) silently, not flagged.
+# But the prior file-scope grep MUST match — locked in by no FAIL/no parse error.
+# Most importantly: the lint must not fall through with EXIT=1 from set -euo pipefail.
+assert_eq "0" "$rc" "(j) exits 0 — whitespace-flexible grep keeps the script alive"
+echo ""
+
+# Test (k): positive-skip assertion for prompt:-only files. The prior Test (g)
+# already covers this path with `assert_contains "skip:"`; this test additionally
+# asserts the file name itself appears in the skip line (not just the keyword).
+echo "Test (k): skip line names the prompt:-only file explicitly"
+WF=$(setup_wf_dir "k")
+CONF="$TMPDIR_BASE/k/required-checks.txt"
+setup_config_file "$CONF"
+cat > "$WF/scheduled-prompt-named.yml" << 'YAML'
+name: PromptNamed
+on: schedule
+jobs:
+  audit:
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            Run gh pr create to file a PR.
+YAML
+output=$(WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" 2>&1) || true
+assert_contains "$output" "skip: " "(k) skip: prefix present"
+assert_contains "$output" "scheduled-prompt-named.yml" "(k) file name in skip line"
+echo ""
+
+# Test (l): every YAML block-scalar style (|-, |+, >, >-, >+) is recognized as
+# a shell run: block. Locks in the regex hardening: silently skipping `|-` blocks
+# (the canonical idiom in many style guides) would invisibly bypass the lint.
+echo "Test (l): YAML block-scalar variants are recognized as shell run: blocks"
+for variant in "|" "|-" "|+" ">" ">-" ">+"; do
+  WF=$(setup_wf_dir "l-${variant//[!a-z+-]/}")
+  CONF="$TMPDIR_BASE/l-${variant//[!a-z+-]/}/required-checks.txt"
+  setup_config_file "$CONF"
+  cat > "$WF/scheduled-scalar.yml" << YAML
+name: Scalar
+on: schedule
+jobs:
+  audit:
+    steps:
+      - name: Create PR
+        run: ${variant}
+          gh pr create --title "test"
+          gh api "repos/foo/check-runs" -f name=test
+YAML
+  output=$(WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" 2>&1) || true
+  if [[ "$output" == *"scheduled-scalar.yml"* ]] && [[ "$output" != *"skip:"*"scheduled-scalar.yml"* ]]; then
+    echo "  PASS: (l) variant '${variant}' enters run-block state"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: (l) variant '${variant}' missed — output: $output"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
 print_results
