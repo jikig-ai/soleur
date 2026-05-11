@@ -306,5 +306,129 @@ class TestAllowlistSync(unittest.TestCase):
                 )
 
 
+class TestCrossFileMode(unittest.TestCase):
+    """Cross-file (sidecar) mode: linter accepts an --index-file flag plus
+    one or more sidecar paths and validates pointer↔body 1:1 mapping across
+    the union. Required by the AGENTS.md change-class loader migration (#3493).
+    """
+
+    def _seed_repo(self, files_at_head: dict, files_working: dict):
+        """Seed a temp git repo: commit `files_at_head`, then overwrite with
+        `files_working`. Returns the repo path (caller manages tempdir).
+        """
+        tmp = tempfile.mkdtemp(prefix="lint-xfile-")
+        repo = Path(tmp) / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=_GIT_ENV)
+        for name, body in files_at_head.items():
+            (repo / name).write_text(body)
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True, env=_GIT_ENV)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True, env=_GIT_ENV)
+        # Overwrite / add files for working tree
+        # First, delete any files that exist at HEAD but not in working
+        for name in files_at_head:
+            if name not in files_working:
+                (repo / name).unlink()
+        for name, body in files_working.items():
+            (repo / name).write_text(body)
+        return repo
+
+    def _run_xfile(self, repo, index, sidecars, retired_content=None):
+        argv = [sys.executable, str(SCRIPT)]
+        if retired_content is not None:
+            retired = repo / "retired-rule-ids.txt"
+            retired.write_text(retired_content)
+            argv.extend(["--retired-file", str(retired)])
+        argv.extend(["--index-file", index])
+        argv.extend(sidecars)
+        return subprocess.run(argv, capture_output=True, text=True, cwd=str(repo))
+
+    # ---- Pointer / body relationship ----
+
+    def test_orphan_pointer_in_index_fails(self):
+        """Index has a pointer to an id whose body doesn't exist in any
+        sidecar → linter must reject."""
+        index_body = (
+            "# Index\n\n## Hard Rules\n\n"
+            "- [id: hr-real-rule] → core\n"
+            "- [id: hr-orphan-pointer] → core\n"
+        )
+        core_body = (
+            "# Core\n\n## Hard Rules\n\n"
+            "- The real rule body [id: hr-real-rule].\n"
+        )
+        repo = self._seed_repo(
+            {"AGENTS.md": "# placeholder\n", "AGENTS.core.md": "# placeholder\n"},
+            {"AGENTS.md": index_body, "AGENTS.core.md": core_body},
+        )
+        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md"])
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("hr-orphan-pointer", r.stderr)
+        self.assertIn("pointer", r.stderr.lower())
+
+    def test_orphan_body_in_sidecar_fails(self):
+        """Sidecar has a rule body for an id not present in the index → reject."""
+        index_body = (
+            "# Index\n\n## Hard Rules\n\n"
+            "- [id: hr-real-rule] → core\n"
+        )
+        core_body = (
+            "# Core\n\n## Hard Rules\n\n"
+            "- The real rule body [id: hr-real-rule].\n"
+            "- An orphan body in core [id: hr-orphan-body].\n"
+        )
+        repo = self._seed_repo(
+            {"AGENTS.md": "# placeholder\n", "AGENTS.core.md": "# placeholder\n"},
+            {"AGENTS.md": index_body, "AGENTS.core.md": core_body},
+        )
+        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md"])
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("hr-orphan-body", r.stderr)
+
+    def test_removed_id_sibling_aware(self):
+        """HEAD has rule body in AGENTS.md; working copy moves the body to
+        AGENTS.core.md and replaces the AGENTS.md entry with a pointer line.
+        The linter must NOT flag it as 'removed' since it lives in a sibling
+        sidecar.
+        """
+        head_index = (
+            "# Agent Instructions\n\n## Hard Rules\n\n"
+            "- Rule one [id: hr-moves-to-core].\n"
+            "- Rule two [id: hr-stays-here].\n"
+        )
+        # Working copy: rule one moved out (body in core, pointer in index)
+        working_index = (
+            "# Index\n\n## Hard Rules\n\n"
+            "- [id: hr-moves-to-core] → core\n"
+            "- [id: hr-stays-here] → core\n"
+        )
+        working_core = (
+            "# Core\n\n## Hard Rules\n\n"
+            "- Rule one [id: hr-moves-to-core].\n"
+            "- Rule two [id: hr-stays-here].\n"
+        )
+        repo = self._seed_repo(
+            {"AGENTS.md": head_index},
+            {"AGENTS.md": working_index, "AGENTS.core.md": working_core},
+        )
+        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md"])
+        self.assertEqual(r.returncode, 0, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertNotIn("removed id", r.stderr)
+
+    def test_legacy_single_file_mode_unchanged(self):
+        """Backward compat: `python3 lint-rule-ids.py AGENTS.md` (no
+        --index-file) still works and continues to enforce the single-file
+        invariants from before this migration.
+        """
+        r = _run(FIXTURE_VALID)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_legacy_single_file_mode_duplicate_still_fails(self):
+        """Backward compat: duplicate IDs in single-file mode still rejected."""
+        r = _run(FIXTURE_DUPLICATE)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("duplicate", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
