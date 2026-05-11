@@ -46,7 +46,11 @@ branch: feat-one-shot-3547-create-ruleset-sync
 - [ ] 5.1 `sparse-checkout` list: add `scripts/ci-required-ruleset-canonical-required-status-checks.json` and `scripts/lib/canonicalize-required-status-checks.sh`.
 - [ ] 5.2 Update workflow `name:` to "Scheduled: Canonical Ruleset Audit (bypass_actors + required_status_checks)". KEEP filename `scheduled-ruleset-bypass-audit.yml`.
 - [ ] 5.3 Update header comment block — refresh to name both audit surfaces, add `#3547` to Ref line.
-- [ ] 5.4 Failure-routing case statement: add `required_status_checks_drift` → `ci/auth-broken` + `compliance/critical`; `canonical_rsc_*` → `ci/guard-broken`.
+- [ ] 5.4 Add workflow-level `env:` block declaring `BYPASS_DRIFT_TITLE`, `RSC_DRIFT_TITLE`, `GUARD_BROKEN_TITLE` as named-token constants.
+- [ ] 5.5 (P0 deepen-finding) Refactor failure-routing case statement to key on `$FAILURE_MODE` (not `$FAILURE_LABEL`), since both drift classes share `ci/auth-broken`. Map: `bypass_actors_drift` → `BYPASS_DRIFT_TITLE`, `required_status_checks_drift` → `RSC_DRIFT_TITLE`, `canonical_*|github_api_*` → `GUARD_BROKEN_TITLE`.
+- [ ] 5.6 (P0 deepen-finding) Replace de-dupe `--search` filter (line 181) with exact-title form `in:title "$ISSUE_TITLE"`. Drops the old `'in:title "Ruleset bypass" "audit" OR in:title "bypass_actors drift"'` query.
+- [ ] 5.7 (P0 deepen-finding) Refactor auto-close stale-tracking-issue block (lines 218-238) to iterate over all three title vars via bash indirect expansion (`${!title_var}`); each title is searched exactly. Generalize the green-state comment to "canonical match restored".
+- [ ] 5.8 Refresh human-facing strings: email-notify subject, tripwire issue title + body. Add `#3547` to tripwire body's `Tracks:` line.
 
 ## Phase 6 — Tests
 

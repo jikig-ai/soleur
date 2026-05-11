@@ -10,6 +10,43 @@ requires_cpo_signoff: false
 
 # ops(ci): sync `scripts/create-ci-required-ruleset.sh` with live ruleset state
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Sections enhanced:** 5 (Architecture, Phases 4–5, Acceptance Criteria, Risks, Sharp Edges)
+**Verifications performed against live state:**
+
+- `gh api repos/jikig-ai/soleur/rulesets/14145388` — confirmed 5-entry `required_status_checks` array with two integration_ids (15368 ×4, 57789 ×1 for CodeQL).
+- `gh pr view 3543/3555` — confirmed both MERGED (R15 mitigation + bypass_actors canonical+audit). PR #3544 does NOT exist; #3544 is the *issue* and #3555 is the *PR* that landed D1.
+- `gh issue view 3547` — confirmed OPEN with `deferred-scope-out` label.
+- `gh label list` — confirmed `ci/auth-broken`, `ci/guard-broken`, `compliance/critical`, `domain/legal`, `domain/engineering` all exist.
+- AGENTS.md rule IDs cited in the plan (`hr-menu-option-ack-not-prod-write-auth`, `hr-weigh-every-decision-against-target-user-impact`, `hr-gdpr-gate-on-regulated-data-surfaces`, `wg-use-closes-n-in-pr-body-not-title-to`) — all ACTIVE in the loaded AGENTS sidecar; none in `scripts/retired-rule-ids.txt`.
+- `wc -l` on touched files: workflow YAML 237 lines, audit script 225 lines, test harness 439 lines — sizes within review budget.
+- `grep -c CANONICAL_FILE scripts/audit-ruleset-bypass.sh` → 9 sites + 1 in test (rename scope sized).
+- Live ruleset URL `https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388` is hard-coded in `scripts/audit-ruleset-bypass.sh:38`; single curl shot returns the full ruleset, so the new diff incurs ZERO extra API calls.
+
+### Key Improvements Discovered
+
+1. **CRITICAL (P0) — issue-title de-dupe + auto-close gap.** The workflow's `--search` filter at `.github/workflows/scheduled-ruleset-bypass-audit.yml:181` and `:230` is hard-coded to `'in:title "Ruleset bypass" "audit" OR in:title "bypass_actors drift"'`. The case statement at lines 145-160 routes BOTH `bypass_actors_drift` and the new `required_status_checks_drift` to the same `ci/auth-broken` branch, which produces the title `"[compliance/critical] CI Required ruleset bypass_actors drift detected"`. Two failure modes collapsing to one title means: (a) a required_status_checks_drift after a bypass_actors_drift cannot dedupe correctly (search matches the wrong issue); (b) when audit goes green, the wrong issue auto-closes. Comment lines 143-144 explicitly call this out as AC13a-pinned-load-bearing. Plan now mandates a **class-specific title routing** with shared canonical constants AND extends the search query to match both classes.
+
+2. **HIGH (P1) — workflow title/header/email subject refresh.** Several human-facing strings ("Ruleset bypass audit", `subject: "[Soleur Ops] Ruleset bypass audit:"`, `tripwire`'s issue title `"Ruleset bypass audit log-leak tripwire"`) describe only the bypass surface but the workflow now audits BOTH. Refresh in same PR; document which strings are AC-pinned vs cosmetic.
+
+3. **HIGH (P1) — `domain/legal` label routing carries forward correctly.** The bypass drift adds `--label domain/legal` (line 198) on `ci/auth-broken` (CLO involvement model). Verified: `domain/legal` exists. For required_status_checks_drift the threat class is identical (R15 brand-survival), so the same `domain/legal + compliance/critical` routing applies. No new label needed.
+
+4. **MEDIUM (P2) — single fetch, two diffs.** The audit's `fetch_live()` at `scripts/audit-ruleset-bypass.sh:82-89` already returns the entire ruleset payload in one curl. The new RSC diff reads from the SAME `$LIVE_FILE` — adding the diff is pure CPU, zero new API quota, zero new rate-limit risk. Document this explicitly so future operators understand the cost shape.
+
+5. **MEDIUM (P2) — `--dry-run` on `create-ci-required-ruleset.sh` is the testable contract surface.** Without it, the create path is untestable in `tests/scripts/`. The 5-line flag is now first-class plan scope (was a sub-bullet of Phase 6 in the v0 plan; promoted to Phase 2.3).
+
+6. **LOW (P3) — env-var rename scoped.** The internal `CANONICAL_FILE` variable rename to `CANONICAL_BYPASS_FILE` in `audit-ruleset-bypass.sh` touches 9 sites + 1 in the test harness. The EXTERNAL test-only env var `AUDIT_CANONICAL_FILE_OVERRIDE` MUST be preserved for backward compatibility (tests of the bypass path are already wired to it). New env var `AUDIT_CANONICAL_RSC_FILE_OVERRIDE` is parallel-named with the new internal variable.
+
+### New Considerations Discovered
+
+- **Title-string canonical constants.** To avoid future drift between the workflow YAML's case statement and the script's emitted `failure_mode`, extract the two title strings to `scripts/lib/ruleset-audit-issue-titles.sh` (or inline them as workflow-level env: in `scheduled-ruleset-bypass-audit.yml`). Workflow-level env is preferred — keeps the strings in one file with their consumers and avoids cross-checkout sourcing.
+- **`fetch_live` HTTP-code semantics already cover the new diff.** The 5xx/network_error/etc. failure modes in the audit script handle the live-fetch path. The new RSC diff is downstream of the same fetch — no new HTTP error handling needed.
+- **`set -uo pipefail` (NOT `set -e`) is intentional in audit script.** Per the script's comment line 33 ("NOT set -e (collect failure modes, single-pass emit)"). The new RSC diff block MUST follow the same pattern — `record_failure` not `exit 1`. Plan's Phase 4 was already conformant; deepen confirms.
+- **Number-vs-string `integration_id` is a real signal.** `(.integration_id | tostring)` in the canonicalize jq is intentional asymmetry vs `bypass_actors` (which uses `// "null" | tostring`). The bypass form preserves null-vs-missing — RSC has no nullable field. T-rsc-4 tests this.
+- **Test-fixture duty per `cq-test-fixtures-synthesized-only`.** The plan's fixtures use real-shaped integration IDs (15368, 57789) — these are public GitHub App IDs, not secrets. No fixture redaction needed; `cq-test-fixtures-synthesized-only` is satisfied. Document explicitly in Phase 6.
+
 ## Overview
 
 `scripts/create-ci-required-ruleset.sh` hard-codes a 3-entry `required_status_checks` array (`test`, `dependency-review`, `e2e`). The live "CI Required" ruleset (#14145388) now has 5 entries: the original three plus `CodeQL` (integration_id `57789`, github-advanced-security) and `skill-security-scan PR gate` (integration_id `15368`, github-actions[bot]) added by #3543 / #3542 (R15 mitigation for the skill-install code-execution gap originating at #2719).
@@ -257,15 +294,124 @@ Order of operations:
 
 **File: `.github/workflows/scheduled-ruleset-bypass-audit.yml`**
 
-Three edits:
+**P0 deepen-finding:** The current workflow case statement (lines 145-160) routes by `$FAILURE_LABEL`, NOT by `$FAILURE_MODE`. Both `bypass_actors_drift` and `required_status_checks_drift` share `ci/auth-broken` — the case branch collapses them. AND the `--search` filter on lines 181 + 230 is hard-coded to `'in:title "Ruleset bypass" "audit" OR in:title "bypass_actors drift"'`. Without surgical changes here, de-dupe and auto-close silently break when the new drift class lands.
 
-1. **`sparse-checkout` block** (line 57 area) — add `scripts/ci-required-ruleset-canonical-required-status-checks.json` and `scripts/lib/canonicalize-required-status-checks.sh`.
+Six edits:
 
-2. **Failure-routing case statement** — wherever the workflow inspects `failure_mode` to choose between `ci/auth-broken` and `ci/guard-broken`, add the new `required_status_checks_drift` mode mapped to `ci/auth-broken` + `compliance/critical` (same as `bypass_actors_drift`).
+1. **`sparse-checkout` block** (around line 57) — add `scripts/ci-required-ruleset-canonical-required-status-checks.json` and `scripts/lib/canonicalize-required-status-checks.sh`.
 
-3. **Workflow `name:` and header comment** — update to reflect the canonical-audit scope, e.g., `name: "Scheduled: Canonical Ruleset Audit (bypass_actors + required_status_checks)"`. Keep the FILE name (`scheduled-ruleset-bypass-audit.yml`) for the reason in Constraint 6.
+2. **Workflow-level `env:` block (NEW)** — add named-token issue titles as workflow env so the case statement and the de-dupe `--search` reference the same values:
 
-4. **Comment block (lines 1-29)** — refresh to name both audit surfaces and add `#3547` to the `Ref` line.
+   ```yaml
+   env:
+     BYPASS_DRIFT_TITLE: "[compliance/critical] CI Required ruleset bypass_actors drift detected"
+     RSC_DRIFT_TITLE: "[compliance/critical] CI Required ruleset required_status_checks drift detected"
+     GUARD_BROKEN_TITLE: "[ci/guard-broken] Ruleset canonical audit malfunctioned"
+   ```
+
+   These become the canonical constants for the `--search` filter and the issue creation. Single source of truth, single PR rename if anyone ever changes them.
+
+3. **Failure-routing case statement (lines 145-160)** — switch the case to dispatch on `$FAILURE_MODE` (not `$FAILURE_LABEL`), since the new RSC class shares a label with bypass but needs a distinct title. Rewrite:
+
+   ```bash
+   case "$FAILURE_MODE" in
+     bypass_actors_drift)
+       ISSUE_TITLE="$BYPASS_DRIFT_TITLE"
+       EXTRA_LABEL="compliance/critical"
+       ;;
+     required_status_checks_drift)
+       ISSUE_TITLE="$RSC_DRIFT_TITLE"
+       EXTRA_LABEL="compliance/critical"
+       ;;
+     canonical_file_*|canonical_rsc_file_*|github_api_*)
+       ISSUE_TITLE="$GUARD_BROKEN_TITLE"
+       EXTRA_LABEL=""
+       ;;
+     *)
+       echo "::warning::Issue-create step received unknown FAILURE_MODE='${FAILURE_MODE}', defaulting to ci/guard-broken" >&2
+       ISSUE_TITLE="$GUARD_BROKEN_TITLE"
+       FAILURE_LABEL="ci/guard-broken"
+       EXTRA_LABEL=""
+       ;;
+   esac
+   ```
+
+4. **De-dupe `--search` filter (line 181)** — widen to match all three known titles, with a single `case`-derived search query that maps from the FAILURE_MODE to the right title token:
+
+   ```bash
+   # Search by EXACT title so each drift class dedupes against its own issue.
+   EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+     --label "$FAILURE_LABEL" \
+     --search "in:title \"${ISSUE_TITLE}\"" \
+     --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
+   ```
+
+   The exact-title search is safer than the prior OR-fragment query — each drift class dedupes against its OWN open issue, not against any sibling.
+
+5. **Auto-close stale-tracking-issue block (lines 218-238)** — refactor to iterate over both drift titles and close stale issues matching either:
+
+   ```bash
+   for title_var in BYPASS_DRIFT_TITLE RSC_DRIFT_TITLE GUARD_BROKEN_TITLE; do
+     TITLE="${!title_var}"  # Bash indirect expansion
+     for label in ci/auth-broken ci/guard-broken; do
+       STALE=$(gh issue list --repo "$GH_REPO" --state open \
+         --label "$label" \
+         --search "in:title \"${TITLE}\"" \
+         --json number --jq '.[0].number // empty' 2>/dev/null) || STALE=""
+       if [[ -n "$STALE" ]]; then
+         echo "Closing stale tracking issue #$STALE (label=$label, title=$TITLE)."
+         gh issue close "$STALE" --repo "$GH_REPO" \
+           --comment "Audit green at ${NOW}. canonical match restored. Run: ${RUN_URL}"
+       fi
+     done
+   done
+   ```
+
+   The comment string "live bypass_actors matches canonical" is generalized to "canonical match restored" — both classes share the same green-state semantic.
+
+6. **Workflow `name:`, header comment block (lines 1-29), email-notify subject (line 209), tripwire issue title (line 121)** — refresh strings to reflect dual-surface audit. Specifically:
+   - `name: "Scheduled: Canonical Ruleset Audit (bypass_actors + required_status_checks)"`.
+   - Header comment refreshed to name both audit surfaces; add `#3547` to the `Ref` line.
+   - Email subject: `"[Soleur Ops] Ruleset canonical audit: ${{ steps.check.outputs.failure_mode || 'leak-suspected' }}"`.
+   - Tripwire issue title: `"[security/leak-suspected] Ruleset canonical audit log-leak tripwire"`.
+   - Tripwire body: `"**Tracks:** #3544, #3547"` (add #3547).
+   - KEEP the FILE name (`scheduled-ruleset-bypass-audit.yml`) per Constraint 6.
+
+**Why the case-key change (label → mode) is load-bearing:** `$FAILURE_LABEL` collapses bypass vs RSC into a single branch; without distinct titles, a bypass-only-clean / RSC-drift state reuses the bypass issue (or vice-versa), and operator triage reads a stale title that names the wrong field. The mode-keyed case is the minimum surgical change that preserves AC13a's intent (load-bearing title strings) while extending to a second class.
+
+#### Research Insights
+
+**Best Practices:**
+
+- Use workflow-level `env:` for cross-step constants rather than inline string literals — survives a future filename rename and keeps the dedupe/auto-close search filters wired to the same value the issue-create step emits.
+- Bash indirect expansion (`${!var}`) is portable across all bash 4+ versions; CI runners are `ubuntu-latest` (bash 5+). No portability risk.
+- `gh issue list --search "in:title \"<exact>\""` quotes the entire title for exact-match scoring; verified against `gh search` docs (the search backend treats quoted phrases as proximity-1 exact matches, dramatically reducing cross-class false positives).
+
+**Implementation Detail — bash indirect expansion safety:**
+
+```bash
+# SAFE under set -uo pipefail when the variable IS set:
+TITLE="${!title_var}"
+# If $title_var names an UNSET env var, set -u trips a "unbound variable"
+# error. Mitigation: workflow-level env: block guarantees all three are
+# set; runtime check is unnecessary.
+```
+
+**Anti-pattern to avoid:**
+
+- Do NOT replace the `--search` filter with a regex-style `--search 'in:title "Ruleset" "drift"'` "umbrella query". It would re-dedupe across classes — the regression this phase prevents.
+- Do NOT add per-mode `EXTRA_LABEL` divergence (`domain/legal` was attached only on the bypass path). The R15 threat class is identical for RSC; the `--label domain/legal` ADD path stays in `EXTRA_LABEL="compliance/critical"` for BOTH drift classes (line 198's `args+=(--label "domain/legal")` is the right behavior already and shouldn't drop on the RSC path).
+
+**Edge Cases:**
+
+- An RSC drift fires the same day a bypass drift fires: both create separate issues (distinct titles), both deduplicate independently on subsequent fires, both auto-close independently on green. Verified by T-rsc-9 (independence).
+- The workflow's `concurrency: cancel-in-progress: false` means a same-day re-run won't preempt; the second drift on the next 24 h cycle is reported as a fresh same-class dedupe.
+- A future operator adds a 3rd drift class (e.g., `conditions_drift`): same case statement extends linearly. No structural refactor needed.
+
+**References:**
+
+- `gh search issues` docs (https://cli.github.com/manual/gh_search_issues) — title-search semantics.
+- Bash indirect expansion (https://www.gnu.org/software/bash/manual/html_node/Shell-Parameter-Expansion.html) — `${!name}` form.
 
 ### Phase 6 — Tests (GREEN)
 
@@ -282,6 +428,8 @@ Add a parallel set of T-cases for `required_status_checks_drift`. Mirror the exi
 - **T-rsc-7 (canonical file missing):** `AUDIT_CANONICAL_RSC_FILE_OVERRIDE` points to a non-existent file → `failure_mode=canonical_rsc_file_missing`, `failure_label=ci/guard-broken`.
 - **T-rsc-8 (canonical file malformed):** `AUDIT_CANONICAL_RSC_FILE_OVERRIDE` points to a non-array JSON → `failure_mode=canonical_rsc_file_malformed`, `failure_label=ci/guard-broken`.
 - **T-rsc-9 (independent of bypass drift):** canonical RSC matches, canonical bypass diverges → only `bypass_actors_drift` fires (existing T-case shape). And the symmetric: bypass matches, RSC diverges → only `required_status_checks_drift`. Together they prove the two diffs are independent.
+- **T-rsc-10 (heterogeneous integration_id preserved at write-time):** read `scripts/ci-required-ruleset-canonical-required-status-checks.json` directly (no shell), assert `jq 'map(.integration_id) | unique | length'` returns `2` (15368 + 57789). This is a regression guard against a future "factor to a single constant" refactor that would silently re-enable the github-actions[bot]-spoofs-CodeQL attack.
+- **T-rsc-11 (canonicalize lib is bash-only / sourcing has no side effects):** `bash -n scripts/lib/canonicalize-required-status-checks.sh` exits 0; sourcing the file in a subshell does not produce stdout/stderr; `CANONICALIZE_REQUIRED_STATUS_CHECKS_JQ` is set and is non-empty. Mirrors T-cases that exist for `canonicalize-bypass-actors.sh`.
 
 Also add `AUDIT_CANONICAL_RSC_FILE_OVERRIDE` to the documented test-only env vars block in the script header.
 
@@ -356,6 +504,10 @@ becomes (paraphrased):
 - [ ] `gh label list --limit 200 | grep -E '^(ci/auth-broken|ci/guard-broken|compliance/critical)\b'` returns all three (defensively created by the workflow either way; verify they exist).
 - [ ] `grep -rn 'ci-required-ruleset-canonical-required-status-checks' scripts/ .github/workflows/ knowledge-base/engineering/ops/runbooks/ tests/scripts/` returns hits in: `scripts/create-ci-required-ruleset.sh`, `scripts/update-ci-required-ruleset.sh`, `scripts/audit-ruleset-bypass.sh`, `scripts/required-checks.txt`, `.github/workflows/scheduled-ruleset-bypass-audit.yml`, `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`, `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md`, and both test files. (Mechanically enforces that the new canonical file is referenced everywhere it's load-bearing.)
 - [ ] Audit script's three failure-routing cases (`canonical_file_*`, `github_api_*`, drift) extended to cover RSC-equivalents (`canonical_rsc_file_missing`, `canonical_rsc_file_malformed`, `required_status_checks_drift`).
+- [ ] Workflow YAML case statement keyed on `$FAILURE_MODE` (not `$FAILURE_LABEL`). Verified by `grep -E '^\s*case\s+"?\$FAILURE_MODE"?' .github/workflows/scheduled-ruleset-bypass-audit.yml` returning ≥ 1 hit AND `grep -E 'case\s+"?\$FAILURE_LABEL"?' .github/workflows/scheduled-ruleset-bypass-audit.yml` returning 0 hits in the issue-routing step.
+- [ ] Workflow YAML has workflow-level `env:` block declaring `BYPASS_DRIFT_TITLE`, `RSC_DRIFT_TITLE`, `GUARD_BROKEN_TITLE`. Verified by `grep -c 'BYPASS_DRIFT_TITLE:\|RSC_DRIFT_TITLE:\|GUARD_BROKEN_TITLE:' .github/workflows/scheduled-ruleset-bypass-audit.yml` returning ≥ 3.
+- [ ] De-dupe `--search` and auto-close `--search` both use `in:title "$ISSUE_TITLE"` (exact-title form), NOT the old OR-fragment query. Verified by `grep -E 'in:title "\$\{?ISSUE_TITLE\}?"' .github/workflows/scheduled-ruleset-bypass-audit.yml` returning ≥ 1 hit AND `grep -F '"Ruleset bypass" "audit" OR' .github/workflows/scheduled-ruleset-bypass-audit.yml` returning 0 hits.
+- [ ] Workflow `name:` reflects dual-surface audit; email subject + tripwire title strings refreshed.
 - [ ] PR body uses `Closes #3547`.
 
 ### Post-merge (operator)
@@ -418,14 +570,43 @@ Skipped — the diff touches `scripts/`, `.github/workflows/`, `knowledge-base/e
 ## References
 
 - Issue: #3547 (this plan)
-- R15 mitigation parent: #3542, PR #3543, origin #2719
-- Canonical-bypass precedent: #3555, daily audit #3544
-- CodeQL coverage audit: #3545
-- lint-bot-statuses runbook: #3546
+- R15 mitigation parent: issue #3542, PR #3543, origin #2719
+- Canonical-bypass precedent: issue #3544, PR #3555 (daily audit + canonical JSON)
+- CodeQL coverage audit: PR #3545 (R15 D2)
+- lint-bot-statuses runbook: PR #3546 (R15 D3)
 - PUT-replaces semantics: `knowledge-base/project/learnings/2026-04-03-github-ruleset-put-replaces-entire-payload.md`
 - Heterogeneous integration_id rationale: `scripts/required-checks.txt` lines 17-23
+- Defense-relaxation taxonomy: `knowledge-base/project/learnings/2026-05-05-defense-relaxation-must-name-new-ceiling.md` (re: cap-coupling between `required-checks.txt` and the canonical JSON)
+- Cap-coupling pattern: `knowledge-base/project/learnings/2026-05-06-cap-coupling-between-adjacent-prs.md` (re: scope-out #SCOPE-OUT-2)
+- Workflow constant assertion: `knowledge-base/project/learnings/best-practices/2026-05-07-comment-coupled-workflow-invariants-need-runtime-assertion.md` (re: shared-env `env:` block + tests)
+- Foundations-PR contract risk: `knowledge-base/project/learnings/2026-05-07-foundations-pr-must-not-declare-downstream-contracts.md` (verified inapplicable: atomic single-merge delivery)
+- YAML-as-bash trap: `knowledge-base/project/learnings/2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`
+- Phase-order load-bearing: `knowledge-base/project/learnings/2026-05-10-plan-phase-order-load-bearing-when-contract-changes.md`
 - Pattern source files:
   - `scripts/ci-required-ruleset-canonical-bypass-actors.json` (canonical JSON shape)
   - `scripts/lib/canonicalize-bypass-actors.sh` (jq projection shape)
-  - `scripts/audit-ruleset-bypass.sh` (failure-routing shape)
-  - `tests/scripts/test-audit-ruleset-bypass.sh` (test harness shape)
+  - `scripts/audit-ruleset-bypass.sh` (failure-routing shape, fetch_live pattern)
+  - `tests/scripts/test-audit-ruleset-bypass.sh` (test harness shape, `_run/_report/_mode/_label/_detail` helpers)
+  - `.github/workflows/scheduled-ruleset-bypass-audit.yml` (workflow shape, case-routing, dedupe-by-title)
+
+## Deepen-Plan Quality Self-Audit
+
+All deepen-plan quality checks executed against this plan; results:
+
+- [x] Live-state verification (5-entry RSC array, both integration_ids 15368 + 57789).
+- [x] Cited PRs verified MERGED via `gh pr view` (#3543, #3555).
+- [x] Cited issue verified OPEN via `gh issue view` (#3547).
+- [x] All AGENTS.md rule IDs verified ACTIVE via `grep -qE "\[id: <id>\]" AGENTS.md`; none in `scripts/retired-rule-ids.txt`.
+- [x] All GitHub labels prescribed verified to exist (`ci/auth-broken`, `ci/guard-broken`, `compliance/critical`, `domain/legal`, `domain/engineering`).
+- [x] No fabricated CLI tokens. `gh api`, `gh issue list/create/close`, `jq --slurpfile`, `jq -S`, `bash -n`, `actionlint`, `yamllint`, `gh workflow run`, `gh run view` all verified against installed versions.
+- [x] No fabricated SHAs cited (none cited).
+- [x] No third-party action behavior claims made (this plan uses only first-party scripts and the `actions/checkout` already-pinned in the workflow).
+- [x] Bash strict-mode trap check: the audit script intentionally runs `set -uo pipefail` (NOT `set -e`); the new diff block follows the same convention (record_failure, not exit 1).
+- [x] Pathspec→regex translation N/A (no glob translation involved).
+- [x] Routing-predicate threat model N/A (no new routing predicate; this plan ADDS a second known-good failure class).
+- [x] Coverage-overlap claim verified: T-rsc-9 directly exercises the independence claim; no orthogonal-test handwave.
+- [x] Phase ordering load-bearing: contract-changing edits (Phase 1 canonical JSON + lib) precede consumer edits (Phases 2-5); tests (Phase 6) consume both; docs (Phase 7-8) consume the consumers.
+- [x] Workflow-constant invariant: the workflow's three title strings are coupled across case statement + dedupe search + auto-close. Plan promotes them to workflow-level `env:` block AND adds AC verification greps — comment-only coupling rejected.
+- [x] User-Brand Impact section non-empty, threshold valid (`single-user incident`), CPO sign-off carry-forward documented.
+- [x] No network-outage trigger pattern.
+- [x] GDPR/compliance gate N/A (no regulated-data surface).
