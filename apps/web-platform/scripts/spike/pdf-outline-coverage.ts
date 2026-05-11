@@ -14,8 +14,14 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { extractPdfOutline } from "../../server/pdf-text-extract";
+
+// ESM-safe __dirname (root package.json sets "type": "module"). Fixes a
+// pre-existing ESM-incompatibility shipped by PR #3440 that surfaced when
+// the spike was first executed in the bundle PR (#3474 follow-through).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 interface FixtureSpec {
   name: string;
