@@ -29,6 +29,8 @@ REPO="jikig-ai/soleur"
 RULESET_ID=14145388
 NEW_CHECK="skill-security-scan PR gate"
 GITHUB_ACTIONS_INTEGRATION_ID=15368  # github-actions[bot]
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+CANONICAL_BYPASS_FILE="${SCRIPT_DIR}/ci-required-ruleset-canonical-bypass-actors.json"
 DRY_RUN=0
 JSON_OUT=0
 for arg in "$@"; do
@@ -204,6 +206,28 @@ if [[ "$new_iid" != "$GITHUB_ACTIONS_INTEGRATION_ID" ]]; then
   echo "         Without integration_id constraint, any GitHub App with checks:write could spoof the gate." >&2
   drift=1
 fi
+
+# Audit fast-path (#3544): diff round-tripped bypass_actors against the
+# canonical in-repo JSON, not just the pre-mutation snapshot. The PUT API
+# copies bypass_actors verbatim from $before, so a same-PUT-cycle drift
+# would not surface in the before/after diff — only the canonical
+# comparison catches an admin-broadened bypass that happened to land in
+# the pre-mutation snapshot.
+if [[ -f "$CANONICAL_BYPASS_FILE" ]]; then
+  bypass_canonical_norm=$(jq -S 'map({actor_type, actor_id, bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)' "$CANONICAL_BYPASS_FILE")
+  bypass_after_norm=$(jq -S '.bypass_actors | map({actor_type, actor_id, bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)' "$after")
+  if [[ "$bypass_canonical_norm" != "$bypass_after_norm" ]]; then
+    echo "::error::bypass_actors after PUT does not match canonical at ${CANONICAL_BYPASS_FILE}" >&2
+    echo "         canonical: ${bypass_canonical_norm}" >&2
+    echo "         after PUT: ${bypass_after_norm}" >&2
+    echo "         If the bypass change is intentional, update the canonical JSON FIRST," >&2
+    echo "         then re-run; the daily audit reads the same file." >&2
+    drift=1
+  fi
+else
+  echo "::warning::canonical bypass file missing at ${CANONICAL_BYPASS_FILE} — skipping audit fast-path check" >&2
+fi
+
 (( drift )) && exit 2
 
 say "Verification OK. Final required_status_checks contexts:"
