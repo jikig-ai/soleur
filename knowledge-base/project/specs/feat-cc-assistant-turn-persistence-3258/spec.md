@@ -6,6 +6,7 @@
 - Headline transcript-persistence fix landed in #3286 (merged 2026-05-05). This spec covers the residual hardening pass surfaced by CTO + CPO + CLO under USER_BRAND_CRITICAL framing.
 - Brand-survival threshold: **single-user incident**. `/soleur:gdpr-gate` required at plan Phase 2.7, work Phase 2 exit, ship Phase 5.5.
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-11-cc-soleur-go-transcript-hardening-brainstorm.md`.
+- **AC11 verification (Step 0) — PASSED 2026-05-11** via Playwright MCP + Supabase service-role DB query on conversation `36df3694-9f0c-4e1e-905f-c0846b52749e`. Two new residuals surfaced (W8 below; W9 advisory). See `gh issue view 3603` comment dated 2026-05-11 for the full result table.
 
 ## Problem Statement
 
@@ -14,7 +15,9 @@ The headline fix in PR #3286 (`saveAssistantMessage` at `cc-dispatcher.ts:1018-1
 1. **Cross-tenant dedup invariants are untested.** A subtle bug in stream-end persistence could surface User A's assistant turn in User B's tab — a GDPR Art. 33/34 notifiable breach at brand-survival threshold. Today there is no two-user matrix test asserting tenant isolation under concurrent load.
 2. **Partial assistant text is lost on abort.** `saveAssistantMessage` fires only on `onTextTurnEnd`. If the SDK aborts mid-turn (Stop button, runner runaway, container kill, internal_error), accumulated text never persists. The legacy single-leader path writes `status:"aborted"` rows via migration 040; the cc path does not.
 3. **SDK retry can double-render an assistant turn.** If the SDK re-emits text blocks during an internal retry, `accumulatedAssistantText` accrues a duplicate prefix and INSERTs a row with doubled content.
-4. **`status` / `usage` column parity is missing on the cc path.** Migration 040 added these columns; the cc-path `saveAssistantMessage` writes neither. Stage-3 deferral comment at `cc-dispatcher.ts:1137-1139` is still open. Hydration in `api-messages.ts:79-85` already SELECTs these columns, so cc rows render with stale defaults.
+4. **`messages.usage` is null on the cc path** (W4-narrowed). AC11 verification on 2026-05-11 confirmed `messages.status` IS populated on cc rows (`status:"complete"`). The remaining Stage-3 deferral at `cc-dispatcher.ts:1137-1139` is `usage` jsonb only.
+
+8. **Routing preamble leaks into persisted assistant content** (W8, new from AC11 verification). The cc path's `saveAssistantMessage` accumulates every `onText` chunk including hidden router telemetry (e.g., `"Routing to soleur:go — classifying this as a simple connectivity/verification ping."`). The UI filters these chunks live but DB persistence captures them. On reload, hydration renders text the user never saw streamed — a "message changed after reload" trust-class failure (CPO: MEDIUM trust damage, "implies tampering, not loss"). Evidence: assistant row `f511ec09-0960-412f-ae3e-c33d502900c5` in conversation `36df3694-9f0c-4e1e-905f-c0846b52749e` carries both the preamble and the user-visible reply concatenated.
 5. **Migration cohort lacks an affordance.** Conversations created between 2026-05-05 (parent PR #3254 merge) and the AC11 verification of #3286 may render with user-only history. CPO + CLO agree that silent rendering of an incomplete transcript is both a brand-trust breach and an Art. 5(1)(a) transparency defect.
 6. **Privacy Policy §4.7 + DPD activity #10 do not acknowledge the cc-soleur-go split.** The legal docs describe a single uniform "conversation data" surface; the implementation is now uniform-on-main but the documentation gap remains.
 7. **DSAR cohort audit pending.** Any Art. 15 export request issued between 2026-05-05 and AC11 verification was materially incomplete for users with active cc conversations. The audit-log review and supplementary-disclosure preparation are unstarted.
@@ -38,9 +41,9 @@ The headline fix in PR #3286 (`saveAssistantMessage` at `cc-dispatcher.ts:1018-1
 
 ## Functional Requirements
 
-### FR1: AC11 prod verification gate (Step 0)
+### FR1: AC11 prod verification gate (Step 0) — PASSED 2026-05-11
 
-Before any code change ships, an operator confirms on prod: open a cc/KB-Concierge thread, exchange at least one user + assistant turn, reload the tab. Both bubbles must render from DB hydration. If the check fails, this hardening pass is paused and a fresh symptom-scoped issue is filed.
+PASSED via Playwright MCP + Supabase service-role DB query on conversation `36df3694-9f0c-4e1e-905f-c0846b52749e`. Both user and assistant rows persisted with matching `conversation_id`; assistant `leader_id=cc_router` (cc-soleur-go path confirmed). `messages.status="complete"` populated on cc path. `messages.usage=null` (W4 deferral confirmed). Two new residuals surfaced during verification: W8 (routing preamble leak into persisted content) and W9 advisory (`conversations.status="failed"` rollup despite per-message success — pending non-abort repro).
 
 ### FR2: Cross-tenant matrix test (W1, PR-A)
 
@@ -54,9 +57,13 @@ Synthesized-fixture test (per `cq-test-fixtures-synthesized-only`) constructs tw
 
 Per-`(conversationId, turnIndex)` in-process latch keyed by an internal turn counter prevents `saveAssistantMessage` from writing twice within a single turn. Latch resets on `onTextTurnEnd` completion. No DB constraint.
 
-### FR5: `status` / `usage` parity on cc path (W4, PR-A)
+### FR5: `usage` parity on cc path (W4-narrowed, PR-A)
 
-`saveAssistantMessage` writes `status:"complete"` on `onTextTurnEnd` and `status:"aborted"` on the FR3 flush path. `usage` jsonb is populated from whatever cost/token data is available at the persistence boundary; if unavailable, write `null` not a placeholder.
+`status` is already written: `status:"complete"` on `onTextTurnEnd` (AC11-verified 2026-05-11). FR3 flush path adds `status:"aborted"`. The remaining gap is `usage` jsonb — populate from whatever cost/token data is available at the persistence boundary; if unavailable, write `null` not a placeholder. Removes the Stage-3 deferral comment at `cc-dispatcher.ts:1137-1139`.
+
+### FR5b: Filter routing preamble from persisted assistant content (W8, PR-A)
+
+`saveAssistantMessage` MUST filter SDK router-telemetry text chunks before INSERT so the persisted `content` matches what the live UI rendered. Cite the existing UI filter logic and apply the same predicate at the persistence boundary. Acceptance: synthesized fixture in which the SDK emits a routing preamble followed by a user-visible reply; assert persisted `content` matches only the user-visible portion.
 
 ### FR6: Hydration regression test (W4, PR-A)
 
