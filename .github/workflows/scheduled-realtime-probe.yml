@@ -1,0 +1,261 @@
+# Synthetic Realtime probe: detects regressions in the Phoenix JOIN handshake
+# that depend on `globalThis.WebSocket` being polyfilled in Node test/probe
+# paths. The polyfill in apps/web-platform/test/helpers/node-websocket-polyfill.ts
+# protects cross-tenant isolation integration tests (#3049) from a known
+# realtime-js Node-without-native-WebSocket factory bug. This workflow runs
+# the probe 5x nightly against dev to canary any future supabase-js bump that
+# either re-triggers the race or quietly fixes it upstream (allowing polyfill
+# retirement). Pattern mirrors scheduled-oauth-probe.yml.
+#
+# Security: all untrusted values (probe stdout, supabase-js version string)
+# flow through env: vars + strip_log_injection before any echo into
+# ::error::/::warning:: or $GITHUB_OUTPUT. No github.event.* inputs consumed.
+#
+# See: knowledge-base/project/learnings/best-practices/2026-04-29-supabase-phx-join-handshake-shell-environment.md
+# Tracks #3060. Verifies #3049 contract.
+
+name: "Scheduled: Realtime Probe"
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # 07:00 UTC daily
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-realtime-probe
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '21.7.3'
+
+      # Pinned package-lock.json install is deliberate: when @supabase/supabase-js
+      # is bumped via Dependabot/Renovate, the next nightly run is the canary
+      # for the polyfill helper's continued necessity. Do NOT switch to
+      # `npm install --no-save <pkg>@latest` here.
+      - name: Install web-platform deps (pinned)
+        run: npm ci --prefix apps/web-platform
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      - id: probe
+        env:
+          # Reuse the workplace-scoped DOPPLER_TOKEN already used by
+          # scheduled-terraform-drift.yml and other scheduled workflows. The
+          # token can read any project config; the runtime `.environment == "dev"`
+          # assertion below is the load-bearing defense for
+          # hr-dev-prd-distinct-supabase-projects, not the token's scope.
+          # Avoids the operator-bootstrap step that a dev-only service token
+          # would require.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          # Note: NOT set -e — we collect failure mode and emit it as output.
+
+          fail_mode=""
+          fail_detail=""
+
+          record_failure() {
+            if [[ -z "$fail_mode" ]]; then
+              fail_mode="$1"
+              fail_detail="$2"
+            fi
+          }
+
+          # strip_log_injection — defense against log-annotation forgery via
+          # values echoed into ::error::/::warning:: or $GITHUB_OUTPUT. Strips
+          # CR/LF, form-feed/vertical-tab/DEL, NEL, and Unicode line/paragraph/
+          # zwsp/bom separators U+2028, U+2029, U+200B, U+FEFF. Bash
+          # "${var//[$'…']/}" does NOT reliably cover multi-byte UTF-8
+          # sequences (verified on bash 5.2); use tr+sed.
+          # Copied verbatim from scheduled-oauth-probe.yml lines 80-90.
+          strip_log_injection() {
+            printf '%s' "$1" | tr -d '\r\n\f\v\x7f\x85' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g'
+          }
+
+          # Graceful fail mode when DOPPLER_TOKEN somehow isn't propagated.
+          # Matches OAUTH_PROBE_GITHUB_CLIENT_ID graceful-fail pattern at
+          # scheduled-oauth-probe.yml lines 285-290.
+          if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+            record_failure "secret_unset" \
+              "DOPPLER_TOKEN is not set — verify the workplace token secret is propagated to this workflow."
+          fi
+
+          # Load-bearing: assert the config we are about to probe resolves to
+          # an environment named 'dev'. The workplace token can read any
+          # config; this is the structural defense for
+          # hr-dev-prd-distinct-supabase-projects. If a future contributor
+          # edits this workflow to target prd by mistake, this assertion
+          # fails fast before any probe runs.
+          if [[ -z "$fail_mode" ]]; then
+            env_name=$(doppler configs get dev -p soleur --json 2>/dev/null \
+              | jq -r '.environment // empty')
+            if [[ -z "$env_name" ]]; then
+              record_failure "doppler_config_missing" \
+                "doppler configs get dev -p soleur returned empty — config does not exist or token lacks read access."
+            elif [[ "$env_name" != "dev" ]]; then
+              env_name_safe=$(strip_log_injection "$env_name")
+              record_failure "doppler_config_drift" \
+                "dev config resolves to environment=${env_name_safe} (expected: dev) — investigate Doppler workspace config drift before running probe."
+            fi
+          fi
+
+          # Run probe 5x consecutively. Any single non-SUBSCRIBED breaks early.
+          # The probe script's own joinTimeout is 10s; its hard timeout is 30s.
+          # Workflow's timeout-minutes ceiling is 10.
+          if [[ -z "$fail_mode" ]]; then
+            for i in 1 2 3 4 5; do
+              # Capture stdout+stderr together AND the exit code. Both signals
+              # are load-bearing — disagreement between exit code 0 and the
+              # SUBSCRIBED token = probe contract drift (script bug), not a
+              # realtime race.
+              set +e
+              output=$(doppler run -p soleur -c dev -- \
+                node apps/web-platform/scripts/realtime-probe.mjs 2>&1)
+              probe_exit=$?
+              set -e
+              has_subscribed="no"
+              grep -q "SUBSCRIBED" <<<"$output" && has_subscribed="yes"
+
+              if [[ "$probe_exit" -eq 0 && "$has_subscribed" == "yes" ]]; then
+                # healthy
+                continue
+              fi
+
+              # Compose a 500-char trimmed, newline-stripped detail.
+              detail_trim=$(printf '%s' "$output" | tr '\n' ' ' | head -c 500)
+              detail_safe=$(strip_log_injection "$detail_trim")
+
+              if [[ "$probe_exit" -eq 0 && "$has_subscribed" == "no" ]] \
+                 || [[ "$probe_exit" -ne 0 && "$has_subscribed" == "yes" ]]; then
+                record_failure "probe_contract_drift" \
+                  "Run ${i}/5: exit=${probe_exit} but SUBSCRIBED token present=${has_subscribed}. Probe script contract changed. Output: ${detail_safe}"
+              else
+                # exit != 0 AND no SUBSCRIBED — the race or upstream change.
+                record_failure "realtime_join_timeout" \
+                  "Run ${i}/5: exit=${probe_exit}, no SUBSCRIBED in output. Output: ${detail_safe}"
+              fi
+              break
+            done
+          fi
+
+          fail_mode_safe=$(strip_log_injection "$fail_mode")
+          fail_detail_safe=$(strip_log_injection "$fail_detail")
+          {
+            echo "failure_mode=${fail_mode_safe}"
+            echo "failure_detail=${fail_detail_safe}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ -n "$fail_mode_safe" ]]; then
+            echo "::warning::Realtime probe failed: ${fail_mode_safe} — ${fail_detail_safe}"
+          else
+            echo "Realtime probe passed (5/5 SUBSCRIBED)."
+          fi
+
+      - name: File or comment on tracking issue (failure)
+        if: steps.probe.outputs.failure_mode != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
+          FAIL_DETAIL: ${{ steps.probe.outputs.failure_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LEARNING_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/knowledge-base/project/learnings/best-practices/2026-04-29-supabase-phx-join-handshake-shell-environment.md
+        run: |
+          set -euo pipefail
+
+          ISSUE_TITLE="[ci/realtime-broken] Nightly Realtime probe failed"
+          ISSUE_SEARCH='in:title "[ci/realtime-broken] Nightly Realtime probe failed"'
+
+          # Pre-create the label defensively (idempotent).
+          gh label create "ci/realtime-broken" --repo "$GH_REPO" \
+            --description "Nightly CI probe detected a Realtime/Phoenix JOIN regression" \
+            --color "B60205" 2>/dev/null || true
+
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          # Build body via printf to avoid heredoc-leading-whitespace traps
+          # (4+ leading spaces would render the body as a code block).
+          BODY_FILE=$(mktemp)
+          trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Nightly Realtime probe failed\n\n'
+            printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+            printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What to do\n\nSee the [Phoenix JOIN handshake learning](%s).\n\n' "$LEARNING_URL"
+            printf 'Common triage paths:\n\n'
+            printf -- '- `realtime_join_timeout` — most likely a `@supabase/realtime-js` or `@supabase/supabase-js` bump re-triggered the Node-without-native-WebSocket race (or upstream removed the polyfill workaround). Re-run `apps/web-platform/scripts/realtime-probe.mjs` locally with and without `--no-polyfill` to confirm which side changed.\n'
+            printf -- '- `probe_contract_drift` — `realtime-probe.mjs` exit code disagrees with its SUBSCRIBED stdout token. Script bug, not a race.\n'
+            printf -- '- `doppler_config_drift` / `doppler_config_missing` — investigate Doppler workspace `dev` config: it should resolve to environment `dev` and the workplace `DOPPLER_TOKEN` must have read access.\n'
+            printf -- '- `secret_unset` — verify `DOPPLER_TOKEN` is propagated to scheduled workflows; mirrors the secret used by `scheduled-terraform-drift.yml`.\n\n'
+            printf '**Tracks:** #3060\n'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+            --search "$ISSUE_SEARCH" \
+            --json number --jq '.[0].number // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Existing tracking issue #$EXISTING — adding comment."
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Probe failed again at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" \
+              --title "$ISSUE_TITLE" \
+              --label "ci/realtime-broken" \
+              --label "priority/p1-high" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Email notification (failure)
+        if: steps.probe.outputs.failure_mode != ''
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "[Soleur Ops] Realtime probe failure: ${{ steps.probe.outputs.failure_mode }}"
+          body: |
+            <p><strong>Failure mode:</strong> ${{ steps.probe.outputs.failure_mode }}</p>
+            <p><strong>Detail:</strong> ${{ steps.probe.outputs.failure_detail }}</p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Run log</a></p>
+            <p>Learning: <a href="https://github.com/${{ github.repository }}/blob/main/knowledge-base/project/learnings/best-practices/2026-04-29-supabase-phx-join-handshake-shell-environment.md">supabase-phx-join-handshake-shell-environment.md</a></p>
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Auto-close stale issue (probe green)
+        if: steps.probe.outputs.failure_mode == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          ISSUE_SEARCH='in:title "[ci/realtime-broken] Nightly Realtime probe failed"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          STALE=$(gh issue list --repo "$GH_REPO" --state open \
+            --search "$ISSUE_SEARCH" \
+            --json number --jq '.[0].number // empty')
+
+          if [[ -n "$STALE" ]]; then
+            echo "Closing stale tracking issue #$STALE."
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "Probe green at ${NOW} (5/5 SUBSCRIBED). Run: ${RUN_URL}"
+          else
+            echo "No stale tracking issue to close."
+          fi

@@ -3,10 +3,11 @@
 // per-process PendingPromptRegistry, StartSessionRateLimiter, and
 // SoleurGoRunner instances.
 //
-// Stage 2.12 — bind real-SDK `query()` from `@anthropic-ai/claude-agent-sdk`
-// inside `realSdkQueryFactory`. Behind FLAG_CC_SOLEUR_GO=0 in prod
-// (default) this code path is unreachable; in dev (FLAG_CC_SOLEUR_GO=1)
-// the runner actually invokes the SDK end-to-end. See plan
+// `realSdkQueryFactory` binds the real-SDK `query()` from
+// `@anthropic-ai/claude-agent-sdk` — this is the always-on production
+// cc-soleur-go runner. Originally gated behind FLAG_CC_SOLEUR_GO=1; the
+// flag was retired in #3270 once the soak window (ADR-022) confirmed the
+// new path. See plan
 // `2026-04-27-feat-stage-2-12-real-sdk-query-factory-binding-plan.md`.
 //
 // V2 follow-ups tracked in #2853 backlog (V2-13: tier-classify in-process
@@ -415,8 +416,7 @@ export function cleanupCcBashGatesForConversation(
 }
 
 // ---------------------------------------------------------------------------
-// realSdkQueryFactory — Stage 2.12 binding (replaces the prior stub
-// that throw-mirrored to Sentry under FLAG_CC_SOLEUR_GO).
+// realSdkQueryFactory — Stage 2.12 binding (unconditional since #3270).
 //
 // Builds a real `Query` per cold conversation. Mirrors
 // `agent-runner.ts startAgentSession` `query({ options })` shape with
