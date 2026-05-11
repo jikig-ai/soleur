@@ -38,31 +38,45 @@ plan: knowledge-base/project/plans/2026-05-11-feat-kb-sidebar-transition-plan.md
 
 ## Phase 3 — Tests
 
-- [ ] 3.1 Extend `apps/web-platform/test/kb-sidebar-collapse.test.tsx` with a new
-       `describe` block: "sidebar transition contract" mirroring the four asserts
+- [ ] 3.1 Create `apps/web-platform/test/kb-sidebar-transition.test.tsx` with
+       `useMediaQuery: () => true` (desktop mode). Mirror the four asserts
        in `settings-sidebar-collapse.test.tsx` lines 149-197:
        (a) `md:transition-[width] md:duration-200 md:ease-out` on `<aside>` in
-       both states;
-       (b) inner wrapper carries `w-72 px-... py-...` and `<aside>` does NOT
-       carry the padding (so `md:w-0` collapses fully);
+       both open and collapsed states;
+       (b) inner wrapper carries `w-72` and `<aside>` does NOT carry `px-*` /
+       `py-*` (so `md:w-0` + `box-border` collapses fully; #3585 lesson);
        (c) collapsed `<aside>` matches `md:w-0`, `md:border-r-0`,
        `md:overflow-hidden`;
        (d) `KbDocShell` content well carries `md:transition-[padding]
-       md:duration-200 md:ease-out` in both states.
-- [ ] 3.2 `bun run --cwd apps/web-platform test
+       md:duration-200 md:ease-out` in both states (#3573 lesson — class
+       must be unconditional).
+- [ ] 3.2 Leave `apps/web-platform/test/kb-sidebar-collapse.test.tsx`
+       untouched — its mobile-mode mock validates click/keyboard/input-focus
+       contracts which still hold.
+- [ ] 3.3 `bun run --cwd apps/web-platform test
+       apps/web-platform/test/kb-sidebar-transition.test.tsx
        apps/web-platform/test/kb-sidebar-collapse.test.tsx` is green.
-- [ ] 3.3 `bun run --cwd apps/web-platform tsc --noEmit` is green.
+- [ ] 3.4 `bun run --cwd apps/web-platform tsc --noEmit` is green.
 
 ## Phase 4 — Manual visual confirmation
 
-- [ ] 4.1 Run `bun run --cwd apps/web-platform dev`; open `/dashboard/kb` at
-       ≥768 px.
+- [ ] 4.1 Try `bun run --cwd apps/web-platform dev`; open `/dashboard/kb` at
+       ≥768 px. If the dev server fails with the `instrumentation.ts` ESM
+       error, fall back to a Vercel preview build of the branch and document
+       `#3562` as the local-QA blocker in the PR body.
 - [ ] 4.2 Toggle via chevron and via ⌘B — confirm 200 ms ease-out width slide,
-       no snap, no flash.
-- [ ] 4.3 Open a doc + open chat — confirm doc-vs-chat resize handle still
+       no snap, no flash, no 32 px sliver in the collapsed state.
+- [ ] 4.3 Open a long markdown doc — confirm body text does NOT drift
+       horizontally during the transition. If it does, add a collapsed-state
+       `md:pl-[...rem]` anchor pad to `KbDocShell`'s content well (settings
+       #3579 pattern; specific value: `w-72` ÷ 16 + chosen pad).
+- [ ] 4.4 Open a PDF doc — confirm the PDF page does NOT drift horizontally
+       during the transition. Same mitigation as 4.3 if needed.
+- [ ] 4.5 Open a doc + open chat — confirm doc-vs-chat resize handle still
        drags inside the inner `<Group>`.
-- [ ] 4.4 Resize to <768 px and verify the mobile `hidden`/`block` class swap
-       is unaffected.
+- [ ] 4.6 Resize to <768 px and verify the mobile `hidden`/`block` class swap
+       is unaffected; the `md:`-prefixed transition classes are inert below
+       the breakpoint.
 
 ## Phase 5 — Deferral tracking
 
