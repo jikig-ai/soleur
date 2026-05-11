@@ -5,7 +5,12 @@ source_pr: 3501
 priority: p3-low
 domain: legal
 created: 2026-05-11
+date: 2026-05-11
 deepened: 2026-05-11
+branch: feat-one-shot-3519-compliance-posture-bump
+worktree: .worktrees/feat-one-shot-3519-compliance-posture-bump
+spec: knowledge-base/project/specs/feat-one-shot-3519-compliance-posture-bump/tasks.md
+requires_cpo_signoff: false
 ---
 
 # chore: bump compliance-posture.md last_updated for gdpr-gate handshake (#3519)
