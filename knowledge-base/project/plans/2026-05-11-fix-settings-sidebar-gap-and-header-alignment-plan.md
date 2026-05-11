@@ -193,12 +193,12 @@ Attach screenshots to the PR alongside the numeric deltas.
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/components/settings/settings-shell.tsx` header row has `min-h-7 flex items-center justify-between`.
-- [ ] Content-area `<div>` uses conditional `md:pl-8 md:pr-10` when `settingsCollapsed` and `md:px-10` otherwise; `py-10` / `md:pb-10` unchanged.
-- [ ] All existing assertions in `apps/web-platform/test/settings-sidebar-collapse.test.tsx` continue to pass.
-- [ ] Three new assertions added (min-h-7 on header row, collapsed-state nav guard, collapsed-state content-padding guard) all pass.
-- [ ] `bun test apps/web-platform/test/settings-sidebar-collapse.test.tsx` → green.
-- [ ] `bunx tsc --noEmit` from `apps/web-platform/` → no new errors.
+- [x] `apps/web-platform/components/settings/settings-shell.tsx` header row has `min-h-7 flex items-center justify-between`.
+- [x] Content-area `<div>` uses conditional `md:pl-8 md:pr-10` when `settingsCollapsed` and `md:px-10` otherwise; `py-10` / `md:pb-10` unchanged.
+- [x] All existing assertions in `apps/web-platform/test/settings-sidebar-collapse.test.tsx` continue to pass.
+- [x] Three new assertions added (min-h-7 on header row, collapsed-state nav guard, collapsed-state content-padding guard) all pass.
+- [x] `bun test apps/web-platform/test/settings-sidebar-collapse.test.tsx` → green.
+- [x] `bunx tsc --noEmit` from `apps/web-platform/` → no new errors.
 - [ ] Visual QA screenshots attached to the PR for the four toggle-state combinations enumerated in Phase 6.
 - [ ] Quantitative `yDelta` measurements via `mcp__playwright__browser_evaluate` recorded in the PR body for combinations 1 + 3 (both states where both chevrons are visible). `yDelta ≤ 1 px`.
 - [ ] Screenshot inspection confirms: (a) settings `<` chevron and main app `<` chevron land on the same y-baseline (±1 px, corroborated by the numeric `yDelta`), (b) when settings sidebar is closed, the content area collapses cleanly with no visible gap >32 px between the main app sidebar's right edge and the expand chevron's left edge.
