@@ -9,6 +9,18 @@ deepened_on: 2026-05-11
 
 # Fix: cc-attachment-pipeline flaky `b.png` substring collision (#3611)
 
+> **Post-review revision (2026-05-11):** Multi-agent review surfaced a strictly
+> simpler fix than the regex described below. Since `node:crypto.randomUUID()`
+> v4 emits only `[0-9a-f]`, renaming the failing-download fixture from
+> `b.png` to `z.png` makes the original `not.toContain("z.png")` assertion
+> collision-proof by construction — no `\b` word-boundary semantics to audit,
+> no template-shape Risk to track. The shipped change is the fixture rename,
+> not the regex swap. The regex analysis below is preserved for historical
+> context; the deferred deterministic-UUID spy (#3617) was closed as wontfix
+> because the fixture rename eliminates the flake class without the spy.
+> Credit: code-simplicity-reviewer on the review pass for surfacing the
+> simpler-fixture alternative the original plan failed to weigh.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-05-11
