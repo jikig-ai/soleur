@@ -39,16 +39,18 @@ vi.mock("@/server/observability", async () => {
     warnSilentFallback: vi.fn(),
     // Override mirrorWithDebounce with a TTL-honoring wrapper that uses
     // the spy as its sink. We can't reuse `actual.mirrorWithDebounce`
-    // directly because that one captured the real reportSilentFallback at
-    // module-init time (before this mock swap).
+    // directly because that one captured the real reportSilentFallback
+    // at module-init time (before this mock swap). Pulling the TTL from
+    // `actual.MIRROR_DEBOUNCE_MS` keeps the wrapper in lockstep with the
+    // production constant — if `MIRROR_DEBOUNCE_MS` ever changes, the
+    // 3-call-→-1-mirror assertion in this file will not silently drift.
     mirrorWithDebounce: (() => {
       const lastReportedAt = new Map<string, number>();
-      const ttl = 5 * 60 * 1000;
       return (err: unknown, ctx: unknown, userId: string, errorClass: string) => {
         const key = `${userId}:${errorClass}`;
         const now = Date.now();
         const last = lastReportedAt.get(key);
-        if (last !== undefined && now - last < ttl) return;
+        if (last !== undefined && now - last < actual.MIRROR_DEBOUNCE_MS) return;
         lastReportedAt.set(key, now);
         mockReportSilentFallback(err, ctx);
       };

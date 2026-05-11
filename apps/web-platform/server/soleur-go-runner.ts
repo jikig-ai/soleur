@@ -1466,11 +1466,14 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       if (state.closed) return;
       if (state.awaitingUser) return;
       // #3040 Finding 4: subtract `totalPausedMs` and any in-flight
-      // paused interval. `pausedAt` is typically null inside this
-      // branch (we returned above when awaitingUser=true), but the
-      // double-subtract is cheap and matches `armRunaway`.
-      const pausedInflight = state.pausedAt !== null ? now() - state.pausedAt : 0;
-      const elapsedMs = now() - turnOriginAt - state.totalPausedMs - pausedInflight;
+      // paused interval. `pausedAt` is null on this branch under the
+      // current control flow (we early-returned above when
+      // awaitingUser=true), but the recompute keeps `armRunaway`'s
+      // math identical and survives future refactors that might let
+      // the callback land mid-pause. `Math.max(0, ...)` clamps against
+      // NTP step-back where `now()` could be < `pausedAt`.
+      const pausedInflight = state.pausedAt !== null ? Math.max(0, now() - state.pausedAt) : 0;
+      const elapsedMs = Math.max(0, now() - turnOriginAt - state.totalPausedMs - pausedInflight);
       if (elapsedMs < maxTurnDurationMs) {
         // Fire-time re-check shape: the timer fired against wall-clock
         // time, but enough of that time was paused that effective
@@ -1557,9 +1560,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // active compute time, not wall-clock time. A chatty-flap runaway
       // cannot escape the 90s window by interleaving short user prompts
       // with heavy compute — each pause reduces effective elapsed by
-      // exactly its real-time duration.
-      const pausedInflight = state.pausedAt !== null ? now() - state.pausedAt : 0;
-      const elapsedMs = now() - firedAtStart - state.totalPausedMs - pausedInflight;
+      // exactly its real-time duration. `Math.max(0, ...)` clamps the
+      // pausedInflight delta against NTP step-back and clamps `elapsedMs`
+      // against any pathological accumulator drift so a negative value
+      // cannot inflate the re-arm delay beyond the configured ceiling.
+      const pausedInflight = state.pausedAt !== null ? Math.max(0, now() - state.pausedAt) : 0;
+      const elapsedMs = Math.max(0, now() - firedAtStart - state.totalPausedMs - pausedInflight);
       if (elapsedMs < wallClockTriggerMs) {
         // Fire-time re-check: the wall-clock setTimeout fired but
         // enough of the wall time was paused that effective elapsed is
@@ -1813,6 +1819,15 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     state.firstToolUseAt = null;
     state.lastBlockKind = null;
     state.lastBlockToolName = null;
+    // #3040 Finding 4 — keep paused-budget reset symmetric with
+    // `firstToolUseAt = null` above. If a result arrives while paused
+    // (rare race: dispatcher emitted result before the resume signal
+    // landed), the next turn's `recordAssistantBlock` first-block reset
+    // would have caught this — but resetting here too closes the cross-
+    // turn drift window where a stale `pausedAt` could survive into a
+    // pre-first-block resume call.
+    state.pausedAt = null;
+    state.totalPausedMs = 0;
     // #3436 Phase 3.B — clear per-turn activeChapter; preserve
     // chapterChunkedContext so the next user turn re-routes off the
     // same outline.
@@ -2646,7 +2661,11 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // semantic) — a chatty-flap runaway cannot escape the ceiling by
     // interleaving cheap user prompts with heavy compute.
     if (state.pausedAt !== null) {
-      state.totalPausedMs += now() - state.pausedAt;
+      // `Date.now()` is wall-clock and may step backward under NTP slew.
+      // Clamp at 0 so a backward step cannot decrement the accumulator
+      // (which would inflate `elapsedMs` and shorten the budget below
+      // its configured ceiling).
+      state.totalPausedMs += Math.max(0, now() - state.pausedAt);
       state.pausedAt = null;
     }
     // Re-arm only when mid-turn (some assistant block has landed and no
