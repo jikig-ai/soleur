@@ -429,6 +429,62 @@ class TestCrossFileMode(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("duplicate", r.stderr)
 
+    # ---- Residency invariants (CPO sign-off PR #3496 condition #3) ----
+
+    def test_compliance_tier_rule_outside_core_fails(self):
+        """A `[compliance-tier]`-tagged rule whose body lives in a non-core
+        sidecar must fail the linter — these rules must load every session.
+        """
+        index = (
+            "# Index\n\n## Hard Rules\n\n"
+            "- [id: hr-must-stay-in-core] → core\n"
+            "- [id: cq-compliance-but-misplaced] → docs-only\n"
+        )
+        core = (
+            "# Core\n\n## Hard Rules\n\n"
+            "- A hard rule [id: hr-must-stay-in-core].\n"
+        )
+        # The `[compliance-tier]` body lives in the docs sidecar, not core.
+        docs = (
+            "# Docs\n\n## Code Quality\n\n"
+            "- Misplaced compliance rule [id: cq-compliance-but-misplaced] [compliance-tier].\n"
+        )
+        repo = self._seed_repo(
+            {"AGENTS.md": "# placeholder\n"},
+            {"AGENTS.md": index, "AGENTS.core.md": core, "AGENTS.docs.md": docs},
+        )
+        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md", "AGENTS.docs.md"])
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("compliance-tier", r.stderr)
+        self.assertIn("cq-compliance-but-misplaced", r.stderr)
+
+    def test_hr_rule_outside_core_fails(self):
+        """An `hr-*` rule whose body lives in a non-core sidecar must fail.
+        CPO sign-off explicitly forbids demoting hr-* — only wg-* may be
+        demoted on `core > 18k` redistribution.
+        """
+        index = (
+            "# Index\n\n## Hard Rules\n\n"
+            "- [id: hr-stays] → core\n"
+            "- [id: hr-misplaced] → rest\n"
+        )
+        core = (
+            "# Core\n\n## Hard Rules\n\n"
+            "- A hard rule [id: hr-stays].\n"
+        )
+        rest = (
+            "# Rest\n\n## Hard Rules\n\n"
+            "- A misplaced hard rule [id: hr-misplaced].\n"
+        )
+        repo = self._seed_repo(
+            {"AGENTS.md": "# placeholder\n"},
+            {"AGENTS.md": index, "AGENTS.core.md": core, "AGENTS.rest.md": rest},
+        )
+        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md", "AGENTS.rest.md"])
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("hr-misplaced", r.stderr)
+        self.assertIn("AGENTS.core.md", r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

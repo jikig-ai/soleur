@@ -197,6 +197,38 @@ def is_pointer_line(line: str) -> bool:
     return bool(POINTER_LINE_RE.match(line))
 
 
+def collect_residency_metadata(path: Path) -> tuple[set[str], set[str]]:
+    """Return (compliance_tier_ids, hr_ids) found as bodies in `path`.
+
+    Used by `lint_union` to enforce the invariant that every
+    `[compliance-tier]`-tagged rule AND every `hr-*` rule lives in
+    `AGENTS.core.md`. Per CPO sign-off on PR #3496, demoting an `hr-*`
+    out of core is a single-user-incident-class regression; until the
+    workflow is hardened, this linter is the canonical enforcer.
+    """
+    compliance_ids: set[str] = set()
+    hr_ids: set[str] = set()
+    if not path.exists():
+        return compliance_ids, hr_ids
+    in_section = False
+    for line in path.read_text().splitlines():
+        m = re.match(r"^## (.+?)\s*$", line)
+        if m:
+            in_section = m.group(1).strip() in SECTIONS
+            continue
+        if not in_section or not line.startswith("- ") or is_pointer_line(line):
+            continue
+        id_match = ID_RE.search(line)
+        if not id_match:
+            continue
+        rid = id_match.group(1)
+        if rid.startswith("hr-"):
+            hr_ids.add(rid)
+        if "[compliance-tier]" in line:
+            compliance_ids.add(rid)
+    return compliance_ids, hr_ids
+
+
 def collect_ids_typed(path: Path) -> tuple[set[str], set[str], list[str]]:
     """Split ids in a file into (pointer_ids, body_ids, errors).
 
@@ -322,6 +354,37 @@ def lint_union(
             + "; ".join(offenders)
             + ". Either add a pointer to the index or remove the body."
         )
+
+    # Residency invariants (CPO sign-off PR #3496, condition #3):
+    # 1. Every `[compliance-tier]`-tagged rule MUST live in AGENTS.core.md.
+    # 2. Every `hr-*` rule MUST live in AGENTS.core.md.
+    # The hook injects `core` on every session regardless of class; demoting
+    # one of these into `docs-only` or `rest` produces a single-user-incident-
+    # class gap (the rule would be absent from sessions whose change-class
+    # doesn't fire the sidecar containing it).
+    core_path = index_path.parent / "AGENTS.core.md"
+    if core_path.exists():
+        core_compliance, core_hr = collect_residency_metadata(core_path)
+    else:
+        core_compliance, core_hr = set(), set()
+    for p in deduped:
+        if str(p.resolve()) == index_real or not p.exists() or p.resolve() == core_path.resolve():
+            continue
+        side_compliance, side_hr = collect_residency_metadata(p)
+        bad_compliance = sorted(side_compliance - core_compliance)
+        if bad_compliance:
+            errors.append(
+                f"{p}: [compliance-tier] rule(s) outside AGENTS.core.md: "
+                f"{bad_compliance}. These rules MUST be in core (loaded "
+                "every session) — move the body to AGENTS.core.md."
+            )
+        bad_hr = sorted(side_hr - core_hr)
+        if bad_hr:
+            errors.append(
+                f"{p}: hr-* rule(s) outside AGENTS.core.md: {bad_hr}. "
+                "Hard Rules MUST be in core per CPO sign-off PR #3496 "
+                "(condition #3) — move the body to AGENTS.core.md."
+            )
 
     # Retired-id reintroduction check (union of pointers + bodies)
     current_ids = pointer_ids | body_ids
