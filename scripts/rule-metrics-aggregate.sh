@@ -247,7 +247,12 @@ report=$(jq -n \
         # weekly cron — every Phase 1.6 outlier would fail orphan-gate.
         # Tests T6/T7/T8 in scripts/rule-metrics-aggregate.test.sh cover this.
         # AGENTS.md section prefixes are hr|wg|cq|rf|pdr|cm; te- cannot collide.
-        | map(select(startswith("te-") | not))) as $orphan_ids
+        | map(select(startswith("te-") | not))
+        # gdpr-gate-* prefix reserved for gdpr-gate skill telemetry
+        # (gdpr-gate-staleness, gdpr-gate-touch, gdpr-gate-cron-binding —
+        # the last introduced by PR #3541). These are operational events
+        # tied to the skill, not rule_ids in the AGENTS.md taxonomy.
+        | map(select(startswith("gdpr-gate-") | not))) as $orphan_ids
     | {
         schema: $schema,
         generated_at: $generated_at,

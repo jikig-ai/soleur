@@ -387,8 +387,20 @@ describe("gdpr-gate runtime staleness banner (FR6, AC6a-d)", () => {
     env: Record<string, string> = {},
     args: string[] = ["scratch.md"],
   ): { stdout: string; stderr: string; exitCode: number } {
+    // Isolate the AC6a-d tests from the cron-run-stale binding (#3535):
+    // when GH_TOKEN/GITHUB_TOKEN are set (as they are in CI), the gate
+    // takes MIN(notice-last-verified, scheduled-workflow-run-timestamp).
+    // A fresh workflow run timestamp suppresses the notice-based staleness
+    // signal these tests assert against. Zero both tokens by default so
+    // the tests exercise the notice path; callers explicitly testing the
+    // cron-binding path can override.
     const result = spawnSync("bash", [HOOK_SH, ...args], {
-      env: { ...process.env, ...env },
+      env: {
+        ...process.env,
+        GH_TOKEN: "",
+        GITHUB_TOKEN: "",
+        ...env,
+      },
       encoding: "utf8",
     });
     return {
