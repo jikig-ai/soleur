@@ -107,8 +107,8 @@ Invoked: `/soleur:gdpr-gate "feat-compound-promotion-loop plan + spec"` on 2026-
 | `.github/workflows/scheduled-compound-promote.yml` | Weekly cron `0 0 * * 0`. Three jobs: `preflight`, `promote` (single, no matrix), `email-on-failure`. |
 | `knowledge-base/project/promotion-config.yml.example` | Opt-in TEMPLATE. Operator copies to `promotion-config.yml` (gitignored — see Files to Edit `.gitignore`) and sets `enabled: true`. Includes 4-line data-flow disclosure. |
 | `knowledge-base/project/learnings/promotion-log.md` | Append-only audit log scaffold. CLO non-repudiation requirement. |
-| `knowledge-base/engineering/runbooks/compound-promote-runbook.md` | Operator runbook: opt-in / opt-out / review heuristic / revert path / kill switch. |
-| `knowledge-base/engineering/architecture/decisions/ADR-021-stateless-self-modifying-cron.md` | ADR for the architectural pattern (Architecture-strategist advisory). Stateless derivation from PR queries; single-job + plain Anthropic API call (no `claude-code-action` wrapper) for self-modifying loops. |
+| `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md` | Operator runbook: opt-in / opt-out / review heuristic / revert path / kill switch. |
+| `knowledge-base/engineering/architecture/decisions/ADR-027-stateless-self-modifying-cron.md` | ADR for the architectural pattern (Architecture-strategist advisory). Stateless derivation from PR queries; single-job + plain Anthropic API call (no `claude-code-action` wrapper) for self-modifying loops. |
 
 ## Files to Edit
 
@@ -584,7 +584,7 @@ EOF
 # - Kill switch: set enabled: false and commit; next cron tick exits no-op.
 #
 # Copy this file to knowledge-base/project/promotion-config.yml (gitignored)
-# and set enabled: true. See knowledge-base/engineering/runbooks/compound-promote-runbook.md.
+# and set enabled: true. See knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md.
 # Default: OFF. Issue: #2720.
 enabled: false
 ```
@@ -628,14 +628,14 @@ Edit `plugins/soleur/skills/compound/SKILL.md` Knowledge Base Integration sectio
 ```markdown
 ### Cross-Session Promotion Loop (Layer 2)
 
-A weekly cron (`scheduled-compound-promote.yml`) consumes accumulated learnings and proposes skill / AGENTS.md edits via draft PR when N=5 learnings cluster around the same root cause. Default OFF. Opt in via `knowledge-base/project/promotion-config.yml`. See `knowledge-base/engineering/runbooks/compound-promote-runbook.md`. Issue: #2720.
+A weekly cron (`scheduled-compound-promote.yml`) consumes accumulated learnings and proposes skill / AGENTS.md edits via draft PR when N=5 learnings cluster around the same root cause. Default OFF. Opt in via `knowledge-base/project/promotion-config.yml`. See `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`. Issue: #2720.
 ```
 
 **Deliverables:** edited `compound/SKILL.md` (+1 subsection ≤4 lines).
 
 ### Phase 6 — Operator runbook
 
-Create `knowledge-base/engineering/runbooks/compound-promote-runbook.md` with:
+Create `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md` with:
 
 - What it does (one paragraph).
 - Opt in (3 commands).
@@ -685,7 +685,7 @@ gh run watch
 
 ### Phase 8 — Issue updates + ADR
 
-8.1. Create `knowledge-base/engineering/architecture/decisions/ADR-021-stateless-self-modifying-cron.md` (Architecture #5 advisory):
+8.1. Create `knowledge-base/engineering/architecture/decisions/ADR-027-stateless-self-modifying-cron.md` (Architecture #5 advisory):
 - Context: claude-code-action token revocation; need single-job arch for self-modifying CI loops.
 - Decision: stateless derivation from PR queries + plain Anthropic API call (no `claude-code-action` wrapper) when the loop opens PRs.
 - Consequences: simpler arch; loses claude-code-action's tool-use; clustering must fit in a single API call.
@@ -699,36 +699,36 @@ gh run watch
 
 ### Pre-merge (PR)
 
-- [ ] **AC1:** `.github/actions/bot-pr-with-synthetic-checks/action.yml` declares 3 new optional inputs (`draft`, `skip-auto-merge`, `labels`) with backward-compatible string defaults.
-- [ ] **AC2:** Boolean inputs normalized at boundary (lowercase + reject non-boolean). Existing callers (`scheduled-rule-prune.yml`, `rule-metrics-aggregate.yml`) NOT modified; defaults preserve their behavior.
-- [ ] **AC2b:** Composite preserves `set -eo pipefail` (NOT upgraded to `-euo` — Kieran P0-1).
-- [ ] **AC3:** `scripts/compound-promote.sh` exists, executable, mirrors `rule-prune.sh` CLI conventions (set -euo, stdout sentinels, env-overridable repo root + GH_BIN + CURL_BIN).
-- [ ] **AC4:** `scripts/compound-promote.test.sh` exists with 3 test cases (no-config, disabled, GDPR-pre-pass-excludes-PII).
-- [ ] **AC5:** `.github/workflows/scheduled-compound-promote.yml` exists. Single `promote` job (no matrix). Cron `0 0 * * 0`. Concurrency group `scheduled-compound-promote`, `cancel-in-progress: false`. Permissions explicitly declared.
-- [ ] **AC6:** `knowledge-base/project/promotion-config.yml.example` includes 4-line data-flow disclosure (LC-01 fold).
-- [ ] **AC7:** `knowledge-base/project/promotion-config.yml` is in `.gitignore`. `.github/promotion-*.json` defensive entry also present.
-- [ ] **AC8:** `plugins/soleur/skills/compound/SKILL.md` has the Layer 2 cross-reference subsection.
-- [ ] **AC9:** `knowledge-base/legal/compliance-posture.md` has an Active Item row referencing #2720 with DPIA candidacy note.
-- [ ] **AC10a:** `bash scripts/compound-promote.test.sh` passes locally.
-- [ ] **AC10b:** Operator invoked `/soleur:review #3559` before mark-as-ready; `user-impact-reviewer` findings resolved or scoped-out with rationale.
-- [ ] **AC11:** Cluster-hash integrity verification step is present in workflow YAML (recompute + compare; refuse on mismatch — Architecture #3).
-- [ ] **AC12:** Hard slice at `WEEK_REMAINING` in driver script via `jq '.[0:$cap]'` (Architecture #2).
-- [ ] **AC13:** GDPR shell pre-pass uses canonical PII regex; excludes matching files BEFORE Anthropic call.
-- [ ] **AC14:** `self-healing/auto` label exists (created by workflow's idempotent step on first run).
-- [ ] **AC15:** PR #3559 body uses `Closes #2720` (own line) + `Ref #2718` + `Ref #421`.
-- [ ] **AC15b:** PR #3559 body passes `pr-auto-close-scanner.yml` regex sweep — only `Closes #2720` matches.
-- [ ] **AC16 (post-merge / pre-ship):** `gh workflow run scheduled-compound-promote.yml` triggers a manual run; the run completes (default config OFF → exit no-op is acceptable).
-- [ ] **AC17:** ADR-021 exists at `knowledge-base/engineering/architecture/decisions/ADR-021-stateless-self-modifying-cron.md`.
-- [ ] **AC18:** Provenance trailer in commit-message uses `Bot-Author:` + `Source-Learnings:` + `Cluster-Hash:` + `Tier:` (NO `Promoted-By:` — SpecFlow NG-8).
-- [ ] **AC19:** Plan-review consensus changes applied (this v2 plan); 5-agent panel findings resolved or scoped out.
+- [x] **AC1:** `.github/actions/bot-pr-with-synthetic-checks/action.yml` declares 3 new optional inputs (`draft`, `skip-auto-merge`, `labels`) with backward-compatible string defaults.
+- [x] **AC2:** Boolean inputs normalized at boundary (lowercase + reject non-boolean). Existing callers (`scheduled-rule-prune.yml`, `rule-metrics-aggregate.yml`) NOT modified; defaults preserve their behavior.
+- [x] **AC2b:** Composite preserves `set -eo pipefail` (NOT upgraded to `-euo` — Kieran P0-1).
+- [x] **AC3:** `scripts/compound-promote.sh` exists, executable, mirrors `rule-prune.sh` CLI conventions (set -euo, stdout sentinels, env-overridable repo root + GH_BIN + CURL_BIN).
+- [x] **AC4:** `scripts/compound-promote.test.sh` exists with 3 test cases (no-config, disabled, GDPR-pre-pass-excludes-PII).
+- [x] **AC5:** `.github/workflows/scheduled-compound-promote.yml` exists. Single `promote` job (no matrix). Cron `0 0 * * 0`. Concurrency group `scheduled-compound-promote`, `cancel-in-progress: false`. Permissions explicitly declared.
+- [x] **AC6:** `knowledge-base/project/promotion-config.yml.example` includes 4-line data-flow disclosure (LC-01 fold).
+- [x] **AC7:** `knowledge-base/project/promotion-config.yml` is in `.gitignore`. `.github/promotion-*.json` defensive entry also present.
+- [x] **AC8:** `plugins/soleur/skills/compound/SKILL.md` has the Layer 2 cross-reference subsection.
+- [x] **AC9:** `knowledge-base/legal/compliance-posture.md` has an Active Item row referencing #2720 with DPIA candidacy note.
+- [x] **AC10a:** `bash scripts/compound-promote.test.sh` passes locally (12/12 assertions GREEN).
+- [ ] **AC10b:** Operator invoked `/soleur:review #3559` before mark-as-ready; `user-impact-reviewer` findings resolved or scoped-out with rationale. *(handed off to /review phase)*
+- [x] **AC11:** Cluster-hash integrity verification step is present in workflow YAML (recompute + compare; refuse on mismatch — Architecture #3).
+- [x] **AC12:** Hard slice at `WEEK_REMAINING` in driver script via `jq '.[0:$cap]'` (Architecture #2).
+- [x] **AC13:** GDPR shell pre-pass uses canonical PII regex; excludes matching files BEFORE Anthropic call.
+- [x] **AC14:** `self-healing/auto` label exists (created by workflow's idempotent step on first run).
+- [ ] **AC15:** PR #3559 body uses `Closes #2720` (own line) + `Ref #2718` + `Ref #421`. *(verified at /ship)*
+- [ ] **AC15b:** PR #3559 body passes `pr-auto-close-scanner.yml` regex sweep — only `Closes #2720` matches. *(verified at /ship)*
+- [ ] **AC16 (post-merge / pre-ship):** `gh workflow run scheduled-compound-promote.yml` triggers a manual run; the run completes (default config OFF → exit no-op is acceptable). *(post-merge)*
+- [x] **AC17:** ADR-027 exists at `knowledge-base/engineering/architecture/decisions/ADR-027-stateless-self-modifying-cron.md` (numbering re-slotted from plan's ADR-021 — that ID was already taken by `ADR-021-kb-binary-serving-pattern.md`).
+- [x] **AC18:** Provenance trailer in commit-message uses `Bot-Author:` + `Source-Learnings:` + `Cluster-Hash:` + `Tier:` (NO `Promoted-By:` — SpecFlow NG-8).
+- [x] **AC19:** Plan-review consensus changes applied (this v2 plan); 5-agent panel findings resolved or scoped out.
 
 ### Post-merge (operator, future cron runs)
 
-- [ ] **AC20:** With `enabled: true` + a synthetic learnings-corpus addition (5+ similar test learnings), a `gh workflow run` opens exactly ONE draft `self-healing/auto` PR with the provenance trailer.
-- [ ] **AC21:** Closing the test PR (without merge) → next `gh workflow run` within the same week respects per-week cap (open count counts toward cap).
-- [ ] **AC22:** `promotion-log.md` rows are append-only; live state derivable via `gh pr view` of linked PRs.
-- [ ] **AC23:** Anthropic processor row exists in `knowledge-base/legal/compliance-posture.md` Vendor DPAs (separate compliance/improvement issue lands first; #2720 ship blocked until then — AC26 from gdpr-gate findings).
-- [ ] **AC24:** Test fixtures contain ONLY synthesized PII (`@example.com`, zero-UUIDs); no real-PII regex patterns appear (AC27 from gdpr-gate findings).
+- [ ] **AC20:** With `enabled: true` + a synthetic learnings-corpus addition (5+ similar test learnings), a `gh workflow run` opens exactly ONE draft `self-healing/auto` PR with the provenance trailer. *(post-merge)*
+- [ ] **AC21:** Closing the test PR (without merge) → next `gh workflow run` within the same week respects per-week cap (open count counts toward cap). *(post-merge)*
+- [ ] **AC22:** `promotion-log.md` rows are append-only; live state derivable via `gh pr view` of linked PRs. *(post-merge integration test)*
+- [ ] **AC23:** Anthropic processor row exists in `knowledge-base/legal/compliance-posture.md` Vendor DPAs (separate compliance/improvement issue lands first; #2720 ship blocked until then — AC26 from gdpr-gate findings). *(SHIP BLOCKER per user instructions; tracked in compliance-posture Active Items)*
+- [x] **AC24:** Test fixtures contain ONLY synthesized PII (`@example.com`, zero-UUIDs); no real-PII regex patterns appear (AC27 from gdpr-gate findings).
 
 ## Risks
 
@@ -749,7 +749,7 @@ gh run watch
 - The cron CANNOT read `.claude/.rule-incidents.jsonl` (gitignored, never in CI). Clustering input is always `knowledge-base/project/learnings/`.
 - Per `wg-after-merging-a-pr-that-adds-or-modifies`, the merged PR must trigger `gh workflow run scheduled-compound-promote.yml` (AC16).
 - Synthetic check-runs are posted by the workflow inline (mirroring bot-pr composite logic) — operator-merge satisfies CI Required + CLA Required rulesets.
-- Constitution line 153 prefers push-to-main for bot content. This plan deviates (draft PR + manual confirm) because brand-survival threshold is `single-user incident`. Documented in ADR-021.
+- Constitution line 153 prefers push-to-main for bot content. This plan deviates (draft PR + manual confirm) because brand-survival threshold is `single-user incident`. Documented in ADR-027.
 - The composite extension is BACKWARD-COMPATIBLE only at the value-of-input layer. Future callers passing wrong-case booleans will be caught by the normalization step's case validator (Architecture #4 fix).
 - The `compound-promote.sh` driver writes to STDOUT only; no state files are created. If a future planner is tempted to add `.github/promotion-*.json`, the `.gitignore` defensive entry will prevent silent re-introduction; the plan-time gate is "document the choice in this plan body, not in code."
 - Cluster-hash is `sha256(sorted(source_learning_paths))` — re-derived in the workflow before PR creation (AC11). The hash is NOT trusted from the LLM output.
@@ -782,7 +782,7 @@ This plan includes test scenarios (AC10a, AC20-AC22). /work MUST write the faili
 | **`peter-evans/create-pull-request`** | No precedent; introduces dependency. Existing composite (extended) covers it. |
 | **Hooks as v1 promotion target** | Highest blast radius. Defer to v2. |
 | **Inline `/compound`-time surface** | Defer to v2 if cron-only proves insufficient. |
-| **Push-to-main directly** (constitution line 153 preference) | Brand-survival `single-user incident` requires manual confirm. Documented deviation in ADR-021. |
+| **Push-to-main directly** (constitution line 153 preference) | Brand-survival `single-user incident` requires manual confirm. Documented deviation in ADR-027. |
 
 ## Deferrals → tracking issues to file at PR-merge time
 

@@ -278,6 +278,10 @@ Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` 
 
 **If knowledge-base/ directory exists, compound saves learnings there and offers constitution promotion:**
 
+### Cross-Session Promotion Loop (Layer 2)
+
+A weekly cron (`.github/workflows/scheduled-compound-promote.yml`) consumes accumulated learnings and proposes skill or `AGENTS.core.md` edits via draft PR when N=5 learnings cluster around the same root cause. Default OFF; opt in via `knowledge-base/project/promotion-config.yml`. See `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`. Issue: #2720.
+
 ### Save Learning to Knowledge Base
 
 If `knowledge-base/` directory exists, save the learning file to `knowledge-base/project/learnings/YYYY-MM-DD-<topic>.md` (using today's date). Otherwise, fall back to `knowledge-base/project/learnings/<category>/<topic>.md`.

@@ -1,0 +1,140 @@
+---
+title: "Compound Promotion Loop — operator runbook"
+type: runbook
+issue: "#2720"
+last_updated: 2026-05-11
+---
+
+# Compound Promotion Loop — operator runbook
+
+## What it does
+
+The Compound Promotion Loop is Layer 2 of the self-healing-workflow design.
+A weekly GitHub Actions cron (Sunday 00:00 UTC) reads
+`knowledge-base/project/learnings/`, runs a deterministic GDPR + retired-rule
+shell pre-pass over the corpus, then calls the Anthropic API to cluster
+learnings by problem/root-cause. When a cluster reaches >=5 source learnings
+the loop opens up to **2 draft PRs per week**, each proposing a skill-instruction
+edit or an `AGENTS.core.md` rule addition. The loop **never auto-merges** —
+an operator confirms each proposal via normal PR review.
+
+The capability is **default OFF**. Enabling sends summaries (path + first 10
+lines per file) of your learnings corpus to Anthropic.
+
+## Opt in
+
+```bash
+# 1. Copy the template (gitignored once renamed).
+cp knowledge-base/project/promotion-config.yml.example \
+   knowledge-base/project/promotion-config.yml
+
+# 2. Flip enabled: true in the new file.
+sed -i 's/^enabled: false/enabled: true/' \
+   knowledge-base/project/promotion-config.yml
+
+# 3. Confirm the next scheduled run will fire (no commit required — the file
+#    is read locally by the cron from the merged main branch on each run).
+gh workflow view scheduled-compound-promote.yml
+```
+
+> **Note.** `promotion-config.yml` is gitignored — the cron reads the file
+> from the runner's checked-out main, so the operator must commit a one-time
+> opt-in patch separately if the intent is repo-wide. The default invocation
+> assumes the file is local to one operator's environment for piloting; the
+> repo-wide opt-in pattern is deferred to v2 (plugin-scope deferral).
+
+## Opt out / kill switch
+
+```bash
+# Hard kill — the next cron tick exits no-op without contacting Anthropic.
+sed -i 's/^enabled: true/enabled: false/' \
+   knowledge-base/project/promotion-config.yml
+```
+
+Or delete the config entirely:
+
+```bash
+rm knowledge-base/project/promotion-config.yml
+```
+
+Either path produces the `::compound-promote-status::disabled` or
+`::compound-promote-status::no-config` sentinel and exits 0.
+
+## Reviewing a `self-healing/auto` PR
+
+Each draft PR is labeled `self-healing/auto` and carries a provenance trailer
+in the commit message (Bot-Author, Source-Learnings, Threshold-Hit,
+Cluster-Hash, Tier). Apply this 5-bullet acceptance heuristic before
+clicking **Ready for review**:
+
+1. **Hash integrity.** The workflow already re-derives `sha256(sorted(source_learnings))`
+   and refuses to open the PR on mismatch (AC11). Spot-check by re-running
+   the hash locally on the listed sources.
+2. **Tier placement.** `tier: skill` → diff edits a single
+   `plugins/soleur/skills/*/SKILL.md` (domain-scoped). `tier: agents-core` →
+   diff edits `AGENTS.core.md` AND the new rule is genuinely cross-cutting
+   (silent failure or blast radius, no single-file trigger). Reject anything
+   that should be hook-enforced or scanner-enforced — those don't belong in
+   the registry per `cq-agents-md-tier-gate`.
+3. **Byte budget.** For `agents-core` PRs, verify the post-merge
+   always-loaded payload (`wc -c AGENTS.md AGENTS.core.md`) stays under the
+   18000-byte warn / 22000-byte critical thresholds defined in
+   `cq-agents-md-why-single-line`. The driver script's prompt enforces a
+   pre-merge 18k refuse, but caller-side verification is the second line of
+   defense.
+4. **Rule shape.** Each AGENTS-md rule body uses single-line `**Why:**`;
+   evidence longer than one sentence belongs in the linked PR or learning
+   file, not in the rule body.
+5. **GDPR sanity.** The shell pre-pass excluded any learning matching the
+   canonical PII regex. Scan the PR body for unexpected fragments anyway —
+   the regex is heuristic (email, IPv4, IBAN) and may miss novel patterns.
+   Reject if the body quotes anything that looks like PII.
+
+If any of the five fail, **close the PR**. The append-only audit log
+(`knowledge-base/project/learnings/promotion-log.md`) preserves the proposal
+record; the close acts as the rejection signal — the loop's per-week cap
+counts open PRs only, so a closed proposal won't block next week's run.
+
+## Reverting a promoted rule
+
+If a merged promotion turns out to be a false positive, demote it via the
+standard rule-retirement path: append the rule's ID to
+`scripts/retired-rule-ids.txt` with format `<id> | <YYYY-MM-DD> | <PR> | <breadcrumb>`.
+The next `rule-prune` cron tick removes the rule from `AGENTS.core.md` and
+the linter rejects any future reintroduction of the retired ID.
+
+## Sharp edges
+
+- **`.claude/.rule-incidents.jsonl` is gitignored.** The cron CANNOT read it.
+  Clustering input is always the committed `knowledge-base/project/learnings/`
+  corpus. Local hook telemetry stays local until rolled up by the weekly
+  aggregator into `knowledge-base/project/rule-metrics.json`.
+- **`self-healing/auto` label is created idempotently.** First workflow run
+  creates it; subsequent runs no-op. Manual creation is not required.
+- **Plugin-scope edits are deferred to v2.** v1 only proposes changes to
+  files inside this repo. Cross-repo plugin-scope promotion (`--scope=plugin`)
+  is blocked on CLO sign-off + ToS/Privacy-Policy disclosure update.
+- **Synthetic checks are posted by the workflow.** Operator-mark-ready
+  satisfies the CI Required + CLA Required rulesets without waiting for real
+  CI on bot-authored content.
+- **GDPR shell pre-pass is heuristic.** The canonical regex covers email,
+  IPv4, and IBAN. Novel PII patterns (phone numbers, employee IDs in unusual
+  formats) may slip through. Use the LLM-driven `/soleur:gdpr-gate` for
+  narrower targeted scans when needed; the human reviewer at PR time is the
+  second line of defense.
+- **Always-loaded payload is already tight.** At PR #2720 merge time,
+  `wc -c AGENTS.md AGENTS.core.md` = 21,949 bytes — within the 22k critical
+  threshold but only 51 bytes from it. Most `agents-core` proposals in the
+  first cron tick will be refused by the prompt's size gate. Retire stale
+  rules first to create headroom.
+- **DPIA candidate.** Art. 35 DPIA assessment is deferred until 4 weeks of
+  operation generate empirical data. Tracked in `compliance-posture.md`.
+
+## Related artifacts
+
+- Driver: `scripts/compound-promote.sh`
+- Tests: `scripts/compound-promote.test.sh`
+- Workflow: `.github/workflows/scheduled-compound-promote.yml`
+- ADR: `knowledge-base/engineering/architecture/decisions/ADR-021-stateless-self-modifying-cron.md`
+- Audit log: `knowledge-base/project/learnings/promotion-log.md`
+- Plan: `knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md`
