@@ -110,6 +110,17 @@ export default function DashboardPage() {
     archiveFilter,
   });
 
+  // Per-error dismissal of the "Failed to load conversations" card.
+  // Edge-triggered on `error` value change so an identical re-fail re-shows it.
+  const [conversationsErrorDismissed, setConversationsErrorDismissed] = useState(false);
+  const prevErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (error !== prevErrorRef.current) {
+      setConversationsErrorDismissed(false);
+      prevErrorRef.current = error ?? null;
+    }
+  }, [error]);
+
   // ---------------------------------------------------------------------------
   // KB state derivation (inline — extract if this grows)
   // ---------------------------------------------------------------------------
@@ -647,11 +658,12 @@ export default function DashboardPage() {
       )}
 
       {/* Error state */}
-      {error && (
+      {error && !conversationsErrorDismissed && (
         <ErrorCard
           title="Failed to load conversations"
           message={error}
           onRetry={refetch}
+          onDismiss={() => setConversationsErrorDismissed(true)}
         />
       )}
 

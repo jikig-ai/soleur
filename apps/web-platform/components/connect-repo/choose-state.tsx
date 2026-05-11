@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 
 interface ChooseStateProps {
   onCreateNew: () => void;
@@ -18,7 +17,7 @@ export function ChooseState({ onCreateNew, onConnectExisting, onSkip }: ChooseSt
     <div className="space-y-8">
       <div className="space-y-4 text-center">
         <Badge>GETTING STARTED</Badge>
-        <h1 className={`${serif.className} text-4xl font-semibold`}>
+        <h1 className="text-4xl font-semibold">
           Give Your AI Team the Full Picture
         </h1>
         <p className="mx-auto max-w-lg text-base text-soleur-text-secondary">
@@ -38,7 +37,7 @@ export function ChooseState({ onCreateNew, onConnectExisting, onSkip }: ChooseSt
             <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2">
               <PlusIcon className="h-5 w-5 text-soleur-text-secondary" />
             </div>
-            <h2 className={`${serif.className} text-xl font-semibold`}>Start Fresh</h2>
+            <h2 className="text-xl font-semibold">Start Fresh</h2>
             <p className="text-sm text-soleur-text-secondary">
               Starting from scratch? We create a project workspace on GitHub
               (owned by Microsoft) under your own account — you keep full
@@ -57,7 +56,7 @@ export function ChooseState({ onCreateNew, onConnectExisting, onSkip }: ChooseSt
             <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2">
               <LinkIcon className="h-5 w-5 text-soleur-text-secondary" />
             </div>
-            <h2 className={`${serif.className} text-xl font-semibold`}>
+            <h2 className="text-xl font-semibold">
               Connect Existing Project
             </h2>
             <p className="text-sm text-soleur-text-secondary">

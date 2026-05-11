@@ -1,0 +1,237 @@
+# Daily audit of the "CI Required" ruleset's bypass_actors (#3544, R15
+# follow-up D1). Compares live bypass_actors on ruleset #14145388 against
+# scripts/ci-required-ruleset-canonical-bypass-actors.json. Drift fires a
+# compliance/critical issue routed to CLO + CPO.
+#
+# Brand-survival threshold: single-user incident (carries from #2719 /
+# #3542 R15). A widened bypass_actors entry would let a malicious skill-
+# install PR merge without the `skill-security-scan PR gate` running.
+# update-ci-required-ruleset.sh PUTs bypass_actors verbatim from the live
+# snapshot, so an admin-broadening between two PUTs leaves no repo-side
+# trace — GitHub's audit log is the only surface. This daily audit closes
+# the gap with a 24h worst-case detection window.
+#
+# Failure routing (3-output model, mirror of
+# scheduled-github-app-drift-guard.yml):
+#   - bypass_actors_drift              -> ci/auth-broken + compliance/critical
+#   - canonical_file_*, github_api_*   -> ci/guard-broken
+#
+# Untrusted input: this workflow has no github.event.* inputs. All step
+# outputs (failure_mode, failure_detail, failure_label) are produced by
+# scripts/audit-ruleset-bypass.sh which sanitizes via strip_log_injection
+# (CR/LF/FF/VT/DEL + U+0085/U+2028/U+2029 stripped) before writing to
+# $GITHUB_OUTPUT. Step-output values used in run: blocks are still copied
+# through env: blocks per the GitHub Actions security hardening guide.
+#
+# Ref #3544, #3542, #2719.
+
+name: "Scheduled: Ruleset Bypass Audit"
+
+on:
+  schedule:
+    # Off-peak vs other 0 6 * * * jobs (codeql-to-issues, scheduled-bug-fixer)
+    # — shift to 13 6 to avoid GHA thundering-herd queue delay.
+    - cron: '13 6 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-ruleset-bypass-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    if: github.repository == 'jikig-ai/soleur'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          sparse-checkout: |
+            .github/actions
+            scripts/audit-ruleset-bypass.sh
+            scripts/ci-required-ruleset-canonical-bypass-actors.json
+            knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md
+          sparse-checkout-cone-mode: false
+
+      - name: Defensively create labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create ci/auth-broken --repo "$GH_REPO" \
+            --description "Synthetic CI probe detected an auth-flow regression" \
+            --color B60205 2>/dev/null || true
+          gh label create ci/guard-broken --repo "$GH_REPO" \
+            --description "Synthetic CI guard malfunctioned" \
+            --color D93F0B 2>/dev/null || true
+          gh label create compliance/critical --repo "$GH_REPO" \
+            --description "Single-user-incident threshold: requires CPO + user-impact-reviewer sign-off" \
+            --color B60205 2>/dev/null || true
+          gh label create security/leak-suspected --repo "$GH_REPO" \
+            --description "Workflow log scan suggests credential leak" \
+            --color B60205 2>/dev/null || true
+
+      - id: check
+        name: Audit CI Required ruleset bypass_actors
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1
+          bash scripts/audit-ruleset-bypass.sh
+
+      - id: tripwire
+        name: Leak tripwire (token-shape scan of step output)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          LOG="$RUNNER_TEMP/step-output.log"
+          if [[ ! -f "$LOG" ]]; then
+            echo "No step-output.log captured."
+            exit 0
+          fi
+          # Strip runner-directives (::add-mask::, ::warning::, ::error::)
+          # before scanning. A real leak via plain echo still matches.
+          # Token-shape alternations cover gho_, ghp_, ghs_, ghu_ (36-char
+          # body) and github_pat_ prefix used by fine-grained PATs.
+          # Token shapes: gho_ (OAuth), ghp_ (PAT), ghs_ (server), ghu_ (user),
+          # ghr_ (refresh), plus github_pat_v1_ (fine-grained PAT).
+          if grep -v '^::' "$LOG" | grep -E 'gh[oprsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}' >/dev/null; then
+            echo "::error::Leak tripwire fired."
+            BODY_FILE=$(mktemp)
+            NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+            {
+              printf '## Leak tripwire fired\n\n'
+              printf 'A GitHub-token-shaped string was found in this run'\''s captured step output. Treat as credential leak suspected until proven otherwise.\n\n'
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '**Tracks:** #3544\n'
+            } > "$BODY_FILE"
+            gh issue create --repo "$GH_REPO" \
+              --title "[security/leak-suspected] Ruleset bypass audit log-leak tripwire" \
+              --label "security/leak-suspected" \
+              --label "ci/guard-broken" \
+              --label "priority/p1-high" \
+              --body-file "$BODY_FILE" || true
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+          echo "Leak tripwire passed."
+
+      - name: File or comment on tracking issue (failure)
+        if: steps.check.outputs.failure_mode != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAILURE_MODE: ${{ steps.check.outputs.failure_mode }}
+          FAILURE_DETAIL: ${{ steps.check.outputs.failure_detail }}
+          FAILURE_LABEL: ${{ steps.check.outputs.failure_label }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUNBOOK_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md
+        run: |
+          set -euo pipefail
+          # Title routing. Use the exact strings pinned by AC13a; any
+          # rename here breaks the de-dupe search-by-title path below.
+          case "$FAILURE_LABEL" in
+            ci/auth-broken)
+              ISSUE_TITLE="[compliance/critical] CI Required ruleset bypass_actors drift detected"
+              EXTRA_LABEL="compliance/critical"
+              ;;
+            ci/guard-broken)
+              ISSUE_TITLE="[ci/guard-broken] Ruleset bypass audit malfunctioned"
+              EXTRA_LABEL=""
+              ;;
+            *)
+              echo "::warning::Issue-create step received unknown FAILURE_LABEL='${FAILURE_LABEL}', defaulting to ci/guard-broken" >&2
+              ISSUE_TITLE="[ci/guard-broken] Ruleset bypass audit malfunctioned"
+              FAILURE_LABEL="ci/guard-broken"
+              EXTRA_LABEL=""
+              ;;
+          esac
+
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp)
+          trap 'rm -f "$BODY_FILE"' EXIT
+          # shellcheck disable=SC2016 # markdown backticks, not command substitution
+          {
+            printf '## Ruleset bypass_actors audit failed\n\n'
+            printf -- '- **Failure mode:** `%s`\n' "$FAILURE_MODE"
+            printf -- '- **Detail:** %s\n' "$FAILURE_DETAIL"
+            printf -- '- **Routed to:** `%s`\n' "$FAILURE_LABEL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What to do\n\nSee [ruleset-bypass-drift.md runbook](%s).\n\n' "$RUNBOOK_URL"
+            printf '**Tracks:** #3544, #3542, #2719\n'
+          } > "$BODY_FILE"
+
+          # De-dupe by label + title prefix. The title strings above are
+          # the load-bearing search keys (AC13a).
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+            --label "$FAILURE_LABEL" \
+            --search 'in:title "Ruleset bypass" "audit" OR in:title "bypass_actors drift"' \
+            --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Existing tracking issue #$EXISTING — adding comment."
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Audit failed again at ${NOW} — \`${FAILURE_MODE}\`: ${FAILURE_DETAIL}. Run: ${RUN_URL}"
+          else
+            args=(
+              issue create --repo "$GH_REPO"
+              --title "$ISSUE_TITLE"
+              --label "$FAILURE_LABEL"
+              --label "priority/p1-high"
+              --body-file "$BODY_FILE"
+            )
+            if [[ -n "$EXTRA_LABEL" ]]; then
+              args+=(--label "$EXTRA_LABEL")
+              args+=(--label "domain/legal")
+            fi
+            gh "${args[@]}"
+          fi
+
+      - id: notify
+        name: Notify ops on failure
+        if: steps.check.outputs.failure_mode != '' || steps.tripwire.outcome == 'failure'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "[Soleur Ops] Ruleset bypass audit: ${{ steps.check.outputs.failure_mode || 'leak-suspected' }}"
+          body: |
+            <p><strong>Failure mode:</strong> ${{ steps.check.outputs.failure_mode || 'leak_tripwire_fired' }}</p>
+            <p><strong>Detail:</strong> ${{ steps.check.outputs.failure_detail || 'Token-shaped string found in step output' }}</p>
+            <p><strong>Label:</strong> ${{ steps.check.outputs.failure_label || 'security/leak-suspected' }}</p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Run log</a></p>
+            <p>Runbook: <a href="https://github.com/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md">ruleset-bypass-drift.md</a></p>
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Auto-close stale tracking issue (audit green)
+        if: steps.check.outputs.failure_mode == '' && steps.tripwire.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          for label in ci/auth-broken ci/guard-broken; do
+            STALE=$(gh issue list --repo "$GH_REPO" --state open \
+              --label "$label" \
+              --search 'in:title "Ruleset bypass" "audit" OR in:title "bypass_actors drift"' \
+              --json number --jq '.[0].number // empty' 2>/dev/null) || STALE=""
+            if [[ -n "$STALE" ]]; then
+              echo "Closing stale tracking issue #$STALE (label=$label)."
+              gh issue close "$STALE" --repo "$GH_REPO" \
+                --comment "Audit green at ${NOW}. live bypass_actors matches canonical. Run: ${RUN_URL}"
+            fi
+          done

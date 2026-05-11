@@ -29,6 +29,13 @@ REPO="jikig-ai/soleur"
 RULESET_ID=14145388
 NEW_CHECK="skill-security-scan PR gate"
 GITHUB_ACTIONS_INTEGRATION_ID=15368  # github-actions[bot]
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+CANONICAL_BYPASS_FILE="${SCRIPT_DIR}/ci-required-ruleset-canonical-bypass-actors.json"
+
+# Shared jq projection (must match scripts/audit-ruleset-bypass.sh). See
+# scripts/lib/canonicalize-bypass-actors.sh.
+# shellcheck source=scripts/lib/canonicalize-bypass-actors.sh
+. "${SCRIPT_DIR}/lib/canonicalize-bypass-actors.sh"
 DRY_RUN=0
 JSON_OUT=0
 for arg in "$@"; do
@@ -179,7 +186,12 @@ say "PUT succeeded. Verifying preserved fields..."
 #    PUT API silently strips any field omitted from the payload, and a
 #    future GitHub schema change could introduce a top-level field whose
 #    drop we'd otherwise miss.
-preserved_fields=(name target enforcement bypass_actors conditions)
+# bypass_actors is excluded from this loop: the canonical fast-path below
+# applies the same `map({...}) | sort_by(...)` projection used by the daily
+# audit. A raw diff here would false-positive when GitHub round-trips
+# `actor_id: null` as a missing key (or vice-versa), since the API contract
+# does not pin null-vs-missing equality.
+preserved_fields=(name target enforcement conditions)
 drift=0
 for field in "${preserved_fields[@]}"; do
   if ! diff <(jq -S ".${field}" "$before") <(jq -S ".${field}" "$after") >/dev/null; then
@@ -204,6 +216,28 @@ if [[ "$new_iid" != "$GITHUB_ACTIONS_INTEGRATION_ID" ]]; then
   echo "         Without integration_id constraint, any GitHub App with checks:write could spoof the gate." >&2
   drift=1
 fi
+
+# Audit fast-path (#3544): diff round-tripped bypass_actors against the
+# canonical in-repo JSON, not just the pre-mutation snapshot. The PUT API
+# copies bypass_actors verbatim from $before, so a same-PUT-cycle drift
+# would not surface in the before/after diff — only the canonical
+# comparison catches an admin-broadened bypass that happened to land in
+# the pre-mutation snapshot.
+if [[ -f "$CANONICAL_BYPASS_FILE" ]]; then
+  bypass_canonical_norm=$(jq -S "$CANONICALIZE_BYPASS_ACTORS_JQ" "$CANONICAL_BYPASS_FILE")
+  bypass_after_norm=$(jq -S ".bypass_actors | $CANONICALIZE_BYPASS_ACTORS_JQ" "$after")
+  if [[ "$bypass_canonical_norm" != "$bypass_after_norm" ]]; then
+    echo "::error::bypass_actors after PUT does not match canonical at ${CANONICAL_BYPASS_FILE}" >&2
+    echo "         canonical: ${bypass_canonical_norm}" >&2
+    echo "         after PUT: ${bypass_after_norm}" >&2
+    echo "         If the bypass change is intentional, update the canonical JSON FIRST," >&2
+    echo "         then re-run; the daily audit reads the same file." >&2
+    drift=1
+  fi
+else
+  echo "::warning::canonical bypass file missing at ${CANONICAL_BYPASS_FILE} — skipping audit fast-path check" >&2
+fi
+
 (( drift )) && exit 2
 
 say "Verification OK. Final required_status_checks contexts:"

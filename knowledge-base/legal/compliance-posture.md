@@ -1,6 +1,10 @@
 ---
 last_updated: 2026-05-11
 ---
+<!-- 2026-05-11: R15 mitigation for #2719 landed via #3543 (ruleset PUT to #14145388) -->
+<!-- 2026-05-11: R15 follow-up D1 (#3544) landed — daily bypass_actors audit closes the audit-log-only blind spot in #3543 -->
+<!-- 2026-05-11: R15 follow-up D2 (#3545) landed — empirical audit confirmed CodeQL coverage on bot PRs is satisfied (neutral conclusion). No remediation needed. Runbook: knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md -->
+
 
 # Legal Compliance Posture
 
@@ -65,7 +69,7 @@ Contract (mirrors plugins/soleur/skills/gdpr-gate/SKILL.md §"Critical-finding e
 | Item | Issue | Status | Deadline | Notes |
 |------|-------|--------|----------|-------|
 | T&C blanket statement contradictions | #736 | OPEN | - | Identified during #670 review |
-| Skill-install advisory gate | #2719 | OPEN | - | Single-user-incident threshold; EU jurisdiction. Verdict naming `LOW-RISK \| REVIEW \| HIGH-RISK` with mandatory advisory disclaimer (CLO requirement). Override = structured artifact under `knowledge-base/security/skill-overrides/` (GDPR Art. 32 evidence; retention = repo lifetime). PII redaction (email/IPv4/IBAN) at scan time per `GDPR-DataMin-1`. Self-defense: SHA-pinned rule pack, OSV untrusted-input handling, fail-loud self-test. R15 mitigation: pending Phase 3 apply (#3542, runbook `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md`). |
+| Skill-install advisory gate | #2719 | OPEN | - | Single-user-incident threshold; EU jurisdiction. Verdict naming `LOW-RISK \| REVIEW \| HIGH-RISK` with mandatory advisory disclaimer (CLO requirement). Override = structured artifact under `knowledge-base/security/skill-overrides/` (GDPR Art. 32 evidence; retention = repo lifetime). PII redaction (email/IPv4/IBAN) at scan time per `GDPR-DataMin-1`. Self-defense: SHA-pinned rule pack, OSV untrusted-input handling, fail-loud self-test. R15 mitigation landed via #3543 on 2026-05-11 — `skill-security-scan PR gate` is a required check on the `CI Required` ruleset (#14145388); admin-merge bypass auto-files a `compliance/critical` issue via post-merge audit. R15 follow-up D1 landed via #3544 on 2026-05-11 — daily audit compares live `bypass_actors` to `scripts/ci-required-ruleset-canonical-bypass-actors.json` (24h worst-case detection window) and files a `compliance/critical` issue routed to CLO + CPO on drift. Runbook: `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`. |
 
 ## Completed Compliance Work
 

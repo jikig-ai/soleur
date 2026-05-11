@@ -44,14 +44,17 @@ pre-commit:
       run: node apps/web-platform/scripts/lint-fixture-content.mjs {staged_files}
     rule-id-lint:
       priority: 4
-      # Run target is pinned to AGENTS.md (not `{staged_files}`) because the
-      # linter needs BOTH AGENTS.md and retired-rule-ids.txt. When only
-      # retired-rule-ids.txt is staged, `{staged_files}` would pass it as the
-      # AGENTS.md positional and the section parser would fail.
+      # Run target is pinned to the full index+sidecar set, not `{staged_files}`:
+      # the cross-file linter (--index-file mode, #3493) needs the union to
+      # validate pointer↔body 1:1, and when only retired-rule-ids.txt is
+      # staged the positional path resolution would otherwise break.
       glob:
         - "AGENTS.md"
+        - "AGENTS.core.md"
+        - "AGENTS.docs.md"
+        - "AGENTS.rest.md"
         - "scripts/retired-rule-ids.txt"
-      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md
+      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
     agents-compound-sync:
       priority: 4
       glob:
@@ -62,8 +65,12 @@ pre-commit:
       priority: 5
       glob:
         - "AGENTS.md"
+        - "AGENTS.core.md"
+        - "AGENTS.docs.md"
+        - "AGENTS.rest.md"
         - "scripts/lint-agents-enforcement-tags.py"
-      run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md
+      # Post-#3493 sidecar split: enforcement tags now live in sidecars.
+      run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
     scheduled-show-full-output-lint:
       priority: 5
       # Forbid show_full_output: true in recurring scheduled workflows. Only
@@ -98,6 +105,12 @@ pre-commit:
     # (see 2026-03-21-lefthook-gobwas-glob-double-star.md). Mirrors the
     # canonical regex in plugins/soleur/skills/gdpr-gate/SKILL.md and
     # scripts/gdpr-gate.sh.
+    #
+    # CI self-test: .github/workflows/gdpr-gate-self-test.yml is the
+    # load-bearing gate for regressions in
+    # plugins/soleur/skills/gdpr-gate/scripts/** (issue #3536). The glob
+    # below intentionally does NOT cover scripts/ because pre-commit
+    # fixture runs are slow and flaky; CI carries the assertion instead.
     gdpr-gate-advisory:
       priority: 6
       glob:
