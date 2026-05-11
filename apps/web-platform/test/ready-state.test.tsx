@@ -6,7 +6,7 @@ import { render, screen } from "@testing-library/react";
 // ---------------------------------------------------------------------------
 
 vi.mock("next/font/google", () => ({
-  Inter: () => ({ className: "mock-sans", variable: "mock-font-inter-var" }),
+  Inter: () => ({ className: "mock-sans", variable: "--font-inter" }),
 }));
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("next/font/google", () => ({
-  Inter: () => ({ className: "mock-sans", variable: "mock-font-inter-var" }),
+  Inter: () => ({ className: "mock-sans", variable: "--font-inter" }),
 }));
 
 vi.mock("@/lib/supabase/client", () => ({

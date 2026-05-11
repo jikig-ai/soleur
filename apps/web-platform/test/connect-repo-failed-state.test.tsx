@@ -2,7 +2,7 @@ import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 vi.mock("next/font/google", () => ({
-  Inter: () => ({ className: "mock-sans", variable: "mock-font-inter-var" }),
+  Inter: () => ({ className: "mock-sans", variable: "--font-inter" }),
 }));
 
 import { FailedState } from "@/components/connect-repo/failed-state";
