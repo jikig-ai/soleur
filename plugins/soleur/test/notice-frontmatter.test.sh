@@ -174,20 +174,17 @@ assert_eq "999" "$OUT" "cron-run-stale=999 when no token is available"
 echo ""
 
 # --- TS-cron-2: cron-run-stale with stub gh emitting a fixture timestamp ---
-# Stub emits 2026-02-01T00:00:00Z. Today (TS5) shows the live NOTICE is ~1d
-# stale, meaning the local clock is roughly 2026-05-11. Days since Feb 1 ≈ 99.
-# Assert in range 90-110 to absorb clock skew across CI runners.
-echo "TS-cron-2: cron-run-stale with stubbed gh returns integer in range 90-110"
+# Use a relative date (99 days ago, computed at test time) so the assertion
+# is exact and the test is not a calendar landmine. An earlier form pinned
+# 2026-02-01 + asserted a 20-day window; the window expired ~10 days after
+# merge. Relative date + exact equality eliminates clock drift entirely
+# (the test fixture moves with today's date).
+echo "TS-cron-2: cron-run-stale with stubbed gh returns 99 (relative date)"
 STUB_DIR_2="$(mktemp -d)"
-make_gh_stub "$STUB_DIR_2" "2026-02-01T00:00:00Z"
+STUB_TS=$(date -u -d '99 days ago' +%Y-%m-%dT00:00:00Z)
+make_gh_stub "$STUB_DIR_2" "$STUB_TS"
 OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_2:$PATH" bash "$PARSER" cron-run-stale)
-if [[ "$OUT" =~ ^[0-9]+$ ]] && (( OUT >= 90 && OUT <= 110 )); then
-  echo "  PASS: cron-run-stale prints integer in range 90-110 (got: $OUT)"
-  PASS=$((PASS + 1))
-else
-  echo "  FAIL: cron-run-stale not in range 90-110 (got: '$OUT')"
-  FAIL=$((FAIL + 1))
-fi
+assert_eq "99" "$OUT" "cron-run-stale prints exact days (99) for fixture timestamp"
 rm -rf "$STUB_DIR_2"
 echo ""
 
@@ -209,6 +206,19 @@ make_gh_stub "$STUB_DIR_4" "2026-02-01"  # date-only, missing T...Z
 OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_4:$PATH" bash "$PARSER" cron-run-stale)
 assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits a date-only string"
 rm -rf "$STUB_DIR_4"
+echo ""
+
+# --- TS-cron-empty: cron-run-stale with stub gh emitting empty stdout → 999 ---
+# Models the workflow-renamed / workflow-deleted case where
+# `gh run list --workflow=<missing>` exits 0 with an empty array, which
+# `jq '.[0].updatedAt // empty'` collapses to empty string. The strict-ISO
+# regex must reject empty input (architecture-strategist finding on #3541).
+echo "TS-cron-empty: cron-run-stale with stub gh emitting empty stdout returns 999"
+STUB_DIR_EMPTY="$(mktemp -d)"
+make_gh_stub "$STUB_DIR_EMPTY" ""
+OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_EMPTY:$PATH" bash "$PARSER" cron-run-stale)
+assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits empty stdout (workflow renamed/deleted case)"
+rm -rf "$STUB_DIR_EMPTY"
 echo ""
 
 # --- TS-cron-5: cron-run-stale with slow stub gh → 999, bounded by timeout ---

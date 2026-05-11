@@ -21,7 +21,14 @@
 /apps/web-platform/scripts/lint-fixture-content.mjs     @jeanderuelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
+# Both workflow files are load-bearing: scheduled-content-vendor-drift.yml is
+# the workflow whose run timestamp feeds cron-run-stale (a rename silently
+# bypasses the MIN-binding); gdpr-gate-self-test.yml is the self-test that
+# asserts the operator-attested-mode banner literal.
 /plugins/soleur/skills/gdpr-gate/NOTICE                 @jeanderuelle
+/.github/workflows/scheduled-content-vendor-drift.yml   @jeanderuelle
+/.github/workflows/gdpr-gate-self-test.yml              @jeanderuelle
+/plugins/soleur/test/fixtures/gdpr-gate-stale/          @jeanderuelle
 
 # Always-loaded workflow rules.
 /AGENTS.md                                              @jeanderuelle

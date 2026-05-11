@@ -29,11 +29,19 @@ on:
   pull_request:
     paths:
       - "plugins/soleur/skills/gdpr-gate/scripts/**"
+      - "plugins/soleur/skills/gdpr-gate/NOTICE"
       - "plugins/soleur/test/fixtures/gdpr-gate-stale/**"
       - "plugins/soleur/test/gdpr-gate-self-test.test.sh"
       - "plugins/soleur/test/test-helpers.sh"
       - "lefthook.yml"
       - ".github/workflows/gdpr-gate-self-test.yml"
+  # Weekly cadence on main so a post-merge silent regression (e.g., banner
+  # printf accidentally removed) surfaces within 7 days even when no PR
+  # touches the paths above. Mirrors the precedent set by
+  # scheduled-content-vendor-drift.yml.
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+  workflow_dispatch:
 
 permissions:
   contents: read

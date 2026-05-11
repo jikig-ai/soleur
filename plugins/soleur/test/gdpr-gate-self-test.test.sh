@@ -35,6 +35,47 @@ assert_file_exists "$GATE" "gdpr-gate.sh exists"
 assert_file_exists "$FIXTURE_NOTICE" "stale fixture NOTICE exists"
 assert_file_exists "$GH_STUB_DIR/gh" "fixture gh stub exists"
 
+# --- Parity checks: literals duplicated across multiple sources must
+# stay in sync. Pattern-recognition / code-quality reviewer findings on
+# PR #3541 flagged that the banner literal and workflow filename live in
+# 3+ sites each; these greps make any silent drift loud.
+NOTICE_PARSER_SRC="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
+SKILL_MD="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/SKILL.md"
+WORKFLOW_FILE="$REPO_ROOT/.github/workflows/scheduled-content-vendor-drift.yml"
+
+# Banner literal must appear verbatim in (a) the test (this file), (b) the
+# gate script, (c) SKILL.md "Sharp edges" docs.
+if grep -qF "$BANNER_LITERAL" "$GATE"; then
+  echo "  PASS: banner literal present verbatim in gdpr-gate.sh"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: banner literal drifted between gdpr-gate-self-test.test.sh and gdpr-gate.sh"
+  FAIL=$((FAIL + 1))
+fi
+if grep -qF "$BANNER_LITERAL" "$SKILL_MD"; then
+  echo "  PASS: banner literal present verbatim in SKILL.md"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: banner literal drifted between gdpr-gate-self-test.test.sh and SKILL.md"
+  FAIL=$((FAIL + 1))
+fi
+
+# Workflow filename must exist on disk — cron-run-stale hard-codes the
+# filename, so a rename without updating the parser silently breaks the
+# trust binding (architecture-strategist + user-impact-reviewer P1).
+if grep -qF "scheduled-content-vendor-drift.yml" "$NOTICE_PARSER_SRC"; then
+  if [[ -f "$WORKFLOW_FILE" ]]; then
+    echo "  PASS: workflow file referenced in notice-frontmatter.sh exists on disk"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: notice-frontmatter.sh references scheduled-content-vendor-drift.yml but the file is missing"
+    FAIL=$((FAIL + 1))
+  fi
+else
+  echo "  FAIL: notice-frontmatter.sh no longer references scheduled-content-vendor-drift.yml — was it renamed?"
+  FAIL=$((FAIL + 1))
+fi
+
 # Quick precondition: the fixture must report ≥90 days stale.
 FIXTURE_DAYS=$(NOTICE_FILE="$FIXTURE_NOTICE" \
   bash "$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh" days-stale)

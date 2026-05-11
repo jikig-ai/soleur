@@ -82,16 +82,6 @@ else
   days_stale="$notice_days_stale"
 fi
 
-# Operator-attested-mode banner — fires when the cron binding is unavailable
-# but the NOTICE last-verified is parseable. If both fall through to 999 the
-# existing 30d/90d banners cover the user signal; redundancy is suppressed.
-# Banner literal is load-bearing: the self-test workflow asserts it verbatim.
-if [[ "$cron_days_stale" == "999" && "$notice_days_stale" != "999" ]]; then
-  printf 'ℹ gdpr-gate: operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified, falling back to NOTICE last-verified)\n'
-  emit_incident gdpr-gate-cron-binding unavailable \
-    "no-token-or-gh-cli" 2>/dev/null || true
-fi
-
 last_verified=$(NOTICE_FILE="${NOTICE_FILE:-}" \
   bash "$NOTICE_PARSER" field last-verified 2>/dev/null || echo "unknown")
 [[ -n "$last_verified" ]] || last_verified="unknown"
@@ -121,6 +111,19 @@ if (( ${#matched[@]} > 0 )); then
   echo "gdpr-gate: regulated-data path touched (${matched[*]}); run /soleur:gdpr-gate" >&2
   emit_incident hr-gdpr-gate-on-regulated-data-surfaces applied \
     "regulated-data path touched: ${matched[0]}" 2>/dev/null || true
+
+  # Operator-attested-mode banner — fires ONLY when (a) a regulated path is
+  # being judged this commit AND (b) the cron binding is unavailable but
+  # NOTICE last-verified is parseable. Gating on matched paths prevents
+  # banner-fatigue (otherwise the banner would fire on every commit in a
+  # subagent shell without GH_TOKEN, training operators to ignore the
+  # signal). Banner literal is load-bearing: the self-test asserts it
+  # verbatim. See review finding from user-impact-reviewer #3541.
+  if [[ "$cron_days_stale" == "999" && "$notice_days_stale" != "999" ]]; then
+    printf 'ℹ gdpr-gate: operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified, falling back to NOTICE last-verified)\n'
+    emit_incident gdpr-gate-cron-binding unavailable \
+      "no-token-or-gh-cli" 2>/dev/null || true
+  fi
 fi
 
 exit 0
