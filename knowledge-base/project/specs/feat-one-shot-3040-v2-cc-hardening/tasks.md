@@ -40,21 +40,15 @@ Derived from `knowledge-base/project/plans/2026-05-11-fix-cc-hardening-safe-bash
 
 ## Phase 4 — Paused-interval subtraction + drift sweep (Finding 4)
 
-- [ ] 4.1 Add `pausedAt: number | null` and `totalPausedMs: number` to `ActiveQuery` interface with the JSDoc shown in plan §"Files to Edit".
-- [ ] 4.2 Update `notifyAwaitingUser`: stamp `pausedAt` on true / accumulate `totalPausedMs` on false. Remove `firstToolUseAt = now()` re-stamp at line 2518.
-- [ ] 4.3 Update `armRunaway` and `armTurnHardCap` fire-time callbacks: compute `elapsedMs = (now() - turnOriginAt) - totalPausedMs - (pausedAt ? now() - pausedAt : 0)`; re-arm via `setTimeout(<callback>, Math.max(1, threshold - elapsedMs))` if too early; log every re-arm at `log.debug`.
-- [ ] 4.4 Update `recordAssistantBlock` (inside `if (isFirstBlockOfTurn)`): reset `totalPausedMs = 0; pausedAt = null`.
-- [ ] 4.5 Update `closeQuery` (line 1524) + `dispatch()` initializer for the new fields.
-- [ ] 4.6 **Drift-sweep** the per-window→cumulative narrative across 6 sites:
-  - test docstring `soleur-go-runner-awaiting-user.test.ts:46`
-  - REWRITE test at `soleur-go-runner-awaiting-user.test.ts:291` ("AC9: only ACTIVE compute time counts")
-  - inline comment `soleur-go-runner-awaiting-user.test.ts:332`
-  - runner doc `soleur-go-runner.ts:825-836` (`notifyAwaitingUser` interface JSDoc)
-  - runner doc `soleur-go-runner.ts:1229-1236` (`awaitingUser` field)
-  - inline comment `soleur-go-runner.ts:2511-2516`
-- [ ] 4.7 Verify drift-sweep via `git grep -E "fresh firstToolUseAt|per-active-window|only ACTIVE compute" apps/web-platform/` returns zero hits.
-- [ ] 4.8 Add NEW AC12 (10-min absolute ceiling cumulative), NEW AC13 (multi-turn reset), NEW AC14 (mirror debounce 5-min TTL coalescing).
-- [ ] 4.9 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts apps/web-platform/test/soleur-go-runner-lifecycle.test.ts apps/web-platform/test/soleur-go-runner-tool-result-idle-reset.test.ts`.
+- [x] 4.1 Add `pausedAt: number | null` and `totalPausedMs: number` to `ActiveQuery` interface with the JSDoc shown in plan §"Files to Edit".
+- [x] 4.2 Update `notifyAwaitingUser`: stamp `pausedAt` on true / accumulate `totalPausedMs` on false. Remove `firstToolUseAt = now()` re-stamp at line 2518.
+- [x] 4.3 Update `armRunaway` and `armTurnHardCap` fire-time callbacks: compute `elapsedMs = (now() - turnOriginAt) - totalPausedMs - (pausedAt ? now() - pausedAt : 0)`; re-arm via `setTimeout(<callback>, Math.max(1, threshold - elapsedMs))` if too early; log every re-arm at `log.debug`.
+- [x] 4.4 Update `recordAssistantBlock` (inside `if (isFirstBlockOfTurn)`): reset `totalPausedMs = 0; pausedAt = null`.
+- [x] 4.5 Update `closeQuery` (line 1524) + `dispatch()` initializer for the new fields.
+- [x] 4.6 **Drift-sweep** the per-window→cumulative narrative across 6 sites.
+- [x] 4.7 Verify drift-sweep via `git grep -E "fresh firstToolUseAt|per-active-window|only ACTIVE compute" apps/web-platform/` returns zero hits.
+- [x] 4.8 Add NEW AC12 (10-min absolute ceiling cumulative), NEW AC13 (multi-turn reset), NEW AC14 (mirror debounce 5-min TTL coalescing).
+- [x] 4.9 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts apps/web-platform/test/soleur-go-runner-lifecycle.test.ts apps/web-platform/test/soleur-go-runner-tool-result-idle-reset.test.ts`.
 - [ ] 4.10 Commit `fix(cc): wall-clock subtracts paused intervals across rapid status flap + drift sweep per-window→cumulative (#3040)`.
 
 ## Phase 5 — Full sweep + review

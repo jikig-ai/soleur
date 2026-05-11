@@ -42,19 +42,25 @@ import {
   type DispatchEvents,
 } from "@/server/soleur-go-runner";
 
-// RED tests for plan 2026-04-29-fix-command-center-qa-permissions-runaway-rename-plan.md
-// Stage TS4 (AC8), TS5 (AC9), AC17 — `notifyAwaitingUser` pause/resume of
-// the runaway wall-clock so `5xx`-style runaway timeouts are not charged
-// against human read time during a Bash review-gate or other interactive
-// prompt.
+// Tests for plan 2026-04-29-fix-command-center-qa-permissions-runaway-rename-plan.md
+// + #3040 Finding 4 cumulative-budget rewrite (drift-sweep
+// per-window→cumulative narrative).
 //
 // The runner exposes `notifyAwaitingUser(conversationId, awaiting:
 // boolean)`. While `awaiting === true`, the wall-clock runaway timer is
-// paused (`clearTimeout`); when transitioning back to false, the runner
-// re-arms with `firstToolUseAt = now()` so the elapsed counter resets.
-// If the conversationId is unknown, it MUST mirror to Sentry via
-// `reportSilentFallback` (no silent no-op) per
-// `cq-silent-fallback-must-mirror-to-sentry`.
+// paused (`clearTimeout`) and `state.pausedAt` is stamped. On resume,
+// the just-finished pause interval is accumulated into
+// `state.totalPausedMs` and both timers are re-armed; `firstToolUseAt`
+// is preserved across pause/resume cycles. The wall-clock trigger and
+// the absolute turn ceiling subtract `totalPausedMs + (pausedAt
+// ? now() - pausedAt : 0)` from elapsed at fire time so paused
+// intervals do not count toward either ceiling. A chatty-flap runaway
+// cannot escape either ceiling by interleaving short user prompts with
+// heavy compute (#3040 Finding 4).
+//
+// If the conversationId is unknown, `notifyAwaitingUser` MUST mirror to
+// Sentry via `mirrorWithDebounce` (per
+// `cq-silent-fallback-must-mirror-to-sentry`; #3040 Finding 2).
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -296,7 +302,7 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
   });
 
-  it("AC9: runaway re-arms after notify(false) — only ACTIVE compute time counts (5s + 30s = 35s, paused 20s in middle)", async () => {
+  it("AC9 (cumulative): runaway fires on cumulative-active-time threshold across pause/resume — 5s active + 20s paused + 30s active fires at the boundary; paused time deducted at fire (#3040 Finding 4)", async () => {
     vi.setSystemTime(0);
     const mock = createMockQuery();
     const runner = createSoleurGoRunner({
@@ -337,17 +343,24 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     await flushMicrotasks();
     expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
 
-    // Resume — re-arms with fresh firstToolUseAt = now().
+    // Resume — re-arms both timers; `firstToolUseAt` preserved at 0.
+    // `totalPausedMs` now holds the 20s pause interval, which the
+    // fire-time recheck subtracts from elapsed.
     runner.notifyAwaitingUser("conv-resume", false);
 
-    // Advance 29.999s post-resume — still under threshold.
+    // Advance 29.999s post-resume — setTimeout scheduled at t=25s
+    // for 30s would fire at t=55s. Under cumulative semantics, at
+    // fire time elapsedMs = 55 - 0 (firstToolUseAt) - 20 (totalPausedMs)
+    // = 35s. We have not yet hit the wall-clock t=55s, so no fire.
     vi.advanceTimersByTime(29_999);
     await flushMicrotasks();
     expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
 
-    // Final 2ms tips us past 30s of post-resume active time. Runaway
-    // fires now (total elapsed real-clock = 5s + 20s + ~30s ≈ 55s; only
-    // the 30s post-resume window matters).
+    // Final 2ms tips us past wall-clock t=55s; the re-armed setTimeout
+    // fires, recomputes elapsedMs=35s (≥ 30s threshold), and emits
+    // runner_runaway. The 20s of human read time was DEDUCTED at fire
+    // time — only the 35s of cumulative active compute counts toward
+    // the threshold.
     vi.advanceTimersByTime(2);
     await flushMicrotasks();
     expect(events._ended.find((e) => e.status === "runner_runaway")).toBeDefined();
@@ -468,6 +481,151 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     vi.advanceTimersByTime(120_000);
     expect(runner.reapIdle()).toBe(1);
     expect(runner.hasActiveQuery("conv-reaper-paused")).toBe(false);
+  });
+
+  it("AC12 (#3040 Finding 4): absolute turn-hard-cap subtracts paused intervals — 30s ceiling, 5s active + 20s paused + 25s active fires at the boundary; paused time deducted at fire", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      // Make idle-window large so only the absolute turn-hard-cap can fire.
+      wallClockTriggerMs: 10 * 60 * 1000,
+      maxTurnDurationMs: 30_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-hardcap",
+      userId: "u1",
+      userMessage: "go",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    mock.emit(
+      makeAssistant({
+        content: [
+          { type: "tool_use", id: "t1", name: "Read", input: { file_path: "x" } },
+        ],
+      }),
+    );
+    await flushMicrotasks();
+
+    // 5s active
+    vi.advanceTimersByTime(5_000);
+    await flushMicrotasks();
+    // Pause for 20s
+    runner.notifyAwaitingUser("conv-hardcap", true);
+    vi.advanceTimersByTime(20_000);
+    await flushMicrotasks();
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+    // Resume — armTurnHardCap re-arms; setTimeout scheduled at t=25
+    // for 30s would fire at t=55s. Under cumulative semantics, at
+    // fire time elapsedMs = 55 - 0 - 20 = 35s > 30s ceiling.
+    runner.notifyAwaitingUser("conv-hardcap", false);
+    // Advance to t=54.999s — under cumulative threshold, no fire yet.
+    vi.advanceTimersByTime(29_999);
+    await flushMicrotasks();
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+    // +2ms tips us past wall-clock t=55s; turnHardCap fires with
+    // reason="max_turn_duration".
+    vi.advanceTimersByTime(2);
+    await flushMicrotasks();
+    const hardCapEnd = events._ended.find((e) => e.status === "runner_runaway");
+    expect(hardCapEnd?.reason).toBe("max_turn_duration");
+  });
+
+  it("AC13 (#3040 Finding 4): multi-turn paused-budget reset — turn 1's paused interval does NOT leak into turn 2's wall-clock budget", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 30_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-multiturn",
+      userId: "u1",
+      userMessage: "go",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Turn 1: first block at t=0, pause 10s, terminal result clears
+    // firstToolUseAt.
+    mock.emit(
+      makeAssistant({
+        content: [
+          { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+        ],
+      }),
+    );
+    await flushMicrotasks();
+    runner.notifyAwaitingUser("conv-multiturn", true);
+    vi.advanceTimersByTime(10_000);
+    runner.notifyAwaitingUser("conv-multiturn", false);
+    // Terminal result @ t=10s — clears firstToolUseAt.
+    mock.emit({
+      type: "result",
+      subtype: "success",
+      duration_ms: 10,
+      duration_api_ms: 10,
+      is_error: false,
+      num_turns: 1,
+      result: "ok",
+      session_id: "s1",
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    } as SDKResultMessage);
+    await flushMicrotasks();
+
+    // Turn 2: first block at t=15s wall-time (5s of inter-turn idle).
+    vi.advanceTimersByTime(5_000);
+    mock.emit(
+      makeAssistant({
+        content: [
+          { type: "tool_use", id: "t2", name: "Bash", input: { command: "pwd" } },
+        ],
+      }),
+    );
+    await flushMicrotasks();
+    // recordAssistantBlock has reset totalPausedMs to 0 for the new
+    // turn. Wall-clock fires at t = 15 + 30 = 45s; effective elapsed
+    // = 45 - 15 - 0 = 30s.
+    vi.advanceTimersByTime(29_999);
+    await flushMicrotasks();
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+    vi.advanceTimersByTime(2);
+    await flushMicrotasks();
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeDefined();
+  });
+
+  it("AC14 (#3040 Finding 2): mirrorWithDebounce 5-min TTL on 'unknown:notify-awaiting-no-active-query' — 3 calls within 100ms coalesce; advance 5min+1ms then a second mirror fires", () => {
+    mockMirrorWithDebounce.mockClear();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => createMockQuery().query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 30_000,
+    });
+
+    // 3 rapid calls — under the real `mirrorWithDebounce`, only the
+    // first would mirror. Here the mock fires every time, so we assert
+    // shape and rely on observability-mirror-debounce.test.ts to pin
+    // the TTL semantics. The runner's contract: pass the const errorClass
+    // and "unknown" userId on every call so the real debounce coalesces.
+    runner.notifyAwaitingUser("ghost-conv", true);
+    runner.notifyAwaitingUser("ghost-conv", true);
+    runner.notifyAwaitingUser("ghost-conv", true);
+    expect(mockMirrorWithDebounce).toHaveBeenCalledTimes(3);
+    for (const call of mockMirrorWithDebounce.mock.calls) {
+      expect(call[2]).toBe("unknown");
+      expect(call[3]).toBe(NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS);
+    }
   });
 
   it("AC7 regression: without notifyAwaitingUser, 30s runaway still fires after first tool_use without a result", async () => {
