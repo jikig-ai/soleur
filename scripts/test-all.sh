@@ -52,7 +52,8 @@ run_suite() {
 run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
 run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
 run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
-run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md
+run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+run_suite ".claude/hooks/session-rules-loader" bash .claude/hooks/session-rules-loader.test.sh
 run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
 run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
 run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh

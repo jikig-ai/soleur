@@ -85,3 +85,43 @@ brew install flock
 
 Without `flock`, the `emit_incident` helper still exits cleanly (the `|| true`
 guard) — you just won't get telemetry locally. CI (Ubuntu) always has `flock`.
+
+## Change-class loader (#3493)
+
+`session-rules-loader.sh` is a **SessionStart** hook (matchers
+`startup|resume|clear|compact`) — it does not block tool calls. It computes
+the session's change-class from `git diff --name-only origin/main...HEAD ∪
+git status --porcelain` and injects the matching `AGENTS.<class>.md`
+sidecar(s) into `hookSpecificOutput.additionalContext`. See spec at
+`knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md`.
+
+### Operator commands
+
+Inspect what the loader picked for the active session:
+
+```bash
+cat .claude/.session-manifests/$(ls -t .claude/.session-manifests/ | head -1)
+```
+
+Force a full re-load when scope shifts mid-session (e.g., a docs-only session
+that pivots into code):
+
+```bash
+LOADER_FAIL_CLOSED=1 bash .claude/hooks/session-rules-loader.sh \
+  < <(printf '{"cwd":"%s"}' "$PWD")
+```
+
+### Default class
+
+- Empty diff (fresh worktree, on main, no uncommitted) → `mixed` → all
+  sidecars loaded (fail-closed).
+- Multi-class diff → `mixed` → all sidecars loaded.
+- Missing sidecar file at runtime → all available sidecars loaded with a
+  `(fail-safe: sidecar missing)` annotation in the stamp.
+
+### Manifests
+
+Per-session manifests at `.claude/.session-manifests/<session_id>.json` carry
+the three fields `{timestamp, change_class, rule_ids_loaded}` — sufficient for
+SOC 2 CC6.1/CC7.2 evidence ("which rules were in context at session X").
+The directory is gitignored.
