@@ -114,6 +114,8 @@ Within ~2 min:
 - The "Squash and merge" button is greyed out with "Required statuses must pass".
 - Even admin override is gated by the ruleset's `bypass_actors`.
 
+After verifying the new ruleset check, run [`scripts/audit-bot-codeql-coverage.sh`](../../../../scripts/audit-bot-codeql-coverage.sh) (#3545) to confirm bot-PR coverage of the pre-existing `CodeQL` required check is preserved. See [`codeql-bot-coverage.md`](./codeql-bot-coverage.md).
+
 ## Close
 
 ```bash
