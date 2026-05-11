@@ -21,11 +21,13 @@ issue: 3545
 
 ## Phase 1.5 — Audit fixtures + regression test
 
-- [ ] 1.10. Create `scripts/fixtures/audit-bot-codeql-coverage/` directory with synthesized JSON fixtures (no real PR numbers).
-- [ ] 1.11. Fixture A: missing-CodeQL — check-runs JSON without `CodeQL` entry.
-- [ ] 1.12. Fixture B: failed-CodeQL — check-runs JSON with `CodeQL.conclusion == "failure"`.
-- [ ] 1.13. Fixture C: passing — check-runs JSON with `CodeQL.conclusion == "neutral"`.
-- [ ] 1.14. Add a small `scripts/test-audit-bot-codeql-coverage.sh` harness that runs the script against each fixture via a `--fixture` flag and asserts exit code + drift entry.
+- [ ] 1.10. Create `scripts/fixtures/audit-bot-codeql-coverage/` directory with synthesized JSON fixtures (no real PR numbers, per `cq-test-fixtures-synthesized-only`).
+- [ ] 1.11. Fixture A (`missing.json`): check-runs payload WITHOUT a `CodeQL` entry. Expected: exit 1, `codeql_state: "missing"`.
+- [ ] 1.12. Fixture B (`failure.json`): `CodeQL.conclusion == "failure"`, `app.id == 57789`. Expected: exit 1, `codeql_state: "failure"`.
+- [ ] 1.13. Fixture C (`neutral-passing.json`): `CodeQL.conclusion == "neutral"`, `status == "completed"`, `app.id == 57789`. Expected: exit 0 (regression guard — load-bearing per deepen-pass §Research Insights).
+- [ ] 1.14. Fixture D (`wrong-app.json`): `CodeQL` entry with `app.id == 15368` (github-actions, not advanced-security). Expected: exit 1, `codeql_state: "wrong_app"`.
+- [ ] 1.15. Fixture E (`in-progress.json`): `CodeQL.status == "in_progress"`, `conclusion == null`. Expected: exit 2 (distinct from drift — re-poll, do not escalate).
+- [ ] 1.16. Add `scripts/test-audit-bot-codeql-coverage.sh` harness that runs the script against each fixture via a `--fixture <path>` flag and asserts exit code + envelope contents.
 
 ## Phase 2 — Runbook + reconciliation
 
