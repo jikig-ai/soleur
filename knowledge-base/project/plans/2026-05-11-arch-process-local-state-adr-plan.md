@@ -70,7 +70,8 @@ The issue body cites a 5-Map inventory with specific `file:line` references. Ver
 
 **If this leaks, the user's data is exposed via:** N/A — the ADR is a docs + guard change with no data-handling surface. The runtime guard reads only the `WEB_PLATFORM_REPLICAS` env var (operator-set, not user-controlled).
 
-**Brand-survival threshold:** `none`. Rationale: this is documentation + a startup tripwire that fires at boot, not request-time. Failure mode is "ADR is slightly wrong" or "container boots when it shouldn't" — both caught at deploy verification (`ci-deploy.sh` health check), not in production by a user.
+- **Brand-survival threshold:** `none`
+- threshold: none, reason: documentation + a startup tripwire that fires at boot, not request-time. Failure mode is "ADR is slightly wrong" or "container boots when it shouldn't" — both caught at deploy verification (`ci-deploy.sh` health check), not in production by a user. Diff touches `apps/web-platform/infra/` and `apps/web-platform/server/` (matches `Check 6` sensitive-path regex) but adds no user-facing surface.
 
 ## Considered Options
 
