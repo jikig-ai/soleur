@@ -98,6 +98,12 @@ pre-commit:
     # (see 2026-03-21-lefthook-gobwas-glob-double-star.md). Mirrors the
     # canonical regex in plugins/soleur/skills/gdpr-gate/SKILL.md and
     # scripts/gdpr-gate.sh.
+    #
+    # CI self-test: .github/workflows/gdpr-gate-self-test.yml is the
+    # load-bearing gate for regressions in
+    # plugins/soleur/skills/gdpr-gate/scripts/** (issue #3536). The glob
+    # below intentionally does NOT cover scripts/ because pre-commit
+    # fixture runs are slow and flaky; CI carries the assertion instead.
     gdpr-gate-advisory:
       priority: 6
       glob:

@@ -9,6 +9,13 @@
 #                     stale immediately, per plan TR2 + SpecFlow P1.5).
 #                     Always exits 0 — the gdpr-gate hook subshell-execs this
 #                     and depends on the always-exit-0 advisory contract.
+#   cron-run-stale    Integer days since the scheduled-content-vendor-drift
+#                     workflow last succeeded (via `gh run list`). 999 on any
+#                     failure mode (no GH_TOKEN, no gh CLI, network blocked,
+#                     empty result, malformed timestamp, timeout). The
+#                     `gdpr-gate.sh` caller computes MIN(days-stale,
+#                     cron-run-stale) to defend against a backdated
+#                     last-verified field (issue #3535).
 #   lifted-files      One `<path>:<local-blob-sha>` per line. Local blob SHAs
 #                     pin the file as it exists in this repo (post-attribution
 #                     header) and are consumed by `vendor-pin-integrity.sh`.
@@ -129,6 +136,39 @@ _emit_files() {
   '
 }
 
+cmd_cron_run_stale() {
+  # Days since the scheduled-content-vendor-drift workflow last succeeded,
+  # via `gh run list ... --json updatedAt`. Always exits 0 — any failure
+  # mode (no token, no gh, network blocked, empty result, malformed
+  # timestamp, non-zero clock skew) resolves to 999 so the caller's
+  # subshell-exec contract holds. Wrap network call with `timeout 5s` to
+  # bound the runtime-banner wall clock.
+  #
+  # Workflow filename is hard-coded; renaming the workflow silently breaks
+  # this binding (falls through to 999 → operator-attested-mode banner).
+  # See SKILL.md "Sharp edges" for the workflow-rename mitigation.
+  local token raw ts cron_epoch today_epoch days
+  token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  [[ -n "$token" ]] || { echo 999; return 0; }
+  command -v gh >/dev/null 2>&1 || { echo 999; return 0; }
+  # `// empty` collapses the literal `null` (empty result set) to empty
+  # string. Belt-and-suspenders with the strict-ISO regex below — a
+  # softened guard alone would silently slip `null` through.
+  raw=$(GH_TOKEN="$token" timeout 5s gh run list \
+          --workflow=scheduled-content-vendor-drift.yml \
+          --status=success --limit=1 \
+          --json updatedAt --jq '.[0].updatedAt // empty' \
+          2>/dev/null) || { echo 999; return 0; }
+  ts="${raw%%[[:space:]]*}"
+  [[ -n "$ts" ]] || { echo 999; return 0; }
+  [[ "$ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+    || { echo 999; return 0; }
+  cron_epoch=$(date -u -d "$ts" +%s 2>/dev/null) || { echo 999; return 0; }
+  today_epoch=$(date -u +%s)
+  days=$(( (today_epoch - cron_epoch) / 86400 ))
+  if (( days < 0 )); then echo 999; else echo "$days"; fi
+}
+
 cmd_lifted_files() {
   _emit_files path local-blob-sha
 }
@@ -144,6 +184,9 @@ case "${1:-}" in
   days-stale)
     cmd_days_stale
     ;;
+  cron-run-stale)
+    cmd_cron_run_stale
+    ;;
   lifted-files)
     cmd_lifted_files
     ;;
@@ -151,7 +194,7 @@ case "${1:-}" in
     cmd_upstream_files
     ;;
   *)
-    echo "Usage: $0 {field <name>|days-stale|lifted-files|upstream-files}" >&2
+    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|upstream-files}" >&2
     exit 2
     ;;
 esac

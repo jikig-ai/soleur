@@ -9,32 +9,44 @@ Cross-references:
 - gdpr-gate skill: `plugins/soleur/skills/gdpr-gate/SKILL.md`
 - Helper scripts: `plugins/soleur/skills/gdpr-gate/scripts/{notice-frontmatter,vendor-pin-integrity,vendor-drift-classify}.sh`
 
-## 1. Synthetic-Drift Test (post-merge AC validation)
+## 1. Synthetic-Drift Test — Cron-Failure-Path Validation
 
-Run this once after merging the PR that landed this runbook (#3517) to verify the workflow end-to-end:
+Run this once after merging the PR that landed this runbook (#3517) — or after any change to the cron, classifier, or NOTICE schema — to verify NOTICE tampering produces a visible alert. The earlier form of this test mutated `pinned-commit` only, but the drift-detection logic compares per-file `upstream-blob-sha` values, so mutating `pinned-commit` alone produced "no drift detected" and silently skipped validation (issue #3540).
+
+**Scope:** this test validates the **cron-failure path** — the workflow's `if: failure()` arm that opens a `vendor/cron-failure` issue when an upstream blob lookup 404s. It does NOT validate the happy-path auto-PR creation, which requires a real upstream content change (covered separately when a real upstream drift lands or when a fork-based test is added).
 
 ```bash
-# 1. Create a feature branch with a deliberately-wrong NOTICE pinned-commit.
+# 1. Create a feature branch with one upstream-blob-sha mutated to a
+#    non-existent SHA. The 0000... SHA is guaranteed to 404 against the
+#    upstream `git/blobs/` endpoint, which trips the workflow's cron-failure
+#    arm.
 git checkout -b synthetic-drift-test
-sed -i 's|^pinned-commit: 7b58d68.*|pinned-commit: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef|' \
+sed -i '0,/^    upstream-blob-sha:.*/{s/^\(    upstream-blob-sha:\).*/\1 0000000000000000000000000000000000000000/}' \
   plugins/soleur/skills/gdpr-gate/NOTICE
-git commit -am 'test: mutate NOTICE pinned-commit for drift workflow validation'
+git commit -am 'test: mutate one upstream-blob-sha to non-existent for cron-failure-path validation'
 git push -u origin synthetic-drift-test
 
 # 2. Dispatch the workflow against this branch.
 gh workflow run scheduled-content-vendor-drift.yml --ref synthetic-drift-test
 
-# 3. Poll until the run completes.
+# 3. Poll until the run completes (expect failure status — the
+#    cron-failure arm is what fires).
 RUN_ID=$(gh run list --workflow=scheduled-content-vendor-drift.yml \
                      --branch=synthetic-drift-test --limit=1 \
                      --json databaseId --jq '.[0].databaseId')
 gh run watch "$RUN_ID"
 
-# 4. Assert the workflow opened an auto-PR (or filed a tracking issue).
-gh pr list --search 'head:ci/vendor-drift-' --state all --limit 5
+# 4. Assert a `vendor/cron-failure` issue was auto-filed with a link to
+#    the failed run.
+gh issue list --label vendor/cron-failure --state open --limit 5
 ```
 
-Expected outcome: a PR is opened against `synthetic-drift-test` with at least the `vendor/pin-drift` label. NOTICE `last-verified` on the auto-PR is bumped to today's date. Delete the test branch after assertion: `gh pr close <num>` and `git push origin --delete synthetic-drift-test`.
+Expected outcome: a `vendor/cron-failure` issue is auto-filed within ~10 minutes of dispatch, body linking to the failed run. The most-important invariant — NOTICE tampering produces a visible alert — is validated. Clean up after assertion:
+
+```bash
+gh issue close <issue-num> --reason completed --comment "synthetic-drift-test validation — closing"
+git push origin --delete synthetic-drift-test
+```
 
 ## 2. Conflict-Marker Resolution (`needs-human-review` label)
 

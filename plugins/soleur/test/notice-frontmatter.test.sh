@@ -167,4 +167,98 @@ fi
 rm -f "$TIMINGS_FILE"
 echo ""
 
+# --- TS-cron-1: cron-run-stale with no token → 999 (no-network path) ---
+echo "TS-cron-1: cron-run-stale with GH_TOKEN='' and GITHUB_TOKEN='' returns 999"
+OUT=$(GH_TOKEN="" GITHUB_TOKEN="" bash "$PARSER" cron-run-stale)
+assert_eq "999" "$OUT" "cron-run-stale=999 when no token is available"
+echo ""
+
+# --- TS-cron-2: cron-run-stale with stub gh emitting a fixture timestamp ---
+# Use a relative date (99 days ago, computed at test time) so the assertion
+# is exact and the test is not a calendar landmine. An earlier form pinned
+# 2026-02-01 + asserted a 20-day window; the window expired ~10 days after
+# merge. Relative date + exact equality eliminates clock drift entirely
+# (the test fixture moves with today's date).
+echo "TS-cron-2: cron-run-stale with stubbed gh returns 99 (relative date)"
+STUB_DIR_2="$(mktemp -d)"
+STUB_TS=$(date -u -d '99 days ago' +%Y-%m-%dT00:00:00Z)
+make_gh_stub "$STUB_DIR_2" "$STUB_TS"
+OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_2:$PATH" bash "$PARSER" cron-run-stale)
+assert_eq "99" "$OUT" "cron-run-stale prints exact days (99) for fixture timestamp"
+rm -rf "$STUB_DIR_2"
+echo ""
+
+# --- TS-cron-3: cron-run-stale with stub gh emitting literal 'null' → 999 ---
+# Matches `gh run list ... --jq '.[0].updatedAt'` on an empty result array.
+# The parser's `// empty` jq filter + strict-ISO regex must both guard this.
+echo "TS-cron-3: cron-run-stale with stub gh emitting 'null' returns 999"
+STUB_DIR_3="$(mktemp -d)"
+make_gh_stub "$STUB_DIR_3" "null"
+OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_3:$PATH" bash "$PARSER" cron-run-stale)
+assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits 'null'"
+rm -rf "$STUB_DIR_3"
+echo ""
+
+# --- TS-cron-4: cron-run-stale with stub gh emitting non-RFC3339 string → 999 ---
+echo "TS-cron-4: cron-run-stale with non-RFC3339 stub output returns 999"
+STUB_DIR_4="$(mktemp -d)"
+make_gh_stub "$STUB_DIR_4" "2026-02-01"  # date-only, missing T...Z
+OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_4:$PATH" bash "$PARSER" cron-run-stale)
+assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits a date-only string"
+rm -rf "$STUB_DIR_4"
+echo ""
+
+# --- TS-cron-empty: cron-run-stale with stub gh emitting empty stdout → 999 ---
+# Models the workflow-renamed / workflow-deleted case where
+# `gh run list --workflow=<missing>` exits 0 with an empty array, which
+# `jq '.[0].updatedAt // empty'` collapses to empty string. The strict-ISO
+# regex must reject empty input (architecture-strategist finding on #3541).
+echo "TS-cron-empty: cron-run-stale with stub gh emitting empty stdout returns 999"
+STUB_DIR_EMPTY="$(mktemp -d)"
+make_gh_stub "$STUB_DIR_EMPTY" ""
+OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_EMPTY:$PATH" bash "$PARSER" cron-run-stale)
+assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits empty stdout (workflow renamed/deleted case)"
+rm -rf "$STUB_DIR_EMPTY"
+echo ""
+
+# --- TS-cron-5: cron-run-stale with slow stub gh → 999, bounded by timeout ---
+# Asserts the `timeout 5s` wrapper fires. Wall-clock < 6s (5s + grace).
+echo "TS-cron-5: cron-run-stale with slow stub gh returns 999 within 6s"
+STUB_DIR_5="$(mktemp -d)"
+make_gh_stub_sleep "$STUB_DIR_5" 10
+SECS=$( { /usr/bin/time -f "%e" \
+  bash -c "GH_TOKEN=stub-token PATH=\"$STUB_DIR_5:\$PATH\" bash \"$PARSER\" cron-run-stale" \
+  >/tmp/cron-stale-out.$$ ; } 2>&1 )
+OUT=$(cat /tmp/cron-stale-out.$$ 2>/dev/null)
+rm -f /tmp/cron-stale-out.$$
+assert_eq "999" "$OUT" "cron-run-stale=999 when gh times out"
+# Compare floats via awk; emit "PASS"/"FAIL" string and assert it.
+WALL_OK=$(awk -v t="$SECS" 'BEGIN { print (t < 6 ? "PASS" : "FAIL") }')
+assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (got: ${SECS}s)"
+rm -rf "$STUB_DIR_5"
+echo ""
+
+# --- TS12: timing — p95 < 100ms across 100 invocations of cron-run-stale ---
+# Budget mirrors TS11. Measure the no-token (no-network) path; the
+# token-present path inherits the GitHub API latency and is not budgeted.
+echo "TS12: p95 < 100ms over 100 invocations of cron-run-stale (no-token path)"
+TIMINGS_FILE_2="$(mktemp)"
+for _ in $(seq 1 100); do
+  SECS=$( { /usr/bin/time -f "%e" \
+    bash -c "GH_TOKEN='' GITHUB_TOKEN='' bash \"$PARSER\" cron-run-stale" \
+    >/dev/null ; } 2>&1 )
+  printf '%s\n' "$SECS"
+done > "$TIMINGS_FILE_2"
+P95_MS_2=$(awk '{printf "%d\n", $1*1000}' "$TIMINGS_FILE_2" | sort -n | awk 'NR==95')
+echo "  p95: ${P95_MS_2}ms (over 100 runs)"
+if (( P95_MS_2 < 100 )); then
+  echo "  PASS: p95 < 100ms"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: p95 >= 100ms (TS12 budget breached)"
+  FAIL=$((FAIL + 1))
+fi
+rm -f "$TIMINGS_FILE_2"
+echo ""
+
 print_results

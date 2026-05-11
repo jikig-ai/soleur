@@ -1,0 +1,73 @@
+name: gdpr-gate-self-test
+
+# Persistent self-test gate for gdpr-gate scripts (issue #3536).
+#
+# The `gdpr-gate-advisory` lefthook glob does not cover
+# `plugins/soleur/skills/gdpr-gate/scripts/**` — a PR could break BOTH the
+# script and a sibling test together and the gate would stay green silently.
+# This workflow is the load-bearing self-test that closes that hole.
+#
+# Two jobs (not a matrix — both GH_TOKEN AND GITHUB_TOKEN must be zeroed
+# for the without-token path because GitHub Actions auto-injects
+# GITHUB_TOKEN):
+#   without-token: asserts the operator-attested-mode banner (issue #3535)
+#                  fires + staleness banner + POSTURE_FAIL + always-exit-0.
+#   with-token:    asserts the operator-attested-mode banner is suppressed
+#                  when a deterministic gh stub resolves the cron-run
+#                  timestamp + always-exit-0.
+#
+# Workflow file is in its own `paths:` filter (self-bootstrap — runs against
+# itself on the PR that lands it). Mirrors `vendor-pin-verify.yml`'s
+# structural shape: SHA-pinned checkout, timeout-minutes: 5,
+# permissions: contents: read.
+#
+# Security note: only `github.token` is used, routed through `env:` per
+# the GitHub Actions injection-hardening guidance. No untrusted PR or
+# issue fields are interpolated.
+
+on:
+  pull_request:
+    paths:
+      - "plugins/soleur/skills/gdpr-gate/scripts/**"
+      - "plugins/soleur/skills/gdpr-gate/NOTICE"
+      - "plugins/soleur/test/fixtures/gdpr-gate-stale/**"
+      - "plugins/soleur/test/gdpr-gate-self-test.test.sh"
+      - "plugins/soleur/test/test-helpers.sh"
+      - "lefthook.yml"
+      - ".github/workflows/gdpr-gate-self-test.yml"
+  # Weekly cadence on main so a post-merge silent regression (e.g., banner
+  # printf accidentally removed) surfaces within 7 days even when no PR
+  # touches the paths above. Mirrors the precedent set by
+  # scheduled-content-vendor-drift.yml.
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  without-token:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ""
+      GITHUB_TOKEN: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: Run self-test (no-token path)
+        run: bash plugins/soleur/test/gdpr-gate-self-test.test.sh
+
+  with-token:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: Run self-test (with-token path)
+        run: bash plugins/soleur/test/gdpr-gate-self-test.test.sh
