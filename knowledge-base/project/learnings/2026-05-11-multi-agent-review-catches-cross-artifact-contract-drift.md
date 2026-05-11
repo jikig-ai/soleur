@@ -46,6 +46,16 @@ Fixed inline in two commits on the PR branch:
 
 Three review agents covered the LOCAL code (pattern, architecture, code-quality) and all approved. The contract break was only visible by reading BOTH files. The git-history-analyzer's archaeology habit (read past commits + adjacent canonical docs) is what surfaced it.
 
+### Sub-pattern: implicit cross-artifact contract (no self-claim comment) — confirmed PR #3596
+
+PR #3596 added one row to `knowledge-base/legal/compliance-posture.md` `## Vendor DPA Status` documenting Anthropic PBC as a processor under SCCs Modules 2+3 (controller→processor + processor→processor). The row carried NO `mirrors X` / `matches X` self-claim comment — the scanner-pattern grep below would have returned zero hits.
+
+But `docs/legal/gdpr-policy.md:31,39` had a public-facing claim that contradicted the row's framing: "the Plugin does not act as a data processor … Anthropic acts as an **independent data controller or processor** … requests are sent to Anthropic's Claude API using the user's own API key. Soleur does not intermediate." The row's SCCs-M2+3 framing implied Soleur engages Anthropic as its processor for ALL Anthropic API surface, contradicting the public framing for plugin/skill-mode invocations.
+
+`security-sentinel` caught it because it instinctively reads adjacent public legal docs when reviewing a legal/compliance diff. The 3 other agents (git-history, pattern-recognition, code-quality) approved the diff in isolation. The fix narrowed the row's `Notes` cell scope to "Jikigai-keyed Anthropic API surface only" (`claude-code-action` CI workflows + compound-promotion-loop) and added an explicit pointer to `gdpr-policy.md § 2.2` for plugin-mode user-keyed calls.
+
+**Generalized lesson:** Implicit cross-artifact contracts exist whenever two artifacts independently describe the same real-world relationship — vendor processor status, schema column meaning, taxonomy IDs, route auth posture. The scanner-pattern grep below catches the *explicit* self-claim case; for the *implicit* case, the review agent must have domain instinct to read the adjacent public-facing artifact. Make this instinct explicit in review prompts: **for any diff touching `knowledge-base/legal/`, the review prompt MUST include "verify the diff's framing of vendor role / data flow / transfer mechanism agrees with `docs/legal/{gdpr,privacy}-policy.md`'s existing public disclosure for the same vendor."**
+
 ## Prevention
 
 **For future review prompts:** when the diff touches a file containing a "mirrors X" / "kept in sync with X" / "matches X" self-claim comment, include in the review prompt: *"Read the named artifact X and verify the claim still holds post-diff."*
@@ -62,9 +72,11 @@ Any hit produces a list of files whose changes must be cross-checked against the
 
 - **Bash CWD reset across calls** — Chained `cd apps/web-platform && cmd` worked, but a follow-up bare command lost CWD and got "no such file or directory". Recovery: use `cd <worktree-abs-path> && cmd` chains consistently. Prevention: discoverable via clear error; already documented in AGENTS.md (`hr-when-a-command-exits-non-zero-or-prints`). No new rule.
 - **`next lint` triggered interactive ESLint setup prompt** — Project has no ESLint config; `next lint` blocks waiting for menu input. Recovery: skipped lint, relied on `tsc --noEmit` + `vitest run` as quality gates. Prevention: discoverable; this project uses TSC + Vitest, not ESLint. No new rule.
+- **PR #3596: WebFetch to `https://www.anthropic.com/legal/dpa` returned HTTP 404** — guessed slug from document name rather than starting from canonical vendor terms page. Recovery: the correct URL (`/legal/data-processing-addendum`) was embedded as a link inside the commercial-terms § C response. Prevention: when verifying vendor legal docs, start from the canonical terms page and follow embedded links, never guess slugs. Already covered by the existing learning instinct; no new rule.
 
 ## Related
 
 - Defect class entry in `plugins/soleur/skills/review/SKILL.md` § "Defect Classes This Review Reliably Catches" — "Cross-stream format-contract drift in telemetry joins" (PR #3124) is the closest precedent. This learning generalizes that pattern from telemetry joins to **any** self-claimed cross-artifact contract.
-- PR #3556 — the originating PR.
-- Issue #3564 — the deferred-scope-out filed in the same review session (CWV infrastructure, architectural-pivot).
+- PR #3556 — the originating PR (explicit-self-claim sub-pattern).
+- PR #3596 — second confirmation (implicit cross-artifact contract sub-pattern, vendor-DPA-row vs gdpr-policy framing).
+- Issue #3564 — the deferred-scope-out filed in the same review session as #3556 (CWV infrastructure, architectural-pivot).
