@@ -24,13 +24,13 @@ jobs:
     name: skill-security-scan PR gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
         with:
           bun-version: latest
 
@@ -86,17 +86,40 @@ jobs:
           CI: 'true'
         run: |
           set -euo pipefail
-          override_count=$(git diff --name-only --diff-filter=A "$BASE_SHA"..."$HEAD_SHA" | grep -cE '^knowledge-base/security/skill-overrides/' || true)
-          override_count="${override_count:-0}"
+          # Per-skill override binding (security review P1):
+          # parse-override.sh emits matched[].skill. For each HIGH-RISK
+          # addition derive the slug from the path; require that slug to
+          # appear in matched[]. Any-override acceptance was a P1 bypass —
+          # an attacker landing a malicious skill + a throwaway override
+          # would have passed the previous aggregate-count check.
+          matched_skills="$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" 2>/dev/null | jq -r '.matched[].skill // empty' | sort -u)"
+          path_to_slug() {
+            local p="$1"
+            case "$p" in
+              plugins/soleur/skills/*/SKILL.md)
+                p="${p#plugins/soleur/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/skills/*/SKILL.md)
+                p="${p#.claude/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/agents/*.md|plugins/soleur/agents/*.md|plugins/soleur/agents/*/*.md|plugins/soleur/agents/*/*/*.md)
+                echo "$(basename "$p" .md)" ;;
+              *) echo "" ;;
+            esac
+          }
           fail=0
           while IFS= read -r path; do
             [ -z "$path" ] && continue
             [ ! -f "$path" ] && continue
             verdict=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')
-            echo "::notice file=$path::skill-security-scan verdict: $verdict"
-            if [ "$verdict" = "HIGH-RISK" ] && [ "$override_count" -lt 1 ]; then
-              echo "::error file=$path::HIGH-RISK without override artifact under knowledge-base/security/skill-overrides/"
-              fail=1
+            slug=$(path_to_slug "$path")
+            echo "::notice file=$path::skill-security-scan verdict: $verdict (slug=$slug)"
+            if [ "$verdict" = "HIGH-RISK" ]; then
+              if [ -z "$slug" ]; then
+                echo "::error file=$path::HIGH-RISK on path with un-derivable slug"
+                fail=1
+              elif ! echo "$matched_skills" | grep -qFx -- "$slug"; then
+                echo "::error file=$path::HIGH-RISK without matching override artifact (expected skill=$slug under knowledge-base/security/skill-overrides/)"
+                fail=1
+              fi
             fi
           done <<< "$ADDED"
           exit $fail

@@ -15,25 +15,8 @@ REDIRECT_FILE="$SCRIPT_DIR/../references/redirect-domains.yaml"
 tmp="$(stdin_to_tempfile)"
 trap 'rm -f "$tmp"' EXIT
 
-# Load allowlisted domains. Strip wildcard prefix `*.` for suffix-matching.
-# (We compute suffix matching at use-time; both forms map to the same set.)
-# YAML list parser: section header `<key>:`, items `  - <value>`, comments allowed.
-# Sub-sections terminate when a new top-level key appears.
-yaml_list() {
-  local file="$1" key="$2"
-  awk -v key="$key" '
-    $0 ~ "^"key":[[:space:]]*$" { in_sec = 1; next }
-    /^[a-zA-Z_]/ { in_sec = 0 }
-    in_sec && /^[[:space:]]*-[[:space:]]/ {
-      val = $0
-      sub(/^[[:space:]]*-[[:space:]]*/, "", val)
-      sub(/[[:space:]]*#.*$/, "", val)
-      sub(/^["'"'"']/, "", val); sub(/["'"'"']$/, "", val)
-      if (val != "") print val
-    }
-  ' "$file"
-}
-
+# Load allowlisted domains via the shared yaml_list helper from lib.sh.
+# Strip wildcard prefix `*.` for suffix-matching at use-time.
 mapfile -t allowlist_hosts < <(yaml_list "$ALLOWLIST_FILE" "domains" | sed 's/^\*\.//')
 mapfile -t allowlist_campaigns < <(yaml_list "$ALLOWLIST_FILE" "utm_campaigns")
 mapfile -t redirect_hosts < <(yaml_list "$REDIRECT_FILE" "redirect_hosts")
@@ -108,9 +91,18 @@ while IFS=':' read -r line rest; do
 done < <(grep -nE -- "$url_re" "$tmp" 2>/dev/null || true)
 
 # Branding-only patterns → finding-level WARN (script reports as REVIEW per Phase 3 mapping).
+# Scope to lines that ALSO contain a URL, markdown link, or image tag —
+# legitimate Soleur prose mentioning the detection itself (e.g., brainstorm.md
+# discussing "'powered by' footers") would otherwise trip the calibration AC.
 brand_re='(powered by|brought to you by|sponsored by)'
+brand_context_re='(https?://|\]\(|<img|!\[)'
 while IFS=':' read -r line rest; do
   [ -z "$line" ] && continue
+  # Require the branding phrase to co-occur with a URL or markdown link/image
+  # on the same line; bare prose mentions are skipped (FP suppression).
+  if ! echo "$rest" | grep -qE -- "$brand_context_re"; then
+    continue
+  fi
   snippet="${rest:0:200}"
   snippet="${snippet//$'\t'/ }"
   findings_lines+="branding-footer"$'\t'"REVIEW"$'\t'"$line"$'\t'"$snippet"$'\n'

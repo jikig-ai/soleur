@@ -103,7 +103,22 @@ for path in "${added[@]}"; do
     continue
   fi
 
-  matched="$(echo "$matched" | jq --arg p "$path" --arg s "$slug" --arg v "$verdict" '. + [{path: $p, slug: $s, verdict: $v}]')"
+  # Extract the `skill:` frontmatter field — this is the slug the artifact CLAIMS
+  # to authorize. Per-skill binding requires that the file-name slug AND the
+  # frontmatter slug match each other (defense-in-depth against template-copy
+  # mistakes), AND that consumers (CI gate, PreToolUse hook) verify the slug
+  # binds to the specific HIGH-RISK skill being installed.
+  artifact_skill="$(echo "$fm" | awk -F: '/^skill:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/"|'"'"'/, "", $2); print $2; exit }')"
+  if [ -z "$artifact_skill" ] || ! [[ "$artifact_skill" =~ $slug_re ]]; then
+    invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "skill: field invalid (got: $artifact_skill)" '. + [{path: $p, reason: $r}]')"
+    continue
+  fi
+  if [ "$artifact_skill" != "$slug" ]; then
+    invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "skill: field ($artifact_skill) does not match filename slug ($slug)" '. + [{path: $p, reason: $r}]')"
+    continue
+  fi
+
+  matched="$(echo "$matched" | jq --arg p "$path" --arg s "$slug" --arg sk "$artifact_skill" --arg v "$verdict" '. + [{path: $p, slug: $s, skill: $sk, verdict: $v}]')"
 done
 
 result="$(jq -n --argjson m "$matched" --argjson i "$invalid" --argjson s "$stale" \

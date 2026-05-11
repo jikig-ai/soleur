@@ -31,14 +31,16 @@ soleur_allowlist_re='ignore[[:space:]]+(the[[:space:]]+)?(step|cache|warning|err
 findings_lines=""
 
 # ---- Frontmatter rules (HIGH-RISK) ----
+# Rule specs are TAB-delimited (not '|') because regex alternation uses '|'
+# literally; pipe-delimitation truncates the regex at the first internal pipe.
 fm_rules=(
-  'role-hijack-fm|HIGH-RISK|(ignore|disregard|forget)[[:space:]]+(all[[:space:]]+)?(previous|prior|above|the[[:space:]]+(system|prior))'
-  'mode-jailbreak-fm|HIGH-RISK|\b(DAN|developer[[:space:]]+mode|jailbreak)\b'
-  'sysprompt-exfil-fm|HIGH-RISK|(reveal|print|show|output|leak)[[:space:]]+([a-z]+[[:space:]]+){0,3}(system[[:space:]]+prompt|the[[:space:]]+system)'
-  'delim-breakout-fm|HIGH-RISK|(</system>|<\|im_(start|end)\|>|^system:)'
+  $'role-hijack-fm\tHIGH-RISK\t(ignore|disregard|forget)[[:space:]]+(all[[:space:]]+)?(previous|prior|above|the[[:space:]]+(system|prior))'
+  $'mode-jailbreak-fm\tHIGH-RISK\t\\b(DAN|developer[[:space:]]+mode|jailbreak)\\b'
+  $'sysprompt-exfil-fm\tHIGH-RISK\t(reveal|print|show|output|leak)[[:space:]]+([a-z]+[[:space:]]+){0,3}(system[[:space:]]+prompt|the[[:space:]]+system)'
+  $'delim-breakout-fm\tHIGH-RISK\t(</system>|<\\|im_(start|end)\\|>|^system:)'
 )
 for spec in "${fm_rules[@]}"; do
-  IFS='|' read -r rule_id severity regex <<<"$spec"
+  IFS=$'\t' read -r rule_id severity regex <<<"$spec"
   while IFS=':' read -r line rest; do
     [ -z "$line" ] && continue
     snippet="${rest:0:200}"
@@ -54,12 +56,12 @@ done
 # ---- Body rules (REVIEW with proximity gate) ----
 body_proximity_re='(you[[:space:]]+(must|should)|base64|[A-Za-z0-9+/]{40,})'
 body_rules=(
-  'role-hijack-body|REVIEW|(ignore|disregard|forget)[[:space:]]+(all[[:space:]]+)?(previous|prior|above)'
-  'sysprompt-exfil-body|REVIEW|(reveal|print|show|leak)[[:space:]]+([a-z]+[[:space:]]+){0,3}(system[[:space:]]+prompt)'
-  'delim-breakout-body|REVIEW|(</system>|<\|im_(start|end)\|>)'
+  $'role-hijack-body\tREVIEW\t(ignore|disregard|forget)[[:space:]]+(all[[:space:]]+)?(previous|prior|above)'
+  $'sysprompt-exfil-body\tREVIEW\t(reveal|print|show|leak)[[:space:]]+([a-z]+[[:space:]]+){0,3}(system[[:space:]]+prompt)'
+  $'delim-breakout-body\tREVIEW\t(</system>|<\\|im_(start|end)\\|>)'
 )
 for spec in "${body_rules[@]}"; do
-  IFS='|' read -r rule_id severity regex <<<"$spec"
+  IFS=$'\t' read -r rule_id severity regex <<<"$spec"
   while IFS=':' read -r line rest; do
     [ -z "$line" ] && continue
     snippet="${rest:0:200}"

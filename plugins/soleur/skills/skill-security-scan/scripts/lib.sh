@@ -142,3 +142,34 @@ findings_to_verdict() {
     }
   '
 }
+
+# ---------------------------------------------------------------------------
+# yaml_list <file> <key> — emit the contents of a top-level YAML list section.
+#
+# Recognizes block-style lists only:
+#
+#   <key>:
+#     - <value1>
+#     - <value2>
+#
+# Section terminates at the next top-level key (line beginning with [a-zA-Z_]).
+# Inline `# comment` suffixes are stripped. Surrounding single/double quotes
+# stripped. Lines whose value resolves to empty after stripping are skipped.
+#
+# Does NOT mutate $0 (avoids the pattern-3 reset bug where gsub-mutated
+# values match subsequent predicates).
+# ---------------------------------------------------------------------------
+yaml_list() {
+  local file="$1" key="$2"
+  awk -v key="$key" '
+    $0 ~ "^"key":[[:space:]]*$" { in_sec = 1; next }
+    /^[a-zA-Z_]/ { in_sec = 0 }
+    in_sec && /^[[:space:]]*-[[:space:]]/ {
+      val = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", val)
+      sub(/[[:space:]]*#.*$/, "", val)
+      sub(/^["'"'"']/, "", val); sub(/["'"'"']$/, "", val)
+      if (val != "") print val
+    }
+  ' "$file"
+}

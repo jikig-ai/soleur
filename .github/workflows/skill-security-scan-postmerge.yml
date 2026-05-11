@@ -20,7 +20,7 @@ jobs:
     name: skill-security-scan post-merge audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 2
 
@@ -41,15 +41,28 @@ jobs:
             echo "No SKILL/agent files added in this push; nothing to audit."
             exit 0
           fi
-          override_count=$(git diff --name-only --diff-filter=A "$parent"...HEAD | grep -cE '^knowledge-base/security/skill-overrides/' || true)
-          override_count="${override_count:-0}"
+          # Per-skill override binding (security review P1). See pr-trailer.yml.
+          matched_skills="$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$parent" --head HEAD 2>/dev/null | jq -r '.matched[].skill // empty' | sort -u)"
+          path_to_slug() {
+            local p="$1"
+            case "$p" in
+              plugins/soleur/skills/*/SKILL.md) p="${p#plugins/soleur/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/skills/*/SKILL.md)      p="${p#.claude/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/agents/*.md|plugins/soleur/agents/*.md|plugins/soleur/agents/*/*.md|plugins/soleur/agents/*/*/*.md)
+                echo "$(basename "$p" .md)" ;;
+              *) echo "" ;;
+            esac
+          }
           violations=""
           while IFS= read -r path; do
             [ -z "$path" ] && continue
             [ ! -f "$path" ] && continue
             verdict=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')
-            if [ "$verdict" = "HIGH-RISK" ] && [ "$override_count" -lt 1 ]; then
-              violations="$violations $path"
+            if [ "$verdict" = "HIGH-RISK" ]; then
+              slug=$(path_to_slug "$path")
+              if [ -z "$slug" ] || ! echo "$matched_skills" | grep -qFx -- "$slug"; then
+                violations="$violations $path"
+              fi
             fi
           done <<< "$added"
           if [ -n "$violations" ]; then

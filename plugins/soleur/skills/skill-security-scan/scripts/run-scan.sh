@@ -60,15 +60,21 @@ if [ -f "$manifest" ]; then
     esac
   done < "$manifest"
   if [ -n "$tampered" ]; then
+    # Tamper short-circuits to HIGH-RISK (deny-by-default), not REVIEW.
+    # Rationale: REVIEW maps to `ask` in the PreToolUse hook, which an operator
+    # can confirm-through; an attacker with rule-pack write access could then
+    # downgrade a real HIGH-RISK skill to REVIEW and have the operator accept.
+    # HIGH-RISK on tamper forces an override-artifact path and audit trail.
     cat <<EOF
-# skill-security-scan verdict: REVIEW
+# skill-security-scan verdict: HIGH-RISK
 
 **Self-defense:** rule pack tampered. Files with SHA mismatch:
 
 $(echo "$tampered" | tr ' ' '\n' | grep -v '^$' | sed 's/^/  - /')
 
 Re-run with \`scripts/run-self-test.sh --regenerate-manifest\` (dev) or fix
-the rule pack before scanning.
+the rule pack before scanning. Override requires a structured artifact under
+\`knowledge-base/security/skill-overrides/\`.
 
 ---
 Advisory static analysis only. LOW-RISK does not constitute a security audit,
@@ -111,24 +117,44 @@ for f in "$results_dir"/*.json; do
   esac
 done
 
-# Build findings_summary JSON (with PII redaction).
+# Build findings_summary JSON (with PII + secret redaction).
+# Per GDPR-DataMin-1 (PII) and security review P2-4 (high-entropy secrets):
+# redact email/IPv4/IBAN PLUS JWT, Anthropic/OpenAI keys, GitHub PAT/OAuth,
+# Doppler tokens, GitLab PAT, Slack tokens, AWS access keys.
+redact_pii() {
+  sed -E '
+    s/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/<email>/g;
+    s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/<ip>/g;
+    s/\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4,}\b/<iban>/g;
+    s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<jwt>/g;
+    s/sk-ant-[A-Za-z0-9_-]{8,}/<anthropic-key>/g;
+    s/sk-[A-Za-z0-9]{20,}/<openai-key>/g;
+    s/\bghp_[A-Za-z0-9]{20,}/<github-pat>/g;
+    s/\bgho_[A-Za-z0-9]{20,}/<github-oauth>/g;
+    s/\bghs_[A-Za-z0-9]{20,}/<github-server>/g;
+    s/\bghr_[A-Za-z0-9]{20,}/<github-refresh>/g;
+    s/\bglpat-[A-Za-z0-9_-]{8,}/<gitlab-pat>/g;
+    s/dp\.ct\.[A-Za-z0-9_-]{20,}/<doppler-token>/g;
+    s/dp\.pt\.[A-Za-z0-9_-]{20,}/<doppler-token>/g;
+    s/dp\.st\.[A-Za-z0-9_-]{20,}/<doppler-token>/g;
+    s/xox[bopas]-[A-Za-z0-9-]{10,}/<slack-token>/g;
+    s/\bAKIA[A-Z0-9]{16}\b/<aws-access-key>/g
+  '
+}
+
 findings_summary='{}'
 for f in "$results_dir"/*.json; do
   cat="$(jq -r '.category' "$f")"
   body="$(jq '{verdict, findings}' "$f")"
-  # PII redaction (per GDPR-DataMin-1): email, IPv4, IBAN-shape.
-  body_redacted="$(echo "$body" | sed -E '
-    s/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/<email>/g;
-    s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/<ip>/g;
-    s/\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4,}\b/<iban>/g
-  ')"
+  body_redacted="$(echo "$body" | redact_pii)"
   findings_summary="$(echo "$findings_summary" | jq --arg c "$cat" --argjson b "$body_redacted" '. + {($c): $b}')"
 done
 
 # Write .scan-meta.json next to input (or to runtime dir for stdin).
+# umask 077 ensures persisted findings are not world-readable on shared hosts.
 ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+(umask 077; mkdir -p "${XDG_RUNTIME_DIR:-/tmp}/skill-security-scan-$$")
 meta_dir="${XDG_RUNTIME_DIR:-/tmp}/skill-security-scan-$$"
-mkdir -p "$meta_dir"
 meta_path="$meta_dir/.scan-meta.json"
 jq -n \
   --arg sv "$SCANNER_VERSION" \

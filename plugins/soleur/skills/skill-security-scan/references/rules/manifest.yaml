@@ -34,3 +34,5 @@ files:
     sha256: 7881969a5126453f9e3442ea14c3f0dd45e59cf229564e558eee847cbd1c9ddd
   - path: regex-patterns.md
     sha256: b0850d2c5c2bc695616b89a0eb89a47f3118fad2d07ce12e22ba970bde98caae
+  - path: first-party-skill-exceptions.yaml
+    sha256: a9f27664794d80b82bcea03be542c0e2c95f2448cb74c9f7231116a9524aa7c0

@@ -1,14 +1,26 @@
 # First-party skill exceptions for skill-security-scan calibration.
 #
-# Per-slug, per-category exception list for legitimate first-party patterns
-# that trip detection. Empty seed; populated as exceptions arise via CODEOWNER
-# PRs. Reviewer responsibility: "is this exception load-bearing or a workaround
-# for a real bug?"
+# NOT-YET-WIRED in v1 — scaffolding for a future extension. The file is
+# tracked + SHA-pinned in manifest.yaml so it cannot be silently mutated
+# post-merge, but no script currently consumes it. Wiring requires a
+# follow-up PR that:
 #
-# Exceptions are NOT a general bypass. They downgrade HIGH-RISK to REVIEW for
-# the named slug + category only. REVIEW findings remain visible.
+#   1. Loads this file from check-prompt-injection.sh + check-telemetry-
+#      surface.sh (the categories with the highest first-party FP rate).
+#   2. Downgrades HIGH-RISK→REVIEW for matching (slug, category) pairs only.
+#   3. Adds a bun test that asserts each exception is justifiable
+#      (load-bearing not workaround).
 #
-# Format:
+# Until wiring lands, calibration FP suppression happens via the allowlist
+# files: regex-patterns.md (Soleur prose allowlist) + first-party-allowlist
+# .yaml (host/campaign list). Both are sufficient at the current first-party
+# corpus size (0 HIGH / 2 REVIEW on 69 skills).
+#
+# Per-slug, per-category exceptions are a SECOND line of defense, reserved
+# for cases where prose-level allowlist expansion would cause a regression
+# elsewhere in the corpus.
+#
+# Format (when wired):
 #
 #   exceptions:
 #     - skill: <slug>             # must match ^[a-z][a-z0-9-]*$
@@ -20,9 +32,7 @@
 #       added_in_pr: <number>     # PR number where the exception was added
 #       added_at: <ISO-8601>      # date the exception was added
 #
-# Calibration AC: 0% HIGH-RISK + <5% REVIEW on plugins/soleur/skills/**/SKILL.md.
-# Allowlist (regex-patterns.md, first-party-allowlist.yaml) is the FIRST line of
-# defense. This exceptions file is the SECOND line, used only when allowlist
-# expansion is not viable.
+# Tracking: file as follow-up to wire on first calibration regression that
+# cannot be resolved via allowlist expansion alone.
 
 exceptions: []

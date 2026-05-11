@@ -19,22 +19,7 @@ TYPOSQUAT_FILE="$SCRIPT_DIR/../references/typosquat-targets.yaml"
 tmp="$(stdin_to_tempfile)"
 trap 'rm -f "$tmp" "$tmp.req"' EXIT
 
-# YAML list parser (does not mutate $0; survives sub-section terminators).
-yaml_list() {
-  local file="$1" key="$2"
-  awk -v key="$key" '
-    $0 ~ "^"key":[[:space:]]*$" { in_sec = 1; next }
-    /^[a-zA-Z_]/ { in_sec = 0 }
-    in_sec && /^[[:space:]]*-[[:space:]]/ {
-      val = $0
-      sub(/^[[:space:]]*-[[:space:]]*/, "", val)
-      sub(/[[:space:]]*#.*$/, "", val)
-      sub(/^["'"'"']/, "", val); sub(/["'"'"']$/, "", val)
-      if (val != "") print val
-    }
-  ' "$file"
-}
-
+# yaml_list shared helper lives in lib.sh.
 mapfile -t ecosystems < <(yaml_list "$CONFIG" "ecosystem_allowlist")
 
 is_known_ecosystem() {
@@ -52,7 +37,21 @@ queries='[]'
 # Detect references to manifest files / deps in body. Heuristic patterns:
 # - `pip install <pkg>` / `npm install <pkg>` / `cargo add <pkg>` / `go get <pkg>`
 # - inline package.json, requirements.txt, pyproject.toml lines
+#
+# `seen` is a dedup hash; `ordered_keys` preserves insertion order so we can
+# attribute OSV results (which are returned in submission order) to packages.
+# Bash associative-array iteration order is NOT insertion order — using `seen`
+# alone produced silent rule_id-to-package misattribution in OSV findings.
 declare -A seen=()
+declare -a ordered_keys=()
+
+add_query() {
+  local pkg="$1" eco="$2" key="$eco:$pkg"
+  [ -n "${seen[$key]:-}" ] && return
+  seen[$key]=1
+  ordered_keys+=("$key")
+  queries="$(echo "$queries" | jq --arg n "$pkg" --arg e "$eco" '. + [{package: {name: $n, ecosystem: $e}}]')"
+}
 
 # pip install <pkg>
 while read -r pkg; do
@@ -60,40 +59,31 @@ while read -r pkg; do
   pkg="${pkg%%[<>=!~]*}"  # strip version specifier
   pkg="${pkg// /}"
   [ -z "$pkg" ] && continue
-  key="PyPI:$pkg"
-  [ -n "${seen[$key]:-}" ] && continue
-  seen[$key]=1
-  queries="$(echo "$queries" | jq --arg n "$pkg" --arg e "PyPI" '. + [{package: {name: $n, ecosystem: $e}}]')"
+  add_query "$pkg" "PyPI"
 done < <(grep -oE 'pip[[:space:]]+install[[:space:]]+[A-Za-z0-9_.-]+' "$tmp" | awk '{print $NF}')
 
 # npm install <pkg>
 while read -r pkg; do
   [ -z "$pkg" ] && continue
   pkg="${pkg// /}"
-  key="npm:$pkg"
-  [ -n "${seen[$key]:-}" ] && continue
-  seen[$key]=1
-  queries="$(echo "$queries" | jq --arg n "$pkg" --arg e "npm" '. + [{package: {name: $n, ecosystem: $e}}]')"
+  [ -z "$pkg" ] && continue
+  add_query "$pkg" "npm"
 done < <(grep -oE 'npm[[:space:]]+(install|i)[[:space:]]+[@A-Za-z0-9/_.-]+' "$tmp" | awk '{print $NF}' | grep -v '^-' || true)
 
 # cargo add <pkg>
 while read -r pkg; do
   [ -z "$pkg" ] && continue
   pkg="${pkg// /}"
-  key="crates.io:$pkg"
-  [ -n "${seen[$key]:-}" ] && continue
-  seen[$key]=1
-  queries="$(echo "$queries" | jq --arg n "$pkg" --arg e "crates.io" '. + [{package: {name: $n, ecosystem: $e}}]')"
+  [ -z "$pkg" ] && continue
+  add_query "$pkg" "crates.io"
 done < <(grep -oE 'cargo[[:space:]]+add[[:space:]]+[A-Za-z0-9_.-]+' "$tmp" | awk '{print $NF}')
 
 # go get <pkg>
 while read -r pkg; do
   [ -z "$pkg" ] && continue
   pkg="${pkg// /}"
-  key="Go:$pkg"
-  [ -n "${seen[$key]:-}" ] && continue
-  seen[$key]=1
-  queries="$(echo "$queries" | jq --arg n "$pkg" --arg e "Go" '. + [{package: {name: $n, ecosystem: $e}}]')"
+  [ -z "$pkg" ] && continue
+  add_query "$pkg" "Go"
 done < <(grep -oE 'go[[:space:]]+get[[:space:]]+[A-Za-z0-9./_-]+' "$tmp" | awk '{print $NF}')
 
 # Typosquat detection (Levenshtein distance ≤ 2 against vendored top-N seed)
@@ -142,8 +132,9 @@ check_typosquat() {
   return 1
 }
 
-# Run typosquat check on each parsed package
-for key in "${!seen[@]}"; do
+# Run typosquat check on each parsed package (iterate insertion-ordered keys
+# so attribution lines stay deterministic — bash hash order is not stable).
+for key in "${ordered_keys[@]}"; do
   eco="${key%%:*}"
   pkg="${key#*:}"
   if target="$(check_typosquat "$pkg" "$eco")"; then
@@ -177,8 +168,14 @@ if [ "$n_queries" -gt 0 ] && [ "${SKILL_SECURITY_SCAN_OFFLINE:-0}" != "1" ]; the
       else
         # Inspect each results[i].vulns
         n_results="$(jq '.results | length' "$tmp.resp")"
+        # OSV.dev returns results in submission order; iterate insertion-
+        # ordered keys to preserve attribution. Reject mismatched-length
+        # response (per security review P2: MITM 200-with-empty-results).
+        if [ "$n_results" -ne "${#ordered_keys[@]}" ]; then
+          findings_lines+="osv-response-length-mismatch"$'\t'"REVIEW"$'\t'"0"$'\t'"OSV results length $n_results != queries ${#ordered_keys[@]}"$'\n'
+        fi
         i=0
-        for key in "${!seen[@]}"; do
+        for key in "${ordered_keys[@]}"; do
           if [ "$i" -ge "$n_results" ]; then break; fi
           n_vulns="$(jq ".results[$i].vulns // [] | length" "$tmp.resp")"
           if [ "$n_vulns" -gt 0 ]; then
