@@ -64,14 +64,16 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 
 Before spawning review agents, classify the PR to avoid spawning agents whose expertise is irrelevant to the change.
 
-1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts. **Worktree-safe scratch paths required** — `.git/` is a *file* (gitdir link) in worktrees, not a directory, so writing to `$SCRATCH/review-changed.txt` errors with `Not a directory (os error 20)`. Resolve via `git rev-parse --git-dir` (which returns the real gitdir for worktrees):
+1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/review-*.txt` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
 
    ```bash
-   SCRATCH="$(git rev-parse --git-dir)"
-   git diff --name-only origin/main...HEAD > "$SCRATCH/review-changed.txt"
-   git diff --name-status origin/main...HEAD > "$SCRATCH/review-status.txt"
-   git diff --numstat origin/main...HEAD > "$SCRATCH/review-numstat.txt"
+   REVIEW_TMP="$(git rev-parse --git-dir)"
+   git diff --name-only origin/main...HEAD > "$REVIEW_TMP/review-changed.txt"
+   git diff --name-status origin/main...HEAD > "$REVIEW_TMP/review-status.txt"
+   git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
    ```
+
+   All downstream `cat .git/review-*.txt` references in the predicates below must use `"$REVIEW_TMP/review-*.txt"` instead. The pre-existing `.git/...` literals work in non-worktree checkouts but silently break in worktrees (where every PR review increasingly happens by default).
 
 2. Check for override: scan `$ARGUMENTS` for "deep review" or "full review". Also run `gh pr view --json body,title --jq '.body + " " + .title'` and check for the same phrases. If override detected, skip classification and spawn all 8 agents.
 3. Apply the four-class decision tree below in order; **first match wins** (override always trumps):
@@ -101,20 +103,20 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
    Compute the predicates inline (`set -uo pipefail` — drop the `e` so legitimately-empty greps don't abort):
 
    ```bash
-   total_files=$(wc -l < $SCRATCH/review-changed.txt)
-   deleted_files=$(grep -cE '^D' $SCRATCH/review-status.txt || true)
-   added_lines=$(awk 'BEGIN{s=0} {if ($1 != "-") s += $1} END{print s}' $SCRATCH/review-numstat.txt)
-   deleted_lines=$(awk 'BEGIN{s=0} {if ($2 != "-") s += $2} END{print s}' $SCRATCH/review-numstat.txt)
+   total_files=$(wc -l < "$REVIEW_TMP/review-changed.txt")
+   deleted_files=$(grep -cE '^D' "$REVIEW_TMP/review-status.txt" || true)
+   added_lines=$(awk 'BEGIN{s=0} {if ($1 != "-") s += $1} END{print s}' "$REVIEW_TMP/review-numstat.txt")
+   deleted_lines=$(awk 'BEGIN{s=0} {if ($2 != "-") s += $2} END{print s}' "$REVIEW_TMP/review-numstat.txt")
    total_lines=$((added_lines + deleted_lines))
 
    LOCKFILE_RE='(^|/)(package-lock\.json|bun\.lock|yarn\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|poetry\.lock|uv\.lock)$'
    ALLOWED_NONLOCK_RE='^(knowledge-base/|.*\.md$)'
    SOURCE_RE='\.(ts|tsx|js|jsx|rb|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|mjs|cjs)$'
 
-   non_lock_files=$(grep -vE "$LOCKFILE_RE" $SCRATCH/review-changed.txt || true)
+   non_lock_files=$(grep -vE "$LOCKFILE_RE" "$REVIEW_TMP/review-changed.txt" || true)
    non_lock_non_doc=$(printf '%s\n' "$non_lock_files" | grep -vE "$ALLOWED_NONLOCK_RE" | grep -v '^$' || true)
-   has_source=$(grep -E "$SOURCE_RE" $SCRATCH/review-changed.txt | head -1 || true)
-   any_lockfile=$(grep -E "$LOCKFILE_RE" $SCRATCH/review-changed.txt | head -1 || true)
+   has_source=$(grep -E "$SOURCE_RE" "$REVIEW_TMP/review-changed.txt" | head -1 || true)
+   any_lockfile=$(grep -E "$LOCKFILE_RE" "$REVIEW_TMP/review-changed.txt" | head -1 || true)
    ```
 
    - `lockfile-only` matches when `$non_lock_non_doc` is empty AND `$any_lockfile` is non-empty AND `$has_source` is empty.

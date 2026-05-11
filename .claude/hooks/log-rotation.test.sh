@@ -191,10 +191,10 @@ for f in "$ACTIVE" "$ROOT"/.claude/.test-*.jsonl "$ROOT"/.claude/.test-*.jsonl.g
   esac
   TOTAL_LINES=$((TOTAL_LINES + C))
 done
-if [[ "$TOTAL_LINES" -lt 100 ]]; then
-  fail "torn writes: only $TOTAL_LINES of 100 lines preserved across rotation"
+if [[ "$TOTAL_LINES" -ne 100 ]]; then
+  fail "non-exact write count: $TOTAL_LINES of 100 lines preserved (torn or duplicated)"
 else
-  pass "$TOTAL_LINES (≥100) lines preserved across concurrent writers + rotation"
+  pass "$TOTAL_LINES (=100) lines preserved across concurrent writers + rotation"
 fi
 rm -rf "$ROOT"
 
@@ -387,6 +387,84 @@ else
     pass "active intact, no partial archive, one stderr warning"
   fi
   rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 15: archive-write failure returns 1 (rotation contract for sentinels)
+# ------------------------------------------------------------------------
+# Counterpart to Test 14 (warn + cleanup). Sentinel-aware callers branch on
+# the exit code: `if ! rotate_if_needed "$f"; then _emit_drop_sentinel ...`.
+# Existing fire-and-forget callers using `|| true` are unaffected — they
+# swallow the non-zero return.
+echo "Test 15: archive-write failure returns 1"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+ACTIVE="$ROOT/.claude/.test.jsonl"
+ARCHIVE_DIR="$ROOT/.claude"
+dd if=/dev/zero bs=1024 count=6144 2>/dev/null | tr '\0' 'r' > "$ACTIVE"
+if [[ $(id -u) -eq 0 ]]; then
+  pass "skipped under root (chmod 0500 ineffective)"
+else
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+  chmod 0500 "$ARCHIVE_DIR"
+  set +e
+  (
+    source_helper
+    rotate_if_needed "$ACTIVE"
+  ) >/dev/null 2>&1
+  RC=$?
+  set -e
+  chmod 0700 "$ARCHIVE_DIR"
+  if [[ "$RC" -ne 1 ]]; then
+    fail "expected return 1 on archive-write failure, got $RC"
+  else
+    pass "rotate_if_needed returned 1 on archive-write failure"
+  fi
+  rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 16: success path returns 0 (existing fire-and-forget callers stay green)
+# ------------------------------------------------------------------------
+echo "Test 16: successful rotation returns 0"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+ACTIVE="$ROOT/.claude/.test.jsonl"
+dd if=/dev/zero bs=1024 count=6144 2>/dev/null | tr '\0' 'g' > "$ACTIVE"
+set +e
+(
+  source_helper
+  rotate_if_needed "$ACTIVE"
+) >/dev/null 2>&1
+RC=$?
+set -e
+if [[ "$RC" -ne 0 ]]; then
+  fail "expected return 0 on successful rotation, got $RC"
+elif ! compgen -G "$ROOT/.claude/.test-*.jsonl.gz" >/dev/null; then
+  fail "no archive produced"
+else
+  pass "rotate_if_needed returned 0 on success path"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 17: no-op path (below threshold) returns 0
+# ------------------------------------------------------------------------
+echo "Test 17: no-op below threshold returns 0"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+ACTIVE="$ROOT/.claude/.test.jsonl"
+printf 'small\n' > "$ACTIVE"
+set +e
+(
+  source_helper
+  rotate_if_needed "$ACTIVE"
+) >/dev/null 2>&1
+RC=$?
+set -e
+if [[ "$RC" -ne 0 ]]; then
+  fail "expected return 0 below threshold, got $RC"
+else
+  pass "below-threshold rotate_if_needed returned 0"
 fi
 rm -rf "$ROOT"
 

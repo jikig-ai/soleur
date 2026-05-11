@@ -109,15 +109,44 @@ done
 
 bad_lines=0
 parsed_count=0
+# Drop-sentinel counts (issue #3509). Sentinels carry `error` but no
+# `skill`; the existing `.skill != null` filter already excludes them
+# from `parsed_records`. A separate jq pass populates drop counts.
+drops_counts_json='{}'
 if [[ -s "$INVOCATIONS_MERGED" ]]; then
   total_lines=$(wc -l < "$INVOCATIONS_MERGED" 2>/dev/null || echo 0)
   parsed_records=$(jq -c -R 'fromjson? | select(.schema == 1 and .skill != null and (.ts | type) == "string")' < "$INVOCATIONS_MERGED" 2>/dev/null || true)
   parsed_count=$(printf '%s' "$parsed_records" | grep -c '^' || true)
   bad_lines=$((total_lines - parsed_count))
   [[ "$bad_lines" -lt 0 ]] && bad_lines=0
+  drops_counts_json=$(jq -R -s '
+    [ split("\n")[]
+      | select(length > 0)
+      | (fromjson? // empty)
+      | select(.schema == 1)
+      | select(.error != null)
+    ]
+    | reduce .[] as $e ({};
+        .[$e.error] = ((.[$e.error] // 0) + 1)
+      )
+  ' < "$INVOCATIONS_MERGED" 2>/dev/null || echo '{}')
+  drops_counts_json=${drops_counts_json:-'{}'}
+  # `bad_lines` from the line-count subtraction includes sentinels — net
+  # them out so `bad_jsonl_lines` reflects only true-malformed lines.
+  drops_total=$(jq -r 'add // 0' <<< "$drops_counts_json" 2>/dev/null || echo 0)
+  drops_total=${drops_total:-0}
+  bad_lines=$(( bad_lines - drops_total ))
+  if [[ "$bad_lines" -lt 0 ]]; then
+    echo "::warning::bad_lines underflow ($bad_lines) on $INVOCATIONS — drops_total=$drops_total exceeds parsed-line gap. Clamping to 0." >&2
+    bad_lines=0
+  fi
 
   if [[ "$bad_lines" -gt 0 ]]; then
     echo "::warning::Dropped $bad_lines malformed line(s) from $INVOCATIONS (+ archives)" >&2
+  fi
+  if [[ "$drops_total" -gt 0 ]]; then
+    drops_breakdown=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$drops_counts_json" 2>/dev/null || echo "")
+    echo "Filtered $drops_total telemetry-drop sentinel row(s) from $INVOCATIONS (+ archives) — see summary.drops_*_count [${drops_breakdown}]" >&2
   fi
 
   if [[ -n "$parsed_records" ]]; then
@@ -151,6 +180,7 @@ report=$(
     --argjson idle_secs "$threshold_idle" \
     --argjson archival_secs "$threshold_archival" \
     --argjson bad_lines "$bad_lines" \
+    --argjson drops "$drops_counts_json" \
     --arg generated_at "$now_iso" '
       # Normalize namespaced skill names ("soleur:plan") to bare names
       # ("plan") so they join against the directory-name inventory.
@@ -198,7 +228,12 @@ report=$(
           idle_365d: ($skills | map(select(.status == "archival_candidate")) | length),
           never_invoked: ($skills | map(select(.status == "never_invoked")) | length),
           orphan_skills: $orphan_skills,
-          bad_jsonl_lines: $bad_lines
+          bad_jsonl_lines: $bad_lines,
+          # Telemetry-drop sentinel counts (issue #3509). skill-invocation-logger
+          # has no `flock_timeout` site (indefinite flock per plan-review), so
+          # only jq_fail and rotation_fail are surfaced for this sink.
+          drops_jq_fail_count: ($drops["jq_fail"] // 0),
+          drops_rotation_fail_count: ($drops["rotation_fail"] // 0)
         }
       }
   '
