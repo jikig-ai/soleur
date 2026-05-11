@@ -23,6 +23,7 @@ against fenced code blocks in the input.
 - Shell-spawn invocation that interpolates user-controllable args → `HIGH-RISK`
 - Shell-spawn with hardcoded args → `REVIEW`
 - Obfuscation signatures (decode-then-execute, hex-encoded ≥40 chars) → `HIGH-RISK`
+- Fetch-then-execute family (`curl|wget|fetch <url> | bash`, `bash <(curl ...)`, `eval "$(curl ...)"`, `` eval `curl ...` ``) → `HIGH-RISK`. Rule_ids: `fetch-pipe-shell` (also handles pipe-interposition via `tee` / `sudo bash` / `env bash`), `fetch-process-sub-shell`, `fetch-cmdsub-exec` (handles BOTH `$(...)` and POSIX backtick forms). Added per #3554 — the canonical install-flow RCE vector was missing from the pack; bypass-class hardening (backtick + pipe-interposition) added in the same PR after multi-agent security review surfaced both as concrete bypasses.
 - Shell-expansion inside string interpolation spanning ≥2 user-tokens → `REVIEW`
 
 **Format-only carve-out (calibration):** rules ignore code-fence content whose
@@ -122,6 +123,11 @@ See [first-party-allowlist.yaml](./first-party-allowlist.yaml) for Soleur-owned
 hosts and approved utm campaign IDs.
 
 ---
+
+## Maintainer notes
+
+- **Manifest resync is one-pass.** When editing multiple rule-pack files in the same change (e.g., `code-exec.yaml` + this `regex-patterns.md`), run `bash scripts/run-self-test.sh --regenerate-manifest` ONCE after ALL edits are complete — not after each individual edit. Resyncing midway leaves later edits unsigned and the scanner's self-defense correctly fail-loud short-circuits to HIGH-RISK with "rule pack tampered". Recovery is one re-run, but the symptom (clean fixtures emit HIGH-RISK) looks like a calibration regression. See `knowledge-base/project/learnings/2026-05-11-security-regex-bypass-class-coverage.md` §Session Errors #3.
+- **Bypass-class enumeration is required for new rules.** Beyond "regex catches the canonical example" and "calibration corpus is clean", every new shell-execution rule MUST be tested against the bypass classes in the checklist at the bottom of [the bypass-class learning](../../../../knowledge-base/project/learnings/2026-05-11-security-regex-bypass-class-coverage.md). Lock the bypass coverage in via a per-rule_id count assertion in `plugins/soleur/test/skill-security-scan.test.ts` so a future regex regression cannot silently lose a bypass class while aggregate verdict stays green.
 
 ## Provenance
 

@@ -52,7 +52,20 @@ import {
   type WorkflowName,
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
-import { reportSilentFallback } from "./observability";
+import { reportSilentFallback, mirrorWithDebounce } from "./observability";
+
+/**
+ * #3040 Finding 2: errorClass for the debounced mirror fired when
+ * `notifyAwaitingUser` is invoked for an unknown conversationId (the
+ * dispatcher signaled after the runner reaped or closed the query).
+ * Exported so tests can assert against the const rather than a magic
+ * string. The 5-min TTL key is `"unknown:notify-awaiting-no-active-query"`
+ * — `userId` is unknowable when no `state` exists, so the single bucket
+ * coalesces a misconfigured-prod flood across all users (intentional;
+ * this branch indicates a server bug, not per-user noise).
+ */
+export const NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS =
+  "notify-awaiting-no-active-query";
 import { createChildLogger } from "./logger";
 import type {
   PdfExtractErrorClass,
@@ -825,14 +838,25 @@ export interface SoleurGoRunner {
    * cc-dispatcher calls `notifyAwaitingUser(true)` when conversation
    * status transitions to `"waiting_for_user"` (Bash review-gate, plan
    * preview, ask_user) and `notifyAwaitingUser(false)` on transition back
-   * to `"active"`. While paused, the runaway timer is cleared; on
-   * resume, `firstToolUseAt` is reset to `now()` and the timer is
-   * re-armed if `state.firstToolUseAt` was set AND the conversation
-   * is still open.
+   * to `"active"`. While paused, the runaway timer is cleared and
+   * `state.pausedAt` is stamped; on resume, the just-finished interval
+   * is accumulated into `state.totalPausedMs` and both timers are
+   * re-armed.
+   *
+   * #3040 Finding 4 (cumulative semantic): `firstToolUseAt` is
+   * preserved across pause/resume cycles within a turn. The wall-clock
+   * trigger and the absolute turn ceiling subtract
+   * `totalPausedMs + (pausedAt ? now() - pausedAt : 0)` from elapsed at
+   * fire time, so the 90s window and 10-min absolute ceiling bound
+   * cumulative agent-compute time only — not human read time. A
+   * chatty-flap runaway cannot escape either ceiling by interleaving
+   * cheap user prompts with heavy compute.
    *
    * If no active query exists for `conversationId`, this MUST mirror to
-   * Sentry via `reportSilentFallback` (no silent no-op) per
-   * `cq-silent-fallback-must-mirror-to-sentry`.
+   * Sentry via `mirrorWithDebounce` (no silent no-op) per
+   * `cq-silent-fallback-must-mirror-to-sentry`. The debounce coalesces
+   * misconfigured-prod floods on the `notify-awaiting-no-active-query`
+   * errorClass.
    */
   notifyAwaitingUser(conversationId: string, awaiting: boolean): void;
 }
@@ -1229,12 +1253,32 @@ interface ActiveQuery {
   /**
    * #2920 — paused-runaway flag. When `true`, the runner is awaiting a
    * user response (e.g., Bash review-gate, ExitPlanMode). The runaway
-   * timer is paused (`clearRunaway`) on transition to `true` and re-armed
-   * with a fresh `firstToolUseAt = now()` on transition to `false`.
-   * The wall-clock contract becomes "agent compute time only, not human
-   * read time".
+   * timer is paused (`clearRunaway`) on transition to `true`.
+   *
+   * #3040 Finding 4 (cumulative wall-clock budget): on resume the runner
+   * NO LONGER re-stamps `firstToolUseAt`. Instead it accumulates the
+   * just-finished pause interval into `totalPausedMs`. The wall-clock
+   * trigger and the absolute turn ceiling subtract
+   * `totalPausedMs + (pausedAt ? now() - pausedAt : 0)` from elapsed at
+   * fire time so paused intervals do not count toward either ceiling —
+   * "agent compute time only, not human read time" — without dissolving
+   * the chatty-flap-runaway role the per-window reset previously
+   * protected against. See `2026-05-05-defense-relaxation-must-name-new-ceiling.md`.
    */
   awaitingUser: boolean;
+  /**
+   * #3040 Finding 4 — cumulative wall-clock budget across rapid status
+   * flap. On `notifyAwaitingUser(true)`: stamp `pausedAt = now()`.
+   * On `notifyAwaitingUser(false)`: `totalPausedMs += now() - pausedAt;
+   * pausedAt = null`. Reset to `pausedAt: null, totalPausedMs: 0` on
+   * `recordAssistantBlock` first-block-of-turn (new turn = new compute
+   * budget) AND in `closeQuery` (defense-in-depth against stale-closure
+   * access). `armRunaway` and `armTurnHardCap` subtract
+   * `totalPausedMs + (pausedAt ? now() - pausedAt : 0)` from elapsed
+   * before firing, re-arming for the difference if below threshold.
+   */
+  pausedAt: number | null;
+  totalPausedMs: number;
   /**
    * #3436 Phase 3.B — chapter-chunked PDF context. Set on session
    * creation when `args.documentExtractMeta.chapters` is populated.
@@ -1418,10 +1462,30 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     clearTurnHardCap(state);
     if (state.awaitingUser) return;
     const turnOriginAt = state.firstToolUseAt ?? now();
-    state.turnHardCap = setTimeout(() => {
+    const fire = (): void => {
       if (state.closed) return;
       if (state.awaitingUser) return;
-      const elapsedMs = now() - turnOriginAt;
+      // #3040 Finding 4: subtract `totalPausedMs` and any in-flight
+      // paused interval. `pausedAt` is null on this branch under the
+      // current control flow (we early-returned above when
+      // awaitingUser=true), but the recompute keeps `armRunaway`'s
+      // math identical and survives future refactors that might let
+      // the callback land mid-pause. `Math.max(0, ...)` clamps against
+      // NTP step-back where `now()` could be < `pausedAt`.
+      const pausedInflight = state.pausedAt !== null ? Math.max(0, now() - state.pausedAt) : 0;
+      const elapsedMs = Math.max(0, now() - turnOriginAt - state.totalPausedMs - pausedInflight);
+      if (elapsedMs < maxTurnDurationMs) {
+        // Fire-time re-check shape: the timer fired against wall-clock
+        // time, but enough of that time was paused that effective
+        // elapsed is still below threshold. Re-arm for the difference.
+        const remainingMs = Math.max(1, maxTurnDurationMs - elapsedMs);
+        log.debug(
+          { conversationId: state.conversationId, elapsedMs, remainingMs },
+          "armTurnHardCap: re-arm (paused intervals deducted from elapsed)",
+        );
+        state.turnHardCap = setTimeout(fire, remainingMs);
+        return;
+      }
       log.warn(
         {
           conversationId: state.conversationId,
@@ -1440,7 +1504,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         lastBlockToolName: state.lastBlockToolName,
         reason: "max_turn_duration",
       });
-    }, maxTurnDurationMs);
+    };
+    state.turnHardCap = setTimeout(fire, maxTurnDurationMs);
   }
 
   // Single source of truth for "an assistant block landed". Stamps the
@@ -1456,6 +1521,15 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     const isFirstBlockOfTurn = state.firstToolUseAt === null;
     if (isFirstBlockOfTurn) {
       state.firstToolUseAt = now();
+      // #3040 Finding 4: new turn = new compute budget. Without this
+      // reset, paused intervals from previous turns would leak into the
+      // current turn's wall-clock budget (the per-turn hard cap is
+      // armed once per turn, so previous turn's `totalPausedMs` would
+      // subtract from elapsed and effectively raise this turn's
+      // ceiling). Reset alongside the `firstToolUseAt` stamp so the
+      // per-turn budget contract is obvious.
+      state.totalPausedMs = 0;
+      state.pausedAt = null;
     }
     state.lastBlockKind = kind;
     state.lastBlockToolName = toolName;
@@ -1474,14 +1548,36 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // the wall-clock against human read time.
     if (state.awaitingUser) return;
     const firedAtStart = state.firstToolUseAt ?? now();
-    state.runaway = setTimeout(() => {
+    const fire = (): void => {
       // Only fire if no SDKResultMessage cleared the arm AND the runner
       // is not paused (race window: timer fires the same tick the user
       // clicks; `notifyAwaitingUser(true)` ran but the timer was already
       // queued).
       if (state.closed) return;
       if (state.awaitingUser) return;
-      const elapsedMs = now() - firedAtStart;
+      // #3040 Finding 4: subtract `totalPausedMs` and any in-flight
+      // paused interval so the wall-clock window bounds cumulative
+      // active compute time, not wall-clock time. A chatty-flap runaway
+      // cannot escape the 90s window by interleaving short user prompts
+      // with heavy compute — each pause reduces effective elapsed by
+      // exactly its real-time duration. `Math.max(0, ...)` clamps the
+      // pausedInflight delta against NTP step-back and clamps `elapsedMs`
+      // against any pathological accumulator drift so a negative value
+      // cannot inflate the re-arm delay beyond the configured ceiling.
+      const pausedInflight = state.pausedAt !== null ? Math.max(0, now() - state.pausedAt) : 0;
+      const elapsedMs = Math.max(0, now() - firedAtStart - state.totalPausedMs - pausedInflight);
+      if (elapsedMs < wallClockTriggerMs) {
+        // Fire-time re-check: the wall-clock setTimeout fired but
+        // enough of the wall time was paused that effective elapsed is
+        // still below threshold. Re-arm for the remaining difference.
+        const remainingMs = Math.max(1, wallClockTriggerMs - elapsedMs);
+        log.debug(
+          { conversationId: state.conversationId, elapsedMs, remainingMs },
+          "armRunaway: re-arm (paused intervals deducted from elapsed)",
+        );
+        state.runaway = setTimeout(fire, remainingMs);
+        return;
+      }
       // Server-log only. The user-facing message ("agent went idle…")
       // is expected on this path — `cq-silent-fallback-must-mirror-to-
       // sentry` carve-out for known degraded states applies.
@@ -1503,7 +1599,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         lastBlockToolName: state.lastBlockToolName,
         reason: "idle_window",
       });
-    }, wallClockTriggerMs);
+    };
+    state.runaway = setTimeout(fire, wallClockTriggerMs);
   }
 
   function emitWorkflowEnded(state: ActiveQuery, end: WorkflowEnd): void {
@@ -1524,6 +1621,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   function closeQuery(state: ActiveQuery): void {
     clearRunaway(state);
     clearTurnHardCap(state);
+    // #3040 Finding 4 — defense-in-depth: reset paused fields so a stale
+    // closure (e.g., a pending setTimeout callback that fires after the
+    // entry is deleted) cannot act on misleading paused state. The
+    // `state.closed = true` guard above is the primary protection;
+    // this is belt-and-suspenders.
+    state.pausedAt = null;
+    state.totalPausedMs = 0;
     try {
       state.query.close();
     } catch (err) {
@@ -1715,6 +1819,15 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     state.firstToolUseAt = null;
     state.lastBlockKind = null;
     state.lastBlockToolName = null;
+    // #3040 Finding 4 — keep paused-budget reset symmetric with
+    // `firstToolUseAt = null` above. If a result arrives while paused
+    // (rare race: dispatcher emitted result before the resume signal
+    // landed), the next turn's `recordAssistantBlock` first-block reset
+    // would have caught this — but resetting here too closes the cross-
+    // turn drift window where a stale `pausedAt` could survive into a
+    // pre-first-block resume call.
+    state.pausedAt = null;
+    state.totalPausedMs = 0;
     // #3436 Phase 3.B — clear per-turn activeChapter; preserve
     // chapterChunkedContext so the next user turn re-routes off the
     // same outline.
@@ -1929,6 +2042,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         events,
         closed: false,
         awaitingUser: false,
+        // #3040 Finding 4 — paused-interval accumulators for cumulative
+        // wall-clock budget across rapid status flap.
+        pausedAt: null,
+        totalPausedMs: 0,
         chapterChunkedContext,
         activeChapter: null,
         // KD-6 forward-looking guard. `cc-dispatcher.ts` passes a single
@@ -2427,6 +2544,22 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     const cutoff = now() - idleReapMs;
     let reaped = 0;
     for (const state of Array.from(activeQueries.values())) {
+      // #3040 Finding 3: skip conversations paused for human review.
+      // Without this, a Bash review-gate awaiting human review for >10 min
+      // is reaped while the user is still reading — the SDK Query closes,
+      // `abortableReviewGate` awaits indefinitely until the 5-min safety
+      // net rejects, and the user's eventual click is dropped via
+      // `respondToToolUse` returning `false`. The 5-min REVIEW_GATE_TIMEOUT_MS
+      // safety net is the absolute upper bound: a stuck-paused conversation
+      // eventually transitions back through the normal close flow, so the
+      // skip-paused predicate does NOT produce a permanent-leak surface.
+      if (state.awaitingUser) {
+        log.debug(
+          { conversationId: state.conversationId, awaitingUser: true },
+          "reapIdle: skipping paused conversation",
+        );
+        continue;
+      }
       if (state.lastActivityAt < cutoff) {
         state.closed = true;
         closeQuery(state);
@@ -2487,35 +2620,57 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // a notify for an unknown conversation is a server bug (the
       // dispatcher fired the signal after the runner already reaped or
       // closed). Mirror to Sentry; do NOT silently drop.
-      reportSilentFallback(
+      //
+      // #3040 Finding 2: route through `mirrorWithDebounce` so a
+      // misconfigured prod (e.g., dispatcher firing 1 QPS for a reaped
+      // conv) cannot flood Sentry with ~144k events/day. `userId` is
+      // unknowable when no `state` exists, so we pass the literal
+      // "unknown" — the single 5-min TTL bucket
+      // ("unknown:notify-awaiting-no-active-query") coalesces correctly
+      // because this branch indicates a server bug, not per-user noise.
+      mirrorWithDebounce(
         new Error("notifyAwaitingUser: no active query"),
         {
           feature: "soleur-go-runner",
           op: "notifyAwaitingUser",
           extra: { conversationId, awaiting },
         },
+        "unknown",
+        NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS,
       );
       return;
     }
     if (state.closed) return;
     if (awaiting) {
+      // #3040 Finding 4: stamp `pausedAt` BEFORE clearing the timers so
+      // a fire-time-recheck callback that lands mid-transition sees a
+      // consistent (pausedAt non-null + timers absent) state. Idempotent
+      // — repeat pause-true while already paused leaves `pausedAt` alone.
+      if (state.pausedAt === null) state.pausedAt = now();
       state.awaitingUser = true;
-      // Pause both wall-clocks — agent compute time only, not human
-      // read time. Both timers will be re-armed on resume against a
-      // fresh anchor.
       clearRunaway(state);
       clearTurnHardCap(state);
       return;
     }
     // Resume.
     state.awaitingUser = false;
+    // #3040 Finding 4: accumulate the just-finished pause interval into
+    // `totalPausedMs`. The wall-clock trigger and absolute turn ceiling
+    // subtract this at fire time so paused intervals do not count
+    // toward either ceiling. `firstToolUseAt` is preserved (cumulative
+    // semantic) — a chatty-flap runaway cannot escape the ceiling by
+    // interleaving cheap user prompts with heavy compute.
+    if (state.pausedAt !== null) {
+      // `Date.now()` is wall-clock and may step backward under NTP slew.
+      // Clamp at 0 so a backward step cannot decrement the accumulator
+      // (which would inflate `elapsedMs` and shorten the budget below
+      // its configured ceiling).
+      state.totalPausedMs += Math.max(0, now() - state.pausedAt);
+      state.pausedAt = null;
+    }
     // Re-arm only when mid-turn (some assistant block has landed and no
-    // result has cleared `firstToolUseAt` yet). Re-stamping
-    // `firstToolUseAt` makes `elapsedMs` report active (non-paused)
-    // turn time — the absolute turn ceiling is also anchored here, so
-    // a long human-read pause does not consume the hard cap budget.
+    // result has cleared `firstToolUseAt` yet).
     if (state.firstToolUseAt !== null) {
-      state.firstToolUseAt = now();
       armRunaway(state);
       armTurnHardCap(state);
     }
