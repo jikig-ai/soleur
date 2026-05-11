@@ -44,9 +44,56 @@ fi
 # Gate exits 0 in all paths (advisory contract preserved).
 # Subshell-exec (not source) so parser failure / deletion / future date all
 # resolve to days_stale=999 → banner fires → gate stays advisory.
+#
+# Trust-binding (#3535): invoke parser twice and compute MIN in the caller
+# frame. NOTICE last-verified is operator-controlled (a PR can backdate it);
+# scheduled-content-vendor-drift workflow run timestamp is not. Taking the
+# MIN ensures a fresh-looking last-verified cannot suppress a stale-cron
+# banner. NOTICE_FILE and GH_TOKEN propagate explicitly — Bash subshell-exec
+# does NOT inherit them otherwise. Operator-attested-mode banner fires only
+# when the cron binding is unavailable AND last-verified is parseable — when
+# both are 999 the existing 30d/90d banners cover the case.
 NOTICE_PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
-days_stale=$(bash "$NOTICE_PARSER" days-stale 2>/dev/null || echo 999)
-last_verified=$(bash "$NOTICE_PARSER" field last-verified 2>/dev/null || echo "unknown")
+notice_days_stale=$(NOTICE_FILE="${NOTICE_FILE:-}" \
+  bash "$NOTICE_PARSER" days-stale 2>/dev/null || echo 999)
+cron_days_stale=$(NOTICE_FILE="${NOTICE_FILE:-}" \
+  GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" \
+  bash "$NOTICE_PARSER" cron-run-stale 2>/dev/null || echo 999)
+
+# MIN-of-both compute (caller frame — Bash env exports drop across the
+# subshell-exec boundary, so the comparison must live here).
+if [[ "$cron_days_stale" != "999" && "$notice_days_stale" != "999" ]]; then
+  if (( cron_days_stale < notice_days_stale )); then
+    days_stale="$cron_days_stale"
+    emit_incident gdpr-gate-cron-binding min-wins \
+      "cron=${cron_days_stale} notice=${notice_days_stale}" \
+      2>/dev/null || true
+  else
+    days_stale="$notice_days_stale"
+    emit_incident gdpr-gate-cron-binding applied \
+      "cron=${cron_days_stale} notice=${notice_days_stale}" \
+      2>/dev/null || true
+  fi
+elif [[ "$cron_days_stale" != "999" ]]; then
+  days_stale="$cron_days_stale"
+  emit_incident gdpr-gate-cron-binding applied \
+    "cron-only=${cron_days_stale}" 2>/dev/null || true
+else
+  days_stale="$notice_days_stale"
+fi
+
+# Operator-attested-mode banner — fires when the cron binding is unavailable
+# but the NOTICE last-verified is parseable. If both fall through to 999 the
+# existing 30d/90d banners cover the user signal; redundancy is suppressed.
+# Banner literal is load-bearing: the self-test workflow asserts it verbatim.
+if [[ "$cron_days_stale" == "999" && "$notice_days_stale" != "999" ]]; then
+  printf 'ℹ gdpr-gate: operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified, falling back to NOTICE last-verified)\n'
+  emit_incident gdpr-gate-cron-binding unavailable \
+    "no-token-or-gh-cli" 2>/dev/null || true
+fi
+
+last_verified=$(NOTICE_FILE="${NOTICE_FILE:-}" \
+  bash "$NOTICE_PARSER" field last-verified 2>/dev/null || echo "unknown")
 [[ -n "$last_verified" ]] || last_verified="unknown"
 if (( days_stale > 30 )); then
   printf '⚠ gdpr-gate rules %s days stale (last verified %s) — output is advisory only and may miss recently-patched detection rules. Refresh: see knowledge-base/engineering/policies/content-vendoring.md\n' \

@@ -20,6 +20,9 @@
 /lefthook.yml                                           @jeanderuelle
 /apps/web-platform/scripts/lint-fixture-content.mjs     @jeanderuelle
 
+# Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
+/plugins/soleur/skills/gdpr-gate/NOTICE                 @jeanderuelle
+
 # Always-loaded workflow rules.
 /AGENTS.md                                              @jeanderuelle
 
