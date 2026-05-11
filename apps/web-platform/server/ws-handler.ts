@@ -144,6 +144,14 @@ export interface ClientSession {
    *  per-turn DB fetch. `null` means "no scoped artifact"; `undefined`
    *  means "cache cold". */
   contextPath?: string | null;
+  /** #3266 — cached `conversations.session_id` for the active
+   *  conversation. Seeded on chat-case cache miss from the SELECT (and
+   *  written back by the runner via `onSessionIdCaptured`). Threaded into
+   *  `dispatchSoleurGo({ sessionId })` so cold-Query construction after
+   *  reap/restart resumes the SDK session and activates the prefill
+   *  guard. `null` means "no persisted session_id"; `undefined` means
+   *  "cache cold". */
+  sessionId?: string | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -202,6 +210,8 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   session.routing = undefined;
   // Same invalidation contract for the KB context cache.
   session.contextPath = undefined;
+  // Same for the session_id cache (#3266).
+  session.sessionId = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // The wrapper enforces the R8 composite-key invariant; errors mirror to
@@ -817,13 +827,14 @@ export function emitConciergeDocumentResolutionBreadcrumb(args: {
   }
 }
 
-async function dispatchSoleurGoForConversation(
+export async function dispatchSoleurGoForConversation(
   userId: string,
   conversationId: string,
   userMessage: string,
   routing: ConversationRouting,
   context?: ConversationContext,
   attachments?: import("@/lib/types").AttachmentRef[],
+  sessionId?: string | null,
 ): Promise<void> {
   const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
     // data-integrity P1-A: never regress a soleur-go conversation back
@@ -939,6 +950,21 @@ async function dispatchSoleurGoForConversation(
     persistActiveWorkflow,
     attachments,
     workspacePath,
+    sessionId,
+    // #3266 — refresh the in-process `ClientSession.sessionId` cache
+    // alongside the DB write/clear so a subsequent chat-case warm-cache
+    // turn forwards the just-persisted value. Without this, runner-reap-
+    // while-WS-alive uses the stale seeded `null` on the next cold-Query
+    // construction and the prefill guard's history-probe branch never
+    // activates. Guards on `liveSession.conversationId === conversationId`
+    // to avoid clobbering a value bound to a different conversation that
+    // the user switched to mid-dispatch.
+    onSessionIdPersisted: (nextSessionId) => {
+      const liveSession = sessions.get(userId);
+      if (liveSession && liveSession.conversationId === conversationId) {
+        liveSession.sessionId = nextSessionId;
+      }
+    },
     ...documentArgs,
   });
 }
@@ -1248,12 +1274,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         }
 
         session.conversationId = msg.conversationId;
-        // Resuming a different conversation — invalidate both the
-        // routing cache and the KB context cache so the first chat-turn
-        // re-reads `active_workflow` and `context_path`. The two caches
-        // share the same lifecycle invariant: invalidate together.
+        // Resuming a different conversation — invalidate the routing,
+        // KB context, and session_id caches so the first chat-turn
+        // re-reads `active_workflow`, `context_path`, and `session_id`.
+        // The three caches share the same lifecycle invariant: invalidate
+        // together.
         session.routing = undefined;
         session.contextPath = undefined;
+        session.sessionId = undefined;
         resetIdleTimer(userId, session);
         sendToClient(userId, {
           type: "session_started",
@@ -1301,6 +1329,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         session.conversationId = undefined;
         session.routing = undefined;
         session.contextPath = undefined;
+        session.sessionId = undefined;
         void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
@@ -1406,6 +1435,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // path entirely. The soleur-go runner owns its own Query
           // lifecycle + canUseTool + sandbox.
           if (pendingRouting && pendingRouting.kind !== "legacy") {
+            // First-message branch: conversation was just inserted by
+            // `createConversation`; persisted `session_id` is always null
+            // until the runner emits the first `result`. Pass `null`
+            // explicitly so the dispatch signature stays uniform.
+            session.sessionId = null;
             await dispatchSoleurGoForConversation(
               userId,
               session.conversationId,
@@ -1413,6 +1447,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               pendingRouting,
               pendingContext,
               msg.attachments,
+              null,
             );
             break;
           }
@@ -1462,7 +1497,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // (the runner singleton is process-local).
         const convId = session.conversationId!;
         let routing: ConversationRouting;
-        if (session.routing && session.contextPath !== undefined) {
+        if (
+          session.routing &&
+          session.contextPath !== undefined &&
+          session.sessionId !== undefined
+        ) {
           routing = session.routing;
         } else {
           const { data: row, error: routeErr } = await supabase
@@ -1490,9 +1529,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
                 active_workflow: typedRow.active_workflow ?? null,
               })
             : { kind: "legacy" };
-          // Seed both caches for subsequent turns.
+          // Seed all three caches for subsequent turns.
           session.routing = routing;
           session.contextPath = typedRow?.context_path ?? null;
+          session.sessionId = typedRow?.session_id ?? null;
         }
 
         if (routing.kind !== "legacy") {
@@ -1511,6 +1551,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             routing,
             chatContext,
             msg.attachments,
+            session.sessionId ?? null,
           );
           break;
         }

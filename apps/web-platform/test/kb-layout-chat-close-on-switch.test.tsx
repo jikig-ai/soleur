@@ -119,6 +119,9 @@ describe("KbLayout — chat panel closes when switching documents", () => {
     return mod.default;
   }
 
+  // The file-tree sidebar is an <aside> (CSS-transitioning, not a <Panel>),
+  // so the inner Group only holds doc + chat. Chat-open ⇒ 2 panels + 1
+  // separator; chat-closed ⇒ 1 panel + 0 separators.
   it("renders chat panel on initial mount when sidebarOpen is persisted", async () => {
     const KbLayout = await loadLayout();
     render(
@@ -127,7 +130,7 @@ describe("KbLayout — chat panel closes when switching documents", () => {
       </KbLayout>,
     );
     await waitFor(() => {
-      expect(screen.getAllByTestId("panel").length).toBe(3);
+      expect(screen.getAllByTestId("panel").length).toBe(2);
     });
   });
 
@@ -139,7 +142,7 @@ describe("KbLayout — chat panel closes when switching documents", () => {
       </KbLayout>,
     );
     await waitFor(() => {
-      expect(screen.getAllByTestId("panel").length).toBe(3);
+      expect(screen.getAllByTestId("panel").length).toBe(2);
     });
 
     // Simulate user clicking a different file in the KB tree — pathname changes.
@@ -153,9 +156,9 @@ describe("KbLayout — chat panel closes when switching documents", () => {
     });
 
     await waitFor(() => {
-      // Chat panel should have closed — only sidebar + doc viewer remain.
-      expect(screen.getAllByTestId("panel").length).toBe(2);
-      expect(screen.getAllByTestId("panel-separator").length).toBe(1);
+      // Chat panel should have closed — only doc viewer Panel remains.
+      expect(screen.getAllByTestId("panel").length).toBe(1);
+      expect(screen.queryAllByTestId("panel-separator").length).toBe(0);
     });
     // Persisted flag should also be cleared so a reload doesn't re-open stale chat.
     expect(sessionStorage.getItem("kb.chat.sidebarOpen")).toBe("0");
@@ -169,7 +172,7 @@ describe("KbLayout — chat panel closes when switching documents", () => {
       </KbLayout>,
     );
     await waitFor(() => {
-      expect(screen.getAllByTestId("panel").length).toBe(3);
+      expect(screen.getAllByTestId("panel").length).toBe(2);
     });
 
     // Simulate navigating back to KB root — contextPath becomes null.
@@ -185,7 +188,7 @@ describe("KbLayout — chat panel closes when switching documents", () => {
     // At root, chat panel + its separator are both removed (no document selected).
     // sessionStorage should also be cleared so the next document visit starts clean.
     await waitFor(() => {
-      expect(screen.getAllByTestId("panel").length).toBe(2);
+      expect(screen.getAllByTestId("panel").length).toBe(1);
     });
     expect(sessionStorage.getItem("kb.chat.sidebarOpen")).toBe("0");
   });
@@ -198,7 +201,7 @@ describe("KbLayout — chat panel closes when switching documents", () => {
       </KbLayout>,
     );
     await waitFor(() => {
-      expect(screen.getAllByTestId("panel").length).toBe(3);
+      expect(screen.getAllByTestId("panel").length).toBe(2);
     });
 
     // Same path, force a rerender.
@@ -211,7 +214,7 @@ describe("KbLayout — chat panel closes when switching documents", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByTestId("panel").length).toBe(3);
+      expect(screen.getAllByTestId("panel").length).toBe(2);
     });
   });
 });

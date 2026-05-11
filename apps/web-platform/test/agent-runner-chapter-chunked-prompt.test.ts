@@ -1,12 +1,13 @@
 // Leader-path system-prompt coverage for the chapter-chunked branch
-// (#3436 Phase 3.A foundations). Symmetric to
-// `soleur-go-runner-chapter-chunked-prompt.test.ts`.
+// (#3436 Phase 3.B — bundle PR feat-pdf-chapter-chunking-bundle).
+// Symmetric to `soleur-go-runner-chapter-chunked-prompt.test.ts`.
 //
-// Phase 3.A intentionally DEFERS the dispatch-time per-turn chapter
-// routing + content-block attachment to #3472 (Phase 3.B). Until #3472
-// ships, when the leader resolver populates
-// `documentExtractMeta.chapters`, the runner system prompt MUST fall
-// through to the existing PR #3430 `too_many_pages` bridge directive.
+// Phase 3.B revives the chapter-chunked directive in lockstep with
+// the dispatch-time content-block attachment (TR4 → AC #18). When the
+// leader resolver populates `documentExtractMeta.chapters`, the
+// runner system prompt MUST carry the Table-of-contents preamble,
+// content-block contract, leader-specific NO-ASK-on-Read clause, and
+// chapter-prefix instruction.
 
 import { vi, describe, test, expect, beforeEach } from "vitest";
 
@@ -161,8 +162,8 @@ beforeEach(() => {
   createQueryMock(mockQuery);
 });
 
-describe("agent-runner leader chapter-chunked branch (#3436 Phase 3.A fall-through)", () => {
-  test("falls through to PDF_TOO_LONG bridge when resolver returns chapters (Phase 3.B not yet wired)", async () => {
+describe("agent-runner leader chapter-chunked branch (#3436 Phase 3.B PRESENT)", () => {
+  test("emits chapter-chunked directive when resolver returns chapters", async () => {
     resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
       artifactPath: PDF_PATH,
       documentKind: "pdf",
@@ -184,15 +185,15 @@ describe("agent-runner leader chapter-chunked branch (#3436 Phase 3.A fall-throu
 
     const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
 
-    // Bridge directive carries the page count.
-    expect(prompt).toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
-    expect(prompt).toContain("403");
-
-    // CRITICAL: chapter-content-block contract must NOT leak into the
-    // prompt until #3472 actually attaches the content block.
-    expect(prompt).not.toContain("Table of contents:");
-    expect(prompt).not.toContain("Do NOT invoke the Read tool");
-    expect(prompt).not.toMatch(/Prefix every reply with `\[Answering/);
+    // Chapter-chunked directive lands at the artifact frame.
+    expect(prompt).toContain("Table of contents:");
+    expect(prompt).toContain("1. Introduction (pages 1-12)");
+    expect(prompt).toContain("`document` content block");
+    expect(prompt).toMatch(/Prefix every reply with `\[Answering from chapter/);
+    // Leader-specific NO-ASK on Read tool (Concierge omits — has no Read).
+    expect(prompt).toContain("Do NOT invoke the Read tool on this PDF");
+    // Does NOT regress to the bridge directive page-count copy.
+    expect(prompt).not.toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
     expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
     expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
   });
