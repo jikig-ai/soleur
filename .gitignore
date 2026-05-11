@@ -88,3 +88,5 @@ apps/web-platform/_plugin-vendored/
 reports/mutation/
 .stryker-tmp/
 mutants/
+/.AGENTS.md.source
+/.claude/.session-manifests/

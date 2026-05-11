@@ -1,93 +1,91 @@
-# Agent Instructions
+# Agent Instructions — Index
 
-This repository contains the Soleur Claude Code plugin. Detailed conventions live in `knowledge-base/project/constitution.md` -- read it when needed. This file contains only rules the agent will violate without being told on every turn.
-
-**Before editing this file, apply the placement gate** (see `cq-agents-md-tier-gate` below and the compound skill's Route-Learning-to-Definition step). Already-enforced and domain-scoped insights route to the owning skill, agent, or reference file — not here. Only cross-cutting session invariants belong in AGENTS.md.
+Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook injects the matching sidecar. Multi-class/empty diff → all sidecars (fail-closed). Spec: `knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md`.
 
 ## Hard Rules
 
-- Never `git stash` in worktrees [id: hr-never-git-stash-in-worktrees] [hook-enforced: guardrails.sh guardrails:block-stash-in-worktrees]. Commit WIP first, then merge. Use `git show <commit>:<path>` to inspect old code without modifying working tree state.
-- MCP tools (Playwright, etc.) resolve paths from the repo root, not the shell CWD [id: hr-mcp-tools-playwright-etc-resolve-paths]. Always pass absolute paths to MCP tools when in a worktree.
-- When a command exits non-zero or prints a warning, investigate before proceeding [id: hr-when-a-command-exits-non-zero-or-prints]. Never treat a failed step as success.
-- Always read a file before editing it [id: hr-always-read-a-file-before-editing-it]. The Edit tool rejects unread files, but context compaction erases prior reads -- re-read after any compaction event.
-- When a plan specifies relative paths (e.g., `source "$SCRIPT_DIR/../../..."`) or file globs (e.g., `apps/foo/**`), trace each `../` step / verify each glob matches ≥1 file via `git ls-files | grep -E` before implementing [id: hr-when-a-plan-specifies-relative-paths-e-g]. Plans have prescribed paths/globs that were implemented verbatim and only caught by review agents (PR #2889 — `infra/**` matched zero paths; gate missed `middleware.ts` / `app/api/**`).
-- The host terminal is Warp [id: hr-the-host-terminal-is-warp]. Do not attempt automated terminal manipulation via escape sequences (cursor position queries, TUI rendering, and similar sequences are intercepted by Warp's tmux control mode and silently fail).
-- The Bash tool runs in a non-interactive shell without `sudo` access [id: hr-the-bash-tool-runs-in-a-non-interactive]. Do not attempt commands requiring elevated privileges -- provide manual instructions instead.
-- Exhaust all automated options before suggesting manual steps [id: hr-exhaust-all-automated-options-before]. Priority: (1) Doppler (`doppler secrets get <KEY> -p soleur -c dev --plain`; check `prd`/`ci`/`prd_terraform`), (2) MCP via `ToolSearch`, (3) CLIs (`gh`, `hcloud`, `supabase` — install to `~/.local/bin` if missing), (4) REST (`curl`/`WebFetch`), (5) Playwright MCP (bootstraps creds → Doppler → CLI/API), (6) manual handoff. Only prompt for creds not found in Doppler.
-- Never label any step as "manual" without first attempting automation [id: hr-never-label-any-step-as-manual-without]. Browser tasks → Playwright MCP first (only CAPTCHAs and OAuth consent are genuinely manual). Post-merge steps → verify each cannot be automated (`terraform apply`, `ssh`, `gh secret set`, `gh workflow run`). Plans that say "manual" when the tool is available are a workflow violation.
-- When triaging issues, never defer as "not automatable" without checking `/soleur:help`, `ToolSearch`, and CLI tools first [id: hr-when-triaging-a-batch-of-issues-never]. Content generation is automatable via `gemini-imagegen`, `frontend-design`, `copywriter`, `pencil` MCP. Check at triage — "skip" classifications don't get re-evaluated. **Why:** #2075 deferred OG image gen despite `gemini-imagegen` being available.
-- All infra provisioning (servers, volumes, firewalls, DNS) goes through Terraform — never vendor APIs or manual SSH [id: hr-all-infrastructure-provisioning-servers]. SSH is read-only diagnosis (`printenv`, `docker inspect`, `journalctl`); fixes go into Terraform. Vendor APIs only for read-only checks or account-level tasks Terraform can't cover. Patterns: `apps/web-platform/infra/`.
-- Every new Terraform root must include an R2 remote backend (`soleur-terraform-state` bucket, key `<app-name>/terraform.tfstate`) [id: hr-every-new-terraform-root-must-include-an]. Copy from `apps/web-platform/infra/main.tf`. Local state is never acceptable.
-- New skills, agents, or user-facing capabilities must include CPO and CMO at minimum in brainstorm domain assessment [id: hr-new-skills-agents-or-user-facing] [skill-enforced: brainstorm Phase 0.5]. CTO is included when the capability has architectural implications.
-- Before shipping, `/ship` Phase 5.5 runs conditional domain leader gates (CMO content-opportunity, CMO website framing, COO expense-tracking) [id: hr-before-shipping-ship-phase-5-5-runs] [skill-enforced: ship Phase 5.5]. These trigger on file-path matches, semver labels, and new service signups.
-- When a workflow concludes with an actionable next step, execute it — don't list it as "next action" and stop [id: hr-when-a-workflow-concludes-with-an]. Use Playwright MCP, `xdg-open`, CLI tools, or APIs to drive completion. Only hand off for credentials/payment at the exact page.
-- Before asserting GitHub issue status, verify via `gh issue view <N> --json state` and check `knowledge-base/` for existing artifacts [id: hr-before-asserting-github-issue-status]. Unverified status claims create false urgency.
-- Never run commands with unbounded output in subagents — pipe through `| head -n 500` or `| tail -n 200` [id: hr-never-run-commands-with-unbounded-output]. Subagent stdout goes to tmpfs; unbounded output fills it and crashes all sessions.
-- Never write to Claude Code memory (`~/.claude/projects/*/memory/`) or local-only locations [id: hr-never-write-to-claude-code-memory-claude]. All knowledge goes to committed repo files: AGENTS.md, constitution.md, `knowledge-base/project/learnings/`, `.mcp.json`. Test: "If a new Soleur user clones this repo, do they get this improvement?"
-- When in a worktree, never read from bare repo paths (where `.git` is a file, not a directory) [id: hr-when-in-a-worktree-never-read-from-bare]. Use `git show HEAD:<path>` or the `Read` tool with the worktree absolute path. Bare repos have no working tree; reads return stale content.
-- GitHub API endpoints with enum parameters require exact format matching [id: hr-github-api-endpoints-with-enum]. CodeQL `dismissed_reason` uses space-separated strings (`"not vulnerable"`, `"used in tests"`), not snake_case. Test API format against schema before calling; catch HTTP 422 with schema-aware validation.
-- For destructive writes against shared prod (terraform/tofu/kubectl apply, migrations, deploys), show the exact command, wait for explicit per-command go-ahead, THEN run with `-auto-approve`/`--yes`/`--force` [id: hr-menu-option-ack-not-prod-write-auth]. Agent shells have no TTY — the tool's native prompt hangs. The load-bearing safety net is the per-command confirmation (user reads the exact command before approving). Menu acks and prior approvals stretched to new commands are NOT authorization. **Why:** #2618 per-command-ack; #2880 operationalized for non-interactive exec.
-- When a plan addresses an SSH/network-connectivity symptom (reset, timeout, kex, handshake, 5xx), verify the L3 firewall allow-list against current client egress IP BEFORE proposing sshd/fail2ban/service-layer fixes [id: hr-ssh-diagnosis-verify-firewall] [skill-enforced: plan Phase 1.4, deepen-plan Phase 4.5]. `hcloud firewall describe` + `curl -s ifconfig.me/ip` is load-bearing. Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`. **Why:** #2681 — #2654 plan had sshd hypotheses; cause was admin-IP drift.
-- In connected-repo agent code paths (`apps/web-platform/server/session-sync.ts` and any future user-repo writer), never `git add -A` / `git add .` — use a path allowlist scoped to `knowledge-base/**` [id: hr-never-git-add-a-in-user-repo-agents]. The auto-commit sweep otherwise lands `.claude/settings.json` wipes, stray `.claude/worktrees/` markers, and unrelated drift into PRs the loop never authored. Bootstrap paths (e.g., `provisionWorkspace`'s seed commit) are exempt. **Why:** #2857/#2859/#2905.
-- Doppler `dev` and `prd` configs MUST resolve to distinct Supabase project refs (canonical hostname `^[a-z0-9]{20}\.supabase\.co$` after CNAME deref) [id: hr-dev-prd-distinct-supabase-projects] [skill-enforced: preflight Check 4]. **Why:** #2887 — shared dev/prd DB makes every dev action a prod action; one creds leak is brand-ending.
-- Every plan/PR touching credentials, auth, data, payments, or user-owned resources MUST answer "what is the worst thing the target user experiences if this fails, silently or loudly?" before `/work` [id: hr-weigh-every-decision-against-target-user-impact] [skill-enforced: brainstorm Phase 0.1, plan Phase 2.6, deepen-plan Phase 4.6, review user-impact-reviewer, preflight Check 6]. Threshold `single-user incident` requires CPO + user-impact-reviewer sign-off. **Why:** #2887/#2888.
-- Never paste secrets via the Claude Code `! ` shell prefix [id: hr-never-paste-secrets-via-bang-prefix]. The harness injects both input AND stdout into conversation context, API logs, and on-disk transcript. For any `<cli> set <KEY>=<VALUE>` mutation (Doppler, gh, vault), instruct the operator to use a separate terminal. Verify presence via `<cli> get <KEY> --plain | wc -c` (length-only). See `knowledge-base/project/learnings/2026-05-06-bang-prefix-leaks-secrets-into-conversation-context.md`. **Why:** 2026-05-06 PR-B — prd JWT secret entered transcript verbatim.
-- On regulated-data surfaces (PII fields, auth flows, schemas, API routes per the canonical regex in `plugins/soleur/skills/gdpr-gate/SKILL.md`), invoke `/soleur:gdpr-gate` at plan Phase 2.7 and work Phase 2 exit [id: hr-gdpr-gate-on-regulated-data-surfaces] [hook-enforced: lefthook gdpr-gate.sh] [skill-enforced: plan Phase 2.7, work Phase 2 exit, ship Phase 5.5]. Advisory; Art. 9 Critical findings escalate to `compliance-posture.md` + GitHub `compliance/critical`. **Why:** EU `single-user incident` threshold; pre-generation catch beats post-hoc audit.
+- [id: hr-never-git-stash-in-worktrees] → core
+- [id: hr-mcp-tools-playwright-etc-resolve-paths] → core
+- [id: hr-when-a-command-exits-non-zero-or-prints] → core
+- [id: hr-always-read-a-file-before-editing-it] → core
+- [id: hr-when-a-plan-specifies-relative-paths-e-g] → core
+- [id: hr-the-host-terminal-is-warp] → core
+- [id: hr-the-bash-tool-runs-in-a-non-interactive] → core
+- [id: hr-exhaust-all-automated-options-before] → core
+- [id: hr-never-label-any-step-as-manual-without] → core
+- [id: hr-when-triaging-a-batch-of-issues-never] → core
+- [id: hr-all-infrastructure-provisioning-servers] → core
+- [id: hr-every-new-terraform-root-must-include-an] → core
+- [id: hr-new-skills-agents-or-user-facing] → core
+- [id: hr-before-shipping-ship-phase-5-5-runs] → core
+- [id: hr-when-a-workflow-concludes-with-an] → core
+- [id: hr-before-asserting-github-issue-status] → core
+- [id: hr-never-run-commands-with-unbounded-output] → core
+- [id: hr-never-write-to-claude-code-memory-claude] → core
+- [id: hr-when-in-a-worktree-never-read-from-bare] → core
+- [id: hr-github-api-endpoints-with-enum] → core
+- [id: hr-menu-option-ack-not-prod-write-auth] → core
+- [id: hr-ssh-diagnosis-verify-firewall] → core
+- [id: hr-never-git-add-a-in-user-repo-agents] → core
+- [id: hr-dev-prd-distinct-supabase-projects] → core
+- [id: hr-weigh-every-decision-against-target-user-impact] → core
+- [id: hr-never-paste-secrets-via-bang-prefix] → core
+- [id: hr-gdpr-gate-on-regulated-data-surfaces] → core
 
 ## Workflow Gates
 
-- When moving issues between milestones, deferring features, or changing priorities, update `knowledge-base/product/roadmap.md` in the same action [id: wg-when-moving-github-issues-between]. The roadmap is canonical product truth — if it contradicts the issue tracker, neither can be trusted. **Why:** #1064 created three conflicting sources of truth (roadmap, milestones, conversation).
-- Every feature in a roadmap phase table MUST have a linked GitHub issue [id: wg-every-feature-listed-in-a-roadmap-phase]. Create the issue in the same action as the roadmap edit — even for trigger-gated phases. Verify every feature row has an Issue column entry before committing. **Why:** 2026-04-03 audit found Phase 5 as an empty milestone shell for weeks; gate only enforced issues→milestones, not the reverse.
-- When closing a phase milestone, update the `## Current State` section of `knowledge-base/product/roadmap.md` in the same commit [id: wg-when-closing-a-phase-milestone-update]. Domain leaders (esp. CPO) read it for phase status — stale Current State produces stale assessments. **Why:** #1878 CPO flagged 7 phantom unfinished P1 items.
-- When fixing a workflow gate's detection logic, retroactively apply the fixed gate to the case that exposed the gap [id: wg-when-fixing-a-workflow-gates-detection] [skill-enforced: ship Phase 5.5 Retroactive Gate Application]. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
-- Zero agents until user confirms direction [id: wg-zero-agents-until-user-confirms]. Present a concise summary first, ask if they want to go deeper, only then launch research. Exception: passive domain routing (see below).
-- Before every commit, run compound (`skill: soleur:compound`) [id: wg-before-every-commit-run-compound-skill]. Do not ask whether to run it -- just run it.
-- Never bump version files in feature branches [id: wg-never-bump-version-files-in-feature]. Version is derived from git tags — CI creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels. Set labels with `/ship`. Do NOT edit `plugin.json` version (frozen sentinel) or `marketplace.json` version.
-- After marking a PR ready, run `gh pr merge <number> --squash --auto` to queue auto-merge, then poll `gh pr view <number> --json state --jq .state` until MERGED, then `cleanup-merged` [id: wg-after-marking-a-pr-ready-run-gh-pr-merge]. Never stop at "waiting for CI" -- actively poll and merge in the same session.
-- After a PR merges to main, verify all release/deploy workflows succeed before ending the session [id: wg-after-a-pr-merges-to-main-verify-all] [skill-enforced: ship Phase 7]. A merged PR with a failing release workflow is a silent production outage.
-- At session start, run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list` (works from bare root or any worktree) [id: wg-at-session-start-run-bash-plugins-soleur]. If no worktree exists for the task, create one with `... --yes create <name>` before doing any work. Repo root is bare — never run `git pull`/`git checkout` from it.
-- At session start (after `cleanup-merged` fetches main), refresh `.mcp.json` at the bare root: `git show main:.mcp.json > .mcp.json` [id: wg-at-session-start-after-cleanup-merged]. Claude Code reads it from CWD on startup to discover MCP servers. Bare repos have no working tree — manual sync is required or MCP servers added in feature branches are unavailable.
-- When a test runner crashes (segfault, OOM, abort), never dismiss it as "known" or "unrelated" [id: wg-when-a-test-runner-crashes-segfault-oom]. Either fix the root cause, file a GitHub issue to track it, or document a concrete workaround. A crash without a tracking issue is a workflow violation.
-- When tests fail and are confirmed pre-existing (same on main), create a GitHub issue to track them before proceeding [id: wg-when-tests-fail-and-are-confirmed-pre]. Pre-existing failures without tracking issues normalize a red suite.
-- When an audit identifies pre-existing issues, create GitHub issues to track them before fixing [id: wg-when-an-audit-identifies-pre-existing]. Don't just note them in conversation -- file them.
-- When deferring a capability, create a GitHub issue (what, why, re-evaluation criteria) milestoned to the target phase or "Post-MVP / Later" [id: wg-when-deferring-a-capability-create-a]. A deferral without a tracking issue is invisible.
-- When a workflow gap causes a mistake, fix the skill or agent first — a learning is not a fix [id: wg-when-a-workflow-gap-causes-a-mistake-fix]. A verbal acknowledgment is not a fix; edit the definition file in the same response. Only record a learning when no code change can address the gap. **Why:** #2430 committed a verbal promise instead of a skill edit.
-- Every session error MUST produce a rule, skill edit, hook, or learning-file entry [id: wg-every-session-error-must-produce-either]. **Discoverability exit:** if an agent discovers the constraint via a clear error, visible diff, or command failure, a learning file alone suffices — do NOT add an AGENTS.md rule. Add a rule only for hidden constraints: silent failures, undocumented tool quirks, post-merge-only invariants, cross-session retry waste, or blast-radius incidents. **Why:** #2865 — 4.7 rules/day consumed the 100→115 raise in 2 days.
-- Auto-close keywords (`close|fix|resolve`[sd]? + `#N`/`GH-N`) trigger anywhere in PR title or body — including inside checkboxes, code blocks, and prose [id: wg-use-closes-n-in-pr-body-not-title-to] [scanner-enforced: .github/workflows/pr-auto-close-scanner.yml]. Use `Closes #N` ONLY on its own body line for intentional closure; `Ref #N` everywhere else. Markdown is invisible to the parser. Qualifiers don't help (`Closes #N partially` still auto-closes). **Why:** #3185 closed twice in 3 days — title `(Closes #N after fire)` then body checkbox `- [ ] close #N`.
-- After merging a PR that adds or modifies a GitHub Actions workflow, trigger a manual run (`gh workflow run <file>.yml`), poll until complete (`gh run view <id> --json status,conclusion`), and investigate failures before moving on [id: wg-after-merging-a-pr-that-adds-or-modifies]. New workflows must be verified working, not just syntactically valid.
+- [id: wg-when-moving-github-issues-between] → core
+- [id: wg-every-feature-listed-in-a-roadmap-phase] → core
+- [id: wg-when-closing-a-phase-milestone-update] → core
+- [id: wg-when-fixing-a-workflow-gates-detection] → core
+- [id: wg-zero-agents-until-user-confirms] → core
+- [id: wg-before-every-commit-run-compound-skill] → core
+- [id: wg-never-bump-version-files-in-feature] → core
+- [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → core
+- [id: wg-after-a-pr-merges-to-main-verify-all] → core
+- [id: wg-at-session-start-run-bash-plugins-soleur] → core
+- [id: wg-at-session-start-after-cleanup-merged] → core
+- [id: wg-when-a-test-runner-crashes-segfault-oom] → rest
+- [id: wg-when-tests-fail-and-are-confirmed-pre] → rest
+- [id: wg-when-an-audit-identifies-pre-existing] → core
+- [id: wg-when-deferring-a-capability-create-a] → core
+- [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core
+- [id: wg-every-session-error-must-produce-either] → core
+- [id: wg-use-closes-n-in-pr-body-not-title-to] → core
+- [id: wg-after-merging-a-pr-that-adds-or-modifies] → core
 
 ## Code Quality
 
-- Write failing tests BEFORE implementation code when a plan includes Test Scenarios or Acceptance Criteria [id: cq-write-failing-tests-before] [skill-enforced: work Phase 2 TDD Gate]. Infrastructure-only tasks (config, CI, scaffolding) are exempt.
-- Before pushing `package.json` changes, verify deps are in the correct `package.json` (app-level, not just root) and both `bun.lock` and `package-lock.json` are regenerated if both exist (Dockerfile uses `npm ci`) [id: cq-before-pushing-package-json-changes].
-- Rule IDs on AGENTS.md rules are immutable [id: cq-rule-ids-are-immutable] [hook-enforced: lefthook lint-rule-ids.py]. Remove a rule by appending its ID to `scripts/retired-rule-ids.txt` (`<id> | date | PR | breadcrumb`); reintroducing a retired ID is linter-rejected. Section prefixes (`hr`, `wg`, `cq`, `rf`, `pdr`, `cm`) match the section.
-- AGENTS.md rules cap at ~600 bytes; `**Why:**` is one sentence → PR/learning [id: cq-agents-md-why-single-line] [skill-enforced: compound step 8]. AGENTS.md loads every turn (ETH Zurich: 10-22% per-turn token overhead). Target ≤37000 bytes; compound warns above 37k, critical above 40k. Rule count advisory. To retire: see `cq-rule-ids-are-immutable`. <!-- rule-threshold: 115 --> **Why:** #2865 bytes-first; #2686 prior.
-- When editing AGENTS.md, apply the placement gate [id: cq-agents-md-tier-gate] [skill-enforced: compound Route-Learning-to-Definition]. **Already-enforced** (`[hook-enforced:]` / `[skill-enforced:]` / `[scanner-enforced:]` for fail-soft CI): keep `[id]` + tag + one-line pointer; full rule in the enforcing artifact. **Domain-scoped** (tests, IaC, CI, Playwright, Pencil, content): edit the owning skill/agent/reference, never AGENTS.md. **Cross-cutting session invariants** (silent-failure or blast-radius, no single-file trigger): AGENTS.md-eligible.
-- App Router route files (`apps/*/app/**/route.{ts,tsx,js,jsx}`) may export only HTTP handlers and Next.js config exports (see Next.js docs) [id: cq-nextjs-route-files-http-only-exports]. Any other export must live in a sibling module. Vitest and `tsc --noEmit` do NOT run the route-file validator — only `next build` does, so errors surface post-merge. **Why:** #2347 → #2401; see `knowledge-base/project/learnings/runtime-errors/2026-04-15-nextjs-15-route-file-non-http-exports.md`.
-- When a code path catches an error (or detects a degraded condition) and returns 4xx/5xx OR continues with fallback data, mirror the pino `logger.error`/`warn` to Sentry [id: cq-silent-fallback-must-mirror-to-sentry]. Pino stdout is invisible in Sentry. Use `reportSilentFallback(err, { feature, op?, extra? })` from `@/server/observability`. Exempt: expected states (CSRF reject, rate-limit hit, first-time 404, intentional pass-through). **Why:** #2457 silent fallback → 20-min debug round; #2480/#2484 remediated 15 sites.
-- Before removing a `useRef` declaration, grep the ref name in the same file and delete every usage — especially inside effect cleanup returns [id: cq-ref-removal-sweep-cleanup-closures]. TS strict and `tsc --noEmit` do NOT flag orphaned cleanup refs; crash surfaces only at component unmount (`ReferenceError`). Target: `rg "<ref-name>" <file>` returns zero after edit. **Why:** #2500 `quoteRafRef` crashed 31 sidebar tests at unmount.
-- When widening a discriminated union, grep **three** consumer patterns [id: cq-union-widening-grep-three-patterns]: (a) `const _exhaustive: never` (switch rails — safe, fails build), (b) `\.kind === "` (if-ladders), (c) `\?\.kind === "` (optional-chained). Hits on (b)/(c) are silent-drops. Preferred fix: extract if-ladders into `render<Thing>(data)` with `switch` + `: never`. **Why:** #2531 `SharedContentKind` widening — see `knowledge-base/project/learnings/integration-issues/discriminated-union-exhaustive-switch-miss-20260410.md`.
-- Postgres `SECURITY DEFINER` functions MUST pin `SET search_path = public, pg_temp` (in that order) and qualify every relation in the body as `public.<table>` [id: cq-pg-security-definer-search-path-pin-pg-temp]. `pg_temp` is the caller's session-private schema; an authenticated attacker can plant `pg_temp.<table>` and the definer body would resolve unqualified references there. Listing `public` first + qualifying in the body is belt-and-suspenders. **Why:** PR #2954 — migration 033 + precedent 027 both had the gap; reviewer caught pre-merge.
-- Selectors rendered above the fold on the Eleventy docs site (`plugins/soleur/docs/{pages,_includes}/**`) must be inlined in `_includes/base.njk` AND pass `plugins/soleur/docs/scripts/screenshot-gate.mjs` (wired into `deploy-docs.yml`) [id: cq-eleventy-critical-css-screenshot-gate]. Template/SEO/CSP gates do NOT detect the async-stylesheet-swap FOUC window. **Why:** PR #2904+#2960 — same FOUC class shipped twice in 8h; see `knowledge-base/project/learnings/best-practices/2026-04-27-hand-extracted-critical-css-misses-globally-rendered-selectors.md`.
-- Test fixtures and golden files (`__goldens__/**`, `**/*.snap`, `apps/web-platform/test/fixtures/**`) MUST contain only synthesized data — no real emails (use `@example.com`/`@test.local`), no Supabase prod-shape UUIDs, no live JWTs/Doppler/BYOK tokens [id: cq-test-fixtures-synthesized-only] [hook-enforced: .github/workflows/secret-scan.yml]. Waive a line with `# gitleaks:allow # issue:#NNN <reason>`. **Why:** #3121 — fixtures bypass prod redaction.
-- Regex character classes containing U+2028/U+2029 (line/paragraph separators) MUST use `\uXXXX` escape notation, never literal Unicode chars [id: cq-regex-unicode-separators-escape-only]. The Edit tool silently rewrites literal U+2028/U+2029 to ASCII spaces (0x20) — `/[\x00-\x1f\x7f<U+2028><U+2029>]/g` becomes `/[\x00-\x1f\x7f  ]/g`, stripping all spaces from sanitized content. Detection: only via downstream test that asserts on a space-bearing input. **Why:** PR #3294 — body sanitizer mangled `# Product Roadmap` → `#ProductRoadmap` post-refactor.
+- [id: cq-write-failing-tests-before] → rest
+- [id: cq-before-pushing-package-json-changes] → rest
+- [id: cq-rule-ids-are-immutable] → docs-only
+- [id: cq-agents-md-why-single-line] → docs-only
+- [id: cq-agents-md-tier-gate] → docs-only
+- [id: cq-nextjs-route-files-http-only-exports] → rest
+- [id: cq-silent-fallback-must-mirror-to-sentry] → rest
+- [id: cq-ref-removal-sweep-cleanup-closures] → rest
+- [id: cq-union-widening-grep-three-patterns] → rest
+- [id: cq-pg-security-definer-search-path-pin-pg-temp] → core
+- [id: cq-eleventy-critical-css-screenshot-gate] → docs-only
+- [id: cq-test-fixtures-synthesized-only] → rest
+- [id: cq-regex-unicode-separators-escape-only] → rest
 
 ## Review & Feedback
 
-- After merging, read files from the merged branch (`git show main:<path>`), not the bare repo directory (stale) [id: rf-after-merging-read-files-from-the-merged].
-- Never skip QA/review before merging [id: rf-never-skip-qa-review-before-merging]. Full pipeline: plan → implement → review → QA → compound → ship.
-- Before spawning review agents, push the branch to remote (`git push -u origin <branch>`) [id: rf-before-spawning-review-agents-push-the]. Review subagents use remote state; unpushed commits produce stale analysis. **Why:** 2026-04-13 — 4 of 9 reviewers analyzed pre-push state.
-- Before shipping, verify: (1) review comments resolved, (2) QA run with screenshots if UI, (3) tests pass locally [id: rf-before-shipping-verify-1-review-comments].
-- When a reviewer or user says to keep a feature/phase, do not remove it without explicit confirmation [id: rf-when-a-reviewer-or-user-says-to-keep-a].
-- Review findings default to fix-inline on the PR branch for all severities [id: rf-review-finding-default-fix-inline] [skill-enforced: ship Phase 5.5 Review-Findings Exit Gate]. Scope-out criteria and labels defined in `plugins/soleur/skills/review/SKILL.md` §5 and the compound skill's Route-Learning-to-Definition step.
+- [id: rf-after-merging-read-files-from-the-merged] → rest
+- [id: rf-never-skip-qa-review-before-merging] → rest
+- [id: rf-before-spawning-review-agents-push-the] → rest
+- [id: rf-before-shipping-verify-1-review-comments] → rest
+- [id: rf-when-a-reviewer-or-user-says-to-keep-a] → rest
+- [id: rf-review-finding-default-fix-inline] → rest
 
 ## Passive Domain Routing
 
-- When a user message contains a clear domain signal unrelated to the current task, route based on signal orthogonality: spawn multiple leaders ONLY when the message contains distinct asks across different domains (e.g., "review expense AND audit privacy policy"); spawn a single leader for single-domain signals. Spawn via `run_in_background: true` per `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md`. Note: governs CLI agent routing; Command Center web app routes via `/soleur:go` [id: pdr-when-a-user-message-contains-a-clear]. **Why:** #2853.
-- Do not route on trivial messages ("yes", "continue", "looks good") or when the domain signal IS the current task's topic (e.g., do not route to CTO during an engineering brainstorm about architecture) [id: pdr-do-not-route-on-trivial-messages-yes].
+- [id: pdr-when-a-user-message-contains-a-clear] → core
+- [id: pdr-do-not-route-on-trivial-messages-yes] → core
 
 ## Communication
 
-- Challenge reasoning instead of validating [id: cm-challenge-reasoning-instead-of]. No flattery. If something looks wrong, say so.
-- Delegate verbose exploration (3+ file reads, research, analysis) to subagents [id: cm-delegate-verbose-exploration-3-file]. Keep main context for edits and user-facing iteration.
-- When proposing to clear context or resume from a fresh session, provide a copy-pasteable resume prompt: skill/command, plan path, branch, worktree path, PR #, issue #, one-line summary [id: cm-when-proposing-to-clear-context-or]. User should paste and go.
+- [id: cm-challenge-reasoning-instead-of] → core
+- [id: cm-delegate-verbose-exploration-3-file] → core
+- [id: cm-when-proposing-to-clear-context-or] → core
