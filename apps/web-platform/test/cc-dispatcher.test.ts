@@ -22,10 +22,41 @@ vi.mock("@/server/conversation-writer", async () => {
   };
 });
 
-vi.mock("@/server/observability", () => ({
-  reportSilentFallback: mockReportSilentFallback,
-  warnSilentFallback: vi.fn(),
-}));
+vi.mock("@/server/observability", async () => {
+  // Pull the real `mirrorWithDebounce` + `__resetMirrorDebounceForTests`
+  // so the existing per-(userId, errorClass) coalescing assertion (3 calls
+  // in <5min → 1 mirror) still holds against the spy reportSilentFallback.
+  // Stub `reportSilentFallback` so individual call-site mirrors are
+  // observable; `mirrorWithDebounce` internally delegates to whatever the
+  // module's exported `reportSilentFallback` is, but since the module is
+  // mocked the delegation pulls our spy.
+  const actual = await vi.importActual<
+    typeof import("@/server/observability")
+  >("@/server/observability");
+  return {
+    ...actual,
+    reportSilentFallback: mockReportSilentFallback,
+    warnSilentFallback: vi.fn(),
+    // Override mirrorWithDebounce with a TTL-honoring wrapper that uses
+    // the spy as its sink. We can't reuse `actual.mirrorWithDebounce`
+    // directly because that one captured the real reportSilentFallback
+    // at module-init time (before this mock swap). Pulling the TTL from
+    // `actual.MIRROR_DEBOUNCE_MS` keeps the wrapper in lockstep with the
+    // production constant — if `MIRROR_DEBOUNCE_MS` ever changes, the
+    // 3-call-→-1-mirror assertion in this file will not silently drift.
+    mirrorWithDebounce: (() => {
+      const lastReportedAt = new Map<string, number>();
+      return (err: unknown, ctx: unknown, userId: string, errorClass: string) => {
+        const key = `${userId}:${errorClass}`;
+        const now = Date.now();
+        const last = lastReportedAt.get(key);
+        if (last !== undefined && now - last < actual.MIRROR_DEBOUNCE_MS) return;
+        lastReportedAt.set(key, now);
+        mockReportSilentFallback(err, ctx);
+      };
+    })(),
+  };
+});
 
 // Module-scoped: every test in this file gets a mocked
 // `fetchUserWorkspacePath`. Existing dispatchSoleurGo tests pre-#3235 do not
