@@ -35,9 +35,9 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       {/* Settings sidebar — hidden on mobile, shown on md+ */}
       <nav
         inert={settingsCollapsed || undefined}
-        className={`hidden shrink-0 border-r border-soleur-border-default md:block
+        className={`hidden shrink-0 border-r border-soleur-border-default px-4 py-5 md:block
         md:transition-[width] md:duration-200 md:ease-out
-        ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48 px-4 py-5"}`}>
+        ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48"}`}>
         <div className="mb-4 flex min-h-7 items-center justify-between">
           <h2 className="text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
             Settings
