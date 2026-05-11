@@ -161,6 +161,88 @@ t_integration_id_invariant() {
   fi
 }
 
+# T10: say() output sanitizes ANSI escape / CR / U+2028 from branch name.
+# Use AUDIT_FIXED_WORKFLOWS with a branch-like first field containing
+# control chars; assert the captured stdout contains zero of those bytes.
+t_say_sanitizes_log_injection() {
+  local tmp; tmp=$(mktemp -d)
+  # Embed: ESC (\x1b), CR (\x0d), and U+2028 (\xe2\x80\xa8) inside the workflow
+  # slot of AUDIT_FIXED_WORKFLOWS. say() should strip all three from the
+  # rendered `[ok]` line.
+  local malicious_wf
+  malicious_wf=$(printf 'workflow\x1b\x0d\xe2\x80\xa8X.yml:1:abcdef1234567890')
+  AUDIT_FIXTURE_OVERRIDE="$FIXTURE_DIR/neutral-passing.json" \
+  AUDIT_FIXED_WORKFLOWS="$malicious_wf" \
+  AUDIT_TELEMETRY_DIR="$tmp/state" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || true
+  # Captured stdout must contain zero ESC/CR bytes and zero U+2028 bytes.
+  local has_esc has_cr has_u2028
+  # grep -c returns non-zero per-file when count is 0; awk sums regardless.
+  # `|| true` keeps set -e from aborting the harness.
+  has_esc=$( (grep -cP '\x1b' "$tmp/stdout" "$tmp/stderr" 2>/dev/null || true) | awk -F: '{s+=$2} END{print s+0}')
+  has_cr=$( (grep -cP '\r' "$tmp/stdout" "$tmp/stderr" 2>/dev/null || true) | awk -F: '{s+=$2} END{print s+0}')
+  has_u2028=$( (grep -cP '\xe2\x80\xa8' "$tmp/stdout" "$tmp/stderr" 2>/dev/null || true) | awk -F: '{s+=$2} END{print s+0}')
+  if [[ "$has_esc" == "0" && "$has_cr" == "0" && "$has_u2028" == "0" ]]; then
+    _report "T10 say() strips ANSI/CR/U+2028 from operator-rendered output" ok
+  else
+    _report "T10 say() strips ANSI/CR/U+2028 from operator-rendered output" fail "esc=$has_esc cr=$has_cr u2028=$has_u2028"
+  fi
+  rm -rf "$tmp"
+}
+
+# T11: silent-success guard — when AUDIT_FIXED_WORKFLOWS is unset and gh
+# is unreachable (simulated via PATH override), the script must exit 1
+# rather than emitting total=0/passing=0/exit 0.
+t_silent_success_guard() {
+  local tmp; tmp=$(mktemp -d)
+  # Stub `gh` to a dummy that returns `[]` from `gh pr list ... --json ...`.
+  # The audit script must detect the zero-PRs case and abort with exit 1.
+  cat > "$tmp/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+# Stub: always return empty array for `gh pr list`, empty SHA for `gh pr view`.
+case "$1" in
+  pr) shift
+      case "$1" in
+        list) echo '[]' ;;
+        view) echo '' ;;
+        *) echo '' ;;
+      esac
+      ;;
+  api) echo '{"check_runs":[]}' ;;
+esac
+GHSTUB
+  chmod +x "$tmp/gh"
+  local rc=0
+  PATH="$tmp:$PATH" AUDIT_TELEMETRY_DIR="$tmp/state" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  if [[ "$rc" == "1" ]] && grep -qF 'gh pr list returned no bot PRs' "$tmp/stderr"; then
+    _report "T11 silent-success guard fires when gh returns empty bot-PR list" ok
+  else
+    _report "T11 silent-success guard fires when gh returns empty bot-PR list" fail "rc=$rc stderr=$(head -1 "$tmp/stderr")"
+  fi
+  rm -rf "$tmp"
+}
+
+# T12: shared strip-log-injection lib is sourced (not redeclared inline)
+t_shared_lib_used() {
+  local audit_file="$REPO_ROOT/scripts/audit-bot-codeql-coverage.sh"
+  local lib_file="$REPO_ROOT/scripts/lib/strip-log-injection.sh"
+  if [[ ! -f "$lib_file" ]]; then
+    _report "T12 scripts/lib/strip-log-injection.sh exists" fail "missing"
+    return
+  fi
+  if ! grep -qF 'lib/strip-log-injection.sh' "$audit_file"; then
+    _report "T12 audit script sources shared strip-log-injection lib" fail
+    return
+  fi
+  # Audit script must NOT redeclare strip_log_injection() inline (function definition)
+  if grep -qE '^strip_log_injection\(\) \{' "$audit_file"; then
+    _report "T12 audit script does not redeclare strip_log_injection inline" fail
+    return
+  fi
+  _report "T12 shared strip-log-injection lib sourced by audit script" ok
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -175,6 +257,9 @@ t_enumeration_count
 t_dry_run_no_telemetry
 t_telemetry_written
 t_integration_id_invariant
+t_say_sanitizes_log_injection
+t_silent_success_guard
+t_shared_lib_used
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

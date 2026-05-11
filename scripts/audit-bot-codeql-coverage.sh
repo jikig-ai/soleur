@@ -29,6 +29,7 @@
 
 set -uo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO="jikig-ai/soleur"
 CODEQL_APP_ID=57789  # github-advanced-security
 LIMIT=5
@@ -46,18 +47,22 @@ while (( "$#" )); do
   esac
 done
 
-say() {
-  if (( JSON_OUT )); then
-    printf '%s\n' "$*" >&2
-  else
-    printf '%s\n' "$*"
-  fi
-}
+# Shared strip_log_injection (CR/LF/FF/VT/ESC/DEL + U+0085/2028/2029).
+# Mirrors scripts/audit-ruleset-bypass.sh; see #3561.
+# shellcheck source=scripts/lib/strip-log-injection.sh
+. "${SCRIPT_DIR}/lib/strip-log-injection.sh"
 
-# Strip CR/LF/U+2028/U+2029 from operator-rendered strings before echoing
-# to $GITHUB_OUTPUT / ::error:: annotations. Octal \177 per PR #3555 learning.
-strip_log_injection() {
-  tr -d '\r\n\f\v\177' | sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'
+# Every operator-rendered line passes through strip_log_injection so a
+# crafted headRefName / PR title / API field can't smuggle ANSI escapes
+# or runner directives into the log.
+say() {
+  local clean
+  clean=$(printf '%s' "$*" | strip_log_injection)
+  if (( JSON_OUT )); then
+    printf '%s\n' "$clean" >&2
+  else
+    printf '%s\n' "$clean"
+  fi
 }
 
 # Enumerate bot workflows via two-source union + runtime cross-check.
@@ -153,10 +158,12 @@ fi
 say "Enumerated $COUNT bot workflows."
 
 # Build PR head-SHA tuples per workflow.
-# Format: "workflow.yml:pr_number:head_sha"
+# Internal format: tab-separated `workflow.yml<TAB>pr_number<TAB>head_sha`
+# Test API: AUDIT_FIXED_WORKFLOWS uses colon delimiter for readability;
+# convert to tabs here.
 TUPLES=""
 if [[ -n "${AUDIT_FIXED_WORKFLOWS:-}" ]]; then
-  TUPLES=$(echo "$AUDIT_FIXED_WORKFLOWS" | tr ',' '\n')
+  TUPLES=$(echo "$AUDIT_FIXED_WORKFLOWS" | tr ',' '\n' | tr ':' '\t')
 else
   # Fetch a wide page of recent bot PRs once. Bot branches follow
   # `ci/<short-name>-<date>` convention but the short-name slug is NOT
@@ -169,46 +176,60 @@ else
   # then resolve head SHA per-PR via `gh pr view`.
   bot_prs=$(gh pr list --state all --limit 100 --author "app/github-actions" \
     --json number,headRefName 2>/dev/null || echo '[]')
+  # Hard-fail when gh returns an empty array AND no AUDIT_FIXED_WORKFLOWS
+  # override — silent-success (total=0, exit 0) would mask a real API
+  # outage as "all bot PRs covered."
+  if [[ "$(printf '%s' "$bot_prs" | jq 'length' 2>/dev/null || echo 0)" == "0" ]]; then
+    echo "::error::gh pr list returned no bot PRs — API outage, auth failure, or workflow drift. Aborting (would otherwise silent-pass with total=0)." >&2
+    exit 1
+  fi
   sample_size=$((LIMIT * COUNT))
   picked=$(printf '%s' "$bot_prs" | jq -r --argjson lim "$sample_size" \
-    '.[:$lim] | .[] | "\(.headRefName):\(.number)"' 2>/dev/null || true)
+    '.[:$lim] | .[] | "\(.headRefName)\t\(.number)"' 2>/dev/null || true)
   samples=""
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    branch="${line%%:*}"
-    pr="${line#*:}"
+  while IFS=$'\t' read -r branch pr; do
+    [[ -z "$branch" ]] && continue
     sha=$(gh pr view "$pr" --json commits --jq '.commits[-1].oid' 2>/dev/null || echo "")
     [[ -z "$sha" ]] && continue
-    samples+="$branch:$pr:$sha"$'\n'
+    samples+="$branch"$'\t'"$pr"$'\t'"$sha"$'\n'
   done <<<"$picked"
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    branch="${line%%:*}"
-    rest="${line#*:}"
-    # Best-effort workflow attribution by checking if any enumerated workflow's
-    # stem (minus `scheduled-` prefix where applicable) appears in the branch.
+  # Best-effort workflow attribution. Tries (a) the full stem, (b) the
+  # stem with `scheduled-` prefix stripped, (c) progressively shorter
+  # prefixes split on `-` (so `rule-metrics-aggregate` matches branch
+  # `ci/rule-metrics-2026-05-10` via the `rule-metrics` prefix). First
+  # workflow whose slug appears as a substring of the branch wins.
+  unattributed_count=0
+  while IFS=$'\t' read -r branch pr sha; do
+    [[ -z "$branch" ]] && continue
     attributed=""
     for wf in $WORKFLOWS; do
       stem=$(basename "$wf" .yml)
-      # Strip `scheduled-` prefix for matching since branches use short names
       short="${stem#scheduled-}"
-      # Try short-form (e.g., "skill-freshness" matches "ci/skill-freshness-...")
-      if [[ "$branch" == *"$short"* ]]; then
-        attributed="$wf"
-        break
-      fi
+      # Try full stem first, then progressively shorter dash-separated prefixes.
+      for slug in "$short" "${short%-*}" "${short%-*-*}"; do
+        [[ -z "$slug" || "$slug" == "$short" && "$slug" != "${short%-*}" ]] && true
+        if [[ -n "$slug" && "$branch" == *"$slug"* ]]; then
+          attributed="$wf"
+          break 2
+        fi
+      done
     done
-    [[ -z "$attributed" ]] && attributed="<unattributed-bot-pr>"
-    TUPLES+="$attributed:$rest"$'\n'
+    if [[ -z "$attributed" ]]; then
+      attributed="<unattributed-bot-pr>"
+      unattributed_count=$((unattributed_count + 1))
+    fi
+    TUPLES+="$attributed"$'\t'"$pr"$'\t'"$sha"$'\n'
   done <<<"$samples"
 fi
 
-# Classify each tuple
+# Classify each tuple. Tuples are tab-separated; preserves colons in
+# unattributed marker `<unattributed-bot-pr>`.
 PASSING=0
 DRIFT=0
 IN_PROGRESS=0
 DRIFT_ENTRIES="[]"
-while IFS=: read -r wf pr sha; do
+unattributed_count="${unattributed_count:-0}"
+while IFS=$'\t' read -r wf pr sha; do
   [[ -z "$wf" ]] && continue
   json=$(fetch_check_runs "$sha")
   state=$(classify_codeql "$json")
@@ -240,9 +261,18 @@ ENVELOPE=$(jq -n \
   --argjson passing "$PASSING" \
   --argjson drift "$DRIFT" \
   --argjson in_progress "$IN_PROGRESS" \
+  --argjson unattributed "$unattributed_count" \
   --argjson drift_entries "$DRIFT_ENTRIES" \
   --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{summary: {total: $total, passing: $passing, drift: $drift, in_progress: $in_progress}, drift: $drift_entries, generated_at: $generated_at}')
+  '{summary: {total: $total, passing: $passing, drift: $drift, in_progress: $in_progress, unattributed: $unattributed}, drift: $drift_entries, generated_at: $generated_at}')
+
+# Warn if attribution miss-rate is high (>30% of sample). Doesn't fail
+# the audit — attribution is reporting metadata, classification is the
+# contract. But high miss-rate is a signal that the slug-prefix heuristic
+# needs to learn a new bot-branch naming convention.
+if (( TOTAL > 0 && unattributed_count * 100 / TOTAL > 30 )); then
+  say "::warning::Unattributed bot PRs: ${unattributed_count}/${TOTAL} (>${unattributed_count}*100/${TOTAL}% threshold) — slug-prefix attribution heuristic may need updating."
+fi
 
 # Telemetry write (skip on --dry-run)
 if (( ! DRY_RUN )); then

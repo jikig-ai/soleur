@@ -65,21 +65,11 @@ record_failure() {
   fi
 }
 
-# Sanitize for $GITHUB_OUTPUT: strip CR/LF/FF/VT/DEL + U+0085 (NEL) +
-# U+2028 (LS) + U+2029 (PS). The latter two render as line breaks in
-# markdown issue bodies and would break the key=value contract for
-# $GITHUB_OUTPUT (NL is the record separator). Mirror of drift-guard's
-# strip_log_injection (yaml :279-284). Per AGENTS.md
-# cq-regex-unicode-separators-escape-only, the U+2028/U+2029 byte
-# sequences are spelled out as explicit hex (\xe2\x80\xa8, \xe2\x80\xa9).
-strip_log_injection() {
-  # POSIX/GNU/uutils tr supports \NNN octal but NOT \xHH hex escapes —
-  # empirically: `echo "f" | tr -d '\x7f'` strips 'f', not DEL. Use \177
-  # for portability. The drift-guard precedent at
-  # .github/workflows/scheduled-github-app-drift-guard.yml:283 uses
-  # `\x7f` and is tracked in issue #3561 for a separate fix.
-  tr -d '\r\n\f\v\177' | sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'
-}
+# Sanitize for $GITHUB_OUTPUT and operator-rendered echoes. See
+# scripts/lib/strip-log-injection.sh for the byte-set + tr-octal-vs-hex
+# rationale (issue #3561).
+# shellcheck source=scripts/lib/strip-log-injection.sh
+. "${SCRIPT_DIR}/lib/strip-log-injection.sh"
 
 # Fetch live ruleset. Tests bypass via AUDIT_FETCH_OVERRIDE.
 LIVE_FILE=""
