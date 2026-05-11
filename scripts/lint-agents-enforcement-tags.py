@@ -55,9 +55,19 @@ def repo_root_for(path: Path) -> Path:
 
 
 def hook_resolves(token: str, root: Path) -> bool:
-    """Return True if `token` names a real hook script."""
-    if "/" in token or ".." in token:
+    """Return True if `token` names a real hook script.
+
+    Two forms accepted:
+      * Bare name (e.g. `worktree-write-guard.sh`) → searched under
+        HOOK_SEARCH_DIRS.
+      * Path-form with `/` (e.g. `.github/workflows/secret-scan.yml`) →
+        resolved verbatim from repo root. `..` is rejected to keep tags
+        from escaping the repo.
+    """
+    if ".." in token:
         return False
+    if "/" in token:
+        return (root / token).is_file()
     for d in HOOK_SEARCH_DIRS:
         if (root / d / token).exists():
             return True
