@@ -1,0 +1,234 @@
+# Apply `terraform_data.deploy_pipeline_fix` from a one-click GitHub Actions
+# button so changes to host-resident deploy-pipeline files (ci-deploy.sh,
+# webhook.service, cat-deploy-state.sh, canary-bundle-claim-check.sh,
+# hooks.json.tmpl) can be propagated to the production VPS without a
+# terminal-typed `yes` prompt.
+#
+# Authorization model: workflow_dispatch + `environment: production`. Once
+# protection rules are added to the `production` environment (Settings →
+# Environments → production → Required reviewers), the reviewer-click is the
+# human-typed authorization that replaces the TTY `yes`.
+#
+# Initial run-blocking setup (one-time, performed via Doppler web UI):
+#   1. Doppler `soleur / prd_terraform` config must have a secret named
+#      `TERRAFORM_SSH_PRIVATE_KEY` containing the prod root SSH private key
+#      that authorizes connections to `hcloud_server.web`.
+#   2. The first workflow run with the secret missing will FAIL with a clear
+#      diagnostic at the "Verify Terraform SSH key" step. Add the secret and
+#      re-run.
+#
+# All workflow_dispatch inputs are routed through env vars before being
+# interpolated into shell — never directly into `run:` blocks. This matches
+# the project's CI workflow injection-prevention conventions.
+#
+# All action references are SHA-pinned.
+
+name: Apply deploy-pipeline-fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you applying? (e.g., 'PR #3601 ci-deploy.sh assertion')"
+        required: true
+        type: string
+
+concurrency:
+  group: terraform-apply-deploy-pipeline-fix
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify DOPPLER_TOKEN
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Verify Terraform SSH key
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          if ! TF_SSH_KEY=$(doppler secrets get TERRAFORM_SSH_PRIVATE_KEY --plain 2>/dev/null) || [[ -z "$TF_SSH_KEY" ]]; then
+            cat <<'MSG'
+          ::error::Doppler secret TERRAFORM_SSH_PRIVATE_KEY is missing or empty.
+
+          One-time setup (browser only — no terminal required):
+            1. Open https://dashboard.doppler.com → project `soleur` → config `prd_terraform`.
+            2. Add a secret named TERRAFORM_SSH_PRIVATE_KEY whose value is the
+               root@hcloud_server.web SSH private key.
+            3. Re-run this workflow.
+
+          The key never leaves Doppler → ssh-agent within this job; it is not
+          written to the filesystem and is masked in logs.
+          MSG
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Generate CI public SSH key for var.ssh_key_path
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Start ssh-agent with prod key
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          eval "$(ssh-agent -s)"
+          printf 'SSH_AUTH_SOCK=%s\n' "$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          printf 'SSH_AGENT_PID=%s\n' "$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          doppler secrets get TERRAFORM_SSH_PRIVATE_KEY --plain | ssh-add - >/dev/null 2>&1
+          ssh-add -l >/dev/null
+
+      - name: Capture local hashes (pre-apply)
+        run: |
+          set -euo pipefail
+          sha256sum \
+            "${INFRA_DIR}/ci-deploy.sh" \
+            "${INFRA_DIR}/webhook.service" \
+            "${INFRA_DIR}/cat-deploy-state.sh" \
+            "${INFRA_DIR}/canary-bundle-claim-check.sh" \
+            > /tmp/local-hashes.txt
+          cat /tmp/local-hashes.txt
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform plan (visibility before apply)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          echo "Reason: ${REASON}"
+          doppler run --name-transformer tf-var -- \
+            terraform plan -target=terraform_data.deploy_pipeline_fix \
+            -var="ssh_key_path=${CI_SSH_PUB}" \
+            -no-color -input=false
+
+      - name: Terraform apply (deploy_pipeline_fix only)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          doppler run --name-transformer tf-var -- \
+            terraform apply -target=terraform_data.deploy_pipeline_fix \
+            -var="ssh_key_path=${CI_SSH_PUB}" \
+            -auto-approve -input=false
+
+      - name: Verify server-side file hashes match local
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          SERVER_IP=$(terraform output -raw server_ip)
+          printf '::add-mask::%s\n' "$SERVER_IP"
+
+          REMOTE_OUT=$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            root@"$SERVER_IP" \
+            "sha256sum /usr/local/bin/ci-deploy.sh /etc/systemd/system/webhook.service /usr/local/bin/cat-deploy-state.sh /usr/local/bin/canary-bundle-claim-check.sh && systemctl is-active webhook")
+          echo "Server-side state:"
+          echo "$REMOTE_OUT"
+
+          declare -A REMOTE
+          while read -r hash path; do
+            base=$(basename "$path")
+            REMOTE["$base"]="$hash"
+          done < <(printf '%s\n' "$REMOTE_OUT" | grep -E '^[a-f0-9]{64}  ')
+
+          MISMATCH=0
+          while read -r hash path; do
+            base=$(basename "$path")
+            r="${REMOTE[$base]:-}"
+            if [[ -z "$r" ]]; then
+              echo "::error::No remote hash recorded for $base"
+              MISMATCH=1
+            elif [[ "$r" != "$hash" ]]; then
+              echo "::error::Hash mismatch for $base: local=$hash remote=$r"
+              MISMATCH=1
+            else
+              echo "OK: $base hash matches ($hash)"
+            fi
+          done < /tmp/local-hashes.txt
+
+          if [[ "$MISMATCH" -ne 0 ]]; then
+            echo "::error::One or more files diverged between local and server post-apply."
+            exit 1
+          fi
+
+          if ! printf '%s\n' "$REMOTE_OUT" | tail -n 1 | grep -qx 'active'; then
+            echo "::error::systemctl is-active webhook returned non-'active' on the server."
+            exit 1
+          fi
+
+          echo "All trigger-file hashes match and webhook is active."
+
+      - name: Post-apply summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Apply deploy-pipeline-fix"
+            echo ""
+            echo "**Reason:** ${REASON}"
+            echo "**Run:** ${RUN_URL}"
+            echo "**Status:** ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
