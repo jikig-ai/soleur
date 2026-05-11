@@ -30,6 +30,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-dev-prd-distinct-supabase-projects] → core
 - [id: hr-weigh-every-decision-against-target-user-impact] → core
 - [id: hr-never-paste-secrets-via-bang-prefix] → core
+- [id: hr-gdpr-gate-on-regulated-data-surfaces] → core
 
 ## Workflow Gates
 
@@ -44,8 +45,8 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-after-a-pr-merges-to-main-verify-all] → core
 - [id: wg-at-session-start-run-bash-plugins-soleur] → core
 - [id: wg-at-session-start-after-cleanup-merged] → core
-- [id: wg-when-a-test-runner-crashes-segfault-oom] → core
-- [id: wg-when-tests-fail-and-are-confirmed-pre] → core
+- [id: wg-when-a-test-runner-crashes-segfault-oom] → rest
+- [id: wg-when-tests-fail-and-are-confirmed-pre] → rest
 - [id: wg-when-an-audit-identifies-pre-existing] → core
 - [id: wg-when-deferring-a-capability-create-a] → core
 - [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core

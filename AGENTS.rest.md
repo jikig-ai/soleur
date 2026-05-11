@@ -11,6 +11,11 @@
 - Test fixtures and golden files (`__goldens__/**`, `**/*.snap`, `apps/web-platform/test/fixtures/**`) MUST contain only synthesized data — no real emails (use `@example.com`/`@test.local`), no Supabase prod-shape UUIDs, no live JWTs/Doppler/BYOK tokens [id: cq-test-fixtures-synthesized-only] [hook-enforced: .github/workflows/secret-scan.yml]. Waive a line with `# gitleaks:allow # issue:#NNN <reason>`. **Why:** #3121 — fixtures bypass prod redaction.
 - Regex character classes containing U+2028/U+2029 (line/paragraph separators) MUST use `\uXXXX` escape notation, never literal Unicode chars [id: cq-regex-unicode-separators-escape-only]. The Edit tool silently rewrites literal U+2028/U+2029 to ASCII spaces (0x20) — `/[\x00-\x1f\x7f<U+2028><U+2029>]/g` becomes `/[\x00-\x1f\x7f  ]/g`, stripping all spaces from sanitized content. Detection: only via downstream test that asserts on a space-bearing input. **Why:** PR #3294 — body sanitizer mangled `# Product Roadmap` → `#ProductRoadmap` post-refactor.
 
+## Workflow Gates
+
+- When a test runner crashes (segfault, OOM, abort), never dismiss it as "known" or "unrelated" [id: wg-when-a-test-runner-crashes-segfault-oom]. Either fix the root cause, file a GitHub issue to track it, or document a concrete workaround. A crash without a tracking issue is a workflow violation.
+- When tests fail and are confirmed pre-existing (same on main), create a GitHub issue to track them before proceeding [id: wg-when-tests-fail-and-are-confirmed-pre]. Pre-existing failures without tracking issues normalize a red suite.
+
 ## Review & Feedback
 
 - After merging, read files from the merged branch (`git show main:<path>`), not the bare repo directory (stale) [id: rf-after-merging-read-files-from-the-merged].

@@ -71,6 +71,32 @@ pre-commit:
         - "scripts/lint-agents-enforcement-tags.py"
       # Post-#3493 sidecar split: enforcement tags now live in sidecars.
       run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+    # gdpr-gate advisory hook — entry hand-imported from origin/main to satisfy
+    # `[hook-enforced: lefthook gdpr-gate.sh]` on rule
+    # hr-gdpr-gate-on-regulated-data-surfaces (added in PR #3501; this branch
+    # was cut before #3501 merged). Full skill at
+    # plugins/soleur/skills/gdpr-gate/ should be brought in at /ship-time
+    # rebase. The hook ALWAYS exits 0 — prints a one-line stderr breadcrumb
+    # when staged paths match the canonical regulated-data regex.
+    gdpr-gate-advisory:
+      priority: 6
+      glob:
+        - "apps/web-platform/supabase/migrations/*.sql"
+        - "apps/web-platform/lib/auth/*.ts"
+        - "apps/web-platform/lib/auth/**/*.ts"
+        - "apps/web-platform/lib/auth/*.tsx"
+        - "apps/web-platform/lib/auth/**/*.tsx"
+        - "apps/web-platform/lib/auth/*.js"
+        - "apps/web-platform/lib/auth/**/*.js"
+        - "apps/web-platform/server/*auth*.ts"
+        - "apps/web-platform/server/*auth*.tsx"
+        - "apps/web-platform/server/*auth*.js"
+        - "apps/web-platform/app/api/*.ts"
+        - "apps/web-platform/app/api/**/*.ts"
+        - "apps/web-platform/app/api/*.tsx"
+        - "apps/web-platform/app/api/**/*.tsx"
+        - "*.sql"
+      run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
     scheduled-show-full-output-lint:
       priority: 5
       # Forbid show_full_output: true in recurring scheduled workflows. Only
