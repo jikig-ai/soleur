@@ -4,9 +4,30 @@ type: feat
 date: 2026-05-11
 branch: feat-one-shot-signout-confirm-popup
 requires_cpo_signoff: false
+deepened: 2026-05-11
 ---
 
 # feat: Add sign-out confirmation modal
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Sections enhanced:** Overview, Implementation Phases (Phase 2 modal, Phase 3 wiring), Test Scenarios, Risks
+**Research focus:** WAI-ARIA `alertdialog` vs `dialog` semantics, Supabase auth `removeAllChannels`/`signOut` v2 return shapes, React Testing Library focus/timer patterns, codebase modal precedent.
+
+### Key Improvements
+
+1. **`role="alertdialog"` vs `role="dialog"` decision recorded.** Confirmation prompts that prevent destructive action are the textbook WAI-ARIA `alertdialog` use case (W3C APG 1.2), BUT every existing Soleur modal uses `role="dialog"` (including the canonical `cancel-retention-modal.tsx`). The plan now explicitly chooses `role="dialog"` for codebase consistency and documents the trade-off in Phase 2 — keeping plan-level coherence over book-perfection.
+2. **`removeAllChannels()` return-shape pin.** The plan now explicitly notes that `supabase.removeAllChannels()` returns `Promise<("ok" | "timed out" | "error")[]>` — a single Promise, not an array of Promises (per encoded learning `2026-04-29-supabase-removeallchannels-api-shape.md`). The await stays singular; no `Promise.all`.
+3. **Sentry tag-coverage drift-guard sequencing pinned.** Phase 4 explicitly orders: implement mirror in Phase 3 first, then extend `AUTH_VERBS` in Phase 4. Reversed order would fail the drift-guard before the mirror exists. Added an explicit grep step to confirm there is only one `signOut` call site today.
+4. **Test patterns reused from `cancel-retention-modal.test.tsx`.** Listed verbatim mock setup (`next/navigation`, `@/lib/supabase/client`, `@/lib/client-observability`) and `fireEvent.keyDown(document, { key: "Escape" })` form so the implementation phase doesn't have to re-derive them.
+5. **Inert-attribute interaction documented.** The dashboard `<main>` has `inert={drawerOpen || undefined}`. The modal renders at the layout root OUTSIDE `<main>`, so it is not affected by inert during mobile drawer-open state. Documented as a Risk + an explicit position requirement.
+
+### New Considerations Discovered
+
+- **Initial-focus choice is load-bearing.** Focusing the **Cancel** button (least-destructive default) on open is a WCAG-aligned pattern for destructive-action prompts. The plan now states this explicitly with a citation rather than leaving it as an implementation detail.
+- **`onConfirm` is async — parent must own the `isSigningOut` lock.** The modal cannot infer the in-flight state from the `onConfirm` return value alone (the caller may not even return the promise). The plan keeps `isSigningOut` as an explicit prop owned by the parent, preventing double-click races.
+- **Route-change unmount path replaces state reset.** Adding `setIsSigningOut(false)` after `router.push("/login")` would briefly re-enable the button between navigation start and unmount. The plan documents this and intentionally OMITS the reset — the unmount IS the reset.
 
 ## Overview
 
@@ -199,6 +220,49 @@ Notes:
 - The backdrop is non-dismissive while `isSigningOut` is true (clicking does nothing) — prevents a user from accidentally re-opening interaction during teardown.
 - The cancel-retention-modal's focus-trap implementation is reused verbatim.
 
+### Research Insights — Phase 2
+
+**Best Practices (WAI-ARIA Authoring Practices Guide 1.2):**
+- The textbook role for a destructive-confirmation prompt is `alertdialog`. `alertdialog` is a subclass of `dialog` for "urgent information that requires the user's immediate attention" (W3C APG, Alert and Message Dialogs Pattern). Screen readers announce `alertdialog` with extra emphasis and read the dialog body without requiring user-initiated focus.
+- However, **every existing Soleur modal uses `role="dialog"`** (`cancel-retention-modal.tsx`, `upgrade-at-capacity-modal.tsx`, `naming-modal.tsx`, `disconnect-repo-dialog.tsx`). For codebase consistency we use `role="dialog"`. Trade-off: marginal screen-reader UX vs. uniform modal contract.
+- **Initial focus must NOT be on the destructive action.** WCAG 2.2 SC 3.3.4 (Error Prevention) recommends that confirmations for "legal commitments, financial transactions, modification or deletion of data" focus the cancel/safe path by default. Sign-out → data-loss-of-in-memory-state qualifies. Initial focus = Cancel.
+- `aria-labelledby` is preferred over `aria-label` for dialogs because it references the visible heading text — keeping accessible name and visible name in sync (WCAG 2.5.3 Label in Name).
+
+**Implementation Details:**
+```tsx
+// Verbatim focus-trap pattern reused from cancel-retention-modal.tsx
+// (apps/web-platform/components/settings/cancel-retention-modal.tsx:35-56)
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape" && !isSigningOut) {
+    onCloseRef.current();
+    return;
+  }
+  if (e.key === "Tab" && dialogRef.current) {
+    const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last?.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first?.focus();
+    }
+  }
+}
+```
+
+**Edge Cases:**
+- A user opens the modal, then resizes from desktop → mobile (crosses the `md` breakpoint). The drawer auto-close effect (`apps/web-platform/app/(dashboard)/layout.tsx:185-191`) fires; the modal is unaffected because it has no `md:` responsive variants and is portaled outside the sidebar `<aside>`. Verified by reading the layout file.
+- The modal is mounted on a route that does NOT have a sidebar (none today, but if added later: e.g., a chat-fullscreen route). The modal renders at the dashboard-layout root, so it lives wherever the dashboard layout is mounted. Routes outside the `(dashboard)` group do not get the Sign-out button at all.
+
+**References:**
+- W3C WAI APG: https://www.w3.org/WAI/ARIA/apg/patterns/alertdialog/
+- W3C WAI APG (dialog/modal): https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/
+- WCAG 2.2 SC 3.3.4 (Error Prevention): https://www.w3.org/WAI/WCAG22/Understanding/error-prevention-legal-financial-data.html
+
 ### Phase 3 — Layout wiring (RED + GREEN, single test phase)
 
 Write the failing integration tests in `apps/web-platform/test/dashboard-layout-signout.test.tsx`:
@@ -263,8 +327,106 @@ async function handleSignOut() {
 
 Key changes vs. current `handleSignOut`:
 - The outer try/finally is preserved: `router.push("/login")` always runs.
-- The inner `removeAllChannels()` is wrapped in its own try/catch + Sentry mirror so a Realtime teardown error does not skip `signOut()` (the current code's `await` on `removeAllChannels()` *would* throw out of the `try` and skip the inner `await signOut()` — the current `finally` only runs `signOut()` because... wait — re-read the current code: the current `finally` runs `signOut() + push`, so a `removeAllChannels` throw does *not* skip them. We preserve that contract: redirect always happens. But we now mirror the `removeAllChannels` error to Sentry instead of swallowing it silently.
-- `signOut()` errors are also mirrored to Sentry — currently they bubble unhandled.
+- The current code's `await supabase.removeAllChannels()` lives inside the `try`. If it rejects, control jumps to `finally`, which executes `signOut + push("/login")` — but then the original rejection propagates OUT of `handleSignOut` (unhandled in the React event handler, ends as an unhandled rejection in the browser). The new code catches the rejection inline, mirrors it to Sentry, and proceeds. Same redirect contract, plus observability.
+- `signOut()` errors are similarly mirrored. Currently they bubble out of the `finally` as well.
+
+### Research Insights — Phase 3
+
+**Supabase v2 contract (verified against `node_modules/@supabase/supabase-js` and the encoded learning):**
+- `supabase.removeAllChannels()` returns `Promise<("ok" | "timed out" | "error")[]>` — ONE Promise resolving to an array of per-channel statuses. NEVER wrap in `Promise.all(...)` (the encoded learning `2026-04-29-supabase-removeallchannels-api-shape.md` documents the silent failure mode). Plan stays at `await supabase.removeAllChannels()` — singular await.
+- `supabase.auth.signOut()` returns `Promise<{ error: AuthError | null }>` — it does NOT throw on auth failure; the error lives on `result.error`. However, it CAN throw on network failure (fetch rejection). Both are mirrored to Sentry by the try/catch.
+- A non-null `result.error` from `signOut()` is currently dropped by the layout. We do NOT change this behavior — the redirect to `/login` is the user-facing contract; observability gets the error. (Optionally inspect `result.error` and `reportSilentFallback` it; documented as a stretch nice-to-have, not required.)
+
+**Implementation Details:**
+```tsx
+// Recommended handleSignOut (final form)
+async function handleSignOut() {
+  setIsSigningOut(true);
+  const supabase = createClient();
+  try {
+    try {
+      await supabase.removeAllChannels();
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "auth",
+        op: "signOut",
+        extra: { stage: "removeAllChannels" },
+      });
+    }
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        reportSilentFallback(error, {
+          feature: "auth",
+          op: "signOut",
+          extra: { stage: "signOut.resultError" },
+        });
+      }
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "auth",
+        op: "signOut",
+        extra: { stage: "signOut.throw" },
+      });
+    }
+  } finally {
+    router.push("/login");
+  }
+}
+```
+
+**Test Pattern (verbatim from `test/cancel-retention-modal.test.tsx` and `test/dashboard-sidebar-collapse.test.tsx`):**
+
+```tsx
+// Required mocks at top of dashboard-layout-signout.test.tsx
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  usePathname: () => "/dashboard",
+}));
+
+const signOutMock = vi.fn(() => Promise.resolve({ error: null }));
+const removeAllChannelsMock = vi.fn(() => Promise.resolve(["ok"]));
+const reportSilentFallbackMock = vi.fn();
+
+vi.mock("@/lib/supabase/client", () => ({
+  createClient: () => ({
+    auth: {
+      signOut: signOutMock,
+      getSession: vi.fn(() => Promise.resolve({ data: { session: null } })),
+    },
+    removeAllChannels: removeAllChannelsMock,
+    from: () => ({
+      select: () => ({
+        eq: () => ({ single: () => Promise.resolve({ data: null }) }),
+      }),
+    }),
+  }),
+}));
+
+vi.mock("@/lib/client-observability", () => ({
+  reportSilentFallback: reportSilentFallbackMock,
+}));
+
+// ESC simulation pattern (note: keyDown is dispatched on `document`, not on
+// the dialog element — matches cancel-retention-modal.test.tsx line 94)
+fireEvent.keyDown(document, { key: "Escape" });
+
+// Sentry mirror assertion
+expect(reportSilentFallbackMock).toHaveBeenCalledWith(
+  expect.anything(),
+  expect.objectContaining({ feature: "auth", op: "signOut" }),
+);
+```
+
+**Edge Cases:**
+- **Double-click race on Confirm.** `setIsSigningOut(true)` fires synchronously at the very top of `handleSignOut`; React batches the re-render and the button's `disabled={isSigningOut}` flips before the browser's next paint. A second synchronous click in the same tick still produces a second `handleSignOut` call (React state batching does not deduplicate identical-tick events). Verified-acceptable: both calls converge on the same `router.push("/login")` and Supabase's `signOut` is idempotent. No mitigation required beyond the `disabled` attribute.
+- **Modal open while a route change is already in flight.** Cannot happen — the only path that calls `router.push` from this layout is `handleSignOut`, and the modal `onClose` is no-op while `isSigningOut`. Verified by reading the layout file.
+- **Modal open while admin-check `fetch("/api/admin/check")` is in flight.** Independent. Both effects run on mount; the admin check has no relationship with the modal state machine.
+
+**References:**
+- Supabase JS v2 `removeAllChannels` upstream: https://supabase.com/docs/reference/javascript/removeallchannels
+- Supabase JS v2 `signOut` upstream: https://supabase.com/docs/reference/javascript/auth-signout
+- Encoded learning: `knowledge-base/project/learnings/best-practices/2026-04-29-supabase-removeallchannels-api-shape.md`
 
 ### Phase 4 — Drift-guard extension
 
@@ -345,6 +507,9 @@ No dead ends, no missing error states, no flows that drop the user.
 - **Focus restore when triggered from a collapsed sidebar:** in the collapsed state, the Sign out button has a `title="Sign out"` but no visible label. `triggerRef.current?.focus()` on close still works because the button DOM element exists; the visual focus ring will land on the icon-only button. Acceptable.
 - **`router.push("/login")` race with React state updates:** the existing code already does this — the `finally` block fires `router.push` regardless of `signOut()` outcome. No new race introduced. Note in Phase 3 explicitly avoids resetting `isSigningOut` after navigation begins, to prevent the Sign out button from flickering re-enabled during the navigation transition.
 - **Sentry mirror failure modes:** `reportSilentFallback` itself can never throw (it swallows internally via `@sentry/nextjs`). No risk to the redirect contract.
+- **`inert` attribute on `<main>` does NOT affect the modal.** The dashboard layout sets `inert={drawerOpen || undefined}` on the `<main>` element (`apps/web-platform/app/(dashboard)/layout.tsx:362`). The modal renders at the layout root level — sibling of the sidebar `<aside>` and the `<main>` — NOT inside `<main>`. So the modal remains interactive even when the mobile drawer is open. Placement requirement: the `<SignOutConfirmModal />` JSX must sit at the same depth as the drawer overlay `<div>` (between the `<aside>` and the `<main>`), NOT inside `<main>`. Adding it as a sibling of `</main>` (after the closing tag, inside the same outer `<div className="flex h-dvh ...">`) is the simplest correct placement.
+- **Test runner crash (segfault) handling.** Per AGENTS.md `wg-when-a-test-runner-crashes-segfault-oom`, if the new tests crash the runner (not just fail), do NOT dismiss as known — either fix the root cause, file a tracking issue, or document a workaround. The cancel-retention-modal tests run cleanly today; we expect parity.
+- **Single `signOut` call site assumption.** Phase 4 assumes `app/(dashboard)/layout.tsx` is the only `supabase.auth.signOut()` call site in the app. Verification at implementation: `rg "\.signOut\b" apps/web-platform/{app,components,lib,server,hooks} -t ts -t tsx`. If a second call site exists (e.g., a forgotten admin-only path), the drift-guard will fail until that site also gets `reportSilentFallback({ feature: "auth", op: "signOut" })`. Fold in additional mirrors inline.
 
 ## Sharp Edges
 
