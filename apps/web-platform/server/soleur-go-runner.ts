@@ -52,7 +52,20 @@ import {
   type WorkflowName,
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
-import { reportSilentFallback } from "./observability";
+import { reportSilentFallback, mirrorWithDebounce } from "./observability";
+
+/**
+ * #3040 Finding 2: errorClass for the debounced mirror fired when
+ * `notifyAwaitingUser` is invoked for an unknown conversationId (the
+ * dispatcher signaled after the runner reaped or closed the query).
+ * Exported so tests can assert against the const rather than a magic
+ * string. The 5-min TTL key is `"unknown:notify-awaiting-no-active-query"`
+ * — `userId` is unknowable when no `state` exists, so the single bucket
+ * coalesces a misconfigured-prod flood across all users (intentional;
+ * this branch indicates a server bug, not per-user noise).
+ */
+export const NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS =
+  "notify-awaiting-no-active-query";
 import { createChildLogger } from "./logger";
 import type {
   PdfExtractErrorClass,
@@ -2427,6 +2440,22 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     const cutoff = now() - idleReapMs;
     let reaped = 0;
     for (const state of Array.from(activeQueries.values())) {
+      // #3040 Finding 3: skip conversations paused for human review.
+      // Without this, a Bash review-gate awaiting human review for >10 min
+      // is reaped while the user is still reading — the SDK Query closes,
+      // `abortableReviewGate` awaits indefinitely until the 5-min safety
+      // net rejects, and the user's eventual click is dropped via
+      // `respondToToolUse` returning `false`. The 5-min REVIEW_GATE_TIMEOUT_MS
+      // safety net is the absolute upper bound: a stuck-paused conversation
+      // eventually transitions back through the normal close flow, so the
+      // skip-paused predicate does NOT produce a permanent-leak surface.
+      if (state.awaitingUser) {
+        log.debug(
+          { conversationId: state.conversationId, awaitingUser: true },
+          "reapIdle: skipping paused conversation",
+        );
+        continue;
+      }
       if (state.lastActivityAt < cutoff) {
         state.closed = true;
         closeQuery(state);
@@ -2487,13 +2516,23 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // a notify for an unknown conversation is a server bug (the
       // dispatcher fired the signal after the runner already reaped or
       // closed). Mirror to Sentry; do NOT silently drop.
-      reportSilentFallback(
+      //
+      // #3040 Finding 2: route through `mirrorWithDebounce` so a
+      // misconfigured prod (e.g., dispatcher firing 1 QPS for a reaped
+      // conv) cannot flood Sentry with ~144k events/day. `userId` is
+      // unknowable when no `state` exists, so we pass the literal
+      // "unknown" — the single 5-min TTL bucket
+      // ("unknown:notify-awaiting-no-active-query") coalesces correctly
+      // because this branch indicates a server bug, not per-user noise.
+      mirrorWithDebounce(
         new Error("notifyAwaitingUser: no active query"),
         {
           feature: "soleur-go-runner",
           op: "notifyAwaitingUser",
           extra: { conversationId, awaiting },
         },
+        "unknown",
+        NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS,
       );
       return;
     }

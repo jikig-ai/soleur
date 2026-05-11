@@ -25,17 +25,17 @@ Derived from `knowledge-base/project/plans/2026-05-11-fix-cc-hardening-safe-bash
 - [x] 2.3 Migrate `kb-document-resolver.ts` to use `mirrorWithDebounce` with errorClass derived from `extractPdfText` failure class.
 - [x] 2.4 Create `apps/web-platform/test/observability-mirror-debounce.test.ts` (5 cases).
 - [x] 2.5 Run `bun test apps/web-platform/test/cc-dispatcher.test.ts apps/web-platform/test/observability-mirror-debounce.test.ts`.
-- [ ] 2.6 Commit `refactor(observability): extract mirrorWithDebounce (Closes #3369)`.
+- [x] 2.6 Commit `refactor(observability): extract mirrorWithDebounce (Closes #3369)`.
 
 ## Phase 3 — `reapIdle` consults `awaitingUser` + Finding 2 runner integration
 
-- [ ] 3.1 Add `&& !state.awaitingUser` predicate in `reapIdle`.
-- [ ] 3.2 Add `log.debug` for paused-skip case.
-- [ ] 3.3 Route `notifyAwaitingUser` no-active-query branch through `mirrorWithDebounce` (import from `./observability`; Phase 2 must have landed).
-- [ ] 3.4 Export `NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS` const at top of `soleur-go-runner.ts`.
-- [ ] 3.5 **REWRITE** existing test at `soleur-go-runner-awaiting-user.test.ts:407` to mock `mirrorWithDebounce` instead of `reportSilentFallback`.
-- [ ] 3.6 Add NEW AC11 (reaper-skip-paused) test.
-- [ ] 3.7 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts apps/web-platform/test/soleur-go-runner-lifecycle.test.ts`.
+- [x] 3.1 Add `&& !state.awaitingUser` predicate in `reapIdle`.
+- [x] 3.2 Add `log.debug` for paused-skip case.
+- [x] 3.3 Route `notifyAwaitingUser` no-active-query branch through `mirrorWithDebounce` (import from `./observability`; Phase 2 must have landed).
+- [x] 3.4 Export `NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS` const at top of `soleur-go-runner.ts`.
+- [x] 3.5 **REWRITE** existing test at `soleur-go-runner-awaiting-user.test.ts:407` to mock `mirrorWithDebounce` instead of `reportSilentFallback`.
+- [x] 3.6 Add NEW AC11 (reaper-skip-paused) test.
+- [x] 3.7 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts apps/web-platform/test/soleur-go-runner-lifecycle.test.ts`.
 - [ ] 3.8 Commit `fix(cc): idle-reaper skips paused conversations + notify-awaiting silent fallback debounced (#3040)`.
 
 ## Phase 4 — Paused-interval subtraction + drift sweep (Finding 4)

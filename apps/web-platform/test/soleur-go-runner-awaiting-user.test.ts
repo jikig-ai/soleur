@@ -15,20 +15,28 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 // Mock observability BEFORE importing the runner so the
-// `reportSilentFallback` import inside soleur-go-runner.ts resolves to
-// the mock and the silent-fallback assertion can inspect it.
-const { mockReportSilentFallback } = vi.hoisted(() => ({
+// `reportSilentFallback` + `mirrorWithDebounce` imports inside
+// soleur-go-runner.ts resolve to the mocks and the silent-fallback
+// assertion can inspect them. #3040 Finding 2 routes the
+// `notifyAwaitingUser` no-active-query branch through
+// `mirrorWithDebounce`; older paths still use `reportSilentFallback`.
+const { mockReportSilentFallback, mockMirrorWithDebounce } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
+  mockMirrorWithDebounce: vi.fn(),
 }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  mirrorWithDebounce: mockMirrorWithDebounce,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 import {
   createSoleurGoRunner,
   DEFAULT_WALL_CLOCK_TRIGGER_MS,
   DEFAULT_MAX_TURN_DURATION_MS,
+  NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS,
   type QueryFactory,
   type WorkflowEnd,
   type DispatchEvents,
@@ -404,7 +412,8 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     expect(events._ended).toHaveLength(1);
   });
 
-  it("silent-fallback: notifyAwaitingUser on unknown conversationId mirrors to Sentry via reportSilentFallback (does NOT silently no-op)", () => {
+  it("silent-fallback: notifyAwaitingUser on unknown conversationId mirrors via mirrorWithDebounce (#3040 Finding 2)", () => {
+    mockMirrorWithDebounce.mockClear();
     const runner = createSoleurGoRunner({
       queryFactory: () => createMockQuery().query,
       now: () => Date.now(),
@@ -413,16 +422,52 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
 
     runner.notifyAwaitingUser("unknown-conv-id", true);
 
-    // Find the call attributable to notifyAwaitingUser.
-    const matchingCalls = mockReportSilentFallback.mock.calls.filter(
+    const matchingCalls = mockMirrorWithDebounce.mock.calls.filter(
       ([, ctx]) =>
         ctx?.feature === "soleur-go-runner" && ctx?.op === "notifyAwaitingUser",
     );
     expect(matchingCalls).toHaveLength(1);
-    const [err, ctx] = matchingCalls[0]!;
+    const [err, ctx, userId, errorClass] = matchingCalls[0]!;
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("notifyAwaitingUser");
     expect(ctx.extra).toMatchObject({ conversationId: "unknown-conv-id" });
+    expect(userId).toBe("unknown");
+    expect(errorClass).toBe(NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS);
+  });
+
+  it("AC11 (#3040 Finding 3): reapIdle skips conversations with awaitingUser=true even when lastActivityAt < cutoff", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      idleReapMs: 60_000,
+      wallClockTriggerMs: 30_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-reaper-paused",
+      userId: "u1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    runner.notifyAwaitingUser("conv-reaper-paused", true);
+
+    // Advance past the idle cutoff while paused — reapIdle MUST NOT
+    // close the query because the user is still mid-review.
+    vi.advanceTimersByTime(120_000);
+    expect(runner.reapIdle()).toBe(0);
+    expect(runner.hasActiveQuery("conv-reaper-paused")).toBe(true);
+
+    // After resume, the reaper proceeds normally on the next idle window.
+    runner.notifyAwaitingUser("conv-reaper-paused", false);
+    vi.advanceTimersByTime(120_000);
+    expect(runner.reapIdle()).toBe(1);
+    expect(runner.hasActiveQuery("conv-reaper-paused")).toBe(false);
   });
 
   it("AC7 regression: without notifyAwaitingUser, 30s runaway still fires after first tool_use without a result", async () => {
