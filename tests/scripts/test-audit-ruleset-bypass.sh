@@ -1,0 +1,439 @@
+#!/usr/bin/env bash
+# Tests for scripts/audit-ruleset-bypass.sh.
+# Deterministic; no live API. Uses AUDIT_FETCH_OVERRIDE to bypass curl.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT="$REPO_ROOT/scripts/audit-ruleset-bypass.sh"
+CANONICAL_REAL="$REPO_ROOT/scripts/ci-required-ruleset-canonical-bypass-actors.json"
+pass=0; fail=0
+
+_report() {
+  local label="$1" status="$2" detail="${3:-}"
+  if [[ "$status" == "ok" ]]; then
+    pass=$((pass + 1))
+    echo "[ok] $label"
+  else
+    fail=$((fail + 1))
+    echo "[FAIL] $label $detail" >&2
+  fi
+}
+
+# Runs the audit script with overridden live + canonical files; captures
+# $GITHUB_OUTPUT to a tempfile so the test can inspect failure_mode/label.
+# Returns the script's exit status (always 0 — failure modes are emitted
+# via $GITHUB_OUTPUT, not exit codes, per the 3-output failure-routing
+# model mirrored from scheduled-github-app-drift-guard.yml).
+_run() {
+  local live_json="$1" canonical_json="$2"
+  local tmp; tmp=$(mktemp -d)
+  local live="$tmp/live.json" canon="$tmp/canonical.json"
+  local output_file="$tmp/output"
+  printf '%s' "$live_json" > "$live"
+  printf '%s' "$canonical_json" > "$canon"
+  : > "$output_file"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$live" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$canon" \
+  GITHUB_OUTPUT="$output_file" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  echo "$tmp:$rc"
+}
+
+_mode() {
+  local tmp="$1"
+  grep -E '^failure_mode=' "$tmp/output" | head -1 | cut -d= -f2- || true
+}
+_label() {
+  local tmp="$1"
+  grep -E '^failure_label=' "$tmp/output" | head -1 | cut -d= -f2- || true
+}
+_detail() {
+  local tmp="$1"
+  grep -E '^failure_detail=' "$tmp/output" | head -1 | cut -d= -f2- || true
+}
+
+CANONICAL='[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"}]'
+
+# T1: identity -> no drift
+t_identity() {
+  local r; r=$(_run "$CANONICAL" "$CANONICAL")
+  local tmp="${r%:*}" rc="${r##*:}"
+  local mode; mode=$(_mode "$tmp")
+  if [[ "$rc" == "0" && -z "$mode" ]]; then
+    _report "T1 identity -> no drift" ok
+  else
+    _report "T1 identity -> no drift" fail "rc=$rc mode='$mode'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T2: added entry -> ci/auth-broken
+t_added_entry() {
+  local live='[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"},{"actor_id":4,"actor_type":"RepositoryRole","bypass_mode":"pull_request"}]'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "bypass_actors_drift" && "$label" == "ci/auth-broken" ]]; then
+    _report "T2 added entry -> auth-broken drift" ok
+  else
+    _report "T2 added entry -> auth-broken drift" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T3: removed entry -> drift
+t_removed_entry() {
+  local live='[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"}]'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "bypass_actors_drift" && "$label" == "ci/auth-broken" ]]; then
+    _report "T3 removed entry -> auth-broken drift" ok
+  else
+    _report "T3 removed entry -> auth-broken drift" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T4: mode broadening -> drift (the brand-damaging case)
+t_mode_change() {
+  local live='[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"always"},{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"}]'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "bypass_actors_drift" && "$label" == "ci/auth-broken" ]]; then
+    _report "T4 mode broadening (pull_request -> always) -> drift" ok
+  else
+    _report "T4 mode broadening (pull_request -> always) -> drift" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T5: order-insensitive -> no drift
+t_order_insensitive() {
+  local live='[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"},{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"}]'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode; mode=$(_mode "$tmp")
+  if [[ -z "$mode" ]]; then
+    _report "T5 reversed order -> no drift" ok
+  else
+    _report "T5 reversed order -> no drift" fail "mode='$mode'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T6: actor_id missing-key vs null -> no drift (projection collapses)
+t_missing_key_eq_null() {
+  local live='[{"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"}]'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode; mode=$(_mode "$tmp")
+  if [[ -z "$mode" ]]; then
+    _report "T6 missing actor_id key vs explicit null -> no drift" ok
+  else
+    _report "T6 missing actor_id key vs explicit null -> no drift" fail "mode='$mode'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T7: canonical missing -> ci/guard-broken
+t_canonical_missing() {
+  local tmp; tmp=$(mktemp -d)
+  local live="$tmp/live.json"
+  printf '%s' "$CANONICAL" > "$live"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$live" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/does-not-exist.json" \
+  GITHUB_OUTPUT="$tmp/output" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "canonical_file_missing" && "$label" == "ci/guard-broken" ]]; then
+    _report "T7 canonical file missing -> guard-broken" ok
+  else
+    _report "T7 canonical file missing -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T7b: canonical malformed JSON -> ci/guard-broken
+t_canonical_malformed() {
+  local r; r=$(_run "$CANONICAL" "not valid json {")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "canonical_file_invalid_json" && "$label" == "ci/guard-broken" ]]; then
+    _report "T7b canonical malformed -> guard-broken" ok
+  else
+    _report "T7b canonical malformed -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T8: live HTTP 5xx (simulated via AUDIT_HTTP_CODE_OVERRIDE) -> guard-broken
+t_live_http_5xx() {
+  local tmp; tmp=$(mktemp -d)
+  local live="$tmp/live.json"
+  printf '%s' "$CANONICAL" > "$live"
+  printf '%s' "$CANONICAL" > "$tmp/canonical.json"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$live" \
+  AUDIT_HTTP_CODE_OVERRIDE="503" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canonical.json" \
+  GITHUB_OUTPUT="$tmp/output" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "github_api_http" && "$label" == "ci/guard-broken" ]]; then
+    _report "T8 HTTP 503 -> guard-broken" ok
+  else
+    _report "T8 HTTP 503 -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T9: log-injection sanitation (CRLF + U+2028 in failure_detail)
+t_log_injection_strip() {
+  # Construct a live JSON whose drift detail string would contain CRLF if
+  # we naively echoed it. We inject via actor_type since jq -c will produce
+  # the literal in the diff string. CRLF in JSON values is escaped as \r\n
+  # by jq; the SUT must strip CR/LF/U+0085/U+2028/U+2029 bytes from the
+  # emitted failure_detail line.
+  local live; live=$(printf '[{"actor_id":null,"actor_type":"Inj\r\nected\xe2\x80\xa8X","bypass_mode":"always"}]')
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  # Sanitation is per-LINE on $GITHUB_OUTPUT (NL is the record separator).
+  # A surviving raw CR/LF/U+2028 in the failure_detail value would either
+  # split the line OR yield a key=value with the literal byte. Assert
+  # zero CR/LF bytes in the failure_detail line, AND no U+2028 bytes
+  # anywhere in the output file.
+  local detail_line; detail_line=$(grep -E '^failure_detail=' "$tmp/output" || true)
+  local has_cr=0 has_u2028=0
+  if printf '%s' "$detail_line" | grep -qP '\r'; then has_cr=1; fi
+  if grep -qP '\xe2\x80\xa8' "$tmp/output"; then has_u2028=1; fi
+  if [[ "$has_cr" == "0" && "$has_u2028" == "0" ]]; then
+    _report "T9 CRLF + U+2028 stripped from failure_detail" ok
+  else
+    _report "T9 CRLF + U+2028 stripped from failure_detail" fail "cr=$has_cr u2028=$has_u2028 line='$detail_line'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T10: unknown actor_type (Integration) -> drift
+t_unknown_actor_type() {
+  local live='[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"pull_request"},{"actor_id":99,"actor_type":"Integration","bypass_mode":"always"}]'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "bypass_actors_drift" && "$label" == "ci/auth-broken" ]]; then
+    _report "T10 Integration actor_type added -> drift" ok
+  else
+    _report "T10 Integration actor_type added -> drift" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T11: number-vs-string actor_id -> drift
+t_number_vs_string_actor_id() {
+  local live='[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},{"actor_id":"5","actor_type":"RepositoryRole","bypass_mode":"pull_request"}]'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode; mode=$(_mode "$tmp")
+  if [[ "$mode" == "bypass_actors_drift" ]]; then
+    _report "T11 number-vs-string actor_id -> drift" ok
+  else
+    _report "T11 number-vs-string actor_id -> drift" fail "mode='$mode'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T12: live missing bypass_actors key -> guard-broken
+t_live_missing_bypass_actors() {
+  local live='{"id":14145388,"name":"CI Required"}'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  # When the override file is a top-level object (not an array) the script
+  # treats it as the full ruleset and extracts .bypass_actors; missing key
+  # -> live_missing_bypass_actors / guard-broken.
+  if [[ "$mode" == "live_missing_bypass_actors" && "$label" == "ci/guard-broken" ]]; then
+    _report "T12 live missing bypass_actors -> guard-broken" ok
+  else
+    _report "T12 live missing bypass_actors -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T14: missing GH_TOKEN -> missing_gh_token / guard-broken
+t_missing_gh_token() {
+  local tmp; tmp=$(mktemp -d)
+  printf '%s' "$CANONICAL" > "$tmp/canonical.json"
+  local rc=0
+  env -u GH_TOKEN -u AUDIT_FETCH_OVERRIDE \
+    AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canonical.json" \
+    GITHUB_OUTPUT="$tmp/output" \
+    RULESET_URL="http://127.0.0.1:1/no-network" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "missing_gh_token" && "$label" == "ci/guard-broken" ]]; then
+    _report "T14 missing GH_TOKEN -> guard-broken" ok
+  else
+    _report "T14 missing GH_TOKEN -> guard-broken" fail "mode='$mode' label='$label' rc=$rc"
+  fi
+  rm -rf "$tmp"
+}
+
+# T15: live HTTP network_error (simulated) -> guard-broken
+t_live_network_error() {
+  local tmp; tmp=$(mktemp -d)
+  printf '%s' "$CANONICAL" > "$tmp/live.json"
+  printf '%s' "$CANONICAL" > "$tmp/canonical.json"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$tmp/live.json" \
+  AUDIT_HTTP_CODE_OVERRIDE="network_error" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canonical.json" \
+  GITHUB_OUTPUT="$tmp/output" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "github_api_network" && "$label" == "ci/guard-broken" ]]; then
+    _report "T15 network_error -> guard-broken" ok
+  else
+    _report "T15 network_error -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T16: canonical with string actor_id (schema violation) -> guard-broken
+t_canonical_invalid_schema() {
+  local bad_canonical='[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},{"actor_id":"5","actor_type":"RepositoryRole","bypass_mode":"pull_request"}]'
+  local r; r=$(_run "$CANONICAL" "$bad_canonical")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "canonical_file_invalid_schema" && "$label" == "ci/guard-broken" ]]; then
+    _report "T16 canonical string actor_id -> invalid_schema" ok
+  else
+    _report "T16 canonical string actor_id -> invalid_schema" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T17: empty canonical [] vs non-empty live -> drift
+t_empty_canonical() {
+  local r; r=$(_run "$CANONICAL" '[]')
+  local tmp="${r%:*}"
+  local mode; mode=$(_mode "$tmp")
+  if [[ "$mode" == "bypass_actors_drift" ]]; then
+    _report "T17 empty canonical vs non-empty live -> drift" ok
+  else
+    _report "T17 empty canonical vs non-empty live -> drift" fail "mode='$mode'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T18: cross-script parity — audit and update use byte-identical jq filter
+t_cross_script_parity() {
+  local repo_root="$REPO_ROOT"
+  local audit_file="$repo_root/scripts/audit-ruleset-bypass.sh"
+  local update_file="$repo_root/scripts/update-ci-required-ruleset.sh"
+  local lib_file="$repo_root/scripts/lib/canonicalize-bypass-actors.sh"
+  if [[ ! -f "$lib_file" ]]; then
+    _report "T18 shared canonicalize lib exists" fail "missing $lib_file"
+    return
+  fi
+  # Both scripts must source the lib (not redefine the jq expression)
+  if ! grep -qF 'canonicalize-bypass-actors.sh' "$audit_file"; then
+    _report "T18 audit script sources lib" fail
+    return
+  fi
+  if ! grep -qF 'canonicalize-bypass-actors.sh' "$update_file"; then
+    _report "T18 update script sources lib" fail
+    return
+  fi
+  # Neither script should redeclare the projection inline. Ignore comment
+  # lines (^# or whitespace-then-#) — only flag executable jq expressions.
+  if grep -nE 'map\(\{actor_type, actor_id, bypass_mode\}\)' "$audit_file" "$update_file" 2>/dev/null \
+      | grep -vE ':[[:space:]]*#' >/dev/null; then
+    _report "T18 no inline projection redeclaration" fail "found executable map({...}) in audit or update script"
+    return
+  fi
+  _report "T18 cross-script jq parity via shared lib" ok
+}
+
+# T19: $GITHUB_OUTPUT shape — exactly 3 lines, key=value, no leading whitespace
+t_github_output_shape() {
+  local r; r=$(_run "$CANONICAL" "$CANONICAL")
+  local tmp="${r%:*}"
+  local line_count; line_count=$(wc -l < "$tmp/output")
+  local malformed; malformed=$(grep -cvE '^[a-z_]+=' "$tmp/output" || true)
+  if [[ "$line_count" == "3" && "$malformed" == "0" ]]; then
+    _report "T19 GITHUB_OUTPUT shape: 3 key=value lines on identity" ok
+  else
+    _report "T19 GITHUB_OUTPUT shape: 3 key=value lines on identity" fail "lines=$line_count malformed=$malformed"
+  fi
+  rm -rf "$tmp"
+}
+
+# T20: drift detail capped at ~500 chars (markdown/email length guard)
+t_drift_detail_capped() {
+  # Build a live entry whose stringified form would explode beyond 500 chars
+  # if not capped — use a long unicode-safe actor_type that's still valid JSON.
+  local long_name
+  long_name=$(printf 'A%.0s' $(seq 1 600))
+  local live; live=$(printf '[{"actor_id":1,"actor_type":"%s","bypass_mode":"always"}]' "$long_name")
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local detail; detail=$(_detail "$tmp")
+  if (( ${#detail} <= 600 )); then  # 500 cap + truncation marker
+    _report "T20 drift detail capped (length=${#detail})" ok
+  else
+    _report "T20 drift detail capped (length=${#detail})" fail "detail too long"
+  fi
+  rm -rf "$tmp"
+}
+
+# T13: real canonical JSON matches the expected shape (regression guard)
+t_real_canonical_shape() {
+  if [[ ! -f "$CANONICAL_REAL" ]]; then
+    _report "T13 real canonical exists" fail "missing $CANONICAL_REAL"
+    return
+  fi
+  if ! jq -e . "$CANONICAL_REAL" >/dev/null 2>&1; then
+    _report "T13 real canonical is valid JSON" fail
+    return
+  fi
+  local n; n=$(jq 'length' < "$CANONICAL_REAL")
+  if [[ "$n" != "2" ]]; then
+    _report "T13 real canonical has 2 entries" fail "got $n"
+    return
+  fi
+  _report "T13 real canonical valid JSON, 2 entries" ok
+}
+
+if [[ ! -f "$SCRIPT" ]]; then
+  echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
+  exit 1
+fi
+
+t_identity
+t_added_entry
+t_removed_entry
+t_mode_change
+t_order_insensitive
+t_missing_key_eq_null
+t_canonical_missing
+t_canonical_malformed
+t_live_http_5xx
+t_log_injection_strip
+t_unknown_actor_type
+t_number_vs_string_actor_id
+t_live_missing_bypass_actors
+t_missing_gh_token
+t_live_network_error
+t_canonical_invalid_schema
+t_empty_canonical
+t_cross_script_parity
+t_github_output_shape
+t_drift_detail_capped
+t_real_canonical_shape
+
+echo "=== $pass passed, $fail failed ==="
+[[ "$fail" -eq 0 ]]
