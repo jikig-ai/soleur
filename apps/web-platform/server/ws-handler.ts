@@ -95,9 +95,10 @@ export interface PendingConversation {
   context?: ConversationContext;
   /** KB document path that will become conversations.context_path at materialization. */
   contextPath?: string;
-  /** Stage 2 (#2853): soleur-go routing decided at start_session time
-   *  (flag is read once per conversation — never again) and persisted
-   *  alongside the conversations row on first materialization. */
+  /** soleur-go routing decided at start_session time and persisted
+   *  alongside the conversations row on first materialization. Always
+   *  `{ kind: "soleur_go_pending" }` since #3270 retired FLAG_CC_SOLEUR_GO;
+   *  read-path stickiness is enforced by `parseConversationRouting`. */
   routing?: ConversationRouting;
 }
 

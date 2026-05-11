@@ -25,6 +25,10 @@ import {
 // removed in #3270 once FLAG_CC_SOLEUR_GO was retired (cc-soleur-go is
 // now the unconditional production binding). The stickiness invariant
 // itself is unchanged: the DB column dictates routing on every read.
+//
+// Reframed from `router-flag-stickiness.test.ts` (introduced #2858) by
+// #3270 — `git log --follow` may not surface the prior lineage because
+// the rename's similarity score fell below git's default threshold.
 
 describe("router stickiness invariant (active_workflow → ConversationRouting)", () => {
   it("parseConversationRouting has no flag parameter — enforced structurally", () => {

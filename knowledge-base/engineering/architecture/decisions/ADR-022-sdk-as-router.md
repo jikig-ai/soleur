@@ -69,9 +69,14 @@ Build a dedicated `soleur-go-runner.ts` that:
   032) for sticky routing on turn 2+.
 
 Stage 8 landed via #3270 — `FLAG_CC_SOLEUR_GO` was removed and the
-cc-soleur-go path is now the unconditional production binding. Legacy
-`domain-router.ts` / `agent-runner.ts` / `dispatchToLeaders` are retained
-for the SDK-router fallback paths only.
+cc-soleur-go path is now the unconditional production binding for every
+new `start_session`. Legacy `domain-router.ts` / `agent-runner.ts` /
+`dispatchToLeaders` are retained for two surfaces: (1) turn-2+ stickiness
+on conversations with `active_workflow IS NULL` (rows persisted before
+the soak window), and (2) the transient read-failure fallback in
+`ws-handler.ts` when a freshly created `conversations` row is unreadable
+on turn 1 (e.g., read-after-write replica lag). Stage 9 (future) covers
+backfilling legacy rows and retiring those code paths entirely.
 
 ## AP-004 deviation (intentional, for V1)
 

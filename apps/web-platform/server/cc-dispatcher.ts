@@ -416,9 +416,7 @@ export function cleanupCcBashGatesForConversation(
 }
 
 // ---------------------------------------------------------------------------
-// realSdkQueryFactory — Stage 2.12 binding (originally gated behind
-// FLAG_CC_SOLEUR_GO; flag removed in #3270, this is now the unconditional
-// production binding).
+// realSdkQueryFactory — Stage 2.12 binding (unconditional since #3270).
 //
 // Builds a real `Query` per cold conversation. Mirrors
 // `agent-runner.ts startAgentSession` `query({ options })` shape with
