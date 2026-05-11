@@ -10,20 +10,23 @@ Derived from `knowledge-base/project/plans/2026-05-11-refactor-gdpr-gate-trust-h
 
 ## Phase 1 — Parser contract extension (#3535)
 
-- [ ] 1.1 Write failing test `TS-cron-1` in `plugins/soleur/test/notice-frontmatter.test.sh`: `cron-run-stale` with `GH_TOKEN=""` → emits `999`, exits 0.
-- [ ] 1.2 Write failing test `TS-cron-2`: `cron-run-stale` with `GH_TOKEN=<token>` against a stubbed `gh` wrapper → emits expected integer.
-- [ ] 1.3 Write failing test `TS-cron-3`: `days-stale` MIN behavior — `last-verified: today` + stubbed cron-run at ~100d ago → emits `100`.
-- [ ] 1.4 Write failing test `TS-cron-4`: `days-stale` with absent token + valid last-verified → emits last-verified value (fallback).
-- [ ] 1.5 Implement `cron-run-stale` subcommand in `plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh`. Reads `GH_TOKEN`/`GITHUB_TOKEN`; absent → `999`. Calls `gh run list --workflow=scheduled-content-vendor-drift.yml --status=success --limit=1 --json updatedAt --jq '.[0].updatedAt'` wrapped in `timeout 5s`. Parses RFC 3339 timestamp via `date -u -d`. Handle `null`/empty array → 999. Always exit 0.
-- [ ] 1.6 Extend `cmd_days_stale` to compute MIN of (last-verified-days, cron-run-days) **only when both are non-999**. Otherwise return the non-999 value, or 999 if both are 999.
-- [ ] 1.7 Run tests; all four TS-cron-* must pass. Run existing `bash plugins/soleur/test/notice-frontmatter.test.sh` — all TS1-TS5 still pass.
+- [ ] 1.0 Add `make_gh_stub` helper to `plugins/soleur/test/test-helpers.sh` (or local equivalent) per plan §1.4. Used by TS-cron-2..5.
+- [ ] 1.1 Write failing test `TS-cron-1` in `plugins/soleur/test/notice-frontmatter.test.sh`: `cron-run-stale` with `GH_TOKEN=""` AND `GITHUB_TOKEN=""` → emits `999`, exits 0.
+- [ ] 1.2 Write failing test `TS-cron-2`: `cron-run-stale` with stub `gh` on `PATH` emitting `2026-02-01T00:00:00Z` → emits an integer in range 90-110.
+- [ ] 1.3 Write failing test `TS-cron-3`: `cron-run-stale` with stub `gh` emitting `null` → emits `999`.
+- [ ] 1.4 Write failing test `TS-cron-4`: `cron-run-stale` with stub `gh` emitting `"2026-02-01"` (missing `T...Z`) → emits `999`.
+- [ ] 1.5 Write failing test `TS-cron-5`: `cron-run-stale` with stub `gh` that `sleep 10` → emits `999`, wall clock <6s.
+- [ ] 1.6 Write failing test `TS12` (mirrors TS11 p95 timing): `cron-run-stale` with `GH_TOKEN=""` (no-network path) → p95 < 100ms over 100 invocations.
+- [ ] 1.7 Implement `cron-run-stale` per plan §1.1 (full shell function listing). NOT the env-export-sentinel design — MIN computed in caller frame (`gdpr-gate.sh`).
+- [ ] 1.8 Confirm `cmd_days_stale` is UNCHANGED (per plan §1.2 — MIN moved to caller).
+- [ ] 1.9 Run tests; all TS-cron-1..5 + TS12 must pass. Run existing `bash plugins/soleur/test/notice-frontmatter.test.sh` — all TS1-TS11 still pass.
 
 ## Phase 2 — Gate caller wiring (#3535)
 
-- [ ] 2.1 Modify `plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh` to invoke parser twice: once for `days-stale` (MIN'd), once for `cron-run-stale` (sentinel only). Propagate `GH_TOKEN` (or `GITHUB_TOKEN`) via `env GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" bash "$NOTICE_PARSER" ...`.
-- [ ] 2.2 When `cron-run-stale` returns 999 AND `days-stale` is non-999, prepend an operator-attested-mode banner line to stdout: `ℹ gdpr-gate running in operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified)`.
-- [ ] 2.3 Emit `gdpr-gate-cron-binding` incident via `incidents.sh` (variants: `applied`, `unavailable`, `min-wins`). Always wrap with `2>/dev/null || true` to preserve advisory exit 0.
-- [ ] 2.4 Manual smoke: run `bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh apps/web-platform/lib/auth/foo.ts` with and without `GH_TOKEN`. Confirm exit 0 in all paths; confirm banner presence/absence matches expected.
+- [ ] 2.1 Modify `plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh` per plan §2.1 full listing. Invoke parser twice with both `NOTICE_FILE` (per R9) AND `GH_TOKEN` (or `GITHUB_TOKEN` fallback) propagated. MIN computed in caller frame.
+- [ ] 2.2 Emit operator-attested-mode banner per plan §2.2 — exact literal string (load-bearing — self-test asserts verbatim). Triple-condition: `cron == 999 AND notice != 999` (NOT when both are 999).
+- [ ] 2.3 Emit `gdpr-gate-cron-binding` incident via `incidents.sh` (variants: `applied`, `unavailable`, `min-wins`). All emits wrapped with `2>/dev/null || true`.
+- [ ] 2.4 Manual smoke per plan §2.4 — four env combos, all must `echo "exit=0"`.
 
 ## Phase 3 — CODEOWNERS row (#3535)
 
@@ -37,10 +40,12 @@ Derived from `knowledge-base/project/plans/2026-05-11-refactor-gdpr-gate-trust-h
 
 ## Phase 5 — Stale fixture + self-test workflow (#3536)
 
-- [ ] 5.1 Create `plugins/soleur/test/fixtures/gdpr-gate-stale/NOTICE` with `last-verified: 2025-11-01`, synthetic SHAs (`aaa...` / `bbb...`), 5 mirror `lifted-files:` entries. Verify `node apps/web-platform/scripts/lint-fixture-content.mjs` passes.
-- [ ] 5.2 Write `plugins/soleur/test/gdpr-gate-self-test.test.sh` with three test cases mirroring TS5/TS6: (a) stale banner fires, (b) POSTURE_FAIL fires, (c) operator-attested banner fires when `GH_TOKEN=""`. Use `NOTICE_FILE=` env override.
-- [ ] 5.3 Create `.github/workflows/gdpr-gate-self-test.yml`. Trigger: `pull_request` on `plugins/soleur/skills/gdpr-gate/scripts/**`, `plugins/soleur/test/fixtures/gdpr-gate-stale/**`, `lefthook.yml`. Pin `actions/checkout` to 40-char SHA. `timeout-minutes: 5`. Two jobs (or matrix): with-token, without-token. Route any `${{ }}` through `env:`.
-- [ ] 5.4 Verify locally (`act` if available; else scratch-branch CI run) that the workflow fails when `gdpr-gate.sh` is temporarily broken to always echo zero days-stale. Revert the break before commit.
+- [ ] 5.1 Create `plugins/soleur/test/fixtures/gdpr-gate-stale/NOTICE` per plan §5.1 with synthetic upstream paths (NOT real `pii-detector/*` paths — per R7) and synthetic SHAs. Verify `node apps/web-platform/scripts/lint-fixture-content.mjs plugins/soleur/test/fixtures/gdpr-gate-stale/NOTICE` passes.
+- [ ] 5.2 Create `plugins/soleur/test/fixtures/gdpr-gate-stale/gh-stub/gh` (used by self-test Case B). Executable shell script that emits a valid RFC 3339 timestamp on `gh run list` and `exit 1` otherwise.
+- [ ] 5.3 Write `plugins/soleur/test/gdpr-gate-self-test.test.sh` per plan §5.2 — three cases (A: no-token operator-attested banner; B: stub-gh present, no banner; C: exit 0 preserved).
+- [ ] 5.4 Create `.github/workflows/gdpr-gate-self-test.yml` per plan §5.3. Two jobs: `without-token` (explicit `env: { GH_TOKEN: "", GITHUB_TOKEN: "" }`) and `with-token` (`env: { GH_TOKEN: ${{ github.token }} }`). `actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7` (mirrors vendor-pin-verify.yml). `timeout-minutes: 5`. `permissions: contents: read`.
+- [ ] 5.5 Include the workflow file in its own `paths:` filter (self-bootstrap — runs against itself on this PR).
+- [ ] 5.6 Negative-path verification (AC10): one-shot edit `gdpr-gate.sh` to drop the operator-attested banner; confirm `without-token` job fails. Revert before commit. DO NOT commit the break.
 
 ## Phase 6 — Lefthook cross-link (#3536)
 
