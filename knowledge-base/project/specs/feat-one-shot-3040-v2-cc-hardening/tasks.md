@@ -49,7 +49,7 @@ Derived from `knowledge-base/project/plans/2026-05-11-fix-cc-hardening-safe-bash
 - [x] 4.7 Verify drift-sweep via `git grep -E "fresh firstToolUseAt|per-active-window|only ACTIVE compute" apps/web-platform/` returns zero hits.
 - [x] 4.8 Add NEW AC12 (10-min absolute ceiling cumulative), NEW AC13 (multi-turn reset), NEW AC14 (mirror debounce 5-min TTL coalescing).
 - [x] 4.9 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts apps/web-platform/test/soleur-go-runner-lifecycle.test.ts apps/web-platform/test/soleur-go-runner-tool-result-idle-reset.test.ts`.
-- [ ] 4.10 Commit `fix(cc): wall-clock subtracts paused intervals across rapid status flap + drift sweep per-window→cumulative (#3040)`.
+- [x] 4.10 Commit `fix(cc): wall-clock subtracts paused intervals across rapid status flap + drift sweep per-window→cumulative (#3040)`.
 
 ## Phase 5 — Full sweep + review
 
