@@ -65,7 +65,7 @@ describe("skill-security-scan: category fixture matrix", () => {
     expect(ruleIds.some((r) => r.startsWith("shell-spawn-"))).toBe(true);
   });
 
-  test("malicious-curl-pipe-bash → category 1 HIGH-RISK on all three fetch-* rules", () => {
+  test("malicious-curl-pipe-bash → category 1 HIGH-RISK on all three fetch-* rules and bypass classes", () => {
     const result = runCategory(
       "check-codeexec.sh",
       join(FIXTURES, "malicious-curl-pipe-bash.skill.md"),
@@ -75,6 +75,19 @@ describe("skill-security-scan: category fixture matrix", () => {
     expect(ruleIds.has("fetch-pipe-shell")).toBe(true);
     expect(ruleIds.has("fetch-process-sub-shell")).toBe(true);
     expect(ruleIds.has("fetch-cmdsub-exec")).toBe(true);
+    // Bypass-class coverage: the fixture lays out 3 fetch-pipe-shell variants
+    // (canonical, tee-interposed, sudo-wrapped) and 2 fetch-cmdsub-exec variants
+    // ($(...) and backtick). Count assertions lock in that a future regex
+    // regression cannot silently lose a bypass class while keeping aggregate
+    // verdict green via the surviving variants.
+    const fetchPipeCount = result.findings.filter(
+      (f) => f.rule_id === "fetch-pipe-shell",
+    ).length;
+    const fetchCmdsubCount = result.findings.filter(
+      (f) => f.rule_id === "fetch-cmdsub-exec",
+    ).length;
+    expect(fetchPipeCount).toBeGreaterThanOrEqual(3);
+    expect(fetchCmdsubCount).toBeGreaterThanOrEqual(2);
   });
 
   test("malicious-prompt-injection → category 2 HIGH-RISK", () => {

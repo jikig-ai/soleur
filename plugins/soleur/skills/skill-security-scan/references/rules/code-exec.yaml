@@ -56,8 +56,8 @@ rules:
 
   - id: fetch-pipe-shell
     severity: HIGH-RISK
-    description: Network-fetched payload piped directly into a shell interpreter. Canonical RCE pattern (curl <url> | bash). ReDoS-bounded with {0,200}.
-    regex: '(curl|wget|fetch)[[:space:]]+[^|&;]{0,200}\|[[:space:]]*(bash|sh|zsh|ksh|fish|/bin/(ba)?sh)([[:space:]]|$)'
+    description: Network-fetched payload piped (directly OR via intermediate pipe stages like tee) into a shell interpreter, optionally wrapped in sudo/env/nice/nohup/exec. Canonical RCE pattern (curl <url> | bash). ReDoS-bounded with {0,200}.
+    regex: '(curl|wget|fetch)[[:space:]]+[^&;]{0,200}\|[[:space:]]*((sudo|env|nice|nohup|exec)[[:space:]]+)?(bash|sh|zsh|ksh|fish|/bin/(ba)?sh)([[:space:]]|$)'
 
   - id: fetch-process-sub-shell
     severity: HIGH-RISK
@@ -66,5 +66,5 @@ rules:
 
   - id: fetch-cmdsub-exec
     severity: HIGH-RISK
-    description: eval / -c / -e interpreter consumes network-fetched payload via command substitution. Covers `eval "$(curl ...)"`, `sh -c "$(curl ...)"`, `bash -c "$(wget ...)"`, `python -c "$(curl ...)"`, `node -e "$(curl ...)"`.
-    regex: '(eval|exec|(sh|bash|zsh|python[23]?|node)[[:space:]]+-(c|e))[[:space:]]+["'"'"']?\$\([[:space:]]*(curl|wget|fetch)[^)]{0,200}\)'
+    description: eval / -c / -e interpreter consumes network-fetched payload via command substitution. Covers BOTH `$(...)` and POSIX backtick `` `...` `` forms. Examples eval "$(curl ...)", eval `curl ...`, sh -c "$(curl ...)", python -c "$(curl ...)".
+    regex: '(eval|exec|(sh|bash|zsh|python[23]?|node)[[:space:]]+-(c|e))[[:space:]]+["'"'"']?(\$\([[:space:]]*(curl|wget|fetch)[^)]{0,200}\)|`[[:space:]]*(curl|wget|fetch)[^`]{0,200}`)'

@@ -21,7 +21,7 @@ version: "0.1.0"
 semgrep_min_version: "1.0.0"  # advisory pin; semgrep is not at runtime path today
 files:
   - path: rules/code-exec.yaml
-    sha256: 8f090b1826214b53bceef5aaf57bb2a8edb786fc50ea4193323b7fe3375d2aa1
+    sha256: 8916f73418515fcb7f257a0ecee0146ae1df2da5ea63b2d7cfc73161894283e8
   - path: rules/filesystem-boundary.yaml
     sha256: 745630fd4daee1f3f3100da8f99c2de65b59da18c72ce36d5c4316c86ba4929f
   - path: rules/supply-chain.yaml
@@ -33,4 +33,4 @@ files:
   - path: typosquat-targets.yaml
     sha256: 7881969a5126453f9e3442ea14c3f0dd45e59cf229564e558eee847cbd1c9ddd
   - path: regex-patterns.md
-    sha256: e138cd0607a2f63c0e660dc04065b2f221535754450a4f29d0702d55033e7ccc
+    sha256: da4715fb199365481c334db2dfc5d33cb1be0b3c47dc46b6b3f30d226cd09ae2

