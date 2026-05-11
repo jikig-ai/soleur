@@ -16,22 +16,26 @@ REPO="jikig-ai/soleur"
 RULESET_NAME="CI Required"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CANONICAL_BYPASS_FILE="${SCRIPT_DIR}/ci-required-ruleset-canonical-bypass-actors.json"
+CANONICAL_RSC_FILE="${SCRIPT_DIR}/ci-required-ruleset-canonical-required-status-checks.json"
 
-# bypass_actors source-of-truth lives in a sibling JSON file shared with
-# .github/workflows/scheduled-ruleset-bypass-audit.yml (#3544). Editing
-# the array here is a workflow violation -- update the JSON instead so
-# the audit's canonical reference stays in sync. R10 Sharp Edge ("JSON
-# payload via heredoc into a file, then --input \"\$payload\"") still
-# applies; the canonical JSON is read via jq --slurpfile and merged
-# into the heredoc payload below.
-if [[ ! -f "$CANONICAL_BYPASS_FILE" ]]; then
-  echo "ERROR: canonical bypass_actors file not found: $CANONICAL_BYPASS_FILE" >&2
-  exit 1
-fi
-if ! jq -e 'type == "array"' "$CANONICAL_BYPASS_FILE" >/dev/null 2>&1; then
-  echo "ERROR: $CANONICAL_BYPASS_FILE is not a JSON array" >&2
-  exit 1
-fi
+# Both `bypass_actors` (#3544) and `required_status_checks` (#3547) source
+# of truth live in sibling JSON files shared with the daily audit workflow
+# (.github/workflows/scheduled-ruleset-bypass-audit.yml). Editing the
+# arrays inline here is a workflow violation -- update the JSON files
+# instead so the audit's canonical reference stays in sync. R10 Sharp
+# Edge ("JSON payload via heredoc into a file, then --input \"\$payload\"")
+# still applies; both canonical JSONs are read via jq --slurpfile and
+# merged into the skeleton heredoc payload below.
+for f in "$CANONICAL_BYPASS_FILE" "$CANONICAL_RSC_FILE"; do
+  if [[ ! -f "$f" ]]; then
+    echo "ERROR: canonical file not found: $f" >&2
+    exit 1
+  fi
+  if ! jq -e 'type == "array"' "$f" >/dev/null 2>&1; then
+    echo "ERROR: $f is not a JSON array" >&2
+    exit 1
+  fi
+done
 
 # Pre-flight: verify bot workflows on main already have synthetic test status
 main_content=$(gh api "repos/${REPO}/contents/.github/workflows/scheduled-weekly-analytics.yml" --jq '.content' 2>/dev/null || true)
@@ -72,28 +76,20 @@ cat > "$skeleton" << 'EOF'
       "parameters": {
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
-        "required_status_checks": [
-          {
-            "context": "test",
-            "integration_id": 15368
-          },
-          {
-            "context": "dependency-review",
-            "integration_id": 15368
-          },
-          {
-            "context": "e2e",
-            "integration_id": 15368
-          }
-        ]
+        "required_status_checks": []
       }
     }
   ]
 }
 EOF
 
-# Merge canonical bypass_actors into the skeleton.
-jq --slurpfile bypass "$CANONICAL_BYPASS_FILE" '. + {bypass_actors: $bypass[0]}' "$skeleton" > "$payload"
+# Merge canonical bypass_actors AND required_status_checks into the skeleton.
+# required_status_checks lives at rules[0].parameters.required_status_checks
+# (rules[0] is the only rule today; future siblings would need select-by-type).
+jq --slurpfile bypass "$CANONICAL_BYPASS_FILE" --slurpfile rsc "$CANONICAL_RSC_FILE" \
+  '. + {bypass_actors: $bypass[0]}
+     | .rules[0].parameters.required_status_checks = $rsc[0]' \
+  "$skeleton" > "$payload"
 
 echo "Creating '${RULESET_NAME}' ruleset on ${REPO}..."
 result=$(gh api "repos/${REPO}/rulesets" -X POST --input "$payload")

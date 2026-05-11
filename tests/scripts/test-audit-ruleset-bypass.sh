@@ -408,6 +408,190 @@ t_real_canonical_shape() {
   _report "T13 real canonical valid JSON, 2 entries" ok
 }
 
+# ---------- RSC (required_status_checks) audit tests (#3547) ----------
+# These tests use object-shape live fixtures (legacy array-shape skips RSC).
+CANONICAL_RSC='[{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"CodeQL","integration_id":57789},{"context":"skill-security-scan PR gate","integration_id":15368}]'
+
+# Helper: run with both canonical files and an object-shape live fixture.
+_run_with_rsc() {
+  local live_object="$1" canonical_bypass="$2" canonical_rsc="$3"
+  local tmp; tmp=$(mktemp -d)
+  printf '%s' "$live_object" > "$tmp/live.json"
+  printf '%s' "$canonical_bypass" > "$tmp/canon-bypass.json"
+  printf '%s' "$canonical_rsc" > "$tmp/canon-rsc.json"
+  : > "$tmp/output"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$tmp/live.json" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canon-bypass.json" \
+  AUDIT_RSC_CANONICAL_FILE_OVERRIDE="$tmp/canon-rsc.json" \
+  GITHUB_OUTPUT="$tmp/output" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  echo "$tmp:$rc"
+}
+
+# T-rsc-1: identity (live RSC matches canonical) -> no drift
+t_rsc_identity() {
+  local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$CANONICAL_RSC" \
+    '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
+  local tmp="${r%:*}"
+  local mode; mode=$(_mode "$tmp")
+  if [[ -z "$mode" ]]; then
+    _report "T-rsc-1 RSC identity -> no drift" ok
+  else
+    _report "T-rsc-1 RSC identity -> no drift" fail "mode='$mode' stderr=$(head -3 "$tmp/stderr")"
+  fi
+  rm -rf "$tmp"
+}
+
+# T-rsc-2: live missing CodeQL -> required_status_checks_drift / auth-broken
+t_rsc_missing_codeql() {
+  local live_rsc='[{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"skill-security-scan PR gate","integration_id":15368}]'
+  local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$live_rsc" \
+    '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "required_status_checks_drift" && "$label" == "ci/auth-broken" ]]; then
+    _report "T-rsc-2 live missing CodeQL -> required_status_checks_drift" ok
+  else
+    _report "T-rsc-2 live missing CodeQL -> required_status_checks_drift" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T-rsc-3: CodeQL integration_id 15368 (would let github-actions[bot] spoof) -> drift
+# Asserts drift_detail names "CodeQL" specifically — without this, a regression
+# that drifts a different context (e.g., dependency-review) would still pass.
+t_rsc_codeql_wrong_app() {
+  local live_rsc='[{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"CodeQL","integration_id":15368},{"context":"skill-security-scan PR gate","integration_id":15368}]'
+  local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$live_rsc" \
+    '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
+  local tmp="${r%:*}"
+  local mode detail; mode=$(_mode "$tmp"); detail=$(_detail "$tmp")
+  if [[ "$mode" == "required_status_checks_drift" ]] && \
+     grep -qF 'CodeQL' <<<"$detail" && \
+     grep -qE 'integration_id":15368' <<<"$detail"; then
+    _report "T-rsc-3 CodeQL integration_id 15368 (wrong app) -> drift names CodeQL+15368" ok
+  else
+    _report "T-rsc-3 CodeQL integration_id 15368 (wrong app) -> drift names CodeQL+15368" fail "mode='$mode' detail='${detail:0:200}'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T-rsc-4: live ruleset has no required_status_checks rule -> guard-broken
+t_rsc_live_missing_rsc_rule() {
+  local live; live=$(jq -nc --argjson b "$CANONICAL" '{bypass_actors: $b, rules: []}')
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "live_missing_required_status_checks" && "$label" == "ci/guard-broken" ]]; then
+    _report "T-rsc-4 live missing RSC rule -> guard-broken" ok
+  else
+    _report "T-rsc-4 live missing RSC rule -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T-rsc-5b: canonical RSC has duplicate context (e.g., two CodeQL rows) -> guard-broken
+t_rsc_canonical_duplicate_context() {
+  local dup='[{"context":"CodeQL","integration_id":57789},{"context":"CodeQL","integration_id":15368}]'
+  local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$CANONICAL_RSC" \
+    '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$dup")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "canonical_rsc_file_invalid_schema" && "$label" == "ci/guard-broken" ]]; then
+    _report "T-rsc-5b canonical RSC duplicate context -> invalid_schema" ok
+  else
+    _report "T-rsc-5b canonical RSC duplicate context -> invalid_schema" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T-rsc-5: canonical RSC has string integration_id (schema violation) -> guard-broken
+t_rsc_canonical_invalid_schema() {
+  local bad_canonical='[{"context":"test","integration_id":"15368"}]'
+  local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$CANONICAL_RSC" \
+    '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$bad_canonical")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "canonical_rsc_file_invalid_schema" && "$label" == "ci/guard-broken" ]]; then
+    _report "T-rsc-5 canonical RSC string integration_id -> invalid_schema" ok
+  else
+    _report "T-rsc-5 canonical RSC string integration_id -> invalid_schema" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T-rsc-6: reordered live RSC -> no drift (sort_by canonical)
+t_rsc_order_insensitive() {
+  local live_rsc='[{"context":"skill-security-scan PR gate","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"CodeQL","integration_id":57789},{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368}]'
+  local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$live_rsc" \
+    '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
+  local tmp="${r%:*}"
+  local mode; mode=$(_mode "$tmp")
+  if [[ -z "$mode" ]]; then
+    _report "T-rsc-6 reordered live RSC -> no drift" ok
+  else
+    _report "T-rsc-6 reordered live RSC -> no drift" fail "mode='$mode'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T-rsc-7: real canonical RSC has 5 entries with CodeQL pinned to 57789
+t_rsc_real_canonical_shape() {
+  local real="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
+  if [[ ! -f "$real" ]]; then
+    _report "T-rsc-7 real canonical RSC exists" fail "missing $real"
+    return
+  fi
+  local n codeql_app
+  n=$(jq 'length' < "$real")
+  codeql_app=$(jq -r '.[] | select(.context=="CodeQL") | .integration_id' < "$real")
+  if [[ "$n" == "5" && "$codeql_app" == "57789" ]]; then
+    _report "T-rsc-7 real canonical RSC: 5 entries, CodeQL integration_id=57789" ok
+  else
+    _report "T-rsc-7 real canonical RSC: 5 entries, CodeQL integration_id=57789" fail "n=$n codeql_app=$codeql_app"
+  fi
+}
+
+# T-rsc-8: cross-script parity — shared canonicalize-required-status-checks lib is sourced
+t_rsc_shared_lib_used() {
+  local audit_file="$REPO_ROOT/scripts/audit-ruleset-bypass.sh"
+  local create_file="$REPO_ROOT/scripts/create-ci-required-ruleset.sh"
+  local lib_file="$REPO_ROOT/scripts/lib/canonicalize-required-status-checks.sh"
+  if [[ ! -f "$lib_file" ]]; then
+    _report "T-rsc-8 canonicalize-required-status-checks.sh exists" fail "missing"
+    return
+  fi
+  local update_file="$REPO_ROOT/scripts/update-ci-required-ruleset.sh"
+  if ! grep -qF 'lib/canonicalize-required-status-checks.sh' "$audit_file"; then
+    _report "T-rsc-8 audit script sources RSC lib" fail
+    return
+  fi
+  if ! grep -qF 'lib/canonicalize-required-status-checks.sh' "$update_file"; then
+    _report "T-rsc-8 update-ci script sources RSC lib (data-integrity P2)" fail
+    return
+  fi
+  if ! grep -qF 'ci-required-ruleset-canonical-required-status-checks.json' "$create_file"; then
+    _report "T-rsc-8 create-ci script references canonical RSC JSON" fail
+    return
+  fi
+  # No-inline-redeclaration guard: neither audit nor update may carry the
+  # jq projection literal — only the shared lib should hold it.
+  if grep -qE 'map\(\{context, integration_id\}\)' "$audit_file" "$update_file" 2>/dev/null; then
+    if grep -nE 'map\(\{context, integration_id\}\)' "$audit_file" "$update_file" | grep -vE ':[[:space:]]*#' >/dev/null; then
+      _report "T-rsc-8 no inline RSC projection redeclaration" fail "found executable map({context,integration_id}) outside lib"
+      return
+    fi
+  fi
+  _report "T-rsc-8 shared RSC lib sourced by audit + update; create-ci references canonical; no inline redecl" ok
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -434,6 +618,17 @@ t_cross_script_parity
 t_github_output_shape
 t_drift_detail_capped
 t_real_canonical_shape
+
+# RSC tests (#3547)
+t_rsc_identity
+t_rsc_missing_codeql
+t_rsc_codeql_wrong_app
+t_rsc_live_missing_rsc_rule
+t_rsc_canonical_invalid_schema
+t_rsc_canonical_duplicate_context
+t_rsc_order_insensitive
+t_rsc_real_canonical_shape
+t_rsc_shared_lib_used
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
