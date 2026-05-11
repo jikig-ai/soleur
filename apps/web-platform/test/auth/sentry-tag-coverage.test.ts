@@ -20,6 +20,7 @@ const AUTH_VERBS = [
   "signInWithOAuth",
   "signInWithOtp",
   "verifyOtp",
+  "signOut",
 ];
 
 const APP_ROOT = resolve(__dirname, "../../");
