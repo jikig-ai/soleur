@@ -1,6 +1,8 @@
 ---
 last_updated: 2026-05-11
 ---
+<!-- 2026-05-11: Compound Promotion Loop (#2720) registered as Active Item with DPIA candidacy note (Art. 35; defer formal assessment 4 weeks). -->
+
 <!-- 2026-05-11: R15 mitigation for #2719 landed via #3543 (ruleset PUT to #14145388) -->
 <!-- 2026-05-11: R15 follow-up D1 (#3544) landed — daily bypass_actors audit closes the audit-log-only blind spot in #3543 -->
 <!-- 2026-05-11: R15 follow-up D2 (#3545) landed — empirical audit confirmed CodeQL coverage on bot PRs is satisfied (neutral conclusion). No remediation needed. Runbook: knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md -->
@@ -71,6 +73,8 @@ Contract (mirrors plugins/soleur/skills/gdpr-gate/SKILL.md §"Critical-finding e
 |------|-------|--------|----------|-------|
 | T&C blanket statement contradictions | #736 | OPEN | - | Identified during #670 review |
 | Skill-install advisory gate | #2719 | OPEN | - | Single-user-incident threshold; EU jurisdiction. Verdict naming `LOW-RISK \| REVIEW \| HIGH-RISK` with mandatory advisory disclaimer (CLO requirement). Override = structured artifact under `knowledge-base/security/skill-overrides/` (GDPR Art. 32 evidence; retention = repo lifetime). PII redaction (email/IPv4/IBAN) at scan time per `GDPR-DataMin-1`. Self-defense: SHA-pinned rule pack, OSV untrusted-input handling, fail-loud self-test. R15 mitigation landed via #3543 on 2026-05-11 — `skill-security-scan PR gate` is a required check on the `CI Required` ruleset (#14145388); admin-merge bypass auto-files a `compliance/critical` issue via post-merge audit. R15 follow-up D1 landed via #3544 on 2026-05-11 — daily audit compares live `bypass_actors` to `scripts/ci-required-ruleset-canonical-bypass-actors.json` (24h worst-case detection window) and files a `compliance/critical` issue routed to CLO + CPO on drift. Runbook: `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`. |
+| Compound Promotion Loop (Layer 2 self-healing) | #2720 | OPEN | - | Single-user-incident threshold. Default OFF; opt-in via `knowledge-base/project/promotion-config.yml`. Plan-time gdpr-gate findings folded as AC23/AC26/AC27 (Anthropic DPA row required pre-merge — tracked in #3594; DPIA candidacy LC-04; synthesized-PII fixtures). **DPIA candidate (Art. 35)** — defer formal assessment until first 4 weeks of operation generate empirical data (cluster count, false-positive rate, operator merge ratio). Re-evaluate at week-4 review. Append-only audit log: `knowledge-base/project/learnings/promotion-log.md`. Runbook: `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`. |
+| Anthropic processor DPA row missing from Vendor DPAs | #3594 | OPEN | - | Pre-existing systemic gap (applies to every `claude-code-action` workflow, gdpr-gate skill, compound-promotion-loop). Blocks #2720 ship (AC23). Operator-action: verify DPA at Anthropic Console, add row to Vendor DPA Status table, open PR citing #3594 + #2720. |
 
 ## Completed Compliance Work
 
