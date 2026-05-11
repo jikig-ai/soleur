@@ -103,13 +103,22 @@ async function renderDashboard() {
 }
 
 describe("DashboardLayout — Settings sidebar relocation", () => {
-  it("NAV_ITEMS does not include a Settings entry", async () => {
-    const mod = await import("@/app/(dashboard)/layout");
-    const navItems = (mod as { NAV_ITEMS?: Array<{ href: string; label: string }> })
-      .NAV_ITEMS;
-    expect(navItems).toBeDefined();
-    expect(navItems!.map((i) => i.href)).not.toContain("/dashboard/settings");
-    expect(navItems!.map((i) => i.label)).not.toContain("Settings");
+  it("renders exactly one Settings link, and it lives in the footer (not the top nav)", async () => {
+    await renderDashboard();
+
+    const settingsLinks = screen.getAllByRole("link", { name: /^settings$/i });
+    expect(settingsLinks).toHaveLength(1);
+
+    const status = screen.getByRole("link", { name: /^status$/i });
+    // The single Settings link is a footer sibling of Status — i.e. the top
+    // nav no longer renders a Settings entry. compareDocumentPosition with
+    // DOCUMENT_POSITION_FOLLOWING is set when the argument node comes AFTER
+    // the receiver; Status sits at the top of the footer, so Settings must
+    // follow it.
+    expect(
+      status.compareDocumentPosition(settingsLinks[0]!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("renders the sidebar footer in order: Status → Settings → Sign out", async () => {
