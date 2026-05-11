@@ -98,13 +98,53 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
     ).rejects.toThrow(/Git clone failed/);
   });
 
-  test("cleans up credential helper even when clone fails", async () => {
-    const credPath = `/tmp/git-cred-${randomUUID()}`;
+  test("cleans up askpass script even when clone fails", async () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
-      randomCredentialPath: vi.fn().mockReturnValue(credPath),
+      // randomCredentialPath stub kept for symmetry with sibling tests; the
+      // deprecated export is being swept by #2848. Removing it here would be
+      // out of scope for the flake fix.
+      randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
       checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
+
+    let capturedAskpassPath: string | undefined;
+
+    // NOTE: factory does NOT throw — error is injected through the execFile
+    // callback. Avoids the vitest-wrapper-message swallowing class documented
+    // in 2026-05-07-vitest-domock-factory-throw-wrapped-message.md.
+    vi.doMock("child_process", async () => {
+      const actual = await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFile: vi
+          .fn()
+          .mockImplementation(
+            (
+              cmd: string,
+              args: string[],
+              opts: { env?: NodeJS.ProcessEnv; cwd?: string; timeout?: number } | undefined,
+              cb: (err: Error | null, result: { stdout: Buffer; stderr: Buffer }) => void,
+            ) => {
+              if (cmd === "git" && args.includes("clone")) {
+                // Canonical pattern: capture GIT_ASKPASS off the env block
+                // that gitWithInstallationAuth (git-auth.ts) sets right
+                // before invoking execFile. This is the ACTUAL artifact the
+                // try/finally in git-auth.ts cleans up. Mirror of
+                // git-auth.test.ts:223-244.
+                capturedAskpassPath = opts?.env?.GIT_ASKPASS;
+                const err: Error & { stderr?: Buffer } = new Error("git exited 128");
+                err.stderr = Buffer.from(
+                  "fatal: repository 'https://github.com/nonexistent/fake-repo-xxx/' not found\n",
+                );
+                cb(err, { stdout: Buffer.from(""), stderr: err.stderr });
+                return;
+              }
+              cb(null, { stdout: Buffer.from(""), stderr: Buffer.from("") });
+            },
+          ),
+      };
+    });
 
     const { provisionWorkspaceWithRepo } = await import("../server/workspace");
     const userId = randomUUID();
@@ -113,8 +153,10 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
       provisionWorkspaceWithRepo(userId, "https://github.com/nonexistent/fake-repo-xxx", 12345),
     ).rejects.toThrow();
 
-    // Credential helper should be cleaned up
-    expect(existsSync(credPath)).toBe(false);
+    // Cleanup contract: gitWithInstallationAuth's finally block unlinks the
+    // askpass script even on clone failure.
+    expect(capturedAskpassPath).toBeTruthy();
+    expect(existsSync(capturedAskpassPath!)).toBe(false);
   });
 });
 
