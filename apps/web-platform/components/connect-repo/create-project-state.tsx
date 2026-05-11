@@ -6,7 +6,6 @@ import { LockIcon, GlobeIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
-import { serif } from "./fonts";
 
 interface CreateProjectStateProps {
   onBack: () => void;
@@ -42,7 +41,7 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
     <div className="mx-auto max-w-md space-y-8">
       <div className="space-y-4 text-center">
         <Badge>NEW PROJECT</Badge>
-        <h1 className={`${serif.className} text-4xl font-semibold`}>
+        <h1 className="text-4xl font-semibold">
           Name Your Project
         </h1>
         <p className="text-base text-soleur-text-secondary">

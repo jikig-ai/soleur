@@ -6,11 +6,7 @@ import { render, screen } from "@testing-library/react";
 // ---------------------------------------------------------------------------
 
 vi.mock("next/font/google", () => ({
-  Cormorant_Garamond: () => ({
-    className: "mock-serif",
-    variable: "--font-serif",
-  }),
-  Inter: () => ({ className: "mock-sans", variable: "--font-sans" }),
+  Inter: () => ({ className: "mock-sans", variable: "mock-font-inter-var" }),
 }));
 
 // ---------------------------------------------------------------------------
