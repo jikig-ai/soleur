@@ -42,11 +42,11 @@ Greps each `.github/workflows/scheduled-*.yml` file for `gh pr create`. If prese
 
 Greps each `.github/workflows/scheduled-*.yml` file for `gh pr create`. For each match:
 
-1. Loads required-check names from [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt) (strips trailing inline comments; **preserves spaces inside check names**, e.g., `skill-security-scan PR gate`).
+1. Loads required-check names from [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt). Per line: strips trailing inline comments, strips one matched pair of outer double quotes, but **preserves spaces inside check names** (e.g., `skill-security-scan PR gate`).
 2. Greps the workflow file for `-f name=<name>` OR `-f context=<name>` patterns covering each required check.
-3. Reports any missing synthetics.
+3. Reports any missing synthetics with the literal CI-log-grep-able form `FAIL: <file> is missing synthetic check-runs for: <names>`.
 
-**App-token escape hatch.** Workflows whose `gh pr create` call lives ONLY inside a `prompt:` block of a `claude-code-action` step are exempt — the App token (`app/claude`) triggers real CI on the resulting PR, so synthetics are unnecessary. Detection is a `gh pr create … only inside prompt:` heuristic in the script.
+**App-token escape hatch.** Detection uses the `has_shell_pr_create` helper, which walks YAML indentation to determine whether `gh pr create` appears under a `run:` block. Anything outside a `run:` block (including `prompt:` blocks of `claude-code-action` steps, or future `with:` consumers) is treated as the App-token path — `app/claude` triggers real CI on the resulting PR, so synthetics are unnecessary.
 
 ## Required-checks config
 
@@ -75,7 +75,7 @@ Inline-pattern bot workflows (the 3 `scheduled-*.yml` files that don't use the c
 | Symptom | Failing script | Likely cause | Fix |
 |---|---|---|---|
 | `FAIL: <file> contains [skip ci]` | statuses | A `scheduled-*.yml` was edited to add `[skip ci]` to a commit message inside `gh pr create` | Remove `[skip ci]`. Bot PRs need CI (or synthetics) to satisfy the ruleset. |
-| `FAIL: <file> missing synthetic for '<check>'` | completeness | A new required check was added to `required-checks.txt` but the bot workflow wasn't updated — OR — a new bot workflow was added without synthetics | Add `-f name=<check>` (or `-f context=<check>`) to a `gh api .../check-runs` call in the workflow's shell `run:` block. Use the composite action if possible (see "How to extend"). |
+| `FAIL: <file> is missing synthetic check-runs for: <names>` | completeness | A new required check was added to `required-checks.txt` but the bot workflow wasn't updated — OR — a new bot workflow was added without synthetics | Add `-f name=<check>` (or `-f context=<check>`) to a `gh api .../check-runs` call in the workflow's shell `run:` block. Use the composite action if possible (see "How to extend"). |
 | `FAIL: config parser` / unexpected blank lines | completeness (parser) | A regression in the config loader (e.g., strip-all-whitespace bug fixed in PR #3543) — multi-word check names like `skill-security-scan PR gate` were collapsed to `skill-security-scanPRgate` | Verify `bash scripts/lint-bot-synthetic-completeness.sh` locally; if the lint passes but CI fails, suspect a parser regression. See learning `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`. |
 | New bot workflow with shell `gh pr create` but no synthetics | completeness | A `scheduled-*.yml` author posted PR-creation logic before adding synthetic check-runs | Add the synthetic-posting block OR refactor to use [`.github/actions/bot-pr-with-synthetic-checks`](../../../../.github/actions/bot-pr-with-synthetic-checks/action.yml). |
 | False-positive on a `claude-code-action` workflow | completeness | The `gh pr create` lives in a `prompt:` block (App-token path) but the heuristic mis-classified it as shell | Verify the call site: if the only `gh pr create` reference in the file is inside a `prompt:` block, the App token triggers real CI and the file is correctly exempt. If the heuristic still flags it, file a fix-script-detection issue. |
