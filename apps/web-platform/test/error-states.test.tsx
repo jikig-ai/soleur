@@ -227,6 +227,40 @@ describe("Error card dismissal on chat surface", () => {
     expect(wsReturn.lastError).toBe(beforeRef);
   });
 
+  test("dismissing then same (code, message) re-firing after a null intermediate re-shows the card (regression: PR #3558 review)", async () => {
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "Your API key is invalid or expired.",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    const mod = await import(
+      "@/app/(dashboard)/dashboard/chat/[conversationId]/page"
+    );
+    const result = render(<mod.default />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /dismiss/i }),
+    );
+    expect(screen.queryByText("Invalid API Key")).toBeNull();
+
+    // Reconnect path: lastError nulls (component stays mounted; dismissedErrorKey persists in state).
+    wsReturn.lastError = null;
+    result.rerender(<mod.default />);
+    expect(screen.queryByText("Invalid API Key")).toBeNull();
+
+    // Identical shape re-fires after the null intermediate. Without the
+    // null-edge-trigger reset of dismissedErrorKey, the rehydrated key would
+    // still match and the card would stay hidden.
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "Your API key is invalid or expired.",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    result.rerender(<mod.default />);
+
+    expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
+  });
+
   test("dismissing one error then a new error code re-shows the card with role=alert (AC3 + AC13)", async () => {
     wsReturn.lastError = {
       code: "key_invalid",

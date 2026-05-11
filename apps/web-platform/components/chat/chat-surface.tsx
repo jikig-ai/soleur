@@ -230,6 +230,14 @@ export function ChatSurface({
     }
     prevSessionTimeoutRef.current = sessionStartTimeout;
   }, [sessionStartTimeout]);
+
+  // Reset dismissedErrorKey whenever lastError clears so an identical re-fire
+  // (same code+message after a reconnect that nulled lastError) is shown again.
+  useEffect(() => {
+    if (!lastError) {
+      setDismissedErrorKey(null);
+    }
+  }, [lastError]);
   const [atQuery, setAtQuery] = useState("");
   const [atVisible, setAtVisible] = useState(false);
   const [atPosition, setAtPosition] = useState(0);
