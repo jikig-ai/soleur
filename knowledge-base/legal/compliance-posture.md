@@ -33,6 +33,18 @@ Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-mem
 | Resend Inc | AUTO | 2026-04-13 | DPF + SCCs | US-based | Automatic DPA via Terms of Service (Section 7: Data Processing). Transactional email for review gate notifications |
 | Doppler Inc | AUTO (MSA + DPA addendum — verification pending) | 2026-05-05 | EU-US Data Privacy Framework | US-based | Holds GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 (brand-survival credential — single-user incident threshold). RBAC review tracked in #3228. PR #3224 introduces the drift-guard secret; Doppler→GH Actions sync is the documented bootstrap path |
 
+## Vendored Code Provenance
+
+Source: `knowledge-base/engineering/policies/content-vendoring.md`
+
+The `gdpr-gate` skill incorporates upstream-vendored detection rules under permissive license. Each lifted bundle is governed by the content-vendoring policy: pinned to a commit, integrity-checked at pre-commit, drift-detected weekly, and runtime-monitored for staleness (>30d STDOUT banner, >90d POSTURE_FAIL line).
+
+| Upstream | License | Pinned Commit | Lifted Files | Last Verified | Status |
+|---|---|---|---|---|---|
+| github.com/goSprinto/compliance-skills | MIT | `7b58d68` | 5 (gdpr-gate `references/`) | 2026-05-10 | active |
+
+NOTICE-of-record: `plugins/soleur/skills/gdpr-gate/NOTICE` (YAML frontmatter is the canonical machine-readable form). Drift-detection workflow: `.github/workflows/scheduled-content-vendor-drift.yml`. Operator runbook: `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md`.
+
 ## Active Compliance Items
 
 <!--
