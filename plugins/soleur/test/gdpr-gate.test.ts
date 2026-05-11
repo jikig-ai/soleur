@@ -18,6 +18,8 @@ const DISCLAIMER_PATTERN = /This is not legal review/;
 const SCHEMA_ONLY_DIRECTIVE = /DO NOT INCLUDE COLUMN VALUES/;
 const ATTRIBUTION_HEADER =
   "<!-- Adapted from gosprinto/compliance-skills (MIT) — see NOTICE -->";
+const SOLEUR_AUTHORED_HEADER =
+  "<!-- Soleur-authored — see NOTICE -->";
 
 const LIFTED_REFS = [
   "references/fields.md",
@@ -25,12 +27,21 @@ const LIFTED_REFS = [
   "references/layers/api-layer.md",
   "references/layers/data-in-transit.md",
   "references/layers/data-lifecycle.md",
+  "references/layers/auth-sessions.md",
+  "references/layers/frontend.md",
+  "references/layers/testing-seeding.md",
 ];
 
 const SCRATCH_REFS = [
   "references/non-negotiables.md",
   "references/legal-consent.md",
 ];
+
+// Soleur-authored layers (post-v2 promotion) — must carry the Soleur
+// attribution header on line 1 and a layer-shape body.
+const SOLEUR_AUTHORED_LAYERS = ["references/legal-consent.md"];
+
+const LEGACY_ARCHIVE = "references/legacy/legal-consent-v1-prose.md";
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -53,7 +64,7 @@ describe("gdpr-gate skill scaffold (AC1-AC5)", () => {
     expect(existsSync(NOTICE)).toBe(true);
   });
 
-  test("5 lifted reference files exist", () => {
+  test("all lifted reference files exist", () => {
     for (const f of LIFTED_REFS) {
       expect(existsSync(resolve(SKILL_DIR, f))).toBe(true);
     }
@@ -193,6 +204,26 @@ describe("gdpr-gate canonical-regex parity (single source of truth)", () => {
     const skillContent = readFileSync(SKILL_MD, "utf8");
     expect(skillContent).toContain(CANONICAL_REGEX_SOURCE);
   });
+
+  test("repo-scan.sh awk extraction yields the same regex byte-for-byte (Architecture M1)", () => {
+    // The repo-scan.sh walker extracts the canonical regex from SKILL.md at
+    // runtime instead of redefining it. Run the SAME awk script repo-scan.sh
+    // uses and assert the extraction matches the test's literal. If SKILL.md
+    // prose drifts (heading rename, fence-shape change, regex reformat),
+    // this test fails the same way the runtime walker would — and well
+    // before any operator hits it via `--repo-scan`.
+    const awkScript = `
+      /^## Path globs \\(canonical\\)/ { found = 1; next }
+      found && /^\`\`\`/ { in_block = !in_block; next }
+      found && in_block && /^[[:space:]]*\\^/ { print; exit }
+    `;
+    const result = Bun.spawnSync(["awk", awkScript, SKILL_MD], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const extracted = result.stdout.toString().trim();
+    expect(extracted).toBe(CANONICAL_REGEX_SOURCE);
+  });
 });
 
 describe("gdpr-gate lefthook hook (AC6, AC7)", () => {
@@ -268,11 +299,41 @@ new file mode 100644
 - [ ] AC-S3 — auth helper passes the constraint-shape contract.
 `.trim();
 
+  // Extract only the sections of SKILL.md that flow into the runtime prompt.
+  // Operator-only sections (`## --repo-scan mode`, `## Sharp edges`, etc.) are
+  // operator docs, not model input — including them makes the heuristic
+  // wildly over-conservative as SKILL.md grows with operator-facing prose.
+  // Runtime prompt = disclaimer + canonical regex + FR4 check table + output
+  // format + prompt template wrapper.
+  function extractRuntimePromptSubset(skill: string): string {
+    const sectionsToInclude = new Set([
+      "Disclaimer (always first)",
+      "Path globs (canonical)",
+      "5 mandatory v1 checks (FR4)",
+      "Output format",
+      "Prompt template — what the gate sends to the model",
+    ]);
+    const out: string[] = [];
+    let currentHeading: string | null = null;
+    let include = false;
+    for (const line of skill.split("\n")) {
+      const m = line.match(/^##\s+(.+)$/);
+      if (m) {
+        currentHeading = m[1].trim();
+        include = sectionsToInclude.has(currentHeading);
+      }
+      if (include) out.push(line);
+    }
+    return out.join("\n");
+  }
+
   test("(heuristic) input chars / 4 ≤ 4000 tokens for synthetic fixture", () => {
     const skillContent = readFileSync(SKILL_MD, "utf8");
-    // Approximate input the gate would send: SKILL.md prompt template + fixture.
+    // Approximate input the gate would send: runtime-relevant sections only +
+    // synthetic diff + synthetic plan excerpt.
     const promptInput =
-      skillContent + "\n\n--- DIFF ---\n" + SYNTHETIC_DIFF +
+      extractRuntimePromptSubset(skillContent) +
+      "\n\n--- DIFF ---\n" + SYNTHETIC_DIFF +
       "\n\n--- PLAN EXCERPT ---\n" + SYNTHETIC_PLAN_EXCERPT;
     // Claude tokenizer: ≈4 chars per token (English prose) is the published
     // ballpark. Heuristic budget = 4000 tokens → 16000 chars.
@@ -292,18 +353,113 @@ new file mode 100644
   );
 });
 
-describe("gdpr-gate NOTICE attribution (AC2)", () => {
-  test("NOTICE pins upstream commit SHA and lists 5 active-layer rows", () => {
+describe("gdpr-gate NOTICE attribution (AC2, AC-LIFT-5)", () => {
+  test("NOTICE pins upstream commit SHA and lists every lifted ref", () => {
     if (!existsSync(NOTICE)) {
       throw new Error("NOTICE missing — RED fixture not yet built");
     }
     const content = readFileSync(NOTICE, "utf8");
     expect(content).toMatch(/7b58d68461cb1fc033a063e34cc9de63d0b4144b/);
     expect(content).toMatch(/gosprinto\/compliance-skills/i);
-    // Each of the 5 lifted ref paths must appear by tail filename.
+    // Each lifted ref path must appear by tail filename.
     for (const f of LIFTED_REFS) {
       const tail = f.replace(/^references\//, "");
       expect(content.includes(tail)).toBe(true);
     }
+  });
+
+  // Comprehensive regex-metachar escape used when inserting trusted path
+  // strings from LIFTED_REFS into a constructed RegExp. The full set of
+  // ECMAScript regex metachars is escaped (not just `.`/`/`/`-`) so the
+  // resulting regex is robust to any future LIFTED_REFS entry shape and
+  // satisfies CodeQL's `js/incomplete-sanitization` rule (which warns when
+  // a sanitizer is incomplete even if current inputs would happen to be
+  // safe).
+  const escapeRegExp = (s: string): string =>
+    s.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+
+  test("each LIFTED_REFS entry has a 40-char hex blob SHA on the same row, and SHAs are unique (Kieran P3.1)", () => {
+    const content = readFileSync(NOTICE, "utf8");
+    const seen = new Map<string, string>();
+    for (const f of LIFTED_REFS) {
+      // Find the table row that mentions the file path. Soleur path appears
+      // first in the row, then the upstream path, then the SHA cell. Anchor
+      // on `^|` (start-of-row) to defend against future column reorders that
+      // could otherwise let a non-row match (e.g. an inline backtick path
+      // mention in prose) match the SHA cell.
+      const re = new RegExp(
+        `^\\|\\s*\\\`${escapeRegExp(f)}\\\`[^\\n]*?\\|\\s*\\\`([0-9a-f]{40})\\\`\\s*\\|`,
+        "m",
+      );
+      const m = content.match(re);
+      expect(m, `NOTICE row missing or malformed for ${f}`).not.toBeNull();
+      const sha = m![1];
+      expect(sha.length).toBe(40);
+      expect(/^[0-9a-f]{40}$/.test(sha)).toBe(true);
+      // Uniqueness — each lifted file gets its own blob SHA. A duplicate
+      // signals an accidental copy-paste of v1 SHAs into v2 rows.
+      const previous = seen.get(sha);
+      expect(
+        previous,
+        `Duplicate blob SHA ${sha} between ${previous} and ${f}`,
+      ).toBeUndefined();
+      seen.set(sha, f);
+    }
+  });
+
+  test("every NOTICE-listed lifted file exists on disk (Architecture M4)", () => {
+    // Defends against a future rename/delete that updates the file but
+    // leaves a phantom NOTICE row claiming attribution for a non-existent
+    // path. Cheap fs-presence check; mirrors the legal-hygiene contract
+    // that NOTICE accurately describes the lifted corpus.
+    for (const f of LIFTED_REFS) {
+      const abs = resolve(SKILL_DIR, f);
+      expect(existsSync(abs), `LIFTED_REFS path missing on disk: ${f}`).toBe(
+        true,
+      );
+    }
+    // Symmetric: legacy archive must exist as long as NOTICE references it.
+    if (readFileSync(NOTICE, "utf8").includes("legacy/legal-consent-v1-prose.md")) {
+      expect(existsSync(resolve(SKILL_DIR, LEGACY_ARCHIVE))).toBe(true);
+    }
+  });
+});
+
+describe("gdpr-gate Soleur-authored layers (AC-PROMOTE-1)", () => {
+  test("each Soleur-authored layer carries the Soleur-authored header on line 1", () => {
+    for (const f of SOLEUR_AUTHORED_LAYERS) {
+      const content = readFileSync(resolve(SKILL_DIR, f), "utf8");
+      const firstLine = content.split("\n")[0];
+      expect(firstLine).toBe(SOLEUR_AUTHORED_HEADER);
+    }
+  });
+
+  test("legal-consent.md is layer-shaped (LC-01 marker + ## When This Layer Loads)", () => {
+    const content = readFileSync(
+      resolve(SKILL_DIR, "references/legal-consent.md"),
+      "utf8",
+    );
+    expect(content).toContain("## When This Layer Loads");
+    for (const id of ["LC-01", "LC-02", "LC-03", "LC-04", "LC-05"]) {
+      expect(content).toContain(id);
+    }
+    // Each block must carry the canonical layer template fields.
+    expect(content).toMatch(/What to grep:/);
+    expect(content).toMatch(/Flag when:/);
+    expect(content).toMatch(/Fix pattern:/);
+    expect(content).toMatch(/Regulation:/);
+  });
+});
+
+describe("gdpr-gate legacy archive (AC-PROMOTE-2)", () => {
+  test("v1 prose-shaped legal-consent is archived under references/legacy/", () => {
+    const path = resolve(SKILL_DIR, LEGACY_ARCHIVE);
+    expect(existsSync(path)).toBe(true);
+    const content = readFileSync(path, "utf8");
+    // Provenance header on line 1 calls out the archived state and the
+    // one-release-cycle removal contract.
+    const firstLine = content.split("\n")[0];
+    expect(firstLine).toMatch(/Archived v1 prose-shape/);
+    expect(firstLine).toMatch(/v3/);
   });
 });

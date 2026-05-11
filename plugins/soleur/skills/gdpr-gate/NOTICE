@@ -1,8 +1,8 @@
 # NOTICE
 
-`gdpr-gate` lifts five reference files from [gosprinto/compliance-skills](https://github.com/goSprinto/compliance-skills) under the MIT license. The lifted files carry a per-file attribution header and are listed below with upstream blob SHAs pinned at commit `7b58d68461cb1fc033a063e34cc9de63d0b4144b` (verified 2026-05-10).
+`gdpr-gate` lifts eight reference files from [gosprinto/compliance-skills](https://github.com/goSprinto/compliance-skills) under the MIT license. The lifted files carry a per-file attribution header and are listed below with upstream blob SHAs pinned at commit `7b58d68461cb1fc033a063e34cc9de63d0b4144b` (verified 2026-05-10 for v1; re-verified 2026-05-10 for v2 — upstream `main` SHA unchanged since v1 lift).
 
-The Soleur prose, GDPR-first framing, EU extensions (Art. 9 fields, Chapter V cross-border check, Art. 20 portability rewrite of DL-04), and the `non-negotiables.md` + `legal-consent.md` reference files are written from scratch for this plugin.
+The Soleur prose, GDPR-first framing, EU extensions (Art. 9 fields, Chapter V cross-border check, Art. 20 portability rewrite of DL-04, Art. 32(1)(b) confidentiality footer on auth-sessions, ePrivacy/TTDSG strict-opt-in footer on frontend, Art. 32 pseudonymization footer on testing-seeding), and the `non-negotiables.md` + `legal-consent.md` reference files are written from scratch for this plugin.
 
 ## gosprinto/compliance-skills (MIT)
 
@@ -17,8 +17,18 @@ Upstream: <https://github.com/goSprinto/compliance-skills>
 | `references/layers/api-layer.md` | `pii-detector/layers/api-layer.md` | `9d3202175c1d0225f60a912c489dbdacf4df491c` | active (verbatim) |
 | `references/layers/data-in-transit.md` | `pii-detector/layers/data-in-transit.md` | `6c9eeabf17d1f0ed5660f5eb54d91587c81214ef` | active (EU-extended with Chapter V) |
 | `references/layers/data-lifecycle.md` | `pii-detector/layers/data-lifecycle.md` | `a073ef24a0527c2c3a6d738b65ea3ef9d6194abe` | active (DL-04 rewritten for Art. 20 + CCPA) |
+| `references/layers/auth-sessions.md` | `pii-detector/layers/auth-sessions.md` | `71dd9d01fe55d3e58f8b35f1cf745d47ba5f0985` | active (EU-extended with Art. 32(1)(b) confidentiality footer) |
+| `references/layers/frontend.md` | `pii-detector/layers/frontend.md` | `5f39e08fe2404759d7cbdbdea54a4f6210b91b8f` | active (EU-extended with ePrivacy/TTDSG strict-opt-in footer) |
+| `references/layers/testing-seeding.md` | `pii-detector/layers/testing-seeding.md` | `a2f299418a5f85246fd2203475d89106936f7a72` | active (EU-extended with Art. 32 pseudonymization footer) |
 
-The three fold-layer files (`auth-sessions.md`, `frontend.md`, `testing-seeding.md`) are NOT lifted in v1 — re-lifted at v2 against then-current upstream SHAs (better hygiene than carrying stale lifts). See plan `knowledge-base/project/plans/2026-05-10-feat-gdpr-gate-skill-plan.md` AC-PM-2 for the v2 follow-up issue.
+## Soleur-authored layers
+
+The following reference files are written from scratch for this plugin and carry a `<!-- Soleur-authored — see NOTICE -->` header on line 1 instead of the upstream attribution header.
+
+| File | Purpose |
+|---|---|
+| `references/non-negotiables.md` | GDPR-first regulatory framing for the plugin's scope. |
+| `references/legal-consent.md` | Layer-shaped (LC-01..LC-05) ePrivacy + GDPR Art. 7 / 13 / 14 / 35 checks. **v2 promotion:** v1 prose-shaped version is preserved at `references/legacy/legal-consent-v1-prose.md` for one release cycle and removed at v3. |
 
 ## License
 
