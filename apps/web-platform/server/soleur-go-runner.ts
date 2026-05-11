@@ -43,6 +43,7 @@ import type {
 
 import { randomUUID } from "crypto";
 import path from "path";
+import { readFile } from "node:fs/promises";
 import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
 import {
   parseConversationRouting,
@@ -53,8 +54,22 @@ import {
 import { wrapUserInput } from "./prompt-injection-wrap";
 import { reportSilentFallback } from "./observability";
 import { createChildLogger } from "./logger";
-import type { PdfExtractErrorClass } from "./pdf-text-extract";
+import type {
+  PdfExtractErrorClass,
+  ChapterIndex,
+} from "./pdf-text-extract";
+import { extractPdfText } from "./pdf-text-extract";
 import type { DocumentExtractMeta } from "./kb-document-resolver";
+import { FULL_TEXT_CAP_BYTES } from "./kb-document-resolver";
+import { isPathInWorkspace } from "./sandbox";
+import { selectChapter } from "./pdf-chapter-router";
+// Type-only import — re-added 2026-05-11 (bundle PR
+// feat-pdf-chapter-chunking-bundle Phase 3.1). Used to shape the
+// structured user message (`document` + `text` content blocks)
+// pushed into the SDK stream when a chapter is routed. Runtime usage
+// of `@anthropic-ai/sdk` would violate AC #9 (parent plan); keep this
+// as `import type` only.
+import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages";
 
 const log = createChildLogger("soleur-go-runner");
 import { isBashCommandSafe } from "./permission-callback";
@@ -1000,27 +1015,43 @@ export function buildSoleurGoSystemPrompt(
         // Write]` in cc-dispatcher is the SDK-level hard brake.
         // 2026-05-07 (#3436) — chapter-chunked soft-route. Resolver
         // partitions outline-bearing oversized PDFs as
-        // `documentExtractMeta.chapters` (no error). Phase 3.A foundations
-        // ship the router module + tests but DEFER the dispatch-time
-        // per-turn chapter routing + content-block attachment to #3472
-        // (Phase 3.B). Until #3472 ships, fall through to PR #3430's
-        // `too_many_pages` bridge whenever chapters are present so the
-        // user gets a deterministic refusal naming the page count, never
-        // a system-prompt directive that promises a content block the
-        // dispatch layer does not yet attach. (Per multi-agent review on
-        // PR #3440: an "we will attach the chapter for you" directive
-        // without the matching dispatch wiring would launder fabricated
-        // chapter answers under a confident `[Answering from chapter N]`
-        // prefix — crosses the brand-survival threshold per plan
-        // §User-Brand Impact.)
+        // `documentExtractMeta.chapters` (no error). Phase 3.B (bundle
+        // PR feat-pdf-chapter-chunking-bundle, TR4 → AC #18) revives
+        // the chapter-chunked directive in lockstep with the
+        // dispatch-time `pushStructuredUserMessage` wiring below — the
+        // per-commit walking script in plan §3.6 verifies no commit
+        // ships the directive marker (`chapter-chunked`) without the
+        // matching dispatch marker (`pushStructuredUserMessage`).
+        //
+        // Review-fix follow-up commits land in pairs by structural
+        // invariant: the dispatch refinements only TIGHTEN the
+        // directive's existing contract (drop full-PDF binary block;
+        // add ENOENT directive override on Leader). The directive
+        // text below is unchanged from the bundle revive commit.
         const chapters = args.documentExtractMeta?.chapters;
         if (chapters && chapters.length > 0) {
-          const safeNumPages = args.documentExtractMeta?.numPages ?? 0;
-          artifactDirective = buildPdfTooLongDirective(
-            safeArtifactPath,
-            safeNumPages,
+          // Inline template per plan §3.2 (no factory — single call
+          // site). Each TOC line carries the 1-based chapter number,
+          // sanitized title, and inclusive page range, mirroring the
+          // shape `selectChapter` expects on the routing turn so the
+          // router's reply digit lands on a directive-visible chapter.
+          const tocLines = chapters
+            .map((c, i) => {
+              const safeTitle = sanitizePromptString(c.title);
+              return `${i + 1}. ${safeTitle} (pages ${c.startPage}-${c.endPage})`;
+            })
+            .join("\n");
+          artifactDirective = [
+            `The user is currently viewing: ${safeArtifactPath}`,
+            "",
+            "This PDF is too long to inline. It has been chapter-chunked. Table of contents:",
+            tocLines,
+            "",
+            "The most-relevant chapter to the user's next question will be routed and attached on that user turn as a `document` content block. Treat that block as the authoritative source for your answer.",
+            `Prefix every reply with \`[Answering from chapter <N>: "<title>"]\` (using the 1-based chapter number and the title from the table of contents above) so the user can confirm the routing chose the right chapter.`,
             NO_ASK,
-          );
+            PDF_INLINE_EXCLUSION_CLAUSE,
+          ].join("\n");
         } else if (args.documentExtractError) {
           const safeErrorClass = sanitizePromptString(args.documentExtractError);
           if (isPdfSoftFailure(safeErrorClass)) {
@@ -1204,6 +1235,95 @@ interface ActiveQuery {
    * read time".
    */
   awaitingUser: boolean;
+  /**
+   * #3436 Phase 3.B — chapter-chunked PDF context. Set on session
+   * creation when `args.documentExtractMeta.chapters` is populated.
+   * `fullPath` is sourced from `args.workspacePath + args.artifactPath`
+   * at session creation (NOT from `documentExtractMeta` — that field
+   * does not exist on the resolver result). Persists across turns;
+   * each within-chapter user turn re-routes off the same outline.
+   * Cleared by the KD-5 stale-context check in `dispatch()` when the
+   * PDF rotates or by `closeQuery` on session end.
+   */
+  chapterChunkedContext: {
+    fullPath: string;
+    outline: ChapterIndex[];
+    documentTitle: string;
+  } | null;
+  /**
+   * Per-turn — set by the chapter-routing block in `dispatch()` before
+   * the answer turn fires; cleared by `handleResultMessage` on the
+   * turn boundary. `prefixEmitted` tracks whether the `[Answering from
+   * chapter <N>: "<title>"]` prefix has been prepended to the current
+   * turn's first text block. `documentTitle` is populated only on the
+   * multi-PDF KD-6 path.
+   */
+  activeChapter: {
+    displayNumber: number;
+    title: string;
+    prefixEmitted: boolean;
+    documentTitle: string | null;
+  } | null;
+  /**
+   * KD-6 (forward-looking guard) — multi-PDF chapter-chunked context.
+   * `cc-dispatcher.ts` currently passes a single `documentExtractMeta`
+   * per turn, so this flag is structurally `false`. The discriminator
+   * is wired now so a future multi-PDF resolver upgrade lands with
+   * the dispatch disambiguation already pinned by tests.
+   */
+  multiPdfChapterChunked: boolean;
+  /**
+   * Per-conversation failure counter for chapter-slice failures.
+   * Bounds the infinite-refund-loop where the user re-asks → routing
+   * fires → slice fails → refund → infinite loop. After 3 failures,
+   * surface the cap and stop refunding the routing cost.
+   */
+  chapterExtractionFailures: number;
+  /**
+   * KD-5 transient flag — set in the reused-session path when the
+   * cached chapter-chunked context was cleared (PDF rotated/deleted).
+   * Cleared on the next response that fires this turn — whichever
+   * response path (chapter-routed, ambiguous, deletion copy, or
+   * fall-through pushUserMessage) consumes the flag and prepends
+   * "(Source PDF changed — answering against the new attachment.)"
+   * to its first emission.
+   */
+  _pendingPdfRotationNotice: boolean;
+}
+
+/**
+ * #3436 Phase 3.B — bounds the per-conversation refund loop on chapter
+ * extraction failures. After this many slice failures, the cap copy
+ * surfaces and the routing-turn cost stops refunding (the next
+ * routing-cap-trip is at the outer `cc-cost-caps.ts` envelope). The
+ * counter resets on container restart (in-memory only); per data-
+ * integrity P3, this drift is bounded by routing-turn cost (~$0.002)
+ * and the outer per-conv cap.
+ */
+const CHAPTER_EXTRACTION_FAILURE_CAP = 3;
+
+/**
+ * #3436 Phase 3.B — cap on per-chapter slice byte size passed to
+ * `extractPdfText`. Reuses `FULL_TEXT_CAP_BYTES` as the upper bound
+ * because per-chapter slices are typically <1 MiB and the loose 5 MiB
+ * cap is conservative either way. Aliased as a separate identifier so
+ * future tightening of either cap doesn't silently change the other
+ * policy (code-quality P2 / primitive-obsession fix).
+ */
+const CHAPTER_SLICE_CAP_BYTES = FULL_TEXT_CAP_BYTES;
+
+/**
+ * #3436 Phase 3.B — derive a human-readable document title from the
+ * artifact path for the KD-6 multi-PDF prefix template. Uses the
+ * basename without the `.pdf` extension. Sanitized via the standard
+ * separator-strip + 256-cap.
+ */
+function deriveDocumentTitle(artifactPath: string): string {
+  const base = path.basename(artifactPath, path.extname(artifactPath));
+  return base
+    // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
+    .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
+    .slice(0, 256);
 }
 
 // --- Runner -----------------------------------------------------------
@@ -1451,8 +1571,33 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         const text = (block as { text?: string }).text ?? "";
         recordAssistantBlock(state, "text", null);
         if (text) {
+          // #3436 Phase 3.B — prepend the chapter prefix to the first
+          // text block of the turn. Server-side guarantee — the system
+          // prompt also instructs the model to emit the prefix, but
+          // hard-prepending here ensures the user always sees the
+          // routing decision even if the model paraphrases. KD-6:
+          // multi-PDF case carries the document title in the
+          // template; single-PDF uses the legacy template.
+          // KD-5: the rotation notice rides on the same first
+          // emission (no separate assistant message).
+          let outText = text;
+          const rotation = state._pendingPdfRotationNotice
+            ? "(Source PDF changed — answering against the new attachment.)\n\n"
+            : "";
+          if (state.activeChapter && !state.activeChapter.prefixEmitted) {
+            const ch = state.activeChapter;
+            const prefix = ch.documentTitle
+              ? `[Answering from "${ch.documentTitle}", chapter ${ch.displayNumber}: "${ch.title}"]\n\n`
+              : `[Answering from chapter ${ch.displayNumber}: "${ch.title}"]\n\n`;
+            outText = `${rotation}${prefix}${text}`;
+            state.activeChapter.prefixEmitted = true;
+            state._pendingPdfRotationNotice = false;
+          } else if (rotation.length > 0) {
+            outText = `${rotation}${text}`;
+            state._pendingPdfRotationNotice = false;
+          }
           try {
-            state.events.onText(text);
+            state.events.onText(outText);
           } catch (err) {
             reportSilentFallback(err, {
               feature: "soleur-go-runner",
@@ -1570,6 +1715,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     state.firstToolUseAt = null;
     state.lastBlockKind = null;
     state.lastBlockToolName = null;
+    // #3436 Phase 3.B — clear per-turn activeChapter; preserve
+    // chapterChunkedContext so the next user turn re-routes off the
+    // same outline.
+    state.activeChapter = null;
     try {
       state.events.onResult({ totalCostUsd: delta });
     } catch (err) {
@@ -1717,6 +1866,51 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         throw err;
       }
 
+      // #3436 Phase 3.B — chapter-chunked PDF context. Captured at
+      // session creation when the resolver returned a chapter-bearing
+      // PDF. `fullPath` is the absolute workspace path (workspacePath +
+      // artifactPath); per-turn `readFile` reads from this path inside
+      // the dispatch chapter-routing block. `documentTitle` is the
+      // parsed basename for the KD-6 multi-PDF prefix template.
+      //
+      // Review fix (security P3, defense-in-depth): re-validate the
+      // resolved absolute path against the workspace boundary before
+      // caching on state. The upstream resolver (`kb-document-resolver`)
+      // already gates traversal, but a future resolver refactor that
+      // populates `documentExtractMeta.chapters` without the pre-check
+      // would make the runner the last line of defense — explicit guard
+      // here means we degrade to no-chapter-routing instead of reading
+      // outside the workspace.
+      const initialChapters = args.documentExtractMeta?.chapters;
+      const chapterChunkedContext = (() => {
+        if (!initialChapters || initialChapters.length === 0) return null;
+        if (!args.artifactPath) return null;
+        const fullPath =
+          args.workspacePath && args.workspacePath.length > 0
+            ? path.join(args.workspacePath, args.artifactPath)
+            : args.artifactPath;
+        if (
+          args.workspacePath &&
+          args.workspacePath.length > 0 &&
+          !isPathInWorkspace(fullPath, args.workspacePath)
+        ) {
+          reportSilentFallback(
+            new Error("chapterChunkedContext.fullPath outside workspace"),
+            {
+              feature: "soleur-go-runner",
+              op: "chapter-cache-path-escape",
+              extra: { conversationId, userId },
+            },
+          );
+          return null;
+        }
+        return {
+          fullPath,
+          outline: initialChapters,
+          documentTitle: deriveDocumentTitle(args.artifactPath),
+        };
+      })();
+
       state = {
         conversationId,
         userId,
@@ -1735,6 +1929,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         events,
         closed: false,
         awaitingUser: false,
+        chapterChunkedContext,
+        activeChapter: null,
+        // KD-6 forward-looking guard. `cc-dispatcher.ts` passes a single
+        // documentExtractMeta per turn so this stays false today.
+        multiPdfChapterChunked: false,
+        chapterExtractionFailures: 0,
+        _pendingPdfRotationNotice: false,
       };
       activeQueries.set(conversationId, state);
 
@@ -1755,14 +1956,463 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       state.firstToolUseAt = null;
       state.lastBlockKind = null;
       state.lastBlockToolName = null;
+
+      // #3436 Phase 3.B KD-5 — stale-context check on reused sessions.
+      // When `state.chapterChunkedContext` is set but the new turn's
+      // resolver result has empty/missing chapters OR points at a
+      // different PDF path, the cached outline is stale. Clear it,
+      // then either reconstruct against the new PDF (if it's also
+      // chapter-chunkable) or fall through to the regular path (if
+      // the new resolver result has no chapters). The annotation
+      // "(Source PDF changed — answering against the new attachment.)"
+      // is prepended to whichever response fires this turn.
+      const newChapters = args.documentExtractMeta?.chapters;
+      const newFullPath =
+        args.artifactPath && args.workspacePath && args.workspacePath.length > 0
+          ? path.join(args.workspacePath, args.artifactPath)
+          : args.artifactPath ?? "";
+      const cached = state.chapterChunkedContext;
+      const pathChanged =
+        cached !== null && cached.fullPath !== newFullPath && newFullPath.length > 0;
+      const chaptersGone = cached !== null && (!newChapters || newChapters.length === 0);
+      if (cached !== null && (pathChanged || chaptersGone)) {
+        state.chapterChunkedContext = null;
+        state.activeChapter = null;
+        state._pendingPdfRotationNotice = true;
+        if (newChapters && newChapters.length > 0 && args.artifactPath) {
+          // Re-validate workspace boundary at re-cache site too —
+          // symmetric with the session-creation guard above.
+          const safeReconstruct =
+            !args.workspacePath ||
+            args.workspacePath.length === 0 ||
+            isPathInWorkspace(newFullPath, args.workspacePath);
+          if (safeReconstruct) {
+            state.chapterChunkedContext = {
+              fullPath: newFullPath,
+              outline: newChapters,
+              documentTitle: deriveDocumentTitle(args.artifactPath),
+            };
+          } else {
+            reportSilentFallback(
+              new Error("chapterChunkedContext.fullPath outside workspace (rotation)"),
+              {
+                feature: "soleur-go-runner",
+                op: "chapter-cache-path-escape-rotation",
+                extra: { conversationId, userId },
+              },
+            );
+          }
+        }
+      }
     }
 
-    pushUserMessage(state, userMessage);
+    // #3436 Phase 3.B — dispatch-time chapter routing. When the active
+    // session has a chapter-chunked PDF context, run a routing turn
+    // against the user's question, then push the routed chapter as a
+    // `document` content block on a structured user message. The
+    // existing `pushUserMessage` is bypassed on the chapter-routed
+    // path. Each `kind` is handled explicitly with an `_exhaustive:
+    // never` rail per `cq-union-widening-grep-three-patterns`.
+    //
+    // Review fix (architecture F4): wrap in try/catch so a synthetic
+    // throw (e.g., an unexpected `extractPdfText` failure that escapes
+    // the typed-error return, or a `readFile` exception not classified
+    // as ENOENT and re-entering `handleSliceFailure`) doesn't leave
+    // the session in a half-committed state (cost charged, no
+    // `pushUserMessage`, no `WorkflowEnded` emit). The catch ensures
+    // the workflow always terminates with `internal_error` + Sentry
+    // mirror — the caller in cc-dispatcher.ts can map this to a
+    // user-visible error envelope.
+    if (state.chapterChunkedContext !== null) {
+      try {
+        await dispatchChapterRouted(state, userMessage);
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "dispatchChapterRouted.synthetic-throw",
+          extra: { conversationId: state.conversationId },
+        });
+        emitWorkflowEnded(state, {
+          status: "internal_error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } else {
+      pushUserMessage(state, userMessage);
+    }
 
     return {
       queryReused,
       resumeSessionId: state.sessionId ?? undefined,
     };
+  }
+
+  /**
+   * #3436 Phase 3.B — chapter-chunked dispatch path. Runs `selectChapter`
+   * against the cached outline, then pushes a structured user message
+   * (`document` block + `text` block) into the SDK stream when routing
+   * succeeds. Refund + Sentry-mirror semantics per parent AC #7 and
+   * `cq-silent-fallback-must-mirror-to-sentry`.
+   *
+   * Cost accounting: routing-turn cost is added to `state.totalCostUsd`
+   * for every kind EXCEPT `cost-cap-hit` (which already includes the
+   * projected total) and the refund branches (ENOENT + slice-failure
+   * up to the 3-failure cap).
+   */
+  async function dispatchChapterRouted(
+    state: ActiveQuery,
+    userMessage: string,
+  ): Promise<void> {
+    const ctx = state.chapterChunkedContext;
+    if (ctx === null) {
+      // Defensive — caller gates on `!== null` already.
+      pushUserMessage(state, userMessage);
+      return;
+    }
+
+    // KD-6 forward-looking guard. Today `multiPdfChapterChunked` is
+    // structurally false (cc-dispatcher passes a single
+    // documentExtractMeta per turn); when a future multi-PDF resolver
+    // upgrade lands, this list is populated from sibling
+    // chapterChunkedContext records and passed to `selectChapter` so
+    // the router can return `ambiguous-which-document`.
+    const candidateDocumentTitles = state.multiPdfChapterChunked
+      ? [ctx.documentTitle]
+      : undefined;
+
+    const cap = capFor(state.costCaps, state.currentWorkflow);
+    const result = await selectChapter({
+      question: userMessage,
+      outline: ctx.outline,
+      conversationCostState: {
+        totalCostUsd: state.totalCostUsd,
+        perConvCap: cap,
+      },
+      candidateDocumentTitles,
+    });
+
+    // Synthetic-text branches (ambiguous, deletion copy, slice
+    // failure) prepend the rotation notice directly. The "selected"
+    // branch leaves the flag alone so `handleAssistantMessage`
+    // prepends it onto the answer turn's first text block — riding
+    // alongside the chapter prefix.
+    const synthRotationNotice = state._pendingPdfRotationNotice
+      ? "(Source PDF changed — answering against the new attachment.)\n\n"
+      : "";
+    const consumeSynthRotation = () => {
+      state._pendingPdfRotationNotice = false;
+    };
+
+    switch (result.kind) {
+      case "router-error": {
+        // Review fix (silent-failure F1): mirror to Sentry — the Leader
+        // path already does this; Concierge was missing it, producing
+        // an asymmetric `internal_error` termination with no operator
+        // signal. `selectChapter` mirrors its OWN SDK error to Sentry
+        // upstream, but the workflow-level routing-error termination
+        // (which closes the conversation) deserves its own breadcrumb.
+        reportSilentFallback(new Error(`chapter-router: ${result.reason}`), {
+          feature: "soleur-go-runner",
+          op: "chapter-router-error",
+          extra: {
+            conversationId: state.conversationId,
+            reason: result.reason,
+          },
+        });
+        state.totalCostUsd += result.routingCostUsd;
+        emitWorkflowEnded(state, {
+          status: "internal_error",
+          error: `chapter-router: ${result.reason}`,
+        });
+        return;
+      }
+      case "cost-cap-hit": {
+        // `selectChapter` returns the projected total; charge to
+        // state and emit `cost_ceiling`.
+        state.totalCostUsd = result.totalCostUsd;
+        emitWorkflowEnded(state, {
+          status: "cost_ceiling",
+          totalCostUsd: state.totalCostUsd,
+          cap: result.cap,
+          workflow: state.currentWorkflow,
+        });
+        return;
+      }
+      case "ambiguous": {
+        state.totalCostUsd += result.routingCostUsd;
+        consumeSynthRotation();
+        try {
+          state.events.onText(
+            `${synthRotationNotice}I can answer from multiple chapters — could you clarify which chapter you'd like me to use?`,
+          );
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "soleur-go-runner",
+            op: "onText.chapter-ambiguous",
+            extra: { conversationId: state.conversationId },
+          });
+        }
+        return;
+      }
+      case "ambiguous-which-document": {
+        // KD-6 forward-looking guard. Unreachable today.
+        state.totalCostUsd += result.routingCostUsd;
+        const list = result.candidateTitles.map((t) => `- ${t}`).join("\n");
+        consumeSynthRotation();
+        try {
+          state.events.onText(
+            `${synthRotationNotice}I see multiple chapter-chunked PDFs in this conversation:\n${list}\n\nWhich one would you like me to answer from?`,
+          );
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "soleur-go-runner",
+            op: "onText.chapter-ambiguous-which-document",
+            extra: { conversationId: state.conversationId },
+          });
+        }
+        return;
+      }
+      case "selected": {
+        state.totalCostUsd += result.routingCostUsd;
+        const chapter = ctx.outline[result.chapterIndex];
+        if (!chapter) {
+          // Defensive — selectChapter guarantees in-range, but a stale
+          // outline read would otherwise crash. Treat as router-error.
+          emitWorkflowEnded(state, {
+            status: "internal_error",
+            error: "chapter-router: chapterIndex out of range",
+          });
+          return;
+        }
+
+        let buffer: Buffer;
+        try {
+          buffer = await readFile(ctx.fullPath);
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException)?.code;
+          if (code === "ENOENT") {
+            // PDF was deleted from KB mid-conversation while
+            // chapterChunkedContext was still cached. Clear context,
+            // refund routing cost, surface deletion copy, mirror to
+            // Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
+            state.chapterChunkedContext = null;
+            state.activeChapter = null;
+            // Refund routing cost; warn-mirror to Sentry when the
+            // clamp swallows a partial overpayment (silent-failure P2).
+            if (state.totalCostUsd < result.routingCostUsd) {
+              reportSilentFallback(
+                new Error("chapter-refund-clamp partial-loss"),
+                {
+                  feature: "soleur-go-runner",
+                  op: "chapter-refund-clamp",
+                  extra: {
+                    conversationId: state.conversationId,
+                    totalCostUsd: state.totalCostUsd,
+                    routingCostUsd: result.routingCostUsd,
+                  },
+                },
+              );
+            }
+            state.totalCostUsd = Math.max(
+              0,
+              state.totalCostUsd - result.routingCostUsd,
+            );
+            reportSilentFallback(err, {
+              feature: "soleur-go-runner",
+              op: "chapter-readfile-enoent",
+              extra: { conversationId: state.conversationId },
+            });
+            consumeSynthRotation();
+            try {
+              state.events.onText(
+                `${synthRotationNotice}The source PDF for this conversation was deleted; please re-attach it to continue.`,
+              );
+            } catch (emitErr) {
+              reportSilentFallback(emitErr, {
+                feature: "soleur-go-runner",
+                op: "onText.chapter-pdf-deleted",
+                extra: { conversationId: state.conversationId },
+              });
+            }
+            return;
+          }
+          // Any other read error → slice-failure branch.
+          handleSliceFailure(
+            state,
+            err,
+            result.routingCostUsd,
+            "chapter-readfile-other",
+            synthRotationNotice,
+          );
+          return;
+        }
+
+        const sliceResult = await extractPdfText(buffer, CHAPTER_SLICE_CAP_BYTES, {
+          featureTag: "concierge",
+          startPage: chapter.startPage,
+          endPage: chapter.endPage,
+        });
+
+        if ("error" in sliceResult) {
+          handleSliceFailure(
+            state,
+            new Error(`extractPdfText ${sliceResult.error}`),
+            result.routingCostUsd,
+            `chapter-slice-${sliceResult.error}`,
+            synthRotationNotice,
+            { chapterIndex: result.chapterIndex, errorClass: sliceResult.error },
+          );
+          return;
+        }
+
+        // GREEN: prepare activeChapter + push structured user message.
+        // Title is sanitized at the source (security P3 review fix):
+        // pdfjs `/Outlines` titles can carry control chars or U+2028/9
+        // from user-uploaded PDFs; the prefix injection in
+        // handleAssistantMessage emits the title to user-visible text
+        // and audit log, so the sanitizer must be applied before
+        // storage on `state`, not at every emission site.
+        state.activeChapter = {
+          displayNumber: result.chapterIndex + 1,
+          title: sanitizePromptIdentifier(chapter.title),
+          prefixEmitted: false,
+          documentTitle: state.multiPdfChapterChunked ? ctx.documentTitle : null,
+        };
+
+        // Plan \u00a73.2 intent (review P1, user-impact F5 + data-integrity P2):
+        // attach the chapter SLICE TEXT as a single content block with
+        // cache_control. Earlier draft attached the full PDF buffer as a
+        // base64 document block in addition to the slice text \u2014 this
+        // re-uploaded the full binary on every within-chapter turn (cache
+        // miss after 5min idle) for negligible grounding gain over the
+        // pdfjs-extracted text. Review BLOCKED on that shape; the chapter
+        // slice text is the byte-economic shape and matches the plan
+        // claim. cache_control: ephemeral attaches to the text block
+        // (SDK-supported); within-chapter turns hit the 5min TTL cache
+        // when the slice text is byte-stable.
+        const sanitizeChapterSlice = (text: string): string =>
+          text
+            // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
+            .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
+            .replaceAll("</document>", "<\\/document>");
+        const sanitizedSlice = sanitizeChapterSlice(sliceResult.text);
+        // Sanitize title for the in-message chapter heading (security
+        // P3, post-review fix). pdfjs `/Outlines` titles are
+        // user-uploaded content; the system-prompt TOC already applies
+        // sanitizePromptString. Mirror it here.
+        const safeChapterTitle = sanitizePromptIdentifier(chapter.title);
+        const userTurnText = [
+          `Chapter ${result.chapterIndex + 1}: ${safeChapterTitle} (pages ${chapter.startPage}-${chapter.endPage})`,
+          "<document>",
+          sanitizedSlice,
+          "</document>",
+          "",
+          `User question: ${userMessage}`,
+        ]
+          .filter((s) => s.length > 0)
+          .join("\n");
+
+        pushStructuredUserMessage(state, [
+          {
+            type: "text",
+            text: userTurnText,
+            cache_control: { type: "ephemeral" },
+          },
+        ]);
+        return;
+      }
+      default: {
+        const _exhaustive: never = result;
+        void _exhaustive;
+        return;
+      }
+    }
+  }
+
+  /**
+   * Slice-failure branch helper (parent AC #7 + KD bundle additions).
+   * Emits the user-facing failure copy, refunds the routing cost (up
+   * to the 3-failure cap), mirrors to Sentry per
+   * `cq-silent-fallback-must-mirror-to-sentry`. After 3 failures, the
+   * cap surfaces and refunds stop — bounds the infinite-refund-loop.
+   */
+  function handleSliceFailure(
+    state: ActiveQuery,
+    err: unknown,
+    routingCostUsd: number,
+    op: string,
+    rotationNotice: string,
+    extra: Record<string, unknown> = {},
+  ): void {
+    state.chapterExtractionFailures += 1;
+    state._pendingPdfRotationNotice = false;
+    const overCap = state.chapterExtractionFailures >= CHAPTER_EXTRACTION_FAILURE_CAP;
+    if (!overCap) {
+      // Refund + clamp-overpayment warning (silent-failure P2 review).
+      if (state.totalCostUsd < routingCostUsd) {
+        reportSilentFallback(
+          new Error("chapter-refund-clamp partial-loss"),
+          {
+            feature: "soleur-go-runner",
+            op: "chapter-refund-clamp",
+            extra: {
+              conversationId: state.conversationId,
+              totalCostUsd: state.totalCostUsd,
+              routingCostUsd,
+              op,
+            },
+          },
+        );
+      }
+      state.totalCostUsd = Math.max(0, state.totalCostUsd - routingCostUsd);
+    }
+    reportSilentFallback(err, {
+      feature: "soleur-go-runner",
+      op,
+      extra: { conversationId: state.conversationId, ...extra },
+    });
+    const copy = overCap
+      ? `${rotationNotice}I can't extract chapters from this PDF — please re-attach or pick a different document.`
+      : `${rotationNotice}I have the TOC but that chapter failed to extract — try a different chapter or re-attach the PDF.`;
+    try {
+      state.events.onText(copy);
+    } catch (emitErr) {
+      reportSilentFallback(emitErr, {
+        feature: "soleur-go-runner",
+        op: "onText.chapter-slice-failure",
+        extra: { conversationId: state.conversationId },
+      });
+    }
+  }
+
+  /**
+   * #3436 Phase 3.B — local helper for pushing a structured
+   * (MessageParam-shaped) user message onto the SDK input stream.
+   * Type-only on @anthropic-ai/sdk import (AC #9). Not exported —
+   * agent-runner.ts has its own sibling.
+   *
+   * Review fix (code-quality P1): `content` is typed as
+   * `MessageParam["content"]` so the type-only import is now
+   * load-bearing instead of relying on a `void (null as unknown as
+   * MessageParam)` keep-alive hack. The downstream cast to the SDK's
+   * legacy `content: string | array` union still needs `any` because
+   * `SDKUserMessage["message"]` is widened upstream.
+   */
+  function pushStructuredUserMessage(
+    state: ActiveQuery,
+    content: MessageParam["content"],
+  ): void {
+    const sdkUserMessage: SDKUserMessage = {
+      type: "user",
+      message: {
+        role: "user",
+        content,
+        // biome-ignore lint/suspicious/noExplicitAny: SDK MessageParam accepts string|array
+      } as any,
+      parent_tool_use_id: null,
+      session_id: state.sessionId ?? "",
+    };
+    state.inputQueue.push(sdkUserMessage);
   }
 
   function hasActiveQuery(conversationId: string): boolean {

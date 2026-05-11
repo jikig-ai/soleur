@@ -16,6 +16,20 @@ Unified entry point for all Soleur workflows. Classify the user's intent and rou
 
 Do not proceed until there is input from the user.
 
+## Step 0: Session-Start Preamble
+
+Before any other work, run the session-start gates from AGENTS.md (`wg-at-session-start-run-bash-plugins-soleur` + `wg-at-session-start-after-cleanup-merged`):
+
+```bash
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && \
+  git worktree list && \
+  git show main:.mcp.json > .mcp.json 2>/dev/null || true
+```
+
+The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree (file gets overwritten on next session-start from the new CWD). Skip silently on first error — do not block routing on session-start hygiene.
+
+See `knowledge-base/project/learnings/2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record.md` Session Errors #1-#2 for the gap this closes.
+
 ## Step 1: Worktree Context
 
 Run `pwd`. If the path contains `.worktrees/`, extract the feature name and mention it:
