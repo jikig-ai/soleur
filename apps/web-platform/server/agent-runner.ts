@@ -1023,6 +1023,11 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
           // no SDK Read surface; leader does and would otherwise try
           // to Read the chapter PDF directly, defeating the
           // chapter-routing cost optimization).
+          //
+          // ENOENT contract: the directive is overridden via a
+          // recency-wins addendum below if readFile fails (silent-
+          // failure P2 fix). Within the original directive block,
+          // the chapter-chunked contract holds.
           const chapters = resolved.documentExtractMeta?.chapters;
           if (chapters && chapters.length > 0) {
             // Capture for the pre-`query()` chapter-routing pass below
@@ -1410,6 +1415,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       if (result.kind === "selected") {
         const chapter = routing.outline[result.chapterIndex];
         let buffer: Buffer;
+        let readSucceeded = true;
         try {
           buffer = await readFile(routing.fullPath);
         } catch (err) {
@@ -1432,8 +1438,21 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               leaderId: effectiveLeaderId,
             });
           buffer = Buffer.alloc(0);
+          readSucceeded = false;
+          // Override the chapter-block directive baked above — the
+          // block is absent, so the "Do NOT invoke Read" prohibition
+          // would otherwise force fabrication. Append a recency-wins
+          // addendum that releases the Read prohibition for this turn
+          // and disables the chapter prefix instruction. Review fix
+          // (silent-failure P2).
+          systemPrompt += [
+            "",
+            "",
+            "## Chapter content unavailable (this turn)",
+            "The source PDF could not be read — no chapter content block is attached on this user turn. Disregard the earlier directive that prohibited the Read tool: you may attempt Read against the table of contents page ranges if you judge it useful, or answer from the TOC alone. Do NOT prefix the reply with `[Answering from chapter <N>: \"<title>\"]` on this turn — the routing failed.",
+          ].join("\n");
         }
-        if (chapter && buffer.length > 0) {
+        if (chapter && buffer.length > 0 && readSucceeded) {
           const sliceResult = await extractPdfText(
             buffer,
             FULL_TEXT_CAP_BYTES,
@@ -1448,9 +1467,13 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
               .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
               .replaceAll("</chapter-content>", "<\\/chapter-content>");
+            // Sanitize chapter title before user-visible prefix
+            // (security P3 review fix — pdfjs outline titles can
+            // carry control chars / U+2028/9).
+            const safeTitle = sanitizePromptIdentifier(chapter.title);
             leaderChapterFor = {
               displayNumber: result.chapterIndex + 1,
-              title: chapter.title,
+              title: safeTitle,
             };
             // Inline the chapter slice in the user message. The
             // system-prompt directive instructs the leader to treat

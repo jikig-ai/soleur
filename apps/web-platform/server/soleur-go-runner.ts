@@ -61,6 +61,7 @@ import type {
 import { extractPdfText } from "./pdf-text-extract";
 import type { DocumentExtractMeta } from "./kb-document-resolver";
 import { FULL_TEXT_CAP_BYTES } from "./kb-document-resolver";
+import { isPathInWorkspace } from "./sandbox";
 import { selectChapter } from "./pdf-chapter-router";
 // Type-only import — re-added 2026-05-11 (bundle PR
 // feat-pdf-chapter-chunking-bundle Phase 3.1). Used to shape the
@@ -1005,6 +1006,12 @@ export function buildSoleurGoSystemPrompt(
         // per-commit walking script in plan §3.6 verifies no commit
         // ships the directive marker (`chapter-chunked`) without the
         // matching dispatch marker (`pushStructuredUserMessage`).
+        //
+        // Review-fix follow-up commits land in pairs by structural
+        // invariant: the dispatch refinements only TIGHTEN the
+        // directive's existing contract (drop full-PDF binary block;
+        // add ENOENT directive override on Leader). The directive
+        // text below is unchanged from the bundle revive commit.
         const chapters = args.documentExtractMeta?.chapters;
         if (chapters && chapters.length > 0) {
           // Inline template per plan §3.2 (no factory — single call
@@ -1267,6 +1274,27 @@ interface ActiveQuery {
    */
   _pendingPdfRotationNotice: boolean;
 }
+
+/**
+ * #3436 Phase 3.B — bounds the per-conversation refund loop on chapter
+ * extraction failures. After this many slice failures, the cap copy
+ * surfaces and the routing-turn cost stops refunding (the next
+ * routing-cap-trip is at the outer `cc-cost-caps.ts` envelope). The
+ * counter resets on container restart (in-memory only); per data-
+ * integrity P3, this drift is bounded by routing-turn cost (~$0.002)
+ * and the outer per-conv cap.
+ */
+const CHAPTER_EXTRACTION_FAILURE_CAP = 3;
+
+/**
+ * #3436 Phase 3.B — cap on per-chapter slice byte size passed to
+ * `extractPdfText`. Reuses `FULL_TEXT_CAP_BYTES` as the upper bound
+ * because per-chapter slices are typically <1 MiB and the loose 5 MiB
+ * cap is conservative either way. Aliased as a separate identifier so
+ * future tightening of either cap doesn't silently change the other
+ * policy (code-quality P2 / primitive-obsession fix).
+ */
+const CHAPTER_SLICE_CAP_BYTES = FULL_TEXT_CAP_BYTES;
 
 /**
  * #3436 Phase 3.B — derive a human-readable document title from the
@@ -1804,18 +1832,44 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // artifactPath); per-turn `readFile` reads from this path inside
       // the dispatch chapter-routing block. `documentTitle` is the
       // parsed basename for the KD-6 multi-PDF prefix template.
+      //
+      // Review fix (security P3, defense-in-depth): re-validate the
+      // resolved absolute path against the workspace boundary before
+      // caching on state. The upstream resolver (`kb-document-resolver`)
+      // already gates traversal, but a future resolver refactor that
+      // populates `documentExtractMeta.chapters` without the pre-check
+      // would make the runner the last line of defense — explicit guard
+      // here means we degrade to no-chapter-routing instead of reading
+      // outside the workspace.
       const initialChapters = args.documentExtractMeta?.chapters;
-      const chapterChunkedContext =
-        initialChapters && initialChapters.length > 0 && args.artifactPath
-          ? {
-              fullPath:
-                args.workspacePath && args.workspacePath.length > 0
-                  ? path.join(args.workspacePath, args.artifactPath)
-                  : args.artifactPath,
-              outline: initialChapters,
-              documentTitle: deriveDocumentTitle(args.artifactPath),
-            }
-          : null;
+      const chapterChunkedContext = (() => {
+        if (!initialChapters || initialChapters.length === 0) return null;
+        if (!args.artifactPath) return null;
+        const fullPath =
+          args.workspacePath && args.workspacePath.length > 0
+            ? path.join(args.workspacePath, args.artifactPath)
+            : args.artifactPath;
+        if (
+          args.workspacePath &&
+          args.workspacePath.length > 0 &&
+          !isPathInWorkspace(fullPath, args.workspacePath)
+        ) {
+          reportSilentFallback(
+            new Error("chapterChunkedContext.fullPath outside workspace"),
+            {
+              feature: "soleur-go-runner",
+              op: "chapter-cache-path-escape",
+              extra: { conversationId, userId },
+            },
+          );
+          return null;
+        }
+        return {
+          fullPath,
+          outline: initialChapters,
+          documentTitle: deriveDocumentTitle(args.artifactPath),
+        };
+      })();
 
       state = {
         conversationId,
@@ -1886,11 +1940,28 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         state.activeChapter = null;
         state._pendingPdfRotationNotice = true;
         if (newChapters && newChapters.length > 0 && args.artifactPath) {
-          state.chapterChunkedContext = {
-            fullPath: newFullPath,
-            outline: newChapters,
-            documentTitle: deriveDocumentTitle(args.artifactPath),
-          };
+          // Re-validate workspace boundary at re-cache site too —
+          // symmetric with the session-creation guard above.
+          const safeReconstruct =
+            !args.workspacePath ||
+            args.workspacePath.length === 0 ||
+            isPathInWorkspace(newFullPath, args.workspacePath);
+          if (safeReconstruct) {
+            state.chapterChunkedContext = {
+              fullPath: newFullPath,
+              outline: newChapters,
+              documentTitle: deriveDocumentTitle(args.artifactPath),
+            };
+          } else {
+            reportSilentFallback(
+              new Error("chapterChunkedContext.fullPath outside workspace (rotation)"),
+              {
+                feature: "soleur-go-runner",
+                op: "chapter-cache-path-escape-rotation",
+                extra: { conversationId, userId },
+              },
+            );
+          }
         }
       }
     }
@@ -1902,8 +1973,30 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // existing `pushUserMessage` is bypassed on the chapter-routed
     // path. Each `kind` is handled explicitly with an `_exhaustive:
     // never` rail per `cq-union-widening-grep-three-patterns`.
+    //
+    // Review fix (architecture F4): wrap in try/catch so a synthetic
+    // throw (e.g., an unexpected `extractPdfText` failure that escapes
+    // the typed-error return, or a `readFile` exception not classified
+    // as ENOENT and re-entering `handleSliceFailure`) doesn't leave
+    // the session in a half-committed state (cost charged, no
+    // `pushUserMessage`, no `WorkflowEnded` emit). The catch ensures
+    // the workflow always terminates with `internal_error` + Sentry
+    // mirror — the caller in cc-dispatcher.ts can map this to a
+    // user-visible error envelope.
     if (state.chapterChunkedContext !== null) {
-      await dispatchChapterRouted(state, userMessage);
+      try {
+        await dispatchChapterRouted(state, userMessage);
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "dispatchChapterRouted.synthetic-throw",
+          extra: { conversationId: state.conversationId },
+        });
+        emitWorkflowEnded(state, {
+          status: "internal_error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     } else {
       pushUserMessage(state, userMessage);
     }
@@ -1972,6 +2065,20 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
 
     switch (result.kind) {
       case "router-error": {
+        // Review fix (silent-failure F1): mirror to Sentry — the Leader
+        // path already does this; Concierge was missing it, producing
+        // an asymmetric `internal_error` termination with no operator
+        // signal. `selectChapter` mirrors its OWN SDK error to Sentry
+        // upstream, but the workflow-level routing-error termination
+        // (which closes the conversation) deserves its own breadcrumb.
+        reportSilentFallback(new Error(`chapter-router: ${result.reason}`), {
+          feature: "soleur-go-runner",
+          op: "chapter-router-error",
+          extra: {
+            conversationId: state.conversationId,
+            reason: result.reason,
+          },
+        });
         state.totalCostUsd += result.routingCostUsd;
         emitWorkflowEnded(state, {
           status: "internal_error",
@@ -2050,6 +2157,22 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
             // Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
             state.chapterChunkedContext = null;
             state.activeChapter = null;
+            // Refund routing cost; warn-mirror to Sentry when the
+            // clamp swallows a partial overpayment (silent-failure P2).
+            if (state.totalCostUsd < result.routingCostUsd) {
+              reportSilentFallback(
+                new Error("chapter-refund-clamp partial-loss"),
+                {
+                  feature: "soleur-go-runner",
+                  op: "chapter-refund-clamp",
+                  extra: {
+                    conversationId: state.conversationId,
+                    totalCostUsd: state.totalCostUsd,
+                    routingCostUsd: result.routingCostUsd,
+                  },
+                },
+              );
+            }
             state.totalCostUsd = Math.max(
               0,
               state.totalCostUsd - result.routingCostUsd,
@@ -2084,7 +2207,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           return;
         }
 
-        const sliceResult = await extractPdfText(buffer, FULL_TEXT_CAP_BYTES, {
+        const sliceResult = await extractPdfText(buffer, CHAPTER_SLICE_CAP_BYTES, {
           featureTag: "concierge",
           startPage: chapter.startPage,
           endPage: chapter.endPage,
@@ -2103,33 +2226,43 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         }
 
         // GREEN: prepare activeChapter + push structured user message.
+        // Title is sanitized at the source (security P3 review fix):
+        // pdfjs `/Outlines` titles can carry control chars or U+2028/9
+        // from user-uploaded PDFs; the prefix injection in
+        // handleAssistantMessage emits the title to user-visible text
+        // and audit log, so the sanitizer must be applied before
+        // storage on `state`, not at every emission site.
         state.activeChapter = {
           displayNumber: result.chapterIndex + 1,
-          title: chapter.title,
+          title: sanitizePromptIdentifier(chapter.title),
           prefixEmitted: false,
           documentTitle: state.multiPdfChapterChunked ? ctx.documentTitle : null,
         };
 
-        const documentBlockBase64 = buffer.toString("base64");
-        // S1 GREEN (verified 2026-05-11 via spike): attach
-        // cache_control: { type: "ephemeral" } on the document block.
-        // The pdf slice is byte-stable across within-chapter turns,
-        // so the 5min TTL cache write on turn 1 reads on turn 2+.
-        const documentBlock = {
-          type: "document",
-          source: {
-            type: "base64",
-            media_type: "application/pdf",
-            data: documentBlockBase64,
-          },
-          cache_control: { type: "ephemeral" },
-        };
-        const sanitizedSlice = sliceResult.text
-          // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
-          .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
-          .replaceAll("</document>", "<\\/document>");
+        // Plan \u00a73.2 intent (review P1, user-impact F5 + data-integrity P2):
+        // attach the chapter SLICE TEXT as a single content block with
+        // cache_control. Earlier draft attached the full PDF buffer as a
+        // base64 document block in addition to the slice text \u2014 this
+        // re-uploaded the full binary on every within-chapter turn (cache
+        // miss after 5min idle) for negligible grounding gain over the
+        // pdfjs-extracted text. Review BLOCKED on that shape; the chapter
+        // slice text is the byte-economic shape and matches the plan
+        // claim. cache_control: ephemeral attaches to the text block
+        // (SDK-supported); within-chapter turns hit the 5min TTL cache
+        // when the slice text is byte-stable.
+        const sanitizeChapterSlice = (text: string): string =>
+          text
+            // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
+            .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
+            .replaceAll("</document>", "<\\/document>");
+        const sanitizedSlice = sanitizeChapterSlice(sliceResult.text);
+        // Sanitize title for the in-message chapter heading (security
+        // P3, post-review fix). pdfjs `/Outlines` titles are
+        // user-uploaded content; the system-prompt TOC already applies
+        // sanitizePromptString. Mirror it here.
+        const safeChapterTitle = sanitizePromptIdentifier(chapter.title);
         const userTurnText = [
-                    `Chapter ${result.chapterIndex + 1}: ${chapter.title} (pages ${chapter.startPage}-${chapter.endPage})`,
+          `Chapter ${result.chapterIndex + 1}: ${safeChapterTitle} (pages ${chapter.startPage}-${chapter.endPage})`,
           "<document>",
           sanitizedSlice,
           "</document>",
@@ -2140,9 +2273,11 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           .join("\n");
 
         pushStructuredUserMessage(state, [
-          // biome-ignore lint/suspicious/noExplicitAny: MessageParam content array narrowed below
-          documentBlock as any,
-          { type: "text", text: userTurnText },
+          {
+            type: "text",
+            text: userTurnText,
+            cache_control: { type: "ephemeral" },
+          },
         ]);
         return;
       }
@@ -2171,8 +2306,24 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   ): void {
     state.chapterExtractionFailures += 1;
     state._pendingPdfRotationNotice = false;
-    const overCap = state.chapterExtractionFailures >= 3;
+    const overCap = state.chapterExtractionFailures >= CHAPTER_EXTRACTION_FAILURE_CAP;
     if (!overCap) {
+      // Refund + clamp-overpayment warning (silent-failure P2 review).
+      if (state.totalCostUsd < routingCostUsd) {
+        reportSilentFallback(
+          new Error("chapter-refund-clamp partial-loss"),
+          {
+            feature: "soleur-go-runner",
+            op: "chapter-refund-clamp",
+            extra: {
+              conversationId: state.conversationId,
+              totalCostUsd: state.totalCostUsd,
+              routingCostUsd,
+              op,
+            },
+          },
+        );
+      }
       state.totalCostUsd = Math.max(0, state.totalCostUsd - routingCostUsd);
     }
     reportSilentFallback(err, {
@@ -2199,11 +2350,17 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
    * (MessageParam-shaped) user message onto the SDK input stream.
    * Type-only on @anthropic-ai/sdk import (AC #9). Not exported —
    * agent-runner.ts has its own sibling.
+   *
+   * Review fix (code-quality P1): `content` is typed as
+   * `MessageParam["content"]` so the type-only import is now
+   * load-bearing instead of relying on a `void (null as unknown as
+   * MessageParam)` keep-alive hack. The downstream cast to the SDK's
+   * legacy `content: string | array` union still needs `any` because
+   * `SDKUserMessage["message"]` is widened upstream.
    */
   function pushStructuredUserMessage(
     state: ActiveQuery,
-    // biome-ignore lint/suspicious/noExplicitAny: SDK content array
-    content: any,
+    content: MessageParam["content"],
   ): void {
     const sdkUserMessage: SDKUserMessage = {
       type: "user",
@@ -2215,8 +2372,6 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       parent_tool_use_id: null,
       session_id: state.sessionId ?? "",
     };
-    // Reference MessageParam type-only so the import is used.
-    void (null as unknown as MessageParam);
     state.inputQueue.push(sdkUserMessage);
   }
 

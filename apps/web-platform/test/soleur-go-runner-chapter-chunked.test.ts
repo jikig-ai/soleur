@@ -490,6 +490,87 @@ describe("soleur-go-runner chapter-chunked dispatch (Phase 3.B)", () => {
     expect(selectChapterSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("GREEN-S1 cache_control: dispatch attaches cache_control: ephemeral on the chapter content block (AC #5 / S1 verification)", async () => {
+    // Review fix (data-integrity P2, test-design P2): the inputQueue
+    // shape is the load-bearing wire for S1 cache economics — without
+    // a static-shape assertion, a silent regression that drops
+    // `cache_control` would invalidate AC #4 (10-turn cost envelope)
+    // post-deploy with no test signal.
+    selectChapterSpy.mockResolvedValueOnce({
+      kind: "selected",
+      chapterIndex: 0,
+      routingCostUsd: 0.001,
+    });
+    readFileSpy.mockResolvedValueOnce(Buffer.from("fake-pdf-bytes"));
+    extractPdfTextSpy.mockResolvedValueOnce({
+      text: "Intro slice text.",
+      truncated: false,
+      pageCount: 12,
+    });
+    // Capture the SDK user-message that lands on the input stream.
+    const captures: SDKUserMessage[] = [];
+    const mock = createMockQuery();
+    const factory: QueryFactory = (args) => {
+      void (async () => {
+        for await (const msg of args.prompt as AsyncIterable<SDKUserMessage>) {
+          captures.push(msg);
+          if (captures.length >= 1) break;
+        }
+      })();
+      return mock.query;
+    };
+    const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
+    const events = makeEvents();
+    await runner.dispatch(baseDispatchArgs("c-cache", "What's in chapter 1?", events));
+    await flush(20);
+
+    expect(captures.length).toBe(1);
+    const pushed = captures[0]!;
+    const content = (pushed.message as { content: unknown }).content;
+    expect(Array.isArray(content)).toBe(true);
+    const blocks = content as Array<{ type: string; cache_control?: { type: string } }>;
+    // Exactly one content block (the text block with the chapter slice).
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.type).toBe("text");
+    expect(blocks[0]!.cache_control).toEqual({ type: "ephemeral" });
+    // The block does NOT carry the full PDF binary (review F5 fix —
+    // earlier draft attached a document block with base64-encoded
+    // PDF buffer, leading to per-turn full-binary egress).
+    expect(blocks.find((b) => (b as { type: string }).type === "document")).toBeUndefined();
+  });
+
+  it("3-failure cap: 3rd slice failure surfaces cap copy and does NOT refund routing cost", async () => {
+    // Review fix (data-integrity P2): the chapterExtractionFailures
+    // 3-cap is the load-bearing infinite-refund-loop guard. Three
+    // consecutive slice failures — first two refund, third surfaces
+    // cap copy without refund.
+    const mock = createMockQuery();
+    const factory: QueryFactory = () => mock.query;
+    const runner = createSoleurGoRunner({ queryFactory: factory, now: () => 0 });
+    const events = makeEvents();
+
+    for (let i = 0; i < 3; i++) {
+      selectChapterSpy.mockResolvedValueOnce({
+        kind: "selected",
+        chapterIndex: 0,
+        routingCostUsd: 0.001,
+      });
+      readFileSpy.mockResolvedValueOnce(Buffer.from("buf"));
+      extractPdfTextSpy.mockResolvedValueOnce({ error: "parse_error" });
+      await runner.dispatch(
+        baseDispatchArgs(`c-cap-3`, `try ${i}`, events),
+      );
+      await flush(8);
+    }
+
+    // Last text emission is the cap copy.
+    const lastText = events._text[events._text.length - 1];
+    expect(lastText).toMatch(/can't extract chapters from this PDF/);
+    // First two failures should NOT have surfaced the cap copy.
+    expect(events._text[0]).toMatch(/chapter failed to extract/);
+    expect(events._text[1]).toMatch(/chapter failed to extract/);
+  });
+
   it("Case 9 — single-PDF prefix shape (no document title)", async () => {
     selectChapterSpy.mockResolvedValueOnce({
       kind: "selected",
