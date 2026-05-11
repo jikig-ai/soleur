@@ -643,6 +643,22 @@ export interface DispatchEvents {
    * callers can ignore.
    */
   onTextTurnEnd?: () => void;
+  /**
+   * #3266 — fires exactly once per active state on the first
+   * `SDKResultMessage` carrying a non-empty `session_id`. The
+   * cc-dispatcher wires this to a `conversations.session_id` write so
+   * the persisted value seeds `args.sessionId` on the next cold-Query
+   * construction (server restart, idle reap, container restart) and
+   * activates the prefill guard's history-probe branch. Optional so
+   * non-cc callers (legacy agent-runner has its own writer) can ignore.
+   * Rebind-aware: fires on any transition (null → value, or value → new
+   * value) and is silent when the SDK echoes the same session_id (warm
+   * resume). The callback is fire-and-forget; the runner's `try/catch`
+   * around the invocation routes throws to Sentry rather than blocking
+   * turn termination. Do NOT promote to required without revisiting the
+   * no-op test cases.
+   */
+  onSessionIdCaptured?: (sessionId: string) => void;
 }
 
 export interface DispatchArgs {
@@ -1521,7 +1537,31 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   function handleResultMessage(state: ActiveQuery, msg: SDKResultMessage): void {
     const delta = msg.total_cost_usd ?? 0;
     state.totalCostUsd += delta;
-    state.sessionId = msg.session_id ?? state.sessionId;
+    const incomingSessionId = msg.session_id || null;
+    // #3266 — fire `onSessionIdCaptured` on any rebind (null → value, or
+    // value → different value). Warm-resume cold-Query construction
+    // where the SDK echoes the seeded `args.sessionId` is silent (no
+    // redundant write per cold start). The writer (cc-dispatcher) is
+    // fire-and-forget; a throw in the user-installed callback MUST NOT
+    // block turn termination.
+    if (
+      incomingSessionId &&
+      incomingSessionId !== state.sessionId &&
+      state.events.onSessionIdCaptured
+    ) {
+      state.sessionId = incomingSessionId;
+      try {
+        state.events.onSessionIdCaptured(incomingSessionId);
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "onSessionIdCaptured",
+          extra: { conversationId: state.conversationId },
+        });
+      }
+    } else if (incomingSessionId) {
+      state.sessionId = incomingSessionId;
+    }
     // Result terminates the turn. Clear both the per-block idle window
     // and the absolute turn ceiling; the next turn's first block will
     // re-stamp `firstToolUseAt` and re-arm both timers.

@@ -805,6 +805,85 @@ export interface DispatchSoleurGoArgs {
    * `agent-runner.ts:sendUserMessage` flow exactly. See #3254.
    */
   attachments?: AttachmentRef[];
+  /**
+   * #3266 — fire-and-forget hook that the dispatcher invokes after a
+   * successful `persistCcSessionId` and after a `clearCcSessionId`. The
+   * ws-handler uses it to mutate the in-process `ClientSession.sessionId`
+   * cache so a subsequent chat-case warm-cache turn forwards the
+   * just-persisted value (instead of the stale `null` seeded on
+   * materialization). Without this, runner-reap-during-live-WS scenarios
+   * use `args.sessionId = null` on the next cold-Query construction,
+   * defeating the prefill guard's history-probe branch. Receives `null`
+   * on the stale-clear path.
+   */
+  onSessionIdPersisted?: (sessionId: string | null) => void;
+}
+
+/**
+ * #3266 — persist the SDK-emitted `session_id` back to
+ * `conversations.session_id` so the next cold-Query construction (server
+ * restart, idle reap, container restart) seeds `args.sessionId` and the
+ * runner can `resume:` the SDK session. The write is fire-and-forget
+ * because the user's current turn does NOT depend on it landing; failures
+ * mirror to Sentry via `updateConversationFor` and the next turn's
+ * in-memory `state.sessionId` covers the warm-Query case.
+ */
+async function persistCcSessionId(args: {
+  userId: string;
+  conversationId: string;
+  sessionId: string;
+}): Promise<void> {
+  const { ok, error } = await updateConversationFor(
+    args.userId,
+    args.conversationId,
+    { session_id: args.sessionId },
+    {
+      feature: "cc-dispatcher",
+      op: "persist-session-id",
+      expectMatch: true,
+    },
+  );
+  if (!ok) {
+    // updateConversationFor already mirrors to Sentry; log here only for
+    // cross-debugging with legacy `agent-runner.ts` parity.
+    log.error(
+      { conversationId: args.conversationId, err: error },
+      "cc-dispatcher: failed to persist session_id",
+    );
+  }
+}
+
+/**
+ * #3266 R7 — clear a stale `conversations.session_id` after the SDK
+ * rejects `resume:` for a non-KeyInvalidError reason (missing session
+ * file, schema drift). Without this, the next cold-Query retries the
+ * same bad session_id indefinitely. Mirrors the legacy
+ * `agent-runner.ts` stale-clear behavior.
+ */
+async function clearCcSessionId(args: {
+  userId: string;
+  conversationId: string;
+}): Promise<void> {
+  // Default `expectMatch: false` — a concurrent close/archive race
+  // (legitimate 0-rows outcome) is silent success here, matching legacy
+  // `agent-runner.ts` stale-clear parity. The composite-key invariant
+  // (`.eq("id", ...).eq("user_id", ...)`) is enforced inside the wrapper
+  // regardless. Real DB errors still mirror to Sentry.
+  const { ok, error } = await updateConversationFor(
+    args.userId,
+    args.conversationId,
+    { session_id: null },
+    {
+      feature: "cc-dispatcher",
+      op: "clear-stale-session-id",
+    },
+  );
+  if (!ok) {
+    log.error(
+      { conversationId: args.conversationId, err: error },
+      "cc-dispatcher: failed to clear stale session_id",
+    );
+  }
 }
 
 /**
@@ -832,6 +911,7 @@ export async function dispatchSoleurGo(
     documentExtractMeta,
     workspacePath: callerWorkspacePath,
     attachments,
+    onSessionIdPersisted,
   } = args;
 
   // Verify conversation ownership AND bump `last_active` in a single
@@ -1057,6 +1137,22 @@ export async function dispatchSoleurGo(
       // Usage totals bubble via `usage_update`; wire in Stage 3 when
       // the aggregate conversation cost reader lands.
     },
+    onSessionIdCaptured: (capturedSessionId) => {
+      // #3266 — fire-and-forget DB persist + synchronous in-process cache
+      // update. The cache update is load-bearing for the
+      // runner-reap-but-WS-alive scenario: on the next chat-case turn the
+      // ws-handler's warm-cache branch forwards `session.sessionId` to
+      // `dispatchSoleurGo`, and a stale `null` would defeat the prefill
+      // guard's history-probe activation. Fires synchronously BEFORE the
+      // async DB write commits so the next turn can read the value even
+      // if the user fires a follow-up before persistence lands.
+      onSessionIdPersisted?.(capturedSessionId);
+      void persistCcSessionId({
+        userId,
+        conversationId,
+        sessionId: capturedSessionId,
+      });
+    },
   };
 
   try {
@@ -1108,6 +1204,25 @@ export async function dispatchSoleurGo(
         errorCode: "key_invalid",
       });
     } else {
+      // #3266 R7 — stale-resume cleanup. The dispatch was attempted with
+      // a persisted session_id but the runner rejected for a reason
+      // other than KeyInvalidError. Plan §R7 documents this trade-off:
+      // the predicate is broad ("any non-KeyInvalidError"), which means
+      // a transient backend error (network blip, BYOK fetch failure,
+      // workspace patch failure) will also clear a legitimate session_id
+      // and force a cold-start on the next turn. Acceptable cost: the
+      // SDK rebuilds from the persisted `messages` rows on next dispatch
+      // and the prefill guard's history-probe handles assistant-
+      // terminated threads — at most one turn of degraded latency.
+      // Narrowing to typed SDK error classes is tracked separately and
+      // is out of scope for the activation PR. Fire-and-forget; the
+      // user-facing generic-error message lands either way. Update the
+      // in-process cache alongside the DB write so the next chat-case
+      // warm-cache turn does not forward the now-stale value.
+      if (sessionId) {
+        onSessionIdPersisted?.(null);
+        void clearCcSessionId({ userId, conversationId });
+      }
       sendToClient(userId, {
         type: "error",
         message: "Dashboard router is unavailable — try again shortly.",
