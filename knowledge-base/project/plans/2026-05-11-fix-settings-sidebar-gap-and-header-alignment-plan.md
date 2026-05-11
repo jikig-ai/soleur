@@ -8,6 +8,26 @@ requires_cpo_signoff: false
 
 # fix: Settings sidebar gap on close and header misalignment
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Sections enhanced:** Overview, Hypotheses, Implementation Phases, Acceptance Criteria, Risks, Test Scenarios
+**Research vectors:** prior settings-nav alignment plans (#2494, #2504), `2026-04-17-alignment-fixes-must-verify-both-toggle-states.md` learning, Tailwind v4.1 docs, existing test contract in `test/settings-sidebar-collapse.test.tsx`, `app/(dashboard)/layout.tsx` main-sidebar geometry, `app/globals.css` token surface.
+
+### Key Improvements
+
+1. **Geometric pre-computation grounded.** The prior fix (#2504) left a residual 2 px y-delta documented in `knowledge-base/project/plans/2026-04-17-fix-settings-nav-expanded-chevron-alignment-plan.md` ("main nav chevron y ≈ 34 px, settings nav chevron y ≈ 32 px post-fix, delta ≤ 2 px"). This plan's `min-h-7` proposal raises the settings header row to 28 px → both chevron centers at 34 px → delta target = 0 px.
+2. **Tailwind v4 verification.** The codebase uses `tailwindcss@^4.1.0` (`apps/web-platform/package.json`). Tailwind v4's unified spacing scale generates `min-h-7` as `min-height: calc(var(--spacing) * 7) = 1.75rem = 28px` — no `tailwind.config.*` extension required. Safe to use.
+3. **Test selector hardened.** Initial draft used `screen.getByText("Settings", { selector: "h2" })`. Replaced with `screen.getByLabelText("Collapse settings nav").parentElement` because the existing test file already imports and uses that label-based query, avoiding a CSS-text-transform pitfall (`uppercase` class affects visual rendering, not `textContent`, but consistent test style is safer).
+4. **Pixel-coord verification mandated in QA.** Per the prior plan's lesson, screenshots alone read as "looks aligned"; `getBoundingClientRect()` deltas in `browser_evaluate` provide quantitative evidence. Acceptance criterion now requires `yDelta ≤ 1` numeric measurement in the PR body.
+5. **Content-padding-transition smoothness deferred to QA.** The conditional `md:pl-8` swap is instantaneous while width transitions over 200 ms. If QA reveals visual jank, a `transition-[padding]` fallback is enumerated in Risks rather than pre-emptively shipped (YAGNI — pixel jank may be imperceptible).
+
+### New Considerations Discovered
+
+- The bug screenshot was captured AFTER #2504 landed (which already brought delta to ≤ 2 px). The user is reporting the residual 2 px, not regression. Plan accordingly targets 0 px, not "restore #2504 behavior".
+- The collapsed-state nav guard test is defensive but does NOT trigger any code change because `md:border-r-0` is already present. It's a regression tripwire for future edits.
+- Light-theme tokenization (#3308) was the only intervening change since #2504 — it changed colors only, not layout. No structural drift to undo.
+
 ## Overview
 
 Two visual regressions on `/dashboard/settings/*` routes:
@@ -55,13 +75,18 @@ Add to `apps/web-platform/test/settings-sidebar-collapse.test.tsx` inside the ex
 ```tsx
 it("settings header row matches main sidebar brand row height (min-h-7)", () => {
   render(<SettingsShell><div>content</div></SettingsShell>);
-  const headingEl = screen.getByText("Settings", { selector: "h2" });
-  // The <div> wrapping the <h2> + collapse button is the header row.
-  const headerRow = headingEl.parentElement;
+  // Use the existing label-based query the test file already relies on,
+  // then walk to the wrapping <div> (the header row).
+  const collapseBtn = screen.getByLabelText("Collapse settings nav");
+  const headerRow = collapseBtn.parentElement;
   expect(headerRow).not.toBeNull();
   expect(headerRow).toHaveClass("min-h-7");
+  // Also lock in the row still flex-centers the chevron + heading.
+  expect(headerRow).toHaveClass("flex", "items-center", "justify-between");
 });
 ```
+
+**Why `min-h-7` and not `h-7`:** `min-h-7` (28 px) sets a floor without preventing growth if a future translation widens the heading line. Tailwind v4.1 generates this as `min-height: calc(var(--spacing) * 7) = 1.75rem = 28 px` directly from the unified spacing scale — no `tailwind.config.*` extension required. Verified: `apps/web-platform/package.json` pins `tailwindcss@^4.1.0` and `@tailwindcss/postcss@^4.2.1`.
 
 Add a new `describe` block for the close-state layout-collapse contract:
 
@@ -138,10 +163,31 @@ Per `cq-when-a-plan-addresses-alignment-of-a` (alignment fixes must verify BOTH 
 4. Main sidebar COLLAPSED + settings sidebar CLOSED.
 
 For each, verify:
-- (Alignment) The `<` chevron in the settings header and the `<` chevron in the main app sidebar header sit on the same y-baseline (within ±1px).
-- (Gap) When settings is CLOSED, the content area's leftmost element (expand chevron) sits ~8px from the previous nav edge — no >32px dead zone.
+- (Alignment) The `<` chevron in the settings header and the `<` chevron in the main app sidebar header sit on the same y-baseline (within ±1 px).
+- (Gap) When settings is CLOSED, the content area's leftmost element (expand chevron) sits ~8 px from the previous nav edge — no >32 px dead zone.
 
-Attach screenshots to the PR.
+**Quantitative evidence required** (per `knowledge-base/project/plans/2026-04-17-fix-settings-nav-expanded-chevron-alignment-plan.md` precedent — "looks aligned" screenshots are insufficient). Use `mcp__playwright__browser_evaluate` to capture pixel deltas:
+
+```javascript
+() => {
+  const mainBtn = document.querySelector('aside button[aria-label*="sidebar" i]');
+  const settingsBtn = document.querySelector('nav button[aria-label="Collapse settings nav"]');
+  if (!mainBtn || !settingsBtn) return { error: "button(s) not found", mainBtn: !!mainBtn, settingsBtn: !!settingsBtn };
+  const m = mainBtn.getBoundingClientRect();
+  const s = settingsBtn.getBoundingClientRect();
+  return {
+    mainY: m.top + m.height / 2,
+    settingsY: s.top + s.height / 2,
+    yDelta: Math.abs((m.top + m.height / 2) - (s.top + s.height / 2)),
+  };
+}
+```
+
+**AC:** `yDelta ≤ 1`. Record `{ mainY, settingsY, yDelta }` in the PR body for each toggle-state combination where both chevrons are visible (combinations 1 + 3).
+
+If `yDelta > 1`, escalate — the `min-h-7` fix did not normalize to the live font/line-height combo. Recovery: switch to absolute-positioning the settings collapse chevron (mirror the expand-chevron approach at `left-N top-5`) rather than fighting flex-row geometry.
+
+Attach screenshots to the PR alongside the numeric deltas.
 
 ## Acceptance Criteria
 
@@ -154,7 +200,8 @@ Attach screenshots to the PR.
 - [ ] `bun test apps/web-platform/test/settings-sidebar-collapse.test.tsx` → green.
 - [ ] `bunx tsc --noEmit` from `apps/web-platform/` → no new errors.
 - [ ] Visual QA screenshots attached to the PR for the four toggle-state combinations enumerated in Phase 6.
-- [ ] Screenshot inspection confirms: (a) settings `<` chevron and main app `<` chevron land on the same y-baseline (±1px), (b) when settings sidebar is closed, the content area collapses cleanly with no visible gap >32px between the main app sidebar and content.
+- [ ] Quantitative `yDelta` measurements via `mcp__playwright__browser_evaluate` recorded in the PR body for combinations 1 + 3 (both states where both chevrons are visible). `yDelta ≤ 1 px`.
+- [ ] Screenshot inspection confirms: (a) settings `<` chevron and main app `<` chevron land on the same y-baseline (±1 px, corroborated by the numeric `yDelta`), (b) when settings sidebar is closed, the content area collapses cleanly with no visible gap >32 px between the main app sidebar's right edge and the expand chevron's left edge.
 
 ### Post-merge (operator)
 
@@ -168,14 +215,40 @@ None. `gh issue list --label code-review --state open` returned an empty list (z
 
 1. **Bug 1 root cause (highest confidence):** content area's symmetric `md:px-10` is fully exposed when the nav is `md:w-0`, reading as a "gap/margin" to the user. Conditional collapse-state padding fixes this.
 2. **Bug 1 secondary (low confidence, mitigated by test):** in some browsers or due to Tailwind class-ordering edge cases, the base `border-r` could outlast `md:border-r-0`. The Phase-1 RED test asserts both utility classes are present, providing regression coverage.
-3. **Bug 2 root cause (high confidence):** font-size differential drives row-height delta; `flex items-center` then centers in different-height boxes, producing the 2-6px vertical drift visible in the screenshot. `min-h-7` normalizes the row height to match `text-lg`'s natural line-height (28px).
+3. **Bug 2 root cause (high confidence):** font-size differential drives row-height delta; `flex items-center` then centers in different-height boxes, producing the 2 px vertical drift residual from PR #2504 visible in the screenshot. `min-h-7` normalizes the row height to match `text-lg`'s natural line-height (28 px).
+
+### Research Insights
+
+**Geometric computation (Bug 2):**
+
+Per `app/(dashboard)/layout.tsx:250` the main sidebar brand row uses `px-5 py-5` (expanded) or `px-2 py-5` (collapsed); inside, `<span class="text-lg">Soleur</span>` (line-height = 1.75 rem = 28 px) and a `h-6 w-6` collapse button. With `flex items-center`, the row height = `max(28, 24) = 28 px`. Chevron y-center = `20 (py-5) + 14 (28/2) = 34 px`.
+
+Settings header at `apps/web-platform/components/settings/settings-shell.tsx:41`: `<h2 class="text-xs ...">Settings</h2>` (text-xs line-height = 1 rem = 16 px) + `h-6 w-6` button. Row height = `max(16, 24) = 24 px`. Chevron y-center = `20 (py-5) + 12 (24/2) = 32 px`. **Residual delta = 2 px** — matches what PR #2504's plan recorded as the post-fix tolerance.
+
+With `min-h-7` (28 px) on the settings header row, the row floor rises to 28 px → chevron y-center = `20 + 14 = 34 px` → **target delta = 0 px**.
+
+**Prior precedent (PR #2494 + PR #2504):**
+
+PR #2494 fixed the **collapsed-state** expand chevron (`>`) by absolute-positioning it at `left-2 top-5 z-10 h-6 w-6` inside the content wrapper. This bypassed flex-row geometry entirely. PR #2504 then fixed the **expanded-state** collapse chevron (`<`) by shrinking the settings `<nav>` padding from `py-10` to `py-5`. Both fixes landed; the current 2 px residual is the limit of what `py-5` alone could achieve.
+
+Reference: `knowledge-base/project/learnings/2026-04-17-alignment-fixes-must-verify-both-toggle-states.md` — "A fix for the collapsed state does not carry over to the expanded state because the two branches of the conditional `className` render different DOM structures with different parent geometry." Applied here: both states are exercised in Phase 6 QA.
+
+**Tailwind v4 spacing semantics (Bug 2 implementation):**
+
+`apps/web-platform/package.json` pins `tailwindcss@^4.1.0` + `@tailwindcss/postcss@^4.2.1`. Tailwind v4 unifies the spacing scale: `min-h-N` generates `min-height: calc(var(--spacing) * N)`. `--spacing` defaults to `0.25rem` (4 px), so `min-h-7` = `28 px`. The token is generated on-demand by `@tailwindcss/postcss` — no `tailwind.config.*` extension required. Verified the codebase already uses numeric `min-h-N` elsewhere (`apps/web-platform/components/chat/conversations-rail.tsx`, `kb/pdf-preview.tsx`, etc., all using `min-h-0`).
+
+**Content-area conditional padding (Bug 1 implementation):**
+
+The `md:pl-8` choice (32 px) is calibrated to the expand chevron's effective right edge: `left-2` (8 px) + `h-6 w-6` (24 px) = `32 px`. Any reduction below 32 px would clip the chevron's hover-target. The right padding stays at `md:pr-10` for content-side symmetry.
 
 ## Risks
 
-- **Wrong root cause for Bug 1.** The "gap" could actually be a 1px `border-r` rendering artifact (border-box behavior at `width:0`). The Phase-1 test asserts `md:border-r-0` is present; if QA still shows a 1px line, fold in a `border-0` (not just `border-r-0`) override in the collapsed branch. Recovery: trivial — single-token addition.
-- **`min-h-7` too aggressive.** If `min-h-7` (28px) interacts oddly with the existing `mb-4` to push the nav items down 6px, the menu may shift. Mitigation: visual QA in Phase 6 covers this. If observed, swap to `h-7` directly or recalibrate to `min-h-[28px]`.
-- **Conditional content-padding may shift content during transition.** The width transition is on `[width]` (200ms) but the padding swap is instant. Visual flicker possible. If observed in QA, add `transition-[padding]` on the content area to match. Acceptance criterion already requires Phase 6 QA.
-- **Test fragility on text matcher.** `screen.getByText("Settings", { selector: "h2" })` depends on the rendered text "Settings" (mixed case in the JSX, uppercased via `uppercase` utility). The matcher uses the DOM text content (mixed case) — verified by reading the JSX. If a future commit changes the label, both the component and the test must update together.
+- **Wrong root cause for Bug 1.** The "gap" could actually be a 1 px `border-r` rendering artifact (border-box behavior at `width:0`). The Phase-1 test asserts `md:border-r-0` is present; if QA still shows a 1 px line, fold in a `border-0` (not just `border-r-0`) override in the collapsed branch. Recovery: trivial — single-token addition.
+- **`min-h-7` interaction with `mb-4`.** `min-h-7` raises the header row from 24 px to 28 px (Δ = 4 px). The settings nav items (the `<ul class="space-y-1">`) sit below the header `<div class="mb-4 ...">`, so they shift down by 4 px. The first nav item was previously at `y = 20 + 24 + 16 = 60 px`; after fix at `y = 20 + 28 + 16 = 64 px`. This is an intentional vertical alignment with the main sidebar's content (which starts at `y = 20 + 28 = 48 px + nav padding`). Mitigation: visual QA in Phase 6 confirms the shift is imperceptible. If QA flags it, swap `min-h-7` for `min-h-[1.75rem]` (identical computed value, more explicit intent) or remove `mb-4` and use `mt-4` on the nav `<ul>` instead.
+- **Conditional content-padding may flicker during the 200 ms width transition.** The width transition is on `[width]` (200 ms) but the padding swap is instant. Visual flicker possible. If observed in QA, add `md:transition-[padding,width] md:duration-200 md:ease-out` on the content `<div>` to match. Not pre-emptively shipped — YAGNI; only add if QA observes jank.
+- **Test selector fragility (resolved).** Initial draft used `screen.getByText("Settings", { selector: "h2" })`. Replaced with `screen.getByLabelText("Collapse settings nav").parentElement` because (a) the existing test file already uses the label-based query, (b) the heading text is wrapped in a `uppercase` utility but `textContent` remains mixed-case, (c) future i18n could replace "Settings" but `aria-label="Collapse settings nav"` is the contract surface.
+- **`getBoundingClientRect()` in JSDOM returns zeros.** The numeric `yDelta` assertion is Playwright-only (real browser). The unit test asserts only the presence of `min-h-7`, NOT the computed pixel-level alignment — JSDOM cannot measure it. This is by design: classname tests are regression gates; Playwright is the alignment source of truth. Recorded in the prior plan (`2026-04-17-fix-settings-nav-expanded-chevron-alignment-plan.md`) as the established convention.
+- **`flex justify-between` with one visible child.** When the main app sidebar is collapsed, the `<span>Soleur</span>` is `md:hidden`, leaving only the chevron button in the brand row. With `justify-between` and one flex child, the child aligns to the start of the row. The settings sidebar's `<` chevron sits in a `justify-between` row where both children are visible (h2 + button), so the button aligns to the end. The two chevrons therefore land at DIFFERENT x-positions when the main sidebar is collapsed. This is out-of-scope (the bug report is vertical alignment) but flagged so the QA evaluator does not mis-read horizontal offset as a regression.
 
 ## Sharp Edges
 
