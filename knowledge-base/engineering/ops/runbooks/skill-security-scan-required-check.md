@@ -27,16 +27,21 @@ verbatim and asserts no drift post-apply.
    Must return a hit. If empty, the lint config on `main` is stale and the
    destructive apply must wait.
 
-2. **`lint-bot-statuses` is green on `main`.** Verify:
+2. **`lint-bot-statuses` is green on `main`.** This is a JOB inside
+   `ci.yml`, not a standalone workflow. Verify:
 
    ```bash
-   gh run list --workflow=lint-bot-statuses.yml --branch=main --limit=1 \
-     --json status,conclusion
+   gh run list --workflow=ci.yml --branch=main --limit=1 \
+     --json databaseId --jq '.[0].databaseId'
+   # then:
+   gh run view <run-id> --json jobs \
+     --jq '.jobs[] | select(.name == "lint-bot-statuses") | {status, conclusion}'
    ```
 
    Must show `status=completed conclusion=success`. If not, fix before
    proceeding -- the lint is the load-bearing audit that bot workflows will
-   actually post the new synthetic.
+   actually post the new synthetic. See [`lint-bot-statuses.md`](lint-bot-statuses.md)
+   for the full diagnostic flow.
 
 3. **Composite action on `main` includes the new check token.** This is also
    checked by the script's preflight, but verify independently:
