@@ -145,6 +145,9 @@ After any change to `scripts/audit-ruleset-bypass.sh` or
   bypass_actors from the canonical via `jq --slurpfile`.
 - `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md`
   — parent R15 runbook.
+- `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md` — sibling lint
+  runbook (#3546) covering pre-merge enforcement of bot-PR synthetic check-run
+  completeness.
 - `knowledge-base/legal/compliance-posture.md` `#2719` row.
 - GitHub Ruleset PUT API:
   https://docs.github.com/en/rest/repos/rules#update-a-repository-ruleset
