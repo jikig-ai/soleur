@@ -163,5 +163,16 @@ describe("Settings sidebar collapse", () => {
       expect(contentArea).not.toBeNull();
       expect(contentArea?.className).toMatch(/\bmd:pl-(?:6|8)\b/);
     });
+
+    it("content area transitions padding in sync with sidebar width (200ms ease-out)", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      const contentArea = expandBtn.parentElement;
+      expect(contentArea).not.toBeNull();
+      expect(contentArea?.className).toMatch(/(?:^|\s)md:transition-\[padding\](?:\s|$)/);
+      expect(contentArea?.className).toMatch(/\bmd:duration-200\b/);
+      expect(contentArea?.className).toMatch(/\bmd:ease-out\b/);
+    });
   });
 });
