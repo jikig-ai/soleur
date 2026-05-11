@@ -383,6 +383,12 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    Skip silently if the cumulative diff does not match the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex.
 
+9. **Full-Suite Exit Gate (single pass, end of Phase 2)**
+
+   [skill-enforced: work Phase 2 exit]
+
+   Before entering Phase 3, run `bash scripts/test-all.sh` once. Touched-file tests are the inner loop; `test-all.sh` is the exit gate — it discovers orphan test suites (sibling files covering the same script — e.g., an untouched `tests/scripts/test-rule-metrics-aggregate.sh` alongside the touched `rule-metrics-aggregate.test.sh`) that the touched-file set never sees. Symmetric to the ship Phase 5.5 Review-Findings Exit Gate; catches the gap that PR #3512 surfaced post-merge-queue when an untouched orphan suite's fixture broke under a tightened predicate. **Why:** see issue #3533.
+
 ### Phase 2.5: Research Validation Loop (knowledge-base deliverables only)
 
 Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754). When a research sprint produces recommendations, run the cascade-validate loop [id: wg-when-a-research-sprint-produces] [skill-enforced: work Phase 2.5]. **"Findings written" is NOT done — "findings applied, validated, and all documents reflect the final state" is done.** The full body of that rule lives here; AGENTS.md retains a one-line pointer preserving the `[id: ...]` tag.
