@@ -101,7 +101,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Content area */}
-      <div className={`relative flex-1 px-4 py-10 pb-20 md:pb-10 md:transition-[padding] md:duration-200 md:ease-out ${settingsCollapsed ? "md:pl-8 md:pr-10" : "md:px-10"}`}>
+      <div className={`relative flex-1 px-4 py-10 pb-20 md:pb-10 md:transition-[padding] md:duration-200 md:ease-out ${settingsCollapsed ? "md:pl-[14.5rem] md:pr-10" : "md:px-10"}`}>
         {settingsCollapsed && (
           <button
             onClick={toggleSettingsCollapsed}
