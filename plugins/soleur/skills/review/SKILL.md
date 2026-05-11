@@ -64,13 +64,16 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 
 Before spawning review agents, classify the PR to avoid spawning agents whose expertise is irrelevant to the change.
 
-1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts:
+1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/review-*.txt` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
 
    ```bash
-   git diff --name-only origin/main...HEAD > .git/review-changed.txt
-   git diff --name-status origin/main...HEAD > .git/review-status.txt
-   git diff --numstat origin/main...HEAD > .git/review-numstat.txt
+   REVIEW_TMP="$(git rev-parse --git-dir)"
+   git diff --name-only origin/main...HEAD > "$REVIEW_TMP/review-changed.txt"
+   git diff --name-status origin/main...HEAD > "$REVIEW_TMP/review-status.txt"
+   git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
    ```
+
+   All downstream `cat .git/review-*.txt` references in the predicates below must use `"$REVIEW_TMP/review-*.txt"` instead. The pre-existing `.git/...` literals work in non-worktree checkouts but silently break in worktrees (where every PR review increasingly happens by default).
 
 2. Check for override: scan `$ARGUMENTS` for "deep review" or "full review". Also run `gh pr view --json body,title --jq '.body + " " + .title'` and check for the same phrases. If override detected, skip classification and spawn all 8 agents.
 3. Apply the four-class decision tree below in order; **first match wins** (override always trumps):
@@ -100,20 +103,20 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
    Compute the predicates inline (`set -uo pipefail` — drop the `e` so legitimately-empty greps don't abort):
 
    ```bash
-   total_files=$(wc -l < .git/review-changed.txt)
-   deleted_files=$(grep -cE '^D' .git/review-status.txt || true)
-   added_lines=$(awk 'BEGIN{s=0} {if ($1 != "-") s += $1} END{print s}' .git/review-numstat.txt)
-   deleted_lines=$(awk 'BEGIN{s=0} {if ($2 != "-") s += $2} END{print s}' .git/review-numstat.txt)
+   total_files=$(wc -l < "$REVIEW_TMP/review-changed.txt")
+   deleted_files=$(grep -cE '^D' "$REVIEW_TMP/review-status.txt" || true)
+   added_lines=$(awk 'BEGIN{s=0} {if ($1 != "-") s += $1} END{print s}' "$REVIEW_TMP/review-numstat.txt")
+   deleted_lines=$(awk 'BEGIN{s=0} {if ($2 != "-") s += $2} END{print s}' "$REVIEW_TMP/review-numstat.txt")
    total_lines=$((added_lines + deleted_lines))
 
    LOCKFILE_RE='(^|/)(package-lock\.json|bun\.lock|yarn\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|poetry\.lock|uv\.lock)$'
    ALLOWED_NONLOCK_RE='^(knowledge-base/|.*\.md$)'
    SOURCE_RE='\.(ts|tsx|js|jsx|rb|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|mjs|cjs)$'
 
-   non_lock_files=$(grep -vE "$LOCKFILE_RE" .git/review-changed.txt || true)
+   non_lock_files=$(grep -vE "$LOCKFILE_RE" "$REVIEW_TMP/review-changed.txt" || true)
    non_lock_non_doc=$(printf '%s\n' "$non_lock_files" | grep -vE "$ALLOWED_NONLOCK_RE" | grep -v '^$' || true)
-   has_source=$(grep -E "$SOURCE_RE" .git/review-changed.txt | head -1 || true)
-   any_lockfile=$(grep -E "$LOCKFILE_RE" .git/review-changed.txt | head -1 || true)
+   has_source=$(grep -E "$SOURCE_RE" "$REVIEW_TMP/review-changed.txt" | head -1 || true)
+   any_lockfile=$(grep -E "$LOCKFILE_RE" "$REVIEW_TMP/review-changed.txt" | head -1 || true)
    ```
 
    - `lockfile-only` matches when `$non_lock_non_doc` is empty AND `$any_lockfile` is non-empty AND `$has_source` is empty.
@@ -727,6 +730,7 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 - **Cross-stream format-contract drift in telemetry joins** — when a feature joins two telemetry streams (a producer and a consumer that look up by name), test fixtures that use a simplified shared format on both sides hide bugs where the producers actually emit different shapes (namespaced `"plugin:name"` vs bare `"name"`, dotted IDs vs slashed IDs, hashed keys vs raw keys). Review agents and unit tests both miss this because each side's tests look internally consistent. The defect surfaces only via a derived-metric counter (orphan rate, miss rate, fall-through rate) whose surprising value points back at the contract. PR #3124 surfaced a `soleur:plan` (hook) vs `plan` (inventory) mismatch only after the orphan-skill counter — added as polish — reported a non-zero count in production data. See `knowledge-base/project/learnings/2026-05-04-telemetry-join-format-mismatch-caught-by-orphan-counter.md`. Reviewer takeaway: when a PR adds a join across two streams, ask whether at least one fixture per side uses each producer's actual emission format, not a normalized placeholder.
 - **Handshake schema drift between producer (skill) and consumer (file)** — when a skill instructs an operator to write a row/entry to a knowledge-base file, the producer's instruction template and the consumer's documented schema can drift in the same PR. Same column count + different semantics = silent table-corruption when followed verbatim. `data-integrity-guardian` catches this by reading both sides and comparing column-by-column. Reviewer takeaway: when a PR adds an instruction "write a row to file Y" alongside a schema documented in Y, grep Y's schema and assert the producer's row template matches column-by-column. Prefer reference-and-defer (instruction says "use the schema in Y") over embed-and-pray. PR #3501 shipped `gdpr-gate` with this exact drift; data-integrity-guardian flagged it as P1 pre-merge. See `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.
 - **Replicated literals across ≥2 source files without parity test** — canonical regexes, schema strings, taxonomy IDs replicated across SKILL.md prose, hook scripts, test files, and config globs drift independently. Three reviewers in PR #3501 independently flagged a path-regex stored in 4 places. Reviewer takeaway: when a PR adds the same literal across ≥2 source files, expect a parity test (`expect(scriptContent.match(/^FOO='([^']+)'/)![1]).toBe(SOURCE_LITERAL)`). If absent, file as P2 inline-fix. Same learning file as above.
+- **Vendor-pipeline trust-contract gaps (auto-PR-of-untrusted-bytes / tautological integrity / exit-code-as-result)** — when a PR establishes a new vendored-content pipeline (pinned upstream blob SHAs + scheduled drift workflow + integrity gate + severity classifier), four trust-model classes compose badly across the pipeline's boundary contracts: (1) auto-PR routing across security-relevant drift classes converts a detection signal into a write primitive (compromised upstream → bot-authored PR → review fatigue); (2) self-consistency integrity check (working-tree hash + frontmatter SHA both PR-author-mutable) is tautological — ask "what other thing must move to bypass this?"; (3) classifier that emits ONE exit-code result silently under-labels co-occurring categories (e.g., security + license drift in one upstream commit); (4) inline-Python/awk parsers with non-greedy or fragile tokenization can no-op silently when YAML formatting drifts. `user-impact-reviewer` names the adversary model; `data-integrity-guardian` runs the regex against the real input and produces the falsifying case. PR #3521 shipped all four; multi-agent review caught them pre-merge. Reviewer takeaway: for PRs establishing trust contracts, require (a) integrity check has at least one cross-domain anchor (CI-side `gh api` upstream verification, signed-commit, CODEOWNERS), (b) classifier emits multi-category stdout AND exit code, (c) auto-PR routing restricted to lowest-risk class only, (d) post-condition assertions on regex/awk substitutions (`subn` count == expected). See `knowledge-base/project/learnings/2026-05-11-multi-agent-review-vendor-pipeline-trust-model.md`.
 
 See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
 

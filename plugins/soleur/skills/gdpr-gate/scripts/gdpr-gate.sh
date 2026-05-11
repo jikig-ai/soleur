@@ -31,6 +31,35 @@ else
   emit_incident() { :; }
 fi
 
+# Runtime staleness check (FR6 / TR2 / TR6).
+#
+# The gdpr-gate skill is partially driven by detection rules lifted from
+# upstream gosprinto/compliance-skills (see plugins/soleur/skills/gdpr-gate/NOTICE).
+# When the cron-driven re-vendor pipeline silently breaks (workflow disabled,
+# GH outage, PR queued), the lifted rules go stale and the gate's
+# "no findings" output becomes a false-clean signal on regulated PRs.
+# The runtime banner is the load-bearing user-protection layer in that case.
+#
+# Banner emits to STDOUT (not stderr) — agent runtimes commonly swallow stderr.
+# Gate exits 0 in all paths (advisory contract preserved).
+# Subshell-exec (not source) so parser failure / deletion / future date all
+# resolve to days_stale=999 → banner fires → gate stays advisory.
+NOTICE_PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
+days_stale=$(bash "$NOTICE_PARSER" days-stale 2>/dev/null || echo 999)
+last_verified=$(bash "$NOTICE_PARSER" field last-verified 2>/dev/null || echo "unknown")
+[[ -n "$last_verified" ]] || last_verified="unknown"
+if (( days_stale > 30 )); then
+  printf '⚠ gdpr-gate rules %s days stale (last verified %s) — output is advisory only and may miss recently-patched detection rules. Refresh: see knowledge-base/engineering/policies/content-vendoring.md\n' \
+    "$days_stale" "$last_verified"
+  emit_incident gdpr-gate-staleness warn "${days_stale}-days-stale" \
+    2>/dev/null || true
+fi
+if (( days_stale > 90 )); then
+  printf 'POSTURE_FAIL: gdpr-gate rules >90 days stale — compliance/critical posture row required. Operator chain: knowledge-base/engineering/policies/content-vendoring.md#posture-fail-operator-chain\n'
+  emit_incident gdpr-gate-staleness deny "${days_stale}-days-stale-posture-fail" \
+    2>/dev/null || true
+fi
+
 # Single source of truth — mirrors SKILL.md §"Path globs (canonical)".
 CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)'
 

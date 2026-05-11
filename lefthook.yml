@@ -117,6 +117,23 @@ pre-commit:
         - "apps/web-platform/app/api/**/*.tsx"
         - "*.sql"
       run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
+    # vendor-pin-integrity (FR5): verifies the staged contents of every
+    # NOTICE-tracked lifted file match the blob SHAs pinned in NOTICE
+    # frontmatter. Detects silent local edits to upstream-vendored content
+    # and silent additions of files outside the registry. The integrity
+    # script reads its registry from NOTICE at runtime, so the glob
+    # intentionally covers the whole `references/` subtree (plus NOTICE
+    # itself) — any new file added under `references/` triggers the script,
+    # which then rejects it via the "staged but not in NOTICE" branch.
+    # Narrow per-file globs would let a re-vendor land a 6th file without
+    # the integrity gate ever firing on it.
+    vendor-pin-integrity:
+      priority: 6
+      glob:
+        - "plugins/soleur/skills/gdpr-gate/references/*.md"
+        - "plugins/soleur/skills/gdpr-gate/references/layers/*.md"
+        - "plugins/soleur/skills/gdpr-gate/NOTICE"
+      run: bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
     # skill-security-scan advisory hook (#2719).
     # ALWAYS exits 0 — prints a one-line stderr breadcrumb on HIGH-RISK
     # without override artifact. Belt-and-suspenders for IDE / manual

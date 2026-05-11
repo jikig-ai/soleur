@@ -1,0 +1,9 @@
+diff --git a/pii-detector/patterns/fields.md b/pii-detector/patterns/fields.md
+index c1bb748..1234567 100644
+--- a/pii-detector/patterns/fields.md
++++ b/pii-detector/patterns/fields.md
+@@ -48,3 +48,4 @@
+ | given_name | string | Verbatim given name |
+ | family_name | string | Verbatim family name |
+ | medical_history | text | Art. 9 special category |
++| genetic_data | bytea | Art. 9 special category, GDPR Art. 9(1) |

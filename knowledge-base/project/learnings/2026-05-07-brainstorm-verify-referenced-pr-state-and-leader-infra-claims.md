@@ -60,9 +60,17 @@ The gap is in two adjacent cases the existing rules don't quite cover:
 
 - **Files API 100-page-cap-on-200K-context-models surfaced only by CTO live-doc fetch.** Issue #3436 named "Files API size cap" as one of 5 open questions but did not anticipate that the cap would be **per-model-context-tier** rather than a single global limit. CTO's WebFetch caught it; without that step, the brainstorm would have proposed a Files API path that doesn't deliver the 400pg-book acceptance criterion on Sonnet 4.6. **Recovery:** chapter-chunking pivot adopted instead. **Prevention:** Phase 1.0 external-platform verification rule already covers this (`5) does the limit cover the migration/feature scope?`); reinforce in domain-leader prompts that "live-doc verification" is required for any external-API capability claim, not just self-service/waitlist questions.
 
+## Update 2026-05-10 — temporal extension (issue #3509 brainstorm)
+
+A second instance of the same root cause surfaced, but in a different temporal slot. In the #3509 brainstorm (telemetry-drop sentinels), prereq PRs #3495 and #3508 were verified at brainstorm start (`gh issue view ... --json state` returned OPEN for both). The agent built three architecture options around their open state, including "Defer until #3508 lands" and "Implementation is blocked because #3495's files aren't on main yet." The user surfaced mid-brainstorm that #3508 had just merged in a parallel session; #3495 had also merged. The architecture-option menu was premised on a factual floor that drifted during the brainstorm.
+
+The 2026-05-07 rule covers verification at brainstorm START. The new wrinkle: load-bearing prereq state needs **re-verification immediately before presenting architecture options that turn on it**, not just at session start. Parallel sessions can land a prereq mid-brainstorm. The verification cost is the same 10 seconds (`gh pr view <N> --json state,mergedAt`), and the alternative is presenting an options menu where one or more options have dissolved before the user reads them.
+
+Action: brainstorm Phase 1.1 verification paragraph extended with a re-verify bullet for long-running brainstorms (>30 min) where prereq state was load-bearing for the option set.
+
 ## Tags
 
 category: integration-issues
 module: brainstorm-skill
 related: 2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites, 2026-04-23-verify-trigger-path-before-attributing-regression, 2026-05-05-brainstorm-capability-gaps-need-repo-grep, 2026-05-05-brainstorm-spawn-cpo-cmo-early-on-external-product-trigger
-issue: 3436
+issue: 3436, 3509
