@@ -11,9 +11,46 @@ status: ready
 detail_level: MINIMAL
 type: fix
 requires_cpo_signoff: false
+deepened: 2026-05-11
 ---
 
 # Plan: anthropic-preflight credit-balance soft-skip (#3605)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Sections enhanced:** Overview, Research Reconciliation, Implementation Phases, Risks
+**Research:** Live `gh` verification of #3605 body, #2715 issue close-date, #2717 implementing-commit SHA, caller surface enumeration (18 workflows consuming the action), Phase 2 fixture sanity-run executed against the prescribed grep clause.
+
+### Key Improvements
+
+1. **Verbatim error-string verification.** Pulled the exact 400 body from `gh issue view 3605` — the prescribed substring `"credit balance is too low"` is a literal substring of the real message (`"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."`). No regex metachar surface.
+2. **Phase 2 recipe pre-flighted live.** Ran the synthesized-fixture script from plan Phase 2 against the exact grep clause prescribed by TR1 — output matches the prescribed expectation (`MATCH / MATCH / NO MATCH`). The recipe is known-good; the implementer is just confirming the edit landed.
+3. **Caller surface confirmed.** `rg -l "anthropic-preflight" .github/workflows/` returns 18 workflows. TR4 ("no workflow changes") has high blast-radius if violated — confirms why callers must continue to consume only `ok` output, not the warning string.
+4. **Precedent commit pinned.** The original spend-cap soft-skip shipped via commit `02d42324` (PR #2717, merged 2026-04-21) closing issue #2715. The existing comment block in `action.yml:42` cites `#2715` correctly as the source issue.
+5. **Empty draft-PR body identified.** PR #3606's body is the auto-generated placeholder `"Draft PR created automatically. Content will be added as work progresses."` — must be replaced before ready-for-review per `wg-use-closes-n-in-pr-body-not-title-to` AND to give reviewers context.
+
+### Live verification artifacts
+
+```bash
+$ gh issue view 3605 --json title,state | jq -r .title
+ci(anthropic-preflight): soft-skip on "credit balance is too low" — same class as spend-cap
+
+$ gh issue view 2715 --json closedAt,state | jq -r '.state, .closedAt'
+CLOSED
+2026-04-21T15:24:47Z
+
+$ git log --all --grep="#2715" --pretty=format:"%h %ad %s" --date=short
+02d42324 2026-04-21 chore(ci): add Anthropic spend-cap preflight guard to Claude workflows (#2717)
+
+$ rg -l "anthropic-preflight" .github/workflows/ | wc -l
+18
+
+$ # Phase 2 fixture run against the prescribed grep clause (executed at deepen time)
+spend-cap -> MATCH (soft-skip)
+credit-balance -> MATCH (soft-skip)
+generic-400 -> NO MATCH (hard-fail)
+```
 
 ## Overview
 
@@ -58,7 +95,8 @@ are independent per the brainstorm's Key Decisions table.
 | Warning text on line 48 covers only spend-cap | Confirmed: `"::warning::Anthropic spend cap exhausted — skipping Claude steps. Body: $BODY"` | Replace per TR2 with both-class wording |
 | Source comment block above line 46 cites only #2715 | Confirmed at lines 41-42 | Update to cite #2715 (spend-cap) + #3605 (credit-balance) and both literal strings per TR2 |
 | Composite action exposes `ok` output, exits 1 on unexpected | Confirmed at lines 9-12, line 57 | No change — TR3 |
-| No workflow under `.github/workflows/` depends on the warning text | Verified: callers consume `ok` output only, not the warning string | No workflow edits — TR4 |
+| No workflow under `.github/workflows/` depends on the warning text | Verified at deepen time: 18 workflows `uses: ./.github/actions/anthropic-preflight` and all consume only the `ok` output (`if: steps.preflight.outputs.ok == 'true'` pattern). Warning text is logged-only. | No workflow edits — TR4 |
+| Verbatim 400 body from issue #3605 contains `"credit balance is too low"` | Confirmed — full body: `{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"req_011Caw4H2tdGWrZaTgoG2CvX"}`. Literal substring match has zero regex-metachar surface. | Use `grep -qE "(specified API usage limits\|credit balance is too low)"` per TR1 — substring-only alternation. |
 
 ## Files to Edit
 
@@ -147,10 +185,52 @@ typo. Do NOT proceed to Phase 3.
 
 ### Phase 3 — Ship
 
-1. Mark draft PR #3606 ready for review:
+**Important.** Draft PR #3606's body is currently the auto-generated placeholder
+`"Draft PR created automatically. Content will be added as work progresses."`
+(verified at deepen time via `gh pr view 3606`). It MUST be replaced with a
+real body containing `Closes #3605` before marking ready.
+
+1. Author the PR body. Suggested content:
+
+   ```bash
+   cat > /tmp/pr-3606-body.md <<'EOF'
+   ## Summary
+
+   Extends the existing HTTP 400 soft-skip branch in
+   `.github/actions/anthropic-preflight/action.yml` to match the
+   "credit balance is too low" message in addition to the spend-cap message.
+   Operationally identical class — API unavailable for billing reasons,
+   identical handling (soft-skip + `::warning::`).
+
+   One-line shell change: `grep -q "specified API usage limits"` →
+   `grep -qE "(specified API usage limits|credit balance is too low)"`.
+   Comment and warning text updated to cite both issues.
+
+   ## Test plan
+
+   - [x] Synthesized BODY_FILE fixtures (spend-cap, credit-balance,
+     generic 400) verified against the new grep clause locally — output
+     matches: MATCH / MATCH / NO MATCH.
+   - [ ] CI required checks green on PR #3606.
+   - [ ] Post-merge: confirm `::warning::` surfaces and `email-on-failure`
+     does NOT fire on the next credit-low event.
+
+   ## Source
+
+   - Spec: `knowledge-base/project/specs/feat-preflight-credit-balance-3605/spec.md`
+   - Plan: `knowledge-base/project/plans/2026-05-11-fix-preflight-credit-balance-soft-skip-plan.md`
+   - Precedent: #2715 / commit 02d42324 (original spend-cap soft-skip, 2026-04-21)
+
+   Closes #3605
+   EOF
+   gh pr edit 3606 --body-file /tmp/pr-3606-body.md
+   ```
+
+   `Closes #3605` is in the **body**, not the title — per
+   `wg-use-closes-n-in-pr-body-not-title-to`.
+
+2. Mark draft PR #3606 ready for review:
    `gh pr ready 3606`
-2. Confirm PR body includes `Closes #3605` (NOT in the title — `wg-use-closes-n-in-pr-body-not-title-to`).
-   If missing, edit via `gh pr edit 3606 --body-file <body.md>`.
 3. Run preflight gates per `wg-after-marking-a-pr-ready-run-gh-pr-merge`:
    `gh pr checks 3606 --watch` and wait for required checks green.
 4. Merge via `gh pr merge 3606 --squash --delete-branch` once all required
@@ -232,6 +312,19 @@ route. `USER_BRAND_CRITICAL=false` was set explicitly in brainstorm Phase 0.1.
 - Track A (#3604) is **not** coupled to this PR. The compound-promote
   workflow_dispatch already fired on main as run `25688627107`. Do not
   bundle the #3604 close into this PR — independent tracks per brainstorm.
+- `set -e` interaction is already addressed by the action: line 24 of
+  `action.yml` explicitly omits `-e` (uses `set -uo pipefail`) so the
+  `grep -qE` non-match exit-1 (the spend-cap-or-credit-balance branch's
+  inverted decision) does NOT abort the step — branch selection is
+  intentional via the `if/elif/else` chain. Do NOT add `set -e` to the
+  `run:` block during editing, or the spend-cap path will short-circuit
+  the step before its `::warning::` and `ok=false` output land. The plan's
+  Phase 2 fixture run is a local sanity check that bypasses this concern
+  (no `set -e` in the recipe).
+- The `grep -qE` regex uses parentheses + `|` only — both standard ERE.
+  Tested on the runner's GNU grep at deepen time; alternation works as
+  expected. Do not switch to BRE (`grep -q "\(a\|b\)"`) — that's the
+  inverted-escaping form and is harder to read.
 
 ## Source
 
