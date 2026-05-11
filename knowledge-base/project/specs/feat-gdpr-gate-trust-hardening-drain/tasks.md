@@ -10,16 +10,16 @@ Derived from `knowledge-base/project/plans/2026-05-11-refactor-gdpr-gate-trust-h
 
 ## Phase 1 — Parser contract extension (#3535)
 
-- [ ] 1.0 Add `make_gh_stub` helper to `plugins/soleur/test/test-helpers.sh` (or local equivalent) per plan §1.4. Used by TS-cron-2..5.
-- [ ] 1.1 Write failing test `TS-cron-1` in `plugins/soleur/test/notice-frontmatter.test.sh`: `cron-run-stale` with `GH_TOKEN=""` AND `GITHUB_TOKEN=""` → emits `999`, exits 0.
-- [ ] 1.2 Write failing test `TS-cron-2`: `cron-run-stale` with stub `gh` on `PATH` emitting `2026-02-01T00:00:00Z` → emits an integer in range 90-110.
-- [ ] 1.3 Write failing test `TS-cron-3`: `cron-run-stale` with stub `gh` emitting `null` → emits `999`.
-- [ ] 1.4 Write failing test `TS-cron-4`: `cron-run-stale` with stub `gh` emitting `"2026-02-01"` (missing `T...Z`) → emits `999`.
-- [ ] 1.5 Write failing test `TS-cron-5`: `cron-run-stale` with stub `gh` that `sleep 10` → emits `999`, wall clock <6s.
-- [ ] 1.6 Write failing test `TS12` (mirrors TS11 p95 timing): `cron-run-stale` with `GH_TOKEN=""` (no-network path) → p95 < 100ms over 100 invocations.
-- [ ] 1.7 Implement `cron-run-stale` per plan §1.1 (full shell function listing). NOT the env-export-sentinel design — MIN computed in caller frame (`gdpr-gate.sh`).
-- [ ] 1.8 Confirm `cmd_days_stale` is UNCHANGED (per plan §1.2 — MIN moved to caller).
-- [ ] 1.9 Run tests; all TS-cron-1..5 + TS12 must pass. Run existing `bash plugins/soleur/test/notice-frontmatter.test.sh` — all TS1-TS11 still pass.
+- [x] 1.0 Add `make_gh_stub` helper to `plugins/soleur/test/test-helpers.sh` (or local equivalent) per plan §1.4. Used by TS-cron-2..5.
+- [x] 1.1 Write failing test `TS-cron-1` in `plugins/soleur/test/notice-frontmatter.test.sh`: `cron-run-stale` with `GH_TOKEN=""` AND `GITHUB_TOKEN=""` → emits `999`, exits 0.
+- [x] 1.2 Write failing test `TS-cron-2`: `cron-run-stale` with stub `gh` on `PATH` emitting `2026-02-01T00:00:00Z` → emits an integer in range 90-110.
+- [x] 1.3 Write failing test `TS-cron-3`: `cron-run-stale` with stub `gh` emitting `null` → emits `999`.
+- [x] 1.4 Write failing test `TS-cron-4`: `cron-run-stale` with stub `gh` emitting `"2026-02-01"` (missing `T...Z`) → emits `999`.
+- [x] 1.5 Write failing test `TS-cron-5`: `cron-run-stale` with stub `gh` that `sleep 10` → emits `999`, wall clock <6s.
+- [x] 1.6 Write failing test `TS12` (mirrors TS11 p95 timing): `cron-run-stale` with `GH_TOKEN=""` (no-network path) → p95 < 100ms over 100 invocations.
+- [x] 1.7 Implement `cron-run-stale` per plan §1.1 (full shell function listing). NOT the env-export-sentinel design — MIN computed in caller frame (`gdpr-gate.sh`).
+- [x] 1.8 Confirm `cmd_days_stale` is UNCHANGED (per plan §1.2 — MIN moved to caller).
+- [x] 1.9 Run tests; all TS-cron-1..5 + TS12 must pass. Run existing `bash plugins/soleur/test/notice-frontmatter.test.sh` — all TS1-TS11 still pass.
 
 ## Phase 2 — Gate caller wiring (#3535)
 
