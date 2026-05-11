@@ -84,6 +84,8 @@ For Option B, the attribution cost is one `NOTICE` file + a one-line header per 
 
 4. **CLO subagent reported a learning-file path that doesn't exist** — I cited `knowledge-base/project/learnings/best-practices/2026-04-18-compliance-runbook-authoring-gotchas.md` from a stale `find` listing, but the file isn't at that path. **Recovery:** subagent flagged for verification rather than guessing. **Prevention:** when citing learning paths to subagents, verify with `ls`/`test -f` first or pass a glob pattern (`find knowledge-base/project/learnings -iname '*compliance-runbook*'`) instead of an exact filename.
 
+5. **Recurrence (2026-05-10, brainstorm of #2719):** CLO subagent reported THIS file (`2026-05-09-evaluating-vendor-branded-claude-code-skills.md`) does not exist on disk; the orchestrator propagated the claim into the brainstorm document; compound-time `ls` from the orchestrator's worktree-root verified the file exists. The subagent's CWD or path-resolution produced a false negative. **Recovery:** corrected brainstorm Q5 + workflow-gap section. **Prevention:** brainstorm SKILL.md Phase 1.1 verification rule extended (2026-05-10) to cover file-existence claims, not just symbol-mounted claims. Independent `ls <absolute-worktree-path>` is mandatory before propagating subagent file-existence negatives.
+
 ## Prevention
 
 - **Brainstorm skill Phase 1.0 / 1.1:** when the feature description contains a URL to a third-party repo, run the 30-second `gh api` recon BEFORE spawning leaders. Surface jurisdiction scope + vendor-surface contamination explicitly to the user as part of the pre-leader summary. (See routing proposal below.)

@@ -1,0 +1,38 @@
+# First-party allowlist for category 5 (telemetry-surface).
+#
+# Matched on URL host segment after parsing (NOT raw substring).
+# Adversarial `https://attacker.com/redirect?ref=soleur.ai` MUST trip detection
+# (host = attacker.com, NOT in this list). See R14 / Sharp Edge #23.
+#
+# Hosts use domain-suffix matching: a literal entry `soleur.ai` matches
+# `soleur.ai` and any subdomain `*.soleur.ai`. The wildcard form `*.soleur.ai`
+# is equivalent and provided for documentation clarity.
+
+domains:
+  - soleur.ai
+  - "*.soleur.ai"
+  - soleur.dev
+  - "*.soleur.dev"
+  - github.com           # Soleur is hosted on github.com/jikig-ai
+  - github.io            # for github pages docs
+  - jikigai.com
+  - "*.jikigai.com"
+  - anthropic.com        # Claude Code surface
+  - "*.anthropic.com"
+  - claude.com           # Claude Code surface
+  - "*.claude.com"
+
+# Approved utm_campaign IDs.  utm-tagged links to non-allowlisted campaigns
+# emit REVIEW (never HIGH-RISK on their own).
+utm_campaigns:
+  - soleur-launch
+  - soleur-blog
+  - soleur-docs
+  - soleur-discord
+  - soleur-github
+  - soleur-x
+  - soleur-bluesky
+  - soleur-linkedin
+  - soleur-hn
+  - soleur-indiehackers
+  - soleur-reddit

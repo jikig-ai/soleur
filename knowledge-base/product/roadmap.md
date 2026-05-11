@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-05-04
-last_reviewed: 2026-05-04
+last_updated: 2026-05-10
+last_reviewed: 2026-05-10
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -322,6 +322,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | 4.8 | Resource monitoring (host CPU/RAM + concurrent session count; per-workspace cgroup accounting deferred to 4.6 container work) | P2 | Before beta invites | [#1052](https://github.com/jikig-ai/soleur/issues/1052), [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.9 | Monitoring + error tracking | P2 | 10+ users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | [#1444](https://github.com/jikig-ai/soleur/issues/1444) Not started |
+| 4.11 | Skill security scan (LOW-RISK\|REVIEW\|HIGH-RISK advisory gate for skill-creator + agent-finder; brand-survival precondition for external skill-install UX) | P1 | Before guided onboarding (4.3) exposes third-party skill-install surface | [#2719](https://github.com/jikig-ai/soleur/issues/2719) Brainstormed |
 
 **Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, X/Twitter solopreneur network, direct network.
 
