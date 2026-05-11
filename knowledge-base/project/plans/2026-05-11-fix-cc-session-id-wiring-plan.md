@@ -214,12 +214,12 @@ Verify the writer's silent-fallback surfaces are observable:
 
 ### Pre-merge (PR)
 
-- [ ] `ws-handler-cc-session-id-wiring.test.ts` passes; `dispatchSoleurGo` receives `sessionId` from the typedRow SELECT and from the `session.sessionId` cache.
-- [ ] `cc-dispatcher-session-id-writer.test.ts` passes; `onSessionIdCaptured` event triggers exactly one `updateConversationFor` call with `{ session_id }`, `expectMatch: true`, scoped to `(id, user_id)`.
-- [ ] `cc-dispatcher-session-id-writer.test.ts` stale-resume scenario passes; a non-`KeyInvalidError` rejection from `runner.dispatch` with a non-null `sessionId` triggers exactly one `updateConversationFor` call with `{ session_id: null }`.
-- [ ] `soleur-go-runner-session-id-rebound.test.ts` passes; runner fires `onSessionIdCaptured` exactly once per state on first non-null `session_id`.
-- [ ] Full `apps/web-platform/test/` suite green: `bun test apps/web-platform/test/`.
-- [ ] `bun run tsc --noEmit` from `apps/web-platform/` reports no new errors.
+- [x] `ws-handler-cc-session-id-wiring.test.ts` passes; `dispatchSoleurGo` receives `sessionId` from the typedRow SELECT and from the `session.sessionId` cache.
+- [x] `cc-dispatcher-session-id-writer.test.ts` passes; `onSessionIdCaptured` event triggers exactly one `updateConversationFor` call with `{ session_id }`, `expectMatch: true`, scoped to `(id, user_id)`.
+- [x] `cc-dispatcher-session-id-writer.test.ts` stale-resume scenario passes; a non-`KeyInvalidError` rejection from `runner.dispatch` with a non-null `sessionId` triggers exactly one `updateConversationFor` call with `{ session_id: null }`.
+- [x] `soleur-go-runner-session-id-rebound.test.ts` passes; runner fires `onSessionIdCaptured` exactly once per state on first non-null `session_id`.
+- [x] Full `apps/web-platform/test/` suite green: `bun test apps/web-platform/test/`.
+- [x] `bun run tsc --noEmit` from `apps/web-platform/` reports no new errors.
 - [ ] PR body uses `Closes #3266` on its own line (not in a checkbox / code block) per `wg-use-closes-n-in-pr-body-not-title-to`.
 - [ ] PR includes `user-impact-reviewer` agent review per AGENTS.md `hr-weigh-every-decision-against-target-user-impact` (threshold: `single-user incident`).
 - [ ] Labels applied: `priority/p2-medium`, `type/bug`, `domain/engineering` (each verified to exist via `gh label list --limit 200`).

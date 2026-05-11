@@ -643,6 +643,18 @@ export interface DispatchEvents {
    * callers can ignore.
    */
   onTextTurnEnd?: () => void;
+  /**
+   * #3266 — fires exactly once per active state on the first
+   * `SDKResultMessage` carrying a non-empty `session_id`. The
+   * cc-dispatcher wires this to a `conversations.session_id` write so
+   * the persisted value seeds `args.sessionId` on the next cold-Query
+   * construction (server restart, idle reap, container restart) and
+   * activates the prefill guard's history-probe branch. Optional so
+   * non-cc callers (legacy agent-runner has its own writer) can ignore.
+   * Once-only contract — see `ActiveQuery.sessionIdEverEmitted`. Do NOT
+   * promote to required without revisiting the no-op test cases.
+   */
+  onSessionIdCaptured?: (sessionId: string) => void;
 }
 
 export interface DispatchArgs {
@@ -1157,6 +1169,16 @@ interface ActiveQuery {
   lastActivityAt: number;
   totalCostUsd: number;
   sessionId: string | null;
+  /**
+   * #3266 — once-only latch for the `onSessionIdCaptured` event. Set on
+   * the first transition from `null` → non-empty `session_id`. A
+   * re-dispatch creates a new state and re-latches; same-state duplicate
+   * `session_id`s do not re-fire. The SDK does not reuse session_ids
+   * across Queries, so a state observing two distinct session_ids would
+   * indicate an SDK invariant shift; we still fire only once per state
+   * to avoid amplifying the writer.
+   */
+  sessionIdEverEmitted: boolean;
   currentWorkflow: WorkflowName | null;
   // Set once when the first assistant block of a turn arrives. Used as
   // the anchor for both `elapsedMs` reporting and the absolute turn
@@ -1521,7 +1543,29 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   function handleResultMessage(state: ActiveQuery, msg: SDKResultMessage): void {
     const delta = msg.total_cost_usd ?? 0;
     state.totalCostUsd += delta;
-    state.sessionId = msg.session_id ?? state.sessionId;
+    const incomingSessionId = msg.session_id || null;
+    if (incomingSessionId) {
+      state.sessionId = incomingSessionId;
+    }
+    // #3266 — fire `onSessionIdCaptured` exactly once per state on the
+    // first non-empty `session_id`. The writer (cc-dispatcher) is
+    // fire-and-forget; a throw here MUST NOT block turn termination.
+    if (
+      incomingSessionId &&
+      !state.sessionIdEverEmitted &&
+      state.events.onSessionIdCaptured
+    ) {
+      state.sessionIdEverEmitted = true;
+      try {
+        state.events.onSessionIdCaptured(incomingSessionId);
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "onSessionIdCaptured",
+          extra: { conversationId: state.conversationId },
+        });
+      }
+    }
     // Result terminates the turn. Clear both the per-block idle window
     // and the absolute turn ceiling; the next turn's first block will
     // re-stamp `firstToolUseAt` and re-arm both timers.
@@ -1685,6 +1729,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         lastActivityAt: now(),
         totalCostUsd: 0,
         sessionId: args.sessionId ?? null,
+        sessionIdEverEmitted: false,
         currentWorkflow: initialWorkflow,
         firstToolUseAt: null,
         runaway: null,
