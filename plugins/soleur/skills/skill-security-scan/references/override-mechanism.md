@@ -41,7 +41,7 @@ timestamp: <ISO-8601>
 # Override: <skill-slug>
 
 ## Findings (verdict: <verdict>)
-<inline JSON copy of the .scan-meta.json findings_summary, or a relative path>
+<path to .scan-meta.json — see "PII safety" below>
 
 ## Justification
 <free-text rationale>
@@ -50,7 +50,8 @@ timestamp: <ISO-8601>
 ## Operator workflow
 
 1. Operator hits HIGH-RISK on a third-party skill they want to install.
-2. Scanner emits findings + suggested override-artifact path.
+2. Scanner emits findings + suggested override-artifact path + the runtime
+   path to the redacted `.scan-meta.json` (printed on stdout).
 3. Operator inspects the findings, decides override is appropriate.
 4. Operator creates the artifact (manual or via `skill-creator` Step 5):
 
@@ -59,7 +60,7 @@ timestamp: <ISO-8601>
    ---
    skill: <slug>
    source: <where-the-skill-came-from>
-   findings_json: <path-to-or-inline-scan-meta.json>
+   findings_json: <path-to-redacted-.scan-meta.json>
    justification: <rationale>
    approver: $(git config user.email)
    scanner_version: 0.1.0
@@ -71,7 +72,7 @@ timestamp: <ISO-8601>
    # Override: <slug>
 
    ## Findings
-   <inline-or-path>
+   <path to .scan-meta.json>
 
    ## Justification
    <text>
@@ -82,6 +83,20 @@ timestamp: <ISO-8601>
 6. CI pre-merge gate (`skill-security-scan-pr-trailer.yml`) and the PreToolUse
    hook on Write run `parse-override.sh` to validate. Valid artifact → install
    accepted.
+
+### PII safety — path-form mandate
+
+The `findings_json` field MUST be a **path to the persisted, redacted
+`.scan-meta.json`** — not an inline JSON copy of findings. Reason: scanner
+stdout (which the operator sees during review) is intentionally unredacted
+for in-terminal inspection; the persisted `.scan-meta.json` runs through
+`redact_pii()` (email, IPv4, IBAN, JWT, Anthropic/OpenAI keys, GitHub
+PAT/OAuth, GitLab PAT, Doppler tokens, Slack tokens, AWS keys). Copy-pasting
+from terminal scrollback lands raw PII / secrets in a permanent git artifact
+retained "for repository lifetime" per Art. 32 evidence retention.
+
+`parse-override.sh` enforces this: artifacts whose body contains a raw email
+pattern outside the `approver:` field are rejected with `invalid_schema`.
 
 ## Multiple overrides per PR
 

@@ -10,6 +10,18 @@ name: skill-security-scan / pre-merge required check
 #      (frontmatter schema, slug regex, rule_pack_sha256 freshness).
 #
 # Required status check on `main` branch protection (mitigates R15).
+#
+# Trigger choice — `pull_request` (not `pull_request_target`):
+# `pull_request_target` runs from base-branch context with secret access,
+# which expands the attack surface (a malicious PR could exploit secrets
+# via untrusted code paths). `pull_request` runs from the PR's head workspace
+# with no secret access. Trade-off: PRs from forks could in principle ship a
+# modified workflow file that disables the gate. This is accepted-risk for
+# v1 because (a) Soleur is not yet accepting community PRs at scale,
+# (b) branch protection's required-check binding is by check-name and is
+# enforced at merge time regardless of what the PR ships, and (c) any change
+# to this workflow file is itself a reviewable diff. Re-evaluate when
+# community contribution volume grows.
 
 on:
   pull_request:

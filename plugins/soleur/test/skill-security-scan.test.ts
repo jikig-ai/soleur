@@ -15,7 +15,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const REPO_ROOT = (() => {
@@ -189,6 +189,34 @@ describe("skill-security-scan: self-test runner", () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toContain("--regenerate-manifest is rejected");
   });
+});
+
+describe("skill-security-scan: load-bearing security scenarios", () => {
+  // Scenario 6: rule-pack tampering. Modifying a rule file without manifest
+  // re-sign must short-circuit to HIGH-RISK (not REVIEW). REVIEW maps to
+  // permissionDecision:ask which an operator could confirm-through.
+  test("rule-pack tamper short-circuits to HIGH-RISK (not REVIEW)", () => {
+    const ruleFile = join(SKILL_DIR, "references/rules/code-exec.yaml");
+    const original = readFileSync(ruleFile, "utf-8");
+    try {
+      writeFileSync(ruleFile, original + "\n# tampered for test\n");
+      const r = spawnSync("bash", [join(SCRIPTS, "run-scan.sh")], {
+        input: "---\nname: x\ndescription: x\n---\n# body\n",
+        encoding: "utf-8",
+        env: { ...process.env, SKILL_SECURITY_SCAN_OFFLINE: "1" },
+      });
+      const firstLine = (r.stdout || "").split("\n")[0] || "";
+      expect(firstLine).toContain("HIGH-RISK");
+      expect(r.stdout).toContain("rule pack tampered");
+    } finally {
+      writeFileSync(ruleFile, original);
+    }
+  });
+
+  // Note: parse-override.sh schema validations (approver email-shape, raw
+  // email in body, per-skill binding) are exercised via shell smoke tests
+  // during /work; adding bun-test coverage requires a git-tempdir fixture
+  // helper that doesn't fit in this pass. See follow-up issue.
 });
 
 describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {

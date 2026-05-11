@@ -90,6 +90,51 @@ for path in "${added[@]}"; do
       ;;
   esac
 
+  # Schema enforcement: approver must be email-shaped, scanner_version semver,
+  # timestamp ISO-8601 (data-integrity review F1). The JSON schema declares
+  # these `format:` constraints but no validator ran — enforce them here.
+  field_value() {
+    echo "$fm" | awk -v fld="$1" '
+      $0 ~ "^"fld":" {
+        # Capture everything after the first colon (preserve embedded :).
+        sub("^"fld":[[:space:]]*", "")
+        gsub(/^["'"'"']|["'"'"']$/, "")
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+        print
+        exit
+      }'
+  }
+  approver="$(field_value approver)"
+  scanner_version="$(field_value scanner_version)"
+  timestamp="$(field_value timestamp)"
+  if ! [[ "$approver" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+    invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "approver must be email-shaped (got: $approver)" '. + [{path: $p, reason: $r}]')"
+    continue
+  fi
+  if ! [[ "$scanner_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "scanner_version must be semver (got: $scanner_version)" '. + [{path: $p, reason: $r}]')"
+    continue
+  fi
+  if ! [[ "$timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:?[0-9]{2})$ ]]; then
+    invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "timestamp must be ISO-8601 (got: $timestamp)" '. + [{path: $p, reason: $r}]')"
+    continue
+  fi
+
+  # PII guard (data-integrity F3): reject artifacts whose frontmatter or body
+  # contain a raw email pattern OUTSIDE the approver field (PR author
+  # copy-pasted from unredacted stdout instead of using the path-form).
+  # Filter the approver line at any line position; only THAT field is
+  # allowed to contain a literal email.
+  artifact_text="$(awk -v approver_line="approver:" '
+    index($0, approver_line) == 1 { next }
+    /^[[:space:]]*approver:/      { next }
+    { print }
+  ' "$path")"
+  if echo "$artifact_text" | grep -qE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'; then
+    invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "artifact contains raw email pattern outside approver field — use path-form findings_json (point to redacted .scan-meta.json) instead of inline" '. + [{path: $p, reason: $r}]')"
+    continue
+  fi
+
   # Freshness: rule_pack_sha256 prefix must match current manifest sha (≥8 chars).
   artifact_sha="$(echo "$fm" | awk -F: '/^rule_pack_sha256:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/"|'"'"'/, "", $2); print $2; exit }')"
   prefix_len="${#artifact_sha}"
