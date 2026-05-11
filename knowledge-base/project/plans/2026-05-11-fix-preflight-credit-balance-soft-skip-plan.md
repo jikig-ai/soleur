@@ -242,15 +242,15 @@ real body containing `Closes #3605` before marking ready.
 
 ### Pre-merge (PR)
 
-- [ ] `.github/actions/anthropic-preflight/action.yml` line 46 uses
+- [x] `.github/actions/anthropic-preflight/action.yml` line 46 uses
   `grep -qE "(specified API usage limits|credit balance is too low)"` (TR1).
-- [ ] Line 48 warning text reads `"::warning::Anthropic API unavailable (spend cap or credit balance) — skipping Claude steps. Body: $BODY"` (TR2).
-- [ ] Comment block above the grep cites #2715 + #3605 and both literal strings (TR2).
-- [ ] No other files changed in the diff (verify via `git diff --name-only main..HEAD` — expect only `action.yml` plus the brainstorm/spec/plan/tasks docs already committed).
-- [ ] No new `inputs:` or `env:` keys on the composite action (TR3).
-- [ ] No `.github/workflows/*` files changed (TR4).
+- [x] Line 48 warning text reads `"::warning::Anthropic API unavailable (spend cap or credit balance) — skipping Claude steps. Body: $BODY"` (TR2).
+- [x] Comment block above the grep cites #2715 + #3605 and both literal strings (TR2).
+- [x] No other files changed in the diff (verify via `git diff --name-only main..HEAD` — expect only `action.yml` plus the brainstorm/spec/plan/tasks docs already committed).
+- [x] No new `inputs:` or `env:` keys on the composite action (TR3).
+- [x] No `.github/workflows/*` files changed (TR4).
 - [ ] PR body contains `Closes #3605` (NOT in title — `wg-use-closes-n-in-pr-body-not-title-to`).
-- [ ] Phase 2 fixture sanity-run printed the expected three-line output.
+- [x] Phase 2 fixture sanity-run printed the expected three-line output.
 - [ ] Required CI checks green.
 
 ### Post-merge
