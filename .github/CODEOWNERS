@@ -54,6 +54,10 @@
 # protects `skill-security-scan PR gate`. Without these pins, R15's
 # bypass authority is one admin-PR away from being self-greened.
 /scripts/ci-required-ruleset-canonical-bypass-actors.json @jeanderuelle
+/scripts/ci-required-ruleset-canonical-required-status-checks.json @jeanderuelle
+/scripts/lib/canonicalize-bypass-actors.sh              @jeanderuelle
+/scripts/lib/canonicalize-required-status-checks.sh     @jeanderuelle
+/scripts/lib/strip-log-injection.sh                     @jeanderuelle
 /scripts/audit-ruleset-bypass.sh                        @jeanderuelle
 /scripts/update-ci-required-ruleset.sh                  @jeanderuelle
 /scripts/create-ci-required-ruleset.sh                  @jeanderuelle
