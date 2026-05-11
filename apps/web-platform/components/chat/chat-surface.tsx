@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useWebSocket } from "@/lib/ws-client";
 import type { ConversationContext, AttachmentRef } from "@/lib/types";
@@ -214,6 +214,30 @@ export function ChatSurface({
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
   const [sessionStartTimeout, setSessionStartTimeout] = useState(false);
+  const [dismissedErrorKey, setDismissedErrorKey] = useState<string | null>(null);
+  const [sessionTimeoutDismissed, setSessionTimeoutDismissed] = useState(false);
+  const prevSessionTimeoutRef = useRef(false);
+
+  const activeErrorKey = useMemo(
+    () => (lastError ? `${lastError.code}::${lastError.message}` : null),
+    [lastError],
+  );
+
+  // Edge-triggered: re-show the timeout card when sessionStartTimeout flips false -> true.
+  useEffect(() => {
+    if (!prevSessionTimeoutRef.current && sessionStartTimeout) {
+      setSessionTimeoutDismissed(false);
+    }
+    prevSessionTimeoutRef.current = sessionStartTimeout;
+  }, [sessionStartTimeout]);
+
+  // Reset dismissedErrorKey whenever lastError clears so an identical re-fire
+  // (same code+message after a reconnect that nulled lastError) is shown again.
+  useEffect(() => {
+    if (!lastError) {
+      setDismissedErrorKey(null);
+    }
+  }, [lastError]);
   const [atQuery, setAtQuery] = useState("");
   const [atVisible, setAtVisible] = useState(false);
   const [atPosition, setAtPosition] = useState(0);
@@ -514,7 +538,7 @@ export function ChatSurface({
       />
 
       <div className={`min-w-0 flex-1 overflow-y-auto px-4 py-4 ${isFull ? "md:px-6" : ""}`}>
-        {lastError && (
+        {lastError && activeErrorKey !== dismissedErrorKey && (
           <div className={`mb-4 ${widthWrapper}`}>
             <ErrorCard
               title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : "Connection Error"}
@@ -522,17 +546,19 @@ export function ChatSurface({
               onRetry={lastError.code !== "key_invalid" ? reconnect : undefined}
               retryLabel="Reconnect"
               action={lastError.action}
+              onDismiss={() => setDismissedErrorKey(activeErrorKey)}
             />
           </div>
         )}
 
-        {sessionStartTimeout && !sessionConfirmed && (
+        {sessionStartTimeout && !sessionConfirmed && !sessionTimeoutDismissed && (
           <div className={`mb-4 ${widthWrapper}`}>
             <ErrorCard
               title="Session Failed to Start"
               message="The server did not confirm the session within 10 seconds. Please try again."
               onRetry={reconnect}
               retryLabel="Reconnect"
+              onDismiss={() => setSessionTimeoutDismissed(true)}
             />
           </div>
         )}
