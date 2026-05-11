@@ -437,8 +437,28 @@ Each finding's default action is to FIX IT INLINE on the PR branch: make the edi
 commit with a message `review: <summary> (P<N>)`, and push. Apply to P1, P2, P3
 equally.
 
-Filing a GitHub issue instead of fixing is allowed ONLY when the finding meets
-one of these four scope-out criteria:
+**Cost-of-filing gate (apply BEFORE the four scope-out criteria below):** If the
+fix is ≤30 lines of code AND touches ≤2 files AND no reviewer agent independently
+dissents on technical grounds (e.g., contested-design with named alternatives),
+fix inline. The bookkeeping cost of `gh issue create + scope-out justification +
+future triage + closure + follow-up PR` averages ~30 minutes of cumulative
+human attention; a ≤30-line code edit averages ~5 minutes. Filing the issue is
+NET-NEGATIVE work for the team. This gate is load-bearing: a PR that opens
+more issues than it closes is a workflow failure, not a normal review outcome.
+
+The gate fails (fix-inline is required) when:
+  - Fix is ≤30 lines AND ≤2 files, regardless of "feels like a follow-up" framing.
+  - The only objection to fixing inline is bookkeeping/scope discipline (vs. a
+    concrete technical contest the agent named).
+  - The finding is `pr-introduced` (per Step 1 provenance triage) — these always
+    fix inline.
+
+The gate may pass (proceed to evaluate the four scope-out criteria) when:
+  - Fix is >30 lines OR touches >2 files, AND
+  - The fix demonstrably matches at least one of the four criteria below.
+
+Filing a GitHub issue instead of fixing is allowed ONLY when both the cost-of-
+filing gate above AND one of these four scope-out criteria are satisfied:
 
   1. **cross-cutting-refactor** — fix requires touching **≥3 files** that are
      **materially unrelated to this PR's core change**, where **core change =
@@ -585,6 +605,24 @@ this really cross-cutting?") for findings the PR itself introduced.
 
 **Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output. If either is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
 
+**Pre-emission cost-of-filing pass (run BEFORE the marker):** Build the
+candidate "Filed as scope-out" list from your synthesis. For each candidate,
+re-apply the cost-of-filing gate from §5:
+
+  - Is the fix ≤30 lines AND ≤2 files? → Remove from the scope-out list; fix
+    inline and add to "Fixed inline" instead.
+  - Is the only objection bookkeeping ("feels like a follow-up", "not core to
+    this PR") rather than a concrete technical contest? → Remove; fix inline.
+  - Did `code-simplicity-reviewer` actually CONCUR on this specific item (not
+    just on the batch)? Required even in pipeline mode. → If no CONCUR, fix
+    inline.
+
+Only items that survive ALL three checks appear in "Filed as scope-out". This
+loop prevents the failure mode where pipeline mode rationalizes filing
+≤30-line cleanup items because the marker template makes filing look like a
+first-class option. **Target: the marker frequently shows "Filed as scope-out:
+0".** A PR that nets +N issues from review is a workflow failure.
+
 **Compact progress marker (pipeline mode):**
 
 ```markdown
@@ -597,6 +635,11 @@ this really cross-cutting?") for findings the PR itself introduced.
 
 [Optional 1-line table of scope-out issues with criteria, if any.]
 ```
+
+**Self-audit:** if the "Filed as scope-out" count exceeds 1 on a PR <500
+lines, re-run the cost-of-filing pass above with a stricter posture before
+emitting. The target is fewer-issues-opened than issues-closed, measured
+across the team's PR throughput.
 
 After emitting the marker, the calling skill's continuation gate takes over — control returns to one-shot step 5 / work Phase 4 in the SAME response.
 
