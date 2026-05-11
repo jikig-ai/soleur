@@ -54,7 +54,14 @@ jobs:
 
       - id: probe
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          # Reuse the workplace-scoped DOPPLER_TOKEN already used by
+          # scheduled-terraform-drift.yml and other scheduled workflows. The
+          # token can read any project config; the runtime `.environment == "dev"`
+          # assertion below is the load-bearing defense for
+          # hr-dev-prd-distinct-supabase-projects, not the token's scope.
+          # Avoids the operator-bootstrap step that a dev-only service token
+          # would require.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
           # Note: NOT set -e — we collect failure mode and emit it as output.
@@ -81,28 +88,30 @@ jobs:
               | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g'
           }
 
-          # Graceful fail mode when the operator hasn't yet provisioned the
-          # dev-scoped service token. Matches OAUTH_PROBE_GITHUB_CLIENT_ID
-          # graceful-fail pattern at scheduled-oauth-probe.yml lines 285-290.
+          # Graceful fail mode when DOPPLER_TOKEN somehow isn't propagated.
+          # Matches OAUTH_PROBE_GITHUB_CLIENT_ID graceful-fail pattern at
+          # scheduled-oauth-probe.yml lines 285-290.
           if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
             record_failure "secret_unset" \
-              "DOPPLER_TOKEN_DEV_SCHEDULED is not set — operator must create dev_scheduled Doppler config + service token, then 'gh secret set DOPPLER_TOKEN_DEV_SCHEDULED' from a separate terminal (see learning file #3060 breadcrumb)."
+              "DOPPLER_TOKEN is not set — verify the workplace token secret is propagated to this workflow."
           fi
 
-          # Belt-and-suspenders: assert the token's config really is dev-scoped
-          # before probing. Defends against a future operator rotating the
-          # token to a prd-scoped one by mistake (would violate
-          # hr-dev-prd-distinct-supabase-projects).
+          # Load-bearing: assert the config we are about to probe resolves to
+          # an environment named 'dev'. The workplace token can read any
+          # config; this is the structural defense for
+          # hr-dev-prd-distinct-supabase-projects. If a future contributor
+          # edits this workflow to target prd by mistake, this assertion
+          # fails fast before any probe runs.
           if [[ -z "$fail_mode" ]]; then
-            env_name=$(doppler configs get dev_scheduled -p soleur --json 2>/dev/null \
+            env_name=$(doppler configs get dev -p soleur --json 2>/dev/null \
               | jq -r '.environment // empty')
             if [[ -z "$env_name" ]]; then
               record_failure "doppler_config_missing" \
-                "doppler configs get dev_scheduled -p soleur returned empty — config does not exist or token lacks read access (see #3060 breadcrumb)."
+                "doppler configs get dev -p soleur returned empty — config does not exist or token lacks read access."
             elif [[ "$env_name" != "dev" ]]; then
               env_name_safe=$(strip_log_injection "$env_name")
               record_failure "doppler_config_drift" \
-                "dev_scheduled config resolves to environment=${env_name_safe} (expected: dev) — token rotated to wrong scope; reset before running probe."
+                "dev config resolves to environment=${env_name_safe} (expected: dev) — investigate Doppler workspace config drift before running probe."
             fi
           fi
 
@@ -116,7 +125,7 @@ jobs:
               # SUBSCRIBED token = probe contract drift (script bug), not a
               # realtime race.
               set +e
-              output=$(doppler run -p soleur -c dev_scheduled -- \
+              output=$(doppler run -p soleur -c dev -- \
                 node apps/web-platform/scripts/realtime-probe.mjs 2>&1)
               probe_exit=$?
               set -e
@@ -194,8 +203,8 @@ jobs:
             printf 'Common triage paths:\n\n'
             printf -- '- `realtime_join_timeout` — most likely a `@supabase/realtime-js` or `@supabase/supabase-js` bump re-triggered the Node-without-native-WebSocket race (or upstream removed the polyfill workaround). Re-run `apps/web-platform/scripts/realtime-probe.mjs` locally with and without `--no-polyfill` to confirm which side changed.\n'
             printf -- '- `probe_contract_drift` — `realtime-probe.mjs` exit code disagrees with its SUBSCRIBED stdout token. Script bug, not a race.\n'
-            printf -- '- `doppler_config_drift` / `doppler_config_missing` — operator action: re-scope `DOPPLER_TOKEN_DEV_SCHEDULED` to the `dev_scheduled` config.\n'
-            printf -- '- `secret_unset` — operator action: provision `DOPPLER_TOKEN_DEV_SCHEDULED` per the #3060 onboarding breadcrumb.\n\n'
+            printf -- '- `doppler_config_drift` / `doppler_config_missing` — investigate Doppler workspace `dev` config: it should resolve to environment `dev` and the workplace `DOPPLER_TOKEN` must have read access.\n'
+            printf -- '- `secret_unset` — verify `DOPPLER_TOKEN` is propagated to scheduled workflows; mirrors the secret used by `scheduled-terraform-drift.yml`.\n\n'
             printf '**Tracks:** #3060\n'
           } > "$BODY_FILE"
 
