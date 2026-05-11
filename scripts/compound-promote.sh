@@ -43,9 +43,10 @@ if [[ ! -f "$CONFIG" ]]; then
   printf '::compound-promote-status::no-config\n'
   exit 0
 fi
-# awk extraction tolerates trailing inline comments and surrounding whitespace
-# so we can avoid the yq dependency.
-ENABLED=$(awk -F': *' '/^enabled:/ { sub(/[ \t]*#.*/, "", $2); gsub(/[ "'\''\t]/, "", $2); print $2; exit }' "$CONFIG")
+# awk extraction tolerates trailing inline comments and surrounding whitespace.
+# `^enabled[ \t]*:` matches both `enabled: x` and `enabled : x` (space before
+# colon is legal YAML and the previous regex missed it). Avoids the yq dep.
+ENABLED=$(awk '/^[ \t]*enabled[ \t]*:/ { sub(/^[^:]*:[ \t]*/, "", $0); sub(/[ \t]*#.*/, "", $0); gsub(/[ "'\''\t]/, "", $0); print $0; exit }' "$CONFIG")
 if [[ "$ENABLED" != "true" ]]; then
   printf '::compound-promote-status::disabled\n'
   exit 0
@@ -64,10 +65,14 @@ fi
 printf '::compound-promote-week-cap::%d\n' "$REMAINING"
 
 # 3. GDPR shell pre-pass -------------------------------------------------------
-# Canonical PII regex: email | IPv4 | IBAN. Heuristic — matches the lefthook
-# advisory layer. Cheap, deterministic, fails OPEN (excludes the file) on any
-# match. The human reviewer at PR time is the second line of defense.
-PII_REGEX='([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|([0-9]{1,3}(\.[0-9]{1,3}){3})|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})'
+# Heuristic PII / credential regex (fails OPEN — any match excludes the file):
+#   - email | IPv4 | IBAN (canonical PII shapes)
+#   - JWT / Anthropic / GitHub / AWS / Stripe / Slack token shapes
+# Cheap, deterministic. Human reviewer at PR time + Anthropic processor DPA
+# are the second and third lines of defense. The runbook acknowledges that
+# novel shapes (phone numbers, customer slugs, prod IDs without prefix) still
+# slip through.
+PII_REGEX='([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|([0-9]{1,3}(\.[0-9]{1,3}){3})|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})|(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(sk-ant-[A-Za-z0-9_-]{20,})|(gh[psr]_[A-Za-z0-9]{20,})|(AKIA[0-9A-Z]{16})|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})|(xox[baprs]-[A-Za-z0-9-]{10,})'
 SAFE_FILES=()
 if [[ -d "$LEARNINGS_DIR" ]]; then
   while IFS= read -r -d '' file; do
@@ -90,7 +95,12 @@ if [[ -f "$RETIRED_FILE" && ${#SAFE_FILES[@]} -gt 0 ]]; then
     while IFS= read -r token; do
       [[ -z "$token" ]] && continue
       RETIRED_PATHS["$token"]=1
-    done < <(printf '%s\n' "$breadcrumb" | grep -oE 'knowledge-base/project/learnings/[^ ]+\.md' || true)
+    # Broadened from `knowledge-base/project/learnings/...` to any kb path so
+    # the extractor matches both manual retirements (constitution, skills) and
+    # rule-prune-generated rows. Strips trailing `|` so the regex doesn't eat
+    # the column separator. Path tokens with spaces are not supported (the
+    # repo's convention is kebab-case).
+    done < <(printf '%s\n' "$breadcrumb" | grep -oE 'knowledge-base/[^ |]+\.md' || true)
   done < "$RETIRED_FILE"
 
   FILTERED_FILES=()
@@ -121,28 +131,54 @@ fi
 # Build corpus JSON: { path, summary } per file. Summary is head -n 10 of the
 # file body — bounds prompt size on the ~947-file corpus and avoids piping
 # full file contents to Anthropic.
-CORPUS_JSON=$(jq -n '[]')
+#
+# Pattern: emit one NDJSON line per file into a tempfile, then `jq -s` slurps
+# the whole tempfile in a single pass. Avoids the O(n²) "re-parse the whole
+# array on every iteration" pattern from the first draft (measured 22s on
+# 953 files; the slurp variant is ~1.3s — 15x faster and degrades linearly).
+CORPUS_NDJSON=$(mktemp)
+trap 'rm -f "$CORPUS_NDJSON"' EXIT
 for file in "${SAFE_FILES[@]}"; do
   rel="${file#"$REPO_ROOT/"}"
   summary=$(head -n 10 "$file" | jq -Rs .)
-  CORPUS_JSON=$(echo "$CORPUS_JSON" | jq --arg path "$rel" --argjson summary "$summary" '. + [{path: $path, summary: $summary}]')
+  jq -nc --arg path "$rel" --argjson summary "$summary" '{path: $path, summary: $summary}' >> "$CORPUS_NDJSON"
 done
+CORPUS_JSON=$(jq -s . "$CORPUS_NDJSON")
+
+# Compute live always-loaded byte size of the AGENTS payload. The LLM cannot
+# inspect the repo filesystem, so the driver injects the current size into the
+# prompt. The post-apply byte cap is also enforced in the workflow after
+# `git apply` lands (defense-in-depth — prompt compliance is best-effort).
+AGENTS_INDEX="$REPO_ROOT/AGENTS.md"
+AGENTS_CORE="$REPO_ROOT/AGENTS.core.md"
+ALWAYS_LOADED_NOW=0
+[[ -f "$AGENTS_INDEX" ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(wc -c < "$AGENTS_INDEX") ))
+[[ -f "$AGENTS_CORE"  ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(wc -c < "$AGENTS_CORE")  ))
+ALWAYS_LOADED_CAP=18000
 
 # Clustering prompt: tier='skill'|'agents-core' (post AGENTS.md split per PR #3496).
-# agents-core targets AGENTS.core.md and is gated on always-loaded payload size.
+# - agents-core targets AGENTS.core.md and is gated on the live always-loaded
+#   payload size injected below. The workflow enforces target_path allowlist
+#   AND a post-apply byte cap — the LLM is told the numbers but not trusted.
+# - cluster_hash is now computed in the workflow from source_learnings, so the
+#   LLM no longer needs to compute it (the field is ignored if supplied; the
+#   prompt asks for it only as a structural placeholder so older clients keep
+#   parsing the schema). Removed the "compute sha256" instruction so the LLM
+#   stops generating speculative hex.
 PROMPT=$(cat <<EOF
 You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${REMAINING} qualifying clusters (each with >=5 source learnings) as a JSON array.
-Schema: [{cluster_hash:'<sha256>', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], proposed_diff_unified:string, rationale:string, byte_impact:{before:int,after:int,delta:int}}].
+Schema: [{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], proposed_diff_unified:string, rationale:string, byte_impact:{before:int,after:int,delta:int}}].
 Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.core.md. Per PR #3496 sidecar split, AGENTS.md (index) + AGENTS.core.md are always-loaded; conditional sidecars (AGENTS.docs.md, AGENTS.rest.md) are deferred to v2.
-For agents-core targets, refuse if (current AGENTS.md size + AGENTS.core.md size + delta) > 18000 bytes.
-Compute cluster_hash = sha256(sorted(source_learnings)).
+Current always-loaded payload (AGENTS.md + AGENTS.core.md) is ${ALWAYS_LOADED_NOW} bytes; the warn cap is ${ALWAYS_LOADED_CAP} bytes. For agents-core targets, REFUSE the cluster if ${ALWAYS_LOADED_NOW} + your byte_impact.delta exceeds ${ALWAYS_LOADED_CAP} — emit fewer/smaller clusters instead.
+target_path MUST be one of: AGENTS.core.md, plugins/soleur/skills/<skill-name>/SKILL.md. The workflow refuses any other path. cluster_hash is ignored (the workflow computes it).
 Output ONLY the JSON array, nothing else.
 EOF
 )
+printf '::compound-promote-byte-budget::%d:%d\n' "$ALWAYS_LOADED_NOW" "$ALWAYS_LOADED_CAP"
 
 REQUEST=$(jq -n \
   --arg model "claude-sonnet-4-6" \
-  --argjson max_tokens 8192 \
+  --argjson max_tokens 16384 \
   --arg prompt "$PROMPT" \
   --argjson corpus "$CORPUS_JSON" \
   '{model: $model, max_tokens: $max_tokens, messages: [{role: "user", content: ($prompt + "\n\nCorpus:\n" + ($corpus | tostring))}]}')
@@ -159,6 +195,16 @@ if [[ -z "$CLUSTERS_TEXT" ]]; then
   echo "::error::Anthropic API returned empty content" >&2
   echo "$RESPONSE" | head -c 500 >&2
   exit 1
+fi
+
+# Defense against truncation: a `stop_reason: "max_tokens"` response means the
+# JSON array is almost certainly malformed (cut mid-cluster). Fail soft on
+# this — emit empty clusters rather than letting downstream jq fail loud.
+STOP_REASON=$(echo "$RESPONSE" | jq -r '.stop_reason // empty' 2>/dev/null || echo "")
+if [[ "$STOP_REASON" == "max_tokens" ]]; then
+  echo "::warning::Anthropic response truncated at max_tokens — emitting empty clusters" >&2
+  printf '::compound-promote-clusters-json::%s\n' "$(printf '%s' '[]' | base64 | tr -d '\n')"
+  exit 0
 fi
 
 # Defensive JSON-shape validation. Fail soft (emit empty array) so the caller

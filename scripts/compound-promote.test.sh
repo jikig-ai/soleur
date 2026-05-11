@@ -232,9 +232,120 @@ EOF
   rm -rf "$root"
 }
 
+# --- T4: retired-rule pre-pass drops learnings referenced in retired-rule-ids.txt
+# Reviewer #16: the original regex (`knowledge-base/project/learnings/[^ ]+\.md`)
+# never matched rule-prune.sh's actual breadcrumb format. The fix broadens to
+# `knowledge-base/[^ |]+\.md`. This test confirms the broader regex catches
+# both learnings/ and constitution/skill paths in the breadcrumb column.
+t4_retired_rule_pre_pass_excludes() {
+  local root; root=$(make_temp_root)
+  copy_fixtures "$root"
+  cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF'
+enabled: true
+EOF
+  # Synthesize a retired-rule row whose breadcrumb names safe-learning-one.md.
+  cat > "$root/scripts/retired-rule-ids.txt" <<EOF
+hr-synth-retired-test | 2026-05-11 | #0000 | retiring per knowledge-base/project/learnings/2026-05-11-safe-learning-one.md context
+EOF
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
+
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" \
+        GH_BIN="$gh_bin" \
+        CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="fake-key-for-mock" \
+        bash "$SUT" 2>&1) || exit_code=$?
+
+  assert_eq        "T4 exit code is 0" "0" "$exit_code"
+  assert_contains  "T4 emits retired-excluded sentinel for safe-learning-one" \
+                   "::compound-promote-retired-excluded::knowledge-base/project/learnings/2026-05-11-safe-learning-one.md" \
+                   "$out"
+  local payload=""
+  [[ -f "$root/curl-capture.txt" ]] && payload=$(cat "$root/curl-capture.txt")
+  assert_not_contains "T4 corpus OMITS the retired learning" \
+                     "2026-05-11-safe-learning-one.md" "$payload"
+  # safe-learning-two is NOT retired and is NOT PII; it must survive.
+  assert_contains    "T4 corpus INCLUDES the non-retired safe-learning-two" \
+                     "2026-05-11-safe-learning-two.md" "$payload"
+  rm -rf "$root"
+}
+
+# --- T5: week-cap-reached short-circuits before any work --------------------
+# Reviewer code-quality M3 + test-design top-3: untested branches in the SUT.
+# When mock gh reports 2 open self-healing/auto PRs (= WEEK_CAP_DEFAULT), the
+# script MUST emit week-cap-reached and exit 0 WITHOUT calling curl.
+t5_week_cap_reached_short_circuits() {
+  local root; root=$(make_temp_root)
+  copy_fixtures "$root"
+  cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF'
+enabled: true
+EOF
+  # gh mock that reports 2 open PRs (== WEEK_CAP_DEFAULT) so REMAINING == 0.
+  local gh_bin="$root/gh"
+  cat > "$gh_bin" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *"pr list"*"self-healing/auto"*"--state open"*"--json number"*"--jq length"*) echo 2 ;;
+  *) echo "[]" ;;
+esac
+EOF
+  chmod +x "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
+
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" \
+        GH_BIN="$gh_bin" \
+        CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="fake-key-not-used" \
+        bash "$SUT" 2>&1) || exit_code=$?
+
+  assert_eq        "T5 exit code is 0"            "0" "$exit_code"
+  assert_contains  "T5 emits week-cap sentinel"   "::compound-promote-week-cap::0" "$out"
+  assert_contains  "T5 emits week-cap-reached"    "::compound-promote-status::week-cap-reached" "$out"
+  # Most importantly: curl was never called (no payload captured).
+  assert_eq        "T5 mock curl never called"    "false" \
+                   "$([[ -f "$root/curl-capture.txt" ]] && echo true || echo false)"
+  rm -rf "$root"
+}
+
+# --- T6: byte-budget sentinel emits live AGENTS payload size ----------------
+# Reviewer agent-native #1: the budget MUST be computed in the driver, not
+# just asserted in the prompt. Emits the sentinel so the workflow / aggregator
+# / reviewer can see the live size. Assert the sentinel fires with both
+# numeric fields populated.
+t6_byte_budget_sentinel_emitted() {
+  local root; root=$(make_temp_root)
+  copy_fixtures "$root"
+  cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF'
+enabled: true
+EOF
+  # Synthesize stand-in AGENTS files so the driver has something to wc.
+  printf 'idx\n' > "$root/AGENTS.md"
+  printf 'core\n' > "$root/AGENTS.core.md"
+  local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
+  local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
+
+  local out exit_code=0
+  out=$(COMPOUND_PROMOTE_FIXTURE_ROOT="$root" \
+        GH_BIN="$gh_bin" \
+        CURL_BIN="$curl_bin" \
+        ANTHROPIC_API_KEY="fake-key-for-mock" \
+        bash "$SUT" 2>&1) || exit_code=$?
+
+  assert_eq        "T6 exit code is 0"               "0" "$exit_code"
+  # `idx\n` = 4 bytes, `core\n` = 5 bytes → total = 9. Cap is 18000.
+  assert_contains  "T6 byte-budget sentinel with 9:18000" \
+                   "::compound-promote-byte-budget::9:18000" "$out"
+  rm -rf "$root"
+}
+
 t1_no_config_returns_noop
 t2_disabled_config_returns_noop
 t3_gdpr_pre_pass_excludes_pii_files
+t4_retired_rule_pre_pass_excludes
+t5_week_cap_reached_short_circuits
+t6_byte_budget_sentinel_emitted
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

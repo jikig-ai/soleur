@@ -26,9 +26,12 @@ one or more draft PRs appends one row per PR below the `ROWS BELOW` marker.
   `merged === true` → applied; `state === CLOSED && merged === false` →
   rejected. This keeps the log non-mutating (CLO non-repudiation requirement).
 - **Tier** — `skill` or `agents-core`.
-- **PR** — `gh pr view` URL once the workflow's PR-create step lands. The
-  workflow writes the row as `(PR pending)` and a follow-up amend writes the
-  URL on the same step.
+- **PR** — written as the literal string `(PR pending)` and never mutated
+  afterwards (rows are append-only per the CLO non-repudiation requirement).
+  To resolve a row to the live PR, search by Cluster-Hash:
+  `gh pr list --search "self-healing/auto-<cluster-hash>" --state all --json url,state,number`
+  returns the PR opened from that cluster. The Cluster-Hash column is
+  load-bearing for this lookup.
 
 Issue: #2720.
 

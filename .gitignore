@@ -91,11 +91,10 @@ mutants/
 /.AGENTS.md.source
 /.claude/.session-manifests/
 
-# Compound Promotion Loop opt-in (#2720). Operator-controlled; copy
-# promotion-config.yml.example -> promotion-config.yml and set enabled:true.
-# Tracked-by-default would auto-opt-in every clone, which violates the
-# default-OFF safety invariant.
-knowledge-base/project/promotion-config.yml
+# Compound Promotion Loop (#2720). promotion-config.yml is TRACKED so the
+# cron's actions/checkout can read it; default-OFF safety comes from the
+# committed `enabled: false` line, not from the file's absence. Flipping
+# to true requires a committed PR that operators can review.
 # Defensive: the cron is stateless (week-cap derived from open
 # self-healing/auto PRs, not from state files). Reject any future
 # .github/promotion-*.json re-introduction.

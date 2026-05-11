@@ -23,25 +23,28 @@ lines per file) of your learnings corpus to Anthropic.
 
 ## Opt in
 
-```bash
-# 1. Copy the template (gitignored once renamed).
-cp knowledge-base/project/promotion-config.yml.example \
-   knowledge-base/project/promotion-config.yml
+The cron reads `knowledge-base/project/promotion-config.yml` from
+`actions/checkout` of main, so opt-in requires a committed flip. The file
+is tracked (not gitignored); default content is `enabled: false`.
 
-# 2. Flip enabled: true in the new file.
+```bash
+# 1. Flip enabled: true in the tracked config.
 sed -i 's/^enabled: false/enabled: true/' \
    knowledge-base/project/promotion-config.yml
 
-# 3. Confirm the next scheduled run will fire (no commit required — the file
-#    is read locally by the cron from the merged main branch on each run).
-gh workflow view scheduled-compound-promote.yml
+# 2. Commit and push the flip via PR. Operators reviewing the PR can veto.
+git add knowledge-base/project/promotion-config.yml
+git commit -m "chore: enable compound-promotion-loop"
+# ... open a PR and merge after review ...
+
+# 3. Confirm the next scheduled run will fire (Sunday 00:00 UTC) or trigger now:
+gh workflow run scheduled-compound-promote.yml
 ```
 
-> **Note.** `promotion-config.yml` is gitignored — the cron reads the file
-> from the runner's checked-out main, so the operator must commit a one-time
-> opt-in patch separately if the intent is repo-wide. The default invocation
-> assumes the file is local to one operator's environment for piloting; the
-> repo-wide opt-in pattern is deferred to v2 (plugin-scope deferral).
+> **Note.** `promotion-config.yml.example` is documentation only — it shows
+> the schema and data-flow disclosure. The live file the cron reads is
+> `promotion-config.yml` (tracked, default `enabled: false`). Editing the
+> example does nothing.
 
 ## Opt out / kill switch
 
@@ -49,16 +52,13 @@ gh workflow view scheduled-compound-promote.yml
 # Hard kill — the next cron tick exits no-op without contacting Anthropic.
 sed -i 's/^enabled: true/enabled: false/' \
    knowledge-base/project/promotion-config.yml
+git add knowledge-base/project/promotion-config.yml
+git commit -m "chore: disable compound-promotion-loop"
+# ... merge ASAP via PR (or revert the original opt-in commit) ...
 ```
 
-Or delete the config entirely:
-
-```bash
-rm knowledge-base/project/promotion-config.yml
-```
-
-Either path produces the `::compound-promote-status::disabled` or
-`::compound-promote-status::no-config` sentinel and exits 0.
+The flip produces the `::compound-promote-status::disabled` sentinel and
+exits 0. The kill is live as soon as the disable PR merges to main.
 
 ## Reviewing a `self-healing/auto` PR
 
