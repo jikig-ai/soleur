@@ -223,6 +223,14 @@ if [[ -z "$failure_mode" && "$LIVE_RSC" != "__SKIP__" ]]; then
     record_failure "canonical_rsc_file_invalid_schema" \
       "canonical RSC entries must have string context and number integration_id" \
       "ci/guard-broken"
+  elif ! jq -e '(map(.context) | length) == (map(.context) | unique | length)' "$CANONICAL_RSC_FILE" >/dev/null 2>&1; then
+    # Duplicate-context guard: a hand-edit that duplicates a context name
+    # (e.g., copy-paste with two `CodeQL` rows, one pinned wrong) would
+    # otherwise pass the schema check but mask drift via the post-PUT
+    # `unique_by({context, integration_id})` dedupe in update-ci script.
+    record_failure "canonical_rsc_file_invalid_schema" \
+      "canonical RSC has duplicate context entries" \
+      "ci/guard-broken"
   else
     CANONICAL_RSC=$(jq -c '.' "$CANONICAL_RSC_FILE")
   fi

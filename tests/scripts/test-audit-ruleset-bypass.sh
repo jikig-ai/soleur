@@ -461,17 +461,21 @@ t_rsc_missing_codeql() {
 }
 
 # T-rsc-3: CodeQL integration_id 15368 (would let github-actions[bot] spoof) -> drift
+# Asserts drift_detail names "CodeQL" specifically — without this, a regression
+# that drifts a different context (e.g., dependency-review) would still pass.
 t_rsc_codeql_wrong_app() {
   local live_rsc='[{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"CodeQL","integration_id":15368},{"context":"skill-security-scan PR gate","integration_id":15368}]'
   local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$live_rsc" \
     '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
   local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
   local tmp="${r%:*}"
-  local mode; mode=$(_mode "$tmp")
-  if [[ "$mode" == "required_status_checks_drift" ]]; then
-    _report "T-rsc-3 CodeQL integration_id 15368 (wrong app) -> drift" ok
+  local mode detail; mode=$(_mode "$tmp"); detail=$(_detail "$tmp")
+  if [[ "$mode" == "required_status_checks_drift" ]] && \
+     grep -qF 'CodeQL' <<<"$detail" && \
+     grep -qE 'integration_id":15368' <<<"$detail"; then
+    _report "T-rsc-3 CodeQL integration_id 15368 (wrong app) -> drift names CodeQL+15368" ok
   else
-    _report "T-rsc-3 CodeQL integration_id 15368 (wrong app) -> drift" fail "mode='$mode'"
+    _report "T-rsc-3 CodeQL integration_id 15368 (wrong app) -> drift names CodeQL+15368" fail "mode='$mode' detail='${detail:0:200}'"
   fi
   rm -rf "$tmp"
 }
@@ -486,6 +490,22 @@ t_rsc_live_missing_rsc_rule() {
     _report "T-rsc-4 live missing RSC rule -> guard-broken" ok
   else
     _report "T-rsc-4 live missing RSC rule -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T-rsc-5b: canonical RSC has duplicate context (e.g., two CodeQL rows) -> guard-broken
+t_rsc_canonical_duplicate_context() {
+  local dup='[{"context":"CodeQL","integration_id":57789},{"context":"CodeQL","integration_id":15368}]'
+  local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$CANONICAL_RSC" \
+    '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$dup")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "canonical_rsc_file_invalid_schema" && "$label" == "ci/guard-broken" ]]; then
+    _report "T-rsc-5b canonical RSC duplicate context -> invalid_schema" ok
+  else
+    _report "T-rsc-5b canonical RSC duplicate context -> invalid_schema" fail "mode='$mode' label='$label'"
   fi
   rm -rf "$tmp"
 }
@@ -548,15 +568,28 @@ t_rsc_shared_lib_used() {
     _report "T-rsc-8 canonicalize-required-status-checks.sh exists" fail "missing"
     return
   fi
+  local update_file="$REPO_ROOT/scripts/update-ci-required-ruleset.sh"
   if ! grep -qF 'lib/canonicalize-required-status-checks.sh' "$audit_file"; then
     _report "T-rsc-8 audit script sources RSC lib" fail
+    return
+  fi
+  if ! grep -qF 'lib/canonicalize-required-status-checks.sh' "$update_file"; then
+    _report "T-rsc-8 update-ci script sources RSC lib (data-integrity P2)" fail
     return
   fi
   if ! grep -qF 'ci-required-ruleset-canonical-required-status-checks.json' "$create_file"; then
     _report "T-rsc-8 create-ci script references canonical RSC JSON" fail
     return
   fi
-  _report "T-rsc-8 shared RSC lib sourced by audit; canonical referenced by create-ci" ok
+  # No-inline-redeclaration guard: neither audit nor update may carry the
+  # jq projection literal — only the shared lib should hold it.
+  if grep -qE 'map\(\{context, integration_id\}\)' "$audit_file" "$update_file" 2>/dev/null; then
+    if grep -nE 'map\(\{context, integration_id\}\)' "$audit_file" "$update_file" | grep -vE ':[[:space:]]*#' >/dev/null; then
+      _report "T-rsc-8 no inline RSC projection redeclaration" fail "found executable map({context,integration_id}) outside lib"
+      return
+    fi
+  fi
+  _report "T-rsc-8 shared RSC lib sourced by audit + update; create-ci references canonical; no inline redecl" ok
 }
 
 if [[ ! -f "$SCRIPT" ]]; then
@@ -592,6 +625,7 @@ t_rsc_missing_codeql
 t_rsc_codeql_wrong_app
 t_rsc_live_missing_rsc_rule
 t_rsc_canonical_invalid_schema
+t_rsc_canonical_duplicate_context
 t_rsc_order_insensitive
 t_rsc_real_canonical_shape
 t_rsc_shared_lib_used

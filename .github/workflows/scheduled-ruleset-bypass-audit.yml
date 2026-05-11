@@ -55,6 +55,10 @@ jobs:
             .github/actions
             scripts/audit-ruleset-bypass.sh
             scripts/ci-required-ruleset-canonical-bypass-actors.json
+            scripts/ci-required-ruleset-canonical-required-status-checks.json
+            scripts/lib/canonicalize-bypass-actors.sh
+            scripts/lib/canonicalize-required-status-checks.sh
+            scripts/lib/strip-log-injection.sh
             knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md
           sparse-checkout-cone-mode: false
 

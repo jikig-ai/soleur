@@ -250,8 +250,14 @@ fi
 # catching any OTHER drift in the live array.
 if [[ -f "$CANONICAL_RSC_FILE" ]]; then
   # Build expected = canonical ∪ {NEW_CHECK row} (idempotent if already present)
+  # unique_by({context, integration_id}) — NOT unique_by(.context). The
+  # stricter key catches the silent-mask case where canonical has a row
+  # with the same context but a different (e.g., spoofed-to-15368)
+  # integration_id; bare unique_by(.context) would keep canonical's
+  # value and silently mask post-PUT drift on the iid pin (pattern-
+  # recognition review feedback).
   rsc_expected_norm=$(jq -S --arg c "$NEW_CHECK" --argjson iid "$GITHUB_ACTIONS_INTEGRATION_ID" \
-    '(. + [{context: $c, integration_id: $iid}]) | unique_by(.context) | '"$CANONICALIZE_REQUIRED_STATUS_CHECKS_JQ" \
+    '(. + [{context: $c, integration_id: $iid}]) | unique_by({context, integration_id}) | '"$CANONICALIZE_REQUIRED_STATUS_CHECKS_JQ" \
     "$CANONICAL_RSC_FILE")
   rsc_after_norm=$(jq -S "${rsc_rule_jq}.parameters.required_status_checks | $CANONICALIZE_REQUIRED_STATUS_CHECKS_JQ" "$after")
   if [[ "$rsc_expected_norm" != "$rsc_after_norm" ]]; then
