@@ -368,6 +368,16 @@ describe("gdpr-gate NOTICE attribution (AC2, AC-LIFT-5)", () => {
     }
   });
 
+  // Comprehensive regex-metachar escape used when inserting trusted path
+  // strings from LIFTED_REFS into a constructed RegExp. The full set of
+  // ECMAScript regex metachars is escaped (not just `.`/`/`/`-`) so the
+  // resulting regex is robust to any future LIFTED_REFS entry shape and
+  // satisfies CodeQL's `js/incomplete-sanitization` rule (which warns when
+  // a sanitizer is incomplete even if current inputs would happen to be
+  // safe).
+  const escapeRegExp = (s: string): string =>
+    s.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+
   test("each LIFTED_REFS entry has a 40-char hex blob SHA on the same row, and SHAs are unique (Kieran P3.1)", () => {
     const content = readFileSync(NOTICE, "utf8");
     const seen = new Map<string, string>();
@@ -378,7 +388,7 @@ describe("gdpr-gate NOTICE attribution (AC2, AC-LIFT-5)", () => {
       // could otherwise let a non-row match (e.g. an inline backtick path
       // mention in prose) match the SHA cell.
       const re = new RegExp(
-        `^\\|\\s*\\\`${f.replace(/[/.-]/g, "\\$&")}\\\`[^\\n]*?\\|\\s*\\\`([0-9a-f]{40})\\\`\\s*\\|`,
+        `^\\|\\s*\\\`${escapeRegExp(f)}\\\`[^\\n]*?\\|\\s*\\\`([0-9a-f]{40})\\\`\\s*\\|`,
         "m",
       );
       const m = content.match(re);
