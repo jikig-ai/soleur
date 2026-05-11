@@ -167,6 +167,13 @@ jobs:
             -f conclusion=success \
             -f "output[title]=Bot PR" \
             -f "output[summary]=Status metadata only, no code changes"
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name="skill-security-scan PR gate" \
+            -f head_sha="$COMMIT_SHA" \
+            -f status=completed \
+            -f conclusion=success \
+            -f "output[title]=Bot PR" \
+            -f "output[summary]=Status metadata only, no SKILL.md/agent changes"
 
           gh pr merge "$BRANCH" --squash --auto
 

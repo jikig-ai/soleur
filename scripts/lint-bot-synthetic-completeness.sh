@@ -27,9 +27,19 @@ fi
 
 required_checks=()
 while IFS= read -r line; do
-  # Strip comments and whitespace
+  # Strip trailing inline comments and surrounding whitespace, but PRESERVE
+  # internal whitespace -- check names may contain spaces (e.g.
+  # "skill-security-scan PR gate" is one check, not three).
   line="${line%%#*}"
-  line="$(echo "$line" | tr -d '[:space:]')"
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  # Strip a single matching pair of surrounding double quotes — operators
+  # may write `"foo bar"` to make the spaces explicit; the grep patterns
+  # below match the workflow's `-f name="foo bar"` form independently.
+  if [[ "$line" == \"*\" ]]; then
+    line="${line#\"}"
+    line="${line%\"}"
+  fi
   [[ -z "$line" ]] && continue
   required_checks+=("$line")
 done < "$CONFIG_FILE"
@@ -106,11 +116,15 @@ for file in "$WORKFLOW_DIR"/$PATTERN; do
 
   for check_name in "${required_checks[@]}"; do
     # Look for synthetic check-run creation patterns:
-    # 1. Checks API: -f name=<check>
-    # 2. Statuses API: -f context="<check>" or -f context=<check>
-    if ! grep -qE "\-f name=${check_name}([[:space:]]|$)" "$file" && \
-       ! grep -qE "\-f context=${check_name}([[:space:]]|$)" "$file" && \
-       ! grep -qE "\-f context=\"${check_name}\"" "$file"; then
+    # 1. Checks API:   -f name=<bareword> or -f name="<quoted>"  (multi-word
+    #    names like "skill-security-scan PR gate" require quoting in shell)
+    # 2. Statuses API: -f context=<bareword> or -f context="<quoted>"
+    # ERE-escape any regex meta in the check name (rare, but conservative).
+    escaped=$(printf '%s' "$check_name" | sed 's/[][\.^$*+?(){}|/\\]/\\&/g')
+    if ! grep -qE "\-f name=${escaped}([[:space:]]|$)" "$file" && \
+       ! grep -qE "\-f name=\"${escaped}\"" "$file" && \
+       ! grep -qE "\-f context=${escaped}([[:space:]]|$)" "$file" && \
+       ! grep -qE "\-f context=\"${escaped}\"" "$file"; then
       file_failures+=("$check_name")
     fi
   done
