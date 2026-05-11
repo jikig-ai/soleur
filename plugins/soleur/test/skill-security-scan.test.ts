@@ -65,6 +65,18 @@ describe("skill-security-scan: category fixture matrix", () => {
     expect(ruleIds.some((r) => r.startsWith("shell-spawn-"))).toBe(true);
   });
 
+  test("malicious-curl-pipe-bash → category 1 HIGH-RISK on all three fetch-* rules", () => {
+    const result = runCategory(
+      "check-codeexec.sh",
+      join(FIXTURES, "malicious-curl-pipe-bash.skill.md"),
+    );
+    expect(result.verdict).toBe("HIGH-RISK");
+    const ruleIds = new Set(result.findings.map((f) => f.rule_id));
+    expect(ruleIds.has("fetch-pipe-shell")).toBe(true);
+    expect(ruleIds.has("fetch-process-sub-shell")).toBe(true);
+    expect(ruleIds.has("fetch-cmdsub-exec")).toBe(true);
+  });
+
   test("malicious-prompt-injection → category 2 HIGH-RISK", () => {
     const result = runCategory("check-prompt-injection.sh", join(FIXTURES, "malicious-prompt-injection.skill.md"));
     expect(result.verdict).toBe("HIGH-RISK");

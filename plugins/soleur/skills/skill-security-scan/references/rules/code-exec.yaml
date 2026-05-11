@@ -53,3 +53,18 @@ rules:
     severity: REVIEW
     description: Shell-spawn with hardcoded args (lower severity; see calibration).
     regex: 'subprocess\.(call|run|Popen)[[:space:]]*\([[:space:]]*\['
+
+  - id: fetch-pipe-shell
+    severity: HIGH-RISK
+    description: Network-fetched payload piped directly into a shell interpreter. Canonical RCE pattern (curl <url> | bash). ReDoS-bounded with {0,200}.
+    regex: '(curl|wget|fetch)[[:space:]]+[^|&;]{0,200}\|[[:space:]]*(bash|sh|zsh|ksh|fish|/bin/(ba)?sh)([[:space:]]|$)'
+
+  - id: fetch-process-sub-shell
+    severity: HIGH-RISK
+    description: Shell consumes network-fetched payload via process substitution. Covers `bash <(curl ...)`, `sh <(wget ...)`, `. <(curl ...)`, `source <(...)`.
+    regex: '(^|[^.[:alnum:]_])(bash|sh|zsh|ksh|\.|source)[[:space:]]+<\([[:space:]]*(curl|wget|fetch)[^)]{0,200}\)'
+
+  - id: fetch-cmdsub-exec
+    severity: HIGH-RISK
+    description: eval / -c / -e interpreter consumes network-fetched payload via command substitution. Covers `eval "$(curl ...)"`, `sh -c "$(curl ...)"`, `bash -c "$(wget ...)"`, `python -c "$(curl ...)"`, `node -e "$(curl ...)"`.
+    regex: '(eval|exec|(sh|bash|zsh|python[23]?|node)[[:space:]]+-(c|e))[[:space:]]+["'"'"']?\$\([[:space:]]*(curl|wget|fetch)[^)]{0,200}\)'

@@ -23,6 +23,7 @@ against fenced code blocks in the input.
 - Shell-spawn invocation that interpolates user-controllable args → `HIGH-RISK`
 - Shell-spawn with hardcoded args → `REVIEW`
 - Obfuscation signatures (decode-then-execute, hex-encoded ≥40 chars) → `HIGH-RISK`
+- Fetch-then-execute family (`curl|wget|fetch <url> | bash`, `bash <(curl ...)`, `eval "$(curl ...)"`) → `HIGH-RISK`. Rule_ids: `fetch-pipe-shell`, `fetch-process-sub-shell`, `fetch-cmdsub-exec`. Added per #3554 — the canonical install-flow RCE vector was missing from the pack.
 - Shell-expansion inside string interpolation spanning ≥2 user-tokens → `REVIEW`
 
 **Format-only carve-out (calibration):** rules ignore code-fence content whose
