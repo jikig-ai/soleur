@@ -56,6 +56,7 @@ run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retire
 run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
 run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
 run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
+run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
 run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
 run_suite "test/content-publisher" bun test test/content-publisher.test.ts
 run_suite "test/x-community" bun test test/x-community.test.ts

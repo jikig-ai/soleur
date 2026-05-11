@@ -3,6 +3,7 @@ last_updated: 2026-05-11
 ---
 <!-- 2026-05-11: R15 mitigation for #2719 landed via #3543 (ruleset PUT to #14145388) -->
 <!-- 2026-05-11: R15 follow-up D1 (#3544) landed — daily bypass_actors audit closes the audit-log-only blind spot in #3543 -->
+<!-- 2026-05-11: R15 follow-up D2 (#3545) landed — empirical audit confirmed CodeQL coverage on bot PRs is satisfied (neutral conclusion). No remediation needed. Runbook: knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md -->
 
 
 # Legal Compliance Posture
