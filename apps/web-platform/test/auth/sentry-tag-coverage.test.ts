@@ -13,13 +13,14 @@ import { resolve, join, relative } from "path";
  * fs.readdirSync + fs.statSync recursive walk).
  */
 
-const AUTH_DIRS = ["app/(auth)", "components/auth"];
+const AUTH_DIRS = ["app/(auth)", "app/(dashboard)", "components/auth"];
 
 const AUTH_VERBS = [
   "exchangeCodeForSession",
   "signInWithOAuth",
   "signInWithOtp",
   "verifyOtp",
+  "signOut",
 ];
 
 const APP_ROOT = resolve(__dirname, "../../");

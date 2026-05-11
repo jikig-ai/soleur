@@ -8,6 +8,8 @@ import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 import { ConversationsRail } from "@/components/chat/conversations-rail";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -104,6 +106,8 @@ export default function DashboardLayout({
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
+  const [signOutModalOpen, setSignOutModalOpen] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   // Check admin status on mount
   useEffect(() => {
@@ -192,19 +196,45 @@ export default function DashboardLayout({
   }, []);
 
   async function handleSignOut() {
+    setIsSigningOut(true);
     const supabase = createClient();
     // Sign-out tears down ALL channels by design. removeAllChannels() is
-    // best-effort cleanup — if the Phoenix WS rejects phx_leave (network
-    // blip, already-closed transport), the inner await throws. We MUST
-    // still complete signOut + redirect: leaving the user authenticated
-    // with the click "doing nothing" is exactly the shared-device leak
-    // the plan's User-Brand Impact paragraph names. try/finally ensures
-    // session teardown is the contract, not a happy-path-only effect.
+    // best-effort cleanup; if the Phoenix WS rejects phx_leave (network
+    // blip, already-closed transport), we mirror to Sentry and proceed.
+    // The outer try/finally still guarantees signOut + redirect run —
+    // leaving the user authenticated is the shared-device leak the plan's
+    // User-Brand Impact paragraph names.
     try {
-      await supabase.removeAllChannels();
+      try {
+        await supabase.removeAllChannels();
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "auth",
+          op: "signOut",
+          extra: { stage: "removeAllChannels" },
+        });
+      }
+      try {
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+          reportSilentFallback(error, {
+            feature: "auth",
+            op: "signOut",
+            extra: { stage: "signOut.resultError" },
+          });
+        }
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "auth",
+          op: "signOut",
+          extra: { stage: "signOut.throw" },
+        });
+      }
     } finally {
-      await supabase.auth.signOut();
       router.push("/login");
+      // Do NOT setIsSigningOut(false): the route push unmounts the layout
+      // and the unmount IS the reset. Resetting here briefly re-enables
+      // the Sign out button between navigation start and unmount.
     }
   }
 
@@ -346,7 +376,7 @@ export default function DashboardLayout({
             <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
           </a>
           <button
-            onClick={handleSignOut}
+            onClick={() => setSignOutModalOpen(true)}
             title={collapsed ? "Sign out" : undefined}
             className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
           >
@@ -381,6 +411,13 @@ export default function DashboardLayout({
         <PaymentWarningBanner subscriptionStatus={subscriptionStatus} />
         {children}
       </main>
+
+      <SignOutConfirmModal
+        open={signOutModalOpen}
+        onClose={() => setSignOutModalOpen(false)}
+        onConfirm={handleSignOut}
+        isSigningOut={isSigningOut}
+      />
     </div>
     </TeamNamesProvider>
   );

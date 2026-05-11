@@ -53,27 +53,27 @@ No spec file existed for `feat-one-shot-signout-confirm-popup` at plan time. All
 
 ### Pre-merge (PR)
 
-- [ ] Clicking the sidebar "Sign out" button opens a modal instead of signing out immediately.
-- [ ] Modal contains a heading ("Sign out?"), a one-sentence body explaining what will happen, and two CTAs: "Sign out" (primary) and "Cancel" (secondary).
-- [ ] Modal renders with `role="dialog"` and `aria-modal="true"` and `aria-labelledby` pointing to the heading.
-- [ ] Pressing ESC closes the modal without signing the user out.
-- [ ] Clicking the backdrop closes the modal without signing the user out.
-- [ ] Clicking "Cancel" closes the modal without signing the user out.
-- [ ] Clicking "Sign out" runs the existing teardown contract verbatim: `try { await supabase.removeAllChannels() } finally { await supabase.auth.signOut(); router.push("/login") }`.
-- [ ] While the sign-out is in flight, the "Sign out" button shows a `Signing out…` label and is `disabled`; the "Cancel" button is also disabled (no escape from the teardown).
-- [ ] Focus moves into the modal on open (initial focus on the Cancel button — least-destructive default) and returns to the sidebar Sign out button on close.
-- [ ] Tab key cycles focus inside the modal; Shift+Tab from the first element wraps to the last.
-- [ ] Modal works in both collapsed and expanded sidebar states (the modal is portaled/positioned independently of the sidebar collapse state).
-- [ ] On mobile (drawer-open state), the modal still appears centered on the viewport, not clipped by the drawer overlay (modal z-index > 50, drawer overlay = 40, drawer aside = 50; modal needs z-index ≥ 60).
-- [ ] `handleSignOut` mirrors `removeAllChannels` and `signOut` failures to Sentry via `reportSilentFallback({ feature: "auth", op: "signOut" })` — folds in #3039. The `finally` redirect MUST still run; Sentry is a side-effect, never load-bearing.
-- [ ] `apps/web-platform/test/auth/sentry-tag-coverage.test.ts` `AUTH_VERBS` array is extended to include `signOut` so the drift-guard now covers the new mirror. PR body uses `Closes #3039`.
-- [ ] Unit tests cover: modal open/close, ESC, backdrop click, Cancel click, Sign out click triggers teardown, focus restore.
-- [ ] No regression in the dashboard layout tests (`apps/web-platform/test/dashboard-layout-*.test.tsx`, `apps/web-platform/test/dashboard-sidebar-collapse.test.tsx`).
-- [ ] `bun typecheck` and `bun test` pass.
+- [x] Clicking the sidebar "Sign out" button opens a modal instead of signing out immediately.
+- [x] Modal contains a heading ("Sign out?"), a one-sentence body explaining what will happen, and two CTAs: "Sign out" (primary) and "Cancel" (secondary).
+- [x] Modal renders with `role="dialog"` and `aria-modal="true"` and `aria-labelledby` pointing to the heading.
+- [x] Pressing ESC closes the modal without signing the user out.
+- [x] Clicking the backdrop closes the modal without signing the user out.
+- [x] Clicking "Cancel" closes the modal without signing the user out.
+- [x] Clicking "Sign out" runs the existing teardown contract verbatim: `try { await supabase.removeAllChannels() } finally { await supabase.auth.signOut(); router.push("/login") }`.
+- [x] While the sign-out is in flight, the "Sign out" button shows a `Signing out…` label and is `disabled`; the "Cancel" button is also disabled (no escape from the teardown).
+- [x] Focus moves into the modal on open (initial focus on the Cancel button — least-destructive default) and returns to the sidebar Sign out button on close.
+- [x] Tab key cycles focus inside the modal; Shift+Tab from the first element wraps to the last.
+- [x] Modal works in both collapsed and expanded sidebar states (the modal is portaled/positioned independently of the sidebar collapse state).
+- [x] On mobile (drawer-open state), the modal still appears centered on the viewport, not clipped by the drawer overlay (modal z-index > 50, drawer overlay = 40, drawer aside = 50; modal needs z-index ≥ 60).
+- [x] `handleSignOut` mirrors `removeAllChannels` and `signOut` failures to Sentry via `reportSilentFallback({ feature: "auth", op: "signOut" })` — folds in #3039. The `finally` redirect MUST still run; Sentry is a side-effect, never load-bearing.
+- [x] `apps/web-platform/test/auth/sentry-tag-coverage.test.ts` `AUTH_VERBS` array is extended to include `signOut` so the drift-guard now covers the new mirror. PR body uses `Closes #3039`.
+- [x] Unit tests cover: modal open/close, ESC, backdrop click, Cancel click, Sign out click triggers teardown, focus restore.
+- [x] No regression in the dashboard layout tests (`apps/web-platform/test/dashboard-layout-*.test.tsx`, `apps/web-platform/test/dashboard-sidebar-collapse.test.tsx`).
+- [x] `bun typecheck` and `bun test` pass.
 
 ### Post-merge (operator)
 
-- [ ] None — the change is pure application code; no infra, migrations, secrets, or external service config.
+- [x] None — the change is pure application code; no infra, migrations, secrets, or external service config.
 
 ## Open Code-Review Overlap
 
