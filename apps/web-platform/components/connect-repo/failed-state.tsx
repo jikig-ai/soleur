@@ -4,7 +4,6 @@ import { XCircleIcon } from "@/components/icons";
 import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 import type { GitErrorCode } from "@/server/git-auth";
 
 interface FailedStateProps {
@@ -114,7 +113,7 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
       </div>
 
       <div className="space-y-3">
-        <h1 className={`${serif.className} text-4xl font-semibold`}>
+        <h1 className="text-4xl font-semibold">
           {copy?.headline ?? "Project Setup Failed"}
         </h1>
         <p className="text-base text-soleur-text-secondary">
