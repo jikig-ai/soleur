@@ -140,21 +140,27 @@ jobs:
           RUNBOOK_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md
         run: |
           set -euo pipefail
-          # Title routing. Use the exact strings pinned by AC13a; any
-          # rename here breaks the de-dupe search-by-title path below.
-          case "$FAILURE_LABEL" in
-            ci/auth-broken)
+          # Title routing keys on FAILURE_MODE (not FAILURE_LABEL): the two
+          # drift classes (bypass_actors_drift vs required_status_checks_drift)
+          # share label `ci/auth-broken` but need distinct titles for
+          # operator triage and to prevent cross-class de-dupe collision.
+          case "$FAILURE_MODE" in
+            bypass_actors_drift)
               ISSUE_TITLE="[compliance/critical] CI Required ruleset bypass_actors drift detected"
               EXTRA_LABEL="compliance/critical"
               ;;
-            ci/guard-broken)
-              ISSUE_TITLE="[ci/guard-broken] Ruleset bypass audit malfunctioned"
-              EXTRA_LABEL=""
+            required_status_checks_drift)
+              ISSUE_TITLE="[compliance/critical] CI Required ruleset required_status_checks drift detected"
+              EXTRA_LABEL="compliance/critical"
               ;;
             *)
-              echo "::warning::Issue-create step received unknown FAILURE_LABEL='${FAILURE_LABEL}', defaulting to ci/guard-broken" >&2
+              # All other failure_mode values route to guard-broken
+              # (canonical_file_*, github_api_*, live_missing_*).
+              if [[ "$FAILURE_LABEL" != "ci/guard-broken" ]]; then
+                echo "::warning::unknown FAILURE_MODE=${FAILURE_MODE} with non-guard FAILURE_LABEL=${FAILURE_LABEL}; defaulting to ci/guard-broken" >&2
+                FAILURE_LABEL="ci/guard-broken"
+              fi
               ISSUE_TITLE="[ci/guard-broken] Ruleset bypass audit malfunctioned"
-              FAILURE_LABEL="ci/guard-broken"
               EXTRA_LABEL=""
               ;;
           esac
@@ -174,11 +180,13 @@ jobs:
             printf '**Tracks:** #3544, #3542, #2719\n'
           } > "$BODY_FILE"
 
-          # De-dupe by label + title prefix. The title strings above are
-          # the load-bearing search keys (AC13a).
+          # De-dupe by label + exact-title match. Different drift classes
+          # (bypass_actors_drift, required_status_checks_drift, malfunction)
+          # get distinct titles so they don't collide across classes —
+          # search by the exact title string we are about to file.
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
             --label "$FAILURE_LABEL" \
-            --search 'in:title "Ruleset bypass" "audit" OR in:title "bypass_actors drift"' \
+            --search "in:title \"${ISSUE_TITLE}\"" \
             --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
 
           if [[ -n "$EXISTING" ]]; then
@@ -224,14 +232,22 @@ jobs:
         run: |
           set -euo pipefail
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
-          for label in ci/auth-broken ci/guard-broken; do
+          # Close stale tracking issues for ALL drift classes by walking the
+          # known title set. Each drift class has a distinct title; cross-class
+          # de-dupe is not desired (a bypass-actors-drift issue should not
+          # auto-close a required-status-checks-drift issue and vice versa).
+          STALE_TITLES=(
+            "[compliance/critical] CI Required ruleset bypass_actors drift detected"
+            "[compliance/critical] CI Required ruleset required_status_checks drift detected"
+            "[ci/guard-broken] Ruleset bypass audit malfunctioned"
+          )
+          for title in "${STALE_TITLES[@]}"; do
             STALE=$(gh issue list --repo "$GH_REPO" --state open \
-              --label "$label" \
-              --search 'in:title "Ruleset bypass" "audit" OR in:title "bypass_actors drift"' \
+              --search "in:title \"${title}\"" \
               --json number --jq '.[0].number // empty' 2>/dev/null) || STALE=""
             if [[ -n "$STALE" ]]; then
-              echo "Closing stale tracking issue #$STALE (label=$label)."
+              echo "Closing stale tracking issue #$STALE (title=${title})."
               gh issue close "$STALE" --repo "$GH_REPO" \
-                --comment "Audit green at ${NOW}. live bypass_actors matches canonical. Run: ${RUN_URL}"
+                --comment "Audit green at ${NOW}. Live ruleset matches canonical. Run: ${RUN_URL}"
             fi
           done

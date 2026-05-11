@@ -31,11 +31,13 @@ NEW_CHECK="skill-security-scan PR gate"
 GITHUB_ACTIONS_INTEGRATION_ID=15368  # github-actions[bot]
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CANONICAL_BYPASS_FILE="${SCRIPT_DIR}/ci-required-ruleset-canonical-bypass-actors.json"
+CANONICAL_RSC_FILE="${SCRIPT_DIR}/ci-required-ruleset-canonical-required-status-checks.json"
 
-# Shared jq projection (must match scripts/audit-ruleset-bypass.sh). See
-# scripts/lib/canonicalize-bypass-actors.sh.
+# Shared jq projections (must match scripts/audit-ruleset-bypass.sh).
 # shellcheck source=scripts/lib/canonicalize-bypass-actors.sh
 . "${SCRIPT_DIR}/lib/canonicalize-bypass-actors.sh"
+# shellcheck source=scripts/lib/canonicalize-required-status-checks.sh
+. "${SCRIPT_DIR}/lib/canonicalize-required-status-checks.sh"
 DRY_RUN=0
 JSON_OUT=0
 for arg in "$@"; do
@@ -236,6 +238,32 @@ if [[ -f "$CANONICAL_BYPASS_FILE" ]]; then
   fi
 else
   echo "::warning::canonical bypass file missing at ${CANONICAL_BYPASS_FILE} — skipping audit fast-path check" >&2
+fi
+
+# Audit fast-path #3547: diff round-tripped required_status_checks against
+# the canonical in-repo JSON. Same threat model as bypass_actors — an admin
+# UI-edit between two PUTs would otherwise leave no repo-side trace.
+# This script's purpose IS to add a new check (NEW_CHECK), so the after-state
+# is expected to be the canonical-extended-by-one entry. Normalize both sides
+# by adding NEW_CHECK to the canonical before comparison if it isn't already
+# present — that handles the first-apply-of-NEW_CHECK case while still
+# catching any OTHER drift in the live array.
+if [[ -f "$CANONICAL_RSC_FILE" ]]; then
+  # Build expected = canonical ∪ {NEW_CHECK row} (idempotent if already present)
+  rsc_expected_norm=$(jq -S --arg c "$NEW_CHECK" --argjson iid "$GITHUB_ACTIONS_INTEGRATION_ID" \
+    '(. + [{context: $c, integration_id: $iid}]) | unique_by(.context) | '"$CANONICALIZE_REQUIRED_STATUS_CHECKS_JQ" \
+    "$CANONICAL_RSC_FILE")
+  rsc_after_norm=$(jq -S "${rsc_rule_jq}.parameters.required_status_checks | $CANONICALIZE_REQUIRED_STATUS_CHECKS_JQ" "$after")
+  if [[ "$rsc_expected_norm" != "$rsc_after_norm" ]]; then
+    echo "::error::required_status_checks after PUT does not match canonical+NEW_CHECK union" >&2
+    echo "         expected: ${rsc_expected_norm}" >&2
+    echo "         after PUT: ${rsc_after_norm}" >&2
+    echo "         If this is an intentional new addition, update the canonical JSON FIRST" >&2
+    echo "         at ${CANONICAL_RSC_FILE}, then re-run; the daily audit reads the same file." >&2
+    drift=1
+  fi
+else
+  echo "::warning::canonical RSC file missing at ${CANONICAL_RSC_FILE} — skipping audit fast-path check" >&2
 fi
 
 (( drift )) && exit 2
