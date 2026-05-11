@@ -10,6 +10,38 @@ brand_survival_threshold: single-user-incident
 
 # Periodic Audit of CI Required Ruleset `bypass_actors` (R15 follow-up D1)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Sections enhanced:** 6 (Overview / Files to Create / Files to Edit / Phase 2 / Phase 3 / Acceptance Criteria)
+**Verification passes run (deepen-plan Quality Checks):**
+
+- Rule-ID verification: 6/6 cited AGENTS.md rule IDs are active (none retired). `cq-pg-security-definer-search-path-pin-pg-temp` cited only as "N/A" — retained as a documentation breadcrumb.
+- Label verification: 6/6 cited labels exist on `jikig-ai/soleur` (`gh label list --limit 200`).
+- Issue/PR live state: #2719 OPEN, #3524 MERGED, #3542 CLOSED (deferred-issue parent), #3543 MERGED, #3544 OPEN (this issue).
+- API field-shape verification: live `bypass_actors[0].actor_id` returns JSON type `null` (not missing key) for `OrganizationAdmin`; type `number` (not string) for `RepositoryRole`. Canonical JSON MUST use `null` and integer `5`.
+- jq canonicalization recipe verified end-to-end: `map({actor_type, actor_id, bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)` collapses missing-key → explicit `null`; preserves number-vs-string mismatch (correct drift signal).
+- Test convention detection: repo uses `tests/scripts/test-<name>.sh` invoked via `bash` from `scripts/test-all.sh:57-58` (e.g., `tests/scripts/test-rule-metrics-aggregate.sh`). NOT `.test.sh`; NOT `.bats`. Plan updated accordingly.
+- Lint-bot-synthetic-completeness scope: `scripts/lint-bot-synthetic-completeness.sh:79` filters by `grep -q "gh pr create"`. Our workflow uses `gh issue create` only → exempt automatically. Confirmed; no `required-checks.txt` addition needed for this workflow.
+- Tool availability on local dev: `actionlint 1.7.7`, `yamllint 1.38.0`, `shellcheck 0.10.0` installed. `yq` NOT installed — original Phase 3.3 prescription that relied on `yq` to extract embedded shell from YAML is INFEASIBLE. Rewritten below to extract the audit logic into a standalone script file `scripts/audit-ruleset-bypass.sh` that the workflow CALLS (instead of inlining), and the test harness invokes the script directly.
+
+### Key Improvements
+
+1. **Extract the audit logic to a standalone script** (`scripts/audit-ruleset-bypass.sh`) instead of inlining 60+ lines of bash inside the workflow. The workflow becomes a thin invocation wrapper; the script is unit-testable in isolation; the test harness no longer needs `yq` to extract embedded shell. This is also the canonical project pattern (see `scripts/post-bot-statuses.sh` + `.github/actions/bot-pr-with-synthetic-checks/` wiring).
+2. **Fix the jq canonicalization recipe** — `map({actor_type, actor_id, bypass_mode})` projection before `sort_by` is load-bearing for the null-vs-missing-key trap. Original plan prescribed sort-then-compare but did not normalize the shape.
+3. **Test convention corrected** to `tests/scripts/test-audit-ruleset-bypass.sh` (matches repo precedent in `tests/scripts/test-rule-metrics-aggregate.sh`); test-all.sh wiring is a single line addition at the existing pattern boundary.
+4. **Drop `yq` dependency** entirely. The deepen pass found `yq` is not installed and not used anywhere in the repo; the original Phase 3.3 prescription would fail at /work entry.
+5. **Locked load-bearing literals** — added a literal-string cross-check section to AC list pinning issue title prefixes (`[compliance/critical] CI Required ruleset bypass_actors drift detected`, `[ci/guard-broken] Ruleset bypass audit malfunctioned`) so dashboard/de-dupe search-by-title remains stable across iterations.
+6. **Added explicit guards** for the "missing actor_id key" and "Integration actor type" edge cases in Phase 3 test cases (T6 already covered missing-key; T10 added for unknown actor_type to verify the audit doesn't silently allow new types).
+
+### New Considerations Discovered
+
+- The audit workflow itself uses `gh issue create`, not `gh pr create`, so it is automatically exempt from `lint-bot-synthetic-completeness.sh`. No `required-checks.txt` modification needed for this workflow's filename. Phase 4.3 (`required-checks.txt` comment-block addition) is retained as a documentation breadcrumb pointing to the canonical JSON, NOT to add a new check name.
+- The workflow MUST set `if: github.repository == 'jikig-ai/soleur'` (already prescribed); without it, any fork running this workflow would fire `compliance/critical` issues against fork repos.
+- The `compliance/critical` label has color `B60205` (same as `priority/p0-critical`); this is correct — it's the load-bearing severity signal per the gdpr-gate skill's convention.
+- The audit's once-daily cadence means the worst-case detection window is 24h. Issue #3544's re-evaluation criterion ("second admin operator onboards OR ruleset edit is suspected vector in any compliance incident") is the right escalation trigger to hourly.
+- `OrganizationAdmin` with `actor_id: null` is correct GitHub API contract — `null` is sentinel for "all org admins" (not a specific actor ID). Documented in the canonical JSON file's header comment.
+
 ## Overview
 
 Add a daily scheduled GitHub Actions workflow that compares the live `bypass_actors`
@@ -76,31 +108,51 @@ authorities. No overlap; greenfield.
 ## Files to Create
 
 1. `.github/workflows/scheduled-ruleset-bypass-audit.yml` -- daily cron
-   workflow. Fetches live ruleset, diffs against canonical, files or
-   updates a `compliance/critical` tracking issue on drift, auto-closes
-   stale tracking issues when drift recovers. Mirrors structure of
-   `scheduled-github-app-drift-guard.yml` (3-output failure routing,
-   strip_log_injection, runbook-linked body, notify-ops-email step,
-   issue-create-or-comment pattern, green auto-close).
+   workflow. Thin invocation wrapper around `scripts/audit-ruleset-bypass.sh`
+   (file #2 below). Mirrors structure of `scheduled-github-app-drift-guard.yml`
+   for label-defensive-create, 3-output failure routing, leak tripwire,
+   `notify-ops-email` step, issue-create-or-comment pattern, and green
+   auto-close.
 
-2. `scripts/ci-required-ruleset-canonical-bypass-actors.json` -- source-of-truth
+2. **`scripts/audit-ruleset-bypass.sh`** -- standalone bash script (NEW;
+   deepen-pass addition). Contains all the audit logic the original plan
+   inlined into the workflow's `run:` block: fetch live ruleset (curl
+   with `--max-time 15`), parse `bypass_actors`, diff against canonical
+   JSON, emit `failure_mode`/`failure_detail`/`failure_label` to
+   `$GITHUB_OUTPUT` if set, or to stdout if invoked locally. Unit-testable
+   in isolation; both the workflow and the test harness call it directly.
+   This sidesteps the `yq`-not-installed problem from the original plan
+   and matches the project's "extracted helper" pattern (see
+   `scripts/post-bot-statuses.sh` + `.github/actions/bot-pr-with-synthetic-checks/`).
+
+3. `scripts/ci-required-ruleset-canonical-bypass-actors.json` -- source-of-truth
    JSON array. Two entries verbatim from the live ruleset:
-   `OrganizationAdmin / null / pull_request` and `RepositoryRole / 5 /
-   pull_request`. Committed; never edited without an accompanying
-   `compliance-posture.md` row.
+   `{"actor_type":"OrganizationAdmin","actor_id":null,"bypass_mode":"pull_request"}`
+   (explicit JSON `null`, NOT missing key) and
+   `{"actor_type":"RepositoryRole","actor_id":5,"bypass_mode":"pull_request"}`
+   (integer `5`, NOT string `"5"`). File header comment documents that
+   `OrganizationAdmin` with `actor_id: null` is the GitHub-API sentinel for
+   "all org admins" and is correct.
 
-3. `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md` -- operator
-   runbook for the three failure routes: `ci/auth-broken` (drift detected --
-   investigate audit log, restore canonical via update-ci-required-ruleset.sh
-   PUT-cycle, log to compliance-posture.md), `ci/guard-broken` (audit itself
-   malfunctioned -- API rate-limit, JSON parse, token absence), and the
-   green-recovery procedure.
+4. `tests/scripts/test-audit-ruleset-bypass.sh` -- the audit's unit-test
+   harness, following the repo convention pinned by
+   `tests/scripts/test-rule-metrics-aggregate.sh`. Wired into
+   `scripts/test-all.sh` via `run_suite "tests/scripts/audit-ruleset-bypass"
+   bash tests/scripts/test-audit-ruleset-bypass.sh` (insert after
+   line 57's `rule-metrics-aggregate` registration).
 
-4. `knowledge-base/project/learnings/best-practices/2026-05-11-ruleset-bypass-audit-canonical-vs-live-comparison.md`
+5. `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md` --
+   operator runbook for the three failure routes: `ci/auth-broken` (drift
+   detected -- investigate audit log, restore canonical via
+   update-ci-required-ruleset.sh PUT-cycle, log to compliance-posture.md),
+   `ci/guard-broken` (audit itself malfunctioned -- API rate-limit, JSON
+   parse, token absence), and the green-recovery procedure.
+
+6. `knowledge-base/project/learnings/best-practices/<YYYY-MM-DD>-ruleset-bypass-audit-canonical-vs-live-comparison.md`
    -- a short learning on JSON-array-set-equality semantics when comparing
-   GitHub Ruleset `bypass_actors` (order-insensitive, key-canonical) and the
-   `null`-actor_id vs missing-key trap. Date deferred to write time per
-   sharp-edge convention.
+   GitHub Ruleset `bypass_actors` (order-insensitive, key-canonical) and
+   the `null`-actor_id vs missing-key trap. Date set at write-time per
+   AGENTS.md compound convention.
 
 ## Files to Edit
 
@@ -190,44 +242,84 @@ Per Sharp Edge #2026-05-10-plan-phase-order: contract-changing edits ship
     Step 2 -- Defensively create `compliance/critical`, `ci/auth-broken`,
     `ci/guard-broken` labels (defensive mirror of drift-guard yaml:65-76).
 
-    Step 3 (id: `check`) -- Audit script body. NOT `set -e` (collect failure
-    modes -> outputs, per drift-guard's 3-output model). Capture
-    step output via `exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1`
-    for the leak tripwire (see Step 4).
+    Step 3 (id: `check`) -- Invokes `scripts/audit-ruleset-bypass.sh`.
+    Captures step output via `exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1`
+    for the leak tripwire (Step 4). The workflow step is short -- the
+    audit script does the work and writes to `$GITHUB_OUTPUT` directly.
 
+    ```yaml
+    - id: check
+      name: Audit CI Required ruleset bypass_actors
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -uo pipefail  # NOT set -e (script collects failure modes)
+        exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1
+        bash scripts/audit-ruleset-bypass.sh
+    ```
+
+    Inside `scripts/audit-ruleset-bypass.sh`:
+
+    - NOT `set -e` (collect failure modes -> outputs, per drift-guard's
+      3-output model).
+    - Mirrors `record_failure()` helper from drift-guard
+      yaml:91-110 (allowlist routing labels; default to `ci/guard-broken`
+      on unknown label).
     - Fetch live ruleset:
-      `curl -s --max-time 15 -H 'Authorization: Bearer $GH_TOKEN' -H 'Accept: application/vnd.github+json' https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388 -o $LIVE_FILE -w '%{http_code}'`
+      ```bash
+      HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
+        -o "$LIVE_FILE" \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2022-11-28' \
+        --header @<(printf 'Authorization: Bearer %s' "$GH_TOKEN") \
+        https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388) || HTTP_CODE="network_error"
+      ```
       (use curl over `gh api` for `--max-time` -- aligns with Sharp Edge
-      "pin a timeout on dig/curl in CI"; `gh api` lacks `--max-time`).
+      "pin a timeout on dig/curl in CI"; `gh api` lacks `--max-time`. Note:
+      `gh api` works with App-token via `token` header, but our case uses
+      `Bearer` for consistency with drift-guard precedent.)
     - Failure modes (each routes via `record_failure`):
       - `github_api_network` (curl error) -> `ci/guard-broken`
       - `github_api_http != 200` -> `ci/guard-broken`
       - `github_api_invalid_json` -> `ci/guard-broken`
       - `live_missing_bypass_actors` (jq returns null) -> `ci/guard-broken`
       - `canonical_file_missing` -> `ci/guard-broken`
+      - `canonical_file_invalid_json` -> `ci/guard-broken`
       - `bypass_actors_drift` -> `ci/auth-broken` (the load-bearing detection)
 
-    - **Drift detection (the heart of the audit):**
+    - **Drift detection (the heart of the audit, verified end-to-end by deepen-pass):**
 
       ```bash
-      # jq array-of-objects set equality.
-      # Sort by (actor_type, actor_id, bypass_mode) for stable comparison.
-      # Use --slurpfile so jq sees a single array; --argjson would re-parse.
-      live_sorted=$(jq -c 'sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)' "$LIVE_BYPASS_FILE")
-      canonical_sorted=$(jq -c 'sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)' "$CANONICAL_FILE")
-      if [[ "$live_sorted" != "$canonical_sorted" ]]; then
+      # CRITICAL: project to canonical 3-field shape BEFORE sort_by so
+      # missing-key entries (no actor_id) collapse to explicit null.
+      # Without map({...}), GitHub-returned `{actor_type, actor_id: null}`
+      # and hand-edited `{actor_type}` (no actor_id key) would diff.
+      live_canonical=$(jq -c 'map({actor_type, actor_id, bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)' "$LIVE_BYPASS_FILE")
+      canonical_canonical=$(jq -c 'map({actor_type, actor_id, bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)' "$CANONICAL_FILE")
+      if [[ "$live_canonical" != "$canonical_canonical" ]]; then
         record_failure "bypass_actors_drift" \
-          "live=${live_sorted}; canonical=${canonical_sorted}" \
+          "live=${live_canonical}; canonical=${canonical_canonical}" \
           "ci/auth-broken"
       fi
       ```
 
+      Verified at plan-time:
+      - `map({actor_type, actor_id, bypass_mode})` collapses missing-key
+        → `{actor_id: null}` so missing-key vs null-value are EQUAL (T6
+        passes).
+      - `sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)`
+        handles `null` in the sort key.
+      - Number `5` vs string `"5"` for `actor_id` produces a diff
+        (correct: hand-edit accidentally stringifying an ID IS drift).
+      - Reversed-order arrays sort to identical canonical form (T5 passes).
+
     - Sanitize `failure_mode`, `failure_detail`, `failure_label` via the
       drift-guard's `strip_log_injection` helper (CRLF + U+0085 + U+2028 +
-      U+2029 stripped via `tr` + `sed`). Echo `key=value` to
-      `$GITHUB_OUTPUT` only after sanitation -- Sharp Edge
-      `cq-regex-unicode-separators-escape-only` plus the
-      log-injection-into-annotations bullet in the plan SKILL Sharp Edges.
+      U+2029 stripped via `tr` + `sed`; see drift-guard yaml:266-273 for
+      verbatim copy). Echo `key=value` to `$GITHUB_OUTPUT` only after
+      sanitation -- per AGENTS.md `cq-regex-unicode-separators-escape-only`
+      plus the log-injection-into-annotations bullet in the plan SKILL
+      Sharp Edges.
 
     Step 4 (id: `tripwire`) -- Lightweight leak tripwire. Audit doesn't mint
     JWTs, so the only credential surface is `$GH_TOKEN`. Tripwire is just:
@@ -258,18 +350,36 @@ Per Sharp Edge #2026-05-10-plan-phase-order: contract-changing edits ship
 2.2 Lint the new YAML:
     - `yamllint .github/workflows/scheduled-ruleset-bypass-audit.yml`
     - `actionlint -no-color .github/workflows/scheduled-ruleset-bypass-audit.yml`
-    - Embedded shell smoke: `bash -c "$(yq '.jobs.audit.steps[2].run' .github/workflows/scheduled-ruleset-bypass-audit.yml)" --dry-run` is infeasible because the script depends on `$GH_TOKEN`, `$RUNNER_TEMP`, `$LIVE_FILE`. Instead: shellcheck the inline `run:` block via `actionlint`'s shellcheck integration (default-on); verify by running `actionlint -shellcheck=` with verbose output. Per Sharp Edge #2026-05-11-multi-word-required-check: NEVER `bash -n` on the YAML.
+    - Embedded shell smoke: NOT needed (deepen-pass revision -- audit
+      logic lives in `scripts/audit-ruleset-bypass.sh`, not inlined in
+      the workflow). The workflow's `run:` block is a 3-line invocation
+      that `actionlint`'s built-in shellcheck integration validates
+      directly. Run `actionlint .github/workflows/scheduled-ruleset-bypass-audit.yml`;
+      it auto-invokes shellcheck on `run:` blocks. Per Sharp Edge
+      `2026-05-11-multi-word-required-check`: NEVER `bash -n` on the YAML.
 
 2.3 Run the workflow once via `gh workflow run scheduled-ruleset-bypass-audit.yml --ref feat-one-shot-3544-bypass-actors-audit`. **EXPECT FAILURE** at this step -- the workflow file must exist on the default branch for `workflow_dispatch` to dispatch (per Sharp Edge `2026-04-21-workflow-dispatch-requires-default-branch.md`). Pre-merge verification = `actionlint` + shellcheck + local-shell-extraction unit test (Phase 3.3). Post-merge verification = `gh workflow run` against main (Phase 5).
 
-### Phase 3 -- Unit tests for the drift detection logic
+### Phase 3 -- Unit tests for the audit logic (REVISED by deepen-pass)
 
-3.1 Add `scripts/test/audit-bypass-drift.test.sh` (or `.bats` if existing
-    test convention uses bats). Convention check: `find apps/ scripts/
-    plugins/ -name '*.test.sh' -o -name '*.bats' 2>/dev/null | head` ->
-    detect convention before authoring. Likely `.test.sh` (project
-    convention; per Sharp Edge "never prescribe a new test framework
-    without an Add dependency task").
+**Convention pinned by deepen-pass:** The repo uses `tests/scripts/test-<name>.sh`
+invoked via `bash` from `scripts/test-all.sh:57-58` (template:
+`tests/scripts/test-rule-metrics-aggregate.sh`). NOT `.test.sh`; NOT `.bats`;
+NOT `yq`. The original plan's `scripts/test/audit-bypass-drift.test.sh` and
+`yq`-based YAML extraction are infeasible (`yq` not installed; no project
+precedent).
+
+3.1 Create `tests/scripts/test-audit-ruleset-bypass.sh` following the
+    `tests/scripts/test-rule-metrics-aggregate.sh` template:
+    - `set -euo pipefail` at top.
+    - `_setup` helper creates a temp dir, writes a canonical JSON file,
+      writes a mock `live-bypass.json`, exports `LIVE_BYPASS_FILE` and
+      `CANONICAL_FILE` env vars.
+    - `_report` helper accumulates pass/fail counters and emits
+      `[ok]`/`[FAIL]` per test.
+    - Each test function invokes `scripts/audit-ruleset-bypass.sh`
+      directly with mocked env (including a `MOCK_CURL` indirection so
+      we can simulate HTTP 503 / network_error without hitting real API).
 
 3.2 Test cases (deterministic; no live API):
 
@@ -285,9 +395,8 @@ Per Sharp Edge #2026-05-10-plan-phase-order: contract-changing edits ship
       reverse order -> NO drift (jq `sort_by` is canonical).
     - **T6 -- `actor_id: null` vs missing key:** live has
       `{"actor_type": "OrganizationAdmin", "bypass_mode": "pull_request"}`
-      (no `actor_id` key at all) -> NO drift (jq `(.actor_id // "null"
-      | tostring)` collapses both to `"null"`). This is the trap from
-      the Research Reconciliation table.
+      (no `actor_id` key at all) -> NO drift (the `map({...})` projection
+      collapses both shapes to `{actor_id: null}`).
     - **T7 -- canonical file missing/malformed:** -> failure_mode
       `canonical_file_missing` or `canonical_file_invalid_json`,
       label `ci/guard-broken`.
@@ -295,16 +404,35 @@ Per Sharp Edge #2026-05-10-plan-phase-order: contract-changing edits ship
       `github_api_http`, label `ci/guard-broken`.
     - **T9 -- log-injection sanitation:** failure_detail containing CRLF
       and U+2028 -> emitted `key=value` has none of those bytes.
+    - **T10 (NEW from deepen):** unknown actor_type (e.g.,
+      `{"actor_type":"Integration","actor_id":99,"bypass_mode":"always"}`
+      added to live) -> drift detected (the audit does not allowlist
+      "known" actor types; ANY new entry IS drift).
+    - **T11 (NEW from deepen):** number-vs-string `actor_id` -- live has
+      `{"actor_type":"RepositoryRole","actor_id":"5","bypass_mode":"pull_request"}`
+      (string `"5"`, e.g., from a hand-edit accident) -> drift detected
+      (jq preserves the type distinction; correct drift signal).
 
-3.3 The test extracts the drift-detection bash block from the YAML via
-    `yq '.jobs.audit.steps[2].run' workflow.yml > /tmp/audit-step.sh`
-    and sources it inside a test harness that mocks `curl`/`gh`. This is
-    NOT `bash -n` (which would crash on the YAML header); it's
-    `bash -c "$(extract-step.sh) ..."` with fixtures. Per Sharp Edge
-    "embedded shell in YAML: extract, then `bash -c`".
+3.3 The test invokes `scripts/audit-ruleset-bypass.sh` directly with mocked
+    env -- NOT via `yq` extraction from YAML. The standalone-script
+    refactor (Files to Create #2) makes this trivial. Mock pattern:
+    ```bash
+    # In test setup:
+    export AUDIT_FETCH_OVERRIDE="$tmp/mock-live.json"  # bypass curl
+    bash scripts/audit-ruleset-bypass.sh
+    ```
+    Where `audit-ruleset-bypass.sh` checks `$AUDIT_FETCH_OVERRIDE` and
+    skips the curl step if set (load-bearing for tests; documented in
+    script header as test-only env var).
 
-3.4 Wire `scripts/test/audit-bypass-drift.test.sh` into `scripts/test-all.sh`
-    (verify via `bash scripts/test-all.sh` runs it).
+3.4 Wire `tests/scripts/test-audit-ruleset-bypass.sh` into
+    `scripts/test-all.sh` immediately after the existing line 57
+    `rule-metrics-aggregate` registration:
+    ```bash
+    run_suite "tests/scripts/audit-ruleset-bypass" \
+      bash tests/scripts/test-audit-ruleset-bypass.sh
+    ```
+    Verify via `bash scripts/test-all.sh` from the worktree root.
 
 ### Phase 4 -- Runbook + compliance-posture wiring
 
@@ -404,10 +532,14 @@ Post-merge ACs (no auto-execution; operator drives):
 - [ ] **AC4** `scripts/update-ci-required-ruleset.sh` post-PUT verification
       now references the canonical JSON file (grep for the path string
       returns ≥1 hit).
-- [ ] **AC5** `scripts/test/audit-bypass-drift.test.sh` exists and all 9
-      test cases (T1-T9) pass.
+- [ ] **AC5** `tests/scripts/test-audit-ruleset-bypass.sh` exists and all
+      11 test cases (T1-T11) pass.
 - [ ] **AC6** `bash scripts/test-all.sh` exits 0 and includes the new
-      audit-bypass-drift test in its output.
+      `tests/scripts/audit-ruleset-bypass` suite in its output.
+- [ ] **AC6a** `scripts/audit-ruleset-bypass.sh` exists, is executable,
+      has shellcheck-clean shell (`shellcheck scripts/audit-ruleset-bypass.sh`
+      exits 0), and supports the `AUDIT_FETCH_OVERRIDE` test-only env
+      var (documented in its header comment).
 - [ ] **AC7** `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md`
       exists and lists the three triage paths.
 - [ ] **AC8** `knowledge-base/legal/compliance-posture.md` has
@@ -425,6 +557,18 @@ Post-merge ACs (no auto-execution; operator drives):
       for "no new dependencies" claim).
 - [ ] **AC13** `actor_id: null` vs missing-key trap is exercised by T6 in
       the test suite (per Research Reconciliation table).
+- [ ] **AC13a** Load-bearing literal strings (verbatim, single canonical
+      value across plan + tests + workflow):
+      - `[compliance/critical] CI Required ruleset bypass_actors drift detected`
+        (issue title for drift)
+      - `[ci/guard-broken] Ruleset bypass audit malfunctioned`
+        (issue title for malfunction)
+      - `bypass_actors_drift` (failure_mode for drift, used by de-dupe)
+      Verify via grep across plan + script + workflow that each literal
+      appears in ALL three places verbatim (no whitespace/casing drift).
+- [ ] **AC13b** No `yq` invocation in any new artifact (`grep -rn '\byq\b'`
+      against new files returns zero matches). Audit logic is in
+      `scripts/audit-ruleset-bypass.sh`; tests invoke the script directly.
 
 ### Post-merge (operator)
 
@@ -546,11 +690,13 @@ detection at the new timestamp.
 A plan whose `## User-Brand Impact` section is empty, contains only TBD,
 or omits the threshold will fail `deepen-plan` Phase 4.6. (Filled above.)
 
-Per Sharp Edge #2026-05-11-multi-word-required-check: do NOT prescribe
+Per Sharp Edge `2026-05-11-multi-word-required-check`: do NOT prescribe
 `bash -n .github/workflows/scheduled-ruleset-bypass-audit.yml` as an AC.
-Use `yamllint` + `actionlint -shellcheck=` for the YAML; use
-`bash -c "$(yq '.jobs.audit.steps[2].run' ...)" ...` for the embedded
-shell snippet (extracted-then-run).
+Use `yamllint` + `actionlint` (which auto-invokes shellcheck on `run:`
+blocks). The audit logic lives in `scripts/audit-ruleset-bypass.sh` --
+shellcheck that file directly with `shellcheck scripts/audit-ruleset-bypass.sh`.
+NO `yq` dependency in the test pipeline (deepen-pass: `yq` is not
+installed and not used in the repo).
 
 Per `2026-04-21-workflow-dispatch-requires-default-branch.md`: pre-merge
 verification of the workflow itself is impossible via `gh workflow run

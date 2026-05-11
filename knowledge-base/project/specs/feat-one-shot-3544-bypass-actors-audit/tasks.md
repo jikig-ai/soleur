@@ -26,12 +26,10 @@ Parent: #3542 (R15 mitigation), #2719 (origin)
   - [ ] 2.1.1 Header: name, `schedule: '0 6 * * *'` + `workflow_dispatch`, concurrency, permissions, repo guard, timeout
   - [ ] 2.1.2 Step 1: sparse checkout (`scripts/` + `.github/actions/notify-ops-email`)
   - [ ] 2.1.3 Step 2: defensively create `compliance/critical`, `ci/auth-broken`, `ci/guard-broken` labels
-  - [ ] 2.1.4 Step 3 (id: check): drift detection logic with `tee` log capture
-    - [ ] 2.1.4.a curl-with-`--max-time 15` against `api.github.com/.../rulesets/14145388`
-    - [ ] 2.1.4.b Failure routing: `github_api_network`, `github_api_http`, `github_api_invalid_json`, `live_missing_bypass_actors`, `canonical_file_missing`, `bypass_actors_drift`
-    - [ ] 2.1.4.c jq sort_by(actor_type, actor_id // "null", bypass_mode) comparison
-    - [ ] 2.1.4.d `strip_log_injection` (CR/LF/FF/VT/DEL + U+0085 + U+2028 + U+2029)
-    - [ ] 2.1.4.e Sanitized `key=value` echo to `$GITHUB_OUTPUT`
+  - [ ] 2.1.4 Step 3 (id: check): invoke `scripts/audit-ruleset-bypass.sh` (deepen-pass: logic moved to standalone script per Phase 2.5)
+    - [ ] 2.1.4.a Workflow step is 3-line `bash scripts/audit-ruleset-bypass.sh` invocation under `set -uo pipefail` + `tee` log capture
+    - [ ] 2.1.4.b All audit logic (curl, jq, record_failure, strip_log_injection, sanitized `$GITHUB_OUTPUT` echo) lives inside `scripts/audit-ruleset-bypass.sh` (Phase 2.5)
+    - [ ] 2.1.4.c **jq canonicalization recipe (verified end-to-end by deepen-pass):** `map({actor_type, actor_id, bypass_mode}) \| sort_by(.actor_type, (.actor_id // "null" \| tostring), .bypass_mode)` — the `map({...})` projection is load-bearing for missing-key vs null-value equality
   - [ ] 2.1.5 Step 4 (id: tripwire): grep for gh_/ghp_/github_pat_ token shapes in step output
   - [ ] 2.1.6 Step 5: File or comment on tracking issue (de-dupe by label + title search)
     - [ ] 2.1.6.a Title routing by failure_label
@@ -45,21 +43,32 @@ Parent: #3542 (R15 mitigation), #2719 (origin)
   - [ ] 2.2.3 NOT `bash -n` (Sharp Edge -- YAML header is not bash)
 - [ ] 2.3 Document that `gh workflow run --ref feat-branch` will fail pre-merge (`workflow_dispatch` requires default branch)
 
-## Phase 3 -- Unit tests for drift detection
+## Phase 2.5 -- Standalone audit script (deepen-pass NEW)
 
-- [ ] 3.1 Create `scripts/test/audit-bypass-drift.test.sh` (or `.bats` per detected convention)
+- [ ] 2.5.1 Create `scripts/audit-ruleset-bypass.sh` containing all audit logic (curl + jq + record_failure + strip_log_injection)
+- [ ] 2.5.2 Support `AUDIT_FETCH_OVERRIDE` test-only env var (skips curl, reads from file)
+- [ ] 2.5.3 Document load-bearing literals in script header: title strings, failure_mode constants
+- [ ] 2.5.4 `shellcheck scripts/audit-ruleset-bypass.sh` exits 0
+
+## Phase 3 -- Unit tests for drift detection (REVISED by deepen-pass)
+
+**Deepen-pass correction:** repo uses `tests/scripts/test-<name>.sh` (NOT `.test.sh`/`.bats`/`yq`). Template: `tests/scripts/test-rule-metrics-aggregate.sh`.
+
+- [ ] 3.1 Create `tests/scripts/test-audit-ruleset-bypass.sh` per repo convention
 - [ ] 3.2 Test cases:
   - [ ] 3.2.T1 Identity: live == canonical -> no failure_mode
   - [ ] 3.2.T2 Added entry: extra `RepositoryRole id=4` -> `bypass_actors_drift`, `ci/auth-broken`
   - [ ] 3.2.T3 Removed entry: missing OrganizationAdmin -> drift
   - [ ] 3.2.T4 Mode change: `bypass_mode: always` -> drift (most brand-damaging case)
   - [ ] 3.2.T5 Order-insensitive: reversed order -> NO drift
-  - [ ] 3.2.T6 `actor_id: null` vs missing key -> NO drift (jq coalescing)
+  - [ ] 3.2.T6 `actor_id: null` vs missing key -> NO drift (`map({...})` projection collapses both)
   - [ ] 3.2.T7 Canonical file missing/malformed -> `canonical_file_missing|invalid_json`, `ci/guard-broken`
   - [ ] 3.2.T8 Live API HTTP 503 -> `github_api_http`, `ci/guard-broken`
   - [ ] 3.2.T9 Log-injection sanitation: CRLF + U+2028 stripped before `$GITHUB_OUTPUT`
-- [ ] 3.3 Test harness extracts shell via `yq '.jobs.audit.steps[2].run' workflow.yml > /tmp/audit-step.sh` then `bash -c ...` with mocked `curl`/`gh`
-- [ ] 3.4 Wire into `scripts/test-all.sh`
+  - [ ] 3.2.T10 Unknown actor_type (`Integration`) -> drift detected (no allowlist)
+  - [ ] 3.2.T11 Number vs string actor_id (`5` vs `"5"`) -> drift detected
+- [ ] 3.3 Test harness invokes `scripts/audit-ruleset-bypass.sh` directly via `AUDIT_FETCH_OVERRIDE` env var. NO `yq`.
+- [ ] 3.4 Wire `tests/scripts/test-audit-ruleset-bypass.sh` into `scripts/test-all.sh` after the `rule-metrics-aggregate` registration (line 57)
 
 ## Phase 4 -- Runbook + compliance-posture wiring
 
