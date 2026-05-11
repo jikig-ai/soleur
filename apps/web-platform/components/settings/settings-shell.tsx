@@ -35,10 +35,10 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       {/* Settings sidebar — hidden on mobile, shown on md+ */}
       <nav
         inert={settingsCollapsed || undefined}
-        className={`hidden shrink-0 border-r border-soleur-border-default md:block
+        className={`hidden shrink-0 border-r border-soleur-border-default px-4 py-5 md:block
         md:transition-[width] md:duration-200 md:ease-out
-        ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48 px-4 py-5"}`}>
-        <div className="mb-4 flex items-center justify-between">
+        ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48"}`}>
+        <div className="mb-4 flex min-h-7 items-center justify-between">
           <h2 className="text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
             Settings
           </h2>
@@ -101,7 +101,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Content area */}
-      <div className="relative flex-1 px-4 py-10 pb-20 md:px-10 md:pb-10">
+      <div className={`relative flex-1 px-4 py-10 pb-20 md:pb-10 md:transition-[padding] md:duration-200 md:ease-out ${settingsCollapsed ? "md:pl-[14.5rem] md:pr-10" : "md:px-10"}`}>
         {settingsCollapsed && (
           <button
             onClick={toggleSettingsCollapsed}

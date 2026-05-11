@@ -69,7 +69,7 @@ Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every brains
 - **Multi-select:** false. Use a single free-text answer (the operator may type into the `other` escape if no preset option fits).
 - **Options:** the AskUserQuestion tool caps `options` at 4 (`maxItems: 4`), and "Other" is auto-appended by the runtime — do NOT include "Other" in your options list, it wastes a slot. Pick the 3 presets most likely to fit the feature being brainstormed from this menu and let auto-"Other" carry the long tail: "User data exposure", "Credential leak / auth bypass", "Billing surprise / payment error", "Data loss / corruption", "Trust breach / cross-tenant read", "No direct user impact". The free-text answer is what drives Step 2 — presets are scaffolding, not exhaustive.
 
-**Step 2 — Parse the answer for trigger keywords.** Scan the free-text answer (case-insensitive substring match) for any of:
+**Step 2 — Parse the answer for trigger keywords.** Scan the case-insensitive concatenation of (a) the free-text answer and (b) the **endorsed option labels and descriptions** (when the operator picks a preset, multi-options shorthand like "All of them", or any other selection) for any of:
 
 User-data + auth lens:
 
@@ -108,7 +108,7 @@ Do NOT emit telemetry when `USER_BRAND_CRITICAL=false` — the gate only records
 
 Domain leaders read `knowledge-base/product/roadmap.md` as ground truth. If the roadmap's status columns are stale, every domain assessment is unreliable. This step syncs the roadmap with GitHub milestone data before domain leaders are spawned.
 
-**Skip if** `knowledge-base/product/roadmap.md` does not exist.
+**Skip if** `knowledge-base/product/roadmap.md` does not exist. Topic ("internal tooling", "CLI infra", "developer-tool", "agent infrastructure") is NOT a skip criterion — the milestone count check is cheap, and stale roadmap rows surface as Phase 3.6 friction regardless of brainstorm topic. See `knowledge-base/project/learnings/2026-05-09-brainstorm-skill-heuristics-substring-match-roadmap-skip-cmo-scope.md`.
 
 1. Read the roadmap's `last_updated` frontmatter date.
 2. For each phase milestone listed in the roadmap, run `gh issue list --milestone "<milestone name>" --state all --json number,state --jq '.[] | "\(.number) | \(.state)"' | head -n 50` to get current issue states.

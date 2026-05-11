@@ -51,6 +51,13 @@ skills/
 └── <skill-name>/          # All skills at root level (flat)
 ```
 
+**Note:** Files at the repo root matching `AGENTS.*.md` (e.g.
+`AGENTS.core.md`, `AGENTS.docs.md`, `AGENTS.rest.md`) are the change-class
+sidecars introduced by #3493. They are *not* plugin components — the plugin
+loader scans `plugins/soleur/{commands,skills,agents}/` only. Edits to the
+sidecars route through the `cq-agents-md-tier-gate` placement gate and the
+`session-rules-loader.sh` SessionStart hook.
+
 ### Adding a New Domain
 
 To add a new domain (e.g., product, growth):
