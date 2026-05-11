@@ -126,6 +126,41 @@ Before installing, validate:
 
 If validation fails, skip with a message: "Artifact [name] failed validation: [reason]. Skipping."
 
+### 4b.5. Security scan (cooperative-fast-path)
+
+Before frontmatter mutation, invoke the `skill-security-scan` advisory gate
+against the in-memory SKILL.md / agent content fetched in step 4a:
+
+```bash
+echo "$content" | bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
+```
+
+The scanner emits a verdict (`LOW-RISK | REVIEW | HIGH-RISK`) plus per-category
+findings and a mandatory advisory disclaimer footer. Operator handling:
+
+- **`LOW-RISK`** — proceed silently to step 4c.
+- **`REVIEW`** — print the findings table to the operator and proceed; the
+  PreToolUse hook may surface confirmation when the Write happens.
+- **`HIGH-RISK`** — print findings + override instructions referencing
+  `plugins/soleur/skills/skill-security-scan/references/override-mechanism.md`.
+  The PreToolUse hook on `Write` (`.claude/hooks/skill-security-scan-write.sh`)
+  is the load-bearing gate — it WILL deny the subsequent Write call regardless
+  of agent cooperation, unless a valid override artifact exists in the working
+  branch under `knowledge-base/security/skill-overrides/`.
+
+This step is the **operator-friendly cooperative path**. The actual block-on-
+HIGH-RISK enforcement lives at the tool layer (PreToolUse hook), per Sharp
+Edge #21 of the implementation plan: "agent prose alone cannot enforce a
+security gate" (Kieran P0-1). A malicious prompt-injected SKILL.md could
+persuade the agent to skip this step; the hook fires regardless.
+
+The existing destructive-bash-warn check above (step 4b item 5) stays in
+place as a graceful-degradation fallback when the scanner is unavailable.
+
+**Invariant:** No disk writes occur between step 4b validation and step 4d
+Write. Telemetry emits in this range are stdout-only or in-memory buffers;
+persistent sink emits move to AFTER step 4b.5 + Write success.
+
 ### 4c. Add provenance frontmatter
 
 Replace the artifact's original frontmatter with provenance-tracked frontmatter:

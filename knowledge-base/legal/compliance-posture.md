@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-05
+last_updated: 2026-05-10
 ---
 
 # Legal Compliance Posture
@@ -32,6 +32,19 @@ Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-mem
 | Cloudflare Inc | AUTO | 2026-03-19 | DPF + SCCs + CBPR | Global CDN | Self-executing via Self-Serve Agreement |
 | Resend Inc | AUTO | 2026-04-13 | DPF + SCCs | US-based | Automatic DPA via Terms of Service (Section 7: Data Processing). Transactional email for review gate notifications |
 | Doppler Inc | AUTO (MSA + DPA addendum — verification pending) | 2026-05-05 | EU-US Data Privacy Framework | US-based | Holds GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 (brand-survival credential — single-user incident threshold). RBAC review tracked in #3228. PR #3224 introduces the drift-guard secret; Doppler→GH Actions sync is the documented bootstrap path |
+| Google LLC (osv.dev) | AUTO | 2026-05-10 | SCC-equivalent (Google Cloud DPA) | US-based | OSV.dev queried by `skill-security-scan` for supply-chain advisory checks (#2719). Package metadata only (name, ecosystem, version) — never operator-identifying data — is sent. Per gdpr-gate `GDPR-ChapterV-1`. |
+
+## Vendored Code Provenance
+
+Source: `knowledge-base/engineering/policies/content-vendoring.md`
+
+The `gdpr-gate` skill incorporates upstream-vendored detection rules under permissive license. Each lifted bundle is governed by the content-vendoring policy: pinned to a commit, integrity-checked at pre-commit, drift-detected weekly, and runtime-monitored for staleness (>30d STDOUT banner, >90d POSTURE_FAIL line).
+
+| Upstream | License | Pinned Commit | Lifted Files | Last Verified | Status |
+|---|---|---|---|---|---|
+| github.com/goSprinto/compliance-skills | MIT | `7b58d68` | 5 (gdpr-gate `references/`) | 2026-05-10 | active |
+
+NOTICE-of-record: `plugins/soleur/skills/gdpr-gate/NOTICE` (YAML frontmatter is the canonical machine-readable form). Drift-detection workflow: `.github/workflows/scheduled-content-vendor-drift.yml`. Operator runbook: `knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md`.
 
 ## Active Compliance Items
 
@@ -52,6 +65,7 @@ Contract (mirrors plugins/soleur/skills/gdpr-gate/SKILL.md §"Critical-finding e
 | Item | Issue | Status | Deadline | Notes |
 |------|-------|--------|----------|-------|
 | T&C blanket statement contradictions | #736 | OPEN | - | Identified during #670 review |
+| Skill-install advisory gate | #2719 | OPEN | - | Single-user-incident threshold; EU jurisdiction. Verdict naming `LOW-RISK \| REVIEW \| HIGH-RISK` with mandatory advisory disclaimer (CLO requirement). Override = structured artifact under `knowledge-base/security/skill-overrides/` (GDPR Art. 32 evidence; retention = repo lifetime). PII redaction (email/IPv4/IBAN) at scan time per `GDPR-DataMin-1`. Self-defense: SHA-pinned rule pack, OSV untrusted-input handling, fail-loud self-test. |
 
 ## Completed Compliance Work
 

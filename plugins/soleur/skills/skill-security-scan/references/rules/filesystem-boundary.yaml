@@ -1,0 +1,29 @@
+# Category 4 rules: filesystem boundary violations
+#
+# Consumed by ../scripts/check-filesystem-boundary.sh.
+
+rules:
+  - id: write-credential-dotfile
+    severity: HIGH-RISK
+    description: Write to credential dotfile (.env, doppler.yaml, .claude/settings.json, etc.).
+    regex: '(>|tee|writeFileSync|fs\.write|open[[:space:]]*\([^)]{0,80}["''])[^"''`]{0,160}(\.env(\.[a-z]+)?|doppler\.yaml|\.claude/settings\.json|id_rsa|id_ed25519|credentials)'
+
+  - id: read-credential-path
+    severity: HIGH-RISK
+    description: Read from credential paths (~/.ssh, ~/.aws, ~/.config/doppler).
+    regex: '(cat|less|head|tail|readFile|readFileSync|fs\.read|open[[:space:]]*\()[[:space:]]+[^|;&]{0,160}(\.ssh/(id_|known_hosts|config)|\.aws/credentials|\.config/doppler|\.netrc)'
+
+  - id: path-traversal-relative
+    severity: REVIEW
+    description: Path traversal via ../ sequences in declarative paths.
+    regex: '(["''`])(\.\./){3,}'
+
+  - id: path-traversal-absolute
+    severity: REVIEW
+    description: Absolute path to system or operator directories.
+    regex: '(["''`])(/etc/|/root/|/var/run/secrets/|~/\.ssh/|~/\.aws/|~/\.config/doppler)'
+
+  - id: symlink-out-of-bounds
+    severity: REVIEW
+    description: Symlink-creation call with target outside designated dirs.
+    regex: '\b(ln[[:space:]]+-s|os\.symlink|symlinkSync|fs\.symlink)[[:space:]]*\(?[^)]*(\.\./|/etc/|/root/)'

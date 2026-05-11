@@ -52,6 +52,15 @@
         ]
       },
       {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/skill-security-scan-write.sh"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__pencil__open_document",
         "hooks": [
           {
