@@ -185,6 +185,7 @@ jobs:
           gh api "repos/${REPO_NAME}/check-runs" -f name=cla-check -f head_sha="$COMMIT_SHA" -f status=completed -f conclusion=success -f "output[title]=Bot PR" -f "output[summary]=Synthetic" || true
           gh api "repos/${REPO_NAME}/check-runs" -f name=dependency-review -f head_sha="$COMMIT_SHA" -f status=completed -f conclusion=success -f "output[title]=Bot PR" -f "output[summary]=Synthetic" || true
           gh api "repos/${REPO_NAME}/check-runs" -f name=e2e -f head_sha="$COMMIT_SHA" -f status=completed -f conclusion=success -f "output[title]=Bot PR" -f "output[summary]=Synthetic" || true
+          gh api "repos/${REPO_NAME}/check-runs" -f name="skill-security-scan PR gate" -f head_sha="$COMMIT_SHA" -f status=completed -f conclusion=success -f "output[title]=Bot PR" -f "output[summary]=Synthetic" || true
           PR_URL=$(gh pr create \
             --base "$DEFAULT_BRANCH" \
             --head "$BRANCH" \

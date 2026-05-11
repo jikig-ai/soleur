@@ -33,6 +33,10 @@ permissions:
 
 jobs:
   scan:
+    # DO NOT RENAME — this exact string is referenced as a required check
+    # in CI Required ruleset #14145388, in scripts/required-checks.txt, and
+    # in 5 bot workflows that post synthetic check-runs of this name.
+    # Renaming breaks the merge gate silently. See #3542 R15, Sharp Edge §3.
     name: skill-security-scan PR gate
     runs-on: ubuntu-latest
     steps:

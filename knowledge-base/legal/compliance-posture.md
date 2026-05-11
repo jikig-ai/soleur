@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-10
+last_updated: 2026-05-11
 ---
 
 # Legal Compliance Posture
@@ -65,7 +65,7 @@ Contract (mirrors plugins/soleur/skills/gdpr-gate/SKILL.md §"Critical-finding e
 | Item | Issue | Status | Deadline | Notes |
 |------|-------|--------|----------|-------|
 | T&C blanket statement contradictions | #736 | OPEN | - | Identified during #670 review |
-| Skill-install advisory gate | #2719 | OPEN | - | Single-user-incident threshold; EU jurisdiction. Verdict naming `LOW-RISK \| REVIEW \| HIGH-RISK` with mandatory advisory disclaimer (CLO requirement). Override = structured artifact under `knowledge-base/security/skill-overrides/` (GDPR Art. 32 evidence; retention = repo lifetime). PII redaction (email/IPv4/IBAN) at scan time per `GDPR-DataMin-1`. Self-defense: SHA-pinned rule pack, OSV untrusted-input handling, fail-loud self-test. |
+| Skill-install advisory gate | #2719 | OPEN | - | Single-user-incident threshold; EU jurisdiction. Verdict naming `LOW-RISK \| REVIEW \| HIGH-RISK` with mandatory advisory disclaimer (CLO requirement). Override = structured artifact under `knowledge-base/security/skill-overrides/` (GDPR Art. 32 evidence; retention = repo lifetime). PII redaction (email/IPv4/IBAN) at scan time per `GDPR-DataMin-1`. Self-defense: SHA-pinned rule pack, OSV untrusted-input handling, fail-loud self-test. R15 mitigation: pending Phase 3 apply (#3542, runbook `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md`). |
 
 ## Completed Compliance Work
 
