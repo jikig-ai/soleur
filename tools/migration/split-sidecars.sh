@@ -9,13 +9,30 @@ set -euo pipefail
 
 TSV="tools/migration/rule-classification.tsv"
 SOURCE_BLOB=".AGENTS.md.source"   # Idempotent input: never read the rewritten AGENTS.md.
+# Source ref defaults to HEAD; pass `origin/main` (or any committish) as $1 to
+# rebuild sidecars against a different branch's full registry — useful when
+# rebasing this PR onto upstream rule additions.
+SOURCE_REF="${1:-HEAD}"
 [[ -f "$TSV" ]] || { echo "missing $TSV — run classify-rules.sh first" >&2; exit 2; }
 
-# Source-of-truth: the version of AGENTS.md at HEAD with compliance-tier tags applied.
+# Source-of-truth: the version of AGENTS.md at $SOURCE_REF with compliance-tier tags applied.
 # Idempotency: even if AGENTS.md has been rewritten to pointer-index form, this script
-# reads from HEAD via `git show` and re-applies tags.
-if ! git show HEAD:AGENTS.md > "$SOURCE_BLOB" 2>/dev/null; then
-  echo "FATAL: cannot read AGENTS.md from HEAD via git show" >&2
+# reads from $SOURCE_REF via `git show` and re-applies tags.
+if ! git show "${SOURCE_REF}:AGENTS.md" > "$SOURCE_BLOB" 2>/dev/null; then
+  echo "FATAL: cannot read AGENTS.md from ${SOURCE_REF} via git show" >&2
+  exit 2
+fi
+
+# Idempotency guard: refuse to operate on an already-migrated source. If the
+# source AGENTS.md has been rewritten to pointer-index form (slug-only lines
+# without prose rule bodies), the classifier can't build the sidecars from
+# it. Detect by checking for the absence of any rule body containing a `**Why:**`
+# marker plus an excess of pointer lines (`→ core`/`→ docs-only`/`→ rest`).
+if ! grep -q '\*\*Why:\*\*' "$SOURCE_BLOB" && grep -qE ' → (core|docs-only|rest)$' "$SOURCE_BLOB"; then
+  echo "FATAL: ${SOURCE_REF}:AGENTS.md is already in pointer-index form (no rule bodies)." >&2
+  echo "       Pass an earlier source ref (e.g., \`bash $0 origin/main\`) to rebuild" >&2
+  echo "       sidecars from the full registry." >&2
+  rm -f "$SOURCE_BLOB"
   exit 2
 fi
 
@@ -69,6 +86,26 @@ rule_class = {}
 rule_section_override = {
     "cq-pg-security-definer-search-path-pin-pg-temp": "Compliance Tier"
 }
+# Force-core overrides for rules the [compliance-tier] tag applies to, regardless of
+# what the upstream TSV says. The TSV is generated from the untagged source registry
+# (origin/main, pre-Phase-1.3), so cq-pg-security-definer would fall into the default
+# Code Quality → rest bucket without this override. Mirrors the 5-rule list inlined in
+# the PYTAG block above.
+COMPLIANCE_TIER_FORCE_CORE = {
+    "hr-never-paste-secrets-via-bang-prefix",
+    "hr-menu-option-ack-not-prod-write-auth",
+    "hr-never-git-add-a-in-user-repo-agents",
+    "cq-pg-security-definer-search-path-pin-pg-temp",
+    "hr-exhaust-all-automated-options-before",
+}
+# Demote-to-rest overrides per plan Phase 1.7.4 ("if core > 18k, default first cut").
+# CPO sign-off condition #3 allows ONLY wg-* demotion — never hr-*.
+# These two rules are code/test session-specific; no value in injecting them into
+# docs-only sessions.
+DEMOTE_TO_REST = {
+    "wg-when-a-test-runner-crashes-segfault-oom",
+    "wg-when-tests-fail-and-are-confirmed-pre",
+}
 with TSV.open() as f:
     next(f)  # header
     for line in f:
@@ -76,6 +113,10 @@ with TSV.open() as f:
         if len(parts) < 4:
             continue
         rid, section, klass = parts[0], parts[1], parts[2]
+        if rid in COMPLIANCE_TIER_FORCE_CORE:
+            klass = "core"
+        elif rid in DEMOTE_TO_REST:
+            klass = "rest"
         rule_class[rid] = klass
 
 # Bucketize rules: { sidecar_path : { section_name : [rule_line, ...] } }
@@ -88,7 +129,9 @@ buckets = {
 core_section_order = ["Hard Rules", "Workflow Gates", "Compliance Tier",
                       "Passive Domain Routing", "Communication"]
 docs_section_order = ["Code Quality"]
-rest_section_order = ["Code Quality", "Review & Feedback"]
+# Workflow Gates included so demoted wg-* test/runner rules land in rest
+# (per plan Phase 1.7.4 default cut; preserves the section heading).
+rest_section_order = ["Workflow Gates", "Code Quality", "Review & Feedback"]
 
 content = REG.read_text()
 lines = content.splitlines()
@@ -163,8 +206,10 @@ def extract_pointer(line, klass):
     id_token = id_match.group(0)
 
     # Slug-only pointer — enforcement tags + prose live in the sidecar body.
-    klass_token = klass.replace("docs-only", "docs")
-    return f"- {id_token} → {klass_token}"
+    # Canonical class tokens (single source of truth): core | docs-only | rest.
+    # Must match `POINTER_LINE_RE` alternation in scripts/lint-rule-ids.py AND
+    # `CLASSES=` vocabulary in .claude/hooks/session-rules-loader.sh.
+    return f"- {id_token} → {klass}"
 
 # Re-walk AGENTS.md to produce pointer index in the same section order as the original
 section_pointers = {}     # section_name → [pointer_line, ...]

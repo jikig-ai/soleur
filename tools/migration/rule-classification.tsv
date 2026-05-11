@@ -1,70 +1,70 @@
 rule_id	section	proposed_class	rationale	byte_count	first_50_chars
-hr-never-git-stash-in-worktrees	Hard Rules	core	Hard Rules → core	258	Never `git stash` in worktrees [id: hr-never-git-s
-hr-mcp-tools-playwright-etc-resolve-paths	Hard Rules	core	Hard Rules → core	192	MCP tools (Playwright, etc.) resolve paths from th
-hr-when-a-command-exits-non-zero-or-prints	Hard Rules	core	Hard Rules → core	171	When a command exits non-zero or prints a warning,
-hr-always-read-a-file-before-editing-it	Hard Rules	core	Hard Rules → core	203	Always read a file before editing it [id: hr-alway
-hr-when-a-plan-specifies-relative-paths-e-g	Hard Rules	core	Hard Rules → core	464	When a plan specifies relative paths (e.g., `sourc
-hr-the-host-terminal-is-warp	Hard Rules	core	Hard Rules → core	259	The host terminal is Warp [id: hr-the-host-termina
-hr-the-bash-tool-runs-in-a-non-interactive	Hard Rules	core	Hard Rules → core	214	The Bash tool runs in a non-interactive shell with
-hr-exhaust-all-automated-options-before	Hard Rules	core	Hard Rules → core	503	Exhaust all automated options before suggesting ma
-hr-never-label-any-step-as-manual-without	Hard Rules	core	Hard Rules → core	409	Never label any step as "manual" without first att
-hr-when-triaging-a-batch-of-issues-never	Hard Rules	core	Hard Rules → core	423	When triaging issues, never defer as "not automata
-hr-all-infrastructure-provisioning-servers	Hard Rules	core	Hard Rules → core	389	All infra provisioning (servers, volumes, firewall
-hr-every-new-terraform-root-must-include-an	Hard Rules	core	Hard Rules → core	260	Every new Terraform root must include an R2 remote
-hr-new-skills-agents-or-user-facing	Hard Rules	core	Hard Rules → core	268	New skills, agents, or user-facing capabilities mu
-hr-before-shipping-ship-phase-5-5-runs	Hard Rules	core	Hard Rules → core	298	Before shipping, `/ship` Phase 5.5 runs conditiona
-hr-when-a-workflow-concludes-with-an	Hard Rules	core	Hard Rules → core	286	When a workflow concludes with an actionable next 
-hr-before-asserting-github-issue-status	Hard Rules	core	Hard Rules → core	229	Before asserting GitHub issue status, verify via `
-hr-never-run-commands-with-unbounded-output	Hard Rules	core	Hard Rules → core	242	Never run commands with unbounded output in subage
-hr-never-write-to-claude-code-memory-claude	Hard Rules	core	Hard Rules → core	343	Never write to Claude Code memory (`~/.claude/proj
-hr-when-in-a-worktree-never-read-from-bare	Hard Rules	core	Hard Rules → core	286	When in a worktree, never read from bare repo path
-hr-github-api-endpoints-with-enum	Hard Rules	core	Hard Rules → core	319	GitHub API endpoints with enum parameters require 
-hr-menu-option-ack-not-prod-write-auth	Hard Rules	core	Hard Rules → core	603	For destructive writes against shared prod (terraf
-hr-ssh-diagnosis-verify-firewall	Hard Rules	core	Hard Rules → core	531	When a plan addresses an SSH/network-connectivity 
-hr-never-git-add-a-in-user-repo-agents	Hard Rules	core	Hard Rules → core	525	In connected-repo agent code paths (`apps/web-plat
-hr-dev-prd-distinct-supabase-projects	Hard Rules	core	Hard Rules → core	339	Doppler `dev` and `prd` configs MUST resolve to di
-hr-weigh-every-decision-against-target-user-impact	Hard Rules	core	Hard Rules → core	485	Every plan/PR touching credentials, auth, data, pa
-hr-never-paste-secrets-via-bang-prefix	Hard Rules	core	Hard Rules → core	590	Never paste secrets via the Claude Code `! ` shell
-wg-when-moving-github-issues-between	Workflow Gates	core	Workflow Gates → core	390	When moving issues between milestones, deferring f
-wg-every-feature-listed-in-a-roadmap-phase	Workflow Gates	core	Workflow Gates → core	420	Every feature in a roadmap phase table MUST have a
-wg-when-closing-a-phase-milestone-update	Workflow Gates	core	Workflow Gates → core	339	When closing a phase milestone, update the `## Cur
-wg-when-fixing-a-workflow-gates-detection	Workflow Gates	core	Workflow Gates → core	306	When fixing a workflow gate's detection logic, ret
-wg-zero-agents-until-user-confirms	Workflow Gates	core	Workflow Gates → core	224	Zero agents until user confirms direction [id: wg-
-wg-before-every-commit-run-compound-skill	Workflow Gates	core	Workflow Gates → core	157	Before every commit, run compound (`skill: soleur:
-wg-never-bump-version-files-in-feature	Workflow Gates	core	Workflow Gates → core	317	Never bump version files in feature branches [id: 
-wg-after-marking-a-pr-ready-run-gh-pr-merge	Workflow Gates	core	Workflow Gates → core	315	After marking a PR ready, run `gh pr merge <number
-wg-after-a-pr-merges-to-main-verify-all	Workflow Gates	core	Workflow Gates → core	252	After a PR merges to main, verify all release/depl
-wg-at-session-start-run-bash-plugins-soleur	Workflow Gates	core	Workflow Gates → core	390	At session start, run `bash ./plugins/soleur/skill
-wg-at-session-start-after-cleanup-merged	Workflow Gates	core	Workflow Gates → core	366	At session start (after `cleanup-merged` fetches m
-wg-when-a-test-runner-crashes-segfault-oom	Workflow Gates	core	Workflow Gates → core	299	When a test runner crashes (segfault, OOM, abort),
-wg-when-tests-fail-and-are-confirmed-pre	Workflow Gates	core	Workflow Gates → core	236	When tests fail and are confirmed pre-existing (sa
-wg-when-an-audit-identifies-pre-existing	Workflow Gates	core	Workflow Gates → core	196	When an audit identifies pre-existing issues, crea
-wg-when-deferring-a-capability-create-a	Workflow Gates	core	Workflow Gates → core	239	When deferring a capability, create a GitHub issue
-wg-when-a-workflow-gap-causes-a-mistake-fix	Workflow Gates	core	Workflow Gates → core	364	When a workflow gap causes a mistake, fix the skil
-wg-every-session-error-must-produce-either	Workflow Gates	core	Workflow Gates → core	553	Every session error MUST produce a rule, skill edi
-wg-use-closes-n-in-pr-body-not-title-to	Workflow Gates	core	Workflow Gates → core	572	Auto-close keywords (`close|fix|resolve`[sd]? + `#
-wg-after-merging-a-pr-that-adds-or-modifies	Workflow Gates	core	Workflow Gates → core	353	After merging a PR that adds or modifies a GitHub 
-cq-write-failing-tests-before	Code Quality	rest	CQ runtime/TS/Postgres → rest	249	Write failing tests BEFORE implementation code whe
-cq-before-pushing-package-json-changes	Code Quality	rest	CQ runtime/TS/Postgres → rest	261	Before pushing `package.json` changes, verify deps
-cq-rule-ids-are-immutable	Code Quality	docs-only	CQ eleventy/agents-md → docs-only	344	Rule IDs on AGENTS.md rules are immutable [id: cq-
-cq-agents-md-why-single-line	Code Quality	docs-only	CQ eleventy/agents-md → docs-only	427	AGENTS.md rules cap at ~600 bytes; `**Why:**` is o
-cq-agents-md-tier-gate	Code Quality	docs-only	CQ eleventy/agents-md → docs-only	554	When editing AGENTS.md, apply the placement gate [
-cq-nextjs-route-files-http-only-exports	Code Quality	rest	CQ runtime/TS/Postgres → rest	489	App Router route files (`apps/*/app/**/route.{ts,t
-cq-silent-fallback-must-mirror-to-sentry	Code Quality	rest	CQ runtime/TS/Postgres → rest	529	When a code path catches an error (or detects a de
-cq-ref-removal-sweep-cleanup-closures	Code Quality	rest	CQ runtime/TS/Postgres → rest	439	Before removing a `useRef` declaration, grep the r
-cq-union-widening-grep-three-patterns	Code Quality	rest	CQ runtime/TS/Postgres → rest	544	When widening a discriminated union, grep **three*
-cq-pg-security-definer-search-path-pin-pg-temp	Code Quality	core	[compliance-tier] → core	570	Postgres `SECURITY DEFINER` functions MUST pin `SE
-cq-eleventy-critical-css-screenshot-gate	Code Quality	docs-only	CQ eleventy/agents-md → docs-only	558	Selectors rendered above the fold on the Eleventy 
-cq-test-fixtures-synthesized-only	Code Quality	rest	CQ runtime/TS/Postgres → rest	459	Test fixtures and golden files (`__goldens__/**`, 
-cq-regex-unicode-separators-escape-only	Code Quality	rest	CQ runtime/TS/Postgres → rest	561	Regex character classes containing U+2028/U+2029 (
-rf-after-merging-read-files-from-the-merged	Review & Feedback	rest	Review & Feedback → rest	164	After merging, read files from the merged branch (
-rf-never-skip-qa-review-before-merging	Review & Feedback	rest	Review & Feedback → rest	159	Never skip QA/review before merging [id: rf-never-
-rf-before-spawning-review-agents-push-the	Review & Feedback	rest	Review & Feedback → rest	282	Before spawning review agents, push the branch to 
-rf-before-shipping-verify-1-review-comments	Review & Feedback	rest	Review & Feedback → rest	166	Before shipping, verify: (1) review comments resol
-rf-when-a-reviewer-or-user-says-to-keep-a	Review & Feedback	rest	Review & Feedback → rest	152	When a reviewer or user says to keep a feature/pha
-rf-review-finding-default-fix-inline	Review & Feedback	rest	Review & Feedback → rest	324	Review findings default to fix-inline on the PR br
-pdr-when-a-user-message-contains-a-clear	Passive Domain Routing	core	pdr → core	573	When a user message contains a clear domain signal
-pdr-do-not-route-on-trivial-messages-yes	Passive Domain Routing	core	pdr → core	251	Do not route on trivial messages ("yes", "continue
-cm-challenge-reasoning-instead-of	Communication	core	cm → core	132	Challenge reasoning instead of validating [id: cm-
-cm-delegate-verbose-exploration-3-file	Communication	core	cm → core	181	Delegate verbose exploration (3+ file reads, resea
-cm-when-proposing-to-clear-context-or	Communication	core	cm → core	258	When proposing to clear context or resume from a f
+hr-never-git-stash-in-worktrees	Hard Rules	core	Hard Rules → core	49	[id: hr-never-git-stash-in-worktrees] → core
+hr-mcp-tools-playwright-etc-resolve-paths	Hard Rules	core	Hard Rules → core	59	[id: hr-mcp-tools-playwright-etc-resolve-paths] �
+hr-when-a-command-exits-non-zero-or-prints	Hard Rules	core	Hard Rules → core	60	[id: hr-when-a-command-exits-non-zero-or-prints] �
+hr-always-read-a-file-before-editing-it	Hard Rules	core	Hard Rules → core	57	[id: hr-always-read-a-file-before-editing-it] → 
+hr-when-a-plan-specifies-relative-paths-e-g	Hard Rules	core	Hard Rules → core	61	[id: hr-when-a-plan-specifies-relative-paths-e-g] 
+hr-the-host-terminal-is-warp	Hard Rules	core	Hard Rules → core	46	[id: hr-the-host-terminal-is-warp] → core
+hr-the-bash-tool-runs-in-a-non-interactive	Hard Rules	core	Hard Rules → core	60	[id: hr-the-bash-tool-runs-in-a-non-interactive] �
+hr-exhaust-all-automated-options-before	Hard Rules	core	Hard Rules → core	57	[id: hr-exhaust-all-automated-options-before] → 
+hr-never-label-any-step-as-manual-without	Hard Rules	core	Hard Rules → core	59	[id: hr-never-label-any-step-as-manual-without] �
+hr-when-triaging-a-batch-of-issues-never	Hard Rules	core	Hard Rules → core	58	[id: hr-when-triaging-a-batch-of-issues-never] →
+hr-all-infrastructure-provisioning-servers	Hard Rules	core	Hard Rules → core	60	[id: hr-all-infrastructure-provisioning-servers] �
+hr-every-new-terraform-root-must-include-an	Hard Rules	core	Hard Rules → core	61	[id: hr-every-new-terraform-root-must-include-an] 
+hr-new-skills-agents-or-user-facing	Hard Rules	core	Hard Rules → core	53	[id: hr-new-skills-agents-or-user-facing] → core
+hr-before-shipping-ship-phase-5-5-runs	Hard Rules	core	Hard Rules → core	56	[id: hr-before-shipping-ship-phase-5-5-runs] → c
+hr-when-a-workflow-concludes-with-an	Hard Rules	core	Hard Rules → core	54	[id: hr-when-a-workflow-concludes-with-an] → cor
+hr-before-asserting-github-issue-status	Hard Rules	core	Hard Rules → core	57	[id: hr-before-asserting-github-issue-status] → 
+hr-never-run-commands-with-unbounded-output	Hard Rules	core	Hard Rules → core	61	[id: hr-never-run-commands-with-unbounded-output] 
+hr-never-write-to-claude-code-memory-claude	Hard Rules	core	Hard Rules → core	61	[id: hr-never-write-to-claude-code-memory-claude] 
+hr-when-in-a-worktree-never-read-from-bare	Hard Rules	core	Hard Rules → core	60	[id: hr-when-in-a-worktree-never-read-from-bare] �
+hr-github-api-endpoints-with-enum	Hard Rules	core	Hard Rules → core	51	[id: hr-github-api-endpoints-with-enum] → core
+hr-menu-option-ack-not-prod-write-auth	Hard Rules	core	Hard Rules → core	56	[id: hr-menu-option-ack-not-prod-write-auth] → c
+hr-ssh-diagnosis-verify-firewall	Hard Rules	core	Hard Rules → core	50	[id: hr-ssh-diagnosis-verify-firewall] → core
+hr-never-git-add-a-in-user-repo-agents	Hard Rules	core	Hard Rules → core	56	[id: hr-never-git-add-a-in-user-repo-agents] → c
+hr-dev-prd-distinct-supabase-projects	Hard Rules	core	Hard Rules → core	55	[id: hr-dev-prd-distinct-supabase-projects] → co
+hr-weigh-every-decision-against-target-user-impact	Hard Rules	core	Hard Rules → core	68	[id: hr-weigh-every-decision-against-target-user-i
+hr-never-paste-secrets-via-bang-prefix	Hard Rules	core	Hard Rules → core	56	[id: hr-never-paste-secrets-via-bang-prefix] → c
+wg-when-moving-github-issues-between	Workflow Gates	core	Workflow Gates → core	54	[id: wg-when-moving-github-issues-between] → cor
+wg-every-feature-listed-in-a-roadmap-phase	Workflow Gates	core	Workflow Gates → core	60	[id: wg-every-feature-listed-in-a-roadmap-phase] �
+wg-when-closing-a-phase-milestone-update	Workflow Gates	core	Workflow Gates → core	58	[id: wg-when-closing-a-phase-milestone-update] →
+wg-when-fixing-a-workflow-gates-detection	Workflow Gates	core	Workflow Gates → core	59	[id: wg-when-fixing-a-workflow-gates-detection] �
+wg-zero-agents-until-user-confirms	Workflow Gates	core	Workflow Gates → core	52	[id: wg-zero-agents-until-user-confirms] → core
+wg-before-every-commit-run-compound-skill	Workflow Gates	core	Workflow Gates → core	59	[id: wg-before-every-commit-run-compound-skill] �
+wg-never-bump-version-files-in-feature	Workflow Gates	core	Workflow Gates → core	56	[id: wg-never-bump-version-files-in-feature] → c
+wg-after-marking-a-pr-ready-run-gh-pr-merge	Workflow Gates	core	Workflow Gates → core	61	[id: wg-after-marking-a-pr-ready-run-gh-pr-merge] 
+wg-after-a-pr-merges-to-main-verify-all	Workflow Gates	core	Workflow Gates → core	57	[id: wg-after-a-pr-merges-to-main-verify-all] → 
+wg-at-session-start-run-bash-plugins-soleur	Workflow Gates	core	Workflow Gates → core	61	[id: wg-at-session-start-run-bash-plugins-soleur] 
+wg-at-session-start-after-cleanup-merged	Workflow Gates	core	Workflow Gates → core	58	[id: wg-at-session-start-after-cleanup-merged] →
+wg-when-a-test-runner-crashes-segfault-oom	Workflow Gates	core	Workflow Gates → core	60	[id: wg-when-a-test-runner-crashes-segfault-oom] �
+wg-when-tests-fail-and-are-confirmed-pre	Workflow Gates	core	Workflow Gates → core	58	[id: wg-when-tests-fail-and-are-confirmed-pre] →
+wg-when-an-audit-identifies-pre-existing	Workflow Gates	core	Workflow Gates → core	58	[id: wg-when-an-audit-identifies-pre-existing] →
+wg-when-deferring-a-capability-create-a	Workflow Gates	core	Workflow Gates → core	57	[id: wg-when-deferring-a-capability-create-a] → 
+wg-when-a-workflow-gap-causes-a-mistake-fix	Workflow Gates	core	Workflow Gates → core	61	[id: wg-when-a-workflow-gap-causes-a-mistake-fix] 
+wg-every-session-error-must-produce-either	Workflow Gates	core	Workflow Gates → core	60	[id: wg-every-session-error-must-produce-either] �
+wg-use-closes-n-in-pr-body-not-title-to	Workflow Gates	core	Workflow Gates → core	57	[id: wg-use-closes-n-in-pr-body-not-title-to] → 
+wg-after-merging-a-pr-that-adds-or-modifies	Workflow Gates	core	Workflow Gates → core	61	[id: wg-after-merging-a-pr-that-adds-or-modifies] 
+cq-write-failing-tests-before	Code Quality	rest	CQ runtime/TS/Postgres → rest	47	[id: cq-write-failing-tests-before] → rest
+cq-before-pushing-package-json-changes	Code Quality	rest	CQ runtime/TS/Postgres → rest	56	[id: cq-before-pushing-package-json-changes] → r
+cq-rule-ids-are-immutable	Code Quality	rest	CQ runtime/TS/Postgres → rest	43	[id: cq-rule-ids-are-immutable] → docs
+cq-agents-md-why-single-line	Code Quality	docs-only	CQ eleventy/agents-md → docs-only	46	[id: cq-agents-md-why-single-line] → docs
+cq-agents-md-tier-gate	Code Quality	docs-only	CQ eleventy/agents-md → docs-only	40	[id: cq-agents-md-tier-gate] → docs
+cq-nextjs-route-files-http-only-exports	Code Quality	rest	CQ runtime/TS/Postgres → rest	57	[id: cq-nextjs-route-files-http-only-exports] → 
+cq-silent-fallback-must-mirror-to-sentry	Code Quality	rest	CQ runtime/TS/Postgres → rest	58	[id: cq-silent-fallback-must-mirror-to-sentry] →
+cq-ref-removal-sweep-cleanup-closures	Code Quality	rest	CQ runtime/TS/Postgres → rest	55	[id: cq-ref-removal-sweep-cleanup-closures] → re
+cq-union-widening-grep-three-patterns	Code Quality	rest	CQ runtime/TS/Postgres → rest	55	[id: cq-union-widening-grep-three-patterns] → re
+cq-pg-security-definer-search-path-pin-pg-temp	Code Quality	rest	CQ runtime/TS/Postgres → rest	64	[id: cq-pg-security-definer-search-path-pin-pg-tem
+cq-eleventy-critical-css-screenshot-gate	Code Quality	docs-only	CQ eleventy/agents-md → docs-only	58	[id: cq-eleventy-critical-css-screenshot-gate] →
+cq-test-fixtures-synthesized-only	Code Quality	rest	CQ runtime/TS/Postgres → rest	51	[id: cq-test-fixtures-synthesized-only] → rest
+cq-regex-unicode-separators-escape-only	Code Quality	rest	CQ runtime/TS/Postgres → rest	57	[id: cq-regex-unicode-separators-escape-only] → 
+rf-after-merging-read-files-from-the-merged	Review & Feedback	rest	Review & Feedback → rest	61	[id: rf-after-merging-read-files-from-the-merged] 
+rf-never-skip-qa-review-before-merging	Review & Feedback	rest	Review & Feedback → rest	56	[id: rf-never-skip-qa-review-before-merging] → r
+rf-before-spawning-review-agents-push-the	Review & Feedback	rest	Review & Feedback → rest	59	[id: rf-before-spawning-review-agents-push-the] �
+rf-before-shipping-verify-1-review-comments	Review & Feedback	rest	Review & Feedback → rest	61	[id: rf-before-shipping-verify-1-review-comments] 
+rf-when-a-reviewer-or-user-says-to-keep-a	Review & Feedback	rest	Review & Feedback → rest	59	[id: rf-when-a-reviewer-or-user-says-to-keep-a] �
+rf-review-finding-default-fix-inline	Review & Feedback	rest	Review & Feedback → rest	54	[id: rf-review-finding-default-fix-inline] → res
+pdr-when-a-user-message-contains-a-clear	Passive Domain Routing	core	pdr → core	58	[id: pdr-when-a-user-message-contains-a-clear] →
+pdr-do-not-route-on-trivial-messages-yes	Passive Domain Routing	core	pdr → core	58	[id: pdr-do-not-route-on-trivial-messages-yes] →
+cm-challenge-reasoning-instead-of	Communication	core	cm → core	51	[id: cm-challenge-reasoning-instead-of] → core
+cm-delegate-verbose-exploration-3-file	Communication	core	cm → core	56	[id: cm-delegate-verbose-exploration-3-file] → c
+cm-when-proposing-to-clear-context-or	Communication	core	cm → core	55	[id: cm-when-proposing-to-clear-context-or] → co

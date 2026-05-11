@@ -168,14 +168,19 @@ setup_repo "$T8_WT" docs >/dev/null 2>&1 || true
 # Force-set origin/main inside worktree
 (cd "$T8_WT" && git branch -f origin/main HEAD 2>/dev/null && git update-ref refs/remotes/origin/main HEAD 2>/dev/null) || true
 # Invoke from $T8_WT but envelope cwd matches → hook must NOT crash and must classify.
-out8=$(printf '%s' "$(jq -nc --arg cwd "$T8_WT" '{cwd: $cwd, session_id: "bare"}')" | "$HOOK" 2>&1) || {
-  echo "FAIL: bare-repo path resolution (hook crashed: $out8)"
+out8_crashed=0
+out8=$(printf '%s' "$(jq -nc --arg cwd "$T8_WT" '{cwd: $cwd, session_id: "bare"}')" | "$HOOK" 2>&1) || out8_crashed=1
+if (( out8_crashed == 1 )); then
+  echo "FAIL: bare-repo path resolution (hook crashed: $(printf '%s' "$out8" | head -c 120))"
   FAIL=$((FAIL+1))
-  out8=""
-}
-if [[ -n "$out8" ]] && printf '%s' "$out8" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1; then
+elif [[ -n "$out8" ]] && printf '%s' "$out8" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1; then
   echo "PASS: bare-repo path resolution (hook returns JSON with class set)"
   PASS=$((PASS+1))
+else
+  # Eliminate the silent-skip path: explicit FAIL when stdout is empty or
+  # not parseable as the expected JSON envelope.
+  echo "FAIL: bare-repo path resolution (no JSON envelope; out8=$(printf '%s' "$out8" | head -c 120))"
+  FAIL=$((FAIL+1))
 fi
 
 # ------------- Test 9: manifest 3-field schema -----------------
@@ -228,6 +233,63 @@ else
   echo "FAIL: stamp+hint line exceeded 200 bytes (max=$max_line)"
   FAIL=$((FAIL+1))
 fi
+
+# ------------- Test 12: session_id path traversal sanitized -----------
+
+TOTAL=$((TOTAL+1))
+T12=$(mktemp -d); setup_repo "$T12" docs
+# Crafted session_id attempting `../../tmp/PWNED.json` escape.
+payload12=$(jq -nc --arg cwd "$T12" --arg sid "../../../tmp/PWNED_RULES_LOADER" '{cwd: $cwd, session_id: $sid}')
+out12=$(printf '%s' "$payload12" | "$HOOK" 2>/dev/null)
+manifest12=$(printf '%s' "$out12" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
+if [[ -f "/tmp/PWNED_RULES_LOADER.json" ]]; then
+  echo "FAIL: session_id path traversal — /tmp/PWNED_RULES_LOADER.json was created"
+  rm -f /tmp/PWNED_RULES_LOADER.json
+  FAIL=$((FAIL+1))
+elif [[ -n "$manifest12" && "$manifest12" == "$T12/.claude/.session-manifests/"* ]]; then
+  echo "PASS: session_id sanitized (manifest stayed inside $T12)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: session_id path traversal — manifest unexpectedly at $manifest12"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 13: cwd outside a git worktree → core-only fallback
+
+TOTAL=$((TOTAL+1))
+T13_NONREPO=$(mktemp -d)
+cp "$T13_NONREPO/../"*/AGENTS.core.md "$T13_NONREPO/AGENTS.core.md" 2>/dev/null || true
+# Use an arbitrary non-repo directory. The hook must refuse to operate
+# (no git worktree at cwd → emit core-only fallback, do NOT create
+# .claude/.session-manifests/ inside the bogus dir).
+payload13=$(jq -nc --arg cwd "$T13_NONREPO" '{cwd: $cwd, session_id: "test-non-repo"}')
+out13=$(printf '%s' "$payload13" | "$HOOK" 2>/dev/null)
+ctx13=$(printf '%s' "$out13" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if printf '%s' "$ctx13" | grep -q 'FALLBACK'; then
+  echo "PASS: cwd outside git worktree → fallback emitted"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: cwd outside git worktree — expected FALLBACK marker, got: $(printf '%s' "$ctx13" | head -c 120)"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 14: symlinked sidecar is rejected (no body read) --
+
+TOTAL=$((TOTAL+1))
+T14=$(mktemp -d); setup_repo "$T14" docs
+echo "EXFIL_TARGET=symlink-pointed-at-this-file" > /tmp/loader-symlink-target-$$
+rm -f "$T14/AGENTS.docs.md"
+ln -s "/tmp/loader-symlink-target-$$" "$T14/AGENTS.docs.md"
+out14=$(invoke_hook "$T14")
+ctx14=$(printf '%s' "$out14" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if printf '%s' "$ctx14" | grep -q 'EXFIL_TARGET'; then
+  echo "FAIL: symlinked sidecar — content from /tmp leaked into context"
+  FAIL=$((FAIL+1))
+else
+  echo "PASS: symlinked sidecar rejected (no exfil content in additionalContext)"
+  PASS=$((PASS+1))
+fi
+rm -f /tmp/loader-symlink-target-$$
 
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"

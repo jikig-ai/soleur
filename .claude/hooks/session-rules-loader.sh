@@ -19,7 +19,27 @@
 # root, `git rev-parse --show-toplevel` returns empty. Prefer envelope `cwd`,
 # fall back to `--git-common-dir`, last-resort `pwd`. Precedent:
 # `.claude/hooks/worktree-write-guard.sh:25`.
-set -euo pipefail
+set -uo pipefail
+# NOTE: `set -e` is deliberately OFF. A non-zero exit from this hook produces
+# no `additionalContext` envelope — Claude Code would then boot with the bare
+# 4.3 kB pointer index and ZERO rule bodies, including the 5 compliance-tier
+# rules. That is the `single-user incident` failure mode user-impact-reviewer
+# flagged on PR #3496. Errors are handled inline (`|| true` on tolerant paths,
+# explicit fallback emission at the end on hard failures).
+trap 'emit_core_only_fallback "hook trap fired before emit"; exit 0' ERR
+
+# emit_core_only_fallback: invoked from ERR trap or any failure branch that
+# cannot continue safely. Reads AGENTS.core.md from `${REPO_ROOT:-$PWD}` and
+# emits a minimal additionalContext so the agent never boots bodyless.
+emit_core_only_fallback() {
+  local reason="${1:-unknown}"
+  local root="${REPO_ROOT:-$PWD}"
+  local fb=""
+  if [[ -r "$root/AGENTS.core.md" ]]; then
+    fb="$(<"$root/AGENTS.core.md")"
+  fi
+  printf '%s' "{\"hookSpecificOutput\":{\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): loaded AGENTS.core.md only"$'\n'"$fb")}}"
+}
 
 INPUT=$(cat 2>/dev/null || true)
 CWD=""
@@ -29,22 +49,33 @@ if command -v jq >/dev/null 2>&1 && [[ -n "$INPUT" ]]; then
   SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 fi
 
-# Resolve repo root (worktree path) with three-tier fallback.
+# Resolve repo root with three-tier fallback. Critical: must point at a real
+# git worktree, otherwise the operator (or a malicious envelope) could redirect
+# manifest writes to arbitrary writable locations. See review on PR #3496.
+REPO_ROOT=""
 if [[ -n "$CWD" && -d "$CWD" ]]; then
   REPO_ROOT="$CWD"
-else
-  REPO_ROOT=""
-  if command -v git >/dev/null 2>&1; then
-    COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "")
-    if [[ -n "$COMMON_DIR" ]]; then
-      # `git-common-dir` for a worktree returns `<bare>/.git`; strip the
-      # trailing `/.git` and we're at the bare root. For a worktree-aware
-      # invocation we still need a working tree — pwd is the safer floor.
-      REPO_ROOT="$(pwd)"
-    fi
-  fi
-  REPO_ROOT="${REPO_ROOT:-$(pwd)}"
+elif command -v git >/dev/null 2>&1; then
+  # `git-common-dir` resolves to `<bare>/.git` or `<bare>/.git/worktrees/<name>`.
+  # `--show-toplevel` is the working-tree we want; only use common-dir as a
+  # last-resort floor.
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
 fi
+REPO_ROOT="${REPO_ROOT:-$(pwd)}"
+
+# Refuse to operate outside a git worktree. Otherwise a crafted envelope
+# `{"cwd":"/tmp/x"}` lets the hook plant `.claude/.session-manifests/` and
+# overwrite arbitrary `*.json` paths via `session_id`. Fallback to AGENTS.core.md
+# from REPO_ROOT so the agent still receives the compliance-tier rules.
+if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  emit_core_only_fallback "cwd $REPO_ROOT not inside a git worktree"
+  exit 0
+fi
+
+# Sanitize SESSION_ID for use as a filename. Anything outside [A-Za-z0-9._-]
+# becomes `_`; `..` segments are folded. Prevents `{"session_id":"../../foo"}`
+# from writing manifests outside .claude/.session-manifests/.
+SESSION_ID="${SESSION_ID//[^A-Za-z0-9._-]/_}"
 
 # Compute change set (committed-on-branch ∪ working-tree) with submodule noise stripped.
 CHANGES=$(
@@ -95,6 +126,13 @@ for class in $CLASSES; do
     rest)      sidecar="$REPO_ROOT/AGENTS.rest.md" ;;
     *)         continue ;;
   esac
+  if [[ -L "$sidecar" ]]; then
+    # Symlinks are a prompt-injection vector (an attacker who controls a
+    # symlink in the repo could redirect AGENTS.<class>.md to /etc/passwd or
+    # a crafted payload). Reject and fall through to fail-safe.
+    FAIL_SAFE_TRIGGERED=1
+    break
+  fi
   if [[ -f "$sidecar" ]]; then
     CONTEXT+=$'\n\n---\n\n'
     CONTEXT+="$(<"$sidecar")"
@@ -107,6 +145,7 @@ done
 if (( FAIL_SAFE_TRIGGERED == 1 )); then
   CONTEXT=""
   for sc in "$REPO_ROOT"/AGENTS.core.md "$REPO_ROOT"/AGENTS.docs.md "$REPO_ROOT"/AGENTS.rest.md; do
+    if [[ -L "$sc" ]]; then continue; fi
     if [[ -f "$sc" ]]; then
       CONTEXT+=$'\n\n---\n\n'
       CONTEXT+="$(<"$sc")"
@@ -118,18 +157,33 @@ else
   FAIL_SAFE_NOTE=""
 fi
 
-# Stamp + hint — both ≤ 200 bytes per line (asserted in Phase 4.5 test).
+# Stamp + hint — both ≤ 200 bytes per line (asserted in test 11).
 RULE_COUNT=$(printf '%s' "$CONTEXT" | grep -cE '^- .*\[id: ' || true)
-TOTAL_RULES=$(grep -hcE '^- .*\[id: ' "$REPO_ROOT"/AGENTS*.md 2>/dev/null | paste -sd+ - | bc 2>/dev/null || echo 0)
+# Single-pipeline awk avoids the multi-line `paste -sd+ | bc` failure mode
+# where `grep -hc` emits one count per file (e.g., `"0\n5\n0\n4"`) and `bc`
+# either crashes or returns a multi-line value that violates the stamp-byte
+# contract.
+TOTAL_RULES=$(grep -hE '^- .*\[id: ' "$REPO_ROOT"/AGENTS*.md 2>/dev/null | wc -l | tr -d ' ')
 CLASSES_DISPLAY="${CLASSES// /+}"
 STAMP="[rules-loader] loaded: ${CLASSES_DISPLAY} (${RULE_COUNT} of ${TOTAL_RULES} rules)${FAIL_SAFE_NOTE}"
-HINT="[rules-loader] scope shift? LOADER_FAIL_CLOSED=1 bash .claude/hooks/session-rules-loader.sh < <(echo '{}')"
+# The hint embeds the *current* REPO_ROOT so the agent can re-run the loader
+# against the same worktree without relying on `$PWD` (which depends on the
+# Bash tool's resetting CWD between calls). Bare `echo '{}'` would have empty
+# cwd → re-classification against the wrong tree.
+HINT="[rules-loader] scope shift? LOADER_FAIL_CLOSED=1 bash .claude/hooks/session-rules-loader.sh < <(printf '{\"cwd\":\"%s\"}' \"$REPO_ROOT\")"
 
-# Slim manifest (3 fields). Key by session_id; fallback to timestamp.
+# Slim manifest (3 fields). Key by sanitized session_id; fallback to timestamp.
+# SESSION_ID has already been stripped of any non-alphanum (see top of file);
+# if it ends up empty after sanitization (e.g., the envelope sent `../`), the
+# `:-$TS` fallback ensures we still write into MANIFEST_DIR, never outside.
 MANIFEST_DIR="$REPO_ROOT/.claude/.session-manifests"
-mkdir -p "$MANIFEST_DIR"
+mkdir -p "$MANIFEST_DIR" 2>/dev/null || {
+  emit_core_only_fallback "cannot create $MANIFEST_DIR (read-only fs?)"
+  exit 0
+}
 TS=$(date -u +%Y-%m-%dT%H-%M-%SZ)
 KEY="${SESSION_ID:-$TS}"
+[[ -z "$KEY" || "$KEY" == "." || "$KEY" == ".." ]] && KEY="$TS"
 MANIFEST="$MANIFEST_DIR/${KEY}.json"
 RULE_IDS_JSON=$(printf '%s' "$CONTEXT" \
   | grep -oE '\[id: [a-z0-9-]+\]' \

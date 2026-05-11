@@ -147,7 +147,7 @@ def lint(path: Path, retired_ids: set[str]) -> int:
 # anchored at end-of-line. Rule bodies that quote `→` in prose do not match
 # because the body continues past the arrow with further prose.
 POINTER_LINE_RE = re.compile(
-    r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s+→\s+(core|docs|rest)\s*$"
+    r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s+→\s+(core|docs-only|rest)\s*$"
 )
 
 

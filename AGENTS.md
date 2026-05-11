@@ -57,15 +57,15 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 
 - [id: cq-write-failing-tests-before] → rest
 - [id: cq-before-pushing-package-json-changes] → rest
-- [id: cq-rule-ids-are-immutable] → docs
-- [id: cq-agents-md-why-single-line] → docs
-- [id: cq-agents-md-tier-gate] → docs
+- [id: cq-rule-ids-are-immutable] → docs-only
+- [id: cq-agents-md-why-single-line] → docs-only
+- [id: cq-agents-md-tier-gate] → docs-only
 - [id: cq-nextjs-route-files-http-only-exports] → rest
 - [id: cq-silent-fallback-must-mirror-to-sentry] → rest
 - [id: cq-ref-removal-sweep-cleanup-closures] → rest
 - [id: cq-union-widening-grep-three-patterns] → rest
 - [id: cq-pg-security-definer-search-path-pin-pg-temp] → core
-- [id: cq-eleventy-critical-css-screenshot-gate] → docs
+- [id: cq-eleventy-critical-css-screenshot-gate] → docs-only
 - [id: cq-test-fixtures-synthesized-only] → rest
 - [id: cq-regex-unicode-separators-escape-only] → rest
 

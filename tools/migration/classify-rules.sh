@@ -109,14 +109,22 @@ fi
 # Classify a list of changed file paths against the same heuristics used by the loader hook.
 # Same regexes as Phase 4 session-rules-loader.sh — single source of truth lives in this script
 # (the loader inlines its own copy for tree-shaking; the two are tested for parity in Phase 6.5).
+# Single source of truth — mirrored verbatim in
+# `.claude/hooks/session-rules-loader.sh` and asserted by
+# `tests/scripts/test_classifier_regex_parity.sh`. Update both files in
+# lockstep or the parity test fails.
+DOCS_RE='\.(md|markdown|txt|njk|html)$|^\.github/.*\.md$'
+CODE_RE='\.(ts|tsx|js|jsx|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|rb)$'
+INFRA_RE='\.tf$|^apps/[^/]+/infra/|\.github/workflows/|/?Dockerfile|/migrations/.*\.sql$'
+
 classify_files() {
   local files="$1"
   local has_docs=0 has_code=0 has_infra=0
   while IFS= read -r path; do
     [[ -z "$path" ]] && continue
-    [[ "$path" =~ \.(md|markdown|txt|njk|html)$ ]] || [[ "$path" =~ ^\.github/.*\.md$ ]] && has_docs=1
-    [[ "$path" =~ \.(ts|tsx|js|jsx|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|rb)$ ]] && has_code=1
-    [[ "$path" =~ \.tf$ ]] || [[ "$path" =~ ^apps/[^/]+/infra/ ]] || [[ "$path" =~ \.github/workflows/ ]] || [[ "$path" =~ /?Dockerfile ]] || [[ "$path" =~ /migrations/.*\.sql$ ]] && has_infra=1
+    if [[ "$path" =~ $DOCS_RE  ]]; then has_docs=1;  fi
+    if [[ "$path" =~ $CODE_RE  ]]; then has_code=1;  fi
+    if [[ "$path" =~ $INFRA_RE ]]; then has_infra=1; fi
   done <<< "$files"
   local sum=$(( has_docs + has_code + has_infra ))
   if (( sum == 0 )); then echo "mixed"; return; fi
