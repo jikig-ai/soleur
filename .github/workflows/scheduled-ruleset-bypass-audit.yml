@@ -29,7 +29,9 @@ name: "Scheduled: Ruleset Bypass Audit"
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    # Off-peak vs other 0 6 * * * jobs (codeql-to-issues, scheduled-bug-fixer)
+    # — shift to 13 6 to avoid GHA thundering-herd queue delay.
+    - cron: '13 6 * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -102,7 +104,9 @@ jobs:
           # before scanning. A real leak via plain echo still matches.
           # Token-shape alternations cover gho_, ghp_, ghs_, ghu_ (36-char
           # body) and github_pat_ prefix used by fine-grained PATs.
-          if grep -v '^::' "$LOG" | grep -E 'gh[opsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}' >/dev/null; then
+          # Token shapes: gho_ (OAuth), ghp_ (PAT), ghs_ (server), ghu_ (user),
+          # ghr_ (refresh), plus github_pat_v1_ (fine-grained PAT).
+          if grep -v '^::' "$LOG" | grep -E 'gh[oprsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}' >/dev/null; then
             echo "::error::Leak tripwire fired."
             BODY_FILE=$(mktemp)
             NOW=$(date -u '+%Y-%m-%d %H:%M UTC')

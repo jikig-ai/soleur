@@ -46,3 +46,15 @@
 /apps/web-platform/scripts/service-role-allowlist-gate.sh @jeanderuelle
 /apps/web-platform/supabase/migrations/                 @jeanderuelle
 /.github/workflows/ci.yml                               @jeanderuelle
+
+# R15 bypass-audit trust loop (#3544 / R15 follow-up D1). Brand-survival
+# threshold: single-user incident (#2719). An attacker-merged PR that
+# mutates the canonical to match a malicious planned live-state would
+# auto-green the daily audit and silently disable the trust loop that
+# protects `skill-security-scan PR gate`. Without these pins, R15's
+# bypass authority is one admin-PR away from being self-greened.
+/scripts/ci-required-ruleset-canonical-bypass-actors.json @jeanderuelle
+/scripts/audit-ruleset-bypass.sh                        @jeanderuelle
+/scripts/update-ci-required-ruleset.sh                  @jeanderuelle
+/scripts/create-ci-required-ruleset.sh                  @jeanderuelle
+/.github/workflows/scheduled-ruleset-bypass-audit.yml   @jeanderuelle

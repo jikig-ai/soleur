@@ -37,6 +37,11 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CANONICAL_FILE="${AUDIT_CANONICAL_FILE_OVERRIDE:-${SCRIPT_DIR}/ci-required-ruleset-canonical-bypass-actors.json}"
 RULESET_URL="https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388"
 
+# Shared jq projection (must match scripts/update-ci-required-ruleset.sh
+# post-PUT verification). See scripts/lib/canonicalize-bypass-actors.sh.
+# shellcheck source=scripts/lib/canonicalize-bypass-actors.sh
+. "${SCRIPT_DIR}/lib/canonicalize-bypass-actors.sh"
+
 # Emit-once state. Mirrors drift-guard's record_failure (yaml :91-110).
 failure_mode=""
 failure_detail=""
@@ -68,33 +73,53 @@ record_failure() {
 # cq-regex-unicode-separators-escape-only, the U+2028/U+2029 byte
 # sequences are spelled out as explicit hex (\xe2\x80\xa8, \xe2\x80\xa9).
 strip_log_injection() {
-  # tr does not interpret \xHH hex escapes — `\x7f` would be read as
-  # literal 'x', '7', 'f'. Use the octal form \177 for DEL (0x7F).
-  # The drift-guard precedent (.github/workflows/scheduled-github-app-
-  # drift-guard.yml:283) has the same latent bug; tracked separately.
+  # POSIX/GNU/uutils tr supports \NNN octal but NOT \xHH hex escapes —
+  # empirically: `echo "f" | tr -d '\x7f'` strips 'f', not DEL. Use \177
+  # for portability. The drift-guard precedent at
+  # .github/workflows/scheduled-github-app-drift-guard.yml:283 uses
+  # `\x7f` and is tracked in issue #3561 for a separate fix.
   tr -d '\r\n\f\v\177' | sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'
 }
 
 # Fetch live ruleset. Tests bypass via AUDIT_FETCH_OVERRIDE.
 LIVE_FILE=""
 HTTP_CODE=""
+LIVE_FILE_OWNED=0  # set when we mktemp'd it ourselves (governs trap cleanup)
+
+# fetch_live() — one curl shot. Returns HTTP code via $HTTP_CODE.
+# Token goes via stdin (--header @-) to keep it out of process-substitution
+# /proc/<pid>/cmdline visibility. Pinned --max-time 15 (Sharp Edge).
+fetch_live() {
+  HTTP_CODE=$(printf 'Authorization: Bearer %s' "$GH_TOKEN" \
+    | curl -s --max-time 15 -w '%{http_code}' \
+      -o "$LIVE_FILE" \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      --header @- \
+      "$RULESET_URL") || HTTP_CODE="network_error"
+}
+
 if [[ -n "${AUDIT_FETCH_OVERRIDE:-}" ]]; then
   LIVE_FILE="$AUDIT_FETCH_OVERRIDE"
   HTTP_CODE="${AUDIT_HTTP_CODE_OVERRIDE:-200}"
 else
   LIVE_FILE=$(mktemp -p "${RUNNER_TEMP:-/tmp}" live-ruleset.XXXXXX)
+  LIVE_FILE_OWNED=1
+  trap '[[ "$LIVE_FILE_OWNED" == "1" && -n "$LIVE_FILE" ]] && rm -f "$LIVE_FILE"' EXIT
   if [[ -z "${GH_TOKEN:-}" ]]; then
     record_failure "missing_gh_token" \
       "GH_TOKEN env var is not set" \
       "ci/guard-broken"
   else
-    # curl over `gh api` so we can pin --max-time 15.
-    HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
-      -o "$LIVE_FILE" \
-      -H 'Accept: application/vnd.github+json' \
-      -H 'X-GitHub-Api-Version: 2022-11-28' \
-      --header @<(printf 'Authorization: Bearer %s' "$GH_TOKEN") \
-      "$RULESET_URL") || HTTP_CODE="network_error"
+    fetch_live
+    # Single retry on transient errors (network or 5xx). Avoids paging
+    # operators every time GitHub has a 15s blip. Daily cadence × no
+    # retry = alarm fatigue. One retry × 5s pause = acceptable noise floor.
+    if [[ "$HTTP_CODE" == "network_error" ]] \
+       || [[ "$HTTP_CODE" =~ ^5[0-9][0-9]$ ]]; then
+      sleep 5
+      fetch_live
+    fi
   fi
 fi
 
@@ -153,6 +178,13 @@ if [[ -z "$failure_mode" ]]; then
     record_failure "canonical_file_invalid_json" \
       "canonical file is not a top-level JSON array" \
       "ci/guard-broken"
+  elif ! jq -e 'all(.[]; (.actor_id == null or (.actor_id | type == "number")) and (.actor_type | type == "string") and (.bypass_mode | type == "string"))' "$CANONICAL_FILE" >/dev/null 2>&1; then
+    # Schema guard: hand-edit could quote "5" as a string, or omit a
+    # required field. Surfaces drift as guard-broken (operator error)
+    # vs auth-broken (real ruleset edit) — different triage path.
+    record_failure "canonical_file_invalid_schema" \
+      "canonical entries must have string actor_type, null|number actor_id, string bypass_mode" \
+      "ci/guard-broken"
   else
     CANONICAL_BYPASS=$(jq -c '.' "$CANONICAL_FILE")
   fi
@@ -164,13 +196,18 @@ fi
 # null-vs-missing-key trap from the GitHub API contract doesn't surface as
 # a false-positive drift signal. See plan Risk #2 + Research Reconciliation.
 if [[ -z "$failure_mode" ]]; then
-  live_canonical=$(printf '%s' "$LIVE_BYPASS" \
-    | jq -c 'map({actor_type, actor_id, bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)')
-  canonical_canonical=$(printf '%s' "$CANONICAL_BYPASS" \
-    | jq -c 'map({actor_type, actor_id, bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)')
+  live_canonical=$(printf '%s' "$LIVE_BYPASS" | jq -c "$CANONICALIZE_BYPASS_ACTORS_JQ")
+  canonical_canonical=$(printf '%s' "$CANONICAL_BYPASS" | jq -c "$CANONICALIZE_BYPASS_ACTORS_JQ")
   if [[ "$live_canonical" != "$canonical_canonical" ]]; then
+    # Cap detail length to keep markdown/email rendering bounded; the
+    # full diff is recoverable from the run log. Sanitation downstream
+    # also strips control chars from this string.
+    drift_detail="live=${live_canonical}; canonical=${canonical_canonical}"
+    if [[ ${#drift_detail} -gt 500 ]]; then
+      drift_detail="${drift_detail:0:500}…(truncated; see run log)"
+    fi
     record_failure "bypass_actors_drift" \
-      "live=${live_canonical}; canonical=${canonical_canonical}" \
+      "$drift_detail" \
       "ci/auth-broken"
   fi
 fi

@@ -263,6 +263,133 @@ t_live_missing_bypass_actors() {
   rm -rf "$tmp"
 }
 
+# T14: missing GH_TOKEN -> missing_gh_token / guard-broken
+t_missing_gh_token() {
+  local tmp; tmp=$(mktemp -d)
+  printf '%s' "$CANONICAL" > "$tmp/canonical.json"
+  local rc=0
+  env -u GH_TOKEN -u AUDIT_FETCH_OVERRIDE \
+    AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canonical.json" \
+    GITHUB_OUTPUT="$tmp/output" \
+    RULESET_URL="http://127.0.0.1:1/no-network" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "missing_gh_token" && "$label" == "ci/guard-broken" ]]; then
+    _report "T14 missing GH_TOKEN -> guard-broken" ok
+  else
+    _report "T14 missing GH_TOKEN -> guard-broken" fail "mode='$mode' label='$label' rc=$rc"
+  fi
+  rm -rf "$tmp"
+}
+
+# T15: live HTTP network_error (simulated) -> guard-broken
+t_live_network_error() {
+  local tmp; tmp=$(mktemp -d)
+  printf '%s' "$CANONICAL" > "$tmp/live.json"
+  printf '%s' "$CANONICAL" > "$tmp/canonical.json"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$tmp/live.json" \
+  AUDIT_HTTP_CODE_OVERRIDE="network_error" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canonical.json" \
+  GITHUB_OUTPUT="$tmp/output" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "github_api_network" && "$label" == "ci/guard-broken" ]]; then
+    _report "T15 network_error -> guard-broken" ok
+  else
+    _report "T15 network_error -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T16: canonical with string actor_id (schema violation) -> guard-broken
+t_canonical_invalid_schema() {
+  local bad_canonical='[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},{"actor_id":"5","actor_type":"RepositoryRole","bypass_mode":"pull_request"}]'
+  local r; r=$(_run "$CANONICAL" "$bad_canonical")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "canonical_file_invalid_schema" && "$label" == "ci/guard-broken" ]]; then
+    _report "T16 canonical string actor_id -> invalid_schema" ok
+  else
+    _report "T16 canonical string actor_id -> invalid_schema" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T17: empty canonical [] vs non-empty live -> drift
+t_empty_canonical() {
+  local r; r=$(_run "$CANONICAL" '[]')
+  local tmp="${r%:*}"
+  local mode; mode=$(_mode "$tmp")
+  if [[ "$mode" == "bypass_actors_drift" ]]; then
+    _report "T17 empty canonical vs non-empty live -> drift" ok
+  else
+    _report "T17 empty canonical vs non-empty live -> drift" fail "mode='$mode'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T18: cross-script parity — audit and update use byte-identical jq filter
+t_cross_script_parity() {
+  local repo_root="$REPO_ROOT"
+  local audit_file="$repo_root/scripts/audit-ruleset-bypass.sh"
+  local update_file="$repo_root/scripts/update-ci-required-ruleset.sh"
+  local lib_file="$repo_root/scripts/lib/canonicalize-bypass-actors.sh"
+  if [[ ! -f "$lib_file" ]]; then
+    _report "T18 shared canonicalize lib exists" fail "missing $lib_file"
+    return
+  fi
+  # Both scripts must source the lib (not redefine the jq expression)
+  if ! grep -qF 'canonicalize-bypass-actors.sh' "$audit_file"; then
+    _report "T18 audit script sources lib" fail
+    return
+  fi
+  if ! grep -qF 'canonicalize-bypass-actors.sh' "$update_file"; then
+    _report "T18 update script sources lib" fail
+    return
+  fi
+  # Neither script should redeclare the projection inline. Ignore comment
+  # lines (^# or whitespace-then-#) — only flag executable jq expressions.
+  if grep -nE 'map\(\{actor_type, actor_id, bypass_mode\}\)' "$audit_file" "$update_file" 2>/dev/null \
+      | grep -vE ':[[:space:]]*#' >/dev/null; then
+    _report "T18 no inline projection redeclaration" fail "found executable map({...}) in audit or update script"
+    return
+  fi
+  _report "T18 cross-script jq parity via shared lib" ok
+}
+
+# T19: $GITHUB_OUTPUT shape — exactly 3 lines, key=value, no leading whitespace
+t_github_output_shape() {
+  local r; r=$(_run "$CANONICAL" "$CANONICAL")
+  local tmp="${r%:*}"
+  local line_count; line_count=$(wc -l < "$tmp/output")
+  local malformed; malformed=$(grep -cvE '^[a-z_]+=' "$tmp/output" || true)
+  if [[ "$line_count" == "3" && "$malformed" == "0" ]]; then
+    _report "T19 GITHUB_OUTPUT shape: 3 key=value lines on identity" ok
+  else
+    _report "T19 GITHUB_OUTPUT shape: 3 key=value lines on identity" fail "lines=$line_count malformed=$malformed"
+  fi
+  rm -rf "$tmp"
+}
+
+# T20: drift detail capped at ~500 chars (markdown/email length guard)
+t_drift_detail_capped() {
+  # Build a live entry whose stringified form would explode beyond 500 chars
+  # if not capped — use a long unicode-safe actor_type that's still valid JSON.
+  local long_name
+  long_name=$(printf 'A%.0s' $(seq 1 600))
+  local live; live=$(printf '[{"actor_id":1,"actor_type":"%s","bypass_mode":"always"}]' "$long_name")
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local detail; detail=$(_detail "$tmp")
+  if (( ${#detail} <= 600 )); then  # 500 cap + truncation marker
+    _report "T20 drift detail capped (length=${#detail})" ok
+  else
+    _report "T20 drift detail capped (length=${#detail})" fail "detail too long"
+  fi
+  rm -rf "$tmp"
+}
+
 # T13: real canonical JSON matches the expected shape (regression guard)
 t_real_canonical_shape() {
   if [[ ! -f "$CANONICAL_REAL" ]]; then
@@ -299,6 +426,13 @@ t_log_injection_strip
 t_unknown_actor_type
 t_number_vs_string_actor_id
 t_live_missing_bypass_actors
+t_missing_gh_token
+t_live_network_error
+t_canonical_invalid_schema
+t_empty_canonical
+t_cross_script_parity
+t_github_output_shape
+t_drift_detail_capped
 t_real_canonical_shape
 
 echo "=== $pass passed, $fail failed ==="
