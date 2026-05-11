@@ -81,7 +81,7 @@ None. No new vendors, no billing-tier change, no infra additions. The Hetzner VP
 
 ## Principle Alignment
 
-- **AP-013 (Process-local state for runner sessions).** Declared by this ADR. First AP whose canonical source is an ADR rather than `AGENTS.md` / `constitution.md`. See the Decision section for the deviation rationale.
+- **AP-013 (Process-local state for runner sessions).** Declared by this ADR. See Decision §2 for the canonical-source rationale.
 - **AP-006 (All knowledge in committed repo files).** Aligned. The invariant moves from scattered module-level comments (e.g., `permission-callback-bash-batch.ts:14-20`) into a single committed ADR.
 - **AP-011 (ADRs capture "why we chose X over Y").** Aligned. The choice — single-replica + documented migration vs. Redis-now — is exactly the artifact shape ADRs are for.
 - **AP-001 (Terraform-only infrastructure).** N/A — this is application-layer and deploy-script governance, not Terraform-managed infrastructure.

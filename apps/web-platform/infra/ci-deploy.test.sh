@@ -1575,18 +1575,39 @@ assert_adr027_pre_run_assertion() {
 
   local output actual_exit
   output=$(
+    export MOCK_DOCKER_MODE="trace"
     export MOCK_DOCKER_PS_PROD_RUNNING=1
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -ne 0 ]] && printf '%s\n' "$output" | grep -qF "ADR-027"; then
+  # Three invariants must hold:
+  # 1. Exit non-zero (assertion fired).
+  # 2. Output names ADR-027 (operator can grep the doc).
+  # 3. The production docker-run trace must NOT appear after the assertion —
+  #    without this, a regression that fired the assertion but still ran the
+  #    `docker run -d --name soleur-web-platform` would pass invariants 1&2
+  #    while corrupting the deploy. The canary trace uses a -canary suffix and
+  #    is permitted; the bare prod-name run is what we forbid.
+  local prod_run_lines
+  prod_run_lines=$(
+    printf '%s\n' "$output" \
+      | awk '/ADR-027/{found=1} found' \
+      | grep -E 'DOCKER_TRACE:run' \
+      | grep -vE -- '-canary' \
+      || true
+  )
+
+  if [[ "$actual_exit" -ne 0 ]] \
+    && printf '%s\n' "$output" | grep -qF "ADR-027" \
+    && [[ -z "$prod_run_lines" ]]; then
     PASS=$((PASS + 1))
-    echo "  PASS: leftover soleur-web-platform aborts deploy with ADR-027 message"
+    echo "  PASS: leftover soleur-web-platform aborts deploy with ADR-027 message (no prod docker-run after abort)"
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: leftover soleur-web-platform aborts deploy with ADR-027 message"
-    echo "        expected: non-zero exit AND output contains 'ADR-027'"
+    echo "        expected: non-zero exit AND output contains 'ADR-027' AND no prod 'docker run' after abort"
     echo "        actual exit: $actual_exit"
+    echo "        prod_run_after_abort: $prod_run_lines"
     echo "        output: $output"
   fi
 }

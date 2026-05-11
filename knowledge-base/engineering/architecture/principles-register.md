@@ -31,3 +31,4 @@ Queryable index of architectural principles. Each principle links to its canonic
 ## Notes
 
 - **AP-011 — ADR shape rubric.** AP-011's application to new ADRs follows the terse/rich shape rubric in [`plugins/soleur/skills/architecture/references/adr-template.md`](../../../plugins/soleur/skills/architecture/references/adr-template.md) under `## Choosing the shape`. Default is terse (3 sections); use rich (8 sections) when any rubric trigger applies.
+- **Canonical-source rubric.** New AP rows pick `Canonical Source` by precedence: `AGENTS.md (Hard Rules)` for mechanical / always-loaded rules; `constitution.md (Architecture/…)` for foundational design tenets; `ADR-NNN` for architectural decisions with a documented migration path. AP-013 → ADR-027 is the first instance of the third tier — extend rather than collapse the precedent when future ADR-sourced APs land.
