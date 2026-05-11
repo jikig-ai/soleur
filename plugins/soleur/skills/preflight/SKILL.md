@@ -26,7 +26,9 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ### Step 0.1: Compute changed-file path-set (diff classifier)
 
-Run `git diff --name-only origin/main...HEAD` ONCE up-front and cache the result so each path-gated check re-uses the same path-set instead of re-running diff. Skill convention forbids `$()` command substitution — write the diff to a tmpfile so checks can `grep -E` the predicate they care about. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/<filename>` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
+Run `git diff --name-only origin/main...HEAD` ONCE up-front and cache the result so each path-gated check re-uses the same path-set instead of re-running diff. Skill convention forbids `$()` command substitution — write the diff to a tmpfile so checks can `grep -E` the predicate they care about.
+
+Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/<filename>` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
 
 ```bash
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
