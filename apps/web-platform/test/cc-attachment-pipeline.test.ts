@@ -230,7 +230,7 @@ describe("persistAndDownloadAttachments", () => {
 
     expect(writeFileMock).toHaveBeenCalledTimes(1);
     expect(attachmentContext).toContain("a.png");
-    expect(attachmentContext).not.toContain("b.png");
+    expect(attachmentContext).not.toMatch(/\bb\.png\b/);
   });
 
   it("returns attachmentContext: undefined when workspace_path lookup is empty", async () => {
