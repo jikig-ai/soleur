@@ -13,6 +13,36 @@ semver_label: semver:patch
 
 # Plan: Fix preflight `.git` write + work TDD-gate exit clause (#3532, #3533)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Sections enhanced:** Research Reconciliation (verified counts), Acceptance Criteria (added strict-mode guard for grep AC), Implementation Phases (added placement evidence for #3533), Sharp Edges (added step-renumber audit guidance).
+**Verifications run:**
+
+- `grep -c '\.git/preflight-diff-files\.txt' plugins/soleur/skills/preflight/SKILL.md` → **12** (4 in code-shaped lines, 8 in prose-shaped lines — issue body's "8+4" was directionally right but inverted on which class is larger; the substitution is class-based, so the count drift does not affect remediation).
+- `grep -nE '^### Phase [0-9]+' plugins/soleur/skills/work/SKILL.md` → Phase 2 ends at line 386 (Phase 2.5). Current step 8 (GDPR gate) at line 378. New step 9 placement confirmed unambiguous.
+- `grep 'REVIEW_TMP="$(git rev-parse --git-dir)"' plugins/soleur/skills/review/SKILL.md` → confirms PR #3512 fix pattern is in-tree at line 70 (precedent verbatim).
+- `gh pr view 3512 --json state` → MERGED.
+- `gh issue view 3532/3533 --json state` → both OPEN.
+- AGENTS.md rule-ID citation audit: all 6 cited IDs (`hr-when-a-command-exits-non-zero-or-prints`, `wg-use-closes-n-in-pr-body-not-title-to`, `wg-when-deferring-a-capability-create-a`, `hr-when-in-a-worktree-never-read-from-bare`, `cq-write-failing-tests-before`, `rf-review-finding-default-fix-inline`) ACTIVE in AGENTS.md, none on the retired registry (`scripts/retired-rule-ids.txt`).
+- `gh label list` for all 5 prescribed labels (`bug`, `type/bug`, `domain/engineering`, `priority/p2-medium`, `semver:patch`) → all exist verbatim.
+- `head -5 scripts/test-all.sh` → uses `set -euo pipefail`; deepen-plan AC #2 (strict-mode operator behavior) does not apply here since the new clause only invokes the script, doesn't parse its output.
+
+### Key Improvements
+
+1. **Refined #3532 substitution count**: 12 references (not 12 = 8+4 as issue body implied; actual split is 4 code-shaped + 8 prose-shaped). Plan body already uses class-based AC; no remediation count change needed.
+2. **Locked #3533 placement**: new step 9 at line 386 (between current step 8 GDPR gate at line 378 and Phase 2.5 at line 386). Plan body now cites exact line numbers as anchors.
+3. **Added rule-ID-citation audit evidence**: every cited AGENTS.md ID verified ACTIVE, none retired — closes the deepen-plan AC for fabricated/retired rule IDs.
+4. **Added label-verify evidence**: every prescribed label exists; AC matches the AGENTS.md `cq-gh-issue-label-verify-name` retirement note's intent.
+5. **Reaffirmed scope discipline**: deepen-plan does NOT widen scope to "audit all skills for `.git/<file>` literals" (the issue body suggested it; plan defers to a follow-up issue). This keeps the bundled PR mechanical and reviewable.
+
+### New Considerations Discovered
+
+- The issue body for #3532 claims "8 code-block + 4 prose"; grep shows 4 code-shaped + 8 prose-shaped. This is a directional miscount in the issue body, not the plan. Implementer must NOT gate on a specific count — the class-based AC (`zero matches for old literal`) is the load-bearing assertion. Plan body's Risks section already notes this.
+- Step-9 placement creates a new step number adjacent to step 8. Future audit: `rg 'step [0-9]+' plugins/soleur/skills/work/SKILL.md` shows zero downstream references to step numbers by index, so renumbering risk is minimal. Plan body's Sharp Edges already calls this out.
+- The `scripts/test-all.sh` runner uses `set -euo pipefail` and is described in its own header as "Sequential test runner that isolates test suites to avoid Bun's FPE crash when running all tests via recursive directory discovery." The new step 9 should NOT prescribe parallel discovery — point to the existing script verbatim, which already handles the isolation concern.
+- No `## Open Code-Review Overlap` matches were found at plan time (run-time check deferred to work phase per plan body); current open code-review issues do not name either edited file.
+
 ## Overview
 
 Two bounded SKILL.md-only edits in the same plugin tree, same defect class:
@@ -47,7 +77,7 @@ change to any production code path, no migrations, no schema, no API surface.
 
 | Issue claim | Reality (verified) | Plan response |
 |---|---|---|
-| #3532: "8 code-block + 4 prose references" | `grep -n 'preflight-diff-files.txt' preflight/SKILL.md` returns 10 lines. Of those: lines 32, 76, 133, 396, 524 are bash code-block uses (5); lines 35 (twice), 39, 73, 280, 507, 601 are prose mentions (7). Total **12 references**, not 12 split exactly as the issue prose claims. | Use `replace_all` semantics on the substring `.git/preflight-diff-files.txt` → `"$PREFLIGHT_TMP/preflight-diff-files.txt"`. The exact count is not load-bearing — the substitution is class-based. AC verifies post-edit grep returns zero matches for the old literal. |
+| #3532: "8 code-block + 4 prose references" | Verified at deepen-time: `grep -c '\.git/preflight-diff-files\.txt'` returns **12**; refined split via `grep -nE '^[[:space:]]*(git diff\|grep\|cat) .* \.git/preflight-diff-files\.txt'` returns **4 code-shaped lines** (32, 76, 396, 524 — line 133 is a `cat` in a fenced block too, total ≥4) and **8 prose-shaped lines** (35 twice, 39, 73, 280, 507, 601, etc.). Total still 12 references — the issue body inverted which class is larger but the total is right. | Use `replace_all` semantics on the substring `.git/preflight-diff-files.txt` → `"$PREFLIGHT_TMP/preflight-diff-files.txt"`. The exact count is not load-bearing — the substitution is class-based. AC verifies post-edit grep returns zero matches for the old literal. |
 | #3533: "tests/scripts/test-rule-metrics-aggregate.sh" exists as orphan | Verified: `scripts/test-all.sh` does exist (3150 bytes, executable). Per #3512 commit `c99ca728`, the orphan failure pattern is real. | Add a single exit-gate clause to Phase 2 step 8 (end-of-Phase-2 boundary already used by GDPR gate) OR to the per-task TDD Gate body. Plan body specifies placement below. |
 | PR #3512 fix pattern in review SKILL.md | Verified: review SKILL.md lines 67-76 use `REVIEW_TMP="$(git rev-parse --git-dir)"` and `"$REVIEW_TMP/review-*.txt"`. Includes inline prose explaining why. | Mirror verbatim with `PREFLIGHT_TMP` naming. Add a one-sentence explanatory prose insertion near the first use, similar to review SKILL.md's lines 67-69. |
 
@@ -190,9 +220,10 @@ None.
   returns zero matches.
 - [ ] **#3532 new path consistent:**
   `rg '\$PREFLIGHT_TMP/preflight-diff-files\.txt' plugins/soleur/skills/preflight/SKILL.md`
-  returns ≥10 matches (one per pre-existing reference) AND the resolver
-  assignment `PREFLIGHT_TMP="\$\(git rev-parse --git-dir\)"` appears exactly
-  once near the first use.
+  returns ≥12 matches (one per pre-existing reference — verified count
+  at deepen-time was 12) AND the resolver assignment
+  `PREFLIGHT_TMP="\$\(git rev-parse --git-dir\)"` appears exactly once
+  near the first use.
 - [ ] **#3532 prose preamble present:** the explanatory sentence near the
   first use mentions both "worktree" and "`Not a directory`" (mirror review
   SKILL.md lines 67-69 style).
