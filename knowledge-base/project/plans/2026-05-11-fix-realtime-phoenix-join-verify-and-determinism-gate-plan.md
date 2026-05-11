@@ -6,7 +6,30 @@ related_issues: [3049, 3060, 3052, 3021]
 related_prs: [3058]
 classification: verification + ci-infra
 requires_cpo_signoff: false
+deepened_on: 2026-05-11
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Phase 4.6 gate:** PASS — `## User-Brand Impact` section present, threshold `none` with concrete one-sentence reason, no sensitive-path edits in `Files to Edit` / `Files to Create`.
+**Phase 4.5 trigger:** FIRED on keywords `timeout` + `handshake` in Overview/Hypotheses — Network-Outage Deep-Dive subsection added below. This is NOT an SSH/firewall regression (verified — Phoenix-level race, not L3). Deep-dive concludes "L3-L7 all green; the root cause is L7 client-side factory branch, fixed by polyfill."
+
+### Key Improvements
+
+1. **Doppler secret-scope correction.** Original plan referenced `DOPPLER_TOKEN_DEV_CI` (does not exist). Live `gh secret list` shows: `DOPPLER_TOKEN`, `DOPPLER_TOKEN_PRD`, `DOPPLER_TOKEN_SCHEDULED` exist. `DOPPLER_TOKEN_SCHEDULED` is scoped to `prd_scheduled` config — using it for dev would violate `hr-dev-prd-distinct-supabase-projects`. **Workflow MUST require a NEW `DOPPLER_TOKEN_DEV_SCHEDULED` service token** scoped to a new `dev_scheduled` Doppler config (or a personal `dev` token rotated quarterly — operator's choice). Plan AC4 + Phase 2.1 updated.
+2. **Rule-ID fabrication sweep.** Two cited rule IDs are not active in AGENTS.md and are not in `retired-rule-ids.txt`: `cq-action-sha-pin` and `cq-when-a-plan-prescribes-dig`. Both removed from the plan body. The underlying intents (pin actions to SHAs; pin curl/dig timeouts) are still load-bearing — replaced with inline rationale + a reference to the canonical sibling-workflow precedent (`scheduled-oauth-probe.yml`).
+3. **GitHub-secret-only fallback rejected.** The OAuth probe pattern (use `NEXT_PUBLIC_SUPABASE_*` GitHub secrets directly) is NOT viable here — those secrets are `prd` values (live `doppler get -c prd` confirms `https://api.soleur.ai`); the dev project is `mlwiodleouzwniehynfz.supabase.co`. Workflow MUST fetch dev creds from Doppler at runtime. Documented in updated Phase 2.
+4. **Probe script contract pinned.** Re-read `realtime-probe.mjs` exit-code semantics — added explicit `probe_contract_drift` failure mode for the rare case where exit code 0 disagrees with stdout token (script bug, not race). Belt-and-suspenders documented in Phase 2.5.
+5. **Doppler install pattern locked.** Confirmed `DopplerHQ/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3` is the canonical install (used by `scheduled-community-monitor.yml`, `scheduled-disk-io-*.yml`). Workflow MUST use that exact pinned SHA, not curl-from-cli.doppler.com.
+6. **Action SHA verified.** `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5` resolves to `v4.3.1` via `gh api repos/actions/checkout/git/refs/tags/v4.3.1`. Use that SHA + `setup-node@<pinned-SHA>` (resolve at workflow-author time).
+
+### New Considerations Discovered
+
+- **No `dev_scheduled` Doppler config exists today** (`doppler configs -p soleur` enumerated: `dev`, `dev_personal`, `ci`, `prd`, `prd_scheduled`, `prd_terraform`). The plan adds a Phase 0 prerequisite: operator creates `dev_scheduled` config (or grants the existing scheduled service-account access to the `dev` config) BEFORE running the workflow.
+- **`ci` config is synthetic** — `doppler get NEXT_PUBLIC_SUPABASE_URL -c ci` returns `https://test.supabase.co`. Not usable for a real probe.
+- **`ci/realtime-broken` label does not exist yet.** The workflow's idempotent `gh label create ... 2>/dev/null || true` step is the right place to create it (mirrors the OAuth probe pattern). No pre-merge `gh label create` action required.
+- **Plan label-verification check** for AGENTS.md/learning citations: re-running the grep on the deepened plan confirms all surviving rule IDs are active and all cited learning files exist on disk.
 
 # Close #3049 — verify cross-tenant Realtime isolation; land #3060 CI determinism gate
 
@@ -36,6 +59,29 @@ The pipeline brief lists four hypotheses to investigate. All four were investiga
 | `apikey` in JOIN payload | The JOIN payload already includes the auth token; broker does not require apikey in payload. Ruled out — JOIN is never sent in shell. | No-op. |
 
 The Phase 2 nightly probe is the structural defense against any of these four assumptions becoming wrong in the future — it does not require diagnosing which one drifted.
+
+## Network-Outage Deep-Dive (Phase 4.5 — triggered by `timeout` / `handshake` keywords)
+
+Per `hr-ssh-diagnosis-verify-firewall` and the deepen-plan Phase 4.5 layer-by-layer checklist, every plan addressing a connectivity symptom MUST verify L3→L7 in order before proposing service-layer fixes. This plan is a deepen of an already-resolved symptom (the polyfill landed 2026-04-29), so the verification is retrospective — documenting which layer the bug actually lived in, so future "browser works, shell doesn't" Realtime debug sessions skip the layers that were proven green:
+
+| Layer | Status (2026-04-29 + re-verified 2026-05-11) | Evidence |
+|---|---|---|
+| L3 firewall / egress IP allow-list | GREEN | No firewall in this path — Supabase Realtime is publicly addressable; CF is in front. `curl https://api.soleur.ai/realtime/v1/websocket` returned HTTP 426 (upgrade required) from operator workstation in #3052 debug → connectivity is open. |
+| L3 DNS / routing | GREEN | `dig +short api.soleur.ai` resolved to CF anycast; `dig +short mlwiodleouzwniehynfz.supabase.co` resolved direct. Both project hosts reachable. |
+| L4 TLS / WS upgrade | GREEN | `curl -H 'Upgrade: websocket' wss://api.soleur.ai/realtime/v1/websocket` → `HTTP 101 Switching Protocols` with `sb-project-ref: ifsccnjhymdmidffkzhl` header. CF routes WS upgrade to Supabase Realtime cleanly. |
+| L7 (Phoenix application) — broker side | GREEN | Browser path (`/dashboard/chat/*`) reaches SUBSCRIBED in <2s against the same brokers. The broker accepts JOINs that arrive. |
+| L7 (Phoenix application) — client side | **ROOT CAUSE — fixed by polyfill** | `@supabase/realtime-js@2.99.2`'s `websocket-factory.ts` returns `{ type: 'unsupported' }` on Node <22 with no `globalThis.WebSocket`. The Phoenix `phx_join` is NEVER SENT — `connect()` throws before WS init; `subscribe()` reconnect-loops until `joinTimeout` fires at 10s, producing TIMED_OUT → CLOSED. |
+
+**Conclusion:** This is NOT an L3 firewall / admin-IP-drift incident (no operator-managed firewall in this path). It is purely a Node-side library-factory bug. The `hr-ssh-diagnosis-verify-firewall` rule does not directly apply (no SSH, no operator-managed firewall), but the gate-fire is still useful — it forces this table into the record so the next Realtime debug session skips re-verifying L3-L4.
+
+**What changes if a future failure DOES involve L3:** Cloudflare or Supabase could change WS routing semantics (HTTP/2 vs HTTP/1.1 upgrade quirks, regional pop variance). Mode B (`--no-polyfill`) still reproduces the L7 client-side race in <10s; if Mode B passes locally but the nightly fails, the failure is L3/L4 (CF or Supabase region) — and the failure mode reports `network_error` distinctly from `realtime_join_timeout`. This separation is the structural defense.
+
+**Telemetry:** Phase 4.5 trigger fired on `timeout` + `handshake` keywords. Emitted (deepen-plan Phase 4.5 incident shim):
+
+```text
+hr-ssh-diagnosis-verify-firewall applied — deepen-plan Phase 4.5 fire on plan
+2026-05-11-fix-realtime-phoenix-join-verify-and-determinism-gate-plan.md
+```
 
 ## Current State (Verified 2026-05-11)
 
@@ -80,13 +126,18 @@ The contract holds today on dev. The integration test is opt-in via `SUPABASE_DE
 - [ ] AC2 — `apps/web-platform/scripts/realtime-probe.mjs` reaches SUBSCRIBED in <2s in default-polyfill mode against dev. (Already verified 2026-05-11; will re-run after any further code edits.)
 - [ ] AC3 — `apps/web-platform/scripts/realtime-probe.mjs --no-polyfill` reproduces `TIMED_OUT` at ~10s against dev (Mode B baseline still holds — this is the regression-detector signal the nightly will assert).
 - [ ] AC4 — `.github/workflows/scheduled-realtime-probe.yml` exists and:
-   - Targets dev only (`-c dev`); MUST NOT reference prd (per `hr-dev-prd-distinct-supabase-projects`).
+   - Uses `DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}` (new secret — see Phase 2.0).
+   - Targets `-c dev_scheduled` (new config — see Phase 2.0); MUST NOT reference `prd` / `prd_scheduled` / `prd_terraform`.
+   - Greppable assertion (CI lint or PR-comment self-check): `grep -E '\-c (prd|prod|prd_scheduled|prd_terraform)' .github/workflows/scheduled-realtime-probe.yml` returns zero (per `hr-dev-prd-distinct-supabase-projects`).
+   - Asserts `doppler configs get dev_scheduled -p soleur --json | jq -r .environment` returns `dev` before running the probe (defends against token-rotation drift to a prd config).
    - Runs the probe 5× consecutively; any single `TIMED_OUT` or non-`SUBSCRIBED` exit fails the step.
    - Per-curl/per-node timeout pinned (probe script's internal joinTimeout is already 10s; workflow's `timeout-minutes` is 10).
    - File/comment-or-close tracking-issue pattern mirrors `scheduled-oauth-probe.yml` (open issue with label `ci/realtime-broken`; comment on existing; auto-close stale on green).
    - `notify-ops-email` step on failure (matches OAuth probe pattern).
    - Permissions: `contents: read, issues: write` only.
    - All untrusted values (probe output, supabase-js version string) flow through env vars + `strip_log_injection` before any `::error::`/`::warning::` echo.
+   - Pinned `DopplerHQ/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3` (matches `scheduled-community-monitor.yml` line 81 — canonical install path; NOT the curl-from-cli.doppler.com pattern, which has reset semantics for the install script and is more fragile).
+   - Pinned `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1` — verified live via `gh api repos/actions/checkout/git/refs/tags/v4.3.1`.
 - [ ] AC5 — `yamllint` + `actionlint` clean on the new workflow file (per `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`: do NOT use `bash -n <file.yml>`).
 - [ ] AC6 — `ci/realtime-broken` label exists (pre-create idempotently in the workflow `gh label create ... 2>/dev/null || true`, mirroring `ci/auth-broken` pattern).
 - [ ] AC7 — Learning file `2026-04-29-supabase-phx-join-handshake-shell-environment.md` updated with a "Nightly CI determinism gate (issue #3060)" breadcrumb in §Related so future readers find the workflow from the learning, not just vice versa.
@@ -223,7 +274,23 @@ jobs:
         # mirror scheduled-oauth-probe.yml lines 500-522
 ```
 
-**Phase 2.1 — `DOPPLER_TOKEN_DEV_CI` secret check.** Before writing the workflow, verify the secret exists: `gh secret list | grep DOPPLER_TOKEN_DEV_CI`. If absent, document in the workflow's preamble that operator must `gh secret set DOPPLER_TOKEN_DEV_CI` after merge, and add a sibling step that gracefully fails with `secret_unset` mode (matching the `OAUTH_PROBE_GITHUB_CLIENT_ID` pattern at lines 285-290 of `scheduled-oauth-probe.yml`). Per `hr-never-paste-secrets-via-bang-prefix`: the operator sets the secret in a separate terminal, never via `!` prefix.
+**Phase 2.0 (NEW — prerequisite) — Doppler `dev_scheduled` config + service token.** Live discovery confirmed:
+
+- `gh secret list` exposes `DOPPLER_TOKEN`, `DOPPLER_TOKEN_PRD`, `DOPPLER_TOKEN_SCHEDULED`. None is dev-scoped.
+- `DOPPLER_TOKEN_SCHEDULED` downloads from `--config prd_scheduled` (see `scheduled-community-monitor.yml` line 80) — using it for dev would silently re-enter prd, violating `hr-dev-prd-distinct-supabase-projects`.
+- `doppler configs -p soleur` lists: `dev`, `dev_personal`, `ci`, `prd`, `prd_scheduled`, `prd_terraform`. No `dev_scheduled`.
+- `doppler get NEXT_PUBLIC_SUPABASE_URL -c ci` returns `https://test.supabase.co` (synthetic; not real dev).
+
+Operator pre-merge action items (documented in PR body, NOT auto-executed — secret mutations require `hr-never-paste-secrets-via-bang-prefix` separate-terminal protocol):
+
+1. `doppler configs create dev_scheduled --environment dev --project soleur` (or grant the existing scheduled SA access to `dev`).
+2. `doppler configs tokens create dev_scheduled_ci --config dev_scheduled --project soleur --plain` — capture token in separate terminal.
+3. In a separate terminal: `gh secret set DOPPLER_TOKEN_DEV_SCHEDULED --body "$DOPPLER_TOKEN"` (operator never pastes the token into the Claude Code transcript).
+4. Verify presence (length-only): `gh secret list | grep DOPPLER_TOKEN_DEV_SCHEDULED`.
+
+Workflow gracefully degrades when the secret is unset: emits `secret_unset` failure mode (matches `OAUTH_PROBE_GITHUB_CLIENT_ID` graceful-fail at `scheduled-oauth-probe.yml` lines 285-290) so the first nightly run after merge files a precise "operator must run gh secret set" issue rather than an opaque curl/auth failure.
+
+**Phase 2.1 — Secret reference in workflow.** Workflow `env:` block uses `DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}`. The `doppler secrets get` invocation reads `--config dev_scheduled` (matching the token's scope). Belt-and-suspenders: the workflow runs `doppler configs get $DOPPLER_CONFIG -p soleur --json | jq -r .environment` once at startup and asserts the response is `dev` — if a future operator rotates the token to a prd-scoped one by mistake, the assertion catches it before the probe runs.
 
 **Phase 2.2 — Dependency install strategy.** The probe script imports `@supabase/supabase-js` and `ws`. Choose ONE of:
 
@@ -233,7 +300,7 @@ jobs:
 
 **Decision: option (a).** The whole point of this gate is to catch a supabase-js bump that re-triggers the race; we MUST install the same locked version the app does. Document in the workflow preamble: "This workflow installs the pinned `package-lock.json` versions deliberately — when `@supabase/supabase-js` is bumped via Dependabot/Renovate, the next nightly run is the canary."
 
-**Phase 2.3 — Action SHA pinning.** All `uses:` actions pinned to commit SHA + version comment, matching `scheduled-oauth-probe.yml` style (`actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`). Per `cq-action-sha-pin` if it exists; default repo convention either way.
+**Phase 2.3 — Action SHA pinning.** All `uses:` actions pinned to commit SHA + version comment, matching `scheduled-oauth-probe.yml` style (`actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`). Verified live via `gh api repos/actions/checkout/git/refs/tags/v4.3.1`. This is the repo-wide default convention applied to every scheduled workflow — no specific AGENTS.md rule cites it (the `cq-action-sha-pin` reference in the original draft was fabricated and has been removed).
 
 **Phase 2.4 — strip_log_injection helper.** Copy the helper verbatim from `scheduled-oauth-probe.yml` lines 80-90. **DO NOT** extract to a shared composite action in this PR — the helper has been duplicated across `scheduled-oauth-probe.yml` for a reason (workflow self-containment, sparse-checkout simplicity). A follow-up issue can track DRY if it ever becomes painful.
 
@@ -401,16 +468,24 @@ Per `cq-agents-md-tier-gate` Step 1: this is a domain-scoped change (CI workflow
 - Per `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`: verify the new workflow YAML via `yamllint`/`actionlint`, NOT `bash -n` on the YAML file. `bash -n .github/workflows/scheduled-realtime-probe.yml` will fail on the YAML header (`name:`, `description:`-style) and mask whether the embedded shell is sound. For embedded-shell verification, extract the `run:` block and pipe to `bash -c`.
 - Per `wg-use-closes-n-in-pr-body-not-title-to` and #3185 precedent: PR title MUST NOT contain `close|fix|resolve` followed by `#N`. AC10 forces a non-auto-close title.
 - Per `hr-dev-prd-distinct-supabase-projects`: workflow MUST target `-c dev` only. Greppable assertion: `grep -E '\-c (prd|prod)' .github/workflows/scheduled-realtime-probe.yml` returns zero.
-- Per `cq-when-a-plan-prescribes-dig` (if applicable): no `dig` in this workflow. `curl --max-time` is pinned inside the probe script's underlying ws library; no new curl call added.
+- Network-call timeouts: no `dig` in this workflow. `curl --max-time` is pinned inside the probe script's underlying ws library; no new curl call added. (The `cq-when-a-plan-prescribes-dig` rule cited in the original draft was fabricated and has been removed; the underlying intent — pin all network-call timeouts — is satisfied by the probe script's existing 10s joinTimeout and the workflow's `timeout-minutes: 10` ceiling.)
 - Per `wg-after-merging-a-pr-that-adds-or-modifies`: PM1 is the operator's responsibility immediately post-merge. Do NOT close #3049/#3060 until PM1 returns `conclusion: success`.
 
 ## Research Insights
 
 - `scheduled-oauth-probe.yml` is the canonical template — file/comment dedup + email notify + auto-close-stale pattern is battle-tested.
 - `realtime-probe.mjs` exit codes: `0` (SUBSCRIBED), `3` (TIMED_OUT), other non-zero (script error). Verified by reading the script.
-- Doppler `dev` config has `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (used by the probe). Verified locally — `doppler run -p soleur -c dev -- node scripts/realtime-probe.mjs` works without `SUPABASE_SERVICE_ROLE_KEY` (probe doesn't need it).
+- Doppler `dev` config has `NEXT_PUBLIC_SUPABASE_URL` (= `https://mlwiodleouzwniehynfz.supabase.co`) and `NEXT_PUBLIC_SUPABASE_ANON_KEY` — verified live via `doppler get -c dev`. `doppler get -c prd` returns `https://api.soleur.ai` (distinct project per `hr-dev-prd-distinct-supabase-projects`). `doppler get -c ci` returns `https://test.supabase.co` (synthetic; not real dev).
+- GitHub-stored `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` secrets are **prd** values (used by `scheduled-oauth-probe.yml` against `api.soleur.ai`). Using them in the realtime probe would violate `hr-dev-prd-distinct-supabase-projects`. The workflow MUST fetch dev creds via Doppler.
+- Doppler service-account scoping: `DOPPLER_TOKEN_SCHEDULED` downloads from `--config prd_scheduled` (line 80 of `scheduled-community-monitor.yml`). A NEW `DOPPLER_TOKEN_DEV_SCHEDULED` secret is required for this workflow (operator post-merge action — see Phase 2.0).
+- Canonical Doppler install action: `DopplerHQ/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3` (matches `scheduled-community-monitor.yml`, `scheduled-disk-io-*.yml`). Do NOT use the `curl -Ls https://cli.doppler.com/install.sh` pattern — fragile, unpinned.
+- `actions/checkout@v4.3.1` SHA = `34e114876b0b11c390a56381ad16ebd13914f8d5` — verified live via `gh api repos/actions/checkout/git/refs/tags/v4.3.1`.
 - `actionlint` is installable via `brew install actionlint` or `go install github.com/rhysd/actionlint/cmd/actionlint@latest`. CI doesn't yet enforce it on every workflow, but plan AC5 requires local clean run.
+- `bash -n <file.yml>` does NOT validate workflows — fails on the YAML header. Per `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`, extract `run:` blocks and pipe to `bash -c '<snippet>'` for embedded-shell validation.
 - The learning file at `2026-04-29-supabase-phx-join-handshake-shell-environment.md` already has a §"When you should re-run this probe" section — the nightly automates two of its three triggers (supabase-js bump, Node upgrade), but the third (debugging "browser works, shell doesn't" symptoms) is still operator-initiated. No change needed there.
+- Rule-ID fabrication audit on the original plan draft: 10 cited IDs, 8 active, 2 fabricated (`cq-action-sha-pin`, `cq-when-a-plan-prescribes-dig`) — both removed and replaced with inline rationale + canonical sibling-workflow precedent. Re-running the audit on the deepened plan: all surviving rule IDs active in AGENTS.md, zero retired-ID citations.
+- Probe Mode B (`--no-polyfill`) successfully reproduced `TIMED_OUT` against dev on the operator workstation 2026-05-11. This is the regression-detector signal — when Mode B starts returning SUBSCRIBED without the polyfill, the upstream race is resolved and the polyfill can be retired (track as a separate follow-up).
+- `ci/realtime-broken` label does not exist today; the workflow creates it idempotently via `gh label create ... 2>/dev/null || true` (matches `ci/auth-broken` pattern in `scheduled-oauth-probe.yml` lines 436-438). No pre-merge `gh label create` step required.
 
 ## Related
 

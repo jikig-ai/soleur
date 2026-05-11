@@ -18,15 +18,21 @@ Closes #3049 + #3060 (auto-close fires only after PM1/PM2 verification — see p
 
 ## Phase 2 — Land nightly determinism gate (#3060)
 
-### 2.1 Pre-flight checks
+### 2.0 Prerequisites (operator pre-merge — separate-terminal protocol)
 
-- [ ] 2.1.1 Verify `DOPPLER_TOKEN_DEV_CI` GitHub secret exists.
-  - `gh secret list | grep DOPPLER_TOKEN_DEV_CI`
-  - If absent: document operator-set step in workflow preamble + add `secret_unset` failure mode.
-- [ ] 2.1.2 Identify Doppler CLI install pattern from a sibling workflow.
-  - `grep -l "doppler" .github/workflows/*.yml | head -3`
-  - Copy the exact install line.
-- [ ] 2.1.3 Confirm `actionlint` available locally; install via `go install github.com/rhysd/actionlint/cmd/actionlint@latest` if missing.
+- [ ] 2.0.1 Operator creates `dev_scheduled` Doppler config: `doppler configs create dev_scheduled --environment dev --project soleur`.
+- [ ] 2.0.2 Operator creates service token: `doppler configs tokens create dev_scheduled_ci --config dev_scheduled --project soleur --plain` (capture in separate terminal).
+- [ ] 2.0.3 Operator runs `gh secret set DOPPLER_TOKEN_DEV_SCHEDULED` in a separate terminal (NEVER via `!` prefix per `hr-never-paste-secrets-via-bang-prefix`).
+- [ ] 2.0.4 Verify presence length-only: `gh secret list | grep DOPPLER_TOKEN_DEV_SCHEDULED`.
+- [ ] 2.0.5 Verify scope: `doppler configs get dev_scheduled -p soleur --json | jq -r .environment` returns `dev`.
+
+If 2.0.1-2.0.5 cannot be completed pre-merge, the workflow STILL merges — it gracefully degrades via `secret_unset` failure mode and files a precise tracking issue on first run telling the operator what to set.
+
+### 2.1 Pre-flight checks (in-repo)
+
+- [ ] 2.1.1 Identify Doppler CLI install pattern: `DopplerHQ/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3` (confirmed canonical via `scheduled-community-monitor.yml` line 81).
+- [ ] 2.1.2 Confirm `actionlint` available locally; install via `go install github.com/rhysd/actionlint/cmd/actionlint@latest` if missing.
+- [ ] 2.1.3 Resolve `actions/setup-node` pinned SHA via `gh api repos/actions/setup-node/git/refs/tags/v4.x.y` at workflow-author time.
 
 ### 2.2 Author workflow file
 
@@ -36,7 +42,10 @@ Closes #3049 + #3060 (auto-close fires only after PM1/PM2 verification — see p
 - [ ] 2.2.4 `timeout-minutes: 10`.
 - [ ] 2.2.5 Sparse checkout: `apps/web-platform/scripts/realtime-probe.mjs`, `apps/web-platform/package.json`, `apps/web-platform/package-lock.json`, `.github/actions`.
 - [ ] 2.2.6 Setup Node 21.7.3 with pinned `actions/setup-node` SHA.
-- [ ] 2.2.7 Install Doppler CLI via the pattern identified in 2.1.2.
+- [ ] 2.2.7 Install Doppler CLI via the pinned action from 2.1.1.
+- [ ] 2.2.7a Env: `DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}` (NOT `DOPPLER_TOKEN_SCHEDULED` — that's prd-scoped).
+- [ ] 2.2.7b Defensive scope assert: `doppler configs get dev_scheduled -p soleur --json | jq -r .environment` returns `dev`; else `record_failure "doppler_scope_drift" "..."`.
+- [ ] 2.2.7c Inject dev secrets: `doppler secrets download --project soleur --config dev_scheduled --no-file --format env-no-quotes | while IFS= read -r line; do ... done` (mirror `scheduled-community-monitor.yml` lines 86-95 — handles base64-padded `=` trailing).
 - [ ] 2.2.8 `npm ci` in `apps/web-platform/` (full lock-pinned install — see plan D2).
 - [ ] 2.2.9 Probe step: 5× consecutive runs; capture stdout; assert `SUBSCRIBED` token + exit 0; fail on any miss.
 - [ ] 2.2.10 strip_log_injection helper inline (verbatim from `scheduled-oauth-probe.yml`).
