@@ -27,27 +27,35 @@ Derived from `knowledge-base/project/plans/2026-05-11-fix-cc-hardening-safe-bash
 - [ ] 2.5 Run `bun test apps/web-platform/test/cc-dispatcher.test.ts apps/web-platform/test/observability-mirror-debounce.test.ts`.
 - [ ] 2.6 Commit `refactor(observability): extract mirrorWithDebounce (Closes #3369)`.
 
-## Phase 3 — `reapIdle` consults `awaitingUser` (Finding 3)
+## Phase 3 — `reapIdle` consults `awaitingUser` + Finding 2 runner integration
 
 - [ ] 3.1 Add `&& !state.awaitingUser` predicate in `reapIdle`.
 - [ ] 3.2 Add `log.debug` for paused-skip case.
-- [ ] 3.3 Route `notifyAwaitingUser` no-active-query branch through `mirrorWithDebounce`.
-- [ ] 3.4 Export `NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS` const.
-- [ ] 3.5 Add AC9 (reaper skip) + AC12 (mirror debounce) tests.
-- [ ] 3.6 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts`.
-- [ ] 3.7 Commit `fix(cc): idle-reaper skips paused conversations + notify-awaiting silent fallback debounced (#3040)`.
+- [ ] 3.3 Route `notifyAwaitingUser` no-active-query branch through `mirrorWithDebounce` (import from `./observability`; Phase 2 must have landed).
+- [ ] 3.4 Export `NOTIFY_AWAITING_NO_ACTIVE_QUERY_ERROR_CLASS` const at top of `soleur-go-runner.ts`.
+- [ ] 3.5 **REWRITE** existing test at `soleur-go-runner-awaiting-user.test.ts:407` to mock `mirrorWithDebounce` instead of `reportSilentFallback`.
+- [ ] 3.6 Add NEW AC11 (reaper-skip-paused) test.
+- [ ] 3.7 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts apps/web-platform/test/soleur-go-runner-lifecycle.test.ts`.
+- [ ] 3.8 Commit `fix(cc): idle-reaper skips paused conversations + notify-awaiting silent fallback debounced (#3040)`.
 
-## Phase 4 — Paused-interval subtraction (Finding 4)
+## Phase 4 — Paused-interval subtraction + drift sweep (Finding 4)
 
-- [ ] 4.1 Add `pausedAt: number | null` and `totalPausedMs: number` to `ActiveQuery` interface.
-- [ ] 4.2 Update `notifyAwaitingUser`: stamp `pausedAt` on true / accumulate `totalPausedMs` on false. Remove `firstToolUseAt = now()` re-stamp.
-- [ ] 4.3 Update `armRunaway` and `armTurnHardCap` fire-time: re-arm if `elapsedMs < threshold` after subtracting paused intervals.
-- [ ] 4.4 Update `recordAssistantBlock` (first-block-of-turn): reset `totalPausedMs = 0; pausedAt = null`.
-- [ ] 4.5 Update `closeQuery` + `dispatch()` initializer for the new fields.
-- [ ] 4.6 Add AC10 (90s window cumulative across flap) + AC11 (10-min ceiling cumulative across pause) tests.
-- [ ] 4.7 Add multi-turn test (paused state reset on new turn).
-- [ ] 4.8 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts apps/web-platform/test/soleur-go-runner-lifecycle.test.ts apps/web-platform/test/soleur-go-runner-tool-result-idle-reset.test.ts`.
-- [ ] 4.9 Commit `fix(cc): wall-clock subtracts paused intervals across rapid status flap (#3040)`.
+- [ ] 4.1 Add `pausedAt: number | null` and `totalPausedMs: number` to `ActiveQuery` interface with the JSDoc shown in plan §"Files to Edit".
+- [ ] 4.2 Update `notifyAwaitingUser`: stamp `pausedAt` on true / accumulate `totalPausedMs` on false. Remove `firstToolUseAt = now()` re-stamp at line 2518.
+- [ ] 4.3 Update `armRunaway` and `armTurnHardCap` fire-time callbacks: compute `elapsedMs = (now() - turnOriginAt) - totalPausedMs - (pausedAt ? now() - pausedAt : 0)`; re-arm via `setTimeout(<callback>, Math.max(1, threshold - elapsedMs))` if too early; log every re-arm at `log.debug`.
+- [ ] 4.4 Update `recordAssistantBlock` (inside `if (isFirstBlockOfTurn)`): reset `totalPausedMs = 0; pausedAt = null`.
+- [ ] 4.5 Update `closeQuery` (line 1524) + `dispatch()` initializer for the new fields.
+- [ ] 4.6 **Drift-sweep** the per-window→cumulative narrative across 6 sites:
+  - test docstring `soleur-go-runner-awaiting-user.test.ts:46`
+  - REWRITE test at `soleur-go-runner-awaiting-user.test.ts:291` ("AC9: only ACTIVE compute time counts")
+  - inline comment `soleur-go-runner-awaiting-user.test.ts:332`
+  - runner doc `soleur-go-runner.ts:825-836` (`notifyAwaitingUser` interface JSDoc)
+  - runner doc `soleur-go-runner.ts:1229-1236` (`awaitingUser` field)
+  - inline comment `soleur-go-runner.ts:2511-2516`
+- [ ] 4.7 Verify drift-sweep via `git grep -E "fresh firstToolUseAt|per-active-window|only ACTIVE compute" apps/web-platform/` returns zero hits.
+- [ ] 4.8 Add NEW AC12 (10-min absolute ceiling cumulative), NEW AC13 (multi-turn reset), NEW AC14 (mirror debounce 5-min TTL coalescing).
+- [ ] 4.9 Run `bun test apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts apps/web-platform/test/soleur-go-runner-lifecycle.test.ts apps/web-platform/test/soleur-go-runner-tool-result-idle-reset.test.ts`.
+- [ ] 4.10 Commit `fix(cc): wall-clock subtracts paused intervals across rapid status flap + drift sweep per-window→cumulative (#3040)`.
 
 ## Phase 5 — Full sweep + review
 
