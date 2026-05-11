@@ -76,7 +76,7 @@ The NOTICE records git blob SHAs (output of `git hash-object`). The lefthook gat
 
 ### TR2: NOTICE frontmatter parser
 
-The runtime staleness check (FR6) must read NOTICE frontmatter in <50ms (it runs on every gdpr-gate invocation). Use bash + `awk` or `sed` for the frontmatter parse — no Python/Node startup cost. Cache the parsed `last-verified` date for the lifetime of the invocation.
+The runtime staleness check (FR6) must read NOTICE frontmatter in <100ms p95 (it runs on every gdpr-gate invocation). Use bash + `awk` or `sed` for the frontmatter parse — no Python/Node startup cost. Cache the parsed `last-verified` date for the lifetime of the invocation. The budget was widened from <50ms after PR #3521 review added strict-ISO validation + UTC anchoring on `last-verified`; the original threshold was within process-spawn jitter of the date(1) call.
 
 ### TR3: Workflow security posture
 

@@ -10,23 +10,73 @@
 # conversion that would otherwise diverge from upstream blob SHAs on
 # Windows/CRLF setups.
 #
-# Invoked from lefthook.yml:
-#   vendor-pin-integrity:
-#     priority: 6
-#     glob:
-#       - "plugins/soleur/skills/gdpr-gate/references/fields.md"
-#       - ...
-#     run: bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
+# Modes:
+#   default            local pin check (per-file hash vs NOTICE local-blob-sha)
+#   --verify-upstream  call `gh api repos/$UPSTREAM/git/blobs/<sha>` for every
+#                      NOTICE upstream-blob-sha and assert HTTP 200. Closes
+#                      the NOTICE co-edit bypass (review #3521) — local
+#                      hash + NOTICE-SHA match alone is tautological if the
+#                      PR edits both. CI-time verification ensures each
+#                      pinned upstream blob is a real, fetchable upstream
+#                      object.
+#
+# Invoked from lefthook.yml (local mode) and
+# `.github/workflows/vendor-pin-verify.yml` (--verify-upstream mode).
 #
 # NOTICE_FILE env var overrides the parser's default NOTICE path so tests can
 # point at fixture frontmatter without mutating the live skill NOTICE.
 
 set -euo pipefail
 
+VERIFY_UPSTREAM=0
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --verify-upstream) VERIFY_UPSTREAM=1; shift ;;
+    --) shift; ARGS+=("$@"); break ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${ARGS[@]}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 PARSER="$SCRIPT_DIR/notice-frontmatter.sh"
 SKILL_PREFIX="plugins/soleur/skills/gdpr-gate"
+
+if (( VERIFY_UPSTREAM )); then
+  UPSTREAM=$(bash "$PARSER" field upstream 2>/dev/null || true)
+  if [[ -z "$UPSTREAM" ]]; then
+    echo "vendor-pin-integrity: NOTICE frontmatter missing 'upstream' field; cannot verify upstream blobs" >&2
+    exit 1
+  fi
+  # NOTICE upstream field is `github.com/<owner>/<repo>`; strip the host.
+  OWNER_REPO="${UPSTREAM#github.com/}"
+  if [[ -z "$OWNER_REPO" || "$OWNER_REPO" == "$UPSTREAM" ]]; then
+    echo "vendor-pin-integrity: NOTICE upstream field '$UPSTREAM' is not in github.com/<owner>/<repo> form" >&2
+    exit 1
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "vendor-pin-integrity: --verify-upstream requires gh CLI" >&2
+    exit 1
+  fi
+  fails=0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    upstream_path="${line%%:*}"
+    upstream_sha="${line##*:}"
+    if ! gh api "repos/$OWNER_REPO/git/blobs/$upstream_sha" --silent 2>/dev/null; then
+      echo "vendor-pin-integrity: upstream blob $upstream_sha (path $upstream_path) not fetchable from $OWNER_REPO — NOTICE may have been tampered with" >&2
+      fails=$((fails + 1))
+    fi
+  done < <(bash "$PARSER" upstream-files)
+  if (( fails > 0 )); then
+    echo "vendor-pin-integrity: $fails upstream blob(s) failed verification" >&2
+    exit 1
+  fi
+  echo "vendor-pin-integrity: all NOTICE upstream-blob-sha values verified against $OWNER_REPO"
+  exit 0
+fi
 
 # Build expected map (rel_path → blob-sha) from NOTICE.
 declare -A EXPECTED=()

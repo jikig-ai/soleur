@@ -120,19 +120,18 @@ pre-commit:
     # vendor-pin-integrity (FR5): verifies the staged contents of every
     # NOTICE-tracked lifted file match the blob SHAs pinned in NOTICE
     # frontmatter. Detects silent local edits to upstream-vendored content
-    # and silent additions of files outside the registry. Glob is path-array
-    # form to avoid gobwas `**` semantics (see learning
-    # 2026-03-21-lefthook-gobwas-glob-double-star.md). The list MUST stay in
-    # parity with NOTICE `lifted-files[].path` — the parity assertion in
-    # plugins/soleur/test/vendor-pin-integrity.test.sh fails on divergence.
+    # and silent additions of files outside the registry. The integrity
+    # script reads its registry from NOTICE at runtime, so the glob
+    # intentionally covers the whole `references/` subtree (plus NOTICE
+    # itself) — any new file added under `references/` triggers the script,
+    # which then rejects it via the "staged but not in NOTICE" branch.
+    # Narrow per-file globs would let a re-vendor land a 6th file without
+    # the integrity gate ever firing on it.
     vendor-pin-integrity:
       priority: 6
       glob:
-        - "plugins/soleur/skills/gdpr-gate/references/fields.md"
-        - "plugins/soleur/skills/gdpr-gate/references/leakage-vectors.md"
-        - "plugins/soleur/skills/gdpr-gate/references/layers/api-layer.md"
-        - "plugins/soleur/skills/gdpr-gate/references/layers/data-in-transit.md"
-        - "plugins/soleur/skills/gdpr-gate/references/layers/data-lifecycle.md"
+        - "plugins/soleur/skills/gdpr-gate/references/*.md"
+        - "plugins/soleur/skills/gdpr-gate/references/layers/*.md"
         - "plugins/soleur/skills/gdpr-gate/NOTICE"
       run: bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
     bun-test:

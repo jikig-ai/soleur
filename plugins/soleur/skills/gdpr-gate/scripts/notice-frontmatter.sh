@@ -69,7 +69,14 @@ cmd_days_stale() {
   local last_verified last_epoch today_epoch days
   last_verified=$(cmd_field last-verified 2>/dev/null) || { echo 999; return 0; }
   [[ -n "$last_verified" ]] || { echo 999; return 0; }
-  last_epoch=$(date -d "$last_verified" +%s 2>/dev/null) || { echo 999; return 0; }
+  # Strict ISO-8601 date guard. `date -d` otherwise accepts "now",
+  # "yesterday", etc., letting a malicious NOTICE PR set last-verified to
+  # any natural-language value and pin days-stale at 0 forever.
+  [[ "$last_verified" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo 999; return 0; }
+  # Anchor to UTC midnight so the comparison against `date -u +%s` is
+  # consistent across timezones (otherwise a UTC+12 host computes a day
+  # off the UTC-anchored today_epoch).
+  last_epoch=$(date -u -d "${last_verified}T00:00:00Z" +%s 2>/dev/null) || { echo 999; return 0; }
   today_epoch=$(date -u +%s)
   days=$(( (today_epoch - last_epoch) / 86400 ))
   # Future date → treat as stale immediately (per SpecFlow P1.5).
@@ -99,6 +106,11 @@ _emit_files() {
       n = split(line, tok, /[[:space:]]+/)
       # New entry sentinel: `- path: <value>` always opens a record. Flush
       # the previous record before starting the new one.
+      # Normalize `key : value` (YAML-legal space-before-colon) to `key:`.
+      # Without this, tok[1] is the bare key and tok[2] is `:`, silently
+      # dropping the entry from the registry view.
+      sub(/[[:space:]]+:[[:space:]]+/, ": ", line)
+      n = split(line, tok, /[[:space:]]+/)
       if (n >= 3 && tok[1] == "-" && tok[2] == "path:") {
         if (cur_path != "" && cur_sha != "") print cur_path ":" cur_sha
         cur_path = ""

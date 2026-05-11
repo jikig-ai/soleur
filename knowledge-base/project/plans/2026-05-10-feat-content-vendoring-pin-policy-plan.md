@@ -73,7 +73,7 @@ Carried forward from brainstorm `## User-Brand Impact` block.
 | `plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh` | Pure-bash NOTICE frontmatter parser; subcommands: `days-stale`, `field <name>`, `lifted-files`. Future date → "stale immediately" | TR2 |
 | `plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh` | Lefthook target — compares lifted-file blob SHAs against NOTICE | FR5, TR1 |
 | `plugins/soleur/skills/gdpr-gate/scripts/vendor-drift-classify.sh` | Severity classifier regex over upstream diff; exit codes 10/11/12/13/14/15/16 | FR3 |
-| `plugins/soleur/test/notice-frontmatter.test.sh` | Bash unit tests; covers happy / missing-frontmatter / malformed-YAML / future-date / p95 <50ms timing | TR2, TR7 |
+| `plugins/soleur/test/notice-frontmatter.test.sh` | Bash unit tests; covers happy / missing-frontmatter / malformed-YAML / future-date / p95 <100ms timing | TR2, TR7 |
 | `plugins/soleur/test/vendor-pin-integrity.test.sh` | Bash unit tests; covers SHA mismatch + lefthook-glob⊇NOTICE-paths parity | TR7, AC5b |
 | `plugins/soleur/test/vendor-drift-classify.test.sh` | Bash unit tests for severity classifier (all 7 exit codes) | TR7 |
 | `plugins/soleur/test/vendor-drift-workflow.test.sh` | Integration test (`SKIP_PR_CREATE=1` dry-run) against synthetic-diff fixtures | TR7 |
@@ -150,7 +150,7 @@ Body sentence added: "The frontmatter above is the canonical machine-readable fo
 - `bash notice-frontmatter.sh days-stale` → prints integer days since `last-verified` (today - last-verified). **Future-dated → prints `999`** (treat as stale immediately, SpecFlow P1.5). Malformed YAML / missing frontmatter → prints `999`. Returns exit 0 always.
 - `bash notice-frontmatter.sh lifted-files` → prints one `<path>:<blob-sha>` per line.
 
-`set -euo pipefail` permitted internally; subcommand wrappers catch failures. Target <50ms p95 (TR2). Test: `notice-frontmatter.test.sh` covers happy / missing-frontmatter / malformed-YAML / future-date / `time` × 100 invocations p95 <50ms.
+`set -euo pipefail` permitted internally; subcommand wrappers catch failures. Target <100ms p95 (TR2; widened from <50ms after PR #3521 added strict-ISO + UTC-anchor on `last-verified`). Test: `notice-frontmatter.test.sh` covers happy / missing-frontmatter / malformed-YAML / future-date / `time` × 100 invocations p95 <100ms.
 
 **1.2** `vendor-pin-integrity.sh` — invoked by lefthook. Per file:
 
@@ -333,7 +333,7 @@ See Files-to-Create test entries. Naming + framework verified: `.test.sh` (bash,
 - AC7. `compliance-posture.md` has the "Vendored Code Provenance" section with the gosprinto entry; cross-links to/from the policy doc.
 - AC8a. All bash tests pass: `bash plugins/soleur/test/notice-frontmatter.test.sh && bash plugins/soleur/test/vendor-pin-integrity.test.sh && bash plugins/soleur/test/vendor-drift-classify.test.sh && bash plugins/soleur/test/vendor-drift-workflow.test.sh`.
 - AC8b. TS tests pass: `cd plugins/soleur && bun test test/gdpr-gate.test.ts`.
-- AC8c. **`notice-frontmatter.test.sh` p95 timing assertion** — 100 invocations of `bash notice-frontmatter.sh days-stale`; p95 < 50ms (TR2).
+- AC8c. **`notice-frontmatter.test.sh` p95 timing assertion** — 100 invocations of `bash notice-frontmatter.sh days-stale`; p95 < 100ms (TR2; widened from <50ms after PR #3521 added strict-ISO + UTC-anchor on `last-verified`).
 - AC9. PR body includes `## Changelog` section. Plan-review (5 reviewers) ran and findings resolved (review_round=1, all P1+P2+P3 inline; 4 scope-outs filed). `gdpr-gate-advisory` lefthook hook does NOT fire on these edits (verified — globs at `lefthook.yml:96-118` don't match `plugins/soleur/skills/gdpr-gate/scripts/**`).
 - AC10. PR is co-labeled `compliance/critical` (single-user incident threshold; `user-impact-reviewer` runs at PR-review time per `plugins/soleur/skills/review/SKILL.md` conditional-agent block).
 - AC11. **PR body uses `Ref #3517` everywhere except the single intentional `Closes #3517` line** (Kieran P1.2 — guards against `wg-use-closes-n-in-pr-body-not-title-to`). Acceptance checkbox phrases that contain `close|fix|resolve` MUST be reworded (e.g., `- [ ] confirm drift workflow runs` rather than `- [ ] resolve drift workflow`).
@@ -364,7 +364,7 @@ See Files-to-Create test entries. Naming + framework verified: `.test.sh` (bash,
 - **Unit (bash):** every helper script gets a `.test.sh` sibling. Each test exercises (a) happy path, (b) malformed input, (c) edge case (empty diff, missing frontmatter, future date).
 - **Integration (bash):** `vendor-drift-workflow.test.sh` runs the workflow body against fixture diffs + NOTICE in `SKIP_PR_CREATE=1` dry-run mode; asserts label set, branch name, classifier exit code, conflict-marker handling.
 - **TS extension:** `gdpr-gate.test.ts` extended with vitest case mocking `notice-frontmatter.sh` output (35d stale, 95d stale, future-dated, parser-deleted) and asserting captured **stdout** contains banner. (SpecFlow P1.1 / AC6d.)
-- **Timing assertion:** AC8c — `time` × 100 invocations, p95 < 50ms.
+- **Timing assertion:** AC8c — `time` × 100 invocations, p95 < 100ms.
 - **No new test framework** — `bats` not installed; `.test.sh` is project convention (verified `ls plugins/soleur/test/`).
 - **Fixture seeding:** all fixtures static synthetic data committed to `plugins/soleur/test/fixtures/vendor-drift/`. No external service deps — `gh api` mocked via fixture files.
 

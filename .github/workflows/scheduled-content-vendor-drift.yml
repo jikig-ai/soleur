@@ -166,33 +166,102 @@ jobs:
           # Classify (rollback detection vs upstream history is best-effort
           # locally; for this workflow rollback is signaled in the runbook
           # via workflow_dispatch + manual SHA inspection).
+          # Capture stdout (multi-category) AND exit code (priority for routing).
+          CLASSIFY_OUT=$(mktemp)
           set +e
           if [[ -n "$DRIFT_FLAGS" ]]; then
-            bash "$CLASSIFIER" "$DRIFT_FLAGS" < "$AGG_DIFF"
+            bash "$CLASSIFIER" "$DRIFT_FLAGS" < "$AGG_DIFF" > "$CLASSIFY_OUT"
           else
-            bash "$CLASSIFIER" < "$AGG_DIFF"
+            bash "$CLASSIFIER" < "$AGG_DIFF" > "$CLASSIFY_OUT"
           fi
           CLASSIFY_RC=$?
           set -e
 
           echo "Classifier exit code: $CLASSIFY_RC"
+          echo "Classifier categories:"
+          cat "$CLASSIFY_OUT"
           echo "classify_rc=$CLASSIFY_RC" >> "$GITHUB_OUTPUT"
           echo "new_sha=$NEW_UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
 
-          case "$CLASSIFY_RC" in
-            0)   LABELS="" ;;
-            10)  LABELS="vendor/pin-drift,compliance/critical" ;;
-            11)  LABELS="vendor/license-changed,compliance/critical" ;;
-            12)  LABELS="vendor/upstream-archived,compliance/critical" ;;
-            13)  LABELS="vendor/pin-drift" ;;
-            15)  LABELS="vendor/upstream-rollback,needs-human-review" ;;
-            16)  LABELS="vendor/upstream-archived,needs-human-review" ;;
-            *)   LABELS="vendor/pin-drift" ;;
-          esac
+          # Accumulate labels from every emitted category (multi-category
+          # contract per review #3521). Co-occurring security + license drift
+          # was previously under-labeled because the exit-code case mapping
+          # picked one winner.
+          declare -A LABEL_SET=()
+          while IFS= read -r line; do
+            cat_value="${line#category=}"
+            case "$cat_value" in
+              security)
+                LABEL_SET["vendor/pin-drift"]=1
+                LABEL_SET["compliance/critical"]=1
+                ;;
+              license)
+                LABEL_SET["vendor/license-changed"]=1
+                LABEL_SET["compliance/critical"]=1
+                ;;
+              archived)
+                LABEL_SET["vendor/upstream-archived"]=1
+                LABEL_SET["compliance/critical"]=1
+                ;;
+              renamed)
+                LABEL_SET["vendor/upstream-archived"]=1
+                LABEL_SET["needs-human-review"]=1
+                ;;
+              rollback)
+                LABEL_SET["vendor/upstream-rollback"]=1
+                LABEL_SET["needs-human-review"]=1
+                ;;
+              batched)
+                LABEL_SET["vendor/pin-drift"]=1
+                ;;
+              no-op) ;;
+            esac
+          done < "$CLASSIFY_OUT"
+          rm -f "$CLASSIFY_OUT"
+          # Fallback for unknown exit codes (defensive — keeps the legacy
+          # behavior when classifier emits nothing on stdout).
+          if [[ ${#LABEL_SET[@]} -eq 0 && "$CLASSIFY_RC" != "0" ]]; then
+            LABEL_SET["vendor/pin-drift"]=1
+          fi
+          LABELS=$(IFS=,; echo "${!LABEL_SET[*]}")
           echo "labels=$LABELS" >> "$GITHUB_OUTPUT"
 
           if [[ "$CLASSIFY_RC" == "0" ]]; then
             echo "drift=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Trust-model routing: security/license/rollback/renamed/archived
+          # drift opens an ISSUE (no auto-PR). Auto-PR is reserved for low-risk
+          # batched drift (exit 13) where the bot-merged bytes are not yet
+          # narrative-claim load-bearing. This prevents a compromised or
+          # malicious upstream from landing attacker-controlled bytes via the
+          # weekly auto-PR — review #3521 user-impact + security-sentinel.
+          case "$CLASSIFY_RC" in
+            10|11|12|15|16)
+              echo "Security-relevant drift (rc=$CLASSIFY_RC) — opening issue, no auto-PR"
+              echo "route=issue" >> "$GITHUB_OUTPUT"
+              echo "drift=detected" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            13)
+              echo "route=pr" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unknown classifier rc=$CLASSIFY_RC — routing to issue for human triage"
+              echo "route=issue" >> "$GITHUB_OUTPUT"
+              echo "drift=detected" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          # Idempotency: if a prior drift PR is still open, skip rather than
+          # opening a duplicate weekly. The existing PR will pick up further
+          # upstream changes when its author rebases or when it merges.
+          OPEN_DRIFT_PRS=$(gh pr list --state open --search "head:ci/vendor-drift-" --json number --jq length)
+          if (( OPEN_DRIFT_PRS > 0 )); then
+            echo "Skipping: $OPEN_DRIFT_PRS open drift PR(s) already exist"
+            echo "drift=skipped-open-pr" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -228,23 +297,35 @@ jobs:
                 NOTICE_FILE="$NOTICE_FILE" REL_PATH="$REL_PATH" \
                 NEW_LOCAL_SHA="$NEW_LOCAL_SHA" CURRENT_UP_SHA="$CURRENT_UP_SHA" \
                 python3 - <<'PYEOF'
-          import os, re
+          import os, re, sys
           path = os.environ["NOTICE_FILE"]
           rel = os.environ["REL_PATH"]
           new_local = os.environ["NEW_LOCAL_SHA"]
           new_upstream = os.environ["CURRENT_UP_SHA"]
           with open(path) as f:
               src = f.read()
+          # Greedy `+` spans the full sub-key block (upstream-path,
+          # upstream-blob-sha, local-blob-sha, status). Non-greedy `+?`
+          # captures only the first sub-key line; subsequent re.sub calls
+          # below would silently no-op on a block that lacked their targets.
+          # Each sub-key line is required to start with exactly 4 spaces,
+          # which terminates the match at the next `  - path:` entry.
           pattern = re.compile(
-              r'(- path: ' + re.escape(rel) + r'\n(?:    .+\n)+?)',
+              r'(- path: ' + re.escape(rel) + r'\n(?:    [^\n]+\n)+)',
               re.MULTILINE,
           )
+          subs = {"local": 0, "upstream": 0}
           def fix_block(m):
               block = m.group(1)
-              block = re.sub(r'(local-blob-sha:\s*)[0-9a-f]+', r'\g<1>' + new_local, block)
-              block = re.sub(r'(upstream-blob-sha:\s*)[0-9a-f]+', r'\g<1>' + new_upstream, block)
+              block, n_local = re.subn(r'(local-blob-sha:\s*)[0-9a-f]+', r'\g<1>' + new_local, block)
+              block, n_upstream = re.subn(r'(upstream-blob-sha:\s*)[0-9a-f]+', r'\g<1>' + new_upstream, block)
+              subs["local"] += n_local
+              subs["upstream"] += n_upstream
               return block
-          new_src = pattern.sub(fix_block, src, count=1)
+          new_src, n_blocks = pattern.subn(fix_block, src, count=1)
+          if n_blocks != 1 or subs["local"] != 1 or subs["upstream"] != 1:
+              print(f"NOTICE bump failed: blocks={n_blocks} local-subs={subs['local']} upstream-subs={subs['upstream']} rel={rel}", file=sys.stderr)
+              sys.exit(1)
           with open(path, 'w') as f:
               f.write(new_src)
           PYEOF
@@ -274,7 +355,7 @@ jobs:
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Open re-vendor PR
-        if: steps.detect.outputs.drift == 'detected'
+        if: steps.detect.outputs.drift == 'detected' && steps.detect.outputs.route == 'pr'
         uses: ./.github/actions/bot-pr-with-synthetic-checks
         env:
           CLASSIFY_RC: ${{ steps.detect.outputs.classify_rc }}
@@ -295,14 +376,17 @@ jobs:
           gh-token: ${{ github.token }}
 
       - name: Apply labels to drift PR
-        if: steps.detect.outputs.drift == 'detected' && steps.detect.outputs.labels != ''
+        if: steps.detect.outputs.drift == 'detected' && steps.detect.outputs.route == 'pr' && steps.detect.outputs.labels != ''
         env:
           GH_TOKEN: ${{ github.token }}
           DRIFT_LABELS: ${{ steps.detect.outputs.labels }}
+          DRIFT_BRANCH: ${{ steps.detect.outputs.branch }}
         run: |
           set -euo pipefail
-          PR_NUM=$(gh pr list --search "head:ci/vendor-drift-" --json number,headRefName \
-            --jq 'sort_by(.number) | reverse | .[0].number')
+          # Scope by exact branch (set in the detect step), not by prefix
+          # search + highest-number. Concurrent runs would otherwise apply
+          # labels to whichever PR has the largest number, not this run's.
+          PR_NUM=$(gh pr list --head "$DRIFT_BRANCH" --json number --jq '.[0].number')
           if [[ -n "$PR_NUM" ]]; then
             IFS=',' read -ra LABEL_ARR <<< "$DRIFT_LABELS"
             for label in "${LABEL_ARR[@]}"; do
@@ -310,6 +394,61 @@ jobs:
               gh pr edit "$PR_NUM" --add-label "$label" 2>/dev/null || true
             done
           fi
+
+      - name: Open re-vendor issue (security-relevant drift)
+        if: steps.detect.outputs.drift == 'detected' && steps.detect.outputs.route == 'issue'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLASSIFY_RC: ${{ steps.detect.outputs.classify_rc }}
+          DRIFT_LABELS: ${{ steps.detect.outputs.labels }}
+          NEW_SHA: ${{ steps.detect.outputs.new_sha }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Open an issue (no auto-PR) when classifier signals security-/
+          # license-/license-/rollback-/archived-/renamed drift. Operator
+          # follows the runbook to manually re-vendor after upstream review.
+          # This closes the auto-PR-of-untrusted-upstream-bytes vector.
+          TODAY=$(date -u +%Y-%m-%d)
+          TITLE="[vendor-drift] security-relevant drift on $TODAY (classifier rc=$CLASSIFY_RC)"
+          # Idempotency: skip if an open issue with the same title prefix exists.
+          EXISTING=$(gh issue list --label vendor/pin-drift \
+                                   --search "\"vendor-drift\] security-relevant drift\" in:title" \
+                                   --state open --limit 5 --json number --jq 'length')
+          if [[ "$EXISTING" -gt 0 ]]; then
+            echo "Existing open security-drift issue found; skipping"
+            exit 0
+          fi
+          BODY_FILE=$(mktemp)
+          {
+            echo "Automated drift detection routed to issue-only (no auto-PR)."
+            echo ""
+            echo "**Classifier exit code:** \`$CLASSIFY_RC\`"
+            echo "**Labels:** \`$DRIFT_LABELS\`"
+            echo "**Upstream HEAD SHA at detection:** \`$NEW_SHA\`"
+            echo "**Workflow run:** ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+            echo ""
+            echo "## Why issue, not PR?"
+            echo ""
+            echo "Security-/license-/rollback-/archived-/renamed-class drift requires human re-vendor (per review #3521 user-impact-reviewer)."
+            echo "The auto-PR path is restricted to exit 13 (batched non-security drift) to prevent attacker-controlled upstream bytes from landing via the weekly bot."
+            echo ""
+            echo "## Resolution path"
+            echo ""
+            echo "Follow \`knowledge-base/engineering/ops/runbooks/vendor-pin-drift-resolution.md\` §2-§5 (classifier-rc-specific branches)."
+            echo ""
+            echo "Ref #3517"
+          } > "$BODY_FILE"
+          IFS=',' read -ra LABEL_ARR <<< "$DRIFT_LABELS"
+          LABEL_ARGS=()
+          for label in "${LABEL_ARR[@]}"; do
+            [[ -n "$label" ]] || continue
+            LABEL_ARGS+=(--label "$label")
+          done
+          gh issue create --title "$TITLE" --body-file "$BODY_FILE" "${LABEL_ARGS[@]}" || true
+          rm -f "$BODY_FILE"
 
       - name: File cron-failure issue
         if: failure()

@@ -6,7 +6,7 @@
 #   --archived   exit 12 (upstream archived; signaled by drift workflow)
 #   --renamed    exit 16 (upstream renamed; signaled by drift workflow)
 #
-# Priority chain (first match wins):
+# Priority chain (exit-code wins go highest→lowest):
 #   15 rollback         new-sha is ancestor of old-sha
 #   12 archived         --archived flag set
 #   16 renamed          --renamed flag set
@@ -23,8 +23,15 @@
 #   ^\+.*§\s*[0-9]+        section symbol
 #   ^\+\+\+ b/.*/layers/   new file under references/layers/
 #
-# Outputs nothing on stdout in normal use; the exit code IS the result. On
-# unexpected argument shape the script writes to stderr and exits 2.
+# Stdout contract (review #3521 — multi-category fix):
+#   For every category that matches, one line is emitted on stdout in the
+#   form `category=<name>` where <name> ∈ {rollback,archived,renamed,license,
+#   security,batched,no-op}. The workflow consumer accumulates labels from
+#   the full set, while routing (auto-PR vs issue) uses the exit code.
+#   The single-exit-code contract previously under-labeled co-occurring
+#   security + license drift.
+#
+# On unexpected argument shape the script writes to stderr and exits 2.
 
 set -euo pipefail
 
@@ -58,34 +65,56 @@ done
 
 DIFF=$(cat)
 
+# Accumulate every matching category to stdout. Exit code retains the
+# first-match-wins priority for routing; stdout is used by the consumer for
+# label accumulation (review #3521 multi-category contract).
+exit_code=0
+
 # 1. Rollback: new-sha is an ancestor of old-sha (and not the same commit).
 if [[ -n "$OLD_SHA" && -n "$NEW_SHA" && "$OLD_SHA" != "$NEW_SHA" ]]; then
   if git merge-base --is-ancestor "$NEW_SHA" "$OLD_SHA" 2>/dev/null; then
+    echo "category=rollback"
     exit 15
   fi
 fi
 
 # 2. Upstream-disambiguation flags (signaled by the workflow's gh-api step).
-(( ARCHIVED )) && exit 12
-(( RENAMED ))  && exit 16
+if (( ARCHIVED )); then
+  echo "category=archived"
+  exit_code=12
+fi
+if (( RENAMED )); then
+  echo "category=renamed"
+  (( exit_code == 0 )) && exit_code=16
+fi
 
-# 3. LICENSE diff (any path containing LICENSE in the file headers).
-if printf '%s\n' "$DIFF" | grep -qE '^(\+\+\+|---) [ab]/.*LICENSE'; then
-  exit 11
+# 3. LICENSE diff (basename anchored, optionally with extension). The
+# anchor prevents false-positives on paths like docs/LICENSE-DISCUSSION.md
+# or src/license_parser.py where `LICENSE` is a substring but the file is
+# not a license document.
+if printf '%s\n' "$DIFF" | grep -qE '^(\+\+\+|---) [ab]/(.*/)?LICENSE(\.[^/]+)?$'; then
+  echo "category=license"
+  (( exit_code == 0 )) && exit_code=11
 fi
 
 # 4. Security-relevant regex set.
-if printf '%s\n' "$DIFF" | grep -qE '^\+.*\|.*\|.*$'; then exit 10; fi
-if printf '%s\n' "$DIFF" | grep -qE '^\+.*\[CRITICAL\]'; then exit 10; fi
-if printf '%s\n' "$DIFF" | grep -qE '^\+.*\bMUST\b'; then exit 10; fi
-if printf '%s\n' "$DIFF" | grep -qE '^\+.*Art\. [0-9]+'; then exit 10; fi
-if printf '%s\n' "$DIFF" | grep -qE '^\+.*§[[:space:]]*[0-9]+'; then exit 10; fi
-if printf '%s\n' "$DIFF" | grep -qE '^\+\+\+ b/.*/layers/'; then exit 10; fi
+if printf '%s\n' "$DIFF" | grep -qE '^\+.*\|.*\|.*$|^\+.*\[CRITICAL\]|^\+.*\bMUST\b|^\+.*Art\. [0-9]+|^\+.*§[[:space:]]*[0-9]+|^\+\+\+ b/.*/layers/'; then
+  echo "category=security"
+  (( exit_code == 0 )) && exit_code=10
+fi
+
+# If any category fired (archived/renamed/license/security), exit with the
+# highest-priority code we accumulated.
+if (( exit_code != 0 )); then
+  exit "$exit_code"
+fi
 
 # 5. Batched (non-empty diff, no security signal).
 if [[ -n "$(printf '%s' "$DIFF" | tr -d '[:space:]')" ]]; then
+  echo "category=batched"
   exit 13
 fi
 
 # 6. No-op.
+echo "category=no-op"
 exit 0
