@@ -22,10 +22,39 @@ vi.mock("@/server/conversation-writer", async () => {
   };
 });
 
-vi.mock("@/server/observability", () => ({
-  reportSilentFallback: mockReportSilentFallback,
-  warnSilentFallback: vi.fn(),
-}));
+vi.mock("@/server/observability", async () => {
+  // Pull the real `mirrorWithDebounce` + `__resetMirrorDebounceForTests`
+  // so the existing per-(userId, errorClass) coalescing assertion (3 calls
+  // in <5min → 1 mirror) still holds against the spy reportSilentFallback.
+  // Stub `reportSilentFallback` so individual call-site mirrors are
+  // observable; `mirrorWithDebounce` internally delegates to whatever the
+  // module's exported `reportSilentFallback` is, but since the module is
+  // mocked the delegation pulls our spy.
+  const actual = await vi.importActual<
+    typeof import("@/server/observability")
+  >("@/server/observability");
+  return {
+    ...actual,
+    reportSilentFallback: mockReportSilentFallback,
+    warnSilentFallback: vi.fn(),
+    // Override mirrorWithDebounce with a TTL-honoring wrapper that uses
+    // the spy as its sink. We can't reuse `actual.mirrorWithDebounce`
+    // directly because that one captured the real reportSilentFallback at
+    // module-init time (before this mock swap).
+    mirrorWithDebounce: (() => {
+      const lastReportedAt = new Map<string, number>();
+      const ttl = 5 * 60 * 1000;
+      return (err: unknown, ctx: unknown, userId: string, errorClass: string) => {
+        const key = `${userId}:${errorClass}`;
+        const now = Date.now();
+        const last = lastReportedAt.get(key);
+        if (last !== undefined && now - last < ttl) return;
+        lastReportedAt.set(key, now);
+        mockReportSilentFallback(err, ctx);
+      };
+    })(),
+  };
+});
 
 // Module-scoped: every test in this file gets a mocked
 // `fetchUserWorkspacePath`. Existing dispatchSoleurGo tests pre-#3235 do not

@@ -16,15 +16,15 @@ Derived from `knowledge-base/project/plans/2026-05-11-fix-cc-hardening-safe-bash
 - [x] 1.3 Update `permission-callback.ts` to import + re-export the symbols.
 - [x] 1.4 Move `permission-callback-safe-bash.test.ts` import path to `@/server/safe-bash`.
 - [x] 1.5 Run `bun test apps/web-platform/test/permission-callback-safe-bash.test.ts apps/web-platform/test/permission-callback-bash-batch.test.ts` — 0 regressions.
-- [ ] 1.6 Commit `refactor(safe-bash): extract regex allowlist module from permission-callback`.
+- [x] 1.6 Commit `refactor(safe-bash): extract regex allowlist module from permission-callback`.
 
 ## Phase 2 — `mirrorWithDebounce` extraction (Findings 2 + #3369)
 
-- [ ] 2.1 Add `mirrorWithDebounce`, `MIRROR_DEBOUNCE_MS`, `_mirrorLastReportedAt` to `observability.ts`.
-- [ ] 2.2 Delete local copy from `cc-dispatcher.ts`; replace with import.
-- [ ] 2.3 Migrate `kb-document-resolver.ts` to use `mirrorWithDebounce` with errorClass derived from `extractPdfText` failure class.
-- [ ] 2.4 Create `apps/web-platform/test/observability-mirror-debounce.test.ts` (5 cases).
-- [ ] 2.5 Run `bun test apps/web-platform/test/cc-dispatcher.test.ts apps/web-platform/test/observability-mirror-debounce.test.ts`.
+- [x] 2.1 Add `mirrorWithDebounce`, `MIRROR_DEBOUNCE_MS`, `_mirrorLastReportedAt` to `observability.ts`.
+- [x] 2.2 Delete local copy from `cc-dispatcher.ts`; replace with import.
+- [x] 2.3 Migrate `kb-document-resolver.ts` to use `mirrorWithDebounce` with errorClass derived from `extractPdfText` failure class.
+- [x] 2.4 Create `apps/web-platform/test/observability-mirror-debounce.test.ts` (5 cases).
+- [x] 2.5 Run `bun test apps/web-platform/test/cc-dispatcher.test.ts apps/web-platform/test/observability-mirror-debounce.test.ts`.
 - [ ] 2.6 Commit `refactor(observability): extract mirrorWithDebounce (Closes #3369)`.
 
 ## Phase 3 — `reapIdle` consults `awaitingUser` + Finding 2 runner integration

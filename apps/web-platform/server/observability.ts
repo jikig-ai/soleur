@@ -147,3 +147,52 @@ export function warnSilentFallback(
     // in non-prod bundles; pino is the durable signal.
   }
 }
+
+/**
+ * Per-`(userId, errorClass)` 5-minute TTL on the Sentry mirror.
+ *
+ * Use at sites where a misconfigured prod or a runaway loop could fire
+ * the same silent-fallback condition repeatedly for a single user.
+ * Without this, 1 QPS for 24 hours = 86k Sentry events per user — enough
+ * to bury other signals. First report mirrors via `reportSilentFallback`
+ * unchanged; subsequent calls inside the window for the same key are
+ * no-ops. The application path (4xx/5xx/degraded response) is unaffected.
+ *
+ * **Registry of `errorClass` strings** (extend when adding a caller):
+ * - `cc-dispatcher` family: `agent-sandbox:sdk-startup`,
+ *   `dispatch:invalid-payload`, `dispatch:invalid-response`,
+ *   `dispatch:kind-mismatch`, `dispatch:internal-error`.
+ * - `kb-document-resolver` family: PDF text-extraction failure classes
+ *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
+ * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.
+ *
+ * Each feature picks a distinct `errorClass` so the per-key TTL bucket
+ * cannot collide across features for the same user.
+ */
+export const MIRROR_DEBOUNCE_MS = 5 * 60 * 1000;
+const _mirrorLastReportedAt = new Map<string, number>();
+
+export function mirrorWithDebounce(
+  err: unknown,
+  ctx: SilentFallbackOptions,
+  userId: string,
+  errorClass: string,
+): void {
+  const key = `${userId}:${errorClass}`;
+  const now = Date.now();
+  const last = _mirrorLastReportedAt.get(key);
+  if (last !== undefined && now - last < MIRROR_DEBOUNCE_MS) {
+    return;
+  }
+  _mirrorLastReportedAt.set(key, now);
+  reportSilentFallback(err, ctx);
+}
+
+/**
+ * Test seam: drain the debounce map between tests so a key set in test A
+ * does not silently coalesce test B's first call. Mirrors the existing
+ * dispatcher reset pattern; never call from production code.
+ */
+export function __resetMirrorDebounceForTests(): void {
+  _mirrorLastReportedAt.clear();
+}

@@ -48,6 +48,13 @@ vi.mock("@/lib/supabase/service", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.ts.
+  // kb-document-resolver routes extractPdfText failure mirrors
+  // through it; forward straight through so the existing spy
+  // assertions keep working.
+  mirrorWithDebounce: reportSilentFallbackSpy,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 vi.mock("@/server/pdf-text-extract", async () => {
