@@ -1,0 +1,36 @@
+# Category 3 rules: supply-chain risk via OSV.dev
+#
+# Consumed by ../scripts/check-supply-chain.sh. Not regex-driven; this file
+# defines the ecosystem allowlist and the network policy.
+
+osv_endpoint: "https://api.osv.dev/v1/querybatch"
+
+# OSV ecosystems with deterministic vulns coverage. Unknown ecosystem → REVIEW
+# (never LOW-RISK). Per plan Sharp Edge #5.
+ecosystem_allowlist:
+  - PyPI
+  - npm
+  - Go
+  - crates.io
+  - RubyGems
+  - Maven
+  - NuGet
+  - Packagist
+  - Hex
+  - Pub
+
+# Network policy
+http_timeout_seconds: 8
+retry_count_on_5xx: 1
+max_concurrent_batches: 10
+
+# Self-defense
+max_response_body_bytes: 33554432  # 32 MiB; reject larger as malformed
+required_response_keys:
+  - results
+
+# Severity mapping for vulns array
+severity_map:
+  empty: LOW-RISK             # vulns array empty → no finding for the package
+  single_advisory: REVIEW     # 1-2 advisories with severity LOW/MEDIUM
+  high_or_multi: HIGH-RISK    # >=3 advisories OR any with severity HIGH/CRITICAL

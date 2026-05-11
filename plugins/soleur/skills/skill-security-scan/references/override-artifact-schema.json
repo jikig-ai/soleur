@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soleur.ai/schemas/skill-security-scan/override-artifact.json",
+  "title": "Skill Security Scan Override Artifact",
+  "description": "Frontmatter schema for knowledge-base/security/skill-overrides/YYYY-MM-DD-<slug>.md. The artifact alone is the audit-trail; no git trailer is involved (squash-merge-safe).",
+  "type": "object",
+  "required": [
+    "skill",
+    "source",
+    "findings_json",
+    "justification",
+    "approver",
+    "scanner_version",
+    "rule_pack_sha256",
+    "verdict",
+    "timestamp"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "skill": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Skill slug. Lowercase + hyphens only; rejects regex meta-chars to prevent bash interpolation hazards in filename matching."
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "URL or 'skill-creator' (where the skill content originated)."
+    },
+    "findings_json": {
+      "description": "Inline JSON copy of the .scan-meta.json findings_summary at override time, or a path string referencing the .scan-meta.json file.",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object" }
+      ]
+    },
+    "justification": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Free-text rationale explaining why the operator accepts the HIGH-RISK or REVIEW verdict."
+    },
+    "approver": {
+      "type": "string",
+      "format": "email",
+      "description": "git config user.email of the operator approving the override."
+    },
+    "scanner_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semver of the scanner at override time."
+    },
+    "rule_pack_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8,64}$",
+      "description": "SHA-256 (or sha-prefix ≥8 chars) of the rule-pack manifest at override time. Mismatch with current manifest indicates stale findings; operator must re-run scanner and update the artifact."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["HIGH-RISK", "REVIEW"],
+      "description": "Verdict the operator is overriding. LOW-RISK never requires an override."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp of override creation."
+    }
+  }
+}

@@ -71,32 +71,6 @@ pre-commit:
         - "scripts/lint-agents-enforcement-tags.py"
       # Post-#3493 sidecar split: enforcement tags now live in sidecars.
       run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
-    # gdpr-gate advisory hook — entry hand-imported from origin/main to satisfy
-    # `[hook-enforced: lefthook gdpr-gate.sh]` on rule
-    # hr-gdpr-gate-on-regulated-data-surfaces (added in PR #3501; this branch
-    # was cut before #3501 merged). Full skill at
-    # plugins/soleur/skills/gdpr-gate/ should be brought in at /ship-time
-    # rebase. The hook ALWAYS exits 0 — prints a one-line stderr breadcrumb
-    # when staged paths match the canonical regulated-data regex.
-    gdpr-gate-advisory:
-      priority: 6
-      glob:
-        - "apps/web-platform/supabase/migrations/*.sql"
-        - "apps/web-platform/lib/auth/*.ts"
-        - "apps/web-platform/lib/auth/**/*.ts"
-        - "apps/web-platform/lib/auth/*.tsx"
-        - "apps/web-platform/lib/auth/**/*.tsx"
-        - "apps/web-platform/lib/auth/*.js"
-        - "apps/web-platform/lib/auth/**/*.js"
-        - "apps/web-platform/server/*auth*.ts"
-        - "apps/web-platform/server/*auth*.tsx"
-        - "apps/web-platform/server/*auth*.js"
-        - "apps/web-platform/app/api/*.ts"
-        - "apps/web-platform/app/api/**/*.ts"
-        - "apps/web-platform/app/api/*.tsx"
-        - "apps/web-platform/app/api/**/*.tsx"
-        - "*.sql"
-      run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
     scheduled-show-full-output-lint:
       priority: 5
       # Forbid show_full_output: true in recurring scheduled workflows. Only
@@ -124,6 +98,69 @@ pre-commit:
         - "apps/web-platform/server/**/*.ts"
         - "scripts/lint-conversations-update-callsites.sh"
       run: bash scripts/lint-conversations-update-callsites.sh
+    # gdpr-gate advisory hook (per AGENTS.md hr-gdpr-gate-on-regulated-data-surfaces).
+    # ALWAYS exits 0 — prints a one-line stderr breadcrumb when staged paths
+    # match the canonical regulated-data regex. Glob list is in path-array
+    # form to avoid gobwas `**` semantics
+    # (see 2026-03-21-lefthook-gobwas-glob-double-star.md). Mirrors the
+    # canonical regex in plugins/soleur/skills/gdpr-gate/SKILL.md and
+    # scripts/gdpr-gate.sh.
+    #
+    # CI self-test: .github/workflows/gdpr-gate-self-test.yml is the
+    # load-bearing gate for regressions in
+    # plugins/soleur/skills/gdpr-gate/scripts/** (issue #3536). The glob
+    # below intentionally does NOT cover scripts/ because pre-commit
+    # fixture runs are slow and flaky; CI carries the assertion instead.
+    gdpr-gate-advisory:
+      priority: 6
+      glob:
+        - "apps/web-platform/supabase/migrations/*.sql"
+        - "apps/web-platform/lib/auth/*.ts"
+        - "apps/web-platform/lib/auth/**/*.ts"
+        - "apps/web-platform/lib/auth/*.tsx"
+        - "apps/web-platform/lib/auth/**/*.tsx"
+        - "apps/web-platform/lib/auth/*.js"
+        - "apps/web-platform/lib/auth/**/*.js"
+        - "apps/web-platform/server/*auth*.ts"
+        - "apps/web-platform/server/*auth*.tsx"
+        - "apps/web-platform/server/*auth*.js"
+        - "apps/web-platform/app/api/*.ts"
+        - "apps/web-platform/app/api/**/*.ts"
+        - "apps/web-platform/app/api/*.tsx"
+        - "apps/web-platform/app/api/**/*.tsx"
+        - "*.sql"
+      run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
+    # vendor-pin-integrity (FR5): verifies the staged contents of every
+    # NOTICE-tracked lifted file match the blob SHAs pinned in NOTICE
+    # frontmatter. Detects silent local edits to upstream-vendored content
+    # and silent additions of files outside the registry. The integrity
+    # script reads its registry from NOTICE at runtime, so the glob
+    # intentionally covers the whole `references/` subtree (plus NOTICE
+    # itself) — any new file added under `references/` triggers the script,
+    # which then rejects it via the "staged but not in NOTICE" branch.
+    # Narrow per-file globs would let a re-vendor land a 6th file without
+    # the integrity gate ever firing on it.
+    vendor-pin-integrity:
+      priority: 6
+      glob:
+        - "plugins/soleur/skills/gdpr-gate/references/*.md"
+        - "plugins/soleur/skills/gdpr-gate/references/layers/*.md"
+        - "plugins/soleur/skills/gdpr-gate/NOTICE"
+      run: bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
+    # skill-security-scan advisory hook (#2719).
+    # ALWAYS exits 0 — prints a one-line stderr breadcrumb on HIGH-RISK
+    # without override artifact. Belt-and-suspenders for IDE / manual
+    # `git commit` paths that bypass the Claude Code PreToolUse hook.
+    # Glob list is in array form per gobwas `**` semantics
+    # (2026-03-21-lefthook-gobwas-glob-double-star.md).
+    skill-security-scan-advisory:
+      priority: 7
+      glob:
+        - "plugins/soleur/skills/**/SKILL.md"
+        - ".claude/skills/**/SKILL.md"
+        - ".claude/agents/**/*.md"
+        - "plugins/soleur/agents/**/*.md"
+      run: bash .claude/hooks/skill-security-scan.sh {staged_files}
     bun-test:
       priority: 6
       glob: "*.{ts,tsx,js,jsx}"

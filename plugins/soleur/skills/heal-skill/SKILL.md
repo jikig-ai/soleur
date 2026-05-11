@@ -1,6 +1,6 @@
 ---
 name: heal-skill
-description: "This skill should be used when a skill has incorrect SKILL.md instructions, outdated API references, or wrong parameters discovered during execution. It detects the affected skill, proposes fixes with before/after diffs, and applies changes after approval."
+description: "This skill should be used when a skill has incorrect instructions, outdated API references, or wrong parameters. Detects, diffs, applies after approval."
 ---
 
 <objective>

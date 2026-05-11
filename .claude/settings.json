@@ -63,6 +63,15 @@
         ]
       },
       {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/skill-security-scan-write.sh"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__pencil__open_document",
         "hooks": [
           {
@@ -88,6 +97,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/docs-cli-verification.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/agent-token-tee.sh"
           }
         ]
       }

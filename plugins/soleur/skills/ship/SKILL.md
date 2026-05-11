@@ -425,6 +425,53 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **Why:** New tools and subscriptions adopted during implementation often go unrecorded in the expense ledger because they feel incidental to the engineering work. The COO gate ensures every new cost is tracked at ship time, not discovered months later during a financial review.
 
+### gdpr-gate `compliance/critical` Auto-Label Gate
+
+**Trigger:** PR diff matches `^plugins/soleur/skills/gdpr-gate/` OR the referenced plan/spec file declares `brand_survival_threshold: single-user incident`.
+
+**Detection:**
+
+```bash
+gdpr_gate_touch=$(git diff main...HEAD --name-only | grep -E '^plugins/soleur/skills/gdpr-gate/' | head -n 1)
+sui_plan=$(gh pr view --json body --jq .body \
+  | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])]+' | head -n 1 || true)
+sui_threshold=""
+if [[ -n "$sui_plan" && -f "$sui_plan" ]]; then
+  sui_threshold=$(grep -E '^brand_survival_threshold:\s*single-user incident' "$sui_plan" || true)
+fi
+```
+
+**If triggered AND PR is not already labeled `compliance/critical`:**
+
+1. Apply the label: `gh pr edit <N> --add-label compliance/critical` (idempotent — `gh` silently no-ops if already applied).
+2. Announce: "Auto-applied `compliance/critical` to PR #<N> (gdpr-gate diff match) — `user-impact-reviewer` will be invoked at PR-review time per `review/SKILL.md` conditional-agent block."
+
+**Why:** AC10 of any `single-user incident` plan requires PR co-label. Operator-attested labels are a workflow-gap class (see #3521 review user-impact #7) — auto-application closes the gap. Idempotent + reversible (operator can remove if false-positive).
+
+### gdpr-gate Critical-Finding Acknowledgment Gate
+
+**Trigger:** PR diff matches the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex (mirrored in `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)" and `plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh`) AND the PR body references an open issue with label `compliance/critical` via `Closes #N` or `Ref #N`.
+
+**Detection:**
+
+```bash
+CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)'
+diff_match=$(git diff main...HEAD --name-only | grep -E "$CANONICAL_REGEX" | head -n 1)
+crit_refs=$(gh pr view --json body --jq .body | grep -oE '(Closes|Ref) #[0-9]+' | head -n 5)
+```
+
+For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name'` for `compliance/critical`.
+
+**If triggered:**
+
+1. Verify each `compliance/critical` issue referenced has a corresponding row in `knowledge-base/legal/compliance-posture.md` Active Items.
+2. **Interactive mode:** Ask "Critical finding #N has no Active Items row. File the row now via `/soleur:compound`, or proceed with operator acknowledgment recorded inline?" Options: (a) File row, (b) Acknowledge inline, (c) Halt.
+3. **Headless mode:** Halt — operator must run `/soleur:ship` interactively when a `compliance/critical` issue is referenced. Auto-merging without an Active Items row is a workflow violation.
+
+**If not triggered:** Skip silently.
+
+**Why:** Critical findings are the load-bearing artifact for `single-user incident` brand-survival; auto-merge without an Active Items row produces silent compliance drift. Defense-in-depth alongside `/soleur:gdpr-gate`'s plan-time and work-time gates.
+
 ### Deploy Pipeline Fix Drift Gate
 
 **Trigger:** PR touches any of the 5 `terraform_data.deploy_pipeline_fix` trigger files:

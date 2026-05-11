@@ -42,7 +42,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 66 |
 | Commands | 3 |
-| Skills | 67 |
+| Skills | 69 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -245,6 +245,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `brainstorm` | Explore requirements and approaches before planning |
 | `competitive-analysis` | Run competitive intelligence scans and market research reports |
 | `deepen-plan` | Enhance plans with parallel research agents |
+| `gdpr-gate` | Audit diffs and plans for GDPR/CCPA/HIPAA compliance gaps (advisory) |
 | `heal-skill` | Fix skill documentation issues |
 | `plan` | Create structured implementation plans |
 | `plan-review` | Multi-agent plan review in parallel |

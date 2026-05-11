@@ -1,0 +1,141 @@
+name: skill-security-scan / pre-merge required check
+
+# Layer C of the defense-in-depth gate (#2719).
+#
+# Runs on every pull_request synchronize event against `main`. For each new
+# SKILL.md / agent MD file added in the PR diff, runs the scanner and asserts:
+#   1. If verdict is HIGH-RISK, a corresponding override artifact MUST exist
+#      under knowledge-base/security/skill-overrides/.
+#   2. If an override artifact exists, parse-override.sh MUST validate it
+#      (frontmatter schema, slug regex, rule_pack_sha256 freshness).
+#
+# Required status check on `main` branch protection (mitigates R15).
+#
+# Trigger choice — `pull_request` (not `pull_request_target`):
+# `pull_request_target` runs from base-branch context with secret access,
+# which expands the attack surface (a malicious PR could exploit secrets
+# via untrusted code paths). `pull_request` runs from the PR's head workspace
+# with no secret access. Trade-off: PRs from forks could in principle ship a
+# modified workflow file that disables the gate. This is accepted-risk for
+# v1 because (a) Soleur is not yet accepting community PRs at scale,
+# (b) branch protection's required-check binding is by check-name and is
+# enforced at merge time regardless of what the PR ships, and (c) any change
+# to this workflow file is itself a reviewable diff. Re-evaluate when
+# community contribution volume grows.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scan:
+    # DO NOT RENAME — this exact string is referenced as a required check
+    # in CI Required ruleset #14145388, in scripts/required-checks.txt, and
+    # in 5 bot workflows that post synthetic check-runs of this name.
+    # Renaming breaks the merge gate silently. See #3542 R15, Sharp Edge §3.
+    name: skill-security-scan PR gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
+        with:
+          bun-version: latest
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Identify added SKILL/agent files in PR diff
+        id: diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          added=$(git diff --name-only --diff-filter=A "$BASE_SHA"..."$HEAD_SHA" | \
+            grep -E '^(plugins/soleur/skills/[^/]+/SKILL\.md|plugins/soleur/agents/.+\.md|\.claude/skills/.+/SKILL\.md|\.claude/agents/.+\.md)$' || true)
+          {
+            echo "added<<EOF"
+            echo "$added"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$added" ]; then
+            echo "no_new_skills=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_new_skills=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate override artifacts (if any)
+        if: steps.diff.outputs.no_new_skills == 'false'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          out=$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" || echo '{"matched":[],"invalid_schema":[{"reason":"parser failed"}],"stale_findings":[]}')
+          echo "$out" | jq .
+          if [ "$(echo "$out" | jq '.invalid_schema | length')" -gt 0 ]; then
+            echo "::error::Invalid override artifact(s) in PR. Fix schema before merge."
+            echo "$out" | jq '.invalid_schema'
+            exit 1
+          fi
+          if [ "$(echo "$out" | jq '.stale_findings | length')" -gt 0 ]; then
+            echo "::error::Stale override artifact(s): rule_pack_sha256 mismatch."
+            echo "$out" | jq '.stale_findings'
+            exit 1
+          fi
+
+      - name: Run scanner against each added SKILL/agent
+        if: steps.diff.outputs.no_new_skills == 'false'
+        env:
+          ADDED: ${{ steps.diff.outputs.added }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI: 'true'
+        run: |
+          set -euo pipefail
+          # Per-skill override binding (security review P1):
+          # parse-override.sh emits matched[].skill. For each HIGH-RISK
+          # addition derive the slug from the path; require that slug to
+          # appear in matched[]. Any-override acceptance was a P1 bypass —
+          # an attacker landing a malicious skill + a throwaway override
+          # would have passed the previous aggregate-count check.
+          matched_skills="$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" 2>/dev/null | jq -r '.matched[].skill // empty' | sort -u)"
+          path_to_slug() {
+            local p="$1"
+            case "$p" in
+              plugins/soleur/skills/*/SKILL.md)
+                p="${p#plugins/soleur/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/skills/*/SKILL.md)
+                p="${p#.claude/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/agents/*.md|plugins/soleur/agents/*.md|plugins/soleur/agents/*/*.md|plugins/soleur/agents/*/*/*.md)
+                echo "$(basename "$p" .md)" ;;
+              *) echo "" ;;
+            esac
+          }
+          fail=0
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            [ ! -f "$path" ] && continue
+            verdict=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')
+            slug=$(path_to_slug "$path")
+            echo "::notice file=$path::skill-security-scan verdict: $verdict (slug=$slug)"
+            if [ "$verdict" = "HIGH-RISK" ]; then
+              if [ -z "$slug" ]; then
+                echo "::error file=$path::HIGH-RISK on path with un-derivable slug"
+                fail=1
+              elif ! echo "$matched_skills" | grep -qFx -- "$slug"; then
+                echo "::error file=$path::HIGH-RISK without matching override artifact (expected skill=$slug under knowledge-base/security/skill-overrides/)"
+                fail=1
+              fi
+            fi
+          done <<< "$ADDED"
+          exit $fail
