@@ -112,6 +112,17 @@ mode="${MOCK_DOCKER_MODE:-default}"
 
 case "$mode" in
   trace)
+    # `ps` is read by the ADR-027 pre-run assertion; the script greps stdout
+    # for the container name, so the DOCKER_TRACE marker must not appear on
+    # stdout for ps calls. Route the trace to stderr and emit name only when
+    # explicitly armed.
+    if [[ "${1:-}" == "ps" ]]; then
+      echo "DOCKER_TRACE:ps" >&2
+      if [[ "${MOCK_DOCKER_PS_PROD_RUNNING:-}" == "1" ]]; then
+        echo "soleur-web-platform"
+      fi
+      exit 0
+    fi
     echo "DOCKER_TRACE:$1"
     if [[ "${1:-}" == "pull" ]] && [[ "${MOCK_DOCKER_PULL_FAIL:-}" == "1" ]]; then
       exit 1
@@ -176,6 +187,14 @@ case "$mode" in
       echo "abc123"
     fi
     if [[ "${1:-}" == "exec" ]]; then
+      exit 0
+    fi
+    if [[ "${1:-}" == "ps" ]]; then
+      # ADR-027 pre-run assertion mock — emit the leftover prod container name
+      # only when the test explicitly arms this mode.
+      if [[ "${MOCK_DOCKER_PS_PROD_RUNNING:-}" == "1" ]]; then
+        echo "soleur-web-platform"
+      fi
       exit 0
     fi
     exit 0
@@ -572,10 +591,11 @@ assert_canary_trace_order() {
 }
 
 # Canary success: prune → pull → stop(stale canary) → rm(stale canary) → run(canary) →
-#   bwrap sandbox check (docker exec) → stop(old) → rm(old) → run(prod) → stop(canary) → rm(canary)
+#   bwrap sandbox check (docker exec) → stop(old) → rm(old) →
+#   ps(ADR-027 single-replica assertion) → run(prod) → stop(canary) → rm(canary)
 assert_canary_trace_order "canary success: correct docker trace order" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "image|pull|stop|rm|run|exec|stop|rm|run|stop|rm"
+  "image|pull|stop|rm|run|exec|stop|rm|ps|run|stop|rm"
 
 # Canary failure / rollback: prune → pull → stop(stale) → rm(stale) → run(canary) →
 #   logs(canary) → stop(canary) → rm(canary)
@@ -740,8 +760,9 @@ assert_prod_start_failure() {
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
   # prune, pull, stale cleanup (stop, rm), canary run (ok), canary health ok,
-  # bwrap sandbox check, old stop, old rm, prod run (fails), canary stop, canary rm
-  local expected="image|pull|stop|rm|run|exec|stop|rm|run|stop|rm"
+  # bwrap sandbox check, old stop, old rm, ADR-027 ps assertion (empty in this
+  # mock mode), prod run (fails), canary stop, canary rm
+  local expected="image|pull|stop|rm|run|exec|stop|rm|ps|run|stop|rm"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -1540,6 +1561,37 @@ assert_stale_sentinel_cleared() {
 }
 
 assert_stale_sentinel_cleared
+
+# ADR-027 — pre-`docker run` single-replica assertion. When a leftover
+# soleur-web-platform container is still running after docker stop|| rm
+# masked a failure (|| true), the script must abort with a clear,
+# ADR-027-referencing error rather than letting docker run produce a
+# cryptic "name already in use".
+echo ""
+echo "--- ADR-027 pre-run single-replica assertion ---"
+
+assert_adr027_pre_run_assertion() {
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export MOCK_DOCKER_PS_PROD_RUNNING=1
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -ne 0 ]] && printf '%s\n' "$output" | grep -qF "ADR-027"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: leftover soleur-web-platform aborts deploy with ADR-027 message"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: leftover soleur-web-platform aborts deploy with ADR-027 message"
+    echo "        expected: non-zero exit AND output contains 'ADR-027'"
+    echo "        actual exit: $actual_exit"
+    echo "        output: $output"
+  fi
+}
+
+assert_adr027_pre_run_assertion
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

@@ -18,6 +18,7 @@ Queryable index of architectural principles. Each principle links to its canonic
 | AP-010 | Convention over configuration for paths | constitution.md (Architecture/Prefer) | advisory | — |
 | AP-011 | ADRs for architecture decisions | constitution.md (Architecture/Always) | skill | — |
 | AP-012 | New vendor checklist | constitution.md (Architecture/Always) | skill | NFR-026, NFR-027 |
+| AP-013 | Process-local state for runner sessions | ADR-027 | skill | NFR-019 |
 
 ## Enforcement Tiers
 
