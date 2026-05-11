@@ -87,12 +87,35 @@ assert_eq "16" "$RC" "exit 16 with --renamed"
 echo ""
 
 # --- TS8: rollback (new SHA is ancestor of old SHA) → exit 15 ---
-# Use real local commits. HEAD~1 is ancestor of HEAD by definition. Pass
-# `<old-sha=HEAD> <new-sha=HEAD~1>` to simulate the upstream rolling back.
+# Build a throwaway git repo with two real commits so the classifier's
+# `git merge-base --is-ancestor` check works regardless of the surrounding
+# repo's clone shape. Previously this relied on `git rev-parse HEAD~1`
+# against the test runner's checkout, which fails on shallow clones in CI
+# (per test-design review #3521 — fragile-to-fetch-depth class).
+TMPREPO=$(mktemp -d -t classify-rollback-XXXXXXXX)
+trap 'rm -rf "$TMPREPO"' EXIT
+(
+  cd "$TMPREPO"
+  git init -q -b main
+  git config user.email test@example.com
+  git config user.name test
+  echo a > f
+  git add f
+  git commit -q -m "first"
+  echo b >> f
+  git add f
+  git commit -q -m "second"
+) >/dev/null
+OLD_SHA=$(git -C "$TMPREPO" rev-parse HEAD)
+NEW_SHA=$(git -C "$TMPREPO" rev-parse HEAD~1)
+# Run the classifier with GIT_DIR pointed at the tmp repo so its
+# merge-base call resolves the synthetic ancestry.
+run_classify_in() {
+  local repo="$1"; shift
+  (cd "$repo" && bash "$CLASSIFY" "$@" >/dev/null 2>&1; echo $?)
+}
 echo "TS8: rollback SHA pair → exit 15"
-OLD_SHA=$(git rev-parse HEAD)
-NEW_SHA=$(git rev-parse HEAD~1)
-RC=$(run_classify "$OLD_SHA" "$NEW_SHA" < "$FIX/upstream-rollback.diff")
+RC=$(run_classify_in "$TMPREPO" "$OLD_SHA" "$NEW_SHA" < "$FIX/upstream-rollback.diff")
 assert_eq "15" "$RC" "exit 15 when new-sha is ancestor of old-sha (rollback)"
 echo ""
 
@@ -100,7 +123,7 @@ echo ""
 # Even if the diff body contains an Art. 9 addition, a rollback SHA pair
 # should classify as 15. Order matters; tests the priority chain.
 echo "TS9: rollback precedence — wins over security-regex content"
-RC=$(run_classify "$OLD_SHA" "$NEW_SHA" < "$FIX/upstream-fields-art9-add.diff")
+RC=$(run_classify_in "$TMPREPO" "$OLD_SHA" "$NEW_SHA" < "$FIX/upstream-fields-art9-add.diff")
 assert_eq "15" "$RC" "exit 15 even when diff body would otherwise be exit 10"
 echo ""
 
@@ -114,7 +137,7 @@ echo ""
 # Pass `<old-sha=HEAD~1> <new-sha=HEAD>` — new is descendant of old, NOT a
 # rollback. The classifier must fall through to diff content, not exit 15.
 echo "TS11: forward-fast (new is descendant) → falls through to diff classifier"
-RC=$(run_classify "$NEW_SHA" "$OLD_SHA" < "$FIX/upstream-fields-art9-add.diff")
+RC=$(run_classify_in "$TMPREPO" "$NEW_SHA" "$OLD_SHA" < "$FIX/upstream-fields-art9-add.diff")
 assert_eq "10" "$RC" "exit 10 (not 15) when new commit is descendant of pinned"
 echo ""
 
