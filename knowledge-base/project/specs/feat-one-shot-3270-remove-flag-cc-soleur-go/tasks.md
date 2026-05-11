@@ -37,11 +37,12 @@ Apply phases in order — phase ordering is load-bearing per
 - 3.1 In `apps/web-platform/lib/feature-flags/server.ts`: delete the line `"command-center-soleur-go": "FLAG_CC_SOLEUR_GO",` from the `FLAG_VARS` map.
 - 3.2 Confirm `bun run typecheck` passes — the union narrows from 3 to 2 members; no type-assertion fix-up needed.
 
-## Phase 4 — Comment + ADR sweep (cosmetic)
+## Phase 4 — Comment + ADR + env-example sweep (cosmetic)
 
 - 4.1 In `apps/web-platform/server/cc-dispatcher.ts` lines 6-10: replace the `Stage 2.12 — bind real-SDK query() / Behind FLAG_CC_SOLEUR_GO=0 in prod...` block with a corrected note explaining `realSdkQueryFactory` is the always-on production cc-soleur-go SDK binding (post-#3270).
 - 4.2 In `apps/web-platform/server/cc-dispatcher.ts` line 419: replace `realSdkQueryFactory — Stage 2.12 binding (replaces the prior stub that throw-mirrored to Sentry under FLAG_CC_SOLEUR_GO).` with `realSdkQueryFactory — Stage 2.12 binding (originally gated behind FLAG_CC_SOLEUR_GO; flag removed in #3270, this is now the unconditional production binding).`
 - 4.3 In `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md` lines 71-73: replace the paragraph with a single-line follow-up describing #3270 as Stage 8.
+- 4.4 In `apps/web-platform/.env.example` lines 81-86: delete the 6-line block (5-line doc comment + `FLAG_CC_SOLEUR_GO=0`). Do NOT delete the "Runtime Feature Flags" banner at lines 75-78 or the surrounding `FLAG_KB_CHAT_SIDEBAR=0` line — those are shared across flag entries. Verify post-edit: `grep -F FLAG_CC_SOLEUR_GO apps/web-platform/.env.example` returns zero hits AND `grep -F 'Runtime Feature Flags' apps/web-platform/.env.example` returns 1.
 
 ## Phase 5 — Verify
 

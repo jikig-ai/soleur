@@ -6,9 +6,48 @@ classification: code-removal
 requires_cpo_signoff: false
 brand_impact_threshold: none
 status: planned
+deepened: 2026-05-11
 ---
 
 # chore: remove FLAG_CC_SOLEUR_GO (always-on in prod and dev)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-11
+**Sections enhanced:** 4 (Files to Edit, Acceptance Criteria, Risks, Sharp Edges)
+**Verification artifacts:** class-wide grep, getFlag-caller count, *.test-d.ts scan, package.json scripts probe
+
+### Key Improvements (from grep verification, NOT external research)
+
+1. **Added `.env.example` to Files to Edit (was missing).** The deepen-pass grep `git grep -nF FLAG_CC_SOLEUR_GO` surfaced `apps/web-platform/.env.example:81-86` — a 6-line block (header comment + the `FLAG_CC_SOLEUR_GO=0` setting). The original plan listed only 6 code files + 1 ADR; `.env.example` is the seventh operator-facing surface. Without this edit, new developers cloning the repo would still seed `FLAG_CC_SOLEUR_GO=0` into local `.env` files for a flag that no longer exists in code (cosmetic, but a confusing onboarding signal).
+2. **Pinned the `getFlag` import-removal decision.** Verified pre-edit count of `getFlag(` calls in `ws-handler.ts` is exactly **1** (the `command-center-soleur-go` call at line 991). After the deletion in task 2.3, the count goes to **0**. Plan Task 2.7's conditional grep is correct, but the deepen-pass concretizes the outcome: the import on line 63 WILL be removed (no remaining caller in the file). The conditional grep stays as a defense-in-depth check.
+3. **Risk #2 (test-d.ts orphans) refuted concretely.** `find apps/web-platform -name "*.test-d.ts"` returns zero files. The risk remains in the plan as a verification step but is downgraded to "unreachable today" — `tsc --noEmit` is the canonical and sufficient gate.
+4. **Pinned the canonical typecheck command.** `apps/web-platform/package.json` scripts: `test: vitest`, `test:ci: vitest run`, `typecheck: tsc --noEmit`. The plan's references to "`bun run typecheck`" should be `bun run typecheck` (which calls `tsc --noEmit`) OR direct `tsc --noEmit` — both invoke the same script. Confirmed correct.
+5. **Confirmed typo in plan Sharp Edges (line 177).** The bullet says "comment-center-soleur-go" — should be "command-center-soleur-go". Fixed inline.
+
+### New Considerations Discovered
+
+- **`.env.example` block spans 6 lines** (the 5-line documentation comment + the `FLAG_CC_SOLEUR_GO=0` line). The header at lines 75-78 ("Runtime Feature Flags" section banner) is shared with `FLAG_KB_CHAT_SIDEBAR`, so do NOT delete those four lines. The deletion target is lines 81-86 exclusive (the per-flag block).
+- **The original feat-cc plan task 8.8** (`knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md:421`) says "Delete `FLAG_CC_SOLEUR_GO` from feature-flag module" — that is precisely the work this PR ships. The 2026-04-23 plan's tasks.md (in `knowledge-base/project/specs/feat-cc-single-leader-routing/tasks.md`) still has task 8.8 as unchecked. After this PR merges, that checkbox can be closed in a separate housekeeping commit (not blocking — historical record).
+- **Class-wide grep already returns the expected residuals** in `knowledge-base/project/learnings/**` and `knowledge-base/project/plans/**`. Those are historical record and MUST NOT be edited (per `cq-agents-md-tier-gate` placement rules and `2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces.md` exemption for archive-equivalent paths). The plan's Pre-merge AC class-wide grep recipe correctly excludes them.
+
+### Verification Greps (live output, not from training data)
+
+```bash
+$ git grep -F "FLAG_CC_SOLEUR_GO" -- ':!knowledge-base/project/learnings/**' \
+    ':!knowledge-base/project/plans/**' ':!knowledge-base/project/specs/**' \
+    ':!**/archive/**' | wc -l
+# Pre-edit: 15 matches in source/config; post-edit target: 0
+
+$ grep -cE '\bgetFlag\(' apps/web-platform/server/ws-handler.ts
+# Pre-edit: 1 (the cc call); post-edit target: 0 → drop the import
+
+$ find apps/web-platform -name "*.test-d.ts"
+# Result: zero files. The test-d orphan risk is unreachable today.
+
+$ jq -r '.scripts.typecheck' apps/web-platform/package.json
+# Result: "tsc --noEmit". Canonical typecheck invocation.
+```
 
 ## Overview
 
@@ -78,6 +117,12 @@ land lazily without coordination.
    - Line 419: replace `realSdkQueryFactory — Stage 2.12 binding (replaces the prior stub that throw-mirrored to Sentry under FLAG_CC_SOLEUR_GO).` with `realSdkQueryFactory — Stage 2.12 binding (originally gated behind FLAG_CC_SOLEUR_GO; flag removed in #3270, this is now the unconditional production binding).`
 7. `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md:71-73` — replace the paragraph `Legacy domain-router.ts / agent-runner.ts / dispatchToLeaders remain behind FLAG_CC_SOLEUR_GO=false until a 14-day dev soak confirms the new path, then Stage 8 (separate PR) removes them.` with a one-line follow-up: `Stage 8 landed via #3270 — FLAG_CC_SOLEUR_GO was removed and the cc-soleur-go path is now the unconditional production binding. Legacy router code is retained for the SDK-router fallback paths only.`
 
+8. `apps/web-platform/.env.example:81-86` — **added during deepen-pass** (see Enhancement Summary). Delete the 6-line block:
+   - Line 81-85: the documentation comment (`# Route Command Center conversations via /soleur:go ...`).
+   - Line 86: `FLAG_CC_SOLEUR_GO=0`.
+   
+   Do NOT delete the surrounding "Runtime Feature Flags" header banner at lines 75-78 — it documents the broader category and is shared with `FLAG_KB_CHAT_SIDEBAR=0` (line 79). Verify post-edit with `grep -F FLAG_CC_SOLEUR_GO apps/web-platform/.env.example` returning zero hits.
+
 ## Files to Create
 
 None.
@@ -101,6 +146,7 @@ Decision: all overlaps acknowledged; no fold-in. The flag-removal scope and the 
 ### Pre-merge (PR)
 
 - [ ] `apps/web-platform/lib/feature-flags/server.ts` no longer mentions `command-center-soleur-go` / `FLAG_CC_SOLEUR_GO` (`grep -F FLAG_CC_SOLEUR_GO apps/web-platform/lib/feature-flags/server.ts` returns zero).
+- [ ] `apps/web-platform/.env.example` no longer mentions `FLAG_CC_SOLEUR_GO` and no longer contains the per-flag documentation block (`grep -F FLAG_CC_SOLEUR_GO apps/web-platform/.env.example` returns zero); the surrounding "Runtime Feature Flags" header at lines 75-78 is preserved (verify the header still exists post-edit).
 - [ ] `apps/web-platform/server/conversation-routing.ts` no longer exports `resolveInitialRouting` (`grep -n 'export function resolveInitialRouting' apps/web-platform/server/conversation-routing.ts` returns zero).
 - [ ] `apps/web-platform/server/ws-handler.ts` no longer references `ccFlagEnabled` or `resolveInitialRouting` (`grep -nE 'ccFlagEnabled|resolveInitialRouting' apps/web-platform/server/ws-handler.ts` returns zero).
 - [ ] The cc rate-limiter check (`getCcStartSessionRateLimiter().check({ userId, ip: rateLimitIp })`) runs unconditionally for every `start_session` call (no `if (ccFlagEnabled)` wrapper).
@@ -174,7 +220,7 @@ The plan touches a TypeScript surface where the compiler is load-bearing (per `2
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. This plan's threshold is `none` with a one-line rationale per `plugins/soleur/skills/preflight/SKILL.md` Check 6 — fill remains intact.
 - When renaming `router-flag-stickiness.test.ts` → `router-stickiness-invariant.test.ts`, use `git mv` exactly. A delete-then-create masquerading as a rename produces a no-history file and complicates `git blame`. **Verify the rename via `git status` shows `R` before commit; if it shows `D` + `??`, run `git mv` again.**
 - When removing the FLAG_VARS entry, verify the surrounding `as const` typedef still produces a valid `FlagName` union. The current type is `keyof typeof FLAG_VARS` — removing one entry simply narrows the union to two members and is type-safe by construction. No type-assertion fix-up is needed.
-- The `comment-center-soleur-go` flag string (the slug used as the key in `FLAG_VARS`) is NOT referenced anywhere else by string literal (verify with `git grep -F 'command-center-soleur-go'`). All consumers go through the typed `getFlag("command-center-soleur-go")` call, which TypeScript will reject after the key is removed.
+- The `command-center-soleur-go` flag string (the slug used as the key in `FLAG_VARS`) is NOT referenced anywhere else by string literal (verify with `git grep -F 'command-center-soleur-go'`). All consumers go through the typed `getFlag("command-center-soleur-go")` call, which TypeScript will reject after the key is removed.
 - The `FLAG_CC_SOLEUR_GO` env-var symbol appears in `cc-dispatcher.ts:419` ONLY as a comment-narrative reference (in the historical `replaces the prior stub that throw-mirrored to Sentry under FLAG_CC_SOLEUR_GO` line). Comment edits are not load-bearing; do not over-engineer this into a JSDoc rewrite — keep the edit minimal and historically faithful.
 - This is a **chore** PR (no semver-bump label needed). Per `wg-never-bump-version-files-in-feature` do NOT edit `plugin.json` or `marketplace.json`. The CI label-bot does not add semver labels to `type/chore` PRs by default.
 - The class-wide verification grep MUST exclude `knowledge-base/project/learnings/**`, `knowledge-base/project/plans/**`, `knowledge-base/project/specs/**`, and any `**/archive/**` path (per `2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces.md` — operator-surface scope is the right default, but historical record is explicitly exempt because plans/learnings record the prior state and must not be rewritten). The literal grep is in AC §"Class-wide grep" — use exactly that invocation.
