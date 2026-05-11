@@ -1,6 +1,7 @@
 import { query, type tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
 import { readFileSync, mkdirSync } from "fs";
+import { readFile } from "node:fs/promises";
 import path from "path";
 
 import { createServiceClient } from "@/lib/supabase/service";
@@ -39,6 +40,9 @@ import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
+import { selectChapter } from "./pdf-chapter-router";
+import { extractPdfText } from "./pdf-text-extract";
+import { FULL_TEXT_CAP_BYTES } from "./kb-document-resolver";
 import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
 import { releaseSlot } from "./concurrency";
@@ -958,6 +962,16 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
     const MAX_INLINE_BYTES = 50_000; // ~12-15K tokens — keeps cost bounded
 
     let artifactDirective = "";
+    // #3436 Phase 3.B — leader-side chapter routing. Hoisted from the
+    // `resolved.documentKind === "pdf"` block so the pre-`query()`
+    // routing pass below can consume the outline + absolute path.
+    // `null` on every non-chapter-chunked path; populated by the
+    // chapters branch when the resolver returned a usable outline.
+    let leaderChapterRouting: {
+      outline: import("./pdf-text-extract").ChapterIndex[];
+      fullPath: string;
+      displayPath: string;
+    } | null = null;
     const safeContextPath = context?.path ? sanitizePromptIdentifier(context.path) : "";
 
     if (context?.content) {
@@ -1000,22 +1014,41 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
 
         if (resolved.documentKind === "pdf") {
           // 2026-05-07 (#3436) — chapter-chunked soft-route, symmetric
-          // with `soleur-go-runner.ts`. Phase 3.A foundations ship the
-          // router module + tests but DEFER per-turn dispatch routing
-          // + content-block attachment to #3472. Until #3472 ships,
-          // fall through to PR #3430's `too_many_pages` bridge whenever
-          // chapters are present so the leader gets a deterministic
-          // refusal naming the page count rather than a directive
-          // promising a content block the dispatch layer does not yet
-          // attach. See multi-agent review on PR #3440 (#3472 tracking).
+          // with `soleur-go-runner.ts`. Phase 3.B (bundle PR
+          // feat-pdf-chapter-chunking-bundle, TR4 → AC #18) revives
+          // the chapter-chunked directive in lockstep with the
+          // dispatch-time `pushStructuredUserMessage`-shaped attachment
+          // wired below. Leader-specific delta from the Concierge: an
+          // explicit NO-ASK clause on the SDK Read tool (Concierge has
+          // no SDK Read surface; leader does and would otherwise try
+          // to Read the chapter PDF directly, defeating the
+          // chapter-routing cost optimization).
           const chapters = resolved.documentExtractMeta?.chapters;
           if (chapters && chapters.length > 0) {
-            const safeNumPages = resolved.documentExtractMeta?.numPages ?? 0;
-            artifactDirective = buildPdfTooLongDirective(
-              safeContextPath,
-              safeNumPages,
+            // Capture for the pre-`query()` chapter-routing pass below
+            // (single-callsite, no shared helper per parent plan §3.4).
+            leaderChapterRouting = {
+              outline: chapters,
+              fullPath: safeFullPath,
+              displayPath: safeContextPath,
+            };
+            const tocLines = chapters
+              .map((c, i) => {
+                const safeTitle = sanitizePromptIdentifier(c.title);
+                return `${i + 1}. ${safeTitle} (pages ${c.startPage}-${c.endPage})`;
+              })
+              .join("\n");
+            artifactDirective = [
+              `The user is currently viewing: ${safeContextPath}`,
+              "",
+              "This PDF is too long to inline. It has been chapter-chunked. Table of contents:",
+              tocLines,
+              "",
+              "The most-relevant chapter to the user's next question will be routed and attached on that user turn as a `document` content block. Treat that block as the authoritative source for your answer.",
+              `Do NOT invoke the Read tool on this PDF; the chapter content is provided in the user message.`,
+              `Prefix every reply with \`[Answering from chapter <N>: "<title>"]\` (using the 1-based chapter number and the title from the table of contents above) so the user can confirm the routing chose the right chapter.`,
               CONTEXT_NO_ASK,
-            );
+            ].join("\n");
           } else if (resolved.documentExtractError) {
             // Lock-step partition-dispatch order with `soleur-go-runner.ts`
             // (lines ~985-1013): SOFT first, then `too_many_pages`, then
@@ -1343,8 +1376,164 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     }
 
     // Run the Agent SDK query
-    const prompt = userMessage
+    let prompt = userMessage
       ?? `[Session started with ${leader.name}] How can I help you today?`;
+
+    // #3436 Phase 3.B — leader-side dispatch chapter routing (TR4 →
+    // AC #18). Lockstep with the directive revival above: when the
+    // resolver returned a chapter-bearing PDF, run a routing turn
+    // against the user's question and rewrite `prompt` to inline the
+    // routed chapter slice. Single-callsite (no shared helper per
+    // parent plan §3.4) because the leader's `prompt: string` shape
+    // diverges from the Concierge's streaming-input
+    // `pushStructuredUserMessage`.
+    //
+    // No `userMessage` (synthetic session-open prompt) → skip
+    // routing. The directive still ships; the model gets the TOC and
+    // will receive a chapter on the user's first real turn (next
+    // `startAgentSession` invocation).
+    let leaderChapterFor: { displayNumber: number; title: string } | null = null;
+    if (leaderChapterRouting !== null && userMessage) {
+      const routing = leaderChapterRouting;
+      const result = await selectChapter({
+        question: userMessage,
+        outline: routing.outline,
+        conversationCostState: {
+          totalCostUsd: 0,
+          // Leader sessions are one-shot per startAgentSession; the
+          // running per-session cap is enforced by `maxBudgetUsd:
+          // 5.0` on the SDK call. The routing turn is a sub-budget
+          // probe; set perConvCap loose enough to never trip here.
+          perConvCap: 100.0,
+        },
+      });
+      if (result.kind === "selected") {
+        const chapter = routing.outline[result.chapterIndex];
+        let buffer: Buffer;
+        try {
+          buffer = await readFile(routing.fullPath);
+        } catch (err) {
+          // ENOENT or other read failure — emit a system-styled
+          // text via `sendToClient` and fall through to the regular
+          // prompt (system-prompt directive still describes the TOC,
+          // so the agent can at least describe what it sees).
+          reportSilentFallback(err, {
+            feature: "agent-runner",
+            op:
+              (err as NodeJS.ErrnoException)?.code === "ENOENT"
+                ? "chapter-readfile-enoent"
+                : "chapter-readfile-other",
+            extra: { conversationId, userId },
+          });
+          sendToClient(userId, {
+              type: "stream",
+              content: `\nThe source PDF for this conversation could not be read — answering against the table of contents only.\n`,
+              partial: false,
+              leaderId: effectiveLeaderId,
+            });
+          buffer = Buffer.alloc(0);
+        }
+        if (chapter && buffer.length > 0) {
+          const sliceResult = await extractPdfText(
+            buffer,
+            FULL_TEXT_CAP_BYTES,
+            {
+              featureTag: "leader-context",
+              startPage: chapter.startPage,
+              endPage: chapter.endPage,
+            },
+          );
+          if (!("error" in sliceResult)) {
+            const sanitizedSlice = sliceResult.text
+              // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
+              .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
+              .replaceAll("</chapter-content>", "<\\/chapter-content>");
+            leaderChapterFor = {
+              displayNumber: result.chapterIndex + 1,
+              title: chapter.title,
+            };
+            // Inline the chapter slice in the user message. The
+            // system-prompt directive instructs the leader to treat
+            // the `<chapter-content>` body as authoritative and to
+            // prefix the reply with `[Answering from chapter <N>:
+            // "<title>"]`. We do NOT switch the SDK Query to
+            // streaming-input mode (that would require a much larger
+            // refactor of agent-runner's single-shot semantics);
+            // string-prompt inlining is the byte-economic shape for
+            // the leader path. AC #4 cost envelope is preserved —
+            // 200K-context model, ~50K-100K of chapter text, single
+            // turn.
+            prompt = [
+              `Chapter ${leaderChapterFor.displayNumber}: ${leaderChapterFor.title} (pages ${chapter.startPage}-${chapter.endPage})`,
+              "<chapter-content>",
+              sanitizedSlice,
+              "</chapter-content>",
+              "",
+              `User question: ${userMessage}`,
+            ].join("\n");
+          } else {
+            reportSilentFallback(
+              new Error(`extractPdfText ${sliceResult.error}`),
+              {
+                feature: "agent-runner",
+                op: `chapter-slice-${sliceResult.error}`,
+                extra: { conversationId, userId },
+              },
+            );
+            sendToClient(userId, {
+              type: "stream",
+              content: `\nI have the TOC but that chapter failed to extract — try a different chapter or re-attach the PDF.\n`,
+              partial: false,
+              leaderId: effectiveLeaderId,
+            });
+          }
+        }
+      } else if (result.kind === "router-error") {
+        reportSilentFallback(new Error(`chapter-router: ${result.reason}`), {
+          feature: "agent-runner",
+          op: "chapter-router-error",
+          extra: { conversationId, userId },
+        });
+        // Fall through with the original prompt; the system-prompt
+        // directive still names the TOC.
+      } else if (result.kind === "ambiguous") {
+        sendToClient(userId, {
+              type: "stream",
+              content: `\nI can answer from multiple chapters — could you clarify which chapter you'd like me to use?\n`,
+              partial: false,
+              leaderId: effectiveLeaderId,
+            });
+        // Fall through with the original prompt to let the agent
+        // converse about the ambiguity if it chooses.
+      } else if (result.kind === "ambiguous-which-document") {
+        // KD-6 forward-looking guard. Unreachable today (single
+        // documentExtractMeta per turn).
+        const list = result.candidateTitles.map((t) => `- ${t}`).join("\n");
+        sendToClient(userId, {
+              type: "stream",
+              content: `\nI see multiple chapter-chunked PDFs:\n${list}\n\nWhich one would you like me to answer from?\n`,
+              partial: false,
+              leaderId: effectiveLeaderId,
+            });
+      } else if (result.kind === "cost-cap-hit") {
+        // Should be unreachable with perConvCap: 100 above, but the
+        // exhaustive rail demands every kind get a branch.
+        reportSilentFallback(
+          new Error(
+            `chapter-router cost-cap-hit (unexpected): cap=${result.cap}, total=${result.totalCostUsd}`,
+          ),
+          {
+            feature: "agent-runner",
+            op: "chapter-router-cost-cap-unexpected",
+            extra: { conversationId, userId },
+          },
+        );
+      } else {
+        const _exhaustive: never = result;
+        void _exhaustive;
+      }
+    }
+    void leaderChapterFor;
 
     // Build the SDK Options through `buildAgentQueryOptions` so the
     // cc-soleur-go `realSdkQueryFactory` and this legacy path stay in
