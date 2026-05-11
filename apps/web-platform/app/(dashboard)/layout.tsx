@@ -2,14 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 import { ConversationsRail } from "@/components/chat/conversations-rail";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
-import { reportSilentFallback } from "@/lib/client-observability";
+import { useSignOut } from "@/components/auth/use-sign-out";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -100,14 +100,13 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
-  const [isSigningOut, setIsSigningOut] = useState(false);
+  const { handleSignOut, isSigningOut } = useSignOut();
 
   // Check admin status on mount
   useEffect(() => {
@@ -195,49 +194,6 @@ export default function DashboardLayout({
     return () => mediaQuery.removeEventListener("change", handler);
   }, []);
 
-  async function handleSignOut() {
-    setIsSigningOut(true);
-    const supabase = createClient();
-    // Sign-out tears down ALL channels by design. removeAllChannels() is
-    // best-effort cleanup; if the Phoenix WS rejects phx_leave (network
-    // blip, already-closed transport), we mirror to Sentry and proceed.
-    // The outer try/finally still guarantees signOut + redirect run —
-    // leaving the user authenticated is the shared-device leak the plan's
-    // User-Brand Impact paragraph names.
-    try {
-      try {
-        await supabase.removeAllChannels();
-      } catch (err) {
-        reportSilentFallback(err, {
-          feature: "auth",
-          op: "signOut",
-          extra: { stage: "removeAllChannels" },
-        });
-      }
-      try {
-        const { error } = await supabase.auth.signOut();
-        if (error) {
-          reportSilentFallback(error, {
-            feature: "auth",
-            op: "signOut",
-            extra: { stage: "signOut.resultError" },
-          });
-        }
-      } catch (err) {
-        reportSilentFallback(err, {
-          feature: "auth",
-          op: "signOut",
-          extra: { stage: "signOut.throw" },
-        });
-      }
-    } finally {
-      router.push("/login");
-      // Do NOT setIsSigningOut(false): the route push unmounts the layout
-      // and the unmount IS the reset. Resetting here briefly re-enables
-      // the Sign out button between navigation start and unmount.
-    }
-  }
-
   return (
     <TeamNamesProvider>
     <div className="flex h-dvh flex-col md:flex-row">
@@ -265,8 +221,12 @@ export default function DashboardLayout({
         onClick={() => setDrawerOpen(false)}
       />
 
-      {/* Sidebar / mobile drawer — always rendered for CSS transitions */}
+      {/* Sidebar / mobile drawer — always rendered for CSS transitions.
+          `inert` while the sign-out modal is open removes the sidebar
+          Sign out button from the a11y tree so agent-driven selectors
+          (and screen readers) target only the modal's confirm button. */}
       <aside
+        inert={signOutModalOpen || undefined}
         className={`
           fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-soleur-border-default bg-soleur-bg-surface-1
           transition-transform duration-200 ease-out

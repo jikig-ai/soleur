@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 
@@ -20,7 +20,9 @@ const {
   reportSilentFallbackMock,
 } = vi.hoisted(() => ({
   pushMock: vi.fn(),
-  signOutMock: vi.fn(() => Promise.resolve({ error: null })),
+  signOutMock: vi.fn(
+    (): Promise<{ error: Error | null }> => Promise.resolve({ error: null }),
+  ),
   removeAllChannelsMock: vi.fn(() => Promise.resolve(["ok"])),
   reportSilentFallbackMock: vi.fn(),
 }));
@@ -90,61 +92,45 @@ afterEach(() => {
 });
 
 describe("DashboardLayout — Sign out confirmation modal", () => {
-  it("does not render the modal until the sidebar Sign out button is clicked", async () => {
+  async function renderDashboard() {
     const { default: DashboardLayout } = await import(
       "@/app/(dashboard)/layout"
     );
-
-    render(
+    return render(
       <Wrap>
         <DashboardLayout>
           <div data-testid="page">page</div>
         </DashboardLayout>
       </Wrap>,
     );
+  }
 
+  function openModal() {
+    const sidebarSignOut = screen.getByRole("button", { name: /sign out/i });
+    fireEvent.click(sidebarSignOut);
+    return screen.getByRole("dialog");
+  }
+
+  it("does not render the modal until the sidebar Sign out button is clicked", async () => {
+    await renderDashboard();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("opens the confirmation modal when the sidebar Sign out button is clicked", async () => {
-    const { default: DashboardLayout } = await import(
-      "@/app/(dashboard)/layout"
-    );
+    await renderDashboard();
 
-    render(
-      <Wrap>
-        <DashboardLayout>
-          <div data-testid="page">page</div>
-        </DashboardLayout>
-      </Wrap>,
-    );
+    const dialog = openModal();
 
-    const signOutButtons = screen.getAllByRole("button", { name: /sign out/i });
-    fireEvent.click(signOutButtons[0]);
-
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
     expect(signOutMock).not.toHaveBeenCalled();
     expect(removeAllChannelsMock).not.toHaveBeenCalled();
   });
 
   it("Cancel inside the modal closes it without signing out", async () => {
-    const { default: DashboardLayout } = await import(
-      "@/app/(dashboard)/layout"
-    );
+    await renderDashboard();
+    const dialog = openModal();
 
-    render(
-      <Wrap>
-        <DashboardLayout>
-          <div data-testid="page">page</div>
-        </DashboardLayout>
-      </Wrap>,
-    );
-
-    const signOutButtons = screen.getAllByRole("button", { name: /sign out/i });
-    fireEvent.click(signOutButtons[0]);
-
-    const cancelButton = screen.getByRole("button", { name: /cancel/i });
-    fireEvent.click(cancelButton);
+    fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(signOutMock).not.toHaveBeenCalled();
@@ -153,26 +139,10 @@ describe("DashboardLayout — Sign out confirmation modal", () => {
   });
 
   it("Confirm inside the modal runs the teardown contract and redirects to /login", async () => {
-    const { default: DashboardLayout } = await import(
-      "@/app/(dashboard)/layout"
-    );
+    await renderDashboard();
+    const dialog = openModal();
 
-    render(
-      <Wrap>
-        <DashboardLayout>
-          <div data-testid="page">page</div>
-        </DashboardLayout>
-      </Wrap>,
-    );
-
-    const sidebarSignOut = screen.getAllByRole("button", { name: /sign out/i })[0];
-    fireEvent.click(sidebarSignOut);
-
-    const confirmInModal = screen
-      .getAllByRole("button", { name: /^sign out$/i })
-      .find((btn) => btn !== sidebarSignOut);
-    expect(confirmInModal).toBeDefined();
-    fireEvent.click(confirmInModal!);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => {
       expect(signOutMock).toHaveBeenCalledTimes(1);
@@ -185,26 +155,10 @@ describe("DashboardLayout — Sign out confirmation modal", () => {
     removeAllChannelsMock.mockImplementationOnce(() =>
       Promise.reject(new Error("phx_leave timeout")),
     );
+    await renderDashboard();
+    const dialog = openModal();
 
-    const { default: DashboardLayout } = await import(
-      "@/app/(dashboard)/layout"
-    );
-
-    render(
-      <Wrap>
-        <DashboardLayout>
-          <div data-testid="page">page</div>
-        </DashboardLayout>
-      </Wrap>,
-    );
-
-    const sidebarSignOut = screen.getAllByRole("button", { name: /sign out/i })[0];
-    fireEvent.click(sidebarSignOut);
-
-    const confirmInModal = screen
-      .getAllByRole("button", { name: /^sign out$/i })
-      .find((btn) => btn !== sidebarSignOut);
-    fireEvent.click(confirmInModal!);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => {
       expect(pushMock).toHaveBeenCalledWith("/login");
@@ -217,38 +171,56 @@ describe("DashboardLayout — Sign out confirmation modal", () => {
     );
   });
 
-  it("mirrors a signOut throw to Sentry with feature:auth op:signOut and still pushes /login", async () => {
+  it("mirrors a signOut throw to Sentry and still pushes /login + force-clears local state", async () => {
     signOutMock.mockImplementationOnce(() =>
       Promise.reject(new Error("network failure")),
     );
+    await renderDashboard();
+    const dialog = openModal();
 
-    const { default: DashboardLayout } = await import(
-      "@/app/(dashboard)/layout"
-    );
-
-    render(
-      <Wrap>
-        <DashboardLayout>
-          <div data-testid="page">page</div>
-        </DashboardLayout>
-      </Wrap>,
-    );
-
-    const sidebarSignOut = screen.getAllByRole("button", { name: /sign out/i })[0];
-    fireEvent.click(sidebarSignOut);
-
-    const confirmInModal = screen
-      .getAllByRole("button", { name: /^sign out$/i })
-      .find((btn) => btn !== sidebarSignOut);
-    fireEvent.click(confirmInModal!);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => {
       expect(pushMock).toHaveBeenCalledWith("/login");
     });
 
+    // First call: original signOut() throws and is mirrored.
+    // Second call: scope-"local" fallback purges local cookies/storage so a
+    // shared device cannot inherit the authenticated session.
+    expect(signOutMock).toHaveBeenCalledTimes(2);
+    expect(signOutMock).toHaveBeenNthCalledWith(2, { scope: "local" });
     expect(reportSilentFallbackMock).toHaveBeenCalledWith(
       expect.any(Error),
-      expect.objectContaining({ feature: "auth", op: "signOut" }),
+      expect.objectContaining({
+        feature: "auth",
+        op: "signOut",
+        extra: expect.objectContaining({ stage: "signOut.throw" }),
+      }),
+    );
+  });
+
+  it("mirrors a signOut { error } resolution and force-clears local state via scope:local fallback", async () => {
+    signOutMock.mockImplementationOnce(() =>
+      Promise.resolve({ error: new Error("admin signOut 500") }),
+    );
+    await renderDashboard();
+    const dialog = openModal();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => {
+      expect(pushMock).toHaveBeenCalledWith("/login");
+    });
+
+    expect(signOutMock).toHaveBeenCalledTimes(2);
+    expect(signOutMock).toHaveBeenNthCalledWith(2, { scope: "local" });
+    expect(reportSilentFallbackMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        feature: "auth",
+        op: "signOut",
+        extra: expect.objectContaining({ stage: "signOut.resultError" }),
+      }),
     );
   });
 });

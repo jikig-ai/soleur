@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
-}));
-
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 
 const BASE_PROPS = {
@@ -58,6 +53,17 @@ describe("SignOutConfirmModal", () => {
     expect(BASE_PROPS.onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("does NOT call onClose when the backdrop is clicked while signing out", () => {
+    const { container } = render(
+      <SignOutConfirmModal {...BASE_PROPS} isSigningOut={true} />,
+    );
+
+    const backdrop = container.querySelector('[role="presentation"]');
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop!);
+    expect(BASE_PROPS.onClose).not.toHaveBeenCalled();
+  });
+
   it("calls onClose when Cancel is clicked", () => {
     render(<SignOutConfirmModal {...BASE_PROPS} />);
 
@@ -75,11 +81,15 @@ describe("SignOutConfirmModal", () => {
   it("disables both buttons and shows Signing out… when isSigningOut is true", () => {
     render(<SignOutConfirmModal {...BASE_PROPS} isSigningOut={true} />);
 
+    // aria-label="Sign out" is pinned across visual state changes so the
+    // accessible name is stable for agent selectors. Visible text flips to
+    // "Signing out…" and aria-busy="true" surfaces the in-flight state to AT.
     const cancelButton = screen.getByRole("button", { name: /cancel/i });
-    const confirmButton = screen.getByRole("button", { name: /signing out/i });
+    const confirmButton = screen.getByRole("button", { name: "Sign out" });
 
     expect(cancelButton).toBeDisabled();
     expect(confirmButton).toBeDisabled();
+    expect(confirmButton).toHaveAttribute("aria-busy", "true");
     expect(confirmButton).toHaveTextContent(/signing out/i);
   });
 

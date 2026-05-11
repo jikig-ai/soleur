@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Idempotent Sentry alert-rule configurator for the auth observability stack.
 #
-# Configures three issue-alert rules that page ops via email on user-facing
+# Configures four issue-alert rules that page ops via email on user-facing
 # auth regressions detected through the existing `feature:auth` Sentry tag:
 #
 #   1. auth-exchange-code-burst    — >=5 events in 15m, op:exchangeCodeForSession
 #   2. auth-callback-no-code-burst — >=3 events in 15m, op:callback_no_code
 #   3. auth-per-user-loop          — >=3 unique-user events in 5m, feature:auth
+#   4. auth-signout-burst          — >=5 events in 15m, op:signOut
 #
 # Idempotency: GET /rules/, match by name, PUT if found else POST.
 # Region detection: probes /users/me/ on sentry.io and de.sentry.io.
@@ -161,4 +162,14 @@ upsert_rule "auth-per-user-loop" \
   '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"}]' \
   30
 
-echo "[done] All three Sentry alert rules upserted."
+# --- Rule 4: auth-signout-burst (sign-out teardown failures) ------------
+# Elevated signOut failures (server 5xx, network outage, CORS regression on
+# the auth endpoint) leave users stuck on a half-authenticated session — the
+# shared-device leak the dashboard layout's User-Brand Impact paragraph
+# names. Mirrors auth-exchange-code-burst's >=5/15m threshold.
+upsert_rule "auth-signout-burst" \
+  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":5,"interval":"15m"}]' \
+  '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"signOut"}]' \
+  60
+
+echo "[done] All four Sentry alert rules upserted."

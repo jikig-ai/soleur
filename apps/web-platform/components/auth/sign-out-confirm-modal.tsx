@@ -39,9 +39,13 @@ export function SignOutConfirmModal({
       }
 
       if (e.key === "Tab" && dialogRef.current) {
+        // Filter `:disabled` so the manual wrap does not call `.focus()` on a
+        // disabled button (no-op that breaks the cycle) while the modal is
+        // in the `isSigningOut=true` state.
         const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+          'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
         );
+        if (focusable.length === 0) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
 
@@ -103,6 +107,8 @@ export function SignOutConfirmModal({
             type="button"
             onClick={onConfirm}
             disabled={isSigningOut}
+            aria-label="Sign out"
+            aria-busy={isSigningOut || undefined}
             className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSigningOut ? "Signing out…" : "Sign out"}
