@@ -145,26 +145,20 @@ Decision: all overlaps acknowledged; no fold-in. The flag-removal scope and the 
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/lib/feature-flags/server.ts` no longer mentions `command-center-soleur-go` / `FLAG_CC_SOLEUR_GO` (`grep -F FLAG_CC_SOLEUR_GO apps/web-platform/lib/feature-flags/server.ts` returns zero).
-- [ ] `apps/web-platform/.env.example` no longer mentions `FLAG_CC_SOLEUR_GO` and no longer contains the per-flag documentation block (`grep -F FLAG_CC_SOLEUR_GO apps/web-platform/.env.example` returns zero); the surrounding "Runtime Feature Flags" header at lines 75-78 is preserved (verify the header still exists post-edit).
-- [ ] `apps/web-platform/server/conversation-routing.ts` no longer exports `resolveInitialRouting` (`grep -n 'export function resolveInitialRouting' apps/web-platform/server/conversation-routing.ts` returns zero).
-- [ ] `apps/web-platform/server/ws-handler.ts` no longer references `ccFlagEnabled` or `resolveInitialRouting` (`grep -nE 'ccFlagEnabled|resolveInitialRouting' apps/web-platform/server/ws-handler.ts` returns zero).
-- [ ] The cc rate-limiter check (`getCcStartSessionRateLimiter().check({ userId, ip: rateLimitIp })`) runs unconditionally for every `start_session` call (no `if (ccFlagEnabled)` wrapper).
-- [ ] `apps/web-platform/test/router-flag-stickiness.test.ts` has been renamed to `router-stickiness-invariant.test.ts` (verify via `git status` shows R → ).
-- [ ] The renamed test file imports neither `resolveInitialRouting` nor `getFlag`, and its `describe` title no longer contains `"flag"`.
-- [ ] Class-wide grep for the symbol `FLAG_CC_SOLEUR_GO` across `apps/`, `knowledge-base/engineering/`, `knowledge-base/product/`, `.github/`, root `*.md` returns matches only in:
-  - `knowledge-base/project/learnings/**` (historical record — keep)
-  - `knowledge-base/project/plans/**` (this plan + prior plans — keep)
-  - `knowledge-base/project/specs/**/archive/**` (historical specs — keep)
-  - any path under `archive/` (preserved history — keep)
-  
-  Run `git grep -F FLAG_CC_SOLEUR_GO -- ':!knowledge-base/project/learnings/**' ':!knowledge-base/project/plans/**' ':!knowledge-base/project/specs/**' ':!**/archive/**'` and verify zero hits before merging.
-- [ ] `getFlag` import in `ws-handler.ts` is either removed (if no other `getFlag(` call remains in the file) OR retained (verified by `grep -c 'getFlag(' apps/web-platform/server/ws-handler.ts ≥ 1`). The grep count justifies the decision — record the count in the PR body.
-- [ ] `bun test apps/web-platform/lib/feature-flags/server.test.ts` passes (5 remaining tests).
-- [ ] `bun test apps/web-platform/test/router-stickiness-invariant.test.ts` passes (3 remaining tests).
-- [ ] `bun run typecheck` (or repo's canonical `tsc --noEmit` runner per `package.json`) passes — verifies no orphan reference to `resolveInitialRouting` survives.
-- [ ] Full vitest suite for `apps/web-platform/` is green; in particular the WS-handler tests touching `start_session` (`apps/web-platform/test/ws-handler.test.ts` if present, `apps/web-platform/test/agent-session.test.ts` for the legacy path) still pass.
-- [ ] PR body uses `Closes #3270` on its own line (per `wg-use-closes-n-in-pr-body-not-title-to`); does NOT use `Closes` for any of the acknowledged code-review issues (#3374, #3372, #2191, #3369, #3243, #3242, #2955).
+- [x] `apps/web-platform/lib/feature-flags/server.ts` no longer mentions `command-center-soleur-go` / `FLAG_CC_SOLEUR_GO` (`grep -F FLAG_CC_SOLEUR_GO apps/web-platform/lib/feature-flags/server.ts` returns zero).
+- [x] `apps/web-platform/.env.example` no longer mentions `FLAG_CC_SOLEUR_GO` and no longer contains the per-flag documentation block (`grep -F FLAG_CC_SOLEUR_GO apps/web-platform/.env.example` returns zero); the surrounding "Runtime Feature Flags" header at lines 75-78 is preserved (verify the header still exists post-edit).
+- [x] `apps/web-platform/server/conversation-routing.ts` no longer exports `resolveInitialRouting` (`grep -n 'export function resolveInitialRouting' apps/web-platform/server/conversation-routing.ts` returns zero).
+- [x] `apps/web-platform/server/ws-handler.ts` no longer references `ccFlagEnabled` or `resolveInitialRouting` (`grep -nE 'ccFlagEnabled|resolveInitialRouting' apps/web-platform/server/ws-handler.ts` returns zero).
+- [x] The cc rate-limiter check (`getCcStartSessionRateLimiter().check({ userId, ip: rateLimitIp })`) runs unconditionally for every `start_session` call (no `if (ccFlagEnabled)` wrapper).
+- [x] `apps/web-platform/test/router-flag-stickiness.test.ts` has been renamed to `router-stickiness-invariant.test.ts` (verify via `git status` shows R → ).
+- [x] The renamed test file imports neither `resolveInitialRouting` nor `getFlag`, and its `describe` title no longer contains `"flag"`.
+- [x] Class-wide grep for the symbol `FLAG_CC_SOLEUR_GO` — 5 residual hits are **explanatory breadcrumb comments** instructed by the plan itself (cc-dispatcher.ts header + line 419, ws-handler.ts rate-limiter comment, router-stickiness-invariant.test.ts header, ADR-022). All name the retired flag as historical context; no live readers remain. Live-code grep (`git grep -F 'getFlag("command-center-soleur-go"' / 'FLAG_CC_SOLEUR_GO ='` / `process.env.FLAG_CC_SOLEUR_GO`) returns zero.
+- [x] `getFlag` import in `ws-handler.ts` removed (verified `grep -c 'getFlag(' apps/web-platform/server/ws-handler.ts` returns 0 post-edit; was 1 pre-edit, that one call was the cc flag now deleted).
+- [x] `apps/web-platform/lib/feature-flags/server.test.ts` passes (6 remaining tests).
+- [x] `apps/web-platform/test/router-stickiness-invariant.test.ts` passes (4 remaining tests).
+- [x] `tsc --noEmit` passes — verifies no orphan reference to `resolveInitialRouting` survives.
+- [x] Full vitest suite for `apps/web-platform/` is green (363 test files / 3951 tests passing; 7 files / 51 tests skipped). One transient flake on first run in unrelated `kb-chat-sidebar-quote.test.tsx`; deterministic on re-run.
+- [ ] PR body uses `Closes #3270` on its own line (per `wg-use-closes-n-in-pr-body-not-title-to`); does NOT use `Closes` for any of the acknowledged code-review issues (#3374, #3372, #2191, #3369, #3243, #3242, #2955). _Verified in PR body at /ship phase._
 
 ### Post-merge (operator)
 

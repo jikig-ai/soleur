@@ -45,7 +45,6 @@ import {
 } from "./concurrency";
 import {
   parseConversationRouting,
-  resolveInitialRouting,
   serializeConversationRouting,
   type ConversationRouting,
   type WorkflowName,
@@ -60,7 +59,6 @@ import {
 } from "./cc-dispatcher";
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { stripAndReportImagePlaceholders } from "./image-paste-strip";
-import { getFlag } from "@/lib/feature-flags/server";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 const log = createChildLogger("ws");
@@ -984,38 +982,36 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         return;
       }
 
-      // Stage 2.13 — soleur-go path gets an additional per-user + per-IP
+      // soleur-go path applies an additional per-user + per-IP
       // sliding-window limiter (10/user/hour, 30/IP/hour) on top of the
-      // legacy `sessionThrottle` above. Fail-closed at either cap.
-      // Flag is read ONCE here — the routing decision is sticky.
-      const ccFlagEnabled = getFlag("command-center-soleur-go");
-      if (ccFlagEnabled) {
-        // security P2: use userId as the per-IP fallback when no IP
-        // was captured. Falling back to a literal string like
-        // `"unknown"` collides every IP-missing user into one 30/hr
-        // bucket — a trivial DoS pivot if a proxy misconfiguration
-        // ever strips headers. Using userId preserves per-user
-        // isolation; the per-user cap still applies above it.
-        const rateLimitIp = session.ip && session.ip.length > 0 ? session.ip : userId;
-        const rate = getCcStartSessionRateLimiter().check({
-          userId,
-          ip: rateLimitIp,
+      // legacy `sessionThrottle` above. Fail-closed at either cap. As
+      // of #3270 (FLAG_CC_SOLEUR_GO retired) this runs unconditionally
+      // for every `start_session` — cc-soleur-go is the only path.
+      // security P2: use userId as the per-IP fallback when no IP was
+      // captured. Falling back to a literal string like `"unknown"`
+      // collides every IP-missing user into one 30/hr bucket — a
+      // trivial DoS pivot if a proxy misconfiguration ever strips
+      // headers. Using userId preserves per-user isolation; the
+      // per-user cap still applies above it.
+      const rateLimitIp = session.ip && session.ip.length > 0 ? session.ip : userId;
+      const rate = getCcStartSessionRateLimiter().check({
+        userId,
+        ip: rateLimitIp,
+      });
+      if (!rate.allowed) {
+        logRateLimitRejection(`cc-${rate.reason}`, userId, {
+          ip: session.ip,
+          ipFallback: session.ip === rateLimitIp ? undefined : "userId",
+          retryAfterMs: rate.retryAfterMs,
         });
-        if (!rate.allowed) {
-          logRateLimitRejection(`cc-${rate.reason}`, userId, {
-            ip: session.ip,
-            ipFallback: session.ip === rateLimitIp ? undefined : "userId",
-            retryAfterMs: rate.retryAfterMs,
-          });
-          sendToClient(userId, {
-            type: "error",
-            message: "Rate limited: too many conversations this hour.",
-            errorCode: "rate_limited",
-          });
-          return;
-        }
+        sendToClient(userId, {
+          type: "error",
+          message: "Rate limited: too many conversations this hour.",
+          errorCode: "rate_limited",
+        });
+        return;
       }
-      const initialRouting: ConversationRouting = resolveInitialRouting(ccFlagEnabled);
+      const initialRouting: ConversationRouting = { kind: "soleur_go_pending" };
 
       try {
         // Validate context payload before any side effects

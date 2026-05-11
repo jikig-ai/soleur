@@ -68,9 +68,10 @@ Build a dedicated `soleur-go-runner.ts` that:
 - Persists the chosen workflow on `conversations.active_workflow` (migration
   032) for sticky routing on turn 2+.
 
-Legacy `domain-router.ts` / `agent-runner.ts` / `dispatchToLeaders` remain
-behind `FLAG_CC_SOLEUR_GO=false` until a 14-day dev soak confirms the new
-path, then Stage 8 (separate PR) removes them.
+Stage 8 landed via #3270 — `FLAG_CC_SOLEUR_GO` was removed and the
+cc-soleur-go path is now the unconditional production binding. Legacy
+`domain-router.ts` / `agent-runner.ts` / `dispatchToLeaders` are retained
+for the SDK-router fallback paths only.
 
 ## AP-004 deviation (intentional, for V1)
 
