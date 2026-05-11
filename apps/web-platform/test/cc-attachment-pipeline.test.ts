@@ -204,7 +204,7 @@ describe("persistAndDownloadAttachments", () => {
     const supabase = makeSupabaseMock({
       workspacePath: "/workspace/u1",
       download: (storagePath) => {
-        if (storagePath.endsWith("b.png")) {
+        if (storagePath.endsWith("z.png")) {
           return { data: null, error: new Error("storage 404") };
         }
         return { data: { arrayBuffer: async () => buf }, error: null };
@@ -216,8 +216,8 @@ describe("persistAndDownloadAttachments", () => {
       storagePath: `${userId}/${conversationId}/a.png`,
     });
     const att2 = makeAttachment({
-      filename: "b.png",
-      storagePath: `${userId}/${conversationId}/b.png`,
+      filename: "z.png",
+      storagePath: `${userId}/${conversationId}/z.png`,
     });
 
     const { attachmentContext } = await persistAndDownloadAttachments({
@@ -230,7 +230,7 @@ describe("persistAndDownloadAttachments", () => {
 
     expect(writeFileMock).toHaveBeenCalledTimes(1);
     expect(attachmentContext).toContain("a.png");
-    expect(attachmentContext).not.toContain("b.png");
+    expect(attachmentContext).not.toContain("z.png");
   });
 
   it("returns attachmentContext: undefined when workspace_path lookup is empty", async () => {
