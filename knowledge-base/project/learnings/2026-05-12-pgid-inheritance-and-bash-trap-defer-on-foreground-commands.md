@@ -62,3 +62,33 @@ When wrapping a long-running shell script with a wall-clock cap that delivers SI
 3. Clear the trap **before** sending kill: `trap - TERM INT` first, then `pkill`. Prevents a queued second-signal (from `--kill-after` grace) re-entering the handler mid-write.
 4. Treat the trap as best-effort. For correctness, the load-bearing primitive is the wrapper's SIGKILL fallback (`--kill-after=Ns`) — bash dying releases any FD-held locks regardless of trap dispatch.
 5. Test the trap in an isolated repro that uses `sleep & wait $!` to bypass bash's foreground-defer; document the gap between repro coverage and prod coverage.
+
+## SE3 — uutils `timeout` rc=125 vs GNU rc=124 on SIGTERM-by-timeout
+
+**Setting:** Dev box on Ubuntu 25.04+ (questing) where `/usr/bin/timeout` is the rust uutils variant from `coreutils-from-uutils`, not GNU coreutils. The wrapper-test's behavioral assertion `timeout --signal=TERM --kill-after=20s 1s sleep 60` expects exit code 124 (GNU's convention for "TERM-by-timeout"). uutils sends the signal correctly but exits 125 ("timeout itself failed"), masking the contract test.
+
+**Recovery:** Detect via `timeout --version | grep -qi uutils`. If detected, fall back to `/usr/bin/gnutimeout` (provided by Ubuntu's `gnu-coreutils` package). If neither is available, SKIP the behavioral test with an explicit log line.
+
+**Prevention pattern:** When verifying CLI primitive behavior in tests, detect coreutils flavor up-front:
+
+```bash
+pick_timeout() {
+  if timeout --version 2>&1 | head -1 | grep -qi uutils; then
+    command -v gnutimeout || echo SKIP
+  else
+    echo timeout
+  fi
+}
+```
+
+Production (Ubuntu 24.04 LTS noble) ships GNU coreutils so the wrapper's bare `timeout` invocation is correct; this is a test-harness-only concern.
+
+## SE4 — Cross-tool regex gotchas in the parity test
+
+Two papercuts during the wrapper/workflow 900s parity test:
+
+**SE4a:** `grep -oE '--kill-after=[0-9]+s [0-9]+s /usr/local/bin/ci-deploy\.sh'` failed with `grep: unrecognized option '--kill-after=…'`. grep parses leading `--` as flag-stop or unknown flag. Fix: `grep -oE -- '--kill-after=…'` (POSIX argument separator) or `grep -oE -e '--kill-after=…'`.
+
+**SE4b:** First extraction attempt `grep -oE '[0-9]+s '` matched both `20s` (from `--kill-after=20s`) and `900s` — `head -1` then picked the wrong one. Fix: anchor on position-bearing context (`grep -oE ' [0-9]+s /'` to pick the digit between `--kill-after=20s ` and `/usr/local/bin/`).
+
+**Prevention pattern:** Multi-token regex extraction must pin positional context, not just shape. When two tokens of identical shape coexist in one line, anchor the extraction on the literal text that disambiguates them (space-before-and-slash-after, not just `\d+s`).
