@@ -229,8 +229,15 @@ export async function sendEmailNotification(
 const DSAR_FAILURE_COPY: Record<string, string> = {
   job_timeout:
     "We weren't able to package your data within the time limit. Please request the export again — if it keeps failing, contact legal@jikigai.com.",
+  // 'account_deleted_during_export' is referenced for completeness but
+  // unreachable as an email path: the account-delete cascade flips the
+  // job row BEFORE deleting the auth account, and we don't email a
+  // tombstoned mailbox. Kept here so the map covers every value the
+  // failure_reason column can hold (Art. 5(2) traceability).
   account_deleted_during_export:
     "Your account was deleted while the export was being prepared. The export was cancelled.",
+  bundle_too_large:
+    "Your account contains more data than the self-serve export currently supports. Please email legal@jikigai.com and we will package your bundle manually within 7 business days.",
   archive_error:
     "We hit an unexpected error while packaging your data. Please request the export again.",
 };

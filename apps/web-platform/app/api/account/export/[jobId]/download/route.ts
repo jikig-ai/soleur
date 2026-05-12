@@ -30,24 +30,44 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient, serverUrl } from "@/lib/supabase/service";
+import { extractClientIpFromHeaders } from "@/server/rate-limiter";
+import { getActiveSessionId, ReauthEventInvalid } from "@/server/dsar-reauth";
 
 const STORAGE_BUCKET = "dsar-exports";
 
-function getRequesterIp(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip") ?? "0.0.0.0";
-}
-
+/**
+ * Canonicalize an IPv4 or IPv6 address into a stable /24 (IPv4) or
+ * /48 (IPv6) prefix string for AC5 comparison. Naive `"::1".split(":")`
+ * yields `["", "", "1"]` which would equate `::1` with `::2` despite
+ * being completely different addresses (fix from security-sentinel P1
+ * on PR #3634).
+ */
 function ipPrefix(ip: string): string {
-  if (ip.includes(":")) {
-    // IPv6 — /48 == first 3 groups
-    const parts = ip.split(":");
-    return parts.slice(0, 3).join(":");
+  // IPv4 — easy: first 3 octets.
+  if (!ip.includes(":")) {
+    const parts = ip.split(".");
+    if (parts.length !== 4) return ip; // malformed → compare verbatim
+    return parts.slice(0, 3).join(".");
   }
-  // IPv4 — /24 == first 3 octets
-  const parts = ip.split(".");
-  return parts.slice(0, 3).join(".");
+
+  // IPv6 — expand "::" once, then take the first 3 hextets (/48).
+  const ipNoZone = ip.split("%")[0]; // strip zone identifier if any
+  const [head, tail] = ipNoZone.split("::");
+  const headParts = head ? head.split(":") : [];
+  const tailParts = tail !== undefined ? tail.split(":").filter(Boolean) : [];
+  // No "::" -> exactly one part, may already be 8 hextets.
+  if (tail === undefined) {
+    return headParts.slice(0, 3).join(":");
+  }
+  // "::" present — expand to 8 hextets total with zero-fill in the middle.
+  const missing = 8 - headParts.length - tailParts.length;
+  if (missing < 0) return ip; // malformed
+  const expanded = [
+    ...headParts,
+    ...Array<string>(missing).fill("0"),
+    ...tailParts,
+  ];
+  return expanded.slice(0, 3).join(":");
 }
 
 function goneResponse(): Response {
@@ -66,16 +86,20 @@ export async function GET(
 ) {
   const { jobId } = await params;
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // session-id from JWT claim; fail-loud when missing (security-
+  // sentinel P1 on PR #3634).
+  let userId: string;
+  let sessionId: string;
+  try {
+    const resolved = await getActiveSessionId(supabase);
+    userId = resolved.userId;
+    sessionId = resolved.sessionId;
+  } catch (err) {
+    if (err instanceof ReauthEventInvalid) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    throw err;
   }
-  const user = userData.user;
-
-  const { data: sessionData } = await supabase.auth.getSession();
-  const sessionId =
-    (sessionData?.session as unknown as { session_id?: string } | null)
-      ?.session_id ?? user.id;
 
   // Service-role: the user-visible RLS only allows SELECT on the jobs
   // table; the atomic single-use UPDATE + Storage operations require
@@ -87,7 +111,7 @@ export async function GET(
       "id, user_id, status, owner_session_id, signed_url_expires_at",
     )
     .eq("id", jobId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (fetchErr) {
     return NextResponse.json({ error: "Lookup failed" }, { status: 500 });
@@ -126,7 +150,7 @@ export async function GET(
     .order("event_at", { ascending: true })
     .limit(1);
   const issuanceIp = (auditRows?.[0]?.requester_ip as string | null) ?? null;
-  const callerIp = getRequesterIp(request);
+  const callerIp = extractClientIpFromHeaders(request.headers);
   if (issuanceIp && ipPrefix(callerIp) !== ipPrefix(issuanceIp)) {
     return NextResponse.json(
       {
@@ -156,7 +180,7 @@ export async function GET(
   if (!claimed) return goneResponse();
 
   // Stream the Storage object via raw fetch with the service-role key.
-  const storagePath = `${user.id}/${jobId}.zip`;
+  const storagePath = `${userId}/${jobId}.zip`;
   const url = `${serverUrl()}/storage/v1/object/${STORAGE_BUCKET}/${storagePath}`;
   const upstream = await fetch(url, {
     headers: {
@@ -183,7 +207,7 @@ export async function GET(
     }
     await service.rpc("write_dsar_export_audit_pii", {
       p_job_id: jobId,
-      p_user_id: user.id,
+      p_user_id: userId,
       p_event_type: "download_complete",
       p_requester_ip: callerIp,
       p_user_agent: request.headers.get("user-agent") ?? "",

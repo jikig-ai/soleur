@@ -14,30 +14,26 @@
 import { useState } from "react";
 
 interface DsarExportDialogProps {
-  /**
-   * Called when the user confirms with a password. Parent is
-   * responsible for the reauth round-trip + enqueue POST.
-   */
+  /** Controlled open state — lifted so a Re-request button on an
+   * expired row can open the same dialog (AC24). */
+  isOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  /** Called when the user confirms with a password. Parent is
+   * responsible for the reauth round-trip + enqueue POST. */
   onConfirmPassword: (password: string) => Promise<void>;
-  /**
-   * Called when the user chooses the OAuth re-auth path. Parent is
-   * responsible for redirecting to supabase.auth.signInWithOAuth
-   * with prompt=login + max_age=300.
-   */
-  onConfirmOAuth: () => void;
-  /**
-   * `true` when an active job exists for this user — disables the
-   * trigger button per AC31.
-   */
+  /** `true` when an active job exists for this user — disables the
+   * trigger button per AC31. */
   hasActiveJob: boolean;
 }
 
 export function DsarExportDialog({
+  isOpen,
+  onOpen,
+  onClose,
   onConfirmPassword,
-  onConfirmOAuth,
   hasActiveJob,
 }: DsarExportDialogProps) {
-  const [isOpen, setIsOpen] = useState(false);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +44,7 @@ export function DsarExportDialog({
     setError(null);
     try {
       await onConfirmPassword(password);
-      setIsOpen(false);
+      onClose();
       setPassword("");
     } catch (err) {
       setError((err as Error).message);
@@ -61,7 +57,7 @@ export function DsarExportDialog({
     return (
       <button
         type="button"
-        onClick={() => setIsOpen(true)}
+        onClick={onOpen}
         disabled={hasActiveJob}
         aria-disabled={hasActiveJob}
         className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
@@ -137,16 +133,8 @@ export function DsarExportDialog({
         </button>
         <button
           type="button"
-          onClick={onConfirmOAuth}
-          disabled={busy}
-          className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Re-authenticate with SSO
-        </button>
-        <button
-          type="button"
           onClick={() => {
-            setIsOpen(false);
+            onClose();
             setPassword("");
             setError(null);
           }}
@@ -160,7 +148,11 @@ export function DsarExportDialog({
       <p className="mt-4 text-xs text-soleur-text-muted">
         Once requested, you&apos;ll receive an email at your registered address
         when the bundle is ready (usually within a few minutes; up to 48h for
-        large accounts).
+        large accounts). If you sign in only with SSO (no password), email
+        <a href="mailto:legal@jikigai.com" className="underline ml-1">
+          legal@jikigai.com
+        </a>{" "}
+        and we will fulfil your request manually.
       </p>
     </div>
   );

@@ -19,21 +19,13 @@
 //     with `duplex: 'half'` from `fs.createReadStream()`. supabase-js
 //     `upload(WebReadableStream)` buffers the body (Δ RSS ≈ 1.09×).
 //
-// v1 scope (this commit — Phase 5a):
+// Data sources (all in v1):
 //   - SQL tables in `DSAR_TABLE_ALLOWLIST` (incl. nested via `joinVia`).
-//   - Manifest with serialization conventions per AC23.
-//   - ZIP archive built on disk; raw-fetch upload.
-//   - Lifecycle: pending -> running -> completed -> delivered/expired.
-//   - Email via notifications.ts:sendDsarExportReadyEmail.
-//
-// Phase 5b (follow-up — explicit `excluded_files[]` entries in manifest):
-//   - `chat-attachments/<userId>/...` binaries via service.storage.list
-//     + path-prefix guard (fail-job-loud on path-traversal per AC26).
-//   - `/workspaces/<userId>/*` files via `O_NOFOLLOW + fstat` ino verify
-//     (skip-with-manifest-entry on symlink/ino-mismatch per AC26).
-// Until 5b lands, the manifest declares these sources as deferred;
-// AC1 (1:1 reconcile with Privacy Policy §4.7 after FR8) is the gate
-// that blocks enablement in prd.
+//   - `chat-attachments/<userId>/...` binaries via Storage list +
+//     path-prefix guard (fail-job-loud on path-traversal per AC26).
+//   - `/workspaces/<userId>/*` files via `O_NOFOLLOW + fstat` ino
+//     verify (skip-with-manifest on symlink/ino-mismatch per AC26).
+//   - Manifest LAST with serialization conventions per AC23.
 
 import {
   createReadStream,
@@ -95,6 +87,16 @@ export class CrossTenantViolation extends Error {
 
 export interface AssertReadScopeOptions {
   ownerField?: string;
+}
+
+/**
+ * Raised when the bundle exceeds DSAR_EXPORT_SIZE_CAP_MB. Mapped by
+ * runExport to failure_reason='bundle_too_large' so the user-facing
+ * email points to the operator-fallback flow instead of telling them
+ * to retry.
+ */
+export class BundleTooLargeError extends Error {
+  readonly name = "BundleTooLargeError";
 }
 
 export function assertReadScope<T extends Record<string, unknown>>(
@@ -173,7 +175,6 @@ interface ManifestRoot {
   };
   files: ManifestFileEntry[];
   excluded_files: ManifestFileEntry[];
-  deferred_sources: { source: string; reason: string }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -849,12 +850,6 @@ async function buildArchiveToDisk(
     });
   }
 
-  // Phase 5b lands the binary sources above. Manifest carries an empty
-  // `deferred_sources[]` for forward-compat (a future feature that
-  // adds a new data class can declare it here without breaking
-  // schema_version 1.0.0).
-  const deferredSources: { source: string; reason: string }[] = [];
-
   // Manifest LAST per spec FR4 step 8.
   const manifest: ManifestRoot = {
     schema_version: MANIFEST_SCHEMA_VERSION,
@@ -869,7 +864,6 @@ async function buildArchiveToDisk(
     },
     files,
     excluded_files: excluded,
-    deferred_sources: deferredSources,
   };
   const manifestJson = dsarStringify(manifest);
   archive.append(Buffer.from(manifestJson, "utf-8"), {
@@ -882,8 +876,14 @@ async function buildArchiveToDisk(
   const fileStat = await stat(localPath);
   if (fileStat.size > SIZE_CAP_BYTES) {
     await rm(localPath, { force: true });
-    throw new Error(
-      `Bundle size ${fileStat.size} exceeds TR4 cap of ${SIZE_CAP_BYTES} bytes`,
+    // Distinct error class so runExport can map to a
+    // `bundle_too_large` failure_reason (vs the generic
+    // `archive_error` which tells the user to retry — retry won't
+    // help against the cap). The user-facing copy points to the
+    // legal@jikigai.com operator-fallback. User-impact-reviewer P1
+    // on PR #3634.
+    throw new BundleTooLargeError(
+      `Bundle size ${fileStat.size} exceeds DSAR_EXPORT_SIZE_CAP_MB cap of ${SIZE_CAP_BYTES} bytes`,
     );
   }
 
@@ -949,17 +949,22 @@ export async function enqueueExport(
 ): Promise<EnqueueExportResult> {
   const service = createServiceClient();
 
-  // Application-layer 24h idempotency (per migration 041 note: the
-  // partial unique index covers in-flight + completed; we additionally
-  // refuse a fresh insert if the user completed within the last 24h
-  // and the bundle has not yet expired).
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  // Application-layer idempotency aligned to the partial unique index:
+  // at most one in-flight or completed-not-yet-expired job per user
+  // (status IN ('pending','running','completed')). The hourly TR14
+  // sweep flips completed -> expired when signed_url_expires_at lapses,
+  // so 'completed' is bounded to the bundle TTL (~7d). Fix from
+  // code-review P1 (data-integrity-guardian, PR #3634): the prior
+  // .gte("requested_at", now-24h) predicate let lookups miss a still-
+  // completed row from >24h ago; the INSERT path then collided with
+  // the unbounded partial unique index and 500'd the user. Aligning
+  // the lookup with the index makes "1 active or completed-in-TTL"
+  // the load-bearing invariant in BOTH layers.
   const { data: existing, error: lookupErr } = await service
     .from("dsar_export_jobs")
     .select("id, status, requested_at, acknowledged_at")
     .eq("user_id", input.userId)
     .in("status", ["pending", "running", "completed"])
-    .gte("requested_at", since)
     .order("requested_at", { ascending: false })
     .limit(1);
   if (lookupErr) {
@@ -1078,7 +1083,18 @@ async function runExport(job: {
 
     log.info({ jobId: job.id, bytes: archive.bytes }, "DSAR job completed");
   } catch (err) {
-    const reason = controller.signal.aborted ? "job_timeout" : "archive_error";
+    // Distinct failure_reason values so the failure email picks the
+    // right user-facing copy (user-impact-reviewer P1 on PR #3634):
+    //   - job_timeout       -> the 30-min worker timeout fired
+    //   - bundle_too_large  -> exceeded DSAR_EXPORT_SIZE_CAP_MB; retry
+    //                          will fail identically, user must email
+    //                          legal@jikigai.com for operator fallback
+    //   - archive_error     -> generic; retry is the right next step
+    const reason = controller.signal.aborted
+      ? "job_timeout"
+      : err instanceof BundleTooLargeError
+        ? "bundle_too_large"
+        : "archive_error";
     log.error({ jobId: job.id, err, reason }, "DSAR job failed");
     await service
       .from("dsar_export_jobs")

@@ -18,6 +18,7 @@ const hoisted = vi.hoisted(() => ({
   storageMock: vi.fn(),
   enqueueExportMock: vi.fn(),
   requireFreshReauthMock: vi.fn(),
+  getActiveSessionIdMock: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -57,6 +58,7 @@ vi.mock("@/server/dsar-reauth", async () => {
   return {
     ...actual,
     requireFreshReauth: hoisted.requireFreshReauthMock,
+    getActiveSessionId: hoisted.getActiveSessionIdMock,
   };
 });
 
@@ -235,6 +237,20 @@ describe("GET /api/account/export/[jobId]/download — lifecycle gates", () => {
     hoisted.getSessionMock.mockResolvedValue({
       data: { session: { session_id: SESSION_ID } },
     });
+    hoisted.getActiveSessionIdMock.mockResolvedValue({
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+    });
+  }
+
+  async function setUserAndUnknownSession() {
+    hoisted.getUserMock.mockResolvedValue({ data: null, error: null });
+    const actual = await vi.importActual<typeof import("../server/dsar-reauth")>(
+      "../server/dsar-reauth",
+    );
+    hoisted.getActiveSessionIdMock.mockRejectedValue(
+      new actual.ReauthEventInvalid("not_found"),
+    );
   }
 
   function mockFromJob(jobRow: Record<string, unknown> | null) {
@@ -276,8 +292,8 @@ describe("GET /api/account/export/[jobId]/download — lifecycle gates", () => {
     });
   }
 
-  it("returns 401 when unauthenticated", async () => {
-    hoisted.getUserMock.mockResolvedValue({ data: null, error: null });
+  it("returns 401 when unauthenticated (no session_id claim)", async () => {
+    await setUserAndUnknownSession();
     const res = await getDownload(
       makeRequest("GET", `/api/account/export/${JOB_ID}/download`),
       { params: Promise.resolve({ jobId: JOB_ID }) },

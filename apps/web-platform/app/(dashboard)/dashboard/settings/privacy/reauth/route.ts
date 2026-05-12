@@ -37,6 +37,7 @@ interface AccessTokenClaims {
   email?: string;
   auth_time?: number;
   session_id?: string;
+  ses_id?: string;
 }
 
 function decodeJwtClaims(jwt: string): AccessTokenClaims | null {
@@ -70,10 +71,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const claims = decodeJwtClaims(session.access_token);
-  const sessionId =
-    (session as unknown as { session_id?: string }).session_id ??
-    claims?.session_id ??
-    user.id;
+  // session_id MUST come from the JWT claim (the Supabase Session
+  // object has no top-level `session_id`). Fail-loud rather than
+  // degrade to user-bind — see dsar-reauth.getActiveSessionId for
+  // the canonical resolver this mirrors.
+  const sessionId = claims?.session_id ?? claims?.ses_id;
+  if (!sessionId || typeof sessionId !== "string") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const body = (await request.json().catch(() => null)) as
     | { mode?: "password" | "oauth_completed"; password?: string }

@@ -15,7 +15,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { SlidingWindowCounter } from "@/server/rate-limiter";
+import {
+  SlidingWindowCounter,
+  extractClientIpFromHeaders,
+} from "@/server/rate-limiter";
 import { ReauthEventInvalid, requireFreshReauth } from "@/server/dsar-reauth";
 import { enqueueExport } from "@/server/dsar-export";
 
@@ -24,12 +27,6 @@ const dsarLimiter = new SlidingWindowCounter({
   windowMs: 60_000,
   maxRequests: 1,
 });
-
-function getRequesterIp(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip") ?? "0.0.0.0";
-}
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -51,9 +48,13 @@ export async function POST(request: Request) {
     );
   }
 
-  // Step-up reauth — AC3 + AC21 + AC27.
+  // Step-up reauth — AC3 + AC21 + AC27. The helper returns the
+  // consumed eventId so we can persist the actual UUID downstream
+  // (the prior literal "consumed-via-body" placeholder threw on the
+  // uuid column for every body-mode call — security-sentinel P1 fix).
+  let reauthSession: { userId: string; sessionId: string; eventId: string };
   try {
-    await requireFreshReauth(request);
+    reauthSession = await requireFreshReauth(request);
   } catch (err) {
     if (err instanceof ReauthEventInvalid) {
       const reason = err.reason;
@@ -69,22 +70,12 @@ export async function POST(request: Request) {
     throw err;
   }
 
-  // Session id binding (FR3 + FR5 + AC5). The session id is available
-  // on the access token; in environments where Supabase does not expose
-  // it directly we fall back to the user id so the binding is at least
-  // scoped to the user.
-  const { data: sessionData } = await supabase.auth.getSession();
-  const sessionId =
-    (sessionData?.session as unknown as { session_id?: string } | null)
-      ?.session_id ?? user.id;
-
   try {
     const { jobId, acknowledgedAt } = await enqueueExport({
-      userId: user.id,
-      sessionId,
-      reauthEventId:
-        request.headers.get("x-reauth-event") ?? "consumed-via-body",
-      requesterIp: getRequesterIp(request),
+      userId: reauthSession.userId,
+      sessionId: reauthSession.sessionId,
+      reauthEventId: reauthSession.eventId,
+      requesterIp: extractClientIpFromHeaders(request.headers),
       userAgent: request.headers.get("user-agent") ?? "",
     });
     return NextResponse.json(

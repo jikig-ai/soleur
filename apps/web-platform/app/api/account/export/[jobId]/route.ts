@@ -10,12 +10,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { createServiceClient } from "@/lib/supabase/service";
-
-function getRequesterIp(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip") ?? "0.0.0.0";
-}
+import { extractClientIpFromHeaders } from "@/server/rate-limiter";
+import { getActiveSessionId, ReauthEventInvalid } from "@/server/dsar-reauth";
 
 export async function GET(
   _request: Request,
@@ -60,16 +56,22 @@ export async function POST(
 
   const { jobId } = await params;
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const user = userData.user;
 
-  const { data: sessionData } = await supabase.auth.getSession();
-  const sessionId =
-    (sessionData?.session as unknown as { session_id?: string } | null)
-      ?.session_id ?? user.id;
+  // Session id derived from the JWT `session_id` claim — throws if
+  // either user or session_id is missing (fail-loud rather than degrade
+  // to user-bind, per security-sentinel P1 on PR #3634).
+  let userId: string;
+  let sessionId: string;
+  try {
+    const resolved = await getActiveSessionId(supabase);
+    userId = resolved.userId;
+    sessionId = resolved.sessionId;
+  } catch (err) {
+    if (err instanceof ReauthEventInvalid) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    throw err;
+  }
 
   // Use service-role to fetch the row and update session+IP bind; the
   // RLS policy only allows SELECT, so reissue must be service-role.
@@ -78,7 +80,7 @@ export async function POST(
     .from("dsar_export_jobs")
     .select("id, user_id, status, signed_url_expires_at")
     .eq("id", jobId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (fetchErr) {
     return NextResponse.json({ error: "Lookup failed" }, { status: 500 });
@@ -105,7 +107,7 @@ export async function POST(
       signed_url_expires_at: newExpiry.toISOString(),
     })
     .eq("id", jobId)
-    .eq("user_id", user.id);
+    .eq("user_id", userId);
   if (updateErr) {
     return NextResponse.json({ error: "Reissue failed" }, { status: 500 });
   }
@@ -113,9 +115,9 @@ export async function POST(
   // Audit row for the reissue event.
   await service.rpc("write_dsar_export_audit_pii", {
     p_job_id: jobId,
-    p_user_id: user.id,
+    p_user_id: userId,
     p_event_type: "reissue",
-    p_requester_ip: getRequesterIp(request),
+    p_requester_ip: extractClientIpFromHeaders(request.headers),
     p_user_agent: request.headers.get("user-agent") ?? "",
   });
 

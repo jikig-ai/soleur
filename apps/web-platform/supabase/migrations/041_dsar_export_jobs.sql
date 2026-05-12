@@ -35,9 +35,18 @@
 -- dsar_export_jobs — per-job state, user-visible RLS.
 -- ============================================================================
 
+-- ON DELETE SET NULL (not NO ACTION) per code-review P1 on PR #3634
+-- (data-integrity-guardian): the Art. 17 cascade in account-delete.ts
+-- only flips dsar_export_jobs status to 'failed' (does NOT delete the
+-- rows) before calling auth.admin.deleteUser. With NO ACTION, the
+-- auth-row deletion would FK-fail. SET NULL preserves the row for
+-- compliance-history (anonymised: status remembers what happened, but
+-- user_id is anonymised). user_id is therefore nullable; the partial
+-- unique index and select policy already gate on user_id, so a row
+-- whose user_id became NULL is no longer user-visible.
 CREATE TABLE IF NOT EXISTS public.dsar_export_jobs (
   id                       uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id                  uuid         NOT NULL REFERENCES auth.users(id) ON DELETE NO ACTION,
+  user_id                  uuid         REFERENCES auth.users(id) ON DELETE SET NULL,
   status                   text         NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'running', 'completed', 'delivered', 'expired', 'failed')),
   requested_at             timestamptz  NOT NULL DEFAULT now(),
@@ -110,10 +119,15 @@ COMMENT ON TABLE public.dsar_export_jobs IS
 -- auth.admin.deleteUser() fires.
 -- ============================================================================
 
+-- See dsar_export_jobs above for the FK rationale: ON DELETE SET NULL
+-- preserves anonymised audit history past auth-deletion (Art. 5(2)
+-- accountability) while letting the cascade complete cleanly. user_id
+-- and job_id are nullable; the WORM trigger above runs against the
+-- anonymise GUC, not against the FK constraint.
 CREATE TABLE IF NOT EXISTS public.dsar_export_audit_pii (
   id              uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id          uuid         NOT NULL REFERENCES public.dsar_export_jobs(id) ON DELETE NO ACTION,
-  user_id         uuid         NOT NULL REFERENCES auth.users(id) ON DELETE NO ACTION,
+  job_id          uuid         REFERENCES public.dsar_export_jobs(id) ON DELETE SET NULL,
+  user_id         uuid         REFERENCES auth.users(id) ON DELETE SET NULL,
   event_type      text         NOT NULL
     CHECK (event_type IN ('enqueue', 'download_start', 'download_complete', 'reissue', 'expire', 'fail')),
   requester_ip    inet,
@@ -156,9 +170,17 @@ COMMENT ON TABLE public.dsar_export_audit_pii IS
 -- the runtime-cryptographic component.
 -- ============================================================================
 
+-- Trigger function is INVOKER (not DEFINER) per code-review P1 from
+-- data-integrity-guardian on PR #3634: a SECURITY DEFINER trigger
+-- evaluates `current_user` to the function OWNER (typically `postgres`
+-- in Supabase migrations), not the role that initiated the triggering
+-- UPDATE. With DEFINER, the `current_user = 'service_role'` gate would
+-- ALWAYS fail and the legitimate Art. 17 anonymise RPC would be
+-- rejected — Art. 17 violation. Triggers do not need DEFINER privileges
+-- since they execute inside the calling transaction with the calling
+-- session's role context, which is exactly what we want here.
 CREATE OR REPLACE FUNCTION public.dsar_export_audit_pii_no_mutate() RETURNS trigger
   LANGUAGE plpgsql
-  SECURITY DEFINER
   SET search_path = public, pg_temp
 AS $$
 DECLARE

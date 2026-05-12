@@ -22,6 +22,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const REAUTH_TTL_MS = 5 * 60 * 1000; // 5 min — issuance-to-consume window
 const OAUTH_AUTH_TIME_MAX_AGE_S = 300; // AC27 — IdP auth_time claim ceiling
@@ -137,6 +138,12 @@ export function consumeReauthEvent(
  * a future route under `app/api/account/export/*` that omits it is
  * caught by CI.
  *
+ * Returns the consumed event PLUS the eventId itself so downstream
+ * callers (e.g., `enqueueExport`) can persist the actual UUID rather
+ * than a placeholder string (fixes a P1 from security-sentinel review
+ * where `"consumed-via-body"` was passed through to a `uuid` column
+ * and threw on every body-mode reauth call).
+ *
  * Throws `ReauthEventInvalid` on any failure mode (missing event id,
  * missing session, mismatch, expired). Caller is responsible for
  * mapping to a 401/403 response.
@@ -144,6 +151,7 @@ export function consumeReauthEvent(
 export async function requireFreshReauth(req: Request): Promise<{
   userId: string;
   sessionId: string;
+  eventId: string;
 }> {
   const headerEventId = req.headers.get("x-reauth-event");
   let eventId = headerEventId ?? "";
@@ -166,27 +174,68 @@ export async function requireFreshReauth(req: Request): Promise<{
   }
 
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data?.user) {
-    throw new ReauthEventInvalid("not_found");
-  }
+  const { userId, sessionId } = await getActiveSessionId(supabase);
 
-  const { data: sessionData } = await supabase.auth.getSession();
-  const sessionId = sessionData?.session?.user?.id
-    ? // The Supabase session object has no first-class session id; we
-      // bind to the access-token's `session_id` claim as Supabase
-      // documents it. When unavailable, fall back to the user id so
-      // the binding is at least scoped to the user (not anyone with
-      // the eventId).
-      (sessionData.session as unknown as { session_id?: string }).session_id ??
-      data.user.id
-    : data.user.id;
-
-  return consumeReauthEvent({
+  const consumed = consumeReauthEvent({
     eventId,
-    expectedUserId: data.user.id,
+    expectedUserId: userId,
     expectedSessionId: sessionId,
   });
+
+  return { userId: consumed.userId, sessionId: consumed.sessionId, eventId };
+}
+
+/**
+ * Resolve the active Supabase session's `session_id` claim from the
+ * access token's JWT payload. The Supabase JS Session object does NOT
+ * expose `session_id` as a top-level field — the value lives inside
+ * the JWT claims (`session_id` / `ses_id`). Earlier code cast the
+ * Session object to `{ session_id?: string }` and silently fell back
+ * to `user.id` when the cast resolved to `undefined`, defeating the
+ * AC5 session-bind defence (per code-review P1 from security-sentinel
+ * on PR #3634).
+ *
+ * Throws `ReauthEventInvalid("not_found")` when no session is active
+ * OR the JWT is missing the claim — fail-loud rather than degrade to
+ * user-bind.
+ */
+export async function getActiveSessionId(
+  supabase: SupabaseClient,
+): Promise<{ userId: string; sessionId: string }> {
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData?.user) {
+    throw new ReauthEventInvalid("not_found");
+  }
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData?.session?.access_token;
+  if (!accessToken) {
+    throw new ReauthEventInvalid("not_found");
+  }
+  const claims = decodeAccessTokenClaims(accessToken);
+  const sessionId = claims?.session_id ?? claims?.ses_id;
+  if (!sessionId || typeof sessionId !== "string") {
+    throw new ReauthEventInvalid("not_found");
+  }
+  return { userId: userData.user.id, sessionId };
+}
+
+interface AccessTokenSessionClaims {
+  session_id?: string;
+  ses_id?: string;
+}
+
+function decodeAccessTokenClaims(jwt: string): AccessTokenSessionClaims | null {
+  try {
+    const payload = jwt.split(".")[1];
+    if (!payload) return null;
+    const decoded = Buffer.from(
+      payload.replace(/-/g, "+").replace(/_/g, "/"),
+      "base64",
+    ).toString("utf-8");
+    return JSON.parse(decoded) as AccessTokenSessionClaims;
+  } catch {
+    return null;
+  }
 }
 
 /**

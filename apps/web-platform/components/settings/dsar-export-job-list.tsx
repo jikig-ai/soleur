@@ -19,6 +19,10 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { DsarExportDialog } from "./dsar-export-dialog";
 
+// `jobs` is the snapshot at server-render time. We don't keep client-
+// side mutable state for it — router.refresh() re-renders the server
+// component when an active job's status changes.
+
 export type JobStatus =
   | "pending"
   | "running"
@@ -76,36 +80,31 @@ function formatBytes(bytes: number | null): string {
 
 export function DsarExportJobList({ initialJobs }: DsarExportJobListProps) {
   const router = useRouter();
-  const [jobs, setJobs] = useState<DsarExportJobRow[]>(initialJobs);
+  const jobs = initialJobs;
   const [error, setError] = useState<string | null>(null);
   const hasActiveJob = jobs.some((j) => isActive(j.status));
 
   // Poll every 10s while an active job is running. Once all jobs are
   // terminal, polling stops. AC31's "disable button + show status
-  // inline" requires keeping the list fresh.
+  // inline" requires keeping the list fresh. The refresh re-fetches
+  // the server component (RLS-scoped) — no separate /list endpoint
+  // required (code-simplicity-reviewer P1 on PR #3634: the prior
+  // fetch hit /api/account/export?list=1 which returns 405 because
+  // no GET handler exists at that path).
   useEffect(() => {
     if (!hasActiveJob) return;
-    let cancelled = false;
-    const tick = async () => {
-      if (cancelled) return;
-      try {
-        const res = await fetch("/api/account/export?list=1", {
-          headers: { Accept: "application/json" },
-        });
-        if (res.ok) {
-          const next = (await res.json()) as { jobs?: DsarExportJobRow[] };
-          if (next.jobs && !cancelled) setJobs(next.jobs);
-        }
-      } catch {
-        // Network blip — let the next tick retry.
-      }
-    };
-    const handle = setInterval(tick, 10_000);
-    return () => {
-      cancelled = true;
-      clearInterval(handle);
-    };
-  }, [hasActiveJob]);
+    const handle = setInterval(() => {
+      router.refresh();
+    }, 10_000);
+    return () => clearInterval(handle);
+  }, [hasActiveJob, router]);
+
+  // The parent owns isOpen so the "Re-request" CTA on an `expired`
+  // row can open the same dialog programmatically (AC24 fix per
+  // user-impact-reviewer P1 on PR #3634: previously the Re-request
+  // button POST'd to /api/account/export/[jobId] which returns 409
+  // for status != 'completed' — every expired-row re-request errored).
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   const handlePasswordConfirm = useCallback(
     async (password: string) => {
@@ -142,41 +141,20 @@ export function DsarExportJobList({ initialJobs }: DsarExportJobListProps) {
     [router],
   );
 
-  const handleOAuthConfirm = useCallback(() => {
-    // Client-side redirect — the OAuth provider will return to
-    // /dashboard/settings/privacy?oauth_reauth=1; a small effect on
-    // that route reads the new session's auth_time claim and POSTs
-    // mode=oauth_completed to /reauth. For Phase 8 v1 we just point
-    // the user at the password flow message; the OAuth handler is a
-    // post-merge follow-up (the route accepts it but client-side
-    // wiring lives in Phase 8b).
-    setError(
-      "SSO re-authentication is rolling out — please use the password " +
-        "field above for now.",
-    );
-  }, []);
-
-  async function reissue(jobId: string) {
-    try {
-      const res = await fetch(`/api/account/export/${jobId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? "Reissue failed");
-      }
-      router.refresh();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
+  // Note: OAuth re-auth path is not wired client-side in v1. The
+  // server route accepts mode=oauth_completed but the redirect +
+  // return-handler is a deferred follow-up. Until then, the dialog
+  // exposes only the password field and we don't render an SSO CTA —
+  // OAuth-only users use the email channel via legal@jikigai.com
+  // (documented in privacy-policy §8.1).
 
   return (
     <div className="space-y-6">
       <DsarExportDialog
+        isOpen={dialogOpen}
+        onOpen={() => setDialogOpen(true)}
+        onClose={() => setDialogOpen(false)}
         onConfirmPassword={handlePasswordConfirm}
-        onConfirmOAuth={handleOAuthConfirm}
         hasActiveJob={hasActiveJob}
       />
 
@@ -238,8 +216,9 @@ export function DsarExportJobList({ initialJobs }: DsarExportJobListProps) {
                     {job.status === "expired" && (
                       <button
                         type="button"
-                        onClick={() => reissue(job.id)}
-                        className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-sm text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
+                        onClick={() => setDialogOpen(true)}
+                        disabled={hasActiveJob}
+                        className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-sm text-soleur-text-secondary hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         Re-request
                       </button>
