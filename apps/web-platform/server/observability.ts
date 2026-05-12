@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
 
@@ -434,4 +434,108 @@ export function mirrorP0Deduped(
  */
 export function __resetMirrorP0DedupForTests(): void {
   _p0Dedup.reset();
+}
+
+/**
+ * SHA-256(salt || userId) — PII-minimal user identifier for Sentry payloads.
+ *
+ * `SOLEUR_SENTRY_PII_SALT` MUST be set in production so the hash is
+ * unlinkable across deployments without operator access to the salt.
+ * In dev/test we fall back to a static literal so single-machine
+ * development does not require Doppler-injection just to call
+ * `mirrorCrossTenantViolation` from a unit test. Sentry payloads in
+ * dev are not load-bearing for the unlinkability invariant.
+ */
+function hashUserIdForSentry(userId: string): string {
+  const salt =
+    process.env.SOLEUR_SENTRY_PII_SALT ??
+    (process.env.NODE_ENV === "production"
+      ? ""
+      : "dsar-dev-salt-not-for-prod");
+  if (!salt) {
+    // Fail-loud in prd if the salt is missing — the alert is the wrong
+    // place to surface PII through configuration oversight.
+    throw new Error(
+      "SOLEUR_SENTRY_PII_SALT not set in production; cannot mirror cross-tenant violation safely.",
+    );
+  }
+  return createHash("sha256")
+    .update(salt)
+    .update("\x00")
+    .update(userId)
+    .digest("hex")
+    .slice(0, 16); // 64-bit prefix is enough for de-duplication; full hash is overkill.
+}
+
+/**
+ * Sibling of `mirrorWithDebounce` for the cross-tenant invariant alarm
+ * path. Functionally distinct: this never debounces and never returns
+ * early. A cross-tenant violation is the highest-severity event class
+ * in the DSAR export surface (Art. 33 + Art. 34 notifiable on a single
+ * occurrence), so we trade some Sentry quota for guaranteed delivery
+ * on every fire.
+ *
+ * Per plan rev-2 AC22 (sibling shape, does NOT modify
+ * `mirrorWithDebounce`'s 2-tuple key — that change deferred to #3638
+ * which lands separately). Logs payload tags:
+ *   - level: 'fatal'
+ *   - sec: true
+ *   - dsar: true
+ *   - cross_tenant: true
+ *   - table: <tableName>
+ *
+ * userIds are hashed via `hashUserIdForSentry` (SHA-256 + salt) BEFORE
+ * the Sentry call so the Sentry retention window never contains raw
+ * UUIDs.
+ *
+ * @param offendingUserId  Owner of the misowned row (or null if the
+ *                         row lacked the owner field entirely).
+ * @param expectedUserId   The userId the worker scope was set to.
+ * @param tableName        Public table the read was issued against.
+ * @param err              The CrossTenantViolation (or other) error.
+ * @param ctx              Optional extras (jobId, queryShape, etc.).
+ */
+export function mirrorCrossTenantViolation(
+  offendingUserId: string | null,
+  expectedUserId: string,
+  tableName: string,
+  err: unknown,
+  ctx: Record<string, unknown> = {},
+): void {
+  const offendingHash =
+    offendingUserId === null ? null : hashUserIdForSentry(offendingUserId);
+  const expectedHash = hashUserIdForSentry(expectedUserId);
+
+  const payload = {
+    level: "fatal" as const,
+    tags: {
+      sec: true,
+      dsar: true,
+      cross_tenant: true,
+      table: tableName,
+    },
+    extra: {
+      offendingUserIdHash: offendingHash,
+      expectedUserIdHash: expectedHash,
+      tableName,
+      ...ctx,
+    },
+  };
+
+  // Mirror to pino first so the alert is visible in container stdout
+  // even if Sentry capture fails or is rate-limited.
+  logger.error(
+    {
+      ...payload.extra,
+      tags: payload.tags,
+      err: err instanceof Error ? { name: err.name, message: err.message } : err,
+    },
+    "DSAR cross-tenant violation",
+  );
+
+  if (err instanceof Error) {
+    Sentry.captureException(err, payload);
+  } else {
+    Sentry.captureMessage("DSAR cross-tenant violation", payload);
+  }
 }

@@ -248,24 +248,50 @@ emit_incident() {
 }
 
 # --- detect_bypass <tool> <command> ---------------------------------------
-# Echoes the rule_id of the bypassed rule when the command uses a v1 bypass
+# Echoes the rule_id of the bypassed rule when the command uses a bypass
 # flag. Empty output means no bypass detected.
 #
-# v1 scope is deliberately minimal to avoid false positives (see
-# plan ADR-2 and R3):
-#   --no-verify   → cq-never-skip-hooks
-#   LEFTHOOK=0    → cq-lefthook-worktree-hang
-# Deferred to v2: --force on main, --no-gpg-sign, --amend after a prior deny.
+# Scope (telemetry-only, not block — anchored on bash-adjacent context to
+# skip substrings embedded in echoed strings, heredoc bodies, PR body text):
+#   --no-verify              → cq-never-skip-hooks  (skip pre-commit/commit-msg)
+#   -c core.hooksPath=…      → cq-never-skip-hooks  (redirect hooks dir to /dev/null etc.)
+#   HUSKY=0                  → cq-never-skip-hooks  (disable Husky)
+#   --no-gpg-sign            → cq-never-skip-hooks  (bypass commit signing)
+#   -c commit.gpgsign=false  → cq-never-skip-hooks  (bypass signing via inline config)
+#   LEFTHOOK=0               → cq-when-lefthook-hangs-in-a-worktree-60s
+# Deferred: --force on main, --amend after a prior deny.
 #
-# Patterns anchor on bash-adjacent context ("git ", "git\t", LEFTHOOK=0 at
-# command start or after a chain operator) to skip substrings embedded in
-# echoed strings, heredoc bodies, PR body text, etc.
+# core.hooksPath / HUSKY / --no-gpg-sign / commit.gpgsign added 2026-05-12
+# after a session-state anticipatory bypass was self-corrected; see
+# 2026-05-12-anticipatory-hook-bypass-and-leader-substrate-cross-check.md.
 detect_bypass() {
   local cmd="${2:-}"
   # --no-verify: only recognize when it's a flag to a git invocation in the
   # command. Matches "git ... --no-verify" and "git -C foo commit --no-verify"
   # but not 'echo "avoid --no-verify"' or 'gh pr create --body "don\'t --no-verify"'.
   if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*--no-verify ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # -c core.hooksPath=…: redirects hook directory (commonly to /dev/null).
+  # Recognize only as a flag to git, not in echoed text. Any value matched.
+  if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*-c[[:space:]]+core\.hooksPath= ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # -c commit.gpgsign=false: disables signing for this invocation.
+  if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*-c[[:space:]]+commit\.gpgsign=false ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # --no-gpg-sign: git flag to bypass commit signing.
+  if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*--no-gpg-sign ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # HUSKY=0: disable Husky pre-commit hooks. Recognize as env-assign-before-
+  # command position (standard form) or after a chain operator. Not in echoed text.
+  if [[ "$cmd" =~ (^|\&\&|\|\||\;)[[:space:]]*HUSKY=0[[:space:]] ]]; then
     echo "cq-never-skip-hooks"
     return
   fi
