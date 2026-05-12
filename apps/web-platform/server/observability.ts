@@ -4,9 +4,16 @@ import logger from "@/server/logger";
 
 const SENTRY_USERID_PEPPER = process.env.SENTRY_USERID_PEPPER;
 
-// One-shot boot warning so operators can spot misconfigured pepper.
+// Boot warning so operators can spot misconfigured pepper. Fires once per
+// Node worker process at module init (N×workers warnings under horizontal
+// scale-out — operationally intentional: every worker that lacks the pepper
+// is in the degraded `pepper_unset`-sentinel mode and operators want to see
+// each one). Tests covering this surface live in
+// `observability.test.ts` (pepper-set happy path) +
+// `observability-pepper-unset.test.ts` (fail-closed sentinel via vitest
+// per-file worker-isolated module-init env).
 if (!SENTRY_USERID_PEPPER) {
-  // eslint-disable-next-line no-console -- intentional one-shot boot warning
+  // eslint-disable-next-line no-console -- intentional boot warning
   console.warn(
     "[observability] SENTRY_USERID_PEPPER not set — userId will emit as 'pepper_unset' sentinel (fail-closed pseudonymization).",
   );
@@ -28,6 +35,23 @@ if (!SENTRY_USERID_PEPPER) {
 export function hashUserId(userId: string, pepper = SENTRY_USERID_PEPPER): string {
   if (!pepper) return "pepper_unset";
   return createHmac("sha256", pepper).update(userId).digest("hex");
+}
+
+/**
+ * Rename `userId` → `userIdHash` (via `hashUserId`) on an emit `extra`
+ * payload. Both silent-fallback helpers share this so the rename signal
+ * lives in one place. Returns `extra` unchanged when no `userId` key is
+ * present. Null/undefined `userId` values resolve to the sentinel
+ * `"pepper_unset_null"` to avoid hashing the empty-string literal — which
+ * would collide every nullable-userId emit under a single hash.
+ */
+function hashExtraUserId(
+  extra: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!extra || typeof extra !== "object" || !("userId" in extra)) return extra;
+  const { userId: rawUserId, ...rest } = extra as { userId?: unknown } & Record<string, unknown>;
+  if (rawUserId == null) return { ...rest, userIdHash: "pepper_unset_null" };
+  return { ...rest, userIdHash: hashUserId(String(rawUserId)) };
 }
 
 /**
@@ -185,20 +209,6 @@ export function warnSilentFallback(
     // See reportSilentFallback — Sentry namespace may be partially shimmed
     // in non-prod bundles; pino is the durable signal.
   }
-}
-
-/**
- * Rename `userId` → `userIdHash` (via `hashUserId`) on an emit `extra`
- * payload. Defined here so both silent-fallback helpers share one
- * implementation and a single source of truth for the rename signal.
- * Returns `extra` unchanged when no `userId` key is present.
- */
-function hashExtraUserId(
-  extra: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (!extra || typeof extra !== "object" || !("userId" in extra)) return extra;
-  const { userId: rawUserId, ...rest } = extra as { userId?: unknown } & Record<string, unknown>;
-  return { ...rest, userIdHash: hashUserId(String(rawUserId ?? "")) };
 }
 
 /**

@@ -17,6 +17,14 @@ export default defineConfig({
           name: "unit",
           environment: "node",
           include: ["test/**/*.test.ts", "lib/**/*.test.ts"],
+          // Vitest 3.x defaults `isolate` to true, but the default has
+          // changed before. Pin it explicitly here so module-init env-var
+          // reads (e.g., `const SENTRY_USERID_PEPPER = process.env.…` in
+          // `server/observability.ts`) cannot leak between unit test files
+          // sharing a worker — `observability-pepper-unset.test.ts` deletes
+          // the env var at vi.hoisted time and relies on a fresh module
+          // graph to see the deletion. See #3638.
+          isolate: true,
         },
       },
       {

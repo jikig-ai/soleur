@@ -14,6 +14,14 @@ const TEST_PEPPER = "test-pepper";
 const expectedHashFor = (userId: string) =>
   createHmac("sha256", TEST_PEPPER).update(userId).digest("hex");
 
+// Frozen golden vector — decouples the test's "did we hash correctly" check
+// from the SUT's formula. If `hashUserId` ever silently switches primitives
+// (scrypt, blake2, truncation), this constant fails before the per-call
+// `expectedHashFor` helpers (which would silently track the new formula).
+// Generated once via `node -e "console.log(require('crypto').createHmac('sha256','test-pepper').update('u1').digest('hex'))"`.
+const GOLDEN_U1_HASH =
+  "d23f7650f3a2d1b52a83870a6412528cb373d6baf3353cba3fd1b421a9c5d7ac";
+
 const {
   mockCaptureException,
   mockCaptureMessage,
@@ -52,6 +60,13 @@ beforeEach(() => {
 });
 
 describe("hashUserId", () => {
+  it("matches the frozen golden vector for ('u1', 'test-pepper')", () => {
+    // Falsifying primitive drift (e.g., scrypt swap, truncation) — the
+    // per-call expectedHashFor helpers would track such drift silently;
+    // this assertion catches it.
+    expect(hashUserId("u1")).toBe(GOLDEN_U1_HASH);
+  });
+
   it("is deterministic for a fixed pepper + input", () => {
     const a = hashUserId("user-abc");
     const b = hashUserId("user-abc");
@@ -64,14 +79,17 @@ describe("hashUserId", () => {
     expect(h).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("distinct inputs produce distinct hashes (1000-iteration smoke)", () => {
-    const seen = new Set<string>();
-    for (let i = 0; i < 1000; i++) {
-      const h = hashUserId(`user-${i}`);
-      expect(seen.has(h)).toBe(false);
-      seen.add(h);
-    }
-    expect(seen.size).toBe(1000);
+  it("distinct inputs produce distinct hashes", () => {
+    // Birthday-bound collision prob for SHA-256 over 3 inputs is ~10^-77.
+    // Replaces a prior 1000-iteration smoke that added CI runtime without
+    // strengthening the contract beyond the determinism + 64-hex shape
+    // tests above.
+    const hashes = new Set([
+      hashUserId("user-a"),
+      hashUserId("user-b"),
+      hashUserId("user-c"),
+    ]);
+    expect(hashes.size).toBe(3);
   });
 
   it("uses the optional pepper arg when provided (prior-pepper lookup contract)", () => {
@@ -154,14 +172,35 @@ describe("reportSilentFallback — userIdHash pseudonymization", () => {
     expect(payload.extra).not.toHaveProperty("userId");
   });
 
-  it("does not emit tags.op when op is omitted; passes through extra without a userId untransformed", () => {
+  it("does not emit tags.op when op is omitted", () => {
     const err = new Error("boom");
     reportSilentFallback(err, { feature: "shared-token", extra: { token: "abc" } });
 
-    expect(mockCaptureException).toHaveBeenCalledWith(err, {
-      tags: { feature: "shared-token" },
-      extra: { token: "abc" },
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      err,
+      expect.objectContaining({ tags: { feature: "shared-token" } }),
+    );
+  });
+
+  it("passes through extra unchanged when no userId key is present", () => {
+    const err = new Error("boom");
+    reportSilentFallback(err, { feature: "shared-token", extra: { token: "abc" } });
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      err,
+      expect.objectContaining({ extra: { token: "abc" } }),
+    );
+  });
+
+  it("hashes a null userId to the 'pepper_unset_null' sentinel (avoids empty-string collision)", () => {
+    const err = new Error("boom");
+    reportSilentFallback(err, {
+      feature: "nullable",
+      extra: { userId: null, other: "value" },
     });
+    const [, payload] = mockCaptureException.mock.calls[0];
+    expect(payload.extra).toEqual({ userIdHash: "pepper_unset_null", other: "value" });
+    expect(payload.extra).not.toHaveProperty("userId");
   });
 
   it("emits a pino logger.error with userIdHash instead of userId", () => {

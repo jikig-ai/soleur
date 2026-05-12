@@ -550,6 +550,14 @@ describe("POST /api/kb/upload", () => {
         }),
       }),
     );
+    // Sentry-side negative assertion — raw `userId` MUST NOT appear in the
+    // Sentry payload extra (mirror of the pino-side negative above).
+    expect(Sentry.captureMessage).not.toHaveBeenCalledWith(
+      "pdf linearization failed",
+      expect.objectContaining({
+        extra: expect.objectContaining({ userId: TEST_USER_ID }),
+      }),
+    );
   });
 
   test("PDF upload: skip_signed is silent in BOTH pino and Sentry", async () => {
