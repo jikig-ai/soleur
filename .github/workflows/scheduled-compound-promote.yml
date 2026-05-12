@@ -126,8 +126,15 @@ jobs:
           TARGET_ALLOW_RE='^(AGENTS\.core\.md|plugins/soleur/skills/[A-Za-z0-9_-]+/SKILL\.md)$'
           MAX_DIFF_BYTES=16384
           # Always-loaded payload size targets (cq-agents-md-why-single-line on
-          # AGENTS.docs.md): 18000 warn, 22000 critical. Post-apply size MUST
-          # stay <= warn; otherwise reject the cluster.
+          # AGENTS.docs.md): 20000 warn, 22000 critical at the pre-commit hook
+          # (scripts/lint-agents-rule-budget.sh). The cron promoter uses the
+          # tighter pre-#3684 warn floor (18000) as its post-apply hard cap on
+          # purpose: clusters land unattended at scheduled cadence, so the
+          # cron carries the strictest budget — any auto-promotion that would
+          # push the always-loaded payload past 18000 is reverted, even though
+          # the same diff would pass the human-supervised pre-commit gate.
+          # Operators who want to land closer to the pre-commit ceiling
+          # commit by hand; the cron stays conservative.
           MAX_ALWAYS_LOADED_BYTES=18000
 
           printf '%s' "$CLUSTERS_JSON" | jq -c '.[]' | while IFS= read -r cluster; do

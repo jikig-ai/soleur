@@ -132,6 +132,12 @@ def parse_skill_segments(first_skill: str, rest: str) -> list[tuple[str, str]]:
         first_anchor = parts[0].strip()
         if first_anchor:
             segments.append((first_skill, first_anchor))
+        elif len(parts) > 1:
+            # Malformed: the first segment has no anchor but subsequent
+            # segments exist (e.g. `[skill-enforced: plan , compound step 8]`).
+            # Emit an empty-anchor placeholder for first_skill so the caller
+            # can report it instead of silently dropping it.
+            segments.append((first_skill, ""))
         for part in parts[1:]:
             tokens = part.split(None, 1)
             if not tokens:
@@ -172,6 +178,16 @@ def load_allowlist(root: Path) -> tuple[set[tuple[str, str]], list[str]]:
             )
             continue
         skill, anchor = tokens[0], tokens[1].strip()
+        if re.search(r"\s#\s", anchor):
+            errors.append(
+                f"{path}:{line_num}: inline `# ...` comments are not "
+                f"supported in allowlist anchors (the parser would treat "
+                f"the `#` and trailing prose as part of the anchor body, "
+                f"silently widening the allowlist). Move the rationale to "
+                f"a preceding standalone `# ...` line. Offending entry: "
+                f"{line!r}"
+            )
+            continue
         if not SKILL_NAME_RE.match(skill):
             errors.append(
                 f"{path}:{line_num}: invalid skill name {skill!r} "
@@ -280,9 +296,13 @@ def lint(agents_md: Path, root: Path, *, check_anchors: bool,
                     errors.append(
                         f"{agents_md}:{line_num}: ERROR: [skill-enforced: ... {skill} {anchor}] "
                         f"— anchor substring not found in plugins/soleur/skills/{skill}/SKILL.md. "
-                        f"Fix: update the tag to a verbatim substring of the skill body, "
-                        f"rename the anchor in the skill, or add `{skill} {anchor}` "
-                        f"to scripts/agents-anchor-ignore.txt with a one-line rationale."
+                        f"Fix options: (a) update the tag to a verbatim substring of the "
+                        f"skill body (preferred); (b) rename the anchor in the skill; "
+                        f"(c) append a new line to scripts/agents-anchor-ignore.txt in "
+                        f"the format `<skill> <anchor>` (split on FIRST whitespace; "
+                        f"inline `# ...` comments NOT supported — put rationale on a "
+                        f"preceding standalone `# ...` line). For this entry, the line "
+                        f"would be: `{skill} {anchor}`."
                     )
 
     return errors
@@ -309,22 +329,24 @@ def main(argv: list[str]) -> int:
 
     total_errors = 0
     total_tags = 0
-    seen_roots: set[Path] = set()
+    allowlist_cache: dict[Path, set[tuple[str, str]]] = {}
     for f in args.files:
         path = Path(f)
         if not path.is_file():
             print(f"ERROR: {f} not found", file=sys.stderr)
             return 2
         root = repo_root_for(path)
-        # Validate the allowlist once per repo root (not per AGENTS file).
-        if root not in seen_roots:
+        # Load + validate the allowlist once per repo root, then cache the
+        # parsed (skill, anchor) set for reuse across subsequent AGENTS files
+        # (the on-disk file does not change mid-invocation, so re-reading it
+        # per AGENTS file is wasted I/O).
+        if root not in allowlist_cache:
             allowlist, allowlist_errs = load_allowlist(root)
             for e in allowlist_errs:
                 print(e, file=sys.stderr)
                 total_errors += 1
-            seen_roots.add(root)
-        else:
-            allowlist, _ = load_allowlist(root)
+            allowlist_cache[root] = allowlist
+        allowlist = allowlist_cache[root]
         text = path.read_text(encoding="utf-8")
         total_tags += len(HOOK_TAG_RE.findall(text)) + len(SKILL_TAG_RE.findall(text))
         errs = lint(path, root, check_anchors=args.check_anchors, allowlist=allowlist)

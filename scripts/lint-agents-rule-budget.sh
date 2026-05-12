@@ -31,7 +31,7 @@ read -r INDEX_BYTES CORE_BYTES TOTAL_BYTES < <(compute_b_always)
 
 if (( TOTAL_BYTES > CRITICAL_BYTES )); then
   DELTA=$((TOTAL_BYTES - CRITICAL_BYTES))
-  echo "::error file=AGENTS.core.md::AGENTS always-loaded payload ${TOTAL_BYTES} B exceeds harness performance threshold (${CRITICAL_BYTES} B) by ${DELTA} B. index=${INDEX_BYTES} core=${CORE_BYTES}. Trim before commit, or demote a wg-* rule from AGENTS.core.md to AGENTS.rest.md per CPO sign-off PR #3496 (only wg-* may be demoted; never hr-*). Bypass with --no-verify if you must (CI cron post-apply revert remains the load-bearing floor)." >&2
+  echo "::error file=AGENTS.core.md::AGENTS always-loaded payload ${TOTAL_BYTES} B exceeds harness performance threshold (${CRITICAL_BYTES} B) by ${DELTA} B. index=${INDEX_BYTES} core=${CORE_BYTES}. Trim before commit, or demote a wg-* rule from AGENTS.core.md to AGENTS.rest.md per CPO sign-off PR #3496 (only wg-* may be demoted; never hr-*). Bypass with --no-verify if you must (the load-bearing CI floor remains the post-apply revert in .github/workflows/scheduled-compound-promote.yml)." >&2
   exit 1
 fi
 

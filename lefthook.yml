@@ -88,7 +88,10 @@ pre-commit:
     # anchor is a verbatim substring of the named skill's SKILL.md, and consults
     # scripts/agents-anchor-ignore.txt for legitimate trims. Path-array glob per
     # 2026-03-21-lefthook-gobwas-glob-double-star.md — every SKILL.md sits at
-    # plugins/soleur/skills/<name>/SKILL.md (mindepth 2 from the skills root).
+    # plugins/soleur/skills/<name>/SKILL.md (exactly one intermediate dir from
+    # the skills root). Use `*/SKILL.md` (single star) NOT `**/SKILL.md`:
+    # gobwas `**` requires 1+ intermediate directories AFTER the `**` segment,
+    # which would silently miss every SKILL.md and disable this gate.
     agents-skill-enforced-anchor:
       priority: 5
       glob:
@@ -98,7 +101,7 @@ pre-commit:
         - "AGENTS.rest.md"
         - "scripts/lint-agents-enforcement-tags.py"
         - "scripts/agents-anchor-ignore.txt"
-        - "plugins/soleur/skills/**/SKILL.md"
+        - "plugins/soleur/skills/*/SKILL.md"
       run: python3 scripts/lint-agents-enforcement-tags.py --check-anchors AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
     scheduled-show-full-output-lint:
       priority: 5
