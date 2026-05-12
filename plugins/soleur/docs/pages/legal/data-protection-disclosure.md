@@ -18,7 +18,7 @@ permalink: legal/data-protection-disclosure/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 12, 2026 (trimmed Section 4.2 Resend row Legal Basis column to remove misplaced push-subscription consent clause; cleanup per #3671 of forward-port #3666)
+**Last Updated:** May 12, 2026 (trimmed Section 4.2 Resend row Legal Basis column to remove misplaced push-subscription consent clause; push-subscription consent basis remains correctly disclosed in §2.3(j))
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
