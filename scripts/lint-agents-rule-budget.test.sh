@@ -71,8 +71,9 @@ make_core_minimal() {
 EOF
 }
 
-# Case T1: current tree.
-t1_current_tree() {
+# Case T1a: current tree — smoke test (exit 0 + B_ALWAYS reported). Does NOT
+# assert which tier fires because B_ALWAYS shifts as rules land/retire.
+t1a_current_tree_smoke() {
   local out rc
   set +e
   out=$(python3 "$SUT" \
@@ -82,10 +83,45 @@ t1_current_tree() {
     "$REPO_ROOT/AGENTS.rest.md" 2>&1)
   rc=$?
   set -e
-  assert_exit "T1 current tree exit 0" "0" "$rc"
-  # WARN tier expected because measured B_ALWAYS = 21985 >= 20000
-  assert_contains "T1 WARN line emitted" "WARN" "$out"
-  assert_contains "T1 B_ALWAYS reported" "B_ALWAYS=" "$out"
+  assert_exit "T1a current tree exit 0" "0" "$rc"
+  assert_contains "T1a B_ALWAYS reported" "B_ALWAYS=" "$out"
+}
+
+# Case T1b: WARN tier fires at synthetic ~20100 B AGENTS.core.md.
+# Padding lives in a comment block OUTSIDE any SECTIONS heading so it
+# does NOT trip the per-rule 600 B cap (which only counts `^- ` lines
+# under `## <SECTIONS>` headings).
+t1b_warn_synth() {
+  local tmp; tmp=$(mktemp -d)
+  make_index "$tmp/AGENTS.md"
+  : > "$tmp/AGENTS.docs.md"
+  : > "$tmp/AGENTS.rest.md"
+  local index_size; index_size=$(wc -c < "$tmp/AGENTS.md")
+  local target=$((20100 - index_size))
+  {
+    echo "# AGENTS Core-class"
+    echo
+    echo "## Hard Rules"
+    echo
+    echo "- [id: hr-test-pointer] one-line body."
+    echo
+    echo "<!-- pad:"
+    head -c "$target" /dev/zero | tr '\0' 'x'
+    echo " -->"
+  } > "$tmp/AGENTS.core.md"
+
+  local out rc
+  set +e
+  out=$(python3 "$SUT" \
+    "$tmp/AGENTS.md" \
+    "$tmp/AGENTS.core.md" \
+    "$tmp/AGENTS.docs.md" \
+    "$tmp/AGENTS.rest.md" 2>&1)
+  rc=$?
+  set -e
+  assert_exit "T1b WARN-synth exit 0" "0" "$rc"
+  assert_contains "T1b WARN line emitted" "WARN" "$out"
+  rm -rf "$tmp"
 }
 
 # Case T2: B_ALWAYS > 22000 -> reject.
@@ -197,6 +233,39 @@ t5_per_rule_in_docs_sidecar() {
   rm -rf "$tmp"
 }
 
+# Case T7: multi-byte UTF-8 — a rule body of <600 chars but >600 bytes
+# (e.g., 250 chars of `→` glyph at 3 B each = 750 B) MUST trip the cap.
+# Guards against char/byte conflation per plan TR6.
+t7_multi_byte_utf8_per_rule() {
+  local tmp; tmp=$(mktemp -d)
+  make_index "$tmp/AGENTS.md"
+  : > "$tmp/AGENTS.docs.md"
+  : > "$tmp/AGENTS.rest.md"
+  {
+    echo "# AGENTS Core-class"
+    echo
+    echo "## Hard Rules"
+    echo
+    # 250 copies of `→` (U+2192, 3 bytes UTF-8) = 750 B body.
+    printf -- "- [id: hr-test-utf8] "
+    python3 -c "print('→' * 250, end='')"
+    echo " **Why:** padded."
+  } > "$tmp/AGENTS.core.md"
+
+  local out rc
+  set +e
+  out=$(python3 "$SUT" \
+    "$tmp/AGENTS.md" \
+    "$tmp/AGENTS.core.md" \
+    "$tmp/AGENTS.docs.md" \
+    "$tmp/AGENTS.rest.md" 2>&1)
+  rc=$?
+  set -e
+  assert_exit "T7 UTF-8 multi-byte per-rule reject exit 1" "1" "$rc"
+  assert_contains "T7 exceeds 600 B reported" "exceeds 600 B" "$out"
+  rm -rf "$tmp"
+}
+
 # Case T6: pointer index lines (short by construction) are never cap-rejected.
 t6_pointer_index_under_cap() {
   local tmp; tmp=$(mktemp -d)
@@ -223,12 +292,14 @@ if [[ ! -f "$SUT" ]]; then
   exit 0
 fi
 
-t1_current_tree
+t1a_current_tree_smoke
+t1b_warn_synth
 t2_byte_budget_reject
 t3_per_rule_reject
 t4_missing_core
 t5_per_rule_in_docs_sidecar
 t6_pointer_index_under_cap
+t7_multi_byte_utf8_per_rule
 
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"

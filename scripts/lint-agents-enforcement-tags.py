@@ -47,8 +47,10 @@ HOOK_SEARCH_DIRS = (
 )
 
 # Per-skill SKILL.md content cache (avoids re-reading the same file across the
-# 14-pair corpus). Keyed by absolute path; cleared per `main()` invocation by
-# not being module-global mutable state — `lint()` builds a fresh dict.
+# 14-tag / 21-pair corpus). Keyed by absolute path. Lifetime: one `main()`
+# invocation, shared across all input files for repeat-read avoidance —
+# `main()` builds a fresh dict at the top of each run and passes it through
+# to every `lint()` call.
 
 
 def repo_root_for(path: Path) -> Path:
@@ -109,6 +111,13 @@ def resolve_anchor(
     couple AGENTS rule wording to SKILL.md heading style and force
     cosmetic edits when one or the other is refactored.
     """
+    # Defense-in-depth: reject path-traversal-shaped anchors before the
+    # rglob fallback. Pathlib treats `/` and `..` as literal pattern tokens
+    # (no upward traversal) but explicit rejection makes the surface obvious
+    # and survives a future pathlib semantic change.
+    if "/" in anchor or ".." in anchor:
+        return False
+
     skill_md = root / "plugins" / "soleur" / "skills" / skill / "SKILL.md"
     if not skill_md.exists():
         return False
@@ -124,12 +133,22 @@ def resolve_anchor(
     if phase_normalized != anchor and phase_normalized in content:
         return True
 
+    # Variant 2 (strip leading `Phase X.Y `): tighten to require the stripped
+    # remainder to appear adjacent to a heading marker (`###`, `**`, `## `) or
+    # at the start of a bullet body (`- `). Bare substring match was overly
+    # permissive — a remainder like "exit" could resolve to any "exit" in
+    # prose. Real anchors in the 14-tag corpus always land on a bold label
+    # (`**TDD Gate**`), heading (`### 1.4`), or self-referencing tag literal
+    # (`work Phase 2 exit` appears in `[skill-enforced: work Phase 2 exit]`
+    # tags inside work/SKILL.md).
     stripped = PHASE_PREFIX_RE.sub("", anchor)
     if stripped != anchor:
-        if stripped in content:
-            return True
-        if stripped.replace("-", " ") in content:
-            return True
+        for prefix in ("**", "### ", "## ", "#### ", "- ", "[skill-enforced: "):
+            if f"{prefix}{stripped}" in content:
+                return True
+            spaced = stripped.replace("-", " ")
+            if spaced != stripped and f"{prefix}{spaced}" in content:
+                return True
 
     if "-" in anchor:
         spaced = anchor.replace("-", " ")
@@ -146,22 +165,29 @@ def resolve_anchor(
 
 
 def iter_skill_pairs(skill: str, rest: str):
-    """Yield (skill, anchor) pairs from a `[skill-enforced: ...]` tag body.
+    """Yield (skill, anchor, malformed?) tuples from a `[skill-enforced: ...]`
+    tag body.
 
     The regex captures the first `(skill, rest)` split. `rest` may carry
     additional comma-separated `<skill> <anchor>` pairs (TR4). The first
     fragment of `rest` is the anchor for the regex-captured `skill`;
     subsequent fragments re-parse via SKILL_PAIR_RE.
+
+    Yields `(skill, anchor, None)` on success and `(None, fragment, "malformed")`
+    on a fragment that doesn't parse — the caller surfaces these as errors
+    instead of silently dropping them, mirroring `cq-silent-fallback-must-mirror-to-sentry`.
     """
     fragments = [f.strip() for f in rest.split(",") if f.strip()]
     if not fragments:
         return
     # First fragment: the anchor belongs to the regex-captured `skill`.
-    yield skill, fragments[0]
+    yield skill, fragments[0], None
     for frag in fragments[1:]:
         m = SKILL_PAIR_RE.match(frag)
         if m:
-            yield m.group(1), m.group(2).strip()
+            yield m.group(1), m.group(2).strip(), None
+        else:
+            yield None, frag, "malformed"
 
 
 def lefthook_command_known(rest: str, lefthook_text: str) -> bool:
@@ -206,8 +232,10 @@ def lint(
                 rest = " ".join(tokens[1:])
                 if not lefthook_command_known(rest, lefthook_text):
                     errors.append(
-                        f"{agents_md}:{line_num}: [hook-enforced: lefthook {rest}] "
-                        f"— no matching command in lefthook.yml"
+                        f"{agents_md}:{line_num}: ERROR: [hook-enforced: lefthook {rest}] "
+                        f"— no matching command in lefthook.yml. "
+                        f"Fix: register the command under pre-commit: in lefthook.yml, "
+                        f"update the tag, or retire the rule."
                     )
             else:
                 if not hook_resolves(first, root):
@@ -231,7 +259,15 @@ def lint(
                 )
                 continue
             # Anchor-parity check across every comma-split pair (#3684, TR3+TR4).
-            for pair_skill, anchor in iter_skill_pairs(skill, rest):
+            for pair_skill, anchor, parse_state in iter_skill_pairs(skill, rest):
+                if parse_state == "malformed":
+                    errors.append(
+                        f"{agents_md}:{line_num}: ERROR: [skill-enforced: ... "
+                        f"{anchor}] — fragment does not match `<skill> <anchor>` "
+                        f"shape. Fix: re-author the comma-separated pair so it "
+                        f"starts with a lowercase skill slug followed by an anchor."
+                    )
+                    continue
                 anchor_pairs_checked += 1
                 pair_skill_md = (
                     root / "plugins" / "soleur" / "skills" / pair_skill / "SKILL.md"

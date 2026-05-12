@@ -56,12 +56,15 @@ write_synth_agents_in_repo() {
 run_synth() {
   local content="$1"
   local synth_path; synth_path=$(write_synth_agents_in_repo "$content")
+  # Defense: if assertions or python3 abort mid-case, the trap removes the
+  # synth file so a stale `AGENTS.test-*.md` cannot pollute the worktree
+  # and contaminate subsequent lefthook runs (which glob AGENTS*.md).
+  trap 'rm -f "$synth_path"' RETURN
   local out rc
   set +e
   out=$(python3 "$SUT" "$synth_path" 2>&1)
   rc=$?
   set -e
-  rm -f "$synth_path"
   printf '%s\n' "$out"
   return "$rc"
 }
@@ -178,6 +181,11 @@ t7_strip_leading_phase() {
   set -e
   assert_exit "T7 strip-leading-Phase exit 0" "0" "$rc"
 }
+
+if [[ ! -f "$SUT" ]]; then
+  echo "SKIP: $SUT not yet present (Phase 1 RED — implementation lands in Phase 3)"
+  exit 0
+fi
 
 t1_real_tree
 t2_nonexistent_anchor

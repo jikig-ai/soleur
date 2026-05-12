@@ -32,6 +32,13 @@ import re
 import sys
 from pathlib import Path
 
+# Self-bootstrap the script directory onto sys.path so `_agents_md_sections`
+# resolves whether this script runs as a CLI tool (cwd may be anywhere) or
+# via importlib in the test harness.
+_SCRIPTS_DIR = str(Path(__file__).parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
 from _agents_md_sections import SECTIONS
 
 B_ALWAYS_WARN = 20000
@@ -108,12 +115,15 @@ def lint(paths: list[Path]) -> int:
 
     reject = False
 
+    remediation = (
+        "Retire a rule via scripts/retired-rule-ids.txt or demote a wg-* rule "
+        "from AGENTS.core.md to AGENTS.rest.md."
+    )
+
     if b_always > B_ALWAYS_REJECT:
         print(
             f"[REJECT] B_ALWAYS={b_always} > {B_ALWAYS_REJECT} "
-            f"(AGENTS.md={b_index} + AGENTS.core.md={b_core}). "
-            "Retire a rule via scripts/retired-rule-ids.txt or demote a wg-* "
-            "rule from AGENTS.core.md to AGENTS.rest.md.",
+            f"(AGENTS.md={b_index} + AGENTS.core.md={b_core}). {remediation}",
             file=sys.stderr,
         )
         reject = True
@@ -121,19 +131,22 @@ def lint(paths: list[Path]) -> int:
         print(
             f"[WARN] B_ALWAYS={b_always} >= {B_ALWAYS_WARN} "
             f"(AGENTS.md={b_index} + AGENTS.core.md={b_core}). "
-            "Approaching the 22000-byte harness ceiling.",
+            f"Approaching the {B_ALWAYS_REJECT}-byte harness ceiling. {remediation}",
             file=sys.stderr,
         )
     else:
-        print(f"[OK] B_ALWAYS={b_always}", file=sys.stderr)
+        # Success status goes to stdout so log scrapers grepping stderr-only
+        # for failures don't see [OK] as noise.
+        print(f"[OK] B_ALWAYS={b_always}")
 
     for p in paths:
         if not p.exists():
             continue
         for line_no, size in per_rule_violations(p):
             print(
-                f"{p}:{line_no}: ERROR: rule body exceeds 600 B (actual={size}). "
-                f"Move context to a learning file per cq-agents-md-why-single-line.",
+                f"{p}:{line_no}: ERROR: rule body exceeds {PER_RULE_CAP} B "
+                f"(actual={size}). Move context to a learning file per "
+                f"cq-agents-md-why-single-line.",
                 file=sys.stderr,
             )
             reject = True
