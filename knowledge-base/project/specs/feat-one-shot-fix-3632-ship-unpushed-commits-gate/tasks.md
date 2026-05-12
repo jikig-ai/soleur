@@ -4,20 +4,29 @@ Derived from `knowledge-base/project/plans/2026-05-12-fix-ship-unpushed-commits-
 
 ## Phase A: Hook script + tests (RED → GREEN)
 
-- [ ] A.1 Write `.claude/hooks/ship-unpushed-commits-gate.test.sh` with stubs for T1-T11.
+- [ ] A.1 **MANDATORY GATE — Empirical hook-input shape verification** (per learning `2026-05-10-empirical-hook-input-shape-prevents-silent-zero-emission.md`).
+  - A.1.1 Write `/tmp/ship-gate-stub-capture.sh` that `cat > /tmp/ship-gate-input-sample.json` and exits 0.
+  - A.1.2 Wire stub temporarily in `.claude/settings.json` under `hooks.PreToolUse` matcher `Bash`.
+  - A.1.3 Run `claude -p 'echo hello'` child session — child loads settings, fires stub on its own Bash invocation, writes the sample.
+  - A.1.4 Inspect `/tmp/ship-gate-input-sample.json` — confirm `.tool_input.command` (string), `.cwd` (string), `.tool_name == "Bash"`.
+  - A.1.5 Record verified shape as date-stamped header comment in the new hook (template in plan Phase A.1).
+  - A.1.6 Remove stub from settings.json; delete `/tmp/ship-gate-stub-*`.
+  - **Gate:** If any field path differs from the sibling-hook contract, halt and surface — drift would invalidate all 5 sibling hooks.
+- [ ] A.2 Write `.claude/hooks/ship-unpushed-commits-gate.test.sh` with stubs for T1-T14 (T1-T11 base + T12-T14 from deepen-plan).
   - Mirror the fixture pattern from `.claude/hooks/pre-merge-rebase.test.sh`.
   - Initial run: all tests FAIL (hook does not exist yet).
-- [ ] A.2 Implement `.claude/hooks/ship-unpushed-commits-gate.sh`.
-  - A.2.1 Source `lib/incidents.sh`.
-  - A.2.2 Read stdin via single `jq` fork: parse `.cwd` and `.tool_input.command`.
-  - A.2.3 Apply chain-operator regex `(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)` — exit 0 if no match.
-  - A.2.4 Resolve `WORK_DIR`; skip if not a work-tree, on main/master, on detached HEAD, no upstream tracking.
-  - A.2.5 `git fetch origin "$BRANCH"`; fail-open with stderr warning on network error.
-  - A.2.6 Count `git rev-list "origin/${BRANCH}..HEAD" | wc -l`.
-  - A.2.7 If > 0: `emit_incident wg-ship-push-before-merge deny <reason> "$CMD"` + deny-JSON output with commit list.
-  - A.2.8 Else: exit 0 with `additionalContext` confirming pass.
-- [ ] A.3 `chmod 755` on the hook script.
-- [ ] A.4 Run tests until GREEN. All T1-T11 PASS.
+- [ ] A.3 Implement `.claude/hooks/ship-unpushed-commits-gate.sh`.
+  - A.3.1 Header includes the empirically-verified hook-input shape from A.1.
+  - A.3.2 `set -eo pipefail` (omit `-u`); source `lib/incidents.sh`.
+  - A.3.3 Single `jq` fork via `@sh` to extract `.cwd` and `.tool_input.command` (mirrors `guardrails.sh:30`).
+  - A.3.4 Apply chain-operator regex `(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)` — exit 0 if no match.
+  - A.3.5 **Guard ordering (load-bearing per learning 2026-03-28):** (1) non-merge cmd → exit 0, (2) main/master → exit 0, (3) detached HEAD → exit 0, (4) no upstream tracking → exit 0, (5) not a work-tree → exit 0.
+  - A.3.6 `git -C "$WORK_DIR" fetch origin "$CURRENT_BRANCH" >/dev/null 2>&1 || { echo "warn..." >&2; exit 0; }` — **redirect BOTH stdout AND stderr** per R5/T14.
+  - A.3.7 `UNPUSHED=$(git -C "$WORK_DIR" rev-list "origin/${CURRENT_BRANCH}..HEAD" 2>/dev/null | wc -l | tr -d ' ')`.
+  - A.3.8 If `UNPUSHED -gt 0`: capture 10-commit `COMMIT_LIST`, call `emit_incident wg-ship-push-before-merge deny "<≤50char prefix>" "$CMD"`, emit deny-JSON via `jq -n --arg ...`.
+  - A.3.9 Else: exit 0 with `additionalContext` JSON confirming pass.
+- [ ] A.4 `chmod 755 .claude/hooks/ship-unpushed-commits-gate.sh`.
+- [ ] A.5 Run tests until GREEN. All T1-T14 PASS.
 
 ## Phase B: Wire hook in `.claude/settings.json`
 
@@ -46,7 +55,7 @@ Derived from `knowledge-base/project/plans/2026-05-12-fix-ship-unpushed-commits-
 ## Phase F: Cross-file verification
 
 - [ ] F.1 `grep -rn 'wg-ship-push-before-merge' . --exclude-dir=.git` — only PR-touched files match.
-- [ ] F.2 `bash .claude/hooks/ship-unpushed-commits-gate.test.sh` final GREEN.
+- [ ] F.2 `bash .claude/hooks/ship-unpushed-commits-gate.test.sh` final GREEN (T1-T14 all PASS).
 - [ ] F.3 `bash .claude/hooks/pre-merge-rebase.test.sh` still GREEN (regression).
 
 ## Phase G: PR

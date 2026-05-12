@@ -9,6 +9,35 @@ requires_cpo_signoff: false
 
 # fix: ship — add unpushed-commits gate before queuing auto-merge
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-12
+**Sections enhanced:** Phase A (empirical hook-input verification), Hook ordering, Test Scenarios (T12-T14 added), Risks (R5-R7 added), Sharp Edges (3 new entries), Out-of-Scope (new section)
+**Research sources:**
+- `knowledge-base/project/learnings/2026-05-10-empirical-hook-input-shape-prevents-silent-zero-emission.md`
+- `knowledge-base/project/learnings/2026-03-28-pretooluse-hook-guard-ordering-matters.md`
+- `knowledge-base/project/learnings/2026-03-19-pre-merge-hook-false-positive-on-string-content.md`
+- `knowledge-base/project/learnings/2026-03-19-ci-squash-fallback-bypasses-merge-gates.md`
+- `knowledge-base/project/learnings/2026-04-02-ship-review-evidence-coupling.md`
+- `knowledge-base/project/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md`
+- `knowledge-base/project/learnings/2026-03-05-plan-review-scope-reduction-and-hook-enforced-annotations.md`
+- Live grep of `.github/workflows/scheduled-*.yml` for `gh pr merge` call sites
+- `.claude/hooks/lib/incidents.sh` `emit_incident` contract (lines 148-240)
+
+### Key Improvements
+1. **Hook-input shape is now empirically verified before implementation** (Phase A.1) — not hypothesized from training data. The PreToolUse Bash hook payload shape is verified via a stub-capture in a child `claude -p` session before `.claude/hooks/ship-unpushed-commits-gate.sh` is written. This closes the silent-zero-emission class from #3494/#3495.
+2. **Guard ordering audited** — the unpushed-commits check fires AFTER `pre-merge-rebase.sh` (its own merge-of-main pushes the new state) but BEFORE the detached HEAD exit within this new hook, mirroring the 2026-03-28 finding that context-independent guards must precede context-dependent exits.
+3. **String-content false-positive surface explicitly addressed** — T8 verifies the chain-operator regex does NOT match `gh pr merge` embedded in echo/heredoc strings; the SKILL.md Phase 6.4 prose snippet uses `git rev-list` (no `merge` keyword) so it does not re-trigger `pre-merge-rebase.sh`'s broad scan.
+4. **Out-of-Scope section enumerates 14+ `.github/workflows/scheduled-*.yml` `gh pr merge` call sites** that run inside GitHub Actions runners — they are NOT protected by this hook by design. AGENTS.md rule body is the cross-surface contract; a follow-up issue is filed for the workflow surface to be addressed separately.
+5. **Add `[hook-enforced: ...]` annotation pattern** — the new AGENTS.core.md rule body uses `[skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]` per the 2026-03-05 convention to make defense duplication grep-able.
+6. **Phase A.1 inspection gate is mandatory** — explicitly load-bearing per the Sharp Edges section; cannot be elided.
+
+### New Considerations Discovered
+- The new hook is the FIRST hook in this repo that needs to operate on the OUTPUT of a prior hook (`pre-merge-rebase.sh` may have pushed a merge commit before this hook fires). Ordering in `.claude/settings.json` is therefore load-bearing — see AC11 (T11).
+- The chain-operator regex from `pre-merge-rebase.sh:25` (`(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)`) is the canonical form; reusing it verbatim avoids regex-drift in the same hook family.
+- `emit_incident` writes to `.claude/.rule-incidents.jsonl` via `flock -x`; tests must use `INCIDENTS_REPO_ROOT` to redirect writes off the operator's real jsonl, per `lib/incidents.sh` convention (lines 19-25).
+- Plan-review-scope-reduction (2026-03-05) confirms the three-layer defense (hook + SKILL.md + AGENTS.md) is justified at this scale — a hook alone misses headless `gh` invocations; prose alone misses the orchestrator path that ignored Phase 6 step 1.
+
 ## Overview
 
 Add a `PreToolUse` hook that intercepts every `gh pr merge` invocation and fails closed if `git rev-list origin/<branch>..HEAD` returns any commits. This closes the fail-open class that produced the #3624 → #3627 → #3630 incident chain, where 2 of 5 local commits (the actual fix + the review fix) were never pushed before auto-merge was queued. The squash-merge consumed only the 3 pushed commits, GitHub returned `MERGED` to the orchestrator, and the recovery only happened because the post-merge `critical-css-gate` happened to exercise the same code the PR was meant to fix.
@@ -239,6 +268,24 @@ Translate each acceptance criterion into a deterministic test. Tests live in `.c
 - **When** parsing `.claude/settings.json` with `jq '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command'`,
 - **Then** the order is: `guardrails.sh`, `pre-merge-rebase.sh`, `ship-unpushed-commits-gate.sh`.
 
+### T12: emit_incident contract — prefix length
+
+- **Given** a deny path,
+- **When** the hook calls `emit_incident wg-ship-push-before-merge deny <prefix> <cmd>`,
+- **Then** the row written to `.claude/.rule-incidents.jsonl` has `rule_text_prefix` ≤ 50 chars (per `lib/incidents.sh:178-180` convention) and `command_snippet` ≤ 1024 chars (per `lib/incidents.sh:185-188`).
+
+### T13: emit_incident contract — INCIDENTS_REPO_ROOT redirect
+
+- **Given** `INCIDENTS_REPO_ROOT=$tmp/incidents` set in the test env,
+- **When** the hook fires a deny,
+- **Then** the jsonl row lands at `$tmp/incidents/.claude/.rule-incidents.jsonl` (NOT the operator's real path). Necessary to keep test runs from polluting production telemetry.
+
+### T14: JSON output is not corrupted by git progress messages
+
+- **Given** a `git fetch origin <branch>` invocation that may print to stderr (progress messages, hint output),
+- **When** the hook's `git fetch` runs,
+- **Then** the hook's stdout contains EXACTLY one valid JSON object (no `Auto-merging`, no `From origin`, no warnings interleaved). Verifiable via `jq . <stdout>` exit 0 + single-object check. This is the canonical learning-2026-03-03 regression test for this hook family.
+
 ## Files to Edit
 
 - `.claude/settings.json` — wire new hook entry under `hooks.PreToolUse`, slotted AFTER `pre-merge-rebase.sh`.
@@ -258,18 +305,60 @@ Phase order is load-bearing — Phase A must land before Phase B because Phase B
 
 ### Phase A: Create the hook script and tests (RED → GREEN)
 
-1. **RED:** Write `.claude/hooks/ship-unpushed-commits-gate.test.sh` with T1-T11 stubs. Initially failing because the hook does not exist.
-2. **GREEN:** Implement `.claude/hooks/ship-unpushed-commits-gate.sh`:
+#### Phase A.1 — Empirical hook-input shape verification (MANDATORY, BEFORE any code is written)
+
+Per learning `2026-05-10-empirical-hook-input-shape-prevents-silent-zero-emission.md`, the PreToolUse Bash hook input shape MUST be empirically captured from a real Claude Code session before implementation. Field paths reconstructed from training data are unreliable — even the sibling `pre-merge-rebase.sh` script uses `.tool_input.command // ""` and `.cwd // ""`, which is the documented contract, but the schema has drifted before (see #3494). The cost of misreading the shape is silent fail-open: every `gh pr merge` would slip through with `CMD=""` and skip the regex match.
+
+**Procedure:**
+
+1. Write a stub PostToolUse / PreToolUse Bash capture hook to `/tmp/ship-gate-stub-capture.sh` that writes raw stdin to `/tmp/ship-gate-input-sample.json` and exits 0.
+2. Wire the stub temporarily in `.claude/settings.json` under `hooks.PreToolUse` matcher `Bash`. Note: `.claude/settings.json` reloads only at session start.
+3. Run a child `claude -p 'echo hello'` session from this worktree. The child loads the modified settings, fires the stub on its own internal Bash invocation, and writes the sample to `/tmp/`.
+4. Inspect `/tmp/ship-gate-input-sample.json` and confirm:
+   - `.tool_input.command` (string) exists.
+   - `.cwd` (string) exists and resolves to the worktree path.
+   - `.tool_name` is `"Bash"`.
+5. Add a date-stamped header comment to the new hook recording the verified shape, mirroring `.claude/hooks/skill-invocation-logger.sh:13-22`:
+
+   ```bash
+   # Empirically-verified PreToolUse(Bash) input shape (2026-05-12):
+   #   .tool_input.command  (string) — the bash command string
+   #   .cwd                 (string) — absolute path to the working directory
+   #   .tool_name           ("Bash") — confirms matcher dispatched correctly
+   ```
+
+6. Remove the stub from `.claude/settings.json` and delete `/tmp/ship-gate-stub-capture.sh` and `/tmp/ship-gate-input-sample.json`.
+
+**Gate:** If A.1 returns ANY field path different from the sibling hook contract, halt Phase A and surface the drift before proceeding — the entire hook ecosystem (5 active PreToolUse Bash hooks) shares the contract, and a drift discovered here would invalidate the assumptions baked into all five.
+
+**Why this gate exists:** It is the cheapest place to catch a contract drift. Discovered later, the same drift would require re-writing the hook + the test suite + every assertion sketch in this plan.
+
+#### Phase A.2 — RED: write failing tests
+
+1. Write `.claude/hooks/ship-unpushed-commits-gate.test.sh` with T1-T14 stubs (T1-T11 from this plan + T12-T14 added by deepen-plan, see Test Scenarios below). Initially failing because the hook does not exist.
+
+#### Phase A.3 — GREEN: implement the hook
+
+1. Implement `.claude/hooks/ship-unpushed-commits-gate.sh`:
+   - Add date-stamped header documenting the verified hook-input shape (from Phase A.1).
+   - `set -eo pipefail` (omit `-u` — hook fail-paths must return JSON, not crash on unset; mirrors `pre-merge-rebase.sh:21-22`).
    - Source `lib/incidents.sh` for `emit_incident`.
-   - Read stdin, parse `.cwd` and `.tool_input.command` via single `jq` fork.
-   - Regex match `(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)` — exit 0 if no match.
-   - Resolve `WORK_DIR`, skip if not a work-tree, skip on main/master, skip on detached HEAD, skip on missing upstream.
-   - `git -C "$WORK_DIR" fetch origin "$CURRENT_BRANCH"` — fail-open on error with stderr warning.
+   - Single `jq` fork to extract both `.tool_input.command` and `.cwd` via `@sh` shell-escape (mirrors `guardrails.sh:30` — halves hot-path overhead).
+   - **Guard ordering (load-bearing, per learning 2026-03-28):**
+     1. **Early exit on non-merge command:** Regex match `(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)` — exit 0 if no match. Context-independent; fires first.
+     2. **Main/master skip:** the agent merges PRs INTO main, not from it. The check is meaningless on main, so this exit is safe to place before the upstream-required guards.
+     3. **Detached HEAD skip:** no upstream tracking to compare against. Place AFTER main/master because the unpushed-commits intent doesn't apply.
+     4. **No upstream tracking ref skip:** never pushed; out of this gate's scope.
+     5. **Work-tree existence skip:** bare repo / missing dir → fail-open.
+   - `git -C "$WORK_DIR" fetch origin "$CURRENT_BRANCH" >/dev/null 2>&1 || { echo "warn..." >&2; exit 0; }` — fail-open on network error. **CRITICAL: redirect BOTH stdout and stderr** per learning 2026-03-03 session error #1 (`git fetch` prints progress to stderr; mixing with hook JSON corrupts output).
    - `UNPUSHED=$(git -C "$WORK_DIR" rev-list "origin/${CURRENT_BRANCH}..HEAD" 2>/dev/null | wc -l | tr -d ' ')`.
-   - If `UNPUSHED > 0`: capture `git log "origin/${CURRENT_BRANCH}..HEAD" --oneline`, call `emit_incident wg-ship-push-before-merge deny <reason> "$CMD"`, return deny-JSON.
-   - Else: exit 0 with `additionalContext` JSON.
-3. `chmod 755 .claude/hooks/ship-unpushed-commits-gate.sh`.
-4. Run `bash .claude/hooks/ship-unpushed-commits-gate.test.sh` until all assertions PASS.
+   - If `UNPUSHED > 0`:
+     - Capture `COMMIT_LIST=$(git -C "$WORK_DIR" log "origin/${CURRENT_BRANCH}..HEAD" --oneline 2>/dev/null | head -10)` (cap to 10 commits to bound deny-message length).
+     - Call `emit_incident wg-ship-push-before-merge deny "Before running \`gh pr merge\`, verify \`git rev-l" "$CMD"` (50-char prefix per `lib/incidents.sh:178-180` convention).
+     - Emit deny-JSON via single `jq -n` fork; message includes count, branch name, and the 10-commit list. Use `jq --arg` for all interpolated values to avoid quote/newline injection.
+   - Else: exit 0 with `additionalContext` JSON confirming the gate passed (mirrors `pre-merge-rebase.sh:190-196`).
+2. `chmod 755 .claude/hooks/ship-unpushed-commits-gate.sh`.
+3. Run `bash .claude/hooks/ship-unpushed-commits-gate.test.sh` until all assertions PASS.
 
 ### Phase B: Wire the hook in settings (contract-declaring → must follow Phase A)
 
@@ -334,26 +423,96 @@ No Product/UX gate — change is invisible to end users.
 ### Risks
 
 - **R1: False-positive on stale upstream tracking ref.** If `git fetch origin <branch>` fails or is skipped, `origin/<branch>` may be stale and `rev-list` could return commits that ARE on origin but not locally tracked. Mitigation: hook calls `git fetch origin "$BRANCH"` before the check; if fetch fails, fail open with stderr warning rather than deny. Sibling: matches `pre-merge-rebase.sh`'s convention.
-- **R2: Hook bypass via direct shell.** If an operator runs `gh pr merge` from outside Claude Code (the gh CLI in a bash terminal), the hook does not fire. Documented in the SKILL.md Phase 6.4 prose; the AGENTS.md rule body is the cross-surface contract. Out of scope for this PR.
+- **R2: Hook bypass via direct shell.** If an operator runs `gh pr merge` from outside Claude Code (the gh CLI in a bash terminal), the hook does not fire. Documented in the SKILL.md Phase 6.4 prose; the AGENTS.md rule body is the cross-surface contract. Out of scope for this PR (see Out-of-Scope below).
 - **R3: Hook ordering misalignment with pre-merge-rebase.sh.** If `pre-merge-rebase.sh` pushes a merge commit, the new gate must see the post-push state. Mitigated by wiring the new hook AFTER `pre-merge-rebase.sh` in `.claude/settings.json`. Tested in T11.
 - **R4: Branch-name-with-special-characters edge case.** A branch like `feat/foo#bar` could mis-tokenize through some shell substitutions. Mitigated by quoting `"origin/${CURRENT_BRANCH}..HEAD"` and using `git -C "$WORK_DIR"` instead of `cd`.
+- **R5: JSON output corruption from git progress messages** (learning 2026-03-03). `git fetch` and `git rev-list` can print progress/hints to stderr; redirecting only one stream lets the other interleave with hook JSON and break `jq` parsing on the harness side. Mitigation: every git invocation uses `>/dev/null 2>&1` unless capture is needed; T14 verifies stdout is parseable JSON.
+- **R6: String-content false positive** (learning 2026-03-19 — pre-merge-rebase.sh's broad keyword match). The chain-operator regex must anchor at start-of-string or after `&&`/`||`/`;` with `\s+pr\s+merge(\s|$)` boundaries. Without anchoring, `echo 'gh pr merge'` inside a heredoc would trip the hook. T8 explicitly verifies this. The Phase 6.4 prose snippet uses `git rev-list` only (no `merge` keyword in the command string) so it does NOT trip `pre-merge-rebase.sh`'s broader scan when executed as a verification step.
+- **R7: Hook silently fails on hook-input shape drift.** If Claude Code's PreToolUse Bash hook input schema changes (`.tool_input.command` becomes nested, renamed to camelCase, etc.), the `jq` extraction returns empty string, the regex never matches, and every `gh pr merge` slips through (silent fail-open — the WORST class). Mitigation: Phase A.1 empirical verification + date-stamped header comment in the hook script + T2 fixture-based test that fires a real `gh pr merge` payload (verifies the contract is honored end-to-end). See learning 2026-05-10.
 
 ### Non-Risks
 
 - **Performance:** added ~300ms per `gh pr merge` invocation. Negligible (this is a once-per-PR operation, not a hot loop).
 - **Backward compat:** no changes to public skills, agents, or commands. Existing ship invocations on clean state see no behavior change.
 
+## Out-of-Scope (filed as separate follow-up)
+
+The PreToolUse hook protects ONLY `gh pr merge` invocations dispatched through Claude Code's Bash tool. Live grep of `.github/workflows/scheduled-*.yml` identifies 14 additional `gh pr merge` call sites that the hook does NOT protect:
+
+```
+.github/workflows/scheduled-campaign-calendar.yml:187
+.github/workflows/scheduled-dogfood-3155.yml:119
+.github/workflows/scheduled-seo-aeo-audit.yml:105
+.github/workflows/scheduled-competitive-analysis.yml:94
+.github/workflows/scheduled-gdpr-gate-preflight-eval-50d.yml:97
+.github/workflows/scheduled-growth-execution.yml:120
+.github/workflows/scheduled-growth-audit.yml:263
+.github/workflows/scheduled-disk-io-7d-recheck.yml:195
+.github/workflows/scheduled-disk-io-24h-recheck.yml:208
+.github/workflows/scheduled-content-generator.yml:181
+.github/workflows/scheduled-bug-fixer.yml:252
+.github/workflows/scheduled-content-publisher.yml:178
+.github/workflows/scheduled-community-monitor.yml:162
+.github/workflows/test-pretooluse-hooks.yml:99  (test workflow — N/A)
+```
+
+**Why out of scope:** These run inside GitHub Actions runners, not in Claude Code. The runner's job typically writes a file, `git add`/`commit`/`push`, THEN `gh pr merge --squash --auto` in the same step — the `push` is sequential, so the unpushed-commits class observed in #3624→#3627→#3630 (orchestrator skipping the push step) does not arise the same way. If a workflow's `push` step fails AND `--auto` is queued anyway, the workflow step itself fails (CI surfaces it). The risk profile is materially different.
+
+**Defense for these workflows is the cross-surface AGENTS.md rule:** `wg-ship-push-before-merge`. Future workflow authors reading the rule will see the contract and structure their workflow steps to honor it.
+
+**Follow-up filed:** Track via a new issue labeled `domain/engineering`, `type/chore`, `priority/p3-low` (verified via `gh label list`): "Audit `.github/workflows/scheduled-*.yml` `gh pr merge` call sites for unpushed-commits gate parity with the Claude Code hook." Defer until the hook lands and accumulates 30 days of telemetry — at which point the per-workflow risk profile can be assessed empirically rather than speculatively.
+
+Additional out-of-scope surfaces (documented but NOT filed):
+
+- **Manual `gh pr merge` from operator shell.** No mechanical defense possible (no harness intercept point). Cross-surface contract is the only signal.
+- **GitHub UI merge button.** Same as above.
+- **Third-party plugins / external automations.** Same as above.
+
 ## References & Research
+
+### Issue + incident chain
 
 - Issue: [#3632](https://github.com/jikig-ai/soleur/issues/3632)
 - Incident chain: PR #3624 (initial fix), PR #3627 (broken — dropped 2 of 5 commits), PR #3630 (recovery via cherry-pick from reflog), commits `399898ce` (recovery merge) and `a23c4197` (broken merge).
-- Sibling hook (template): `.claude/hooks/pre-merge-rebase.sh` (197 lines), its test `.claude/hooks/pre-merge-rebase.test.sh` (217 lines).
-- Sibling learning: `knowledge-base/project/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md` — sets the template for fail-open infra / fail-closed logical convention, and the stdout-redirect gotcha for git commands inside JSON-emitting hooks.
-- Sibling rule: `AGENTS.rest.md:23` `rf-before-spawning-review-agents-push-the` — same shape (push-before-step), different step (review vs. merge).
-- Hook framework convention: `lib/incidents.sh` `emit_incident <rule_id> <event_type> <reason> [<command>]` writes JSONL to `.claude/.rule-incidents.jsonl`.
+
+### Sibling hook + tests (templates)
+
+- `.claude/hooks/pre-merge-rebase.sh` (197 lines, lines 25-27 = chain-operator regex, lines 100-115 = guard ordering, lines 190-196 = success JSON)
+- `.claude/hooks/pre-merge-rebase.test.sh` (217 lines, lines 40-72 = `assert_deny` helper, lines 75-95 = `init_git_repo` fixture)
+- `.claude/hooks/guardrails.sh` (lines 24-30 = single-jq-fork `@sh` pattern)
+
+### Hook framework
+
+- `lib/incidents.sh:148-240` `emit_incident <rule_id> <event_type> <prefix> [<command>] [<hook_event>]` — event ∈ {deny, bypass, applied, warn}; prefix ≤50 chars; command_snippet ≤1024 chars; writes JSONL to `.claude/.rule-incidents.jsonl` via `flock -x`.
+- `INCIDENTS_REPO_ROOT` env var (lib/incidents.sh:19-25): tests use this to redirect emissions off the operator's real jsonl.
+
+### Sibling rules + conventions
+
+- `AGENTS.rest.md:23` `rf-before-spawning-review-agents-push-the` — same shape (push-before-step), different step (review vs. merge).
+- `[skill-enforced: ...]` annotation pattern (learning 2026-03-05): makes defense duplication grep-able for future retirement decisions; `grep -c 'skill-enforced'` gives an instant count.
+
+### Load-bearing learnings (folded into Phase A + Risks + Sharp Edges)
+
+- `2026-05-10-empirical-hook-input-shape-prevents-silent-zero-emission.md` — Phase A.1 gate.
+- `2026-03-28-pretooluse-hook-guard-ordering-matters.md` — Phase A.3 guard ordering.
+- `2026-03-19-pre-merge-hook-false-positive-on-string-content.md` — chain-operator regex + Sharp Edge on the `merge` keyword in command snippets.
+- `2026-03-03-pre-merge-rebase-hook-implementation.md` — stdout/stderr redirect gotcha (R5/T14), fail-open vs fail-closed convention.
+- `2026-04-02-ship-review-evidence-coupling.md` — three-signal pattern (local + git log + GitHub issue) — this hook does NOT need multi-signal because the question (`is local commit list non-empty?`) is a single source of truth.
+- `2026-03-19-ci-squash-fallback-bypasses-merge-gates.md` — the GitHub Actions workflow surface (Out-of-Scope section) is structurally different — they push-then-merge sequentially in the same step, so the fail-open class is not the same shape. Worth tracking but not in scope.
+- `2026-03-05-plan-review-scope-reduction-and-hook-enforced-annotations.md` — `[hook-enforced: ...]` / `[skill-enforced: ...]` convention; defense-in-depth annotation rather than deletion.
+
+### External research
+
+- GitHub auto-merge documentation: <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request> — confirms that `gh pr merge --auto` queues a merge based on the PR's HEAD ref on origin, and that local commits are invisible to the auto-merge queue.
+- `git rev-list <upstream>..HEAD` semantics: <https://git-scm.com/docs/git-rev-list> — confirms that the form returns commits reachable from HEAD but not from `<upstream>`, which is exactly the set of unpushed-or-rewound-but-not-pushed commits.
+- Claude Code PreToolUse hook contract: per `lib/incidents.sh:177` and the sibling hooks, the input is JSON on stdin with `.tool_name`, `.tool_input.command`, and `.cwd`. **Phase A.1 verifies this empirically before relying on it.**
 
 ## Sharp Edges
 
+- **Phase A.1 (empirical hook-input verification) is load-bearing — do not skip.** Per learning 2026-05-10, the cost of misreading the PreToolUse Bash hook input shape is silent fail-open: every `gh pr merge` slips through with `CMD=""`. Phase A.1 must complete with a date-stamped header comment in the hook source before Phase A.3 (implementation) starts. The verification cost is one `claude -p` child invocation (~5 seconds); the cost of skipping it is potentially shipping a hook that is structurally unable to fire.
+- **Redirect BOTH stdout and stderr on every git invocation in the hook** (learning 2026-03-03). `git fetch` prints progress to stderr; `git rev-list` is silent but `git log` is verbose. Anything not explicitly captured for use must go to `/dev/null 2>&1`. T14 is the canonical regression test for this — keep it green.
+- **Do not embed the word `merge` in the SKILL.md Phase 6.4 verification command snippet** (learning 2026-03-19 — `pre-merge-rebase.sh` matches `merge` keyword broadly in command strings). Use `git rev-list "origin/${BRANCH}..HEAD"` in the prose; do NOT use `git merge-base` or any other token containing `merge` in a literal command snippet that an agent might copy and execute, or it will trip `pre-merge-rebase.sh`'s review-evidence check. (Note: `merge-base` IS safe in `Files to Edit` text because that's prose, not an executable command.)
+- **Hook ordering in `.claude/settings.json` is load-bearing** (learning 2026-03-28). The unpushed-commits hook must fire AFTER `pre-merge-rebase.sh` so that any auto-push performed by the latter has updated the upstream tracking ref. T11 verifies this. If a future hook is inserted between them, re-verify T11.
 - **Don't grep for stale `wg-ship-push-before-merge` matches.** This is a NEW rule id; grep should return matches only in the files this PR touches. Any other match is either (a) a stale plan file (acceptable, learning files preserve history) or (b) a bug.
 - **Don't put the gate INSIDE `pre-merge-rebase.sh`.** Resist the temptation to fold this into the existing hook to save a file. The existing hook has well-scoped responsibilities (review evidence + dirty tree + main-sync); adding unpushed-commit logic conflates four concerns and makes the failure messages harder to diagnose. Separate hook = separate emit_incident rule_id = separate test = clearer diagnostics.
 - **Don't elide `git fetch` to save latency.** Without the fetch, the local tracking ref `origin/<branch>` may be stale; the gate would either silently miss unpushed commits (false-negative on the bug we're fixing) or fire spuriously on already-pushed commits the local ref hasn't caught up on. The 100-300ms latency is the price of correctness.
