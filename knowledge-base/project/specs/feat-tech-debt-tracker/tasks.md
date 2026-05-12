@@ -49,7 +49,7 @@ Single Python script. Shebang `#!/usr/bin/env python3`. Imports parse helpers fr
 
 ## Phase 4 — README
 
-- [ ] **4.1** Create `knowledge-base/project/learnings/technical-debt/README.md`:
+- [x] **4.1** Create `knowledge-base/project/learnings/technical-debt/README.md`:
   - One-paragraph: *"Operator-facing ledger of known tech debt in the Soleur plugin codebase."*
   - Frontmatter contract: `status` (required, enum), `linked_issue` (required only when `resolved`; optional when `wont-fix`; forbidden when `open`).
   - **Load-bearing-discriminator note** (architecture-strategist P2): `wont-fix` is the discriminator-of-record — without `status`, no way to express "we know about this debt and decided not to fix it." Future schema simplification must preserve `status`.
@@ -60,22 +60,22 @@ Single Python script. Shebang `#!/usr/bin/env python3`. Imports parse helpers fr
 
 ## Phase 5 — Compound-capture integration (template-only)
 
-- [ ] **5.1** Edit `plugins/soleur/skills/compound-capture/assets/resolution-template.md` line 12 (after `severity:`). Insert:
+- [x] **5.1** Edit `plugins/soleur/skills/compound-capture/assets/resolution-template.md` line 12 (after `severity:`). Insert:
   ```yaml
   status: open  # defaults to open — close via /soleur:resolve-debt
   ```
-- [ ] **5.2** Do **NOT** edit `compound-capture/schema.yaml` (CORA-vendored). Do **NOT** edit `compound-capture/references/yaml-schema.md` (CORA-derived).
-- [ ] **5.3** Verify: dry-run compound with a synthesized `problem_type: technical_debt` fixture; new entry has `status: open` at the right slot.
+- [x] **5.2** Do **NOT** edit `compound-capture/schema.yaml` (CORA-vendored). Do **NOT** edit `compound-capture/references/yaml-schema.md` (CORA-derived).
+- [x] **5.3** Verify: dry-run compound with a synthesized `problem_type: technical_debt` fixture; new entry has `status: open` at the right slot.
 
 ## Phase 6 — Registration + count propagation
 
-- [ ] **6.1** Edit `plugins/soleur/docs/_data/skills.js`:
+- [x] **6.1** Edit `plugins/soleur/docs/_data/skills.js`:
   - Line 11: `(4 categories, 65 skills)` → `(4 categories, 70 skills)`.
   - Line 61: `// Workflow (21)` → `// Workflow (22)`.
   - Between line 75 and 76: insert `"resolve-debt": "Workflow",` alphabetically.
-- [ ] **6.2** Grep for old counts: `git grep -E '\b(69|65) skills\b' -- ':(exclude).worktrees/' ':(exclude)*.lock'`.
-- [ ] **6.3** Update each hit to `70`: `plugins/soleur/README.md:45`, root `README.md`, `knowledge-base/overview/brand-guide.md` (×2). Reconcile divergence (skills.js stale at 65 → 70).
-- [ ] **6.4** Re-grep: same query returns zero hits.
+- [x] **6.2** Grep for old counts: `git grep -E '\b(69|65) skills\b' -- ':(exclude).worktrees/' ':(exclude)*.lock'`.
+- [x] **6.3** Update each hit to `70`: `plugins/soleur/README.md:45`, root `README.md`, `knowledge-base/overview/brand-guide.md` (×2). Reconcile divergence (skills.js stale at 65 → 70).
+- [x] **6.4** Re-grep: same query returns zero hits.
 
 ## Phase 7 — Tests + verification
 
@@ -86,10 +86,10 @@ Single Python script. Shebang `#!/usr/bin/env python3`. Imports parse helpers fr
   - `empty-ledger/` (empty directory for empty-state test).
   - `compound-output.md` (compound round-trip fixture).
 - [x] **7.2** Create `plugins/soleur/test/resolve-debt.test.sh` covering T1-T12 (see plan §Test Scenarios). `set -euo pipefail` + per-test isolation.
-- [ ] **7.3** Run `bun test plugins/soleur/test/components.test.ts` (word-budget gate). Expected: green.
-- [ ] **7.4** Run `bun test plugins/soleur/test/` full suite. Expected: green, including `resolve-debt.test.sh`.
-- [ ] **7.5** Run docs site build per `plugins/soleur/CLAUDE.md`. Expected: `resolve-debt` rendered under Workflow category at `/skills/`.
-- [ ] **7.6** Smoke-test interactive flow against fixture: `open` → `resolved` with `linked_issue: 2723`; verify diff printed; verify no auto-commit; verify file mutated atomically; verify stderr undo-hint present.
+- [x] **7.3** Run `bun test plugins/soleur/test/components.test.ts` (word-budget gate). Expected: green.
+- [x] **7.4** Run `bun test plugins/soleur/test/` full suite. Expected: green, including `resolve-debt.test.sh`.
+- [x] **7.5** Run docs site build per `plugins/soleur/CLAUDE.md`. Expected: `resolve-debt` rendered under Workflow category at `/skills/`.
+- [x] **7.6** Smoke-test interactive flow against fixture: `open` → `resolved` with `linked_issue: 2723`; verify diff printed; verify no auto-commit; verify file mutated atomically; verify stderr undo-hint present.
 
 ## Phase 8 — PR preparation
 
