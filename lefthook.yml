@@ -71,6 +71,35 @@ pre-commit:
         - "scripts/lint-agents-enforcement-tags.py"
       # Post-#3493 sidecar split: enforcement tags now live in sidecars.
       run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+    # AGENTS always-loaded payload byte-cap gate (#3684). Hard-rejects commits
+    # that push wc -c AGENTS.md + wc -c AGENTS.core.md past 22000 B (the harness
+    # performance ceiling); warns at 20000 B. Bypass with --no-verify is
+    # intentionally possible — the load-bearing CI floor remains the cron post-
+    # apply revert in scheduled-compound-promote.yml. Anchor for tag substring:
+    # "scripts/lint-agents-rule-budget.sh".
+    agents-rule-budget:
+      priority: 5
+      glob:
+        - "AGENTS.md"
+        - "AGENTS.core.md"
+      run: bash scripts/lint-agents-rule-budget.sh
+    # AGENTS [skill-enforced: <skill> <anchor>] anchor-substring parity gate
+    # (#3684). Splits multi-skill comma-separated tag bodies, verifies each
+    # anchor is a verbatim substring of the named skill's SKILL.md, and consults
+    # scripts/agents-anchor-ignore.txt for legitimate trims. Path-array glob per
+    # 2026-03-21-lefthook-gobwas-glob-double-star.md — every SKILL.md sits at
+    # plugins/soleur/skills/<name>/SKILL.md (mindepth 2 from the skills root).
+    agents-skill-enforced-anchor:
+      priority: 5
+      glob:
+        - "AGENTS.md"
+        - "AGENTS.core.md"
+        - "AGENTS.docs.md"
+        - "AGENTS.rest.md"
+        - "scripts/lint-agents-enforcement-tags.py"
+        - "scripts/agents-anchor-ignore.txt"
+        - "plugins/soleur/skills/**/SKILL.md"
+      run: python3 scripts/lint-agents-enforcement-tags.py --check-anchors AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
     scheduled-show-full-output-lint:
       priority: 5
       # Forbid show_full_output: true in recurring scheduled workflows. Only

@@ -203,10 +203,9 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
      'AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
    ```
 
-   - Per-file bytes:
-     - `B_INDEX=$(wc -c < AGENTS.md)` — index, loaded every turn via `@AGENTS.md`
-     - `B_CORE=$(wc -c < AGENTS.core.md 2>/dev/null || echo 0)` — sidecar injected on every SessionStart
-   - `B_ALWAYS=$((B_INDEX + B_CORE))` — always-loaded payload
+   - Per-file bytes — sourced from the shared library so all callers (this advisory, [lint-agents-rule-budget.sh](../../../../scripts/lint-agents-rule-budget.sh), and `.github/workflows/scheduled-compound-promote.yml`) compute B_ALWAYS identically:
+     - `source scripts/lib/agents-payload-bytes.sh`
+     - `read -r B_INDEX B_CORE B_ALWAYS < <(compute_b_always)` — tab-delimited `<index>\t<core>\t<sum>`
    - `B_TOTAL=$(cat AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>/dev/null | wc -c)` — full registry (informational)
    - Rules: `A=$(grep -h '^- ' AGENTS*.md 2>/dev/null | wc -l)`
    - Longest: `L=$(grep -h '^- ' AGENTS*.md 2>/dev/null | awk '{print length}' | sort -n | tail -1)`
@@ -217,13 +216,13 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Rule budget:
      index (always-loaded):  B_INDEX bytes
      core (always-loaded):   B_CORE bytes
-     always-loaded total:    B_ALWAYS bytes (warn > 18000 / critical > 22000)
+     always-loaded total:    B_ALWAYS bytes (warn > 20000 / critical > 22000)
      registry total:         B_TOTAL bytes / A rules (longest rule: L bytes)
      constitution.md:        C rules
    ```
 
    Append warnings:
-   - If `B_ALWAYS > 18000`: `"[WARNING] always-loaded payload (B_ALWAYS/18000) exceeded — apply the placement gate (see Route Learning to Definition) and discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; already-enforced and domain-scoped insights MUST route to a skill/agent, NOT AGENTS.core.md; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
+   - If `B_ALWAYS > 20000`: `"[WARNING] always-loaded payload (B_ALWAYS/20000) exceeded — apply the placement gate (see Route Learning to Definition) and discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; already-enforced and domain-scoped insights MUST route to a skill/agent, NOT AGENTS.core.md; consider retiring an existing rule via scripts/retired-rule-ids.txt. The pre-commit gate scripts/lint-agents-rule-budget.sh (issue #3684) hard-rejects commits past 22000."`
    - If `B_ALWAYS > 22000`: `"[CRITICAL] always-loaded payload exceeds harness performance threshold (22k) — shrink required before next rule; demote wg-* class-specific rules from AGENTS.core.md to AGENTS.rest.md (per CPO sign-off PR #3496, only wg-* may be demoted — never hr-*). When trimming **Why:** lines to fit, preserve per-issue mechanism labels (text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction that downstream readers use to map a rule to its triggering incident class). Before demoting any wg-*, verify loader-class fit: `sed -n '88,115p' .claude/hooks/session-rules-loader.sh` — if the rule fires on docs-only sessions but AGENTS.rest.md does not load on docs-only, KEEP in core."`
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->

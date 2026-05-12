@@ -1,0 +1,38 @@
+# Anchor allowlist for `[skill-enforced: <skill> <anchor>]` tags whose
+# anchor cannot be made a verbatim substring of the named skill's SKILL.md.
+#
+# Wired into: scripts/lint-agents-enforcement-tags.py --check-anchors
+# Companion to: scripts/retired-rule-ids.txt (same one-entry-per-line shape).
+#
+# Format (one per line):
+#   <skill> <anchor>     # parser splits on FIRST whitespace
+#   # standalone comment
+#   (blank line)
+#
+# Inline comments after the anchor are NOT supported (the parser treats
+# everything after the skill name as the anchor body). Put rationale on a
+# preceding standalone `# ...` line.
+#
+# Every entry MUST cite the load-bearing reason the anchor cannot be made
+# literal. Allowlist entries SHOULD be migrated to literal-substring form
+# opportunistically. Future allowlist additions go through PR review.
+#
+# Validated by load_allowlist() in scripts/lint-agents-enforcement-tags.py:
+# every <skill> must resolve to a real plugins/soleur/skills/<skill>/SKILL.md.
+
+# `Phase X.Y` is the conventional cross-skill cite shape used in AGENTS rule
+# bodies; the corresponding skill headings use bare `X.Y.` numbering
+# (`### 1.4. Network-Outage Hypothesis Check`). Migrating these to
+# verbatim-substring form would inflate the always-loaded byte budget for
+# zero discoverability gain — readers grep `Phase 1.4` more often than the
+# numbered prefix.
+plan Phase 1.4
+plan Phase 2.6
+deepen-plan Phase 4.6
+
+# The parenthetical `(Why-line trim semantics + loader-class-fit)` is
+# descriptive commentary that names the two enforcement dimensions compound
+# step 8 covers; the literal `step 8` IS in compound/SKILL.md but the
+# parens are not. Migrating to verbatim form would either drop the
+# semantic clue or duplicate it into compound's prose.
+compound step 8 (Why-line trim semantics + loader-class-fit)

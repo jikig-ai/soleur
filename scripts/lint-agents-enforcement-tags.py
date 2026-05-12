@@ -9,18 +9,38 @@ appears in `lefthook.yml` as a command run target.
 For each `[skill-enforced: <skill> <rest>]` tag, asserts
 `plugins/soleur/skills/<skill>/SKILL.md` exists. Phase notation (`Phase X`,
 `step X`, `Check X`, `Route-Learning-to-Definition`, agent name) is
-deliberately NOT verified — the 13 existing tags use 5 distinct notations
-and a strict match would couple AGENTS.md formatting to skill heading style.
+deliberately NOT verified by default — the existing tags use multiple
+notations and a strict match would couple AGENTS.md formatting to skill
+heading style. Pass `--check-anchors` to opt into per-segment anchor
+substring verification (issue #3684).
+
+Anchor parser contract for `[skill-enforced: <s1> <a1>, <s2> <a2>, ...]`:
+the comma-separated list lets one tag enforce N (skill, anchor) pairs. For
+the FIRST segment, the skill name is the regex's group(1) (the leading
+identifier). For each subsequent segment, the first whitespace-delimited
+token is the skill name, the rest forms the anchor substring.
+
+Anchor segments MUST NOT contain commas. If a future anchor needs a comma,
+switch the segment delimiter to `;` (and update both the parser and the
+AGENTS tag-style guidance in cq-agents-md-tier-gate's body).
+
+Allowlist: `scripts/agents-anchor-ignore.txt` (one entry per line:
+`<skill> <anchor>` OR `# comment` OR blank). Allowlisted segments skip the
+grep check. Every `<skill>` in the allowlist must resolve to a real
+`plugins/soleur/skills/<skill>/SKILL.md` — otherwise the allowlist itself
+is silent rot.
 
 Companion to `scripts/lint-rule-ids.py`. Wired into `lefthook.yml` at
 pre-commit time on AGENTS.md changes.
 
 Usage:
     python3 scripts/lint-agents-enforcement-tags.py [AGENTS.md ...]
+    python3 scripts/lint-agents-enforcement-tags.py --check-anchors AGENTS.md ...
 
 Exit codes:
     0  all tags resolve
-    1  one or more tags name a missing hook script or skill directory
+    1  one or more tags name a missing hook script, skill directory, or
+       (with --check-anchors) a missing anchor substring
     2  argument or I/O error
 """
 
@@ -33,12 +53,15 @@ from pathlib import Path
 
 HOOK_TAG_RE = re.compile(r"\[hook-enforced: ([^\]]+)\]")
 SKILL_TAG_RE = re.compile(r"\[skill-enforced: ([a-z][a-z0-9-]*)([^\]]*)\]")
+SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
 HOOK_SEARCH_DIRS = (
     ".claude/hooks",
     "scripts",
     "plugins/soleur/hooks",
 )
+
+ALLOWLIST_REL_PATH = Path("scripts/agents-anchor-ignore.txt")
 
 
 def repo_root_for(path: Path) -> Path:
@@ -89,7 +112,99 @@ def lefthook_command_known(rest: str, lefthook_text: str) -> bool:
     return False
 
 
-def lint(agents_md: Path, root: Path) -> list[str]:
+def parse_skill_segments(first_skill: str, rest: str) -> list[tuple[str, str]]:
+    """Parse a `[skill-enforced: <s1> <a1>, <s2> <a2>, ...]` tag body into
+    per-segment `(skill, anchor)` pairs.
+
+    `first_skill` is the regex's group(1) (e.g. `plan`).
+    `rest` is the regex's group(2) (e.g. ` Phase 2.6, deepen-plan Phase 4.6`).
+
+    Returns an empty list for tags with no anchor content (just `[skill-enforced: foo]`).
+    """
+    segments: list[tuple[str, str]] = []
+    raw = rest.strip()
+    if not raw:
+        return segments
+
+    parts = [p.strip() for p in raw.split(",")]
+    # First segment uses first_skill as the skill; the segment text is the anchor.
+    if parts:
+        first_anchor = parts[0].strip()
+        if first_anchor:
+            segments.append((first_skill, first_anchor))
+        for part in parts[1:]:
+            tokens = part.split(None, 1)
+            if not tokens:
+                continue
+            skill = tokens[0]
+            anchor = tokens[1].strip() if len(tokens) > 1 else ""
+            if skill and SKILL_NAME_RE.match(skill):
+                segments.append((skill, anchor))
+            else:
+                # Bad segment shape — record as a (skill="", anchor=part) so the
+                # caller can report it with file context.
+                segments.append(("", part))
+    return segments
+
+
+def load_allowlist(root: Path) -> tuple[set[tuple[str, str]], list[str]]:
+    """Return (allowlist_set, validation_errors).
+
+    allowlist_set: set of (skill, anchor) pairs to skip in --check-anchors.
+    validation_errors: list of error messages for malformed entries or
+                       entries naming a non-existent skill.
+    """
+    allowlist: set[tuple[str, str]] = set()
+    errors: list[str] = []
+    path = root / ALLOWLIST_REL_PATH
+    if not path.is_file():
+        return allowlist, errors
+
+    for line_num, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = line.split(None, 1)
+        if len(tokens) < 2:
+            errors.append(
+                f"{path}:{line_num}: malformed allowlist entry "
+                f"(expected `<skill> <anchor>`): {line!r}"
+            )
+            continue
+        skill, anchor = tokens[0], tokens[1].strip()
+        if not SKILL_NAME_RE.match(skill):
+            errors.append(
+                f"{path}:{line_num}: invalid skill name {skill!r} "
+                f"(expected lowercase-with-hyphens)"
+            )
+            continue
+        skill_md = root / "plugins" / "soleur" / "skills" / skill / "SKILL.md"
+        if not skill_md.exists():
+            errors.append(
+                f"{path}:{line_num}: allowlist names skill {skill!r} but "
+                f"{skill_md.relative_to(root)} does not exist"
+            )
+            continue
+        allowlist.add((skill, anchor))
+    return allowlist, errors
+
+
+def anchor_resolves(skill: str, anchor: str, root: Path) -> bool:
+    """Return True if `anchor` appears as a literal substring in the named
+    skill's SKILL.md. Mirrors `grep -F` semantics.
+    """
+    skill_md = root / "plugins" / "soleur" / "skills" / skill / "SKILL.md"
+    if not skill_md.is_file():
+        return False
+    try:
+        body = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return anchor in body
+
+
+def lint(agents_md: Path, root: Path, *, check_anchors: bool,
+         allowlist: set[tuple[str, str]]) -> list[str]:
     """Return a list of error messages. Empty list = pass."""
     errors: list[str] = []
     text = agents_md.read_text(encoding="utf-8")
@@ -125,14 +240,50 @@ def lint(agents_md: Path, root: Path) -> list[str]:
                     )
 
         for match in SKILL_TAG_RE.finditer(line):
-            skill = match.group(1).strip()
-            skill_md = root / "plugins" / "soleur" / "skills" / skill / "SKILL.md"
+            first_skill = match.group(1).strip()
+            rest = match.group(2)
+            skill_md = root / "plugins" / "soleur" / "skills" / first_skill / "SKILL.md"
             if not skill_md.exists():
                 errors.append(
-                    f"{agents_md}:{line_num}: ERROR: [skill-enforced: {skill} ...] "
+                    f"{agents_md}:{line_num}: ERROR: [skill-enforced: {first_skill} ...] "
                     f"— SKILL.md not found at {skill_md.relative_to(root)}. "
                     f"Fix: create the skill, update the tag, or retire the rule."
                 )
+                continue
+
+            if not check_anchors:
+                continue
+
+            for skill, anchor in parse_skill_segments(first_skill, rest):
+                if not skill:
+                    errors.append(
+                        f"{agents_md}:{line_num}: ERROR: malformed segment "
+                        f"in [skill-enforced: ...]: {anchor!r} "
+                        f"(expected `<skill> <anchor>` after comma)"
+                    )
+                    continue
+                seg_skill_md = root / "plugins" / "soleur" / "skills" / skill / "SKILL.md"
+                if not seg_skill_md.exists():
+                    errors.append(
+                        f"{agents_md}:{line_num}: ERROR: [skill-enforced: ... {skill} ...] "
+                        f"— SKILL.md not found at {seg_skill_md.relative_to(root)}. "
+                        f"Fix: create the skill, update the tag, or retire the rule."
+                    )
+                    continue
+                if not anchor:
+                    # Tag like `[skill-enforced: foo]` with no anchor body —
+                    # nothing to verify in --check-anchors mode.
+                    continue
+                if (skill, anchor) in allowlist:
+                    continue
+                if not anchor_resolves(skill, anchor, root):
+                    errors.append(
+                        f"{agents_md}:{line_num}: ERROR: [skill-enforced: ... {skill} {anchor}] "
+                        f"— anchor substring not found in plugins/soleur/skills/{skill}/SKILL.md. "
+                        f"Fix: update the tag to a verbatim substring of the skill body, "
+                        f"rename the anchor in the skill, or add `{skill} {anchor}` "
+                        f"to scripts/agents-anchor-ignore.txt with a one-line rationale."
+                    )
 
     return errors
 
@@ -147,19 +298,36 @@ def main(argv: list[str]) -> int:
         default=["AGENTS.md"],
         help="AGENTS.md files to lint (default: AGENTS.md in CWD)",
     )
+    parser.add_argument(
+        "--check-anchors",
+        action="store_true",
+        help="Verify each [skill-enforced: <skill> <anchor>] anchor is a "
+             "verbatim substring of the named skill's SKILL.md "
+             "(consults scripts/agents-anchor-ignore.txt for legitimate trims)",
+    )
     args = parser.parse_args(argv)
 
     total_errors = 0
     total_tags = 0
+    seen_roots: set[Path] = set()
     for f in args.files:
         path = Path(f)
         if not path.is_file():
             print(f"ERROR: {f} not found", file=sys.stderr)
             return 2
         root = repo_root_for(path)
+        # Validate the allowlist once per repo root (not per AGENTS file).
+        if root not in seen_roots:
+            allowlist, allowlist_errs = load_allowlist(root)
+            for e in allowlist_errs:
+                print(e, file=sys.stderr)
+                total_errors += 1
+            seen_roots.add(root)
+        else:
+            allowlist, _ = load_allowlist(root)
         text = path.read_text(encoding="utf-8")
         total_tags += len(HOOK_TAG_RE.findall(text)) + len(SKILL_TAG_RE.findall(text))
-        errs = lint(path, root)
+        errs = lint(path, root, check_anchors=args.check_anchors, allowlist=allowlist)
         for e in errs:
             print(e, file=sys.stderr)
         total_errors += len(errs)

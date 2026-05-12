@@ -195,7 +195,14 @@ jobs:
             # Post-apply byte-budget check on always-loaded AGENTS payload. The
             # driver prompt instructs the LLM to refuse oversize proposals; the
             # workflow ENFORCES it after the diff lands. Revert on overflow.
-            ALWAYS_LOADED_BYTES=$(( $(wc -c < AGENTS.md) + $(wc -c < AGENTS.core.md) ))
+            # Computation sourced from scripts/lib/agents-payload-bytes.sh so
+            # this gate, the compound advisory, and the pre-commit hook
+            # (scripts/lint-agents-rule-budget.sh) compute B_ALWAYS identically.
+            # No untrusted input flows into the sourced library — the script
+            # reads only AGENTS.md / AGENTS.core.md from the workflow checkout.
+            # shellcheck source=scripts/lib/agents-payload-bytes.sh
+            source scripts/lib/agents-payload-bytes.sh
+            ALWAYS_LOADED_BYTES=$(compute_b_always | cut -f3)
             if (( ALWAYS_LOADED_BYTES > MAX_ALWAYS_LOADED_BYTES )); then
               echo "::error::post-apply AGENTS payload ${ALWAYS_LOADED_BYTES} > ${MAX_ALWAYS_LOADED_BYTES} cap — reverting cluster"
               git checkout -- AGENTS.md AGENTS.core.md 2>/dev/null || true
