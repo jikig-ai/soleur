@@ -54,7 +54,7 @@ The fix is documentation-only: three Sharp Edges entries in `plugins/soleur/skil
 
 - **AC1.** `grep -c "PR #3653" plugins/soleur/skills/plan/SKILL.md` returns ≥ 3 (one per FR1/FR2/FR3 entry).
 - **AC2.** `grep -c "PR #3653" plugins/soleur/skills/review/SKILL.md` returns ≥ 1 (FR4 entry).
-- **AC3.** `grep -c "2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md" plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/review/SKILL.md` returns ≥ 4 (one citation per added entry).
+- **AC3.** `grep -h "2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md" plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/review/SKILL.md | wc -l` returns ≥ 4 (one citation per added entry; `-h` suppresses filename prefix and `| wc -l` produces a single summed integer — bare `grep -c` returns per-file `file:count` rows, not a sum, and would fail this AC at face value).
 - **AC4.** `grep -nE "precondition.*grep|grep.*precondition|producing-scope|producing scope" plugins/soleur/skills/plan/SKILL.md` returns ≥ 1 match in the Sharp Edges section (line ≥ 686). (FR1 marker.)
 - **AC5.** `grep -nE "test\.each|parametrized test|test list" plugins/soleur/skills/plan/SKILL.md | grep -i "prop boundary\|component"` returns ≥ 1 match in the Sharp Edges section. (FR2 marker.)
 - **AC6.** `grep -nE "enum-gate|enum gate|every union member|every member of the union|classify every" plugins/soleur/skills/plan/SKILL.md` returns ≥ 1 match in the Sharp Edges section. (FR3 marker.)

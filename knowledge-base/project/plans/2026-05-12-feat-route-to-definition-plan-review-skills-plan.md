@@ -9,6 +9,32 @@ detail_level: "MORE"
 
 # Plan: Route-to-definition for plan + review skills (enum-gate + precondition grep)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-12
+**Sections enhanced:** 3 (Acceptance Criteria robustness, Phase 1 bullet-format conformance check, Phase 2 Defect Classes catalog format conformance check).
+**Research artifacts verified live:**
+
+- PR #3653 state: MERGED at 2026-05-12T11:45:41Z, title `feat(chat): cohort missing-reply marker (text-only) — #3603` (`gh pr view 3653`).
+- Source learning file exists at exact path with 9,513 bytes (`ls -la knowledge-base/project/learnings/2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md`).
+- `StreamState` declaration confirmed at `apps/web-platform/lib/ws-client.ts:47` (`grep -nE "^export type StreamState"`): `export type StreamState = "idle" | "streaming" | "stopping"`. Plan citation `ws-client.ts:47` is verbatim accurate. Note: source learning says `ws-client.ts:47` and `apps/web-platform/lib/chat/ws-client.ts:47` interchangeably; the actual file is at `apps/web-platform/lib/ws-client.ts:47` (no `chat/` directory). The bullets use the bare `ws-client.ts:47` form, matching the source learning's primary citation — no correction needed.
+- `plan/SKILL.md` Sharp Edges last bullet at line 758 (PR #2723) — insertion target confirmed.
+- `review/SKILL.md` Defect Classes last bullet at line 777 (PR #3521); closing `See ...` line at 779 — insertion target confirmed.
+- 10 sibling Defect Classes bullets in `review/SKILL.md` (lines 764-777) all use the `- **Bold lead** — body` shape — Bullet 4 mirrors the pattern.
+- 59 sibling Sharp Edges bullets in `plan/SKILL.md` start with `- When a plan`; my three opening clauses ("When a plan precondition asserts", "When a plan specifies both (a) a component architecture", "When a plan FR conditions on a single enum / union") do NOT collide with any existing bullet's opening.
+
+### Key Improvements
+
+1. **AC3 robustness fix** — `grep -c <pattern> file1 file2` returns per-file `file:count` rows, not a sum. Original AC3 wording would have read "1\n4" as "neither ≥ 4" at face value. Rewrote AC3 to use `grep -h <pattern> file1 file2 | wc -l` which produces a single summed integer.
+2. **Format-conformance research** — verified the new entries match sibling patterns: plan/SKILL.md Sharp Edges = single-paragraph `- When …` bullets ending in `**Why:** PR #N — … See <learning-path>.`; review/SKILL.md Defect Classes = `- **Bold lead** — body + Reviewer takeaway + Why+citation`. No format drift in the proposed bullets.
+3. **Citation-path discipline** — every cited PR number (#3653) and learning path (`2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md`) verified against live `gh` and the filesystem. Per the deepen-plan checklist for cited PR numbers + every plan-prescribed learning path.
+
+### New Considerations Discovered
+
+- The AC3 grep semantics issue (per-file count vs. sum) would have surfaced as a /work-phase false-fail. Caught at deepen time.
+- Sibling bullet at `plan/SKILL.md:724` already addresses widening discriminated unions (payload-side); my FR3 addresses gate-side enumeration of an existing union. The two are complementary, not duplicate — no overlap concern.
+- The review/SKILL.md Defect Classes section's closing `See ...` line at 779 is a pattern-catalogue pointer, not a bullet. Insertion goes BEFORE line 779 (after the PR #3521 bullet at line 777). Avoid accidentally inserting after the closing line.
+
 **Issue:** [#3667](https://github.com/jikig-ai/soleur/issues/3667)
 **Branch:** `feat-one-shot-3667-route-to-definition`
 **Spec:** [`knowledge-base/project/specs/feat-one-shot-3667-route-to-definition/spec.md`](../specs/feat-one-shot-3667-route-to-definition/spec.md)
@@ -45,7 +71,7 @@ See spec.md "Research Reconciliation" table. Summary: zero divergences; the issu
 
 - **AC1.** `grep -c "PR #3653" plugins/soleur/skills/plan/SKILL.md` returns ≥ 3 (one per FR1/FR2/FR3 entry).
 - **AC2.** `grep -c "PR #3653" plugins/soleur/skills/review/SKILL.md` returns ≥ 1 (FR4 entry).
-- **AC3.** `grep -c "2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md" plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/review/SKILL.md` returns ≥ 4 (one citation per added entry).
+- **AC3.** The source learning path appears ≥ 4 times across both files combined (one citation per added entry). Use a sum, not per-file `grep -c` (which returns `file:count` rows, not a sum): `grep -h "2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md" plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/review/SKILL.md | wc -l` returns ≥ 4.
 - **AC4.** `grep -nE "precondition.*grep|grep.*precondition|producing-scope|producing scope" plugins/soleur/skills/plan/SKILL.md` returns ≥ 1 match at a line ≥ 686 (inside `## Sharp Edges`). (FR1 marker.)
 - **AC5.** `grep -nE "test\.each|parametrized test|test list" plugins/soleur/skills/plan/SKILL.md | grep -iE "prop boundary|component"` returns ≥ 1 match in the Sharp Edges section. (FR2 marker.)
 - **AC6.** `grep -nE "enum-gate|enum gate|every union member|every member of the union|classify every" plugins/soleur/skills/plan/SKILL.md` returns ≥ 1 match in the Sharp Edges section. (FR3 marker.)
@@ -100,6 +126,25 @@ Append three single-paragraph bullets to the end of `## Sharp Edges` (after curr
 
 > When a plan FR conditions on a single enum / union value (`X === "streaming"`, `!isStreamingAssistant`, `status === "completed"`), the FR text MUST classify EVERY union member of `X` as include or exclude. If `X` has N values, the FR must explicitly enumerate all N. Single-value FRs hide a class of bug under any future schema widening, and the work phase reliably honors the FR verbatim — the gap is structural in the FR, not in execution. **Why:** PR #3653 — plan §FR2 conditioned on `!isStreamingAssistant`; implementation bound it to `streamState === "streaming"`. Codebase: `StreamState = "idle" | "streaming" | "stopping"` (`ws-client.ts:47`); `"stopping"` is a distinct in-flight state during mid-aborts that the FR never named. `user-impact-reviewer` caught the slip at PR review only because the review-spawn prompt explicitly enumerated the 3-value enum. Recovery: renamed prop to `isTurnInFlight`, bound to `streamState !== "idle"`. See same learning file.
 
+#### Research Insights — Phase 1
+
+**Sibling-bullet format conformance:**
+
+- Every Sharp Edges bullet in `plan/SKILL.md` ends with `**Why:** PR #N — <prose>. See <learning-path>.` (n=59 bullets sampled at lines 688-758). My three bullets all match this terminator shape.
+- Sibling bullets use ASCII em-dash characters (`—` U+2014) in the `**Why:** PR #N — <prose>` form. My three bullets use the same character (`—`). Avoid hyphen-minus substitution at /work time.
+- Citation paths in sibling bullets are bare paths without leading `./` or `/` (e.g., `See knowledge-base/project/learnings/...md.`). My three bullets follow this convention.
+
+**Opening-clause discoverability (Sharp Edges entry above already enforces this):**
+
+- "When a plan precondition asserts …" (Bullet 1) — unique opener; closest neighbor at line 752 starts "When a plan AC prescribes a git command to enforce a per-file co-change invariant", different subject.
+- "When a plan specifies both (a) a component architecture and (b) a parametrized test list …" (Bullet 2) — unique opener; no existing bullet uses "parametrized test" or `test.each` framing.
+- "When a plan FR conditions on a single enum / union value …" (Bullet 3) — unique opener; line 724 ("When a plan widens a discriminated union") is the closest neighbor, but it addresses payload type-design at union widening, not predicate enumeration at gate sites. The two are complementary.
+
+**Edge cases:**
+
+- A future plan-pass that adds an FR conditioning on a 2-member union (boolean-like) shouldn't fire Bullet 3's rule. Bullet 3 says "every union member" — for a 2-member union, the FR must enumerate both, which is rarely a real defect. The defect class lives in 3+-member unions; the source-learning case is 3-value (`StreamState`). Leave the wording at "every union member" — the rule applies equally at N=2 but the defect-class label fires meaningfully at N≥3. Operator reading the rule will calibrate.
+- If a future operator reads Bullet 1 and applies the grep against a `.d.ts` declaration file rather than the producing module's implementation, the grep returns the type signature but not the value-presence. Bullet 1's wording says "grep for X in the file that defines scope Y" — for a hook returning a flat record, the producing file is the hook implementation, not the type. The source learning's drift was at the implementation layer; the bullet aligns.
+
 ### Phase 2 — `review/SKILL.md` Defect Classes addition
 
 Append one bullet to the end of `### Defect Classes This Review Reliably Catches` (after current line 777, BEFORE the closing `See knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` line at 779). Format mirrors sibling entries: **bold lead clause** + em-dash + body + `Reviewer takeaway:` + `**Why:** PR #N — … See <path>.`.
@@ -107,6 +152,20 @@ Append one bullet to the end of `### Defect Classes This Review Reliably Catches
 **Bullet 4 (FR4) — Single-literal gate over multi-member union/enum:**
 
 > **Single-literal gate over a multi-member union/enum** — when a TypeScript predicate gates behavior on `X === <literal>` (or `!isFoo`, `status === "completed"`) and `X` is a union/enum with ≥ 3 members, the gate is correct only by coincidence unless every member has been classified include/exclude in the originating FR. `user-impact-reviewer` and `pattern-recognition-specialist` reliably catch this **only when the review-spawn prompt explicitly enumerates the union members** — without the prompt, agents echo the plan's single-value framing as a false-pass. Reviewer takeaway: when reviewing a gate conditioned on `X === <literal>` where `X` is a TypeScript union/enum, enumerate every union member by grepping the type's declaration (`rg "type X =" <module>` or `grep -nE "X = .*\|"`), then ask "is the gate correct for each value?" Single-literal gates against multi-member unions are a known defect class. **Why:** PR #3653 — plan §FR2 conditioned on `!isStreamingAssistant`; work bound `streamState === "streaming"` while `StreamState = "idle" | "streaming" | "stopping"` (`ws-client.ts:47`). `"stopping"` is a distinct in-flight substate that mid-aborts traverse; a Stop click could have flashed the marker during that window. Caught only because the spawn prompt explicitly named the 3-value enum. See `knowledge-base/project/learnings/2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md`.
+
+#### Research Insights — Phase 2
+
+**Sibling-bullet format conformance:**
+
+- 10 sibling Defect Classes bullets sampled (lines 764-777). All use the form `- **Bold lead clause** — body + Reviewer takeaway: + **Why:** PR #N — <prose>. See <learning-path>.` Bullet 4 matches this shape exactly.
+- The Defect Classes section closes at line 779 with `See knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md for the full pattern catalogue.` — this is the section's pattern-catalogue pointer, NOT a bullet. Bullet 4 must insert AFTER line 777 (the PR #3521 trailing bullet) but BEFORE line 779 (the catalogue pointer).
+- Sibling bullets name the catching agents inline (e.g., `data-integrity-guardian catches this by reading both files`, `Security-sentinel asks "what if the client sends X?"`). Bullet 4 names `user-impact-reviewer` and `pattern-recognition-specialist` — both are real agents in the soleur plugin (confirmed by `find ~/.claude/plugins/cache -name 'user-impact-reviewer.md' -o -name 'pattern-recognition-specialist.md'` returns matches in the cache).
+
+**Wording precision:**
+
+- Bullet 4 says "≥ 3 members" to scope the rule to the defect-class target (3-value unions). 2-member unions (boolean-like) don't materially benefit — the rule there is over-fire territory. The wording explicitly says `≥ 3 members`.
+- The reviewer takeaway prescribes `rg "type X =" <module>` or `grep -nE "X = .*\|"` — both are real ripgrep / GNU grep invocations. Verified locally: `rg "type StreamState =" apps/web-platform/lib/ws-client.ts` returns the line at 47.
+- Avoid implying the rule fires only on TypeScript. The wording says "TypeScript predicate" because the source-learning case is TypeScript, but the underlying defect class applies to any predicate over a finite value set with ≥ 3 members (Postgres CHECK constraints, Zod schemas, Rust match arms). Generalization is out of scope for this PR (per Non-Goal NG1); the wording stays TS-shaped.
 
 ### Phase 3 — AC verification + commit
 

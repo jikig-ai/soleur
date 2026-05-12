@@ -34,7 +34,7 @@ Derived from `2026-05-12-feat-route-to-definition-plan-review-skills-plan.md`. A
 
 - [ ] 3.1. **AC1.** `grep -c "PR #3653" plugins/soleur/skills/plan/SKILL.md` returns ≥ 3.
 - [ ] 3.2. **AC2.** `grep -c "PR #3653" plugins/soleur/skills/review/SKILL.md` returns ≥ 1.
-- [ ] 3.3. **AC3.** `grep -c "2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md" plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/review/SKILL.md` returns ≥ 4 (sum across both files).
+- [ ] 3.3. **AC3.** `grep -h "2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md" plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/review/SKILL.md | wc -l` returns ≥ 4. (Use `-h` to suppress filename prefixes and `| wc -l` to produce a single summed integer; bare `grep -c` returns per-file `file:count` rows, not a sum.)
 - [ ] 3.4. **AC4.** `grep -nE "precondition.*grep|grep.*precondition|producing-scope|producing scope" plugins/soleur/skills/plan/SKILL.md` returns ≥ 1 match at line ≥ 686.
 - [ ] 3.5. **AC5.** `grep -nE "test\.each|parametrized test|test list" plugins/soleur/skills/plan/SKILL.md | grep -iE "prop boundary|component"` returns ≥ 1 match.
 - [ ] 3.6. **AC6.** `grep -nE "enum-gate|enum gate|every union member|every member of the union|classify every" plugins/soleur/skills/plan/SKILL.md` returns ≥ 1 match.
