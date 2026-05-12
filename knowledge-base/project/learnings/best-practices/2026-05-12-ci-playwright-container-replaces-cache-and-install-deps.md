@@ -107,9 +107,40 @@ When a CI gate's install step swings 30 s → 4 min on cache hit, the bug is str
 
 3. **PreToolUse Edit hook noise on workflow files.** The `security_reminder_hook.py` PreToolUse hook printed a security advisory the first time I called `Edit` on each workflow file. The second identical retry landed cleanly. The hook is advisory (prints warning + workflow-injection examples) but interrupts the first attempt. **Prevention:** not a workflow change — the hook is functioning as designed (educate-then-allow). Noting only so future sessions don't mistake the first-attempt failure for a blocking error and abandon the edit.
 
+## Follow-up: when the consumer uses `bun` instead of `npm`, the Playwright Jammy image is missing `unzip`
+
+PR #3664 applied this pattern to the `apps/web-platform` `e2e` job in `ci.yml`. That job uses `oven-sh/setup-bun@3d267786...` to install bun (driving `bun install --frozen-lockfile`), whereas the docs `critical-css-gate` job uses `npm`. Inside `mcr.microsoft.com/playwright:v1.58.2-jammy@sha256:4698…0565` (and likely every recent `:vX.Y.Z-jammy` tag), the action fails at setup with:
+
+```
+error: unzip is required to install bun
+```
+
+This is a known open issue at `oven-sh/setup-bun#55` (since 2024-02). The action shells out to `unzip` to extract the bun tarball; the `curl ... bun.sh/install` fallback path does the same. The Playwright Jammy base does not include `unzip` because the upstream image is sized for Node + Chromium, not generic CLI tooling.
+
+The fix is a one-line apt step inserted **before** `Setup Bun`:
+
+```yaml
+- name: Install unzip (required by setup-bun)
+  run: apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip
+```
+
+Three discipline points from the PR #3664 review:
+
+1. **Chain with `&&` on a single line** so a flaky `apt-get update` (mirror outage) fails the step instead of falling through to a stale-cache install. The default `bash` shell in `defaults.run.shell: bash` does NOT enable `set -e` automatically.
+2. **Use `--no-install-recommends`** to keep the apt install footprint minimal (no docs, no suggested-package pulls). Cheap supply-chain hardening.
+3. **Order matters** — `Install unzip` MUST precede `Setup Bun`. The action fails fast on the missing `unzip`, so a later-positioned install step is useless.
+
+### Generalization
+
+When migrating any CI job to a vendor-supplied container, audit the job's existing actions for `apt`-dependencies that the container's base image may not satisfy. The Playwright Jammy image is Ubuntu 22.04 + Node + Chromium + browser OS deps — **not** a general-purpose dev environment. Actions that internally shell out to `unzip`, `git`, `curl`, `tar`, `gzip`, `jq`, `make`, `gcc`, etc. should be verified empirically (`docker run <image> which <tool>`) before merging.
+
+The two CI gate jobs now coexist with **different Playwright versions** (1.58.2 for e2e, 1.60.0 for critical-css-gate) by design — they're scoped to different lockfiles (`apps/web-platform/package-lock.json` vs root install). Maintainers tempted to unify the versions will break browser-binary lookup; the workflow comments now explicitly say "DO NOT unify these versions without first bumping the corresponding lockfile pin." A YAML-anchor unification of the two `container:` blocks would be premature and would couple the two gates.
+
 ## Related
 
 - [2026-05-12-ci-playwright-cache-key-must-track-npm-version-not-script-hash](2026-05-12-ci-playwright-cache-key-must-track-npm-version-not-script-hash.md) — the cache-key learning that this container migration supersedes
 - [2026-03-20-playwright-shared-cache-version-coupling](../2026-03-20-playwright-shared-cache-version-coupling.md) — exact-revision browser-binary lookup
 - PR #3624 — the cache-key fix that preceded this container migration
-- PR #3654 — this container migration
+- PR #3654 — initial container migration (docs `critical-css-gate`, Playwright 1.60.0, npm)
+- PR #3664 — second container migration (web-platform `e2e`, Playwright 1.58.2, bun) — surfaced the `unzip`-missing-from-Jammy interaction
+- `oven-sh/setup-bun#55` — upstream tracker for the missing-unzip failure mode

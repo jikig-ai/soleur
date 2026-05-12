@@ -4,6 +4,7 @@ date: 2026-03-03
 category: technical-debt
 tags: [testing, bun, ci, developer-experience]
 severity: low
+status: open
 ---
 
 # No Unified Test Runner from Repo Root
