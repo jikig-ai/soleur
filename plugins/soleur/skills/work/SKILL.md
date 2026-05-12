@@ -253,6 +253,48 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      - Evaluate for incremental commit (see below)
    ```
 
+   **No mid-plan pause gates (HARD GATE).** A multi-phase plan
+   (`tasks.md` Phase 0 through Phase N) is a SINGLE execution unit.
+   Do NOT insert "Pause for review or continue?" prompts between
+   phases. Do NOT end a turn after one phase commits with "Continue
+   into Phase N+1 next turn?". The skill's Phase 4 handoff is the
+   only sanctioned stopping point — until then, chain straight
+   through every phase the plan defines, including phases the plan
+   labels "Pre-merge verification" or "Post-merge (operator)" if
+   they're automatable per the next gate. **Why:** the founder is a
+   solo operator; every "continue or pause?" is a context switch
+   that defeats the entire point of a multi-phase plan. Pipeline
+   mode (file-path arg in Phase 1) means pipeline mode for the WHOLE
+   plan, not per-phase.
+
+   **Operator-step automation gate (HARD GATE).** Before treating
+   any task in `tasks.md` as "operator-driven" (apply migration,
+   verify pg_cron, verify Storage bucket, run end-to-end smoke,
+   `gh pr ready`, `gh pr merge --auto`), check whether it is
+   automatable via a loaded MCP server or CLI:
+
+   - Supabase migrations + `cron.job` queries + Storage bucket
+     existence + RLS spot-checks → `mcp__plugin_supabase_supabase__*`
+   - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close`
+     → Bash via `gh` CLI
+   - End-to-end UI flow → Playwright MCP (`mcp__playwright__*`)
+   - Cloudflare DNS / WAF / Workers → `mcp__plugin_soleur_cloudflare__*`
+   - Live Stripe state → `mcp__plugin_soleur_stripe__*`
+
+   If automatable, EXECUTE it inline as part of the work pipeline —
+   never list it back to the operator. The /ship skill already
+   handles `gh pr ready` + auto-merge + migration verification (see
+   `plugins/soleur/skills/ship/SKILL.md`); chain to `/soleur:ship`
+   at Phase 4 and let it run. For migration **apply** to dev (vs
+   verify), invoke `mcp__plugin_supabase_supabase__apply_migration`
+   inline at the phase where the migration lands, not as a
+   post-merge todo. **Why:** see ship/SKILL.md:1027 ("Every 'please
+   run this manually' is a context switch") and ship/SKILL.md:1177
+   (PR #1375 — migration verification was left as a manual
+   "post-merge todo" instead of being executed; deployed code
+   expected the new schema and broke). Same class as the
+   Playwright-first audit in Phase 4: if a tool exists, use it.
+
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 
    Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):
