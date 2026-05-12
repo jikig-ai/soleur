@@ -1,0 +1,108 @@
+name: Legal-doc cross-document gate
+
+# Phase 11 of feat-dsar-art15-export-endpoint (#3637, plan rev-2 C8).
+#
+# When a PR modifies any declared "regulated-data surface" file, this
+# workflow asserts that the PR ALSO modifies every declared legal-doc
+# pair. A legal-doc update that lags behind a regulated-data surface
+# change is the failure mode of plan rev-2 R10 (Privacy Policy §4.7
+# enumerated four data classes the code already handled) — this gate
+# blocks the asymmetric merge.
+#
+# Detection is intentionally simple: read the changed-files list from
+# the PR diff, classify each file as `surface`, `legal`, or other.
+# If any `surface` file is changed AND any `legal` file is missing,
+# fail with a remediation pointer.
+
+on:
+  pull_request:
+    paths:
+      - "apps/web-platform/server/dsar-export.ts"
+      - "apps/web-platform/server/dsar-export-allowlist.ts"
+      - "apps/web-platform/server/dsar-reauth.ts"
+      - "apps/web-platform/app/api/account/export/**"
+      - "apps/web-platform/supabase/migrations/041_dsar_export_jobs.sql"
+      - "apps/web-platform/supabase/migrations/042_dsar_exports_storage_bucket.sql"
+      - "docs/legal/privacy-policy.md"
+      - "docs/legal/gdpr-policy.md"
+      - "docs/legal/data-protection-disclosure.md"
+      - "knowledge-base/legal/compliance-posture.md"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Enforce legal-doc cross-document lockstep
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          # Surfaces whose presence in the diff REQUIRES the four legal
+          # docs to be touched in the same PR. Keep in sync with the
+          # `paths:` filter above.
+          surface_patterns=(
+            'apps/web-platform/server/dsar-export\.ts'
+            'apps/web-platform/server/dsar-export-allowlist\.ts'
+            'apps/web-platform/server/dsar-reauth\.ts'
+            'apps/web-platform/app/api/account/export/'
+            'apps/web-platform/supabase/migrations/041_dsar_export_jobs\.sql'
+            'apps/web-platform/supabase/migrations/042_dsar_exports_storage_bucket\.sql'
+          )
+
+          required_legal_files=(
+            'docs/legal/privacy-policy.md'
+            'docs/legal/gdpr-policy.md'
+            'docs/legal/data-protection-disclosure.md'
+            'knowledge-base/legal/compliance-posture.md'
+          )
+
+          # Collect changed files in the PR diff against the PR base.
+          # BASE_REF arrives via env: + double-quoted in the command so
+          # workflow-injection guidance is honoured.
+          git fetch --quiet --depth=1 origin "$BASE_REF"
+          changed_files=$(git diff --name-only "origin/${BASE_REF}"...HEAD)
+          echo "Changed files in PR:"
+          echo "$changed_files" | sed 's/^/  /'
+
+          surface_hit=false
+          for pat in "${surface_patterns[@]}"; do
+            if echo "$changed_files" | grep -Eq "$pat"; then
+              surface_hit=true
+              break
+            fi
+          done
+
+          if [ "$surface_hit" = false ]; then
+            echo "No DSAR surface file touched — gate trivially passes."
+            exit 0
+          fi
+
+          echo "DSAR surface file detected; verifying all required legal docs are updated…"
+          missing=()
+          for legal in "${required_legal_files[@]}"; do
+            if ! echo "$changed_files" | grep -Fxq "$legal"; then
+              missing+=("$legal")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Legal-doc cross-document gate FAILED. The PR touches a DSAR-regulated-data surface but is missing updates to:"
+            for f in "${missing[@]}"; do
+              echo "::error::  - $f"
+            done
+            echo ""
+            echo "Per plan rev-2 C8 / AC8 / FR8: the Privacy Policy, GDPR Policy, Data Protection Disclosure, and compliance-posture documents must be updated in the same PR as any change to the DSAR worker, route, migration, or allowlist. Update the four files above (or split the change into two PRs)."
+            exit 1
+          fi
+
+          echo "All four required legal docs are updated. Gate passes."

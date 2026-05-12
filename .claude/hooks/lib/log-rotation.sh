@@ -56,6 +56,16 @@
 #     _emit_drop_sentinel "$file" "$HOOK_EVENT_LITERAL" rotation_fail
 #   fi
 
+# Source session-state.sh (idempotent guard inside it). Used for
+# headless_or_stderr — routes warns to a log file under `claude --bg` and to
+# stderr foreground. Fallback to plain stderr echo when missing (legacy
+# worktrees).
+# shellcheck source=session-state.sh
+source "$(dirname "${BASH_SOURCE[0]}")/session-state.sh" 2>/dev/null || true
+if ! declare -f headless_or_stderr >/dev/null; then
+  headless_or_stderr() { echo "[$1] $2" >&2; }
+fi
+
 LOG_ROTATION_SIZE_BYTES_DEFAULT=$((5 * 1024 * 1024))   # 5 MB
 LOG_ROTATION_AGE_DAYS_DEFAULT=30
 LOG_ROTATION_FLOCK_TIMEOUT_S_DEFAULT=5
@@ -156,7 +166,7 @@ rotate_if_needed() {
       rm -f "$archive" 2>/dev/null || true
       local _log_rotation_warned_marker="/tmp/log-rotation-warned-$$"
       if [[ ! -f "$_log_rotation_warned_marker" ]]; then
-        echo "[log-rotation] warning: failed to archive $active (disk full? permissions?)" >&2
+        SOLEUR_HOOK_NAME="log-rotation" headless_or_stderr warn "failed to archive $active (disk full? permissions?)"
         : > "$_log_rotation_warned_marker" 2>/dev/null || true
       fi
       return 1
