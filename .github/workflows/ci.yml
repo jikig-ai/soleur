@@ -238,7 +238,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   test-scripts:
-    if: false  # T14 MUTATION — reverted in next commit
     runs-on: ubuntu-latest
     # No setup-bun, no setup-node, no install — bash + python3 ship on
     # ubuntu-latest by default and the scripts group needs neither runtime.
