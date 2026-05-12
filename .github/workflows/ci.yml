@@ -150,9 +150,18 @@ jobs:
         working-directory: apps/web-platform
         run: npm run build
 
-  test:
+  # --- Test matrix: 3 shards + synthetic aggregator ---
+  #
+  # The single `test` job was split into three parallel shards
+  # (test-webplat / test-bun / test-scripts) so install + typecheck +
+  # vitest + bun-test workloads run concurrently. The synthetic `test`
+  # aggregator (below) is the required status check on branch-protection
+  # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
+  # every merge. Each shard invokes scripts/test-all.sh with the
+  # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`).
+  # See plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
+  test-webplat:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -166,8 +175,19 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      # First actions/cache usage in this repo. SHA pinned per the standing
+      # vendor-pin discipline (every other action above is also SHA-pinned).
+      # Cache key uses `apps/web-platform/bun.lock` (text format — `bun.lockb`
+      # does not exist in this repo; hashFiles() would silently hash zero bytes).
+      - name: Cache bun install (apps/web-platform)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            apps/web-platform/node_modules
+          key: bun-webplat-${{ runner.os }}-${{ hashFiles('apps/web-platform/bun.lock') }}
+          restore-keys: |
+            bun-webplat-${{ runner.os }}-
 
       - name: Install web-platform dependencies
         run: bun install --frozen-lockfile
@@ -177,10 +197,110 @@ jobs:
         run: npx tsc --noEmit
         working-directory: apps/web-platform
 
-      - name: Run tests
-        run: bash scripts/test-all.sh
+      - name: Run webplat tests (vitest)
+        run: bash scripts/test-all.sh webplat
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-bun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      # setup-node is required for `npx --yes @11ty/eleventy` inside
+      # scripts/validate-blog-links.sh (one of the bun-group suites).
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Cache bun install (root)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: bun-root-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-root-${{ runner.os }}-
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run bun-side tests
+        run: bash scripts/test-all.sh bun
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-scripts:
+    runs-on: ubuntu-latest
+    # No setup-bun, no setup-node, no install — bash + python3 ship on
+    # ubuntu-latest by default and the scripts group needs neither runtime.
+    # Verified at plan time: `grep -l '^bun ' plugins/soleur/test/*.test.sh`
+    # returned zero matches. If a future .test.sh adds a `bun` invocation,
+    # add `setup-bun` here (still no install needed).
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Run scripts-side tests (bash + python3)
+        run: bash scripts/test-all.sh scripts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Synthetic aggregator.
+  #
+  # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
+  # branch-protection ruleset 14145388's `test` required check. It carries
+  # three distinct values: (a) cross-layer truing — converts three shard
+  # `conclusion`s into the single required-context conclusion the ruleset
+  # already expects by name; (b) drift-resilience — survives a future
+  # ruleset edit that changes the required-context list, as long as the
+  # `test` name still gates merge; (c) observability — single PR-status
+  # row to inspect, not three. Removing this job orphans the ruleset's
+  # `test` required check and breaks every PR merge.
+  #
+  # The name `test` MUST match the required-context name on ruleset
+  # 14145388 exactly. Drift = merge gate orphaned for the whole team.
+  #
+  # `if: always()` + per-shard `result` inspection is the documented
+  # fail-closed pattern (precedent: scheduled-compound-promote.yml). Without
+  # `if: always()`, the default `needs:` semantics produce `skipped` when
+  # any dependency fails — and some branch-protection configs treat
+  # `skipped` as success (fail-open). No `|| true`, no `continue-on-error`.
+  # Per-shard `result` is read via env: + quoted "$VAR" per workflow-injection
+  # guidance (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/).
+  test:
+    needs: [test-webplat, test-bun, test-scripts]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate shard results
+        env:
+          WEBPLAT_RESULT: ${{ needs.test-webplat.result }}
+          BUN_RESULT: ${{ needs.test-bun.result }}
+          SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
+        run: |
+          fail=0
+          for shard in test-webplat test-bun test-scripts; do
+            case "$shard" in
+              test-webplat) result="$WEBPLAT_RESULT" ;;
+              test-bun)     result="$BUN_RESULT" ;;
+              test-scripts) result="$SCRIPTS_RESULT" ;;
+            esac
+            if [[ "$result" != "success" ]]; then
+              echo "$shard: $result" >&2
+              fail=1
+            fi
+          done
+          if [[ $fail -ne 0 ]]; then
+            exit 1
+          fi
+          echo "All three shards green."
 
   # E2E job runs inside the official Playwright container so Chromium + OS deps
   # are pre-installed at the matching Playwright version. Container tag, digest,

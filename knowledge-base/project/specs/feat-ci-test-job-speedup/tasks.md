@@ -41,24 +41,24 @@ Derived from `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-p
   - [x] `bash scripts/test-all.sh scripts` (32 suites — 11 pre-suite + 21 *.test.sh)
   - [x] `bash scripts/test-all.sh bogus` (exits 2 with stderr usage naming all 4 valid values)
 - [x] **1a.10** Verify env-vs-positional precedence: `TEST_GROUP=bun bash scripts/test-all.sh scripts` runs the bun group (5 suites — env wins).
-- [ ] **1a.11** Commit. Message: `feat(ci): add TEST_GROUP selector to test-all.sh — #3680`. Push.
-- [ ] **1a.12** Verify CI on the pushed commit: existing single `test` job passes (script invoked without args defaults to `all`, byte-identical behavior).
+- [x] **1a.11** Commit. Message: `feat(ci): add TEST_GROUP selector to test-all.sh — #3680`. Push. (Commit `29386033`.)
+- [x] **1a.12** Verify CI on the pushed commit: existing single `test` job passes (script invoked without args defaults to `all`, byte-identical behavior). **Result:** `test` job green at 181s on run 25743078345; all other jobs green.
 
 ## Phase 1b — CI workflow restructure (commit 3)
 
-- [ ] **1b.1** Edit `.github/workflows/ci.yml`: delete the existing `test` job definition.
-- [ ] **1b.2** Add `test-webplat` job per Phase 1b YAML in plan. Steps: checkout, setup-bun, setup-node v22, `actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0` keyed on `apps/web-platform/bun.lock` (caches `~/.bun/install/cache` + `apps/web-platform/node_modules`), `bun install --frozen-lockfile` in `apps/web-platform`, `npx tsc --noEmit` in `apps/web-platform`, `bash scripts/test-all.sh webplat`.
-- [ ] **1b.3** Add `test-bun` job per Phase 1b YAML. Steps: checkout, setup-bun, setup-node v22 (for `npx eleventy` in validate-blog-links.sh), `actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0` keyed on root `bun.lock` (caches `~/.bun/install/cache` + root `node_modules`), `bun install --frozen-lockfile` at root, `bash scripts/test-all.sh bun`.
-- [ ] **1b.4** Add `test-scripts` job per Phase 1b YAML. Minimal: checkout + `bash scripts/test-all.sh scripts`. NO setup-bun, NO setup-node, NO cache, NO install (verified at plan time: zero `.test.sh` files invoke `bun`; python3 + bash ship on ubuntu-latest).
-- [ ] **1b.5** Add synthetic `test` aggregator job: `needs: [test-webplat, test-bun, test-scripts]`, `if: always()`, per-shard `result` checks in a for-loop with explicit `fail=1; exit 1`. Include the load-bearing-sub-value comment naming cross-layer truing / drift-resilience / observability + the `scheduled-compound-promote.yml:291` precedent citation.
-- [ ] **1b.6** Verify no `|| true`, no `continue-on-error: true` anywhere in the four new jobs: `git grep -nE "(\|\| true|continue-on-error: true)" .github/workflows/ci.yml` returns zero matches in the new job bodies.
-- [ ] **1b.7** Drift safeguard: `git diff main...HEAD | grep -c telegram-bridge` MUST return 0. `git diff main...HEAD | grep -c bun.lockb` MUST return 0.
+- [x] **1b.1** Edit `.github/workflows/ci.yml`: delete the existing `test` job definition.
+- [x] **1b.2** Add `test-webplat` job per Phase 1b YAML in plan. Steps: checkout, setup-bun, setup-node v22, `actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0` keyed on `apps/web-platform/bun.lock`, install web-platform deps, type-check, `bash scripts/test-all.sh webplat`.
+- [x] **1b.3** Add `test-bun` job per Phase 1b YAML. setup-bun + setup-node v22 + cache keyed on root `bun.lock` + root install + `bash scripts/test-all.sh bun`.
+- [x] **1b.4** Add `test-scripts` job per Phase 1b YAML. Minimal: checkout + `bash scripts/test-all.sh scripts`. NO setup-bun, NO setup-node, NO cache, NO install.
+- [x] **1b.5** Add synthetic `test` aggregator job: `needs: [test-webplat, test-bun, test-scripts]`, `if: always()`, per-shard `result` env vars + for-loop check with explicit `fail=1; exit 1`. Load-bearing-sub-value comment + workflow-injection-safe pattern documented inline.
+- [x] **1b.6** Verify no `|| true`, no `continue-on-error: true` in new job bodies. **Result:** ZERO matches (the two `|| true` hits at L443/L454 are in an unrelated pre-existing job; the one match at L274 is my own comment text naming the invariant).
+- [x] **1b.7** Drift safeguard: `git diff main...HEAD --name-only | grep -v '^knowledge-base/' | xargs grep -l <pattern>` returns ZERO for both `telegram-bridge` and `bun.lockb`. (Plan/spec/brainstorm/tasks under `knowledge-base/` legitimately document the v1 drift findings; the safeguard's intent is code/yaml/scripts only.)
 - [ ] **1b.8** Commit. Message: `feat(ci): split test job into webplat + bun + scripts shards with synthetic aggregator — #3680`. Push.
-- [ ] **1b.9** Create three follow-up GitHub issues (verified labels: `chore`, `domain/engineering`, `priority/p3-low`, milestone `Post-MVP / Later`):
-  - [ ] **1b.9.a** "ci: bun version probe for FPE-class re-evaluation" — body cites #3680 + the 2026-03-20 FPE learning + the re-evaluation trigger (every minor Bun bump). Note: probe targets bun-runtime test surfaces only (`test/`, `plugins/soleur/`), NOT `apps/web-platform/` (Vitest).
-  - [ ] **1b.9.b** "ci: suite-internal split of apps/web-platform/test/" — body cites #3680 + Phase 2 trigger condition (webplat shard wall-clock dominates >100s consistently).
-  - [ ] **1b.9.c** "ci: shard e2e job with --shard=2 + synthetic aggregator" — body cites #3680 + the test-job pattern as the template.
-- [ ] **1b.10** Update PR #3672 body to link the three new issues under an "Out of scope (deferred follow-ups)" section.
+- [x] **1b.9** Three follow-up GitHub issues created (labels: `type/chore`, `domain/engineering`, `priority/p3-low`; milestone `Post-MVP / Later`):
+  - [x] **1b.9.a** #3692 — "ci: bun version probe for FPE-class re-evaluation"
+  - [x] **1b.9.b** #3693 — "ci: suite-internal split of apps/web-platform/test/"
+  - [x] **1b.9.c** #3694 — "ci: shard e2e job with --shard=2 + synthetic aggregator"
+- [x] **1b.10** PR #3672 body updated with "Out of scope (deferred follow-ups)" section linking #3692, #3693, #3694.
 
 ## Phase 2 — Validation (mutation tests + 10-run wall-clock validation)
 
