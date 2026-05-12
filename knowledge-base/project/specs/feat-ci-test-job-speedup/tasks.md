@@ -16,11 +16,11 @@ Derived from `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-p
 
 ## Phase 0 — Measurement (commit 1)
 
-- [ ] **0.1** Instrument `scripts/test-all.sh` `run_suite()` with `EPOCHREALTIME` boundaries. Compute `elapsed_ms` via integer math on `seconds.microseconds`. Write tab-separated label/ms/status to `${TEST_TIMING_LOG:-/dev/null}`.
-- [ ] **0.2** Add script header comment documenting (a) `EPOCHREALTIME` requires bash 5+, (b) CI runs ubuntu-latest (bash 5.x), (c) macOS default `/bin/bash` is 3.2 — `bash` from Homebrew works.
-- [ ] **0.3** Run locally on Linux (or in this worktree's CI): `TEST_TIMING_LOG=/tmp/test-timing.tsv bash scripts/test-all.sh`. Save the tsv.
-- [ ] **0.4** Run the spawn-count probe locally (informational only): `strace -fe trace=clone -c bun test plugins/soleur/ 2>/tmp/strace-summary.txt 1>/dev/null && grep clone /tmp/strace-summary.txt`. Record the `clone` count. NOTE: probe targets `bun test plugins/soleur/` (the actual largest bun-test invocation — `apps/web-platform` is Vitest and excluded from the FPE class).
-- [ ] **0.5** Commit instrumentation. Message: `feat(ci): instrument test-all.sh with per-suite timing — #3680`. Push.
+- [x] **0.1** Instrument `scripts/test-all.sh` `run_suite()` with `EPOCHREALTIME` boundaries. Compute `elapsed_ms` via integer math on `seconds.microseconds`. Write tab-separated label/ms/status to `${TEST_TIMING_LOG:-/dev/null}`.
+- [x] **0.2** Add script header comment documenting (a) `EPOCHREALTIME` requires bash 5+, (b) CI runs ubuntu-latest (bash 5.x), (c) macOS default `/bin/bash` is 3.2 — `bash` from Homebrew works.
+- [x] **0.3** Run locally on Linux (or in this worktree's CI): `TEST_TIMING_LOG=/tmp/test-timing.tsv bash scripts/test-all.sh`. Save the tsv. **Result:** 38/38 green; webplat=41.7s, bun=44.6s, scripts=33.2s; max/min=1.34 → 3-way split confirmed.
+- [x] **0.4** Run the spawn-count probe locally (informational only): `strace -fe trace=clone -c bun test plugins/soleur/ 2>/tmp/strace-summary.txt 1>/dev/null && grep clone /tmp/strace-summary.txt`. Record the `clone` count. NOTE: probe targets `bun test plugins/soleur/` (the actual largest bun-test invocation — `apps/web-platform` is Vitest and excluded from the FPE class). **Result:** 26,380 clone(2) syscalls on Bun 1.3.11 (includes worker threads). Informational only.
+- [x] **0.5** Commit instrumentation. Message: `feat(ci): instrument test-all.sh with per-suite timing — #3680`. Push.
 - [ ] **0.6** Append a markdown table to PR #3672 body containing: (a) all 38 suite wall-clock timings sorted descending with top-5 in **bold**; (b) per-group aggregates (`webplat`, `bun`, `scripts`) and `max/min` ratio; (c) `bun test plugins/soleur/` clone(2) count (informational); (d) Phase 1b grouping decision (3-way default; collapse to 2-way only if `max/min ≥ 2.0` AND one of {bun, scripts} is the small side).
 - [ ] **0.7** **NO HALT GATE.** v1's pre-Phase-1b BLOCKER (`apps/web-platform` clone(2) >130) is dropped — that target was misframed (Vitest, not Bun). Proceed to Phase 1a unconditionally.
 

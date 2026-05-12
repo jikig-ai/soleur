@@ -4,6 +4,14 @@ set -euo pipefail
 # Sequential test runner that isolates test suites to avoid Bun's FPE crash
 # when running all tests via recursive directory discovery.
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
+#
+# Per-suite timing: when TEST_TIMING_LOG is set to a writable path, each
+# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL]" to that path.
+# Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
+# coreutils dependency, portable across Linux + Homebrew bash on macOS).
+# CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
+# bash 5 from Homebrew if you need timing locally; otherwise EPOCHREALTIME
+# resolves to empty and elapsed_ms computes 0 silently.
 
 # --- Version Check ---
 if [[ -f .bun-version ]]; then
@@ -40,12 +48,29 @@ suites=0
 run_suite() {
   local label="$1"; shift
   suites=$((suites + 1))
+  local start="$EPOCHREALTIME"
   echo "--- $label ---"
-  if "$@"; then
-    echo "[ok] $label"
-  else
-    echo "[FAIL] $label" >&2
+  local status="ok"
+  if ! "$@"; then
+    status="FAIL"
     failed=$((failed + 1))
+  fi
+  # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
+  # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
+  # microseconds substring (a leading zero would otherwise trigger octal).
+  local end="$EPOCHREALTIME"
+  local elapsed_ms=0
+  if [[ -n "$start" && -n "$end" ]]; then
+    local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
+    local end_us=$(( ${end%.*} * 1000000 + 10#${end#*.} ))
+    elapsed_ms=$(( (end_us - start_us) / 1000 ))
+  fi
+  if [[ "$status" == "ok" ]]; then
+    echo "[ok] $label (${elapsed_ms}ms)"
+    printf '%s\t%d\n' "$label" "$elapsed_ms" >> "${TEST_TIMING_LOG:-/dev/null}"
+  else
+    echo "[FAIL] $label (${elapsed_ms}ms)" >&2
+    printf '%s\t%d\tFAIL\n' "$label" "$elapsed_ms" >> "${TEST_TIMING_LOG:-/dev/null}"
   fi
 }
 
