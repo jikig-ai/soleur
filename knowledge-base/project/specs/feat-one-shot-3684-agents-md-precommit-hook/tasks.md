@@ -32,21 +32,26 @@ lane: single-domain
 - [ ] 3.4 Manual repro: empty commit succeeds (no AGENTS file staged).
 - [ ] 3.5 Manual repro: synthetic AGENTS.core.md edit at 22,500 B → commit rejected with `::error::` annotation naming byte delta.
 
-## Phase 4: Anchor-parity check (GREEN)
+## Phase 4: Anchor-parity check + Live-state migration (GREEN)
 
 - [ ] 4.1 Extend `scripts/lint-agents-enforcement-tags.py` with `--check-anchors` flag, multi-skill segment parser (split `<rest>` on `,`), allowlist consultation per plan AC3.
 - [ ] 4.2 Create `scripts/agents-anchor-ignore.txt` with header comment matching `scripts/retired-rule-ids.txt` style.
 - [ ] 4.3 Add allowlist self-validation per plan AC5 (every `<skill>` in allowlist resolves to a real `plugins/soleur/skills/<skill>/SKILL.md`).
 - [ ] 4.4 Iterate until 1.5 is GREEN.
 - [ ] 4.5 Add `agents-skill-enforced-anchor` command to `lefthook.yml` priority 5 with the multi-glob from plan AC4.
-- [ ] 4.6 Run `python3 scripts/lint-agents-enforcement-tags.py --check-anchors AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md` against live repo. If any segment fails, fix in-skill OR update tag OR allowlist with rationale comment.
+- [ ] 4.6 **Live-state migration per plan AC15.** Run `python3 scripts/lint-agents-enforcement-tags.py --check-anchors AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md`; expect ~10 dangling segments. For each, apply default remediation per AC15 table (rewrite tag to literal substring, OR rewrite skill heading, OR allowlist with rationale).
+- [ ] 4.7 After migration, re-run; assert exit 0.
+- [ ] 4.8 Capture per-segment migration decisions in PR-body table.
+- [ ] 4.9 Update AGENTS.docs.md:6 threshold prose `≤18000 warn` → `≤20000 warn` per plan AC9.
+- [ ] 4.10 Cross-file consistency check: `grep -nE '18000|22000|20000' AGENTS.docs.md plugins/soleur/skills/compound/SKILL.md scripts/lint-agents-rule-budget.sh scripts/lib/agents-payload-bytes.sh .github/workflows/scheduled-compound-promote.yml` — confirm 20000 at all warn sites, 22000 at all critical sites, no stray 18000.
 
 ## Phase 5: Verification + manual reproductions
 
-- [ ] 5.1 Run `bash scripts/test-all.sh` end-to-end; assert all linters + 38 plugin test suites green.
+- [ ] 5.1 Run `bash scripts/test-all.sh` end-to-end; assert all linters + plugin test suites green. **Note (deepen-pass correction):** the runner uses an explicit `run_suite` list; verify the new tests appear in the output by name.
 - [ ] 5.2 Stage `[skill-enforced: nonexistent-skill Phase 99]` edit → commit rejected. Capture output for PR body.
 - [ ] 5.3 Stage AGENTS.core.md addition pushing payload past 22 k → commit rejected. Capture output for PR body.
 - [ ] 5.4 Verify `git commit --allow-empty` succeeds (no false-fire).
+- [ ] 5.5 Verify glob matching empirically: `lefthook run pre-commit --files AGENTS.md` should fire `agents-rule-budget` and `agents-skill-enforced-anchor`. Per the lefthook gobwas glob learning, silent no-fire is the failure mode if globs are mis-shaped.
 
 ## Phase 6: Plan-prescribed skills + ship
 
