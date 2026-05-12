@@ -8,7 +8,7 @@ permalink: legal/privacy-policy/
 <section class="page-hero">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 12, 2026</p>
   </div>
 </section>
 
@@ -17,7 +17,7 @@ permalink: legal/privacy-policy/
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 29, 2026 (added conversation data as PII category in Section 4.7, updated purpose and retention for conversation history, added conversation data retention to Section 7, added conversation data export right to Section 8, added Web Platform cookies cross-reference to Section 12)
+**Last Updated:** May 12, 2026 (added `usage` jsonb token-consumption and cost metadata to Section 4.7 Conversation data bullet, added Section 4.7 SIGKILL persistence-limitation sentence, added Section 8.1 cross-reference to Section 4.7 persistence limitation for conversation-history exports)
 
 ## 1. Introduction
 
@@ -110,7 +110,7 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 - **Account data:** Email address (registration), authentication tokens, and session cookies. If you sign in via an OAuth provider (Google, Apple, GitHub, or Microsoft), we also receive your provider user ID, display name, and profile picture URL from the provider. Accounts with matching verified email addresses are automatically linked.
 - **Workspace data:** User workspaces and encrypted API keys (BYOK -- bring your own key). API keys are encrypted using AES-256-GCM before storage.
 - **Subscription data:** Subscription status and billing metadata (managed by Stripe). Card data is handled exclusively by Stripe via Stripe Checkout and never reaches Jikigai servers (PCI SAQ-A).
-- **Conversation data:** Conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata) stored in the Supabase database. Conversations are associated with the user's account via user_id. **Partial assistant outputs from aborted turns** -- assistant text generated before a user-initiated Stop or an involuntary client disconnect -- are preserved in the same conversation history with an "aborted" status marker, the token cost of the partial turn, and the list of completed actions. The purpose is to give you a faithful record of what the Service produced (and billed against your usage) on your behalf. Partial-turn rows are retained for the same period as the parent conversation (see the retention paragraph immediately below this list, and Section 7 for the overall retention policy) unless you exercise your erasure right under Section 8.1. See Section 5.5 of the [Terms & Conditions](/legal/terms-and-conditions/) for the consumption terms that govern partial-turn billing and side effects; your erasure rights (GDPR Article 17) under Section 8.1 below apply equally to partial-turn rows.
+- **Conversation data:** Conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata, and -- when usage telemetry is enabled per operator configuration -- token-consumption and cost metadata stored in a `usage` jsonb field per assistant message) stored in the Supabase database. Conversations are associated with the user's account via user_id. **Partial assistant outputs from aborted turns** -- assistant text generated before a user-initiated Stop or an involuntary client disconnect -- are preserved in the same conversation history with an "aborted" status marker, the token cost of the partial turn, and the list of completed actions. The purpose is to give you a faithful record of what the Service produced (and billed against your usage) on your behalf. Partial-turn rows are retained for the same period as the parent conversation (see the retention paragraph immediately below this list, and Section 7 for the overall retention policy) unless you exercise your erasure right under Section 8.1. See Section 5.5 of the [Terms & Conditions](/legal/terms-and-conditions/) for the consumption terms that govern partial-turn billing and side effects; your erasure rights (GDPR Article 17) under Section 8.1 below apply equally to partial-turn rows. In rare cases of unexpected service interruption (e.g., kernel-level process termination or container restart) after generation but before persistence completes, a small portion of an in-progress reply may not be retained in the conversation record.
 - **Technical data:** IP addresses and request headers processed by Cloudflare CDN/proxy.
 
 **Purpose:** Providing the Web Platform service, including account management, workspace provisioning, subscription billing, and conversational AI interactions with domain-specific agents.
@@ -239,7 +239,7 @@ If you are located in the EU or EEA, you have the following rights with respect 
 - **Right to object** (Article 21) -- the right to object to processing based on legitimate interests.
 - **Right to lodge a complaint** -- the right to file a complaint with your local Data Protection Authority.
 
-For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, conversation data, and subscription data by contacting <legal@jikigai.com>. You may request export of your conversation history (messages and metadata) in a structured, machine-readable format under the right to data portability (Article 20). To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
+For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, conversation data, and subscription data by contacting <legal@jikigai.com>. You may request export of your conversation history (messages and metadata) in a structured, machine-readable format under the right to data portability (Article 20). Conversation-history exports reflect the persistence limitation described in Section 4.7. To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
 
 ### 8.2 Rights Under US Privacy Laws
 
