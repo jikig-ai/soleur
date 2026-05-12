@@ -216,3 +216,102 @@ export function __resetMirrorDebounceForTests(): void {
   _mirrorLastReportedAt.clear();
   _mirrorWriteCount = 0;
 }
+
+/**
+ * Per-`(userId, op, conversationId)` 1-hour TTL on a P0-severity Sentry
+ * mirror. Distinct from `mirrorWithDebounce`:
+ * - **Dedup key includes `conversationId`** so two cross-tenant attempts
+ *   against different conversations from the same user are NOT coalesced.
+ * - **TTL is 1 hour, not 5 minutes** — Art. 33(1) gives the controller a
+ *   72-hour window to notify the supervisory authority; the 1-hour TTL
+ *   provides ~72 distinct samples for the same `(user, op, conv)` triple
+ *   within the notifiability window without burying the Sentry stream.
+ * - **`level: "fatal"`** — these events represent a write-boundary or
+ *   GDPR-category violation, not a degraded fallback. Pages oncall.
+ * - **`severity: "breach_attempt"` + `first_seen_at`** are included in the
+ *   Sentry `extra` payload so the 72-hour notifiability clock starts at
+ *   the FIRST observation, even when subsequent re-fires within the
+ *   dedup window are suppressed.
+ *
+ * Callers:
+ * - `cc-dispatcher.ts` — write-boundary sentinel (`assertWriteScope`),
+ *   W4-orphan drop (`usage_orphan_dropped`).
+ *
+ * Sentry retention (typically 30-90 days) does NOT satisfy Art. 33(5)'s
+ * indefinite breach documentation requirement. A durable audit-log table
+ * is tracked separately as D-durable-audit-log (#3603 rev-2 deferral).
+ */
+export const P0_DEDUP_TTL_MS = 60 * 60 * 1000;
+// Hard cap on map size — TTL-only eviction is insufficient under an adversarial
+// burst with rotating conversationId values (every entry is fresh, sweep deletes
+// nothing). Insertion-order eviction (Map preserves insertion order) caps heap
+// regardless of burst rate. Sized to ~1.4 MB worst-case.
+const P0_DEDUP_MAX_SIZE = 10_000;
+const _p0DedupMap = new Map<string, number>();
+const P0_SWEEP_INTERVAL = 64;
+let _p0WriteCount = 0;
+
+export function mirrorP0Deduped(
+  err: Error,
+  ctx: { op: string; userId: string; conversationId: string },
+): void {
+  const key = `${ctx.userId}:${ctx.op}:${ctx.conversationId}`;
+  const now = Date.now();
+  const last = _p0DedupMap.get(key);
+  if (last !== undefined && now - last < P0_DEDUP_TTL_MS) return;
+  // Capacity check BEFORE insert: evict oldest if at cap.
+  if (_p0DedupMap.size >= P0_DEDUP_MAX_SIZE) {
+    const oldest = _p0DedupMap.keys().next().value;
+    if (oldest !== undefined) _p0DedupMap.delete(oldest);
+  }
+  _p0DedupMap.set(key, now);
+
+  // Amortized sweep — drops entries older than the TTL on a fraction of
+  // writes. Bounds map growth on long-running processes per learning
+  // 2026-05-11-debounce-cache-needs-eviction-and-symmetric-state-reset.md.
+  // Cutoff is `> TTL` (not `> 2*TTL` as in mirrorWithDebounce) because P0
+  // events warrant tighter eviction than 5-min-debounce mirrors.
+  _p0WriteCount++;
+  if (_p0WriteCount % P0_SWEEP_INTERVAL === 0) {
+    for (const [k, t] of _p0DedupMap) {
+      if (now - t > P0_DEDUP_TTL_MS) _p0DedupMap.delete(k);
+    }
+  }
+
+  // Pino mirror for container-stdout visibility (same shape as
+  // `reportSilentFallback` so log aggregators key off identical fields).
+  logger.error(
+    { err, op: ctx.op, userId: ctx.userId, conversationId: ctx.conversationId },
+    `p0 deduped mirror: ${ctx.op}`,
+  );
+
+  // Sentry — fatal severity, bypasses `mirrorWithDebounce` 5-min window.
+  // `first_seen_at` is the Art. 33(1) 72h-clock anchor.
+  try {
+    if (typeof Sentry.captureException === "function") {
+      Sentry.captureException(err, {
+        level: "fatal",
+        tags: { op: ctx.op, scope: "p0_deduped" },
+        extra: {
+          op: ctx.op,
+          userId: ctx.userId,
+          conversationId: ctx.conversationId,
+          severity: "breach_attempt",
+          first_seen_at: new Date(now).toISOString(),
+        },
+      });
+    }
+  } catch {
+    // Sentry namespace partially shimmed (dev-server bundle) — pino is the
+    // durable signal regardless.
+  }
+}
+
+/**
+ * Test seam: drain the P0 dedup map between tests. Naming mirrors
+ * `__resetMirrorDebounceForTests` (line above). Never call from production.
+ */
+export function __resetP0DedupForTests(): void {
+  _p0DedupMap.clear();
+  _p0WriteCount = 0;
+}

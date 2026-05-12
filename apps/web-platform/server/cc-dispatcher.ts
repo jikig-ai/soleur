@@ -62,6 +62,7 @@ import {
 import {
   reportSilentFallback,
   mirrorWithDebounce,
+  mirrorP0Deduped,
   __resetMirrorDebounceForTests,
 } from "./observability";
 import { updateConversationFor } from "./conversation-writer";
@@ -157,6 +158,98 @@ const _abortFlushExhaustive: Record<AbortFlushStatus, true> = {
   internal_error: true,
 };
 void _abortFlushExhaustive;
+
+// #3603 W1 — Write-boundary tenant-isolation sentinel.
+//
+// cc-dispatcher.ts uses the service-role Supabase client (`supabase()` —
+// see `createServiceClient` import) for the `messages` INSERT path, which
+// **bypasses RLS on writes**. RLS catches reads only. A bug routing user A's
+// dispatch with user B's `conversation_id` would write into B's conversation
+// undetected. This helper is the single sentinel call site that every
+// assistant-row write runs through.
+//
+// At HEAD the SDK callback shape (`DispatchEvents` in `soleur-go-runner.ts`)
+// does NOT carry payload-derived `user_id` / `conversation_id`, so the
+// dispatch closure is the only source of truth — the sentinel returns `true`
+// unconditionally and is essentially a placeholder. Its load-bearing role is
+// **forward**: when a future SDK callback exposes payload identifiers, the
+// helper signature gains those params and a mismatch check + `mirrorP0Deduped`
+// call goes inside this function — a single edit point.
+//
+// Returns `boolean` rather than throwing: the call sites are
+// `void saveAssistantMessage(...)` (fire-and-forget at lines ~1129 and ~1163);
+// throwing across the `void` boundary turns into an unhandled promise rejection.
+// Halt is `if (!assertWriteScope(...)) return;`.
+function assertWriteScope(
+  dispatchUserId: string,
+  dispatchConversationId: string,
+): boolean {
+  if (_assertWriteScopeOverride) {
+    return _assertWriteScopeOverride(dispatchUserId, dispatchConversationId);
+  }
+  // Sentinel: no payload source exists today, so the dispatch closure
+  // identity IS the write scope. Always-true.
+  return true;
+}
+
+// Test seam — never use in production. The sentinel returns `true`
+// unconditionally; tests force `false` via this hook to prove every
+// assistant-row write call site runs through the helper.
+let _assertWriteScopeOverride:
+  | ((u: string, c: string) => boolean)
+  | null = null;
+
+export function __setAssertWriteScopeForTests(
+  fn: (u: string, c: string) => boolean,
+): void {
+  // Defense-in-depth (PR-A2 security review H3): refuse to install the
+  // override outside a test environment. Without this guard a malicious /
+  // accidentally-imported call site in a prod-bundle code path could neutralize
+  // the sentinel for the process lifetime — module-singleton state with no
+  // caller authentication. Vitest sets `NODE_ENV=test`; production sets `production`.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "__setAssertWriteScopeForTests is not callable in production builds",
+    );
+  }
+  _assertWriteScopeOverride = fn;
+}
+
+export function __resetAssertWriteScopeForTests(): void {
+  _assertWriteScopeOverride = null;
+}
+
+// #3603 PR-A2 review H4 — `CC_PERSIST_USAGE=true` is the trigger for a new
+// GDPR-regulated persisted category (Art. 13(3) prior-disclosure surface).
+// Mirror the FIRST observation per process via `reportSilentFallback` so
+// post-hoc Art. 33 evidence ("when did this process start writing
+// messages.usage?") doesn't depend on Doppler audit-log correlation. The
+// pino + Sentry payload from `reportSilentFallback` carries a server-side
+// timestamp + `feature` tag; aggregation by `op: "cc-persist-usage-on"`
+// gives the operator a per-process flip timeline.
+let _ccPersistUsageFirstTrueObserved = false;
+function _observeCcPersistUsageFirstTrue(): void {
+  if (_ccPersistUsageFirstTrueObserved) return;
+  _ccPersistUsageFirstTrueObserved = true;
+  reportSilentFallback(null, {
+    feature: "cc-dispatcher",
+    op: "cc-persist-usage-on",
+    message:
+      "CC_PERSIST_USAGE=true observed for first time in this process — messages.usage writes are now active",
+    extra: {
+      // Anchors the 72h Art. 33 clock to a server-side timestamp the
+      // operator can correlate against Doppler change events.
+      first_observed_at: new Date().toISOString(),
+    },
+  });
+}
+
+// Test seam — reset the once-observed flag so multiple unit tests can
+// exercise the breadcrumb path without cross-test bleed. Never call from
+// production code.
+export function __resetCcPersistUsageObservationForTests(): void {
+  _ccPersistUsageFirstTrueObserved = false;
+}
 
 /**
  * User-facing copy for each `WorkflowEndStatus`. Replaces the previous
@@ -954,6 +1047,18 @@ export async function dispatchSoleurGo(
   // The SDK's session-id resume mechanism still owns transcript replay
   // for the agent — these rows are for attachment metadata durability and
   // for `api-messages.ts` history hydration on tab reload.
+  //
+  // #3603 W1 — same write-boundary sentinel as `saveAssistantMessage`.
+  // User-content rows carry PII; a misrouted dispatch persisting User A's
+  // text into User B's conversation is the same Art. 33/34 surface as the
+  // assistant row. Throws (rather than the assistant path's `return`)
+  // because this insert is awaited and a halt here cleanly aborts the
+  // dispatch via the existing user-INSERT-failure path below.
+  if (!assertWriteScope(userId, conversationId)) {
+    throw new Error(
+      "cc-dispatcher: assertWriteScope halted user-message persistence",
+    );
+  }
   const messageId = randomUUID();
   const { error: insertErr } = await supabase().from("messages").insert({
     id: messageId,
@@ -1028,20 +1133,63 @@ export async function dispatchSoleurGo(
   // and live UI. Invariant: the value at the instant `onTextTurnEnd`
   // fires (or `onWorkflowEnded` flushes for the abort path) is what
   // persists. No reordering, no merge.
-  let accumulatedAssistantText = "";
+  let latestAssistantText = "";
   // #3603 W2 — flushed by `onWorkflowEnded` for non-`completed` statuses
   // so a late `onTextTurnEnd` (in-flight SDK callback after abort fires)
   // cannot double-write or overwrite the abort row. Closure-scoped per
   // dispatch invocation; fresh `false` for each `dispatchSoleurGo` call.
-  let workflowEnded = false;
+  let assistantTurnPersisted = false;
+  // #3603 W4 — per-turn cost telemetry captured pre-`onTextTurnEnd`.
+  // `currentTurnIndex` is the closure-scoped turn counter; `pendingTurnUsage`
+  // holds the cost captured by `onResult` tagged with the turnIndex active at
+  // capture time, so a stale `onResult` interleaved across microtasks cannot
+  // attach to a later turn. Both reset by `onTextTurnEnd` (snapshot-clear-bump
+  // synchronously before the save's await) and by the abort path so an
+  // orphaned usage cannot bleed into a subsequent callback.
+  let currentTurnIndex = 0;
+  let pendingTurnUsage: { turnIndex: number; costUsd: number } | null = null;
 
-  async function saveAssistantMessage(opts?: { status?: "aborted" }): Promise<void> {
+  // #3603 W4 — cc-path narrows the type-wide `Message.usage` shape to
+  // cost-only on `'complete'` turns (Art. 5(1)(c) data-minimization). The
+  // legacy agent-runner path emits the full `UsageSnapshot` (input_tokens,
+  // output_tokens, cost_usd, completed_actions[]) on `'aborted'` turns —
+  // see `Message.usage` doc-comment in `lib/types.ts`.
+  type AssistantPersistMode = "complete" | "aborted";
+  interface AssistantPersistOpts {
+    mode: AssistantPersistMode;
+    usage?: { costUsd: number } | null;
+  }
+
+  async function saveAssistantMessage(opts: AssistantPersistOpts): Promise<void> {
+    // #3603 W1 — Cross-tenant write-boundary sentinel. cc-path uses
+    // service-role for INSERT (RLS-bypass on writes). RLS catches reads;
+    // this guard catches writes. Returns `false` only via the test seam
+    // today (sentinel placeholder); load-bearing call site for a future
+    // SDK-payload-derived identifier comparison. See `assertWriteScope`
+    // module-level doc.
+    if (!assertWriteScope(userId, conversationId)) return;
+
     // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
     // mutate `fullText` while this insert is in flight (single async loop
     // serializes onText/onTextTurnEnd, but the await yields the microtask).
-    const fullText = accumulatedAssistantText;
-    accumulatedAssistantText = "";
+    const fullText = latestAssistantText;
+    latestAssistantText = "";
     if (!fullText) return;
+
+    // #3603 W4 — gated single-read site for `CC_PERSIST_USAGE`. The hot-path
+    // env read is intentional: enables runtime rollback flip without a
+    // process restart, load-bearing for a GDPR-rollback scenario after PR-C.
+    // Exact-match `"true"` only — any other truthy string keeps the flag
+    // off (defense-in-depth against a half-set Doppler value). Default-off
+    // at merge per AC9/AC11.
+    const flagOn = process.env.CC_PERSIST_USAGE === "true";
+    // #3603 PR-A2 review H4 — first-true observation per process gives the
+    // Art. 33 72h-clock a "when did we start collecting" evidence anchor,
+    // independent of when the Doppler flip happened. Module-scoped boolean
+    // ensures we mirror once, not on every persist call.
+    if (flagOn) _observeCcPersistUsageFirstTrue();
+    const usageColumn =
+      flagOn && opts.usage ? { cost_usd: opts.usage.costUsd } : null;
 
     const row: Record<string, unknown> = {
       id: randomUUID(),
@@ -1050,23 +1198,19 @@ export async function dispatchSoleurGo(
       content: fullText,
       tool_calls: null,
       leader_id: CC_ROUTER_LEADER_ID,
+      usage: usageColumn,
     };
     // Omit `status` for the normal completion path — migration 040's
     // DEFAULT of `'complete'` applies. Only the abort branch writes
     // `status: "aborted"` explicitly.
-    // Note: `usage` jsonb is intentionally NOT populated here. The legacy
-    // single-leader path at `agent-runner.ts:2051-2054` writes
-    // `usage: { ...accumulatedUsage, completed_actions }` on abort; cc-path
-    // parity is deferred to PR-A2 (W4) behind a `CC_PERSIST_USAGE`
-    // feature flag for Art. 13(3) compliance. See #3603 PR-A1/PR-A2 split.
-    if (opts?.status === "aborted") {
+    if (opts.mode === "aborted") {
       row.status = "aborted";
     }
 
     // Hoisted op slug so `mirrorWithDebounce` receives the same value for
     // both `op` and `errorClass` (the dedupe key) — drift between them
     // would silently split the Sentry dedupe stream.
-    const opSlug = opts?.status === "aborted"
+    const opSlug = opts.mode === "aborted"
       ? "save-assistant-message-aborted-failed"
       : "save-assistant-message-failed";
 
@@ -1094,7 +1238,7 @@ export async function dispatchSoleurGo(
       // #3603 W8 — replace, not append. Mirrors chat-state-machine REPLACE
       // semantic so persisted content matches the UI's live render.
       // See accumulator declaration comment above for invariant + AC11 source.
-      accumulatedAssistantText = text;
+      latestAssistantText = text;
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -1122,12 +1266,24 @@ export async function dispatchSoleurGo(
       // flushed an abort row would double-write or, worse, overwrite the
       // "aborted" status row with a "complete" one. Silent no-op:
       // user already saw the partial text (rendered live; abort row hydrates).
-      if (workflowEnded) {
+      if (assistantTurnPersisted) {
         // silent: turn was already persisted via the abort path
         return;
       }
+      // #3603 W4 — snapshot-clear-bump SYNCHRONOUSLY before the save's
+      // microtask yield. Without this, a turn-N+1 `onResult` arriving on the
+      // same iterator yield could overwrite `pendingTurnUsage` before we
+      // read it, attaching turn N+1's cost to turn N's row.
+      const turnSnapshot = currentTurnIndex;
+      const turnUsage =
+        pendingTurnUsage?.turnIndex === turnSnapshot ? pendingTurnUsage : null;
+      pendingTurnUsage = null;
+      currentTurnIndex = turnSnapshot + 1;
       // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
-      void saveAssistantMessage();
+      void saveAssistantMessage({
+        mode: "complete",
+        usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
+      });
       // Per-turn boundary → terminal stream event for the cc_router bubble.
       // Without this, the client reducer keeps the bubble in
       // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown
@@ -1151,17 +1307,43 @@ export async function dispatchSoleurGo(
       // BEFORE the existing user-visible routing below. Mirrors the legacy
       // abort contract at `agent-runner.ts:2044-2055`. Skips on
       // `status: "completed"` because the normal `onTextTurnEnd` path
-      // already wrote (or will write) the row. The `workflowEnded` flag
+      // already wrote (or will write) the row. The `assistantTurnPersisted` flag
       // suppresses a late `onTextTurnEnd` arriving after this flush.
       // Use the typed `ABORT_FLUSH_STATUSES` set (exhaustively type-checked
       // via `_abortFlushExhaustive`) rather than a bare `!== "completed"` so
       // a future `WorkflowEnd` variant cannot silently route through abort
       // without a deliberate listing here.
       if (ABORT_FLUSH_STATUSES.has(end.status)) {
-        // Fire-and-forget — set the flag SYNCHRONOUSLY so a late
-        // onTextTurnEnd cannot race the await microtask.
-        workflowEnded = true;
-        void saveAssistantMessage({ status: "aborted" });
+        if (latestAssistantText.length > 0) {
+          // #3603 W4 — text-present abort: capture the per-turn usage tagged
+          // to the active turn index, then clear pendingTurnUsage so a late
+          // onTextTurnEnd cannot re-attach the stale value. Set
+          // `assistantTurnPersisted = true` SYNCHRONOUSLY so the late onTextTurnEnd
+          // cannot race the await microtask.
+          const turnUsage =
+            pendingTurnUsage?.turnIndex === currentTurnIndex
+              ? pendingTurnUsage
+              : null;
+          pendingTurnUsage = null;
+          assistantTurnPersisted = true;
+          void saveAssistantMessage({
+            mode: "aborted",
+            usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
+          });
+        } else if (pendingTurnUsage) {
+          // #3603 W4 orphan — usage captured but model produced ZERO text
+          // (tool-only turn that then aborted). The empty-text path drops
+          // the row (PR-A1 contract at `saveAssistantMessage` empty-drop);
+          // P0-mirror the orphaned cost so operators can detect a runner
+          // misconfiguration that strands cost telemetry. Dedup keyed on
+          // `(userId, op, conversationId)` with 1h TTL.
+          pendingTurnUsage = null;
+          mirrorP0Deduped(new Error("usage_orphan_dropped"), {
+            op: "usage_orphan_dropped",
+            userId,
+            conversationId,
+          });
+        }
       }
       // Architecture-F4: `session_ended` is terminal in `ws-client.ts`
       // (clears streams, disables input). Emitting it for RECOVERABLE
@@ -1201,15 +1383,22 @@ export async function dispatchSoleurGo(
       // `closeConversation`. No direct call needed here.
     },
     onResult: (result) => {
-      // Fire-and-forget per-turn cost write. Closes the cc-soleur-go
-      // path's 60-90% under-count vs the Anthropic Console (2026-05-12
-      // plan). The legacy agent-runner.ts path uses the same helper.
-      // Turn termination must not block on DB writes — the helper
-      // chains `.then()` for error mirroring rather than awaiting.
-      // `persistTurnCost` is synchronous and mirrors all async failure
-      // modes to Sentry internally (cost-writer.ts §reportSilentFallback);
-      // soleur-go-runner's onResult try/catch covers the residual
-      // synchronous-throw surface (lib initialization, etc.).
+      // #3603 W4 — capture per-turn cost telemetry for attachment to the
+      // assistant row that `onTextTurnEnd` writes. `totalCostUsd` is a
+      // per-turn delta (`soleur-go-runner.ts` `handleResultMessage` —
+      // `delta = msg.total_cost_usd ?? 0`), not a cumulative running total,
+      // so the value is safe to attach verbatim. The `turnIndex` tag pins
+      // capture to the active turn so a stale callback arriving after the
+      // bump cannot misattribute to a later row.
+      pendingTurnUsage = { turnIndex: currentTurnIndex, costUsd: result.totalCostUsd };
+
+      // Fire-and-forget per-turn cost write to the aggregation surface
+      // (separate from messages.usage). Closes the cc-soleur-go path's
+      // 60-90% under-count vs the Anthropic Console (#3626). The legacy
+      // agent-runner.ts path uses the same helper. Turn termination must
+      // not block on DB writes — `persistTurnCost` chains `.then()` for
+      // error mirroring rather than awaiting; soleur-go-runner's onResult
+      // try/catch covers the residual synchronous-throw surface.
       persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, result);
     },
     onSessionIdCaptured: (capturedSessionId) => {
