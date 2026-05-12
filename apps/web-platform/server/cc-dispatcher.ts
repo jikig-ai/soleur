@@ -42,6 +42,7 @@ import {
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps } from "./cc-cost-caps";
+import { persistTurnCost } from "./cost-writer";
 import { PendingPromptRegistry } from "./pending-prompt-registry";
 import {
   createStartSessionRateLimiter,
@@ -1199,9 +1200,17 @@ export async function dispatchSoleurGo(
       // which fires from `emitWorkflowEnded`/`reapIdle`/
       // `closeConversation`. No direct call needed here.
     },
-    onResult: (_result) => {
-      // Usage totals bubble via `usage_update`; wire in Stage 3 when
-      // the aggregate conversation cost reader lands.
+    onResult: (result) => {
+      // Fire-and-forget per-turn cost write. Closes the cc-soleur-go
+      // path's 60-90% under-count vs the Anthropic Console (2026-05-12
+      // plan). The legacy agent-runner.ts path uses the same helper.
+      // Turn termination must not block on DB writes — the helper
+      // chains `.then()` for error mirroring rather than awaiting.
+      // `persistTurnCost` is synchronous and mirrors all async failure
+      // modes to Sentry internally (cost-writer.ts §reportSilentFallback);
+      // soleur-go-runner's onResult try/catch covers the residual
+      // synchronous-throw surface (lib initialization, etc.).
+      persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, result);
     },
     onSessionIdCaptured: (capturedSessionId) => {
       // #3266 — fire-and-forget DB persist + synchronous in-process cache
