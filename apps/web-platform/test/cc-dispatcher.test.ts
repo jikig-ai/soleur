@@ -1278,6 +1278,53 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(row.content).toBe("normal reply");
   });
 
+  it("T-W2-late-text-async: workflowEnded flag survives a real microtask boundary between onWorkflowEnded and onTextTurnEnd", async () => {
+    // Per GDPR work-phase-2-exit R2 (2026-05-12): T-W2-late-text fires both
+    // callbacks synchronously; in production the SDK iterator may interleave
+    // them across actual microtasks. The synchronous flag set is correct
+    // either way, but this test exercises the realistic async interleave.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: async (events) => {
+          events.onText("partial before abort (async case)");
+          events.onWorkflowEnded?.({
+            status: "runner_runaway",
+            elapsedMs: 5000,
+            lastBlockKind: "text",
+            lastBlockToolName: null,
+            reason: "idle_window",
+          });
+          // Yield the event loop — real-world SDK iterator interleave.
+          await Promise.resolve();
+          await Promise.resolve();
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w2-async",
+      conversationId: "conv-w2-async",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1);
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    expect(row.status).toBe("aborted");
+    expect(row.content).toBe("partial before abort (async case)");
+  });
+
   it("T-W2-late-text: a late onTextTurnEnd after onWorkflowEnded(aborted) is a silent no-op (no double-write, no overwrite)", async () => {
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
 
