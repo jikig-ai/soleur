@@ -75,19 +75,25 @@ describe("skill-security-scan: category fixture matrix", () => {
     expect(ruleIds.has("fetch-pipe-shell")).toBe(true);
     expect(ruleIds.has("fetch-process-sub-shell")).toBe(true);
     expect(ruleIds.has("fetch-cmdsub-exec")).toBe(true);
-    // Bypass-class coverage: the fixture lays out 3 fetch-pipe-shell variants
-    // (canonical, tee-interposed, sudo-wrapped) and 2 fetch-cmdsub-exec variants
-    // ($(...) and backtick). Count assertions lock in that a future regex
-    // regression cannot silently lose a bypass class while keeping aggregate
-    // verdict green via the surviving variants.
+    // Bypass-class coverage: the fixture lays out fetch-pipe-shell variants
+    // (canonical, tee-interposed, sudo-wrapped, aria2c-pipe, axel-pipe),
+    // fetch-process-sub-shell variants (canonical curl, aria2c, axel), and
+    // fetch-cmdsub-exec variants (curl $(...), curl backtick, aria2c $(...),
+    // axel $(...)). Count assertions lock in that a future regex regression
+    // cannot silently lose a bypass class — including the #3607 tool-allowlist
+    // widening — while keeping aggregate verdict green via the surviving variants.
     const fetchPipeCount = result.findings.filter(
       (f) => f.rule_id === "fetch-pipe-shell",
+    ).length;
+    const fetchProcessSubCount = result.findings.filter(
+      (f) => f.rule_id === "fetch-process-sub-shell",
     ).length;
     const fetchCmdsubCount = result.findings.filter(
       (f) => f.rule_id === "fetch-cmdsub-exec",
     ).length;
-    expect(fetchPipeCount).toBeGreaterThanOrEqual(3);
-    expect(fetchCmdsubCount).toBeGreaterThanOrEqual(2);
+    expect(fetchPipeCount).toBeGreaterThanOrEqual(5);
+    expect(fetchProcessSubCount).toBeGreaterThanOrEqual(3);
+    expect(fetchCmdsubCount).toBeGreaterThanOrEqual(4);
   });
 
   test("malicious-prompt-injection → category 2 HIGH-RISK", () => {
