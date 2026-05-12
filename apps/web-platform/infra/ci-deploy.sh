@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Job control: each foreground child gets its own PGID (#3704). Paired with
+# pkill -P $$ in the TERM trap so wall-clock-induced kills propagate to
+# `docker pull` / `docker exec` / `curl` children without escalating to the
+# webhook parent's PGID (which kill -TERM 0 would do — webhook fork-execs
+# this script without setpgid, so ci-deploy.sh shares webhook.service's PGID).
+set -m
 
 # Deploy script invoked by the webhook listener (adnanh/webhook).
 # The webhook sets SSH_ORIGINAL_COMMAND from the JSON payload's "command" field.
@@ -100,6 +106,30 @@ rm -f "${STATE_FILE}.final"
 # We also clear the sentinel so a future run starts clean.
 # shellcheck disable=SC2064
 trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
+
+# Wall-clock-induced kill (#3704). When ci-deploy-wrapper.sh hits its 900s
+# timeout, it sends SIGTERM to this script. Without a TERM trap, bash dies on
+# the default action and leaves the state file at "running" — the workflow
+# polls -1 (running) until its own 900s ceiling and exits 1 with no terminal
+# reason. With this trap:
+#   1. final_write_state touches the .final sentinel + writes terminal state
+#      so the EXIT trap's "unhandled" branch is skipped, AND the workflow
+#      sees exit_code=124 reason=timeout in the very next poll.
+#   2. `trap - TERM INT` clears the trap before signalling children — without
+#      this, pkill below would re-fire the trap on this shell (recursive
+#      handler).
+#   3. `pkill -TERM -P $$` sends TERM to every direct child of this bash
+#      (docker pull, docker exec, canary-bundle-claim-check.sh). We use -P
+#      instead of `kill -TERM 0` because ci-deploy.sh inherits its parent's
+#      PGID (webhook.service does not setpgid before fork-exec), so kill 0
+#      would also TERM the webhook listener and cascade restart noise.
+#      `set -m` above ensures children have their own PGIDs, but that does
+#      NOT move bash itself out of the parent's PGID.
+#   4. `exit 124` matches GNU timeout(1)'s exit code on SIGTERM-by-timeout,
+#      so the workflow's `*)` case statement parses an actionable failure
+#      rather than the symptom-only `unhandled`.
+# shellcheck disable=SC2064
+trap 'final_write_state 124 "timeout"; trap - TERM INT; pkill -TERM -P $$ 2>/dev/null || true; exit 124' TERM INT
 
 # Structured error output: on failure, emit the failing line number and exit code.
 # In async mode (include-command-output-in-response: false), stderr goes to syslog
