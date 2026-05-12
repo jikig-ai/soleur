@@ -111,6 +111,11 @@ import {
   dispatchSoleurGo,
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
+// #3603 W1 plan §2.2.3 — hook P0 dedup reset into the test reset chain so a
+// future test that exercises the real `mirrorP0Deduped` (vs. this file's spy
+// override) doesn't see state leak from a prior test. No-op against the spy
+// override below, but pins the contract.
+import { __resetP0DedupForTests } from "@/server/observability";
 import type { WSMessage } from "@/lib/types";
 import { KeyInvalidError } from "@/lib/types";
 import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
@@ -127,6 +132,7 @@ type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_
 describe("cc-dispatcher singletons + orchestration", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
+    __resetP0DedupForTests();
     mockReportSilentFallback.mockClear();
     mockFetchUserWorkspacePath.mockReset();
     mockMessagesInsert.mockClear();
@@ -1766,11 +1772,18 @@ describe("cc-dispatcher singletons + orchestration", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
 
-      // Helper was exercised at each call site; receives the dispatch-closure
-      // identity tuple — when a future SDK payload source is wired in, this
-      // signature is the single edit point.
-      expect(scopeSpy).toHaveBeenCalled();
+      // Exactly TWO scope-spy calls — proves BOTH the complete-path
+      // (`onTextTurnEnd` → `saveAssistantMessage()`) and the abort-path
+      // (`onWorkflowEnded` text-present branch → `saveAssistantMessage({status:"aborted"})`)
+      // call sites are exercised. The `assertWriteScope` check runs BEFORE
+      // the accumulator snapshot-clear, so the false-return path leaves
+      // `accumulatedAssistantText` intact for the second `onText` to refresh
+      // — both write call sites see non-empty text and reach the sentinel.
+      // A future refactor that drops either call site fails this assertion.
+      expect(scopeSpy).toHaveBeenCalledTimes(2);
       for (const call of scopeSpy.mock.calls) {
+        // Receives the dispatch-closure identity tuple — when a future SDK
+        // payload source is wired in, this signature is the single edit point.
         expect(call).toEqual(["u-scope", "conv-scope"]);
       }
     } finally {
