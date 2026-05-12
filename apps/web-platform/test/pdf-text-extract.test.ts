@@ -12,7 +12,7 @@
 // gone — tests that asserted `toBeNull()` now assert `result.error === <class>`
 // so the next Sentry event diagnoses itself.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll } from "vitest";
 
 import {
   extractPdfText,
@@ -129,6 +129,13 @@ function isOk(
 }
 
 describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfText", () => {
+  // Pre-warm the pdfjs-dist lazy import so the first test doesn't pay the
+  // ~7s cold-start cost on CI runners (timeout at 5s default). Subsequent
+  // calls share the module cache via `extractPdfText`'s internal lazy import.
+  beforeAll(async () => {
+    await import("pdfjs-dist/legacy/build/pdf.mjs");
+  }, 30_000);
+
   it("extracts text from a single-page PDF", async () => {
     const buf = makeMinimalPdf(["Hello World"]);
     const result = await extractPdfText(buf, 50_000);
