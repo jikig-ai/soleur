@@ -33,6 +33,8 @@ Read the plan file passed as `$ARGUMENTS`. Find the `## Test Scenarios` section.
 
 **If Test Scenarios section is empty:** Same as above — warn and skip.
 
+**If Test Scenarios contains only Given/When/Then prose with no `Browser:`, `API verify:`, or `Cleanup:` prefixed steps:** Output "Test Scenarios are integration-level Given/When/Then prose (no executable Browser:/API verify: steps) — covered by unit test suite + manual Phase 6 cross-check. Skipping automated QA." and stop. Do not start the dev server. This case is common for plans whose QA gate is explicitly manual (e.g., requires a real Anthropic key + live Supabase apply); a dev-server smoke would not add coverage beyond what the typecheck + unit suite already validate. Never block the pipeline on a confirmation prompt for the dev server in a test environment — auto-skip silently.
+
 ### Step 1.5: Ensure Dev Server is Running
 
 Before executing any browser scenarios, check whether the dev server is reachable. If not, attempt to start it automatically.

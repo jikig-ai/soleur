@@ -42,6 +42,7 @@ import {
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps } from "./cc-cost-caps";
+import { persistTurnCost } from "./cost-writer";
 import { PendingPromptRegistry } from "./pending-prompt-registry";
 import {
   createStartSessionRateLimiter,
@@ -1379,16 +1380,24 @@ export async function dispatchSoleurGo(
       // which fires from `emitWorkflowEnded`/`reapIdle`/
       // `closeConversation`. No direct call needed here.
     },
-    onResult: ({ totalCostUsd }) => {
+    onResult: (result) => {
       // #3603 W4 — capture per-turn cost telemetry for attachment to the
       // assistant row that `onTextTurnEnd` writes. `totalCostUsd` is a
       // per-turn delta (`soleur-go-runner.ts` `handleResultMessage` —
       // `delta = msg.total_cost_usd ?? 0`), not a cumulative running total,
       // so the value is safe to attach verbatim. The `turnIndex` tag pins
       // capture to the active turn so a stale callback arriving after the
-      // bump cannot misattribute to a later row. Aggregate `/usage` reader
-      // is a separate workstream.
-      pendingTurnUsage = { turnIndex: currentTurnIndex, costUsd: totalCostUsd };
+      // bump cannot misattribute to a later row.
+      pendingTurnUsage = { turnIndex: currentTurnIndex, costUsd: result.totalCostUsd };
+
+      // Fire-and-forget per-turn cost write to the aggregation surface
+      // (separate from messages.usage). Closes the cc-soleur-go path's
+      // 60-90% under-count vs the Anthropic Console (#3626). The legacy
+      // agent-runner.ts path uses the same helper. Turn termination must
+      // not block on DB writes — `persistTurnCost` chains `.then()` for
+      // error mirroring rather than awaiting; soleur-go-runner's onResult
+      // try/catch covers the residual synchronous-throw surface.
+      persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, result);
     },
     onSessionIdCaptured: (capturedSessionId) => {
       // #3266 — fire-and-forget DB persist + synchronous in-process cache

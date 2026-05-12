@@ -266,7 +266,21 @@ export type WSMessage =
       reason: ContextResetReason;
       conversationId: string;
     }
-  | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
+  | {
+      type: "usage_update";
+      conversationId: string;
+      totalCostUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      // Cache tokens — `0` when prompt caching is not engaged. Widened
+      // 2026-05-12 to close the dashboard cross-check gap vs the
+      // Anthropic Console for cached prompts (plan §Risks R8).
+      // Optional for one release cycle so rolling prd deploys don't
+      // drop frames between mismatched server/client shapes; coerce
+      // `?? 0` at every consumer. Tighten in a follow-up.
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
   // Stage 3 (#2885) — Command Center soleur-go router protocol with
