@@ -4,7 +4,7 @@ type: article-30-register
 jurisdiction: FR, EU
 version: 0.1.0-draft
 last_reviewed: 2026-05-12
-controller: "Jikigai (France; 25 rue de Ponthieu, 75008 Paris) — legal form (SAS/SARL) to be confirmed by counsel"
+controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris)"
 dpo: "None designated — Soleur is below the GDPR Art. 37(1) mandatory-designation thresholds; designation remains optional"
 contact: "legal@jikigai.com"
 status: draft-requires-counsel-review
@@ -20,8 +20,8 @@ This is the canonical Register of Processing Activities maintained by **Jikigai*
 
 | Field | Value |
 |---|---|
-| Controller name | Jikigai |
-| Legal form | Société (FR) — exact form (SAS / SARL) to be verified by counsel against KBis extract |
+| Controller name | Jikigai SARL |
+| Legal form | SARL (Société à responsabilité limitée), France |
 | Registered office | 25 rue de Ponthieu, 75008 Paris, France |
 | Controller contact | legal@jikigai.com |
 | Representative (Art. 27) | Not applicable — controller is established in the Union |
@@ -206,7 +206,7 @@ This is the canonical Register of Processing Activities maintained by **Jikigai*
   - `docs/legal/gdpr-policy.md` — GDPR-specific disclosures and data-subject rights procedure.
   - `apps/web-platform/supabase/migrations/` — schema authority for personal-data column inventory.
 - **Outstanding counsel-review items:**
-  1. Confirm exact legal form of Jikigai (SAS vs SARL vs other) on KBis extract and update the controller block.
+  1. ~~Confirm exact legal form of Jikigai~~ — **resolved 2026-05-12: Jikigai SARL (Société à responsabilité limitée), confirmed by founder.**
   2. Confirm Art. 30(5) micro-enterprise derogation analysis (Soleur is below 250 employees but processes data not "occasionally" — Art. 30(1) obligation stands; derogation explicitly does **not** apply).
   3. Confirm characterisation of Web Push transmission as user-directed vs controller-initiated transfer (PA 5).
   4. Confirm retention envelope for cc-dispatcher P0 mirror records (PA 8) — target ≤ 12 months absent open investigation.
