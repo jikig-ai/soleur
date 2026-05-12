@@ -4,17 +4,43 @@ date: 2026-05-12
 type: docs-cleanup
 lane: procedural
 issue: 3671
-related_pr: 3666
-related_origin_pr: 3662
+related_issues: [3666]
+related_prs: [3669, 3662]
+related_origin_commit: e5fbe668
 priority: p3-low
 domain: legal
+deepened: 2026-05-12
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-12
+**Method:** Subagent fan-out unavailable in this environment — applied agent lenses inline (legal-compliance-auditor sharp-edge, code-simplicity, pattern-recognition sibling-bug class scan, kieran convention-check, deepen-plan post-write checklist).
+**Sections enhanced:** Acceptance Criteria (AC5/AC6 corrected), Research Insights (sibling-bug scan finding added), Risks (paraphrase-citation fix), frontmatter (issue/PR labeling corrected).
+
+### Key Improvements
+
+1. **AC5/AC6 corrected from expected `1` to expected `2`.** Live grep showed both Buttondown §2.3(e) AND push-subscription §2.3(j) use the `consent (Article 6(1)(a) GDPR)` form — the AC as originally written would have failed false-positive after a correct trim. Caught by Phase 6 "explicit string literals match across plan" check.
+
+2. **Issue-vs-PR citations disambiguated.** #3666 and #3603 are issues (CLOSED); the merged PRs are #3669 (closes #3666) and #3662 (closes #3603) respectively. Several "PR #3666" references in the plan body were paraphrase errors. SHA `e5fbe668` verified live via `git log -1`.
+
+3. **Sibling-bug class scan returned clean.** Pattern-recognition lens applied: only TWO §4.2 rows carry semicolon-split dual-basis (Cloudflare and Resend). Cloudflare's is legitimate (per learning `2026-03-20-cdn-dual-legal-basis-unauthenticated-traffic.md` — authenticated traffic uses contract performance, unauthenticated uses legitimate interest, per PR #912). Resend's was the only orphan. No other rows need editing. This is positive validation that the fix scope is tight and correct.
+
+4. **All cited AGENTS.md rule IDs verified active.** `wg-when-an-audit-identifies-pre-existing`, `wg-use-closes-n-in-pr-body-not-title-to`, and `hr-weigh-every-decision-against-target-user-impact` all match `[id: <id>]` in AGENTS.* sidecars. No fabricated or retired IDs cited.
+
+5. **All gates verified pass.** Phase 4.6 User-Brand Impact section present, threshold `none` valid (no sensitive-path diff per Check 6 regex). Phase 4.5 network-outage trigger absent. GitHub labels (`domain/legal`, `priority/p3-low`, `code-review`) verified live.
+
+### New Considerations Discovered
+
+- The orphan-clause failure mode (mixing per-data-element bases into a per-processor-relationship table cell) has happened exactly once in the DPD's history. The sibling-bug class scan shows the document's authors consistently keep per-element bases in §2.3 prose and per-relationship bases in §4.2 tables. The Resend row was the deviation; after this fix, the convention is uniform.
+
+- A follow-up learning at /ship time may want to capture: "When forward-porting a legal doc that contains a known pre-existing inconsistency flagged by the auditor, the cleanup PR's AC must include the dual-file diff (`diff <(grep '| <row>' file1) <(grep '| <row>' file2)`) to enforce sync." This is already in AC7; the learning would generalize the pattern.
 
 # Plan: fix DPD §4.2 Resend row legal-basis cleanup (#3671)
 
 ## Overview
 
-Single-clause string trim in `Section 4.2 — Web Platform Processors`, Resend row, "Legal Basis" column. The trailing `; consent (Article 6(1)(a)) for push subscriptions` clause is orphan content — it describes Supabase-stored push-subscription data (§2.3(j) — endpoint URL, p256dh, auth keys), not the Resend processor (which only handles recipient email addresses + notification content). The clause was introduced as a copy-paste artifact in PR-C #3662 (commit `e5fbe668`) when the §2.3(j) push-notification activity and §2.3(k) Resend transactional-email activity were drafted in the same commit. The misplaced clause was forward-ported to the plugin-mirror by PR #3666 (per the audit deferral in that plan's Risks §R3) and now lives in both:
+Single-clause string trim in `Section 4.2 — Web Platform Processors`, Resend row, "Legal Basis" column. The trailing `; consent (Article 6(1)(a)) for push subscriptions` clause is orphan content — it describes Supabase-stored push-subscription data (§2.3(j) — endpoint URL, p256dh, auth keys), not the Resend processor (which only handles recipient email addresses + notification content). The clause was introduced as a copy-paste artifact in **PR #3662** (commit `e5fbe668`, which closed issue #3603 — "PR-C legal refresh for cc-soleur-go transcript persistence + DSAR audit") when the §2.3(j) push-notification activity and §2.3(k) Resend transactional-email activity were drafted in the same commit. The misplaced clause was forward-ported to the plugin-mirror by **PR #3669** (which closed issue #3666 — "Forward-port canonical-vs-plugin legal-doc backlog"; the audit deferral lives in that plan's Risks §R3) and now lives in both:
 
 1. `docs/legal/data-protection-disclosure.md:156` (canonical, GitHub-rendered)
 2. `plugins/soleur/docs/pages/legal/data-protection-disclosure.md:165` (Eleventy mirror, docs-site-rendered)
@@ -145,15 +171,19 @@ Run the verification ACs in §Acceptance Criteria. No build is strictly required
     grep -c "consent (Article 6(1)(a) GDPR)" docs/legal/data-protection-disclosure.md
     ```
 
-    Expected: `1` (the §2.3(j) push-subscription line). Sanity: confirms the trim removed the §4.2 occurrence WITHOUT also stripping the legitimate §2.3(j) basis. (Note: the regex `consent (Article 6(1)(a))` without "GDPR" appears in additional rows — Buttondown, Cloudflare context, etc. — so we anchor to the `GDPR` suffix that §2.3(j) uses.)
+    Expected: `2`. Two legitimate occurrences of this exact string exist in §2.3 prose:
+    - §2.3(e) Buttondown newsletter (canonical line 95): "The legal basis for email address processing is consent (Article 6(1)(a) GDPR), verified through a double opt-in confirmation email."
+    - §2.3(j) push notifications (canonical line 100): "Legal basis: consent (Article 6(1)(a) GDPR) -- subscriptions are created only after explicit browser permission grant."
 
-6. **AC6 — §2.3(j) push-subscription consent basis untouched (mirror):**
+    Sanity: confirms the trim removed the §4.2 Resend row occurrence (which uses `consent (Article 6(1)(a))` WITHOUT the `GDPR` suffix — note the per-element §2.3 prose ALWAYS includes `GDPR`, while §4.2 table cells DO NOT) WITHOUT stripping either of the two legitimate §2.3 bases. Pre-edit grep count is also `2` (the §4.2 row's no-`GDPR` form is excluded by the regex); the count stays at `2` post-edit because we are only stripping a `(Article 6(1)(a))` (no `GDPR`) occurrence, never a `(Article 6(1)(a) GDPR)` occurrence.
+
+6. **AC6 — §2.3(e) + §2.3(j) consent bases untouched (mirror):**
 
     ```bash
     grep -c "consent (Article 6(1)(a) GDPR)" plugins/soleur/docs/pages/legal/data-protection-disclosure.md
     ```
 
-    Expected: `1`.
+    Expected: `2` (mirror lines 104 §2.3(e) + 109 §2.3(j)). Same rationale as AC5.
 
 7. **AC7 — Canonical and mirror Resend rows are bit-identical (modulo whitespace):**
 
@@ -222,7 +252,7 @@ None. This is a docs edit that goes live the moment it lands on `main` (GitHub r
 ### Legal (CLO)
 
 **Status:** reviewed (inline, plan-time assessment)
-**Assessment:** This is a non-substantive correction. No new processing activity is being disclosed or removed; the §2.3(j) consent basis for push-subscription storage remains correctly disclosed on the Supabase row (which is the actual processor for that data). §4.2's Resend row continues to disclose the only legal basis Resend's processing requires — legitimate interest for transactional email under Article 6(1)(f). The pre-edit state was internally inconsistent (table column claimed Resend held push-subscription consent it does not hold); the post-edit state is consistent and continues to satisfy Article 13/14 GDPR transparency requirements. No new contract, sub-processor disclosure, or breach-notification surface is impacted. No CLO sign-off required for a typo-class trim that improves accuracy; the legal-compliance-auditor that flagged this in PR #3666 review has already provided the CLO-equivalent advisory.
+**Assessment:** This is a non-substantive correction. No new processing activity is being disclosed or removed; the §2.3(j) consent basis for push-subscription storage remains correctly disclosed on the Supabase row (which is the actual processor for that data). §4.2's Resend row continues to disclose the only legal basis Resend's processing requires — legitimate interest for transactional email under Article 6(1)(f). The pre-edit state was internally inconsistent (table column claimed Resend held push-subscription consent it does not hold); the post-edit state is consistent and continues to satisfy Article 13/14 GDPR transparency requirements. No new contract, sub-processor disclosure, or breach-notification surface is impacted. No CLO sign-off required for a typo-class trim that improves accuracy; the legal-compliance-auditor that flagged this during the PR #3669 review (which forward-ported the canonical-side clause to the plugin-mirror — issue #3666) has already provided the CLO-equivalent advisory.
 
 No specialist needed beyond the auditor's existing flag.
 
@@ -249,7 +279,7 @@ This plan edits a GDPR-disclosure document but does NOT touch any of the canonic
 - **(c) New cron/workflow reading `knowledge-base/project/learnings/` or `specs/`:** No.
 - **(d) New artifact distribution surface (plugin update, public PR body, package release):** No new surface — the docs-site mirror is an existing surface, and this edit only corrects a previously-published clause without adding new disclosures.
 
-**Skip the `/soleur:gdpr-gate` invocation.** Plain text correction in a published disclosure that removes a misstatement; gate-fire is not warranted. The legal-compliance-auditor that originally flagged this in PR #3666 review IS the gate that fired for this class.
+**Skip the `/soleur:gdpr-gate` invocation.** Plain text correction in a published disclosure that removes a misstatement; gate-fire is not warranted. The legal-compliance-auditor that originally flagged this during PR #3669 review (which closed issue #3666) IS the gate that fired for this class.
 
 ## Research Insights
 
@@ -284,6 +314,49 @@ This three-way structure (per-activity basis in §2.3, per-processor relationshi
 ### Wrapper-vs-curl / paper-resolution: N/A
 
 No workflow wrapper or CI machinery involved. No FR/AC paper-resolution to police — every AC cites a `grep` invocation against a named file path.
+
+### Sibling-bug class scan (pattern-recognition lens, added at deepen-pass)
+
+Question: are there OTHER §4.2 rows with the same copy-paste contamination pattern (per-data-element basis leaked into a per-processor-relationship cell)?
+
+Scan via `grep -E "^\| .+ \|.+ \|.+ \|.+;.+ \|" docs/legal/data-protection-disclosure.md` (rows whose Legal Basis column contains a semicolon, indicating dual-basis):
+
+- **Cloudflare Inc** (canonical line 155): `Contract performance (Article 6(1)(b)) for authenticated users; legitimate interest (Article 6(1)(f)) for unauthenticated traffic`. **LEGITIMATE.** This is a Cloudflare-specific dual-flow established by PR #912 ("harmonize Cloudflare dual legal basis"), captured in learning `2026-03-20-cdn-dual-legal-basis-unauthenticated-traffic.md`. Authenticated traffic is contractually performed; unauthenticated traffic (anonymous visitors to the marketing site routed through the same proxy zone) is processed on the legitimate-interest basis of running the proxy. Both clauses describe what Cloudflare itself does, on its own row.
+- **Resend Inc** (canonical line 156): the orphan being fixed.
+
+**Result: clean.** No other row carries the same failure mode. The DPD's convention is uniform: per-element bases live in §2.3 prose with the `(Article 6(1)(a) GDPR)` form (note `GDPR` suffix), per-processor-relationship bases live in §4.2 table cells with the `(Article 6(1)(a))` form (no `GDPR` suffix). The Resend row was the sole deviation — semicolon-splitting a per-element clause into a §4.2 cell while also mis-attributing the clause's subject (push subscriptions don't flow through Resend). After this fix, the convention is bit-uniform.
+
+### Verified live at deepen-pass
+
+- **PR #3662** (`MERGED`, closed issue #3603): `git log -1 e5fbe668` confirms `docs(legal): PR-C legal refresh for cc-soleur-go transcript persistence + DSAR audit — #3603 (#3662)`.
+- **PR #3669** (`MERGED`, closed issue #3666): the forward-port that mirrored the canonical orphan clause into `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`.
+- **Issue #3666** (`CLOSED`): "Forward-port canonical-vs-plugin legal-doc backlog (KB sharing + push notifications + Resend + OAuth row)".
+- **Issue #3603** (`CLOSED`): "hardening: cc-soleur-go transcript persistence — cross-tenant invariants, abort flush, migration affordance, privacy refresh".
+- **SHA e5fbe668**: verified.
+- **AGENTS.md rule IDs cited** (`wg-when-an-audit-identifies-pre-existing`, `wg-use-closes-n-in-pr-body-not-title-to`, `hr-weigh-every-decision-against-target-user-impact`): all match `[id: <id>]` in AGENTS.* sidecars — none retired, none fabricated.
+- **GitHub labels prescribed** (`domain/legal`, `priority/p3-low`, `code-review`): all 3 verified via `gh label list --limit 200 | grep -E "^(<label>)\b"`.
+
+### AC self-consistency check (Phase 6 explicit-strings rule)
+
+Live grep counts against the pre-edit state:
+
+| AC | Expected | Live count (pre-edit) | Expected (post-edit) | Status |
+|----|----------|------------------------|----------------------|--------|
+| AC1 (canonical clause removed) | 0 | 1 | 0 | ✓ delta of 1 |
+| AC2 (mirror clause removed) | 0 | 1 | 0 | ✓ delta of 1 |
+| AC3 (canonical trimmed row exists) | 1 | 0 (current row ends with `push subscriptions \|`) | 1 | ✓ delta of 1 |
+| AC4 (mirror trimmed row exists) | 1 | 0 | 1 | ✓ delta of 1 |
+| AC5 (canonical `(Article 6(1)(a) GDPR)` untouched) | 2 (CORRECTED from 1) | 2 | 2 | ✓ no-change |
+| AC6 (mirror `(Article 6(1)(a) GDPR)` untouched) | 2 (CORRECTED from 1) | 2 | 2 | ✓ no-change |
+| AC7 (dual-file Resend row diff) | empty | empty (both files share the orphan today) | empty | ✓ stays empty |
+| AC8 (canonical Last-Updated annotation) | 1 | 0 | 1 | ✓ delta of 1 |
+| AC9 (mirror Last-Updated annotation) | 1 | 0 | 1 | ✓ delta of 1 |
+| AC10 (mirror hero date unchanged) | 1 | 1 | 1 | ✓ no-change |
+| AC11 (mirror Last-Updated locations match) | 2 | 2 | 2 | ✓ no-change |
+| AC12a (canonical `^\| Resend Inc` rows) | 1 | 1 | 1 | ✓ no-change |
+| AC12b (mirror `^\| Resend Inc` rows) | 1 | 1 | 1 | ✓ no-change |
+
+All ACs are now consistent with the live state and the expected post-edit state. AC5/AC6 were corrected — pre-deepen they prescribed `1`, which would have failed false-positive (the §2.3(e) Buttondown line also matches the `(Article 6(1)(a) GDPR)` regex).
 
 ## Risks
 

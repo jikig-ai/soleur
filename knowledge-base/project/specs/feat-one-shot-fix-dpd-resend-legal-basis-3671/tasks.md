@@ -35,8 +35,8 @@ issue: 3671
 - [ ] 3.2 AC2: same grep on mirror → `0`.
 - [ ] 3.3 AC3: `grep -c "| Resend Inc.*Legitimate interest (Article 6(1)(f)) for transactional notifications |" docs/legal/data-protection-disclosure.md` → `1`.
 - [ ] 3.4 AC4: same on mirror → `1`.
-- [ ] 3.5 AC5: `grep -c "consent (Article 6(1)(a) GDPR)" docs/legal/data-protection-disclosure.md` → `1`.
-- [ ] 3.6 AC6: same on mirror → `1`.
+- [ ] 3.5 AC5: `grep -c "consent (Article 6(1)(a) GDPR)" docs/legal/data-protection-disclosure.md` → `2` (corrected from `1` at deepen-pass — Buttondown §2.3(e) and push §2.3(j) both match).
+- [ ] 3.6 AC6: same on mirror → `2`.
 - [ ] 3.7 AC7: `diff <(grep '| Resend Inc' docs/legal/data-protection-disclosure.md) <(grep '| Resend Inc' plugins/soleur/docs/pages/legal/data-protection-disclosure.md)` → empty.
 - [ ] 3.8 AC8: `grep -c "trimmed Section 4.2 Resend row Legal Basis" docs/legal/data-protection-disclosure.md` → `1`.
 - [ ] 3.9 AC9: same on mirror → `1`.
