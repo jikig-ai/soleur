@@ -421,8 +421,13 @@ jobs:
                  push it, then open a PR via
                  `gh pr create --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" --title "chore(schedule): neutralize $WORKFLOW_NAME" --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER. Removes the schedule: trigger from the generated --once workflow file. See plugins/soleur/skills/schedule/SKILL.md (D4 defense)."`.
                  Then attempt auto-merge under the merge-main lock so
-                 parallel CC sessions don't queue concurrent auto-merges:
+                 parallel CC sessions don't queue concurrent auto-merges
+                 (the `--` separator terminates `with_lock`'s positional
+                 args; required):
                  `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+                 If the wrapper returns rc=99 (`>600s` contention), the
+                 merge was NOT queued — surface to the operator and retry
+                 rather than treating the auto-merge as successful.
                  If `merge.err` contains `auto-merge is not allowed`, the user
                  repo has `allow_auto_merge: false` — the PR is open and
                  waiting on a human reviewer; that is still a successful

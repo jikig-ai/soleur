@@ -37,12 +37,17 @@ if [[ -f "$_SS_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$_SS_LIB"
 else
+  # Loud one-shot warn so an operator (or CI log scrape) sees that lease
+  # protection is OFF in this worktree. Silent stubs would mask the
+  # 2026-04-21 regression class the lease layer was added to prevent.
+  echo "[warn] session-state.sh missing at $_SS_LIB — lease/lock protection disabled in this worktree." >&2
   acquire_lock() { return 0; }
   release_lock() { return 0; }
   acquire_lease() { return 0; }
   release_lease() { return 0; }
   is_lease_active() { return 1; }
   sweep_orphan_leases() { return 0; }
+  _register_lease_release_trap() { return 0; }
   headless_or_stderr() { echo "[$1] $2" >&2; }
 fi
 
@@ -520,12 +525,27 @@ create_for_feature() {
   # come from the invoking skill's env (see skills/*/SKILL.md Phase 0).
   acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
     || headless_or_stderr warn "could not acquire lease for $branch_name"
+  # Multi-signal trap so an interrupted session (SIGINT/SIGTERM/SIGHUP)
+  # still releases the lease — without this the lease leaks until the
+  # 24h sweep, blocking sibling cleanup-merged unnecessarily.
+  _register_lease_release_trap "$branch_name"
 
   # Push -u immediately so the branch has a remote anchor before the operator
-  # writes any local commits. If push fails (network down, auth, etc.) we
-  # warn and continue — the lease still protects the worktree locally.
+  # writes any local commits. Per plan AC line 158, verify the remote ref
+  # exists via `git ls-remote` after push so a silent push-failure does NOT
+  # leave a local-only branch that a later `cleanup-merged` could reap.
+  local push_ok=true
   if ! git -C "$worktree_path" push -u origin "$branch_name" 2>/dev/null; then
-    headless_or_stderr warn "git push -u origin $branch_name failed; lease still protects worktree locally"
+    push_ok=false
+  elif [[ -z "$(git -C "$worktree_path" ls-remote --heads origin "$branch_name" 2>/dev/null)" ]]; then
+    push_ok=false
+  fi
+  if [[ "$push_ok" == "false" ]]; then
+    # Emit BOTH the human warn and a structured marker on stdout — the
+    # marker is grep-able by orchestrating agents so push failure surfaces
+    # under `claude --bg` where warn-to-log-file is otherwise invisible.
+    echo "SOLEUR_FEATURE_PUSH_FAILED branch=$branch_name"
+    headless_or_stderr warn "git push -u origin $branch_name failed; branch is local-only and may be reaped after the lease expires. Run \`git push -u origin $branch_name\` once network is available."
   fi
 
   echo ""
@@ -767,8 +787,10 @@ cleanup_orphan_worktree_dirs() {
 # Clean up worktrees for merged branches (detects [gone] and merged-to-main)
 cleanup_merged_worktrees() {
   # Serialize concurrent cleanup-merged invocations across sibling sessions.
-  # Skip (don't fail) when contended — the holder will finish the work.
-  if ! acquire_lock cleanup-merged 30; then
+  # 5s is the operator-perception threshold; longer waits in headless mode
+  # are invisible. Skip (don't fail) when contended — the holder will
+  # finish the work and the next session-start cycle picks up any residue.
+  if ! acquire_lock cleanup-merged 5; then
     headless_or_stderr warn "cleanup-merged lock contended; skipping"
     return 0
   fi

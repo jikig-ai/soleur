@@ -76,6 +76,10 @@ _session_state_require_flock() {
 # correct against the same lock_file.
 declare -gA _SESSION_LOCK_FDS 2>/dev/null || true
 declare -gA _SESSION_LOCK_FILES 2>/dev/null || true
+# Stash the started_at this shell wrote into each lease so `release_lease`
+# can verify "I'm the recorded owner" before deleting. Closes the PID-reuse
+# window where a new shell inheriting our pid would otherwise release.
+declare -gA _LEASE_ACQUIRED_STARTED_AT 2>/dev/null || true
 
 _acquire_lock_impl() {
   local name="$1"
@@ -155,8 +159,24 @@ with_lock() {
 # Leases (durable, key=value, atomic-write)
 # ---------------------------------------------------------------------------
 
+# Validate that a worktree name is safe for filesystem-path interpolation.
+# Rejects `..`, slashes, and any character outside [A-Za-z0-9._-]. Required
+# because the CLI shim at the bottom of this file accepts arbitrary worktree
+# names from operator/agent input; in-shell callers pass `$(basename "$PWD")`
+# which is also safe but worth defense-in-depth.
+_validate_worktree_name() {
+  local n="$1"
+  [[ "$n" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [[ "$n" == "." || "$n" == ".." ]] && return 1
+  return 0
+}
+
 _lease_file() {
   _session_state_init_dirs
+  if ! _validate_worktree_name "$1"; then
+    headless_or_stderr warn "invalid worktree name for lease: $1"
+    return 1
+  fi
   printf '%s/%s.lease\n' "$LEASE_DIR" "$1"
 }
 
@@ -177,7 +197,16 @@ acquire_lease() {
   _session_state_init_dirs
 
   local lease_file
-  lease_file=$(_lease_file "$worktree")
+  lease_file=$(_lease_file "$worktree") || return 1
+  # Sanitize skill/duration on write so `_lease_read_field` (grep+cut) sees
+  # safe values. `=` and newline would corrupt the key=value parser; today
+  # only `=` is plausible (operator-supplied SOLEUR_SKILL_NAME), but the
+  # guard is cheap defense-in-depth and matches the documented invariant.
+  skill=$(printf '%s' "$skill" | tr -d '=\n')
+  if ! [[ "$expected_duration_min" =~ ^[0-9]+$ ]]; then
+    expected_duration_min=240
+  fi
+
   local tmp
   tmp=$(mktemp "${lease_file}.XXXXXX") || return 1
 
@@ -194,6 +223,7 @@ hostname=$HOSTNAME
 EOF
   # Atomic rename on same filesystem.
   mv "$tmp" "$lease_file"
+  _LEASE_ACQUIRED_STARTED_AT[$worktree]="$started_at"
   return 0
 }
 
@@ -201,15 +231,24 @@ release_lease() {
   local worktree="$1"
   _session_state_disabled && return 0
   local lease_file
-  lease_file=$(_lease_file "$worktree")
+  lease_file=$(_lease_file "$worktree") || return 0
   [[ -f "$lease_file" ]] || return 0
 
-  # Guard: only release if same pid + hostname + started_at (Flohr rule).
-  local lease_pid lease_host
+  # Flohr rule: only release the lease if THIS shell is the recorded owner.
+  # Compares pid + hostname + started_at — the started_at field protects
+  # against PID-reuse after a crash (new shell inherits the dead shell's
+  # numeric pid; without started_at it would release someone else's lease).
+  local lease_pid lease_host lease_started
   lease_pid=$(_lease_read_field "$lease_file" pid)
   lease_host=$(_lease_read_field "$lease_file" hostname)
-  if [[ "$lease_pid" == "$$" ]] && [[ "$lease_host" == "$HOSTNAME" ]]; then
+  lease_started=$(_lease_read_field "$lease_file" started_at)
+  if [[ "$lease_pid" == "$$" ]] \
+     && [[ "$lease_host" == "$HOSTNAME" ]] \
+     && [[ -n "$lease_started" ]] \
+     && [[ -n "${_LEASE_ACQUIRED_STARTED_AT[$worktree]:-}" ]] \
+     && [[ "$lease_started" == "${_LEASE_ACQUIRED_STARTED_AT[$worktree]}" ]]; then
     rm -f "$lease_file"
+    unset "_LEASE_ACQUIRED_STARTED_AT[$worktree]"
   fi
   return 0
 }
@@ -237,20 +276,30 @@ is_lease_active() {
   local cap=$(( lease_expected * 60 ))
   (( cap < floor )) && cap=$floor
 
-  if [[ -n "$lease_started" ]]; then
-    local started_epoch now_epoch age
-    started_epoch=$(date -d "$lease_started" +%s 2>/dev/null || echo "")
-    now_epoch=$(date +%s)
-    if [[ -n "$started_epoch" ]]; then
-      age=$(( now_epoch - started_epoch ))
-      # Clock-skew guard: negative age (future start) treated as fresh.
-      (( age < 0 )) && return 0
-      (( age < cap )) && return 0
-      return 1
-    fi
+  # Anchor started_at to the strict ISO-8601-Z format we always write
+  # ourselves (date -u +%Y-%m-%dT%H:%M:%SZ). A malformed or natural-language
+  # value (e.g., "next year") fed to `date -d` would otherwise resolve to a
+  # future epoch — combined with the clock-skew "fresh" branch below that
+  # turns into a forever-active lease and a permanent reap block.
+  if [[ ! "$lease_started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    # Malformed or missing — treat as inactive; let sweep_orphan_leases
+    # reap by mtime instead of forever-blocking cleanup-merged.
+    return 1
   fi
-  # Missing started_at — fall back to PID-alive truth.
-  return 0
+  local started_epoch now_epoch age
+  started_epoch=$(date -d "$lease_started" +%s 2>/dev/null || echo "")
+  now_epoch=$(date +%s)
+  if [[ -z "$started_epoch" ]]; then
+    return 1
+  fi
+  age=$(( now_epoch - started_epoch ))
+  # Negative age = clock skew or future-stamped lease. Treat as inactive
+  # (not forever-fresh) to avoid the DoS vector.
+  if (( age < 0 )); then
+    return 1
+  fi
+  (( age < cap )) && return 0
+  return 1
 }
 
 # Sweep orphan leases: PID dead OR mtime > 24h.

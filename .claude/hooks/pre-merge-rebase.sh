@@ -44,9 +44,13 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 # Early exit: only intercept gh pr merge commands.
 # Word boundary (\s|$) prevents false positives on hypothetical merge-* subcommands.
 # Chain operator pattern from guardrails.sh catches chained commands.
-if ! echo "$CMD" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)'; then
+if ! echo "$CMD" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
   exit 0
 fi
+# Note: the `\s--\s` alternative catches the with_lock wrapped form
+# (`bash session-state.sh with_lock merge-main 600 -- gh pr merge ...`)
+# so the wrapped form does NOT bypass the review-evidence gate, the
+# uncommitted-changes check, or the origin/main auto-sync.
 
 # Determine working directory from hook input (.cwd is authoritative).
 WORK_DIR=$(echo "$INPUT" | jq -r '.cwd // ""')

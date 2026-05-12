@@ -862,9 +862,14 @@ After confirming mergeability, queue auto-merge and let GitHub handle waiting fo
 ```bash
 bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- \
   gh pr merge <number> --squash --auto
+rc=$?
+if [[ "$rc" -eq 99 ]]; then
+  echo "merge-main lock contended >600s — another session is queueing auto-merge. Retry: re-run /ship after that session completes."
+  exit 1
+fi
 ```
 
-The `with_lock` wrapper acquires the lock, runs the command inline (so fd 9 stays open for the duration), and releases on exit. Returns 99 if the lock is contended for >600s.
+The `with_lock <name> <timeout_s> -- <cmd> [args...]` wrapper acquires the lock, runs the command inline (so the lock fd stays open for the duration), and releases on exit. **The `--` separator is required** — it terminates `with_lock`'s positional arguments. Returns 99 on `>timeout_s` contention; check `$?` and surface to the operator rather than silently failing the merge.
 
 Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet, causing premature merge attempts.
 
