@@ -3,6 +3,10 @@ name: Deploy Documentation to GitHub Pages
 on:
   push:
     branches: [main]
+    # Keep this list in sync with the path-filter regex in
+    # .github/workflows/ci.yml's detect-changes job — both gate the same
+    # docs/Eleventy surface (critical-css-gate pre-merge, this workflow
+    # post-merge). See #3624.
     paths:
       - 'plugins/soleur/docs/**'
       - 'plugins/soleur/agents/**'
