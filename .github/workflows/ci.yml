@@ -20,8 +20,10 @@ jobs:
   # detect-changes: drives the if:-gate on critical-css-gate. Mirrors the
   # infra-validation.yml pattern (single boolean output instead of matrix).
   # Cheap (one checkout + one git diff). See #3624.
-  # BASE_REF is the PR target branch (controlled enum, not user content) and
-  # is passed via env: + quoted "$BASE_REF" per workflow-injection guidance.
+  # BASE_REF is only set on pull_request events; we short-circuit on other
+  # events (push / workflow_dispatch) before referencing it. It is passed
+  # via env: + quoted "$BASE_REF" per workflow-injection guidance — see
+  # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions.
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -40,6 +42,12 @@ jobs:
             printf 'docs=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Path anchors mirror .github/workflows/deploy-docs.yml's on.push.paths
+          # (docs/skills/agents/commands/eleventy.config.js). The ci|deploy-docs
+          # workflow self-trigger is an intentional addition NOT in deploy-docs:
+          # edits to the gate workflow itself must run the gate to prevent
+          # silent gate-bypass on gate-logic changes. Keep this list in sync
+          # with deploy-docs.yml's paths: when adding new docs source trees.
           CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
           if printf '%s\n' "$CHANGED" | grep -qE '^(plugins/soleur/(docs|skills|agents|commands)/|eleventy\.config\.js$|\.github/workflows/(ci|deploy-docs)\.yml$)'; then
             printf 'docs=true\n' >> "$GITHUB_OUTPUT"
@@ -264,6 +272,11 @@ jobs:
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
+          # Cache key MUST track the Playwright npm version (lives in
+          # package-lock.json), NOT the consumer script. The cache-hit branch
+          # runs only `npx playwright install-deps chromium` (OS deps), not
+          # the binary — keying on screenshot-gate.mjs let stale browser
+          # binaries persist across Playwright bumps. See #3624.
           key: playwright-critical-css-gate-${{ hashFiles('package-lock.json') }}
 
       - name: Install Playwright + http-server (cache miss)
