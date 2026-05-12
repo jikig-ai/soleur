@@ -72,10 +72,10 @@ lane: single-domain
 
 - [ ] 7.1 Author `test/helpers/cc-dispatcher-harness.ts` exporting `buildDispatcherMocks({ withRealMirror?, withRealP0? })`.
 - [ ] 7.2 Migrate `cc-dispatcher.test.ts` 7-mock hoist block to the harness.
-- [ ] 7.3 Migrate sibling `cc-dispatcher-*.test.ts` consumers (per Step 1.2 enumeration) that re-hoist ≥ 3 of the same mocks.
-- [ ] 7.4 Rename `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` in `observability.ts` + update every call site.
+- [ ] 7.3 Migrate `cc-dispatcher-cost.test.ts` to the harness (5/6 mock overlap per deepen-plan baseline). Other 5 sibling test files stay on bespoke hoists (1/6 overlap each).
+- [ ] 7.4 Rename `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` in `observability.ts:314` + update **3 call sites**: `cc-dispatcher.test.ts:128 + 155` AND `cc-dispatcher-cross-tenant.integration.test.ts:69 + 159` (integration test edit is rename-only).
 - [ ] 7.5 Move `__setAssertWriteScopeForTests` + `__resetAssertWriteScopeForTests` from cc-dispatcher.ts:~195-230 to the bottom-of-file test-seam block.
-- [ ] 7.6 Replace the two `setTimeout(_, 10)` settles with `await expect.poll(() => ...).toBe(...)` in `T-W4-orphan` + `T-W4-reset-symmetry`.
+- [ ] 7.6 Replace the two `setTimeout(_, 10)` settles in `T-W4-orphan` + `T-W4-reset-symmetry` with `await expect.poll(() => mockMessagesInsert.mock.calls.length, { interval: 5, timeout: 200 }).toBe(0)` (vitest 3.2.4 signature; predicate must not throw; no `.resolves`/`.rejects` chaining).
 - [ ] 7.7 Verify `grep -nE "setTimeout\([^,]+, *[0-9]+\)" apps/web-platform/test/cc-dispatcher.test.ts` returns zero.
 - [ ] 7.8 Run `bun test` — expect green.
 - [ ] 7.9 Commit: `refactor(test): shared cc-dispatcher harness + expect.poll + seam renames — closes #3641 (F5 + drift × 3 + test-design)`.

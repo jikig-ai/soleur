@@ -11,7 +11,32 @@ lane: single-domain
 tags: [cc-soleur-go, refactor, code-review, cluster-drain, observability]
 requires_cpo_signoff: false
 brand_survival_threshold: aggregate-pattern
+deepened_on: 2026-05-12
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-12
+**Sections enhanced:** Research Reconciliation (3 new corrections), all five issue ACs, Implementation Phases (Phase 1 + Phase 3 + Phase 5 + Phase 7), Risks, Sharp Edges, Test Strategy.
+
+**Live-citation verification:** All 12 PR/issue numbers (`#2467`, `#2468`, `#2469`, `#2486`, `#3603`, `#3638`, `#3639`, `#3640`, `#3641`, `#3642`, `#3662`, `#3670`) resolved via `gh pr view --json state,title` and `gh issue view --json state,title`. All five GitHub labels (`code-review`, `domain/engineering`, `priority/p2-medium`, `priority/p3-low`, `type/chore`) confirmed via `gh label list --limit 200`. AGENTS.md rule `hr-type-widening-cross-consumer-grep` confirmed active in `AGENTS.core.md`. Vitest `expect.poll` API confirmed in installed `node_modules/vitest/dist/chunks/global.d.MAmajcmJ.d.ts` at `vitest@3.2.4`.
+
+### Key Improvements
+
+1. **Seam-rename scope corrected.** The plan originally claimed `__resetP0DedupForTests` has two call sites (both in `cc-dispatcher.test.ts`). Live grep against `apps/web-platform/` shows **three call sites + one definition**: `cc-dispatcher.test.ts:128 + 155`, `cc-dispatcher-cross-tenant.integration.test.ts:69 + 159`, definition at `observability.ts:314`. The seam rename therefore touches the integration test (a write to a file the plan otherwise leaves untouched per the Research Reconciliation finding). Plan now explicitly carves this out.
+2. **F6 reader scope tightened.** Live `grep -nE "typeof m\.usage\.(input_tokens|output_tokens|cost_usd|completed_actions) === ['\"]number['\"]"` against `apps/web-platform/` returns **only 2 matches** — both at `lib/ws-client.ts:1013 + 1016`. The message-bubble.tsx branches use the `usage && typeof usage.input_tokens === "number"` shape (variable-name `usage`, not `m.usage`) at lines 341-346 — also F6 readers, just with a different grep pattern. Plan adopts an **OR-grep over both shapes** as the canonical AC.
+3. **Harness consumer set enumerated.** 7 sibling `cc-dispatcher-*.test.ts` files were probed at plan-time for the 6 mock surfaces of cc-dispatcher.test.ts. Result: `cc-dispatcher-cost.test.ts` is the only sibling that mocks ≥ 3 of the same modules (5/6) and is the natural second harness consumer. The other 5 unit-test siblings mock only `@/server/observability` (1/6) and are out-of-scope — migrating them to the harness would be churn without payoff. Integration test (`cross-tenant`) has zero mocks per the existing Research Reconciliation. Plan updates AC-3641-consumers from "≥ 3 mocks overlap" to a concrete list: `cc-dispatcher.test.ts` + `cc-dispatcher-cost.test.ts`.
+4. **Vitest expect.poll signature pinned.** Type def at `node_modules/vitest/dist/chunks/global.d.MAmajcmJ.d.ts:63` confirms `poll<T>(actual: () => T, options?: { interval?: number; timeout?: number; message?: string })`. Runtime guards at `@vitest/expect/dist/index.js:1583 + 1617` reject `.resolves` / `.rejects` chaining with `SyntaxError`. Predicate must return a value (not throw). Plan's snippet refined accordingly with options (`{ timeout: 200 }`) so a wall-clock-bounded poll is explicit, not relying on the implicit 1000 ms default.
+5. **#3642 op-slug literal sites enumerated.** Live grep returned 9 occurrences across `cc-dispatcher.ts` (5 production sites) + `observability.ts:238` (registry comment) + `cc-dispatcher.test.ts` (3 test-assertion sites). Plan tightens AC-3642-test-callers to enumerate the three test lines (1479, 1487, 1672 + 1674) explicitly.
+
+### New Considerations Discovered
+
+- **Integration-test pull-in for seam rename.** Adding `cc-dispatcher-cross-tenant.integration.test.ts` to `Files to Edit` for the F5 seam rename only. The integration test continues to be untouched for the harness extraction (per the existing Research Reconciliation).
+- **`agent-runner.ts:1856` legacy aggregator is NOT a F6 reader.** Live grep returned `const inputDelta = message.usage?.input_tokens ?? 0;` at that line. This is the legacy agent-runner's per-turn cost aggregator, not a reader of the hydrated `Message.usage` — it reads from the SDK message stream, which has a different schema. Plan explicitly scope-outs this site.
+- **Vitest 3.2.4 default poll interval is 50ms, default timeout is 1000ms.** Two negative-assertion settles in T-W4-orphan and T-W4-reset-symmetry should bound the wall-clock with `{ timeout: 200 }` to keep the test suite snappy — the negative assertions settle in microtasks today (no real wall-clock cost), so 200 ms is generous headroom.
+- **F6 `variant` placement decision crystallized.** Two candidate shapes: (a) top-level `Message.variant`, or (b) nested `usage.variant`. Top-level is simpler for the reader switch but requires every test fixture to add `variant`. Nested keeps fixture surface stable but requires the discriminator field to be set even when `usage` is `null`. Recommendation: **top-level `Message.variant`**, with `variant: "legacy"` as the implicit default for fixtures lacking it (via a helper or by widening the type as `variant?: "legacy" | "cc"` and treating `undefined` as `"legacy"`). Plan captures this in the deepened AC-3640-F6-type.
+
+
 
 # refactor: cc-dispatcher cluster drain (PR-A2 review #3639 + #3640 + #3641 + #3642)
 
@@ -48,8 +73,13 @@ Production:
 
 Tests:
 
-- `apps/web-platform/test/cc-dispatcher.test.ts` (#3641 all 4 fixes: harness import, seam rename, setTimeout → expect.poll, T-W1-invariant-7 relaxation)
-- Any sibling `cc-dispatcher-*.test.ts` file that currently re-hoists the same mock set, verified at Phase 1 grep step (#3641 harness consumers)
+- `apps/web-platform/test/cc-dispatcher.test.ts` (#3641 all 4 fixes: harness import, seam rename call-site, setTimeout → expect.poll, T-W1-invariant-7 relaxation; #3642 test-assertion sites at lines 1479, 1487, 1672, 1674 migrated to `CC_OP_SLUGS.*`)
+- `apps/web-platform/test/cc-dispatcher-cost.test.ts` (#3641 harness consumer — mocks 5/6 of the same modules as cc-dispatcher.test.ts per Phase 1 baseline; second-largest hoist block in the cc-dispatcher-*.test.ts family)
+- `apps/web-platform/test/cc-dispatcher-cross-tenant.integration.test.ts` (#3641 **seam rename only** — call sites at lines 69 + 159 import `__resetP0DedupForTests`. NOT a harness consumer per the existing Research Reconciliation; the rename is the only edit. No other behavior touched.)
+
+Out-of-scope tests (verified Phase 1 baselines):
+
+- `cc-dispatcher-bash-gate.test.ts`, `cc-dispatcher-concierge-context.test.ts`, `cc-dispatcher-prefill-guard.test.ts`, `cc-dispatcher-real-factory.test.ts`, `cc-dispatcher-session-id-writer.test.ts` — each mocks only `@/server/observability` (1/6 overlap), so harness migration would be churn. Stay on bespoke hoists.
 
 ## Files to Create
 
@@ -99,23 +129,25 @@ Not applicable. This PR is a structural refactor — no new persistence sites, n
 
 - **AC-3640-F2:** `AssistantPersistMode = "complete" | "aborted"` and the `AssistantPersistOpts` interface are deleted. Replaced by `type PersistMode = { kind: "complete"; usage: { costUsd: number } | null } | { kind: "aborted"; usage: { costUsd: number } | null }`. `saveAssistantMessage` signature is `(mode: PersistMode) => Promise<void>`.
 - **AC-3640-F4:** `saveAssistantMessage` orchestrator body is ≤ 20 LoC. Two helpers extracted at module scope: `buildRow(mode, text, conversationId)` and `mirrorInsertError(error, mode, userId, conversationId, fullText)`. Switch over `mode.kind` is exhaustive — exhaustiveness rail (`const _exhaustive: never = mode`) added.
-- **AC-3640-F6-type:** `Message.usage` becomes a discriminated union keyed by a new `variant` field on `Message`:
-  ```ts
-  variant: "legacy" | "cc";
-  usage?: ({ variant: "legacy" } & LegacyUsageSnapshot) | ({ variant: "cc" } & CcUsageSnapshot) | null;
-  ```
-  Or equivalently, a top-level `Message.variant` derived at hydration that downstream readers branch on (final shape chosen at deepen-plan; the constraint is **no field-presence branching on reader paths**).
-- **AC-3640-F6-hydration:** `apps/web-platform/lib/api-messages.ts` sets `variant = row.leader_id === CC_ROUTER_LEADER_ID ? "cc" : "legacy"` on every Message it returns. No new DB column. Verified by `grep -n "variant" apps/web-platform/lib/api-messages.ts` showing the assignment + a comment pinning the derivation rule.
-- **AC-3640-F6-readers:** `grep -nE "typeof m\.usage\.(input_tokens|output_tokens|cost_usd|completed_actions) === ['\"]number['\"]" apps/web-platform/{lib,components,server}/` returns zero matches after the change. All reader branches use `usage.variant === "cc" | "legacy"`.
+- **AC-3640-F6-type:** Top-level `Message.variant: "legacy" | "cc"` (recommended shape per deepen-plan analysis — nested-on-usage discriminator requires the field to exist when `usage` is `null`, breaking the test-fixture-stable invariant). Field is **required** in the final shape but the migration tactic is `variant?: "legacy" | "cc"` to allow fixtures to omit it (readers default `undefined` to `"legacy"` — backward-compatible against the existing test-fixture corpus). If deepen-plan or work-time agents find a cleaner shape, document the rationale in a Risks subsection.
+- **AC-3640-F6-hydration:** `apps/web-platform/lib/api-messages.ts` sets `variant = row.leader_id === CC_ROUTER_LEADER_ID ? "cc" : "legacy"` on every Message it returns. No new DB column. Verified by `grep -n "variant" apps/web-platform/lib/api-messages.ts` showing the assignment + a comment pinning the derivation rule (cites `cc-router-id.ts` and migration 040).
+- **AC-3640-F6-readers:** Two complementary greps return zero matches after the change:
+  - `grep -nE "typeof m\.usage\.(input_tokens|output_tokens|cost_usd|completed_actions) === ['\"]number['\"]" apps/web-platform/{lib,components,server}/` (baseline: 2 hits at `lib/ws-client.ts:1013 + 1016`).
+  - `grep -nE "typeof usage\.(input_tokens|output_tokens|cost_usd|completed_actions) === ['\"]number['\"]" apps/web-platform/{lib,components,server}/` (baseline: 3 hits at `components/chat/message-bubble.tsx:341 + 342 + 346`).
+  - All reader branches use `m.variant === "cc"` / `m.variant === "legacy"` (or the helper-typed `usage.variant` if the deepen-plan recommendation is overridden in favor of nested discriminator).
+  - **Scope-out:** `apps/web-platform/server/agent-runner.ts:1856` (`message.usage?.input_tokens ?? 0`) is the legacy SDK-message aggregator, NOT a reader of the hydrated `Message.usage`. Out of F6 scope.
 
 #### #3641 — shared harness + expect.poll + seam renames
 
 - **AC-3641-harness:** `apps/web-platform/test/helpers/cc-dispatcher-harness.ts` exists exporting `buildDispatcherMocks({ withRealMirror?: boolean, withRealP0?: boolean })`. The returned object exposes named spies (`mockReportSilentFallback`, `mockMessagesInsert`, `mockMirrorP0Deduped`, etc.) plus a `vi.mock`-compatible factory closure that callers wire via `vi.mock("@/server/observability", () => factory())`.
-- **AC-3641-consumers:** At minimum `cc-dispatcher.test.ts` imports the harness. The plan-time grep step (Phase 1) enumerates the full set of `cc-dispatcher-*.test.ts` consumers; every file that re-hoists ≥ 3 of the same mocks switches to the harness. Files that hoist a disjoint mock set stay untouched.
-- **AC-3641-seam-rename:** `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` in `observability.ts`. Updated at all call sites: `cc-dispatcher.test.ts:128 + 155`, plus any other found via `grep -rn "__resetP0DedupForTests" apps/web-platform/`. Old name deleted (no alias) — refactor-only PR, no deprecation period needed.
+- **AC-3641-consumers:** Two unit-test files import the harness post-Phase 1 enumeration: `cc-dispatcher.test.ts` (7-mock hoist block today, full match) AND `cc-dispatcher-cost.test.ts` (5/6 mock surfaces overlap). All five other `cc-dispatcher-*.test.ts` siblings mock only `@/server/observability` (1/6 overlap) and stay on bespoke hoists — migrating them would be churn without payoff. Integration test (`cross-tenant`) stays untouched per the existing Research Reconciliation row.
+- **AC-3641-seam-rename:** `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` in `observability.ts:314`. Updated at all three call sites enumerated by Phase 1 grep: `cc-dispatcher.test.ts:128 + 155` AND `cc-dispatcher-cross-tenant.integration.test.ts:69 + 159`. Old name deleted (no alias) — refactor-only PR, no deprecation period needed. The integration-test edit is scoped strictly to the rename (no other behavioral change in that file).
 - **AC-3641-type-rail-move:** `PersistMode` (post-#3640 rename) lives at module scope in `cc-dispatcher.ts` adjacent to `ABORT_FLUSH_STATUSES` (around line 137), NOT inside `dispatchSoleurGo`. Verified by `grep -n "^type PersistMode" apps/web-platform/server/cc-dispatcher.ts` returning a top-level match.
 - **AC-3641-seam-relocation:** `__setAssertWriteScopeForTests` + `__resetAssertWriteScopeForTests` move from lines ~195-230 to the existing bottom-of-file test-seam block (current location of `__resetDispatcherForTests`, `__resetCcPersistUsageObservationForTests`).
-- **AC-3641-no-settle-timeouts:** `grep -nE "setTimeout\([^,]+, *[0-9]+\)" apps/web-platform/test/cc-dispatcher.test.ts` returns zero matches. The two negative-assertion settles in `T-W4-orphan` and `T-W4-reset-symmetry` use `await expect.poll(() => fn()).toBe(...)` with the default timeout (1s).
+- **AC-3641-no-settle-timeouts:** `grep -nE "setTimeout\([^,]+, *[0-9]+\)" apps/web-platform/test/cc-dispatcher.test.ts` returns zero matches. The two negative-assertion settles in `T-W4-orphan` and `T-W4-reset-symmetry` use `await expect.poll(() => fn(), { interval: 5, timeout: 200 }).toBe(...)`. **Vitest 3.2.4 API constraints (verified at `node_modules/vitest/dist/chunks/global.d.MAmajcmJ.d.ts:63`):**
+  - Predicate must return a value; throwing in the predicate aborts the poll.
+  - `.resolves` / `.rejects` chaining is not supported (`@vitest/expect/dist/index.js:1583 + 1617`).
+  - Defaults: `interval=50ms`, `timeout=1000ms`. Plan tightens both: `interval=5ms` (microtask-fast settle), `timeout=200ms` (generous wall-clock cap for a negative assertion that ought to settle within microtasks).
 - **AC-3641-T-W1-invariant-7:** Test `T-W1-invariant-7` uses `expect(scopeSpy).toHaveBeenCalledTimes(n)` with `n >= 3` (not `=== 3`) AND retains the `expect(call).toEqual([userId, conversationId])` loop as the load-bearing assertion. The class method now wraps the previous three call sites (user-INSERT + complete + aborted) and may emit additional internal calls.
 
 #### #3642 — op-slug constants
@@ -123,7 +155,7 @@ Not applicable. This PR is a structural refactor — no new persistence sites, n
 - **AC-3642-constants:** Module-scope `const CC_OP_SLUGS = { saveAssistant: "save-assistant-message-failed", saveAssistantAborted: "save-assistant-message-aborted-failed", usageOrphanDropped: "usage_orphan_dropped", ccPersistUsageOn: "cc-persist-usage-on", persistUserMessage: "persist-user-message" } as const;` lives at the top of `cc-dispatcher.ts` (adjacent to `ABORT_FLUSH_STATUSES` and the post-#3641 module-scope `PersistMode`).
 - **AC-3642-w4-orphan:** The W4 orphan branch uses `new Error(CC_OP_SLUGS.usageOrphanDropped)` AND `op: CC_OP_SLUGS.usageOrphanDropped` so the Error message and `ctx.op` cannot drift.
 - **AC-3642-no-literals:** `grep -E "\"(save-assistant-message-failed|save-assistant-message-aborted-failed|usage_orphan_dropped|cc-persist-usage-on|persist-user-message)\"" apps/web-platform/server/cc-dispatcher.ts` returns zero matches (the constants in `CC_OP_SLUGS` are the single source).
-- **AC-3642-test-callers:** Test files that assert on the slug values (`cc-dispatcher.test.ts:1479 + 1487`, `cc-dispatcher.test.ts:1674`) MUST reference the same imported `CC_OP_SLUGS.*` rather than re-typing the string literal — otherwise the test could pass against a renamed slug while production silently drifts.
+- **AC-3642-test-callers:** Four test-assertion sites in `cc-dispatcher.test.ts` (lines 1479, 1487, 1672, 1674 per Phase 1 grep — `mirrorCallsForOp(..., "save-assistant-message-failed")` × 2 and `expect((errArg as Error)?.message).toBe("usage_orphan_dropped")` + `op: "usage_orphan_dropped"` ctx assertion) MUST reference the same imported `CC_OP_SLUGS.*` rather than re-typing the string literal — otherwise the test could pass against a renamed slug while production silently drifts. The `it(...)` description strings at lines 1442 and 1634 may keep human-readable slug names (they document intent, not coupling).
 - **AC-3642-registry-comment:** `observability.ts:161-170` registry comment is updated to reference `CC_OP_SLUGS.*` instead of free-text slug examples.
 
 ### Post-merge (operator)
@@ -136,11 +168,13 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 1 — Plan-time greps + harness consumer scoping
 
-- [ ] `grep -rn "__resetP0DedupForTests" apps/web-platform/` — enumerate every call site for the rename in #3641.
-- [ ] `for f in apps/web-platform/test/cc-dispatcher-*.test.ts; do printf "%s: " "$f"; grep -c "vi.hoisted\|vi.mock" "$f"; done` — quantify mock-hoist surface per sibling test file to decide harness-import scope.
-- [ ] `grep -E "\"(save-assistant-message-failed|save-assistant-message-aborted-failed|usage_orphan_dropped|cc-persist-usage-on|persist-user-message)\"" apps/web-platform/ -rn` — baseline count for AC-3642-no-literals + AC-3642-test-callers.
-- [ ] `grep -nE "typeof m\.usage\.(input_tokens|output_tokens|cost_usd|completed_actions) === ['\"]number['\"]" apps/web-platform/` — baseline count for AC-3640-F6-readers (must reach zero post-fix).
-- [ ] `grep -nE "setTimeout\([^,]+, *[0-9]+\)" apps/web-platform/test/cc-dispatcher.test.ts` — baseline (expected: 2 hits in T-W4-orphan + T-W4-reset-symmetry).
+**Baselines captured at deepen-plan (2026-05-12). Re-run before opening the PR for the "before" column. Expected values below; deviation → halt and reconcile.**
+
+- [ ] `grep -rn "__resetP0DedupForTests" apps/web-platform/` — **expected: 5 hits** (definition at `observability.ts:314`; consumers at `cc-dispatcher.test.ts:128 + 155` and `cc-dispatcher-cross-tenant.integration.test.ts:69 + 159`).
+- [ ] `for f in apps/web-platform/test/cc-dispatcher-*.test.ts; do printf "%s\n  hoist: %s\n  vi.mock(observability): %s\n  vi.mock(supabase): %s\n  vi.mock(cost-writer): %s\n  vi.mock(kb-document-resolver): %s\n  vi.mock(conversation-writer): %s\n" "$(basename "$f")" "$(grep -c "vi\.hoisted" "$f")" "$(grep -c "vi\.mock(\"@/server/observability\"" "$f")" "$(grep -c "vi\.mock(\"@/lib/supabase/service\"" "$f")" "$(grep -c "vi\.mock(\"@/server/cost-writer\"" "$f")" "$(grep -c "vi\.mock(\"@/server/kb-document-resolver\"" "$f")" "$(grep -c "vi\.mock(\"@/server/conversation-writer\"" "$f")"; done` — **expected: cc-dispatcher.test.ts (7/6 hoist + all 6 mocks); cc-dispatcher-cost.test.ts (1/1 hoist + 5/6 mocks); 5 other siblings (≤ 2/6 mocks); integration test (0 hoists, 0 mocks).**
+- [ ] `grep -rnE "\\b(save-assistant-message-failed|save-assistant-message-aborted-failed|usage_orphan_dropped|cc-persist-usage-on|persist-user-message)\\b" apps/web-platform/` — **expected: 9 hits** (5 production sites in `cc-dispatcher.ts:236, 1074, 1214, 1215, 1341, 1342`; 1 doc-comment site in `observability.ts:238`; 3 test-assertion sites in `cc-dispatcher.test.ts:1479, 1487, 1672, 1674` — 4 individual matches but 3 distinct slugs).
+- [ ] `grep -rnE "typeof m\\.usage\\.(input_tokens|output_tokens|cost_usd|completed_actions) === ['\"]number['\"]" apps/web-platform/{lib,components,server}/` — **expected: 2 hits** (`ws-client.ts:1013 + 1016`). Plus `grep -rnE "typeof usage\\.(input_tokens|output_tokens|cost_usd|completed_actions) === ['\"]number['\"]" apps/web-platform/{lib,components,server}/` — **expected: 3 hits** (`message-bubble.tsx:341 + 342 + 346`). Combined baseline: **5 reader sites**, must reach 0 post-Phase 5.
+- [ ] `grep -nE "setTimeout\\([^,]+, *[0-9]+\\)" apps/web-platform/test/cc-dispatcher.test.ts` — **expected: 2 hits** (T-W4-orphan + T-W4-reset-symmetry settles). Must reach 0 post-Phase 7.
 - [ ] Record the baselines in the PR body as a "before" table.
 
 ### Phase 2 — #3642 F7 op-slug constants (independent, lands first to feed downstream phases)
@@ -180,22 +214,29 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 5 — #3640 F6 Message.usage variant union
 
-- [ ] Widen `Message` in `apps/web-platform/lib/types.ts:412` with a required `variant: "legacy" | "cc"` field. Discriminate `usage?` as a tagged union:
+- [ ] Widen `Message` in `apps/web-platform/lib/types.ts:412` with `variant?: "legacy" | "cc"` (optional during transition; readers default `undefined` → `"legacy"` for fixture-stable backward compatibility). Discriminator lives at the **top level on `Message`**, not nested on `usage` (deepen-plan recommendation: nested would require the discriminator when `usage` is `null`, breaking fixture stability). Rough shape:
   ```ts
-  export type LegacyUsage = {
-    variant: "legacy";
-    input_tokens?: number;
-    output_tokens?: number;
-    cost_usd?: number | null;
-    completed_actions?: Array<{ tool_name: string; input_summary: string; result_summary: string; }>;
-  };
-  export type CcUsage = {
-    variant: "cc";
-    cost_usd: number | null;
-  };
-  // ... usage?: LegacyUsage | CcUsage | null;
+  export interface Message {
+    // ...existing fields...
+    /** #3640 F6 — discriminates usage shape. Derived at hydration from
+     *  `leader_id === CC_ROUTER_LEADER_ID` per `cc-router-id.ts`. Persisted
+     *  rows have no `variant` column; this is a TS-only widening.
+     *  Optional during the F6 transition window — readers treat
+     *  `undefined` as `"legacy"` so existing test fixtures don't churn. */
+    variant?: "legacy" | "cc";
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cost_usd?: number | null;
+      completed_actions?: Array<{
+        tool_name: string;
+        input_summary: string;
+        result_summary: string;
+      }>;
+    } | null;
+  }
   ```
-  (Final shape — top-level discriminator vs. nested-on-usage — chosen at deepen-plan based on which yields the smaller cross-consumer diff per `hr-type-widening-cross-consumer-grep`.)
+  The `usage` shape itself is unchanged at the type level (legacy fields stay optional). The discriminator-driven reader switch is what enforces the narrowing — `m.variant === "cc"` readers must only access `usage.cost_usd`; `m.variant === "legacy"` (default) readers may access the full snapshot.
 - [ ] Update `lib/api-messages.ts` hydration to derive `variant = row.leader_id === CC_ROUTER_LEADER_ID ? "cc" : "legacy"` and assign on every row. Cite migration 040 + `cc-router-id.ts` in a header comment.
 - [ ] Rewrite `ws-client.ts:1010-1025` `usage:` ternary to switch on `m.variant`. Legacy branch keeps the existing field passthrough; cc branch keeps only `cost_usd`.
 - [ ] Rewrite `message-bubble.tsx:330-350` `renderAbortedAssistant` token-sum + cost-label logic to switch on `usage.variant`. Legacy computes `input_tokens + output_tokens`; cc skips token sum (returns `null`, which already renders gracefully).
@@ -223,18 +264,25 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 - [ ] Author `apps/web-platform/test/helpers/cc-dispatcher-harness.ts` exporting `buildDispatcherMocks({ withRealMirror = false, withRealP0 = false } = {})`. Returns an object with named spies + a `mocks` block suitable for `vi.mock("@/server/observability", () => ...)`. Use the existing `cc-dispatcher.test.ts` hoist block as the template; the harness function is invoked inside the caller's `vi.hoisted(...)` because `vi.mock` is hoisted at parse time.
   - **Important:** because `vi.hoisted` runs synchronously before the rest of the module, the harness must export a builder function that the caller calls *inside* its own `vi.hoisted(() => buildDispatcherMocks(...))` block. The harness itself does not call `vi.hoisted`; it provides the factory the hoist returns.
 - [ ] Migrate `cc-dispatcher.test.ts` to use the harness. Replace the 7 hoisted mocks at top + the inline TTL wrapper (already removed in Phase 3). Verify the file shrinks by ~80 LoC.
-- [ ] Migrate any sibling `cc-dispatcher-*.test.ts` file enumerated in Phase 1 that re-hoists ≥ 3 of the same mocks.
-- [ ] Rename `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` in `observability.ts`. Update every call site found by Phase 1 grep (at minimum `cc-dispatcher.test.ts:128 + 155`).
+- [ ] Migrate `cc-dispatcher-cost.test.ts` to use the harness (5/6 mock overlap per Phase 1 baseline). All five other `cc-dispatcher-*.test.ts` siblings stay on bespoke hoists (1/6 overlap each — not worth churning).
+- [ ] Rename `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` in `observability.ts:314`. Update all three call sites: `cc-dispatcher.test.ts:128 + 155` AND `cc-dispatcher-cross-tenant.integration.test.ts:69 + 159`. The integration-test edit is **rename-only** (zero other behavioral changes) — preserves the Research Reconciliation's "integration test stays untouched for harness extraction" claim.
 - [ ] Move `__setAssertWriteScopeForTests` + `__resetAssertWriteScopeForTests` from `cc-dispatcher.ts:202 + 218` to the existing bottom-of-file test-seam block (location of `__resetDispatcherForTests`, `__resetCcPersistUsageObservationForTests`). The relocation is a verbatim move — no signature change.
 - [ ] Replace the two `setTimeout(_, 10)` settles in `T-W4-orphan` and `T-W4-reset-symmetry`:
   ```ts
-  // before:
+  // before (existing pattern at T-W4-orphan + T-W4-reset-symmetry):
   await new Promise((r) => setTimeout(r, 10));
   expect(mockMessagesInsert).not.toHaveBeenCalled();
-  // after:
-  await expect.poll(() => mockMessagesInsert.mock.calls.length).toBe(0);
+  // after (vitest 3.2.4 expect.poll, signature verified at
+  //  node_modules/vitest/dist/chunks/global.d.MAmajcmJ.d.ts:63):
+  await expect
+    .poll(() => mockMessagesInsert.mock.calls.length, { interval: 5, timeout: 200 })
+    .toBe(0);
+  // Constraints:
+  //  - Predicate MUST return a value (throwing aborts the poll).
+  //  - `.resolves` / `.rejects` are unsupported (@vitest/expect:1583,1617).
+  //  - Defaults: interval=50ms, timeout=1000ms. Tightened to interval=5ms
+  //    (microtask-fast settle) + timeout=200ms (generous wall-clock cap).
   ```
-  Vitest `expect.poll` default timeout (1s) is sufficient; the negative assertion settles within microtasks today (the 10ms was over-budgeted).
 - [ ] Verify `grep -nE "setTimeout\([^,]+, *[0-9]+\)" apps/web-platform/test/cc-dispatcher.test.ts` returns zero matches.
 - [ ] Run unit tests. Expected: green.
 - [ ] Commit: `refactor(test): shared cc-dispatcher harness + expect.poll + seam renames — closes #3641 (F5 + drift × 3 + test-design)`.
@@ -255,6 +303,8 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 - **#3641 harness builder + vi.hoisted ordering.** `vi.hoisted(fn)` is hoisted ABOVE module imports. The harness file is itself a module; importing it requires the import to be parsed before the hoist runs. Vitest handles this by treating `vi.hoisted` as a special form, but the harness must NOT itself call `vi.hoisted` — only export a plain function the caller invokes inside its own hoist block. Mitigation: this is captured explicitly in Phase 7's bullet; if vitest complains, the fallback is to inline the factory's body into the test file's hoist call (one `import { buildDispatcherMocks } from ...` + one call returning the mocks).
 - **#3642 test-caller drift.** If the test file's string-literal assertions on slugs aren't migrated to `CC_OP_SLUGS.*`, a future slug rename would pass the test (literal stays in the test) while production silently emits the new value. Mitigation: AC-3642-test-callers explicitly requires the migration.
 - **Refactor-only invariant.** Every commit in this PR must leave the test suite green. Any commit that needs to break a test is a behavior change in disguise — abort and re-scope. Phase boundaries are commit boundaries.
+- **F6 `variant` field placement (top-level vs. nested-on-usage).** Deepen-plan recommends top-level `Message.variant?: "legacy" | "cc"` with `undefined → "legacy"` default for fixture stability. Alternative (nested `usage.variant`) requires the discriminator field to exist when `usage` is `null`, which would force every test fixture to either set `usage: null` to `usage: { variant: "legacy" }` (changing semantics) or be widened with a helper. The chosen shape is the lower-churn option, but `tsc --noEmit` in Phase 5 may surface consumer call-sites that exercise narrow types and prefer the nested shape. Decision rule: if Phase 5's typecheck diff exceeds ~30 LoC of consumer-side widening, escalate to a brainstorm-class re-evaluation rather than push through.
+- **Seam-rename touches integration test.** The `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` rename touches `cc-dispatcher-cross-tenant.integration.test.ts:69 + 159` even though the harness extraction does NOT. This is a deliberate scope creep of 2 lines in the integration test — verified at deepen-plan to be a verbatim find-and-replace with no test-logic impact. If a future deepen-plan or work-time agent thinks the integration test should adopt the harness, file a separate issue rather than expanding this PR.
 
 ## Test Strategy
 
@@ -285,7 +335,9 @@ GDPR / Compliance Gate: skipped per `/soleur:gdpr-gate` canonical regex — touc
 - **Type-rail move order (Phase 4 → Phase 6).** `PersistMode` is renamed (#3640 F2) before it is moved to module scope (#3641 type-rail). Phase 4 places the renamed type module-scope already; Phase 6 + Phase 7 are no-ops for the placement.
 - **F6 `variant` derivation is hydration-only.** Never persist a `variant` column. The discriminator is computed from `leader_id` at hydration in `api-messages.ts` (and at construction time for newly-built `Message` instances). A schema column would require a backfill + a PR-C coordination cycle, both unnecessary.
 - **Test seam rename has no deprecation period.** `__resetP0DedupForTests` is deleted (not aliased) by Phase 7. Any out-of-tree consumer (skill, hook, plugin) that imports it will break at typecheck time. Plan-time grep (Phase 1) limits scope to the in-tree call sites; if a future plugin reference appears it must update at the same SHA.
-- **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.** This plan's section is populated above; fill any deepen-plan-introduced subsections before requesting `/work`.
+- **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.** This plan's section is populated above; fill any deepen-plan-introduced subsections before requesting `/work`. Verified at deepen-plan: section present, threshold `aggregate pattern`, non-empty body — gate passes.
+- **Vitest `expect.poll` predicate-throw semantics.** A predicate that throws (e.g., `mockMessagesInsert.mock.calls[0][0].id`) when the array is empty aborts the poll — not the same as "predicate returned a non-matching value". The negative-assertion replacements (`mock.calls.length === 0`) cannot throw, so this is safe; but if a future test asserts on a property of the first call, gate the predicate with a length check or use `mock.calls.length === N && mock.calls[0][0].id === EXPECTED` instead of indexing first.
+- **`vi.mock` factory-import constraint.** `vi.mock` is hoisted ABOVE module imports. The harness file's top-level `import { ... } from "vitest"` is fine because the harness is a module the test imports; vitest's hoist rewriter handles this correctly as long as the harness itself does NOT call `vi.hoisted`. If a future contributor adds `vi.hoisted` inside the harness, the consumer test will fail with "cannot access X before initialization" — the harness must remain a pure factory module.
 
 ## References
 
