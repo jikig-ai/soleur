@@ -19,7 +19,7 @@ permalink: legal/gdpr-policy/
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** May 12, 2026 (added per-message `usage` jsonb token-consumption and cost metadata to Section 3.7 Conversation management bullet and Section 10 Article 30 register activity #10, added SIGKILL persistence-limitation Notes to Section 10 activity #10)
+**Last Updated:** May 12, 2026 (forward-ported §3.8 KB-sharing canonical body form and §10 Article 30 register activity #11 Web Platform content sharing from canonical per #3666)
 
 ---
 
@@ -97,16 +97,18 @@ For processing of account data, workspace data, and subscription data through th
 - **Conversation management:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide the conversational AI service. Data processed: conversation metadata (domain leader, status, timestamps), message content (user messages, assistant responses, tool call metadata), and -- when usage telemetry is enabled per operator configuration -- per-message `usage` jsonb (token consumption and cost metadata).
 - **CDN/proxy processing:** For authenticated users, the lawful basis is **contract performance** (Article 6(1)(b)) -- Cloudflare processes requests as part of delivering the Web Platform service. For unauthenticated traffic (visitors who have not signed up), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- operating CDN and DDoS protection for `app.soleur.ai` is necessary for infrastructure security and service availability (see also GDPR Recital 49). Data processed: IP addresses, request headers, TLS termination data. Processed by Cloudflare (see DPD Section 4.2).
 
-A balancing test is not required for the contract performance basis used in account, payment, and infrastructure processing above. For the legitimate interest basis applied to unauthenticated CDN/proxy traffic, the balancing test considers: (a) the processing is limited to standard HTTP connection metadata (IP addresses, request headers), (b) operating CDN and DDoS protection is within the reasonable expectations of anyone visiting a web application, (c) Cloudflare does not use this data for profiling or advertising, and (d) the processing is necessary for infrastructure security and cannot be achieved without processing technical connection data from all visitors. Data subjects may object under Article 21 by contacting <legal@jikigai.com>.
-
 <!-- Added 2026-04-10: KB sharing -->
 
-### 3.8 Content Sharing
+### 3.8 Content Sharing (Knowledge Base Document Sharing)
 
-- **Share link management:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide the sharing feature the user activated. Data processed: share link metadata (token, document path, creation timestamp, revocation status).
-- **Shared page viewer access logs:** The lawful basis is **legitimate interest** (Article 6(1)(f)) -- infrastructure security and abuse prevention for publicly accessible share endpoints. Data processed: IP addresses, timestamps, user-agent strings. The balancing test considers: (a) processing is limited to standard server access log data, (b) no cookies or tracking are applied to shared page viewers, (c) the processing is necessary for rate limiting and abuse prevention on public endpoints. Data subjects may object under Article 21 by contacting <legal@jikigai.com>.
+For processing related to the knowledge base document sharing feature on the Web Platform:
+
+- **Share link management (authenticated users):** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide the sharing feature the user activated. Data processed: share link metadata (document ID, sharing user ID, creation timestamp, share token).
+- **Viewer access logs (unauthenticated viewers):** The lawful basis is **legitimate interest** (Article 6(1)(f)) -- infrastructure security and abuse prevention for publicly accessible endpoints. Data processed: IP address, timestamp, user-agent (standard server access logs via Cloudflare and Hetzner). No cookies are set, no additional tracking occurs, and no account or profile is created for viewers. The balancing test considers: (a) only standard HTTP connection metadata is processed, (b) viewers voluntarily access a public URL, (c) the processing is necessary for security and cannot be avoided, and (d) no profiling or cross-site tracking occurs.
 
 <!-- End: KB sharing -->
+
+A balancing test is not required for the contract performance basis used in account, payment, and infrastructure processing above. For the legitimate interest basis applied to unauthenticated CDN/proxy traffic, the balancing test considers: (a) the processing is limited to standard HTTP connection metadata (IP addresses, request headers), (b) operating CDN and DDoS protection is within the reasonable expectations of anyone visiting a web application, (c) Cloudflare does not use this data for profiling or advertising, and (d) the processing is necessary for infrastructure security and cannot be achieved without processing technical connection data from all visitors. Data subjects may object under Article 21 by contacting <legal@jikigai.com>.
 
 ---
 
@@ -290,7 +292,7 @@ This assessment will be revisited if processing activities expand significantly 
 
 Jikigai maintains an internal record of processing activities as required by Article 30(1) of the GDPR. The SME exemption under Article 30(5) does not apply because, although Jikigai has fewer than 250 employees, the documentation site hosting constitutes non-occasional processing (continuous web hosting).
 
-The register documents ten processing activities:
+The register documents eleven processing activities:
 
 1. **Documentation website hosting** (soleur.ai via GitHub Pages) -- IP addresses, browser metadata of visitors
 2. **Website analytics** (soleur.ai via Plausible Analytics) -- page URLs, referrer URLs, country (derived from IP, not stored), device type, browser type. Legal basis: legitimate interest (Article 6(1)(f)). No personal data is stored; IP addresses are discarded after geolocation. Plausible Analytics is hosted in the EU.
@@ -302,6 +304,10 @@ The register documents ten processing activities:
 8. **Web Platform payment processing** (app.soleur.ai via Stripe Checkout) -- customer email, subscription metadata. Card data is processed exclusively by Stripe (PCI DSS Level 1, SAQ-A integration) and never reaches Jikigai servers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Stripe Inc (US-based, DPF + SCCs). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
 9. **Web Platform infrastructure hosting** (app.soleur.ai via Hetzner (Helsinki, Finland, EU)) -- user workspaces, encrypted API keys (AES-256-GCM), Docker containers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Hetzner Online GmbH (EU-based, no international transfer). Retention: while account is active.
 10. **Web Platform conversation management** (app.soleur.ai via Supabase) -- conversation metadata (domain leader, status, timestamps), message content (user messages, assistant responses, tool call metadata), and -- when usage telemetry is enabled per operator configuration -- per-message `usage` jsonb (token consumption and cost metadata). Legal basis: contract performance (Article 6(1)(b)). Data is processed by Supabase Inc (project deployed to AWS eu-west-1, Ireland, EU -- no international data transfer). Retention: while account is active; deleted on account deletion request. Notes: in rare service-interruption cases (kernel-level process termination or container restart) between generation and persistence, a small portion of an in-progress reply may not be retained in the conversation record (see Privacy Policy Section 4.7).
+
+<!-- Added 2026-04-10: KB sharing -->
+11. **Web Platform content sharing** (app.soleur.ai via Supabase) -- share link metadata (document ID, sharing user ID, creation timestamp, share token) for authenticated users who activate document sharing; server access logs (IP address, timestamp, user-agent) for unauthenticated viewers accessing shared URLs. Legal basis: contract performance (Article 6(1)(b)) for share link records; legitimate interest (Article 6(1)(f)) for viewer access logs. No cookies are set for viewers; shared pages include `noindex` meta tags. Retention: share link records retained while active, deleted on revocation or account deletion; access logs per Cloudflare and Hetzner retention policies.
+<!-- End: KB sharing -->
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 

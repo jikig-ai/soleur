@@ -70,7 +70,24 @@ pre-commit:
         - "AGENTS.rest.md"
         - "scripts/lint-agents-enforcement-tags.py"
       # Post-#3493 sidecar split: enforcement tags now live in sidecars.
+      # Anchor-parity extension landed in #3684.
       run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+    rule-budget-lint:
+      priority: 5
+      # Mirrors rule-id-lint's glob shape. Self-glob includes the linter
+      # script and the test harness so test-only edits re-run the linter
+      # (lint-scheduled-show-full-output convention). The shared SECTIONS
+      # module is also globbed because a section-list edit should re-run
+      # both lint-rule-ids.py and lint-agents-rule-budget.py.
+      glob:
+        - "AGENTS.md"
+        - "AGENTS.core.md"
+        - "AGENTS.docs.md"
+        - "AGENTS.rest.md"
+        - "scripts/lint-agents-rule-budget.py"
+        - "scripts/lint-agents-rule-budget.test.sh"
+        - "scripts/_agents_md_sections.py"
+      run: python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
     scheduled-show-full-output-lint:
       priority: 5
       # Forbid show_full_output: true in recurring scheduled workflows. Only
