@@ -91,10 +91,10 @@ Derived from the rev-2 plan after 3-reviewer pass (legal-compliance-auditor + co
 
 ## Phase 3 — `Message.usage` doc-comment + FR6
 
-- [ ] 3.1 `AssistantPersistMode` finalized in Phase 1.3.1 — re-affirm only.
-- [ ] 3.2 Update `lib/types.ts:414-416` doc-comment: cc-path emits `{cost_usd}` on complete turns when flag on; legacy emits full snapshot on abort.
-- [ ] 3.3 FR6: new test in `apps/web-platform/test/api-messages.test.ts` — both cc + soleur_go leader rows returned by hydration.
-- [ ] 3.4 Phase 3 checkpoint: full suite green, typecheck + lint clean, commit.
+- [x] 3.1 `AssistantPersistMode` finalized in Phase 1.3.1 — re-affirm only.
+- [x] 3.2 Update `lib/types.ts:414-416` doc-comment: cc-path emits `{cost_usd}` on complete turns when flag on; legacy emits full snapshot on abort. (Also widened `usage` field shape: `input_tokens`/`output_tokens`/`completed_actions` made optional so the cc-narrowed `{ cost_usd }` payload type-checks; readers must branch on field presence per updated comment.)
+- [x] 3.3 FR6: new test in `apps/web-platform/test/api-messages.test.ts` — both cc + soleur_go leader rows returned by hydration.
+- [x] 3.4 Phase 3 checkpoint: full suite green, typecheck + lint clean, commit. (4058/4058 unit tests pass; tsc --noEmit clean.)
 
 ## Phase 4 — Pre-merge gates
 

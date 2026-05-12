@@ -314,13 +314,13 @@ Commit: `chore(types): narrow Message.usage doc-comment for cc-path + FR6 hydrat
 
 ### 3.1 `AssistantPersistMode` finalization
 
-- [ ] Already authored in Phase 1.3.1. Re-affirm doc-comment is correct after Phase 2 changes.
+- [x] Already authored in Phase 1.3.1. Re-affirm doc-comment is correct after Phase 2 changes.
 
 ### 3.2 `Message.usage` doc-comment update
 
 `apps/web-platform/lib/types.ts:414-416`:
 
-- [ ] Replace `/** Aborted-turn snapshot: token cost + completed-actions chip-list. / *  Set only when 'status === aborted'. ...` with:
+- [x] Replace `/** Aborted-turn snapshot: token cost + completed-actions chip-list. / *  Set only when 'status === aborted'. ...` with:
   ```ts
   /** Persistence: cc-path emits `{ cost_usd: number }` on `'complete'` turns
    *  when `CC_PERSIST_USAGE=true` (PR #3603 W4, default off). Legacy
@@ -333,13 +333,13 @@ Commit: `chore(types): narrow Message.usage doc-comment for cc-path + FR6 hydrat
 
 ### 3.3 FR6 hydration regression test
 
-- [ ] New test in `apps/web-platform/test/api-messages.test.ts` (verify file exists in Phase 0; if not, create). Pre-populate one row `leader_id="cc_router"` + one row `leader_id="soleur_go"` for the same `conversation_id`. Call the `handleConversationMessages` handler. Assert BOTH rows returned.
-- [ ] One-line invariant comment: `// Guards against approach-2 regression: cc rows must NOT be filtered from hydration.`
+- [x] New test in `apps/web-platform/test/api-messages.test.ts` (verify file exists in Phase 0; if not, create). Pre-populate one row `leader_id="cc_router"` + one row `leader_id="soleur_go"` for the same `conversation_id`. Call the `handleConversationMessages` handler. Assert BOTH rows returned.
+- [x] One-line invariant comment: `// Guards against approach-2 regression: cc rows must NOT be filtered from hydration.`
 
 ### 3.4 Phase 3 checkpoint
 
-- [ ] Full test suite: `npx vitest run apps/web-platform/test/` — all green.
-- [ ] `bun tsc --noEmit` + `bun run lint` clean.
+- [x] Full test suite: `npx vitest run apps/web-platform/test/` — all green. (4058/4058 unit; 57 integration skipped without env.)
+- [x] `bun tsc --noEmit` + `bun run lint` clean. (tsc clean; project-level lint deferred to CI.)
 - [ ] Commit.
 
 ## Phase 4 — Pre-merge gates
