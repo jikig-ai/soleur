@@ -62,20 +62,14 @@ Derived from `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-p
 
 ## Phase 2 — Validation (mutation tests + 10-run wall-clock validation)
 
-- [ ] **2.1 T14 SKIPPED-shard mutation tests — three sub-runs.** For each shard `test-webplat`, `test-bun`, `test-scripts`:
-  - [ ] **2.1.a** Edit `.github/workflows/ci.yml` to add `if: false` directly to that shard. Commit (`test: validate aggregator fails closed on skipped <shard> — #3680 [REVERTME]`). Push. Wait for run to complete.
-  - [ ] **2.1.b** Confirm via `gh run view <run-id> --json jobs`: the mutated shard has `conclusion: skipped`; synthetic `test` has `conclusion: failure`. Run `gh pr checks 3672` and confirm `test` is shown as failing.
-  - [ ] **2.1.c** Revert the mutation: `git revert HEAD --no-edit`; push. Confirm next CI run is green before testing the next shard.
-- [ ] **2.2** Execute 10 empty-commit-push cycles for wall-clock validation:
-  ```bash
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    git commit --allow-empty -m "ci: validation run $i — #3680"
-    git push
-  done
-  ```
-- [ ] **2.3** Collect per-run timings via `gh run list --branch feat-ci-test-job-speedup --workflow ci.yml --limit 15 --json databaseId,createdAt,conclusion,jobs` + per-run drill-down. Compute median `test` aggregator duration. Compute per-shard medians for `test-webplat`, `test-bun`, `test-scripts`.
-- [ ] **2.4** **VALIDATION GATE:** Confirm `test` aggregator wall-clock <130s on ≥6 of 10 runs AND 10/10 green. If <6/10 within target, execute Deferred-Items Item 2 (`apps/web-platform/` internal split) as a fix-on-same-PR follow-up commit. If any non-green, diagnose flake class before proceeding.
-- [ ] **2.5** Append the 10-run timing distribution + the T14 mutation results (all three sub-runs) to PR #3672 body.
+- [x] **2.1 T14 SKIPPED-shard mutation tests — three sub-runs.** For each shard `test-webplat`, `test-bun`, `test-scripts`:
+  - [x] **2.1.a** Edit `.github/workflows/ci.yml` to add `if: false` directly to that shard. Commit + push. (Commits `222ae748`, `2177deee`, `c4d7ae45`.)
+  - [x] **2.1.b** Confirmed via `gh run view`: each mutated shard had `conclusion: skipped`; synthetic `test` had `conclusion: failure`. `gh pr checks 3672` showed `test` failing on all three sub-runs.
+  - [x] **2.1.c** Reverted each mutation; baseline returned green.
+- [x] **2.2** Executed 10+ empty-commit-push cycles for wall-clock validation (initial single-shard test-webplat: 10 runs; Item 2 vitest matrix: 10 distinct runs).
+- [x] **2.3** Collected per-run + per-shard timings; full distribution table in PR body.
+- [x] **2.4** **VALIDATION GATE.** Initial single-shard layout: 0/10 <130s (webplat dominated 134-149s). Pivoted to Item 2 fix-on-PR (commit `b123b0d4`, 2-way vitest `--shard` matrix with tsc gated to shard 1). Post-pivot: **7/10 <130s (70%)**, 10/10 green, median 117.5s, min 99s, max 153s. **Plan AC12 satisfied.**
+- [x] **2.5** Phase 2 validation block (T14 sub-mutations + 10-run distribution + median + Item 2 rationale) appended to PR #3672 body.
 - [ ] **2.6** Mark PR #3672 ready-for-review (`gh pr ready 3672`).
 
 ## Phase 3 — Post-merge sanity
