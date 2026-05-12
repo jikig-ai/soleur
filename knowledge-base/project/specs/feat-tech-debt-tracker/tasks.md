@@ -23,29 +23,29 @@ Derived from the post-review plan. Phases follow dependency order; tasks within 
 
 ## Phase 2 — SKILL.md scaffold
 
-- [ ] **2.1** Create `plugins/soleur/skills/resolve-debt/SKILL.md` with `name: resolve-debt` and ≤30-word third-person description: *"This skill should be used when triaging or closing open entries in the technical-debt ledger. Lists open debt, walks the operator through closing one with a linked GitHub issue."* (28 words.)
-- [ ] **2.2** Body sections: Overview, Commands (`list` / `close` / `help`), Sharp Edges. Model on `plugins/soleur/skills/schedule/SKILL.md`. No `<example>` blocks; per `plugins/soleur/AGENTS.md` skill-compliance checklist.
-- [ ] **2.3** Sanity: pre-measure cumulative SKILL description words. Expected: 1759 + 28 = 1787 ≤ 1800.
+- [x] **2.1** Create `plugins/soleur/skills/resolve-debt/SKILL.md` with `name: resolve-debt` and ≤30-word third-person description: *"This skill should be used when triaging or closing open entries in the technical-debt ledger. Lists open debt, walks the operator through closing one with a linked GitHub issue."* (28 words.)
+- [x] **2.2** Body sections: Overview, Commands (`list` / `close` / `help`), Sharp Edges. Model on `plugins/soleur/skills/schedule/SKILL.md`. No `<example>` blocks; per `plugins/soleur/AGENTS.md` skill-compliance checklist.
+- [x] **2.3** Sanity: pre-measure cumulative SKILL description words. Expected: 1759 + 28 = 1787 ≤ 1800.
 
 ## Phase 3 — `resolve-debt.py` main script
 
 Single Python script. Shebang `#!/usr/bin/env python3`. Imports parse helpers from `scripts/backfill-frontmatter.py` via `sys.path` insert (no separate `_frontmatter.py` module).
 
-- [ ] **3.1** Create `plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py`. Module skeleton: `argparse` for `--list`/`--no-verify`/`--help`; default mode interactive.
-- [ ] **3.2** Implement `list_mode`:
+- [x] **3.1** Create `plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py`. Module skeleton: `argparse` for `--list`/`--no-verify`/`--help`; default mode interactive.
+- [x] **3.2** Implement `list_mode`:
   - Walk `knowledge-base/project/learnings/technical-debt/`, skip `archive/`.
   - Per-file: `safe_parse_frontmatter` (stderr warn + skip on parse failure).
   - Filter `status == 'open'`; sort by `severity` desc (high>medium>low>unset), then `date` asc.
   - Print markdown table; empty-state `No open debt entries.` + exit 0.
-- [ ] **3.3** Implement `interactive_mode`:
+- [x] **3.3** Implement `interactive_mode`:
   - Display table; prompt `Select entry (1..N) or q to quit:`; out-of-range re-prompt up to 3x then exit 2.
   - Prompt `Status (resolved | wont-fix):`; enum reject re-prompt.
   - If `resolved`: prompt `linked_issue (integer):`; `int()` parse + range-check `1 <= n <= 9_999_999`; on ValueError or range-fail re-prompt up to 3x then exit 2.
   - If not `--no-verify`: `gh issue view <N> --json state,title` (5s timeout). Non-zero exit → stderr names failure mode + `Re-invoke with --no-verify to skip validation.` + exit 1. No closed-state-warn branch.
-- [ ] **3.4** Implement `mutate_atomic`: serialize new frontmatter to a tempfile in the same directory; `os.replace`. SIGINT before replace leaves original untouched.
-- [ ] **3.5** After mutation: print `git diff -- <file>` to stdout; stderr message `Diff above. Review and commit when ready. To undo: git checkout -- <file>. No auto-commit by design.` Exit 0.
-- [ ] **3.6** Implement `print_help`: usage block enumerating three modes; exit 0.
-- [ ] **3.7** Smoke-test against the real backfilled ledger: `python3 plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py --list` → 9-row markdown table.
+- [x] **3.4** Implement `mutate_atomic`: serialize new frontmatter to a tempfile in the same directory; `os.replace`. SIGINT before replace leaves original untouched.
+- [x] **3.5** After mutation: print `git diff -- <file>` to stdout; stderr message `Diff above. Review and commit when ready. To undo: git checkout -- <file>. No auto-commit by design.` Exit 0.
+- [x] **3.6** Implement `print_help`: usage block enumerating three modes; exit 0.
+- [x] **3.7** Smoke-test against the real backfilled ledger: `python3 plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py --list` → 9-row markdown table.
 
 ## Phase 4 — README
 
@@ -79,13 +79,13 @@ Single Python script. Shebang `#!/usr/bin/env python3`. Imports parse helpers fr
 
 ## Phase 7 — Tests + verification
 
-- [ ] **7.1** Create synthesized fixtures under `plugins/soleur/test/fixtures/resolve-debt/`:
+- [x] **7.1** Create synthesized fixtures under `plugins/soleur/test/fixtures/resolve-debt/`:
   - `legacy-schema.md` (one entry with `module/problem_type/component/tags/severity` shape; `status: open`).
   - `current-schema.md` (one entry with `title/category/tags/severity` shape; `status: open`).
   - `malformed-frontmatter.md` (broken YAML to trigger stderr-warn path).
   - `empty-ledger/` (empty directory for empty-state test).
   - `compound-output.md` (compound round-trip fixture).
-- [ ] **7.2** Create `plugins/soleur/test/resolve-debt.test.sh` covering T1-T12 (see plan §Test Scenarios). `set -euo pipefail` + per-test isolation.
+- [x] **7.2** Create `plugins/soleur/test/resolve-debt.test.sh` covering T1-T12 (see plan §Test Scenarios). `set -euo pipefail` + per-test isolation.
 - [ ] **7.3** Run `bun test plugins/soleur/test/components.test.ts` (word-budget gate). Expected: green.
 - [ ] **7.4** Run `bun test plugins/soleur/test/` full suite. Expected: green, including `resolve-debt.test.sh`.
 - [ ] **7.5** Run docs site build per `plugins/soleur/CLAUDE.md`. Expected: `resolve-debt` rendered under Workflow category at `/skills/`.
