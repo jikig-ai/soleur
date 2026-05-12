@@ -21,26 +21,26 @@ Derived from `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-p
 - [x] **0.3** Run locally on Linux (or in this worktree's CI): `TEST_TIMING_LOG=/tmp/test-timing.tsv bash scripts/test-all.sh`. Save the tsv. **Result:** 38/38 green; webplat=41.7s, bun=44.6s, scripts=33.2s; max/min=1.34 → 3-way split confirmed.
 - [x] **0.4** Run the spawn-count probe locally (informational only): `strace -fe trace=clone -c bun test plugins/soleur/ 2>/tmp/strace-summary.txt 1>/dev/null && grep clone /tmp/strace-summary.txt`. Record the `clone` count. NOTE: probe targets `bun test plugins/soleur/` (the actual largest bun-test invocation — `apps/web-platform` is Vitest and excluded from the FPE class). **Result:** 26,380 clone(2) syscalls on Bun 1.3.11 (includes worker threads). Informational only.
 - [x] **0.5** Commit instrumentation. Message: `feat(ci): instrument test-all.sh with per-suite timing — #3680`. Push.
-- [ ] **0.6** Append a markdown table to PR #3672 body containing: (a) all 38 suite wall-clock timings sorted descending with top-5 in **bold**; (b) per-group aggregates (`webplat`, `bun`, `scripts`) and `max/min` ratio; (c) `bun test plugins/soleur/` clone(2) count (informational); (d) Phase 1b grouping decision (3-way default; collapse to 2-way only if `max/min ≥ 2.0` AND one of {bun, scripts} is the small side).
-- [ ] **0.7** **NO HALT GATE.** v1's pre-Phase-1b BLOCKER (`apps/web-platform` clone(2) >130) is dropped — that target was misframed (Vitest, not Bun). Proceed to Phase 1a unconditionally.
+- [x] **0.6** Append a markdown table to PR #3672 body containing: (a) all 38 suite wall-clock timings sorted descending with top-5 in **bold**; (b) per-group aggregates (`webplat`, `bun`, `scripts`) and `max/min` ratio; (c) `bun test plugins/soleur/` clone(2) count (informational); (d) Phase 1b grouping decision (3-way default; collapse to 2-way only if `max/min ≥ 2.0` AND one of {bun, scripts} is the small side). **Decision:** max/min=1.34 < 2.0 → 3-way matrix confirmed.
+- [x] **0.7** **NO HALT GATE.** v1's pre-Phase-1b BLOCKER (`apps/web-platform` clone(2) >130) is dropped — that target was misframed (Vitest, not Bun). Proceed to Phase 1a unconditionally.
 
 ## Phase 1a — TEST_GROUP selector (commit 2)
 
-- [ ] **1a.1** Edit `scripts/test-all.sh`: add `TEST_GROUP="${TEST_GROUP:-${1:-all}}"` after the version check; add the `case` validation arm exiting code 2 with stderr usage message on invalid value. Valid values: `all`, `webplat`, `bun`, `scripts`.
-- [ ] **1a.2** Define helper functions `want_scripts()`, `want_bun()`, `want_webplat()` returning truthy when `TEST_GROUP` matches.
-- [ ] **1a.3** Wrap the 11 pre-suite tests (lines 52-62 of original — hooks/incidents, hooks/emissions, lint-rule-ids, lint-rule-ids-live, session-rules-loader, classifier-regex-parity, rule-id-regex-parity, rule-metrics-aggregate, audit-ruleset-bypass, audit-bot-codeql-coverage, sync-rule-prune) inside `if want_scripts; then ... fi`.
-- [ ] **1a.4** Wrap the 3 bun-named tests (lines 63-65 — content-publisher, x-community, pre-merge-rebase) inside `if want_bun; then ... fi`.
-- [ ] **1a.5** Wrap the apps/web-platform vitest line (line 66) inside `if want_webplat; then ... fi`.
-- [ ] **1a.6** Wrap `plugins/soleur` (line 67) + `blog-link-validation` (line 68) inside `if want_bun; then ... fi`. Add inline comment explaining co-location with `seo-aeo-drift-guard.test.ts` (perf reuse + defense against future xargs-P).
-- [ ] **1a.7** Wrap the `plugins/soleur/test/*.test.sh` glob loop (lines 71-74) inside `if want_scripts; then ... fi`.
-- [ ] **1a.8** Add header comment to `scripts/validate-blog-links.sh` documenting (a) the `_site/` co-location invariant with `seo-aeo-drift-guard.test.ts`, (b) shared `bun` TEST_GROUP, (c) perf-vs-correctness framing (race-free under matrix sharding; defense against future in-runner parallelism).
-- [ ] **1a.9** Verify locally — all five modes:
-  - [ ] `bash scripts/test-all.sh` (no args, all 38 suites in original order)
-  - [ ] `bash scripts/test-all.sh webplat` (1 suite — apps/web-platform vitest only)
-  - [ ] `bash scripts/test-all.sh bun` (5 suites — 3 named bun + plugins/soleur + blog-link-validation)
-  - [ ] `bash scripts/test-all.sh scripts` (32 suites — 11 pre-suite + 21 *.test.sh)
-  - [ ] `bash scripts/test-all.sh invalid` (exits 2 with stderr usage naming all 4 valid values)
-- [ ] **1a.10** Verify env-vs-positional precedence: `TEST_GROUP=bun bash scripts/test-all.sh scripts` runs the bun group (env wins).
+- [x] **1a.1** Edit `scripts/test-all.sh`: add `TEST_GROUP="${TEST_GROUP:-${1:-all}}"` after the version check; add the `case` validation arm exiting code 2 with stderr usage message on invalid value. Valid values: `all`, `webplat`, `bun`, `scripts`.
+- [x] **1a.2** Define helper functions `want_scripts()`, `want_bun()`, `want_webplat()` returning truthy when `TEST_GROUP` matches.
+- [x] **1a.3** Wrap the 11 pre-suite tests inside `if want_scripts; then ... fi`.
+- [x] **1a.4** Wrap the 3 bun-named tests inside `if want_bun; then ... fi`.
+- [x] **1a.5** Wrap the apps/web-platform vitest line inside `if want_webplat; then ... fi`.
+- [x] **1a.6** Wrap `plugins/soleur` + `blog-link-validation` inside `if want_bun; then ... fi`. Inline comment explains co-location with `seo-aeo-drift-guard.test.ts` (perf reuse + defense against future xargs-P).
+- [x] **1a.7** Wrap the `plugins/soleur/test/*.test.sh` glob loop inside `if want_scripts; then ... fi`.
+- [x] **1a.8** Add header comment to `scripts/validate-blog-links.sh` documenting (a) the `_site/` co-location invariant with `seo-aeo-drift-guard.test.ts`, (b) shared `bun` TEST_GROUP, (c) perf-vs-correctness framing.
+- [x] **1a.9** Verify locally — all five modes:
+  - [x] `bash scripts/test-all.sh` (no args, all 38 suites — dispatch dry-run confirms 38)
+  - [x] `bash scripts/test-all.sh webplat` (1 suite — apps/web-platform vitest only)
+  - [x] `bash scripts/test-all.sh bun` (5 suites — 3 named bun + plugins/soleur + blog-link-validation; **end-to-end 5/5 green**)
+  - [x] `bash scripts/test-all.sh scripts` (32 suites — 11 pre-suite + 21 *.test.sh)
+  - [x] `bash scripts/test-all.sh bogus` (exits 2 with stderr usage naming all 4 valid values)
+- [x] **1a.10** Verify env-vs-positional precedence: `TEST_GROUP=bun bash scripts/test-all.sh scripts` runs the bun group (5 suites — env wins).
 - [ ] **1a.11** Commit. Message: `feat(ci): add TEST_GROUP selector to test-all.sh — #3680`. Push.
 - [ ] **1a.12** Verify CI on the pushed commit: existing single `test` job passes (script invoked without args defaults to `all`, byte-identical behavior).
 

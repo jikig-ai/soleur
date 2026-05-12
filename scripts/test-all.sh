@@ -41,6 +41,35 @@ if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
   exit 1
 fi
 
+# --- Test group selector ---
+# TEST_GROUP partitions the suite list across CI matrix shards. Env var wins
+# over positional ($1) so GitHub Actions `env:` blocks and `gh workflow run`
+# compose without rewriting the call site. Default `all` preserves byte-
+# identical behavior for local invocation and any caller that never set this.
+#
+#   all      every suite, in original order (no-args default)
+#   webplat  only apps/web-platform vitest
+#   bun      3 named bun tests + plugins/soleur + blog-link-validation
+#   scripts  11 pre-suite bash/python + 21 plugins/soleur/test/*.test.sh
+#
+# See `.github/workflows/ci.yml` test-{webplat,bun,scripts} jobs + the
+# synthetic `test` aggregator. See plan
+# `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`.
+TEST_GROUP="${TEST_GROUP:-${1:-all}}"
+case "$TEST_GROUP" in
+  all|webplat|bun|scripts) ;;
+  *)
+    echo "ERROR: TEST_GROUP must be one of: all, webplat, bun, scripts (got: $TEST_GROUP)" >&2
+    echo "Usage: bash scripts/test-all.sh [all|webplat|bun|scripts]" >&2
+    echo "   or: TEST_GROUP=<value> bash scripts/test-all.sh" >&2
+    exit 2
+    ;;
+esac
+
+want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" ]]; }
+want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun"     ]]; }
+want_webplat() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "webplat" ]]; }
+
 # --- Run Tests Per Directory ---
 failed=0
 suites=0
@@ -74,29 +103,51 @@ run_suite() {
   fi
 }
 
-run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
-run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
-run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
-run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
-run_suite ".claude/hooks/session-rules-loader" bash .claude/hooks/session-rules-loader.test.sh
-run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
-run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
-run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
-run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
-run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
-run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
-run_suite "test/content-publisher" bun test test/content-publisher.test.ts
-run_suite "test/x-community" bun test test/x-community.test.ts
-run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
-run_suite "apps/web-platform" bash -c "cd apps/web-platform && npm run test:ci 2>&1"
-run_suite "plugins/soleur" bun test plugins/soleur/
-run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
+# Pre-suite bash/python tests — scripts shard.
+if want_scripts; then
+  run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
+  run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
+  run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
+  run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+  run_suite ".claude/hooks/session-rules-loader" bash .claude/hooks/session-rules-loader.test.sh
+  run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
+  run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
+  run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
+  run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
+  run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
+  run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
+fi
 
-# Bash tests (not discovered by bun test; ci-deploy.test.sh runs in infra-validation.yml)
-for f in plugins/soleur/test/*.test.sh; do
-  [[ -f "$f" ]] || continue
-  run_suite "$f" bash "$f"
-done
+# Named bun-test entries — bun shard.
+if want_bun; then
+  run_suite "test/content-publisher" bun test test/content-publisher.test.ts
+  run_suite "test/x-community" bun test test/x-community.test.ts
+  run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
+fi
+
+# Vitest in apps/web-platform — webplat shard.
+if want_webplat; then
+  run_suite "apps/web-platform" bash -c "cd apps/web-platform && npm run test:ci 2>&1"
+fi
+
+# plugins/soleur bun-test recursion + blog-link-validation — bun shard.
+# Co-located because validate-blog-links.sh reads _site/, which
+# plugins/soleur/test/seo-aeo-drift-guard.test.ts builds. Under matrix
+# sharding (separate runners) there is no race; co-location is a perf
+# optimization (build once, reuse) AND defense against any future xargs-P
+# attempt that would re-introduce the race within one runner.
+if want_bun; then
+  run_suite "plugins/soleur" bun test plugins/soleur/
+  run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
+fi
+
+# Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)
+if want_scripts; then
+  for f in plugins/soleur/test/*.test.sh; do
+    [[ -f "$f" ]] || continue
+    run_suite "$f" bash "$f"
+  done
+fi
 
 echo "=== $((suites - failed))/$suites suites passed ==="
 if [[ "$failed" -gt 0 ]]; then

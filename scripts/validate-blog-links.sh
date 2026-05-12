@@ -3,6 +3,16 @@
 # Usage: bash scripts/validate-blog-links.sh [site-dir]
 # If site-dir not provided, builds the site first.
 # Exit 0 = all links valid, Exit 1 = one or more broken links.
+#
+# CO-LOCATION INVARIANT: this script reads _site/ which is also built by
+# plugins/soleur/test/seo-aeo-drift-guard.test.ts (running inside `bun test
+# plugins/soleur/`). Both run in the "bun" TEST_GROUP in scripts/test-all.sh
+# and in the test-bun job in .github/workflows/ci.yml. Under matrix sharding
+# (separate runners), there is no _site/ race because each runner builds its
+# own _site/; co-location is a perf optimization (build once, reuse) plus
+# defense in depth against any future xargs-P / --max-pool-size attempt that
+# would re-introduce the race inside one runner. DO NOT move this script
+# to a different TEST_GROUP than the bun-side builders.
 
 set -euo pipefail
 
