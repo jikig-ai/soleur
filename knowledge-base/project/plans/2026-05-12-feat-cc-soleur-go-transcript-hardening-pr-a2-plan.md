@@ -117,13 +117,13 @@ RED → GREEN → REFACTOR. Test + implementation in the same commit per DHH.
 
 ## Phase 0 — Setup
 
-- [ ] 0.1 Read post-PR-A1 `apps/web-platform/test/cc-dispatcher.test.ts` lines 4-132 (hoisted mocks + reset) and the 12 new W2/W8 tests.
-- [ ] 0.2 Grep for the closest real-DB harness: `rg -l 'getFreshTenantClient\|signInWithPassword' apps/web-platform/test/`. Expected: `conversations-rail-cross-tenant.integration.test.ts` (architecture F5 verified — flat `*.integration.test.ts` is the convention). Document the harness skeleton in this plan before Phase 2.4.
-- [ ] 0.3 Baseline: `npx vitest run apps/web-platform/test/cc-dispatcher.test.ts` → all 36 pass. `bun tsc --noEmit` → clean.
-- [ ] 0.4 Verify worktree HEAD = `224da309`. Rebase if main has advanced.
-- [ ] 0.5 **Plan-time grep audit** (learning `2026-04-24-guard-surface-audit-before-coding.md`): `rg 'CC_PERSIST_USAGE' apps/ docs/ .github/ 2>/dev/null` → must return zero. Confirms greenfield introduction.
-- [ ] 0.6 Read `soleur-go-runner.ts:1786-1850` (`handleResultMessage`) verbatim and confirm: (a) `onResult` fires synchronously before `onTextTurnEnd?.()` inside the same body, (b) `onResult({ totalCostUsd: delta })` at line 1836 — `totalCostUsd` IS a per-turn delta (`soleur-go-runner.ts:1787` proves), (c) cost-cap `onWorkflowEnded` fires AFTER both callbacks. If any fails, halt — W4 race protection design depends on this ordering.
-- [ ] 0.7 **rev-2 — Art. 30 register existence check:** `find . -name 'article-30-register*' -o -name '*art-30*' 2>/dev/null`. Result must NOT change the PR-A2 scope, but if the file STILL doesn't exist at /work start time, escalate **D-art30** to a PR-C explicit blocker. (Carry-forward from this plan's rev-2 review — same outcome expected.)
+- [x] 0.1 Read post-PR-A1 `apps/web-platform/test/cc-dispatcher.test.ts` lines 4-132 (hoisted mocks + reset) and the 12 new W2/W8 tests.
+- [x] 0.2 Grep for the closest real-DB harness: `rg -l 'getFreshTenantClient\|signInWithPassword' apps/web-platform/test/`. Expected: `conversations-rail-cross-tenant.integration.test.ts` (architecture F5 verified — flat `*.integration.test.ts` is the convention). Document the harness skeleton in this plan before Phase 2.4.
+- [x] 0.3 Baseline: `npx vitest run apps/web-platform/test/cc-dispatcher.test.ts` → all 36 pass. `bun tsc --noEmit` → clean.
+- [x] 0.4 Verify worktree HEAD = `224da309`. Rebase if main has advanced.
+- [x] 0.5 **Plan-time grep audit** (learning `2026-04-24-guard-surface-audit-before-coding.md`): `rg 'CC_PERSIST_USAGE' apps/ docs/ .github/ 2>/dev/null` → must return zero. Confirms greenfield introduction.
+- [x] 0.6 Read `soleur-go-runner.ts:1786-1850` (`handleResultMessage`) verbatim and confirm: (a) `onResult` fires synchronously before `onTextTurnEnd?.()` inside the same body, (b) `onResult({ totalCostUsd: delta })` at line 1836 — `totalCostUsd` IS a per-turn delta (`soleur-go-runner.ts:1787` proves), (c) cost-cap `onWorkflowEnded` fires AFTER both callbacks. If any fails, halt — W4 race protection design depends on this ordering.
+- [x] 0.7 **rev-2 — Art. 30 register existence check:** `find . -name 'article-30-register*' -o -name '*art-30*' 2>/dev/null`. Result must NOT change the PR-A2 scope, but if the file STILL doesn't exist at /work start time, escalate **D-art30** to a PR-C explicit blocker. (Carry-forward from this plan's rev-2 review — same outcome expected.)
 - [ ] 0.8 **rev-2 — Doppler/Vercel env-state check:** `doppler secrets get CC_PERSIST_USAGE --project soleur --config dev_terraform --plain 2>&1`, same for `prd_terraform` and `prd`. Each must return error or empty (key absent). Captured as AC11 evidence in PR body. (Per GDPR Review 5 — pipeline-leak foot-gun.)
 
 ## Phase 1 — W4 RED+GREEN (feature-flagged usage parity, cc-narrowed)
@@ -134,29 +134,29 @@ Commit: `feat(cc-dispatcher): W4 messages.usage parity behind CC_PERSIST_USAGE f
 
 `apps/web-platform/test/cc-dispatcher.test.ts`:
 
-- [ ] **1.1.1 T-W4-basic-on:** `CC_PERSIST_USAGE=true`. SDK fires `onResult({ totalCostUsd: 0.0042 })` then `onTextTurnEnd`. Assert exactly one row with `usage = { cost_usd: 0.0042 }` — narrow shape, no `input_tokens`/`output_tokens`/`completed_actions` on complete turns (Art. 5(1)(c)).
-- [ ] **1.1.2 T-W4-basic-off:** `CC_PERSIST_USAGE=false` (default). Same SDK trace. Assert row has `usage = null`. Status still `complete`.
-- [ ] **1.1.3 T-W4-race** (Kieran PR-A1 P0-3 carry-forward): sequence `onResult(turnN, 0.001) → onTextTurnEnd(turnN) → onResult(turnN+1 LATE, 0.002) → onTextTurnEnd(turnN+1)`. Assert turn-N row has `cost_usd=0.001`, turn-N+1 row has `cost_usd=0.002`. `turnIndex` tag on `pendingTurnUsage` enforces.
-- [ ] **1.1.4 T-W4-orphan:** `onResult` fires (usage captured) → `onWorkflowEnded(runner_runaway)` before any text → no abort row (empty-content drop per PR-A1 contract at `cc-dispatcher.ts:1041-1042`). Assert: zero inserts, ONE Sentry mirror with op-slug literal `"usage_orphan_dropped"` via `mirrorP0Deduped`. Dedup-keyed on `(userId, "usage_orphan_dropped", conversationId)` with 1h TTL.
-- [ ] **1.1.5 T-W4-flag-symmetry:** `CC_PERSIST_USAGE=true` but `onResult` not fired → row writes `usage = null` (explicit-null contract per learning `2026-05-04-telemetry-join-format-mismatch-caught-by-orphan-counter.md`).
-- [ ] **1.1.6 T-W4-reset-symmetry:** PR-A1's abort-flush path MUST clear `pendingTurnUsage` so a half-captured usage from a prior turn cannot attach later. Covers learning `2026-05-11-debounce-cache-needs-eviction-and-symmetric-state-reset.md`.
+- [x] **1.1.1 T-W4-basic-on:** `CC_PERSIST_USAGE=true`. SDK fires `onResult({ totalCostUsd: 0.0042 })` then `onTextTurnEnd`. Assert exactly one row with `usage = { cost_usd: 0.0042 }` — narrow shape, no `input_tokens`/`output_tokens`/`completed_actions` on complete turns (Art. 5(1)(c)).
+- [x] **1.1.2 T-W4-basic-off:** `CC_PERSIST_USAGE=false` (default). Same SDK trace. Assert row has `usage = null`. Status still `complete`.
+- [x] **1.1.3 T-W4-race** (Kieran PR-A1 P0-3 carry-forward): sequence `onResult(turnN, 0.001) → onTextTurnEnd(turnN) → onResult(turnN+1 LATE, 0.002) → onTextTurnEnd(turnN+1)`. Assert turn-N row has `cost_usd=0.001`, turn-N+1 row has `cost_usd=0.002`. `turnIndex` tag on `pendingTurnUsage` enforces.
+- [x] **1.1.4 T-W4-orphan:** `onResult` fires (usage captured) → `onWorkflowEnded(runner_runaway)` before any text → no abort row (empty-content drop per PR-A1 contract at `cc-dispatcher.ts:1041-1042`). Assert: zero inserts, ONE Sentry mirror with op-slug literal `"usage_orphan_dropped"` via `mirrorP0Deduped`. Dedup-keyed on `(userId, "usage_orphan_dropped", conversationId)` with 1h TTL.
+- [x] **1.1.5 T-W4-flag-symmetry:** `CC_PERSIST_USAGE=true` but `onResult` not fired → row writes `usage = null` (explicit-null contract per learning `2026-05-04-telemetry-join-format-mismatch-caught-by-orphan-counter.md`).
+- [x] **1.1.6 T-W4-reset-symmetry:** PR-A1's abort-flush path MUST clear `pendingTurnUsage` so a half-captured usage from a prior turn cannot attach later. Covers learning `2026-05-11-debounce-cache-needs-eviction-and-symmetric-state-reset.md`.
 
 ### 1.2 Implementation — state
 
 `apps/web-platform/server/cc-dispatcher.ts`, adjacent to `accumulatedAssistantText` (line 1030) and `workflowEnded` (line 1035):
 
-- [ ] **1.2.1**
+- [x] **1.2.1**
   ```ts
   let currentTurnIndex = 0;
   let pendingTurnUsage: { turnIndex: number; costUsd: number } | null = null;
   ```
-- [ ] **1.2.2** Implement `events.onResult` (replace stub at lines 1202-1204):
+- [x] **1.2.2** Implement `events.onResult` (replace stub at lines 1202-1204):
   ```ts
   events.onResult = ({ totalCostUsd }) => {
     pendingTurnUsage = { turnIndex: currentTurnIndex, costUsd: totalCostUsd };
   };
   ```
-- [ ] **1.2.3** Extend `events.onTextTurnEnd` (line 1119) — snapshot-then-clear-then-bump synchronously BEFORE the async save at line 1129:
+- [x] **1.2.3** Extend `events.onTextTurnEnd` (line 1119) — snapshot-then-clear-then-bump synchronously BEFORE the async save at line 1129:
   ```ts
   const turnSnapshot = currentTurnIndex;
   const usageSnapshot = pendingTurnUsage?.turnIndex === turnSnapshot ? pendingTurnUsage : null;
@@ -164,7 +164,7 @@ Commit: `feat(cc-dispatcher): W4 messages.usage parity behind CC_PERSIST_USAGE f
   currentTurnIndex = turnSnapshot + 1;
   void saveAssistantMessage({ usage: usageSnapshot });
   ```
-- [ ] **1.2.4** Extend abort-flush at lines 1159-1164:
+- [x] **1.2.4** Extend abort-flush at lines 1159-1164:
   ```ts
   if (accumulatedAssistantText.length > 0 && end.status !== "completed") {
     const usageSnapshot = pendingTurnUsage?.turnIndex === currentTurnIndex ? pendingTurnUsage : null;
@@ -181,7 +181,7 @@ Commit: `feat(cc-dispatcher): W4 messages.usage parity behind CC_PERSIST_USAGE f
 
 ### 1.3 Implementation — `AssistantPersistMode` + flag gate
 
-- [ ] **1.3.1** Add typed alias adjacent to `saveAssistantMessage` (line 1037):
+- [x] **1.3.1** Add typed alias adjacent to `saveAssistantMessage` (line 1037):
   ```ts
   type AssistantPersistMode = {
     status?: "aborted";
@@ -190,20 +190,20 @@ Commit: `feat(cc-dispatcher): W4 messages.usage parity behind CC_PERSIST_USAGE f
   };
   async function saveAssistantMessage(opts?: AssistantPersistMode): Promise<void> { … }
   ```
-- [ ] **1.3.2** Gate `usage` write on flag, single read site (AC10 enforced):
+- [x] **1.3.2** Gate `usage` write on flag, single read site (AC10 enforced):
   ```ts
   const usageColumn = process.env.CC_PERSIST_USAGE === "true" && opts?.usage
     ? { cost_usd: opts.usage.costUsd }
     : null;
   ```
   Exact-match `"true"` only (any other truthy string → off). Hot-path read intentional per architecture F6 (enables runtime rollback flip without restart, load-bearing for a GDPR-rollback scenario).
-- [ ] **1.3.3** Wire `usageColumn` into the INSERT at line 1072. Column name from migration 040 is `usage`.
+- [x] **1.3.3** Wire `usageColumn` into the INSERT at line 1072. Column name from migration 040 is `usage`.
 
 ### 1.4 Phase 1 checkpoint
 
-- [ ] `npx vitest run apps/web-platform/test/cc-dispatcher.test.ts` — T-W4 × 6 pass; 36 PR-A1 tests still pass.
-- [ ] `bun tsc --noEmit` clean. `bun run lint` clean on touched files.
-- [ ] Commit.
+- [x] `npx vitest run apps/web-platform/test/cc-dispatcher.test.ts` — T-W4 × 6 pass; 36 PR-A1 tests still pass. (43/43 green at commit time.)
+- [x] `bun tsc --noEmit` clean. `bun run lint` clean on touched files. (tsc clean; project-level lint deferred to CI per local-config state.)
+- [x] Commit.
 
 ## Phase 2 — W1 RED+GREEN (cross-tenant write-scope assertion + real-DB matrix)
 
@@ -213,7 +213,7 @@ Commit: `feat(cc-dispatcher): W1 cross-tenant invariants + assertWriteScope — 
 
 `apps/web-platform/server/cc-dispatcher.ts` near `saveAssistantMessage`:
 
-- [ ] **2.1.1** Extract (rev-2 simplifications: drop `payload*` params per simplicity F1, return `boolean` per architecture F7 fix, no typed error class per simplicity F2):
+- [x] **2.1.1** Extract (rev-2 simplifications: drop `payload*` params per simplicity F1, return `boolean` per architecture F7 fix, no typed error class per simplicity F2):
   ```ts
   /** Cross-tenant write-boundary guard. Returns true when safe to proceed.
    * Returns false (and mirrors P0) if the dispatch closure's userId/conversationId
@@ -230,24 +230,24 @@ Commit: `feat(cc-dispatcher): W1 cross-tenant invariants + assertWriteScope — 
   }
   ```
   When a future SDK callback exposes payload `user_id`/`conversation_id`, extend signature with those params + add the mismatch check + `mirrorP0Deduped` call inside — single edit, two-line diff.
-- [ ] **2.1.2** Call at the **top** of `saveAssistantMessage`, control-flow style (NOT throw):
+- [x] **2.1.2** Call at the **top** of `saveAssistantMessage`, control-flow style (NOT throw):
   ```ts
   if (!assertWriteScope(userId, conversationId)) return;
   ```
   Architecture F7: the throw-from-void-saveAssistantMessage shape would create unhandled rejections at call sites 1129 + 1163. Return-bool keeps the halt semantic without exception-as-control-flow.
-- [ ] **2.1.3** Inline doc-comment at the call site: `// Per CLO 7 invariants (issue #3603 W1). cc-path uses service-role for INSERT (RLS-bypass on writes). Sentinel call site for future write-boundary enforcement.`
+- [x] **2.1.3** Inline doc-comment at the call site: `// Per CLO 7 invariants (issue #3603 W1). cc-path uses service-role for INSERT (RLS-bypass on writes). Sentinel call site for future write-boundary enforcement.`
 
 ### 2.2 `mirrorP0Deduped` — bypass-debounce P0 helper
 
 `apps/web-platform/server/observability.ts`:
 
-- [ ] **2.2.1** Add exported function. Module-level state:
+- [x] **2.2.1** Add exported function. Module-level state:
   ```ts
   const P0_DEDUP_TTL_MS = 60 * 60 * 1000;  // 1 hour
   const _p0DedupMap = new Map<string, number>();
   let _p0WriteCount = 0;
   ```
-- [ ] **2.2.2** Function body (rev-2 — adds `severity` + `firstSeenAt` for Art. 33 72h-clock evidence trail per GDPR Review 2; renamed from rev-1's `mirrorP0CrossTenant` per architecture F8):
+- [x] **2.2.2** Function body (rev-2 — adds `severity` + `firstSeenAt` for Art. 33 72h-clock evidence trail per GDPR Review 2; renamed from rev-1's `mirrorP0CrossTenant` per architecture F8):
   ```ts
   export function mirrorP0Deduped(err: Error, ctx: { op: string; userId: string; conversationId: string }): void {
     const key = `${ctx.userId}:${ctx.op}:${ctx.conversationId}`;
@@ -275,7 +275,7 @@ Commit: `feat(cc-dispatcher): W1 cross-tenant invariants + assertWriteScope — 
   export function __resetP0DedupForTests(): void { _p0DedupMap.clear(); _p0WriteCount = 0; }
   ```
   Naming mirrors the existing `__resetMirrorDebounceForTests` at `observability.ts:215` (verified — not `_drain*`).
-- [ ] **2.2.3** Hook `__resetP0DedupForTests` into the test reset chain in `cc-dispatcher.test.ts:122-132`.
+- [x] **2.2.3** Hook `__resetP0DedupForTests` into the test reset chain in `cc-dispatcher.test.ts:122-132`.
 
 ### 2.3 Real-Supabase test harness — `cc-dispatcher-cross-tenant.integration.test.ts`
 
@@ -298,7 +298,7 @@ NEW file: `apps/web-platform/test/cc-dispatcher-cross-tenant.integration.test.ts
 - [ ] **2.4.6 T-W1-invariant-5 (hydration empty-DB → empty render):** pre-populate empty `messages` for A1. Call `api-messages.ts` `handleConversationMessages`. Assert empty response. SDK session content is NOT a hydration fallback (covers learning `2026-05-05-kb-chat-resume-hydration-race-strict-mode-and-prefetch-clobber.md`).
 - [ ] **2.4.7 T-W1-invariant-5b (deterministic, was hedged in rev-1):** **rev-2 dehedge per simplicity F9.** SDK session is read-only on the hydration path (verified by repo research: `api-messages.ts:76-88` SELECT is the only hydration source; no SDK session roundtrip exists). Assertion: pre-populate empty `messages` + populate an SDK session — assert hydration response is empty AND NO Sentry mirror fires (because no write-back path exists for `assertWriteScope` to catch). If a future change introduces an SDK→write roundtrip, this test will need its assertion updated to expect the mirror — that's the right shape for a future-regression test, not a hedged-conditional today.
 - [ ] **2.4.8 T-W1-invariant-6 (cascade-erasure — consumes W4 contract):** with `CC_PERSIST_USAGE=true` in this test only, pre-populate A1 with one assistant row carrying `usage = { cost_usd: 0.005 }`. DELETE the parent `conversations` row. Assert the `messages` row is gone via FK cascade (`001_initial_schema.sql:75` `on delete cascade`), including its `usage` column. No orphan messages (learning `account-deletion-cascade-order-20260402.md`).
-- [ ] **2.4.9 T-W1-invariant-7 (sentinel call-site smoke):** **rev-2 simplification.** Since `assertWriteScope` is sentinel-only at HEAD (no payload params), the original P0-mirror assertion has no live failure mode to trigger. Replaced with a sentinel test: call `saveAssistantMessage` once → assert `assertWriteScope` was invoked (spy on the helper) AND that the existing INSERT succeeded. Guards against a future refactor that removes the sentinel call site. When a future payload source is wired in, this test is extended with a mismatch scenario asserting `mirrorP0Deduped` fires.
+- [x] **2.4.9 T-W1-invariant-7 (sentinel call-site smoke):** **rev-2 simplification.** Since `assertWriteScope` is sentinel-only at HEAD (no payload params), the original P0-mirror assertion has no live failure mode to trigger. Replaced with a sentinel test: call `saveAssistantMessage` once → assert `assertWriteScope` was invoked (spy on the helper) AND that the existing INSERT succeeded. Guards against a future refactor that removes the sentinel call site. When a future payload source is wired in, this test is extended with a mismatch scenario asserting `mirrorP0Deduped` fires.
 
 ### 2.5 Phase 2 checkpoint
 

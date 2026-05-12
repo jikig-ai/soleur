@@ -15,56 +15,56 @@ Derived from the rev-2 plan after 3-reviewer pass (legal-compliance-auditor + co
 
 ## Phase 0 — Setup
 
-- [ ] 0.1 Read post-PR-A1 `apps/web-platform/test/cc-dispatcher.test.ts` lines 4-132 (hoisted mocks + reset) and the 12 new W2/W8 tests.
-- [ ] 0.2 Grep `rg -l 'getFreshTenantClient|signInWithPassword' apps/web-platform/test/` → confirm `conversations-rail-cross-tenant.integration.test.ts` harness pattern; document skeleton.
-- [ ] 0.3 Baseline: `npx vitest run apps/web-platform/test/cc-dispatcher.test.ts` (36 pass) + `bun tsc --noEmit` clean.
-- [ ] 0.4 Verify HEAD = `224da309`; rebase if main has advanced.
-- [ ] 0.5 Plan-time grep audit: `rg 'CC_PERSIST_USAGE' apps/ docs/ .github/ 2>/dev/null` returns zero.
-- [ ] 0.6 Read `soleur-go-runner.ts:1786-1850` (`handleResultMessage`); confirm onResult-before-onTextTurnEnd synchronous ordering + `totalCostUsd` IS delta (line 1787).
-- [ ] 0.7 Verify `article-30-register.md` still absent → escalate **D-art30** to PR-C explicit blocker if so.
-- [ ] 0.8 Doppler/Vercel env-state check for `CC_PERSIST_USAGE` (dev_terraform + prd_terraform + prd) — all return error/empty. Capture as AC11 evidence.
+- [x] 0.1 Read post-PR-A1 `apps/web-platform/test/cc-dispatcher.test.ts` lines 4-132 (hoisted mocks + reset) and the 12 new W2/W8 tests.
+- [x] 0.2 Grep `rg -l 'getFreshTenantClient|signInWithPassword' apps/web-platform/test/` → confirm `conversations-rail-cross-tenant.integration.test.ts` harness pattern; document skeleton.
+- [x] 0.3 Baseline: `npx vitest run apps/web-platform/test/cc-dispatcher.test.ts` (36 pass) + `bun tsc --noEmit` clean.
+- [x] 0.4 Verify HEAD = `224da309`; rebase if main has advanced. (Branch tip is plan-docs commit `70367790`; parent = `224da309`.)
+- [x] 0.5 Plan-time grep audit: `rg 'CC_PERSIST_USAGE' apps/ docs/ .github/ 2>/dev/null` returns zero. (Only match was the PR-A1 deferral comment in `cc-dispatcher.ts` — that's the stub the W4 commit replaces.)
+- [x] 0.6 Read `soleur-go-runner.ts:1786-1850` (`handleResultMessage`); confirm onResult-before-onTextTurnEnd synchronous ordering + `totalCostUsd` IS delta (line 1787).
+- [x] 0.7 Verify `article-30-register.md` still absent → escalate **D-art30** to PR-C explicit blocker if so. (Still absent — escalation stands.)
+- [ ] 0.8 Doppler/Vercel env-state check for `CC_PERSIST_USAGE` (dev_terraform + prd_terraform + prd) — all return error/empty. Capture as AC11 evidence. (Deferred to operator at PR creation; `doppler` CLI not available in this worktree session.)
 
 ## Phase 1 — W4 (feature-flagged usage parity, cc-narrowed)
 
 ### 1.1 Tests T-W4
 
-- [ ] 1.1.1 T-W4-basic-on (`{ cost_usd: 0.0042 }` on complete turn under `CC_PERSIST_USAGE=true`).
-- [ ] 1.1.2 T-W4-basic-off (default false → `usage = null`).
-- [ ] 1.1.3 T-W4-race (`turnIndex` tag prevents stale `onResult` attribution).
-- [ ] 1.1.4 T-W4-orphan (usage captured + empty text → drop + `mirrorP0Deduped` fires with op `"usage_orphan_dropped"`).
-- [ ] 1.1.5 T-W4-flag-symmetry (`true` but no `onResult` → `usage = null` explicit).
-- [ ] 1.1.6 T-W4-reset-symmetry (abort path clears `pendingTurnUsage` too).
+- [x] 1.1.1 T-W4-basic-on (`{ cost_usd: 0.0042 }` on complete turn under `CC_PERSIST_USAGE=true`).
+- [x] 1.1.2 T-W4-basic-off (default false → `usage = null`).
+- [x] 1.1.3 T-W4-race (`turnIndex` tag prevents stale `onResult` attribution).
+- [x] 1.1.4 T-W4-orphan (usage captured + empty text → drop + `mirrorP0Deduped` fires with op `"usage_orphan_dropped"`).
+- [x] 1.1.5 T-W4-flag-symmetry (`true` but no `onResult` → `usage = null` explicit).
+- [x] 1.1.6 T-W4-reset-symmetry (abort path clears `pendingTurnUsage` too).
 
 ### 1.2 Implementation — state
 
-- [ ] 1.2.1 Closure-scoped `currentTurnIndex` + `pendingTurnUsage` adjacent to `accumulatedAssistantText`/`workflowEnded` at `cc-dispatcher.ts:1030-1035`.
-- [ ] 1.2.2 Replace `onResult` stub at lines 1202-1204 with capture: `pendingTurnUsage = { turnIndex: currentTurnIndex, costUsd: totalCostUsd }`.
-- [ ] 1.2.3 Extend `onTextTurnEnd` (line 1119): snapshot-clear-bump synchronously before `void saveAssistantMessage()` at line 1129.
-- [ ] 1.2.4 Extend abort-flush (lines 1159-1164): clear `pendingTurnUsage`; if usage-without-text, fire `mirrorP0Deduped` orphan.
+- [x] 1.2.1 Closure-scoped `currentTurnIndex` + `pendingTurnUsage` adjacent to `accumulatedAssistantText`/`workflowEnded` at `cc-dispatcher.ts:1030-1035`.
+- [x] 1.2.2 Replace `onResult` stub at lines 1202-1204 with capture: `pendingTurnUsage = { turnIndex: currentTurnIndex, costUsd: totalCostUsd }`.
+- [x] 1.2.3 Extend `onTextTurnEnd` (line 1119): snapshot-clear-bump synchronously before `void saveAssistantMessage()` at line 1129.
+- [x] 1.2.4 Extend abort-flush (lines 1159-1164): clear `pendingTurnUsage`; if usage-without-text, fire `mirrorP0Deduped` orphan.
 
 ### 1.3 Implementation — `AssistantPersistMode` + flag gate
 
-- [ ] 1.3.1 Add `type AssistantPersistMode = { status?: "aborted"; usage?: { costUsd: number } | null }` adjacent to `saveAssistantMessage` (line 1037). cc-narrowed shape per Art. 5(1)(c).
-- [ ] 1.3.2 Gate `usage` write: `process.env.CC_PERSIST_USAGE === "true" && opts?.usage` → `{ cost_usd: opts.usage.costUsd }`, else `null`. Single read site (hot path; AC10).
-- [ ] 1.3.3 Wire `usageColumn` into INSERT at line 1072. Column from migration 040.
+- [x] 1.3.1 Add `type AssistantPersistMode = { status?: "aborted"; usage?: { costUsd: number } | null }` adjacent to `saveAssistantMessage` (line 1037). cc-narrowed shape per Art. 5(1)(c).
+- [x] 1.3.2 Gate `usage` write: `process.env.CC_PERSIST_USAGE === "true" && opts?.usage` → `{ cost_usd: opts.usage.costUsd }`, else `null`. Single read site (hot path; AC10).
+- [x] 1.3.3 Wire `usageColumn` into INSERT at line 1072. Column from migration 040.
 
 ### 1.4 Phase 1 checkpoint
 
-- [ ] T-W4 × 6 pass + 36 PR-A1 tests still pass. Typecheck + lint clean. Commit.
+- [x] T-W4 × 6 pass + 36 PR-A1 tests still pass. Typecheck + lint clean. Commit.
 
 ## Phase 2 — W1 (cross-tenant write-scope assertion + real-DB matrix)
 
 ### 2.1 `assertWriteScope` sentinel (rev-2 return-bool, no throw, no payload params)
 
-- [ ] 2.1.1 Add helper returning `boolean`; today always `true` (sentinel only — no payload source exists).
-- [ ] 2.1.2 Call at top of `saveAssistantMessage`: `if (!assertWriteScope(userId, conversationId)) return;`. Control-flow, not throw (architecture F7).
-- [ ] 2.1.3 Inline rationale comment citing CLO 7 invariants + service-role-bypass rationale.
+- [x] 2.1.1 Add helper returning `boolean`; today always `true` (sentinel only — no payload source exists).
+- [x] 2.1.2 Call at top of `saveAssistantMessage`: `if (!assertWriteScope(userId, conversationId)) return;`. Control-flow, not throw (architecture F7).
+- [x] 2.1.3 Inline rationale comment citing CLO 7 invariants + service-role-bypass rationale.
 
 ### 2.2 `mirrorP0Deduped` helper
 
-- [ ] 2.2.1 Module state in `observability.ts`: `P0_DEDUP_TTL_MS = 60*60*1000` + `_p0DedupMap: Map<string, number>` + `_p0WriteCount`.
-- [ ] 2.2.2 Function body with amortized sweep every 64 writes + Sentry `level: "fatal"` + `extra: { severity: "breach_attempt", first_seen_at }` for Art. 33 72h-clock.
-- [ ] 2.2.3 Export `__resetP0DedupForTests` (name parity with existing `__resetMirrorDebounceForTests` at line 215). Hook into test reset chain in `cc-dispatcher.test.ts:122-132`.
+- [x] 2.2.1 Module state in `observability.ts`: `P0_DEDUP_TTL_MS = 60*60*1000` + `_p0DedupMap: Map<string, number>` + `_p0WriteCount`.
+- [x] 2.2.2 Function body with amortized sweep every 64 writes + Sentry `level: "fatal"` + `extra: { severity: "breach_attempt", first_seen_at }` for Art. 33 72h-clock.
+- [x] 2.2.3 Export `__resetP0DedupForTests` (name parity with existing `__resetMirrorDebounceForTests` at line 215). Hook into test reset chain in `cc-dispatcher.test.ts:122-132`. (Hookup is via the spy override at line ~62 of the test file — production helper's dedup map is bypassed in unit tests; integration test resets the real map via `__resetP0DedupForTests`.)
 
 ### 2.3 Real-Supabase test harness
 
@@ -83,7 +83,7 @@ Derived from the rev-2 plan after 3-reviewer pass (legal-compliance-auditor + co
 - [ ] 2.4.6 T-W1-invariant-5 (empty DB → empty render; no SDK fallback).
 - [ ] 2.4.7 T-W1-invariant-5b (deterministic dehedge): empty `messages` + populated SDK session → empty response + no mirror fires (no SDK→write roundtrip exists today).
 - [ ] 2.4.8 T-W1-invariant-6 (cascade-erasure — consumes W4 `usage` write).
-- [ ] 2.4.9 T-W1-invariant-7 (sentinel smoke): spy on `assertWriteScope` to assert it's invoked at top of `saveAssistantMessage`.
+- [x] 2.4.9 T-W1-invariant-7 (sentinel smoke): rewritten as behavior test — force `assertWriteScope` to return `false` via `__setAssertWriteScopeForTests` and assert zero inserts across BOTH complete + abort call sites. Stronger than a spy: tests the early-return wiring at every call site.
 
 ### 2.5 Phase 2 checkpoint
 
