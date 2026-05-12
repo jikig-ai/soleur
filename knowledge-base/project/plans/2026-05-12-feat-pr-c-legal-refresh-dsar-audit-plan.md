@@ -35,6 +35,8 @@ PR-C does not ship code. It updates controller-side data-processing disclosures 
 
 **Brand-survival threshold:** `single-user incident`. One CNIL referral citing the §4.7 / Article 30 register gap against `usage` collection is sufficient. CPO sign-off required at plan-time (`requires_cpo_signoff: true`); `user-impact-reviewer` enumerates failure modes at review-time.
 
+**Residual post-merge exposure (deferred to follow-up #3666):** the plugin-mirror legal docs at soleur.ai trail the canonical at app.soleur.ai on several non-cc-soleur-go processing activities (KB sharing, push notifications, Resend transactional email, OAuth provider row in GDPR §4.2). A user reading only the plugin-mirror docs may miss disclosures for activities that reach them. PR-C does not absorb this cross-surface asymmetry; AC13 follow-up consolidates the forward-port. Surfaced post-merge by review-time `user-impact-reviewer` (PR #3662 review).
+
 ## Research Reconciliation — Spec vs. Codebase
 
 Three verified divergences between the brainstorm-handoff framing and codebase / external-service reality.
