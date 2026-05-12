@@ -7,11 +7,12 @@ description: "This skill should be used when triaging or closing open entries in
 
 Operator-facing surface for the `knowledge-base/project/learnings/technical-debt/` ledger. The ledger is populated reactively by `/soleur:compound`; this skill is the read + close half of the loop.
 
-Three modes:
+Four modes:
 
-- **`--list`** — print a deterministic markdown table of open entries (severity desc, then date asc). Stdout only, no prompts. Suitable for piping into other skills or `/loop`.
+- **`--list`** — print a deterministic markdown table of open entries (severity desc, then date asc). Stdout only, no prompts. Pair with `--json` for agent / `/loop` composition.
+- **`--close N --status S [--linked-issue N]`** — non-interactive close. Bypasses prompts. Reuses the same validation surface as interactive mode (status enum, linked-issue range, fixture-path refusal, `gh issue view`, atomic mutation, body MD5 check). Index `N` follows the `--list` ordering.
 - **interactive (default)** — list, prompt for entry selection, prompt for new status + `linked_issue`, mutate the entry's frontmatter atomically, print the diff. Does NOT auto-commit; the operator commits on whatever branch they are on.
-- **`--no-verify`** — same as interactive but skip the `gh issue view <N>` round-trip. Use offline or when `gh` is unavailable.
+- **`--no-verify`** — modifier on interactive / `--close`: skip the `gh issue view <N>` round-trip. Use offline or when `gh` is unavailable.
 
 The skill never calls `git commit` or `git push`. Recovery from a wrong close is `git checkout -- <file>` (pre-commit) or `git revert` (post-commit).
 
@@ -23,7 +24,7 @@ The skill never calls `git commit` or `git push`. Recovery from a wrong close is
 python3 plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py --list
 ```
 
-Walks `knowledge-base/project/learnings/technical-debt/` (skips `archive/`). For each `.md` file, parses frontmatter via the `parse_frontmatter` helper loaded from the repo-root `scripts/` directory (file: `backfill-frontmatter.py`). Files with parse failures emit a stderr warning naming the file and are skipped — `--list` does not crash on malformed frontmatter.
+Walks `knowledge-base/project/learnings/technical-debt/` (skips `archive/`). For each `.md` file, parses frontmatter via the `parse_frontmatter` helper from the repo-root `scripts/` directory (file: `frontmatter_lib.py`). Files with parse failures emit a stderr warning naming the file and are skipped — `--list` does not crash on malformed frontmatter.
 
 Filters to `status == open`. Sorts by `severity` desc (`high > medium > low > unset`), then `date` asc (oldest first).
 
@@ -64,7 +65,7 @@ See [knowledge-base/project/learnings/technical-debt/README.md](../../../../know
 
 ## Sharp Edges
 
-- **The frontmatter mutation goes through the `parse_frontmatter` helper in the repo-root `scripts/` directory** (file: `backfill-frontmatter.py`), loaded via `importlib.util.spec_from_file_location` because the source filename uses a hyphen and is not a valid Python identifier. Do not re-implement YAML mutation in shell — `sed` range patterns match all `---` blocks and ledger bodies may contain horizontal-rule `---`.
+- **Frontmatter parsing goes through the shared `parse_frontmatter` helper in the repo-root `scripts/` directory** (file: `frontmatter_lib.py`), imported via `sys.path.insert`. The `backfill-frontmatter.py` one-shot migration in the same directory imports the same module — single source of truth. Do not re-implement YAML mutation in shell — `sed` range patterns match all `---` blocks and ledger bodies may contain horizontal-rule `---`.
 - **No auto-commit by design.** The skill prints the diff and stops. Ledger commits land on whatever branch the operator is on; auto-commit would risk wrong-branch writes.
 - **Archive is frozen.** The walker skips `knowledge-base/project/learnings/technical-debt/archive/`. Closed-out historical entries live there and are not re-surfaced.
 - **`gh issue view` failure is a hard stop.** No silent fallback to skip validation. The error message names the failure mode and points at `--no-verify` for the operator to opt in explicitly.
@@ -75,5 +76,4 @@ See [knowledge-base/project/learnings/technical-debt/README.md](../../../../know
 - `--undo-close` flag — recovery is `git checkout -- <file>` (pre-commit) or `git revert` (post-commit).
 - Bulk-resolve.
 - Severity filter (`--severity high`).
-- JSON output for agent consumption.
 - Scheduled scanner / re-surfacing of stale open entries — deferred to issue #3650 (Spec B).

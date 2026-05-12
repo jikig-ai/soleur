@@ -6,7 +6,7 @@ The ledger is populated **reactively** by [/soleur:compound](../../../../plugins
 
 ## Frontmatter Contract
 
-Every entry MUST have a `status` field. Other fields vary by schema (see below).
+Every entry MUST have a `status` field. Other fields vary by schema (see below). This contract is intentionally narrow: it documents only the fields that `/soleur:resolve-debt` reads or mutates, plus the canonical fields shared across all ledger entries. Extra fields emitted by `/soleur:compound`'s generic learning template (`symptoms`, `root_cause`, `resolution_type`, `rails_version`, etc.) are accepted but unused by `resolve-debt`; they are documented in compound's own schema, not here.
 
 | Field | Required when | Optional when | Forbidden when |
 |-------|---------------|---------------|----------------|

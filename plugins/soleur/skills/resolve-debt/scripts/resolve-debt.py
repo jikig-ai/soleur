@@ -8,20 +8,20 @@ Modes:
   --help                 Print usage and exit.
   (default)              Interactive close flow.
 
-Frontmatter mutation goes through `parse_frontmatter` from the repo-root
-scripts/ directory (file: backfill-frontmatter.py), loaded via
-importlib.util.spec_from_file_location because the source filename uses a
-hyphen and is not a valid Python identifier. List parsing uses the helper.
+Frontmatter parsing uses `scripts/frontmatter_lib.py` from the repo root
+(shared helper module — also consumed by `scripts/backfill-frontmatter.py`).
 Close mutation does surgical line-level edits to preserve key order.
 """
 
 import argparse
-import importlib.util
+import hashlib
+import json
 import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any, Callable
 
 LEDGER_DEFAULT = "knowledge-base/project/learnings/technical-debt"
 SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
@@ -29,29 +29,38 @@ LINKED_ISSUE_MIN = 1
 LINKED_ISSUE_MAX = 9_999_999
 GH_TIMEOUT_SECONDS = 5
 MAX_PROMPT_ATTEMPTS = 3
+VALID_STATUSES = ("open", "resolved", "wont-fix")
+CLOSE_STATUSES = ("resolved", "wont-fix")
 
 
 def repo_root() -> Path:
-    """Find the repo root by walking up to a .git/AGENTS.md anchor."""
+    """Find the repo root by walking up to an AGENTS.md + plugins/ anchor."""
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / "AGENTS.md").exists() and (parent / "plugins").is_dir():
             return parent
-    return Path.cwd()
+    sys.exit(
+        "ERROR: cannot locate repo root (AGENTS.md + plugins/ anchor missing). "
+        "resolve-debt must run from inside a Soleur checkout."
+    )
 
 
-def load_frontmatter_helpers():
-    """Load parse_frontmatter from scripts/backfill-frontmatter.py via importlib."""
-    src = repo_root() / "scripts" / "backfill-frontmatter.py"
-    if not src.exists():
-        sys.exit(f"ERROR: required helper not found: {src}")
-    spec = importlib.util.spec_from_file_location("_bff", src)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.parse_frontmatter
+def load_frontmatter_helpers() -> Callable[[str], tuple]:
+    """Load parse_frontmatter from scripts/frontmatter_lib.py via sys.path."""
+    scripts_dir = repo_root() / "scripts"
+    lib = scripts_dir / "frontmatter_lib.py"
+    if not lib.exists():
+        sys.exit(f"ERROR: required helper not found: {lib}")
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from frontmatter_lib import parse_frontmatter  # noqa: E402
+
+    return parse_frontmatter
 
 
-def list_open_entries(ledger: Path, parse_frontmatter):
+def list_open_entries(
+    ledger: Path, parse_frontmatter: Callable[[str], tuple]
+) -> list[tuple[Path, dict]]:
     """Walk ledger, parse each *.md, return list of (path, fm) for status==open.
 
     Sorted by severity desc (high>medium>low>unset), then date asc.
@@ -85,7 +94,7 @@ def list_open_entries(ledger: Path, parse_frontmatter):
     return entries
 
 
-def render_table(entries) -> str:
+def render_table(entries: list[tuple[Path, dict]]) -> str:
     """Render entries as a markdown table (idx, file, date, severity, comp/cat, title)."""
     if not entries:
         return "No open debt entries."
@@ -103,7 +112,12 @@ def render_table(entries) -> str:
     return "\n".join(rows)
 
 
-def prompt_with_retry(prompt: str, validate, *, attempts: int = MAX_PROMPT_ATTEMPTS):
+def prompt_with_retry(
+    prompt: str,
+    validate: Callable[[str], tuple[bool, Any]],
+    *,
+    attempts: int = MAX_PROMPT_ATTEMPTS,
+) -> Any:
     """Prompt until validate returns (True, value) or attempts exhausted.
 
     validate(raw_input) -> (ok: bool, value_or_msg).
@@ -118,11 +132,11 @@ def prompt_with_retry(prompt: str, validate, *, attempts: int = MAX_PROMPT_ATTEM
         if ok:
             return val_or_msg
         print(f"  invalid: {val_or_msg}", file=sys.stderr)
-    print(f"  too many invalid attempts; aborting.", file=sys.stderr)
+    print("  too many invalid attempts; aborting.", file=sys.stderr)
     sys.exit(2)
 
 
-def validate_selection(raw: str, n: int):
+def validate_selection(raw: str, n: int) -> tuple[bool, Any]:
     raw = raw.strip()
     if raw.lower() == "q":
         return True, "quit"
@@ -135,14 +149,14 @@ def validate_selection(raw: str, n: int):
     return True, idx
 
 
-def validate_status(raw: str):
+def validate_status(raw: str) -> tuple[bool, Any]:
     raw = raw.strip().lower()
-    if raw in ("resolved", "wont-fix"):
+    if raw in CLOSE_STATUSES:
         return True, raw
     return False, f"'{raw}' is not 'resolved' or 'wont-fix'"
 
 
-def validate_linked_issue(raw: str, *, required: bool):
+def validate_linked_issue(raw: str, *, required: bool) -> tuple[bool, Any]:
     raw = raw.strip()
     if not raw:
         if required:
@@ -190,7 +204,7 @@ def verify_issue_via_gh(issue_n: int) -> None:
         sys.exit(1)
 
 
-def find_frontmatter_block(lines):
+def find_frontmatter_block(lines: list[str]) -> tuple[int, int] | None:
     """Return (start, end) line indices of `---` boundaries, or None."""
     if not lines or lines[0].strip() != "---":
         return None
@@ -200,11 +214,19 @@ def find_frontmatter_block(lines):
     return None
 
 
-def mutate_entry(fp: Path, new_status: str, linked_issue):
+def mutate_entry(fp: Path, new_status: str, linked_issue: int | None) -> None:
     """Rewrite the entry's frontmatter: replace status:, optionally insert linked_issue:.
 
-    Atomic via tempfile + os.replace. Returns nothing; raises on structural failure.
+    Atomic via tempfile + os.replace. Asserts body MD5 unchanged (defense
+    against CRLF/EOL drift and accidental body mutation). Raises on
+    structural failure or prior-status-not-in-enum.
     """
+    if new_status == "open" and linked_issue is not None:
+        sys.exit(
+            "ERROR: linked_issue is forbidden when status=open "
+            "(see knowledge-base/project/learnings/technical-debt/README.md)."
+        )
+
     text = fp.read_text()
     lines = text.split("\n")
     bounds = find_frontmatter_block(lines)
@@ -212,18 +234,33 @@ def mutate_entry(fp: Path, new_status: str, linked_issue):
         sys.exit(f"ERROR: cannot locate frontmatter block in {fp.name}")
     start, end = bounds
 
+    # Capture body hash BEFORE mutation. Mutations are line-level inside the
+    # frontmatter block; the body (lines after the closing `---`) must round-
+    # trip byte-for-byte.
+    body_before = "\n".join(lines[end + 1 :])
+    body_hash_before = hashlib.md5(body_before.encode()).hexdigest()
+
     new_lines = list(lines)
     status_idx = None
     linked_idx = None
+    prior_status_value = None
     for i in range(start + 1, end):
         stripped = new_lines[i].lstrip()
         if stripped.startswith("status:"):
             status_idx = i
+            prior_status_value = stripped.split(":", 1)[1].strip()
         elif stripped.startswith("linked_issue:"):
             linked_idx = i
 
     if status_idx is None:
         sys.exit(f"ERROR: no status: line in {fp.name} (Phase 1 backfill skipped?)")
+
+    if prior_status_value not in VALID_STATUSES:
+        sys.exit(
+            f"ERROR: {fp.name} has out-of-enum prior status "
+            f"'{prior_status_value}' (expected one of {VALID_STATUSES}). "
+            "Inspect manually before mutating."
+        )
 
     new_lines[status_idx] = f"status: {new_status}"
 
@@ -238,6 +275,22 @@ def mutate_entry(fp: Path, new_status: str, linked_issue):
         pass
 
     new_text = "\n".join(new_lines)
+
+    # Re-locate frontmatter boundary in the mutated lines so we can verify
+    # body integrity by hash. If insertion shifted the closing ---, end+1
+    # → end+2 in new_lines.
+    new_bounds = find_frontmatter_block(new_lines)
+    if new_bounds is None:
+        sys.exit(f"ERROR: post-mutation frontmatter block missing in {fp.name}")
+    _, new_end = new_bounds
+    body_after = "\n".join(new_lines[new_end + 1 :])
+    body_hash_after = hashlib.md5(body_after.encode()).hexdigest()
+    if body_hash_before != body_hash_after:
+        sys.exit(
+            f"ERROR: body hash drift on {fp.name} "
+            f"(before={body_hash_before}, after={body_hash_after}). "
+            "Mutation aborted; no file written."
+        )
 
     # Atomic write: tempfile in same dir, then os.replace.
     fd, tmp_path = tempfile.mkstemp(
@@ -255,24 +308,138 @@ def mutate_entry(fp: Path, new_status: str, linked_issue):
         raise
 
 
-def print_diff(fp: Path):
-    """Print `git diff -- <fp>` to stdout. Best-effort: silent on git failure."""
+def print_diff(fp: Path) -> None:
+    """Print `git diff -- <fp>` to stdout. Warn loudly on git failure.
+
+    Silent on FileNotFoundError (git missing) since the script's contract
+    is "mutate atomically + print diff for review"; if git is unreachable
+    the operator can run `diff` themselves, but we must SAY SO rather than
+    leave the call site believing the diff was rendered.
+    """
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["git", "diff", "--", str(fp)],
             check=False,
         )
     except FileNotFoundError:
-        pass
+        print(
+            f"WARN: git not on PATH. Mutation succeeded; inspect {fp} manually.",
+            file=sys.stderr,
+        )
+        return
+    if result.returncode != 0:
+        print(
+            f"WARN: git diff failed (rc={result.returncode}). "
+            f"Mutation succeeded; inspect {fp} manually.",
+            file=sys.stderr,
+        )
 
 
-def cmd_list(ledger: Path, parse_frontmatter) -> int:
+def render_json(entries: list[tuple[Path, dict]]) -> str:
+    """Render entries as a JSON array (for agent/loop consumption).
+
+    PyYAML returns `datetime.date` for ISO dates; coerce all values to
+    JSON-safe primitives so the default encoder doesn't raise.
+    """
+    def _safe(v: Any) -> Any:
+        if v is None or isinstance(v, (str, int, float, bool, list, dict)):
+            return v
+        return str(v)
+
+    rows = []
+    for i, (fp, fm) in enumerate(entries, start=1):
+        rows.append(
+            {
+                "idx": i,
+                "file": fp.name,
+                "date": _safe(fm.get("date")),
+                "severity": _safe(fm.get("severity")),
+                "component_or_category": _safe(fm.get("component") or fm.get("category")),
+                "title": _safe(fm.get("title") or fp.stem),
+                "status": _safe(fm.get("status")),
+            }
+        )
+    return json.dumps(rows, indent=2)
+
+
+def cmd_list(
+    ledger: Path, parse_frontmatter: Callable[[str], tuple], *, as_json: bool
+) -> int:
     entries = list_open_entries(ledger, parse_frontmatter)
-    print(render_table(entries))
+    if as_json:
+        print(render_json(entries))
+    else:
+        print(render_table(entries))
     return 0
 
 
-def cmd_interactive(ledger: Path, parse_frontmatter, *, verify: bool) -> int:
+def cmd_close_noninteractive(
+    ledger: Path,
+    parse_frontmatter: Callable[[str], tuple],
+    *,
+    close_idx: int,
+    new_status: str,
+    linked_issue: int | None,
+    verify: bool,
+    allow_fixture: bool,
+) -> int:
+    """Close a single entry without prompts. For /loop and agent composition.
+
+    Reuses the same validation surface as interactive mode (status enum,
+    linked_issue range, fixture-path refusal, gh verify, atomic mutation,
+    body MD5). Re-resolves the entry index against the current sorted
+    --list ordering so external `--list --json` → `--close N` pipelines
+    are coherent.
+    """
+    ledger_str = str(ledger.resolve())
+    if "/test/fixtures/" in ledger_str and not allow_fixture:
+        sys.exit(
+            f"ERROR: refusing to mutate fixtures under {ledger_str}. "
+            "Pass --allow-fixture to override (test smoke-runs only)."
+        )
+    if new_status not in CLOSE_STATUSES:
+        sys.exit(
+            f"ERROR: --status must be one of {CLOSE_STATUSES}; got '{new_status}'."
+        )
+    if new_status == "resolved" and linked_issue is None:
+        sys.exit("ERROR: --linked-issue is required when --status=resolved.")
+    entries = list_open_entries(ledger, parse_frontmatter)
+    if not entries:
+        sys.exit("ERROR: no open entries to close.")
+    if not (1 <= close_idx <= len(entries)):
+        sys.exit(
+            f"ERROR: --close index {close_idx} out of range 1..{len(entries)}."
+        )
+    fp, _fm = entries[close_idx - 1]
+    if verify and linked_issue is not None:
+        verify_issue_via_gh(linked_issue)
+    mutate_entry(fp, new_status, linked_issue)
+    print_diff(fp)
+    print(
+        f"Diff above. Review and commit when ready. To undo: git checkout -- {fp}. "
+        "No auto-commit by design.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_interactive(
+    ledger: Path,
+    parse_frontmatter: Callable[[str], tuple],
+    *,
+    verify: bool,
+    allow_fixture: bool,
+) -> int:
+    # Refuse to mutate fixtures by default — the interactive flow rewrites
+    # files in place, and an operator running smoke tests against fixture
+    # paths under plugins/**/test/fixtures/** would otherwise create a
+    # mutated-fixture commit risk (see #3645 review F6).
+    ledger_str = str(ledger.resolve())
+    if "/test/fixtures/" in ledger_str and not allow_fixture:
+        sys.exit(
+            f"ERROR: refusing to mutate fixtures under {ledger_str}. "
+            "Pass --allow-fixture to override (test smoke-runs only)."
+        )
     entries = list_open_entries(ledger, parse_frontmatter)
     if not entries:
         print("No open debt entries.")
@@ -324,8 +491,11 @@ def main() -> int:
         epilog=(
             "Modes:\n"
             "  --list                 Print open entries as a markdown table.\n"
+            "  --list --json          Print open entries as JSON (for agents).\n"
+            "  --close N --status S [--linked-issue N]   Non-interactive close.\n"
             "  --no-verify            Skip `gh issue view` when closing.\n"
             "  --ledger <path>        Override ledger root (testing).\n"
+            "  --allow-fixture        Permit mutation under test/fixtures/.\n"
             "  (no flags)             Interactive close flow.\n"
             "\n"
             "The skill never auto-commits. After mutation, it prints the diff\n"
@@ -334,11 +504,40 @@ def main() -> int:
         ),
     )
     parser.add_argument("--list", action="store_true", help="list open entries; no prompts")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="with --list, emit JSON instead of markdown (for agents / /loop)",
+    )
     parser.add_argument("--no-verify", action="store_true", help="skip `gh issue view` validation")
     parser.add_argument(
         "--ledger",
         default=None,
         help=f"ledger directory (default: {LEDGER_DEFAULT})",
+    )
+    parser.add_argument(
+        "--allow-fixture",
+        action="store_true",
+        help="allow mutation against test/fixtures/ paths (smoke-runs only)",
+    )
+    parser.add_argument(
+        "--close",
+        type=int,
+        default=None,
+        metavar="IDX",
+        help="non-interactive close: target the IDX-th open entry (1-based, same order as --list)",
+    )
+    parser.add_argument(
+        "--status",
+        default=None,
+        choices=list(CLOSE_STATUSES),
+        help="with --close: new status (resolved|wont-fix)",
+    )
+    parser.add_argument(
+        "--linked-issue",
+        type=int,
+        default=None,
+        help="with --close: linked GitHub issue number (required for resolved)",
     )
     args = parser.parse_args()
 
@@ -346,8 +545,29 @@ def main() -> int:
     ledger = Path(args.ledger) if args.ledger else (repo_root() / LEDGER_DEFAULT)
 
     if args.list:
-        return cmd_list(ledger, parse_frontmatter)
-    return cmd_interactive(ledger, parse_frontmatter, verify=not args.no_verify)
+        return cmd_list(ledger, parse_frontmatter, as_json=args.json)
+    if args.close is not None:
+        if args.status is None:
+            sys.exit("ERROR: --status is required with --close.")
+        if args.linked_issue is not None:
+            ok, msg = validate_linked_issue(str(args.linked_issue), required=False)
+            if not ok:
+                sys.exit(f"ERROR: --linked-issue invalid: {msg}")
+        return cmd_close_noninteractive(
+            ledger,
+            parse_frontmatter,
+            close_idx=args.close,
+            new_status=args.status,
+            linked_issue=args.linked_issue,
+            verify=not args.no_verify,
+            allow_fixture=args.allow_fixture,
+        )
+    return cmd_interactive(
+        ledger,
+        parse_frontmatter,
+        verify=not args.no_verify,
+        allow_fixture=args.allow_fixture,
+    )
 
 
 if __name__ == "__main__":
