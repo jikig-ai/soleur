@@ -49,7 +49,22 @@ Check if `knowledge-base/` directory exists. If it does:
 2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
 3. Detect feature from current branch (`feat-<name>` pattern)
 4. Read `knowledge-base/project/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
-5. Announce: "Loaded constitution and tasks for `feat-<name>`"
+4.5. Read `lane:` from spec.md if present. Guard file existence first:
+
+   ```bash
+   spec_path="knowledge-base/project/specs/feat-${branch_name}/spec.md"
+   if [[ -f "$spec_path" ]]; then
+     LANE=$(awk '/^lane:/ { gsub(/^lane:[[:space:]]*"?|"?$/, ""); print; exit }' "$spec_path")
+     case "$LANE" in
+       single-domain|cross-domain|procedural) ;;
+       "") LANE="" ;;  # legacy spec; silent skip in announce
+       *) echo "work: invalid lane value '$LANE' in spec; ignoring."; LANE="" ;;
+     esac
+   fi
+   ```
+
+   Lane is **non-binding in skill logic** — `work` code does not branch on `LANE`. Operators MAY use the announced lane as a heuristic when picking work Tier 0/A/B/C in Phase 2; binding behavior is deferred per Non-Goal #2.
+5. Announce: `"Loaded constitution and tasks for \`feat-<name>\`"` — append `" (lane=<value>)"` when `LANE` is non-empty.
 
 **If knowledge-base/ does NOT exist:**
 
