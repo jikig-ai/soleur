@@ -14,6 +14,7 @@ import { describe, it, expect } from "vitest";
 import {
   assertReadScope,
   CrossTenantViolation,
+  dsarStringify,
 } from "../server/dsar-export";
 
 describe("CrossTenantViolation", () => {
@@ -100,5 +101,74 @@ describe("assertReadScope", () => {
         ownerField: "user_id",
       }),
     ).toThrow(CrossTenantViolation);
+  });
+});
+
+// Phase 5: deterministic serialization conventions per AC23.
+//
+// Why this is a golden fixture: the manifest's stability under SHA-256
+// is part of the audit story (AC2 — every per-table file's sha256 in
+// manifest must reproduce on re-read). Sorted-keys + ISO 8601 + base64
+// for bytea + JSON null for SQL NULL are the four invariants that make
+// the bundle byte-stable across re-runs of the same data.
+
+describe("dsarStringify (AC23 serialization conventions)", () => {
+  it("sorts object keys alphabetically for deterministic SHA-256", () => {
+    const out1 = dsarStringify({ b: 1, a: 2, c: 3 });
+    const out2 = dsarStringify({ c: 3, a: 2, b: 1 });
+    expect(out1).toBe(out2);
+    expect(out1.indexOf('"a"')).toBeLessThan(out1.indexOf('"b"'));
+    expect(out1.indexOf('"b"')).toBeLessThan(out1.indexOf('"c"'));
+  });
+
+  it("encodes Date values as ISO 8601 with UTC offset (Z)", () => {
+    const out = dsarStringify({ at: new Date("2026-05-12T10:30:00.000Z") });
+    expect(out).toContain('"2026-05-12T10:30:00.000Z"');
+  });
+
+  it("encodes Buffer (Postgres bytea) as base64 string", () => {
+    const out = dsarStringify({ ciphertext: Buffer.from("hello", "utf-8") });
+    // "hello" base64 = "aGVsbG8="
+    expect(out).toContain('"aGVsbG8="');
+  });
+
+  it("encodes Uint8Array as base64 string (bytea via non-Buffer path)", () => {
+    const bytes = new Uint8Array([104, 105]); // "hi"
+    const out = dsarStringify({ ciphertext: bytes });
+    expect(out).toContain('"aGk="');
+  });
+
+  it("encodes null and undefined as JSON null (SQL NULL convention)", () => {
+    const out = dsarStringify({ a: null, b: undefined });
+    expect(out).toContain('"a": null');
+    expect(out).toContain('"b": null');
+  });
+
+  it("recursively normalizes nested objects + arrays of mixed types", () => {
+    const out = dsarStringify({
+      rows: [
+        { c: 1, a: new Date("2026-01-01T00:00:00.000Z"), b: null },
+      ],
+    });
+    // Inside the array, the row's keys must also be sorted.
+    const aIdx = out.indexOf('"a"');
+    const bIdx = out.indexOf('"b"');
+    const cIdx = out.indexOf('"c"');
+    expect(aIdx).toBeLessThan(bIdx);
+    expect(bIdx).toBeLessThan(cIdx);
+    expect(out).toContain('"2026-01-01T00:00:00.000Z"');
+  });
+
+  it("produces byte-identical output across calls (SHA-256 stability)", () => {
+    const fixture = {
+      table: "conversations",
+      rows: [
+        { id: "11111111-1111-1111-1111-111111111111", user_id: "u-1", title: "t" },
+        { id: "22222222-2222-2222-2222-222222222222", user_id: "u-1", title: null },
+      ],
+    };
+    const a = dsarStringify(fixture);
+    const b = dsarStringify(fixture);
+    expect(a).toBe(b);
   });
 });

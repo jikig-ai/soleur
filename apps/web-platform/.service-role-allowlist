@@ -75,3 +75,15 @@ apps/web-platform/server/account-delete.ts
 apps/web-platform/server/cc-dispatcher.ts
 apps/web-platform/server/concurrency.ts
 apps/web-platform/server/notifications.ts
+
+# DSAR Art. 15 + Art. 20 self-serve export worker (#3637, plan rev-2).
+# Service-role is load-bearing per Q-credential / R-extra1 / C1: an
+# in-process worker that authenticates as the data subject would
+# require either storing per-user JWT-at-rest (credential-vault risk
+# class) or minting per-user session JWTs at runtime (no Supabase
+# admin primitive demonstrated for that). C1 alternative: service-role
+# + mandatory per-row `WHERE owner_id = $1` (file-parse lint AC30 in
+# `dsar-worker-per-row-where.test.ts`) + `assertReadScope` runtime
+# invariant on every result set (AC12) + cross-tenant golden fixture
+# integration test (AC15). Two-layer defense.
+apps/web-platform/server/dsar-export.ts
