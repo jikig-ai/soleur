@@ -934,6 +934,10 @@ describe("cc-dispatcher singletons + orchestration", () => {
   type AssistantPersistenceEvents = {
     onText: (text: string) => void;
     onTextTurnEnd?: () => void;
+    // #3603 W2 — flush partial assistant text on non-completed workflow end.
+    // Loosely typed to avoid pulling the full WorkflowEnd union into the
+    // narrow test contract; tests pass minimally-shaped status payloads.
+    onWorkflowEnded?: (end: { status: string } & Record<string, unknown>) => void;
   };
 
   function makeAssistantPersistenceStubRunner(args: {
@@ -981,8 +985,10 @@ describe("cc-dispatcher singletons + orchestration", () => {
     __setCcRunnerForTests(
       makeAssistantPersistenceStubRunner({
         onDispatch: (events) => {
-          events.onText("Hello ");
-          events.onText("world.");
+          // #3603 W8 — single onText carries the complete SDK emission for
+          // this turn. The multi-emission "last-wins" semantic is exercised
+          // separately in T-W8 / T-W8-emission-order.
+          events.onText("Hello world.");
           events.onTextTurnEnd?.();
         },
       }),
@@ -1046,6 +1052,268 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // the count stays at 0.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // #3603 W8 — replace-not-append: align persisted content with UI render
+  //
+  // The chat-state-machine REPLACE semantic at `chat-state-machine.ts:477`
+  // (`applyStreamEvent` case `"stream"`) shows only the LATEST SDK emission
+  // within a turn. The server accumulator must mirror this so DB hydration
+  // on tab reload matches what the user saw live (AC11 evidence
+  // 2026-05-11 — conversation 36df3694: persisted content concatenated a
+  // hidden routing preamble with the visible answer; user only saw the
+  // answer).
+  //
+  // Invariant: the value of `accumulatedAssistantText` at the instant
+  // `onTextTurnEnd` fires is what persists. No reordering, no merge.
+  // ---------------------------------------------------------------------------
+
+  it("T-W8: multi-emission within one turn persists ONLY the latest emission (replace, not append)", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          // Simulates the AC11 finding: SDK emits a routing preamble
+          // (filtered/replaced by the UI's REPLACE semantic), then the
+          // actual user-visible answer.
+          events.onText("Routing to soleur:go — classifying this as a connectivity ping.");
+          events.onText("AC11 verification confirmed.");
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w8-1",
+      conversationId: "conv-w8-1",
+      userMessage: "ping",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    // Only the LATEST emission persists — preamble is gone.
+    expect(row).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: "AC11 verification confirmed.",
+        leader_id: "cc_router",
+      }),
+    );
+    // Explicit negative assertion guards against future regression to `+=`.
+    expect((row.content as string)).not.toContain("Routing to soleur:go");
+  });
+
+  it("T-W8-emission-order: persistence mirrors UI render regardless of SDK emission order (last wins, even when 'wrong')", async () => {
+    // Falsifiable proof of the chosen W8 invariant (GDPR BLOCK 1 corollary).
+    // If the SDK ever reverses order and emits the preamble LAST, persistence
+    // will store the preamble — same as what the UI would render. Drift
+    // between persistence and UI stays zero regardless of "meaning".
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          // Reversed order: answer first, then routing preamble.
+          events.onText("AC11 verification confirmed.");
+          events.onText("Routing to soleur:go — classifying this as a connectivity ping.");
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w8-2",
+      conversationId: "conv-w8-2",
+      userMessage: "ping",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    // LAST emission wins — preamble persists even though "wrong" from the
+    // user's perspective. The UI would render the same; consistency is the
+    // load-bearing invariant.
+    expect(row.content).toBe(
+      "Routing to soleur:go — classifying this as a connectivity ping.",
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // #3603 W2 — flush partial assistant text on non-completed workflow end
+  //
+  // Mirrors the legacy abort contract at `agent-runner.ts:2044-2055` so the
+  // user's partially-streamed text survives a runner abort. A closure-scoped
+  // `workflowEnded` flag suppresses a late `onTextTurnEnd` so it cannot
+  // double-write or overwrite the abort row.
+  //
+  // Scope: 6 non-`completed` `WorkflowEnd` statuses (cost_ceiling,
+  // runner_runaway, user_aborted, idle_timeout, plugin_load_failure,
+  // internal_error). User-Stop is `user_aborted` and IS covered.
+  //
+  // Accepted residuals: SIGKILL (no onWorkflowEnded fires) and
+  // reaper/closeConversation paths (cc-dispatcher.ts:738).
+  // ---------------------------------------------------------------------------
+
+  for (const statusFixture of [
+    { status: "runner_runaway", elapsedMs: 5000, lastBlockKind: "text", lastBlockToolName: null, reason: "idle_window" },
+    { status: "idle_timeout" },
+    { status: "internal_error", error: "boom" },
+    { status: "user_aborted" },
+    { status: "plugin_load_failure", error: "plugin missing" },
+    { status: "cost_ceiling", totalCostUsd: 5, cap: 4, workflow: null },
+  ]) {
+    it(`T-W2-${statusFixture.status}: flushes accumulated text as status:"aborted" row on non-completed workflow end`, async () => {
+      const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+      __setCcRunnerForTests(
+        makeAssistantPersistenceStubRunner({
+          onDispatch: (events) => {
+            events.onText("partial reply before abort");
+            // Note: onTextTurnEnd does NOT fire — runner aborts mid-turn.
+            events.onWorkflowEnded?.(statusFixture);
+          },
+        }),
+      );
+
+      const sendToClient = vi.fn().mockReturnValue(true);
+      await dispatchSoleurGo({
+        userId: `u-w2-${statusFixture.status}`,
+        conversationId: `conv-w2-${statusFixture.status}`,
+        userMessage: "hi",
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient,
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+      });
+
+      await vi.waitFor(() =>
+        expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+      );
+
+      const [row] = assistantInsertCalls(mockMessagesInsert);
+      expect(row).toEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: "partial reply before abort",
+          leader_id: "cc_router",
+          status: "aborted",
+        }),
+      );
+    });
+  }
+
+  it("T-W2-empty: does NOT write an aborted row when accumulator is empty (tool-only turn that aborts)", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          // No onText — model used a tool then aborted before emitting text.
+          events.onWorkflowEnded?.({ status: "runner_runaway", elapsedMs: 5000, lastBlockKind: "tool_use", lastBlockToolName: "Read", reason: "idle_window" });
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w2-empty",
+      conversationId: "conv-w2-empty",
+      userMessage: "tool only",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Flush microtasks; no assistant insert should land.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
+  });
+
+  it("T-W2-completed: does NOT write an aborted row on status:'completed' (normal onTextTurnEnd path applies)", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("normal reply");
+          // onWorkflowEnded with completed fires AFTER onTextTurnEnd in the
+          // normal flow; here we simulate the completed-only case for safety.
+          events.onTextTurnEnd?.();
+          events.onWorkflowEnded?.({ status: "completed" });
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w2-completed",
+      conversationId: "conv-w2-completed",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    // Normal flow — no "aborted" status, just a regular assistant row.
+    expect(row.status).not.toBe("aborted");
+    expect(row.content).toBe("normal reply");
+  });
+
+  it("T-W2-late-text: a late onTextTurnEnd after onWorkflowEnded(aborted) is a silent no-op (no double-write, no overwrite)", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("text before abort");
+          events.onWorkflowEnded?.({ status: "runner_runaway", elapsedMs: 5000, lastBlockKind: "text", lastBlockToolName: null, reason: "idle_window" });
+          // Simulate the in-flight SDK callback that arrives after the abort
+          // has already flushed. The workflowEnded flag must suppress this.
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w2-late",
+      conversationId: "conv-w2-late",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Settle: only the abort write should land; the late onTextTurnEnd
+    // should not produce a second insert.
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1);
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    expect(row.status).toBe("aborted");
+    expect(row.content).toBe("text before abort");
   });
 
   it("T3: mirrors save-assistant-message-failed to Sentry on insert error and does NOT throw", async () => {

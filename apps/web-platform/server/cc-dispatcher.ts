@@ -1007,15 +1007,23 @@ export async function dispatchSoleurGo(
     });
 
   // Per-turn assistant text accumulator. Reset to "" inside
-  // `saveAssistantMessage` after each turn boundary, so a turn that ends in
-  // `result` with zero text correctly skips the insert without consuming the
-  // previous turn's data. Mirrors the pattern at `agent-runner.ts:1079` so
-  // `api-messages.ts` returns BOTH user and assistant rows on resume —
-  // without this the cc path's history is user-only and the resumed thread
-  // re-renders the routing chip as if the question were unanswered.
+  // Holds the LATEST SDKAssistantMessage emission for this turn. Mirrors
+  // the chat-state-machine REPLACE semantic at `chat-state-machine.ts:477`
+  // (`applyStreamEvent` case "stream") so DB hydration on tab reload
+  // matches what the user saw live. #3603 W8 — pre-2026-05-12 the
+  // accumulator concatenated all emissions (`+=`); AC11 verification
+  // on conversation 36df3694 surfaced the drift between persisted content
+  // and live UI. Invariant: the value at the instant `onTextTurnEnd`
+  // fires (or `onWorkflowEnded` flushes for the abort path) is what
+  // persists. No reordering, no merge.
   let accumulatedAssistantText = "";
+  // #3603 W2 — flushed by `onWorkflowEnded` for non-`completed` statuses
+  // so a late `onTextTurnEnd` (in-flight SDK callback after abort fires)
+  // cannot double-write or overwrite the abort row. Closure-scoped per
+  // dispatch invocation; fresh `false` for each `dispatchSoleurGo` call.
+  let workflowEnded = false;
 
-  async function saveAssistantMessage(): Promise<void> {
+  async function saveAssistantMessage(opts?: { status?: "aborted" }): Promise<void> {
     // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
     // mutate `fullText` while this insert is in flight (single async loop
     // serializes onText/onTextTurnEnd, but the await yields the microtask).
@@ -1023,14 +1031,22 @@ export async function dispatchSoleurGo(
     accumulatedAssistantText = "";
     if (!fullText) return;
 
-    const { error } = await supabase().from("messages").insert({
+    const row: Record<string, unknown> = {
       id: randomUUID(),
       conversation_id: conversationId,
       role: "assistant",
       content: fullText,
       tool_calls: null,
       leader_id: CC_ROUTER_LEADER_ID,
-    });
+    };
+    // Omit `status` for the normal completion path — migration 040's
+    // DEFAULT of `'complete'` applies. Only the abort branch writes
+    // `status: "aborted"` explicitly.
+    if (opts?.status === "aborted") {
+      row.status = "aborted";
+    }
+
+    const { error } = await supabase().from("messages").insert(row);
     if (error) {
       // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
       // — a misconfigured Supabase RLS for one user could otherwise emit one
@@ -1040,18 +1056,25 @@ export async function dispatchSoleurGo(
         error,
         {
           feature: "cc-dispatcher",
-          op: "save-assistant-message-failed",
+          op: opts?.status === "aborted"
+            ? "save-assistant-message-aborted-failed"
+            : "save-assistant-message-failed",
           extra: { userId, conversationId, length: fullText.length },
         },
         userId,
-        "save-assistant-message-failed",
+        opts?.status === "aborted"
+          ? "save-assistant-message-aborted-failed"
+          : "save-assistant-message-failed",
       );
     }
   }
 
   const events: DispatchEvents = {
     onText: (text) => {
-      accumulatedAssistantText += text;
+      // #3603 W8 — replace, not append. Mirrors chat-state-machine REPLACE
+      // semantic so persisted content matches the UI's live render.
+      // See accumulator declaration comment above for invariant + AC11 source.
+      accumulatedAssistantText = text;
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -1075,6 +1098,14 @@ export async function dispatchSoleurGo(
       );
     },
     onTextTurnEnd: () => {
+      // #3603 W2 — a late `onTextTurnEnd` after `onWorkflowEnded` has already
+      // flushed an abort row would double-write or, worse, overwrite the
+      // "aborted" status row with a "complete" one. Silent no-op:
+      // user already saw the partial text (rendered live; abort row hydrates).
+      if (workflowEnded) {
+        // silent: turn was already persisted via the abort path
+        return;
+      }
       // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
       void saveAssistantMessage();
       // Per-turn boundary → terminal stream event for the cc_router bubble.
@@ -1096,6 +1127,18 @@ export async function dispatchSoleurGo(
       // single source of truth.
     },
     onWorkflowEnded: (end: WorkflowEnd) => {
+      // #3603 W2 — flush partial assistant text as an `status: "aborted"` row
+      // BEFORE the existing user-visible routing below. Mirrors the legacy
+      // abort contract at `agent-runner.ts:2044-2055`. Skips on
+      // `status: "completed"` because the normal `onTextTurnEnd` path
+      // already wrote (or will write) the row. The `workflowEnded` flag
+      // suppresses a late `onTextTurnEnd` arriving after this flush.
+      if (end.status !== "completed") {
+        // Fire-and-forget — set the flag SYNCHRONOUSLY so a late
+        // onTextTurnEnd cannot race the await microtask.
+        workflowEnded = true;
+        void saveAssistantMessage({ status: "aborted" });
+      }
       // Architecture-F4: `session_ended` is terminal in `ws-client.ts`
       // (clears streams, disables input). Emitting it for RECOVERABLE
       // runner states (cost_ceiling, runner_runaway) would break

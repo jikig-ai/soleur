@@ -18,15 +18,22 @@ next_phase: Phase 1.1 W2 RED+GREEN
 
 ## Phase 0 findings
 
-### 0.4 — User-Stop status string
+### 0.4 — User-Stop status string (corrected 2026-05-12)
 
-`WorkflowEnd` discriminated union (`soleur-go-runner.ts:617-638`) has **3 statuses**:
+**Initial finding was wrong** — re-reading `WorkflowEnd` at `soleur-go-runner.ts:617-638` reveals **7 statuses**:
 - `completed` (with optional `summary`)
-- `runner_runaway`
+- `cost_ceiling` (with totalCostUsd, cap, workflow)
+- `runner_runaway` (with elapsedMs, lastBlockKind, lastBlockToolName, reason)
+- **`user_aborted`** ← this IS user-Stop; in W2 scope
 - `idle_timeout`
-- `internal_error` (with `error` string)
+- `plugin_load_failure` (with error)
+- `internal_error` (with error)
 
-**User-Stop is NOT in this enum.** Comment at `cc-dispatcher.ts:738` confirms: user-Stop closes the Query without firing `onWorkflowEnded`. W2 covers `runner_runaway | idle_timeout | internal_error` only. User-Stop is a separate code path handled elsewhere (likely `agent-runner.ts` or `_runner.updateConversationStatus`). Plan must reflect this — W2 cannot catch user-Stop.
+The `cc-dispatcher.ts:738-739` comment refers to a DIFFERENT path: `runner.reapIdle()` and `runner.closeConversation()` close the Query without firing `onWorkflowEnded` — these are reaper/cleanup paths, not user-Stop. User-Stop fires `onWorkflowEnded({status: "user_aborted"})` and IS caught by W2.
+
+**W2 scope (corrected):** flush on ALL non-`completed` statuses: `cost_ceiling | runner_runaway | user_aborted | idle_timeout | plugin_load_failure | internal_error`.
+
+**Residual gap:** reaper/closeConversation paths that close Query without onWorkflowEnded leave the accumulator in-process. Documented as accepted residual alongside SIGKILL.
 
 ### 0.5 — DSAR export query
 

@@ -1,27 +1,32 @@
 ---
-date: 2026-05-11
+date: 2026-05-11 (rev-3: 2026-05-12 PR-A split)
 issue: "#3603"
-pr: "#3602 (draft)"
+pr: "#3602 (draft, becomes PR-A1)"
 branch: feat-cc-assistant-turn-persistence-3258
 brand_survival_threshold: single-user incident
 gdpr_gate: required (plan 2.7, work 2 exit, ship 5.5)
 type: feat
-scope: PR-A of 3-PR sequence (engineering hardening)
-review_revision: rev-2 (post DHH + Kieran + Simplicity + GDPR-audit synthesis 2026-05-11)
+scope: PR-A1 of 4-PR sequence (PR-A split into A1+A2 per implementation-time scope assessment 2026-05-12)
+review_revision: rev-3 (PR-A1/PR-A2 split applied during Phase 0 of implementation)
 ---
 
-# Plan: cc-soleur-go transcript hardening — PR-A (engineering)
+# Plan: cc-soleur-go transcript hardening — PR-A1 (engineering, small)
 
 ## Summary
 
-PR-A is the engineering hardening pass for the cc-soleur-go transcript path. It closes **four** workstreams (W3 cut per DHH + Simplicity grep evidence — no SDK retry path exists in code):
+**Rev-3 split (2026-05-12):** PR-A as originally planned (4 workstreams) was sized for multi-hour focused implementation. To ship the highest-user-impact fix fastest, PR-A splits into:
 
-| Workstream | Surface |
-|---|---|
-| **W1** | Cross-tenant matrix invariants (7 invariants from CLO brainstorm, all actively tested) |
-| **W2** | Flush partial assistant text on `onWorkflowEnded` for non-completed statuses + `workflowEnded` flag to prevent late `onTextTurnEnd` double-write |
-| **W4** (narrowed) | `messages.usage` parity on cc path, feature-flagged behind `CC_PERSIST_USAGE` until PR-C lands |
-| **W8** (new from AC11) | Align persisted content with UI render via replace-not-append; documented invariant + emission-ordering test |
+- **PR-A1 (this plan):** W2 + W8 — abort flush + replace-not-append. ~50 LOC code + ~4 tests. Shippable in one session.
+- **PR-A2 (follow-up):** W4 (feature-flagged usage parity) + W1 (cross-tenant RLS matrix). More complex; needs real Supabase fixture + feature-flag wiring.
+
+Both PRs reference #3603 (umbrella stays open until both ship + PR-B + PR-C). DHH framing "ship the fix, don't perform the fix" drives the split.
+
+| Workstream | Surface | PR |
+|---|---|---|
+| **W2** | Flush partial assistant text on `onWorkflowEnded` for non-completed statuses + `workflowEnded` flag to prevent late `onTextTurnEnd` double-write | **A1** |
+| **W8** (new from AC11) | Align persisted content with UI render via replace-not-append; documented invariant + emission-ordering test | **A1** |
+| **W4** (narrowed) | `messages.usage` parity on cc path, feature-flagged behind `CC_PERSIST_USAGE` until PR-C lands | **A2** |
+| **W1** | Cross-tenant matrix invariants (7 invariants from CLO brainstorm, all actively tested) | **A2** |
 
 Step 0 (AC11 prod verification) cleared 2026-05-11. PR-B (migration cohort UX) and PR-C (legal refresh) follow in sequence.
 
@@ -71,9 +76,9 @@ Each subsection writes the failing test then implements. One commit per workstre
 - [ ] 1.1.1 Mock SDK emits two `onText` chunks; trigger `onWorkflowEnded` with status `runner_runaway` without firing `onTextTurnEnd`.
 - [ ] 1.1.2 Assert one assistant row with `status: "aborted"`, content = concatenation of the two chunks (Note: this is the LAST emission per replace-not-append semantic post-W8; pre-W8 ordering also valid for this test), `leader_id: cc_router`.
 - [ ] 1.1.3 Assert accumulator reset post-flush.
-- [ ] 1.1.4 Repeat for each status in 0.4's enumerated list (NOT a hard-coded set).
+- [ ] 1.1.4 Repeat for each non-`completed` `WorkflowEnd` status (Phase 0.4 corrected 2026-05-12 — 6 statuses, NOT 3): `cost_ceiling`, `runner_runaway`, `user_aborted`, `idle_timeout`, `plugin_load_failure`, `internal_error`. **User-Stop is `user_aborted` and IS in scope** — initial Phase 0.4 finding was wrong.
 - [ ] 1.1.5 **T-W2.late-text:** after W2 flush, fire `onTextTurnEnd` late (simulating in-flight SDK callback). Assert no second row, no `status: "completed"` overwrite.
-- [ ] 1.1.6 Document SIGKILL accepted residual (container-kill does not fire `onWorkflowEnded`).
+- [ ] 1.1.6 Document accepted residuals: SIGKILL (container-kill skips `onWorkflowEnded`) and reaper/closeConversation paths (cc-dispatcher.ts:738 — close Query without firing onWorkflowEnded).
 
 **Implementation:** `apps/web-platform/server/cc-dispatcher.ts`
 
@@ -192,7 +197,7 @@ DHH flagged this as "coverage theater" — point taken, but the brainstorm expli
 - [ ] **D1** Container-kill / SIGKILL flush gap. Heartbeat-based detection. File on Phase 4 close.
 - [ ] **D2** Multi-bubble-per-turn UI semantic (W8 alternative). File only if appetite emerges post-PR-A.
 - [ ] **D3** `conversations.status="failed"` rollup despite per-message success (AC11 W9 advisory). Repro under non-abort conditions first; file if reproducible.
-- [ ] **D-DSAR** (if Phase 0.5 finds export query is column-listed and `usage` missing): wire `usage` into DSAR export query — block in PR-C (regulated surface).
+- [ ] **D-DSAR-art15** (Phase 0.5 finding 2026-05-12): **No Art. 15 DSAR export endpoint exists in code.** Pre-existing gap surfaced during this PR's Phase 0 verification — broader than originally framed. Privacy Policy §8.1 promise apparently fulfilled by manual operator action today. File as separate workstream; Art. 17 cascade delete is wired and works for the new `usage` column.
 
 ## Files touched
 
