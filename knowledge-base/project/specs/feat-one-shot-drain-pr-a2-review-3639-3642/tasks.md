@@ -27,13 +27,13 @@ lane: single-domain
 
 ## 3. #3639 F3 — extract TtlDedupMap
 
-- [ ] 3.1 Author `class TtlDedupMap<K extends string>` in `observability.ts` (constructor `(ttlMs, sweepInterval, maxSize?)`, methods `tryClaim` + `reset`).
-- [ ] 3.2 Refactor `mirrorWithDebounce` body to ≤ 12 LoC using a module-scope `TtlDedupMap` instance.
-- [ ] 3.3 Refactor `mirrorP0Deduped` body to ≤ 20 LoC using `TtlDedupMap` (with `maxSize` set for insertion-order eviction).
-- [ ] 3.4 Update both `__reset*ForTests` seams to call `instance.reset()`.
-- [ ] 3.5 Replace `cc-dispatcher.test.ts:49-59` inline TTL re-impl with `new TtlDedupMap(MIRROR_DEBOUNCE_MS, Infinity)`.
-- [ ] 3.6 Run `bun test` — expect green (incl. `observability-mirror-debounce.test.ts`).
-- [ ] 3.7 Commit: `refactor(observability): extract TtlDedupMap, drop inline test re-impl — partial #3639 (F3)`.
+- [x] 3.1 Author `class TtlDedupMap<K extends string>` in `observability.ts` (constructor `(ttlMs, sweepInterval, maxSize?)`, methods `tryClaim` + `reset`).
+- [x] 3.2 Refactor `mirrorWithDebounce` body to ≤ 12 LoC using a module-scope `TtlDedupMap` instance.
+- [x] 3.3 Refactor `mirrorP0Deduped` body to ≤ 20 LoC using `TtlDedupMap` (with `maxSize` set for insertion-order eviction).
+- [x] 3.4 Update both `__reset*ForTests` seams to call `instance.reset()`.
+- [x] 3.5 Replace `cc-dispatcher.test.ts:49-59` inline TTL re-impl with `new TtlDedupMap(MIRROR_DEBOUNCE_MS, Infinity)`.
+- [x] 3.6 Run `bun test` — expect green (incl. `observability-mirror-debounce.test.ts`).
+- [x] 3.7 Commit: `refactor(observability): extract TtlDedupMap, drop inline test re-impl — partial #3639 (F3)`.
 
 ## 4. #3640 F2 + F4 — discriminated PersistMode + helper extraction
 

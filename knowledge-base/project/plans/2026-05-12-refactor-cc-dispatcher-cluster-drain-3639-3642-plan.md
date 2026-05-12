@@ -192,13 +192,13 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 3 — #3639 F3 TtlDedupMap extraction
 
-- [ ] Add `class TtlDedupMap<K extends string>` to `observability.ts`. Generic over key type; constructor `(ttlMs: number, sweepInterval: number, maxSize?: number)`. Methods: `tryClaim(key: K, now: number): boolean` (returns `true` if claimed = first call within TTL, `false` if deduped), `reset(): void`. Internal `Map<K, number>` + write counter + amortized sweep mirroring current `mirrorWithDebounce` / `mirrorP0Deduped` semantics. Insertion-order eviction when `maxSize` is set (matches current P0 behavior).
-- [ ] Refactor `mirrorWithDebounce` body to `if (!_mirrorDebounce.tryClaim(key, now)) return; reportSilentFallback(err, ctx);` — body ≤ 12 LoC. Construct one module-scope `_mirrorDebounce = new TtlDedupMap<string>(MIRROR_DEBOUNCE_MS, MIRROR_SWEEP_INTERVAL)`.
-- [ ] Refactor `mirrorP0Deduped` body to use `_p0Dedup = new TtlDedupMap<string>(P0_DEDUP_TTL_MS, P0_SWEEP_INTERVAL, P0_DEDUP_MAX_SIZE)`. Pino + Sentry emit stay as-is (the irreducible level + payload shaping per AC-3639-F3-wrappers).
-- [ ] Update `__resetMirrorDebounceForTests` + (still-named) `__resetP0DedupForTests` to call `instance.reset()` instead of poking the old `Map` directly.
-- [ ] In `cc-dispatcher.test.ts`, delete the inline TTL re-implementation (lines ~49-59). Import `TtlDedupMap` + `MIRROR_DEBOUNCE_MS` and construct one instance in the `mirrorWithDebounce` mock factory. The 3-call-→-1-mirror assertion stays in lockstep with production automatically.
-- [ ] Run unit tests + `observability-mirror-debounce.test.ts`. Expected: green.
-- [ ] Commit: `refactor(observability): extract TtlDedupMap, drop inline test re-impl — partial #3639 (F3)`.
+- [x] Add `class TtlDedupMap<K extends string>` to `observability.ts`. Generic over key type; constructor `(ttlMs: number, sweepInterval: number, maxSize?: number)`. Methods: `tryClaim(key: K, now: number): boolean` (returns `true` if claimed = first call within TTL, `false` if deduped), `reset(): void`. Internal `Map<K, number>` + write counter + amortized sweep mirroring current `mirrorWithDebounce` / `mirrorP0Deduped` semantics. Insertion-order eviction when `maxSize` is set (matches current P0 behavior).
+- [x] Refactor `mirrorWithDebounce` body to `if (!_mirrorDebounce.tryClaim(key, now)) return; reportSilentFallback(err, ctx);` — body ≤ 12 LoC. Construct one module-scope `_mirrorDebounce = new TtlDedupMap<string>(MIRROR_DEBOUNCE_MS, MIRROR_SWEEP_INTERVAL)`.
+- [x] Refactor `mirrorP0Deduped` body to use `_p0Dedup = new TtlDedupMap<string>(P0_DEDUP_TTL_MS, P0_SWEEP_INTERVAL, P0_DEDUP_MAX_SIZE)`. Pino + Sentry emit stay as-is (the irreducible level + payload shaping per AC-3639-F3-wrappers).
+- [x] Update `__resetMirrorDebounceForTests` + (still-named) `__resetP0DedupForTests` to call `instance.reset()` instead of poking the old `Map` directly.
+- [x] In `cc-dispatcher.test.ts`, delete the inline TTL re-implementation (lines ~49-59). Import `TtlDedupMap` + `MIRROR_DEBOUNCE_MS` and construct one instance in the `mirrorWithDebounce` mock factory. The 3-call-→-1-mirror assertion stays in lockstep with production automatically.
+- [x] Run unit tests + `observability-mirror-debounce.test.ts`. Expected: green.
+- [x] Commit: `refactor(observability): extract TtlDedupMap, drop inline test re-impl — partial #3639 (F3)`.
 
 ### Phase 4 — #3640 F2 + F4 discriminated PersistMode + helper extraction
 
