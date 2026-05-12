@@ -1,6 +1,58 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
+
+const SENTRY_USERID_PEPPER = process.env.SENTRY_USERID_PEPPER;
+
+// Boot warning so operators can spot misconfigured pepper. Fires once per
+// Node worker process at module init (N×workers warnings under horizontal
+// scale-out — operationally intentional: every worker that lacks the pepper
+// is in the degraded `pepper_unset`-sentinel mode and operators want to see
+// each one). Tests covering this surface live in
+// `observability.test.ts` (pepper-set happy path) +
+// `observability-pepper-unset.test.ts` (fail-closed sentinel via vitest
+// per-file worker-isolated module-init env).
+if (!SENTRY_USERID_PEPPER) {
+  // eslint-disable-next-line no-console -- intentional boot warning
+  console.warn(
+    "[observability] SENTRY_USERID_PEPPER not set — userId will emit as 'pepper_unset' sentinel (fail-closed pseudonymization).",
+  );
+}
+
+/**
+ * Pseudonymize a user identifier for Sentry / pino emission.
+ *
+ * - HMAC-SHA256, full 64-hex digest (fits Sentry's ~200-char tag-value limit).
+ * - Returns `"pepper_unset"` sentinel when pepper is absent: pre-PR baseline
+ *   shipped raw userId; fail-closed sentinel preserves operator visibility
+ *   without leaking PII. The sentinel collides across all users by design
+ *   (surfaced via boot warning above) so a real degraded mode is detectable.
+ * - Optional `pepper` arg lets operator-side hash-lookup scripts compute
+ *   prior-pepper hashes during a future rotation without re-engineering this
+ *   module (no `SENTRY_USERID_PEPPER_PREVIOUS` env var loaded here — added
+ *   the day a rotation is scheduled).
+ */
+export function hashUserId(userId: string, pepper = SENTRY_USERID_PEPPER): string {
+  if (!pepper) return "pepper_unset";
+  return createHmac("sha256", pepper).update(userId).digest("hex");
+}
+
+/**
+ * Rename `userId` → `userIdHash` (via `hashUserId`) on an emit `extra`
+ * payload. Both silent-fallback helpers share this so the rename signal
+ * lives in one place. Returns `extra` unchanged when no `userId` key is
+ * present. Null/undefined `userId` values resolve to the sentinel
+ * `"pepper_unset_null"` to avoid hashing the empty-string literal — which
+ * would collide every nullable-userId emit under a single hash.
+ */
+function hashExtraUserId(
+  extra: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!extra || typeof extra !== "object" || !("userId" in extra)) return extra;
+  const { userId: rawUserId, ...rest } = extra as { userId?: unknown } & Record<string, unknown>;
+  if (rawUserId == null) return { ...rest, userIdHash: "pepper_unset_null" };
+  return { ...rest, userIdHash: hashUserId(String(rawUserId)) };
+}
 
 /**
  * Single source of truth for the literal app-origin used when
@@ -88,9 +140,15 @@ export function reportSilentFallback(
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
 
+  // Pseudonymize `userId` → `userIdHash` (Recital 26) at the emit boundary.
+  // Centralized here so the 40+ call sites continue passing raw `userId` and
+  // never need to know about the rename. Renamed (not value-swapped) so log
+  // readers can tell at a glance that pseudonymization is in effect.
+  const transformedExtra = hashExtraUserId(extra);
+
   // Mirror the structured context into pino so log aggregators (container
   // stdout, Better Stack) also get the same tag vocabulary.
-  logger.error({ err, feature, op, ...extra }, message ?? `${feature} silent fallback`);
+  logger.error({ err, feature, op, ...transformedExtra }, message ?? `${feature} silent fallback`);
 
   // Sentry's namespace shape varies across the dev-server bundle (where
   // captureMessage may be tree-shaken when DSN is unset) and the prod build.
@@ -100,13 +158,13 @@ export function reportSilentFallback(
   try {
     if (err instanceof Error) {
       if (typeof Sentry.captureException === "function") {
-        Sentry.captureException(err, { tags, extra });
+        Sentry.captureException(err, { tags, extra: transformedExtra });
       }
     } else if (typeof Sentry.captureMessage === "function") {
       Sentry.captureMessage(message ?? `${feature} silent fallback`, {
         level: "error",
         tags,
-        extra: { err, ...extra },
+        extra: { err, ...transformedExtra },
       });
     }
   } catch {
@@ -129,18 +187,22 @@ export function warnSilentFallback(
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
 
-  logger.warn({ err, feature, op, ...extra }, message ?? `${feature} silent fallback`);
+  // Pseudonymize `userId` → `userIdHash` at the emit boundary (see
+  // reportSilentFallback for rationale).
+  const transformedExtra = hashExtraUserId(extra);
+
+  logger.warn({ err, feature, op, ...transformedExtra }, message ?? `${feature} silent fallback`);
 
   try {
     if (err instanceof Error) {
       if (typeof Sentry.captureException === "function") {
-        Sentry.captureException(err, { level: "warning", tags, extra });
+        Sentry.captureException(err, { level: "warning", tags, extra: transformedExtra });
       }
     } else if (typeof Sentry.captureMessage === "function") {
       Sentry.captureMessage(message ?? `${feature} silent fallback`, {
         level: "warning",
         tags,
-        extra: { err, ...extra },
+        extra: { err, ...transformedExtra },
       });
     }
   } catch {
@@ -269,6 +331,9 @@ export function mirrorWithDebounce(
   userId: string,
   errorClass: string,
 ): void {
+  // Dedup key uses raw `userId` — in-process map only, never emitted.
+  // `reportSilentFallback` hashes the `userId` field of `ctx.extra` at the
+  // emit boundary; no transform needed here.
   if (!_mirrorDebounce.tryClaim(`${userId}:${errorClass}`, Date.now())) return;
   reportSilentFallback(err, ctx);
 }
@@ -324,14 +389,17 @@ export function mirrorP0Deduped(
   err: Error,
   ctx: { op: string; userId: string; conversationId: string },
 ): void {
+  // Dedup key keeps raw `userId` — in-process map only, never emitted.
   const key = `${ctx.userId}:${ctx.op}:${ctx.conversationId}`;
   const now = Date.now();
   if (!_p0Dedup.tryClaim(key, now)) return;
 
+  const userIdHash = hashUserId(ctx.userId);
+
   // Pino mirror for container-stdout visibility (same shape as
   // `reportSilentFallback` so log aggregators key off identical fields).
   logger.error(
-    { err, op: ctx.op, userId: ctx.userId, conversationId: ctx.conversationId },
+    { err, op: ctx.op, userIdHash, conversationId: ctx.conversationId },
     `p0 deduped mirror: ${ctx.op}`,
   );
 
@@ -341,10 +409,10 @@ export function mirrorP0Deduped(
     if (typeof Sentry.captureException === "function") {
       Sentry.captureException(err, {
         level: "fatal",
-        tags: { op: ctx.op, scope: "p0_deduped" },
+        tags: { op: ctx.op, scope: "p0_deduped", userIdHash },
         extra: {
           op: ctx.op,
-          userId: ctx.userId,
+          userIdHash,
           conversationId: ctx.conversationId,
           severity: "breach_attempt",
           first_seen_at: new Date(now).toISOString(),
