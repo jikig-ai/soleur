@@ -18,13 +18,14 @@ created: 2026-05-12
 
 - [ ] 2.1 Add `container.image: mcr.microsoft.com/playwright:v1.58.2-jammy@sha256:4698a73749c5848d3f5fcd42a2174d172fcad2b2283e087843b115424303a565` to the `e2e:` job key.
 - [ ] 2.2 Add `defaults.run.shell: bash` at the `e2e` job level.
-- [ ] 2.3 Delete the `Setup Node.js` step (`actions/setup-node@... node-version: 22`).
-- [ ] 2.4 Delete the `Cache Playwright browsers` step (`actions/cache@5a3ec84...`).
-- [ ] 2.5 Delete the `Install Playwright Chromium` step (`npx playwright install --with-deps chromium`).
-- [ ] 2.6 Delete the `Install Playwright system deps (cache hit)` step (`npx playwright install-deps chromium`).
-- [ ] 2.7 Keep `actions/checkout`, `Setup Bun`, `Install dependencies`, `Install web-platform dependencies`, `Run E2E tests`, and `Upload test results on failure` BYTE-IDENTICAL.
-- [ ] 2.8 Verify NO `options: --user` directive is added on the container block.
-- [ ] 2.9 Verify the job key remains `e2e:` byte-identical (required by branch-protection ruleset `14145388`).
+- [ ] 2.3 Insert NEW `Install unzip (required by setup-bun in container)` step immediately after `actions/checkout` and BEFORE `Setup Bun`: `apt-get update && apt-get install -y unzip`. Required by `oven-sh/setup-bun` issue #55; verified empirically at deepen-time.
+- [ ] 2.4 Delete the `Setup Node.js` step (`actions/setup-node@... node-version: 22`).
+- [ ] 2.5 Delete the `Cache Playwright browsers` step (`actions/cache@5a3ec84...`).
+- [ ] 2.6 Delete the `Install Playwright Chromium` step (`npx playwright install --with-deps chromium`).
+- [ ] 2.7 Delete the `Install Playwright system deps (cache hit)` step (`npx playwright install-deps chromium`).
+- [ ] 2.8 Keep `actions/checkout`, `Setup Bun`, `Install dependencies`, `Install web-platform dependencies`, `Run E2E tests`, and `Upload test results on failure` BYTE-IDENTICAL (action pins unchanged; only steps added/removed).
+- [ ] 2.9 Verify NO `options: --user` directive is added on the container block.
+- [ ] 2.10 Verify the job key remains `e2e:` byte-identical (required by branch-protection ruleset `14145388`).
 
 ## Phase 3 — Local pre-push verification
 
@@ -40,7 +41,9 @@ created: 2026-05-12
 - [ ] 3.10 Run AC10 (`deploy-docs.yml` UNTOUCHED).
 - [ ] 3.11 Run AC11 (job key `e2e:` preserved).
 - [ ] 3.12 Run AC12 (ruleset still includes `e2e`).
-- [ ] 3.13 (Optional) Run the e2e suite locally inside the container to exercise the exact in-container shape.
+- [ ] 3.13 Run AC16 (`Install unzip` step present in `e2e` section).
+- [ ] 3.14 Run AC17 (`Install unzip` precedes `Setup Bun`).
+- [ ] 3.15 (Optional) Run the e2e suite locally inside the container (requires the `apt-get install -y unzip` preinstall) to exercise the exact in-container shape.
 
 ## Phase 4 — Push, observe PR CI
 
