@@ -133,7 +133,7 @@ describe("agent-runner cost capture", () => {
     setupSupabaseMock();
   });
 
-  test("calls increment_conversation_cost RPC with correct params", async () => {
+  test("calls increment_conversation_cost RPC v2 with 5 deltas (cache zero when missing)", async () => {
     setupQueryWithCost(0.0042, 1200, 300);
     mockRpc.mockResolvedValue({ error: null });
 
@@ -144,10 +144,32 @@ describe("agent-runner cost capture", () => {
       cost_delta: 0.0042,
       input_delta: 1200,
       output_delta: 300,
+      cache_read_delta: 0,
+      cache_creation_delta: 0,
     });
   });
 
-  test("sends usage_update WebSocket message with cost delta", async () => {
+  test("appends a write_byok_audit row with the same turn's totals", async () => {
+    setupQueryWithCost(0.0042, 1200, 300);
+    mockRpc.mockResolvedValue({ error: null });
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const auditCall = mockRpc.mock.calls.find(
+      ([fn]) => fn === "write_byok_audit",
+    );
+    expect(auditCall).toBeDefined();
+    const args = auditCall![1];
+    expect(args.p_founder_id).toBe("user-1");
+    expect(args.p_agent_role).toBe("cpo");
+    // 1200 input + 300 output + 0 cache = 1500 combined
+    expect(args.p_token_count).toBe(1500);
+    // Math.round(0.0042 * 100) = 0 (sub-cent precision lost intentionally —
+    // forensic surface only; cent-precision UI stays on conversations.total_cost_usd)
+    expect(args.p_unit_cost_cents).toBe(0);
+  });
+
+  test("sends usage_update WebSocket message with cost delta + cache fields", async () => {
     setupQueryWithCost(0.0123, 500, 150);
     mockRpc.mockResolvedValue({ error: null });
 
@@ -159,6 +181,8 @@ describe("agent-runner cost capture", () => {
       totalCostUsd: 0.0123,
       inputTokens: 500,
       outputTokens: 150,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
     });
   });
 
@@ -196,6 +220,43 @@ describe("agent-runner cost capture", () => {
       cost_delta: 0,
       input_delta: 0,
       output_delta: 0,
+      cache_read_delta: 0,
+      cache_creation_delta: 0,
+    });
+  });
+
+  test("persists cache token deltas when SDK emits them", async () => {
+    createQueryMock(mockQuery, {
+      type: "result",
+      session_id: "sess-cache-1",
+      total_cost_usd: 0.012,
+      usage: {
+        input_tokens: 521,
+        output_tokens: 88,
+        cache_read_input_tokens: 14_000,
+        cache_creation_input_tokens: 800,
+      },
+    } as never);
+    mockRpc.mockResolvedValue({ error: null });
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    expect(mockRpc).toHaveBeenCalledWith("increment_conversation_cost", {
+      conv_id: "conv-1",
+      cost_delta: 0.012,
+      input_delta: 521,
+      output_delta: 88,
+      cache_read_delta: 14_000,
+      cache_creation_delta: 800,
+    });
+    expect(mockSendToClient).toHaveBeenCalledWith("user-1", {
+      type: "usage_update",
+      conversationId: "conv-1",
+      totalCostUsd: 0.012,
+      inputTokens: 521,
+      outputTokens: 88,
+      cacheReadInputTokens: 14_000,
+      cacheCreationInputTokens: 800,
     });
   });
 });

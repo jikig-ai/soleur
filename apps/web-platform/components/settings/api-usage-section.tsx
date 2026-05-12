@@ -46,6 +46,15 @@ export async function ApiUsageSection({ userId }: ApiUsageSectionProps) {
             choice matters too — Opus costs more per token than Sonnet or
             Haiku.
           </ApiUsageInfoTooltip>
+          <ApiUsageInfoTooltip label="What about cache tokens?">
+            Prompt caching reduces real cost — Anthropic prices input in
+            three tiers: uncached (full price), cache write (slightly
+            higher first time), and cache read (a fraction of full
+            price). The Input column sums all three to match the
+            Anthropic Console&apos;s headline number; the Cache read and
+            Cache write pills break out what landed in each tier when
+            present.
+          </ApiUsageInfoTooltip>
         </div>
       </header>
 
@@ -139,33 +148,54 @@ function UsageBody({
 function UsageList({ rows }: { rows: ApiUsageRow[] }) {
   return (
     <ul className="divide-y divide-soleur-border-default">
-      {rows.map((row) => (
-        <li
-          key={row.id}
-          className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3"
-        >
-          <span className="flex-1 min-w-[180px] text-sm text-soleur-text-primary">
-            <span className="font-medium">[{row.domainLabel}]</span>
-            <span className="mx-1 text-soleur-text-secondary" aria-hidden="true">
-              ·
+      {rows.map((row) => {
+        // The Anthropic Console's headline "input tokens" is the SUM
+        // of uncached + cache_read + cache_creation. The SDK's
+        // `usage.input_tokens` is the uncached subset only. Render the
+        // SUM here so the cross-check footnote below stays true for
+        // cached prompts (plan §Risks R8).
+        const totalInput =
+          row.inputTokens + row.cacheReadTokens + row.cacheCreationTokens;
+        return (
+          <li
+            key={row.id}
+            className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3"
+          >
+            <span className="flex-1 min-w-[180px] text-sm text-soleur-text-primary">
+              <span className="font-medium">[{row.domainLabel}]</span>
+              <span className="mx-1 text-soleur-text-secondary" aria-hidden="true">
+                ·
+              </span>
+              <span className="text-soleur-text-secondary">
+                {relativeTime(row.createdAt.toISOString())}
+              </span>
             </span>
-            <span className="text-soleur-text-secondary">
-              {relativeTime(row.createdAt.toISOString())}
+            <span className="text-xs text-soleur-text-secondary">
+              <span className="text-soleur-text-muted">Input </span>
+              {totalInput.toLocaleString("en-US")}
             </span>
-          </span>
-          <span className="text-xs text-soleur-text-secondary">
-            <span className="text-soleur-text-muted">Input </span>
-            {row.inputTokens.toLocaleString("en-US")}
-          </span>
-          <span className="text-xs text-soleur-text-secondary">
-            <span className="text-soleur-text-muted">Output </span>
-            {row.outputTokens.toLocaleString("en-US")}
-          </span>
-          <span className="min-w-[72px] text-right text-sm font-medium tabular-nums text-soleur-text-primary">
-            {formatUsd(row.costUsd)}
-          </span>
-        </li>
-      ))}
+            <span className="text-xs text-soleur-text-secondary">
+              <span className="text-soleur-text-muted">Output </span>
+              {row.outputTokens.toLocaleString("en-US")}
+            </span>
+            {row.cacheReadTokens > 0 && (
+              <span className="text-xs text-soleur-text-secondary">
+                <span className="text-soleur-text-muted">Cache read </span>
+                {row.cacheReadTokens.toLocaleString("en-US")}
+              </span>
+            )}
+            {row.cacheCreationTokens > 0 && (
+              <span className="text-xs text-soleur-text-secondary">
+                <span className="text-soleur-text-muted">Cache write </span>
+                {row.cacheCreationTokens.toLocaleString("en-US")}
+              </span>
+            )}
+            <span className="min-w-[72px] text-right text-sm font-medium tabular-nums text-soleur-text-primary">
+              {formatUsd(row.costUsd)}
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }

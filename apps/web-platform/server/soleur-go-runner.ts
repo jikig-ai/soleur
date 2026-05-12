@@ -659,7 +659,24 @@ export interface DispatchEvents {
   }) => void;
   onWorkflowDetected: (workflow: WorkflowName) => void;
   onWorkflowEnded: (end: WorkflowEnd) => void;
-  onResult: (result: { totalCostUsd: number }) => void;
+  /**
+   * Fires once per `SDKResultMessage`. Payload widened beyond
+   * `totalCostUsd` (2026-05-12) to surface the 4-token usage axis +
+   * model hint so the cost-writer can persist cache tokens and the
+   * audit row carries the correct attribution. SDK exposes nullable
+   * cache fields per `@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts`,
+   * so the runner coerces `?? 0` at this boundary.
+   */
+  onResult: (result: {
+    totalCostUsd: number;
+    usage: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens: number;
+      cache_creation_input_tokens: number;
+    };
+    modelHint: string | null;
+  }) => void;
   /**
    * Per-turn boundary signal. Fires once per `SDKResultMessage`,
    * immediately after `onResult`. The cc-dispatcher wires this to a
@@ -1833,7 +1850,33 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // same outline.
     state.activeChapter = null;
     try {
-      state.events.onResult({ totalCostUsd: delta });
+      // SDK `usage` cache fields are nullable per the SDK type
+      // definition; coerce `?? 0` at this boundary so the cost-writer
+      // (and DB) never see NULL on a NOT NULL column.
+      // SDKResultSuccess has no direct `.model` field — pick the
+      // first key from `modelUsage` as the per-turn primary model.
+      // Multi-model turns lose secondary attribution; the dashboard
+      // is per-conversation aggregate (per migration 017 NG), so a
+      // single hint is sufficient for v1.
+      const u = msg.usage;
+      const modelHint = (() => {
+        const mu = (msg as { modelUsage?: Record<string, unknown> }).modelUsage;
+        if (mu && typeof mu === "object") {
+          const k = Object.keys(mu)[0];
+          return k ?? null;
+        }
+        return null;
+      })();
+      state.events.onResult({
+        totalCostUsd: delta,
+        usage: {
+          input_tokens: u?.input_tokens ?? 0,
+          output_tokens: u?.output_tokens ?? 0,
+          cache_read_input_tokens: u?.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: u?.cache_creation_input_tokens ?? 0,
+        },
+        modelHint,
+      });
     } catch (err) {
       reportSilentFallback(err, {
         feature: "soleur-go-runner",

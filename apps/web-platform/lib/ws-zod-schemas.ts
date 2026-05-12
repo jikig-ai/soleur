@@ -303,6 +303,12 @@ const usageUpdateSchema = z.strictObject({
   totalCostUsd: z.number(),
   inputTokens: z.number(),
   outputTokens: z.number(),
+  // Cache tokens — widened 2026-05-12 to close the dashboard
+  // cross-check gap vs the Anthropic Console for cached prompts.
+  // `0` when prompt caching is not engaged. Required (strictObject)
+  // so wire-emitters can't accidentally regress to the legacy shape.
+  cacheReadInputTokens: z.number(),
+  cacheCreationInputTokens: z.number(),
 });
 const fanoutTruncatedSchema = z.strictObject({
   type: z.literal("fanout_truncated"),

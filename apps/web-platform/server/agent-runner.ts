@@ -40,6 +40,7 @@ import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
+import { persistTurnCost } from "./cost-writer";
 import { selectChapter } from "./pdf-chapter-router";
 import { extractPdfText } from "./pdf-text-extract";
 import { FULL_TEXT_CAP_BYTES } from "./kb-document-resolver";
@@ -1848,10 +1849,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             assistantPersisted = true;
           }
 
-          // Capture cost data from SDK result (per-turn delta)
+          // Capture cost data from SDK result (per-turn delta). Cache
+          // tokens flow through too (NULL-coerced) — schema 041 added
+          // the columns; RPC v2 (migration 042) accepts the 5-arg shape.
           const costDelta = message.total_cost_usd ?? 0;
           const inputDelta = message.usage?.input_tokens ?? 0;
           const outputDelta = message.usage?.output_tokens ?? 0;
+          const cacheReadDelta = message.usage?.cache_read_input_tokens ?? 0;
+          const cacheCreationDelta =
+            message.usage?.cache_creation_input_tokens ?? 0;
           // Accumulate (NOT overwrite) into the abort-branch
           // accumulator. The SDK can yield multiple `result` events
           // in a single session (multi-turn agents), and the abort
@@ -1863,44 +1869,21 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             cost_usd: accumulatedUsage.cost_usd + costDelta,
           };
 
-          // SERVICE-ROLE: `increment_conversation_cost` is REVOKEd from
-          // authenticated (migration 017:43). Granting authenticated would
-          // require an `auth.uid() = user_id` guard in the RPC body to
-          // prevent cross-founder cost-counter inflation; that's a separate
-          // migration tracked as a follow-up. Service-role is safe here
-          // because the conversation's ownership was verified earlier in
-          // the session (tenant.from("conversations") in sendUserMessage,
-          // or the JWT-validated session start). agent-runner.ts is
-          // allowlisted (.service-role-allowlist).
-          // Fire-and-forget: cost tracking is non-blocking telemetry.
-          // A failure here drops per-turn cost data silently — mirror to Sentry
-          // per `cq-silent-fallback-must-mirror-to-sentry` so on-call sees
-          // cost-tracking drift instead of discovering it at monthly reconciliation.
-          supabase().rpc(
-            "increment_conversation_cost",
-            {
-              conv_id: conversationId,
-              cost_delta: costDelta,
-              input_delta: inputDelta,
-              output_delta: outputDelta,
-            },
-          ).then(({ error: costError }) => {
-            if (costError) {
-              log.error({ err: costError, conversationId }, "Failed to save cost data");
-              reportSilentFallback(costError, {
-                feature: "agent-cost-tracking",
-                op: "increment",
-                extra: { conversationId, costDelta, inputDelta, outputDelta },
-              });
-            }
-          });
-
-          sendToClient(userId, {
-            type: "usage_update",
-            conversationId,
+          // Delegate to the shared cost-writer helper so both this
+          // legacy path and the cc-soleur-go dispatcher path
+          // (`cc-dispatcher.ts` onResult) converge on a single set of
+          // side-effects: atomic RPC v2 (5 deltas), forensic
+          // `write_byok_audit` row, widened `usage_update` WS event,
+          // Sentry mirror per `cq-silent-fallback-must-mirror-to-sentry`.
+          persistTurnCost(userId, conversationId, streamLeaderId, {
             totalCostUsd: costDelta,
-            inputTokens: inputDelta,
-            outputTokens: outputDelta,
+            usage: {
+              input_tokens: inputDelta,
+              output_tokens: outputDelta,
+              cache_read_input_tokens: cacheReadDelta,
+              cache_creation_input_tokens: cacheCreationDelta,
+            },
+            modelHint: null,
           });
 
           // Sync: push changes to remote after session (connected repos only)

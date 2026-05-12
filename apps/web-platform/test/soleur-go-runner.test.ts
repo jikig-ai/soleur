@@ -572,7 +572,20 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     mock.emit(makeResult(0.25));
     await flushMicrotasks();
 
-    expect(events._results.at(-1)).toEqual({ totalCostUsd: 0.25 });
+    // onResult payload widened 2026-05-12 to carry the 4-token usage
+    // axis + model hint so the cost-writer can persist cache tokens
+    // and the audit row carries the correct attribution. modelUsage is
+    // an empty object in the fixture → modelHint resolves to null.
+    expect(events._results.at(-1)).toEqual({
+      totalCostUsd: 0.25,
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      modelHint: null,
+    });
   });
 
   it("KB Concierge: fires onTextTurnEnd once per SDKResultMessage (real-runner contract)", async () => {
