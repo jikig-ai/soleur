@@ -201,11 +201,53 @@ let _assertWriteScopeOverride:
 export function __setAssertWriteScopeForTests(
   fn: (u: string, c: string) => boolean,
 ): void {
+  // Defense-in-depth (PR-A2 security review H3): refuse to install the
+  // override outside a test environment. Without this guard a malicious /
+  // accidentally-imported call site in a prod-bundle code path could neutralize
+  // the sentinel for the process lifetime — module-singleton state with no
+  // caller authentication. Vitest sets `NODE_ENV=test`; production sets `production`.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "__setAssertWriteScopeForTests is not callable in production builds",
+    );
+  }
   _assertWriteScopeOverride = fn;
 }
 
 export function __resetAssertWriteScopeForTests(): void {
   _assertWriteScopeOverride = null;
+}
+
+// #3603 PR-A2 review H4 — `CC_PERSIST_USAGE=true` is the trigger for a new
+// GDPR-regulated persisted category (Art. 13(3) prior-disclosure surface).
+// Mirror the FIRST observation per process via `reportSilentFallback` so
+// post-hoc Art. 33 evidence ("when did this process start writing
+// messages.usage?") doesn't depend on Doppler audit-log correlation. The
+// pino + Sentry payload from `reportSilentFallback` carries a server-side
+// timestamp + `feature` tag; aggregation by `op: "cc-persist-usage-on"`
+// gives the operator a per-process flip timeline.
+let _ccPersistUsageFirstTrueObserved = false;
+function _observeCcPersistUsageFirstTrue(): void {
+  if (_ccPersistUsageFirstTrueObserved) return;
+  _ccPersistUsageFirstTrueObserved = true;
+  reportSilentFallback(null, {
+    feature: "cc-dispatcher",
+    op: "cc-persist-usage-on",
+    message:
+      "CC_PERSIST_USAGE=true observed for first time in this process — messages.usage writes are now active",
+    extra: {
+      // Anchors the 72h Art. 33 clock to a server-side timestamp the
+      // operator can correlate against Doppler change events.
+      first_observed_at: new Date().toISOString(),
+    },
+  });
+}
+
+// Test seam — reset the once-observed flag so multiple unit tests can
+// exercise the breadcrumb path without cross-test bleed. Never call from
+// production code.
+export function __resetCcPersistUsageObservationForTests(): void {
+  _ccPersistUsageFirstTrueObserved = false;
 }
 
 /**
@@ -1004,6 +1046,18 @@ export async function dispatchSoleurGo(
   // The SDK's session-id resume mechanism still owns transcript replay
   // for the agent — these rows are for attachment metadata durability and
   // for `api-messages.ts` history hydration on tab reload.
+  //
+  // #3603 W1 — same write-boundary sentinel as `saveAssistantMessage`.
+  // User-content rows carry PII; a misrouted dispatch persisting User A's
+  // text into User B's conversation is the same Art. 33/34 surface as the
+  // assistant row. Throws (rather than the assistant path's `return`)
+  // because this insert is awaited and a halt here cleanly aborts the
+  // dispatch via the existing user-INSERT-failure path below.
+  if (!assertWriteScope(userId, conversationId)) {
+    throw new Error(
+      "cc-dispatcher: assertWriteScope halted user-message persistence",
+    );
+  }
   const messageId = randomUUID();
   const { error: insertErr } = await supabase().from("messages").insert({
     id: messageId,
@@ -1126,10 +1180,14 @@ export async function dispatchSoleurGo(
     // Exact-match `"true"` only — any other truthy string keeps the flag
     // off (defense-in-depth against a half-set Doppler value). Default-off
     // at merge per AC9/AC11.
+    const flagOn = process.env.CC_PERSIST_USAGE === "true";
+    // #3603 PR-A2 review H4 — first-true observation per process gives the
+    // Art. 33 72h-clock a "when did we start collecting" evidence anchor,
+    // independent of when the Doppler flip happened. Module-scoped boolean
+    // ensures we mirror once, not on every persist call.
+    if (flagOn) _observeCcPersistUsageFirstTrue();
     const usageColumn =
-      process.env.CC_PERSIST_USAGE === "true" && opts?.usage
-        ? { cost_usd: opts.usage.costUsd }
-        : null;
+      flagOn && opts?.usage ? { cost_usd: opts.usage.costUsd } : null;
 
     const row: Record<string, unknown> = {
       id: randomUUID(),

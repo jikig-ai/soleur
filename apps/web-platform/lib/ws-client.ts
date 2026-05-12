@@ -977,13 +977,27 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // bubble on every parent render, regressing the 10-50 Hz token-stream
       // memo guarantee on long threads).
       status: m.status ?? undefined,
+      // #3603 W4 — `Message.usage` now carries TWO shapes: the legacy
+      // agent-runner `UsageSnapshot` (input_tokens + output_tokens +
+      // completed_actions) and the cc-router narrow shape (`cost_usd` only)
+      // gated on `CC_PERSIST_USAGE`. Field-presence branching avoids
+      // coercing `undefined` into the typed `AbortMarkerUsage.input_tokens`
+      // slot — readers downstream (`message-bubble.tsx`
+      // `renderAbortedAssistant`) already gate on `typeof === "number"` for
+      // the token sum, so partial shape is safe to pass through.
       usage:
         m.status === "aborted" && m.usage
           ? {
-              input_tokens: m.usage.input_tokens,
-              output_tokens: m.usage.output_tokens,
+              ...(typeof m.usage.input_tokens === "number"
+                ? { input_tokens: m.usage.input_tokens }
+                : {}),
+              ...(typeof m.usage.output_tokens === "number"
+                ? { output_tokens: m.usage.output_tokens }
+                : {}),
               cost_usd: m.usage.cost_usd ?? null,
-              completed_actions: m.usage.completed_actions ?? [],
+              ...(m.usage.completed_actions
+                ? { completed_actions: m.usage.completed_actions }
+                : {}),
             }
           : null,
     }));

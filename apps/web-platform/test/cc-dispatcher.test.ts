@@ -110,6 +110,7 @@ import {
   handleInteractivePromptResponseCase,
   dispatchSoleurGo,
   __resetDispatcherForTests,
+  __resetCcPersistUsageObservationForTests,
 } from "@/server/cc-dispatcher";
 // #3603 W1 plan §2.2.3 — hook P0 dedup reset into the test reset chain so a
 // future test that exercises the real `mirrorP0Deduped` (vs. this file's spy
@@ -133,6 +134,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
     __resetP0DedupForTests();
+    __resetCcPersistUsageObservationForTests();
     mockReportSilentFallback.mockClear();
     mockFetchUserWorkspacePath.mockReset();
     mockMessagesInsert.mockClear();
@@ -1547,18 +1549,38 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(row.status).toBeUndefined();
   });
 
-  it("T-W4-race: turnIndex tag ensures per-turn usage attaches to the correct row across two consecutive turns", async () => {
+  it("T-W4-race: per-turn `pendingTurnUsage` snapshot-clear-bump attaches each turn's cost to its own row + a LATE stale onResult attaches to the next turn (not bleeds back)", async () => {
+    // Test-design review 2026-05-12 flagged the earlier variant as a vacuous
+    // pass against the `turnIndex` tag — events fired sequentially per turn
+    // would pass even without the tag. Revised below to ALSO exercise the
+    // stale-onResult scenario:
+    //   Turn 0: onText → onResult(c0) → onTextTurnEnd (saves with c0,
+    //           snapshot-clear-bumps to turnIndex=1)
+    //   Stale:  onResult(c_stale) — fires AFTER turn 0's bump but BEFORE
+    //           turn 1's content. pendingTurnUsage gets tagged turnIndex=1
+    //           with the wrong cost.
+    //   Turn 1: onText → onResult(c1) overwrites pendingTurnUsage (still
+    //           tagged 1) → onTextTurnEnd saves with c1 (correct).
+    // Load-bearing assertion: row 0 carries c0 (NOT c_stale), row 1 carries
+    // c1 (NOT c_stale). Catches a regression where pendingTurnUsage isn't
+    // cleared per turn or where the snapshot bumps `currentTurnIndex`
+    // BEFORE reading pendingTurnUsage (which would cause a turnIndex mismatch
+    // and drop turn 0's usage).
     vi.stubEnv("CC_PERSIST_USAGE", "true");
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
 
     __setCcRunnerForTests(
       makeAssistantPersistenceStubRunner({
         onDispatch: (events) => {
-          // Turn N
+          // Turn 0
           events.onText("first reply");
           events.onResult?.({ totalCostUsd: 0.001 });
           events.onTextTurnEnd?.();
-          // Turn N+1 — usage MUST attach to row N+1, not N.
+          // Late stale onResult — currentTurnIndex is now 1 (bumped by the
+          // preceding onTextTurnEnd), so this captures with turnIndex=1.
+          // Turn 1's onResult below overwrites it.
+          events.onResult?.({ totalCostUsd: 0.999 });
+          // Turn 1
           events.onText("second reply");
           events.onResult?.({ totalCostUsd: 0.002 });
           events.onTextTurnEnd?.();
@@ -1728,18 +1750,30 @@ describe("cc-dispatcher singletons + orchestration", () => {
   // extended with a mismatch scenario asserting `mirrorP0Deduped` fires.
   // ---------------------------------------------------------------------------
 
-  it("T-W1-invariant-7: assertWriteScope returning false halts every assistant-row write (sentinel call-site smoke)", async () => {
+  it("T-W1-invariant-7: assertWriteScope is exercised at EVERY messages-write call site (user-INSERT + complete + aborted)", async () => {
     // Sentinel-only at HEAD: the production helper always returns `true`.
-    // Forcing it to `false` via the test seam proves the early-return wiring
-    // exists AT EVERY write call site (complete + aborted). A future refactor
-    // that drops a call site fails this test.
+    // Forcing it to fail at SPECIFIC call sites proves the halt wiring is
+    // present at each one. Call sequence (per `dispatchSoleurGo`):
+    //   Call 1: user-row INSERT (pre-runner). Throws on false.
+    //   Call 2: `onTextTurnEnd` → `saveAssistantMessage()` (complete path).
+    //           Returns silently on false.
+    //   Call 3: `onWorkflowEnded` abort branch → `saveAssistantMessage({status:"aborted"})`.
+    //           Returns silently on false.
+    // Call-counting spy: lets call 1 through (so dispatch reaches the runner),
+    // then halts calls 2 + 3. Tests ALL THREE call sites in a single dispatch.
     const {
       __setCcRunnerForTests,
       __setAssertWriteScopeForTests,
       __resetAssertWriteScopeForTests,
     } = await import("@/server/cc-dispatcher");
 
-    const scopeSpy = vi.fn(() => false);
+    let scopeCallCount = 0;
+    const scopeSpy = vi.fn(() => {
+      scopeCallCount += 1;
+      // First call (user-INSERT) succeeds so dispatch proceeds; subsequent
+      // calls (assistant complete + abort) halt.
+      return scopeCallCount === 1;
+    });
     __setAssertWriteScopeForTests(scopeSpy);
 
     try {
@@ -1768,19 +1802,22 @@ describe("cc-dispatcher singletons + orchestration", () => {
         persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
       });
 
-      // Both write call sites halt → zero assistant rows inserted.
+      // Settle the assistant call sites' microtasks.
       await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Exactly ONE user-INSERT (call 1 passed), ZERO assistant rows (calls
+      // 2 + 3 halted by sentinel).
+      const userRows = mockMessagesInsert.mock.calls
+        .map((c) => c[0] as { role?: string })
+        .filter((r) => r.role === "user");
+      expect(userRows).toHaveLength(1);
       expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
 
-      // Exactly TWO scope-spy calls — proves BOTH the complete-path
-      // (`onTextTurnEnd` → `saveAssistantMessage()`) and the abort-path
-      // (`onWorkflowEnded` text-present branch → `saveAssistantMessage({status:"aborted"})`)
-      // call sites are exercised. The `assertWriteScope` check runs BEFORE
-      // the accumulator snapshot-clear, so the false-return path leaves
-      // `accumulatedAssistantText` intact for the second `onText` to refresh
-      // — both write call sites see non-empty text and reach the sentinel.
-      // A future refactor that drops either call site fails this assertion.
-      expect(scopeSpy).toHaveBeenCalledTimes(2);
+      // Exactly THREE scope-spy invocations — proves all three call sites
+      // (user-INSERT, onTextTurnEnd→save, onWorkflowEnded→save({status:"aborted"}))
+      // run through the helper. A future refactor that drops any call site
+      // fails this assertion.
+      expect(scopeSpy).toHaveBeenCalledTimes(3);
       for (const call of scopeSpy.mock.calls) {
         // Receives the dispatch-closure identity tuple — when a future SDK
         // payload source is wired in, this signature is the single edit point.
