@@ -130,6 +130,8 @@ If the dev server was started in Step 1.5 (a background PID was recorded), kill 
 
 This step runs regardless of whether scenarios passed or failed.
 
+- After the kill, verify the server is actually down via the same `curl -sf --max-time 2 http://localhost:3000/ >/dev/null 2>&1 && echo alive || echo dead` probe from Step 1.5 — never via `pgrep -f <substring>`. The Bash tool wraps every command in a zsh shell-snapshot subshell whose argv contains your literal pattern string, so `pgrep -f "dev-server.mjs"` returns the wrapping subshell's own PID (different each call), making the cleanup appear to find a respawning process when the real service is already dead. See `knowledge-base/project/learnings/2026-05-12-pgrep-matches-shell-snapshot-subprocess.md`.
+
 ## Graceful Degradation
 
 The skill handles missing prerequisites without blocking the pipeline:
