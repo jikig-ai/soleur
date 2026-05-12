@@ -90,9 +90,13 @@ run_suite() {
   # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
   # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
   # microseconds substring (a leading zero would otherwise trigger octal).
+  # The `*.*` glob guard rejects bash-3.x values (where EPOCHREALTIME is unset
+  # and the captured value is empty or non-dotted) and exits elapsed_ms=0
+  # gracefully instead of arithmetic-overflowing on `${start#*.}` returning
+  # the whole string.
   local end="$EPOCHREALTIME"
   local elapsed_ms=0
-  if [[ -n "$start" && -n "$end" ]]; then
+  if [[ "$start" == *.* && "$end" == *.* ]]; then
     local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
     local end_us=$(( ${end%.*} * 1000000 + 10#${end#*.} ))
     elapsed_ms=$(( (end_us - start_us) / 1000 ))
@@ -132,8 +136,15 @@ fi
 # VITEST_SHARD (e.g., "1/2") is forwarded to vitest --shard for matrix sharding
 # in CI. When unset, vitest runs all files. The empty-string suppression via
 # ${VAR:+...} keeps local invocation byte-identical.
+#
+# VITEST_SHARD is passed via env: to the inner bash so the inner shell expands
+# it under its own quoting (single-quoted outer, double-quoted inner). This
+# blocks shell-injection if a caller ever sets VITEST_SHARD to a value
+# containing `;` or `$(…)`. The matrix literal in ci.yml is always `K/N`
+# today, but the script is a public surface — defense in depth.
 if want_webplat; then
-  run_suite "apps/web-platform" bash -c "cd apps/web-platform && npm run test:ci -- ${VITEST_SHARD:+--shard=$VITEST_SHARD} 2>&1"
+  run_suite "apps/web-platform" env VITEST_SHARD="${VITEST_SHARD:-}" \
+    bash -c 'cd apps/web-platform && npm run test:ci -- ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.

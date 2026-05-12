@@ -204,7 +204,11 @@ jobs:
         working-directory: apps/web-platform
 
       - name: Type-check web-platform
-        if: matrix.shard == '1/2'
+        # Gated to the first matrix run so we type-check once even though
+        # vitest runs are sharded. `strategy.job-index == 0` is matrix-
+        # resize-safe (survives 2→N changes); a literal `'1/2'` would
+        # silently stop running tsc if the matrix is renumbered.
+        if: strategy.job-index == 0
         run: npx tsc --noEmit
         working-directory: apps/web-platform
 
@@ -298,12 +302,13 @@ jobs:
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
         run: |
           fail=0
-          for shard in test-webplat test-bun test-scripts; do
-            case "$shard" in
-              test-webplat) result="$WEBPLAT_RESULT" ;;
-              test-bun)     result="$BUN_RESULT" ;;
-              test-scripts) result="$SCRIPTS_RESULT" ;;
-            esac
+          # Single colon-delimited iteration collapses the prior parallel
+          # for-list + case-arms. Adding a 4th shard now requires editing
+          # one line (plus needs: + env:); previously also required
+          # editing a separate case arm.
+          for entry in "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT"; do
+            shard="${entry%%:*}"
+            result="${entry#*:}"
             if [[ "$result" != "success" ]]; then
               echo "$shard: $result" >&2
               fail=1
