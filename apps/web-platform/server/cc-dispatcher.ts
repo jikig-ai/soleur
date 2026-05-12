@@ -1133,12 +1133,12 @@ export async function dispatchSoleurGo(
   // and live UI. Invariant: the value at the instant `onTextTurnEnd`
   // fires (or `onWorkflowEnded` flushes for the abort path) is what
   // persists. No reordering, no merge.
-  let accumulatedAssistantText = "";
+  let latestAssistantText = "";
   // #3603 W2 — flushed by `onWorkflowEnded` for non-`completed` statuses
   // so a late `onTextTurnEnd` (in-flight SDK callback after abort fires)
   // cannot double-write or overwrite the abort row. Closure-scoped per
   // dispatch invocation; fresh `false` for each `dispatchSoleurGo` call.
-  let workflowEnded = false;
+  let assistantTurnPersisted = false;
   // #3603 W4 — per-turn cost telemetry captured pre-`onTextTurnEnd`.
   // `currentTurnIndex` is the closure-scoped turn counter; `pendingTurnUsage`
   // holds the cost captured by `onResult` tagged with the turnIndex active at
@@ -1154,12 +1154,13 @@ export async function dispatchSoleurGo(
   // legacy agent-runner path emits the full `UsageSnapshot` (input_tokens,
   // output_tokens, cost_usd, completed_actions[]) on `'aborted'` turns —
   // see `Message.usage` doc-comment in `lib/types.ts`.
-  type AssistantPersistMode = {
-    status?: "aborted";
+  type AssistantPersistMode = "complete" | "aborted";
+  interface AssistantPersistOpts {
+    mode: AssistantPersistMode;
     usage?: { costUsd: number } | null;
-  };
+  }
 
-  async function saveAssistantMessage(opts?: AssistantPersistMode): Promise<void> {
+  async function saveAssistantMessage(opts: AssistantPersistOpts): Promise<void> {
     // #3603 W1 — Cross-tenant write-boundary sentinel. cc-path uses
     // service-role for INSERT (RLS-bypass on writes). RLS catches reads;
     // this guard catches writes. Returns `false` only via the test seam
@@ -1171,8 +1172,8 @@ export async function dispatchSoleurGo(
     // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
     // mutate `fullText` while this insert is in flight (single async loop
     // serializes onText/onTextTurnEnd, but the await yields the microtask).
-    const fullText = accumulatedAssistantText;
-    accumulatedAssistantText = "";
+    const fullText = latestAssistantText;
+    latestAssistantText = "";
     if (!fullText) return;
 
     // #3603 W4 — gated single-read site for `CC_PERSIST_USAGE`. The hot-path
@@ -1188,7 +1189,7 @@ export async function dispatchSoleurGo(
     // ensures we mirror once, not on every persist call.
     if (flagOn) _observeCcPersistUsageFirstTrue();
     const usageColumn =
-      flagOn && opts?.usage ? { cost_usd: opts.usage.costUsd } : null;
+      flagOn && opts.usage ? { cost_usd: opts.usage.costUsd } : null;
 
     const row: Record<string, unknown> = {
       id: randomUUID(),
@@ -1202,14 +1203,14 @@ export async function dispatchSoleurGo(
     // Omit `status` for the normal completion path — migration 040's
     // DEFAULT of `'complete'` applies. Only the abort branch writes
     // `status: "aborted"` explicitly.
-    if (opts?.status === "aborted") {
+    if (opts.mode === "aborted") {
       row.status = "aborted";
     }
 
     // Hoisted op slug so `mirrorWithDebounce` receives the same value for
     // both `op` and `errorClass` (the dedupe key) — drift between them
     // would silently split the Sentry dedupe stream.
-    const opSlug = opts?.status === "aborted"
+    const opSlug = opts.mode === "aborted"
       ? "save-assistant-message-aborted-failed"
       : "save-assistant-message-failed";
 
@@ -1237,7 +1238,7 @@ export async function dispatchSoleurGo(
       // #3603 W8 — replace, not append. Mirrors chat-state-machine REPLACE
       // semantic so persisted content matches the UI's live render.
       // See accumulator declaration comment above for invariant + AC11 source.
-      accumulatedAssistantText = text;
+      latestAssistantText = text;
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -1265,7 +1266,7 @@ export async function dispatchSoleurGo(
       // flushed an abort row would double-write or, worse, overwrite the
       // "aborted" status row with a "complete" one. Silent no-op:
       // user already saw the partial text (rendered live; abort row hydrates).
-      if (workflowEnded) {
+      if (assistantTurnPersisted) {
         // silent: turn was already persisted via the abort path
         return;
       }
@@ -1280,6 +1281,7 @@ export async function dispatchSoleurGo(
       currentTurnIndex = turnSnapshot + 1;
       // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
       void saveAssistantMessage({
+        mode: "complete",
         usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
       });
       // Per-turn boundary → terminal stream event for the cc_router bubble.
@@ -1305,27 +1307,27 @@ export async function dispatchSoleurGo(
       // BEFORE the existing user-visible routing below. Mirrors the legacy
       // abort contract at `agent-runner.ts:2044-2055`. Skips on
       // `status: "completed"` because the normal `onTextTurnEnd` path
-      // already wrote (or will write) the row. The `workflowEnded` flag
+      // already wrote (or will write) the row. The `assistantTurnPersisted` flag
       // suppresses a late `onTextTurnEnd` arriving after this flush.
       // Use the typed `ABORT_FLUSH_STATUSES` set (exhaustively type-checked
       // via `_abortFlushExhaustive`) rather than a bare `!== "completed"` so
       // a future `WorkflowEnd` variant cannot silently route through abort
       // without a deliberate listing here.
       if (ABORT_FLUSH_STATUSES.has(end.status)) {
-        if (accumulatedAssistantText.length > 0) {
+        if (latestAssistantText.length > 0) {
           // #3603 W4 — text-present abort: capture the per-turn usage tagged
           // to the active turn index, then clear pendingTurnUsage so a late
           // onTextTurnEnd cannot re-attach the stale value. Set
-          // `workflowEnded = true` SYNCHRONOUSLY so the late onTextTurnEnd
+          // `assistantTurnPersisted = true` SYNCHRONOUSLY so the late onTextTurnEnd
           // cannot race the await microtask.
           const turnUsage =
             pendingTurnUsage?.turnIndex === currentTurnIndex
               ? pendingTurnUsage
               : null;
           pendingTurnUsage = null;
-          workflowEnded = true;
+          assistantTurnPersisted = true;
           void saveAssistantMessage({
-            status: "aborted",
+            mode: "aborted",
             usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
           });
         } else if (pendingTurnUsage) {
