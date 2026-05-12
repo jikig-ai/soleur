@@ -8,7 +8,7 @@ permalink: legal/privacy-policy/
 <section class="page-hero">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 12, 2026</p>
   </div>
 </section>
 
@@ -17,7 +17,7 @@ permalink: legal/privacy-policy/
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 29, 2026 (added conversation data as PII category in Section 4.7, updated purpose and retention for conversation history, added conversation data retention to Section 7, added conversation data export right to Section 8, added Web Platform cookies cross-reference to Section 12)
+**Last Updated:** May 12, 2026 (forward-ported §4.9 Push Notification Subscriptions and §5.9 Resend from canonical per #3666)
 
 ## 1. Introduction
 
@@ -110,8 +110,11 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 - **Account data:** Email address (registration), authentication tokens, and session cookies. If you sign in via an OAuth provider (Google, Apple, GitHub, or Microsoft), we also receive your provider user ID, display name, and profile picture URL from the provider. Accounts with matching verified email addresses are automatically linked.
 - **Workspace data:** User workspaces and encrypted API keys (BYOK -- bring your own key). API keys are encrypted using AES-256-GCM before storage.
 - **Subscription data:** Subscription status and billing metadata (managed by Stripe). Card data is handled exclusively by Stripe via Stripe Checkout and never reaches Jikigai servers (PCI SAQ-A).
-- **Conversation data:** Conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata) stored in the Supabase database. Conversations are associated with the user's account via user_id. **Partial assistant outputs from aborted turns** -- assistant text generated before a user-initiated Stop or an involuntary client disconnect -- are preserved in the same conversation history with an "aborted" status marker, the token cost of the partial turn, and the list of completed actions. The purpose is to give you a faithful record of what the Service produced (and billed against your usage) on your behalf. Partial-turn rows are retained for the same period as the parent conversation (see the retention paragraph immediately below this list, and Section 7 for the overall retention policy) unless you exercise your erasure right under Section 8.1. See Section 5.5 of the [Terms & Conditions](/legal/terms-and-conditions/) for the consumption terms that govern partial-turn billing and side effects; your erasure rights (GDPR Article 17) under Section 8.1 below apply equally to partial-turn rows.
+- **Conversation data:** Conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata) stored in the Supabase database. Conversations are associated with the user's account via user_id. **Partial assistant outputs from aborted turns** -- assistant text generated before a user-initiated Stop or an involuntary client disconnect -- are preserved in the same conversation history with an "aborted" status marker, the token cost of the partial turn, and the list of completed actions. The purpose is to give you a faithful record of what the Service produced (and billed against your usage) on your behalf. Partial-turn rows are retained for the same period as the parent conversation (see the retention paragraph immediately below this list, and Section 7 for the overall retention policy) unless you exercise your erasure right under Section 8.1. See Section 5.5 of the [Terms & Conditions](/legal/terms-and-conditions/) for the consumption terms that govern partial-turn billing and side effects; your erasure rights (GDPR Article 17) under Section 8.1 below apply equally to partial-turn rows. In rare cases of unexpected service interruption (e.g., kernel-level process termination or container restart) after generation but before persistence completes, a small portion of an in-progress reply may not be retained in the conversation record.
+- **Per-turn cost telemetry (Concierge surface):** On conversations handled by the Concierge code path (the `/soleur:go` surface), each completed assistant turn is annotated with a small `usage` record attached to the message row. On this surface the record is **deliberately narrowed to a single numeric field -- the turn's cost in US dollars** (`{ cost_usd: <number> }`); token counts are not persisted on completed Concierge turns, in line with the data-minimisation principle (Article 5(1)(c) GDPR). The legacy single-leader chat surface continues to persist the wider snapshot already described in the preceding bullet (input tokens, output tokens, cost, and completed-action list) on aborted turns only. The purposes of the cost field are: (i) subscription cost accounting; (ii) per-user usage observability via the in-product `/api/usage` aggregator; and (iii) operator-side resolution of cost-cap-related billing inquiries. The legal basis, recipients, hosting region, technical and organisational measures, and retention period are the same as the parent conversation row: Article 6(1)(b) GDPR (contract performance); processed by Supabase (eu-west-1, Ireland) on Hetzner-hosted infrastructure (hel1, Finland); no new third-party recipients; protected by Supabase Row-Level Security gated on `conversation_id` ownership and a service-role write boundary enforced by the cc-dispatcher `assertWriteScope` sentinel; cascade-deleted on account deletion via foreign key (`ON DELETE CASCADE`).
 - **Technical data:** IP addresses and request headers processed by Cloudflare CDN/proxy.
+
+<!-- 2026-05-12: Article 13(3) prior-disclosure refresh for messages.usage column (PR #3603 / PR-A2 #3648). CC_PERSIST_USAGE=true active in prd. -->
 
 **Purpose:** Providing the Web Platform service, including account management, workspace provisioning, subscription billing, and conversational AI interactions with domain-specific agents.
 
@@ -132,6 +135,20 @@ The Web Platform allows authenticated users to share individual knowledge base d
 - **Revocation:** The document owner can revoke a share link at any time, which takes immediate effect. After revocation, the shared URL returns an error. However, Jikigai cannot guarantee that recipients have not copied or redistributed the content prior to revocation.
 
 <!-- End: KB sharing -->
+
+<!-- Added 2026-04-13: Push notifications -->
+
+### 4.9 Push Notification Subscriptions
+
+When you enable push notifications on the Web Platform, we store your push subscription data:
+
+- **Data collected:** Push subscription endpoint URL, encryption keys (p256dh, auth), and timestamps (created, last used). This data is associated with your user account.
+- **Purpose:** Delivering browser push notifications when an AI agent requires your input (review gate events) and you are not actively connected to the Web Platform.
+- **Legal basis:** Consent (Article 6(1)(a) GDPR) -- push subscriptions are created only after you explicitly grant notification permission via the browser's permission prompt.
+- **Retention:** Push subscription data is retained while your account is active. Expired or invalid subscriptions (HTTP 410 Gone) are deleted automatically. All subscription data is deleted upon account deletion (cascade delete via foreign key).
+- **Withdrawal:** You can revoke notification permission at any time through your browser's settings, which prevents new notifications. You can also remove stored subscriptions by disabling notifications in your browser.
+
+<!-- End: Push notifications -->
 
 ## 5. Third-Party Services
 
@@ -201,6 +218,16 @@ The Web Platform at `app.soleur.ai` uses **Cloudflare** ([cloudflare.com](https:
 - **DPA:** [Cloudflare Customer Data Processing Agreement](https://www.cloudflare.com/cloudflare-customer-dpa/).
 - Cloudflare uses the EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification for international data transfers.
 
+### 5.9 Resend (Web Platform Transactional Email)
+
+We use **Resend** ([resend.com](https://resend.com)) to send transactional email notifications from the Web Platform. Resend Inc acts as a data processor on our behalf.
+
+- **Data processed:** Recipient email address, email subject, and email body content (review gate notification summaries).
+- **Purpose:** Sending email notifications when an AI agent requires user input and the user has no active push notification subscriptions.
+- **DPA:** [Resend Data Processing Agreement](https://resend.com/legal/dpa) (incorporated into the Terms of Service, Section 7: Data Processing, automatically applicable).
+- Resend is a US-based service. International data transfers are covered by the EU-US Data Privacy Framework (DPF) and Standard Contractual Clauses (SCCs).
+- **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR) -- transactional notifications are necessary to inform users of pending decisions that block AI agent progress, which is core to the service functionality.
+
 ## 6. Legal Basis for Processing (GDPR -- EU Users)
 
 For users in the European Union or European Economic Area:
@@ -239,7 +266,7 @@ If you are located in the EU or EEA, you have the following rights with respect 
 - **Right to object** (Article 21) -- the right to object to processing based on legitimate interests.
 - **Right to lodge a complaint** -- the right to file a complaint with your local Data Protection Authority.
 
-For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, conversation data, and subscription data by contacting <legal@jikigai.com>. You may request export of your conversation history (messages and metadata) in a structured, machine-readable format under the right to data portability (Article 20). To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
+For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, conversation data, and subscription data by contacting <legal@jikigai.com>. You may request export of your conversation history (messages and metadata) in a structured, machine-readable format under the right to data portability (Article 20). Conversation-history exports reflect the persistence limitation described in Section 4.7. To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
 
 ### 8.2 Rights Under US Privacy Laws
 

@@ -131,6 +131,68 @@ describe("handleConversationMessages", () => {
     expect(body.workflowEndedAt).toBe("2026-04-27T12:00:00Z");
   });
 
+  test("response includes createdAt from the conversation row (PR-B #3603)", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: USER_ID } },
+      error: null,
+    });
+
+    const convChain = mockQueryChain({
+      id: CONV_ID,
+      total_cost_usd: "0",
+      input_tokens: 0,
+      output_tokens: 0,
+      workflow_ended_at: null,
+      created_at: "2026-05-08T10:00:00Z",
+    });
+    const msgChain = mockQueryChain([]);
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "conversations") return convChain;
+      if (table === "messages") return msgChain;
+      return mockQueryChain(null);
+    });
+
+    const req = makeReq("valid-token");
+    const res = makeRes();
+
+    await handleConversationMessages(req, res, CONV_ID);
+
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body.createdAt).toBe("2026-05-08T10:00:00Z");
+  });
+
+  test("createdAt is null when the conversation row has no created_at (PR-B #3603, defensive)", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: USER_ID } },
+      error: null,
+    });
+
+    const convChain = mockQueryChain({
+      id: CONV_ID,
+      total_cost_usd: "0",
+      input_tokens: 0,
+      output_tokens: 0,
+      workflow_ended_at: null,
+      created_at: null,
+    });
+    const msgChain = mockQueryChain([]);
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "conversations") return convChain;
+      if (table === "messages") return msgChain;
+      return mockQueryChain(null);
+    });
+
+    const req = makeReq("valid-token");
+    const res = makeRes();
+
+    await handleConversationMessages(req, res, CONV_ID);
+
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body.createdAt).toBeNull();
+  });
+
   test("workflowEndedAt is null when the conversation has not ended (review F3 #2886)", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: USER_ID } },
@@ -159,6 +221,70 @@ describe("handleConversationMessages", () => {
     expect(res._status).toBe(200);
     const body = JSON.parse(res._body);
     expect(body.workflowEndedAt).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // #3603 FR6 — Hydration regression test.
+  //
+  // Approach-2 (pre-PR-A1) filtered cc-router rows out of the hydration
+  // SELECT, which surfaced as "Continue Thread" empty-state on resume of a
+  // cc-routed conversation. The fix is the absence of a filter — the SELECT
+  // in `api-messages.ts:76-88` does NOT branch on `leader_id`, so BOTH the
+  // legacy `soleur_go` rows and the new `cc_router` rows are returned.
+  //
+  // This test guards against re-introduction: a future refactor that adds
+  // `.eq("leader_id", "soleur_go")` (or filters out cc_router) breaks here.
+  // ---------------------------------------------------------------------------
+  test("FR6: hydration returns BOTH cc_router and soleur_go leader rows (no leader_id filter)", async () => {
+    // Guards against approach-2 regression: cc rows must NOT be filtered from hydration.
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: USER_ID } },
+      error: null,
+    });
+
+    const convChain = mockQueryChain({
+      id: CONV_ID,
+      total_cost_usd: "0",
+      input_tokens: 0,
+      output_tokens: 0,
+      workflow_ended_at: null,
+    });
+    // Two assistant rows in the same conversation: one legacy `soleur_go`,
+    // one cc `cc_router`. The handler MUST return both.
+    const msgChain = mockQueryChain([
+      {
+        id: "msg-legacy",
+        role: "assistant",
+        content: "legacy soleur_go reply",
+        leader_id: "soleur_go",
+        created_at: "2026-05-12T10:00:00Z",
+      },
+      {
+        id: "msg-cc",
+        role: "assistant",
+        content: "cc_router reply",
+        leader_id: "cc_router",
+        created_at: "2026-05-12T10:00:01Z",
+      },
+    ]);
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "conversations") return convChain;
+      if (table === "messages") return msgChain;
+      return mockQueryChain(null);
+    });
+
+    const req = makeReq("valid-token");
+    const res = makeRes();
+
+    await handleConversationMessages(req, res, CONV_ID);
+
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body.messages).toHaveLength(2);
+    const leaderIds = (body.messages as Array<{ leader_id: string }>)
+      .map((m) => m.leader_id)
+      .sort();
+    expect(leaderIds).toEqual(["cc_router", "soleur_go"]);
   });
 
   test("cost fields default to zero when conversation has no cost data", async () => {

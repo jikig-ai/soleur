@@ -104,6 +104,27 @@ Do NOT emit telemetry when `USER_BRAND_CRITICAL=false` — the gate only records
 
 **Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped because every prior gate weighed the decision on technical and convenience axes only, and no gate asked what one user's data breach would cost the brand. This is the earliest layer of enforcement for the workflow gate; it pairs with plan Phase 2.6 (template), deepen-plan Phase 4.6 (halt), preflight Check 6 (ship gate), and the `user-impact-reviewer` conditional agent to close the loop.
 
+### Phase 0.4: Lane Auto-Detect and Selection
+
+Select an orchestration lane that describes the Phase 0.5 domain-leader breadth. Canonical vocabulary: `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` `## Lane Inference`. Written to spec.md frontmatter at Phase 3.6.
+
+**Skip if** `USER_BRAND_CRITICAL=true` from Phase 0.1 — set `LANE=cross-domain` and proceed to Phase 0.25 without prompting. The framing question was already answered; avoid double-prompting.
+
+**Otherwise:**
+
+1. **Keyword scan** the feature description against the `## Lane Inference` table.
+
+2. **Pipeline / headless mode detection.** If the parent invocation was `/soleur:one-shot`, `/soleur:go --headless`, or any non-interactive context (no TTY available, `HEADLESS_MODE=true`), set `LANE=<keyword-inference-result>` directly — fail-closed to `cross-domain` if no keyword matches. Skip the AskUserQuestion gate. Echo to the operator-facing terminal: `Phase 0.4: pipeline mode — lane=<value> (inferred)`. Continue.
+
+3. **Interactive mode — AskUserQuestion.** Three presets (the runtime appends auto-Other automatically — do NOT include "Other" as a fourth preset per the 4-option cap):
+   - Header: `"Lane"`
+   - Question: `"Phase 0.5 domain-leader breadth. Inferred: <inferred-lane>."`
+   - Options: the three lanes ordered with the inferred lane first labeled `(Recommended)`. Each option's `description` quotes the Phase 0.5 effect from the canonical table.
+
+4. **Resolve response.** If the operator picks a preset, set `LANE=<picked>`. If the operator picks "Other" and the text resolves to a literal lane value, use it. **If "Other" does not resolve, fail-closed:** `LANE=cross-domain` AND echo to operator terminal: `Phase 0.4: free-text "<text>" did not resolve — fail-closed to cross-domain.` (Visible terminal echo, not just artifact note — per spec-flow G3.)
+
+5. **Operator-override telemetry note (FR6).** When the chosen lane differs from the keyword-inferred default, add a one-line bullet to the brainstorm doc body's `## Lane` section: `Lane override: inferred=<inferred>, chosen=<chosen>.` Also echo to operator terminal so the override is visible immediately (not just on doc re-read).
+
 ### Phase 0.25: Roadmap Freshness Check
 
 Domain leaders read `knowledge-base/product/roadmap.md` as ground truth. If the roadmap's status columns are stale, every domain assessment is unreliable. This step syncs the roadmap with GitHub milestone data before domain leaders are spawned.
@@ -118,6 +139,16 @@ Domain leaders read `knowledge-base/product/roadmap.md` as ground truth. If the 
 6. If any changes were made, commit: `git add knowledge-base/product/roadmap.md && git commit -m "docs: sync roadmap statuses from GitHub milestones"`.
 
 **Why:** In #1745, the CPO assessed KB sharing as premature because "KB API and viewer are not started" — but both had been shipping for weeks. The stale roadmap caused a domain leader to give incorrect sequencing advice, wasting a brainstorm cycle.
+
+### Phase 0.4: Linear Context Preflight
+
+Scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/]+/issue/`. If any match:
+
+1. Use the **Skill tool**: `skill: soleur:linear-fetch`, args: "$ARGUMENTS". The skill returns two artifacts: `agent_context` (the markdown blob + image content blocks, streamed into THIS brainstorm conversation only) and `persist_safe_summary` (the same text with every `uploads.linear.app/*` URL redacted to `[linear-image: REDACTED]`).
+2. The brainstorm parent conversation retains `agent_context` for Phase 2 Synthesis and Phase 3 Capture — when synthesizing or writing the brainstorm doc, you may reference the visual content directly but MUST NOT write any `uploads.linear.app` URL into the brainstorm file. Use `persist_safe_summary` for any direct quotation of issue body text in the brainstorm doc.
+3. When Phase 0.5 spawns domain leaders via Task, embed `persist_safe_summary` (NOT `agent_context`, NOT `$ARGUMENTS`) in the leader prompt's context section. Task subagents inherit prompt text only — they do not receive image content blocks (see `knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`). The leaders' assessment will be text-only-aware; the brainstorm parent retains the visual context for its own synthesis.
+
+Phase 0.4 must complete before Phase 0.5 spawns leaders. The two phases are sequential despite Phase 0.5 internally parallelizing leader spawns. If no Linear references match in `$ARGUMENTS`, Phase 0.4 is a no-op and the brainstorm proceeds directly to Phase 0.5 unchanged.
 
 ### Phase 0.5: Domain Leader Assessment
 
@@ -139,10 +170,15 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "New skills, agents, or user-facing capabilities must"
 ```
 
+0. **Lane-driven domain-set sizing (spec FR4).** Read `LANE` from Phase 0.4.
+   - `LANE=procedural`: Skip Phase 0.5 entirely; echo `Phase 0.5: skipped (lane=procedural)` to the operator terminal so the bypass of 8 potential leaders is visible (per spec-flow G2); proceed to Phase 1.
+   - `LANE=single-domain`: After step 1 selects the relevant-domain set, spawn only the single highest-relevance leader. On tie at highest score, fall back to **config declaration order** in `brainstorm-domain-config.md` domain table (first match wins). No AskUserQuestion at this point — tie-break is deterministic to support pipeline/headless mode.
+   - `LANE=cross-domain`: After step 1, if fewer than 2 domains matched Assessment Questions, expand by adding the next-highest-relevance domain not yet in the set; tie-break by config declaration order; repeat until ≥2 leaders fire. Echo the expansion: `Phase 0.5: cross-domain expansion added <domain> (relevance tied; config-order tie-break)` to the operator terminal (per spec-flow G6).
+   - The existing `USER_BRAND_CRITICAL=true` triad override (step 2) wins unconditionally — the triad is always mandatory when set; `LANE` shapes any additional leader inclusion only.
 1. Read the feature description and assess relevance against each domain in the table above using the Assessment Question column.
 2. **External-product-comparison default:** If Phase 1.0 ran (the feature description references an external platform/product) OR the feature description contains a URL to a competitor's product, treat **CPO and CMO as default-relevant** regardless of the relevance assessment in step 1. External-product comparisons import framing baked in by the comparison source (architecture, target user, positioning); CPO + CMO are the leaders whose first job is to challenge those assumptions before architecture-first leaders (CTO) commit context to designing the wrong product correctly. See `knowledge-base/project/learnings/2026-05-05-brainstorm-spawn-cpo-cmo-early-on-external-product-trigger.md`.
-3. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
-4. **In-flight feature refresh:** If the feature description references one or more GitHub issues with an existing plan that carries `brand_survival_threshold` and `## Domain Review (carry-forward)` sections (detect via `gh issue view <N> --json body` + grep for `plan:.*\.md` or by referenced plan path), AskUserQuestion: **carry-forward only** (reuse plan's leader sign-offs verbatim; user-impact-reviewer at PR review remains the load-bearing gate) vs **focused refresh** (spawn leaders with prompts narrowly scoped to: does User-Brand Impact still hold under the new scope decision; any code drift since plan date; one new delta this brainstorm introduces). Cap refresh prompts at 250-350 words per agent; forbid sub-agent spawning. See `knowledge-base/project/learnings/2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record.md` Pattern 3.
+3. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If Phase 0.4 fired (Linear references detected and `linear-fetch` returned a `persist_safe_summary`), the `{desc}` substitution MUST use `persist_safe_summary` in place of the raw `$ARGUMENTS` — never the `agent_context` artifact, never a `uploads.linear.app` URL. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
+4. **In-flight feature refresh:** If the feature description references one or more GitHub issues with an existing plan that carries `brand_survival_threshold` and `## Domain Review (carry-forward)` sections (detect via `gh issue view <N> --json body` + grep for `plan:.*\.md` or by referenced plan path), AskUserQuestion: **carry-forward only** (reuse plan's leader sign-offs verbatim; user-impact-reviewer at PR review remains the load-bearing gate) vs **focused refresh** (spawn leaders with prompts narrowly scoped to: does User-Brand Impact still hold under the new scope decision; any code drift since plan date; one new delta this brainstorm introduces; **does any inherited transparency/disclosure surface (banner, blast notification, in-product banner) still match THIS PR's audience — drop if the affected cohort is reachable by a cheaper, more honest channel** per `knowledge-base/project/learnings/2026-05-12-brainstorm-re-audit-inherited-transparency-surfaces.md`). Cap refresh prompts at 250-350 words per agent; forbid sub-agent spawning. See `knowledge-base/project/learnings/2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record.md` Pattern 3.
 5. If the user explicitly requests a brand workshop or validation workshop (e.g., "start brand workshop", "run validation workshop"), follow the named workshop section below instead of spawning an assessment.
 6. If no domains are relevant, continue to Phase 1.
 
@@ -165,11 +201,13 @@ If the feature description references an external platform, marketplace, or serv
 **Pre-research: check existing KB artifacts first.** Before spawning any agents, run one local check for prior brainstorms and specs matching the feature's topic keywords:
 
 ```bash
-find knowledge-base/project/brainstorms knowledge-base/project/specs \
+find knowledge-base/project/brainstorms knowledge-base/project/specs knowledge-base/project/learnings \
   -maxdepth 3 -type f -iname "*<keyword>*" 2>/dev/null | head -n 20
 ```
 
 If prior artifacts exist, read them and frame the research agent prompts as "given these prior decisions, what's changed and what gaps remain?" rather than "research this topic cold." **Why:** In the 2026-04-17 BYOK usage dashboard brainstorm, the prior `2026-04-10-byok-cost-tracking-brainstorm.md` and `specs/feat-byok-cost-tracking/spec.md` had already decided scope; agents rediscovered them mid-session instead of building on them. See `knowledge-base/project/learnings/2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites.md`. Use `-type f` to avoid false positives from empty spec directories left by prior `worktree-manager.sh feature` runs that bailed before writing spec.md.
+
+**Write-mostly artifact diagnosis.** When the prior-art grep surfaces an existing ledger/queue/backlog/inventory that matches the claimed gap, check whether it has any closure markers (resolution status, linked closing issue, or `gh issue list --state closed --search "<topic>"` hits). An artifact with zero closures over months is a falsifiable signal that automation producing *more entries* will compound the backlog, not the knowledge — reframe the brainstorm to ship the lifecycle/closure prereq first and let 60-day closure evidence decide whether the production loop is worth building. **Why:** 2026-05-12 #2723 tech-debt-tracker brainstorm — issue framed as "no persistent ledger" but `knowledge-base/project/learnings/technical-debt/` already had 11 entries with structured frontmatter and zero closures; the triad reframed to lifecycle prereq (#2723) + deferred scheduled scanner (#3650) with ALL-must-hold re-evaluation criteria, avoiding a CI-report-nobody-reads outcome. See `knowledge-base/project/learnings/2026-05-12-brainstorm-write-mostly-artifact-diagnosis-and-lifecycle-prereq.md`.
 
 **Also check sibling/closed issues for prior framings of the same mechanism.** When the feature_description references `#N` with a parent (`Parent: #M` in the body or an umbrella issue), read the parent's child list AND run `gh issue list --state all --search "<core-mechanism-keywords>"` to surface deferred or closed prior framings. **Why:** 2026-05-11 #2720 brainstorm — the issue was a re-framing of #421 (deferred Layer 2 of self-healing-workflow); without this check, the brainstorm would have produced a parallel spec orphaning #421. See `knowledge-base/project/learnings/2026-05-11-brainstorm-parallel-domain-and-research-fan-out-and-duplicate-issue-discovery.md`.
 
@@ -194,6 +232,10 @@ Run these agents **in parallel** to gather context before dialogue. **Spawn doma
 **Treating `claude[bot]` / `bot-fix/attempted` comments as read-only context, not recommendations.** When the issue carries a `bot-fix/attempted` label or `claude[bot]` comment trail, the bot's chosen fix shape optimized for the `fix-issue` skill's single-file constraint — not for brand-survival or user-impact threshold. Read what the bot tried for context, then re-derive the fix shape from leader consensus (Phase 0.5). The bot's "needs multi-file" bail-out is a handoff signal, never an endorsement of the partial shape it attempted. See `knowledge-base/project/learnings/2026-05-07-bot-fix-single-file-constraint-not-a-signal-for-brainstorm-fix-shape.md`.
 
 **Cross-checking leader infra/substrate claims against repo-research.** When a domain leader (CTO, CPO, etc.) returns a recommendation that names a specific substrate ("use Vercel cron", "Edge Function + cron poll", "the existing X queue") with phrasing like "already wired" / "already running" / "identical auth model", verify the claim with a targeted grep BEFORE treating it as authoritative. Read the parallel repo-research report first — leader agents reason strategically and may prescribe substrates that don't exist in *this* codebase. If grep returns zero matches for the substrate's diagnostic symbol (`cron` config, `setInterval` site, Edge Function directory), treat the leader recommendation as a NEW substrate proposal (with the ops cost that entails), not a "use what's there" recommendation. **Why:** 2026-05-12 D-DSAR-art15 brainstorm — CTO recommended "Vercel cron + serverless" with "already running" phrasing; repo-research confirmed no Vercel cron and no Edge Functions directory were wired (only `pg_cron` + one `setInterval` site). Catching this at brainstorm produced three candidate substrates in Open Questions; missing it would have produced a spec premised on infra that doesn't exist. See `knowledge-base/project/learnings/2026-05-12-anticipatory-hook-bypass-and-leader-substrate-cross-check.md`.
+
+**Verifying issue-body architectural constraints against the plugin-wide rule corpus.** When the feature description quotes an architectural constraint from the issue body (e.g., "no stdlib Python CLI", "no X allowed in skills"), verify it against `plugins/soleur/AGENTS.md` and a spot-check of `plugins/soleur/skills/**/scripts/` BEFORE letting it bound the option space at Phase 2. Issue bodies are written at one point in time and drift from the plugin's actual practice; uncritically accepting a constraint that overstates the rule cuts off viable architectures and biases toward heavier alternatives. See `knowledge-base/project/learnings/2026-05-12-brainstorm-defer-decision-issue-body-rule-drift-and-oauth-only-bundling-scope-bound.md` Pattern 1.
+
+**Tier 2 cannibalization lens for competitive-audit umbrella candidates.** When the feature description is a single candidate from a competitive-audit umbrella's Tier 2 list, list the umbrella's explicit reject decisions, count how many sibling candidates already shipped, and ask "if we ship N more, do we reconstruct the rejected outcome?" If yes, the bar for this candidate is higher than its own merits — surface the cumulative count in the Domain Assessments so reviewers see the pattern. See `knowledge-base/project/learnings/2026-05-12-brainstorm-defer-decision-issue-body-rule-drift-and-oauth-only-bundling-scope-bound.md` Pattern 3.
 
 If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 
@@ -351,6 +393,7 @@ Ensure the brainstorms directory exists before writing.
    - Fill in Non-Goals from what was explicitly excluded
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
+   - **spec.md frontmatter MUST include `lane: <value>`** where `<value>` is the resolved `LANE` from Phase 0.4. spec.md is the canonical post-Phase-3.6 lane source for downstream `plan` and `work` skills (per `## Lane Inference` carry-forward contract). spec.md frontmatter MUST also include `brand_survival_threshold:` matching the Phase 0.1 framing.
 
 5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/project/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
 

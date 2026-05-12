@@ -53,7 +53,9 @@ export async function handleConversationMessages(
   // initializes to `idle` and the input renders enabled.
   const { data: conv, error: convErr } = await supabase
     .from("conversations")
-    .select("id, total_cost_usd, input_tokens, output_tokens, workflow_ended_at")
+    .select(
+      "id, total_cost_usd, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, workflow_ended_at, created_at",
+    )
     .eq("id", conversationId)
     .eq("user_id", user.id)
     .single();
@@ -121,6 +123,19 @@ export async function handleConversationMessages(
     totalCostUsd: Number(conv.total_cost_usd ?? 0),
     inputTokens: conv.input_tokens ?? 0,
     outputTokens: conv.output_tokens ?? 0,
+    // Migration 041 — cache tokens persisted per-conversation. Surface
+    // them in the resume response so the chat-surface cost badge can
+    // render `(input + cache_read + cache_creation)` instead of
+    // showing the uncached-input subset only (plan §Risks R8).
+    cacheReadInputTokens:
+      (conv as { cache_read_input_tokens?: number | null })
+        .cache_read_input_tokens ?? 0,
+    cacheCreationInputTokens:
+      (conv as { cache_creation_input_tokens?: number | null })
+        .cache_creation_input_tokens ?? 0,
     workflowEndedAt: conv.workflow_ended_at ?? null,
+    // PR-B (#3603) — surface conversation start time so the chat surface can
+    // gate the cohort-missing-reply marker on the row-absence cohort window.
+    createdAt: conv.created_at ?? null,
   }));
 }

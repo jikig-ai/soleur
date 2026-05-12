@@ -1,6 +1,7 @@
 ---
-last_updated: 2026-05-11
+last_updated: 2026-05-12
 ---
+<!-- 2026-05-12: PR-A2 (#3603/#3648) — Privacy Policy §4.7 Art. 13(3) prior-disclosure refresh for messages.usage column (CC_PERSIST_USAGE=true in Doppler prd). Article 30 RoPA register created at knowledge-base/legal/article-30-register.md. Both draft — counsel review pending. -->
 <!-- 2026-05-11: Compound Promotion Loop (#2720) registered as Active Item with DPIA candidacy note (Art. 35; defer formal assessment 4 weeks). -->
 
 <!-- 2026-05-11: R15 mitigation for #2719 landed via #3543 (ruleset PUT to #14145388) -->
@@ -17,11 +18,12 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 | Document | Location | Last Updated | Status |
 |----------|----------|-------------|--------|
 | Terms & Conditions | `docs/legal/terms-and-conditions.md` | 2026-03-20 | Active |
-| Privacy Policy | `docs/legal/privacy-policy.md` | 2026-03-20 | Active |
+| Privacy Policy | `docs/legal/privacy-policy.md` | 2026-05-12 | Active |
+| Article 30 Register (RoPA) | `knowledge-base/legal/article-30-register.md` | 2026-05-12 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | 2026-03-20 | Active |
-| GDPR Policy | `docs/legal/gdpr-policy.md` | 2026-03-20 | Active |
+| GDPR Policy | `docs/legal/gdpr-policy.md` | 2026-05-12 | Active |
 | Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | 2026-03-20 | Active |
-| Data Protection Disclosure | `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | 2026-03-20 | Active |
+| Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | 2026-05-12 | Active |
 | Disclaimer | `docs/legal/disclaimer.md` | 2026-03-20 | Active |
 | Individual CLA | `docs/legal/individual-cla.md` | 2026-03-20 | Active |
 | Corporate CLA | `docs/legal/corporate-cla.md` | 2026-03-20 | Active |
@@ -33,7 +35,7 @@ Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-mem
 | Vendor | DPA Status | Signed/Verified | Transfer Mechanism | Data Region | Notes |
 |--------|-----------|----------------|-------------------|-------------|-------|
 | Hetzner Online GmbH | SIGNED | 2026-03-19 | N/A (EU-only) | hel1 (Finland) | Covers CX33 (web platform) |
-| Supabase Inc | SIGNED | 2026-03-19 | N/A (EU-only) | eu-west-1 (Ireland) | DPA version: August 5, 2025. SCCs Module 2+3. Governing law: Irish |
+| Supabase Inc | SIGNED | 2026-03-19 | N/A (EU-only) | eu-west-1 (Ireland) | DPA version: August 5, 2025. SCCs Module 2+3. Governing law: Irish. `usage` jsonb column added to `messages` table 2026-05-12 (PR #3648); processing-activity-bound DPA scope covers column-level extensions without re-signing |
 | Stripe Inc | AUTO | 2026-03-19 | EU-US DPF + SCCs | US-based | Automatic via Services Agreement. SAQ-A eligible (PCI) |
 | Cloudflare Inc | AUTO | 2026-03-19 | DPF + SCCs + CBPR | Global CDN | Self-executing via Self-Serve Agreement |
 | Resend Inc | AUTO | 2026-04-13 | DPF + SCCs | US-based | Automatic DPA via Terms of Service (Section 7: Data Processing). Transactional email for review gate notifications |
@@ -81,6 +83,10 @@ Contract (mirrors plugins/soleur/skills/gdpr-gate/SKILL.md §"Critical-finding e
 
 | Item | Issue/PR | Completed | Notes |
 |------|----------|-----------|-------|
+| W7 DSAR cohort audit (cc-soleur-go disclosure-asymmetry window) | #3603 / PR #3662 | 2026-05-12 | Backward-looking Art. 15 cohort audit for window 2026-05-05 → 2026-05-11 (PR #3286 first ship through PR-A1 AC11 verification). Four channels: GitHub `label:legal` (programmatic), `legal@jikigai.com` inbox + Linear `Art. 15 OR DSAR` + Discord support (operator-manual completeness flags). **Result: zero Art. 15 / DSAR requests in window.** No supplementary disclosure required. Evidence: `knowledge-base/legal/audits/2026-05-12-w7-dsar-cohort-audit.md` (load-bearing per CLO Q4 — null result is the audit answer). Operator-amendment posture documented for post-merge discovery. |
+| `CC_PERSIST_USAGE=true` operator decision + PR-C disclosure-side close | #3603 / PR #3662 | 2026-05-12 | Operator confirmed at PR-C plan-time that the flip to `CC_PERSIST_USAGE=true` in both `prd` and `prd_scheduled` Doppler configs was a **deliberate decision** taken with PR-C disclosure in flight — not a flag-flip-by-mistake. PR-C #3662 closes the disclosure side: Privacy Policy §4.7, DPD §2.3(i), GDPR Policy §3.7 + §10 #10 each carry the `usage` jsonb disclosure. SIGKILL persistence-limitation transparency sentence added to Privacy §4.7 (and Notes in GDPR §10 #10) with cross-reference from Privacy §8.1. Not an Art. 33-notifiable incident; planned-and-known operator-decision audit trail. Re-evaluation deferred to post-OP3 (after umbrella close). |
+| Privacy Policy §4.7 refresh — `messages.usage` disclosure (Art. 13(3)) | #3603 / PR #3648 | 2026-05-12 | Disclosed cc-narrowed per-turn cost telemetry (`{ cost_usd }`) on Concierge (`/soleur:go`) surface; `CC_PERSIST_USAGE=true` flipped on in Doppler `prd` 2026-05-12. Legacy `agent-runner` `UsageSnapshot` shape on aborted turns unchanged. Data-minimisation rationale: Art. 5(1)(c). Legal basis, recipients, retention, and TOMs inherited from parent conversation row (Art. 6(1)(b); Supabase eu-west-1 + Hetzner hel1; RLS on `conversation_id`; cascade-delete on account erasure). Sync committed to `plugins/soleur/docs/pages/legal/privacy-policy.md`. Counsel review pending. |
+| Article 30 Register (RoPA) — initial draft | #3603 / PR #3648 | 2026-05-12 | Initial draft at `knowledge-base/legal/article-30-register.md` covering 8 processing activities (account/auth, conversation data incl. `messages.usage`, billing, KB sharing, web push, newsletter, CLA signatures, operational telemetry/breach-detection). Vendor mapping consolidated. Counsel review pending — outstanding items: controller legal form (SAS vs SARL), Web Push transfer characterisation, P0 mirror retention envelope, Art. 30(5) micro-enterprise derogation confirmation. |
 | Supabase DPA update (Braintrust sub-processor) | #1056 / PR #1298 | 2026-04-07 | Supabase confirmed (Tracy Lane, 2026-04-07): Braintrust tracing disabled for EU-hosted projects (eu-west-1). No cross-border transfer. No data sent to Braintrust. No re-signing required — existing DPA (signed 2026-03-19) remains in effect. Sub-processor accepted via Section 6.5 notification mechanism. |
 | Web platform vendor DPA review | #670 / PR #732 | 2026-03-18 | All 4 vendor DPAs signed/verified. Expense ledger updated. Legal docs updated |
 | Vendor checklist gate added | #670 / PR #732 | 2026-03-18 | PR template and constitution updated with vendor compliance section |

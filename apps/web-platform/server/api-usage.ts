@@ -21,6 +21,12 @@ export interface ApiUsageRow {
   createdAt: Date;
   inputTokens: number;
   outputTokens: number;
+  // Cache tokens — `0` when prompt caching was not engaged for this
+  // conversation. Widened 2026-05-12 (migration 041) so the dashboard's
+  // "Input" pill can render `(uncached + cache_read + cache_creation)`
+  // — matching the Anthropic Console's headline total input.
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   costUsd: number;
 }
 
@@ -62,6 +68,8 @@ interface ConversationListRow {
   created_at: string;
   input_tokens: number | string | null;
   output_tokens: number | string | null;
+  cache_read_input_tokens: number | string | null;
+  cache_creation_input_tokens: number | string | null;
   total_cost_usd: number | string | null;
 }
 
@@ -87,7 +95,7 @@ export async function loadApiUsageForUser(
     service
       .from("conversations")
       .select(
-        "id, domain_leader, created_at, input_tokens, output_tokens, total_cost_usd",
+        "id, domain_leader, created_at, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, total_cost_usd",
       )
       .eq("user_id", userId)
       .gt("total_cost_usd", 0)
@@ -119,6 +127,8 @@ export async function loadApiUsageForUser(
     createdAt: new Date(r.created_at),
     inputTokens: Number(r.input_tokens ?? 0),
     outputTokens: Number(r.output_tokens ?? 0),
+    cacheReadTokens: Number(r.cache_read_input_tokens ?? 0),
+    cacheCreationTokens: Number(r.cache_creation_input_tokens ?? 0),
     costUsd: Number(r.total_cost_usd ?? 0),
   }));
 
