@@ -9,7 +9,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 12, 2026 (added per-message `usage` jsonb token-consumption and cost metadata to Section 2.3(i) Web Platform conversation management activity)
+**Last Updated:** May 12, 2026 (trimmed Section 4.2 Resend row Legal Basis column to remove misplaced push-subscription consent clause; push-subscription consent basis remains correctly disclosed in §2.3(j))
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -153,7 +153,7 @@ For processing activities where Jikigai acts as Controller (see Sections 2.1b an
 | Stripe Inc ([stripe.com](https://stripe.com)) | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | Contract performance (Article 6(1)(b)) | [Stripe Sub-processors](https://stripe.com/legal/service-providers) |
 | Hetzner Online GmbH ([hetzner.com](https://hetzner.com)) | Web Platform infrastructure hosting (Helsinki, EU-only) | User workspaces, encrypted API keys, Docker containers | Contract performance (Article 6(1)(b)) | [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/) |
 | Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) for authenticated users; legitimate interest (Article 6(1)(f)) for unauthenticated traffic | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
-| Resend Inc ([resend.com](https://resend.com)) | Web Platform transactional email notifications (review gate alerts) | Recipient email address, email content (notification summaries) | Legitimate interest (Article 6(1)(f)) for transactional notifications; consent (Article 6(1)(a)) for push subscriptions | [Resend DPA](https://resend.com/legal/dpa) |
+| Resend Inc ([resend.com](https://resend.com)) | Web Platform transactional email notifications (review gate alerts) | Recipient email address, email content (notification summaries) | Legitimate interest (Article 6(1)(f)) for transactional notifications | [Resend DPA](https://resend.com/legal/dpa) |
 
 This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), 2.3(h), 2.3(i), 2.3(j), and 2.3(k).
 
