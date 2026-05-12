@@ -505,6 +505,26 @@ Scan any "next steps", "setup instructions", or "to use this" text you are about
 
 If you catch yourself writing phrases like "set up X in the browser", "go to the portal and...", or "manually configure..." — stop and attempt Playwright first. This audit is mandatory; skipping it is a deviation.
 
+#### Phase 4 Entry-Guard
+
+Before emitting `## Work Phase Complete` (one-shot mode) or chaining into the post-implementation pipeline (direct mode), assert at least one commit exists beyond `origin/<branch>`. An empty diff hands review agents nothing to analyze and produces no signal. Run BEFORE the Invocation Mode branch so both paths are covered:
+
+```bash
+BRANCH=$(git branch --show-current)
+N=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+if [[ "$N" == "0" ]]; then
+  echo "[work-phase-4-guard] no commits beyond origin/${BRANCH}; running incremental commit logic from Phase 2 step 3 first." >&2
+  # Invoke Phase 2 step 3 incremental commit (stage logical-unit files, conventional commit message), then re-check.
+  N=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+  if [[ "$N" == "0" ]]; then
+    echo "[work-phase-4-guard] empty diff vs origin/${BRANCH}; handing off to review with empty diff is a no-op — investigate before continuing." >&2
+    exit 1  # HALT — do NOT emit "## Work Phase Complete"
+  fi
+fi
+```
+
+Form rationale: `git rev-list ... --count` returns a clean integer ready for `[[ "$N" == "0" ]]`; the `wc -l` shape requires a `tr -d` strip and is whitespace-padded. Precedent: `plugins/soleur/skills/ship/SKILL.md:619`, `.claude/hooks/ship-unpushed-commits-gate.sh`. The hard `exit 1` ensures one-shot orchestrators see a non-zero exit and stop the pipeline rather than silently continuing into review on an empty diff.
+
 #### Invocation Mode
 
 **If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Output exactly `## Work Phase Complete` and then **immediately invoke** `skill: soleur:review` (step 4 of the one-shot sequence). Do NOT end your turn after outputting the marker — you ARE the orchestrator, so you must continue executing one-shot steps 4 through 10 in order. The marker is a progress signal, not a stopping point.
