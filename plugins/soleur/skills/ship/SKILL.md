@@ -857,11 +857,14 @@ gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}
 
 ### CI Status Check
 
-After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI:
+After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI. Wrap the call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
-gh pr merge <number> --squash --auto
+bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- \
+  gh pr merge <number> --squash --auto
 ```
+
+The `with_lock` wrapper acquires the lock, runs the command inline (so fd 9 stays open for the duration), and releases on exit. Returns 99 if the lock is contended for >600s.
 
 Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet, causing premature merge attempts.
 

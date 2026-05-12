@@ -168,6 +168,15 @@ if [[ "$MERGE_BASE" == "$REMOTE_MAIN" ]]; then
   exit 0
 fi
 
+# Serialize against concurrent main-sync attempts (sibling sessions
+# pre-flighting `gh pr merge --auto` from a different worktree). Lock name
+# is `rebase-main` per plan §Implementation Phases for the hook surface,
+# even though the strategy here is `git merge` (see top-of-file comment on
+# the historical filename).
+acquire_lock rebase-main 60 || headless_or_stderr warn "rebase-main lock contended; proceeding without serialization"
+# Release on any exit path below (merge failure, push failure, success).
+trap 'release_lock rebase-main 2>/dev/null || true' EXIT
+
 # Attempt merge
 if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
   # Merge failed -- capture conflicts BEFORE aborting (abort clears conflict state)

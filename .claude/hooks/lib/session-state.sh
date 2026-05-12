@@ -128,6 +128,29 @@ release_lock() {
   return 0
 }
 
+# with_lock <name> <timeout_s> -- <command> [args...]
+#
+# CLI-friendly wrapper for SKILL.md callers. Each `bash session-state.sh
+# acquire_lock` invocation is a separate process whose fd 9 closes on exit,
+# so the standalone acquire/release pattern doesn't serialize anything when
+# invoked separately. This wrapper acquires the lock and runs the command
+# in the same shell so the lock outlives the critical section.
+#
+# Returns the command's exit code on success, 99 on lock-acquire timeout.
+with_lock() {
+  local name="$1"; shift
+  local timeout_s="$1"; shift
+  if [[ "$1" == "--" ]]; then shift; fi
+  if ! acquire_lock "$name" "$timeout_s"; then
+    headless_or_stderr warn "lock '$name' contended after ${timeout_s}s; aborting"
+    return 99
+  fi
+  local rc=0
+  "$@" || rc=$?
+  release_lock "$name"
+  return "$rc"
+}
+
 # ---------------------------------------------------------------------------
 # Leases (durable, key=value, atomic-write)
 # ---------------------------------------------------------------------------
@@ -311,7 +334,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   fn="${1:-}"
   shift || true
   case "$fn" in
-    acquire_lock|release_lock|acquire_lock_shared|acquire_lease|release_lease|is_lease_active|sweep_orphan_leases|headless_or_stderr)
+    acquire_lock|release_lock|acquire_lock_shared|acquire_lease|release_lease|is_lease_active|sweep_orphan_leases|headless_or_stderr|with_lock)
       "$fn" "$@"
       ;;
     "")
