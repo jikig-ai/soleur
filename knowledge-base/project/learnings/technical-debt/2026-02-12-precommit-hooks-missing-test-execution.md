@@ -5,6 +5,7 @@ problem_type: best_practice
 component: ci
 tags: [lefthook, pre-commit, testing, bun-test]
 severity: medium
+status: open
 ---
 
 # Pre-commit Hooks Do Not Run Tests

@@ -13,7 +13,7 @@ status: draft
 
 ## Problem Statement
 
-The `knowledge-base/project/learnings/technical-debt/` directory contains 11 entries dated 2026-02-12 through 2026-03-03. **Zero of them have a resolution marker; zero have been closed via a linked issue or PR.** The ledger is write-mostly: `/soleur:compound` populates it reactively after fixes ship, then entries sit indefinitely. There is no skill, command, or workflow surface that surfaces open debt for triage, prioritization, or closure.
+The `knowledge-base/project/learnings/technical-debt/` directory contains 9 live entries (plus 2 archived) dated 2026-02-12 through 2026-03-03. **Zero of them have a resolution marker; zero have been closed via a linked issue or PR.** The ledger is write-mostly: `/soleur:compound` populates it reactively after fixes ship, then entries sit indefinitely. There is no skill, command, or workflow surface that surfaces open debt for triage, prioritization, or closure.
 
 The follow-on consequence: any future automated scanner (the original framing of #2723) would compound the backlog rather than the knowledge. Adding upstream/scan tooling without a closure mechanic is the dominant failure mode of debt tools, per CTO assessment and learning `2026-02-09-plugin-staleness-audit-patterns.md`.
 
@@ -29,7 +29,7 @@ The follow-on consequence: any future automated scanner (the original framing of
 - Scanner / scan-mode / scheduled cron — deferred to Spec B (re-evaluation criteria in brainstorm doc).
 - Trending dashboard, time-series JSON, executive reporting — deferred to Spec B.
 - Schema unification of the two frontmatter shapes under `technical-debt/` — separate follow-up issue.
-- Backfill of `linked_issue` for the existing 11 entries — `linked_issue` is optional; backfill only `status` (default `open`).
+- Backfill of `linked_issue` for the 9 live entries — `linked_issue` is optional; backfill only `status` (default `open`).
 - Cost-of-delay framework (WSJF / RICE / ICE) selection — deferred to Spec B.
 - App-developer-facing surface (Soleur cloud users tracking debt in their own repos) — Phase 8+ scope.
 - Wholesale lift of upstream `alirezarezvani/claude-skills` reference content (taxonomy, frameworks, communication templates) — liftable later under NOTICE attribution when Spec B is built.
@@ -38,7 +38,7 @@ The follow-on consequence: any future automated scanner (the original framing of
 
 | ID | Requirement |
 |----|-------------|
-| FR1 | Add `status: open\|resolved\|wont-fix` to the frontmatter of all 11 existing entries in `knowledge-base/project/learnings/technical-debt/*.md`. Default to `open` during backfill. Schema A (`module/problem_type/component/tags/severity`) and Schema B (`title/category/tags/severity`) both gain this field; both are preserved otherwise. |
+| FR1 | Add `status: open\|resolved\|wont-fix` to the frontmatter of all 9 live entries (archive excluded) in `knowledge-base/project/learnings/technical-debt/*.md`. Default to `open` during backfill. Schema A (`module/problem_type/component/tags/severity`) and Schema B (`title/category/tags/severity`) both gain this field; both are preserved otherwise. |
 | FR2 | Add optional `linked_issue: <number>` (GitHub issue number, integer, no `#` prefix in YAML) to the frontmatter contract. Required only when `status: resolved`. Optional when `status: wont-fix`. Forbidden when `status: open`. |
 | FR3 | Create `/soleur:resolve-debt` skill at `plugins/soleur/skills/resolve-debt/SKILL.md`. Skill description follows the third-person convention (`This skill should be used when...`) and stays under 30 words for the routing-budget check. |
 | FR4 | The skill MUST list open ledger entries sorted by `severity` desc (high > medium > low > unset), then by file `date` asc (oldest first) as tiebreaker. Output format: a markdown table with columns: file, date, severity, component (or category), short title. |
@@ -46,7 +46,7 @@ The follow-on consequence: any future automated scanner (the original framing of
 | FR6 | The skill MUST support a "list only" non-interactive flow when invoked with `--list` (for piping into other skills / `/loop`). Output table only; no prompts. |
 | FR7 | The skill MUST validate that `linked_issue` (when provided) corresponds to an existing GitHub issue via `gh issue view <N> --json state,title`. The operator may pass `--no-verify` to skip validation when offline; the skill records this in the commit message. |
 | FR8 | The skill MUST be registered in `plugins/soleur/docs/_data/skills.js` `SKILL_CATEGORIES` under the engineering category (matches `code-quality-analyst` adjacency). Without this registration the skill is invisible to the docs site (per `2026-02-19-growth-strategist-agent-skill-development.md`). |
-| FR9 | `/soleur:compound` MUST learn to set `status: open` when it auto-creates a new entry under `learnings/technical-debt/`. The new entry's other fields remain unchanged. This is a one-line edit to the compound skill's technical-debt write path. |
+| FR9 | `/soleur:compound` MUST learn to set `status: open` when it auto-creates a new entry under `learnings/technical-debt/`. The new entry's other fields remain unchanged. Plan-time narrowed: template-only edit to `plugins/soleur/skills/compound-capture/assets/resolution-template.md` (≤2 lines). `compound-capture/schema.yaml` (CORA-vendored) and `references/yaml-schema.md` (CORA-derived) are NOT touched — editing schema.yaml would trigger the blocking validation_gate for all 13 problem_types. |
 | FR10 | Update `knowledge-base/project/learnings/technical-debt/` README (create if missing) to document the new frontmatter contract (status + linked_issue field, allowed values, when each is required/optional/forbidden). |
 
 ## Technical Requirements
@@ -60,11 +60,11 @@ The follow-on consequence: any future automated scanner (the original framing of
 | TR5 | Skill MUST stay flat at `plugins/soleur/skills/resolve-debt/SKILL.md`. No `references/` are required for Spec A; add references only if word-count overflow forces extraction. |
 | TR6 | No git operations from within the skill except `git diff --cached` for the confirmation preview. The skill prints the diff and asks the operator to commit themselves; it does not call `git commit` or `git push` automatically. (Reason: ledger commits land on whatever branch the operator is on; auto-commit would risk wrong-branch writes.) |
 | TR7 | `gh issue view <N>` calls MUST set a 5-second timeout and fall back to `--no-verify` mode on network failure with a logged warning. Operator can still mark resolved without round-trip when offline. |
-| TR8 | `/soleur:compound` integration (FR9) MUST NOT bump the brainstorm-time word budget for compound's SKILL.md — the change is one literal-string addition to a frontmatter-emission path. |
+| TR8 | `/soleur:compound` integration (FR9) MUST NOT bump the brainstorm-time word budget for compound's SKILL.md. Plan-time narrowed: single template edit + 1 inline comment line; cumulative diff <5 LOC; SKILL.md is unedited. |
 
 ## Acceptance Criteria
 
-- All 11 existing `learnings/technical-debt/*.md` entries have `status: open` in frontmatter after backfill PR merges.
+- All 9 live `learnings/technical-debt/*.md` entries (archive excluded) have `status: open` in frontmatter after backfill PR merges.
 - `/soleur:resolve-debt` invocation (interactive) successfully transitions one entry from `open` → `resolved` with a `linked_issue`, mutates the file, and emits a diff for operator commit.
 - `/soleur:resolve-debt --list` produces a deterministic, severity-sorted table on stdout.
 - `bun test plugins/soleur/test/components.test.ts` passes (word-budget guardrail).

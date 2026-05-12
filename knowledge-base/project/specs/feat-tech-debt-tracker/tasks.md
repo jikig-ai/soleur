@@ -15,10 +15,10 @@ Derived from the post-review plan. Phases follow dependency order; tasks within 
 
 ## Phase 1 — Backfill (9 live entries)
 
-- [ ] **1.1** Spec amendment: edit `knowledge-base/project/specs/feat-tech-debt-tracker/spec.md` FR1 to "9 live entries (archive excluded)". FR9 + TR8 narrowed to template-only (schema.yaml + references/yaml-schema.md NOT touched).
-- [ ] **1.2** Run the Phase 1 inline Python snippet (see plan §Phase 1) against `knowledge-base/project/learnings/technical-debt/`. Snippet imports `parse_frontmatter`/`serialize_frontmatter` from `scripts/backfill-frontmatter.py` via `sys.path` insert; MD5 body-verify asserted.
-- [ ] **1.3** Verify: `git diff knowledge-base/project/learnings/technical-debt/` shows 9 single-line additions, all `status: open`. Re-run snippet to confirm idempotent (zero output diff on re-run).
-- [ ] **1.4** Sanity check: `grep -c '^status:' knowledge-base/project/learnings/technical-debt/*.md` returns 9.
+- [x] **1.1** Spec amendment: edit `knowledge-base/project/specs/feat-tech-debt-tracker/spec.md` FR1 to "9 live entries (archive excluded)". FR9 + TR8 narrowed to template-only (schema.yaml + references/yaml-schema.md NOT touched).
+- [x] **1.2** Run the Phase 1 inline Python snippet (see plan §Phase 1) against `knowledge-base/project/learnings/technical-debt/`. Snippet imports `parse_frontmatter`/`serialize_frontmatter` from `scripts/backfill-frontmatter.py` via `sys.path` insert; MD5 body-verify asserted.
+- [x] **1.3** Verify: `git diff knowledge-base/project/learnings/technical-debt/` shows 9 single-line additions, all `status: open`. Re-run snippet to confirm idempotent (zero output diff on re-run).
+- [x] **1.4** Sanity check: `grep -c '^status:' knowledge-base/project/learnings/technical-debt/*.md` returns 9.
 - [ ] **1.5** Commit: `chore: backfill status:open on tech-debt ledger entries (FR1) + spec FR1/FR9/TR8 amendment`.
 
 ## Phase 2 — SKILL.md scaffold
