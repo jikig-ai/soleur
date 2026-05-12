@@ -120,4 +120,25 @@ describe("KB sidebar collapse", () => {
     expect(aside).toBeInTheDocument();
     expect(aside!.className).toContain("hidden");
   });
+
+  it("header row uses px-5 py-5 to match Soleur main sidebar (layout.tsx:241)", async () => {
+    render(<KbLayout><div>content</div></KbLayout>);
+    await screen.findByTestId("file-tree");
+    const heading = screen.getByRole("heading", { name: "Knowledge Base", level: 1 });
+    const headerRow = heading.parentElement;
+    expect(headerRow).not.toBeNull();
+    expect(headerRow).toHaveClass("px-5", "py-5");
+    expect(headerRow).toHaveClass("flex", "items-center", "justify-between", "shrink-0");
+    expect(headerRow).not.toHaveClass("px-4");
+    expect(headerRow).not.toHaveClass("pt-4");
+    expect(headerRow).not.toHaveClass("pb-3");
+  });
+
+  it("'Knowledge Base' heading uses font-semibold to match Soleur wordmark weight", async () => {
+    render(<KbLayout><div>content</div></KbLayout>);
+    await screen.findByTestId("file-tree");
+    const heading = screen.getByRole("heading", { name: "Knowledge Base", level: 1 });
+    expect(heading).toHaveClass("text-lg", "font-semibold", "tracking-tight");
+    expect(heading).not.toHaveClass("font-medium");
+  });
 });

@@ -235,16 +235,16 @@ The KB sidebar's tokenization (`text-soleur-text-primary`) is theme-neutral. Ope
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/components/kb/kb-sidebar-shell.tsx`: `<header>` container uses `flex shrink-0 items-center justify-between px-5 py-5` (verbatim).
-- [ ] `apps/web-platform/components/kb/kb-sidebar-shell.tsx`: `<h1>` uses `text-lg font-semibold tracking-tight text-soleur-text-primary` (verbatim).
-- [ ] `apps/web-platform/test/kb-sidebar-collapse.test.tsx`: new describe block "KB sidebar header alignment with Soleur main sidebar brand row" with 2 passing assertions added; all 6 prior assertions still pass.
-- [ ] `bunx vitest run apps/web-platform/test/kb-sidebar-collapse.test.tsx` → 8/8 pass.
-- [ ] `bunx tsc --noEmit` from `apps/web-platform/` → 0 errors.
-- [ ] `bun run lint` from `apps/web-platform/` → 0 errors.
+- [x] `apps/web-platform/components/kb/kb-sidebar-shell.tsx`: `<header>` container uses `flex shrink-0 items-center justify-between px-5 py-5` (verbatim).
+- [x] `apps/web-platform/components/kb/kb-sidebar-shell.tsx`: `<h1>` uses `text-lg font-semibold tracking-tight text-soleur-text-primary` (verbatim).
+- [x] `apps/web-platform/test/kb-sidebar-collapse.test.tsx`: 2 new alignment assertions added to existing describe block; all 6 prior assertions still pass.
+- [x] `./node_modules/.bin/vitest run test/kb-sidebar-collapse.test.tsx` → 8/8 pass.
+- [x] `./node_modules/.bin/tsc --noEmit` from `apps/web-platform/` → 0 errors.
+- [ ] `bun run lint` from `apps/web-platform/` → deferred: `next lint` script is interactive on this checkout (pre-existing ESLint config prompt, unrelated to this fix).
 - [ ] Playwright `dy` measurement between Soleur brand `<span>` and KB `<h1>`: `Math.abs(dy) ≤ 1 px`. PR body includes the measured value. **If Playwright is degraded by a pre-existing dev-server bug, the vitest contract is sufficient AND the dev-server bug is filed as a separate issue with `pre-existing-unrelated` criterion.**
 - [ ] PR body contains 4 screenshots: before/after × (expanded state, light theme) and (expanded state, dark theme), or before/after × (expanded, collapsed) if theme switching is blocked.
-- [ ] `rg "px-4 pb-3 pt-4" apps/web-platform/components/kb/` → 0 matches.
-- [ ] `rg "text-lg font-medium tracking-tight" apps/web-platform/components/kb/kb-sidebar-shell.tsx` → 0 matches.
+- [x] `rg "px-4 pb-3 pt-4" apps/web-platform/components/kb/` → 0 matches.
+- [x] `rg "text-lg font-medium tracking-tight" apps/web-platform/components/kb/kb-sidebar-shell.tsx` → 0 matches.
 - [ ] PR body references `Ref SOL-39` (Linear) and the matching GitHub-mirror issue if one exists.
 
 ### Post-merge (operator)
