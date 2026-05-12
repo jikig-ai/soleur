@@ -25,7 +25,7 @@ requires_cpo_signoff: false
 
 ### New Considerations Discovered
 
-- **Sibling PR #3587 just shipped** (2026-05-12 commit `6cf6bb27` — "apply settings-sidebar transition to KB file-tree sidebar"). It changed the KB `<aside>` transition wrapper but did NOT touch the header. No conflict with this plan; the inner wrapper at `kb-desktop-layout.tsx:60` is untouched.
+- **Sibling PR #3587 just shipped** (2026-05-11 commit `6cf6bb27` — "apply settings-sidebar transition to KB file-tree sidebar"). It changed the KB `<aside>` transition wrapper but did NOT touch the header. No conflict with this plan; the inner wrapper at `kb-desktop-layout.tsx:60` is untouched.
 - **CPO sign-off NOT required** despite this being a user-facing surface, because: (a) User-Brand Impact threshold is `none`, (b) the diff touches zero sensitive paths per the preflight regex, (c) no new interactive surface is created.
 - **The font-weight change from `font-medium` to `font-semibold` is the visually dominant fix** even more than the padding change. At a 4 px geometric delta on a 28 px line-box, the human eye perceives weight asymmetry more readily than 4 px of offset.
 - **No e2e Playwright spec added** — repository convention places interactive e2e in `apps/web-platform/e2e/*.e2e.ts` (currently auth/onboarding/rail flows only, no layout spec). Adding a `kb-sidebar-alignment.e2e.ts` would establish a new convention; YAGNI for a one-shot fix. Pixel-coord verification is captured manually in Phase 4 and pasted into the PR body.

@@ -125,7 +125,7 @@ describe("KB sidebar collapse", () => {
     render(<KbLayout><div>content</div></KbLayout>);
     await screen.findByTestId("file-tree");
     const heading = screen.getByRole("heading", { name: "Knowledge Base", level: 1 });
-    const headerRow = heading.parentElement;
+    const headerRow = heading.closest("header");
     expect(headerRow).not.toBeNull();
     expect(headerRow).toHaveClass("px-5", "py-5");
     expect(headerRow).toHaveClass("flex", "items-center", "justify-between", "shrink-0");
