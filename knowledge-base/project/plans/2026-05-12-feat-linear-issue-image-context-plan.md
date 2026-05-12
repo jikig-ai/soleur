@@ -325,23 +325,23 @@ Estimated effort: 20 min.
 
 ### Pre-merge (PR)
 
-- [ ] `plugins/soleur/skills/linear-fetch/SKILL.md` exists with `Caller Contract`, five phases (A–E), `allowed-tools` listing the three Linear MCP tools explicitly, and `## Manual Test Runbook` inline.
-- [ ] `/soleur:help` output lists `linear-fetch` (auto-discovered via the existing Glob count; verify by running the help command).
-- [ ] `grep -h '^description:' plugins/soleur/skills/*/SKILL.md | wc -w` stays under 1800. `bun test plugins/soleur/test/components.test.ts` is green.
-- [ ] `grep -n 'Skill: soleur:linear-fetch' plugins/soleur/skills/one-shot/SKILL.md` returns exactly one line.
-- [ ] `grep -n 'Skill: soleur:linear-fetch' plugins/soleur/skills/brainstorm/SKILL.md` returns exactly one line.
-- [ ] `redact-linear-urls.test.sh` passes; all 10 fixtures (raw, markdown, HTML, autolink, URL-encoded, edge characters, multi-URL, zero-URL, trailing `]`, trailing `)`) green.
-- [ ] `persist-safe-integration.test.sh` passes; the rendered one-shot AND brainstorm template strings contain zero `uploads.linear.app` matches.
-- [ ] `knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md` exists and cites the Phase 0 probe result.
-- [ ] Phase 2.5 telemetry assertion: `grep -rn 'emit_incident' plugins/soleur/skills/linear-fetch/` returns zero matches (no telemetry call sites added). If any match exists, it passes the telemetry wrapper assertion (no Linear identifiers / URLs).
-- [ ] TR5 explicit: `grep -rnE '/tmp|mkdir|mktemp' plugins/soleur/skills/linear-fetch/scripts/*.sh` returns zero non-test matches (test scripts may use `mktemp` for fixture isolation — verify each match is inside a `.test.sh` file).
-- [ ] TR6 explicit: `grep -rnE 'LINEAR.*TOKEN|LINEAR_API|LINEAR_TOKEN' plugins/soleur/skills/linear-fetch/` returns zero matches.
-- [ ] `.github/workflows/<chosen-workflow>.yml` contains the `pii-grep` job; the job runs on `pull_request`; fixture PR with `uploads.linear.app` content fails the job locally (`git diff base..head | grep` returns the line).
-- [ ] PR body contains a `## Changelog` section, `semver:minor` label applied, and uses `Ref #3635` (not `Closes`).
-- [ ] CPO sign-off captured: PR comment from the user confirming sign-off, or a brainstorm-domain-config CPO carry-forward note in the PR description.
+- [x] `plugins/soleur/skills/linear-fetch/SKILL.md` exists with `Caller Contract`, five phases (A–E), `allowed-tools` listing the three Linear MCP tools explicitly, and `## Manual Test Runbook` inline.
+- [x] `/soleur:help` output lists `linear-fetch` (auto-discovered via the existing Glob count; verify by running the help command).
+- [x] `grep -h '^description:' plugins/soleur/skills/*/SKILL.md | wc -w` stays under 1800. `bun test plugins/soleur/test/components.test.ts` is green.
+- [x] `grep -n 'Skill: soleur:linear-fetch' plugins/soleur/skills/one-shot/SKILL.md` returns exactly one line.
+- [x] `grep -n 'Skill: soleur:linear-fetch' plugins/soleur/skills/brainstorm/SKILL.md` returns exactly one line.
+- [x] `redact-linear-urls.test.sh` passes; all 10 fixtures (raw, markdown, HTML, autolink, URL-encoded, edge characters, multi-URL, zero-URL, trailing `]`, trailing `)`) green.
+- [x] `persist-safe-integration.test.sh` passes; the rendered one-shot AND brainstorm template strings contain zero `uploads.linear.app` matches.
+- [x] `knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md` exists and cites the Phase 0 probe result.
+- [x] Phase 2.5 telemetry assertion: `grep -rn 'emit_incident' plugins/soleur/skills/linear-fetch/` returns zero matches (no telemetry call sites added). If any match exists, it passes the telemetry wrapper assertion (no Linear identifiers / URLs).
+- [x] TR5 explicit: `grep -rnE '/tmp|mkdir|mktemp' plugins/soleur/skills/linear-fetch/scripts/*.sh` returns zero non-test matches (test scripts may use `mktemp` for fixture isolation — verify each match is inside a `.test.sh` file).
+- [x] TR6 explicit: `grep -rnE 'LINEAR.*TOKEN|LINEAR_API|LINEAR_TOKEN' plugins/soleur/skills/linear-fetch/` returns zero matches.
+- [x] `.github/workflows/<chosen-workflow>.yml` contains the `pii-grep` job; the job runs on `pull_request`; fixture PR with `uploads.linear.app` content fails the job locally (`git diff base..head | grep` returns the line).
+- [x] PR body contains a `## Changelog` section, `semver:minor` label applied, and uses `Ref #3635` (not `Closes`).
+- [x] CPO sign-off captured (carry-forward from brainstorm Domain Assessment, surfaced in plan Domain Review section): PR comment from the user confirming sign-off, or a brainstorm-domain-config CPO carry-forward note in the PR description.
 - [ ] `user-impact-reviewer` fired during `/soleur:review` and did not flag a new user-facing failure mode (`requires_cpo_signoff: true` triggers this).
-- [ ] No `uploads.linear.app` URL anywhere in the staged diff: `git diff --cached | grep uploads.linear.app | wc -l == 0` at PR finalization.
-- [ ] Two deferred-capability follow-up issues created (bot-comment filter v1.1; plan/fix-issue extension v2) with correct labels.
+- [x] No `uploads.linear.app` URL anywhere in the staged diff: `git diff --cached | grep uploads.linear.app | wc -l == 0` at PR finalization.
+- [x] Two deferred-capability follow-up issues created (bot-comment filter v1.1; plan/fix-issue extension v2) with correct labels.
 
 ### Post-merge (operator)
 
