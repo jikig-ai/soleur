@@ -537,6 +537,14 @@ Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get
 
 **If knowledge-base/ exists and on a feature branch:**
 
+**Carry forward `lane:` from spec.md.** Extract using the canonical gsub awk pattern (matches `skill-security-scan/scripts/run-scan.sh:34`):
+
+```bash
+LANE=$(awk '/^lane:/ { gsub(/^lane:[[:space:]]*"?|"?$/, ""); print; exit }' "knowledge-base/project/specs/feat-${branch_name}/spec.md")
+```
+
+Validate `LANE` against the 3-value enum (`single-domain`, `cross-domain`, `procedural`). If empty (legacy spec lacks `lane:`) or invalid (any other value), set `LANE=cross-domain` and echo to the operator terminal: `plan: spec lacks valid lane: — defaulted to cross-domain (fail-closed).` Add a one-line note to the plan body: `Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).` The plan file's YAML frontmatter MUST include `lane: <value>`.
+
 1. **Generate tasks.md** using `spec-templates` skill template, derived from the finalized (post-review) plan:
    - Extract actionable tasks from the plan
    - Organize into phases (Setup, Core Implementation, Testing)
