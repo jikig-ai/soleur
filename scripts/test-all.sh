@@ -14,7 +14,10 @@ set -euo pipefail
 # resolves to empty and elapsed_ms computes 0 silently.
 
 # --- Version Check ---
-if [[ -f .bun-version ]]; then
+# Gated on bun being installed so the script runs cleanly in a bun-free
+# environment (TEST_GROUP=scripts in CI omits setup-bun by design — the
+# scripts shard needs neither bun nor node).
+if [[ -f .bun-version ]] && command -v bun >/dev/null 2>&1; then
   expected=$(tr -d '[:space:]' < .bun-version)
   actual=$(bun --version)
   if [[ "$actual" != "$expected" ]]; then
