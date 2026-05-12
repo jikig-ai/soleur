@@ -54,3 +54,7 @@ If intent is clear, invoke the skill directly via the **Skill tool** with the or
 When routing to `soleur:drain-labeled-backlog`, extract the label value from the user's message. If the user used a bare name (e.g., "security"), resolve it to the namespaced form by running `gh label list --limit 100 | grep -i <name>` before invoking — `gh` rejects an invalid `--label` with a clear error, so verify against the live label set. Pass the resolved label via `--label <resolved>` in the skill arguments.
 
 If intent is truly ambiguous, use the **AskUserQuestion tool** with 4 options: Brainstorm (Recommended), Fix (one-shot), Drain (labeled backlog), Review.
+
+## Sharp Edges
+
+- **NAME-relative worktree detection (Linear-ID-keyed entry).** Step 1 only checks whether `pwd` is currently inside a worktree (CWD-relative). If the user input contains a Linear ID (`SOL-\d+`) and `git worktree list` shows a sibling worktree named after that ID (e.g., `.worktrees/feat-one-shot-sol-39-*` or `.worktrees/feat-fix-sol-39-*`), surface that state BEFORE routing to one-shot — routing fresh would collide with the existing branch and orphan any open draft PR. Present a 4-option `AskUserQuestion` (continue / review existing PR / restart fresh / brief). If "restart fresh" is chosen, follow up with a SECOND `AskUserQuestion` enumerating cleanup scope (full nuke / soft nuke / cancel) so destructive actions get explicit per-step approval. See `knowledge-base/project/learnings/2026-05-12-soleur-go-restart-fresh-from-existing-wip.md`.
