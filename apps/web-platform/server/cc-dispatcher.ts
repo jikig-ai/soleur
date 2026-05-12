@@ -174,6 +174,99 @@ export const CC_OP_SLUGS = {
   persistUserMessage: "persist-user-message",
 } as const;
 
+// #3640 F2 — Discriminated `PersistMode` replaces the per-dispatch
+// `AssistantPersistMode` string literal + `AssistantPersistOpts` interface
+// pair. Module-scope so #3641 type-rail move is a no-op (the type already
+// lives outside the `dispatchSoleurGo` closure). The `usage` field is
+// keyed inside each variant so a future `aborted` variant can drop the
+// `usage` field entirely without an `undefined`-vs-`null` ambiguity.
+export type PersistMode =
+  | { kind: "complete"; usage: { costUsd: number } | null }
+  | { kind: "aborted"; usage: { costUsd: number } | null };
+
+// #3640 F4 — Build the `messages` INSERT row from a `PersistMode`. Module-
+// scope helper keeps `saveAssistantMessage`'s body ≤ 20 LoC; pure function
+// (no I/O), so the assistant-row schema can evolve in one place.
+function buildRow(
+  mode: PersistMode,
+  text: string,
+  conversationId: string,
+): Record<string, unknown> {
+  // #3603 W4 — gated single-read site for `CC_PERSIST_USAGE`. The hot-path
+  // env read is intentional: enables runtime rollback flip without a
+  // process restart, load-bearing for a GDPR-rollback scenario after PR-C.
+  // Exact-match `"true"` only — any other truthy string keeps the flag
+  // off (defense-in-depth against a half-set Doppler value). Default-off
+  // at merge per AC9/AC11.
+  const flagOn = process.env.CC_PERSIST_USAGE === "true";
+  if (flagOn) _observeCcPersistUsageFirstTrue();
+  const usageColumn =
+    flagOn && mode.usage ? { cost_usd: mode.usage.costUsd } : null;
+
+  const row: Record<string, unknown> = {
+    id: randomUUID(),
+    conversation_id: conversationId,
+    role: "assistant",
+    content: text,
+    tool_calls: null,
+    leader_id: CC_ROUTER_LEADER_ID,
+    usage: usageColumn,
+  };
+  // Omit `status` for the normal completion path — migration 040's
+  // DEFAULT of `'complete'` applies. Only the abort branch writes
+  // `status: "aborted"` explicitly.
+  switch (mode.kind) {
+    case "complete":
+      break;
+    case "aborted":
+      row.status = "aborted";
+      break;
+    default: {
+      const _exhaustive: never = mode;
+      void _exhaustive;
+    }
+  }
+  return row;
+}
+
+// #3640 F4 — Mirror a `messages` INSERT failure through `mirrorWithDebounce`.
+// The op-slug is picked by `mode.kind` so the `op` + `errorClass` (dedupe
+// key) match — drift between them would silently split the Sentry stream.
+function mirrorInsertError(
+  error: unknown,
+  mode: PersistMode,
+  userId: string,
+  conversationId: string,
+  fullText: string,
+): void {
+  const opSlug: string = (() => {
+    switch (mode.kind) {
+      case "complete":
+        return CC_OP_SLUGS.saveAssistant;
+      case "aborted":
+        return CC_OP_SLUGS.saveAssistantAborted;
+      default: {
+        const _exhaustive: never = mode;
+        return _exhaustive;
+      }
+    }
+  })();
+  // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
+  // — a misconfigured Supabase RLS for one user could otherwise emit one
+  // Sentry event per assistant turn (10 turns/conv × 100 active convs =
+  // 1000 events/hr).
+  mirrorWithDebounce(
+    error,
+    {
+      feature: "cc-dispatcher",
+      op: opSlug,
+      extra: { userId, conversationId, length: fullText.length },
+    },
+    userId,
+    opSlug,
+  );
+}
+
 // #3603 W1 — Write-boundary tenant-isolation sentinel.
 //
 // cc-dispatcher.ts uses the service-role Supabase client (`supabase()` —
@@ -1168,14 +1261,9 @@ export async function dispatchSoleurGo(
   // cost-only on `'complete'` turns (Art. 5(1)(c) data-minimization). The
   // legacy agent-runner path emits the full `UsageSnapshot` (input_tokens,
   // output_tokens, cost_usd, completed_actions[]) on `'aborted'` turns —
-  // see `Message.usage` doc-comment in `lib/types.ts`.
-  type AssistantPersistMode = "complete" | "aborted";
-  interface AssistantPersistOpts {
-    mode: AssistantPersistMode;
-    usage?: { costUsd: number } | null;
-  }
-
-  async function saveAssistantMessage(opts: AssistantPersistOpts): Promise<void> {
+  // see `Message.usage` doc-comment in `lib/types.ts`. `PersistMode` is
+  // declared at module scope above (#3640 F2 + #3641 type-rail).
+  async function saveAssistantMessage(mode: PersistMode): Promise<void> {
     // #3603 W1 — Cross-tenant write-boundary sentinel. cc-path uses
     // service-role for INSERT (RLS-bypass on writes). RLS catches reads;
     // this guard catches writes. Returns `false` only via the test seam
@@ -1191,60 +1279,10 @@ export async function dispatchSoleurGo(
     latestAssistantText = "";
     if (!fullText) return;
 
-    // #3603 W4 — gated single-read site for `CC_PERSIST_USAGE`. The hot-path
-    // env read is intentional: enables runtime rollback flip without a
-    // process restart, load-bearing for a GDPR-rollback scenario after PR-C.
-    // Exact-match `"true"` only — any other truthy string keeps the flag
-    // off (defense-in-depth against a half-set Doppler value). Default-off
-    // at merge per AC9/AC11.
-    const flagOn = process.env.CC_PERSIST_USAGE === "true";
-    // #3603 PR-A2 review H4 — first-true observation per process gives the
-    // Art. 33 72h-clock a "when did we start collecting" evidence anchor,
-    // independent of when the Doppler flip happened. Module-scoped boolean
-    // ensures we mirror once, not on every persist call.
-    if (flagOn) _observeCcPersistUsageFirstTrue();
-    const usageColumn =
-      flagOn && opts.usage ? { cost_usd: opts.usage.costUsd } : null;
-
-    const row: Record<string, unknown> = {
-      id: randomUUID(),
-      conversation_id: conversationId,
-      role: "assistant",
-      content: fullText,
-      tool_calls: null,
-      leader_id: CC_ROUTER_LEADER_ID,
-      usage: usageColumn,
-    };
-    // Omit `status` for the normal completion path — migration 040's
-    // DEFAULT of `'complete'` applies. Only the abort branch writes
-    // `status: "aborted"` explicitly.
-    if (opts.mode === "aborted") {
-      row.status = "aborted";
-    }
-
-    // Hoisted op slug so `mirrorWithDebounce` receives the same value for
-    // both `op` and `errorClass` (the dedupe key) — drift between them
-    // would silently split the Sentry dedupe stream.
-    const opSlug = opts.mode === "aborted"
-      ? CC_OP_SLUGS.saveAssistantAborted
-      : CC_OP_SLUGS.saveAssistant;
-
+    const row = buildRow(mode, fullText, conversationId);
     const { error } = await supabase().from("messages").insert(row);
     if (error) {
-      // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
-      // — a misconfigured Supabase RLS for one user could otherwise emit one
-      // Sentry event per assistant turn (10 turns/conv × 100 active convs =
-      // 1000 events/hr).
-      mirrorWithDebounce(
-        error,
-        {
-          feature: "cc-dispatcher",
-          op: opSlug,
-          extra: { userId, conversationId, length: fullText.length },
-        },
-        userId,
-        opSlug,
-      );
+      mirrorInsertError(error, mode, userId, conversationId, fullText);
     }
   }
 
@@ -1296,7 +1334,7 @@ export async function dispatchSoleurGo(
       currentTurnIndex = turnSnapshot + 1;
       // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
       void saveAssistantMessage({
-        mode: "complete",
+        kind: "complete",
         usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
       });
       // Per-turn boundary → terminal stream event for the cc_router bubble.
@@ -1342,7 +1380,7 @@ export async function dispatchSoleurGo(
           pendingTurnUsage = null;
           assistantTurnPersisted = true;
           void saveAssistantMessage({
-            mode: "aborted",
+            kind: "aborted",
             usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
           });
         } else if (pendingTurnUsage) {

@@ -202,15 +202,15 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 4 — #3640 F2 + F4 discriminated PersistMode + helper extraction
 
-- [ ] Replace the `dispatchSoleurGo`-local `AssistantPersistMode` + `AssistantPersistOpts` with a module-scope `type PersistMode = { kind: "complete"; usage: { costUsd: number } | null } | { kind: "aborted"; usage: { costUsd: number } | null }`. Place adjacent to `ABORT_FLUSH_STATUSES` for #3641 type-rail move (Phase 6 below verifies placement).
-- [ ] Rewrite `saveAssistantMessage` signature to `async function saveAssistantMessage(mode: PersistMode): Promise<void>`.
-- [ ] Extract `buildRow(mode: PersistMode, text: string, conversationId: string): Record<string, unknown>` at module scope. Encodes the `status` + `usage` shaping per `mode.kind`.
-- [ ] Extract `mirrorInsertError(error: unknown, mode: PersistMode, userId: string, conversationId: string, fullText: string): void` at module scope. Routes through `mirrorWithDebounce` with the slug picked by `switch (mode.kind)`.
-- [ ] Body of `saveAssistantMessage` becomes ≤ 20 LoC: write-boundary check → snapshot accumulator → flag read → `const row = buildRow(...)` → `await insert(row)` → on error `mirrorInsertError(...)`.
-- [ ] Add exhaustiveness rail: `const _exhaustive: never = mode;` after the switch (compile-time pin against future `PersistMode` variants like `"timed_out"`).
-- [ ] Update the two call sites in `onTextTurnEnd` (~1283) and `onWorkflowEnded` (~1329) to pass `{ kind: "complete", usage: ... }` / `{ kind: "aborted", usage: ... }`.
-- [ ] Run unit tests. Expected: green.
-- [ ] Commit: `refactor(cc-dispatcher): discriminated PersistMode + buildRow/mirrorInsertError helpers — partial #3640 (F2 + F4)`.
+- [x] Replace the `dispatchSoleurGo`-local `AssistantPersistMode` + `AssistantPersistOpts` with a module-scope `type PersistMode = { kind: "complete"; usage: { costUsd: number } | null } | { kind: "aborted"; usage: { costUsd: number } | null }`. Place adjacent to `ABORT_FLUSH_STATUSES` for #3641 type-rail move (Phase 6 below verifies placement).
+- [x] Rewrite `saveAssistantMessage` signature to `async function saveAssistantMessage(mode: PersistMode): Promise<void>`.
+- [x] Extract `buildRow(mode: PersistMode, text: string, conversationId: string): Record<string, unknown>` at module scope. Encodes the `status` + `usage` shaping per `mode.kind`.
+- [x] Extract `mirrorInsertError(error: unknown, mode: PersistMode, userId: string, conversationId: string, fullText: string): void` at module scope. Routes through `mirrorWithDebounce` with the slug picked by `switch (mode.kind)`.
+- [x] Body of `saveAssistantMessage` becomes ≤ 20 LoC: write-boundary check → snapshot accumulator → flag read → `const row = buildRow(...)` → `await insert(row)` → on error `mirrorInsertError(...)`.
+- [x] Add exhaustiveness rail: `const _exhaustive: never = mode;` after the switch (compile-time pin against future `PersistMode` variants like `"timed_out"`).
+- [x] Update the two call sites in `onTextTurnEnd` (~1283) and `onWorkflowEnded` (~1329) to pass `{ kind: "complete", usage: ... }` / `{ kind: "aborted", usage: ... }`.
+- [x] Run unit tests. Expected: green.
+- [x] Commit: `refactor(cc-dispatcher): discriminated PersistMode + buildRow/mirrorInsertError helpers — partial #3640 (F2 + F4)`.
 
 ### Phase 5 — #3640 F6 Message.usage variant union
 

@@ -37,15 +37,15 @@ lane: single-domain
 
 ## 4. #3640 F2 + F4 — discriminated PersistMode + helper extraction
 
-- [ ] 4.1 Replace `AssistantPersistMode` + `AssistantPersistOpts` with module-scope `type PersistMode = { kind: "complete"; usage: ... } | { kind: "aborted"; usage: ... }`.
-- [ ] 4.2 Rewrite `saveAssistantMessage` signature to `(mode: PersistMode) => Promise<void>`.
-- [ ] 4.3 Extract `buildRow(mode, text, conversationId)` at module scope.
-- [ ] 4.4 Extract `mirrorInsertError(error, mode, userId, conversationId, fullText)` at module scope.
-- [ ] 4.5 Add `const _exhaustive: never = mode;` exhaustiveness rail after the switch.
-- [ ] 4.6 Trim `saveAssistantMessage` orchestrator to ≤ 20 LoC.
-- [ ] 4.7 Update two call sites (`onTextTurnEnd` ~1283, `onWorkflowEnded` ~1329) to pass `{ kind, usage }`.
-- [ ] 4.8 Run `bun test` — expect green.
-- [ ] 4.9 Commit: `refactor(cc-dispatcher): discriminated PersistMode + buildRow/mirrorInsertError helpers — partial #3640 (F2 + F4)`.
+- [x] 4.1 Replace `AssistantPersistMode` + `AssistantPersistOpts` with module-scope `type PersistMode = { kind: "complete"; usage: ... } | { kind: "aborted"; usage: ... }`.
+- [x] 4.2 Rewrite `saveAssistantMessage` signature to `(mode: PersistMode) => Promise<void>`.
+- [x] 4.3 Extract `buildRow(mode, text, conversationId)` at module scope.
+- [x] 4.4 Extract `mirrorInsertError(error, mode, userId, conversationId, fullText)` at module scope.
+- [x] 4.5 Add `const _exhaustive: never = mode;` exhaustiveness rail after the switch.
+- [x] 4.6 Trim `saveAssistantMessage` orchestrator to ≤ 20 LoC.
+- [x] 4.7 Update two call sites (`onTextTurnEnd` ~1283, `onWorkflowEnded` ~1329) to pass `{ kind, usage }`.
+- [x] 4.8 Run `bun test` — expect green.
+- [x] 4.9 Commit: `refactor(cc-dispatcher): discriminated PersistMode + buildRow/mirrorInsertError helpers — partial #3640 (F2 + F4)`.
 
 ## 5. #3640 F6 — Message.usage variant union (TS-only, no migration)
 
