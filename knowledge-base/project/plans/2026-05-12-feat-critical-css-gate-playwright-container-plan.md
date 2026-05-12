@@ -66,7 +66,7 @@ The feature description contains one factual claim that needs reconciliation:
 
 ## Files to Edit
 
-- `.github/workflows/ci.yml` — `critical-css-gate` job: add `container:`, drop `Setup Node.js` step (Playwright image ships Node 20), drop `Cache Playwright browsers` step, replace dual install steps with single `npm install --no-save playwright@1.60.0 http-server@14`. Keep `actions/checkout`, `npm ci`, `npx @11ty/eleventy`, the CSP/SEO validators, the critical-CSS coverage check, and the screenshot-gate + stylesheet-swap step intact.
+- `.github/workflows/ci.yml` — `critical-css-gate` job: add `container:`, drop `Setup Node.js` step (Playwright image ships Node 24), drop `Cache Playwright browsers` step, replace dual install steps with single `npm install --no-save playwright@1.60.0 http-server@14`. Keep `actions/checkout`, `npm ci`, `npx @11ty/eleventy`, the CSP/SEO validators, the critical-CSS coverage check, and the screenshot-gate + stylesheet-swap step intact.
 - `.github/workflows/deploy-docs.yml` — same container migration on the post-merge gate's screenshot-gate path (steps "Install Playwright (Chromium only) for screenshot gate" and below). The `deploy` job runs the full Eleventy build + SEO/CSP validators on the runner; the screenshot-gate step is what needs the container.
 
 ## Files to Create
@@ -244,7 +244,7 @@ Edit shape — add `container:` to the `deploy` job, remove the `Setup Node.js` 
 ### Phase 4 — Verify locally (best-effort)
 
 - Run `docker pull mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc` to confirm the digest is pullable.
-- Run `docker run --rm --workdir /work -v "$(pwd):/work" mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc bash -c 'node --version && which chromium-headless-shell || ls /ms-playwright'` to confirm Node 20 and the Chromium binary are present at expected paths.
+- Run `docker run --rm --workdir /work -v "$(pwd):/work" mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc bash -c 'node --version && which chromium-headless-shell || ls /ms-playwright'` to confirm Node 24 and the Chromium binary are present at expected paths.
 - Run the full gate locally: `docker run --rm --workdir /work -v "$(pwd):/work" --network host mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc bash -c 'npm ci && npx @11ty/eleventy && npm install --no-save playwright@1.60.0 http-server@14 && (npx http-server _site -p 8888 -a 127.0.0.1 -c-1 -s &) && sleep 2 && node plugins/soleur/docs/scripts/screenshot-gate.mjs'`. Confirm exit 0 and `< 60 s` wall-clock.
 
 ### Phase 5 — PR + observe

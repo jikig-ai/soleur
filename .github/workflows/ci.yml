@@ -288,7 +288,9 @@ jobs:
         # (used by `import { chromium } from "playwright"` in screenshot-gate.mjs)
         # must match the container's Playwright version EXACTLY — browser-binary
         # lookup is exact-revision (see learning
-        # 2026-03-20-playwright-shared-cache-version-coupling.md). Keep this
+        # 2026-03-20-playwright-shared-cache-version-coupling.md). Use exact
+        # `X.Y.Z` — no `^`, no `~`, no `playwright@1` floating tag — or the
+        # npm package drifts off the container's Chromium revision. Keep this
         # pin in sync with the container image tag above and with
         # deploy-docs.yml's matching step.
         run: npm install --no-save playwright@1.60.0 http-server@14
