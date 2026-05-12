@@ -1104,12 +1104,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       dispatch({ type: "filter_prepend", messages: result.messages });
       seedCostData(result.costData);
       seedWorkflowEndedAt(result.workflowEndedAt);
-      // PR-B (#3603): seed once; null is the unhydrated sentinel. Functional
-      // updater mirrors the seedWorkflowEndedAt pattern — never clobber a
-      // non-null prior value on a retry/race.
-      if (result.createdAt) {
-        setConversationCreatedAt((prev) => prev ?? result.createdAt);
-      }
+      // PR-B (#3603): write the resolved row's createdAt. Unlike
+      // seedCostData/seedWorkflowEndedAt (which guard against racing WS
+      // events that could clobber a fresher in-memory value), `created_at`
+      // is a write-once row attribute with no WS-side update path — the
+      // history fetch is the only writer. The sidebar variant reuses one
+      // useWebSocket hook across conversation switches (resumeByContextPath
+      // resolves a new realConversationId while keeping the hook alive);
+      // a `prev ?? value` seed would silently render conversation A's date
+      // while the user is reading conversation B. See review #3653.
+      setConversationCreatedAt(result.createdAt);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       reportSilentFallback(err, {

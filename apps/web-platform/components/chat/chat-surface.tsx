@@ -739,9 +739,9 @@ export function ChatSurface({
               `messagesEndRef` so scroll-into-view still lands on the
               composer anchor, not the marker. */}
           <CohortMissingReplyMarker
-            createdAt={conversationCreatedAt ?? ""}
+            createdAt={conversationCreatedAt}
             messages={messages}
-            isStreamingAssistant={streamState === "streaming"}
+            isTurnInFlight={streamState !== "idle"}
           />
           <div ref={messagesEndRef} />
         </div>

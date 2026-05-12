@@ -1,37 +1,49 @@
+"use client";
+
 import type { ChatMessage } from "@/lib/chat-state-machine";
 
-// Sunset 90 days after PR-B merge — component returns null after this date; lazy-delete on next file touch.
+// Sunset 91 days after PR-B merge (2026-05-12 → 2026-08-11) — component
+// returns null after this date; lazy-delete on next file touch. See #3603.
 const COHORT_WINDOW_START = new Date("2026-05-05T00:00:00Z").getTime();
 const COHORT_WINDOW_END = new Date("2026-05-12T00:00:00Z").getTime();
 const COHORT_MARKER_SUNSET = new Date("2026-08-11T00:00:00Z").getTime();
 
 export interface CohortMissingReplyMarkerProps {
-  createdAt: string;
+  createdAt: string | null;
   messages: ChatMessage[];
-  isStreamingAssistant: boolean;
+  /** True while a turn is in flight (`streaming` or `stopping`). Suppresses
+   *  the marker across the whole abort window so a Stop click on a cohort
+   *  thread does not flash the note during `streaming → stopping → idle`. */
+  isTurnInFlight: boolean;
 }
 
 export function CohortMissingReplyMarker({
   createdAt,
   messages,
-  isStreamingAssistant,
+  isTurnInFlight,
 }: CohortMissingReplyMarkerProps) {
+  // `Date.now()` is re-evaluated per render so a long-lived session that
+  // crosses the sunset boundary hides the marker without requiring a reload.
   if (Date.now() >= COHORT_MARKER_SUNSET) return null;
+  if (createdAt === null) return null;
 
   const startMs = Date.parse(createdAt);
   if (Number.isNaN(startMs)) return null;
   if (startMs < COHORT_WINDOW_START || startMs >= COHORT_WINDOW_END) return null;
-  if (isStreamingAssistant) return null;
+  if (isTurnInFlight) return null;
 
   const textMessages = messages.filter((m) => m.type === "text");
   if (textMessages.length === 0) return null;
   if (!textMessages.every((m) => m.role === "user")) return null;
 
+  // Reuse the validated `startMs` instead of re-parsing `createdAt` — both
+  // guarantees the formatted output matches the value that passed the gate
+  // and saves a second parse per render.
   const formattedDate = new Intl.DateTimeFormat(undefined, {
     year: "numeric",
     month: "long",
     day: "numeric",
-  }).format(new Date(createdAt));
+  }).format(new Date(startMs));
 
   return (
     <aside
