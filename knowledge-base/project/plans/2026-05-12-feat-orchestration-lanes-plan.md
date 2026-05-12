@@ -227,8 +227,8 @@ Three lanes describe Phase 0.5 domain-leader breadth: `single-domain`, `cross-do
 - [x] `work/SKILL.md` Phase 0 reads `lane:` (file-existence guarded), validates enum, includes ` (lane=<value>)` in announce when present.
 - [x] Parent audit spec FR4 amended to three-lane single-axis with link back; TR7 specifies fail-closed default.
 - [x] `plugins/soleur/test/lane-frontmatter.test.sh` exists; 7 assertions all GREEN; header comment acknowledges marker-existence limitation.
-- [ ] `bun test plugins/soleur/test/components.test.ts` passes.
-- [ ] `bash scripts/test-all.sh` passes.
+- [x] `bun test plugins/soleur/test/components.test.ts` passes.
+- [x] `bash scripts/test-all.sh` passes.
 - [ ] PR body uses **`Closes #2721`** (no manual smoke run gating closure — the test scaffold + reviewer eyes + brainstorm self-test on the next brainstorm session are sufficient).
 
 ## Risks / Sharp Edges
