@@ -1,15 +1,19 @@
 ---
 title: "CI test-job speedup — bun-vs-bash matrix split with synthetic aggregator"
 date: 2026-05-12
-status: brainstorm-complete
+status: superseded-by-replan
 worktree: .worktrees/feat-ci-test-job-speedup
 branch: feat-ci-test-job-speedup
 pr: 3672
 issue: 3680
+plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
 brand_survival_threshold: single-user incident
 ---
 
 # CI test-job speedup brainstorm
+
+> **Status: Superseded by the replan at [`../plans/2026-05-12-feat-ci-test-job-speedup-plan.md`](../plans/2026-05-12-feat-ci-test-job-speedup-plan.md).**
+> The bun-vs-bash 2-way framing below was corrected at /work Phase 1 after precondition-drift findings (38 suites not 29, `apps/web-platform` is Vitest not Bun, no `apps/telegram-bridge`, `bun.lock` not `bun.lockb`, missing scripts shard for 11 pre-suite tests). The replan ships a 3-way `test-webplat + test-bun + test-scripts` split. Preserved here for historical traceability.
 
 ## What we're building
 
@@ -30,7 +34,7 @@ Phase 0.5 + 1.1 surfaced three load-bearing constraints that ruled out the alter
 
 3. **Branch-protection ruleset 14145388 requires the literal context `test`** alongside four externally-configured checks (`e2e`, `dependency-review`, `CodeQL`, `skill-security-scan PR gate`). Renaming `test` orphans the merge gate; recovery requires either ruleset edit (live ammo) or a synthetic aggregator (precedent at `2026-03-20-github-required-checks-skip-ci-synthetic-status.md`). The aggregator wins on reversibility — no ruleset drift if someone reverts the CI later.
 
-**Why bun-vs-bash split (A′) instead of indexed shards (A):** the 29 suites cleave naturally on runner type. Bash tests don't need `bun install`, don't touch the FPE crash class, and can run in their own job without paying setup overhead twice. Indexed sharding would need a shard-list generator that re-uses `test-all.sh`'s discovery logic to preserve the orphan-suite invariant (PR #3512/#3533) — extra complexity for marginal additional savings.
+**Why bun-vs-bash split (A′) instead of indexed shards (A):** the 29 suites cleave naturally on runner type. Bash tests don't need `bun install`, don't touch the FPE crash class, and can run in their own job without paying setup overhead twice. Indexed sharding would need a shard-list generator that re-uses `test-all.sh`'s discovery logic to preserve the orphan-suite invariant (issue #3533, PR #3534) — extra complexity for marginal additional savings.
 
 ## User-Brand Impact
 
@@ -66,7 +70,7 @@ Phase 0.5 + 1.1 surfaced three load-bearing constraints that ruled out the alter
 - **Approach C (trim slowest suite)** — Bounded ceiling, useful only as complement. If Phase 0 reveals `apps/web-platform` dominates at ~80s, this becomes a follow-up: split `apps/web-platform/test/` into sub-directories (auth, kb, sandbox) so each is its own `run_suite` line and bin-packs across shards.
 - **Approach D (`bun test --max-pool-size N`)** — Rejected outright. Re-creates the FPE spawn-pressure pattern that the sequential runner was built to mitigate.
 - **GitHub-hosted larger runner (`ubuntu-latest-4-cores`)** — Rejected. Paid runners shift cost without changing the serial bottleneck for any single suite.
-- **Touched-file-aware test selection** — Rejected for v1. Violates the orphan-suite invariant (PR #3512/#3533) if applied naively; full sweep on `push: main` could preserve it but adds complexity. Worth a follow-up issue.
+- **Touched-file-aware test selection** — Rejected for v1. Violates the orphan-suite invariant (issue #3533, PR #3534) if applied naively; full sweep on `push: main` could preserve it but adds complexity. Worth a follow-up issue.
 
 ## Open questions
 

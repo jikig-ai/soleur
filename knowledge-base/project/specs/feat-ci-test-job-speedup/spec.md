@@ -1,22 +1,27 @@
 ---
 title: "CI test-job speedup — bun-vs-bash matrix split with synthetic aggregator"
-status: Draft
+status: superseded-by-replan
 lane: cross-domain
 brand_survival_threshold: single-user incident
 branch: feat-ci-test-job-speedup
 pr: 3672
 issue: 3680
 brainstorm: knowledge-base/project/brainstorms/2026-05-12-ci-test-job-speedup-brainstorm.md
+plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
 date: 2026-05-12
 ---
 
 # Spec: CI test-job speedup — bun-vs-bash matrix split
 
+> **Status: Superseded by the replan at [`../../plans/2026-05-12-feat-ci-test-job-speedup-plan.md`](../../plans/2026-05-12-feat-ci-test-job-speedup-plan.md).**
+> The FR/TR/SC sections below describe a 2-way `test-bun + test-bash` split that was corrected at /work Phase 1 after five precondition-drift findings (29 vs 38 suites, fabricated `apps/telegram-bridge`, `apps/web-platform` is Vitest not Bun, `bun.lock` not `bun.lockb`, missing `scripts` shard for 11 pre-suite tests). The replan ships a 3-way `test-webplat + test-bun + test-scripts` split with a 2-way vitest `--shard` matrix on `test-webplat`. **Read the plan as the source of truth.** This spec is preserved for historical traceability of the design-change reasoning.
+
 **Issue:** #3680
 **Branch:** feat-ci-test-job-speedup
 **Draft PR:** #3672
-**Status:** Draft
+**Status:** Superseded (see banner above)
 **Brainstorm:** `knowledge-base/project/brainstorms/2026-05-12-ci-test-job-speedup-brainstorm.md`
+**Plan (canonical):** [`knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`](../../plans/2026-05-12-feat-ci-test-job-speedup-plan.md)
 
 ## Problem Statement
 
@@ -28,7 +33,7 @@ The secondary target is the 111s `Run E2E tests` step in the `e2e` job, where Pl
 
 - G1: Reduce median `test` job wall-clock to <130s (down from ~199s); stretch <100s.
 - G2: Reduce median `e2e` job wall-clock to <80s by running Playwright with `--shard=2`.
-- G3: Preserve the `test-all.sh` orphan-suite invariant (PR #3512/#3533) — any new suite added under `plugins/soleur/test/*.test.sh`, `apps/*/test/`, or `test/` must be discovered without manual workflow edits.
+- G3: Preserve the `test-all.sh` orphan-suite invariant (issue #3533, PR #3534) — any new suite added under `plugins/soleur/test/*.test.sh`, `apps/*/test/`, or `test/` must be discovered without manual workflow edits.
 - G4: Keep branch-protection ruleset 14145388 untouched — required checks (`test`, `e2e`) reconstructed via synthetic aggregator jobs.
 - G5: Introduce no new flake class — 5/5 green runs on the validation pass.
 
