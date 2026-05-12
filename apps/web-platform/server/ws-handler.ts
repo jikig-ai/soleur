@@ -22,7 +22,7 @@ import {
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
-import { reportSilentFallback } from "./observability";
+import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { createChildLogger } from "./logger";
@@ -690,10 +690,13 @@ async function createConversation(
       const existingWorkflow = existingRow.active_workflow ?? null;
       const intendedWorkflow = activeWorkflow ?? null;
       if (activeWorkflow !== undefined && existingWorkflow !== intendedWorkflow) {
-        Sentry.captureMessage(
-          "createConversation 23505 fallback: activeWorkflow diverged — first-writer-wins",
+        warnSilentFallback(
+          new Error(
+            "createConversation 23505 fallback: activeWorkflow diverged — first-writer-wins",
+          ),
           {
-            level: "warning",
+            feature: "create-conversation",
+            op: "23505-fallback-active-workflow",
             extra: {
               conversationId: existingRow.id,
               existingWorkflow,
@@ -716,10 +719,13 @@ async function createConversation(
       // do (cq-silent-fallback-must-mirror-to-sentry).
       const existingContextPath = existingRow.context_path ?? null;
       if (existingContextPath !== (contextPath ?? null)) {
-        Sentry.captureMessage(
-          "createConversation 23505 fallback: context_path diverged — invariant assumed unreachable today",
+        warnSilentFallback(
+          new Error(
+            "createConversation 23505 fallback: context_path diverged — invariant assumed unreachable today",
+          ),
           {
-            level: "warning",
+            feature: "create-conversation",
+            op: "23505-fallback-context-path",
             extra: {
               conversationId: existingRow.id,
               existingContextPath,

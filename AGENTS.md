@@ -53,8 +53,8 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-when-an-audit-identifies-pre-existing] → core
 - [id: wg-when-deferring-a-capability-create-a] → core
 - [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core
-- [id: wg-every-session-error-must-produce-either] → core
-- [id: wg-use-closes-n-in-pr-body-not-title-to] → core
+- [id: wg-every-session-error-must-produce-either] → rest
+- [id: wg-use-closes-n-in-pr-body-not-title-to] → rest
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → core
 - [id: wg-plan-prescribed-skills-must-run-inline] → core
 
