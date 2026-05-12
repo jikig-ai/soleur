@@ -48,8 +48,6 @@ screenshot-gate-failures/
 # Local state (since-id, caches -- do not commit)
 .soleur/
 
-# Article 30 register (private -- do not commit)
-article-30-register*.md
 knowledge-base/private/
 
 # Screenshot and video artifacts (browser tests, feature demos, image generation)

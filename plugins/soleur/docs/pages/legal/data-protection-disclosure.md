@@ -8,7 +8,7 @@ permalink: legal/data-protection-disclosure/
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 12, 2026</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: legal/data-protection-disclosure/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 29, 2026 (added conversation data to Section 2.1b(c), added Section 2.3(i) conversation management, updated Supabase processor row in Section 4.2, added conversation data to Section 10.3 account deletion)
+**Last Updated:** May 12, 2026 (added per-message `usage` jsonb token-consumption and cost metadata to Section 2.3(i) Web Platform conversation management activity)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -105,7 +105,7 @@ Soleur's data processing activities are limited to:
 - **(f)** **Web Platform account management:** The Web Platform (app.soleur.ai) processes email addresses, authentication tokens, and session data for user account management and authentication. Users may authenticate via magic link or OAuth providers (Google, Apple, GitHub, Microsoft). OAuth sign-in additionally processes provider user IDs, display names, and profile picture URLs. Accounts with matching verified email addresses are automatically linked. OAuth identity data is managed by Supabase. Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request.
 - **(g)** **Web Platform payment processing:** The Web Platform processes customer email addresses and subscription metadata via Stripe Checkout. Card data is handled exclusively by Stripe and never reaches Jikigai servers (PCI SAQ-A). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
 - **(h)** **Web Platform infrastructure hosting:** The Web Platform hosts user workspaces, encrypted API keys (AES-256-GCM), and Docker containers on Hetzner servers in Helsinki, Finland (EU-only). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active.
-- **(i)** **Web Platform conversation management:** The Web Platform stores conversation metadata and message content associated with user accounts. Data processed: conversation status, domain leader assignment, user messages, assistant responses, tool call metadata. Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request (cascade delete).
+- **(i)** **Web Platform conversation management:** The Web Platform stores conversation metadata and message content associated with user accounts. Data processed: conversation status, domain leader assignment, user messages, assistant responses, tool call metadata, and -- when usage telemetry is enabled per operator configuration -- per-message `usage` jsonb (token consumption and cost metadata). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request (cascade delete).
 
 For these activities, Jikigai acts as a Controller with respect to data it directly collects and processes (including CLA signature data and Web Platform account data). Third-party processors are engaged as described in Section 4.2.
 

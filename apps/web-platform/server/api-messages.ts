@@ -54,7 +54,7 @@ export async function handleConversationMessages(
   const { data: conv, error: convErr } = await supabase
     .from("conversations")
     .select(
-      "id, total_cost_usd, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, workflow_ended_at",
+      "id, total_cost_usd, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, workflow_ended_at, created_at",
     )
     .eq("id", conversationId)
     .eq("user_id", user.id)
@@ -134,5 +134,8 @@ export async function handleConversationMessages(
       (conv as { cache_creation_input_tokens?: number | null })
         .cache_creation_input_tokens ?? 0,
     workflowEndedAt: conv.workflow_ended_at ?? null,
+    // PR-B (#3603) — surface conversation start time so the chat surface can
+    // gate the cohort-missing-reply marker on the row-absence cohort window.
+    createdAt: conv.created_at ?? null,
   }));
 }
