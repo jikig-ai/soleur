@@ -5,6 +5,7 @@ problem_type: best_practice
 component: testing
 tags: [testing, plugin, markdown, validation, coverage-gap]
 severity: medium
+status: open
 ---
 
 # Plugin Markdown Components Have No Automated Tests

@@ -5,6 +5,7 @@ problem_type: best_practice
 component: skills
 tags: [skills, duplication, consolidation]
 severity: low
+status: open
 ---
 
 # skill-creator and create-agent-skills Have Overlapping Purposes

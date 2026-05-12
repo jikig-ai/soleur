@@ -5,6 +5,7 @@ problem_type: best_practice
 component: skills
 tags: [skills, markdown-links, backtick, convention-violation]
 severity: medium
+status: open
 ---
 
 # Several Skills Use Backtick References Instead of Markdown Links
