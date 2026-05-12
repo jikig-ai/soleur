@@ -139,6 +139,16 @@ type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_
 // singleton init, rate-limit config, and interactive_prompt_response
 // WS-error mapping.
 
+// Drains the microtask queue twice so a `void saveAssistantMessage()`
+// kicked off in a synchronous SDK callback (and any chained `.then`s the
+// insert spawns) gets to run before the assertion. Replaces the
+// `setTimeout(_, 10)` settle wait pattern — microtask flushes are
+// deterministic and don't carry the 10ms wall-clock cost per assertion.
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("cc-dispatcher singletons + orchestration", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
@@ -1115,7 +1125,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     // No assistant row should ever be inserted — flush microtasks and assert
     // the count stays at 0.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
     expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
   });
 
@@ -1130,7 +1140,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
   // hidden routing preamble with the visible answer; user only saw the
   // answer).
   //
-  // Invariant: the value of `accumulatedAssistantText` at the instant
+  // Invariant: the value of `latestAssistantText` at the instant
   // `onTextTurnEnd` fires is what persists. No reordering, no merge.
   // ---------------------------------------------------------------------------
 
@@ -1223,7 +1233,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
   //
   // Mirrors the legacy abort contract at `agent-runner.ts:2044-2055` so the
   // user's partially-streamed text survives a runner abort. A closure-scoped
-  // `workflowEnded` flag suppresses a late `onTextTurnEnd` so it cannot
+  // `assistantTurnPersisted` flag suppresses a late `onTextTurnEnd` so it cannot
   // double-write or overwrite the abort row.
   //
   // Scope: 6 non-`completed` `WorkflowEnd` statuses (cost_ceiling,
@@ -1234,15 +1244,16 @@ describe("cc-dispatcher singletons + orchestration", () => {
   // reaper/closeConversation paths (cc-dispatcher.ts:738).
   // ---------------------------------------------------------------------------
 
-  for (const statusFixture of [
+  it.each([
     { status: "runner_runaway", elapsedMs: 5000, lastBlockKind: "text", lastBlockToolName: null, reason: "idle_window" },
     { status: "idle_timeout" },
     { status: "internal_error", error: "boom" },
     { status: "user_aborted" },
     { status: "plugin_load_failure", error: "plugin missing" },
     { status: "cost_ceiling", totalCostUsd: 5, cap: 4, workflow: null },
-  ]) {
-    it(`T-W2-${statusFixture.status}: flushes accumulated text as status:"aborted" row on non-completed workflow end`, async () => {
+  ])(
+    'T-W2-$status: flushes accumulated text as status:"aborted" row on non-completed workflow end',
+    async (statusFixture) => {
       const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
 
       __setCcRunnerForTests(
@@ -1278,8 +1289,8 @@ describe("cc-dispatcher singletons + orchestration", () => {
           status: "aborted",
         }),
       );
-    });
-  }
+    },
+  );
 
   it("T-W2-empty: does NOT write an aborted row when accumulator is empty (tool-only turn that aborts)", async () => {
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
@@ -1304,7 +1315,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     });
 
     // Flush microtasks; no assistant insert should land.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushMicrotasks();
     expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
   });
 
@@ -1343,7 +1354,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(row.content).toBe("normal reply");
   });
 
-  it("T-W2-late-text-async: workflowEnded flag survives a real microtask boundary between onWorkflowEnded and onTextTurnEnd", async () => {
+  it("T-W2-late-text-async: assistantTurnPersisted flag survives a real microtask boundary between onWorkflowEnded and onTextTurnEnd", async () => {
     // Per GDPR work-phase-2-exit R2 (2026-05-12): T-W2-late-text fires both
     // callbacks synchronously; in production the SDK iterator may interleave
     // them across actual microtasks. The synchronous flag set is correct
@@ -1382,7 +1393,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     await vi.waitFor(() =>
       expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushMicrotasks();
     expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1);
 
     const [row] = assistantInsertCalls(mockMessagesInsert);
@@ -1399,7 +1410,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
           events.onText("text before abort");
           events.onWorkflowEnded?.({ status: "runner_runaway", elapsedMs: 5000, lastBlockKind: "text", lastBlockToolName: null, reason: "idle_window" });
           // Simulate the in-flight SDK callback that arrives after the abort
-          // has already flushed. The workflowEnded flag must suppress this.
+          // has already flushed. The assistantTurnPersisted flag must suppress this.
           events.onTextTurnEnd?.();
         },
       }),
@@ -1420,7 +1431,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     await vi.waitFor(() =>
       expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushMicrotasks();
     expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1);
 
     const [row] = assistantInsertCalls(mockMessagesInsert);
@@ -1652,7 +1663,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     });
 
     // Settle: no assistant insert.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushMicrotasks();
     expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
 
     // Exactly ONE P0 mirror with the literal op slug.
@@ -1734,7 +1745,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     );
     // Settle further — confirm the late onTextTurnEnd does NOT produce a
     // second insert.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushMicrotasks();
     expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1);
 
     const [row] = assistantInsertCalls(mockMessagesInsert);
@@ -1812,7 +1823,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       });
 
       // Settle the assistant call sites' microtasks.
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await flushMicrotasks();
 
       // Exactly ONE user-INSERT (call 1 passed), ZERO assistant rows (calls
       // 2 + 3 halted by sentinel).
