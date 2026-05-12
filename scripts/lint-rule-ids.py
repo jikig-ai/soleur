@@ -24,9 +24,15 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-SECTIONS = {"Hard Rules", "Workflow Gates", "Code Quality",
-            "Review & Feedback", "Passive Domain Routing", "Communication",
-            "Compliance Tier"}
+# Ensure the sibling _agents_md_sections module is importable whether this
+# script runs as a CLI tool (cwd may be anywhere) or via importlib in the
+# test harness (which uses spec_from_file_location and doesn't put the
+# script's directory on sys.path).
+_SCRIPTS_DIR = str(Path(__file__).parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from _agents_md_sections import SECTIONS
 ID_RE = re.compile(r"\[id: ([a-z0-9-]+)\]")
 RID_RE = re.compile(r"^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$")
 

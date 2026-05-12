@@ -13,6 +13,14 @@
 # Fire-and-forget: never blocks the hook (all jq invocations on external input
 # wrapped in `2>/dev/null || true`, per learning 2026-03-18).
 
+# headless_or_stderr is provided by lib/session-state.sh; route warns to a
+# log file under `claude --bg`. Fall back to stderr for legacy worktrees.
+# shellcheck source=session-state.sh
+source "$(dirname "${BASH_SOURCE[0]}")/session-state.sh" 2>/dev/null || true
+if ! declare -f headless_or_stderr >/dev/null; then
+  headless_or_stderr() { echo "[$1] $2" >&2; }
+fi
+
 # --- Repo-root resolution --------------------------------------------------
 # BASH_SOURCE[0] is the path to THIS file regardless of how it was sourced.
 # From .claude/hooks/lib/incidents.sh, the repo root is three dirs up.
@@ -233,7 +241,7 @@ emit_incident() {
     # we want one warn per hook fork, not once globally.
     local marker="/tmp/rule-incidents-warned-$$"
     if [[ ! -f "$marker" ]]; then
-      echo "[rule-incidents] warning: failed to write $file (permissions? disk?)" >&2
+      SOLEUR_HOOK_NAME="rule-incidents" headless_or_stderr warn "failed to write $file (permissions? disk?)"
       : > "$marker" 2>/dev/null || true
     fi
   fi
