@@ -62,6 +62,11 @@ export interface UsageData {
   totalCostUsd: number;
   inputTokens: number;
   outputTokens: number;
+  // Cache tokens — `0` when prompt caching is not engaged. Widened
+  // 2026-05-12 so the chat-surface cost badge can render the same
+  // total-input semantics the dashboard's API Usage section does.
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
 }
 
 export interface StartSessionOptions {
@@ -779,6 +784,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             totalCostUsd: (prev?.totalCostUsd ?? 0) + msg.totalCostUsd,
             inputTokens: (prev?.inputTokens ?? 0) + msg.inputTokens,
             outputTokens: (prev?.outputTokens ?? 0) + msg.outputTokens,
+            // `?? 0` coerces frames from old-shape servers (cache fields
+            // absent) during a rolling deploy. Tighten to required when
+            // the Zod schema flips back to non-optional.
+            cacheReadInputTokens:
+              (prev?.cacheReadInputTokens ?? 0) + (msg.cacheReadInputTokens ?? 0),
+            cacheCreationInputTokens:
+              (prev?.cacheCreationInputTokens ?? 0) +
+              (msg.cacheCreationInputTokens ?? 0),
           }));
           break;
         }
@@ -990,7 +1003,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     const costData: UsageData | null =
       json.totalCostUsd > 0
-        ? { totalCostUsd: json.totalCostUsd, inputTokens: json.inputTokens, outputTokens: json.outputTokens }
+        ? {
+            totalCostUsd: json.totalCostUsd,
+            inputTokens: json.inputTokens,
+            outputTokens: json.outputTokens,
+            // History responses pre-2026-05-12 omit cache token fields;
+            // default to 0 so the resume path can hydrate without
+            // throwing on missing fields. Forward-going responses
+            // populate these from `api-messages.ts`.
+            cacheReadInputTokens:
+              typeof json.cacheReadInputTokens === "number"
+                ? json.cacheReadInputTokens
+                : 0,
+            cacheCreationInputTokens:
+              typeof json.cacheCreationInputTokens === "number"
+                ? json.cacheCreationInputTokens
+                : 0,
+          }
         : null;
 
     const workflowEndedAtFromServer: string | null =
