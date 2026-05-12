@@ -5,6 +5,13 @@ description: "This skill should be used when running the full autonomous enginee
 
 Run these steps in order. Do not do anything else.
 
+**Step 0a: Linear context preflight.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/]+/issue/`. If any match:
+
+1. Use the **Skill tool**: `skill: soleur:linear-fetch`, args: "$ARGUMENTS". The skill returns two artifacts: `agent_context` (markdown blob + image content blocks, streamed into THIS parent conversation only) and `persist_safe_summary` (the same text with every `uploads.linear.app/*` URL redacted to `[linear-image: REDACTED]`).
+2. For the remainder of this skill, **substitute `persist_safe_summary` for `$ARGUMENTS` whenever the value is passed to a Task subagent or to a child skill invocation** (e.g., the subagent prompt template's `ARGUMENTS:` line at the top of Steps 1-2, the subagent's `args: "$ARGUMENTS"` for `skill: soleur:plan`, and the fallback inline `args: "$ARGUMENTS"`). Do NOT pass `agent_context` or any Linear image URL into a subagent prompt — Task subagents inherit prompt text only (`knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`); the parent retains the images for Steps 3-8 (work, review, ship). The original `$ARGUMENTS` placeholder remains the slugification source at Step 0b's worktree-name construction; only downstream prompt construction substitutes.
+
+If no Linear references match, this step is a no-op and `$ARGUMENTS` flows through unchanged.
+
 **Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), create a worktree for the feature branch. Do NOT use `git pull` or `git checkout -b` -- both fail on bare repos (`core.bare=true`).
 
 ```bash
