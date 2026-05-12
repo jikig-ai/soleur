@@ -209,6 +209,135 @@ export async function sendEmailNotification(
 }
 
 // ---------------------------------------------------------------------------
+// DSAR export notifications (Phase 4 of feat-dsar-art15-export-endpoint
+// #3637, plan rev-2 C2 fold of dsar-email.ts).
+//
+// TR6 contract:
+//   - Subject + first 280 chars of body are PII-free (no jobId, userId,
+//     email) so mobile-client preview-text rendering cannot leak.
+//   - Plain `<a>` link, NOT auto-tracked: no Resend `tags` / per-link
+//     tracking, since trackable URLs forwarded to a coworker would let
+//     the email host's tracker correlate the recipient.
+//   - Returns `false` on user-lookup or email-absent failure (silent
+//     non-throw — caller is the worker, which already mirrored the
+//     fact that the export completed/failed; an email failure is not
+//     a hard failure of the DSAR job).
+// ---------------------------------------------------------------------------
+
+// Internal code -> user-facing copy. Codes themselves never reach the
+// body (they would leak internal taxonomy and rot under refactor).
+const DSAR_FAILURE_COPY: Record<string, string> = {
+  job_timeout:
+    "We weren't able to package your data within the time limit. Please request the export again — if it keeps failing, contact legal@jikigai.com.",
+  account_deleted_during_export:
+    "Your account was deleted while the export was being prepared. The export was cancelled.",
+  archive_error:
+    "We hit an unexpected error while packaging your data. Please request the export again.",
+};
+
+function dsarFailureCopy(reason: string): string {
+  return (
+    DSAR_FAILURE_COPY[reason] ??
+    "We weren't able to complete your data export. Please request it again or contact legal@jikigai.com."
+  );
+}
+
+async function lookupUserEmail(userId: string): Promise<string | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.auth.admin.getUserById(userId);
+  if (error || !data?.user?.email) {
+    log.error(
+      { userId, err: error?.message },
+      "Failed to look up user email for DSAR notification",
+    );
+    return null;
+  }
+  return data.user.email;
+}
+
+/**
+ * Notify the user that their DSAR export bundle is ready.
+ *
+ * @returns `true` on Resend success, `false` on user-lookup failure or
+ *          missing email. Never throws.
+ */
+export async function sendDsarExportReadyEmail(
+  userId: string,
+  jobId: string,
+  expiresAt: Date,
+): Promise<boolean> {
+  const email = await lookupUserEmail(userId);
+  if (!email) return false;
+
+  const downloadUrl = `${appUrl()}/api/account/export/${jobId}/download`;
+  // Format expiry as a human-friendly UTC date — "the link expires in
+  // 7 days" + the absolute timestamp so users in any TZ can plan.
+  const expiresAtUtc = expiresAt.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+
+  const resend = getResend();
+  const { error } = await resend.emails.send({
+    from: "Soleur <notifications@soleur.ai>",
+    to: [email],
+    // PII-free subject — no jobId, no userId, no email.
+    subject: "Your Soleur data export is ready",
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">Your Soleur data export is ready</h2>
+        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">Your data export is ready to download. The link expires in 7 days (${escapeHtml(expiresAtUtc)}). The download link is single-use and bound to the device that requested it.</p>
+        <a href="${downloadUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">Download my data</a>
+        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You requested this export from /settings/privacy on Soleur. If you did not request it, contact legal@jikigai.com.</p>
+      </div>
+    `,
+  });
+
+  if (error) {
+    log.error({ userId, jobId, err: error }, "Failed to send DSAR ready email");
+    return false;
+  }
+  log.info({ userId, jobId }, "DSAR ready email sent");
+  return true;
+}
+
+/**
+ * Notify the user that their DSAR export job failed. Translates the
+ * internal `failure_reason` code to user-facing copy — the code itself
+ * never reaches the body.
+ */
+export async function sendDsarExportFailedEmail(
+  userId: string,
+  jobId: string,
+  reason: string,
+): Promise<boolean> {
+  const email = await lookupUserEmail(userId);
+  if (!email) return false;
+
+  const settingsUrl = `${appUrl()}/dashboard/settings/privacy`;
+  const userCopy = dsarFailureCopy(reason);
+
+  const resend = getResend();
+  const { error } = await resend.emails.send({
+    from: "Soleur <notifications@soleur.ai>",
+    to: [email],
+    subject: "Your Soleur data export could not be completed",
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">Your Soleur data export could not be completed</h2>
+        <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(userCopy)}</p>
+        <a href="${settingsUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">Go to /settings/privacy</a>
+        <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You requested this export from /settings/privacy on Soleur. If the problem persists, contact legal@jikigai.com.</p>
+      </div>
+    `,
+  });
+
+  if (error) {
+    log.error({ userId, jobId, reason, err: error }, "Failed to send DSAR failed email");
+    return false;
+  }
+  log.info({ userId, jobId, reason }, "DSAR failed email sent");
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
