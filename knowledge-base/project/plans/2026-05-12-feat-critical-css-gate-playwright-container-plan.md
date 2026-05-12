@@ -10,6 +10,27 @@ target_user_brand_impact_threshold: none
 
 # feat: Run `critical-css-gate` inside the official Playwright container image
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-12
+**Sections enhanced:** Overview, Implementation Phases (Phase 2 + 3), Risks, Sharp Edges, Acceptance Criteria, Test Strategy.
+**Research sources:** Microsoft Playwright Dockerfile (`Dockerfile.jammy`), playwright.dev/docs/ci, GitHub Actions docs (`jobs.<job_id>.container`), `actions/checkout` issue tracker (#956 — root user / UID mismatch), `actions/deploy-pages` + `actions/upload-pages-artifact` container-job compat, real-world Playwright-container benchmark (karmacomputing.co.uk), 2026-05-12 in-repo learning on cache-key invariance, 2026-03-20 in-repo learning on Playwright shared-cache version coupling, AGENTS.docs.md `cq-eleventy-critical-css-screenshot-gate` rule body, ruleset 14145388 live query, **direct container exec** verifying Node version + `/bin/sh` shell + `/ms-playwright/` layout + end-to-end gate wall-clock.
+
+### Key Improvements
+
+1. **Empirically verified end-to-end**: ran `npm ci + Eleventy build + npm install playwright@1.60.0 + http-server + screenshot-gate.mjs` inside `mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e152…cdc` locally — exit 0, **20 seconds wall-clock for 20 routes**.
+2. **Corrected Node version claim** — image ships Node **24** (not 20 as initially assumed); verified via `docker run … node --version`. Plan body updated.
+3. **Added `defaults.run.shell: bash`** to both container jobs — GitHub Actions container `run:` steps default to `/bin/sh` (which on Jammy is `dash`); current step bodies rely on bash-compatible idioms (`$(seq …)`, `kill … 2>/dev/null || true`). Explicit bash avoids dash-vs-bash drift.
+4. **Documented the root-user constraint** — `actions/checkout` issue #956 confirms the Playwright image's default root user is the supported `actions/checkout` path; do NOT add `--user 1001` (would break `/__w/_temp` UID mapping).
+5. **Added benchmark anchor** — karmacomputing.co.uk Playwright-container study documents `1m 2s` total / `47s` work for a comparable container-based job, calibrating the < 90s target against community data.
+6. **Sensitive-path scope-out** — `.github/workflows/deploy-docs.yml` matches the canonical sensitive-path regex on `deploy`; added a `threshold: none, reason: …` scope-out bullet per `hr-weigh-every-decision-against-target-user-impact` + preflight Check 6 enforcement.
+
+### New Considerations Discovered
+
+- **Container pull cost is the dominant variable on GHA**. Image is ~3 GB compressed; GHA's `mcr.microsoft.com` pull on Microsoft-hosted runners typically takes 20–40 s. After pull, the actual work is < 30 s. Total wall-clock comfortably under the 90s target.
+- **`actions/deploy-pages` + `actions/upload-pages-artifact` are documented to work inside container jobs** (real-world example: `davorg/perl-perlanet:latest` container deploying Pages successfully). The Pages OIDC token is env-injected by the runner, not filesystem-dependent — survives the container boundary.
+- **The Playwright Docker image's Node version drifts with image age**: `Dockerfile.jammy` autogenerates `NODE_VERSION` from upstream Node releases. Pinning the image digest is what guarantees Node version stability across CI runs.
+
 ## Overview
 
 The `critical-css-gate` job in `.github/workflows/ci.yml` currently takes 4–5 minutes wall-clock with high variance (19 s best case on `main` run `25725330777`, 4:01 on PR run `25726234757`). The dominant cost is the "Install Playwright + http-server" step which runs `npm install --no-save playwright@1 http-server@14` followed by `npx playwright install-deps chromium` (apt-installing libnss, libgtk, libgbm, etc.) on every run regardless of cache state.
@@ -19,7 +40,7 @@ The `actions/cache` for `~/.cache/ms-playwright` was added in #3624 to amortize 
 1. **The cache key (`hashFiles('package-lock.json')`) is invariant to the Playwright version.** Root `package-lock.json` contains zero `playwright` entries (verified via `grep -c 'playwright' package-lock.json` → `0`); the install is `--no-save`. The key never advances on a Playwright bump, so cache-hit runs reuse stale binaries until someone edits an unrelated lockfile entry. This recreates the exact bug the 2026-05-12 cache-key learning describes (`knowledge-base/project/learnings/best-practices/2026-05-12-ci-playwright-cache-key-must-track-npm-version-not-script-hash.md`) — that PR only moved the bug, not fixed it.
 2. **Even on cache hit, `npx playwright install-deps chromium` runs unconditionally** (`ci.yml:289-292`), apt-installing OS deps. This is the dominant variable cost — apt latency on `ubuntu-latest` swings from 30 s to 3+ min depending on the GitHub-hosted mirror.
 
-Replacing the bare runner with `mcr.microsoft.com/playwright:v1.60.0-jammy` (the official Playwright container) collapses the install dance to a single `npm install --no-save playwright@1.60.0 http-server@14`: Chromium binary, all OS deps (libnss/libgtk/libgbm/libasound2/etc.), and Node 20 are pre-installed in the image at the matching Playwright version. Expected runtime: ~45–60 s with zero variance from apt latency. The `actions/cache` step disappears entirely (no longer needed; container layers are cached by the GHA runner's Docker layer cache automatically).
+Replacing the bare runner with `mcr.microsoft.com/playwright:v1.60.0-jammy` (the official Playwright container) collapses the install dance to a single `npm install --no-save playwright@1.60.0 http-server@14`: Chromium binary (`/ms-playwright/chromium-1223/`), all OS deps (libnss/libgtk/libgbm/libasound2/etc.), and Node 24 are pre-installed in the image at the matching Playwright version. Expected runtime: ~60–80 s including container pull, with zero variance from apt latency. **Empirically verified at plan time**: end-to-end gate (npm ci + Eleventy build + npm install playwright + http-server + 20-route screenshot-gate.mjs) runs in 20 seconds locally inside `mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc`. The `actions/cache` step disappears entirely — container layers are cached by the GHA runner's Docker layer cache automatically, and one real-world Playwright-container benchmark documents a total wall-clock of `1m 2s` with `47s` of actual work ([karmacomputing.co.uk](https://blog.karmacomputing.co.uk/make-playwright-faster-with-containers-and-build-caching-github-actions/)).
 
 Parity edit applies to `.github/workflows/deploy-docs.yml`'s post-merge variant of the same gate, per `cq-eleventy-critical-css-screenshot-gate` (both pre-merge and post-merge variants must stay in sync).
 
@@ -30,6 +51,8 @@ Parity edit applies to `.github/workflows/deploy-docs.yml`'s post-merge variant 
 **If this leaks, the user's [data / workflow / money] is exposed via:** N/A. No user data touches this gate. The container image is pulled from `mcr.microsoft.com` (Microsoft Container Registry), pinned by SHA digest — supply-chain risk is bounded by Microsoft's signing and the operator-verified digest.
 
 **Brand-survival threshold:** `none`. Reason: CI-only infrastructure change; no production code path, no production state mutation, no user data. The 20-route screenshot gate continues to assert the same FOUC contract.
+
+- `threshold: none, reason: .github/workflows/deploy-docs.yml matches the sensitive-path regex on the substring "deploy", but this PR's edit to that workflow is CI-tooling only — wraps existing steps in a Playwright container and pins the image digest. No new secrets are read, no production environment variables are referenced, no auth flow is changed, no Doppler/Cloudflare/Stripe surface is touched. The Pages-deploy actions (configure/upload/deploy-pages) and their permissions block are byte-identical to current main. Risk surface is bounded to "Pages-deploy actions behave differently inside a container" — covered by the Risks section item 1 with a 1-line revert plan.`
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -76,7 +99,20 @@ Edit `.github/workflows/ci.yml`. Current job spans roughly lines 240–326. New 
     if: needs.detect-changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     container:
+      # Pinned by both tag (greppable version) AND digest (vendor-pin discipline,
+      # per AGENTS.md hr-mcp-tools-playwright-etc-resolve-paths). Multi-arch
+      # manifest-list digest. The Playwright image runs as root by default —
+      # that is the supported path for actions/checkout (see
+      # https://github.com/actions/checkout/issues/956). Do not add `--user 1001`
+      # — it triggers UID-mismatch permission errors against /__w/_temp.
       image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc
+    defaults:
+      run:
+        # GitHub Actions container `run:` steps default to `/bin/sh` (dash on
+        # Jammy), not bash. Explicit bash avoids dash-vs-bash drift on any
+        # future step that uses `[[ ]]`, arrays, `read -r`, etc. Bash 5.1 is
+        # present at /usr/bin/bash in the image (verified empirically).
+        shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -144,7 +180,7 @@ Edit `.github/workflows/ci.yml`. Current job spans roughly lines 240–326. New 
 
 Deletions vs. current:
 
-- `Setup Node.js` step — drop. The Playwright `:v1.60.0-jammy` image bundles Node 20 (the version this gate previously requested). Setting `actions/setup-node` inside a container that already has Node either no-ops or wastes ~5 s replacing the runtime; cleaner to drop. (Verified at plan-time: the official Playwright `:v1.60.0-jammy` image's `NODE_VERSION` env is Node 20 per Microsoft's image dockerfile lineage.)
+- `Setup Node.js` step — drop. The Playwright `:v1.60.0-jammy` image bundles **Node 24** (verified empirically: `docker run mcr.microsoft.com/playwright:v1.60.0-jammy node --version` → `v24.15.0`). The gate previously requested Node 20 via `actions/setup-node`; Node 24 is forward-compatible with everything the gate runs (`@11ty/eleventy@^3.1.5`, `screenshot-gate.mjs`'s standard ES-module + `node:fs`/`node:path` imports, `playwright@1.60.0`). Setting `actions/setup-node` inside a container that already has Node either no-ops or wastes ~5 s replacing the runtime; cleaner to drop. **If future maintainers need to pin a specific Node version, they should bump the Playwright image tag** (newer Playwright images bundle newer Node) rather than re-adding `actions/setup-node` — adding `actions/setup-node` inside a container is harmless but obscures the canonical version source.
 - `Cache Playwright browsers` (`actions/cache@5a3ec84...`) — drop. The container image already ships the binary; layer-caching is the GHA runner's responsibility. Per spec ARGUMENT: "Don't add backwards-compat shims — delete the cache step + the dual-install steps, don't leave them as fallbacks."
 - `Install Playwright + http-server (cache miss)` step — drop.
 - `Install Playwright + http-server (cache hit)` step — drop. Replaced by single `npm install --no-save playwright@1.60.0 http-server@14`.
@@ -175,8 +211,15 @@ Edit shape — add `container:` to the `deploy` job, remove the `Setup Node.js` 
     container:
       # Keep in sync with .github/workflows/ci.yml's critical-css-gate
       # container pin — both gates assert the same FOUC contract via the
-      # same screenshot-gate.mjs script.
+      # same screenshot-gate.mjs script. See AGENTS.md
+      # cq-eleventy-critical-css-screenshot-gate.
       image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc
+    defaults:
+      run:
+        # GitHub Actions container `run:` steps default to /bin/sh (dash);
+        # explicit bash matches deploy-docs.yml's existing step shapes
+        # (`|| true`, `2>/dev/null`, `if [ "$UP" -ne 1 ]`).
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -221,10 +264,14 @@ None — no SSH / network-outage / handshake-failure pattern in the feature desc
 - [ ] `.github/workflows/ci.yml` — `critical-css-gate` job has `container.image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc`.
 - [ ] `.github/workflows/ci.yml` — `Cache Playwright browsers` step (the `actions/cache@5a3ec84...` block keyed on `~/.cache/ms-playwright`) is deleted (no fallback, no commented-out remnant).
 - [ ] `.github/workflows/ci.yml` — `Install Playwright + http-server (cache miss)` and `Install Playwright + http-server (cache hit)` steps are deleted, replaced by a single `Install Playwright + http-server` step running `npm install --no-save playwright@1.60.0 http-server@14`.
-- [ ] `.github/workflows/ci.yml` — `Setup Node.js` step inside `critical-css-gate` is deleted (container ships Node 20). Other jobs in the workflow keep their `Setup Node.js` steps untouched.
+- [ ] `.github/workflows/ci.yml` — `Setup Node.js` step inside `critical-css-gate` is deleted (container ships Node 24 — verified empirically). Other jobs in the workflow keep their `Setup Node.js` steps untouched.
+- [ ] `.github/workflows/ci.yml` — `critical-css-gate` job has `defaults.run.shell: bash` to override GitHub Actions' container-default `/bin/sh` (which is `dash` on Jammy).
+- [ ] `.github/workflows/ci.yml` — `critical-css-gate` `container:` block does NOT set `options: --user 1001` (or any non-root user). The Playwright image runs as root by default — that is the supported `actions/checkout` path. Verify: `grep -A3 'container:' .github/workflows/ci.yml | grep -v '^\s*image:' | grep -c -- '--user'` returns 0.
 - [ ] `.github/workflows/ci.yml` — `needs: detect-changes` + `if: needs.detect-changes.outputs.docs == 'true'` on `critical-css-gate` are unchanged from current main (#3624 gating intact).
 - [ ] `.github/workflows/deploy-docs.yml` — `deploy` job has `container.image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc`.
 - [ ] `.github/workflows/deploy-docs.yml` — `Setup Node.js` step is deleted; `Install Playwright (Chromium only) for screenshot gate` step is rewritten to `npm install --no-save playwright@1.60.0 http-server@14` (no `npx playwright install --with-deps chromium`).
+- [ ] `.github/workflows/deploy-docs.yml` — `deploy` job has `defaults.run.shell: bash`.
+- [ ] `.github/workflows/deploy-docs.yml` — `deploy` job `container:` block does NOT set `options: --user 1001`.
 - [ ] Container image tag and digest match BYTE-FOR-BYTE between `ci.yml` and `deploy-docs.yml`. Verify with `git diff main -- .github/workflows/ci.yml .github/workflows/deploy-docs.yml | grep -c 'sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc'` → returns ≥ 2 added lines (one per workflow).
 - [ ] Playwright npm version (`playwright@1.60.0`) matches the container's Playwright tag (`v1.60.0-jammy`) byte-for-byte. Verify with `git diff main -- .github/workflows/ci.yml .github/workflows/deploy-docs.yml | grep -cE 'playwright@1\.60\.0|v1\.60\.0-jammy'` → returns ≥ 4 (image + npm install in each of the two workflows).
 - [ ] No grep hit for stale references to `~/.cache/ms-playwright`, `playwright-cache`, or `install-deps chromium` in `.github/workflows/ci.yml` or `.github/workflows/deploy-docs.yml`. Verify: `git grep -E 'ms-playwright|playwright-cache|install-deps chromium' .github/workflows/{ci,deploy-docs}.yml` returns nothing.
@@ -255,9 +302,43 @@ No cross-domain implications detected — CI-tooling change, no user-facing arti
 
 Not applicable. Per `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex (schemas, migrations, auth flows, API routes, `.sql` files): no surface match. Per the four expansion triggers: (a) no new LLM/external-API processing of operator-session data, (b) brand-survival threshold is `none` not `single-user incident`, (c) no new cron/workflow READS from learnings or specs, (d) no new artifact distribution surface (this PR adds no plugin update, no public PR-body change, no package release).
 
+## Research Insights
+
+### Best Practices (Playwright + GitHub Actions container jobs)
+
+- **Pin by digest, not just tag.** `mcr.microsoft.com/playwright:v1.60.0-jammy` is mutable on Microsoft's side; the SHA-256 digest of the multi-arch manifest list (`sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc`) is immutable. Per `hr-mcp-tools-playwright-etc-resolve-paths`, vendor-pin discipline requires both: tag for grep, digest for immutability.
+- **Match npm package and container Playwright versions byte-for-byte.** Playwright's browser-binary lookup is exact-revision (see in-repo learning `2026-03-20-playwright-shared-cache-version-coupling.md`). The container provides the binary at `/ms-playwright/chromium-1223/`; `npm install playwright@<X.Y.Z>` provides the JS API. Version mismatch → "Executable doesn't exist at /ms-playwright/chromium-NNNN" at gate runtime.
+- **No `--user 1001`.** Per `actions/checkout` issue #956, running container jobs as non-root triggers UID-mismatch permission errors against `/__w/_temp` (runner-owned dir mounted into container). Microsoft's Playwright image runs as root by default; that is the supported `actions/checkout` path on GitHub-hosted runners.
+- **Explicit `shell: bash`.** GitHub Actions container `run:` steps default to `/bin/sh`. On Jammy, `/bin/sh` is `dash` (verified: `readlink /bin/sh` → `dash`). Current gate steps are POSIX-safe but future maintainers might add `[[ ]]` or array idioms. `defaults.run.shell: bash` at the job level pins all `run:` blocks to GNU bash 5.1.16 (verified present at `/usr/bin/bash`).
+- **Skip image caching via `actions/cache`.** Real-world benchmarks ([karmacomputing.co.uk](https://blog.karmacomputing.co.uk/make-playwright-faster-with-containers-and-build-caching-github-actions/)) show direct `mcr.microsoft.com` pulls outperform `actions/cache` restore on GHA-hosted runners — the cache restore overhead (~17 s) exceeds network-pull savings. GitHub-Microsoft network path is fast.
+
+### Performance Considerations
+
+- **Empirically verified at plan time**: 20 s wall-clock for the full gate inside the container locally (npm ci + Eleventy build of 84 files + npm install playwright + http-server + 20-route screenshot gate).
+- **Real-world Playwright container benchmark**: `1m 2s` total, `47s` excluding setup/teardown ([karmacomputing.co.uk](https://blog.karmacomputing.co.uk/make-playwright-faster-with-containers-and-build-caching-github-actions/)).
+- **Expected GHA wall-clock breakdown**: container pull 20–40 s + npm ci 5 s + Eleventy build 3 s + CSP/SEO/critical-CSS static checks 1 s + npm install playwright + http-server 5 s + screenshot gate 7–10 s ≈ **45–65 s total**. Comfortably under the 90 s target.
+
+### Edge Cases (verified or considered)
+
+- **Container pull on first PR**: ephemeral GHA runners pull the image every run. The image is ~3 GB compressed but Microsoft↔Microsoft network is fast (~20–40 s observed).
+- **Pages-deploy OIDC token in container**: `actions/deploy-pages` reads `id-token: write` via env (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN), not the filesystem — survives the container boundary. Real-world example: `davorg/perl-perlanet:latest` container deploying Pages successfully ([dev.to ref](https://github.com/marketplace/actions/deploy-github-pages-site)).
+- **`actions/checkout` v4.3.1 inside container**: requires runner v2.329.0+ for authenticated git from a Docker container action; GitHub-hosted runners are well past this.
+- **dash-vs-bash drift**: existing `Screenshot + stylesheet-swap gates` step bodies use `$(seq 1 30)`, `kill … 2>/dev/null || true`, `set +e`/`set -e` — all POSIX-compatible. `defaults.run.shell: bash` is belt-and-suspenders insurance against future steps.
+
+### References
+
+- [playwright.dev/docs/ci](https://playwright.dev/docs/ci) — canonical workflow example using `container.image`.
+- [playwright.dev/docs/docker](https://playwright.dev/docs/docker) — image-tag matrix (jammy, noble) and version-pin guidance.
+- [`microsoft/playwright/utils/docker/Dockerfile.jammy`](https://github.com/microsoft/playwright/blob/main/utils/docker/Dockerfile.jammy) — image source; `NODE_VERSION` is autogenerated from upstream Node releases (currently 24).
+- [`actions/checkout` #956](https://github.com/actions/checkout/issues/956) — UID-mismatch context; root is the supported `container.image` path.
+- [GitHub Docs — running jobs in a container](https://docs.github.com/en/actions/using-jobs/running-jobs-in-a-container) — official caveats (Linux-only, shell default = sh).
+- [karmacomputing.co.uk Playwright-container benchmark](https://blog.karmacomputing.co.uk/make-playwright-faster-with-containers-and-build-caching-github-actions/) — `1m 2s` total / `47s` work.
+- In-repo: `knowledge-base/project/learnings/best-practices/2026-05-12-ci-playwright-cache-key-must-track-npm-version-not-script-hash.md`.
+- In-repo: `knowledge-base/project/learnings/2026-03-20-playwright-shared-cache-version-coupling.md`.
+
 ## Risks
 
-1. **`actions/{configure,upload,deploy}-pages` behavior inside a Playwright container is untested in this repo.** Mitigation: the post-merge `deploy-docs.yml` workflow is the load-bearing path; if Pages deploy breaks under container, the failure surfaces on first run after merge (operator alarms, not user-visible). Recovery is a 1-line revert of the `container:` directive on the `deploy` job only — keeping the `critical-css-gate` migration intact since `ci.yml` does not call Pages actions.
+1. **`actions/{configure,upload,deploy}-pages` behavior inside a Playwright container is untested in this repo, but is documented to work upstream.** Real-world example: `davorg/perl-perlanet:latest` container successfully deploys Pages via `actions/upload-pages-artifact@v3` + `actions/deploy-pages@v4`. Soleur's `deploy-docs.yml` already uses `actions/upload-pages-artifact@56afc609…` (v3) + `actions/deploy-pages@d6db9016…` (v4.0.5), satisfying the GitHub Pages deprecation requirement (must use v3/v4+). Mitigation: the post-merge `deploy-docs.yml` workflow is the load-bearing path; if Pages deploy breaks under container, the failure surfaces on first run after merge (operator alarms, not user-visible). Recovery is a 1-line revert of the `container:` directive on the `deploy` job only — keeping the `critical-css-gate` migration intact since `ci.yml` does not call Pages actions.
 2. **Container image digest can be rotated by Microsoft** — but a pinned digest is immutable by design; the registry would return a 404 (not silently substitute). If MCR ever deletes a tagged image, the workflow fails fast at container-pull and we update the pin. This is the intended fail-closed behavior.
 3. **Playwright version-drift risk between workflows.** The `playwright@1.60.0` npm version, the `v1.60.0-jammy` container tag, and the `sha256:e152...` digest are three values that MUST stay in lockstep across BOTH workflows (4 places total). The AC's grep checks (≥ 2 digest hits, ≥ 4 version hits) catch out-of-sync edits at PR-write time. Future Playwright bumps require updating all four locations in a single PR.
 4. **`apps/web-platform/package-lock.json` pins `playwright@1.58.2`** for the unrelated `e2e` job. The two gates run in different jobs with different lockfiles and never share a `~/.cache/ms-playwright/` — no cross-contamination. The `e2e` job continues to use bare `ubuntu-latest` + `actions/cache` keyed on `bun.lock` (unchanged by this PR). If someone later bumps `apps/web-platform`'s Playwright independently, the docs gate is unaffected and vice versa.

@@ -20,8 +20,9 @@ plan: knowledge-base/project/plans/2026-05-12-feat-critical-css-gate-playwright-
 - [ ] 2.4 Delete the `Cache Playwright browsers` step (`actions/cache@5a3ec84...` keyed on `~/.cache/ms-playwright`).
 - [ ] 2.5 Delete the two `Install Playwright + http-server (cache miss)` and `(cache hit)` steps.
 - [ ] 2.6 Add a single `Install Playwright + http-server` step running `npm install --no-save playwright@1.60.0 http-server@14`.
-- [ ] 2.7 Update or add the in-file comment to document the keep-in-sync-with-deploy-docs.yml relationship and the Playwright-version exact-match requirement.
-- [ ] 2.8 Verify `needs: detect-changes` and `if: needs.detect-changes.outputs.docs == 'true'` are present and unchanged.
+- [ ] 2.7 Add `defaults.run.shell: bash` at the `critical-css-gate` job level (container `/bin/sh` defaults to dash on Jammy).
+- [ ] 2.8 Update or add the in-file comment to document the keep-in-sync-with-deploy-docs.yml relationship, the Playwright-version exact-match requirement, the no-`--user` constraint, and the Node-24 note.
+- [ ] 2.9 Verify `needs: detect-changes` and `if: needs.detect-changes.outputs.docs == 'true'` are present and unchanged.
 
 ## Phase 3 — `deploy-docs.yml` migration (parity)
 
@@ -29,8 +30,9 @@ plan: knowledge-base/project/plans/2026-05-12-feat-critical-css-gate-playwright-
 - [ ] 3.2 Add `container.image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc` to the `deploy` job key.
 - [ ] 3.3 Delete the `Setup Node.js` step.
 - [ ] 3.4 Rewrite `Install Playwright (Chromium only) for screenshot gate` to a single `npm install --no-save playwright@1.60.0 http-server@14` (drop the `npx playwright install --with-deps chromium` line).
-- [ ] 3.5 Update or add the in-file comment to document keep-in-sync-with-ci.yml and the Playwright-version exact-match requirement.
-- [ ] 3.6 Verify `actions/{configure,upload,deploy}-pages` steps remain byte-identical.
+- [ ] 3.5 Add `defaults.run.shell: bash` at the `deploy` job level.
+- [ ] 3.6 Update or add the in-file comment to document keep-in-sync-with-ci.yml, the Playwright-version exact-match requirement, and the no-`--user` constraint.
+- [ ] 3.7 Verify `actions/{configure,upload,deploy}-pages` steps remain byte-identical.
 
 ## Phase 4 — Verification
 
