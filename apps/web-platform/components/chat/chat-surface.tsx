@@ -21,6 +21,7 @@ import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card
 import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
 import { ToolUseChip } from "@/components/chat/tool-use-chip";
 import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
+import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
   InteractivePromptResponsePayload,
@@ -204,6 +205,7 @@ export function ChatSurface({
     resumedFrom,
     workflow,
     workflowEndedAt,
+    conversationCreatedAt,
     historyLoading,
     streamState,
     abort,
@@ -730,6 +732,17 @@ export function ChatSurface({
           )}
 
           <NotificationPrompt visible={showNotificationPrompt} />
+          {/* PR-B (#3603) — per-thread transparency marker for the
+              row-absence cohort. Component self-gates on the cohort window,
+              sunset date, message shape, and streaming state; rendering an
+              empty pass when any gate fails. Mounted before
+              `messagesEndRef` so scroll-into-view still lands on the
+              composer anchor, not the marker. */}
+          <CohortMissingReplyMarker
+            createdAt={conversationCreatedAt ?? ""}
+            messages={messages}
+            isStreamingAssistant={streamState === "streaming"}
+          />
           <div ref={messagesEndRef} />
         </div>
       </div>

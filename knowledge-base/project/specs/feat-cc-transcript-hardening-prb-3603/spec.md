@@ -16,6 +16,8 @@ user_impact_reviewer_required: true
 
 # Spec — cc-soleur-go transcript hardening PR-B (cohort marker)
 
+> **Plan-Time Amendments (2026-05-12):** CTA dropped during plan-review (DHH + code-simplicity convergence, confirmed by operator). Spec FR4-FR7 and AC6-AC9 are superseded by `knowledge-base/project/plans/2026-05-12-feat-cc-transcript-hardening-prb-cohort-marker-plan.md` §Research Reconciliation. Spec body retained as historical record.
+
 ## Problem Statement
 
 Between PR #3286's merge (2026-05-05) and the AC11 verification date (2026-05-11), the cc-soleur-go path persisted user messages but did NOT reliably persist assistant turns. The fix in #3286 (verified on 2026-05-11) closed the asymmetry going forward, but conversations created during the ~6-day window now render lopsidedly when the affected user re-opens them: user bubbles present, assistant bubbles absent. Without an explicit in-thread acknowledgement, an affected user concludes the product is still broken — a silent gaslighting failure mode that erodes trust even though the underlying bug is fixed.
