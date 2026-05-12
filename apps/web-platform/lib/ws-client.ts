@@ -1000,8 +1000,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // bubble on every parent render, regressing the 10-50 Hz token-stream
       // memo guarantee on long threads).
       status: m.status ?? undefined,
-      // #3640 F6 — derive `variant` from `leader_id` per the
-      // `Message.variant` doc-comment in `lib/types.ts`. The cc-router path
+      // #3640 F6 — derive nested `usage.variant` from `leader_id` per the
+      // `AbortMarkerUsage` doc-comment in `components/chat/message-bubble.tsx`
+      // and the `Message.usage` doc-comment in `lib/types.ts`. The cc-router path
       // (`leader_id === CC_ROUTER_LEADER_ID`) persists the cc-narrowed
       // `{ cost_usd }` shape; the legacy agent-runner path persists the
       // full `UsageSnapshot`. Downstream readers (`renderAbortedAssistant`

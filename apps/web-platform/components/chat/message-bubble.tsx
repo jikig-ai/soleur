@@ -335,8 +335,9 @@ function renderAbortedAssistant({
   variant: "full" | "sidebar";
 }): React.ReactNode {
   const wrapCode = variant === "sidebar";
-  // #3640 F6 — switch on `usage.variant` per the `Message.variant`
-  // doc-comment in `lib/types.ts`. The cc-router path persists only
+  // #3640 F6 — switch on `usage.variant` per the `AbortMarkerUsage`
+  // doc-comment above and the `Message.usage` doc-comment in
+  // `lib/types.ts`. The cc-router path persists only
   // `cost_usd` (Art. 5(1)(c) data minimization); the legacy
   // `agent-runner` path persists the full `UsageSnapshot` (input_tokens +
   // output_tokens + cost_usd + completed_actions). `undefined` variant
@@ -350,9 +351,15 @@ function renderAbortedAssistant({
     usage.output_tokens !== undefined
       ? usage.input_tokens + usage.output_tokens
       : null;
+  // Review #3670 — guard against non-numeric `cost_usd` values that could
+  // leak from the `messages.usage` jsonb column (legacy rows, partial
+  // backfills). `typeof === "number" && Number.isFinite` mirrors the
+  // pre-#3640 behavior — a malformed cell renders "included in your plan"
+  // rather than crashing the bubble (`.toFixed` on a string) or rendering
+  // "$NaN" / "$Infinity" to the user.
   const costUsd = usage?.cost_usd;
   const costLabel =
-    costUsd !== null && costUsd !== undefined
+    typeof costUsd === "number" && Number.isFinite(costUsd)
       ? `$${costUsd.toFixed(4)}`
       : "included in your plan";
   const actions = usage?.completed_actions ?? [];

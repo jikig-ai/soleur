@@ -425,31 +425,23 @@ export interface Message {
    *  fixtures/snapshots don't churn; runtime persistence always sets
    *  it (DB default is `'complete'`). */
   status?: "complete" | "aborted";
-  /** #3640 F6 — discriminates the `usage` shape carried by this Message.
-   *  Derived at hydration time from `leader_id === CC_ROUTER_LEADER_ID`
-   *  (see `cc-router-id.ts` + migration 040). **There is no `variant`
-   *  column on the `messages` table** — this is a TypeScript-only
-   *  widening that lets reader switches replace the `typeof === "number"`
-   *  field-presence checks (e.g., the old `lib/ws-client.ts:1013-1016`
-   *  spread). Optional during the F6 transition so existing test
-   *  fixtures don't churn; readers treat `undefined` as `"legacy"` for
-   *  backward compatibility against the pre-#3640 fixture corpus.
+  /** #3640 F6 — discriminates the `usage` shape. **The discriminator
+   *  lives on the nested `usage` object, NOT at the Message top level**
+   *  (review #3670 — the top-level field was declared but unread; readers
+   *  uniformly consult `usage?.variant`). The reader-side types
+   *  (`AbortMarkerUsage` in `message-bubble.tsx`, `ChatTextMessage.usage`
+   *  in `chat-state-machine.ts`) each carry their own `variant?` field;
+   *  the hydration site in `lib/ws-client.ts:1010-1024` derives it from
+   *  `leader_id === CC_ROUTER_LEADER_ID`. There is no `variant` column on
+   *  the `messages` table — this is a TypeScript-only widening.
    *
-   *  - `"legacy"` → `usage` may carry the full `UsageSnapshot`
-   *    (`input_tokens`, `output_tokens`, `cost_usd`, `completed_actions`).
-   *  - `"cc"` → `usage` carries only `{ cost_usd }` (Art. 5(1)(c) data
-   *    minimization on the cc-router path under `CC_PERSIST_USAGE=true`).
-   */
-  variant?: "legacy" | "cc";
-  /** Persistence shape varies by leader:
-   *
-   *  - **Legacy `agent-runner` path** (`variant === "legacy"` / default,
-   *    `leader_id` ∈ domain leaders): full `UsageSnapshot` on
-   *    `status === 'aborted'` turns — `{ input_tokens, output_tokens,
+   *  - **Legacy `agent-runner` path** (default — nested `variant` absent
+   *    or `"legacy"`, `leader_id` ∈ domain leaders): full `UsageSnapshot`
+   *    on `status === 'aborted'` turns — `{ input_tokens, output_tokens,
    *    cost_usd?, completed_actions[] }`. Shape documented in
    *    `UsageSnapshot` in `agent-runner.ts` and migration 040.
    *
-   *  - **cc-router path** (`variant === "cc"`, `leader_id ===
+   *  - **cc-router path** (nested `variant === "cc"`, `leader_id ===
    *    'cc_router'`, PR #3603 W4): cc-narrowed `{ cost_usd: number }`
    *    only — Art. 5(1)(c) data minimization. Persisted on `'complete'`
    *    turns when `CC_PERSIST_USAGE === "true"` (default off until PR-C
@@ -457,8 +449,8 @@ export interface Message {
    *    when captured by `onResult` before the abort fired.
    *
    *  Optional in the type so existing fixtures don't churn. Readers
-   *  should branch on `variant` (post-#3640 F6) rather than on field
-   *  presence.
+   *  should branch on `usage?.variant` (post-#3640 F6) rather than on
+   *  field presence — see `renderAbortedAssistant` in `message-bubble.tsx`.
    */
   usage?: {
     input_tokens?: number;

@@ -194,8 +194,10 @@ export type PersistMode =
 // only 3 of 4 fields is caught at code-review time.
 //
 // Method contracts (call sites in `dispatchSoleurGo` events block):
-// - `appendText(text)` — `onText` writes the latest streamed text
-//   (REPLACE semantic per chat-state-machine.ts:477 + W8).
+// - `setText(text)` — `onText` writes the latest streamed text (REPLACE
+//   semantic per chat-state-machine.ts:477 + W8). Named `setText` rather
+//   than `appendText` since the semantic is a complete-replace, not an
+//   append (review #3670 — naming clarity).
 // - `captureUsage(turnIdx, costUsd)` — `onResult` stages cost telemetry
 //   tagged with `turnIdx`. A stale `onResult` tagged against a previous
 //   turn is dropped at consume time by `consumeMatchedUsage`.
@@ -203,14 +205,21 @@ export type PersistMode =
 //   matched usage, clear both cells, bump turn index. Snapshot happens
 //   SYNCHRONOUSLY before `saveAssistantMessage` yields the microtask so
 //   a turn-N+1 `onResult` arriving on the same iterator yield cannot
-//   overwrite turn N's snapshot.
+//   overwrite turn N's snapshot. Returns `null` when the turn is already
+//   aborted — the abort branch is the single authoritative writer once
+//   `_aborted` flips true.
 // - `consumeForAbort()` — `onWorkflowEnded` abort branch: returns text +
 //   matched usage and marks the turn as persisted (so a late
 //   `onTextTurnEnd` is a no-op) when text is present; returns
 //   `{ kind: "orphan" }` when text is absent but usage was captured (W4
 //   orphan); returns `{ kind: "none" }` when neither is present.
-// - `isAborted()` — read of `_aborted` for `onTextTurnEnd` early-exit.
-// - `reset()` — clears all four fields. Reset-symmetry invariant.
+// - `currentTurnIndex()` — read of `_currentTurnIndex` for `onResult`
+//   to tag `captureUsage` with the active turn.
+// - `reset()` — test seam; clears all four fields. Reset-symmetry is a
+//   class invariant (production never resets — per-`dispatchSoleurGo`
+//   instances are GC'd at dispatch end). Kept for `__getStateForTests`-
+//   style override paths and to document the "cells move together"
+//   invariant in code rather than prose.
 export class TurnPersistenceState {
   private _latestAssistantText = "";
   private _aborted = false;
@@ -218,8 +227,10 @@ export class TurnPersistenceState {
   private _pendingTurnUsage: { turnIndex: number; costUsd: number } | null =
     null;
 
-  /** `onText` — REPLACE the accumulator (W8 invariant). */
-  appendText(text: string): void {
+  /** `onText` — REPLACE the accumulator (W8 invariant). Named `setText`
+   *  rather than `appendText` because the semantic is a complete-replace
+   *  per chat-state-machine.ts:477 — review #3670 (naming clarity). */
+  setText(text: string): void {
     this._latestAssistantText = text;
   }
 
@@ -228,19 +239,9 @@ export class TurnPersistenceState {
     this._pendingTurnUsage = { turnIndex: turnIdx, costUsd };
   }
 
-  /** True when `onWorkflowEnded` has already flushed an abort row. */
-  isAborted(): boolean {
-    return this._aborted;
-  }
-
   /** Active turn index (for `onResult` to tag `captureUsage`). */
   currentTurnIndex(): number {
     return this._currentTurnIndex;
-  }
-
-  /** Whether usage has been staged for the current turn. */
-  hasPendingUsage(): boolean {
-    return this._pendingTurnUsage !== null;
   }
 
   /**
@@ -363,18 +364,23 @@ function mirrorInsertError(
   conversationId: string,
   fullText: string,
 ): void {
-  const opSlug: string = (() => {
-    switch (mode.kind) {
-      case "complete":
-        return CC_OP_SLUGS.saveAssistant;
-      case "aborted":
-        return CC_OP_SLUGS.saveAssistantAborted;
-      default: {
-        const _exhaustive: never = mode;
-        return _exhaustive;
-      }
+  // Symmetric with `buildRow`'s exhaustiveness rail (review #3670): assign
+  // to a `never`-typed local and use a sentinel return so the compile
+  // error fires at the switch, not at the (never-reached) IIFE return.
+  let opSlug: string;
+  switch (mode.kind) {
+    case "complete":
+      opSlug = CC_OP_SLUGS.saveAssistant;
+      break;
+    case "aborted":
+      opSlug = CC_OP_SLUGS.saveAssistantAborted;
+      break;
+    default: {
+      const _exhaustive: never = mode;
+      void _exhaustive;
+      opSlug = CC_OP_SLUGS.saveAssistant; // unreachable; compile error if PersistMode gains a variant
     }
-  })();
+  }
   // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
   // — a misconfigured Supabase RLS for one user could otherwise emit one
   // Sentry event per assistant turn (10 turns/conv × 100 active convs =
@@ -1382,8 +1388,8 @@ export async function dispatchSoleurGo(
     onText: (text) => {
       // #3603 W8 — replace, not append. Mirrors chat-state-machine REPLACE
       // semantic so persisted content matches the UI's live render.
-      // See `TurnPersistenceState.appendText` for invariant + AC11 source.
-      state.appendText(text);
+      // See `TurnPersistenceState.setText` for invariant + AC11 source.
+      state.setText(text);
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -1755,5 +1761,16 @@ export function __setAssertWriteScopeForTests(
 }
 
 export function __resetAssertWriteScopeForTests(): void {
+  // Defense-in-depth (review #3670): symmetric with the setter's
+  // production-refusal guard. Today reset is harmless (null → null), but
+  // the sentinel is anticipated to become load-bearing when SDK callbacks
+  // expose payload identifiers — an unguarded resetter could then be
+  // called from an accidental prod-bundle import path to neutralize an
+  // installed override that does real cross-tenant comparison.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "__resetAssertWriteScopeForTests is not callable in production builds",
+    );
+  }
   _assertWriteScopeOverride = null;
 }
