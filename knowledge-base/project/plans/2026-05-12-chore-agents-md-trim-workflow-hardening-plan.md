@@ -20,8 +20,8 @@ requires_cpo_signoff: false
 ### Key Improvements
 
 1. **Edit 1 entry-guard form switched** from `git log | wc -l` to the canonical `git rev-list "origin/${BRANCH}..HEAD" --count` (precedent: `plugins/soleur/skills/ship/SKILL.md:619`). The `wc -l` form is portable but bash-dependent; `--count` returns a clean integer that `set -euo pipefail` can compare without a `tr -d` strip.
-2. **Edit 3a byte budget headroom verified.** `awk '/cq-agents-md-why-single-line/ {print length($0)}' AGENTS.docs.md` returns 572 B at plan time (cap is 600). The +28 B insertion ("preserving per-issue mechanism labels (text after each `#N`)") fits within the 28 B headroom — no trim needed elsewhere in the rule. Verified live, not from memory.
-3. **Loader-class-fit grep target pinned to lines 84-115.** The classification regex block in `session-rules-loader.sh` (`DOCS_RE`/`CODE_RE`/`INFRA_RE` + class-selection branch) is the canonical source. Edit 2 instructs the planner to grep this exact line range, not paraphrase the regex.
+2. **Edit 3a byte budget — superseded post-review.** Original plan: insert "preserving per-issue mechanism labels..." into the rule body and trim redundant prose to fit the 600 B cap. Post-review (pattern-recognition + code-quality flagged duplication with the `[skill-enforced: compound step 8]` tag): the clause was DEDUPLICATED out of the rule body and into the `[skill-enforced: compound step 8 (Why-line trim semantics + loader-class-fit)]` tag suffix. Final byte length: 578 B (was 572 pre-edit; cap 600). Single source of truth for the trim semantics now lives in `compound/SKILL.md` step 8 (Edit 3b).
+3. **Loader-class-fit grep target pinned to lines 88-115.** The classification regex block in `session-rules-loader.sh` (`DOCS_RE`/`CODE_RE`/`INFRA_RE` + class-selection branch) is the canonical source. Edit 2 instructs the planner to grep this exact line range, not paraphrase the regex.
 4. **All cited rule IDs verified active.** `wg-plan-prescribed-skills-must-run-inline`, `wg-every-session-error-must-produce-either`, `cq-agents-md-why-single-line`, `cq-agents-md-tier-gate`, `hr-weigh-every-decision-against-target-user-impact` — all present in AGENTS.md, none in `scripts/retired-rule-ids.txt`.
 5. **PR #3681 confirmed OPEN at deepen time.** The source learning `2026-05-12-agents-md-trim-loader-class-fit-verification.md` does NOT exist on `main` — it lands with #3681. This plan must therefore not gate on its existence; reference it by future path only and let compound at Phase 4 reconcile.
 
@@ -42,7 +42,7 @@ that PR #3681 surfaced but did not fully prevent re-occurrence:
    and the handoff produces no signal.
 2. **`plugins/soleur/skills/plan/SKILL.md` + `deepen-plan/SKILL.md` loader-class-fit
    verification.** When a plan proposes a `wg-*` core→rest demotion, grep
-   `.claude/hooks/session-rules-loader.sh` (lines 84-115 — the `DOCS_RE`/`CODE_RE`/
+   `.claude/hooks/session-rules-loader.sh` (lines 88-115 — the `DOCS_RE`/`CODE_RE`/
    `INFRA_RE` regex block + class-selection branch) and assert: "Can the situation
    that triggers this rule occur during a session that the loader classifies as
    `docs-only`?" If yes → keep in core (body-trim if budget requires).
@@ -59,7 +59,7 @@ issue framing (#3682) explicitly bundles them as a single follow-up surface.
 | Issue claim | Reality | Plan response |
 |---|---|---|
 | Source learning at `knowledge-base/project/learnings/2026-05-12-agents-md-trim-loader-class-fit-verification.md` | File does not exist on `main` (PR #3681 still OPEN at plan + deepen time, verified `gh pr view 3681 --json state` → `OPEN`). | Reference learning by future path only. Do NOT gate on its existence. Compound at Phase 4 will write the canonical version of the learning if PR #3681 merges first; otherwise this PR's compound writes it. |
-| `.claude/hooks/session-rules-loader.sh` exists and classifies `docs-only` via file extension regex | Confirmed at lines 84-86: `DOCS_RE='\.(md|markdown|txt|njk|html)$\|^\.github/.*\.md$'`; `CODE_RE`/`INFRA_RE` separately at 85-86; class selection at 104-115: `docs-only` fires when `HAS_DOCS=1 && HAS_CODE=0 && HAS_INFRA=0`. | Edit 2 grep target pinned to lines 84-115. Verified loader IS the authoritative class table. |
+| `.claude/hooks/session-rules-loader.sh` exists and classifies `docs-only` via file extension regex | Confirmed at lines 88-90: `DOCS_RE='\.(md|markdown|txt|njk|html)$\|^\.github/.*\.md$'`; `CODE_RE`/`INFRA_RE` separately at 89-90; class selection at 103-115: `docs-only` fires when `HAS_DOCS=1 && HAS_CODE=0 && HAS_INFRA=0`. | Edit 2 grep target pinned to lines 88-115. Verified loader IS the authoritative class table. |
 | `wg-plan-prescribed-skills-must-run-inline` lives in core | Confirmed `AGENTS.core.md:54`. | Edit 2 protects its core placement and any future similar `wg-*` whose trigger surface intersects docs-only sessions. |
 | `cq-agents-md-why-single-line` body lives in `AGENTS.docs.md` | Confirmed `AGENTS.docs.md:6`; current byte length 572 B (cap 600). | Edit 3a modifies `AGENTS.docs.md` with a +28 B addition that fits the headroom. |
 | Compound step 8 emits the `[CRITICAL]` warning at >22k bytes | Confirmed `compound/SKILL.md:227`. | Edit 3b augments the same step with the Why-line semantic-label preservation hint. |
@@ -111,7 +111,7 @@ of `apps/web-platform/{server,supabase,app/api,middleware}`, no
   guidance section: "When a plan proposes any AGENTS.md core→rest demotion
   (`wg-*` only — `hr-*` may not be demoted per CPO sign-off PR #3496), verify
   loader-class fit by grepping `.claude/hooks/session-rules-loader.sh` lines
-  84-115 (the `DOCS_RE`/`CODE_RE`/`INFRA_RE` regex block + class-selection
+  88-115 (the `DOCS_RE`/`CODE_RE`/`INFRA_RE` regex block + class-selection
   branch). For each demotion candidate, classify its trigger surface (does it
   fire on plan/learning/spec edits, or only on code/infra?). If `docs-only`
   is in the trigger surface but the rest sidecar does NOT load on docs-only,
@@ -238,7 +238,7 @@ of `apps/web-platform/{server,supabase,app/api,middleware}`, no
    > plan proposes any AGENTS.md `core→rest` demotion (`wg-*` only — `hr-*`
    > may not be demoted per CPO sign-off PR #3496 condition 3), verify
    > loader-class fit:
-   > `sed -n '84,115p' .claude/hooks/session-rules-loader.sh` to read the
+   > `sed -n '88,115p' .claude/hooks/session-rules-loader.sh` to read the
    > `DOCS_RE`/`CODE_RE`/`INFRA_RE` regex block AND the class-selection
    > branch (`docs-only` fires when `HAS_DOCS=1 && HAS_CODE=0 && HAS_INFRA=0`;
    > `code` or `infra` triggers `core+rest` load). For each demotion
@@ -267,11 +267,11 @@ runs `/soleur:plan` only or `/soleur:plan` followed by `/soleur:deepen-plan`.
 
 **Best Practices (verified live):**
 
-- The loader regex block (lines 84-86) is the single source of truth for
+- The loader regex block (lines 88-90) is the single source of truth for
   `docs-only`/`code`/`infra` classification. Paraphrasing it in the plan/
   deepen-plan body would create a drift surface — when the loader's regex
   changes (e.g., adding `.yaml` to `DOCS_RE`), the planner's mental model
-  silently goes stale. Pinning the grep to `sed -n '84,115p' <loader>` keeps
+  silently goes stale. Pinning the grep to `sed -n '88,115p' <loader>` keeps
   the planner reading the canonical source every time.
 - The class-selection branch at lines 104-115 includes a critical fallback:
   `multi-class / empty / explicit override → load everything (fail-closed)`.
@@ -296,19 +296,14 @@ runs `/soleur:plan` only or `/soleur:plan` followed by `/soleur:deepen-plan`.
 
 **Approach:**
 
-1. **AGENTS.docs.md:6 rule body augmentation.** Modify the rule's main
-   directive from:
-   > AGENTS registry rules cap at ~600 bytes; `**Why:**` is one sentence → PR/learning [id: cq-agents-md-why-single-line]
+1. **AGENTS.docs.md:6 rule body augmentation (final form post-review).** Modify the rule's `[skill-enforced:]` tag from:
+   > [skill-enforced: compound step 8]
    to:
-   > AGENTS registry rules cap at ~600 bytes; `**Why:**` is one sentence preserving per-issue mechanism labels (text after each `#N`) → PR/learning [id: cq-agents-md-why-single-line]
+   > [skill-enforced: compound step 8 (Why-line trim semantics + loader-class-fit)]
 
-   Net delta: +60 B. Pre-edit length: 572. Post-edit: ~632 → OVER cap. Must
-   trim ~32 B elsewhere in the rule. Candidates (in order of preference):
-   - **Drop the redundant `Rule count advisory.` sentence** (-22 B): the rule
-     already says "rule count advisory" via the `<!-- rule-threshold: 115 -->`
-     comment + the `[ADVISORY] rule count` warning in compound step 8.
-   - **Tighten `Targets: always-loaded payload ≤18000 warn / ≤22000 critical (compound step 8).`** to `≤18000 warn / ≤22000 critical (compound step 8).` (-15 B): "Targets: always-loaded payload" is implied by context.
-   - **Trim the `**Why:** #3493 sidecar split; #2865 bytes-first; #2686 prior.`** to `**Why:** #3493 split; #2865 bytes-first.` (-30 B): drop `#2686` (the prior incident is fully captured in #2865's lineage; #2686 is a stale ancestor).
+   AND drop the redundant `Rule count advisory.` sentence (-22 B; covered by `<!-- rule-threshold: 115 -->` HTML comment + `[ADVISORY] rule count` warning in compound step 8) AND the second `(compound step 8)` parenthetical inside the `Targets:` clause (-18 B; the `[skill-enforced:]` tag already cites compound step 8 once at the top of the rule). Net delta: +6 B (538 → 578). Cap 600. Headroom: 22 B post-edit.
+
+   **Original draft (superseded):** insert "preserving per-issue mechanism labels (text after each `#N`)" into the rule body itself (+60 B), then offset with the same trims above. Pattern-recognition + code-quality reviewers flagged duplication with the `[skill-enforced: compound step 8]` tag (the rule body was restating what the tag pointed at). Final form moves the semantic clue into the tag suffix and lets compound step 8 own the trim-semantics directive verbatim.
 
    Verify post-edit with `awk '/cq-agents-md-why-single-line/ {print length($0)}' AGENTS.docs.md` ≤ 600.
 
@@ -424,11 +419,11 @@ USER_BRAND_CRITICAL=false; threshold `none`).
   `plugins/soleur/skills/ship/SKILL.md:619`,
   `.claude/hooks/ship-unpushed-commits-gate.sh`.
 - Edit 2 (loader-class-fit verify) MUST grep
-  `.claude/hooks/session-rules-loader.sh` lines 84-115 ITSELF, not paraphrase
+  `.claude/hooks/session-rules-loader.sh` lines 88-115 ITSELF, not paraphrase
   the classification regex. The loader's regex is the canonical source of
   truth — paraphrasing creates a drift surface (when the loader's regex
   changes, the plan/deepen-plan body silently goes stale). Pin the grep with
-  `sed -n '84,115p'` so the planner re-reads the canonical source each time.
+  `sed -n '88,115p'` so the planner re-reads the canonical source each time.
 - Edit 3a (Why-line semantic preservation) — verify
   `cq-agents-md-why-single-line` rule body stays ≤600 B AFTER the addition.
   Current body is at 572 B; the +60 B addition pushes it OVER cap by ~32 B.
@@ -497,7 +492,7 @@ USER_BRAND_CRITICAL=false; threshold `none`).
   core→rest, never `hr-*`).
 - **Loader spec:** `knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md`
 - **Loader implementation:** `.claude/hooks/session-rules-loader.sh` (lines
-  84-115 = classification regex + class-selection branch).
+  88-115 = classification regex + class-selection branch).
 - **Compound rule-budget step:** `plugins/soleur/skills/compound/SKILL.md:195-260`
   (step 8). Insertion point: between line 227 ([CRITICAL]) and line 228
   ([WARNING] longest rule).

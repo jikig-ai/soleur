@@ -507,23 +507,40 @@ If you catch yourself writing phrases like "set up X in the browser", "go to the
 
 #### Phase 4 Entry-Guard
 
-Before emitting `## Work Phase Complete` (one-shot mode) or chaining into the post-implementation pipeline (direct mode), assert at least one commit exists beyond `origin/<branch>`. An empty diff hands review agents nothing to analyze and produces no signal. Run BEFORE the Invocation Mode branch so both paths are covered:
+Before emitting `## Work Phase Complete` (one-shot mode) or chaining into the post-implementation pipeline (direct mode), assert at least one commit exists beyond `origin/<branch>`. An empty diff hands review agents nothing to analyze and produces no signal. Run BEFORE the Invocation Mode branch so both paths are covered.
 
-```bash
-BRANCH=$(git branch --show-current)
-N=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
-if [[ "$N" == "0" ]]; then
-  echo "[work-phase-4-guard] no commits beyond origin/${BRANCH}; running incremental commit logic from Phase 2 step 3 first." >&2
-  # Invoke Phase 2 step 3 incremental commit (stage logical-unit files, conventional commit message), then re-check.
-  N=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
-  if [[ "$N" == "0" ]]; then
-    echo "[work-phase-4-guard] empty diff vs origin/${BRANCH}; handing off to review with empty diff is a no-op — investigate before continuing." >&2
-    exit 1  # HALT — do NOT emit "## Work Phase Complete"
-  fi
-fi
-```
+**Procedure (distinct exit codes signal distinct operator actions):**
 
-Form rationale: `git rev-list ... --count` returns a clean integer ready for `[[ "$N" == "0" ]]`; the `wc -l` shape requires a `tr -d` strip and is whitespace-padded. Precedent: `plugins/soleur/skills/ship/SKILL.md:619`, `.claude/hooks/ship-unpushed-commits-gate.sh`. The hard `exit 1` ensures one-shot orchestrators see a non-zero exit and stop the pipeline rather than silently continuing into review on an empty diff.
+1. Probe the commit count:
+
+   ```bash
+   BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   if [[ -z "$BRANCH" || "$BRANCH" == "HEAD" ]]; then
+     echo "[work-phase-4-guard] detached HEAD — checkout a feature branch before chaining to review." >&2
+     exit 1
+   fi
+   N=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+   ```
+
+2. If `N == 0`, **stop and run Phase 2 step 3** (stage logical-unit files, write conventional commit message). Do not chain through this block as a single bash invocation — the commit is an explicit action the agent must perform between probes:
+
+   ```bash
+   if [[ "$N" == "0" ]]; then
+     echo "[work-phase-4-guard] no commits beyond origin/${BRANCH} — pause and run Phase 2 step 3 incremental commit before continuing." >&2
+     exit 2  # PAUSE — orchestrator should re-enter Phase 4 after the commit lands
+   fi
+   ```
+
+3. After the incremental commit lands, re-enter the Phase 4 entry-guard. If `N == 0` on the second probe (commit failed silently or no diff exists), HALT:
+
+   ```bash
+   if [[ "$N" == "0" ]]; then
+     echo "[work-phase-4-guard] empty diff vs origin/${BRANCH} after Phase 2 step 3 — investigate before continuing." >&2
+     exit 1  # HALT — do NOT emit "## Work Phase Complete"
+   fi
+   ```
+
+**Form rationale.** `git rev-parse --abbrev-ref HEAD` matches `ship/SKILL.md:619` precedent and returns the literal `HEAD` on detached state (vs. `git branch --show-current` which returns empty), so the detached-HEAD guard catches both shapes. `git rev-list ... --count` returns a clean integer ready for `[[ "$N" == "0" ]]`; the `wc -l` shape requires a `tr -d` strip and is whitespace-padded. Precedent: `plugins/soleur/skills/ship/SKILL.md:619`, `.claude/hooks/ship-unpushed-commits-gate.sh`. **Distinct exit codes** (`2 = pause-and-commit`, `1 = halt-and-investigate`) let one-shot orchestrators distinguish the two recovery paths rather than treating both as opaque non-zero failures.
 
 #### Invocation Mode
 
