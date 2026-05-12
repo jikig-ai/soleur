@@ -263,13 +263,12 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 7 — #3641 shared harness + seam rename + seam relocation + expect.poll
 
-- [ ] Author `apps/web-platform/test/helpers/cc-dispatcher-harness.ts` exporting `buildDispatcherMocks({ withRealMirror = false, withRealP0 = false } = {})`. Returns an object with named spies + a `mocks` block suitable for `vi.mock("@/server/observability", () => ...)`. Use the existing `cc-dispatcher.test.ts` hoist block as the template; the harness function is invoked inside the caller's `vi.hoisted(...)` because `vi.mock` is hoisted at parse time.
-  - **Important:** because `vi.hoisted` runs synchronously before the rest of the module, the harness must export a builder function that the caller calls *inside* its own `vi.hoisted(() => buildDispatcherMocks(...))` block. The harness itself does not call `vi.hoisted`; it provides the factory the hoist returns.
-- [ ] Migrate `cc-dispatcher.test.ts` to use the harness. Replace the 7 hoisted mocks at top + the inline TTL wrapper (already removed in Phase 3). Verify the file shrinks by ~80 LoC.
-- [ ] Migrate `cc-dispatcher-cost.test.ts` to use the harness (5/6 mock overlap per Phase 1 baseline). All five other `cc-dispatcher-*.test.ts` siblings stay on bespoke hoists (1/6 overlap each — not worth churning).
-- [ ] Rename `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` in `observability.ts:314`. Update all three call sites: `cc-dispatcher.test.ts:128 + 155` AND `cc-dispatcher-cross-tenant.integration.test.ts:69 + 159`. The integration-test edit is **rename-only** (zero other behavioral changes) — preserves the Research Reconciliation's "integration test stays untouched for harness extraction" claim.
-- [ ] Move `__setAssertWriteScopeForTests` + `__resetAssertWriteScopeForTests` from `cc-dispatcher.ts:202 + 218` to the existing bottom-of-file test-seam block (location of `__resetDispatcherForTests`, `__resetCcPersistUsageObservationForTests`). The relocation is a verbatim move — no signature change.
-- [ ] Replace the two `setTimeout(_, 10)` settles in `T-W4-orphan` and `T-W4-reset-symmetry`:
+- [x] Authored `apps/web-platform/test/helpers/cc-dispatcher-harness.ts` exporting 5 per-module factories (`observabilityFactory`, `conversationWriterFactory`, `costWriterFactory`, `kbDocumentResolverFactory`, `supabaseServiceFactory`). Drift from plan: rather than a single `buildDispatcherMocks` returning bundled spies + factory closures, the harness exports each factory directly and takes the spies as parameters. Spies are still declared in each consumer test file via `vi.hoisted(...)` so the test body can assert against them and the `vi.mock` factory body can wire them onto each mocked module via dynamic `import` of the harness module.
+- [x] Migrated `cc-dispatcher.test.ts` 5-block `vi.mock` mix to the harness. File shrinks by ~70 LoC.
+- [x] Migrated `cc-dispatcher-cost.test.ts` to the harness (`withTtlDedupWrapper: false`). 5 sibling test files stay on bespoke hoists.
+- [x] Renamed `__resetP0DedupForTests` → `__resetMirrorP0DedupForTests` in `observability.ts` + updated all 3 call sites (`cc-dispatcher.test.ts:128 + 155` and `cc-dispatcher-cross-tenant.integration.test.ts:69 + 159`). Integration-test edit is rename-only.
+- [x] Moved `__setAssertWriteScopeForTests` + `__resetAssertWriteScopeForTests` from inline-near-helper to the bottom-of-file test-seam block. `_assertWriteScopeOverride` cell stays near `assertWriteScope`. Functions moved verbatim (no signature change).
+- [x] **SKIPPED expect.poll migration per work-start drift note** — `cc-dispatcher.test.ts` already uses `flushMicrotasks()` instead of `setTimeout(_, 10)`. The plan's expect.poll snippet was a no-op against current state. The grep returns 1 match (a historical comment, not a runtime call) which is the documentation of the pattern that was replaced historically.
   ```ts
   // before (existing pattern at T-W4-orphan + T-W4-reset-symmetry):
   await new Promise((r) => setTimeout(r, 10));
@@ -285,9 +284,9 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
   //  - Defaults: interval=50ms, timeout=1000ms. Tightened to interval=5ms
   //    (microtask-fast settle) + timeout=200ms (generous wall-clock cap).
   ```
-- [ ] Verify `grep -nE "setTimeout\([^,]+, *[0-9]+\)" apps/web-platform/test/cc-dispatcher.test.ts` returns zero matches.
-- [ ] Run unit tests. Expected: green.
-- [ ] Commit: `refactor(test): shared cc-dispatcher harness + expect.poll + seam renames — closes #3641 (F5 + drift × 3 + test-design)`.
+- [x] Verified `grep -nE "setTimeout\([^,]+, *[0-9]+\)"` returns 1 match (historical comment only).
+- [x] Ran unit tests. Green (4076 / 57 skipped).
+- [x] Commit: `refactor(test): shared cc-dispatcher harness + seam renames + seam relocation — closes #3641 (F5 + drift × 3 + test-design)`.
 
 ### Phase 8 — Verification + PR-body refresh
 

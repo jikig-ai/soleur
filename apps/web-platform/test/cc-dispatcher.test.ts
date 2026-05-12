@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// #3641 F5 — Shared per-module factory closures live in
+// `test/helpers/cc-dispatcher-harness.ts`. The spies are still declared
+// here via `vi.hoisted` (vitest hoists `vi.fn()` calls above module
+// imports) and passed into the harness factories — keeping the
+// `vi.hoisted` semantics intact while letting the factory bodies (which
+// are the bulk of the duplication) live in one place.
 const {
   mockReportSilentFallback,
   mockFetchUserWorkspacePath,
@@ -15,103 +21,53 @@ const {
 }));
 
 vi.mock("@/server/conversation-writer", async () => {
-  const actual = await vi.importActual<
-    typeof import("@/server/conversation-writer")
-  >("@/server/conversation-writer");
-  return {
-    ...actual,
-    updateConversationFor: mockUpdateConversationFor,
-  };
+  const { conversationWriterFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return conversationWriterFactory({ mockUpdateConversationFor });
 });
 
 vi.mock("@/server/observability", async () => {
-  // Pull the real `mirrorWithDebounce` + `__resetMirrorDebounceForTests`
-  // so the existing per-(userId, errorClass) coalescing assertion (3 calls
-  // in <5min → 1 mirror) still holds against the spy reportSilentFallback.
-  // Stub `reportSilentFallback` so individual call-site mirrors are
-  // observable; `mirrorWithDebounce` internally delegates to whatever the
-  // module's exported `reportSilentFallback` is, but since the module is
-  // mocked the delegation pulls our spy.
-  const actual = await vi.importActual<
-    typeof import("@/server/observability")
-  >("@/server/observability");
-  return {
-    ...actual,
-    reportSilentFallback: mockReportSilentFallback,
-    warnSilentFallback: vi.fn(),
-    // Override mirrorWithDebounce with a TTL-honoring wrapper that uses
-    // the spy as its sink. We can't reuse `actual.mirrorWithDebounce`
-    // directly because that one captured the real reportSilentFallback
-    // at module-init time (before this mock swap). Reuse the real
-    // `TtlDedupMap` class (#3639 F3) so the wrapper's dedup bookkeeping
-    // stays in lockstep with production — if the TTL/sweep semantics
-    // ever change, the 3-call-→-1-mirror assertion in this file will not
-    // silently drift.
-    mirrorWithDebounce: (() => {
-      const dedup = new actual.TtlDedupMap<string>(
-        actual.MIRROR_DEBOUNCE_MS,
-        Infinity,
-      );
-      return (err: unknown, ctx: unknown, userId: string, errorClass: string) => {
-        if (!dedup.tryClaim(`${userId}:${errorClass}`, Date.now())) return;
-        mockReportSilentFallback(err, ctx);
-      };
-    })(),
-    // #3603 W1 — `mirrorP0Deduped` is the cross-tenant / W4-orphan
-    // P0 mirror with 1h `(userId, op, conversationId)` dedup. Spying
-    // it directly lets W4-orphan tests assert the op slug + ctx shape
-    // without exercising the real Sentry path; the real helper's
-    // dedup behavior is covered separately in observability tests.
-    mirrorP0Deduped: mockMirrorP0Deduped,
-  };
+  const { observabilityFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return observabilityFactory({
+    mockReportSilentFallback,
+    mockMirrorP0Deduped,
+    withTtlDedupWrapper: true,
+  });
 });
 
 // Module-scoped: every test in this file gets a mocked
 // `fetchUserWorkspacePath`. Existing dispatchSoleurGo tests pre-#3235 do not
 // assert on workspace-resolve or tool labels, so the swap is behavior-neutral
-// for them. Future tests in this file MUST be aware that a real Supabase
-// SELECT is bypassed here — re-add `vi.importActual` if you need the real
-// memo / Supabase round-trip semantics.
+// for them.
 // #3626 — `onResult` now also calls `persistTurnCost` (cost-writer.ts).
-// In test env the helper would attempt a real Supabase write and throw
-// synchronously, breaking subsequent SDK callbacks. Stub to a no-op so
-// the W4 messages.usage path remains the unit-under-test here. The cost-
-// writer aggregation surface has its own dedicated test coverage.
-vi.mock("@/server/cost-writer", () => ({
-  persistTurnCost: vi.fn(),
-}));
+// Harness's `costWriterFactory` stubs it to a no-op.
+vi.mock("@/server/cost-writer", async () => {
+  const { costWriterFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return costWriterFactory();
+});
 
 vi.mock("@/server/kb-document-resolver", async () => {
-  const actual = await vi.importActual<
-    typeof import("@/server/kb-document-resolver")
-  >("@/server/kb-document-resolver");
-  return {
-    ...actual,
-    fetchUserWorkspacePath: mockFetchUserWorkspacePath,
-  };
+  const { kbDocumentResolverFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return kbDocumentResolverFactory({ mockFetchUserWorkspacePath });
 });
 
 // #3254 — `dispatchSoleurGo` now persists a `messages` row per turn
 // (so `message_attachments.message_id` FK can be satisfied for cc-path
-// attachments). Stub the service-role client so existing tests that
-// don't care about the new insert keep passing without spinning a real
-// Supabase up.
-vi.mock("@/lib/supabase/service", () => ({
-  serverUrl: () => "https://test.supabase.co",
-  createServiceClient: () => ({
-    from: (table: string) => {
-      if (table === "messages") {
-        return { insert: mockMessagesInsert };
-      }
-      // `conversations` writes go through `updateConversationFor` which is
-      // mocked above; service-client should never see a direct .from("conversations").
-      throw new Error(`unexpected table in cc-dispatcher.test.ts: ${table}`);
-    },
-    storage: {
-      from: () => ({ download: vi.fn() }),
-    },
-  }),
-}));
+// attachments). Harness's `supabaseServiceFactory` stubs the
+// service-role client to the harness's `mockMessagesInsert`.
+vi.mock("@/lib/supabase/service", async () => {
+  const { supabaseServiceFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return supabaseServiceFactory({ mockMessagesInsert });
+});
 
 import {
   getPendingPromptRegistry,
@@ -126,7 +82,7 @@ import {
 // future test that exercises the real `mirrorP0Deduped` (vs. this file's spy
 // override) doesn't see state leak from a prior test. No-op against the spy
 // override below, but pins the contract.
-import { __resetP0DedupForTests } from "@/server/observability";
+import { __resetMirrorP0DedupForTests } from "@/server/observability";
 import type { WSMessage } from "@/lib/types";
 import { KeyInvalidError } from "@/lib/types";
 import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
@@ -153,7 +109,7 @@ async function flushMicrotasks(): Promise<void> {
 describe("cc-dispatcher singletons + orchestration", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
-    __resetP0DedupForTests();
+    __resetMirrorP0DedupForTests();
     __resetCcPersistUsageObservationForTests();
     mockReportSilentFallback.mockClear();
     mockFetchUserWorkspacePath.mockReset();

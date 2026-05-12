@@ -66,7 +66,7 @@ import {
   type SupabaseClient,
 } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "crypto";
-import { __resetP0DedupForTests } from "@/server/observability";
+import { __resetMirrorP0DedupForTests } from "@/server/observability";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -156,7 +156,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // run don't suppress this file's expected mirror events. The unit
       // test file overrides `mirrorP0Deduped` with a spy and never touches
       // the real map; this hookup is the integration-side reset.
-      __resetP0DedupForTests();
+      __resetMirrorP0DedupForTests();
 
       // Create userA + userB via service-role auth admin. Up to 3 retries
       // tolerate the rare email-collision case (random hex collision in

@@ -354,8 +354,11 @@ export function mirrorP0Deduped(
 
 /**
  * Test seam: drain the P0 dedup map between tests. Naming mirrors
- * `__resetMirrorDebounceForTests` (line above). Never call from production.
+ * `__resetMirrorDebounceForTests` (line above) — both prefix the cache
+ * they reset with `Mirror` for parallelism. Never call from production.
+ * #3641 — renamed from `__resetP0DedupForTests` to match the
+ * `mirror{Debounce,P0Dedup}` naming pair. No deprecation alias kept.
  */
-export function __resetP0DedupForTests(): void {
+export function __resetMirrorP0DedupForTests(): void {
   _p0Dedup.reset();
 }

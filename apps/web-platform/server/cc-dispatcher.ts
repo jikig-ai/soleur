@@ -426,30 +426,13 @@ function assertWriteScope(
 
 // Test seam — never use in production. The sentinel returns `true`
 // unconditionally; tests force `false` via this hook to prove every
-// assistant-row write call site runs through the helper.
+// assistant-row write call site runs through the helper. The exported
+// setter/resetter functions (#3641 — relocated) live in the bottom-of-
+// file test-seam block alongside `__resetDispatcherForTests` and
+// `__setCcRunnerForTests` so all test-only exports cluster in one place.
 let _assertWriteScopeOverride:
   | ((u: string, c: string) => boolean)
   | null = null;
-
-export function __setAssertWriteScopeForTests(
-  fn: (u: string, c: string) => boolean,
-): void {
-  // Defense-in-depth (PR-A2 security review H3): refuse to install the
-  // override outside a test environment. Without this guard a malicious /
-  // accidentally-imported call site in a prod-bundle code path could neutralize
-  // the sentinel for the process lifetime — module-singleton state with no
-  // caller authentication. Vitest sets `NODE_ENV=test`; production sets `production`.
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "__setAssertWriteScopeForTests is not callable in production builds",
-    );
-  }
-  _assertWriteScopeOverride = fn;
-}
-
-export function __resetAssertWriteScopeForTests(): void {
-  _assertWriteScopeOverride = null;
-}
 
 // #3603 PR-A2 review H4 — `CC_PERSIST_USAGE=true` is the trigger for a new
 // GDPR-regulated persisted category (Art. 13(3) prior-disclosure surface).
@@ -1745,4 +1728,32 @@ export function __resetDispatcherForTests(): void {
   // tests is observable. Lives in `kb-document-resolver.ts` for the same
   // reason as the bash cache: shared across files, drained centrally.
   _resetWorkspacePathCacheForTests();
+}
+
+/**
+ * #3603 W1 invariant-7 — install a stub that lets tests force the
+ * write-boundary sentinel to return `false` at specific call sites,
+ * proving every assistant-row write runs through `assertWriteScope`.
+ * #3641 — relocated from the inline declaration adjacent to
+ * `assertWriteScope` to this bottom-of-file test-seam block so all
+ * test-only exports cluster in one place.
+ */
+export function __setAssertWriteScopeForTests(
+  fn: (u: string, c: string) => boolean,
+): void {
+  // Defense-in-depth (PR-A2 security review H3): refuse to install the
+  // override outside a test environment. Without this guard a malicious /
+  // accidentally-imported call site in a prod-bundle code path could neutralize
+  // the sentinel for the process lifetime — module-singleton state with no
+  // caller authentication. Vitest sets `NODE_ENV=test`; production sets `production`.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "__setAssertWriteScopeForTests is not callable in production builds",
+    );
+  }
+  _assertWriteScopeOverride = fn;
+}
+
+export function __resetAssertWriteScopeForTests(): void {
+  _assertWriteScopeOverride = null;
 }
