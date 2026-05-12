@@ -1,55 +1,95 @@
 // S0 spike for #3637 (feat-dsar-art15-export-endpoint, plan rev-2 Phase 0).
 //
-// Measures peak RSS, wall-clock, and SHA-256 round-trip integrity during
-// archiver -> Node Readable -> Web ReadableStream -> Supabase Storage `upload()`
-// across 100 MB / 500 MB / 1 GB / 2 GB synthesised payloads. Output drives:
+// Measures peak RSS, wall-clock, and SHA-256 round-trip integrity for two
+// upload patterns across 100 MB / 500 MB / 1 GB / 2 GB synthesised payloads:
+//
+//   - mode=stream: archiver -> Node Readable -> Web ReadableStream ->
+//     supabase.storage.upload()  -- the plan rev-2 "streaming" hypothesis.
+//
+//   - mode=disk:   archiver -> tempfile -> fs.createReadStream() -> raw fetch
+//     POST to /storage/v1/object/{bucket}/{path} with `duplex: 'half'` --
+//     plan Phase 0.7 disk-then-upload fallback. Bypasses supabase-js so the
+//     SDK's body-buffering does not contaminate the RSS measurement.
+//
+// Output drives:
 //   - TR4 v1 size cap (largest tier where peak RSS stays under 2 GB)
 //   - S8 Node 22 runtime invariant captured in ADR
 //     0NN-dsar-export-substrate-and-audit-retention.md
 //   - GATE: Phase 1 cannot start until report exists
 //
 // Path deviates from plan literal `scripts/spike-dsar-streaming-upload.ts`
-// to match existing in-tree convention (`scripts/spike/<name>.ts`) per the
-// other S-series spikes (cache-control-forwarding.ts, pdf-outline-coverage.ts).
+// to match existing in-tree convention (`scripts/spike/<name>.ts`).
 // Runtime is Node 22 via tsx (NOT Bun) per work-skill clarification
-// 2026-05-12: production worker is `next start` on Node 22, so peak-RSS
-// numbers must come from the runtime that actually owns prod memory.
+// 2026-05-12: production worker is `next start` on Node 22.
 //
-// Test fixtures are synthesised on-the-fly via seeded PRNG per
-// `cq-test-fixtures-synthesized-only`. Zero real-user data flows through
-// this script.
+// Test fixtures are synthesised on-the-fly via crypto.randomFillSync (native)
+// per `cq-test-fixtures-synthesized-only`. Zero real-user data flows.
 //
 // Operator command:
-//   bun add -d archiver @types/archiver   # one-time, lands in package.json
+//   bun add archiver && bun add -d @types/archiver   # one-time
 //   doppler run -p soleur -c dev -- ./node_modules/.bin/tsx \
 //     scripts/spike/dsar-streaming-upload.ts
 //
 // Optional env knobs:
 //   DSAR_SPIKE_SIZES_MB="100,500,1000,2000"   # default
+//   DSAR_SPIKE_MODES="stream,disk"            # default; values: stream|disk
 //   DSAR_SPIKE_BUCKET="dsar-spike"            # default
-//   DSAR_SPIKE_SEED="dsar-spike-2026-05-12"   # default
 //   DSAR_SPIKE_KEEP_OBJECTS="0"               # set 1 to skip cleanup
+//   DSAR_SPIKE_TMP_DIR=<path>                 # default $TMPDIR for disk mode
 
-import { createHash } from "node:crypto";
+import { createHash, randomFillSync } from "node:crypto";
+import {
+  createReadStream,
+  createWriteStream,
+  mkdtempSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
-import archiver from "archiver";
+// archiver@8 is ESM-only with no default export (breaking change from v7).
+// @types/archiver@7 still ships the v7 CJS shape (factory function), so we
+// import the runtime class through a manual shim. The runtime export was
+// verified via `grep -E "^export" node_modules/archiver/index.js`.
+import type * as ArchiverNS from "archiver";
+import * as ArchiverRuntime from "archiver";
+type Archive = ArchiverNS.Archiver;
+const ZipArchive = (
+  ArchiverRuntime as unknown as {
+    ZipArchive: new (opts?: ArchiverNS.ArchiverOptions) => Archive;
+  }
+).ZipArchive;
 
-import { createServiceClient } from "../../lib/supabase/service";
+import { createServiceClient, serverUrl } from "../../lib/supabase/service";
+
+type Mode = "stream" | "disk";
 
 const SIZES_MB = (process.env.DSAR_SPIKE_SIZES_MB ?? "100,500,1000,2000")
   .split(",")
   .map((s) => Number.parseInt(s.trim(), 10))
   .filter((n) => Number.isFinite(n) && n > 0);
 
+const MODES: Mode[] = (process.env.DSAR_SPIKE_MODES ?? "stream,disk")
+  .split(",")
+  .map((s) => s.trim())
+  .filter((s): s is Mode => s === "stream" || s === "disk");
+
 const BUCKET = process.env.DSAR_SPIKE_BUCKET ?? "dsar-spike";
-const SEED = process.env.DSAR_SPIKE_SEED ?? "dsar-spike-2026-05-12";
 const KEEP_OBJECTS = process.env.DSAR_SPIKE_KEEP_OBJECTS === "1";
+const TMP_BASE = process.env.DSAR_SPIKE_TMP_DIR ?? tmpdir();
 const POLL_MS = 250;
-const CHUNK_BYTES = 64 * 1024; // 64 KB — matches archiver's internal pull size
+const CHUNK_BYTES = 64 * 1024;
+// Per-file ceiling for the bucket (5 GB — well above the 2 GB Hetzner RSS
+// ceiling so the bucket itself never becomes the cap). Supabase Pro tier
+// supports file sizes up to 500 GB.
+const BUCKET_FILE_LIMIT = 5 * 1024 * 1024 * 1024;
 
 interface RunResult {
   sizeMb: number;
+  mode: Mode;
   archiveBytes: number;
   peakRssMb: number;
   baselineRssMb: number;
@@ -63,46 +103,12 @@ interface RunResult {
 }
 
 // ---------------------------------------------------------------------------
-// Seeded PRNG — xoshiro256** family. Deterministic given (seed, file index).
-// Output is statistically random enough to be incompressible at zlib level 0
-// (we set zlib level 0 anyway; the spike measures stream behaviour, not
-// compression).
+// Synthetic byte generator. Uses node:crypto randomFillSync (native, ~GB/s).
+// Per `cq-test-fixtures-synthesized-only` (no real-user data).
 // ---------------------------------------------------------------------------
-function makePrng(seedString: string, index: number): () => number {
-  const seedHash = createHash("sha256")
-    .update(`${seedString}:${index}`)
-    .digest();
-  const state = new BigUint64Array(4);
-  for (let i = 0; i < 4; i++) {
-    state[i] = seedHash.readBigUInt64LE(i * 8);
-  }
-
-  const rotl = (x: bigint, k: bigint): bigint => {
-    const mask = 0xffffffffffffffffn;
-    return (((x << k) & mask) | (x >> (64n - k))) & mask;
-  };
-
-  return () => {
-    const mask = 0xffffffffffffffffn;
-    const result = (rotl((state[1]! * 5n) & mask, 7n) * 9n) & mask;
-    const t = (state[1]! << 17n) & mask;
-    state[2] = (state[2]! ^ state[0]!) & mask;
-    state[3] = (state[3]! ^ state[1]!) & mask;
-    state[1] = (state[1]! ^ state[2]!) & mask;
-    state[0] = (state[0]! ^ state[3]!) & mask;
-    state[2] = (state[2]! ^ t) & mask;
-    state[3] = rotl(state[3]!, 45n);
-    return Number(result & 0xffffffffn) / 0xffffffff;
-  };
-}
-
-function makeSyntheticFileStream(
-  seed: string,
-  index: number,
-  bytes: number,
-): Readable {
-  const prng = makePrng(seed, index);
+function makeSyntheticFileStream(bytes: number): Readable {
   let remaining = bytes;
+  const scratch = Buffer.allocUnsafe(CHUNK_BYTES);
   return new Readable({
     highWaterMark: CHUNK_BYTES,
     read() {
@@ -111,35 +117,16 @@ function makeSyntheticFileStream(
         return;
       }
       const n = Math.min(CHUNK_BYTES, remaining);
-      const buf = Buffer.allocUnsafe(n);
-      // Fill via PRNG: write whole uint32 strides, then fill the tail
-      // byte-by-byte. writeUInt32LE throws RangeError if i+4 > buf.length,
-      // so the loop bound is strict.
-      const wholeWords = n - (n % 4);
-      for (let i = 0; i < wholeWords; i += 4) {
-        const v = (prng() * 0x100000000) >>> 0;
-        buf.writeUInt32LE(v, i);
-      }
-      if (wholeWords < n) {
-        const tail = (prng() * 0x100000000) >>> 0;
-        for (let i = wholeWords; i < n; i++) {
-          buf.writeUInt8((tail >>> ((i - wholeWords) * 8)) & 0xff, i);
-        }
-      }
+      randomFillSync(scratch, 0, n);
       remaining -= n;
-      this.push(buf);
+      // Copy so subsequent overwrites don't clobber queued chunks.
+      this.push(Buffer.from(scratch.subarray(0, n)));
     },
   });
 }
 
 // ---------------------------------------------------------------------------
 // Archive layout mirroring real DSAR shape. Total bytes ≈ target size.
-//   /manifest.json                 — small JSON header
-//   /tables/<n>.json               — ~10 MB each, JSON-shaped payload
-//   /attachments/<n>.bin           — varied binary, 1-16 MB each
-//   /workspace/<n>.txt             — text-like 0.5-4 MB each
-// We don't bother with realistic JSON parsing — payload is just bytes.
-// Pure point of the spike is byte throughput, not content shape.
 // ---------------------------------------------------------------------------
 function planArchiveLayout(targetBytes: number): Array<{
   name: string;
@@ -149,7 +136,6 @@ function planArchiveLayout(targetBytes: number): Array<{
   const manifestBytes = 4 * 1024;
   layout.push({ name: "manifest.json", bytes: manifestBytes });
 
-  // Distribute remaining bytes: 40% tables, 50% attachments, 10% workspace.
   let remaining = targetBytes - manifestBytes;
   const tablesTotal = Math.floor(remaining * 0.4);
   const attachmentsTotal = Math.floor(remaining * 0.5);
@@ -170,51 +156,97 @@ function planArchiveLayout(targetBytes: number): Array<{
     }
   };
 
-  addBucket("tables", tablesTotal, 10 * 1024 * 1024); // 10 MB tables
-  addBucket("attachments", attachmentsTotal, 8 * 1024 * 1024); // 8 MB attachments
-  addBucket("workspace", workspaceTotal, 2 * 1024 * 1024); // 2 MB workspace files
+  addBucket("tables", tablesTotal, 10 * 1024 * 1024);
+  addBucket("attachments", attachmentsTotal, 8 * 1024 * 1024);
+  addBucket("workspace", workspaceTotal, 2 * 1024 * 1024);
 
   return layout;
 }
 
+function buildArchiveSource(
+  layout: Array<{ name: string; bytes: number }>,
+): { archive: Archive; finalize: Promise<void> } {
+  const archive = new ZipArchive({ zlib: { level: 0 } });
+  archive.on("warning", (err: NodeJS.ErrnoException) => {
+    if (err.code !== "ENOENT") throw err;
+  });
+  archive.on("error", (err: Error) => {
+    throw err;
+  });
+  for (const entry of layout) {
+    archive.append(makeSyntheticFileStream(entry.bytes), { name: entry.name });
+  }
+  // Hold a reference to the finalize promise so callers can await completion
+  // after their consumer drains.
+  const finalize = archive.finalize();
+  return { archive, finalize };
+}
+
+function startRssSampler(): {
+  baseline: number;
+  stop: () => { peak: number };
+} {
+  if (global.gc) global.gc();
+  const baseline = process.memoryUsage().rss;
+  let peak = baseline;
+  const id = setInterval(() => {
+    const rss = process.memoryUsage().rss;
+    if (rss > peak) peak = rss;
+  }, POLL_MS);
+  return {
+    baseline,
+    stop: () => {
+      clearInterval(id);
+      return { peak };
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
-// Single tier: build archive, stream to Storage, measure peak RSS, hash.
+// Re-download the uploaded object via service-role and hash. Streams the
+// Blob so we do not spike RSS a second time.
 // ---------------------------------------------------------------------------
-async function runTier(
+async function fetchHash(
+  service: ReturnType<typeof createServiceClient>,
+  objectPath: string,
+): Promise<{ sha256: string; error?: string }> {
+  try {
+    const { data, error } = await service.storage
+      .from(BUCKET)
+      .download(objectPath);
+    if (error) return { sha256: "", error: error.message };
+    if (!data) return { sha256: "", error: "download returned no body" };
+    const hash = createHash("sha256");
+    const reader = (data.stream() as ReadableStream<Uint8Array>).getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) hash.update(value);
+    }
+    return { sha256: hash.digest("hex") };
+  } catch (err) {
+    return {
+      sha256: "",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode=stream: archive -> hashPass -> Readable.toWeb() -> SDK upload.
+// ---------------------------------------------------------------------------
+async function runTierStream(
   service: ReturnType<typeof createServiceClient>,
   sizeMb: number,
 ): Promise<RunResult> {
   const targetBytes = sizeMb * 1024 * 1024;
   const layout = planArchiveLayout(targetBytes);
-  const objectPath = `tier-${sizeMb}mb-${Date.now()}.zip`;
+  const objectPath = `tier-${sizeMb}mb-stream-${Date.now()}.zip`;
 
-  // Warm GC before sampling so baseline reflects steady state, not whatever
-  // the previous tier left in the heap.
-  if (global.gc) global.gc();
-  // Sleep 100 ms so v8 settles
-  await new Promise((r) => setTimeout(r, 100));
-  const baselineRss = process.memoryUsage().rss;
-  let peakRss = baselineRss;
-
-  const sampler = setInterval(() => {
-    const rss = process.memoryUsage().rss;
-    if (rss > peakRss) peakRss = rss;
-  }, POLL_MS);
-
+  const sampler = startRssSampler();
   const startedAt = Date.now();
 
-  const archive = archiver("zip", { zlib: { level: 0 } });
-  archive.on("warning", (err) => {
-    if (err.code !== "ENOENT") throw err;
-  });
-  archive.on("error", (err) => {
-    throw err;
-  });
-
-  // Hashing pass-through. Archive -> hashPass -> web stream -> upload. This
-  // avoids the double-consume hazard of attaching both a `data` listener
-  // and `Readable.toWeb()` to the archive Readable directly (only the
-  // first consumer would drain it).
+  const { archive, finalize } = buildArchiveSource(layout);
   const uploadHash = createHash("sha256");
   let archiveBytes = 0;
   const hashPass = new PassThrough({ highWaterMark: CHUNK_BYTES });
@@ -224,19 +256,6 @@ async function runTier(
   });
   archive.pipe(hashPass);
 
-  // Append entries lazily so we don't materialise the entire archive upfront.
-  for (let i = 0; i < layout.length; i++) {
-    const entry = layout[i]!;
-    archive.append(makeSyntheticFileStream(SEED, i, entry.bytes), {
-      name: entry.name,
-    });
-  }
-  const finalizePromise = archive.finalize();
-
-  // Node Readable -> Web ReadableStream. supabase-js v2 accepts a Web
-  // ReadableStream body via undici; type assertion bridges the upload
-  // overload set which lists FileBody but not ReadableStream<Uint8Array>
-  // in the public d.ts.
   const webStream = Readable.toWeb(
     hashPass,
   ) as unknown as ReadableStream<Uint8Array>;
@@ -254,61 +273,39 @@ async function runTier(
   } catch (err) {
     uploadError = err instanceof Error ? err.message : String(err);
   }
-  await finalizePromise.catch((err) => {
+  await finalize.catch((err) => {
     uploadError = uploadError ?? (err instanceof Error ? err.message : String(err));
   });
 
   const wallClockSec = (Date.now() - startedAt) / 1000;
-  clearInterval(sampler);
+  const { peak } = sampler.stop();
+
   const sha256Upload = uploadHash.digest("hex");
+  const { sha256: sha256Download, error: downloadError } = uploadError
+    ? { sha256: "", error: undefined as string | undefined }
+    : await fetchHash(service, objectPath);
 
-  // Re-download via service-role for SHA round-trip.
-  let sha256Download = "";
-  let downloadError: string | undefined;
-  if (!uploadError) {
-    try {
-      const { data, error } = await service.storage
-        .from(BUCKET)
-        .download(objectPath);
-      if (error) downloadError = error.message;
-      else if (data) {
-        const downloadHash = createHash("sha256");
-        // data is a Blob; stream through its arrayBuffer in chunks to avoid
-        // a second full-payload spike in RSS.
-        const reader = (data.stream() as ReadableStream<Uint8Array>).getReader();
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (value) downloadHash.update(value);
-        }
-        sha256Download = downloadHash.digest("hex");
-      }
-    } catch (err) {
-      downloadError = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  // Cleanup unless operator opted out.
   if (!KEEP_OBJECTS && !uploadError) {
     try {
       await service.storage.from(BUCKET).remove([objectPath]);
     } catch {
-      /* non-fatal — spike cleanup is best-effort */
+      /* best-effort */
     }
   }
 
   const error = uploadError ?? downloadError;
-  const peakRssMb = peakRss / (1024 * 1024);
-  const baselineRssMb = baselineRss / (1024 * 1024);
-
+  const peakRssMb = peak / (1024 * 1024);
+  const baselineRssMb = sampler.baseline / (1024 * 1024);
   return {
     sizeMb,
+    mode: "stream",
     archiveBytes,
     peakRssMb,
     baselineRssMb,
     rssDeltaMb: peakRssMb - baselineRssMb,
     wallClockSec,
-    throughputMBps: archiveBytes / (1024 * 1024) / Math.max(wallClockSec, 0.001),
+    throughputMBps:
+      archiveBytes / (1024 * 1024) / Math.max(wallClockSec, 0.001),
     sha256Upload,
     sha256Download,
     integrityOk:
@@ -317,33 +314,166 @@ async function runTier(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Mode=disk: archive -> tempfile (hashing en route) -> raw fetch POST with
+// fs.createReadStream + duplex: 'half'. Bypasses supabase-js so the SDK's
+// body-buffering does not contaminate the measurement.
+// ---------------------------------------------------------------------------
+async function runTierDisk(
+  service: ReturnType<typeof createServiceClient>,
+  sizeMb: number,
+): Promise<RunResult> {
+  const targetBytes = sizeMb * 1024 * 1024;
+  const layout = planArchiveLayout(targetBytes);
+  const objectPath = `tier-${sizeMb}mb-disk-${Date.now()}.zip`;
+  const tmpDir = mkdtempSync(path.join(TMP_BASE, "dsar-spike-"));
+  const tmpFile = path.join(tmpDir, `tier-${sizeMb}mb.zip`);
+
+  const sampler = startRssSampler();
+  const startedAt = Date.now();
+
+  // Phase A — archive to disk.
+  const { archive, finalize } = buildArchiveSource(layout);
+  const uploadHash = createHash("sha256");
+  let archiveBytes = 0;
+  const hashPass = new PassThrough({ highWaterMark: CHUNK_BYTES });
+  hashPass.on("data", (chunk: Buffer) => {
+    archiveBytes += chunk.length;
+    uploadHash.update(chunk);
+  });
+
+  let phaseAError: string | undefined;
+  try {
+    await pipeline(archive, hashPass, createWriteStream(tmpFile));
+    await finalize.catch(() => {
+      /* finalize fires after pipe completes; ignore double-end */
+    });
+  } catch (err) {
+    phaseAError = err instanceof Error ? err.message : String(err);
+  }
+  const sha256Upload = uploadHash.digest("hex");
+
+  // Phase B — fetch POST from disk stream. Bypass supabase-js entirely.
+  let phaseBError: string | undefined;
+  if (!phaseAError) {
+    const fileSize = statSync(tmpFile).size;
+    const url = `${serverUrl()}/storage/v1/object/${encodeURIComponent(
+      BUCKET,
+    )}/${encodeURIComponent(objectPath)}`;
+    const token = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const body = createReadStream(tmpFile, { highWaterMark: 1024 * 1024 });
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: token,
+          "Content-Type": "application/zip",
+          "Content-Length": String(fileSize),
+          "x-upsert": "true",
+        },
+        body: Readable.toWeb(body) as unknown as ReadableStream<Uint8Array>,
+        // @ts-expect-error -- undici-only option; TS lib.dom lacks it.
+        duplex: "half",
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        phaseBError = `HTTP ${res.status}: ${txt.slice(0, 200)}`;
+      }
+    } catch (err) {
+      phaseBError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  const wallClockSec = (Date.now() - startedAt) / 1000;
+  const { peak } = sampler.stop();
+
+  const uploadError = phaseAError ?? phaseBError;
+  const { sha256: sha256Download, error: downloadError } = uploadError
+    ? { sha256: "", error: undefined as string | undefined }
+    : await fetchHash(service, objectPath);
+
+  if (!KEEP_OBJECTS && !uploadError) {
+    try {
+      await service.storage.from(BUCKET).remove([objectPath]);
+    } catch {
+      /* best-effort */
+    }
+  }
+  try {
+    rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+
+  const error = uploadError ?? downloadError;
+  const peakRssMb = peak / (1024 * 1024);
+  const baselineRssMb = sampler.baseline / (1024 * 1024);
+  return {
+    sizeMb,
+    mode: "disk",
+    archiveBytes,
+    peakRssMb,
+    baselineRssMb,
+    rssDeltaMb: peakRssMb - baselineRssMb,
+    wallClockSec,
+    throughputMBps:
+      archiveBytes / (1024 * 1024) / Math.max(wallClockSec, 0.001),
+    sha256Upload,
+    sha256Download,
+    integrityOk:
+      !error && sha256Download !== "" && sha256Upload === sha256Download,
+    error,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Bucket setup. Create with explicit fileSizeLimit; updateBucket if the
+// existing bucket has a smaller limit (idempotent across re-runs).
+// ---------------------------------------------------------------------------
 async function ensureBucket(
   service: ReturnType<typeof createServiceClient>,
 ): Promise<void> {
   const { data, error } = await service.storage.listBuckets();
   if (error) throw new Error(`listBuckets failed: ${error.message}`);
-  const exists = (data ?? []).some((b) => b.name === BUCKET);
-  if (exists) return;
+  const existing = (data ?? []).find((b) => b.name === BUCKET);
+  if (existing) {
+    const { error: updErr } = await service.storage.updateBucket(BUCKET, {
+      public: false,
+      fileSizeLimit: BUCKET_FILE_LIMIT,
+    });
+    if (updErr) {
+      console.warn(
+        `[spike] updateBucket(${BUCKET}) returned: ${updErr.message} (continuing — pre-existing limit may be sufficient)`,
+      );
+    }
+    return;
+  }
   const { error: createErr } = await service.storage.createBucket(BUCKET, {
     public: false,
+    fileSizeLimit: BUCKET_FILE_LIMIT,
   });
   if (createErr) {
     throw new Error(`createBucket(${BUCKET}) failed: ${createErr.message}`);
   }
-  console.log(`[spike] created private bucket "${BUCKET}"`);
+  console.log(
+    `[spike] created private bucket "${BUCKET}" with fileSizeLimit ${BUCKET_FILE_LIMIT}`,
+  );
 }
 
 function formatResult(r: RunResult): string {
-  const ok = r.integrityOk ? "OK" : r.error ? `ERR(${r.error})` : "SHA_MISMATCH";
+  const ok = r.integrityOk ? "OK" : r.error ? `ERR(${r.error.slice(0, 60)})` : "SHA_MISMATCH";
   return [
-    String(r.sizeMb).padStart(4),
+    String(r.sizeMb).padStart(5),
+    r.mode.padStart(6),
     (r.archiveBytes / (1024 * 1024)).toFixed(1).padStart(8),
     r.baselineRssMb.toFixed(1).padStart(8),
     r.peakRssMb.toFixed(1).padStart(8),
     r.rssDeltaMb.toFixed(1).padStart(8),
     r.wallClockSec.toFixed(1).padStart(7),
-    r.throughputMBps.toFixed(1).padStart(8),
-    ok.padStart(14),
+    r.throughputMBps.toFixed(1).padStart(6),
+    ok,
   ].join("  ");
 }
 
@@ -357,52 +487,58 @@ async function main(): Promise<void> {
   await ensureBucket(service);
 
   console.log(
-    `[spike] node=${process.version} sizes=${SIZES_MB.join(",")} bucket=${BUCKET} seed=${SEED}`,
+    `[spike] node=${process.version} sizes=${SIZES_MB.join(",")} modes=${MODES.join(",")} bucket=${BUCKET}`,
   );
   console.log(
-    "tier(MB)  archiveMB    baseRSS    peakRSS    deltaRSS   wall(s)   MB/s   integrity",
+    "tier(MB)    mode   archMB   baseRSS   peakRSS  deltaRSS  wall(s)   MB/s  integrity",
   );
 
   const results: RunResult[] = [];
   for (const sz of SIZES_MB) {
-    try {
-      const r = await runTier(service, sz);
-      results.push(r);
-      console.log(formatResult(r));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[spike] tier ${sz} MB threw: ${msg}`);
-      results.push({
-        sizeMb: sz,
-        archiveBytes: 0,
-        peakRssMb: 0,
-        baselineRssMb: 0,
-        rssDeltaMb: 0,
-        wallClockSec: 0,
-        throughputMBps: 0,
-        sha256Upload: "",
-        sha256Download: "",
-        integrityOk: false,
-        error: msg,
-      });
+    for (const mode of MODES) {
+      try {
+        const r =
+          mode === "stream"
+            ? await runTierStream(service, sz)
+            : await runTierDisk(service, sz);
+        results.push(r);
+        console.log(formatResult(r));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[spike] tier ${sz} MB mode=${mode} threw: ${msg}`);
+        results.push({
+          sizeMb: sz,
+          mode,
+          archiveBytes: 0,
+          peakRssMb: 0,
+          baselineRssMb: 0,
+          rssDeltaMb: 0,
+          wallClockSec: 0,
+          throughputMBps: 0,
+          sha256Upload: "",
+          sha256Download: "",
+          integrityOk: false,
+          error: msg,
+        });
+      }
     }
   }
 
-  // Cap suggestion: largest tier with peak RSS < 2048 MB AND integrity OK.
-  const passing = results.filter((r) => r.integrityOk && r.peakRssMb < 2048);
-  const cap = passing.length
-    ? passing.reduce((a, b) => (a.sizeMb > b.sizeMb ? a : b))
-    : null;
-
   console.log("");
-  if (cap) {
-    console.log(
-      `[spike] suggested TR4 v1 cap: ${cap.sizeMb} MB (peak RSS ${cap.peakRssMb.toFixed(1)} MB, integrity OK)`,
+  for (const mode of MODES) {
+    const passing = results.filter(
+      (r) => r.mode === mode && r.integrityOk && r.peakRssMb < 2048,
     );
-  } else {
-    console.log(
-      "[spike] no tier passed (peak RSS >= 2 GB or integrity fail). Pivot to disk-then-upload fallback per plan Phase 0.7.",
-    );
+    const cap = passing.length
+      ? passing.reduce((a, b) => (a.sizeMb > b.sizeMb ? a : b))
+      : null;
+    if (cap) {
+      console.log(
+        `[spike] mode=${mode}: largest passing tier ${cap.sizeMb} MB (peak ${cap.peakRssMb.toFixed(1)} MB)`,
+      );
+    } else {
+      console.log(`[spike] mode=${mode}: NO tier passed within 2 GB ceiling`);
+    }
   }
 }
 
