@@ -35,12 +35,19 @@
 // AC1 (1:1 reconcile with Privacy Policy §4.7 after FR8) is the gate
 // that blocks enablement in prd.
 
-import { createReadStream, statSync } from "node:fs";
-import { writeFile, mkdir, rm, stat } from "node:fs/promises";
+import {
+  createReadStream,
+  statSync,
+  openSync,
+  fstatSync,
+  closeSync,
+  constants as fsConstants,
+} from "node:fs";
+import { mkdir, rm, stat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix as posixPath } from "node:path";
 import { createHash } from "node:crypto";
-import { Readable } from "node:stream";
+import { Readable, PassThrough } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import archiver from "archiver";
 import { createWriteStream } from "node:fs";
@@ -455,6 +462,281 @@ async function exportSqlTable(
 }
 
 // ---------------------------------------------------------------------------
+// Storage attachments — list `chat-attachments/<userId>/...` recursively,
+// download each blob via service-role, archive under `attachments/<path>`.
+//
+// Path-prefix guard per AC26 + the 2026-04-11 IDOR learning: every
+// resolved storage path MUST start with `<userId>/` AND MUST NOT
+// contain `..`. Either violation is FAIL-JOB-LOUD — silently skipping
+// a `..`-bearing path treats security-validation regressions as
+// data-quality concerns. assertReadScope's twin for the Storage path.
+// ---------------------------------------------------------------------------
+
+const STORAGE_LIST_PAGE_SIZE = 1000;
+
+interface AttachmentBinary {
+  /** storage path relative to bucket root (e.g. "<userId>/conv-1/foo.png"). */
+  storagePath: string;
+  /** archive path inside the ZIP (e.g. "attachments/conv-1/foo.png"). */
+  archivePath: string;
+  buffer: Buffer;
+}
+
+async function enumerateChatAttachments(
+  expectedUserId: string,
+  signal: AbortSignal,
+): Promise<AttachmentBinary[]> {
+  const service = createServiceClient();
+  const bucket = service.storage.from("chat-attachments");
+  const results: AttachmentBinary[] = [];
+
+  // Two-level listing: <userId>/<convId>/<file>. The convId folders
+  // are discovered by listing under the user's prefix.
+  const { data: folders, error: listErr } = await bucket.list(expectedUserId, {
+    limit: STORAGE_LIST_PAGE_SIZE,
+  });
+  if (signal.aborted) throw new Error("aborted");
+  if (listErr) {
+    throw new Error(`chat-attachments list failed: ${listErr.message}`);
+  }
+  if (!folders) return results;
+
+  for (const folder of folders) {
+    if (signal.aborted) throw new Error("aborted");
+    // Storage list returns both files and folders mixed; folders have
+    // metadata=null. A bare file directly under <userId>/ would be
+    // unusual (the schema places attachments at <userId>/<convId>/) but
+    // we handle both for robustness.
+    const subPrefix = `${expectedUserId}/${folder.name}`;
+    let isFile = (folder as { metadata?: unknown }).metadata !== null;
+    if (!isFile) {
+      const { data: inner, error: innerErr } = await bucket.list(subPrefix, {
+        limit: STORAGE_LIST_PAGE_SIZE,
+      });
+      if (signal.aborted) throw new Error("aborted");
+      if (innerErr) {
+        throw new Error(
+          `chat-attachments list ${subPrefix} failed: ${innerErr.message}`,
+        );
+      }
+      for (const file of inner ?? []) {
+        const storagePath = `${subPrefix}/${file.name}`;
+        assertSafeStoragePath(storagePath, expectedUserId);
+        const buf = await downloadAttachment(bucket, storagePath, signal);
+        results.push({
+          storagePath,
+          archivePath: `attachments/${folder.name}/${file.name}`,
+          buffer: buf,
+        });
+      }
+    } else {
+      const storagePath = subPrefix;
+      assertSafeStoragePath(storagePath, expectedUserId);
+      const buf = await downloadAttachment(bucket, storagePath, signal);
+      results.push({
+        storagePath,
+        archivePath: `attachments/${folder.name}`,
+        buffer: buf,
+      });
+    }
+  }
+
+  return results;
+}
+
+function assertSafeStoragePath(
+  storagePath: string,
+  expectedUserId: string,
+): void {
+  // Reject any path segment of `..` AND any path not anchored at
+  // `<userId>/`. Service-role bypasses RLS so a path-prefix bug here
+  // could surface another user's blob in the bundle — fail-job-loud
+  // per AC26.
+  const norm = posixPath.normalize(storagePath);
+  if (
+    !norm.startsWith(`${expectedUserId}/`) ||
+    norm.includes("/../") ||
+    norm.endsWith("/..") ||
+    norm.startsWith("../")
+  ) {
+    const err = new CrossTenantViolation(
+      "chat-attachments",
+      expectedUserId,
+      null,
+    );
+    mirrorCrossTenantViolation(null, expectedUserId, "chat-attachments", err);
+    throw err;
+  }
+}
+
+async function downloadAttachment(
+  bucket: ReturnType<ReturnType<typeof createServiceClient>["storage"]["from"]>,
+  storagePath: string,
+  signal: AbortSignal,
+): Promise<Buffer> {
+  const { data, error } = await bucket.download(storagePath);
+  if (signal.aborted) throw new Error("aborted");
+  if (error) throw new Error(`download ${storagePath}: ${error.message}`);
+  if (!data) throw new Error(`download ${storagePath}: null body`);
+  const arr = new Uint8Array(await data.arrayBuffer());
+  return Buffer.from(arr);
+}
+
+// ---------------------------------------------------------------------------
+// Workspace files — walk `<workspacePath>/` with `O_NOFOLLOW` opens +
+// `fstat` ino verify per AC17 + AC18. Per-file SHA-256 computed in the
+// same fd-pass that streams bytes to the archiver (no re-open).
+//
+// Per AC26 per-file error policy:
+//   - Symlink (ELOOP) on workspace file: skip-with-manifest-entry.
+//   - fstat ino-mismatch (TOCTOU evidence): skip-with-manifest-entry.
+//   - All other errors: propagate (worker fails the job).
+// ---------------------------------------------------------------------------
+
+interface WorkspaceFileResult {
+  /** absolute path on disk. */
+  absPath: string;
+  /** archive path inside the ZIP, prefixed with workspace/. */
+  archivePath: string;
+  /** sha256 hex + byte count, populated for included files only. */
+  sha256: string;
+  bytes: number;
+}
+
+interface WorkspaceSkip {
+  archivePath: string;
+  reason: "symlink_rejected" | "inode_mismatch";
+}
+
+interface WorkspaceWalkResult {
+  included: WorkspaceFileResult[];
+  skipped: WorkspaceSkip[];
+}
+
+const MAX_WORKSPACE_DEPTH = 16;
+const MAX_WORKSPACE_FILES = 100_000; // bounded sweep — defense in depth
+
+async function enumerateWorkspaceFiles(
+  workspacePath: string | null,
+  signal: AbortSignal,
+  appendToArchive: (
+    archivePath: string,
+    buf: Buffer,
+  ) => void,
+): Promise<WorkspaceWalkResult> {
+  const included: WorkspaceFileResult[] = [];
+  const skipped: WorkspaceSkip[] = [];
+  if (!workspacePath) return { included, skipped };
+
+  let resolvedRoot: string;
+  try {
+    const st = await stat(workspacePath);
+    if (!st.isDirectory()) return { included, skipped };
+    resolvedRoot = workspacePath;
+  } catch {
+    return { included, skipped };
+  }
+
+  let fileCount = 0;
+  const queue: { abs: string; rel: string; depth: number }[] = [
+    { abs: resolvedRoot, rel: "", depth: 0 },
+  ];
+
+  while (queue.length > 0) {
+    if (signal.aborted) throw new Error("aborted");
+    const dir = queue.shift()!;
+    if (dir.depth > MAX_WORKSPACE_DEPTH) continue;
+
+    let entries;
+    try {
+      entries = await readdir(dir.abs, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const e of entries) {
+      if (fileCount >= MAX_WORKSPACE_FILES) break;
+      const abs = join(dir.abs, e.name);
+      const rel = dir.rel ? `${dir.rel}/${e.name}` : e.name;
+      const archivePath = `workspace/${rel}`;
+
+      if (e.isSymbolicLink()) {
+        skipped.push({ archivePath, reason: "symlink_rejected" });
+        continue;
+      }
+      if (e.isDirectory()) {
+        queue.push({ abs, rel, depth: dir.depth + 1 });
+        continue;
+      }
+      if (!e.isFile()) continue;
+
+      let fd: number | null = null;
+      try {
+        fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+        const openStat = fstatSync(fd);
+        if (!openStat.isFile()) {
+          skipped.push({ archivePath, reason: "inode_mismatch" });
+          continue;
+        }
+        // Single fd-pass: read into a buffer + hash in one go per AC18.
+        // For workspaces that may have large files, the buffer is the
+        // archive's input — there is no re-open seam to TOCTOU through.
+        const stream = createReadStream("", { fd, autoClose: false });
+        const chunks: Buffer[] = [];
+        const hash = createHash("sha256");
+        await new Promise<void>((resolve, reject) => {
+          stream.on("data", (c) => {
+            const buf = Buffer.isBuffer(c) ? c : Buffer.from(c);
+            chunks.push(buf);
+            hash.update(buf);
+          });
+          stream.on("end", resolve);
+          stream.on("error", reject);
+        });
+        const buf = Buffer.concat(chunks);
+        // Post-read fstat: ino + size must match pre-read fstat.
+        const reStat = fstatSync(fd);
+        if (
+          reStat.ino !== openStat.ino ||
+          reStat.size !== openStat.size
+        ) {
+          skipped.push({ archivePath, reason: "inode_mismatch" });
+          continue;
+        }
+        const sha256 = hash.digest("hex");
+        appendToArchive(archivePath, buf);
+        included.push({
+          absPath: abs,
+          archivePath,
+          sha256,
+          bytes: buf.length,
+        });
+        fileCount++;
+      } catch (err) {
+        // ELOOP from O_NOFOLLOW races (symlink swapped in after readdir).
+        if ((err as NodeJS.ErrnoException).code === "ELOOP") {
+          skipped.push({ archivePath, reason: "symlink_rejected" });
+          continue;
+        }
+        // Any other I/O error propagates so the worker fails the job
+        // rather than silently dropping data.
+        throw err;
+      } finally {
+        if (fd !== null) {
+          try {
+            closeSync(fd);
+          } catch {
+            // Closing already-closed fd is safe to swallow.
+          }
+        }
+      }
+    }
+  }
+
+  return { included, skipped };
+}
+
+// ---------------------------------------------------------------------------
 // Archive construction — disk-then-upload (ADR-028 §D4).
 // ---------------------------------------------------------------------------
 
@@ -469,6 +751,7 @@ async function buildArchiveToDisk(
   jobId: string,
   userId: string,
   tables: TableExportResult[],
+  workspacePath: string | null,
   signal: AbortSignal,
 ): Promise<BuildArchiveResult> {
   const tmpRoot = join(tmpdir(), "dsar-exports");
@@ -477,25 +760,6 @@ async function buildArchiveToDisk(
 
   const files: ManifestFileEntry[] = [];
   const excluded: ManifestFileEntry[] = [];
-
-  // Phase 5b deferrals — explicit so reviewers and the user-facing
-  // manifest both see what is NOT YET covered. AC1 (1:1 reconcile with
-  // Privacy Policy §4.7) is the merge-blocking gate.
-  const deferredSources: { source: string; reason: string }[] = [
-    {
-      source: "chat-attachments storage objects",
-      reason:
-        "Phase 5b — pending O_NOFOLLOW + fstat ino-verify + path-prefix " +
-        "guard implementation; metadata rows are included in " +
-        "message_attachments JSON.",
-    },
-    {
-      source: "workspace files (/workspaces/<userId>/*)",
-      reason:
-        "Phase 5b — pending O_NOFOLLOW + fstat ino-verify implementation " +
-        "(AC17 + AC18 + AC26).",
-    },
-  ];
 
   const out = createWriteStream(localPath);
   const archive = archiver("zip", { zlib: { level: 6 } });
@@ -535,6 +799,57 @@ async function buildArchiveToDisk(
     });
   }
 
+  // Storage attachments (chat-attachments bucket). Path-prefix guard
+  // fail-job-loud per AC26 is inside `enumerateChatAttachments`.
+  const attachments = await enumerateChatAttachments(userId, signal);
+  for (const a of attachments) {
+    if (signal.aborted) {
+      archive.abort();
+      throw new Error("aborted");
+    }
+    archive.append(a.buffer, { name: a.archivePath });
+    files.push({
+      path: a.archivePath,
+      included: true,
+      article: "15+20",
+      sha256: sha256Hex(a.buffer),
+      bytes: a.buffer.length,
+    });
+  }
+
+  // Workspace files (`/workspaces/<userId>/*`). O_NOFOLLOW + fstat ino
+  // verify per AC17 + AC18. Per-file errors land in `excluded_files[]`
+  // per AC26.
+  const workspaceWalk = await enumerateWorkspaceFiles(
+    workspacePath,
+    signal,
+    (archivePath, buf) => {
+      archive.append(buf, { name: archivePath });
+    },
+  );
+  for (const w of workspaceWalk.included) {
+    files.push({
+      path: w.archivePath,
+      included: true,
+      article: "15+20",
+      sha256: w.sha256,
+      bytes: w.bytes,
+    });
+  }
+  for (const s of workspaceWalk.skipped) {
+    excluded.push({
+      path: s.archivePath,
+      included: false,
+      reason: s.reason,
+    });
+  }
+
+  // Phase 5b lands the binary sources above. Manifest carries an empty
+  // `deferred_sources[]` for forward-compat (a future feature that
+  // adds a new data class can declare it here without breaking
+  // schema_version 1.0.0).
+  const deferredSources: { source: string; reason: string }[] = [];
+
   // Manifest LAST per spec FR4 step 8.
   const manifest: ManifestRoot = {
     schema_version: MANIFEST_SCHEMA_VERSION,
@@ -569,12 +884,16 @@ async function buildArchiveToDisk(
 
   // SHA-256 of the entire bundle for `bundle_sha256` audit column.
   const bundleHash = createHash("sha256");
-  await pipeline(createReadStream(localPath), async function* (src) {
-    for await (const chunk of src as AsyncIterable<Buffer>) {
-      bundleHash.update(chunk);
-      yield chunk;
-    }
-  }, new (require("node:stream").PassThrough)());
+  await pipeline(
+    createReadStream(localPath),
+    async function* (src: AsyncIterable<Buffer>) {
+      for await (const chunk of src) {
+        bundleHash.update(chunk);
+        yield chunk;
+      }
+    },
+    new PassThrough(),
+  );
   const bundleSha256 = bundleHash.digest("hex");
 
   return { localPath, sha256: bundleSha256, bytes: fileStat.size, manifest };
@@ -699,10 +1018,21 @@ async function runExport(job: {
 
   try {
     const tables = await exportSqlTable(expectedUserId, controller.signal);
+    // Locate the user's workspace path for the workspace-files
+    // enumerator. Pulled from the `users` row already fetched by
+    // exportSqlTable — single source of truth.
+    const userRow = tables.find((t) => t.table === "users")?.rows[0] as
+      | { workspace_path?: unknown }
+      | undefined;
+    const workspacePath =
+      typeof userRow?.workspace_path === "string" && userRow.workspace_path
+        ? userRow.workspace_path
+        : null;
     const archive = await buildArchiveToDisk(
       job.id,
       expectedUserId,
       tables,
+      workspacePath,
       controller.signal,
     );
     localPath = archive.localPath;
