@@ -237,18 +237,34 @@ jobs:
   # Pre-merge variant of the deploy-docs critical-CSS gate. Catches FOUC-class
   # regressions before merge, not after — see AGENTS.md cq-eleventy-critical-css-screenshot-gate.
   # Scoped to docs-touching PRs via detect-changes (see #3624).
+  # Runs inside the official Playwright container so Chromium + OS deps are
+  # pre-installed at the matching Playwright version. Container tag, digest,
+  # and the playwright@X.Y.Z npm pin below MUST stay in lockstep with
+  # deploy-docs.yml's `deploy` job — both gates assert the same FOUC contract
+  # via the same screenshot-gate.mjs script.
   critical-css-gate:
     needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
+    container:
+      # Pinned by both tag (greppable version) AND digest (vendor-pin discipline,
+      # per AGENTS.md hr-mcp-tools-playwright-etc-resolve-paths). The Playwright
+      # image runs as root by default — that is the supported path for
+      # actions/checkout (see https://github.com/actions/checkout/issues/956).
+      # Do NOT add `options: --user 1001` — it triggers UID-mismatch permission
+      # errors against /__w/_temp. Image ships Node 24 (no actions/setup-node
+      # needed). Future Playwright bumps: update tag, digest, AND the
+      # `playwright@<X.Y.Z>` npm pin below, in BOTH this workflow and
+      # deploy-docs.yml — see Sharp Edges in the plan.
+      image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc
+    defaults:
+      run:
+        # GitHub Actions container `run:` steps default to /bin/sh (dash on
+        # Jammy). Explicit bash avoids dash-vs-bash drift on any future step
+        # that uses `[[ ]]`, arrays, `read -r`, etc.
+        shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 20
-          cache: npm
 
       - name: Install root dependencies
         run: npm ci
@@ -267,29 +283,15 @@ jobs:
       - name: Static critical-CSS coverage check
         run: node plugins/soleur/docs/scripts/check-critical-css-coverage.mjs
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          # Cache key MUST track the Playwright npm version (lives in
-          # package-lock.json), NOT the consumer script. The cache-hit branch
-          # runs only `npx playwright install-deps chromium` (OS deps), not
-          # the binary — keying on screenshot-gate.mjs let stale browser
-          # binaries persist across Playwright bumps. See #3624.
-          key: playwright-critical-css-gate-${{ hashFiles('package-lock.json') }}
-
-      - name: Install Playwright + http-server (cache miss)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: |
-          npm install --no-save playwright@1 http-server@14
-          npx playwright install --with-deps chromium
-
-      - name: Install Playwright + http-server (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: |
-          npm install --no-save playwright@1 http-server@14
-          npx playwright install-deps chromium
+      - name: Install Playwright + http-server
+        # Container provides the Chromium binary + OS deps; the npm package
+        # (used by `import { chromium } from "playwright"` in screenshot-gate.mjs)
+        # must match the container's Playwright version EXACTLY — browser-binary
+        # lookup is exact-revision (see learning
+        # 2026-03-20-playwright-shared-cache-version-coupling.md). Keep this
+        # pin in sync with the container image tag above and with
+        # deploy-docs.yml's matching step.
+        run: npm install --no-save playwright@1.60.0 http-server@14
 
       - name: Screenshot + stylesheet-swap gates
         run: |
