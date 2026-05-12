@@ -12,6 +12,18 @@ Run these steps in order. Do not do anything else.
 
 If no Linear references match, this step is a no-op and `$ARGUMENTS` flows through unchanged.
 
+**Step 0a.5: Open-issue collision check.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `#[0-9]+` (zero or more GitHub issue references). For each distinct match `#<N>`:
+
+1. Run `gh issue view <N> --json state,closedByPullRequestsReferences --jq '{state, closed_by: [.closedByPullRequestsReferences[] | select(.isCrossRepository | not) | .number]}'`. If `gh` exits non-zero (no auth, network failure, issue not found in this repo), warn once on stderr (`WARNING: gh issue view #<N> failed; skipping collision check for this ref`) and continue without aborting — fail open so an infrastructure flake does not silently kill a legitimate run.
+
+2. **If `state == "CLOSED"`:** ABORT one-shot immediately with: `Issue #<N> is already closed (closed by PR #<closed_by[0]> if present). Aborting to avoid duplicate work — the issue's resolution is already in main. If you intend to do follow-on work, pass a plan file path or freeform description instead of #<N>, or re-open the issue first.` This abort fires in BOTH headless and interactive modes — closed-issue is an unambiguous "this work is done" signal and continuing wastes a full plan→work→review→ship cycle. Do NOT create the worktree, do NOT create the draft PR.
+
+3. **If `state == "OPEN"`:** also run `gh pr list --search "linked:issue #<N>" --state open --json number,title --jq '.[] | "  #\(.number): \(.title)"'`. If any PRs are returned, surface a multi-line stderr warning naming each, then continue. In **interactive mode**, additionally pause via AskUserQuestion offering (a) continue (operator accepts collision risk — they may be racing intentionally or producing alternate designs), (b) abort (preferred when the listed PR is clearly the same scope). In **headless mode**, log the warning and continue — the operator will see it in the run log.
+
+If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform description), this step is a no-op.
+
+**Why this gate exists.** The pipeline can run for 30-90 minutes between Step 0b worktree creation and Phase 6.5 mergeability check. In that window, a parallel session OR a manually-merged PR can resolve the same issue, producing a duplicate-implementation PR that has to be closed during ship. The 2026-05-12 `/one-shot #3684` session hit this exact failure mode: PR #3697 had merged + closed #3684 ~90 minutes earlier, but one-shot ran the full pipeline anyway and produced PR #3699 (closed at Phase 6.5 when the conflict-resolution diff surfaced parallel `lint-agents-rule-budget.{sh,py}` implementations). The check is cheap (≤2 `gh` calls per issue ref) and runs before the worktree exists, so the abort path costs nothing. It does NOT prevent the rarer "issue closed mid-flow" case — that would require a global lock; out of scope here.
+
 **Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), create a worktree for the feature branch. Do NOT use `git pull` or `git checkout -b` -- both fail on bare repos (`core.bare=true`).
 
 ```bash
