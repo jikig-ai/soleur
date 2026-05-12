@@ -48,7 +48,7 @@ run_assert "ENG-1234 in payload"
 [[ "$RC" == "1" ]] && pass "exit 1 on ENG-1234" || fail "rc=$RC"
 
 echo "Test 6: uploads.linear.app URL"
-run_assert "see https://uploads.linear.app/x.png"
+run_assert "see https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png"
 [[ "$RC" == "1" ]] && pass "exit 1 on CDN URL" || fail "rc=$RC"
 
 echo "Test 7: uploads.linear.app case-insensitive"

@@ -162,11 +162,14 @@ jobs:
             echo "::notice::Empty diff — nothing to scan."
             exit 0
           fi
-          # Synthesized test-fixture string is allowed (clearly fake, non-routable).
-          # Real CDN references are blocked.
+          # Match URL shape only: https?://uploads.linear.app/ — bare prose
+          # mentions of the string "uploads.linear.app" in documentation are
+          # legitimate (this skill's docs discuss the pattern at length).
+          # Synthesized test-fixture URLs (TEST-FIXTURE-NOT-REAL) are allowed.
+          # Real CDN URLs are blocked.
           OFFENDERS=$(printf '%s' "$DIFF" \
             | grep -E '^\+' \
-            | grep -E 'uploads\.linear\.app' \
+            | grep -E 'https?://uploads\.linear\.app/' \
             | grep -vE 'TEST-FIXTURE-NOT-REAL' || true)
           if [[ -n "$OFFENDERS" ]]; then
             echo "::error::PR diff contains a uploads.linear.app URL. This is a Linear CDN signed URL — committing it on a public-GitHub repo is a single-user-incident threshold breach per knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7. Use Skill: soleur:linear-fetch to redact, or replace the URL with [linear-image: REDACTED]."

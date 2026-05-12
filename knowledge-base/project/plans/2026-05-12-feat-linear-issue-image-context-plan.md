@@ -174,7 +174,7 @@ The character class `[^[:space:]<>"\x27)\]]+` (using `\x27` for single quote to 
 
 **Verification at end of phase (automated):**
 
-- `redact-linear-urls.test.sh` fixtures: raw URL, markdown image, HTML img tag, autolink `<URL>`, link with title `[alt](URL "title")`, URL-encoded path `https://uploads.linear.app/foo%20bar.png`, 5 URLs across 3 lines (count = 5), zero URLs (count = 0), URL followed by `]` (`[![]](URL)]`), URL followed by `)`.
+- `redact-linear-urls.test.sh` fixtures: raw URL, markdown image, HTML img tag, autolink `<URL>`, link with title `[alt](URL "title")`, URL-encoded path `https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-foo%20bar.png`, 5 URLs across 3 lines (count = 5), zero URLs (count = 0), URL followed by `]` (`[![]](URL)]`), URL followed by `)`.
 - Each fixture asserts both the substituted output AND the stderr count.
 - Bash compat: tested on `bash 5.x` (Linux) AND `bash 3.2` (macOS default) — `[^[:space:]<>"\x27)\]]+` must parse identically on both.
 
@@ -267,7 +267,7 @@ pii-grep:
 
 **Verification.**
 
-- Synthesize a fixture PR (locally, no push) where a commit adds a file with `https://uploads.linear.app/test.png`. Run `git diff <base>..HEAD | grep -E 'uploads\.linear\.app'` and confirm the grep matches.
+- Synthesize a fixture PR (locally, no push) where a commit adds a file with `https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png` (or any non-fixture URL — the goal is to verify the gate fires; the TEST-FIXTURE-NOT-REAL token is allowlisted so use a real-shape URL for an actual gate-fires test). Run `git diff <base>..HEAD | grep -E 'https?://uploads\.linear\.app/'` and confirm the grep matches.
 - Confirm the workflow runs on `pull_request` (not just `pull_request_target`) so it executes on forks too — fork PRs are uncommon for this private-development-context skill, but it's free to enable.
 
 ### Phase 5 — Tests (automated E2E for the load-bearing rail)
@@ -347,7 +347,7 @@ Estimated effort: 20 min.
 
 - [ ] Manual smoke test: run `/soleur:one-shot fix SOL-<real-id>` against a real Linear issue with at least one image; confirm disclosure line fires, image visible in the parent conversation, plan subagent's plan document contains zero Linear CDN URLs.
 - [ ] Manual smoke test: run `/soleur:brainstorm` against a text-only Linear issue (`text-only issue, no images.` line fires).
-- [ ] Manual smoke test: open a synthetic PR (push a branch via raw `git`) containing `https://uploads.linear.app/x.png` in a staged file. Confirm the `pii-grep` CI job fails the PR with a clear annotation.
+- [ ] Manual smoke test: open a synthetic PR (push a branch via raw `git`) containing a Linear CDN URL (non-fixture) in a staged file. Confirm the `pii-grep` CI job fails the PR with a clear annotation.
 - [ ] Manual smoke test: 6-ID input (`SOL-39 SOL-40 SOL-41 SOL-42 SOL-43 SOL-44`) triggers `AskUserQuestion` before any MCP fetch.
 - [ ] Close `#3635` with `gh issue close 3635 --comment "Verified post-merge: skill discoverable, image fetch works, redaction confirmed, CI gate active."` once all four smoke tests pass.
 - [ ] If any of the four smoke tests fail post-merge: file a P1 follow-up issue, leave `#3635` open, and DO NOT mark the skill as production-ready until the failure is reproduced and fixed.

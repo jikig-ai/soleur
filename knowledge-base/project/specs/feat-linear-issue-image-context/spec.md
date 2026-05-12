@@ -67,7 +67,7 @@ This is observable today: the `feat-one-shot-sol-39-sidebar-misalignment` worktr
 - [ ] Running `/soleur:brainstorm` with a prompt containing `SOL-39` triggers the fetch at Phase 1.1, before domain leaders spawn.
 - [ ] `/soleur:linear-fetch` invoked on an issue without images prints `text-only issue, no images.` and returns the persist-safe summary unchanged.
 - [ ] Persist-safe summary contains zero `uploads.linear.app` URLs. Verified by `grep -c "uploads.linear.app"` on the returned string == 0.
-- [ ] Pre-commit hook rejects a test fixture containing `https://uploads.linear.app/test.png` with a clear error message.
+- [ ] Pre-commit hook rejects a test fixture containing `https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png` with a clear error message.
 - [ ] MCP allowlist contains the three specific tools, not a wildcard. Verified by `grep -n "mcp__linear-server" <allowlist-path>` showing exactly three lines.
 - [ ] `get_issue` failure path (use an invalid ID `SOL-999999`) prints the warning and continues — does not abort the parent skill.
 - [ ] Multi-issue input (e.g., `compare SOL-39 and SOL-42`) fetches both and emits two disclosure lines.
@@ -91,7 +91,7 @@ This is observable today: the `feat-one-shot-sol-39-sidebar-misalignment` worktr
 6. **False-positive identifier.** Input `the PR-123 we shipped`. Expected: silent no-op (404 dropped). No warning printed for false positives that 404.
 7. **Comments cap.** Issue with 50 comments containing images. Expected: only 10 most-recent processed; one anomaly log.
 8. **Persist-safe round-trip.** Brainstorm doc written after a Linear fetch. `grep "uploads.linear.app" <brainstorm.md>` returns zero lines.
-9. **Pre-commit hook fires.** Stage a file containing `https://uploads.linear.app/x.png`. Expected: commit rejected with clear error.
+9. **Pre-commit hook fires.** Stage a file containing `https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png`. Expected: commit rejected with clear error.
 10. **Telemetry redaction.** Run any skill that emits telemetry while in a session with linear-fetch context. Inspect `.claude/incidents/` payloads — zero Linear identifiers, zero URLs.
 
 ## Open Questions

@@ -86,7 +86,7 @@ run_redact 'See <https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png> for detai
 # Fixture 6: URL-encoded path (e.g., %20 for space, %2F for slash).
 # ------------------------------------------------------------------------
 echo "Test 6: URL-encoded path"
-run_redact 'https://uploads.linear.app/folder%2Fimage%20name.png'
+run_redact 'https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-folder%2Fimage%20name.png'
 [[ "$OUT" == "[linear-image: REDACTED]" ]] && pass "stdout" || fail "stdout (got: '$OUT')"
 [[ "$ERR" == "1" ]] && pass "count=1" || fail "count (got: '$ERR')"
 
@@ -94,7 +94,7 @@ run_redact 'https://uploads.linear.app/folder%2Fimage%20name.png'
 # Fixture 7: five URLs across three lines — count must equal 5.
 # ------------------------------------------------------------------------
 echo "Test 7: five URLs across three lines"
-multi=$'line1 https://uploads.linear.app/a.png https://uploads.linear.app/b.png\nline2 https://uploads.linear.app/c.png\nline3 https://uploads.linear.app/d.png https://uploads.linear.app/e.png'
+multi=$'line1 https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-a.png https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-b.png\nline2 https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-c.png\nline3 https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-d.png https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-e.png'
 run_redact "$multi"
 # Each URL becomes [linear-image: REDACTED]
 if ! printf '%s' "$OUT" | grep -q 'uploads.linear.app'; then pass "no CDN URL remains"; else fail "URL still present in: '$OUT'"; fi

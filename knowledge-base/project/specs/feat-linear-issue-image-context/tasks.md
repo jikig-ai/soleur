@@ -77,6 +77,6 @@ Derived from the plan. Use `Skill: soleur:work` to execute in order.
 
 - [ ] PM.1 Real-issue smoke: `/soleur:one-shot fix SOL-<real-id>` with image — disclosure fires, image visible, plan contains zero CDN URLs.
 - [ ] PM.2 Text-only smoke: `/soleur:brainstorm` against a text-only Linear issue — `text-only issue, no images.` line fires.
-- [ ] PM.3 CI gate smoke: push a branch via raw `git` with `https://uploads.linear.app/x.png` in a staged file; confirm the `pii-grep` CI job fails the PR.
+- [ ] PM.3 CI gate smoke: push a branch via raw `git` with `https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png` (or any non-fixture URL — the goal is to verify the gate fires) in a staged file; confirm the `pii-grep` CI job fails the PR.
 - [ ] PM.4 Cap-prompt smoke: six-ID input triggers `AskUserQuestion`.
 - [ ] PM.5 Close `#3635` with `gh issue close 3635 --comment "..."` after PM.1–4 pass.
