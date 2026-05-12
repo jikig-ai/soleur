@@ -1,6 +1,6 @@
 ---
 name: agent-native-architecture
-description: "This skill should be used when designing agent-native applications where agents are first-class citizens. It applies when architecting autonomous agents, creating MCP tools, implementing self-modifying systems, or building apps where features are agent-driven outcomes."
+description: "This skill should be used when designing agent-native applications where agents are first-class citizens: architecting autonomous agents, creating MCP tools, building apps where features are agent-driven outcomes."
 ---
 
 <why_now>
