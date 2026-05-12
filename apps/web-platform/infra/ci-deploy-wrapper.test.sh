@@ -196,6 +196,35 @@ else
   echo "  FAIL: success path broken (rc=$rc output=$output)"
 fi
 
+# ---------------------------------------------------------------------------
+# Test 6: ceiling parity — the wrapper's `timeout … <N>s …` value MUST equal
+# `IN_FLIGHT_CEILING_S` in .github/workflows/web-platform-release.yml. The
+# workflow already runtime-asserts STATUS_POLL × INTERVAL == HEALTH_POLL ×
+# INTERVAL == IN_FLIGHT_CEILING_S, but does NOT cover the wrapper. A future
+# PR that bumps IN_FLIGHT_CEILING_S without touching the wrapper would pass
+# the workflow's assertion while reopening #3704. This test closes that gap.
+# ---------------------------------------------------------------------------
+TOTAL=$((TOTAL + 1))
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+WORKFLOW="$REPO_ROOT/.github/workflows/web-platform-release.yml"
+wrapper_seconds=$(grep -oE -- '--kill-after=[0-9]+s [0-9]+s /usr/local/bin/ci-deploy\.sh' "$WRAPPER" \
+  | grep -oE ' [0-9]+s /' | grep -oE '[0-9]+' | head -1)
+workflow_seconds=$(grep -oE '^[[:space:]]*IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WORKFLOW" \
+  | grep -oE '[0-9]+$' | head -1)
+if [[ -z "$wrapper_seconds" ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: could not extract wrapper timeout seconds from $WRAPPER"
+elif [[ -z "$workflow_seconds" ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: could not extract IN_FLIGHT_CEILING_S from $WORKFLOW"
+elif [[ "$wrapper_seconds" == "$workflow_seconds" ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: wrapper timeout (${wrapper_seconds}s) matches IN_FLIGHT_CEILING_S (${workflow_seconds})"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: ceiling drift — wrapper=${wrapper_seconds}s, IN_FLIGHT_CEILING_S=${workflow_seconds} (must agree per #3704)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
