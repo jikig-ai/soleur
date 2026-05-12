@@ -120,35 +120,6 @@ describe("KB sidebar collapse", () => {
     expect(aside).toBeInTheDocument();
     expect(aside!.className).toContain("hidden");
   });
-});
-
-describe("KB sidebar header alignment with main app brand row", () => {
-  beforeEach(() => {
-    mockPathname = "/dashboard/kb";
-    localStorage.clear();
-    vi.stubGlobal("fetch", vi.fn((url: string) => {
-      if (url === "/api/kb/tree") {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: () => Promise.resolve({ tree: { name: "root", children: [{ name: "file.md", children: [] }] } }),
-        });
-      }
-      if (url === "/api/flags") {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: () => Promise.resolve({}),
-        });
-      }
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
-    }));
-  });
-
-  afterEach(() => {
-    localStorage.clear();
-    vi.unstubAllGlobals();
-  });
 
   it("KB header row uses py-5 + min-h-7 to match main sidebar brand row height", async () => {
     render(<KbLayout><div>content</div></KbLayout>);
