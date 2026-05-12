@@ -162,7 +162,6 @@ jobs:
   # See plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
   test-webplat:
     runs-on: ubuntu-latest
-    if: false  # T14 MUTATION — reverted in next commit
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
