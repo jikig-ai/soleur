@@ -129,6 +129,39 @@ const TERMINAL_WORKFLOW_END_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
   "internal_error",
 ]);
 
+// #3603 W2 — statuses that trigger the assistant-text abort flush. Mirrors
+// the legacy contract at `agent-runner.ts:2044-2055` (writes any non-completed
+// terminal status as `status: "aborted"`). Co-located with
+// `TERMINAL_WORKFLOW_END_STATUSES` so the file has one canonical
+// exhaustiveness rail per status-set. The `_abortFlushExhaustive` rail below
+// is the type-level proof that this set covers every non-`completed`
+// variant — adding a new `WorkflowEnd` variant without listing it here is a
+// TS error.
+const ABORT_FLUSH_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
+  WorkflowEndStatus
+>([
+  "cost_ceiling",
+  "runner_runaway",
+  "user_aborted",
+  "idle_timeout",
+  "plugin_load_failure",
+  "internal_error",
+]);
+
+// Compile-time exhaustiveness rail for `ABORT_FLUSH_STATUSES`.
+// `Exclude<WorkflowEndStatus, "completed">` is exactly the set of non-completed
+// statuses; this type assignment forces the keys above to cover that set.
+type AbortFlushStatus = Exclude<WorkflowEndStatus, "completed">;
+const _abortFlushExhaustive: Record<AbortFlushStatus, true> = {
+  cost_ceiling: true,
+  runner_runaway: true,
+  user_aborted: true,
+  idle_timeout: true,
+  plugin_load_failure: true,
+  internal_error: true,
+};
+void _abortFlushExhaustive;
+
 /**
  * User-facing copy for each `WorkflowEndStatus`. Replaces the previous
  * ad-hoc `"Workflow ended (${status}) — retry to continue."` template
@@ -1006,7 +1039,6 @@ export async function dispatchSoleurGo(
       });
     });
 
-  // Per-turn assistant text accumulator. Reset to "" inside
   // Holds the LATEST SDKAssistantMessage emission for this turn. Mirrors
   // the chat-state-machine REPLACE semantic at `chat-state-machine.ts:477`
   // (`applyStreamEvent` case "stream") so DB hydration on tab reload
@@ -1042,9 +1074,21 @@ export async function dispatchSoleurGo(
     // Omit `status` for the normal completion path — migration 040's
     // DEFAULT of `'complete'` applies. Only the abort branch writes
     // `status: "aborted"` explicitly.
+    // Note: `usage` jsonb is intentionally NOT populated here. The legacy
+    // single-leader path at `agent-runner.ts:2051-2054` writes
+    // `usage: { ...accumulatedUsage, completed_actions }` on abort; cc-path
+    // parity is deferred to PR-A2 (W4) behind a `CC_PERSIST_USAGE`
+    // feature flag for Art. 13(3) compliance. See #3603 PR-A1/PR-A2 split.
     if (opts?.status === "aborted") {
       row.status = "aborted";
     }
+
+    // Hoisted op slug so `mirrorWithDebounce` receives the same value for
+    // both `op` and `errorClass` (the dedupe key) — drift between them
+    // would silently split the Sentry dedupe stream.
+    const opSlug = opts?.status === "aborted"
+      ? "save-assistant-message-aborted-failed"
+      : "save-assistant-message-failed";
 
     const { error } = await supabase().from("messages").insert(row);
     if (error) {
@@ -1056,15 +1100,11 @@ export async function dispatchSoleurGo(
         error,
         {
           feature: "cc-dispatcher",
-          op: opts?.status === "aborted"
-            ? "save-assistant-message-aborted-failed"
-            : "save-assistant-message-failed",
+          op: opSlug,
           extra: { userId, conversationId, length: fullText.length },
         },
         userId,
-        opts?.status === "aborted"
-          ? "save-assistant-message-aborted-failed"
-          : "save-assistant-message-failed",
+        opSlug,
       );
     }
   }
@@ -1133,7 +1173,11 @@ export async function dispatchSoleurGo(
       // `status: "completed"` because the normal `onTextTurnEnd` path
       // already wrote (or will write) the row. The `workflowEnded` flag
       // suppresses a late `onTextTurnEnd` arriving after this flush.
-      if (end.status !== "completed") {
+      // Use the typed `ABORT_FLUSH_STATUSES` set (exhaustively type-checked
+      // via `_abortFlushExhaustive`) rather than a bare `!== "completed"` so
+      // a future `WorkflowEnd` variant cannot silently route through abort
+      // without a deliberate listing here.
+      if (ABORT_FLUSH_STATUSES.has(end.status)) {
         // Fire-and-forget — set the flag SYNCHRONOUSLY so a late
         // onTextTurnEnd cannot race the await microtask.
         workflowEnded = true;
