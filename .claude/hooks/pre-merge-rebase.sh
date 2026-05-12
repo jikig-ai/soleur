@@ -24,6 +24,20 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
+# shellcheck source=lib/session-state.sh
+# headless_or_stderr routes warns to a log file under $GIT_COMMON_DIR/
+# soleur-session-state/logs/$PPID.log when stderr is not a TTY and
+# CLAUDECODE is set (running under `claude --bg`). Otherwise echoes to
+# stderr as before. Tolerate missing helper for legacy worktrees.
+_SS_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/session-state.sh"
+if [[ -f "$_SS_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_SS_LIB"
+else
+  headless_or_stderr() { echo "[$1] $2" >&2; }
+fi
+export SOLEUR_HOOK_NAME="pre-merge-rebase"
+
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
@@ -107,7 +121,7 @@ fi
 
 # Check for detached HEAD -- auto-sync needs a branch to push
 if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
-  echo "Warning: Detached HEAD state. Skipping auto-sync." >&2
+  headless_or_stderr warn "Detached HEAD state. Skipping auto-sync."
   exit 0
 fi
 
@@ -134,7 +148,7 @@ fi
 
 # Fetch latest main -- fail open on network error
 if ! git -C "$WORK_DIR" fetch origin main >/dev/null 2>&1; then
-  echo "Warning: Could not fetch origin/main (network error). Proceeding with merge." >&2
+  headless_or_stderr warn "Could not fetch origin/main (network error). Proceeding with merge."
   exit 0
 fi
 
@@ -144,13 +158,13 @@ REMOTE_MAIN=$(git -C "$WORK_DIR" rev-parse origin/main 2>/dev/null) || true
 
 if [[ -z "$MERGE_BASE" ]] || [[ -z "$REMOTE_MAIN" ]]; then
   # Could not determine relationship -- fail open
-  echo "Warning: Could not determine branch relationship with main. Proceeding with merge." >&2
+  headless_or_stderr warn "Could not determine branch relationship with main. Proceeding with merge."
   exit 0
 fi
 
 if [[ "$MERGE_BASE" == "$REMOTE_MAIN" ]]; then
   # Already up-to-date, no sync needed
-  echo "[ok] Branch already up-to-date with origin/main." >&2
+  headless_or_stderr info "Branch already up-to-date with origin/main."
   exit 0
 fi
 

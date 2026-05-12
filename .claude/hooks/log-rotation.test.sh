@@ -368,8 +368,11 @@ else
   # Clear any prior warn marker for this test process so we measure THIS run
   rm -f "/tmp/log-rotation-warned-$$" 2>/dev/null || true
   chmod 0500 "$ARCHIVE_DIR"
+  # Unset CLAUDECODE so headless_or_stderr stays on the stderr branch; the
+  # log-file branch is covered by .claude/hooks/pre-merge-rebase-headless.test.sh.
   STDERR=$(
     (
+      unset CLAUDECODE
       source_helper
       rotate_if_needed "$ACTIVE"
     ) 2>&1 >/dev/null
@@ -381,7 +384,7 @@ else
     fail "active mutated despite archive failure (orig=$ORIG_SIZE, now=$POST_SIZE)"
   elif [[ "$PARTIAL_COUNT" -ne 0 ]]; then
     fail "partial archive left behind ($PARTIAL_COUNT files)"
-  elif ! grep -q '\[log-rotation\] warning' <<< "$STDERR"; then
+  elif ! grep -qE 'failed to archive' <<< "$STDERR"; then
     fail "no stderr warning emitted (got: $STDERR)"
   else
     pass "active intact, no partial archive, one stderr warning"
