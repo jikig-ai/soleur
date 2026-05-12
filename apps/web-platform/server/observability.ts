@@ -173,10 +173,14 @@ export function warnSilentFallback(
  * cannot collide across features for the same user.
  */
 export const MIRROR_DEBOUNCE_MS = 5 * 60 * 1000;
-// Periodic sweep cadence — drain stale entries older than `staleTtlMs` (the
-// `TtlDedupMap` second-stage cutoff) on a fraction of writes. Cheap amortized
-// O(1) per call when the sweep is skipped; O(n) at the sweep threshold.
-// Caps map growth on long-running processes that see many distinct keys.
+// Periodic sweep cadence — drain entries older than the dedup window
+// (`ttlMs`, the `TtlDedupMap` sweep cutoff) on a fraction of writes. Cheap
+// amortized O(1) per call when the sweep is skipped; O(n) at the sweep
+// threshold. Caps map growth on long-running processes that see many distinct
+// keys. Pre-#3639 used a 2×TTL grace cutoff for `mirrorWithDebounce` to
+// retain zombie entries past the dedup window; the consolidated 1×TTL cutoff
+// here is functionally equivalent (post-window entries cannot affect dedup
+// outcomes) and reclaims memory sooner.
 const MIRROR_SWEEP_INTERVAL = 64;
 
 /**
