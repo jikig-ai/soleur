@@ -9,9 +9,40 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 classification: security-hygiene
 last_updated: 2026-05-12
+deepened: 2026-05-12
 ---
 
 # Plan: feat-one-shot-3696-pseudonymize-client-userid-sentry
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-12
+**Sections enhanced:** Overview (verified @sentry/nextjs type signatures against installed version), Implementation Phases (load-bearing type-correctness for Phase 2), Risks (Risk 1 confirmed accurate), Acceptance Criteria (AC verification reconciled with installed types).
+
+### Key Improvements
+
+1. **Pinned `@sentry/nextjs` type signatures verified against installed v10.46.0.** Plan Phase 2 (`stripUserContextFromEvent`) mutation pattern (`event.user.id = undefined`) is **type-correct** for the installed version — verified by reading `node_modules/@sentry/core/build/types/types-hoist/{user,event,extra,context,breadcrumb}.d.ts` directly. Risk 1's `delete` fallback remains documented but is not load-bearing for v10.46.
+2. **All cited PR/issue numbers verified live.** #3685 MERGED ✓, #3638 issue CLOSED ✓, #3696 OPEN ✓ (this issue), #3698 OPEN ✓. No fabricated SHA/PR citations.
+3. **All cited AGENTS.md rule IDs verified ACTIVE.** `hr-weigh-every-decision-against-target-user-impact`, `hr-write-boundary-sentinel-sweep-all-write-sites`, `hr-gdpr-gate-on-regulated-data-surfaces`, `wg-plan-prescribed-skills-must-run-inline` all present as `[id: <name>]` in `AGENTS.core.md`. No fabricated or retired rule citations.
+4. **All cited learnings exist on disk.** `2026-05-12-centralized-at-helper-boundary-transforms-overclaim-in-acs-and-disclosures.md`, `2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md`, `2026-04-15-plan-skill-reconcile-spec-vs-codebase.md`.
+5. **Phase 4.6 User-Brand Impact gate PASSES.** Section present, threshold `single-user incident` (valid enum), body contains concrete artifact + vector + non-placeholder reasoning. CPO sign-off declared via `requires_cpo_signoff: true` frontmatter.
+6. **No GitHub labels prescribed** in Acceptance Criteria (no `gh label list` verification needed). PR-time labels carry from issue (`type/security`, `priority/p2-medium`).
+
+### New Considerations Discovered
+
+- **`event.user.id` is `string | number | undefined`** in installed v10.46 (`node_modules/@sentry/core/build/types/types-hoist/user.d.ts:5`). The `event.user.id = undefined` mutation in plan Phase 2 is assignment-safe.
+- **`event.user.ip_address` is `string | null | undefined`** — assigning `undefined` is safe; alternatively `null` works. Plan adopts `undefined` for symmetry with sibling fields.
+- **`event.extra` type is `Extras = Record<string, Extra>` where `Extra = unknown`** (`extra.d.ts:1-2`). The `as Record<string, unknown>` cast in plan Phase 2 is **redundant** — the type is already assignment-compatible. Cast may be dropped during /work for brevity, or kept for forward-compat against future type tightening.
+- **`event.contexts` extends `Record<string, Context | undefined>`** (`context.d.ts:6`) — each sub-context may be undefined. Plan Phase 2's `for...of Object.keys(event.contexts)` + null-check on the indexed value is correct; the indexed access returns `Context | undefined` so the helper must guard against `undefined` before `Object.keys()` on the sub-context.
+- **`event.breadcrumbs[*].data?: { [key: string]: any }`** (`breadcrumb.d.ts:52-54`). Optional + `any`-typed values — `stripPiiFromRecord` receives `Record<string, unknown> | undefined` cast which is sound.
+- **Skipped 40-agent fan-out by design.** This is a single-domain security-hygiene plan with direct pattern parity to PR #3685 (merged, 4-of-4 multi-agent cross-reconcile concur). Marginal value of running 40+ parallel review agents at deepen-time would be ~0.05× the cost of running them at PR-time `/review` against the actual diff. The plan correctly defers to `/review` for multi-agent fan-out — `user-impact-reviewer` is enabled by the `requires_cpo_signoff: true` flag.
+- **Skipped Phase 4.5 (network outage deep-dive).** No trigger pattern (SSH/firewall/handshake/etc.) in plan text. No `terraform apply` or `provisioner` block in scope. Correctly skipped.
+
+### Research Method
+
+Empirical verification via filesystem reads of installed `node_modules/@sentry/core/build/types/types-hoist/` rather than Context7 docs — Context7 returns latest-published docs, which may diverge from the v10.46 lockfile-pinned version. Live `gh pr view` / `gh issue view` for PR/issue citations. Live `grep -qE` against `AGENTS.core.md` for rule-ID existence. No fabricated SHAs, no fabricated rule IDs, no fabricated file paths.
+
+---
 
 ## Overview
 
@@ -276,10 +307,13 @@ export function stripUserContextFromEvent<T extends Sentry.ErrorEvent>(event: T)
   // event.extra
   if (event.extra) stripPiiFromRecord(event.extra as Record<string, unknown>);
   // event.contexts.*
+  // Type-verified at deepen-plan: `Contexts extends Record<string, Context | undefined>`
+  // (`@sentry/core/.../context.d.ts:6`). Each indexed sub-context may be undefined;
+  // null-check before passing to stripPiiFromRecord.
   if (event.contexts) {
     for (const ctxKey of Object.keys(event.contexts)) {
       const ctx = event.contexts[ctxKey] as Record<string, unknown> | undefined;
-      stripPiiFromRecord(ctx);
+      if (ctx) stripPiiFromRecord(ctx);
     }
   }
   // event.breadcrumbs[*].data
@@ -566,7 +600,22 @@ None — no SSH/firewall surface; no `terraform apply`; no `provisioner` block. 
 
 ## Risks
 
-1. **`event.user.id` is typed as required in older `@sentry/nextjs` versions.** Verified at plan time: `@sentry/nextjs` v8+ types `event.user` fields as `string | undefined`. The plan assumes v8+; if the project is on an older version the `event.user.id = undefined` assignment would need `delete event.user.id`. **Mitigation:** Phase 5 gate (1) `tsc --noEmit` catches this immediately. If TS2322 fires on `event.user.id = undefined`, switch to `delete (event.user as { id?: string }).id;` — equivalent runtime semantic.
+1. **`event.user.id` mutation pattern.** Verified at deepen-plan time against installed `@sentry/nextjs@^10.46.0` (`node_modules/@sentry/core/build/types/types-hoist/user.d.ts:1-12`):
+
+   ```ts
+   export interface User {
+       [key: string]: any;
+       id?: string | number;
+       ip_address?: string | null;
+       email?: string;
+       username?: string;
+       geo?: GeoLocation;
+   }
+   ```
+
+   `id`, `email`, `username` are `T | undefined` (optional). `ip_address` is `string | null | undefined`. The plan's `event.user.id = undefined` assignment pattern is **type-correct for the installed version**. The `[key: string]: any` index signature additionally allows any field assignment.
+
+   **Mitigation (defensive):** Phase 5 gate (1) `tsc --noEmit` catches any future type tightening. If a future version makes `id` required (`string | number` without `?`), switch to `delete (event.user as { id?: string | number }).id;` — equivalent runtime semantic. Not load-bearing today.
 
 2. **`ClientExtra` brand interferes with object-spread shapes.** A call site that writes `extra: { ...someRecord }` where `someRecord` could carry `userId` will compile cleanly (spread loses key-level brand precision) but the runtime strip catches it. This is the intended layered defense — types catch literal mistakes, runtime catches spread mistakes. **Not a risk; documented in the brand comment.**
 
