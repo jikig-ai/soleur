@@ -242,6 +242,11 @@ export function __resetMirrorDebounceForTests(): void {
  * is tracked separately as D-durable-audit-log (#3603 rev-2 deferral).
  */
 export const P0_DEDUP_TTL_MS = 60 * 60 * 1000;
+// Hard cap on map size — TTL-only eviction is insufficient under an adversarial
+// burst with rotating conversationId values (every entry is fresh, sweep deletes
+// nothing). Insertion-order eviction (Map preserves insertion order) caps heap
+// regardless of burst rate. Sized to ~1.4 MB worst-case.
+const P0_DEDUP_MAX_SIZE = 10_000;
 const _p0DedupMap = new Map<string, number>();
 const P0_SWEEP_INTERVAL = 64;
 let _p0WriteCount = 0;
@@ -254,11 +259,18 @@ export function mirrorP0Deduped(
   const now = Date.now();
   const last = _p0DedupMap.get(key);
   if (last !== undefined && now - last < P0_DEDUP_TTL_MS) return;
+  // Capacity check BEFORE insert: evict oldest if at cap.
+  if (_p0DedupMap.size >= P0_DEDUP_MAX_SIZE) {
+    const oldest = _p0DedupMap.keys().next().value;
+    if (oldest !== undefined) _p0DedupMap.delete(oldest);
+  }
   _p0DedupMap.set(key, now);
 
   // Amortized sweep — drops entries older than the TTL on a fraction of
   // writes. Bounds map growth on long-running processes per learning
   // 2026-05-11-debounce-cache-needs-eviction-and-symmetric-state-reset.md.
+  // Cutoff is `> TTL` (not `> 2*TTL` as in mirrorWithDebounce) because P0
+  // events warrant tighter eviction than 5-min-debounce mirrors.
   _p0WriteCount++;
   if (_p0WriteCount % P0_SWEEP_INTERVAL === 0) {
     for (const [k, t] of _p0DedupMap) {
