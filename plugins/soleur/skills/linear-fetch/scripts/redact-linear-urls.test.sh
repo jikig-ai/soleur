@@ -133,6 +133,58 @@ run_redact '(see [here](https://uploads.linear.app/TEST-FIXTURE-NOT-REAL.png))'
 [[ "$ERR" == "1" ]] && pass "count=1" || fail "count (got: '$ERR')"
 
 # ------------------------------------------------------------------------
+# Fixture 11: mixed-case hostname (security-sentinel P1-1 regression guard).
+# DNS is case-insensitive — Linear's CDN serves the same signed bearer
+# credential whether the hostname is lowercase or Camel-Case. The redactor
+# MUST redact regardless of case.
+# ------------------------------------------------------------------------
+echo "Test 11: mixed-case hostname"
+run_redact 'See https://Uploads.Linear.App/TEST-FIXTURE-NOT-REAL-mixed.png here'
+[[ "$OUT" == "See [linear-image: REDACTED] here" ]] && pass "mixed-case redacted" || fail "stdout (got: '$OUT')"
+[[ "$ERR" == "1" ]] && pass "count=1" || fail "count (got: '$ERR')"
+
+# ------------------------------------------------------------------------
+# Fixture 12: ALL-UPPERCASE hostname.
+# ------------------------------------------------------------------------
+echo "Test 12: all-uppercase hostname"
+run_redact 'See HTTPS://UPLOADS.LINEAR.APP/TEST-FIXTURE-NOT-REAL-upper.png after'
+[[ "$OUT" == "See [linear-image: REDACTED] after" ]] && pass "uppercase redacted" || fail "stdout (got: '$OUT')"
+[[ "$ERR" == "1" ]] && pass "count=1" || fail "count (got: '$ERR')"
+
+# ------------------------------------------------------------------------
+# Fixture 13: URL followed by U+2028 LINE SEPARATOR (\xe2\x80\xa8) —
+# security-sentinel P2-3. POSIX [:space:] does NOT cover U+2028, so the
+# previous regex could consume past it. The new ASCII-only path class
+# stops at the first non-ASCII byte (the leading \xe2 of the UTF-8
+# sequence), terminating the match cleanly.
+# ------------------------------------------------------------------------
+echo "Test 13: URL followed by U+2028 line separator"
+url_then_u2028=$(printf 'before https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-u2028.png\xe2\x80\xa8after')
+run_redact "$url_then_u2028"
+# After redaction, the U+2028 and trailing text MUST remain (URL match
+# cannot extend into the separator's bytes).
+if printf '%s' "$OUT" | grep -q 'after' && printf '%s' "$OUT" | grep -q '\[linear-image: REDACTED\]'; then
+  pass "U+2028 terminates URL match cleanly"
+else
+  fail "U+2028 not handled (got: '$OUT')"
+fi
+[[ "$ERR" == "1" ]] && pass "count=1" || fail "count (got: '$ERR')"
+
+# ------------------------------------------------------------------------
+# Fixture 14: URL followed by NBSP (\xc2\xa0). Same class as U+2028 —
+# multi-byte sequence not in POSIX [:space:]. Must terminate match.
+# ------------------------------------------------------------------------
+echo "Test 14: URL followed by NBSP"
+url_then_nbsp=$(printf 'leading https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-nbsp.png\xc2\xa0trailing')
+run_redact "$url_then_nbsp"
+if printf '%s' "$OUT" | grep -q 'trailing' && printf '%s' "$OUT" | grep -q '\[linear-image: REDACTED\]'; then
+  pass "NBSP terminates URL match cleanly"
+else
+  fail "NBSP not handled (got: '$OUT')"
+fi
+[[ "$ERR" == "1" ]] && pass "count=1" || fail "count (got: '$ERR')"
+
+# ------------------------------------------------------------------------
 # Negative-space check: a public Linear issue URL (NOT a CDN URL) MUST NOT
 # be redacted. The skill's redaction is strict to `uploads.linear.app`.
 # ------------------------------------------------------------------------
@@ -140,6 +192,22 @@ echo "Negative-space: public linear.app/team/issue URL"
 run_redact 'See https://linear.app/jikig-ai/issue/SOL-39/title-here for context'
 [[ "$OUT" == "See https://linear.app/jikig-ai/issue/SOL-39/title-here for context" ]] && pass "public URL preserved" || fail "stdout (got: '$OUT')"
 [[ "$ERR" == "0" ]] && pass "count=0 (no CDN URLs)" || fail "count (got: '$ERR')"
+
+# ------------------------------------------------------------------------
+# Negative-space: prefix-injection / hyphen-substitution attacks
+# (security-sentinel P3-1).
+# ------------------------------------------------------------------------
+echo "Negative-space: hostname prefix/suffix injection"
+run_redact 'attack1: https://uploads-linear.app/x.png'
+[[ "$ERR" == "0" ]] && pass "uploads-linear.app (hyphen) not redacted" || fail "false positive (got: '$ERR')"
+run_redact 'attack2: https://myuploads.linear.app/x.png'
+[[ "$ERR" == "0" ]] && pass "myuploads.linear.app (prefix) not redacted" || fail "false positive (got: '$ERR')"
+run_redact 'attack3: https://uploads.linear.app.evil.com/x.png'
+# The hostname regex requires `/` immediately after `uploads.linear.app`,
+# so `.evil.com` after the hostname causes a non-match. The URL is left
+# alone, which is correct — the attacker's domain is different and the
+# CDN-bearer-credential threat does not apply.
+[[ "$ERR" == "0" ]] && pass "uploads.linear.app.evil.com (subdomain injection) not matched" || fail "got: '$ERR'"
 
 # ------------------------------------------------------------------------
 # Summary

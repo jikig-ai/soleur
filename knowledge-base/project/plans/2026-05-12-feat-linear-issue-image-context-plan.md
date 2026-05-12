@@ -66,6 +66,15 @@ A Bash-PreToolUse hook was considered and rejected: it would only fire inside Cl
 
 If either layer fails review, the legal items scoped out in the brainstorm (Linear DPA register entry, sub-processor disclosure in `docs/legal/gdpr-policy.md`, privacy-policy legitimate-interest note, `/soleur:gdpr-gate` on PR #3631) automatically re-enter scope as PR-blocking — per the brainstorm CLO carry-forward.
 
+**Out-of-scope artifacts (intentional, named by user-impact-reviewer at PR #3631 review-time):** The two-layer defense above is **image-URL-shaped only**. The following artifacts flow through the persist-safe summary path verbatim and are NOT redacted — operators selecting which Linear issues to invoke against `/soleur:one-shot` or `/soleur:brainstorm` are responsible for issue selection per the threat model. If any of the below is material, widen the redaction or use a different invocation pattern:
+
+- **Comment / issue body text** is persisted unredacted. Customer PII pasted as prose into a Linear issue body (passwords, account numbers, free-text complaints) is NOT redacted by this skill. The redaction primitive operates only on `uploads.linear.app/*` URLs, not on prose content.
+- **`comment.author.displayName`** is inlined in the comment delimiter (`--- comment by <author.displayName> on <createdAt> ---`) and persisted. Workspaces using `customer@domain.com` or full names as display names will have those identities persisted to PR bodies, brainstorm docs, and knowledge-base writes.
+- **Operator-facing stdout** (Phase E failure warnings, Phase D disclosure lines) intentionally names the Linear identifier (`SOL-39`) so operators can take corrective action. Operators sharing their Claude Code transcripts publicly (Slack, Discord, GitHub issues) are out of scope of this guard.
+- **Anthropic conversation retention** is the trust boundary for `agent_context` (the full markdown + image content blocks held in the parent conversation). Governed by Anthropic ToS; out of scope of this guard.
+
+The `pii-grep` CI job is the durable backstop for the URL class only — it does NOT scan for comment-body prose, display names, or identifiers. The single-user-incident threshold is bounded to **leaked signed bearer credentials**, not to prose PII or workspace identity leaks.
+
 ## Implementation Phases
 
 ### Phase 0 — Preflight, capability checks, and load-bearing assumption verification
@@ -402,7 +411,7 @@ Ran `gh issue list --label code-review --state open --json number,title,body --l
 
 **Status:** reviewed (brainstorm carry-forward) + CPO sign-off required at plan time per `requires_cpo_signoff: true`
 **Assessment:** Scope v1 to one-shot + brainstorm; defer plan + fix-issue to v2. Auto-detect over flag, cap at 10 most-recent comments, warn-and-continue on MCP failure. **No new user-facing UI surface** — operator-facing CLI/skill only. Product/UX Gate tier: **NONE** (no `app/**/page.tsx` or `components/**/*.tsx` files created).
-**Sign-off captured:** to be confirmed via PR comment before `/soleur:work` begins.
+**Sign-off captured:** brainstorm Domain Assessment for Product is the load-bearing CPO sign-off for this PR. The brainstorm's CPO summary (see `knowledge-base/project/brainstorms/2026-05-12-linear-issue-image-context-brainstorm.md` §Domain Assessments → Product) constrained scope to one-shot + brainstorm v1, auto-detect over flag, cap at 10 comments, warn-and-continue on MCP failure — all of which the implementation honors. No additional CPO sign-off PR comment is required; the brainstorm record IS the sign-off per `brand_survival_threshold: single-user incident` carry-forward.
 **Brainstorm-recommended specialists:** none.
 
 ### Skipped specialists

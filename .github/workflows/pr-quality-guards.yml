@@ -165,12 +165,26 @@ jobs:
           # Match URL shape only: https?://uploads.linear.app/ — bare prose
           # mentions of the string "uploads.linear.app" in documentation are
           # legitimate (this skill's docs discuss the pattern at length).
-          # Synthesized test-fixture URLs (TEST-FIXTURE-NOT-REAL) are allowed.
-          # Real CDN URLs are blocked.
+          #
+          # Hostname match is case-insensitive (-iE flag): DNS is case-
+          # insensitive, so https://Uploads.Linear.App/... resolves to the
+          # same CDN host and serves the same signed bearer credential.
+          # Matches the redaction primitive's case-insensitive hostname
+          # class in scripts/redact-linear-urls.sh.
+          #
+          # The TEST-FIXTURE-NOT-REAL allowlist is anchored to the path
+          # immediately after the hostname, NOT a free substring. A real
+          # Linear upload named "screenshot-TEST-FIXTURE-NOT-REAL.png" would
+          # produce a URL like https://uploads.linear.app/<uuid>/screenshot-
+          # TEST-FIXTURE-NOT-REAL.png that the unanchored allowlist would
+          # let pass. Anchoring to /TEST-FIXTURE-NOT-REAL right after the
+          # hostname requires the test fixture token to appear at a fixed
+          # positional slot, which real Linear paths cannot satisfy.
+          # Exclude unified-diff file-header lines (+++) which begin with `+`.
           OFFENDERS=$(printf '%s' "$DIFF" \
-            | grep -E '^\+' \
-            | grep -E 'https?://uploads\.linear\.app/' \
-            | grep -vE 'TEST-FIXTURE-NOT-REAL' || true)
+            | grep -E '^\+' | grep -vE '^\+\+\+' \
+            | grep -iE 'https?://uploads\.linear\.app/' \
+            | grep -ivE 'https?://uploads\.linear\.app/TEST-FIXTURE-NOT-REAL' || true)
           if [[ -n "$OFFENDERS" ]]; then
             echo "::error::PR diff contains a uploads.linear.app URL. This is a Linear CDN signed URL — committing it on a public-GitHub repo is a single-user-incident threshold breach per knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7. Use Skill: soleur:linear-fetch to redact, or replace the URL with [linear-image: REDACTED]."
             echo "Offending lines (first 10):"
