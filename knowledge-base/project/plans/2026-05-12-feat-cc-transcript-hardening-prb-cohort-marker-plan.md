@@ -100,7 +100,7 @@ gh issue list --label code-review --state open --json number,body --limit 200 \
 
 ### Phase 0 — Setup
 
-- [ ] 0.1 Read `apps/web-platform/components/chat/chat-surface.tsx` lines 570-740 to confirm: (a) `messages.map` mount block exists at ~574, (b) `<div ref={messagesEndRef} />` exists at ~733, (c) no virtualization wrapper has been introduced since this plan was drafted, (d) `conversation.created_at` (or equivalent) is accessible from the surrounding scope of the mount point.
+- [x] 0.1 Read `apps/web-platform/components/chat/chat-surface.tsx` lines 570-740 to confirm: (a) `messages.map` mount block exists at ~574, (b) `<div ref={messagesEndRef} />` exists at ~733, (c) no virtualization wrapper has been introduced since this plan was drafted, (d) `conversation.created_at` (or equivalent) is accessible from the surrounding scope of the mount point.
 
 ### Phase 1 — Component implementation (RED → GREEN, single commit)
 
@@ -108,9 +108,9 @@ gh issue list --label code-review --state open --json number,body --limit 200 \
 
 File: `apps/web-platform/test/cohort-missing-reply-marker.test.tsx`. Synthesized fixtures only (`cq-test-fixtures-synthesized-only`). Test names use AC trace inline per sibling `abort-marker.test.tsx` convention.
 
-- [ ] 1.1.1 `test("AC1 — renders marker on cohort fixture with locale-formatted created_at", ...)`. Cohort fixture (`createdAt: "2026-05-08T10:00:00Z"`, two user-only text messages). Assert marker visible; assert rendered text contains "started" + locale-formatted "May 8, 2026" (or equivalent for `en-US` if test locale is forced).
-- [ ] 1.1.2 `test.each([healed, postFix, preWindow, streaming, postSunset])("AC2-AC5 — hides marker when …", ({ fixture, label, expectHidden }) => { … })`. Parametrized table with 5 cases sharing one render+assert body: (a) healed (cohort fixture + one appended assistant message), (b) post-fix (`createdAt: "2026-05-12T00:00:00Z"` — exclusive upper bound), (c) pre-window (`createdAt: "2026-05-04T23:59:00Z"`), (d) streaming (`isStreamingAssistant: true`), (e) post-sunset (`vi.useFakeTimers()` + `vi.setSystemTime("2026-08-11T00:00:01Z")`).
-- [ ] 1.1.3 `test("AC9 — semantic role and aria-label", ...)`. Assert `screen.getByRole("note", { name: /conversation history note/i })` returns the marker root.
+- [x] 1.1.1 `test("AC1 — renders marker on cohort fixture with locale-formatted created_at", ...)`. Cohort fixture (`createdAt: "2026-05-08T10:00:00Z"`, two user-only text messages). Assert marker visible; assert rendered text contains "started" + locale-formatted "May 8, 2026" (or equivalent for `en-US` if test locale is forced).
+- [x] 1.1.2 `test.each([healed, postFix, preWindow, streaming, postSunset])("AC2-AC5 — hides marker when …", ({ fixture, label, expectHidden }) => { … })`. Parametrized table with 5 cases sharing one render+assert body: (a) healed (cohort fixture + one appended assistant message), (b) post-fix (`createdAt: "2026-05-12T00:00:00Z"` — exclusive upper bound), (c) pre-window (`createdAt: "2026-05-04T23:59:00Z"`), (d) streaming (`isStreamingAssistant: true`), (e) post-sunset (`vi.useFakeTimers()` + `vi.setSystemTime("2026-08-11T00:00:01Z")`).
+- [x] 1.1.3 `test("AC9 — semantic role and aria-label", ...)`. Assert `screen.getByRole("note", { name: /conversation history note/i })` returns the marker root.
 
 All three tests FAIL with "component not found" before Phase 1.2.
 
@@ -118,17 +118,17 @@ All three tests FAIL with "component not found" before Phase 1.2.
 
 File: `apps/web-platform/components/chat/cohort-missing-reply-marker.tsx`:
 
-- [ ] 1.2.1 Module-level constants. Use `new Date(...).getTime()` (validates at module load — `NaN` would surface at any test run, not at production runtime):
+- [x] 1.2.1 Module-level constants. Use `new Date(...).getTime()` (validates at module load — `NaN` would surface at any test run, not at production runtime):
   ```ts
   const COHORT_WINDOW_START = new Date("2026-05-05T00:00:00Z").getTime();
   const COHORT_WINDOW_END = new Date("2026-05-12T00:00:00Z").getTime();
   const COHORT_MARKER_SUNSET = new Date("2026-08-11T00:00:00Z").getTime();
   ```
   Single-line comment: `// Sunset 90 days after PR-B merge — component returns null after this date; lazy-delete on next file touch.`
-- [ ] 1.2.2 Exported function `CohortMissingReplyMarker({ createdAt }: { createdAt: string })`. Single prop matching the hydration-payload spelling (Kieran finding #1).
-- [ ] 1.2.3 Early return when `Date.now() >= COHORT_MARKER_SUNSET` returns `null`. NaN-guard `Number.isNaN(Date.parse(createdAt))` also returns `null` to suppress malformed-date false positives.
-- [ ] 1.2.4 Format date inline (no `useMemo` — single call per render, render is gated by the parent's filter): `const formattedDate = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" }).format(new Date(createdAt));`.
-- [ ] 1.2.5 JSX:
+- [x] 1.2.2 Exported function `CohortMissingReplyMarker({ createdAt }: { createdAt: string })`. Single prop matching the hydration-payload spelling (Kieran finding #1).
+- [x] 1.2.3 Early return when `Date.now() >= COHORT_MARKER_SUNSET` returns `null`. NaN-guard `Number.isNaN(Date.parse(createdAt))` also returns `null` to suppress malformed-date false positives.
+- [x] 1.2.4 Format date inline (no `useMemo` — single call per render, render is gated by the parent's filter): `const formattedDate = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" }).format(new Date(createdAt));`.
+- [x] 1.2.5 JSX:
   ```tsx
   <aside
     role="note"
@@ -140,13 +140,13 @@ File: `apps/web-platform/components/chat/cohort-missing-reply-marker.tsx`:
   </aside>
   ```
   Use the existing `text-soleur-text-secondary` token (verified live in `pwa-install-banner.tsx`). No new color or spacing classes invented.
-- [ ] 1.2.6 No `onContinue`, no button, no event handlers. Component is pure presentational.
-- [ ] 1.2.7 Re-run test suite: assert all three tests GREEN.
+- [x] 1.2.6 No `onContinue`, no button, no event handlers. Component is pure presentational.
+- [x] 1.2.7 Re-run test suite: assert all three tests GREEN.
 
 #### 1.3 Mount in chat-surface
 
-- [ ] 1.3.1 Import the constants from the marker module (not duplicated). The cohort filter lives at the mount site, not inside the component, so the predicate can read sibling chat-surface state (`isStreamingAssistant`) without prop-drilling.
-- [ ] 1.3.2 Inline the predicate at the JSX site (no `useMemo` — five boolean checks per render is fine):
+- [x] 1.3.1 Import the constants from the marker module (not duplicated). The cohort filter lives at the mount site, not inside the component, so the predicate can read sibling chat-surface state (`isStreamingAssistant`) without prop-drilling.
+- [x] 1.3.2 Inline the predicate at the JSX site (no `useMemo` — five boolean checks per render is fine):
   ```tsx
   {(() => {
     const textMessages = messages.filter((m) => m.type === "text");
@@ -161,17 +161,17 @@ File: `apps/web-platform/components/chat/cohort-missing-reply-marker.tsx`:
   })()}
   ```
   Mount **immediately before** `<div ref={messagesEndRef} />` at ~line 733.
-- [ ] 1.3.3 Identify the actual `isStreamingAssistant`-equivalent state slice name in chat-surface (likely derived from `status` or a workflow-lifecycle hook). Use the exact name in the predicate.
-- [ ] 1.3.4 Confirm `conversation.created_at` is available in the mount scope; if the hydration payload exposes it as `createdAt` instead of `created_at`, adapt.
+- [x] 1.3.3 Identify the actual `isStreamingAssistant`-equivalent state slice name in chat-surface (likely derived from `status` or a workflow-lifecycle hook). Use the exact name in the predicate.
+- [x] 1.3.4 Confirm `conversation.created_at` is available in the mount scope; if the hydration payload exposes it as `createdAt` instead of `created_at`, adapt.
 
 #### 1.4 Phase 1 commit
 
-- [ ] 1.4.1 Run full suite: `bunx vitest run apps/web-platform/test/`. Assert green.
-- [ ] 1.4.2 `bun tsc --noEmit` clean.
-- [ ] 1.4.3 `bun lint` clean on edited files.
-- [ ] 1.4.4 Add a one-line "Plan-Time Amendments" note at the top of `knowledge-base/project/project/specs/feat-cc-transcript-hardening-prb-3603/spec.md`:
+- [x] 1.4.1 Run full suite: `bunx vitest run apps/web-platform/test/`. Assert green.
+- [x] 1.4.2 `bun tsc --noEmit` clean.
+- [x] 1.4.3 `bun lint` clean on edited files.
+- [x] 1.4.4 Add a one-line "Plan-Time Amendments" note at the top of `knowledge-base/project/project/specs/feat-cc-transcript-hardening-prb-3603/spec.md`:
   > **Plan-Time Amendments (2026-05-12):** CTA dropped during plan-review (DHH + code-simplicity convergence). Spec FR4-FR7 and AC6-AC9 are superseded by `knowledge-base/project/plans/2026-05-12-feat-cc-transcript-hardening-prb-cohort-marker-plan.md` §Research Reconciliation. Spec body retained as historical record.
-- [ ] 1.4.5 Commit `feat(chat): add CohortMissingReplyMarker (text-only) for cohort transparency — #3603`. Single commit covers component + test + chat-surface mount + spec amendment note.
+- [x] 1.4.5 Commit `feat(chat): add CohortMissingReplyMarker (text-only) for cohort transparency — #3603`. Single commit covers component + test + chat-surface mount + spec amendment note.
 
 ### Phase 2 — Pre-merge gates
 
