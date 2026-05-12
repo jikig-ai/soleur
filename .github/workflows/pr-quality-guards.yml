@@ -137,6 +137,44 @@ jobs:
             exit 1
           fi
 
+  pii-grep:
+    name: Block Linear CDN URLs in PR diff (#3635)
+    # Intentionally NO opt-out support. The redaction guard is the
+    # load-bearing defense for a single-user-incident threshold per
+    # knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7.
+    # An opt-out label would defeat the purpose. If a PR legitimately
+    # needs to commit a uploads.linear.app reference (e.g., a test
+    # fixture documenting the failure mode), use the synthesized non-
+    # routable string `uploads.linear.app/TEST-FIXTURE-NOT-REAL.png`
+    # convention from cq-test-fixtures-synthesized-only — that string
+    # is detected as a test-fixture and skipped below.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan PR diff for Linear CDN URLs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          DIFF=$(gh pr diff "$PR_NUMBER" --repo "$GH_REPO" 2>/dev/null || true)
+          if [[ -z "$DIFF" ]]; then
+            echo "::notice::Empty diff — nothing to scan."
+            exit 0
+          fi
+          # Synthesized test-fixture string is allowed (clearly fake, non-routable).
+          # Real CDN references are blocked.
+          OFFENDERS=$(printf '%s' "$DIFF" \
+            | grep -E '^\+' \
+            | grep -E 'uploads\.linear\.app' \
+            | grep -vE 'TEST-FIXTURE-NOT-REAL' || true)
+          if [[ -n "$OFFENDERS" ]]; then
+            echo "::error::PR diff contains a uploads.linear.app URL. This is a Linear CDN signed URL — committing it on a public-GitHub repo is a single-user-incident threshold breach per knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7. Use Skill: soleur:linear-fetch to redact, or replace the URL with [linear-image: REDACTED]."
+            echo "Offending lines (first 10):"
+            printf '%s\n' "$OFFENDERS" | head -n 10 | sed 's/^/  /'
+            exit 1
+          fi
+
   auto-commit-message-density:
     name: Block PRs dominated by auto-commit headlines
     runs-on: ubuntu-latest
