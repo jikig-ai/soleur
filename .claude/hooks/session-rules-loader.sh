@@ -28,6 +28,17 @@ set -uo pipefail
 # explicit fallback emission at the end on hard failures).
 trap 'emit_core_only_fallback "hook trap fired before emit"; exit 0' ERR
 
+# HEADLESS_MODE classifier — boolean, downstream hooks read this to decide
+# whether to route warnings through headless_or_stderr or stderr. Boolean
+# only; the 3-value enum (peek vs bg) was rejected by simplicity review
+# because no consumer currently needs to distinguish. Re-introduce if a
+# concrete need emerges.
+if [[ ! -t 0 ]] && [[ -n "${CLAUDECODE:-}" ]]; then
+  export HEADLESS_MODE=1
+else
+  export HEADLESS_MODE=0
+fi
+
 # emit_core_only_fallback: invoked from ERR trap or any failure branch that
 # cannot continue safely. Reads AGENTS.core.md from `${REPO_ROOT:-$PWD}` and
 # emits a minimal additionalContext so the agent never boots bodyless.

@@ -139,10 +139,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Create a worktree for the new feature:
 
    ```bash
-   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
+   SOLEUR_SKILL_NAME=work SOLEUR_EXPECTED_DURATION_MIN=240 \
+     bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
    ```
 
-   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation.
+   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation. The env vars wire a session lease so sibling cleanup-merged invocations refuse to reap this worktree.
+
+   **Phase Exit (release lease).** At the end of the workflow — after `/soleur:ship` returns OR if you exit without shipping — release the lease so a sibling `cleanup-merged` can reap the worktree once it's actually merged:
+
+   ```bash
+   bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+   ```
+
+   The release is a no-op if the lease was already removed by the multi-signal trap (EXIT/INT/TERM/HUP fires on abnormal exit). Stale leases get swept after 24 hours regardless.
 
    Use a meaningful name based on the work (e.g., `feat-user-authentication`, `fix-email-validation`).
 

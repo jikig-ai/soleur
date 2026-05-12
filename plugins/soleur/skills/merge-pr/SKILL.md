@@ -255,8 +255,16 @@ Announce the PR URL.
 ### 5.1 Queue Auto-Merge
 
 ```bash
-gh pr merge <number> --squash --auto
+bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- \
+  gh pr merge <number> --squash --auto
+rc=$?
+if [[ "$rc" -eq 99 ]]; then
+  echo "merge-main lock contended >600s — another session is queueing auto-merge. Retry shortly."
+  exit 1
+fi
 ```
+
+The `with_lock <name> <timeout_s> -- <cmd>` wrapper serializes concurrent `merge --auto` queueings across parallel CC sessions; the lock releases on exit. **The `--` separator is required** to terminate positional args. Returns 99 on `>timeout_s` contention; check `$?` so the merge intent doesn't drop silently.
 
 This queues the merge. GitHub waits for all branch protection requirements (CI checks, CLA) to pass, then merges automatically. Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet.
 
