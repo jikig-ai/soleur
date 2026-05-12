@@ -63,6 +63,12 @@ export const SENSITIVE_KEY_NAMES = [
   "DEV_USER_1_PASSWORD",
   "DEV_USER_2_PASSWORD",
   "DEV_USER_3_PASSWORD",
+  // Sentry userId pseudonymization pepper (#3638). Held in Doppler, read
+  // once at module init in `server/observability.ts`. Listed here so a
+  // future env-block dump or config-snapshot log cannot leak the pepper —
+  // the value is what the helper's confidentiality leans on (Recital 26).
+  "SENTRY_USERID_PEPPER",
+  "pepper",
   // HTTP transport
   "cookie",
   "x-nonce",
