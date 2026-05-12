@@ -290,12 +290,12 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 8 — Verification + PR-body refresh
 
-- [ ] Run `bun test` from `apps/web-platform/`. Expected: 4058 passes (baseline preserved).
-- [ ] Run `bun run typecheck`. Expected: clean.
-- [ ] Optionally run `SUPABASE_DEV_INTEGRATION=1 doppler run -p soleur -c dev -- bun test test/cc-dispatcher-cross-tenant.integration.test.ts` if Doppler dev creds are available. Expected: green (no production changes to the integration test's invariants).
-- [ ] Replay the Phase 1 baseline greps to fill in the PR body "after" column.
-- [ ] Rewrite the PR body (currently auto-generated WIP placeholder) with: Summary, Closes block (`Closes #3639` × 4), per-issue resolution table mapping AC → commit SHA, "before/after" grep table, mention of PR #2486 as the cluster-drain precedent, test plan checklist.
-- [ ] Mark PR ready for review.
+- [x] Ran `vitest run` — 4076 passed | 57 skipped (corrected from the plan's 4058 baseline at work-start; the corrected baseline is what was preserved at every phase boundary).
+- [x] Ran `tsc --noEmit` — clean.
+- [ ] (Optional) Dev integration test under `SUPABASE_DEV_INTEGRATION=1` — deferred to QA/operator.
+- [x] Replayed Phase 1 baseline greps; all targets reached zero (or remained at the single historical-comment match for the `setTimeout` pattern).
+- [x] Rewrote PR body with Summary, four `Closes #N` lines, per-issue resolution table, phase commit SHAs, before/after grep table, test plan, PR #2486 cluster-drain reference.
+- [ ] Mark PR ready for review — left to the orchestrator (work-phase stops at Phase 8 per contract).
 
 ## Risks
 

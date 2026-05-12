@@ -83,9 +83,9 @@ lane: single-domain
 
 ## 8. Verification + PR body refresh
 
-- [ ] 8.1 Run `bun test` from `apps/web-platform/` — expect 4058 passes.
-- [ ] 8.2 Run `bun run typecheck` — expect clean.
-- [ ] 8.3 Optional: run dev integration test under `SUPABASE_DEV_INTEGRATION=1` if Doppler dev creds available.
-- [ ] 8.4 Replay Phase 1 baseline greps for the PR body "after" column.
-- [ ] 8.5 Rewrite PR body (Summary, four `Closes #N` lines, per-AC commit-SHA map, before/after grep table, test plan, PR #2486 cluster-drain reference).
-- [ ] 8.6 Mark PR #3670 ready for review.
+- [x] 8.1 Ran `vitest run` from `apps/web-platform/` — 4076 passed | 57 skipped (baseline preserved; corrected from plan's 4058).
+- [x] 8.2 Ran `tsc --noEmit` — clean.
+- [ ] 8.3 (Optional) Dev integration test under `SUPABASE_DEV_INTEGRATION=1` — deferred to QA/operator.
+- [x] 8.4 Replayed Phase 1 baseline greps; all targets reached.
+- [x] 8.5 Rewrote PR body with Summary, four `Closes #N` lines, per-issue resolution table, phase commit SHAs, before/after grep table, test plan.
+- [ ] 8.6 Mark PR ready for review — left to the orchestrator (per work-phase contract: stop at Phase 8, do not mark ready).
