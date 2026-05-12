@@ -28,3 +28,21 @@ Rationale:
 Phase 0.5 Processing Instructions: when `USER_BRAND_CRITICAL=true`, expand the relevant-domain set to include `cpo`, `clo`, `cto` even if their assessment questions did not match. Spawn all three in parallel via `run_in_background: true` per the standard passive-routing convention. The original assessment-question matches still drive their normal participation; the tag only expands the set, never contracts it.
 
 **Why:** Triggered by #2887 — the dev/prd Doppler-config collapse needed product framing (worst-user-outcome), legal framing (data-isolation compliance), and architectural framing (blast radius) at brainstorm time, but no gate forced any of those leaders into the room. AGENTS.md `hr-weigh-every-decision-against-target-user-impact` codifies this; this section is the brainstorm-side enforcement.
+
+## Lane Inference
+
+Lanes describe **Phase 0.5 domain-leader breadth** (single source of truth; downstream skills reference this section by heading).
+
+| Lane | Phase 0.5 effect | Triggers (case-insensitive token scan) |
+|---|---|---|
+| `single-domain` | Spawn one leader (highest-relevance per Assessment Questions). On tie, fall back to **config declaration order** in this file's domain table (first match wins). | No `cross-domain` trigger AND no `procedural` trigger. |
+| `cross-domain` | Spawn ≥2 leaders in parallel. If fewer than 2 match Assessment Questions, **fail-closed expand**: add the next-highest-relevance domain not yet in the set; tie-break by config declaration order. | `audit`, `review`, `security`, `compliance`, `migration`, `data`, `infra`, `regulated`, `payment`, `auth`, `cross-tenant`, `billing`, `gdpr`, `privacy`. |
+| `procedural` | Spawn zero leaders. | `scaffold`, `lockfile`, `format-only`, `rename-only`, `dep-bump`, `version-bump`, `lint-fix` AND no `cross-domain` trigger. |
+
+**Fail-closed default** when keyword inference returns no signal AND operator selects nothing resolvable: `cross-domain`. Cost asymmetry — false-positive fan-out is recoverable; missed user-impact gate is shipped breach.
+
+**USER_BRAND_CRITICAL × lane composition.** When `USER_BRAND_CRITICAL=true` is set by Phase 0.1, the override at the top of this file (CPO + CLO + CTO mandatory triad) wins. Lane is then forced to `cross-domain`; the `cross-domain` fail-closed-expand clause is a no-op because the triad already provides ≥2 leaders. If relevance scoring would later drop one of the triad, the triad still fires (the override is unconditional); expansion only re-adds non-triad leaders.
+
+**Carry-forward contract.** spec.md is the **canonical** lane source post-Phase-3.6; brainstorm-doc may carry `lane:` for provenance but is not load-bearing. `plan` reads from spec.md; `work` reads from spec.md. Operator-edited spec.md `lane:` between brainstorm and work is the operator's source of truth.
+
+**Stability.** `lane:` is a frozen 3-value enum. Adding a fourth value requires parent-audit-spec amendment (`feat-claude-skills-audit/spec.md` FR4) and explicit follow-up brainstorm.
