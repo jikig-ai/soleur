@@ -10,6 +10,27 @@ linear: SOL-39
 
 # fix: KB sidebar "Knowledge Base" header vertical-baseline misalignment with main "Soleur" brand row
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-12
+**Sections enhanced:** Overview, Hypotheses (Research Insights), Implementation Phases, Acceptance Criteria, Risks, Test Scenarios
+**Research vectors:** yesterday's settings-sidebar peer plan (PR #3557, plan `2026-05-11-fix-settings-sidebar-gap-and-header-alignment-plan.md`); QA-degradation learning `2026-05-11-qa-degradation-when-dev-server-broken-on-css-only-fix.md`; both-toggle-states learning `2026-04-17-alignment-fixes-must-verify-both-toggle-states.md`; Playwright-in-worktree learning `2026-02-17-playwright-screenshots-land-in-main-repo.md`; JSDOM-layout-trap learning `best-practices/2026-04-18-test-mock-factory-drift-guard-and-jsdom-layout-traps.md`; Tailwind v4 token-availability learning `2026-04-02-tailwind-v4-a11y-focus-ring-contrast-patterns.md`. Verified `tailwindcss@^4.1.0` + `@tailwindcss/postcss@^4.2.1` in `apps/web-platform/package.json`; verified `min-h-7` already in production at `apps/web-platform/components/settings/settings-shell.tsx:42`; verified `py-5` already in production at `apps/web-platform/app/(dashboard)/layout.tsx:241` AND `apps/web-platform/components/settings/settings-shell.tsx:41`; verified `gh issue view 3562 --json state` returns `OPEN` (dev-server bug still un-fixed — QA-degradation path is precedent).
+
+### Key Improvements
+
+1. **Token availability proven, not asserted.** Original plan claimed `min-h-7` and `py-5` work under Tailwind v4 from arithmetic alone. Deepen-pass grepped both tokens against the codebase and confirmed each is already in use in **production-shipped** files — `min-h-7` lives at `settings-shell.tsx:42` (landed yesterday in PR #3557), `py-5` lives at three call sites including the very `(dashboard)/layout.tsx:241` row we're aligning to. No tailwind.config.* exists (verified: `apps/web-platform/tailwind.config.*` matches zero files), so Tailwind v4's zero-config defaults are authoritative. The plan no longer depends on the arithmetic alone.
+2. **QA-degradation pre-authorized.** Deepen-pass confirmed via `gh issue view 3562` that the dev-server bug (#3562) blocking Playwright is OPEN. The 2026-05-11 settings-sidebar PR (#3557) hit the same blocker and shipped on vitest className contracts alone, per `knowledge-base/project/learnings/2026-05-11-qa-degradation-when-dev-server-broken-on-css-only-fix.md`. This plan's User-Brand Impact threshold is `none`, className contracts are unit-tested, and the geometry math is in §Research Insights — three of three QA-degradation criteria. Phase 4 now has a documented escape valve that maps to the existing precedent rather than blocking on a pre-existing infra bug.
+3. **Playwright screenshot path corrected.** Per `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`, Playwright MCP in a worktree writes screenshots to the MAIN-repo root unless an absolute filename path is passed. Phase 4 now prescribes `filename: "$(pwd)/.playwright-mcp/<name>.png"` (or equivalent absolute path) so screenshots land in the worktree's `.playwright-mcp/` and don't pollute `main`.
+4. **JSDOM layout-trap risk reified.** The original Risks mentioned JSDOM zero-returns from `getBoundingClientRect`. Deepen-pass surfaced the broader pattern (`best-practices/2026-04-18-test-mock-factory-drift-guard-and-jsdom-layout-traps.md` — `clientWidth > 0`-gated assertions silently green-pass in JSDOM). Phase 1 test snippet was audited: it asserts ONLY className tokens, no layout values, no conditional layout gates. Confirmed safe.
+5. **Plan-prescribed labels verified.** Deepen-pass ran `gh label list` (already done at plan-write time): only `domain/engineering` and `chore` resolve cleanly from the conventional candidates. The plan uses no labels (no AC-prescribed `gh issue create --label` site), so this gate passes trivially.
+
+### New Considerations Discovered
+
+- **Yesterday's peer plan (PR #3557) is the immediate ancestor.** This bug is the SECOND alignment regression of the same class in two days. The pattern is now established: header rows on side-by-side sidebars use different padding tokens; fix is `py-5 min-h-7`. A shared `<SidebarHeader>` component scope-out is filed in §Sharp Edges (third-occurrence trigger — keep YAGNI until then).
+- **#3562 (dev-server ESM/CJS conflict) is still open.** This is the load-bearing precondition for the QA-degradation path. If #3562 lands before this plan ships, restore full Playwright QA per the original Phase 4. Until then, the degraded path stands.
+- **No tailwind.config.\* file exists.** Tailwind v4 uses CSS-driven `@theme` directives instead. The `--spacing` default of `0.25rem` is therefore the source of truth for `py-5` (20 px) and `min-h-7` (28 px). If a future PR adds a `@theme` block overriding `--spacing`, both tokens would re-scale and the alignment would re-break together — but the math would still match because both sidebars use the same scale.
+- **Heading-level inconsistency across sidebars is documented but out of scope.** Main brand uses `<span>`, KB uses `<h1>`, settings uses `<h2>`. An a11y/heading-hierarchy follow-up scope-out is filed in §Sharp Edges.
+
 ## Overview
 
 On `/dashboard/kb*` routes, two sidebars sit side-by-side at the top of the app:
@@ -155,9 +176,9 @@ bunx tsc --noEmit
 
 Both must pass. The new assertion goes from RED → GREEN; existing assertions remain GREEN; `tsc` shows no new errors (no type surface changed).
 
-### Phase 4 — Quantitative visual QA via Playwright MCP
+### Phase 4 — Quantitative visual QA via Playwright MCP (with degradation path)
 
-Per `cq-when-a-plan-addresses-alignment-of-a` (alignment fixes must verify BOTH toggle states), capture measurements + screenshots at `/dashboard/kb` under each toggle-state combination where both sidebars are visible:
+Per the alignment-fixes-must-verify-both-toggle-states learning at `knowledge-base/project/learnings/2026-04-17-alignment-fixes-must-verify-both-toggle-states.md`, capture measurements + screenshots at `/dashboard/kb` under each toggle-state combination where both sidebars are visible:
 
 | # | Main sidebar | KB sidebar | Both visible? |
 |---|---|---|---|
@@ -170,9 +191,25 @@ For combinations #1 and #2, run the same `browser_evaluate` snippet from Phase 0
 
 For combinations #3 and #4, attach screenshots only — the assertion is "the KB sidebar collapses cleanly to `md:w-0` and the main sidebar layout is unaffected by the new `min-h-7` token."
 
+**Screenshot paths (worktree-safety):** Per `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`, Playwright MCP screenshots in a worktree write to the MAIN-repo root unless the `filename:` parameter is an absolute path. For every `mcp__playwright__browser_take_screenshot` call, pass `filename: "$(pwd)/.playwright-mcp/sol-39-<combo-N>.png"` (resolving `$(pwd)` to the active worktree absolute path before the MCP call). Do NOT use relative filenames. After Phase 4 completes, run `ls .playwright-mcp/` inside the worktree to verify all four screenshots landed there, then `ls "$(git rev-parse --git-common-dir)/.."/*.png 2>/dev/null` to confirm no `.png` files leaked into the main repo root.
+
 If `yDelta > 1` in #1 or #2, escalate — the `py-5 min-h-7` choice did not normalize to the live font/line-height combo. Recovery: read the post-edit `getBoundingClientRect()` heights of both `<header>` / brand `<div>` elements and reconcile against arithmetic (most likely cause: `font-medium` vs `font-semibold` produces a sub-pixel baseline offset that the line-box does not absorb — recovery is to add `leading-7` to both rows, but only if measurement proves it).
 
 Attach screenshots to the PR alongside the numeric deltas.
+
+#### Phase 4 fallback — QA-degradation path (pre-authorized)
+
+Per `knowledge-base/project/learnings/2026-05-11-qa-degradation-when-dev-server-broken-on-css-only-fix.md`, if the dev server (`bun run dev` from `apps/web-platform/`) fails to start due to issue #3562 (verified OPEN at deepen-pass time: 2026-05-12), Playwright QA is degraded to vitest className contracts alone. Three discriminator criteria from the learning, all satisfied by this plan:
+
+- (a) User-Brand Impact threshold = `none` — yes (see §User-Brand Impact).
+- (b) className contracts are unit-tested — yes (Phase 1 RED test asserts `py-5`, `min-h-7`, `flex`, `items-center`, `justify-between` are present and `pt-4`, `pb-3` are absent).
+- (c) Geometry math is in the plan — yes (see §Research Insights "Geometric computation").
+
+If #3562 is still OPEN at QA time, the PR may merge on Phase 1+2+3 alone, with the PR body citing this fallback subsection and PR #3557 as the precedent. The Phase 0 ground-truth measurement is ALSO degraded (it requires the dev server too) — note `Phase 0 deferred to #3562 close` in the PR body if so. Re-running Phase 0 + Phase 4 quantitatively becomes a post-merge sanity check rather than a pre-merge gate, scoped to the close of #3562.
+
+If #3562 has been resolved by QA time, run the full Phase 4 path above (no degradation).
+
+**Do NOT use this fallback for fixes whose threshold is `single-user incident` or `aggregate pattern`, or for fixes that touch interactive flows / data writes / auth / payments.** Pure-CSS-utility-class fixes only.
 
 ## Acceptance Criteria
 
@@ -184,9 +221,9 @@ Attach screenshots to the PR alongside the numeric deltas.
 - [x] One new assertion added in a new `describe` block asserting `py-5`, `min-h-7`, `flex`, `items-center`, `justify-between` present and `pt-4`, `pb-3` absent — passes.
 - [x] `bun test apps/web-platform/test/kb-sidebar-collapse.test.tsx` → green.
 - [x] `bunx tsc --noEmit` from `apps/web-platform/` → no new errors.
-- [ ] Phase 0 pre-fix ground-truth `{ brandY, kbY, yDelta, direction }` measurement attached to the PR body.
-- [ ] Phase 4 post-fix `{ brandY, kbY, yDelta }` measurements attached for combinations #1 (both sidebars open) and #2 (main collapsed, KB open). `yDelta ≤ 1 px` in both cases.
-- [ ] Phase 4 screenshots attached for all four toggle-state combinations.
+- [ ] **Either** Phase 0 pre-fix ground-truth `{ brandY, kbY, yDelta, direction }` measurement attached to the PR body, **OR** PR body cites the §Phase 4 fallback subsection AND PR #3557 as precedent AND issue #3562 is still OPEN at PR-open time (verified via `gh issue view 3562 --json state`).
+- [ ] **Either** Phase 4 post-fix `{ brandY, kbY, yDelta }` measurements attached for combinations #1 + #2 with `yDelta ≤ 1 px`, **OR** same QA-degradation fallback as above.
+- [ ] **Either** Phase 4 screenshots attached for all four toggle-state combinations (filenames written via absolute path to `$(worktree)/.playwright-mcp/`), **OR** same QA-degradation fallback as above. If screenshots are taken, `ls .playwright-mcp/ && ls "$(git rev-parse --git-common-dir)/.."/*.png 2>/dev/null` confirms all PNGs landed inside the worktree and none in the main repo root.
 - [ ] PR body uses `Closes SOL-39` (Linear) — or `Ref SOL-39` if the Linear close-on-merge integration is not wired for this repo.
 
 ### Post-merge (operator)
@@ -239,6 +276,9 @@ The main brand row is on the dashboard layout used by EVERY `/dashboard/*` route
 - **Conditional collapse-state padding is NOT touched.** The KB sidebar uses an animated width transition (`md:transition-[width]`) but the header padding does NOT change between expanded and collapsed states (the KB sidebar collapses to `md:w-0`, so the header is `overflow-hidden`-ed away rather than re-padded). No collapse-state padding swap is added — out of scope.
 - **`safe-top` only on main brand row.** The main brand row carries `safe-top` (`padding-top: env(safe-area-inset-top, 0px)`); the KB header does NOT. On desktop browsers `env(safe-area-inset-top)` resolves to 0, so this is irrelevant for the bug surface. On iPad/iOS Safari in standalone-PWA mode, the main brand could shift down by up to ~44 px while the KB header does not — but iPad horizontal layout is below md anyway, so the KB sidebar is `md:hidden`-equivalent. Not a blocker. Flagged so the QA evaluator does not test on iPad simulator and report a regression.
 - **JSDOM `getBoundingClientRect()` returns zeros.** The numeric `yDelta` assertion is Playwright-only (real browser). The unit test asserts only class presence — JSDOM cannot measure pixels. This is by design; same convention as the 2026-05-11 settings-sidebar plan and `2026-04-17-fix-settings-nav-expanded-chevron-alignment-plan.md`.
+- **JSDOM layout-trap broader pattern (audited, confirmed safe).** Per `knowledge-base/project/learnings/best-practices/2026-04-18-test-mock-factory-drift-guard-and-jsdom-layout-traps.md`, JSDOM also silently green-passes assertions gated on `clientWidth > 0`, `scrollWidth`, `offsetHeight`, etc. The Phase 1 test snippet was audited against this pattern: it asserts ONLY classname-token presence/absence via `.className.match()` and `closest("header")`, with NO layout-value reads, NO conditional layout gates, and NO awaited `act`-style layout measurements. Confirmed safe under JSDOM.
+- **Playwright screenshots can leak into main repo.** Per `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`, Playwright MCP in a worktree writes screenshots to the MAIN-repo root unless `filename:` is an absolute path. Phase 4 prescribes absolute paths into `$(worktree)/.playwright-mcp/`. Mitigation also verifies via post-Phase-4 `ls` against the main repo root.
+- **QA-degradation fallback is bounded to this fix class.** The fallback (vitest className contracts only, Playwright deferred) is pre-authorized ONLY because (a) threshold is `none`, (b) className contracts are unit-tested, (c) geometry math is in the plan. If a follow-up review identifies an unanticipated user-facing impact, the threshold must be re-evaluated and the fallback withdrawn — the Phase 4 quantitative path becomes load-bearing again.
 - **Test selector fragility.** The new test uses `screen.getByLabelText("Collapse file tree").closest("header")`. The label string is the contract surface (used by all existing tests in `kb-sidebar-collapse.test.tsx`), and `closest("header")` resolves to the top header element by tag. If a future refactor changes the wrapping element from `<header>` to `<div>`, the selector breaks. Mitigation: the existing test file already uses this query pattern; consistency wins over a more-resilient `data-testid` for a one-line CSS test.
 - **Theme-token rotation in flight.** A recent change rotated theme tokens app-wide (light-theme tokenization PR class). This plan's edit is theme-agnostic (no `text-soleur-text-*` change), so it composes cleanly with both light and dark themes. Verify Phase 4 screenshots are captured in BOTH themes (default + `next-themes`-toggled) — add as the second screenshot per combination.
 
@@ -281,6 +321,10 @@ No content review needed — fix touches no copy, no labels, no flows, no images
 | Test guard: header padding token | DOM at initial render | `<header>` has `py-5`, `min-h-7`, `flex`, `items-center`, `justify-between`; does NOT have `pt-4` or `pb-3`. |
 | Existing toggle behavior | DOM after collapse click | All existing assertions in `KB sidebar collapse` describe block continue to pass — toggle still works, Cmd/Ctrl+B still works, input-focus still suppresses. |
 | Dark + light theme | Both themes, combination #1 | yDelta unchanged across theme toggle (CSS-vars only affect color, not geometry). |
+| QA-degradation discriminator: threshold none | Plan §User-Brand Impact | Threshold reads `none` with stated reason — fallback eligibility criterion (a) satisfied. |
+| QA-degradation discriminator: className contracts unit-tested | Phase 1 RED test | Test asserts `py-5`, `min-h-7`, `flex`, `items-center`, `justify-between` present + `pt-4`/`pb-3` absent — fallback eligibility criterion (b) satisfied. |
+| QA-degradation discriminator: geometry math in plan | §Research Insights "Geometric computation" | Pre-fix + post-fix arithmetic present — fallback eligibility criterion (c) satisfied. |
+| Screenshot path safety | Post-Phase-4 `ls` | All `.png` files land in `$(worktree)/.playwright-mcp/`; zero PNGs in `$(git rev-parse --git-common-dir)/..`. |
 
 ## Definition of Done
 

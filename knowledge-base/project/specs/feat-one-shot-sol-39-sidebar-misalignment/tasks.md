@@ -28,13 +28,16 @@ linear: SOL-39
 - 3.1. Run `bun test apps/web-platform/test/kb-sidebar-collapse.test.tsx`. All assertions green.
 - 3.2. Run `bunx tsc --noEmit` from `apps/web-platform/`. No new errors.
 
-## Phase 4 — Quantitative visual QA via Playwright MCP
+## Phase 4 — Quantitative visual QA via Playwright MCP (with degradation path)
 
+- 4.0. PRE-CHECK: `gh issue view 3562 --json state` → if OPEN, dev server is broken; jump to 4.7 (degradation fallback). If CLOSED, proceed to 4.1.
 - 4.1. Combination #1 (main open, KB open): re-run the `browser_evaluate` snippet; record `{ brandY, kbY, yDelta }`. AC: `yDelta ≤ 1`.
 - 4.2. Combination #2 (main collapsed, KB open): same. AC: `yDelta ≤ 1`.
 - 4.3. Combinations #3 + #4: screenshots only (KB header is `overflow-hidden`-ed).
 - 4.4. Capture screenshots in BOTH default + light themes (theme-token rotation risk per plan §Risks).
-- 4.5. Attach measurements + screenshots to PR body.
+- 4.5. Screenshots use ABSOLUTE filename paths: `filename: "$(pwd)/.playwright-mcp/sol-39-<combo-N>.png"` (worktree-safety per plan §Risks).
+- 4.6. Post-capture verification: `ls .playwright-mcp/ && ls "$(git rev-parse --git-common-dir)/.."/*.png 2>/dev/null` confirms PNGs landed in worktree, not main repo. Attach measurements + screenshots to PR body.
+- 4.7. FALLBACK (if 4.0 = OPEN): cite the §Phase 4 fallback subsection and PR #3557 as precedent in the PR body. Skip 4.1–4.6 and Phase 0 ground-truth measurement. Defer quantitative verification to post-#3562-close sanity check.
 
 ## Phase 5 — Ship
 
