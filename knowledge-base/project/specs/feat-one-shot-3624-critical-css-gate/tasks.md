@@ -7,22 +7,24 @@ Derived from `knowledge-base/project/plans/2026-05-12-fix-critical-css-gate-path
 - [ ] 1.1 Read the failing run logs once more (`gh run view 25718834192 --log | grep critical-css-gate`) to confirm error string.
 - [ ] 1.2 Read `.github/workflows/ci.yml` (full file) — note all jobs, the canonical action-pin format, and any pre-existing `needs:` dependencies.
 - [ ] 1.3 Read `.github/workflows/deploy-docs.yml` lines 6-11 — capture the `paths:` prefix list verbatim (will be re-used in the per-job filter).
-- [ ] 1.4 Read `.github/workflows/vendor-pin-verify.yml` — confirm the action-pin convention (SHA + `# vX.Y.Z` comment) that `dorny/paths-filter@v3` must follow.
+- [ ] 1.4 Read `.github/workflows/infra-validation.yml:24-52` — confirm the `detect-changes` + `outputs.directories` + `if:` pattern that this plan mirrors (single boolean output instead of matrix).
 
 ## 2. Core Implementation
 
-### 2.1 Add `changes` detection job
+### 2.1 Add `detect-changes` job (hand-rolled, mirrors `infra-validation.yml:24-52`)
 
-- [ ] 2.1.1 Insert a new `changes` job at the top of the `jobs:` block in `.github/workflows/ci.yml` (immediately after `readme-counts`).
-- [ ] 2.1.2 Use `dorny/paths-filter@v3` pinned by SHA. Resolve the SHA via `gh api repos/dorny/paths-filter/tags --jq '.[] | select(.name == "v3") | .commit.sha'` and use the canonical `# v3.x.y` comment format.
-- [ ] 2.1.3 Define a single `docs` filter with the prefix list verbatim from `deploy-docs.yml:6-11`, plus `.github/workflows/ci.yml` and `.github/workflows/deploy-docs.yml` for self-trigger coverage.
-- [ ] 2.1.4 Expose `outputs.docs` from the job using `steps.<id>.outputs.docs`.
+- [ ] 2.1.1 Insert a new `detect-changes` job at the top of the `jobs:` block in `.github/workflows/ci.yml` (immediately after `readme-counts`).
+- [ ] 2.1.2 Use `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1` with `fetch-depth: 0` (REQUIRED — shallow clone breaks the `origin/${BASE_REF}...HEAD` diff).
+- [ ] 2.1.3 Add a `filter` step that runs `git diff --name-only "origin/${BASE_REF}...HEAD" | grep -qE '<regex>'` against the regex anchor list from Phase 1 of the plan. Short-circuit `push` events to `docs=true` unconditionally.
+- [ ] 2.1.4 Emit `outputs.docs` as `'true'` or `'false'` via `$GITHUB_OUTPUT`.
+- [ ] 2.1.5 Run the three-shape fixture test from the plan against the regex BEFORE committing (deep-nested, root, negative).
 
 ### 2.2 Gate `critical-css-gate` with the conditional
 
-- [ ] 2.2.1 Add `needs: changes` to the `critical-css-gate` job.
-- [ ] 2.2.2 Add `if: needs.changes.outputs.docs == 'true'` to the job.
+- [ ] 2.2.1 Add `needs: detect-changes` to the `critical-css-gate` job.
+- [ ] 2.2.2 Add `if: needs.detect-changes.outputs.docs == 'true'` to the job.
 - [ ] 2.2.3 Confirm no other job in the workflow has `needs: critical-css-gate` (grep verifies — none today).
+- [ ] 2.2.4 Run `actionlint` against the modified workflow file. Do NOT use `bash -n` (Sharp Edge — YAML parses as bash and fails on header).
 
 ### 2.3 Realign cache key
 
