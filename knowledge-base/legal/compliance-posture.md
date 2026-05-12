@@ -1,6 +1,7 @@
 ---
-last_updated: 2026-05-11
+last_updated: 2026-05-12
 ---
+<!-- 2026-05-12: PR-A2 (#3603/#3648) — Privacy Policy §4.7 Art. 13(3) prior-disclosure refresh for messages.usage column (CC_PERSIST_USAGE=true in Doppler prd). Article 30 RoPA register created at knowledge-base/legal/article-30-register.md. Both draft — counsel review pending. -->
 <!-- 2026-05-11: Compound Promotion Loop (#2720) registered as Active Item with DPIA candidacy note (Art. 35; defer formal assessment 4 weeks). -->
 
 <!-- 2026-05-11: R15 mitigation for #2719 landed via #3543 (ruleset PUT to #14145388) -->
@@ -17,7 +18,8 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 | Document | Location | Last Updated | Status |
 |----------|----------|-------------|--------|
 | Terms & Conditions | `docs/legal/terms-and-conditions.md` | 2026-03-20 | Active |
-| Privacy Policy | `docs/legal/privacy-policy.md` | 2026-03-20 | Active |
+| Privacy Policy | `docs/legal/privacy-policy.md` | 2026-05-12 | Active |
+| Article 30 Register (RoPA) | `knowledge-base/legal/article-30-register.md` | 2026-05-12 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | 2026-03-20 | Active |
 | GDPR Policy | `docs/legal/gdpr-policy.md` | 2026-03-20 | Active |
 | Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | 2026-03-20 | Active |
@@ -80,6 +82,8 @@ Contract (mirrors plugins/soleur/skills/gdpr-gate/SKILL.md §"Critical-finding e
 
 | Item | Issue/PR | Completed | Notes |
 |------|----------|-----------|-------|
+| Privacy Policy §4.7 refresh — `messages.usage` disclosure (Art. 13(3)) | #3603 / PR #3648 | 2026-05-12 | Disclosed cc-narrowed per-turn cost telemetry (`{ cost_usd }`) on Concierge (`/soleur:go`) surface; `CC_PERSIST_USAGE=true` flipped on in Doppler `prd` 2026-05-12. Legacy `agent-runner` `UsageSnapshot` shape on aborted turns unchanged. Data-minimisation rationale: Art. 5(1)(c). Legal basis, recipients, retention, and TOMs inherited from parent conversation row (Art. 6(1)(b); Supabase eu-west-1 + Hetzner hel1; RLS on `conversation_id`; cascade-delete on account erasure). Sync committed to `plugins/soleur/docs/pages/legal/privacy-policy.md`. Counsel review pending. |
+| Article 30 Register (RoPA) — initial draft | #3603 / PR #3648 | 2026-05-12 | Initial draft at `knowledge-base/legal/article-30-register.md` covering 8 processing activities (account/auth, conversation data incl. `messages.usage`, billing, KB sharing, web push, newsletter, CLA signatures, operational telemetry/breach-detection). Vendor mapping consolidated. Counsel review pending — outstanding items: controller legal form (SAS vs SARL), Web Push transfer characterisation, P0 mirror retention envelope, Art. 30(5) micro-enterprise derogation confirmation. |
 | Supabase DPA update (Braintrust sub-processor) | #1056 / PR #1298 | 2026-04-07 | Supabase confirmed (Tracy Lane, 2026-04-07): Braintrust tracing disabled for EU-hosted projects (eu-west-1). No cross-border transfer. No data sent to Braintrust. No re-signing required — existing DPA (signed 2026-03-19) remains in effect. Sub-processor accepted via Section 6.5 notification mechanism. |
 | Web platform vendor DPA review | #670 / PR #732 | 2026-03-18 | All 4 vendor DPAs signed/verified. Expense ledger updated. Legal docs updated |
 | Vendor checklist gate added | #670 / PR #732 | 2026-03-18 | PR template and constitution updated with vendor compliance section |
