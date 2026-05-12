@@ -247,18 +247,19 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 6 — #3639 F1 TurnPersistenceState + #3641 T-W1-invariant-7 relaxation (paired)
 
-- [ ] Add `class TurnPersistenceState` at module scope in `cc-dispatcher.ts` (adjacent to `ABORT_FLUSH_STATUSES`). Private fields: `accumulatedAssistantText: string`, `workflowEnded: boolean`, `currentTurnIndex: number`, `pendingTurnUsage: { turnIndex: number; costUsd: number } | null`.
-- [ ] Public methods (issue body verbatim):
-  - `captureUsage(idx: number, costUsd: number): void` — sets `pendingTurnUsage` tagged with `idx`.
-  - `snapshotAndBumpTurn(): { text: string; usage: { costUsd: number } | null }` — used by `onTextTurnEnd` complete path. Returns `text` + matched usage; clears `accumulatedAssistantText`; clears `pendingTurnUsage`; bumps `currentTurnIndex`.
-  - `flushAbort(end: WorkflowEnd): { text: string; usage: { costUsd: number } | null } | { orphanedUsage: true } | null` — used by `onWorkflowEnded`. Three branches: text present (return `{ text, usage }` + sets `workflowEnded = true`); text absent + usage pending (return `{ orphanedUsage: true }`, caller fires P0 mirror); neither (return `null`).
-  - `flushComplete(): boolean` — returns `workflowEnded` so the late-`onTextTurnEnd` no-op stays explicit.
-  - `appendText(text: string): void` — replace (per W8 REPLACE semantic at chat-state-machine.ts:477). Single-writer for the `accumulatedAssistantText` cell.
-  - `reset(): void` — clears all four fields. Reset-symmetry is a class invariant (asserted by the modified `T-W4-reset-symmetry`).
-- [ ] Replace the four `let` declarations (lines 1136-1150) with `const state = new TurnPersistenceState();`. Rewrite `onText`, `onTextTurnEnd`, `onWorkflowEnded`, `onResult` to call class methods.
-- [ ] In `cc-dispatcher.test.ts`, `T-W1-invariant-7`: relax `expect(scopeSpy).toHaveBeenCalledTimes(3)` → `expect(scopeSpy.mock.calls.length).toBeGreaterThanOrEqual(3)`. Keep the per-call argument-equality loop as the load-bearing assertion. Comment cites #3639 F1 as the rationale.
-- [ ] Run unit tests. Expected: green. If `T-W4-reset-symmetry` breaks because it pokes closure state directly, port it to call `state.reset()` and assert against the public `flushComplete()` accessor (or add a `__getStateForTests()` seam to the bottom-of-file block).
-- [ ] Commit: `refactor(cc-dispatcher): extract TurnPersistenceState + relax T-W1-invariant-7 — closes #3639 (F1 + F3)`.
+- [x] Add `class TurnPersistenceState` at module scope in `cc-dispatcher.ts` (adjacent to `ABORT_FLUSH_STATUSES`). Private fields: `_latestAssistantText: string`, `_aborted: boolean`, `_currentTurnIndex: number`, `_pendingTurnUsage: { turnIndex: number; costUsd: number } | null`.
+- [x] Public methods (final form):
+  - `appendText(text: string): void` — REPLACE semantic (W8 invariant). Single-writer for the text accumulator.
+  - `captureUsage(turnIdx: number, costUsd: number): void` — `onResult` stages cost tagged with the active turn.
+  - `consumeForComplete(): { text; usage } | null` — `onTextTurnEnd` happy path. Returns `null` if `_aborted` (subsumes the late-`onTextTurnEnd` no-op). Snapshot-clear-bump SYNCHRONOUSLY.
+  - `consumeForAbort(): { kind: "text"; text; usage } | { kind: "orphan" } | { kind: "none" }` — `onWorkflowEnded` abort branch. Three-variant outcome.
+  - `isAborted() / currentTurnIndex() / hasPendingUsage()` — public read accessors.
+  - `reset(): void` — clears all four fields. Reset-symmetry is a class invariant.
+  - Drift from plan: `snapshotAndBumpTurn` + `flushAbort` + `flushComplete` were renamed to `consumeForComplete` + `consumeForAbort` so the three-branch outcome is encoded in a discriminated-union return type rather than a `null | { orphanedUsage: true }` polymorphism. The `flushComplete()` boolean is exposed as `isAborted()`.
+- [x] Replaced the four `let` declarations with `const state = new TurnPersistenceState();`. Rewrote `onText`, `onTextTurnEnd`, `onWorkflowEnded`, `onResult` to call class methods. `saveAssistantMessage` now takes `text: string` explicitly.
+- [x] Relaxed `T-W1-invariant-7`: `toHaveBeenCalledTimes(3)` → `toBeGreaterThanOrEqual(3)`. Per-call argument-equality loop retained.
+- [x] Ran unit tests. Green (4076 / 57 skipped). `T-W4-reset-symmetry` did not break — it observes mock-insert calls + mockMirrorP0Deduped, not closure state — so no `__getStateForTests` seam was needed.
+- [x] Commit: `refactor(cc-dispatcher): extract TurnPersistenceState + relax T-W1-invariant-7 — closes #3639 (F1 + F3)`.
 
 ### Phase 7 — #3641 shared harness + seam rename + seam relocation + expect.poll
 

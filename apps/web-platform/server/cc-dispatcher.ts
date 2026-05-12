@@ -184,6 +184,130 @@ export type PersistMode =
   | { kind: "complete"; usage: { costUsd: number } | null }
   | { kind: "aborted"; usage: { costUsd: number } | null };
 
+// #3639 F1 — Encapsulates the four mutable per-turn cells previously
+// held as `let` bindings inside `dispatchSoleurGo` (the
+// `latestAssistantText` accumulator, the `assistantTurnPersisted` abort
+// flag, the `currentTurnIndex` counter, and the `pendingTurnUsage`
+// cost-capture). One class owns reset-symmetry as a class invariant —
+// `reset()` is the only path that clears all four; every mutator method
+// is paired with the field it mutates so a future change that touches
+// only 3 of 4 fields is caught at code-review time.
+//
+// Method contracts (call sites in `dispatchSoleurGo` events block):
+// - `appendText(text)` — `onText` writes the latest streamed text
+//   (REPLACE semantic per chat-state-machine.ts:477 + W8).
+// - `captureUsage(turnIdx, costUsd)` — `onResult` stages cost telemetry
+//   tagged with `turnIdx`. A stale `onResult` tagged against a previous
+//   turn is dropped at consume time by `consumeMatchedUsage`.
+// - `consumeForComplete()` — `onTextTurnEnd` happy path: snapshot text +
+//   matched usage, clear both cells, bump turn index. Snapshot happens
+//   SYNCHRONOUSLY before `saveAssistantMessage` yields the microtask so
+//   a turn-N+1 `onResult` arriving on the same iterator yield cannot
+//   overwrite turn N's snapshot.
+// - `consumeForAbort()` — `onWorkflowEnded` abort branch: returns text +
+//   matched usage and marks the turn as persisted (so a late
+//   `onTextTurnEnd` is a no-op) when text is present; returns
+//   `{ kind: "orphan" }` when text is absent but usage was captured (W4
+//   orphan); returns `{ kind: "none" }` when neither is present.
+// - `isAborted()` — read of `_aborted` for `onTextTurnEnd` early-exit.
+// - `reset()` — clears all four fields. Reset-symmetry invariant.
+export class TurnPersistenceState {
+  private _latestAssistantText = "";
+  private _aborted = false;
+  private _currentTurnIndex = 0;
+  private _pendingTurnUsage: { turnIndex: number; costUsd: number } | null =
+    null;
+
+  /** `onText` — REPLACE the accumulator (W8 invariant). */
+  appendText(text: string): void {
+    this._latestAssistantText = text;
+  }
+
+  /** `onResult` — stage per-turn cost tagged with the active turn. */
+  captureUsage(turnIdx: number, costUsd: number): void {
+    this._pendingTurnUsage = { turnIndex: turnIdx, costUsd };
+  }
+
+  /** True when `onWorkflowEnded` has already flushed an abort row. */
+  isAborted(): boolean {
+    return this._aborted;
+  }
+
+  /** Active turn index (for `onResult` to tag `captureUsage`). */
+  currentTurnIndex(): number {
+    return this._currentTurnIndex;
+  }
+
+  /** Whether usage has been staged for the current turn. */
+  hasPendingUsage(): boolean {
+    return this._pendingTurnUsage !== null;
+  }
+
+  /**
+   * `onTextTurnEnd` happy path. Snapshots text + matched usage,
+   * synchronously clears the accumulator + pendingUsage, and bumps the
+   * turn index. Returns `null` when there's nothing to persist.
+   */
+  consumeForComplete(): { text: string; usage: { costUsd: number } | null } | null {
+    if (this._aborted) return null;
+    const turnSnapshot = this._currentTurnIndex;
+    const turnUsage =
+      this._pendingTurnUsage?.turnIndex === turnSnapshot
+        ? this._pendingTurnUsage
+        : null;
+    const text = this._latestAssistantText;
+    this._latestAssistantText = "";
+    this._pendingTurnUsage = null;
+    this._currentTurnIndex = turnSnapshot + 1;
+    return {
+      text,
+      usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
+    };
+  }
+
+  /**
+   * `onWorkflowEnded` abort branch. Three outcomes:
+   * - `{ kind: "text"; text; usage }` — text present, abort row should
+   *   be written. Marks turn as persisted (suppresses late onTextTurnEnd).
+   * - `{ kind: "orphan" }` — text absent but usage was captured (W4
+   *   orphan). Caller fires `mirrorP0Deduped`. Clears pendingUsage.
+   * - `{ kind: "none" }` — neither text nor usage; no-op.
+   */
+  consumeForAbort():
+    | { kind: "text"; text: string; usage: { costUsd: number } | null }
+    | { kind: "orphan" }
+    | { kind: "none" } {
+    if (this._latestAssistantText.length > 0) {
+      const turnUsage =
+        this._pendingTurnUsage?.turnIndex === this._currentTurnIndex
+          ? this._pendingTurnUsage
+          : null;
+      const text = this._latestAssistantText;
+      this._latestAssistantText = "";
+      this._pendingTurnUsage = null;
+      this._aborted = true;
+      return {
+        kind: "text",
+        text,
+        usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
+      };
+    }
+    if (this._pendingTurnUsage) {
+      this._pendingTurnUsage = null;
+      return { kind: "orphan" };
+    }
+    return { kind: "none" };
+  }
+
+  /** Reset-symmetry invariant: clears ALL four fields. */
+  reset(): void {
+    this._latestAssistantText = "";
+    this._aborted = false;
+    this._currentTurnIndex = 0;
+    this._pendingTurnUsage = null;
+  }
+}
+
 // #3640 F4 — Build the `messages` INSERT row from a `PersistMode`. Module-
 // scope helper keeps `saveAssistantMessage`'s body ≤ 20 LoC; pure function
 // (no I/O), so the assistant-row schema can evolve in one place.
@@ -1232,30 +1356,13 @@ export async function dispatchSoleurGo(
       });
     });
 
-  // Holds the LATEST SDKAssistantMessage emission for this turn. Mirrors
-  // the chat-state-machine REPLACE semantic at `chat-state-machine.ts:477`
-  // (`applyStreamEvent` case "stream") so DB hydration on tab reload
-  // matches what the user saw live. #3603 W8 — pre-2026-05-12 the
-  // accumulator concatenated all emissions (`+=`); AC11 verification
-  // on conversation 36df3694 surfaced the drift between persisted content
-  // and live UI. Invariant: the value at the instant `onTextTurnEnd`
-  // fires (or `onWorkflowEnded` flushes for the abort path) is what
-  // persists. No reordering, no merge.
-  let latestAssistantText = "";
-  // #3603 W2 — flushed by `onWorkflowEnded` for non-`completed` statuses
-  // so a late `onTextTurnEnd` (in-flight SDK callback after abort fires)
-  // cannot double-write or overwrite the abort row. Closure-scoped per
-  // dispatch invocation; fresh `false` for each `dispatchSoleurGo` call.
-  let assistantTurnPersisted = false;
-  // #3603 W4 — per-turn cost telemetry captured pre-`onTextTurnEnd`.
-  // `currentTurnIndex` is the closure-scoped turn counter; `pendingTurnUsage`
-  // holds the cost captured by `onResult` tagged with the turnIndex active at
-  // capture time, so a stale `onResult` interleaved across microtasks cannot
-  // attach to a later turn. Both reset by `onTextTurnEnd` (snapshot-clear-bump
-  // synchronously before the save's await) and by the abort path so an
-  // orphaned usage cannot bleed into a subsequent callback.
-  let currentTurnIndex = 0;
-  let pendingTurnUsage: { turnIndex: number; costUsd: number } | null = null;
+  // #3639 F1 — Per-dispatch per-turn state cell. Wraps the four mutable
+  // cells (text accumulator, abort flag, turn index, pending usage) so
+  // reset-symmetry is a class invariant rather than four parallel
+  // `let` declarations. Mirrors the REPLACE semantic at
+  // `chat-state-machine.ts:477` (W8). See class doc-comment for the
+  // method contract.
+  const state = new TurnPersistenceState();
 
   // #3603 W4 — cc-path narrows the type-wide `Message.usage` shape to
   // cost-only on `'complete'` turns (Art. 5(1)(c) data-minimization). The
@@ -1263,7 +1370,10 @@ export async function dispatchSoleurGo(
   // output_tokens, cost_usd, completed_actions[]) on `'aborted'` turns —
   // see `Message.usage` doc-comment in `lib/types.ts`. `PersistMode` is
   // declared at module scope above (#3640 F2 + #3641 type-rail).
-  async function saveAssistantMessage(mode: PersistMode): Promise<void> {
+  async function saveAssistantMessage(
+    mode: PersistMode,
+    text: string,
+  ): Promise<void> {
     // #3603 W1 — Cross-tenant write-boundary sentinel. cc-path uses
     // service-role for INSERT (RLS-bypass on writes). RLS catches reads;
     // this guard catches writes. Returns `false` only via the test seam
@@ -1272,17 +1382,16 @@ export async function dispatchSoleurGo(
     // module-level doc.
     if (!assertWriteScope(userId, conversationId)) return;
 
-    // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
-    // mutate `fullText` while this insert is in flight (single async loop
-    // serializes onText/onTextTurnEnd, but the await yields the microtask).
-    const fullText = latestAssistantText;
-    latestAssistantText = "";
-    if (!fullText) return;
+    // Empty-drop contract (PR-A1): an empty-text turn produces no row.
+    // The state-class's `consumeForComplete` / `consumeForAbort` callers
+    // already short-circuit on empty text, but guard here defensively so a
+    // future caller can't silently produce an empty assistant row.
+    if (!text) return;
 
-    const row = buildRow(mode, fullText, conversationId);
+    const row = buildRow(mode, text, conversationId);
     const { error } = await supabase().from("messages").insert(row);
     if (error) {
-      mirrorInsertError(error, mode, userId, conversationId, fullText);
+      mirrorInsertError(error, mode, userId, conversationId, text);
     }
   }
 
@@ -1290,8 +1399,8 @@ export async function dispatchSoleurGo(
     onText: (text) => {
       // #3603 W8 — replace, not append. Mirrors chat-state-machine REPLACE
       // semantic so persisted content matches the UI's live render.
-      // See accumulator declaration comment above for invariant + AC11 source.
-      latestAssistantText = text;
+      // See `TurnPersistenceState.appendText` for invariant + AC11 source.
+      state.appendText(text);
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -1315,28 +1424,19 @@ export async function dispatchSoleurGo(
       );
     },
     onTextTurnEnd: () => {
-      // #3603 W2 — a late `onTextTurnEnd` after `onWorkflowEnded` has already
-      // flushed an abort row would double-write or, worse, overwrite the
-      // "aborted" status row with a "complete" one. Silent no-op:
-      // user already saw the partial text (rendered live; abort row hydrates).
-      if (assistantTurnPersisted) {
-        // silent: turn was already persisted via the abort path
-        return;
-      }
-      // #3603 W4 — snapshot-clear-bump SYNCHRONOUSLY before the save's
-      // microtask yield. Without this, a turn-N+1 `onResult` arriving on the
-      // same iterator yield could overwrite `pendingTurnUsage` before we
-      // read it, attaching turn N+1's cost to turn N's row.
-      const turnSnapshot = currentTurnIndex;
-      const turnUsage =
-        pendingTurnUsage?.turnIndex === turnSnapshot ? pendingTurnUsage : null;
-      pendingTurnUsage = null;
-      currentTurnIndex = turnSnapshot + 1;
+      // #3603 W2 + W4 — `consumeForComplete` returns `null` if the turn was
+      // already persisted via the abort path (silent no-op so a late
+      // `onTextTurnEnd` cannot double-write or overwrite the aborted row).
+      // Otherwise it snapshot-clear-bumps SYNCHRONOUSLY so a turn-N+1
+      // `onResult` arriving on the same iterator yield cannot overwrite
+      // turn N's snapshot.
+      const consumed = state.consumeForComplete();
+      if (consumed === null) return;
       // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
-      void saveAssistantMessage({
-        kind: "complete",
-        usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
-      });
+      void saveAssistantMessage(
+        { kind: "complete", usage: consumed.usage },
+        consumed.text,
+      );
       // Per-turn boundary → terminal stream event for the cc_router bubble.
       // Without this, the client reducer keeps the bubble in
       // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown
@@ -1367,35 +1467,35 @@ export async function dispatchSoleurGo(
       // a future `WorkflowEnd` variant cannot silently route through abort
       // without a deliberate listing here.
       if (ABORT_FLUSH_STATUSES.has(end.status)) {
-        if (latestAssistantText.length > 0) {
-          // #3603 W4 — text-present abort: capture the per-turn usage tagged
-          // to the active turn index, then clear pendingTurnUsage so a late
-          // onTextTurnEnd cannot re-attach the stale value. Set
-          // `assistantTurnPersisted = true` SYNCHRONOUSLY so the late onTextTurnEnd
-          // cannot race the await microtask.
-          const turnUsage =
-            pendingTurnUsage?.turnIndex === currentTurnIndex
-              ? pendingTurnUsage
-              : null;
-          pendingTurnUsage = null;
-          assistantTurnPersisted = true;
-          void saveAssistantMessage({
-            kind: "aborted",
-            usage: turnUsage ? { costUsd: turnUsage.costUsd } : null,
-          });
-        } else if (pendingTurnUsage) {
-          // #3603 W4 orphan — usage captured but model produced ZERO text
-          // (tool-only turn that then aborted). The empty-text path drops
-          // the row (PR-A1 contract at `saveAssistantMessage` empty-drop);
-          // P0-mirror the orphaned cost so operators can detect a runner
-          // misconfiguration that strands cost telemetry. Dedup keyed on
-          // `(userId, op, conversationId)` with 1h TTL.
-          pendingTurnUsage = null;
-          mirrorP0Deduped(new Error(CC_OP_SLUGS.usageOrphanDropped), {
-            op: CC_OP_SLUGS.usageOrphanDropped,
-            userId,
-            conversationId,
-          });
+        const outcome = state.consumeForAbort();
+        switch (outcome.kind) {
+          case "text":
+            // #3603 W4 text-present abort: state-class snapshot-clear-marks
+            // SYNCHRONOUSLY so a late onTextTurnEnd cannot race the await.
+            void saveAssistantMessage(
+              { kind: "aborted", usage: outcome.usage },
+              outcome.text,
+            );
+            break;
+          case "orphan":
+            // #3603 W4 orphan — usage captured but model produced ZERO text
+            // (tool-only turn that then aborted). The empty-text path drops
+            // the row (PR-A1 contract at `saveAssistantMessage` empty-drop);
+            // P0-mirror the orphaned cost so operators can detect a runner
+            // misconfiguration that strands cost telemetry. Dedup keyed on
+            // `(userId, op, conversationId)` with 1h TTL.
+            mirrorP0Deduped(new Error(CC_OP_SLUGS.usageOrphanDropped), {
+              op: CC_OP_SLUGS.usageOrphanDropped,
+              userId,
+              conversationId,
+            });
+            break;
+          case "none":
+            break;
+          default: {
+            const _exhaustive: never = outcome;
+            void _exhaustive;
+          }
         }
       }
       // Architecture-F4: `session_ended` is terminal in `ws-client.ts`
@@ -1443,7 +1543,7 @@ export async function dispatchSoleurGo(
       // so the value is safe to attach verbatim. The `turnIndex` tag pins
       // capture to the active turn so a stale callback arriving after the
       // bump cannot misattribute to a later row.
-      pendingTurnUsage = { turnIndex: currentTurnIndex, costUsd: result.totalCostUsd };
+      state.captureUsage(state.currentTurnIndex(), result.totalCostUsd);
 
       // Fire-and-forget per-turn cost write to the aggregation surface
       // (separate from messages.usage). Closes the cc-soleur-go path's

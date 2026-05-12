@@ -1834,11 +1834,15 @@ describe("cc-dispatcher singletons + orchestration", () => {
       expect(userRows).toHaveLength(1);
       expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
 
-      // Exactly THREE scope-spy invocations — proves all three call sites
+      // At least THREE scope-spy invocations — proves all three call sites
       // (user-INSERT, onTextTurnEnd→save, onWorkflowEnded→save({status:"aborted"}))
       // run through the helper. A future refactor that drops any call site
-      // fails this assertion.
-      expect(scopeSpy).toHaveBeenCalledTimes(3);
+      // fails the per-call argument-equality assertion below; a future
+      // refactor that ADDS another `assertWriteScope` call site (e.g., a
+      // new message-write path inside `TurnPersistenceState` consumers)
+      // does not silently regress this test. #3639 F1 + #3641
+      // T-W1-invariant-7 relaxation.
+      expect(scopeSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
       for (const call of scopeSpy.mock.calls) {
         // Receives the dispatch-closure identity tuple — when a future SDK
         // payload source is wired in, this signature is the single edit point.

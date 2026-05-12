@@ -61,13 +61,13 @@ lane: single-domain
 
 ## 6. #3639 F1 + #3641 T-W1-invariant-7 — TurnPersistenceState extraction (paired)
 
-- [ ] 6.1 Author `class TurnPersistenceState` at module scope in `cc-dispatcher.ts` with private fields + 6 public methods (`appendText`, `captureUsage`, `snapshotAndBumpTurn`, `flushAbort`, `flushComplete`, `reset`).
-- [ ] 6.2 Replace the four `let` declarations (cc-dispatcher.ts:1136-1150) with `const state = new TurnPersistenceState();`.
-- [ ] 6.3 Rewrite `onText` / `onTextTurnEnd` / `onWorkflowEnded` / `onResult` to call class methods.
-- [ ] 6.4 Relax `T-W1-invariant-7`: `toHaveBeenCalledTimes(3)` → `toBeGreaterThanOrEqual(3)`. Keep the per-call argument-equality loop.
-- [ ] 6.5 Port `T-W4-reset-symmetry` to call `state.reset()` and assert against the public accessor (add `__getStateForTests` seam if needed).
-- [ ] 6.6 Run `bun test` — expect green.
-- [ ] 6.7 Commit: `refactor(cc-dispatcher): extract TurnPersistenceState + relax T-W1-invariant-7 — closes #3639 (F1 + F3)`.
+- [x] 6.1 Author `class TurnPersistenceState` at module scope in `cc-dispatcher.ts` with private fields + public methods (`appendText`, `captureUsage`, `consumeForComplete`, `consumeForAbort`, `isAborted`, `currentTurnIndex`, `hasPendingUsage`, `reset`). Plan-prescribed names `snapshotAndBumpTurn` / `flushAbort` / `flushComplete` were renamed to `consumeFor{Complete,Abort}` so the discriminated-union return type encodes the three-branch outcome explicitly (text / orphan / none) — drift noted.
+- [x] 6.2 Replaced the four `let` declarations with `const state = new TurnPersistenceState();`.
+- [x] 6.3 Rewrote `onText` / `onTextTurnEnd` / `onWorkflowEnded` / `onResult` to call class methods. `saveAssistantMessage` now takes `text: string` explicitly (the state class snapshots text via `consumeForComplete`/`consumeForAbort` synchronously before the await).
+- [x] 6.4 Relaxed `T-W1-invariant-7`: `toHaveBeenCalledTimes(3)` → `toBeGreaterThanOrEqual(3)`. Per-call argument-equality loop retained.
+- [x] 6.5 `T-W4-reset-symmetry` did not need to be ported — it asserts via mock-insert-call observations (`assistantInsertCalls(mockMessagesInsert)`) and `mockMirrorP0Deduped`, not via direct closure-state poking. No `__getStateForTests` seam needed.
+- [x] 6.6 Ran `vitest run` — green (4076 / 57 skipped).
+- [x] 6.7 Commit: `refactor(cc-dispatcher): extract TurnPersistenceState + relax T-W1-invariant-7 — closes #3639 (F1 + F3)`.
 
 ## 7. #3641 — shared harness + seam renames + seam relocation + expect.poll
 
