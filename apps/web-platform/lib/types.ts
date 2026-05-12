@@ -425,24 +425,32 @@ export interface Message {
    *  fixtures/snapshots don't churn; runtime persistence always sets
    *  it (DB default is `'complete'`). */
   status?: "complete" | "aborted";
-  /** Persistence shape varies by leader:
+  /** #3640 F6 — discriminates the `usage` shape. **The discriminator
+   *  lives on the nested `usage` object, NOT at the Message top level**
+   *  (review #3670 — the top-level field was declared but unread; readers
+   *  uniformly consult `usage?.variant`). The reader-side types
+   *  (`AbortMarkerUsage` in `message-bubble.tsx`, `ChatTextMessage.usage`
+   *  in `chat-state-machine.ts`) each carry their own `variant?` field;
+   *  the hydration site in `lib/ws-client.ts:1010-1024` derives it from
+   *  `leader_id === CC_ROUTER_LEADER_ID`. There is no `variant` column on
+   *  the `messages` table — this is a TypeScript-only widening.
    *
-   *  - **Legacy `agent-runner` path** (`leader_id` ∈ domain leaders):
-   *    full `UsageSnapshot` on `status === 'aborted'` turns —
-   *    `{ input_tokens, output_tokens, cost_usd?, completed_actions[] }`.
-   *    Shape documented in `UsageSnapshot` in `agent-runner.ts` and
-   *    migration 040.
+   *  - **Legacy `agent-runner` path** (default — nested `variant` absent
+   *    or `"legacy"`, `leader_id` ∈ domain leaders): full `UsageSnapshot`
+   *    on `status === 'aborted'` turns — `{ input_tokens, output_tokens,
+   *    cost_usd?, completed_actions[] }`. Shape documented in
+   *    `UsageSnapshot` in `agent-runner.ts` and migration 040.
    *
-   *  - **cc-router path** (`leader_id === 'cc_router'`, PR #3603 W4):
-   *    cc-narrowed `{ cost_usd: number }` only — Art. 5(1)(c) data
-   *    minimization. Persisted on `'complete'` turns when
-   *    `CC_PERSIST_USAGE === "true"` (default off until PR-C Privacy
-   *    Policy refresh ships); also attached to `'aborted'` rows when
-   *    captured by `onResult` before the abort fired.
+   *  - **cc-router path** (nested `variant === "cc"`, `leader_id ===
+   *    'cc_router'`, PR #3603 W4): cc-narrowed `{ cost_usd: number }`
+   *    only — Art. 5(1)(c) data minimization. Persisted on `'complete'`
+   *    turns when `CC_PERSIST_USAGE === "true"` (default off until PR-C
+   *    Privacy Policy refresh ships); also attached to `'aborted'` rows
+   *    when captured by `onResult` before the abort fired.
    *
    *  Optional in the type so existing fixtures don't churn. Readers
-   *  must branch on the present field set (`input_tokens` exists =>
-   *  legacy snapshot; only `cost_usd` => cc-narrowed).
+   *  should branch on `usage?.variant` (post-#3640 F6) rather than on
+   *  field presence — see `renderAbortedAssistant` in `message-bubble.tsx`.
    */
   usage?: {
     input_tokens?: number;

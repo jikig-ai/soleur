@@ -61,9 +61,15 @@ export function RetryingChip({ label }: { label: string | undefined }) {
  *  #3603 W4 — fields widened to optional so the cc-narrowed `{ cost_usd }`
  *  shape (cc-router aborted rows under `CC_PERSIST_USAGE=true`) renders as a
  *  cost-only marker without producing `NaN` from `input_tokens +
- *  output_tokens`. Readers MUST branch on field presence per the
- *  `Message.usage` doc-comment in `lib/types.ts`. */
+ *  output_tokens`.
+ *
+ *  #3640 F6 — `variant` discriminates the two persistence shapes so
+ *  readers can switch on `variant` instead of doing `typeof === "number"`
+ *  field-presence checks. Optional during the F6 transition (readers
+ *  treat `undefined` as `"legacy"`); derived at hydration from
+ *  `leader_id === CC_ROUTER_LEADER_ID`. */
 export interface AbortMarkerUsage {
+  variant?: "legacy" | "cc";
   input_tokens?: number;
   output_tokens?: number;
   cost_usd?: number | null;
@@ -329,22 +335,32 @@ function renderAbortedAssistant({
   variant: "full" | "sidebar";
 }): React.ReactNode {
   const wrapCode = variant === "sidebar";
-  // #3603 W4 — branch on field presence per the `Message.usage` doc-comment.
-  // Legacy `agent-runner` rows carry the full `UsageSnapshot` (input_tokens +
-  // output_tokens + cost_usd + completed_actions); cc-router rows under
-  // `CC_PERSIST_USAGE=true` carry only `cost_usd`. Computing
-  // `input_tokens + output_tokens` unconditionally would surface `NaN tokens`
-  // on a cc-router aborted-row reload (per data-integrity finding in this
-  // PR's review).
+  // #3640 F6 — switch on `usage.variant` per the `AbortMarkerUsage`
+  // doc-comment above and the `Message.usage` doc-comment in
+  // `lib/types.ts`. The cc-router path persists only
+  // `cost_usd` (Art. 5(1)(c) data minimization); the legacy
+  // `agent-runner` path persists the full `UsageSnapshot` (input_tokens +
+  // output_tokens + cost_usd + completed_actions). `undefined` variant
+  // defaults to `"legacy"` for fixture-stable backward-compat with the
+  // pre-#3640 corpus. The cc branch skips the token sum so a cc-router
+  // aborted-row reload renders cost-only (no `NaN tokens`).
+  const usageVariant = usage?.variant ?? "legacy";
   const totalTokens =
-    usage &&
-    typeof usage.input_tokens === "number" &&
-    typeof usage.output_tokens === "number"
+    usage && usageVariant === "legacy" &&
+    usage.input_tokens !== undefined &&
+    usage.output_tokens !== undefined
       ? usage.input_tokens + usage.output_tokens
       : null;
+  // Review #3670 — guard against non-numeric `cost_usd` values that could
+  // leak from the `messages.usage` jsonb column (legacy rows, partial
+  // backfills). `typeof === "number" && Number.isFinite` mirrors the
+  // pre-#3640 behavior — a malformed cell renders "included in your plan"
+  // rather than crashing the bubble (`.toFixed` on a string) or rendering
+  // "$NaN" / "$Infinity" to the user.
+  const costUsd = usage?.cost_usd;
   const costLabel =
-    usage && typeof usage.cost_usd === "number"
-      ? `$${usage.cost_usd.toFixed(4)}`
+    typeof costUsd === "number" && Number.isFinite(costUsd)
+      ? `$${costUsd.toFixed(4)}`
       : "included in your plan";
   const actions = usage?.completed_actions ?? [];
 

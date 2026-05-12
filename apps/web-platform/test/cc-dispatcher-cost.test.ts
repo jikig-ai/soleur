@@ -15,67 +15,67 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// #3641 F5 — Shared `vi.mock` factory bodies live in
+// `test/helpers/cc-dispatcher-harness.ts`. This file consumes 5/6 of the
+// harness modules; the 1 omitted (`mockMirrorP0Deduped`) is not exercised
+// by the cost-writer wiring tests (W4-orphan path is unit-tested in
+// cc-dispatcher.test.ts). Five sibling cc-dispatcher-*.test.ts files
+// stay on bespoke hoists per the plan's harness consumer scoping.
 const {
   mockReportSilentFallback,
   mockFetchUserWorkspacePath,
   mockMessagesInsert,
   mockUpdateConversationFor,
+  mockMirrorP0Deduped,
   mockPersistTurnCost,
 } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
   mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
   mockUpdateConversationFor: vi.fn().mockResolvedValue({ ok: true }),
+  mockMirrorP0Deduped: vi.fn(),
   mockPersistTurnCost: vi.fn(),
 }));
 
 vi.mock("@/server/conversation-writer", async () => {
-  const actual = await vi.importActual<
-    typeof import("@/server/conversation-writer")
-  >("@/server/conversation-writer");
-  return {
-    ...actual,
-    updateConversationFor: mockUpdateConversationFor,
-  };
+  const { conversationWriterFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return conversationWriterFactory({ mockUpdateConversationFor });
 });
 
-vi.mock("@/server/observability", () => ({
-  reportSilentFallback: mockReportSilentFallback,
-  warnSilentFallback: vi.fn(),
-  mirrorWithDebounce: mockReportSilentFallback,
-  __resetMirrorDebounceForTests: vi.fn(),
-  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
-}));
+vi.mock("@/server/observability", async () => {
+  const { observabilityFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return observabilityFactory({
+    mockReportSilentFallback,
+    mockMirrorP0Deduped,
+    // This file doesn't exercise the 5-min TTL coalescing — collapse
+    // `mirrorWithDebounce` to the spy directly.
+    withTtlDedupWrapper: false,
+  });
+});
 
 vi.mock("@/server/kb-document-resolver", async () => {
-  const actual = await vi.importActual<
-    typeof import("@/server/kb-document-resolver")
-  >("@/server/kb-document-resolver");
-  return {
-    ...actual,
-    fetchUserWorkspacePath: mockFetchUserWorkspacePath,
-  };
+  const { kbDocumentResolverFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return kbDocumentResolverFactory({ mockFetchUserWorkspacePath });
 });
 
-vi.mock("@/lib/supabase/service", () => ({
-  serverUrl: () => "https://test.supabase.co",
-  createServiceClient: () => ({
-    from: (table: string) => {
-      if (table === "messages") return { insert: mockMessagesInsert };
-      throw new Error(`unexpected table: ${table}`);
-    },
-    storage: { from: () => ({ download: vi.fn() }) },
-  }),
-}));
+vi.mock("@/lib/supabase/service", async () => {
+  const { supabaseServiceFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return supabaseServiceFactory({ mockMessagesInsert });
+});
 
 vi.mock("@/server/cost-writer", async () => {
-  const actual = await vi.importActual<
-    typeof import("@/server/cost-writer")
-  >("@/server/cost-writer");
-  return {
-    ...actual,
-    persistTurnCost: mockPersistTurnCost,
-  };
+  const { costWriterFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return costWriterFactory({ mockPersistTurnCost });
 });
 
 import {

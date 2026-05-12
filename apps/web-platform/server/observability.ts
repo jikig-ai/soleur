@@ -161,7 +161,10 @@ export function warnSilentFallback(
  * **Registry of `errorClass` strings** (extend when adding a caller):
  * - `cc-dispatcher` family: `agent-sandbox:sdk-startup`,
  *   `dispatch:invalid-payload`, `dispatch:invalid-response`,
- *   `dispatch:kind-mismatch`, `dispatch:internal-error`.
+ *   `dispatch:kind-mismatch`, `dispatch:internal-error`. The
+ *   op-slug emit sites in `cc-dispatcher.ts` reference
+ *   `CC_OP_SLUGS.*` (e.g., `CC_OP_SLUGS.saveAssistant`,
+ *   `CC_OP_SLUGS.persistUserMessage`) — see #3642 F7.
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.
@@ -170,15 +173,94 @@ export function warnSilentFallback(
  * cannot collide across features for the same user.
  */
 export const MIRROR_DEBOUNCE_MS = 5 * 60 * 1000;
-const _mirrorLastReportedAt = new Map<string, number>();
-// Periodic sweep cadence — drain stale entries older than 2x the TTL on a
-// fraction of writes. Cheap amortized O(1) per call when the sweep is
-// skipped; O(n) at the sweep threshold. Caps map growth on long-running
-// processes that see many distinct `(userId, errorClass)` pairs (e.g.,
-// dispatcher firing one-off internal-error mirrors across many users).
-const MIRROR_STALE_TTL_MS = 2 * MIRROR_DEBOUNCE_MS;
+// Periodic sweep cadence — drain entries older than the dedup window
+// (`ttlMs`, the `TtlDedupMap` sweep cutoff) on a fraction of writes. Cheap
+// amortized O(1) per call when the sweep is skipped; O(n) at the sweep
+// threshold. Caps map growth on long-running processes that see many distinct
+// keys. Pre-#3639 used a 2×TTL grace cutoff for `mirrorWithDebounce` to
+// retain zombie entries past the dedup window; the consolidated 1×TTL cutoff
+// here is functionally equivalent (post-window entries cannot affect dedup
+// outcomes) and reclaims memory sooner.
 const MIRROR_SWEEP_INTERVAL = 64;
-let _mirrorWriteCount = 0;
+
+/**
+ * #3639 F3 — Generic per-key TTL dedup cache with amortized sweep and
+ * optional insertion-order eviction.
+ *
+ * Both `mirrorWithDebounce` (per-`(userId, errorClass)` 5-min TTL) and
+ * `mirrorP0Deduped` (per-`(userId, op, conversationId)` 1-hour TTL with a
+ * hard size cap) share identical bookkeeping: a `Map<key, lastTimestamp>`,
+ * an "every N writes run an O(n) sweep" amortized eviction, and a
+ * `reset()` test seam. Extracting both into one class avoids drift between
+ * the two wrappers' bookkeeping (e.g., the sweep interval, the stale-TTL
+ * cutoff multiplier, the `clear()` reset semantics).
+ *
+ * Constructor params:
+ * - `ttlMs`: dedup window. `tryClaim` returns `false` if a previous claim
+ *   for `key` is within `ttlMs` of `now`.
+ * - `sweepInterval`: every `Nth` claim triggers an O(n) sweep dropping
+ *   entries older than `ttlMs` (P0 wrapper uses TTL cutoff). Pass
+ *   `Infinity` to disable sweeping entirely.
+ * - `maxSize` (optional): when present, capacity-bound the map. On insert
+ *   that would exceed `maxSize`, evict the oldest entry (Map preserves
+ *   insertion order). Used by `mirrorP0Deduped` to bound heap under an
+ *   adversarial burst with rotating keys; `mirrorWithDebounce` omits it
+ *   to preserve the pre-existing behavior.
+ *
+ * The wrappers compute sink emission (Sentry / Pino) themselves —
+ * `TtlDedupMap` is dedup bookkeeping only, no I/O.
+ */
+export class TtlDedupMap<K extends string = string> {
+  private readonly _lastAt = new Map<K, number>();
+  private _writeCount = 0;
+
+  constructor(
+    private readonly ttlMs: number,
+    private readonly sweepInterval: number,
+    private readonly maxSize?: number,
+  ) {}
+
+  /**
+   * Attempt to claim `key` at time `now`. Returns `true` when the caller
+   * holds the slot (first claim within `ttlMs`); `false` if a prior claim
+   * is still within the window (caller should skip the side effect).
+   *
+   * Amortizes a sweep over every `sweepInterval` claims to bound map size.
+   * When `maxSize` is set and the map is at capacity, the oldest entry is
+   * evicted before insertion (insertion-order eviction via `Map.keys()`).
+   */
+  tryClaim(key: K, now: number): boolean {
+    const last = this._lastAt.get(key);
+    if (last !== undefined && now - last < this.ttlMs) return false;
+    // Capacity check BEFORE insert: evict oldest if at cap.
+    if (this.maxSize !== undefined && this._lastAt.size >= this.maxSize) {
+      const oldest = this._lastAt.keys().next().value;
+      if (oldest !== undefined) this._lastAt.delete(oldest);
+    }
+    this._lastAt.set(key, now);
+    this._writeCount++;
+    if (
+      Number.isFinite(this.sweepInterval) &&
+      this._writeCount % this.sweepInterval === 0
+    ) {
+      for (const [k, t] of this._lastAt) {
+        if (now - t > this.ttlMs) this._lastAt.delete(k);
+      }
+    }
+    return true;
+  }
+
+  /** Test seam: drop all entries + reset the write counter. */
+  reset(): void {
+    this._lastAt.clear();
+    this._writeCount = 0;
+  }
+}
+
+const _mirrorDebounce = new TtlDedupMap<string>(
+  MIRROR_DEBOUNCE_MS,
+  MIRROR_SWEEP_INTERVAL,
+);
 
 export function mirrorWithDebounce(
   err: unknown,
@@ -186,24 +268,7 @@ export function mirrorWithDebounce(
   userId: string,
   errorClass: string,
 ): void {
-  const key = `${userId}:${errorClass}`;
-  const now = Date.now();
-  const last = _mirrorLastReportedAt.get(key);
-  if (last !== undefined && now - last < MIRROR_DEBOUNCE_MS) {
-    return;
-  }
-  _mirrorLastReportedAt.set(key, now);
-  // Amortized sweep: every ~MIRROR_SWEEP_INTERVAL writes, drop entries
-  // whose last-mirror was >2x the TTL ago. Keeps the map size bounded
-  // by the steady-state set of recently-active (userId, errorClass)
-  // pairs rather than the all-time set.
-  _mirrorWriteCount++;
-  if (_mirrorWriteCount % MIRROR_SWEEP_INTERVAL === 0) {
-    const cutoff = now - MIRROR_STALE_TTL_MS;
-    for (const [k, t] of _mirrorLastReportedAt) {
-      if (t < cutoff) _mirrorLastReportedAt.delete(k);
-    }
-  }
+  if (!_mirrorDebounce.tryClaim(`${userId}:${errorClass}`, Date.now())) return;
   reportSilentFallback(err, ctx);
 }
 
@@ -213,8 +278,7 @@ export function mirrorWithDebounce(
  * dispatcher reset pattern; never call from production code.
  */
 export function __resetMirrorDebounceForTests(): void {
-  _mirrorLastReportedAt.clear();
-  _mirrorWriteCount = 0;
+  _mirrorDebounce.reset();
 }
 
 /**
@@ -235,7 +299,7 @@ export function __resetMirrorDebounceForTests(): void {
  *
  * Callers:
  * - `cc-dispatcher.ts` — write-boundary sentinel (`assertWriteScope`),
- *   W4-orphan drop (`usage_orphan_dropped`).
+ *   W4-orphan drop (`CC_OP_SLUGS.usageOrphanDropped`).
  *
  * Sentry retention (typically 30-90 days) does NOT satisfy Art. 33(5)'s
  * indefinite breach documentation requirement. A durable audit-log table
@@ -247,9 +311,13 @@ export const P0_DEDUP_TTL_MS = 60 * 60 * 1000;
 // nothing). Insertion-order eviction (Map preserves insertion order) caps heap
 // regardless of burst rate. Sized to ~1.4 MB worst-case.
 const P0_DEDUP_MAX_SIZE = 10_000;
-const _p0DedupMap = new Map<string, number>();
 const P0_SWEEP_INTERVAL = 64;
-let _p0WriteCount = 0;
+
+const _p0Dedup = new TtlDedupMap<string>(
+  P0_DEDUP_TTL_MS,
+  P0_SWEEP_INTERVAL,
+  P0_DEDUP_MAX_SIZE,
+);
 
 export function mirrorP0Deduped(
   err: Error,
@@ -257,26 +325,7 @@ export function mirrorP0Deduped(
 ): void {
   const key = `${ctx.userId}:${ctx.op}:${ctx.conversationId}`;
   const now = Date.now();
-  const last = _p0DedupMap.get(key);
-  if (last !== undefined && now - last < P0_DEDUP_TTL_MS) return;
-  // Capacity check BEFORE insert: evict oldest if at cap.
-  if (_p0DedupMap.size >= P0_DEDUP_MAX_SIZE) {
-    const oldest = _p0DedupMap.keys().next().value;
-    if (oldest !== undefined) _p0DedupMap.delete(oldest);
-  }
-  _p0DedupMap.set(key, now);
-
-  // Amortized sweep — drops entries older than the TTL on a fraction of
-  // writes. Bounds map growth on long-running processes per learning
-  // 2026-05-11-debounce-cache-needs-eviction-and-symmetric-state-reset.md.
-  // Cutoff is `> TTL` (not `> 2*TTL` as in mirrorWithDebounce) because P0
-  // events warrant tighter eviction than 5-min-debounce mirrors.
-  _p0WriteCount++;
-  if (_p0WriteCount % P0_SWEEP_INTERVAL === 0) {
-    for (const [k, t] of _p0DedupMap) {
-      if (now - t > P0_DEDUP_TTL_MS) _p0DedupMap.delete(k);
-    }
-  }
+  if (!_p0Dedup.tryClaim(key, now)) return;
 
   // Pino mirror for container-stdout visibility (same shape as
   // `reportSilentFallback` so log aggregators key off identical fields).
@@ -309,9 +358,11 @@ export function mirrorP0Deduped(
 
 /**
  * Test seam: drain the P0 dedup map between tests. Naming mirrors
- * `__resetMirrorDebounceForTests` (line above). Never call from production.
+ * `__resetMirrorDebounceForTests` (line above) — both prefix the cache
+ * they reset with `Mirror` for parallelism. Never call from production.
+ * #3641 — renamed from `__resetP0DedupForTests` to match the
+ * `mirror{Debounce,P0Dedup}` naming pair. No deprecation alias kept.
  */
-export function __resetP0DedupForTests(): void {
-  _p0DedupMap.clear();
-  _p0WriteCount = 0;
+export function __resetMirrorP0DedupForTests(): void {
+  _p0Dedup.reset();
 }
