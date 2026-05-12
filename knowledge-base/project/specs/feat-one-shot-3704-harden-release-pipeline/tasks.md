@@ -10,8 +10,9 @@ Derived from the plan. Each task corresponds to a phase + Acceptance Criterion i
 
 ## 1. Wrapper + script trap (Phase 1)
 
-- [ ] 1.1 Create `apps/web-platform/infra/ci-deploy-wrapper.sh` — single `exec systemd-run --scope --quiet --collect --service-type=exec --property=RuntimeMaxSec=900s --property=TimeoutStopSec=20s --setenv=… -- /usr/local/bin/ci-deploy.sh`. Mode `0755`.
-- [ ] 1.2 Add `trap 'final_write_state 124 timeout; exit 124' TERM INT` to `apps/web-platform/infra/ci-deploy.sh` directly after the existing EXIT trap (around line 102).
+- [ ] 1.1 Create `apps/web-platform/infra/ci-deploy-wrapper.sh` — single `exec timeout --signal=TERM --kill-after=20s 900s /usr/local/bin/ci-deploy.sh`. Mode `0755`.
+- [ ] 1.2a Add `set -m` to `apps/web-platform/infra/ci-deploy.sh` at top (between `set -euo pipefail` and the first `readonly`).
+- [ ] 1.2b Add `trap 'final_write_state 124 "timeout"; kill -TERM 0 2>/dev/null || true; exit 124' TERM INT` to `apps/web-platform/infra/ci-deploy.sh` directly after the existing EXIT trap (around line 102).
 - [ ] 1.3 Edit `apps/web-platform/infra/hooks.json.tmpl` `execute-command` to `/usr/local/bin/ci-deploy-wrapper.sh`.
 - [ ] 1.4 Edit `apps/web-platform/infra/server.tf`:
   - [ ] 1.4.1 Add `file("${path.module}/ci-deploy-wrapper.sh")` to `terraform_data.deploy_pipeline_fix.triggers_replace`.
