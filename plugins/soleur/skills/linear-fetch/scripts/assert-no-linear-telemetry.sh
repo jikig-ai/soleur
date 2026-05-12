@@ -21,6 +21,19 @@
 # .claude/hooks/lib/incidents.sh are gated. The skill currently has zero
 # emit_incident call sites; this helper exists so a future maintainer
 # adding one cannot regress TR7 silently.
+#
+# Known limitations (security-sentinel P2-1, P2-2):
+#   1. Base64-encoded payloads are NOT decoded before pattern check. A
+#      caller that base64-encodes Linear identifiers or URLs in telemetry
+#      will silently pass this gate. If telemetry shapes start including
+#      encoded fields, add a base64-decode pre-pass (detect strings of
+#      shape `^[A-Za-z0-9+/=]{16,}$`, decode, recurse).
+#   2. URL-fragment-only leaks (e.g., `?sig=<long_base64>&expires=<ts>`
+#      without the hostname) are NOT caught. A future maintainer pasting
+#      signed-URL query params separately from the host would bypass.
+#      Consider adding a fourth pattern matching `\?[a-zA-Z]+=[A-Za-z0-9_-]{32,}`.
+# These limitations are acceptable for the current zero-emit_incident
+# baseline; revisit if the skill grows real telemetry emissions.
 
 set -eu
 
