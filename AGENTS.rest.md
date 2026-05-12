@@ -15,6 +15,7 @@
 
 - When a test runner crashes (segfault, OOM, abort), never dismiss it as "known" or "unrelated" [id: wg-when-a-test-runner-crashes-segfault-oom]. Either fix the root cause, file a GitHub issue to track it, or document a concrete workaround. A crash without a tracking issue is a workflow violation.
 - When tests fail and are confirmed pre-existing (same on main), create a GitHub issue to track them before proceeding [id: wg-when-tests-fail-and-are-confirmed-pre]. Pre-existing failures without tracking issues normalize a red suite.
+- Before `gh pr merge`, all local commits MUST be on origin/<branch> [id: wg-ship-push-before-merge] [hook-enforced: .claude/hooks/ship-unpushed-commits-gate.sh]. The hook denies when `git rev-list origin/<branch>..HEAD --count` > 0. Hook covers Claude Code Bash only — CI workflows, terraform, and manual shell invocations MUST run the equivalent check (see ship Phase 6.4). **Why:** 2026-05-12 #3624→#3627→#3630 — 2 of 5 local commits never pushed; squash-merge consumed only the 3 pushed planning files.
 
 ## Review & Feedback
 

@@ -42,6 +42,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-before-every-commit-run-compound-skill] → core
 - [id: wg-never-bump-version-files-in-feature] → core
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → core
+- [id: wg-ship-push-before-merge] → rest
 - [id: wg-after-a-pr-merges-to-main-verify-all] → core
 - [id: wg-at-session-start-run-bash-plugins-soleur] → core
 - [id: wg-at-session-start-after-cleanup-merged] → core
