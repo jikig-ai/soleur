@@ -124,6 +124,39 @@ const TERMINAL_WORKFLOW_END_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
   "internal_error",
 ]);
 
+// #3603 W2 — statuses that trigger the assistant-text abort flush. Mirrors
+// the legacy contract at `agent-runner.ts:2044-2055` (writes any non-completed
+// terminal status as `status: "aborted"`). Co-located with
+// `TERMINAL_WORKFLOW_END_STATUSES` so the file has one canonical
+// exhaustiveness rail per status-set. The `_abortFlushExhaustive` rail below
+// is the type-level proof that this set covers every non-`completed`
+// variant — adding a new `WorkflowEnd` variant without listing it here is a
+// TS error.
+const ABORT_FLUSH_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
+  WorkflowEndStatus
+>([
+  "cost_ceiling",
+  "runner_runaway",
+  "user_aborted",
+  "idle_timeout",
+  "plugin_load_failure",
+  "internal_error",
+]);
+
+// Compile-time exhaustiveness rail for `ABORT_FLUSH_STATUSES`.
+// `Exclude<WorkflowEndStatus, "completed">` is exactly the set of non-completed
+// statuses; this type assignment forces the keys above to cover that set.
+type AbortFlushStatus = Exclude<WorkflowEndStatus, "completed">;
+const _abortFlushExhaustive: Record<AbortFlushStatus, true> = {
+  cost_ceiling: true,
+  runner_runaway: true,
+  user_aborted: true,
+  idle_timeout: true,
+  plugin_load_failure: true,
+  internal_error: true,
+};
+void _abortFlushExhaustive;
+
 /**
  * User-facing copy for each `WorkflowEndStatus`. Replaces the previous
  * ad-hoc `"Workflow ended (${status}) — retry to continue."` template
@@ -985,16 +1018,23 @@ export async function dispatchSoleurGo(
       });
     });
 
-  // Per-turn assistant text accumulator. Reset to "" inside
-  // `saveAssistantMessage` after each turn boundary, so a turn that ends in
-  // `result` with zero text correctly skips the insert without consuming the
-  // previous turn's data. Mirrors the pattern at `agent-runner.ts:1079` so
-  // `api-messages.ts` returns BOTH user and assistant rows on resume —
-  // without this the cc path's history is user-only and the resumed thread
-  // re-renders the routing chip as if the question were unanswered.
+  // Holds the LATEST SDKAssistantMessage emission for this turn. Mirrors
+  // the chat-state-machine REPLACE semantic at `chat-state-machine.ts:477`
+  // (`applyStreamEvent` case "stream") so DB hydration on tab reload
+  // matches what the user saw live. #3603 W8 — pre-2026-05-12 the
+  // accumulator concatenated all emissions (`+=`); AC11 verification
+  // on conversation 36df3694 surfaced the drift between persisted content
+  // and live UI. Invariant: the value at the instant `onTextTurnEnd`
+  // fires (or `onWorkflowEnded` flushes for the abort path) is what
+  // persists. No reordering, no merge.
   let accumulatedAssistantText = "";
+  // #3603 W2 — flushed by `onWorkflowEnded` for non-`completed` statuses
+  // so a late `onTextTurnEnd` (in-flight SDK callback after abort fires)
+  // cannot double-write or overwrite the abort row. Closure-scoped per
+  // dispatch invocation; fresh `false` for each `dispatchSoleurGo` call.
+  let workflowEnded = false;
 
-  async function saveAssistantMessage(): Promise<void> {
+  async function saveAssistantMessage(opts?: { status?: "aborted" }): Promise<void> {
     // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
     // mutate `fullText` while this insert is in flight (single async loop
     // serializes onText/onTextTurnEnd, but the await yields the microtask).
@@ -1002,14 +1042,34 @@ export async function dispatchSoleurGo(
     accumulatedAssistantText = "";
     if (!fullText) return;
 
-    const { error } = await supabase().from("messages").insert({
+    const row: Record<string, unknown> = {
       id: randomUUID(),
       conversation_id: conversationId,
       role: "assistant",
       content: fullText,
       tool_calls: null,
       leader_id: CC_ROUTER_LEADER_ID,
-    });
+    };
+    // Omit `status` for the normal completion path — migration 040's
+    // DEFAULT of `'complete'` applies. Only the abort branch writes
+    // `status: "aborted"` explicitly.
+    // Note: `usage` jsonb is intentionally NOT populated here. The legacy
+    // single-leader path at `agent-runner.ts:2051-2054` writes
+    // `usage: { ...accumulatedUsage, completed_actions }` on abort; cc-path
+    // parity is deferred to PR-A2 (W4) behind a `CC_PERSIST_USAGE`
+    // feature flag for Art. 13(3) compliance. See #3603 PR-A1/PR-A2 split.
+    if (opts?.status === "aborted") {
+      row.status = "aborted";
+    }
+
+    // Hoisted op slug so `mirrorWithDebounce` receives the same value for
+    // both `op` and `errorClass` (the dedupe key) — drift between them
+    // would silently split the Sentry dedupe stream.
+    const opSlug = opts?.status === "aborted"
+      ? "save-assistant-message-aborted-failed"
+      : "save-assistant-message-failed";
+
+    const { error } = await supabase().from("messages").insert(row);
     if (error) {
       // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
       // — a misconfigured Supabase RLS for one user could otherwise emit one
@@ -1019,18 +1079,21 @@ export async function dispatchSoleurGo(
         error,
         {
           feature: "cc-dispatcher",
-          op: "save-assistant-message-failed",
+          op: opSlug,
           extra: { userId, conversationId, length: fullText.length },
         },
         userId,
-        "save-assistant-message-failed",
+        opSlug,
       );
     }
   }
 
   const events: DispatchEvents = {
     onText: (text) => {
-      accumulatedAssistantText += text;
+      // #3603 W8 — replace, not append. Mirrors chat-state-machine REPLACE
+      // semantic so persisted content matches the UI's live render.
+      // See accumulator declaration comment above for invariant + AC11 source.
+      accumulatedAssistantText = text;
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -1054,6 +1117,14 @@ export async function dispatchSoleurGo(
       );
     },
     onTextTurnEnd: () => {
+      // #3603 W2 — a late `onTextTurnEnd` after `onWorkflowEnded` has already
+      // flushed an abort row would double-write or, worse, overwrite the
+      // "aborted" status row with a "complete" one. Silent no-op:
+      // user already saw the partial text (rendered live; abort row hydrates).
+      if (workflowEnded) {
+        // silent: turn was already persisted via the abort path
+        return;
+      }
       // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
       void saveAssistantMessage();
       // Per-turn boundary → terminal stream event for the cc_router bubble.
@@ -1075,6 +1146,22 @@ export async function dispatchSoleurGo(
       // single source of truth.
     },
     onWorkflowEnded: (end: WorkflowEnd) => {
+      // #3603 W2 — flush partial assistant text as an `status: "aborted"` row
+      // BEFORE the existing user-visible routing below. Mirrors the legacy
+      // abort contract at `agent-runner.ts:2044-2055`. Skips on
+      // `status: "completed"` because the normal `onTextTurnEnd` path
+      // already wrote (or will write) the row. The `workflowEnded` flag
+      // suppresses a late `onTextTurnEnd` arriving after this flush.
+      // Use the typed `ABORT_FLUSH_STATUSES` set (exhaustively type-checked
+      // via `_abortFlushExhaustive`) rather than a bare `!== "completed"` so
+      // a future `WorkflowEnd` variant cannot silently route through abort
+      // without a deliberate listing here.
+      if (ABORT_FLUSH_STATUSES.has(end.status)) {
+        // Fire-and-forget — set the flag SYNCHRONOUSLY so a late
+        // onTextTurnEnd cannot race the await microtask.
+        workflowEnded = true;
+        void saveAssistantMessage({ status: "aborted" });
+      }
       // Architecture-F4: `session_ended` is terminal in `ws-client.ts`
       // (clears streams, disables input). Emitting it for RECOVERABLE
       // runner states (cost_ceiling, runner_runaway) would break
