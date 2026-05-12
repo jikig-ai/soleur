@@ -253,7 +253,12 @@ interface TableExportResult {
   error?: Error;
 }
 
-async function exportSqlTable(
+/**
+ * Exported for the cross-tenant integration test (Phase 10).
+ * Not part of the public worker API — callers should go through
+ * `runExport` which orchestrates table reads + archive + upload.
+ */
+export async function exportSqlTable(
   // Per AC30, the per-row-WHERE lint expects `service.from("<table>")
   // .select(...).eq(<owner>, expectedUserId)` at every literal call
   // site. The worker enumerates each allowlisted table EXPLICITLY

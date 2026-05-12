@@ -86,6 +86,7 @@ For processing of account data, workspace data, and subscription data through th
 - **Payment processing:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to fulfill the subscription agreement. Data processed: customer email, subscription metadata. Card data is handled exclusively by Stripe via Stripe Checkout (PCI SAQ-A) and never reaches Jikigai servers.
 - **Infrastructure hosting:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide workspace environments. Data processed: user workspaces, encrypted API keys (AES-256-GCM), Docker containers. Hosted on Hetzner in Helsinki, Finland (EU-only).
 - **Conversation management:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide the conversational AI service. Data processed: conversation metadata (domain leader, status, timestamps), message content (user messages, assistant responses, tool call metadata).
+- **Data-subject-rights fulfilment (Articles 15 + 20 self-serve export):** The lawful basis is **legal obligation** (Article 6(1)(c)) -- packaging a user's account data into a downloadable bundle is necessary to comply with the controller's obligations under GDPR Articles 15 (right of access) and 20 (data portability). Data processed: the categories enumerated in DPD §2.3 (account profile, conversations, messages, attachments, KB share links, team / agent names, BYOK credentials and usage audit, workspace files). The associated audit record (requester IP, user agent, event timestamp) has the lawful basis of **legal obligation** (Article 6(1)(c)) under Article 5(2) accountability; this PII-bearing audit row is segregated from the user-visible job-tracking row and retained for 24 months (DPD §8 / Privacy Policy §7).
 - **CDN/proxy processing:** For authenticated users, the lawful basis is **contract performance** (Article 6(1)(b)) -- Cloudflare processes requests as part of delivering the Web Platform service. For unauthenticated traffic (visitors who have not signed up), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- operating CDN and DDoS protection for `app.soleur.ai` is necessary for infrastructure security and service availability (see also GDPR Recital 49). Data processed: IP addresses, request headers, TLS termination data. Processed by Cloudflare (see DPD Section 4.2).
 
 <!-- Added 2026-04-10: KB sharing -->
@@ -178,14 +179,19 @@ Under the GDPR, data subjects in the EEA have the following rights. For data pro
 
 ### 5.3 Rights Exercisable Against Jikigai (Web Platform)
 
-For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as data controller (see Section 2.1), data subjects may exercise the following rights by contacting <legal@jikigai.com>:
+For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as data controller (see Section 2.1), data subjects may exercise the following rights through either of the following channels:
 
-- **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data (account data, workspace data, conversation data, subscription metadata).
-- **Right to Rectification (Article 16):** Request correction of inaccurate personal data held by Jikigai.
-- **Right to Erasure (Article 17):** Request deletion of personal data under applicable conditions. Note: payment records (subscription metadata, invoices) subject to French tax law retention (Code de commerce Art. L123-22) may be retained for up to 10 years (see Section 8.4).
-- **Right to Restriction of Processing (Article 18):** Request that Jikigai restrict processing of personal data.
-- **Right to Data Portability (Article 20):** Request personal data in a structured, commonly used, machine-readable format.
-- **Right to Object (Article 21):** Object to processing of personal data. The legal basis for Web Platform processing is contract performance (Article 6(1)(b)), so this right applies primarily when processing extends beyond strict contractual necessity.
+- **Self-serve (Articles 15 and 20):** Visit `/dashboard/settings/privacy` while signed in. The Web Platform packages your account profile, conversations, messages, message attachments, knowledge-base share links, team / agent names, BYOK encrypted credentials, BYOK usage audit log, and workspace files into a ZIP archive (with a `manifest.json` describing GDPR article tag, row count, and SHA-256 for every file). The bundle is delivered as a one-time download link valid for 7 days. The technical scope of the export is the same as the email channel.
+- **Email (all rights):** Contact <legal@jikigai.com>. We will fulfil the same scope manually for Articles 15 and 20, and is the canonical channel for Articles 16, 17, 18, 21, and 7 (consent withdrawal).
+
+Both channels fulfil the same legal right; the self-serve path exists for convenience.
+
+- **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data (account data, workspace data, conversation data, attachments, BYOK credentials and usage audit, team / agent names, subscription metadata).
+- **Right to Rectification (Article 16):** Request correction of inaccurate personal data held by Jikigai. Email channel only.
+- **Right to Erasure (Article 17):** Request deletion of personal data under applicable conditions. Self-serve at `/dashboard/settings` (Delete Account dialog) or via email. Note: payment records (subscription metadata, invoices) subject to French tax law retention (Code de commerce Art. L123-22) may be retained for up to 10 years (see Section 8.4). The DSAR export audit log (`dsar_export_audit_pii`) is anonymised as part of the Article 17 cascade.
+- **Right to Restriction of Processing (Article 18):** Request that Jikigai restrict processing of personal data. Email channel.
+- **Right to Data Portability (Article 20):** Request personal data in a structured, commonly used, machine-readable format. Self-serve at `/dashboard/settings/privacy` (delivers JSON-per-table + binaries in a manifest-described ZIP archive), or by email.
+- **Right to Object (Article 21):** Object to processing of personal data. The legal basis for Web Platform processing is contract performance (Article 6(1)(b)), so this right applies primarily when processing extends beyond strict contractual necessity. Email channel.
 
 Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
 
