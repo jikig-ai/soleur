@@ -64,13 +64,25 @@ CREATE POLICY dsar_export_jobs_owner_select ON public.dsar_export_jobs
 -- via the SECURITY DEFINER RPCs below + the worker. authenticated role
 -- cannot directly mutate job state.
 
--- Compliance idempotency: at most one non-terminal job per user inside
--- a 24h window. Permits a successor request after 24h or after the
--- current job terminates (completed/delivered/expired/failed).
+-- Compliance idempotency: at most one active job per user (any of
+-- pending / running / completed). Once status transitions to a
+-- terminal state (delivered / expired / failed) the user can request
+-- a fresh export. The `completed` status is bounded to ≤7d by the
+-- TTL-expiry sweep (TR14, schedule below), which moves rows to
+-- `expired` once `signed_url_expires_at < now()`. Combined this gives
+-- the spec FR4-step rate-limit shape (1 in-flight job, 7d natural
+-- spacing between completed→re-request).
+--
+-- Why not `AND requested_at > now() - interval '24 hours'`: Postgres
+-- requires functions in index predicates to be IMMUTABLE; `now()` is
+-- STABLE, so the original design (plan rev-2 TR7 wording) cannot be
+-- expressed as a partial unique index. The 24h compliance idempotency
+-- moves to the application layer (the `enqueueExport` server function
+-- in dsar-export.ts will check for completed-within-24h jobs before
+-- inserting a new row). Tracked in the plan rev-2 amendment.
 CREATE UNIQUE INDEX dsar_export_jobs_one_active_per_user_idx
   ON public.dsar_export_jobs (user_id)
-  WHERE status IN ('pending', 'running', 'completed')
-    AND requested_at > (now() - interval '24 hours');
+  WHERE status IN ('pending', 'running', 'completed');
 
 -- Worker claim hot path: order pending jobs by request time.
 CREATE INDEX dsar_export_jobs_pending_idx
