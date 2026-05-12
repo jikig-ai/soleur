@@ -72,6 +72,15 @@ vi.mock("@/server/observability", async () => {
 // for them. Future tests in this file MUST be aware that a real Supabase
 // SELECT is bypassed here — re-add `vi.importActual` if you need the real
 // memo / Supabase round-trip semantics.
+// #3626 — `onResult` now also calls `persistTurnCost` (cost-writer.ts).
+// In test env the helper would attempt a real Supabase write and throw
+// synchronously, breaking subsequent SDK callbacks. Stub to a no-op so
+// the W4 messages.usage path remains the unit-under-test here. The cost-
+// writer aggregation surface has its own dedicated test coverage.
+vi.mock("@/server/cost-writer", () => ({
+  persistTurnCost: vi.fn(),
+}));
+
 vi.mock("@/server/kb-document-resolver", async () => {
   const actual = await vi.importActual<
     typeof import("@/server/kb-document-resolver")
