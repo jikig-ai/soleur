@@ -305,10 +305,12 @@ const usageUpdateSchema = z.strictObject({
   outputTokens: z.number(),
   // Cache tokens — widened 2026-05-12 to close the dashboard
   // cross-check gap vs the Anthropic Console for cached prompts.
-  // `0` when prompt caching is not engaged. Required (strictObject)
-  // so wire-emitters can't accidentally regress to the legacy shape.
-  cacheReadInputTokens: z.number(),
-  cacheCreationInputTokens: z.number(),
+  // `0` when prompt caching is not engaged. `.optional()` for one
+  // release cycle so a rolling prd deploy doesn't drop frames between
+  // an old server (emitting the legacy 3-field shape) and a new client.
+  // Tighten to required in a follow-up after the old build ages out.
+  cacheReadInputTokens: z.number().optional(),
+  cacheCreationInputTokens: z.number().optional(),
 });
 const fanoutTruncatedSchema = z.strictObject({
   type: z.literal("fanout_truncated"),

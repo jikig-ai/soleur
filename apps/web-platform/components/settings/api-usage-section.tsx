@@ -139,7 +139,9 @@ function UsageBody({
       <p className="mt-3 text-xs text-soleur-text-muted">
         Figures come straight from the Anthropic SDK response. Cross-check
         any row in your Anthropic Console under Usage — the numbers will
-        match to the cent.
+        match to the cent. Conversations from before 2026-05-12 may
+        under-reflect cache-read tokens; new conversations capture all
+        three input tiers.
       </p>
     </div>
   );

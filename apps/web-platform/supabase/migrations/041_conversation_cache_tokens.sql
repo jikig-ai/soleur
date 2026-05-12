@@ -22,6 +22,12 @@ ALTER TABLE conversations
 
 -- Extend the dashboard list query's covering index so the
 -- per-conversation SELECT stays index-only after the schema widening.
+-- The list query SELECTs: id, domain_leader, created_at,
+-- input_tokens, output_tokens, cache_read_input_tokens,
+-- cache_creation_input_tokens, total_cost_usd. `id`, `user_id`,
+-- `created_at` are in the index key; the other 6 must be in INCLUDE
+-- for the planner to choose an Index-Only Scan. `domain_leader`
+-- was the missing column pre-2026-05-12.
 -- Supabase wraps the migration in a transaction (CONCURRENTLY forbidden,
 -- per learning 2026-04-18-supabase-migration-concurrently-forbidden).
 -- A brief AccessExclusive lock at current scale is acceptable.
@@ -29,6 +35,7 @@ DROP INDEX IF EXISTS idx_conversations_user_cost;
 CREATE INDEX idx_conversations_user_cost
   ON conversations (user_id, created_at DESC)
   INCLUDE (
+    domain_leader,
     total_cost_usd,
     input_tokens,
     output_tokens,

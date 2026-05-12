@@ -75,3 +75,10 @@ apps/web-platform/server/account-delete.ts
 apps/web-platform/server/cc-dispatcher.ts
 apps/web-platform/server/concurrency.ts
 apps/web-platform/server/notifications.ts
+
+# Shared per-turn cost writer (PR #3626). Service-role required for the
+# atomic `increment_conversation_cost` + `write_byok_audit` RPCs which
+# are SECURITY DEFINER + service-role-only by migrations 017/037/042.
+# Both callers (agent-runner.ts, cc-dispatcher.ts) are already on this
+# allowlist for the same posture; the helper inherits.
+apps/web-platform/server/cost-writer.ts

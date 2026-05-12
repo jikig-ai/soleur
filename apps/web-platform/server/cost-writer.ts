@@ -46,18 +46,6 @@ export interface UsageDeltas {
 export interface TurnCostInput {
   totalCostUsd: number;
   usage: UsageDeltas;
-  modelHint: string | null;
-}
-
-export function normalizeUsage(
-  usage: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | null | undefined,
-): UsageDeltas {
-  return {
-    input_tokens: usage?.input_tokens ?? 0,
-    output_tokens: usage?.output_tokens ?? 0,
-    cache_read_input_tokens: usage?.cache_read_input_tokens ?? 0,
-    cache_creation_input_tokens: usage?.cache_creation_input_tokens ?? 0,
-  };
 }
 
 /**

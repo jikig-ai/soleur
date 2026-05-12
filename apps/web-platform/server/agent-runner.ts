@@ -1883,7 +1883,6 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               cache_read_input_tokens: cacheReadDelta,
               cache_creation_input_tokens: cacheCreationDelta,
             },
-            modelHint: null,
           });
 
           // Sync: push changes to remote after session (connected repos only)

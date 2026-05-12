@@ -258,5 +258,14 @@ describe("agent-runner cost capture", () => {
       cacheReadInputTokens: 14_000,
       cacheCreationInputTokens: 800,
     });
+    // Audit row's `token_count` MUST sum all 4 axes (uncached input +
+    // output + cache_read + cache_creation). Without this assertion a
+    // refactor dropping cache axes from the sum would still pass the
+    // 1500-token "no cache" fixture above (vacuous pass).
+    const auditCall = mockRpc.mock.calls.find(
+      ([fn]) => fn === "write_byok_audit",
+    );
+    expect(auditCall).toBeDefined();
+    expect(auditCall![1].p_token_count).toBe(521 + 88 + 14_000 + 800);
   });
 });

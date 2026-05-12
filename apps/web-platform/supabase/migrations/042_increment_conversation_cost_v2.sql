@@ -1,19 +1,27 @@
--- increment_conversation_cost v2 — widen the atomic-increment RPC to
--- accept cache_read_delta + cache_creation_delta so the cc-soleur-go
+-- increment_conversation_cost v2 — add an overloaded 6-arg signature
+-- accepting cache_read_delta + cache_creation_delta so the cc-soleur-go
 -- and legacy paths can persist the full 4-axis usage shape from the
 -- Anthropic SDK result message.
 --
--- The v1 signature `(UUID, NUMERIC, INT, INT)` is callable from any
--- of `agent-runner.ts:1880` and (soon) `cost-writer.ts`. Postgres
--- rejects `CREATE OR REPLACE` across overload signature changes with
--- "function is not unique"; the v1 must be dropped first (precedent:
--- migration 027 comment).
+-- Rolling-deploy safety: this migration intentionally creates a NEW
+-- overload (6 args) and does NOT drop the v1 4-arg signature. Postgres
+-- distinguishes overloads by parameter-list shape — calls bound to the
+-- old signature route to v1; new callers route to v2. Both paths write
+-- to the same columns; v1 simply leaves the two new cache columns at
+-- their existing values. This eliminates the deploy-ordering window
+-- where (a) prd schema-without-app would break new code with `function
+-- not exist`, and (b) prd app-without-schema would break old pods'
+-- cost writes. v1 is removed in a follow-up migration once the v1
+-- callers have aged out (no in-tree v1 caller after this PR).
 --
 -- The atomic UPDATE pattern is preserved verbatim — the v1 was
 -- documented as race-safe under concurrent multi-leader turns (migration
 -- 017 §Atomic increment); the v2 only widens the column set.
-
-DROP FUNCTION IF EXISTS public.increment_conversation_cost(UUID, NUMERIC, INTEGER, INTEGER);
+--
+-- supabase-js sends named-arg PostgREST envelopes, so once the v2
+-- overload exists, every named-arg call (`{conv_id, cost_delta, ...}`)
+-- routes to v2 by parameter name — v1 callers benefit transparently
+-- once they redeploy to include the cache args.
 
 CREATE OR REPLACE FUNCTION public.increment_conversation_cost(
   conv_id              UUID,

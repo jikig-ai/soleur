@@ -140,7 +140,7 @@ This is the **complementary org-level truth-source**. Single-user use case: a us
 ### Phase 6 — QA gate & validation
 
 - **6.1** Reproduce the original bug: open the dashboard before deploying any code, screenshot the May totals against the Anthropic Console. Pin both in PR body. Use a fresh chat-case conversation to confirm the no-op `onResult` is reachable in current production routing.
-- **6.2** Deploy migrations 041 + 042 + 043 to **dev Supabase first** per `hr-dev-prd-distinct-supabase-projects`. Verify each migration applies cleanly via `supabase migration list`. Apply to prd only after dev confirms via the in-app dashboard.
+- **6.2** Deploy migrations 041 + 042 to **dev Supabase first** per `hr-dev-prd-distinct-supabase-projects`. Verify each migration applies cleanly via `supabase migration list`. Apply to prd **before** rolling out the new app revision (migration 042 is now backwards-compatible — it adds a v2 overload without dropping v1, so prd app instances on either revision write correctly). Apply to prd only after dev confirms via the in-app dashboard.
 - **6.3** Manual reconciliation: with the dev deployment + a fresh chat-case conversation, read `conversations.total_cost_usd` directly from dev Supabase and compare against the same conversation's row in the dev Anthropic workspace's Console. **Must match to the cent.**
 - **6.4** If Phase 5 is included: provide an admin key, refresh the dashboard, confirm the green "Verified against Anthropic Console ✓" banner renders with deltaPct ≤ 0.5%.
 - **6.5** Sentry budget: scan `silent-fallback` events for 24h post-deploy with `feature: "agent-cost-tracking"` or `feature: "anthropic-admin-client"` and pin the count in a follow-up comment on the issue.

@@ -784,10 +784,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             totalCostUsd: (prev?.totalCostUsd ?? 0) + msg.totalCostUsd,
             inputTokens: (prev?.inputTokens ?? 0) + msg.inputTokens,
             outputTokens: (prev?.outputTokens ?? 0) + msg.outputTokens,
+            // `?? 0` coerces frames from old-shape servers (cache fields
+            // absent) during a rolling deploy. Tighten to required when
+            // the Zod schema flips back to non-optional.
             cacheReadInputTokens:
-              (prev?.cacheReadInputTokens ?? 0) + msg.cacheReadInputTokens,
+              (prev?.cacheReadInputTokens ?? 0) + (msg.cacheReadInputTokens ?? 0),
             cacheCreationInputTokens:
-              (prev?.cacheCreationInputTokens ?? 0) + msg.cacheCreationInputTokens,
+              (prev?.cacheCreationInputTokens ?? 0) +
+              (msg.cacheCreationInputTokens ?? 0),
           }));
           break;
         }

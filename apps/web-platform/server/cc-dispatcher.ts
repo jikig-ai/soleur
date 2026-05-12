@@ -1206,15 +1206,11 @@ export async function dispatchSoleurGo(
       // plan). The legacy agent-runner.ts path uses the same helper.
       // Turn termination must not block on DB writes — the helper
       // chains `.then()` for error mirroring rather than awaiting.
-      try {
-        persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, result);
-      } catch (err) {
-        reportSilentFallback(err, {
-          feature: "agent-cost-tracking",
-          op: "cc-dispatcher.onResult",
-          extra: { userId, conversationId },
-        });
-      }
+      // `persistTurnCost` is synchronous and mirrors all async failure
+      // modes to Sentry internally (cost-writer.ts §reportSilentFallback);
+      // soleur-go-runner's onResult try/catch covers the residual
+      // synchronous-throw surface (lib initialization, etc.).
+      persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, result);
     },
     onSessionIdCaptured: (capturedSessionId) => {
       // #3266 — fire-and-forget DB persist + synchronous in-process cache

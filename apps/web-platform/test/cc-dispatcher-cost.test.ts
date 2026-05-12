@@ -114,7 +114,6 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
                 cache_read_input_tokens: number;
                 cache_creation_input_tokens: number;
               };
-              modelHint: string | null;
             }) => void;
           };
         }) => {
@@ -126,7 +125,6 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
               cache_read_input_tokens: 14_000,
               cache_creation_input_tokens: 800,
             },
-            modelHint: "claude-sonnet-4-6",
           });
         },
       ),
@@ -162,7 +160,6 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
           cache_read_input_tokens: 14_000,
           cache_creation_input_tokens: 800,
         },
-        modelHint: "claude-sonnet-4-6",
       },
     );
   });

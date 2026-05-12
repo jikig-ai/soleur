@@ -275,8 +275,11 @@ export type WSMessage =
       // Cache tokens — `0` when prompt caching is not engaged. Widened
       // 2026-05-12 to close the dashboard cross-check gap vs the
       // Anthropic Console for cached prompts (plan §Risks R8).
-      cacheReadInputTokens: number;
-      cacheCreationInputTokens: number;
+      // Optional for one release cycle so rolling prd deploys don't
+      // drop frames between mismatched server/client shapes; coerce
+      // `?? 0` at every consumer. Tighten in a follow-up.
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
     }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }

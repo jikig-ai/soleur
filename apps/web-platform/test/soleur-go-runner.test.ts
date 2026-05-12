@@ -573,9 +573,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     await flushMicrotasks();
 
     // onResult payload widened 2026-05-12 to carry the 4-token usage
-    // axis + model hint so the cost-writer can persist cache tokens
-    // and the audit row carries the correct attribution. modelUsage is
-    // an empty object in the fixture → modelHint resolves to null.
+    // axis so the cost-writer can persist cache tokens.
     expect(events._results.at(-1)).toEqual({
       totalCostUsd: 0.25,
       usage: {
@@ -584,7 +582,6 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
       },
-      modelHint: null,
     });
   });
 
