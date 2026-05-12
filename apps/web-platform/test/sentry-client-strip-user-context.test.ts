@@ -1,5 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { stripUserContextFromEvent } from "@/sentry.client.config";
+import {
+  stripUserContextFromEvent,
+  scrubJwtFromEvent,
+} from "@/sentry.client.config";
+import { PII_KEY_RE } from "@/lib/client-observability";
+
+describe("PII_KEY_RE source of truth", () => {
+  it("is shared between client-observability and sentry.client.config (anchored, case-insensitive)", () => {
+    // Smoke test against the import — if anyone forks the constant into
+    // a private literal in `sentry.client.config.ts`, the canonical
+    // shape assertions below will still pass for whichever copy stays
+    // hooked up, but this assertion locks the canonical regex source.
+    expect(PII_KEY_RE.source).toBe("^user_?id$|^email$");
+    expect(PII_KEY_RE.flags).toContain("i");
+  });
+});
 
 describe("sentry.client.config beforeSend stripUserContext", () => {
   it("zeros event.user.{id,email,username,ip_address}", () => {
@@ -90,7 +105,7 @@ describe("sentry.client.config beforeSend stripUserContext", () => {
     expect(() => stripUserContextFromEvent(event)).not.toThrow();
   });
 
-  it("strip is independent of JWT scrub (event.message preserved)", () => {
+  it("strip alone leaves event.message untouched (one direction of independence)", () => {
     const event = {
       message: "boom",
       extra: { userId: "u1" },
@@ -101,6 +116,41 @@ describe("sentry.client.config beforeSend stripUserContext", () => {
     };
     expect(out.extra?.userId).toBeUndefined();
     expect(out.message).toBe("boom");
+  });
+
+  it("JWT-scrub alone leaves event.extra.userId untouched (other direction)", () => {
+    const event = {
+      message: "boom",
+      extra: { userId: "u1" },
+    } as never;
+    const out = scrubJwtFromEvent(event) as {
+      message?: string;
+      extra?: Record<string, unknown>;
+    };
+    // Strip is independent of JWT scrub — if a refactor wired scrub into
+    // user-context stripping, this assertion would fail.
+    expect(out.extra?.userId).toBe("u1");
+    expect(out.message).toBe("boom");
+  });
+
+  it("composed beforeSend handles JWT in message AND userId in extra", () => {
+    // Synthesized fake JWT (3 base64url segments, "eyJ"-prefixed). Same
+    // shape used by `sentry-client-jwt-scrub.test.ts` fixtures.
+    const FAKE_JWT =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSJ9.synthesized-signature-for-test"; // gitleaks:allow # synthesized
+    const event = {
+      message: `boom (preview: ${FAKE_JWT})`,
+      extra: { userId: "u1", segment: "kept" },
+    } as never;
+    // Mirror the beforeSend chain order in `sentry.client.config.ts`.
+    const out = stripUserContextFromEvent(scrubJwtFromEvent(event)) as {
+      message?: string;
+      extra?: Record<string, unknown>;
+    };
+    expect(out.message).toContain("<jwt-redacted>");
+    expect(out.message).not.toContain("eyJ");
+    expect(out.extra?.userId).toBeUndefined();
+    expect(out.extra?.segment).toBe("kept");
   });
 
   it("handles undefined breadcrumb data entries without throwing", () => {

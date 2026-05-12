@@ -146,6 +146,8 @@ Per `gh issue list --label code-review --state open --json number,title,body --l
 
 **If this lands broken, the user experiences:** silent loss of Sentry breadcrumb / extra context on a real client error if the strip mutates the wrong keys. Mitigation: tests assert non-PII keys (`segment`, `digest`, `stage`, `filename`) survive unchanged; the `beforeSend` strip is null-defensive on every optional field so a malformed event never throws (Sentry would drop the event silently otherwise).
 
+**Perf cost on the user's error path:** `beforeSend` mutation is O(keys) over `event.extra`, `event.contexts`, and `event.breadcrumbs` (Sentry-capped at `maxBreadcrumbs=100` default). It runs only on error events (not on hot paths), so no measurable user-visible page-load impact — the user is already on the degraded path when this fires.
+
 **If this leaks, the user's `user.id` (UUID, GDPR Art. 4(1) personal data) is exposed via:** Sentry browser-bundle envelope shipped to DE region (90d retention). The current leak surface is **latent** — no caller exercises it today (grep-verified) — but the same surface that lacks pseudonymization for the server (the framing that drove #3638/#3685) applies symmetrically: a single user invoking GDPR Art. 17 erasure who later hits a client-side error would have their `user_id` persist in Sentry until retention expires.
 
 **Brand-survival threshold:** `single-user incident` (carried forward from #3638/#3685 brainstorm framing — same data class, same processor, same retention window, same regulator-complaint vector).

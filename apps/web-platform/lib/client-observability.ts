@@ -6,8 +6,11 @@
  * already has a first-party client build; pino does not. This shim exposes the
  * same `reportSilentFallback` contract without the pino dependency.
  *
- * Keep the public shape identical to the server version so call sites can
- * swap imports without any other change.
+ * Keep the public function names and signatures aligned with the server
+ * version. The `extra` type is intentionally stricter: `ClientExtra` brands
+ * `userId` / `user_id` / `email` as `never`, so call sites that pass those
+ * keys against the server import must drop them when switching to this
+ * module. The runtime strip is the fail-closed backstop for untyped spread.
  *
  * PII strip: the browser bundle cannot hold the server's `SENTRY_USERID_PEPPER`
  * (a pepper in `NEXT_PUBLIC_*` is not a pepper — every reader recomputes hashes).
@@ -22,7 +25,10 @@ import * as Sentry from "@sentry/nextjs";
 
 // Anchored regex — matches `userId`, `user_id`, `email` case-insensitively.
 // Does NOT match `customerId`, `tenantId`, `userIdentifier`, `userEmail` etc.
-const PII_KEY_RE = /^user_?id$|^email$/i;
+// Exported so `sentry.client.config.ts`'s `beforeSend` backstop shares one
+// source of truth — drift between the two layers would silently weaken the
+// fail-closed defense.
+export const PII_KEY_RE = /^user_?id$|^email$/i;
 
 type PiiKey = "userId" | "user_id" | "email";
 
@@ -36,6 +42,19 @@ export type ClientExtra = Record<string, unknown> & {
   [K in PiiKey]?: never;
 };
 
+/**
+ * Strip PII keys (`userId`, `user_id`, `email`, case-insensitive) from a
+ * Sentry `extra` payload before transport. Three return cases:
+ *
+ *   1. `extra` is `undefined` / non-object → returned as-is (passthrough).
+ *   2. No key matches `PII_KEY_RE` → returns the **same reference** as input
+ *      (callers should not mutate the result, as they may also be holding
+ *      the original).
+ *   3. At least one key matches → returns a **new object** with matching
+ *      keys removed plus a `piiStripped: string[]` sentinel listing the
+ *      removed key names. Operators can search Sentry for `piiStripped` to
+ *      surface regressions where a call site routes PII through the helper.
+ */
 export function stripPiiKeys(
   extra: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
