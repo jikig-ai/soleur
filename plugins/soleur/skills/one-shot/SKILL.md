@@ -15,10 +15,17 @@ If no Linear references match, this step is a no-op and `$ARGUMENTS` flows throu
 **Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), create a worktree for the feature branch. Do NOT use `git pull` or `git checkout -b` -- both fail on bare repos (`core.bare=true`).
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
+SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
+  bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
 ```
 
 Then `cd` into the worktree path printed by the script. Parallel agents on the same repo cause silent merge conflicts when both work on main.
+
+The `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` env wire a lease on this worktree (see `.claude/hooks/lib/session-state.sh`). A sibling session's `cleanup-merged` invocation refuses to reap any worktree with an active lease. Release on clean exit:
+
+```bash
+bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+```
 
 **Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise, and the Bash tool does NOT persist CWD across calls — use a single `cd && bash` to be explicit):
 
