@@ -120,6 +120,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Before proceeding, verify the plan does not contradict conventions in AGENTS.md and constitution.md: file format (markdown tables not YAML), kebab-case naming, directory structure (agents recurse, skills flat), required frontmatter fields, shell script conventions
    - **Plan-quoted numbers are preconditions to verify, not facts.** When the plan quotes a current measurement (`bun test … reports X`, `wc -c < AGENTS.md = N`, "cumulative ~Y words; ~Z headroom", `git ls-files | wc -l`), re-run the measurement at /work start before depending on it. Plans authored hours-or-days earlier observe a moving target; parallel branches landing in `main` invalidate the measurement. PR #3501 plan claimed `~186 word headroom` against an actual `15` and required inline trim of the gate description. See `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.
    - **Write-boundary sentinel sweep (when applicable).** If the plan introduces a sentinel/guard that asserts a property at write sites (e.g., `assertWriteScope` for cross-tenant integrity, GDPR write-boundary checks), enumerate ALL write sites where the property applies — not just diff sites. Run `git grep -nE '\.from\("<table>"\)\.insert\(' <scope>` (or the equivalent for the boundary type) at Phase 0 and verify every match is sentinel-gated, then file follow-up tasks for any uncovered sites BEFORE entering Phase 1. See `knowledge-base/project/learnings/2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`; hard rule `hr-write-boundary-sentinel-sweep-all-write-sites`. **Why:** PR-A2 #3603 — sentinel placed at assistant-row write but not user-row write at `cc-dispatcher.ts:1008`; same service-role-bypass surface.
+   - **Type-widening cross-consumer grep (when applicable).** When the PR widens a producer-side shared type whose payload crosses an `unknown`/`any`/jsonb boundary (compiler cannot enforce optionality at the consumer), `git grep -nE '<field-name-pattern>' apps/` across every consumer and verify each respects the new optionality. For `Message`-class fields the canonical grep is `git grep -nE '\bmessage\.usage\.(input_tokens|output_tokens|completed_actions)\b' apps/` (adapt per field family). See learning `2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`; hard rule `hr-type-widening-cross-consumer-grep`. **Why:** PR-A2 #3603.
    - **Interactive mode only:** If anything is unclear or ambiguous, ask clarifying questions now. Get user approval to proceed. **Do not skip this** - better to ask questions now than build the wrong thing.
    - **Pipeline mode:** Skip clarifying questions and approval. Proceed directly to step 2.
 
@@ -283,6 +284,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    **Test environment setup:** If the project's test runner cannot run the type of test needed (e.g., React component tests require jsdom but vitest is configured for node), set up the test environment BEFORE starting the task. This is part of RED — the test infrastructure must exist for the test to fail properly.
 
    - When configuring bun preload scripts that register DOM globals (e.g., happy-dom), use dynamic `await import()` for all subsequent dependencies — static ES imports are hoisted before any imperative code, causing libraries like @testing-library/react to initialize without DOM globals. See `knowledge-base/project/learnings/test-failures/2026-04-03-bun-test-dom-preload-execution-order.md`.
+   - When a test file calls a SUT that lazy-imports a heavy module (`pdfjs-dist`, `sharp`, `puppeteer`, `playwright`, `@xenova/transformers`, `onnxruntime`), pre-warm the module in `beforeAll(async () => { await import("<module>"); }, 30_000)`. The cold-start cost (~5-10s on CI runners) otherwise lands on the first `it()` and blows the default 5s vitest timeout — the second test in the same file runs at warm ~9ms because subsequent calls hit the module cache. Cheapest detection: `git grep -lE '(pdfjs-dist|sharp|puppeteer|playwright|@xenova/transformers|onnxruntime)' -- '*.test.ts'` and check for sibling `beforeAll`. **Why:** PR #3681 `pdf-text-extract.test.ts` cold-start flake (7s vs 9ms, #3687).
    - When uploading files via Playwright MCP, save files to repo-accessible paths (not `/tmp/`). Playwright MCP restricts file access to the repo root. When Google Search Console offers Cloudflare auto-verification, prefer "Any DNS provider" manual flow — the popup OAuth flow opens an external tab that crashes the Playwright browser context.
    - After any `Write` whose hook output emits a warning (security, style, rule), immediately `Read` the file to verify the full content landed. PreToolUse hooks that print error output but return non-blocking status can still cause partial writes — detecting this only when tests fail wastes a debug round. See `knowledge-base/project/learnings/2026-04-15-kb-share-binary-files-lifecycle.md`.
    - When adding source-reading regex tests (`readFileSync(path)` + `expect(src).toMatch(...)`) as a negative-space regression gate after an extraction, put them in a standalone `*.test.ts` file — never add them to an existing test file that already mocks `node:fs` or `node:path`. The existing `vi.mock("node:fs", ...)` factory likely omits `readFileSync`, and the new test will fail at collection with "No `readFileSync` export is defined" before any assertion runs. Also trim the gate to only the assertion that cannot be expressed behaviorally — usually the negative "symbol-not-present" check. Positive assertions (import regex, await-call regex) duplicate coverage that mock-based behavioral tests already provide and are brittle to barrel re-exports, aliases, and whitespace. See `knowledge-base/project/learnings/best-practices/2026-04-17-regex-on-source-delegation-tests-trim-to-negative-space.md`.
@@ -504,6 +506,43 @@ Scan any "next steps", "setup instructions", or "to use this" text you are about
 3. **If genuinely manual:** Drive the flow via Playwright up to the manual gate (e.g., navigate to the OAuth consent screen), then hand off only that single interaction to the user.
 
 If you catch yourself writing phrases like "set up X in the browser", "go to the portal and...", or "manually configure..." — stop and attempt Playwright first. This audit is mandatory; skipping it is a deviation.
+
+#### Phase 4 Entry-Guard
+
+Before emitting `## Work Phase Complete` (one-shot mode) or chaining into the post-implementation pipeline (direct mode), assert at least one commit exists beyond `origin/<branch>`. An empty diff hands review agents nothing to analyze and produces no signal. Run BEFORE the Invocation Mode branch so both paths are covered.
+
+**Procedure (distinct exit codes signal distinct operator actions):**
+
+1. Probe the commit count:
+
+   ```bash
+   BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   if [[ -z "$BRANCH" || "$BRANCH" == "HEAD" ]]; then
+     echo "[work-phase-4-guard] detached HEAD — checkout a feature branch before chaining to review." >&2
+     exit 1
+   fi
+   N=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+   ```
+
+2. If `N == 0`, **stop and run Phase 2 step 3** (stage logical-unit files, write conventional commit message). Do not chain through this block as a single bash invocation — the commit is an explicit action the agent must perform between probes:
+
+   ```bash
+   if [[ "$N" == "0" ]]; then
+     echo "[work-phase-4-guard] no commits beyond origin/${BRANCH} — pause and run Phase 2 step 3 incremental commit before continuing." >&2
+     exit 2  # PAUSE — orchestrator should re-enter Phase 4 after the commit lands
+   fi
+   ```
+
+3. After the incremental commit lands, re-enter the Phase 4 entry-guard. If `N == 0` on the second probe (commit failed silently or no diff exists), HALT:
+
+   ```bash
+   if [[ "$N" == "0" ]]; then
+     echo "[work-phase-4-guard] empty diff vs origin/${BRANCH} after Phase 2 step 3 — investigate before continuing." >&2
+     exit 1  # HALT — do NOT emit "## Work Phase Complete"
+   fi
+   ```
+
+**Form rationale.** `git rev-parse --abbrev-ref HEAD` matches `ship/SKILL.md:619` precedent and returns the literal `HEAD` on detached state (vs. `git branch --show-current` which returns empty), so the detached-HEAD guard catches both shapes. `git rev-list ... --count` returns a clean integer ready for `[[ "$N" == "0" ]]`; the `wc -l` shape requires a `tr -d` strip and is whitespace-padded. Precedent: `plugins/soleur/skills/ship/SKILL.md:619`, `.claude/hooks/ship-unpushed-commits-gate.sh`. **Distinct exit codes** (`2 = pause-and-commit`, `1 = halt-and-investigate`) let one-shot orchestrators distinguish the two recovery paths rather than treating both as opaque non-zero failures.
 
 #### Invocation Mode
 
