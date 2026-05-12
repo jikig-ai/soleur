@@ -129,8 +129,11 @@ if want_bun; then
 fi
 
 # Vitest in apps/web-platform — webplat shard.
+# VITEST_SHARD (e.g., "1/2") is forwarded to vitest --shard for matrix sharding
+# in CI. When unset, vitest runs all files. The empty-string suppression via
+# ${VAR:+...} keeps local invocation byte-identical.
 if want_webplat; then
-  run_suite "apps/web-platform" bash -c "cd apps/web-platform && npm run test:ci 2>&1"
+  run_suite "apps/web-platform" bash -c "cd apps/web-platform && npm run test:ci -- ${VITEST_SHARD:+--shard=$VITEST_SHARD} 2>&1"
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.

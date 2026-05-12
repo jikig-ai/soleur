@@ -53,7 +53,7 @@ Derived from `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-p
 - [x] **1b.5** Add synthetic `test` aggregator job: `needs: [test-webplat, test-bun, test-scripts]`, `if: always()`, per-shard `result` env vars + for-loop check with explicit `fail=1; exit 1`. Load-bearing-sub-value comment + workflow-injection-safe pattern documented inline.
 - [x] **1b.6** Verify no `|| true`, no `continue-on-error: true` in new job bodies. **Result:** ZERO matches (the two `|| true` hits at L443/L454 are in an unrelated pre-existing job; the one match at L274 is my own comment text naming the invariant).
 - [x] **1b.7** Drift safeguard: `git diff main...HEAD --name-only | grep -v '^knowledge-base/' | xargs grep -l <pattern>` returns ZERO for both `telegram-bridge` and `bun.lockb`. (Plan/spec/brainstorm/tasks under `knowledge-base/` legitimately document the v1 drift findings; the safeguard's intent is code/yaml/scripts only.)
-- [ ] **1b.8** Commit. Message: `feat(ci): split test job into webplat + bun + scripts shards with synthetic aggregator — #3680`. Push.
+- [x] **1b.8** Commit. Message: `feat(ci): split test job into webplat + bun + scripts shards with synthetic aggregator — #3680`. Push. (Commit `6897fef0`.)
 - [x] **1b.9** Three follow-up GitHub issues created (labels: `type/chore`, `domain/engineering`, `priority/p3-low`; milestone `Post-MVP / Later`):
   - [x] **1b.9.a** #3692 — "ci: bun version probe for FPE-class re-evaluation"
   - [x] **1b.9.b** #3693 — "ci: suite-internal split of apps/web-platform/test/"

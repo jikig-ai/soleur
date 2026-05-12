@@ -160,8 +160,18 @@ jobs:
   # every merge. Each shard invokes scripts/test-all.sh with the
   # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`).
   # See plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
+  # 2-way vitest --shard matrix. Vitest natively supports `--shard=K/N`;
+  # `test:ci` forwards `--shard=$VITEST_SHARD` when VITEST_SHARD is set.
+  # `tsc --noEmit` is independent of shard and runs only on shard 1 to
+  # avoid duplicated ~18s of type-check work. The synthetic `test`
+  # aggregator (below) reads `needs.test-webplat.result` which rolls up
+  # the matrix outcome — failure on any shard fails the whole job.
   test-webplat:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -194,13 +204,15 @@ jobs:
         working-directory: apps/web-platform
 
       - name: Type-check web-platform
+        if: matrix.shard == '1/2'
         run: npx tsc --noEmit
         working-directory: apps/web-platform
 
-      - name: Run webplat tests (vitest)
-        run: bash scripts/test-all.sh webplat
+      - name: Run webplat tests (vitest --shard)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITEST_SHARD: ${{ matrix.shard }}
+        run: bash scripts/test-all.sh webplat
 
   test-bun:
     runs-on: ubuntu-latest
