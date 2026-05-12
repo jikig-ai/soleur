@@ -56,12 +56,18 @@ export function RetryingChip({ label }: { label: string | undefined }) {
 
 /** #3448 PR2 — abort-marker payload, mirrors the `usage` jsonb persisted on
  *  `messages` rows whose `status === 'aborted'`. The shape is documented in
- *  migration 040 and `lib/types.ts:Message.usage`. */
+ *  migration 040 and `lib/types.ts:Message.usage`.
+ *
+ *  #3603 W4 — fields widened to optional so the cc-narrowed `{ cost_usd }`
+ *  shape (cc-router aborted rows under `CC_PERSIST_USAGE=true`) renders as a
+ *  cost-only marker without producing `NaN` from `input_tokens +
+ *  output_tokens`. Readers MUST branch on field presence per the
+ *  `Message.usage` doc-comment in `lib/types.ts`. */
 export interface AbortMarkerUsage {
-  input_tokens: number;
-  output_tokens: number;
+  input_tokens?: number;
+  output_tokens?: number;
   cost_usd?: number | null;
-  completed_actions: Array<{
+  completed_actions?: Array<{
     tool_name: string;
     input_summary: string;
     result_summary: string;
@@ -323,9 +329,19 @@ function renderAbortedAssistant({
   variant: "full" | "sidebar";
 }): React.ReactNode {
   const wrapCode = variant === "sidebar";
-  const totalTokens = usage
-    ? usage.input_tokens + usage.output_tokens
-    : null;
+  // #3603 W4 — branch on field presence per the `Message.usage` doc-comment.
+  // Legacy `agent-runner` rows carry the full `UsageSnapshot` (input_tokens +
+  // output_tokens + cost_usd + completed_actions); cc-router rows under
+  // `CC_PERSIST_USAGE=true` carry only `cost_usd`. Computing
+  // `input_tokens + output_tokens` unconditionally would surface `NaN tokens`
+  // on a cc-router aborted-row reload (per data-integrity finding in this
+  // PR's review).
+  const totalTokens =
+    usage &&
+    typeof usage.input_tokens === "number" &&
+    typeof usage.output_tokens === "number"
+      ? usage.input_tokens + usage.output_tokens
+      : null;
   const costLabel =
     usage && typeof usage.cost_usd === "number"
       ? `$${usage.cost_usd.toFixed(4)}`

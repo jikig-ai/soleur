@@ -425,14 +425,30 @@ export interface Message {
    *  fixtures/snapshots don't churn; runtime persistence always sets
    *  it (DB default is `'complete'`). */
   status?: "complete" | "aborted";
-  /** Aborted-turn snapshot: token cost + completed-actions chip-list.
-   *  Set only when `status === 'aborted'`. Shape documented in
-   *  migration 040 and `UsageSnapshot` in agent-runner.ts. */
+  /** Persistence shape varies by leader:
+   *
+   *  - **Legacy `agent-runner` path** (`leader_id` ∈ domain leaders):
+   *    full `UsageSnapshot` on `status === 'aborted'` turns —
+   *    `{ input_tokens, output_tokens, cost_usd?, completed_actions[] }`.
+   *    Shape documented in `UsageSnapshot` in `agent-runner.ts` and
+   *    migration 040.
+   *
+   *  - **cc-router path** (`leader_id === 'cc_router'`, PR #3603 W4):
+   *    cc-narrowed `{ cost_usd: number }` only — Art. 5(1)(c) data
+   *    minimization. Persisted on `'complete'` turns when
+   *    `CC_PERSIST_USAGE === "true"` (default off until PR-C Privacy
+   *    Policy refresh ships); also attached to `'aborted'` rows when
+   *    captured by `onResult` before the abort fired.
+   *
+   *  Optional in the type so existing fixtures don't churn. Readers
+   *  must branch on the present field set (`input_tokens` exists =>
+   *  legacy snapshot; only `cost_usd` => cc-narrowed).
+   */
   usage?: {
-    input_tokens: number;
-    output_tokens: number;
+    input_tokens?: number;
+    output_tokens?: number;
     cost_usd?: number | null;
-    completed_actions: Array<{
+    completed_actions?: Array<{
       tool_name: string;
       input_summary: string;
       result_summary: string;

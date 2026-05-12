@@ -31,6 +31,8 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-weigh-every-decision-against-target-user-impact] → core
 - [id: hr-never-paste-secrets-via-bang-prefix] → core
 - [id: hr-gdpr-gate-on-regulated-data-surfaces] → core
+- [id: hr-type-widening-cross-consumer-grep] → core
+- [id: hr-write-boundary-sentinel-sweep-all-write-sites] → core
 
 ## Workflow Gates
 
@@ -54,6 +56,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-every-session-error-must-produce-either] → core
 - [id: wg-use-closes-n-in-pr-body-not-title-to] → core
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → core
+- [id: wg-plan-prescribed-skills-must-run-inline] → core
 
 ## Code Quality
 
