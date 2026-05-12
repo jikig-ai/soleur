@@ -2,12 +2,13 @@
 title: CI #3672 follow-ups scoping (bundle vs split)
 date: 2026-05-12
 status: complete
-related_issues: [3692, 3693, 3694]
+related_issues: [3692]
+deferred_issues: [3693, 3694]
 related_pr: 3709
 parent_pr: 3672
 parent_issue: 3680
 lane: single-domain
-brand_survival_threshold: internal-only
+brand_survival_threshold: none
 ---
 
 # CI #3672 follow-ups scoping
@@ -16,13 +17,15 @@ brand_survival_threshold: internal-only
 
 A scoping decision (not new code) over three open follow-up issues from the merged test-job restructure (PR #3672, merged 2026-05-12):
 
-- **#3692** — Bun version probe for FPE-class re-evaluation (standalone measurement; `.bun-version` bump to test if FPE SIGFPE still fires in 1.3.11, then revert)
+- **#3692** — Bun version probe for FPE-class re-evaluation (standalone measurement; `.bun-version` bump to test if FPE SIGFPE still fires on the latest 1.3.x patch)
 - **#3693** — Suite-internal split of `apps/web-platform/test/` into sub-directories so `scripts/test-all.sh` can bin-pack future shard matrices more aggressively
 - **#3694** — Apply the synthetic-aggregator shard pattern to the `e2e` job (~111s → ~65s)
 
 ## Why This Approach
 
-User chose to bundle **#3692 + #3693** into one PR and defer **#3694** to its own PR.
+**[Updated 2026-05-12 — plan-time pivot]:** Original decision was to bundle #3692 + #3693 and defer #3694. Plan-skill discovery revealed the webplat split is materially larger than the brainstorm anticipated (**355 top-level files in `apps/web-platform/test/`**, only ~28 in existing subdirs — a 200+ file refactor, not a "small companion commit"). Parent plan `2026-05-12-feat-ci-test-job-speedup-plan.md` had **explicitly deferred** #3693 to a conditional trigger ("test-webplat shard >100s sustained post-merge") that has zero data yet (parent #3672 merged today). Preemptively shipping a 200+ file refactor without the data the parent plan said should drive the decision is over-engineering.
+
+Final decision: **probe only (#3692 alone) in PR #3709**. Both #3693 and #3694 remain open and gated on their own triggers.
 
 The original framing in the feature description ("shared CI surface, possible ordering dependencies, aggregator wiring cleaner in one diff") did not survive inspection:
 
@@ -30,18 +33,15 @@ The original framing in the feature description ("shared CI surface, possible or
 - #3693's issue body explicitly drops the bun-FPE dependency: `apps/web-platform` runs **Vitest (tinypool/threads), not Bun** — the spawn-count class does not apply.
 - #3694 has a **time-based gate** the issue author wrote: "Re-evaluation trigger: ≥1 week post-merge with no regressions." Parent #3672 merged 2026-05-12 19:44 UTC. The gate cannot be met today.
 
-So the bundle is a workflow ergonomics choice (one review cycle instead of two), not a structural coupling. Two-commit split inside one PR preserves revert surgery.
-
 ## Key Decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Scope of this PR | Bundle #3692 + #3693 | One review cycle; files disjoint; revert surgery preserved via two commits |
-| #3694 disposition | Defer to own PR | Honors explicit ≥1-week post-#3672 stability gate (issue body) |
-| Commit shape inside bundle | Two commits: (1) bun probe + result note, (2) webplat split | Independent revertability — if probe fails, webplat split still ships |
-| Probe result handling | If FPE no longer fires: keep `.bun-version` bump, record finding in learnings, unlock `--max-pool-size` discussion for future work. If FPE still fires: revert `.bun-version` and record finding | Probe is a measurement, not a unilateral version bump commitment |
-| #3693 trigger threshold | Apply regardless of post-#3672 timing | User chose to ship preemptively rather than wait for empirical >100s observation. Tradeoff accepted; minor over-engineering risk noted |
-| Regression-signal protection | Each commit isolated; CI runs both before merge | Addresses user-impact concern from Phase 0.1 (regression masked, slow feedback) |
+| Scope of this PR | **[Updated 2026-05-12]** Probe-only (#3692) | Plan-time discovery: 355 top-level webplat test files; parent plan deferred #3693 to a data-driven trigger; preempting it is over-engineering. Bundle calculus changed once the real scope was known. |
+| #3693 disposition | **[Updated 2026-05-12]** Defer; restore parent plan's conditional trigger | Re-open with plan-time discovery note. Re-evaluate when `test-webplat` shard wall-clock data exists post-#3672 (matrix shard timings are emitted via `TEST_TIMING_LOG`). |
+| #3694 disposition | Defer to own PR | Honors explicit ≥1-week post-#3672 stability gate (issue body). |
+| Probe result handling | If FPE no longer fires on 1.3.13: keep `.bun-version` at 1.3.13, record finding in learnings, unlock `--max-pool-size` discussion for future work. If FPE still fires: revert `.bun-version` to 1.3.11 in the same commit and record the failing patch. | Probe is a measurement, not a unilateral version bump commitment. |
+| Regression-signal protection | Single-commit PR; full CI before merge | Addresses user-impact concern from Phase 0.1 (regression masked, slow feedback). Probe-only scope has the smallest possible blast radius. |
 
 ## Open Questions
 
@@ -51,10 +51,20 @@ So the bundle is a workflow ergonomics choice (one review cycle instead of two),
 
 ## Approaches Considered
 
-- **A — Keep separate, sequence by gate:** Three PRs, each gated on its own trigger. Lowest blast radius. *Rejected:* user prefers single review cycle for #3692+#3693.
-- **B — Bundle #3692 + #3693, defer #3694:** **CHOSEN.** Probe + webplat split together; e2e shard deferred to honor its 1-week stability gate.
-- **C — Bundle all three:** Rejected. Directly violates #3694's "≥1 week post-merge" gate. Maximum blast radius; rollback profile mixes probe + two permanent changes.
+- **A — Keep separate, sequence by gate:** **[Updated 2026-05-12] CHOSEN.** Probe (#3692) ships now in PR #3709; #3693 + #3694 remain open under their own triggers.
+- **B — Bundle #3692 + #3693, defer #3694:** Initially chosen, then dropped after plan-time discovery of 355 top-level files in `apps/web-platform/test/` and parent plan's data-driven deferral of #3693.
+- **C — Bundle all three:** Rejected. Directly violates #3694's "≥1 week post-merge" gate.
 - **D — Park all three:** Rejected. #3692 is fast and informative now; no reason to wait.
+
+### Webplat split scoping options (now deferred under #3693)
+
+Captured for the next time #3693 is picked up:
+
+| Option | Files moved | Test-all.sh edits | Value |
+|---|---|---|---|
+| Minimal split (test-all.sh only) | 0 | 2-3 run_suite lines using vitest path filters (existing subdirs + top-level catch-all) | Finer labels, modest bin-pack value |
+| Cluster split | ~100 (kb-*, ws-*, agent-runner-*, cc-*, soleur-go-runner-*) | Per-cluster run_suite | Real cohesion win; moderate diff |
+| Full refactor | 250+ across ~10-15 new subdirs | Per-subdir run_suite | Closes #3693 fully; high review surface |
 
 ## Domain Assessments
 
@@ -75,5 +85,5 @@ Not user-brand-critical. CI test infra is internal; the user's Phase 0.1 selecti
 ## Resume Prompt
 
 ```text
-/soleur:plan #3692 #3693 — Bundle bun probe + webplat test/ split. Brainstorm: knowledge-base/project/brainstorms/2026-05-12-ci-3672-followups-scoping-brainstorm.md. Spec: knowledge-base/project/specs/feat-ci-followups-scoping/spec.md. Branch: feat-ci-followups-scoping. Worktree: .worktrees/feat-ci-followups-scoping/. PR: #3709. Plan two commits: (1) .bun-version bump + bun-test probe with revert protocol, (2) apps/web-platform/test/ sub-directory split + scripts/test-all.sh per-sub-dir run_suite lines. #3694 deferred until ≥2026-05-19 post-#3672 stability check.
+/soleur:work knowledge-base/project/plans/2026-05-12-chore-ci-bun-probe-plan.md. Branch: feat-ci-followups-scoping. Worktree: .worktrees/feat-ci-followups-scoping/. Issue: #3692. PR: #3709. Probe-only scope (single commit): bump .bun-version 1.3.11 → 1.3.13, observe CI for FPE-class regression on bun-test surfaces, revert + record on failure or keep + record on success. #3693 deferred to its parent-plan trigger (test-webplat shard >100s sustained). #3694 deferred to ≥2026-05-19.
 ```
