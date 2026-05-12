@@ -18,7 +18,7 @@ permalink: legal/data-protection-disclosure/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 12, 2026 (added per-message `usage` jsonb token-consumption and cost metadata to Section 2.3(i) Web Platform conversation management activity)
+**Last Updated:** May 12, 2026 (forward-ported Web Platform push-notification §2.3(j), Resend transactional-email §2.3(k), Resend processor row in §4.2, and §4.2 cross-ref extension to (j),(k) from canonical per #3666)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -106,6 +106,8 @@ Soleur's data processing activities are limited to:
 - **(g)** **Web Platform payment processing:** The Web Platform processes customer email addresses and subscription metadata via Stripe Checkout. Card data is handled exclusively by Stripe and never reaches Jikigai servers (PCI SAQ-A). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
 - **(h)** **Web Platform infrastructure hosting:** The Web Platform hosts user workspaces, encrypted API keys (AES-256-GCM), and Docker containers on Hetzner servers in Helsinki, Finland (EU-only). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active.
 - **(i)** **Web Platform conversation management:** The Web Platform stores conversation metadata and message content associated with user accounts. Data processed: conversation status, domain leader assignment, user messages, assistant responses, tool call metadata, and -- when usage telemetry is enabled per operator configuration -- per-message `usage` jsonb (token consumption and cost metadata). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request (cascade delete).
+- **(j)** **Web Platform push notification subscriptions:** The Web Platform stores push notification subscription data (endpoint URL, encryption keys) when users enable browser push notifications. Data processed: push subscription endpoint, p256dh and auth encryption keys, timestamps. Legal basis: consent (Article 6(1)(a) GDPR) -- subscriptions are created only after explicit browser permission grant. Retention: while account is active; expired subscriptions (HTTP 410 Gone) deleted automatically; all data deleted on account deletion (cascade delete).
+- **(k)** **Web Platform transactional email notifications:** The Web Platform sends email notifications via Resend when an AI agent requires user input and the user has no active push subscriptions. Data processed: recipient email address, notification content (agent name, question summary, conversation deep link). Legal basis: legitimate interest (Article 6(1)(f) GDPR) -- transactional notifications are necessary to inform users of pending decisions that block AI agent progress. Retention: email delivery logs retained per Resend's data retention policy.
 
 For these activities, Jikigai acts as a Controller with respect to data it directly collects and processes (including CLA signature data and Web Platform account data). Third-party processors are engaged as described in Section 4.2.
 
@@ -160,8 +162,9 @@ For processing activities where Jikigai acts as Controller (see Sections 2.1b an
 | Stripe Inc ([stripe.com](https://stripe.com)) | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | Contract performance (Article 6(1)(b)) | [Stripe Sub-processors](https://stripe.com/legal/service-providers) |
 | Hetzner Online GmbH ([hetzner.com](https://hetzner.com)) | Web Platform infrastructure hosting (Helsinki, EU-only) | User workspaces, encrypted API keys, Docker containers | Contract performance (Article 6(1)(b)) | [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/) |
 | Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) for authenticated users; legitimate interest (Article 6(1)(f)) for unauthenticated traffic | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
+| Resend Inc ([resend.com](https://resend.com)) | Web Platform transactional email notifications (review gate alerts) | Recipient email address, email content (notification summaries) | Legitimate interest (Article 6(1)(f)) for transactional notifications; consent (Article 6(1)(a)) for push subscriptions | [Resend DPA](https://resend.com/legal/dpa) |
 
-This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), 2.3(h), and 2.3(i).
+This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), 2.3(h), 2.3(i), 2.3(j), and 2.3(k).
 
 ### 4.3 Third-Party Services Used by Users
 
