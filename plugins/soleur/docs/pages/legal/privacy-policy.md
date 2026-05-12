@@ -17,7 +17,7 @@ permalink: legal/privacy-policy/
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** May 12, 2026 (added `usage` jsonb token-consumption and cost metadata to Section 4.7 Conversation data bullet, added Section 4.7 SIGKILL persistence-limitation sentence, added Section 8.1 cross-reference to Section 4.7 persistence limitation for conversation-history exports)
+**Last Updated:** May 12, 2026 (forward-ported §4.9 Push Notification Subscriptions and §5.9 Resend from canonical per #3666)
 
 ## 1. Introduction
 
@@ -136,6 +136,20 @@ The Web Platform allows authenticated users to share individual knowledge base d
 
 <!-- End: KB sharing -->
 
+<!-- Added 2026-04-13: Push notifications -->
+
+### 4.9 Push Notification Subscriptions
+
+When you enable push notifications on the Web Platform, we store your push subscription data:
+
+- **Data collected:** Push subscription endpoint URL, encryption keys (p256dh, auth), and timestamps (created, last used). This data is associated with your user account.
+- **Purpose:** Delivering browser push notifications when an AI agent requires your input (review gate events) and you are not actively connected to the Web Platform.
+- **Legal basis:** Consent (Article 6(1)(a) GDPR) -- push subscriptions are created only after you explicitly grant notification permission via the browser's permission prompt.
+- **Retention:** Push subscription data is retained while your account is active. Expired or invalid subscriptions (HTTP 410 Gone) are deleted automatically. All subscription data is deleted upon account deletion (cascade delete via foreign key).
+- **Withdrawal:** You can revoke notification permission at any time through your browser's settings, which prevents new notifications. You can also remove stored subscriptions by disabling notifications in your browser.
+
+<!-- End: Push notifications -->
+
 ## 5. Third-Party Services
 
 ### 5.1 Anthropic Claude API
@@ -203,6 +217,16 @@ The Web Platform at `app.soleur.ai` uses **Cloudflare** ([cloudflare.com](https:
 - **Purpose:** CDN, DDoS protection, and DNS resolution for the Web Platform.
 - **DPA:** [Cloudflare Customer Data Processing Agreement](https://www.cloudflare.com/cloudflare-customer-dpa/).
 - Cloudflare uses the EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification for international data transfers.
+
+### 5.9 Resend (Web Platform Transactional Email)
+
+We use **Resend** ([resend.com](https://resend.com)) to send transactional email notifications from the Web Platform. Resend Inc acts as a data processor on our behalf.
+
+- **Data processed:** Recipient email address, email subject, and email body content (review gate notification summaries).
+- **Purpose:** Sending email notifications when an AI agent requires user input and the user has no active push notification subscriptions.
+- **DPA:** [Resend Data Processing Agreement](https://resend.com/legal/dpa) (incorporated into the Terms of Service, Section 7: Data Processing, automatically applicable).
+- Resend is a US-based service. International data transfers are covered by the EU-US Data Privacy Framework (DPF) and Standard Contractual Clauses (SCCs).
+- **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR) -- transactional notifications are necessary to inform users of pending decisions that block AI agent progress, which is core to the service functionality.
 
 ## 6. Legal Basis for Processing (GDPR -- EU Users)
 

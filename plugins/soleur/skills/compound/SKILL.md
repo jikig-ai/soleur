@@ -362,17 +362,25 @@ Routing mechanics:
    `BASENAME=$(basename "$TARGET" | tr -cd '[:alnum:]._-')` — or pass the
    message via a heredoc (`git commit -m "$(cat <<EOF\nskill: route ...\nEOF\n)"`)
    so backticks or `$(...)` in a learning-file-derived basename cannot
-   command-substitute. The edit surface is BOUNDED: a single bullet-point
-   append, a single Sharp Edges entry, or a ≤3-line instruction clarification.
-   Edits that change existing bullet semantics, span multiple files, or modify
-   AGENTS.md rule wording are OUT OF SCOPE for direct edit — file an issue
-   instead.
+   command-substitute. The edit surface is BOUNDED **per file**: each
+   affected file gets a single bullet-point append, a single Sharp Edges
+   entry, or a ≤3-line instruction clarification. Multi-file edits are
+   allowed when the insight is **convergent** — one rule with parallel
+   per-skill bullets (e.g., "when an enum-gate exists, plan must enumerate
+   AND review must verify"). Each file's surface still has to satisfy the
+   bounded-surface budget on its own. Edits that change existing bullet
+   semantics or modify AGENTS.md rule wording remain OUT OF SCOPE for
+   direct edit — file an issue instead.
 
 4. **File-issue exception:** File a GitHub issue when the edit meets one of:
-   cross-skill (touches 2+ skill/agent files), contested-design (competing
-   valid approaches), agents-md-semantic-change (modifies existing rule text),
-   tier-ambiguous (insight straddles Tier 2 and Tier 3 and a reviewer's
-   judgment is load-bearing).
+   contested-design (competing valid approaches), agents-md-semantic-change
+   (modifies existing rule text), tier-ambiguous (insight straddles Tier 2
+   and Tier 3 and a reviewer's judgment is load-bearing), **divergent
+   multi-file** (two or more unrelated edits across skills that don't share
+   a single insight — these warrant separate scrutiny), or any single file's
+   edit exceeds the bounded-surface budget (>1 bullet, >1 Sharp Edges entry,
+   or >3 instruction lines). "Cross-skill" alone is NOT a trigger — a
+   convergent insight with parallel per-skill bullets applies inline.
    Title: `compound: route-to-definition proposal for <target-basename>`.
    Body: proposed edit text + target path + source learning path + `## Scope-Out
    Justification` naming the criterion. Flags: `--label deferred-scope-out
