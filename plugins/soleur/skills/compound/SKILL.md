@@ -195,6 +195,8 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 8. **Rule budget count.** After deviation analysis, measure both rule count and byte size of always-loaded `AGENTS.md`:
 
+   **Commit-gate:** [lint-agents-rule-budget.py](../../../../scripts/lint-agents-rule-budget.py) is the authoritative pre-commit reject (warns at B_ALWAYS ≥ 20000, rejects at > 22000, rejects any rule body > 600 B); the step 8 output below is advisory-only.
+
    Emit rule-application telemetry (records that the byte-cap / why-single-line policy ran — see AGENTS.md `cq-agents-md-why-single-line`):
 
    ```bash
