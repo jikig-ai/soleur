@@ -249,8 +249,11 @@ t8_substring_false_positive_pass() {
   rm -rf "$tmp"
 }
 
-# --- T9: fetch network failure → PASS (fail-open) ------------------------
-t9_fetch_failure_pass() {
+# --- T9: fetch network failure → DENY (fail-closed) ----------------------
+# The fail-open path here would re-introduce the silent-miss class this gate
+# exists to prevent (stale tracking ref → rev-list = 0 → unpushed merge).
+# The deny prompts the operator to fetch manually.
+t9_fetch_failure_deny() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-no-net")
   echo "fix" > "$work/fix.txt"
@@ -263,7 +266,17 @@ t9_fetch_failure_pass() {
   payload=$(make_payload "$work" "gh pr merge 129 --squash")
   out=$(printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
   exit_code=${exit_code:-0}
-  assert_pass "T9 fetch failure fail-open" "$incidents" "$out" "$exit_code"
+  assert_deny "T9 fetch failure fail-closed" "$incidents" "$out" "$exit_code"
+  # Additionally verify the deny reason references fetch — distinguishes the
+  # fetch-fail deny path from the unpushed-commits deny path.
+  local reason
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null || echo "")
+  if [[ "$reason" == *"git fetch"* ]]; then
+    echo "  (T9 deny reason cites fetch failure)"
+  else
+    echo "  FAIL: T9 deny reason does not cite fetch failure: '$reason'"
+    FAIL=$((FAIL + 1))
+  fi
   rm -rf "$tmp"
 }
 
@@ -401,7 +414,7 @@ t5_no_upstream_pass
 t6_non_merge_command_pass
 t7_chained_command_deny
 t8_substring_false_positive_pass
-t9_fetch_failure_pass
+t9_fetch_failure_deny
 t10_settings_json_valid
 t11_hook_ordering
 t12_emit_incident_prefix_length

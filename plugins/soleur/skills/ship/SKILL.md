@@ -624,7 +624,9 @@ if [[ "$UNPUSHED" -gt 0 ]]; then
 fi
 ```
 
-**Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, `git fetch` network failure. These mirror the sibling `pre-merge-rebase.sh` convention; see rule `wg-ship-push-before-merge` in `AGENTS.core.md` for the canonical contract.
+**Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** — a stale tracking ref re-introduces the silent-miss class this gate exists to prevent, so the hook denies and prompts the operator to fetch manually. See rule `wg-ship-push-before-merge` in `AGENTS.core.md` for the canonical contract.
+
+**Hook ordering** matters: the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json) so any auto-sync push performed by the rebase hook has updated the upstream tracking ref before this gate counts unpushed commits. `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces the ordering invariant — keep it green if either hook moves.
 
 ## Phase 6: Push and Create PR
 
