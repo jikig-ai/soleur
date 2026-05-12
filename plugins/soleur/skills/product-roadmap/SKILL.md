@@ -199,7 +199,7 @@ Present an output summary listing the document path, milestones created, issues 
 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
 2. Use `/ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
-3. After the PR is created, queue auto-merge: `gh pr merge <number> --squash --auto`.
+3. After the PR is created, queue auto-merge under the merge-main lock: `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge <number> --squash --auto`. The `--` separator is required (terminates `with_lock`'s positional args). If the wrapper returns rc=99, the lock was contended for >600s and the merge was NOT queued — surface to the operator and retry rather than assuming success.
 4. Poll `gh pr view <number> --json state --jq .state` until MERGED.
 5. Run `cleanup-merged` to remove the worktree.
 

@@ -14,10 +14,15 @@ const HOOK_PATH = join(
 // Strip git hook env vars (GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE) that
 // git sets when running pre-commit hooks — these override GIT_CEILING_DIRECTORIES
 // and cause tests to use the parent repo instead of the temp repos.
+// Also strip CLAUDECODE so headless_or_stderr routes warnings to stderr
+// (foreground branch) instead of a per-PPID log file — the assertions
+// below grep stderr, and the log-file branch is covered by
+// .claude/hooks/pre-merge-rebase-headless.test.sh.
 const {
   GIT_DIR: _d,
   GIT_INDEX_FILE: _i,
   GIT_WORK_TREE: _w,
+  CLAUDECODE: _c,
   ...cleanEnv
 } = process.env;
 // `Record<string, string | undefined>` matches `process.env`'s actual shape
