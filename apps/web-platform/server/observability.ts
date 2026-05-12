@@ -161,7 +161,10 @@ export function warnSilentFallback(
  * **Registry of `errorClass` strings** (extend when adding a caller):
  * - `cc-dispatcher` family: `agent-sandbox:sdk-startup`,
  *   `dispatch:invalid-payload`, `dispatch:invalid-response`,
- *   `dispatch:kind-mismatch`, `dispatch:internal-error`.
+ *   `dispatch:kind-mismatch`, `dispatch:internal-error`. The
+ *   op-slug emit sites in `cc-dispatcher.ts` reference
+ *   `CC_OP_SLUGS.*` (e.g., `CC_OP_SLUGS.saveAssistant`,
+ *   `CC_OP_SLUGS.persistUserMessage`) — see #3642 F7.
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.
@@ -235,7 +238,7 @@ export function __resetMirrorDebounceForTests(): void {
  *
  * Callers:
  * - `cc-dispatcher.ts` — write-boundary sentinel (`assertWriteScope`),
- *   W4-orphan drop (`usage_orphan_dropped`).
+ *   W4-orphan drop (`CC_OP_SLUGS.usageOrphanDropped`).
  *
  * Sentry retention (typically 30-90 days) does NOT satisfy Art. 33(5)'s
  * indefinite breach documentation requirement. A durable audit-log table

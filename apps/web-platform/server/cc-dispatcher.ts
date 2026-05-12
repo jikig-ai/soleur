@@ -159,6 +159,21 @@ const _abortFlushExhaustive: Record<AbortFlushStatus, true> = {
 };
 void _abortFlushExhaustive;
 
+// #3642 F7 — Single source of truth for `op` slugs emitted via
+// `reportSilentFallback` / `mirrorWithDebounce` / `mirrorP0Deduped` from
+// this file. Hoisting these literals prevents drift between the production
+// emit site and the test-suite assertions (e.g., an `op` rename in code
+// would silently pass the test if the test still hard-codes the old
+// literal). Test-file imports re-use this constant via the same module
+// path. Registry of slugs is documented in `observability.ts:161-170`.
+export const CC_OP_SLUGS = {
+  saveAssistant: "save-assistant-message-failed",
+  saveAssistantAborted: "save-assistant-message-aborted-failed",
+  usageOrphanDropped: "usage_orphan_dropped",
+  ccPersistUsageOn: "cc-persist-usage-on",
+  persistUserMessage: "persist-user-message",
+} as const;
+
 // #3603 W1 — Write-boundary tenant-isolation sentinel.
 //
 // cc-dispatcher.ts uses the service-role Supabase client (`supabase()` —
@@ -225,7 +240,7 @@ export function __resetAssertWriteScopeForTests(): void {
 // post-hoc Art. 33 evidence ("when did this process start writing
 // messages.usage?") doesn't depend on Doppler audit-log correlation. The
 // pino + Sentry payload from `reportSilentFallback` carries a server-side
-// timestamp + `feature` tag; aggregation by `op: "cc-persist-usage-on"`
+// timestamp + `feature` tag; aggregation by `op: CC_OP_SLUGS.ccPersistUsageOn`
 // gives the operator a per-process flip timeline.
 let _ccPersistUsageFirstTrueObserved = false;
 function _observeCcPersistUsageFirstTrue(): void {
@@ -233,7 +248,7 @@ function _observeCcPersistUsageFirstTrue(): void {
   _ccPersistUsageFirstTrueObserved = true;
   reportSilentFallback(null, {
     feature: "cc-dispatcher",
-    op: "cc-persist-usage-on",
+    op: CC_OP_SLUGS.ccPersistUsageOn,
     message:
       "CC_PERSIST_USAGE=true observed for first time in this process — messages.usage writes are now active",
     extra: {
@@ -1071,7 +1086,7 @@ export async function dispatchSoleurGo(
   if (insertErr) {
     reportSilentFallback(insertErr, {
       feature: "cc-dispatcher",
-      op: "persist-user-message",
+      op: CC_OP_SLUGS.persistUserMessage,
       extra: { userId, conversationId },
     });
     throw new Error(`Failed to save user message: ${insertErr.message}`);
@@ -1211,8 +1226,8 @@ export async function dispatchSoleurGo(
     // both `op` and `errorClass` (the dedupe key) — drift between them
     // would silently split the Sentry dedupe stream.
     const opSlug = opts.mode === "aborted"
-      ? "save-assistant-message-aborted-failed"
-      : "save-assistant-message-failed";
+      ? CC_OP_SLUGS.saveAssistantAborted
+      : CC_OP_SLUGS.saveAssistant;
 
     const { error } = await supabase().from("messages").insert(row);
     if (error) {
@@ -1338,8 +1353,8 @@ export async function dispatchSoleurGo(
           // misconfiguration that strands cost telemetry. Dedup keyed on
           // `(userId, op, conversationId)` with 1h TTL.
           pendingTurnUsage = null;
-          mirrorP0Deduped(new Error("usage_orphan_dropped"), {
-            op: "usage_orphan_dropped",
+          mirrorP0Deduped(new Error(CC_OP_SLUGS.usageOrphanDropped), {
+            op: CC_OP_SLUGS.usageOrphanDropped,
             userId,
             conversationId,
           });

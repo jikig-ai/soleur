@@ -179,16 +179,16 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 2 — #3642 F7 op-slug constants (independent, lands first to feed downstream phases)
 
-- [ ] Add `const CC_OP_SLUGS = { ... } as const;` at the top of `apps/web-platform/server/cc-dispatcher.ts` (after `ABORT_FLUSH_STATUSES`).
-- [ ] Replace every inline slug literal in `cc-dispatcher.ts` (5 call sites identified by Phase 1 grep) with `CC_OP_SLUGS.<key>`. Includes:
+- [x] Add `const CC_OP_SLUGS = { ... } as const;` at the top of `apps/web-platform/server/cc-dispatcher.ts` (after `ABORT_FLUSH_STATUSES`).
+- [x] Replace every inline slug literal in `cc-dispatcher.ts` (5 call sites identified by Phase 1 grep) with `CC_OP_SLUGS.<key>`. Includes:
   - `saveAssistantMessage` — `opSlug` ternary at ~1213.
   - W4 orphan — `new Error(...)` at ~1341 + `op: ...` at ~1342.
   - `_observeCcPersistUsageFirstTrue` — `op: "cc-persist-usage-on"` at ~236.
   - User-INSERT failure mirror — `op: "persist-user-message"` at ~1074.
-- [ ] Update `observability.ts` registry comment (lines 161-170) to reference `CC_OP_SLUGS.*` rather than free-text examples.
-- [ ] Update test-file references to import + use `CC_OP_SLUGS.saveAssistant` / `CC_OP_SLUGS.usageOrphanDropped` in lieu of literals.
-- [ ] Run unit tests. Expected: green (string-identical post-substitution).
-- [ ] Commit: `refactor(cc-dispatcher): hoist op-slug literals to CC_OP_SLUGS — closes #3642 (F7)`.
+- [x] Update `observability.ts` registry comment (lines 161-170) to reference `CC_OP_SLUGS.*` rather than free-text examples.
+- [x] Update test-file references to import + use `CC_OP_SLUGS.saveAssistant` / `CC_OP_SLUGS.usageOrphanDropped` in lieu of literals.
+- [x] Run unit tests. Expected: green (string-identical post-substitution).
+- [x] Commit: `refactor(cc-dispatcher): hoist op-slug literals to CC_OP_SLUGS — closes #3642 (F7)`.
 
 ### Phase 3 — #3639 F3 TtlDedupMap extraction
 

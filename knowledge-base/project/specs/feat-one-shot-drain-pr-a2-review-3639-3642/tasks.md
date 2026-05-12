@@ -18,12 +18,12 @@ lane: single-domain
 
 ## 2. #3642 F7 — hoist op-slug constants (independent, lands first)
 
-- [ ] 2.1 Add `const CC_OP_SLUGS = { ... } as const;` at module scope in `cc-dispatcher.ts`.
-- [ ] 2.2 Replace 5 inline slug literals (`saveAssistantMessage`, W4 orphan Error + ctx.op, `_observeCcPersistUsageFirstTrue`, user-INSERT mirror).
-- [ ] 2.3 Update `observability.ts:161-170` registry comment to reference `CC_OP_SLUGS.*`.
-- [ ] 2.4 Migrate test-file slug-literal assertions to import + use `CC_OP_SLUGS.*`.
-- [ ] 2.5 Run `bun test` (apps/web-platform) — expect 4058 passes.
-- [ ] 2.6 Commit: `refactor(cc-dispatcher): hoist op-slug literals to CC_OP_SLUGS — closes #3642 (F7)`.
+- [x] 2.1 Add `const CC_OP_SLUGS = { ... } as const;` at module scope in `cc-dispatcher.ts`.
+- [x] 2.2 Replace 5 inline slug literals (`saveAssistantMessage`, W4 orphan Error + ctx.op, `_observeCcPersistUsageFirstTrue`, user-INSERT mirror).
+- [x] 2.3 Update `observability.ts:161-170` registry comment to reference `CC_OP_SLUGS.*`.
+- [x] 2.4 Migrate test-file slug-literal assertions to import + use `CC_OP_SLUGS.*`.
+- [x] 2.5 Run `bun test` (apps/web-platform) — expect 4058 passes.
+- [x] 2.6 Commit: `refactor(cc-dispatcher): hoist op-slug literals to CC_OP_SLUGS — closes #3642 (F7)`.
 
 ## 3. #3639 F3 — extract TtlDedupMap
 

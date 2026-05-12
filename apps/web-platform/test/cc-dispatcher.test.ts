@@ -120,6 +120,7 @@ import {
   dispatchSoleurGo,
   __resetDispatcherForTests,
   __resetCcPersistUsageObservationForTests,
+  CC_OP_SLUGS,
 } from "@/server/cc-dispatcher";
 // #3603 W1 plan §2.2.3 — hook P0 dedup reset into the test reset chain so a
 // future test that exercises the real `mirrorP0Deduped` (vs. this file's spy
@@ -1476,7 +1477,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     await vi.waitFor(() =>
       expect(
-        mirrorCallsForOp(mockReportSilentFallback, "save-assistant-message-failed"),
+        mirrorCallsForOp(mockReportSilentFallback, CC_OP_SLUGS.saveAssistant),
       ).toHaveLength(1),
     );
 
@@ -1484,7 +1485,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // — defends against a future refactor that drops the err arg.
     const mirrorCall = mirrorCallsForOp(
       mockReportSilentFallback,
-      "save-assistant-message-failed",
+      CC_OP_SLUGS.saveAssistant,
     )[0]!;
     expect(mirrorCall[0]).toBeTruthy();
     expect(mirrorCall[0]).toMatchObject({ message: "db down" });
@@ -1669,9 +1670,9 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // Exactly ONE P0 mirror with the literal op slug.
     expect(mockMirrorP0Deduped).toHaveBeenCalledTimes(1);
     const [errArg, ctxArg] = mockMirrorP0Deduped.mock.calls[0]!;
-    expect((errArg as Error)?.message).toBe("usage_orphan_dropped");
+    expect((errArg as Error)?.message).toBe(CC_OP_SLUGS.usageOrphanDropped);
     expect(ctxArg).toEqual({
-      op: "usage_orphan_dropped",
+      op: CC_OP_SLUGS.usageOrphanDropped,
       userId: "u-w4-orphan",
       conversationId: "conv-w4-orphan",
     });
