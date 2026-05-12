@@ -449,6 +449,23 @@ case "$COMPONENT" in
       { docker stop --time=12 soleur-web-platform 2>/dev/null || true; }
       { docker rm soleur-web-platform 2>/dev/null || true; }
 
+      # ADR-027: pre-`docker run` single-replica assertion. The two docker
+      # commands above use `|| true` to mask "container not found" on a
+      # first-deploy host, but the same `|| true` would also mask a stop
+      # failure that leaves the prior container running. Without this guard,
+      # the docker run below would surface a cryptic "name already in use".
+      # Here we surface the ADR-027 invariant by name so an operator knows
+      # which doc to read.
+      if docker ps --filter "name=^soleur-web-platform$" --format '{{.Names}}' | grep -q .; then
+        echo "ERROR: soleur-web-platform container is still running after docker stop/rm." >&2
+        echo "       Single-replica invariant (ADR-027) violated. See" >&2
+        echo "       knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md" >&2
+        { docker stop soleur-web-platform-canary 2>/dev/null || true; }
+        { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+        final_write_state 1 "adr027_prod_already_running"
+        exit 1
+      fi
+
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.

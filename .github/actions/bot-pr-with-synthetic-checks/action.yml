@@ -44,6 +44,27 @@ inputs:
   gh-token:
     description: GITHUB_TOKEN with contents/pull-requests/checks=write.
     required: true
+  draft:
+    description: >
+      If 'true' (case-insensitive after lowercase normalization), open the PR
+      as draft. Default 'false' preserves existing caller behavior. Non-boolean
+      values fail loud. See CHANGELOG.md v2.
+    required: false
+    default: 'false'
+  skip-auto-merge:
+    description: >
+      If 'true' (case-insensitive after lowercase normalization), skip the
+      final `gh pr merge --squash --auto`. Default 'false' preserves existing
+      caller behavior. Non-boolean values fail loud. See CHANGELOG.md v2.
+    required: false
+    default: 'false'
+  labels:
+    description: >
+      Newline-separated label names applied via `gh pr edit --add-label`.
+      Empty string skips the label step. Labels MUST already exist — caller's
+      responsibility. See CHANGELOG.md v2.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -58,9 +79,25 @@ runs:
         PR_TITLE_PREFIX: ${{ inputs.pr-title-prefix }}
         PR_BODY: ${{ inputs.pr-body }}
         CHANGE_SUMMARY: ${{ inputs.change-summary }}
+        DRAFT: ${{ inputs.draft }}
+        SKIP_AUTO_MERGE: ${{ inputs.skip-auto-merge }}
+        LABELS: ${{ inputs.labels }}
         REPO: ${{ github.repository }}
       run: |
         set -eo pipefail
+        # Normalize boolean inputs at the boundary. Composite-action inputs are
+        # always strings; lowercase + hard-reject any non-{true,false} value so
+        # callers passing 'True'/'1'/'yes' fail loud. (Architecture review #4.)
+        DRAFT=$(printf '%s' "${DRAFT:-false}" | tr '[:upper:]' '[:lower:]')
+        SKIP_AUTO_MERGE=$(printf '%s' "${SKIP_AUTO_MERGE:-false}" | tr '[:upper:]' '[:lower:]')
+        case "$DRAFT" in
+          true|false) ;;
+          *) echo "::error::draft must be 'true' or 'false' (got: $DRAFT)"; exit 1 ;;
+        esac
+        case "$SKIP_AUTO_MERGE" in
+          true|false) ;;
+          *) echo "::error::skip-auto-merge must be 'true' or 'false' (got: $SKIP_AUTO_MERGE)"; exit 1 ;;
+        esac
         # Validate payload-like inputs up-front so failure is loud, not silent.
         if [[ "$PR_BODY" == *$'\n'* ]]; then
           echo "::error::pr-body must be single-line"
@@ -99,12 +136,27 @@ runs:
         # cleanly if the single-line guard is ever relaxed.
         BODY_FILE=$(mktemp)
         printf '%s' "$PR_BODY" > "$BODY_FILE"
-        gh pr create \
-          --title "${PR_TITLE_PREFIX} ${DATE_SUFFIX}" \
-          --body-file "$BODY_FILE" \
-          --base main \
+        # Build args array so the conditional --draft flag does not become a
+        # quoted empty arg (would land in the title with `gh pr create --draft ""`).
+        PR_CREATE_ARGS=(
+          --title "${PR_TITLE_PREFIX} ${DATE_SUFFIX}"
+          --body-file "$BODY_FILE"
+          --base main
           --head "$BRANCH"
+        )
+        if [[ "$DRAFT" == "true" ]]; then
+          PR_CREATE_ARGS+=(--draft)
+        fi
+        gh pr create "${PR_CREATE_ARGS[@]}"
         rm -f "$BODY_FILE"
+        # Apply labels (no-op when LABELS is empty). Labels must pre-exist —
+        # caller's responsibility per CHANGELOG.md v2.
+        if [[ -n "$LABELS" ]]; then
+          while IFS= read -r label; do
+            [[ -z "$label" ]] && continue
+            gh pr edit "$BRANCH" --add-label "$label"
+          done <<< "$LABELS"
+        fi
         COMMIT_SHA=$(git rev-parse HEAD)
         # Synthetic checks — satisfies CI Required + CLA Required rulesets on
         # main. Use the Checks API (/check-runs), NOT Statuses API; rulesets
@@ -127,4 +179,6 @@ runs:
           -f conclusion=success \
           -f "output[title]=CLA pre-approved" \
           -f "output[summary]=github-actions[bot] is in CLA allowlist"
-        gh pr merge "$BRANCH" --squash --auto
+        if [[ "$SKIP_AUTO_MERGE" != "true" ]]; then
+          gh pr merge "$BRANCH" --squash --auto
+        fi

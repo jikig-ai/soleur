@@ -18,6 +18,7 @@ Queryable index of architectural principles. Each principle links to its canonic
 | AP-010 | Convention over configuration for paths | constitution.md (Architecture/Prefer) | advisory | — |
 | AP-011 | ADRs for architecture decisions | constitution.md (Architecture/Always) | skill | — |
 | AP-012 | New vendor checklist | constitution.md (Architecture/Always) | skill | NFR-026, NFR-027 |
+| AP-013 | Process-local state for runner sessions | ADR-027 | skill | NFR-019 |
 
 ## Enforcement Tiers
 
@@ -30,3 +31,4 @@ Queryable index of architectural principles. Each principle links to its canonic
 ## Notes
 
 - **AP-011 — ADR shape rubric.** AP-011's application to new ADRs follows the terse/rich shape rubric in [`plugins/soleur/skills/architecture/references/adr-template.md`](../../../plugins/soleur/skills/architecture/references/adr-template.md) under `## Choosing the shape`. Default is terse (3 sections); use rich (8 sections) when any rubric trigger applies.
+- **Canonical-source rubric.** New AP rows pick `Canonical Source` by precedence: `AGENTS.md (Hard Rules)` for mechanical / always-loaded rules; `constitution.md (Architecture/…)` for foundational design tenets; `ADR-NNN` for architectural decisions with a documented migration path. AP-013 → ADR-027 is the first instance of the third tier — extend rather than collapse the precedent when future ADR-sourced APs land.

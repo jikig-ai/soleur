@@ -1,0 +1,270 @@
+# Auto-apply `terraform_data.deploy_pipeline_fix` whenever a PR that touches
+# the host-resident deploy-pipeline trigger files merges to main. This
+# eliminates the "edit script → drift on next 12h cron → manually apply"
+# cycle documented in:
+#   knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md
+#
+# Authorization model: the PR merge IS the human authorization. Same model as
+# `web-platform-release.yml` — the reviewer's approval click on the merge
+# button is the load-bearing `yes`, replacing the in-terminal Terraform
+# prompt. Restricted to the 5 trigger files via the `paths:` filter so
+# unrelated merges (app code, docs, plugin changes) never write prod.
+#
+# Kill switch: include `[skip-deploy-fix-apply]` anywhere in a commit message
+# on the PR to skip auto-apply for that merge (e.g., when the change is
+# intentionally not meant to land on prod yet).
+#
+# Manual escape hatch: `workflow_dispatch` is kept for re-runs after a
+# transient failure or for ad-hoc applies.
+#
+# Doppler `prd_terraform` config provides:
+#   - HCLOUD_TOKEN          (via doppler run --name-transformer tf-var)
+#   - AWS_ACCESS_KEY_ID     (R2 backend)
+#   - AWS_SECRET_ACCESS_KEY (R2 backend)
+#   - DEPLOY_SSH_PRIVATE_KEY (auth for remote-exec; matches DEPLOY_SSH_PUBLIC_KEY
+#                             already registered with the server via cloud-init)
+#
+# All untrusted inputs (commit messages, workflow_dispatch inputs) are routed
+# through env vars before reaching any `run:` block — CI workflow
+# injection-prevention convention. All action references are SHA-pinned.
+
+name: Apply deploy-pipeline-fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web-platform/infra/ci-deploy.sh"
+      - "apps/web-platform/infra/webhook.service"
+      - "apps/web-platform/infra/cat-deploy-state.sh"
+      - "apps/web-platform/infra/canary-bundle-claim-check.sh"
+      - "apps/web-platform/infra/hooks.json.tmpl"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you applying? (manual re-run only)"
+        required: true
+        type: string
+
+concurrency:
+  group: terraform-apply-deploy-pipeline-fix
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    outputs:
+      skip: ${{ steps.kill_switch.outputs.skip }}
+    steps:
+      - id: kill_switch
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if [[ "$HEAD_MSG" == *"[skip-deploy-fix-apply]"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Kill switch detected in commit message — skipping apply."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  apply:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify DOPPLER_TOKEN
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Verify Deploy SSH key
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          if ! KEY=$(doppler secrets get DEPLOY_SSH_PRIVATE_KEY --plain 2>/dev/null) || [[ -z "$KEY" ]]; then
+            echo "::error::Doppler secret DEPLOY_SSH_PRIVATE_KEY is missing or empty. See workflow header for setup."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Generate CI public SSH key for var.ssh_key_path
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Start ssh-agent with deploy key
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          eval "$(ssh-agent -s)"
+          printf 'SSH_AUTH_SOCK=%s\n' "$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          printf 'SSH_AGENT_PID=%s\n' "$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          doppler secrets get DEPLOY_SSH_PRIVATE_KEY --plain | ssh-add - >/dev/null 2>&1
+          ssh-add -l >/dev/null
+
+      - name: Capture local hashes (pre-apply)
+        run: |
+          set -euo pipefail
+          sha256sum \
+            "${INFRA_DIR}/ci-deploy.sh" \
+            "${INFRA_DIR}/webhook.service" \
+            "${INFRA_DIR}/cat-deploy-state.sh" \
+            "${INFRA_DIR}/canary-bundle-claim-check.sh" \
+            > /tmp/local-hashes.txt
+          cat /tmp/local-hashes.txt
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          doppler run --name-transformer tf-var -- \
+            terraform plan -target=terraform_data.deploy_pipeline_fix \
+            -var="ssh_key_path=${CI_SSH_PUB}" \
+            -no-color -input=false
+
+      - name: Terraform apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          doppler run --name-transformer tf-var -- \
+            terraform apply -target=terraform_data.deploy_pipeline_fix \
+            -var="ssh_key_path=${CI_SSH_PUB}" \
+            -auto-approve -input=false
+
+      - name: Verify server-side file hashes match local
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          SERVER_IP=$(terraform output -raw server_ip)
+          printf '::add-mask::%s\n' "$SERVER_IP"
+
+          REMOTE_OUT=$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            root@"$SERVER_IP" \
+            "sha256sum /usr/local/bin/ci-deploy.sh /etc/systemd/system/webhook.service /usr/local/bin/cat-deploy-state.sh /usr/local/bin/canary-bundle-claim-check.sh && systemctl is-active webhook")
+          echo "Server-side state:"
+          echo "$REMOTE_OUT"
+
+          declare -A REMOTE
+          while read -r hash path; do
+            base=$(basename "$path")
+            REMOTE["$base"]="$hash"
+          done < <(printf '%s\n' "$REMOTE_OUT" | grep -E '^[a-f0-9]{64}  ')
+
+          MISMATCH=0
+          while read -r hash path; do
+            base=$(basename "$path")
+            r="${REMOTE[$base]:-}"
+            if [[ -z "$r" ]]; then
+              echo "::error::No remote hash recorded for $base"
+              MISMATCH=1
+            elif [[ "$r" != "$hash" ]]; then
+              echo "::error::Hash mismatch for $base: local=$hash remote=$r"
+              MISMATCH=1
+            else
+              echo "OK: $base hash matches ($hash)"
+            fi
+          done < /tmp/local-hashes.txt
+
+          if [[ "$MISMATCH" -ne 0 ]]; then
+            echo "::error::One or more files diverged between local and server post-apply."
+            exit 1
+          fi
+
+          if ! printf '%s\n' "$REMOTE_OUT" | tail -n 1 | grep -qx 'active'; then
+            echo "::error::systemctl is-active webhook returned non-'active' on the server."
+            exit 1
+          fi
+
+          echo "All trigger-file hashes match and webhook is active."
+
+      - name: Auto-close any open drift issues for this stack
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          issues=$(gh issue list --label "infra-drift" --state open \
+            --search "infra: drift detected in web-platform in:title" \
+            --json number --jq '.[].number')
+          for n in $issues; do
+            gh issue comment "$n" --body "Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA}. Server state was re-aligned with HEAD."
+            gh issue close "$n" --reason completed
+            echo "Closed #$n"
+          done
+
+      - name: Post-apply summary
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          {
+            echo "## Apply deploy-pipeline-fix"
+            echo ""
+            echo "**Trigger:** ${{ github.event_name }}"
+            echo "**Merge SHA:** ${{ github.sha }}"
+            echo "**Reason (manual only):** ${REASON:-n/a}"
+            echo "**Status:** ${{ job.status }}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"

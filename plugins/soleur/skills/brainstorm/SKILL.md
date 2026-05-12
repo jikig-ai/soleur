@@ -166,12 +166,14 @@ If the feature description references an external platform, marketplace, or serv
 
 ```bash
 find knowledge-base/project/brainstorms knowledge-base/project/specs \
-  -maxdepth 3 -iname "*<keyword>*" 2>/dev/null | head -n 20
+  -maxdepth 3 -type f -iname "*<keyword>*" 2>/dev/null | head -n 20
 ```
 
-If prior artifacts exist, read them and frame the research agent prompts as "given these prior decisions, what's changed and what gaps remain?" rather than "research this topic cold." **Why:** In the 2026-04-17 BYOK usage dashboard brainstorm, the prior `2026-04-10-byok-cost-tracking-brainstorm.md` and `specs/feat-byok-cost-tracking/spec.md` had already decided scope; agents rediscovered them mid-session instead of building on them. See `knowledge-base/project/learnings/2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites.md`.
+If prior artifacts exist, read them and frame the research agent prompts as "given these prior decisions, what's changed and what gaps remain?" rather than "research this topic cold." **Why:** In the 2026-04-17 BYOK usage dashboard brainstorm, the prior `2026-04-10-byok-cost-tracking-brainstorm.md` and `specs/feat-byok-cost-tracking/spec.md` had already decided scope; agents rediscovered them mid-session instead of building on them. See `knowledge-base/project/learnings/2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites.md`. Use `-type f` to avoid false positives from empty spec directories left by prior `worktree-manager.sh feature` runs that bailed before writing spec.md.
 
-Run these agents **in parallel** to gather context before dialogue:
+**Also check sibling/closed issues for prior framings of the same mechanism.** When the feature_description references `#N` with a parent (`Parent: #M` in the body or an umbrella issue), read the parent's child list AND run `gh issue list --state all --search "<core-mechanism-keywords>"` to surface deferred or closed prior framings. **Why:** 2026-05-11 #2720 brainstorm — the issue was a re-framing of #421 (deferred Layer 2 of self-healing-workflow); without this check, the brainstorm would have produced a parallel spec orphaning #421. See `knowledge-base/project/learnings/2026-05-11-brainstorm-parallel-domain-and-research-fan-out-and-duplicate-issue-discovery.md`.
+
+Run these agents **in parallel** to gather context before dialogue. **Spawn domain leaders (Phase 0.5) and research agents (Phase 1.1) in one parallel batch** via `run_in_background: true` — they're independent. While agents run, use the wait time for local prior-art file checks and parent/sibling issue inspection rather than blocking on a wakeup. **Why:** 2026-05-11 #2720 brainstorm — 4 leaders + 2 research agents in one batch returned in 60-180s vs. ~10 min sequenced.
 
 - Task repo-research-analyst(feature_description)
 - Task learnings-researcher(feature_description)

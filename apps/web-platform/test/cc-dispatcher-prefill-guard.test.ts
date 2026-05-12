@@ -74,6 +74,12 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.
+  // These dispatcher tests do not exercise the debounce TTL, so
+  // the stub forwards every call straight through to the spy.
+  mirrorWithDebounce: mockReportSilentFallback,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 vi.mock("@supabase/supabase-js", () => ({

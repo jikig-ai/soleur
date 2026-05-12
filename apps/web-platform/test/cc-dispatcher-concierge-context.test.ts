@@ -43,6 +43,14 @@ vi.mock("@/lib/supabase/service", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.ts. This test
+  // asserts on `reportSilentFallbackSpy` calls — forward debounced
+  // mirrors straight through so the existing assertions don't need to
+  // know about the new wrapper. (Tests that exercise debounce coalescing
+  // live in observability-mirror-debounce.test.ts.)
+  mirrorWithDebounce: reportSilentFallbackSpy,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 vi.mock("@/server/pdf-text-extract", async () => {

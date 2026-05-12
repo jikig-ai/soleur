@@ -58,7 +58,11 @@ import {
   type ConversationRouting,
   type WorkflowName,
 } from "./conversation-routing";
-import { reportSilentFallback } from "./observability";
+import {
+  reportSilentFallback,
+  mirrorWithDebounce,
+  __resetMirrorDebounceForTests,
+} from "./observability";
 import { updateConversationFor } from "./conversation-writer";
 import {
   getUserApiKey,
@@ -103,18 +107,9 @@ const log = createChildLogger("cc-dispatcher");
 export { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 
-// ---------------------------------------------------------------------------
-// Sentry mirror debounce — per (userId, errorClass) 5-minute TTL.
-// Prevents a misconfigured prod (1 QPS = 86k events/day per failure
-// mode) from flooding Sentry when `realSdkQueryFactory` or
-// `dispatchSoleurGo` catch repeatedly mirrors the same class for one
-// user. First report mirrors; subsequent reports within the window are
-// dropped. The error still propagates to the client unchanged — only
-// the Sentry write is debounced.
-// ---------------------------------------------------------------------------
-
-const MIRROR_DEBOUNCE_MS = 5 * 60 * 1000;
-const _mirrorLastReportedAt = new Map<string, number>();
+// Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
+// (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
+// prod (1 QPS = 86k events/day per failure mode) from flooding Sentry.
 
 // Hoisted module-level sets (avoid per-call construction in
 // `dispatchSoleurGo` / `handleInteractivePromptResponseCase`).
@@ -212,22 +207,6 @@ const MIRROR_INTERACTIVE_RESPONSE_ERRORS: ReadonlySet<
   "invalid_response",
   "kind_mismatch",
 ]);
-
-function mirrorWithDebounce(
-  err: unknown,
-  ctx: Parameters<typeof reportSilentFallback>[1],
-  userId: string,
-  errorClass: string,
-): void {
-  const key = `${userId}:${errorClass}`;
-  const now = Date.now();
-  const last = _mirrorLastReportedAt.get(key);
-  if (last !== undefined && now - last < MIRROR_DEBOUNCE_MS) {
-    return;
-  }
-  _mirrorLastReportedAt.set(key, now);
-  reportSilentFallback(err, ctx);
-}
 
 // ---------------------------------------------------------------------------
 // Singletons
@@ -1404,7 +1383,7 @@ export function __resetDispatcherForTests(): void {
   _runner = null;
   _runnerSendToClient = null;
   _ccBashGates.clear();
-  _mirrorLastReportedAt.clear();
+  __resetMirrorDebounceForTests();
   // The bash batched-approval cache lives in a sibling module
   // (`permission-callback-bash-batch.ts`) and is keyed by
   // `${userId}:${conversationId}`. Without draining it here, a granted
