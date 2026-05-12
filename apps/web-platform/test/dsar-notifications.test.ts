@@ -115,8 +115,18 @@ describe("sendDsarExportReadyEmail", () => {
       new Date("2026-05-19T12:00:00Z"),
     );
     const call = mockResendSend.mock.calls[0][0];
-    const text = call.html.replace(/<[^>]+>/g, "").trim();
-    const preview = text.slice(0, 280);
+    // Iterative tag-strip until stable — single-pass `<[^>]+>` regex
+    // leaves residual tags on nested-bracket inputs (CodeQL
+    // js/incomplete-multi-character-sanitization). For a test fixture
+    // this is fine, but the iterative form makes the intent
+    // (extract text content) explicit + silences the rule.
+    let text: string = call.html;
+    let prev = "";
+    while (text !== prev) {
+      prev = text;
+      text = text.replace(/<[^>]+>/g, "");
+    }
+    const preview = text.trim().slice(0, 280);
     expect(preview).not.toContain(JOB_ID);
     expect(preview).not.toContain(USER_ID);
     expect(preview).not.toContain(USER_EMAIL);
