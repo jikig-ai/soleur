@@ -160,6 +160,12 @@ jobs:
   # every merge. Each shard invokes scripts/test-all.sh with the
   # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`).
   # See plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
+  #
+  # NOTE for future maintainers: keep `actions/checkout`, `oven-sh/setup-bun`,
+  # `actions/setup-node`, and `actions/cache` SHA pins in lockstep across
+  # test-webplat / test-bun / test-scripts. When bumping any action, edit
+  # all three job blocks in the same commit; this YAML has no include or
+  # anchor mechanism so the duplication is structural.
   # 2-way vitest --shard matrix. Vitest natively supports `--shard=K/N`;
   # `test:ci` forwards `--shard=$VITEST_SHARD` when VITEST_SHARD is set.
   # `tsc --noEmit` is independent of shard and runs only on shard 1 to
