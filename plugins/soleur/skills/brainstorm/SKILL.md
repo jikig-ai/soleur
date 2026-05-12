@@ -104,6 +104,27 @@ Do NOT emit telemetry when `USER_BRAND_CRITICAL=false` — the gate only records
 
 **Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped because every prior gate weighed the decision on technical and convenience axes only, and no gate asked what one user's data breach would cost the brand. This is the earliest layer of enforcement for the workflow gate; it pairs with plan Phase 2.6 (template), deepen-plan Phase 4.6 (halt), preflight Check 6 (ship gate), and the `user-impact-reviewer` conditional agent to close the loop.
 
+### Phase 0.4: Lane Auto-Detect and Selection
+
+Select an orchestration lane that describes the Phase 0.5 domain-leader breadth. Canonical vocabulary: `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` `## Lane Inference`. Written to spec.md frontmatter at Phase 3.6.
+
+**Skip if** `USER_BRAND_CRITICAL=true` from Phase 0.1 — set `LANE=cross-domain` and proceed to Phase 0.25 without prompting. The framing question was already answered; avoid double-prompting.
+
+**Otherwise:**
+
+1. **Keyword scan** the feature description against the `## Lane Inference` table.
+
+2. **Pipeline / headless mode detection.** If the parent invocation was `/soleur:one-shot`, `/soleur:go --headless`, or any non-interactive context (no TTY available, `HEADLESS_MODE=true`), set `LANE=<keyword-inference-result>` directly — fail-closed to `cross-domain` if no keyword matches. Skip the AskUserQuestion gate. Echo to the operator-facing terminal: `Phase 0.4: pipeline mode — lane=<value> (inferred)`. Continue.
+
+3. **Interactive mode — AskUserQuestion.** Three presets (the runtime appends auto-Other automatically — do NOT include "Other" as a fourth preset per the 4-option cap):
+   - Header: `"Lane"`
+   - Question: `"Phase 0.5 domain-leader breadth. Inferred: <inferred-lane>."`
+   - Options: the three lanes ordered with the inferred lane first labeled `(Recommended)`. Each option's `description` quotes the Phase 0.5 effect from the canonical table.
+
+4. **Resolve response.** If the operator picks a preset, set `LANE=<picked>`. If the operator picks "Other" and the text resolves to a literal lane value, use it. **If "Other" does not resolve, fail-closed:** `LANE=cross-domain` AND echo to operator terminal: `Phase 0.4: free-text "<text>" did not resolve — fail-closed to cross-domain.` (Visible terminal echo, not just artifact note — per spec-flow G3.)
+
+5. **Operator-override telemetry note (FR6).** When the chosen lane differs from the keyword-inferred default, add a one-line bullet to the brainstorm doc body's `## Lane` section: `Lane override: inferred=<inferred>, chosen=<chosen>.` Also echo to operator terminal so the override is visible immediately (not just on doc re-read).
+
 ### Phase 0.25: Roadmap Freshness Check
 
 Domain leaders read `knowledge-base/product/roadmap.md` as ground truth. If the roadmap's status columns are stale, every domain assessment is unreliable. This step syncs the roadmap with GitHub milestone data before domain leaders are spawned.
@@ -149,6 +170,11 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "New skills, agents, or user-facing capabilities must"
 ```
 
+0. **Lane-driven domain-set sizing (spec FR4).** Read `LANE` from Phase 0.4.
+   - `LANE=procedural`: Skip Phase 0.5 entirely; echo `Phase 0.5: skipped (lane=procedural)` to the operator terminal so the bypass of 8 potential leaders is visible (per spec-flow G2); proceed to Phase 1.
+   - `LANE=single-domain`: After step 1 selects the relevant-domain set, spawn only the single highest-relevance leader. On tie at highest score, fall back to **config declaration order** in `brainstorm-domain-config.md` domain table (first match wins). No AskUserQuestion at this point — tie-break is deterministic to support pipeline/headless mode.
+   - `LANE=cross-domain`: After step 1, if fewer than 2 domains matched Assessment Questions, expand by adding the next-highest-relevance domain not yet in the set; tie-break by config declaration order; repeat until ≥2 leaders fire. Echo the expansion: `Phase 0.5: cross-domain expansion added <domain> (relevance tied; config-order tie-break)` to the operator terminal (per spec-flow G6).
+   - The existing `USER_BRAND_CRITICAL=true` triad override (step 2) wins unconditionally — the triad is always mandatory when set; `LANE` shapes any additional leader inclusion only.
 1. Read the feature description and assess relevance against each domain in the table above using the Assessment Question column.
 2. **External-product-comparison default:** If Phase 1.0 ran (the feature description references an external platform/product) OR the feature description contains a URL to a competitor's product, treat **CPO and CMO as default-relevant** regardless of the relevance assessment in step 1. External-product comparisons import framing baked in by the comparison source (architecture, target user, positioning); CPO + CMO are the leaders whose first job is to challenge those assumptions before architecture-first leaders (CTO) commit context to designing the wrong product correctly. See `knowledge-base/project/learnings/2026-05-05-brainstorm-spawn-cpo-cmo-early-on-external-product-trigger.md`.
 3. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If Phase 0.4 fired (Linear references detected and `linear-fetch` returned a `persist_safe_summary`), the `{desc}` substitution MUST use `persist_safe_summary` in place of the raw `$ARGUMENTS` — never the `agent_context` artifact, never a `uploads.linear.app` URL. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
@@ -359,6 +385,7 @@ Ensure the brainstorms directory exists before writing.
    - Fill in Non-Goals from what was explicitly excluded
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
+   - **spec.md frontmatter MUST include `lane: <value>`** where `<value>` is the resolved `LANE` from Phase 0.4. spec.md is the canonical post-Phase-3.6 lane source for downstream `plan` and `work` skills (per `## Lane Inference` carry-forward contract). spec.md frontmatter MUST also include `brand_survival_threshold:` matching the Phase 0.1 framing.
 
 5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/project/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
 

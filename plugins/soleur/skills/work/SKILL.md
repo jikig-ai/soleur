@@ -49,7 +49,22 @@ Check if `knowledge-base/` directory exists. If it does:
 2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
 3. Detect feature from current branch (`feat-<name>` pattern)
 4. Read `knowledge-base/project/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
-5. Announce: "Loaded constitution and tasks for `feat-<name>`"
+4.5. Read `lane:` from spec.md if present. Guard file existence first:
+
+   ```bash
+   spec_path="knowledge-base/project/specs/feat-${branch_name}/spec.md"
+   if [[ -f "$spec_path" ]]; then
+     LANE=$(awk '/^lane:/ { gsub(/^lane:[[:space:]]*"?|"?$/, ""); print; exit }' "$spec_path")
+     case "$LANE" in
+       single-domain|cross-domain|procedural) ;;
+       "") LANE="" ;;  # legacy spec; silent skip in announce
+       *) echo "work: invalid lane value '$LANE' in spec; ignoring."; LANE="" ;;
+     esac
+   fi
+   ```
+
+   Lane is **non-binding in skill logic** — `work` code does not branch on `LANE`. Operators MAY use the announced lane as a heuristic when picking work Tier 0/A/B/C in Phase 2; binding behavior is deferred per Non-Goal #2.
+5. Announce: `"Loaded constitution and tasks for \`feat-<name>\`"` — append `" (lane=<value>)"` when `LANE` is non-empty.
 
 **If knowledge-base/ does NOT exist:**
 
@@ -104,6 +119,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Review any references or links provided in the plan
    - Before proceeding, verify the plan does not contradict conventions in AGENTS.md and constitution.md: file format (markdown tables not YAML), kebab-case naming, directory structure (agents recurse, skills flat), required frontmatter fields, shell script conventions
    - **Plan-quoted numbers are preconditions to verify, not facts.** When the plan quotes a current measurement (`bun test … reports X`, `wc -c < AGENTS.md = N`, "cumulative ~Y words; ~Z headroom", `git ls-files | wc -l`), re-run the measurement at /work start before depending on it. Plans authored hours-or-days earlier observe a moving target; parallel branches landing in `main` invalidate the measurement. PR #3501 plan claimed `~186 word headroom` against an actual `15` and required inline trim of the gate description. See `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.
+   - **Write-boundary sentinel sweep (when applicable).** If the plan introduces a sentinel/guard that asserts a property at write sites (e.g., `assertWriteScope` for cross-tenant integrity, GDPR write-boundary checks), enumerate ALL write sites where the property applies — not just diff sites. Run `git grep -nE '\.from\("<table>"\)\.insert\(' <scope>` (or the equivalent for the boundary type) at Phase 0 and verify every match is sentinel-gated, then file follow-up tasks for any uncovered sites BEFORE entering Phase 1. See `knowledge-base/project/learnings/2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`; hard rule `hr-write-boundary-sentinel-sweep-all-write-sites`. **Why:** PR-A2 #3603 — sentinel placed at assistant-row write but not user-row write at `cc-dispatcher.ts:1008`; same service-role-bypass surface.
    - **Interactive mode only:** If anything is unclear or ambiguous, ask clarifying questions now. Get user approval to proceed. **Do not skip this** - better to ask questions now than build the wrong thing.
    - **Pipeline mode:** Skip clarifying questions and approval. Proceed directly to step 2.
 
@@ -339,6 +355,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - **Debounce/throttle "not-yet-fired" sentinels must be `undefined` or `-Infinity`, never `0`.** Combined with `vi.useFakeTimers({ now: 0 })`, a `0` default produces `Date.now() - 0 >= threshold` = false on the first fire, starving the very path the debounce was supposed to time. Use `if (last === undefined || now - last >= THRESHOLD_MS)`. **Why:** same learning file, session error #3.
    - **When the diff touches `bun.lock` AND the bump is intended to be transitive-only (e.g., a Dependabot security bump), use the surgical-lockfile-edit pattern in [work-lockfile-bumps.md](./references/work-lockfile-bumps.md) as the first attempt.** Never `bun update <pkg>` (elevates the target to a direct dep) or bare `bun update` (bumps every direct caret-ranged dep). Validate with `bun install --frozen-lockfile`. **Why:** PR #3488 — three failed bun invocations rediscovered the constraint at task time.
    - **When a new call site needs coverage by a boundary-enforcing drift-guard whose walk array (`*_DIRS`/`*_PATHS`/`*_GLOBS`) does NOT include the new file's directory, extract the call site into the existing scope — do NOT widen the walk.** The guard encodes an architectural convention ("auth verbs live in `app/(auth)` + `components/auth/`", "CSRF coverage applies to `app/api/`", etc.). Widening the array to absorb one new call site (e.g., adding `app/(dashboard)` because a single `(dashboard)/layout.tsx` calls `signOut`) inverts the convention into "any file in this whole route group that happens to call the verb must carry the guard's tags." The shortest path leaves a worse architecture. Refactor to a hook/util living in the existing scope (`components/auth/use-sign-out.ts`) so the guard's directional rule is preserved. **Why:** PR #3576 — see `knowledge-base/project/learnings/2026-05-11-drift-guard-scoping-extract-call-site-not-widen-walk.md`.
+   - **When a migration changes a SECURITY DEFINER RPC's signature for which prod callers exist, prefer overloading (additive `CREATE OR REPLACE` with a new parameter list) over `DROP FUNCTION` + `CREATE`.** Postgres distinguishes overloads by parameter list; supabase-js sends named-arg PostgREST envelopes that route to whichever overload matches by parameter name. Overloading is rolling-deploy-safe: (a) prd-schema-without-app keeps the v1 signature alive for old pods; (b) prd-app-without-schema keeps writes succeeding because the v1 signature still exists. DROP+CREATE creates a window where one direction silently zeros the write path. Drop the v1 in a follow-up migration after the old build ages out. **Why:** PR #3626 — see `knowledge-base/project/learnings/2026-05-12-stub-handlers-as-silent-undercount-vectors.md`.
+   - **Stub event handlers ("wire in Stage N when X lands") in dispatcher/router code are silent telemetry-loss vectors.** A no-op handler that satisfies the type system, sits next to fully-wired siblings, and has no error path is invisible to skim-review and Sentry alike. Either throw `Error("handler not yet wired: <name>")` until the wiring lands, OR fan out to an instrumentation counter so a "stub still present" alert can fire. **Why:** same PR #3626 — `cc-dispatcher.ts:1202` `onResult` shipped as a no-op for 3 weeks (originally added 2026-04-24 #2858), under-counting API cost by 60-90% for every cc-soleur-go conversation while the legacy path's wiring made the surface look complete.
 
 5. **Test Continuously**
 

@@ -5,11 +5,13 @@ const {
   mockFetchUserWorkspacePath,
   mockMessagesInsert,
   mockUpdateConversationFor,
+  mockMirrorP0Deduped,
 } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
   mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
   mockUpdateConversationFor: vi.fn().mockResolvedValue({ ok: true }),
+  mockMirrorP0Deduped: vi.fn(),
 }));
 
 vi.mock("@/server/conversation-writer", async () => {
@@ -55,6 +57,12 @@ vi.mock("@/server/observability", async () => {
         mockReportSilentFallback(err, ctx);
       };
     })(),
+    // #3603 W1 — `mirrorP0Deduped` is the cross-tenant / W4-orphan
+    // P0 mirror with 1h `(userId, op, conversationId)` dedup. Spying
+    // it directly lets W4-orphan tests assert the op slug + ctx shape
+    // without exercising the real Sentry path; the real helper's
+    // dedup behavior is covered separately in observability tests.
+    mirrorP0Deduped: mockMirrorP0Deduped,
   };
 });
 
@@ -64,6 +72,15 @@ vi.mock("@/server/observability", async () => {
 // for them. Future tests in this file MUST be aware that a real Supabase
 // SELECT is bypassed here — re-add `vi.importActual` if you need the real
 // memo / Supabase round-trip semantics.
+// #3626 — `onResult` now also calls `persistTurnCost` (cost-writer.ts).
+// In test env the helper would attempt a real Supabase write and throw
+// synchronously, breaking subsequent SDK callbacks. Stub to a no-op so
+// the W4 messages.usage path remains the unit-under-test here. The cost-
+// writer aggregation surface has its own dedicated test coverage.
+vi.mock("@/server/cost-writer", () => ({
+  persistTurnCost: vi.fn(),
+}));
+
 vi.mock("@/server/kb-document-resolver", async () => {
   const actual = await vi.importActual<
     typeof import("@/server/kb-document-resolver")
@@ -102,7 +119,13 @@ import {
   handleInteractivePromptResponseCase,
   dispatchSoleurGo,
   __resetDispatcherForTests,
+  __resetCcPersistUsageObservationForTests,
 } from "@/server/cc-dispatcher";
+// #3603 W1 plan §2.2.3 — hook P0 dedup reset into the test reset chain so a
+// future test that exercises the real `mirrorP0Deduped` (vs. this file's spy
+// override) doesn't see state leak from a prior test. No-op against the spy
+// override below, but pins the contract.
+import { __resetP0DedupForTests } from "@/server/observability";
 import type { WSMessage } from "@/lib/types";
 import { KeyInvalidError } from "@/lib/types";
 import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
@@ -119,6 +142,8 @@ type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_
 describe("cc-dispatcher singletons + orchestration", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
+    __resetP0DedupForTests();
+    __resetCcPersistUsageObservationForTests();
     mockReportSilentFallback.mockClear();
     mockFetchUserWorkspacePath.mockReset();
     mockMessagesInsert.mockClear();
@@ -127,6 +152,11 @@ describe("cc-dispatcher singletons + orchestration", () => {
     mockMessagesInsert.mockResolvedValue({ error: null });
     mockUpdateConversationFor.mockClear();
     mockUpdateConversationFor.mockResolvedValue({ ok: true });
+    mockMirrorP0Deduped.mockClear();
+    // #3603 W4 — env state must be deterministic per test. `CC_PERSIST_USAGE`
+    // defaults to off (unset) at merge per AC9/AC11; tests that need the
+    // flag on stub it explicitly via `vi.stubEnv`.
+    vi.unstubAllEnvs();
     // Default: a stable stub workspace path so existing tests that don't
     // care about the workspace-resolve path still get a deterministic value.
     mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
@@ -969,6 +999,10 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // Loosely typed to avoid pulling the full WorkflowEnd union into the
     // narrow test contract; tests pass minimally-shaped status payloads.
     onWorkflowEnded?: (end: { status: string } & Record<string, unknown>) => void;
+    // #3603 W4 — per-turn cost telemetry captured pre-`onTextTurnEnd` so the
+    // dispatcher can attach `{ cost_usd }` to the corresponding `messages` row
+    // under the `CC_PERSIST_USAGE` flag.
+    onResult?: (result: { totalCostUsd: number }) => void;
   };
 
   function makeAssistantPersistenceStubRunner(args: {
@@ -1443,5 +1477,363 @@ describe("cc-dispatcher singletons + orchestration", () => {
     )[0]!;
     expect(mirrorCall[0]).toBeTruthy();
     expect(mirrorCall[0]).toMatchObject({ message: "db down" });
+  });
+
+  // ---------------------------------------------------------------------------
+  // #3603 W4 — `messages.usage` parity behind `CC_PERSIST_USAGE` flag
+  //
+  // Default-off. When on, cc-path persists the cc-narrowed shape
+  // `{ cost_usd: number }` per Art. 5(1)(c) data-minimization (cost only on
+  // complete turns; full usage snapshot is the legacy agent-runner contract).
+  // ---------------------------------------------------------------------------
+
+  it("T-W4-basic-on: persists usage = { cost_usd } when CC_PERSIST_USAGE=true and onResult fired before onTextTurnEnd", async () => {
+    vi.stubEnv("CC_PERSIST_USAGE", "true");
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("turn N reply");
+          // Runner fires onResult immediately before onTextTurnEnd (see
+          // soleur-go-runner.ts handleResultMessage:1836+1848).
+          events.onResult?.({ totalCostUsd: 0.0042 });
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w4-on",
+      conversationId: "conv-w4-on",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    // cc-narrowed shape: `cost_usd` only — NO `input_tokens` / `output_tokens`
+    // / `completed_actions` on complete turns (Art. 5(1)(c)).
+    expect(row.usage).toEqual({ cost_usd: 0.0042 });
+  });
+
+  it("T-W4-basic-off: persists usage = null when CC_PERSIST_USAGE is unset (default)", async () => {
+    // No vi.stubEnv — exercises the default-off path enforced by AC9/AC11.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("turn N reply");
+          events.onResult?.({ totalCostUsd: 0.0042 });
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w4-off",
+      conversationId: "conv-w4-off",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    // Flag off → explicit null, NOT `{ cost_usd: 0.0042 }`. Status defaults
+    // to `'complete'` via migration 040 (omitted from the row payload).
+    expect(row.usage).toBeNull();
+    expect(row.status).toBeUndefined();
+  });
+
+  it("T-W4-race: per-turn `pendingTurnUsage` snapshot-clear-bump attaches each turn's cost to its own row + a LATE stale onResult attaches to the next turn (not bleeds back)", async () => {
+    // Test-design review 2026-05-12 flagged the earlier variant as a vacuous
+    // pass against the `turnIndex` tag — events fired sequentially per turn
+    // would pass even without the tag. Revised below to ALSO exercise the
+    // stale-onResult scenario:
+    //   Turn 0: onText → onResult(c0) → onTextTurnEnd (saves with c0,
+    //           snapshot-clear-bumps to turnIndex=1)
+    //   Stale:  onResult(c_stale) — fires AFTER turn 0's bump but BEFORE
+    //           turn 1's content. pendingTurnUsage gets tagged turnIndex=1
+    //           with the wrong cost.
+    //   Turn 1: onText → onResult(c1) overwrites pendingTurnUsage (still
+    //           tagged 1) → onTextTurnEnd saves with c1 (correct).
+    // Load-bearing assertion: row 0 carries c0 (NOT c_stale), row 1 carries
+    // c1 (NOT c_stale). Catches a regression where pendingTurnUsage isn't
+    // cleared per turn or where the snapshot bumps `currentTurnIndex`
+    // BEFORE reading pendingTurnUsage (which would cause a turnIndex mismatch
+    // and drop turn 0's usage).
+    vi.stubEnv("CC_PERSIST_USAGE", "true");
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          // Turn 0
+          events.onText("first reply");
+          events.onResult?.({ totalCostUsd: 0.001 });
+          events.onTextTurnEnd?.();
+          // Late stale onResult — currentTurnIndex is now 1 (bumped by the
+          // preceding onTextTurnEnd), so this captures with turnIndex=1.
+          // Turn 1's onResult below overwrites it.
+          events.onResult?.({ totalCostUsd: 0.999 });
+          // Turn 1
+          events.onText("second reply");
+          events.onResult?.({ totalCostUsd: 0.002 });
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w4-race",
+      conversationId: "conv-w4-race",
+      userMessage: "two turns",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(2),
+    );
+
+    const rows = assistantInsertCalls(mockMessagesInsert);
+    expect(rows[0]).toEqual(
+      expect.objectContaining({ content: "first reply", usage: { cost_usd: 0.001 } }),
+    );
+    expect(rows[1]).toEqual(
+      expect.objectContaining({ content: "second reply", usage: { cost_usd: 0.002 } }),
+    );
+  });
+
+  it("T-W4-orphan: usage captured + empty text aborted via runner_runaway drops the row AND fires mirrorP0Deduped(usage_orphan_dropped)", async () => {
+    vi.stubEnv("CC_PERSIST_USAGE", "true");
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          // Cost emitted (turn cost-capped after a tool burst) but the model
+          // produced zero text → empty-content drop per PR-A1 contract.
+          events.onResult?.({ totalCostUsd: 0.0099 });
+          events.onWorkflowEnded?.({
+            status: "runner_runaway",
+            elapsedMs: 5000,
+            lastBlockKind: "tool_use",
+            lastBlockToolName: "Bash",
+            reason: "idle_window",
+          });
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w4-orphan",
+      conversationId: "conv-w4-orphan",
+      userMessage: "tool-only orphan",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Settle: no assistant insert.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
+
+    // Exactly ONE P0 mirror with the literal op slug.
+    expect(mockMirrorP0Deduped).toHaveBeenCalledTimes(1);
+    const [errArg, ctxArg] = mockMirrorP0Deduped.mock.calls[0]!;
+    expect((errArg as Error)?.message).toBe("usage_orphan_dropped");
+    expect(ctxArg).toEqual({
+      op: "usage_orphan_dropped",
+      userId: "u-w4-orphan",
+      conversationId: "conv-w4-orphan",
+    });
+  });
+
+  it("T-W4-flag-symmetry: CC_PERSIST_USAGE=true but onResult never fires → row writes usage = null (explicit, not undefined)", async () => {
+    vi.stubEnv("CC_PERSIST_USAGE", "true");
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("reply without onResult");
+          // No onResult — simulates SDK callback drop / non-fire path.
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w4-symmetry",
+      conversationId: "conv-w4-symmetry",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    // Flag on + no captured usage → explicit null write. Closes the
+    // telemetry-join-format-mismatch class of bugs (learning
+    // 2026-05-04-telemetry-join-format-mismatch-caught-by-orphan-counter.md).
+    expect(row.usage).toBeNull();
+  });
+
+  it("T-W4-reset-symmetry: abort-with-text attaches captured usage AND clears pendingTurnUsage so a late onTextTurnEnd is a no-op", async () => {
+    vi.stubEnv("CC_PERSIST_USAGE", "true");
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("partial before abort");
+          events.onResult?.({ totalCostUsd: 0.005 });
+          // Abort while text is present → aborted row carries the captured
+          // usage; pendingTurnUsage MUST be cleared so a late onTextTurnEnd
+          // cannot re-attach the stale value.
+          events.onWorkflowEnded?.({ status: "user_aborted" });
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-w4-reset",
+      conversationId: "conv-w4-reset",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+    // Settle further — confirm the late onTextTurnEnd does NOT produce a
+    // second insert.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1);
+
+    const [row] = assistantInsertCalls(mockMessagesInsert);
+    expect(row).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: "partial before abort",
+        status: "aborted",
+        usage: { cost_usd: 0.005 },
+      }),
+    );
+    // No orphan mirror — the usage was consumed by the aborted row.
+    expect(mockMirrorP0Deduped).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // #3603 W1 invariant-7 — `assertWriteScope` sentinel call-site smoke.
+  //
+  // Sentinel-only at HEAD (no payload source exists); the call site itself is
+  // the load-bearing invariant. Any future refactor that drops the call must
+  // be caught by this test. When a payload source IS wired in, this test is
+  // extended with a mismatch scenario asserting `mirrorP0Deduped` fires.
+  // ---------------------------------------------------------------------------
+
+  it("T-W1-invariant-7: assertWriteScope is exercised at EVERY messages-write call site (user-INSERT + complete + aborted)", async () => {
+    // Sentinel-only at HEAD: the production helper always returns `true`.
+    // Forcing it to fail at SPECIFIC call sites proves the halt wiring is
+    // present at each one. Call sequence (per `dispatchSoleurGo`):
+    //   Call 1: user-row INSERT (pre-runner). Throws on false.
+    //   Call 2: `onTextTurnEnd` → `saveAssistantMessage()` (complete path).
+    //           Returns silently on false.
+    //   Call 3: `onWorkflowEnded` abort branch → `saveAssistantMessage({status:"aborted"})`.
+    //           Returns silently on false.
+    // Call-counting spy: lets call 1 through (so dispatch reaches the runner),
+    // then halts calls 2 + 3. Tests ALL THREE call sites in a single dispatch.
+    const {
+      __setCcRunnerForTests,
+      __setAssertWriteScopeForTests,
+      __resetAssertWriteScopeForTests,
+    } = await import("@/server/cc-dispatcher");
+
+    let scopeCallCount = 0;
+    const scopeSpy = vi.fn(() => {
+      scopeCallCount += 1;
+      // First call (user-INSERT) succeeds so dispatch proceeds; subsequent
+      // calls (assistant complete + abort) halt.
+      return scopeCallCount === 1;
+    });
+    __setAssertWriteScopeForTests(scopeSpy);
+
+    try {
+      __setCcRunnerForTests(
+        makeAssistantPersistenceStubRunner({
+          onDispatch: (events) => {
+            // Drive BOTH the complete-path and the abort-path call sites
+            // through a single dispatch so the test pins them together.
+            events.onText("would have been persisted");
+            events.onTextTurnEnd?.();
+            events.onText("partial before abort");
+            events.onWorkflowEnded?.({
+              status: "user_aborted",
+            });
+          },
+        }),
+      );
+
+      const sendToClient = vi.fn().mockReturnValue(true);
+      await dispatchSoleurGo({
+        userId: "u-scope",
+        conversationId: "conv-scope",
+        userMessage: "hi",
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient,
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+      });
+
+      // Settle the assistant call sites' microtasks.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Exactly ONE user-INSERT (call 1 passed), ZERO assistant rows (calls
+      // 2 + 3 halted by sentinel).
+      const userRows = mockMessagesInsert.mock.calls
+        .map((c) => c[0] as { role?: string })
+        .filter((r) => r.role === "user");
+      expect(userRows).toHaveLength(1);
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
+
+      // Exactly THREE scope-spy invocations — proves all three call sites
+      // (user-INSERT, onTextTurnEnd→save, onWorkflowEnded→save({status:"aborted"}))
+      // run through the helper. A future refactor that drops any call site
+      // fails this assertion.
+      expect(scopeSpy).toHaveBeenCalledTimes(3);
+      for (const call of scopeSpy.mock.calls) {
+        // Receives the dispatch-closure identity tuple — when a future SDK
+        // payload source is wired in, this signature is the single edit point.
+        expect(call).toEqual(["u-scope", "conv-scope"]);
+      }
+    } finally {
+      __resetAssertWriteScopeForTests();
+    }
   });
 });

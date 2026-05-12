@@ -659,7 +659,22 @@ export interface DispatchEvents {
   }) => void;
   onWorkflowDetected: (workflow: WorkflowName) => void;
   onWorkflowEnded: (end: WorkflowEnd) => void;
-  onResult: (result: { totalCostUsd: number }) => void;
+  /**
+   * Fires once per `SDKResultMessage`. Payload widened beyond
+   * `totalCostUsd` (2026-05-12) to surface the 4-token usage axis so
+   * the cost-writer can persist cache tokens. SDK exposes nullable
+   * cache fields per `@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts`,
+   * so the runner coerces `?? 0` at this boundary.
+   */
+  onResult: (result: {
+    totalCostUsd: number;
+    usage: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens: number;
+      cache_creation_input_tokens: number;
+    };
+  }) => void;
   /**
    * Per-turn boundary signal. Fires once per `SDKResultMessage`,
    * immediately after `onResult`. The cc-dispatcher wires this to a
@@ -1833,7 +1848,19 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // same outline.
     state.activeChapter = null;
     try {
-      state.events.onResult({ totalCostUsd: delta });
+      // SDK `usage` cache fields are nullable per the SDK type
+      // definition; coerce `?? 0` at this boundary so the cost-writer
+      // (and DB) never see NULL on a NOT NULL column.
+      const u = msg.usage;
+      state.events.onResult({
+        totalCostUsd: delta,
+        usage: {
+          input_tokens: u?.input_tokens ?? 0,
+          output_tokens: u?.output_tokens ?? 0,
+          cache_read_input_tokens: u?.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: u?.cache_creation_input_tokens ?? 0,
+        },
+      });
     } catch (err) {
       reportSilentFallback(err, {
         feature: "soleur-go-runner",

@@ -62,6 +62,11 @@ export interface UsageData {
   totalCostUsd: number;
   inputTokens: number;
   outputTokens: number;
+  // Cache tokens — `0` when prompt caching is not engaged. Widened
+  // 2026-05-12 so the chat-surface cost badge can render the same
+  // total-input semantics the dashboard's API Usage section does.
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
 }
 
 export interface StartSessionOptions {
@@ -779,6 +784,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             totalCostUsd: (prev?.totalCostUsd ?? 0) + msg.totalCostUsd,
             inputTokens: (prev?.inputTokens ?? 0) + msg.inputTokens,
             outputTokens: (prev?.outputTokens ?? 0) + msg.outputTokens,
+            // `?? 0` coerces frames from old-shape servers (cache fields
+            // absent) during a rolling deploy. Tighten to required when
+            // the Zod schema flips back to non-optional.
+            cacheReadInputTokens:
+              (prev?.cacheReadInputTokens ?? 0) + (msg.cacheReadInputTokens ?? 0),
+            cacheCreationInputTokens:
+              (prev?.cacheCreationInputTokens ?? 0) +
+              (msg.cacheCreationInputTokens ?? 0),
           }));
           break;
         }
@@ -977,20 +990,50 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // bubble on every parent render, regressing the 10-50 Hz token-stream
       // memo guarantee on long threads).
       status: m.status ?? undefined,
+      // #3603 W4 — `Message.usage` now carries TWO shapes: the legacy
+      // agent-runner `UsageSnapshot` (input_tokens + output_tokens +
+      // completed_actions) and the cc-router narrow shape (`cost_usd` only)
+      // gated on `CC_PERSIST_USAGE`. Field-presence branching avoids
+      // coercing `undefined` into the typed `AbortMarkerUsage.input_tokens`
+      // slot — readers downstream (`message-bubble.tsx`
+      // `renderAbortedAssistant`) already gate on `typeof === "number"` for
+      // the token sum, so partial shape is safe to pass through.
       usage:
         m.status === "aborted" && m.usage
           ? {
-              input_tokens: m.usage.input_tokens,
-              output_tokens: m.usage.output_tokens,
+              ...(typeof m.usage.input_tokens === "number"
+                ? { input_tokens: m.usage.input_tokens }
+                : {}),
+              ...(typeof m.usage.output_tokens === "number"
+                ? { output_tokens: m.usage.output_tokens }
+                : {}),
               cost_usd: m.usage.cost_usd ?? null,
-              completed_actions: m.usage.completed_actions ?? [],
+              ...(m.usage.completed_actions
+                ? { completed_actions: m.usage.completed_actions }
+                : {}),
             }
           : null,
     }));
 
     const costData: UsageData | null =
       json.totalCostUsd > 0
-        ? { totalCostUsd: json.totalCostUsd, inputTokens: json.inputTokens, outputTokens: json.outputTokens }
+        ? {
+            totalCostUsd: json.totalCostUsd,
+            inputTokens: json.inputTokens,
+            outputTokens: json.outputTokens,
+            // History responses pre-2026-05-12 omit cache token fields;
+            // default to 0 so the resume path can hydrate without
+            // throwing on missing fields. Forward-going responses
+            // populate these from `api-messages.ts`.
+            cacheReadInputTokens:
+              typeof json.cacheReadInputTokens === "number"
+                ? json.cacheReadInputTokens
+                : 0,
+            cacheCreationInputTokens:
+              typeof json.cacheCreationInputTokens === "number"
+                ? json.cacheCreationInputTokens
+                : 0,
+          }
         : null;
 
     const workflowEndedAtFromServer: string | null =
