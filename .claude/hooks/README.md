@@ -48,16 +48,24 @@ emit_incident "<rule_id>" "<event_type>" "<rule_text_prefix>" ["<command_snippet
 `BASH_SOURCE[0]` is used to resolve the repo root — `$0` returns the caller of
 the sourced file, not the library itself.
 
-### v1 bypass detection
+### Bypass detection
 
 `detect_bypass "<tool_name>" "<command>"` returns a rule_id when the command
-uses a known skip flag:
+uses a known skip flag (telemetry-only, not block):
 
-- `--no-verify` → `cq-never-skip-hooks`
-- `LEFTHOOK=0`  → `cq-when-lefthook-hangs-in-a-worktree-60s`
+- `--no-verify`               → `cq-never-skip-hooks` (skip pre-commit/commit-msg hooks)
+- `-c core.hooksPath=…`       → `cq-never-skip-hooks` (redirect hooks dir, commonly to /dev/null)
+- `HUSKY=0`                   → `cq-never-skip-hooks` (disable Husky pre-commit)
+- `--no-gpg-sign`             → `cq-never-skip-hooks` (bypass commit signing)
+- `-c commit.gpgsign=false`   → `cq-never-skip-hooks` (bypass signing via inline config)
+- `LEFTHOOK=0`                → `cq-when-lefthook-hangs-in-a-worktree-60s`
 
-Deferred to v2 until the dataset shows it: `--force` on main, `--no-gpg-sign`,
-`--amend` after a same-session deny.
+Deferred until the dataset shows it: `--force` on main, `--amend` after a
+same-session deny.
+
+`core.hooksPath`, `HUSKY=0`, `--no-gpg-sign`, `commit.gpgsign=false` added
+2026-05-12 after a self-corrected anticipatory bypass; see
+`knowledge-base/project/learnings/2026-05-12-anticipatory-hook-bypass-and-leader-substrate-cross-check.md`.
 
 ## Rotation
 
