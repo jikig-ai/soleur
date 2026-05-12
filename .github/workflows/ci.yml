@@ -182,44 +182,58 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # E2E job runs inside the official Playwright container so Chromium + OS deps
+  # are pre-installed at the matching Playwright version. Container tag, digest,
+  # and the playwright pin in apps/web-platform/package-lock.json (1.58.2) MUST
+  # stay in lockstep — Playwright's browser-binary lookup is exact-revision (see
+  # learning 2026-03-20-playwright-shared-cache-version-coupling.md). When
+  # bumping playwright in apps/web-platform, bump BOTH the tag and the digest
+  # below in the same PR. NOTE: distinct from critical-css-gate's container
+  # (which uses v1.60.0 against the root install) — the two jobs use different
+  # lockfiles and are independent. DO NOT unify these versions without first
+  # bumping the corresponding lockfile pin (apps/web-platform/package-lock.json
+  # for this job, root for critical-css-gate); the two jobs are deliberately
+  # decoupled and a "tidying" unification will break browser-binary lookup.
   e2e:
     runs-on: ubuntu-latest
-
+    container:
+      # Pinned by both tag (greppable version) AND multi-arch manifest-list
+      # digest (vendor-pin discipline, per AGENTS.md
+      # hr-mcp-tools-playwright-etc-resolve-paths). The Playwright image runs
+      # as root by default — that is the supported path for actions/checkout
+      # (see https://github.com/actions/checkout/issues/956). Do NOT add
+      # `options: --user 1001` — it triggers UID-mismatch permission errors
+      # against /__w/_temp. Image ships Node 24 (no actions/setup-node needed).
+      image: mcr.microsoft.com/playwright:v1.58.2-jammy@sha256:4698a73749c5848d3f5fcd42a2174d172fcad2b2283e087843b115424303a565
+    defaults:
+      run:
+        # GitHub Actions container `run:` steps default to /bin/sh (dash on
+        # Jammy). Explicit bash avoids dash-vs-bash drift on any future step.
+        shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install unzip (required by setup-bun)
+        # The Playwright Jammy image does not include unzip, which oven-sh/setup-bun
+        # shells out to during install. Without it the action fails with
+        # "error: unzip is required to install bun" (see oven-sh/setup-bun#55).
+        # critical-css-gate did not hit this because that job uses npm, not bun.
+        # Chained with `&&` so a flaky `apt-get update` (mirror outage) fails the
+        # step instead of falling through to a stale-cache install.
+        # `--no-install-recommends` keeps the install footprint minimal (no docs,
+        # no suggested-package pulls).
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
           bun-version-file: ".bun-version"
 
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
-
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
       - name: Install web-platform dependencies
         run: bun install --frozen-lockfile
-        working-directory: apps/web-platform
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ hashFiles('apps/web-platform/bun.lock') }}
-
-      - name: Install Playwright Chromium
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web-platform
-
-      - name: Install Playwright system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
         working-directory: apps/web-platform
 
       - name: Run E2E tests
