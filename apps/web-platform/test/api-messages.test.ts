@@ -131,6 +131,68 @@ describe("handleConversationMessages", () => {
     expect(body.workflowEndedAt).toBe("2026-04-27T12:00:00Z");
   });
 
+  test("response includes createdAt from the conversation row (PR-B #3603)", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: USER_ID } },
+      error: null,
+    });
+
+    const convChain = mockQueryChain({
+      id: CONV_ID,
+      total_cost_usd: "0",
+      input_tokens: 0,
+      output_tokens: 0,
+      workflow_ended_at: null,
+      created_at: "2026-05-08T10:00:00Z",
+    });
+    const msgChain = mockQueryChain([]);
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "conversations") return convChain;
+      if (table === "messages") return msgChain;
+      return mockQueryChain(null);
+    });
+
+    const req = makeReq("valid-token");
+    const res = makeRes();
+
+    await handleConversationMessages(req, res, CONV_ID);
+
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body.createdAt).toBe("2026-05-08T10:00:00Z");
+  });
+
+  test("createdAt is null when the conversation row has no created_at (PR-B #3603, defensive)", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: USER_ID } },
+      error: null,
+    });
+
+    const convChain = mockQueryChain({
+      id: CONV_ID,
+      total_cost_usd: "0",
+      input_tokens: 0,
+      output_tokens: 0,
+      workflow_ended_at: null,
+      created_at: null,
+    });
+    const msgChain = mockQueryChain([]);
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "conversations") return convChain;
+      if (table === "messages") return msgChain;
+      return mockQueryChain(null);
+    });
+
+    const req = makeReq("valid-token");
+    const res = makeRes();
+
+    await handleConversationMessages(req, res, CONV_ID);
+
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body.createdAt).toBeNull();
+  });
+
   test("workflowEndedAt is null when the conversation has not ended (review F3 #2886)", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: USER_ID } },
