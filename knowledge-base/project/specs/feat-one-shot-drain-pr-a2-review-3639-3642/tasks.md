@@ -49,14 +49,15 @@ lane: single-domain
 
 ## 5. #3640 F6 — Message.usage variant union (TS-only, no migration)
 
-- [ ] 5.1 Widen `Message` in `lib/types.ts` with `variant: "legacy" | "cc"` + tagged `usage?` union (`LegacyUsage` / `CcUsage`).
-- [ ] 5.2 Update `lib/api-messages.ts` hydration: `variant = row.leader_id === CC_ROUTER_LEADER_ID ? "cc" : "legacy"` on every Message returned.
-- [ ] 5.3 Rewrite `ws-client.ts:1010-1025` `usage:` ternary to switch on `m.variant`.
-- [ ] 5.4 Rewrite `message-bubble.tsx:330-350` `renderAbortedAssistant` token-sum + cost-label to switch on `usage.variant`.
-- [ ] 5.5 Run `bun run typecheck` — enumerate every consumer that breaks; add each to `Files to Edit` inline.
-- [ ] 5.6 Iterate Steps 5.3-5.5 until typecheck is clean.
-- [ ] 5.7 Run `bun test` — expect green.
-- [ ] 5.8 Commit: `refactor(types): discriminate Message.usage by variant — closes #3640 (F2 + F4 + F6)`.
+- [x] 5.1 Widen `Message` in `lib/types.ts` with `variant?: "legacy" | "cc"` (top-level discriminator, fixture-stable default).
+- [x] 5.2 Variant derived client-side at hydration in `lib/ws-client.ts` from `leader_id === CC_ROUTER_LEADER_ID`. `server/api-messages.ts` continues to return raw rows; the deepen-plan note about an `api-messages.ts` hydration step did not apply because raw rows are not constructed into typed `Message` objects on the server.
+- [x] 5.3 Rewrote `ws-client.ts` `usage:` ternary to branch on `m.leader_id` and emit a `variant`-tagged abort-marker payload (cc vs. legacy).
+- [x] 5.4 Rewrote `message-bubble.tsx:renderAbortedAssistant` token-sum + cost-label to switch on `usage.variant` (with `undefined → "legacy"` fixture-stable default).
+- [x] 5.5 Ran `tsc --noEmit` — typecheck clean, no consumer-side breaks (the `variant?` widening is optional on every shape, so the existing fixture corpus type-checks unchanged).
+- [x] 5.6 Also widened `AbortMarkerUsage` (message-bubble.tsx) and `ChatTextMessage.usage` (chat-state-machine.ts) to carry `variant?` and to relax `input_tokens` / `output_tokens` from `number` to `number | undefined` so cc-narrowed rows don't fabricate zeros.
+- [x] 5.7 Both reader-pattern greps return zero matches (`typeof m.usage.<f> === "number"` AND `typeof usage.<f> === "number"`).
+- [x] 5.8 Ran `vitest run` — green (4076 / 57 skipped).
+- [x] 5.9 Commit: `refactor(types): discriminate Message.usage by variant — closes #3640 (F2 + F4 + F6)`.
 
 ## 6. #3639 F1 + #3641 T-W1-invariant-7 — TurnPersistenceState extraction (paired)
 

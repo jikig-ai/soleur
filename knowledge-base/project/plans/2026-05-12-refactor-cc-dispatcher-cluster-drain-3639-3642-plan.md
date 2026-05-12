@@ -214,7 +214,7 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
 
 ### Phase 5 — #3640 F6 Message.usage variant union
 
-- [ ] Widen `Message` in `apps/web-platform/lib/types.ts:412` with `variant?: "legacy" | "cc"` (optional during transition; readers default `undefined` → `"legacy"` for fixture-stable backward compatibility). Discriminator lives at the **top level on `Message`**, not nested on `usage` (deepen-plan recommendation: nested would require the discriminator when `usage` is `null`, breaking fixture stability). Rough shape:
+- [x] Widen `Message` in `apps/web-platform/lib/types.ts:412` with `variant?: "legacy" | "cc"` (optional during transition; readers default `undefined` → `"legacy"` for fixture-stable backward compatibility). Discriminator lives at the **top level on `Message`**, not nested on `usage` (deepen-plan recommendation: nested would require the discriminator when `usage` is `null`, breaking fixture stability). Rough shape:
   ```ts
   export interface Message {
     // ...existing fields...
@@ -237,12 +237,13 @@ None. This PR is refactor-only; no migrations, no flags, no operator actions. `g
   }
   ```
   The `usage` shape itself is unchanged at the type level (legacy fields stay optional). The discriminator-driven reader switch is what enforces the narrowing — `m.variant === "cc"` readers must only access `usage.cost_usd`; `m.variant === "legacy"` (default) readers may access the full snapshot.
-- [ ] Update `lib/api-messages.ts` hydration to derive `variant = row.leader_id === CC_ROUTER_LEADER_ID ? "cc" : "legacy"` and assign on every row. Cite migration 040 + `cc-router-id.ts` in a header comment.
-- [ ] Rewrite `ws-client.ts:1010-1025` `usage:` ternary to switch on `m.variant`. Legacy branch keeps the existing field passthrough; cc branch keeps only `cost_usd`.
-- [ ] Rewrite `message-bubble.tsx:330-350` `renderAbortedAssistant` token-sum + cost-label logic to switch on `usage.variant`. Legacy computes `input_tokens + output_tokens`; cc skips token sum (returns `null`, which already renders gracefully).
-- [ ] Run `bun run typecheck`. Every consumer that broke is added to the `Files to Edit` list inline (per `hr-type-widening-cross-consumer-grep`).
-- [ ] Run unit tests. Expected: green (the on-the-wire shape didn't change — only the in-memory branch shape).
-- [ ] Commit: `refactor(types): discriminate Message.usage by variant — closes #3640 (F2 + F4 + F6)`.
+- [x] `lib/api-messages.ts` was scoped out at work-time: the server returns raw DB rows (not typed `Message` objects), so variant derivation moved to `lib/ws-client.ts` where the raw rows are actually hydrated into the in-memory chat-state-machine shape. Drift documented in tasks.md 5.2.
+- [x] Rewrote `ws-client.ts:1010-1025` `usage:` ternary to branch on `m.leader_id === CC_ROUTER_LEADER_ID` and emit a `variant`-tagged abort-marker payload (cc vs. legacy). The legacy branch passes through the full `UsageSnapshot` fields; cc emits `{ variant: "cc", cost_usd }` only.
+- [x] Rewrote `message-bubble.tsx:330-350` `renderAbortedAssistant` token-sum to switch on `usage.variant` (`undefined → "legacy"` default); cc branch skips token sum and renders cost-only.
+- [x] Also widened `AbortMarkerUsage` (message-bubble.tsx) and `ChatTextMessage.usage` (chat-state-machine.ts) to carry `variant?` and to relax `input_tokens` + `output_tokens` from `number` to `number | undefined`.
+- [x] Ran `tsc --noEmit`. Clean; no consumer-side breaks (the `variant?` widening is optional everywhere). `use-conversations.ts` only reads `role + content + leader_id + created_at` from `Message`, no churn.
+- [x] Ran unit tests. Green (4076 / 57 skipped).
+- [x] Commit: `refactor(types): discriminate Message.usage by variant — closes #3640 (F2 + F4 + F6)`.
 
 ### Phase 6 — #3639 F1 TurnPersistenceState + #3641 T-W1-invariant-7 relaxation (paired)
 

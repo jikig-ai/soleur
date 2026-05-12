@@ -57,12 +57,20 @@ interface ChatTextMessage extends ChatMessageBase {
   status?: "complete" | "aborted";
   /** #3448 PR2: aborted-turn snapshot. Present only for rows whose
    *  `status === "aborted"`. Shape mirrors the `usage` jsonb column
-   *  documented in migration 040. */
+   *  documented in migration 040.
+   *
+   *  #3640 F6 — `variant` discriminates the legacy `agent-runner`
+   *  `UsageSnapshot` (full fields) from the cc-router `{ cost_usd }`
+   *  narrow shape. `input_tokens` + `output_tokens` widened to optional
+   *  so cc-narrowed rows don't fabricate zeros at hydration. Readers
+   *  switch on `variant`; `undefined` defaults to `"legacy"` for the
+   *  fixture-stable backward-compat path. */
   usage?: {
-    input_tokens: number;
-    output_tokens: number;
+    variant?: "legacy" | "cc";
+    input_tokens?: number;
+    output_tokens?: number;
     cost_usd?: number | null;
-    completed_actions: Array<{
+    completed_actions?: Array<{
       tool_name: string;
       input_summary: string;
       result_summary: string;
