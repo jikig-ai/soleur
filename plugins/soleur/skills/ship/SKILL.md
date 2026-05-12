@@ -503,13 +503,13 @@ If the grep matches at least one path, the gate fires. Trigger condition is "≥
 
 **If triggered:**
 
-The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply. The drift workflow (`scheduled-terraform-drift.yml`, cron `0 6,18 * * *`) will detect this on its next tick and auto-file an issue. The cleaner path is to schedule the apply to happen *with* the merge.
+The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply.
 
-**Preferred path: one-click workflow.** Run the [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow via the GitHub Actions UI (`Actions → Apply deploy-pipeline-fix → Run workflow`). The workflow runs the targeted `terraform apply` with the credentials sourced from Doppler `prd_terraform`, then verifies server-side hashes match local trigger files and `webhook` is `active`. No terminal, no local Doppler/SSH setup. The first run requires a one-time browser-only setup (paste the prod SSH private key into Doppler as `TERRAFORM_SSH_PRIVATE_KEY`) — the workflow's "Verify Terraform SSH key" step fails with explicit instructions when the secret is missing.
+**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any of the 5 trigger files change. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies server-side hashes match the merged tree, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
 
-The local-terminal flow below is preserved as a fallback for operators who cannot use the workflow (e.g., the workflow's environment-protection reviewer is unavailable, or the Doppler secret has not yet been seeded). Issue #3618 tracks the deeper refactor that eliminates this whole class of host-resident-script drift (containerized deploy-orchestrator).
+This gate's role is now purely informational: surface that the PR will trigger the auto-apply, and confirm the operator has not used the kill-switch unintentionally. Issue #3618 tracks the deeper refactor that eliminates the `terraform_data.deploy_pipeline_fix` pattern entirely (containerized deploy-orchestrator).
 
-Display this exact block to the operator (fallback path):
+The local-terminal flow below is preserved as a documented fallback for the rare case where the auto-apply fails (transient network, Hetzner outage, terraform state lock). Display this block to the operator only when the auto-apply has actually failed:
 
 ```text
 This PR edits `terraform_data.deploy_pipeline_fix` trigger files. Drift will be
@@ -556,19 +556,14 @@ plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
 
 **Interactive mode:**
 
-Ask via AskUserQuestion: "Apply now via one-click workflow (recommended), apply locally via terminal (fallback), defer to operator post-merge, or skip?"
-
-- **Apply now via workflow:** Open the [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow in the GitHub Actions UI and click "Run workflow." The reviewer-click on the `production` environment is the human authorization. Pause the ship pipeline until the workflow reports success (visible in the Actions tab).
-- **Apply locally via terminal:** Pause the ship pipeline until the operator confirms the apply ran. Do NOT execute the apply from this skill — the operator runs it in their own terminal so the Terraform `yes` prompt is in their TTY. (TTY hand-off is intentional: prod blast radius warrants a human-typed `yes` rather than `-auto-approve` plus an in-conversation confirmation menu, even though `hr-menu-option-ack-not-prod-write-auth` would technically permit the latter.)
-- **Defer:** Add a `gh pr comment` on the PR (deferred until Phase 6 has the PR number) tagged `[deploy_pipeline_fix-drift-gate]` with both remediation paths embedded so the next operator (post-merge) sees them.
-- **Skip:** Same as Defer plus a "skip rationale" sentence; the next drift cron tick will still file an issue as the safety net.
+Inform the operator: "PR touches `terraform_data.deploy_pipeline_fix` trigger file(s). The `apply-deploy-pipeline-fix.yml` workflow will auto-apply on merge — no action required. Kill switch: add `[skip-deploy-fix-apply]` to a commit message if you want to defer the apply." Proceed to Phase 6 without blocking on user input.
 
 **Headless mode:**
 
-Auto-defer. Try `gh pr comment` first. If `gh pr comment` exits non-zero (the most common cause is the workflow's `GITHUB_TOKEN` lacks `pull-requests: write`; soleur shipping workflows typically grant `contents: read` + `issues: write` only), fall back to writing the tracking message into both stderr and `$GITHUB_STEP_SUMMARY` so it appears in the workflow's Summary tab. Do NOT abort the ship pipeline — the 12h drift cron remains the eventual safety net. The tracking message names the one-click workflow first so a non-technical operator can click through without a terminal.
+Same as interactive — surface a tracking comment on the PR noting the auto-apply will fire on merge, then proceed. The comment also names the kill-switch and the fallback terminal command for the rare auto-apply failure case.
 
 ```bash
-TRACKING_MSG="[deploy_pipeline_fix-drift-gate] PR touches a trigger file. Preferred: run the 'Apply deploy-pipeline-fix' workflow in the GitHub Actions UI (Actions tab → Apply deploy-pipeline-fix → Run workflow). Fallback: doppler run -p soleur -c prd_terraform -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=true"
+TRACKING_MSG=$'[deploy_pipeline_fix-drift-gate] This PR touches a trigger file. `apply-deploy-pipeline-fix.yml` will auto-apply on merge — no action required. To skip the auto-apply, add `[skip-deploy-fix-apply]` to a commit message. If the auto-apply fails (transient outage), run the workflow manually from the Actions tab, or as a last resort: `doppler run -p soleur -c prd_terraform -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=true`.'
 if ! gh pr comment "$PR_NUMBER" --body "$TRACKING_MSG" 2>/dev/null; then
   echo "$TRACKING_MSG" >&2
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
