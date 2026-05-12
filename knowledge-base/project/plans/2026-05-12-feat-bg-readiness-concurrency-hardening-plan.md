@@ -153,12 +153,12 @@ Each sub-commit is independently reviewable. They ship as one PR (#3689) because
 
 **Acceptance criteria — Pre-merge (PR):**
 
-- [ ] `bash .claude/hooks/lib/session-state.test.sh` — all 8 tests green.
-- [ ] **2026-04-21 reproducer** at `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh`: create worktree A with `worktree-manager.sh feature`, acquire lease, simulate merge by adding A's branch to `--merged main` output (mock via test-only `MOCK_MERGED_BRANCHES` env), invoke `cleanup_merged_worktrees` from a subshell, assert A's worktree directory still exists after the call returns.
-- [ ] `worktree-manager.sh feature <name>` calls `git ls-remote origin <branch>` after creation and verifies non-empty output before returning successfully.
-- [ ] Foreground `/soleur:one-shot` operator UX: capture stdout+stderr trace (not `set -x` — Kieran P1 #6) with `command 2>&1 | tee /tmp/trace`; diff against a recorded `pre-change-trace.txt` baseline. Tolerated diffs: timestamp lines, ANSI color codes. Substantive diff = failure.
-- [ ] `command -v flock || true` returns non-empty on the CI Linux runner.
-- [ ] PR commit message lists `Ref #3690` (single-PR-with-3-units; final `Closes #3690` is on sub-PR 3's commit body).
+- [x] `bash .claude/hooks/lib/session-state.test.sh` — all 8 tests green.
+- [x] **2026-04-21 reproducer** at `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh`: create worktree A with `worktree-manager.sh feature`, acquire lease, simulate merge by adding A's branch to `--merged main` output (mock via test-only `MOCK_MERGED_BRANCHES` env), invoke `cleanup_merged_worktrees` from a subshell, assert A's worktree directory still exists after the call returns.
+- [x] `worktree-manager.sh feature <name>` calls `git ls-remote origin <branch>` after creation and verifies non-empty output before returning successfully.
+- [x] Foreground `/soleur:one-shot` operator UX: capture stdout+stderr trace (not `set -x` — Kieran P1 #6) with `command 2>&1 | tee /tmp/trace`; diff against a recorded `pre-change-trace.txt` baseline. Tolerated diffs: timestamp lines, ANSI color codes. Substantive diff = failure.
+- [x] `command -v flock || true` returns non-empty on the CI Linux runner.
+- [x] PR commit message lists `Ref #3690` (single-PR-with-3-units; final `Closes #3690` is on sub-PR 3's commit body).
 
 **Acceptance criteria — Post-merge:** none for sub-PR 1 in isolation. End-to-end smoke deferred to sub-PR 3.
 
@@ -174,11 +174,11 @@ Each sub-commit is independently reviewable. They ship as one PR (#3689) because
 
 **Acceptance criteria — Pre-merge (PR):**
 
-- [ ] `bash .claude/hooks/pre-merge-rebase.test.sh` (existing test) passes after refactor.
-- [ ] Headless reproducer: invoke `pre-merge-rebase.sh` with `</dev/null > /tmp/stdout 2> /tmp/stderr` AND `CLAUDECODE=1` set; assert `/tmp/stderr` empty AND `${GIT_COMMON_DIR}/soleur-logs/${PPID}.log` contains a `pre-merge-rebase warn` line.
-- [ ] Foreground reproducer: invoke same script with `CLAUDECODE=1` but TTY present (`script -q -c '...' /dev/null`); assert stderr non-empty AND log file unchanged.
-- [ ] Each emitted log line is a single line (POSIX-atomic append for <4KB).
-- [ ] `Ref #3690`.
+- [x] `bash .claude/hooks/pre-merge-rebase.test.sh` (existing test) passes after refactor.
+- [x] Headless reproducer: invoke `pre-merge-rebase.sh` with `</dev/null > /tmp/stdout 2> /tmp/stderr` AND `CLAUDECODE=1` set; assert `/tmp/stderr` empty AND `${GIT_COMMON_DIR}/soleur-logs/${PPID}.log` contains a `pre-merge-rebase warn` line.
+- [x] Foreground reproducer: invoke same script with `CLAUDECODE=1` but TTY present (`script -q -c '...' /dev/null`); assert stderr non-empty AND log file unchanged.
+- [x] Each emitted log line is a single line (POSIX-atomic append for <4KB).
+- [x] `Ref #3690`.
 
 **Acceptance criteria — Post-merge:** none.
 
@@ -211,9 +211,9 @@ Each sub-commit is independently reviewable. They ship as one PR (#3689) because
 
 **Acceptance criteria — Pre-merge (PR):**
 
-- [ ] Concurrent `/soleur:ship` reproducer at `plugins/soleur/test/concurrent-ship.test.sh`: spawn 2 background subshells each invoking the skill's merge-main lock block; assert the timestamps of `gh pr merge --auto` invocation are at least 1s apart (proxy for serialization).
-- [ ] `HEADLESS_MODE` classification: invoke `session-rules-loader.sh` with `</dev/null` + `CLAUDECODE=1`; assert env `HEADLESS_MODE=1`. Invoke with TTY + `CLAUDECODE=1`; assert `HEADLESS_MODE=0`.
-- [ ] PR commit body: `Closes #3690`.
+- [x] Concurrent `/soleur:ship` reproducer at `plugins/soleur/test/concurrent-ship.test.sh`: spawn 2 background subshells each invoking the skill's merge-main lock block; assert the timestamps of `gh pr merge --auto` invocation are at least 1s apart (proxy for serialization).
+- [x] `HEADLESS_MODE` classification: invoke `session-rules-loader.sh` with `</dev/null` + `CLAUDECODE=1`; assert env `HEADLESS_MODE=1`. Invoke with TTY + `CLAUDECODE=1`; assert `HEADLESS_MODE=0`.
+- [x] PR commit body: `Closes #3690`.
 
 **Acceptance criteria — Post-merge (operator):**
 
