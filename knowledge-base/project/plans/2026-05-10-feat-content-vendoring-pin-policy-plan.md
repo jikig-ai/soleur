@@ -393,7 +393,7 @@ No other plan-file overlap. Verified via `gh issue list --label code-review --st
 ### Product (CPO) — carry-forward from brainstorm
 
 **Status:** reviewed
-**Assessment:** Pin-policy doc itself is meta-process; freshness SLO carries the single-user-incident threshold. Weave-don't-append output makes 0-finding-on-stale-rules a single-user incident. Runtime staleness gate is the load-bearing user protection independent of the cron. Plan-time CPO sign-off treated as covered by brainstorm carry-forward per Phase 2.6 sign-off lifecycle staging.
+**Assessment:** Pin-policy doc itself is meta-process; freshness SLO carries the single-user incident threshold. Weave-don't-append output makes 0-finding-on-stale-rules a single-user incident. Runtime staleness gate is the load-bearing user protection independent of the cron. Plan-time CPO sign-off treated as covered by brainstorm carry-forward per Phase 2.6 sign-off lifecycle staging.
 
 ### Product/UX Gate
 

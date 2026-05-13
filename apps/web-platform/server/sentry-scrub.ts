@@ -12,8 +12,53 @@
 // value on revisit, leaking credentials nested under shared sub-objects
 // (e.g., a single `error.cause` chain referenced from multiple breadcrumbs).
 // See PR #3240 review.
+//
+// userId rename special-case (#3710 PR-B deliverable 3): top-level and nested
+// `userId` / `user_id` keys (case-insensitive) are renamed to `userIdHash`
+// via the shared `hashUserIdValue` primitive. This is the structural
+// backstop for direct `Sentry.captureException({extra: {userId}})` sites
+// that bypass the centralised helpers (e.g., `server/ws-handler.ts`,
+// `server/index.ts:120` startup capture). ADR-029 (rename-at-boundary).
+// The rename wins over `SENSITIVE_LOWER.has()` so a future addition of
+// `userId` to `SENSITIVE_KEY_NAMES` does not bury the pseudonymous
+// identifier under `[Redacted]`.
 
 import { SENSITIVE_LOWER, SENSITIVE_KEY_NAMES } from "./sensitive-keys";
+import { hashUserIdValue } from "./userid-pseudonymize";
+
+// Canonical inventory of helper-migration sites bound to `Sentry.setUser` via
+// `Sentry.withIsolationScope`. Single source of truth for the Article 30
+// register PA8 §(c)(i) symmetric-coverage claim. Update this list whenever a
+// new authenticated emit site adopts the helper+isolation wrap; the legal
+// disclosure references this file path (not a PR number that ages out).
+//
+// HOC binding (4 routes inherit setUser via `server/with-user-rate-limit.ts`):
+//   - app/api/conversations/route.ts          (per `withUserRateLimit`)
+//   - app/api/kb/search/route.ts              (per `withUserRateLimit`)
+//   - app/api/kb/tree/route.ts                (per `withUserRateLimit`)
+//   - app/api/chat/thread-info/route.ts       (per `withUserRateLimit`)
+//
+// Inline helper-migration sites (each wraps reportSilentFallback in
+// Sentry.withIsolationScope + setUser({id: hashUserIdValue(userId)})):
+//   - app/(auth)/callback/route.ts            (auth-callback / user-upsert)
+//   - app/(auth)/callback/route.ts            (auth-callback / workspace-provisioning)
+//   - app/api/accept-terms/route.ts           (accept-terms / record — DB error)
+//   - app/api/accept-terms/route.ts           (accept-terms / record — user row missing)
+//   - app/api/auth/github-resolve/callback/route.ts (github-resolve / store-username)
+//   - app/api/repo/setup/route.ts             (repo-setup / clone)
+//   - app/api/services/route.ts               (services / store)
+//   - app/api/services/route.ts               (services / list)
+//   - app/api/services/route.ts               (services / delete)
+//   - app/api/webhooks/stripe/route.ts        (stripe-webhook / checkout.session.completed)
+//   - app/api/workspace/route.ts              (workspace / provisioning)
+//
+// Sites outside this inventory (e.g., server/ws-handler.ts, server/index.ts:120,
+// app/api/attachments/presign/route.ts, app/api/keys/route.ts,
+// app/api/checkout/route.ts, app/api/billing/portal/route.ts,
+// app/api/repo/create/route.ts, app/api/repo/setup/route.ts:126/175/194)
+// are covered by the rename special-case below as the structural backstop —
+// they emit raw `userId` in extras which is rewritten to `userIdHash` at the
+// scrub boundary.
 
 const REDACTED = "[Redacted]";
 
@@ -40,8 +85,39 @@ function scrubRecursive(
 
   const out: Record<string, unknown> = {};
   memo.set(obj, out);
+
+  // Pre-scan for the rename special-case so defensive precedence wins:
+  // when both `userId` (or `user_id`) and `userIdHash` are present, the
+  // caller-supplied `userIdHash` is preserved verbatim and the raw key is
+  // dropped — prevents re-hashing an already-pseudonymous value across
+  // re-entries (mirrors `renameUserIdToHash` defensive branch).
+  // `userIdHash` is the ADR-029 §I8 reserved emit-key.
+  let hasUserIdHashPreset = false;
+  for (const k of Object.keys(value as Record<string, unknown>)) {
+    if (k === "userIdHash") {
+      hasUserIdHashPreset = true;
+      break;
+    }
+  }
+
+  let renamedHashWritten = false;
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (SENSITIVE_LOWER.has(k.toLowerCase())) {
+    const keyLower = k.toLowerCase();
+
+    // userId / user_id rename special-case — wins over SENSITIVE_LOWER.has().
+    if (keyLower === "userid" || keyLower === "user_id") {
+      if (hasUserIdHashPreset) {
+        // Defensive precedence — keep preset, drop raw.
+        continue;
+      }
+      if (!renamedHashWritten) {
+        out["userIdHash"] = hashUserIdValue(v);
+        renamedHashWritten = true;
+      }
+      continue;
+    }
+
+    if (SENSITIVE_LOWER.has(keyLower)) {
       out[k] = REDACTED;
     } else {
       out[k] = scrubRecursive(v, memo);
