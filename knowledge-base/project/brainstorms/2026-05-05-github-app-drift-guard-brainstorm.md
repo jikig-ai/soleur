@@ -4,7 +4,7 @@ topic: github-app-drift-guard
 related_issues: [3187, 3181, 3183, 1784, 2887]
 related_prs: [3181]
 status: brainstorm-complete
-brand_survival: single-user-incident
+brand_survival_threshold: single-user incident
 ---
 
 # GitHub App Drift-Guard via JWT-signed `gh api /app` Snapshot
