@@ -20,7 +20,7 @@ The three existing C4 architecture diagrams in `knowledge-base/engineering/archi
 ## Goals
 
 - G1 — `system-context.md`, `container.md`, and `component-plugin.md` render with zero overlapping arrows and zero label collisions on GitHub markdown preview.
-- G2 — Each rendered Mermaid block stays within the node-count budget: L1 ≤ 8, L2 ≤ 10, L3 ≤ 8.
+- G2 — Each rendered Mermaid block stays within the node-count budget: **L1 ≤ 9, L2 ≤ 11, L3 ≤ 8**. (Amended 2026-05-13 from initial draft `L1 ≤ 8 / L2 ≤ 10` after plan-time recount; ADR-007 architectural significance keeps `doppler` distinct at both levels rather than fold it.)
 - G3 — All semantic content currently represented in the three diagrams remains discoverable in the same file (either inside the Mermaid block or in a new `## Details` prose section).
 - G4 — Filenames `system-context.md`, `container.md`, `component-plugin.md` remain unchanged so the 19+ ADR / plan / spec cross-references stay valid.
 - G5 — No new tooling, no new runtime dependency, no new CI step. Source format stays Mermaid.
@@ -41,18 +41,24 @@ Apply relation bundling to `system-context.md`:
 
 - Combine related `Rel()` edges that share source and target into a single labeled bundle (e.g., today's separate "Auth and data" + "Sessions and encrypted keys" become bundled per source-target pair).
 - Reorder boundary and system_ext declaration top-to-bottom by data flow direction: Founder → Web App → Cloud CLI Engine → Supabase → External systems.
-- Apply `UpdateLayoutConfig($c4ShapeInRow=3, $c4BoundaryInRow=2)`.
-- Maintain the existing 8 systems (founder, webapp, engine, supabase, anthropic, github, cloudflare, doppler, discord, stripe, plausible) **subject to G2** — if node count exceeds 8, fold the lowest-signal external systems (e.g., plausible, discord) into a single `Analytics & Notifications` system_ext with the folded detail in the `## Details` section.
+- Apply `UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")`. **Values are quoted strings** per `plugins/soleur/skills/architecture/references/c4-reference.md:77` — unquoted values fail silently (Mermaid keeps defaults).
+- Fold `discord` + `stripe` + `plausible` into a single `System_Ext(thirdparty, "Third-Party Services", "Discord + Stripe + Plausible")`. Preserve original Mermaid aliases (`discord`, `stripe`, `plausible`) and per-system role descriptions in the new `## Details` section below the Mermaid block. Final visible node count: 9 (founder + 3 internal + cloudflare + doppler + anthropic + github + thirdparty).
 
 ### FR2: Container (L2) restructure
 
-Apply aggressive node trim to `container.md`:
+Apply aggressive node trim to `container.md` — fold each boundary's internal containers to a single representative container plus the same `thirdparty` external fold from FR1:
 
-- Inside the `Soleur Plugin` boundary, collapse `Skills` + `Agents` + `Knowledge Base` into a single `Plugin Resources` container (their detail belongs at L3 anyway).
-- Reorder boundary declarations top-to-bottom by data flow: Web Application → Cloud CLI Engine → Soleur Plugin → Infrastructure.
+- Web Application boundary: collapse `dashboard` + `api` + `auth` into a single `Container(webapp, "Web Application", "Next.js PWA", "Dashboard UI + API routes + Supabase Auth")`.
+- Cloud CLI Engine boundary: collapse `claude` + `skillloader` + `hooks` into a single `Container(engine, "Cloud CLI Engine", "Claude Code", "Agent runtime + plugin discovery + hook engine")`.
+- Soleur Plugin boundary: collapse `skills` + `agents` + `kb` into a single `Container(plugin, "Soleur Plugin", "Markdown", "Skills + Agents + Knowledge Base — see L3")`.
+- Infrastructure boundary: collapse `tunnel` + `hetzner` into a single `Container(compute, "Compute & Tunnel", "Hetzner Cloud + Cloudflare Tunnel", "Docker containers behind zero-trust tunnel")`. Keep `ContainerDb(supabase, ...)` separate (data store visibility).
+- Externals: fold `discord` + `stripe` + `plausible` into single `System_Ext(thirdparty, ...)` (same fold as FR1).
+- Reorder boundary declarations top-to-bottom by data flow: Web Application → Cloud CLI Engine → Soleur Plugin → Infrastructure (supabase + compute) → externals.
 - Bundle redundant cross-boundary `Rel()` edges where source-target pairs share semantics.
-- Apply `UpdateLayoutConfig($c4ShapeInRow=2, $c4BoundaryInRow=2)`.
-- Add a `## Details` prose section listing every folded element and its origin (e.g., "`Plugin Resources` contains: Skills (markdown SKILL.md), Agents (markdown Agent Defs), Knowledge Base (Markdown + YAML)").
+- Apply `UpdateLayoutConfig($c4ShapeInRow="2", $c4BoundaryInRow="2")` (quoted strings per `c4-reference.md:77`).
+- Add a `## Details` prose section listing every folded element by **original Mermaid alias** with role description (e.g., "`webapp` contains: `dashboard` (React, Next.js), `api` (Next.js API), `auth` (Supabase Auth)").
+
+Final visible node count: 11 (founder + 5 internal + 5 externals).
 
 ### FR3: Component plugin (L3) restructure
 
@@ -61,8 +67,8 @@ Apply aggressive node trim to `component-plugin.md`:
 - Collapse entry-point commands (`go`, `sync`, `help`) into one `Entry Points` component.
 - Collapse workflow skills (`brainstorm`, `plan`, `work`, `review`, `compound`, `ship`, `one-shot`, `architecture`) into one `Workflow Skills` component.
 - Keep `CTO agent`, `CMO agent`, `CPO agent`, `architecture-strategist` visible only if total node count remains ≤ 8 — otherwise fold the four domain leaders + architecture-strategist into a single `Domain Leaders & Reviewers` component.
-- Bundle the seven `Rel(oneshot, *)` edges into one labeled bundle (`one-shot → Workflow Skills [orchestrates steps 1-5]`).
-- Apply `UpdateLayoutConfig($c4ShapeInRow=2, $c4BoundaryInRow=1)`.
+- Bundle the seven `Rel(oneshot, *)` edges into one labeled bundle (`one-shot → Workflow Skills [orchestrates steps 1-5]`), OR drop the intra-workflow orchestration edges and document the Step 1-5 sequence in `## Details` (preferred — the relationships are textual sequencing, not architectural couplings).
+- Apply `UpdateLayoutConfig($c4ShapeInRow="1", $c4BoundaryInRow="1")` (quoted strings per `c4-reference.md:77`).
 - Add a `## Details` prose section listing every folded element (component name + role) so the information stays grep-able and reviewable.
 
 ### FR4: Visual acceptance check
