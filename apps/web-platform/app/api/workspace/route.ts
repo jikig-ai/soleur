@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { provisionWorkspace } from "@/server/workspace";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
+import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
@@ -65,7 +67,14 @@ export async function POST(request: Request) {
       workspace_path: workspacePath,
     });
   } catch (err) {
-    logger.error({ err, userId: user.id }, "Workspace provisioning failed");
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(err, {
+        feature: "workspace",
+        op: "provisioning",
+        extra: { userId: user.id },
+      });
+    });
     return NextResponse.json(
       { error: "Workspace provisioning failed" },
       { status: 500 },

@@ -9,8 +9,10 @@ import {
 import { provisionWorkspace } from "@/server/workspace";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse, type NextRequest } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // Matches both the canonical verifier cookie and the hypothetical chunked
 // variant (`@supabase/ssr` chunks `sb-<ref>-auth-token` once it exceeds ~4KB;
@@ -307,7 +309,14 @@ async function ensureWorkspaceProvisioned(
         { onConflict: "id", ignoreDuplicates: true },
       );
     if (insertError) {
-      logger.error({ err: insertError, userId }, "Fallback user upsert failed");
+      Sentry.withIsolationScope(() => {
+        Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
+        reportSilentFallback(insertError, {
+          feature: "auth-callback",
+          op: "user-upsert",
+          extra: { userId },
+        });
+      });
     }
     return null;
   }
@@ -320,7 +329,14 @@ async function ensureWorkspaceProvisioned(
         .update({ workspace_path: workspacePath, workspace_status: "ready" })
         .eq("id", userId);
     } catch (err) {
-      logger.error({ err, userId }, "Workspace provisioning failed");
+      Sentry.withIsolationScope(() => {
+        Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
+        reportSilentFallback(err, {
+          feature: "auth-callback",
+          op: "workspace-provisioning",
+          extra: { userId },
+        });
+      });
     }
   }
 

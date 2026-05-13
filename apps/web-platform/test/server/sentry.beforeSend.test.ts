@@ -144,13 +144,18 @@ describe("scrubSentryEvent (beforeSend hook)", () => {
   });
 
   it("preserves non-sensitive fields (negative-space guard)", () => {
+    // `userId` is no longer in this fixture: the sentry-scrub rename
+    // special-case (#3710 PR-B) rewrites `userId` → `userIdHash` at the
+    // scrubbing boundary, so a literal `user-123` survival assertion would
+    // be inconsistent with the documented pseudonymisation contract.
+    // Rename coverage lives in `test/sentry-scrub.test.ts`.
     const event = {
       contexts: { app: { app_name: "soleur", app_version: "1.0" } },
-      extra: { userId: "user-123", count: 42 },
+      extra: { requestId: "req-123", count: 42 },
     };
     const out = scrubSentryEvent(event);
     const json = JSON.stringify(out);
-    expect(json).toContain("user-123");
+    expect(json).toContain("req-123");
     expect(json).toContain("soleur");
     expect(json).toContain("42");
   });

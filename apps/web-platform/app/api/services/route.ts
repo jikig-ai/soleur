@@ -6,8 +6,9 @@ import { validateToken } from "@/server/token-validators";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "@/server/providers";
 import { SlidingWindowCounter } from "@/server/rate-limiter";
 import type { Provider } from "@/lib/types";
-import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
+import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // Rate limit: 10 token submissions per minute per user
 // (each submission hits a third-party API for validation)
@@ -100,10 +101,13 @@ export async function POST(request: Request) {
     );
 
   if (dbError) {
-    logger.error({ err: dbError, userId: user.id }, "Failed to store service token");
-    Sentry.captureException(dbError, {
-      tags: { feature: "services", op: "store" },
-      extra: { userId: user.id, provider },
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(dbError, {
+        feature: "services",
+        op: "store",
+        extra: { userId: user.id, provider },
+      });
     });
     return NextResponse.json(
       { error: "Failed to store token" },
@@ -130,10 +134,13 @@ export async function GET() {
     .eq("user_id", user.id);
 
   if (error) {
-    logger.error({ err: error, userId: user.id }, "Failed to list services");
-    Sentry.captureException(error, {
-      tags: { feature: "services", op: "list" },
-      extra: { userId: user.id },
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(error, {
+        feature: "services",
+        op: "list",
+        extra: { userId: user.id },
+      });
     });
     return NextResponse.json(
       { error: "Failed to load services" },
@@ -195,10 +202,13 @@ export async function DELETE(request: Request) {
     .eq("provider", provider);
 
   if (dbError) {
-    logger.error({ err: dbError, userId: user.id }, "Failed to delete service token");
-    Sentry.captureException(dbError, {
-      tags: { feature: "services", op: "delete" },
-      extra: { userId: user.id, provider },
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(dbError, {
+        feature: "services",
+        op: "delete",
+        extra: { userId: user.id, provider },
+      });
     });
     return NextResponse.json(
       { error: "Failed to disconnect service" },

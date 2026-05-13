@@ -7,6 +7,8 @@ import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { GitOperationError, sanitizeGitStderr } from "@/server/git-auth";
 import logger from "@/server/logger";
+import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 /**
  * POST /api/repo/setup
@@ -193,8 +195,14 @@ export async function POST(request: Request) {
       });
     })
     .catch(async (err) => {
-      logger.error({ err, userId: user.id, repoUrl }, "Repo clone failed");
-      Sentry.captureException(err);
+      Sentry.withIsolationScope(() => {
+        Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+        reportSilentFallback(err, {
+          feature: "repo-setup",
+          op: "clone",
+          extra: { userId: user.id, repoUrl },
+        });
+      });
 
       const rawMessage = err instanceof Error ? err.message : String(err);
       const code =
