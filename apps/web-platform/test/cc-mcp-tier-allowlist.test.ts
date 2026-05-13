@@ -82,6 +82,7 @@ describe("readCcMcpAllowlist (#2909 FR1)", () => {
     ).toThrow(/plausible_get_stats/);
   });
 
+  // PHASE-1-CONTRACT — delete in #3722
   test("non-denylist valid name returns {} in Phase 1 (Phase 2 builds populated server)", () => {
     // Phase 1: the allowlist mechanism enforces the denylist only. Even with
     // a valid non-denylist name present, we return {} — building a populated
@@ -89,6 +90,7 @@ describe("readCcMcpAllowlist (#2909 FR1)", () => {
     expect(readCcMcpAllowlist({ CC_MCP_ALLOWLIST: "kb_share_list" })).toEqual({});
   });
 
+  // PHASE-1-CONTRACT — delete in #3722
   test("non-denylist names with whitespace stripped, still return {} in Phase 1", () => {
     expect(
       readCcMcpAllowlist({
@@ -97,6 +99,7 @@ describe("readCcMcpAllowlist (#2909 FR1)", () => {
     ).toEqual({});
   });
 
+  // PHASE-1-CONTRACT — delete in #3722
   test("unknown non-denylist names do NOT throw in Phase 1 (validation deferred to Phase 2)", () => {
     // Phase 1 contract: only the denylist is enforced. Unknown names pass
     // through silently and return {} (since Phase 1 always returns {}).
@@ -108,6 +111,29 @@ describe("readCcMcpAllowlist (#2909 FR1)", () => {
     expect(readCcMcpAllowlist({ CC_MCP_ALLOWLIST: "not_a_real_tool" })).toEqual(
       {},
     );
+  });
+
+  test("default process.env branch (no explicit env arg) returns {}", () => {
+    // Coverage for the parameter-default branch — readCcMcpAllowlist() with
+    // no arg must read process.env (which has CC_MCP_ALLOWLIST unset in the
+    // test environment). Confirms the default-param path is exercised.
+    const originalEnv = process.env.CC_MCP_ALLOWLIST;
+    delete process.env.CC_MCP_ALLOWLIST;
+    try {
+      expect(readCcMcpAllowlist()).toEqual({});
+    } finally {
+      if (originalEnv !== undefined) process.env.CC_MCP_ALLOWLIST = originalEnv;
+    }
+  });
+
+  test("denylist throw message points to the source-of-truth file (operator debugging)", () => {
+    // The error message must mention `tool-tiers.ts` so a misconfigured
+    // operator immediately knows where to inspect the denylist. Pinning the
+    // file pointer guards against future message refactors silently dropping
+    // the operator's only breadcrumb.
+    expect(() =>
+      readCcMcpAllowlist({ CC_MCP_ALLOWLIST: "plausible_create_site" }),
+    ).toThrow(/tool-tiers\.ts/);
   });
 });
 

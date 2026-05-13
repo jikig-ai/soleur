@@ -33,6 +33,8 @@ Per plan review (DHH + Kieran + code-simplicity, 2026-05-13): the Phase 1 delive
 
 **If this leaks, the user's data is exposed via:** a future PR (post-Phase-1) ad-hoc widening `mcpServers` without going through the inline allowlist function → a misclassified write tool reachable from the router → cross-tenant write or credential exposure.
 
+**If Doppler is misconfigured** (operator typo or accidental write of a Tier 3 short-name into `CC_MCP_ALLOWLIST`): `readCcMcpAllowlist()` throws at factory construction → every cc-router conversation fails to start until Doppler is corrected. Bounded: throw fires at session-start with the offending name in the error message; Phase 6 prescribes dev-first ordering so operator sees it in dev before prd. The throw is preferred over a silent `{}` fallback because a misconfigured denylist is a security control failure, not a degraded-experience failure.
+
 **Brand-survival threshold:** `single-user incident`. CPO sign-off required at plan time. `user-impact-reviewer` agent invoked at PR-review time.
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -385,6 +387,7 @@ Append to `apps/web-platform/.env.example`:
 - **Plausible region verification at DPA-row authorship** (Phase 3.2.1) — plausible.io EU vs self-hosted have different Chapter V postures. Do NOT copy a template row.
 - **`legal-document-generator` outputs require operator review** before commit (Phases 3.1.2, 3.2.2). Agent produces DRAFT marked output.
 - **`Closes #2909` vs `Related: #3722`** — never close #3722 from this PR (#3722 is the Phase 2 deferral container). Phase 6.3 close is conditional.
+- **Denylist is name-based, not shape-based.** `CC_ROUTER_TIER3_DENYLIST` enumerates 3 specific Plausible FQNs. A future tool that mirrors Plausible's shape (single backend service token, no per-user / per-site scoping) is NOT auto-blocked — the future PR author must add the new FQN to the denylist at the same time the tool lands. Phase 2 (#3722) plan MUST include a "shared-credential audit" gate before any tool promotion that asks: does this tool's backing credential support per-user scoping, or is one key used for all tenants? If the latter, add to denylist before promotion. Generalization to a shape-based check (introspect the tool's auth model at registration time) is a Phase 3 concern and tracked as tech debt via this bullet.
 
 ## Risks
 

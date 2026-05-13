@@ -66,8 +66,10 @@ The `cc-soleur-go` router (`apps/web-platform/server/cc-dispatcher.ts:948 realSd
 
 ### FR3: DPA prerequisite rows (legal hard-block closure)
 
-- **FR3.1** Add row for **GitHub Inc** to `knowledge-base/legal/compliance-posture.md` Vendor DPA Status table. Fields: vendor, role (sub-processor for operator GitHub App installations), data categories (issue bodies, commit author emails, repo metadata), legal basis, DPA status, region, retention.
-- **FR3.2** Add row for **Plausible Analytics** to the same table. Fields: vendor, role (sub-processor for operator analytics), data categories (IP-pseudonymized event data), legal basis, DPA status, region (verify EU-hosted vs self-hosted), retention.
+**Canonical table shape (per `compliance-posture.md` line 35 header — 6 columns):** `| Vendor | DPA Status | Signed/Verified | Transfer Mechanism | Data Region | Notes |`. The role / data-categories / legal-basis / retention fields named below MUST be folded into the `Notes` column — do NOT widen the table. (Per #2909 review: data-integrity-guardian flagged the prior 7-field framing as schema drift; learning `2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.)
+
+- **FR3.1** Add row for **GitHub Inc** to the Vendor DPA Status table. Notes-column content: role (sub-processor for operator GitHub App installations), data categories (issue bodies, commit author emails, repo metadata, installation tokens), legal basis (Art. 6(1)(f)), retention (tied to GitHub's own lifecycle — 60-day audit log per published policy).
+- **FR3.2** Add row for **Plausible Analytics (Plausible Insights OÜ)** to the same table. Notes-column content: role (sub-processor for operator-bound analytics), data categories (ephemeral IP processing with 24h hashed retention per Plausible DPA — IPs hashed at intake and discarded within 24h; no cookies, no persistent identifiers), legal basis (Art. 6(1)(f)), region verified at row authorship (EU-hosted vs self-hosted US determines Transfer Mechanism).
 - **FR3.3** Both rows authored via `plugins/soleur/agents/legal-document-generator` agent invocation in the plan execution; operator review before commit.
 - **FR3.4** `knowledge-base/legal/article-30-register.md` (RoPA) updated with new processing activities for any MCP-exposed tool surface that could be promoted in Phase 2 (read-only annotation; no operational change).
 

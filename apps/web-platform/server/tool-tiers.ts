@@ -50,6 +50,15 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   // a security benefit.
   // cc-router (#2909): Tier 1 candidate (Phase 2 via #3722)
   "mcp__soleur_platform__kb_share_preview": "auto-approve",
+
+  // NOTE (#2909 review): `mcp__soleur_platform__conversations_lookup` is
+  // registered at `agent-runner.ts:1372` but DELIBERATELY omitted from this
+  // map — the legacy `startAgentSession` path relies on `getToolTier()`'s
+  // "gated" fallback for it, and changing that semantic is out of scope
+  // for #2909 Phase 1 (see spec NG2 + Sharp Edge "TOOL_TIER_MAP shared with
+  // legacy path"). cc-router (#2909): Tier 1 candidate — promotion to
+  // explicit "auto-approve" (parity with kb_share_list/preview rationale,
+  // closure-bound userId scoping) tracked at #3722.
 };
 
 /**

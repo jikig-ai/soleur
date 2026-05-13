@@ -178,6 +178,35 @@ export function shouldMirrorUnregisteredPlatformToolUse(
   return !registeredPlatformToolNames.includes(toolName);
 }
 
+/**
+ * Registered platform tool names for the cc-router (#2909 FR2 + Phase 2 #3722
+ * promotion hook). Phase 1: empty — `mcpServers === {}` via `readCcMcpAllowlist()`.
+ * Phase 2: populated from `CC_MCP_ALLOWLIST` allowlist outcome. Module-level
+ * constant so the iterator hook's `shouldMirrorUnregisteredPlatformToolUse`
+ * predicate has a single named place to read, preventing drift between the
+ * allowlist source and the mirror predicate at Phase 2 promotion time.
+ */
+const CC_REGISTERED_PLATFORM_TOOL_NAMES: readonly string[] = [];
+
+// Max length cap for `block.name` before passing to Sentry/pino. Defense-in-
+// depth against future model regressions that might emit pathologically long
+// tool names; the SDK validation gate constrains names to the registered
+// catalog today, so this is bounded but not impossible.
+const MAX_TOOL_NAME_LEN_FOR_LOG = 128;
+
+/**
+ * Sanitize a tool name for log emission (#2909 FR2): strip control chars +
+ * Unicode line/paragraph separators (CWE-117 log injection defense-in-depth),
+ * and length-cap. Pino's JSON serialization is the primary defense; this is
+ * a belt-and-suspenders pass per the log-injection-unicode-line-separators
+ * learning.
+ */
+function sanitizeToolNameForLog(name: string): string {
+  return name
+    .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "?")
+    .slice(0, MAX_TOOL_NAME_LEN_FOR_LOG);
+}
+
 // Hoisted module-level sets (avoid per-call construction in
 // `dispatchSoleurGo` / `handleInteractivePromptResponseCase`).
 export type WorkflowEndStatus = WorkflowEnd["status"];
@@ -1471,21 +1500,31 @@ export async function dispatchSoleurGo(
       // and `canUseTool` is NEVER invoked. The model gets a `tool_result`
       // error with no Sentry signal — a silent-failure surface that violates
       // `cq-silent-fallback-must-mirror-to-sentry`. Mirror via
-      // `reportSilentFallback` so operators see attempted invocations.
-      // Intrinsically scoped to cc-router because this callback only fires
-      // from `dispatchSoleurGo` (legacy `startAgentSession` is a separate path).
-      if (shouldMirrorUnregisteredPlatformToolUse(block.name, [])) {
-        reportSilentFallback(null, {
-          feature: "cc-mcp-tier",
-          op: "unregistered-tool-invoked",
-          message: `cc-router skill attempted unregistered platform tool ${block.name}`,
-          extra: {
-            toolName: block.name,
-            userId,
-            conversationId,
-            leaderId: CC_ROUTER_LEADER_ID,
+      // `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL) so a
+      // misconfigured leader skill that loops on the same unregistered tool
+      // cannot flood Sentry. Intrinsically scoped to cc-router because this
+      // callback only fires from `dispatchSoleurGo` (legacy
+      // `startAgentSession` is a separate path).
+      if (shouldMirrorUnregisteredPlatformToolUse(block.name, CC_REGISTERED_PLATFORM_TOOL_NAMES)) {
+        const safeToolName = sanitizeToolNameForLog(block.name);
+        mirrorWithDebounce(
+          null,
+          {
+            feature: "cc-mcp-tier",
+            op: "unregistered-tool-invoked",
+            message: `cc-router skill attempted unregistered platform tool ${safeToolName}`,
+            extra: {
+              toolName: safeToolName,
+              toolUseId: block.toolUseId,
+              userId,
+              conversationId,
+              leaderId: CC_ROUTER_LEADER_ID,
+              mcpAllowlistConfigured: Boolean(process.env.CC_MCP_ALLOWLIST?.trim()),
+            },
           },
-        });
+          userId,
+          "cc-mcp-tier:unregistered-tool",
+        );
       }
       // `buildToolUseWSMessage` pins the #2138 invariant: the raw SDK tool
       // name is NOT placed on the wire (information-disclosure mitigation,
