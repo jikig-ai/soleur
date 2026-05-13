@@ -94,6 +94,72 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# ─── Matching logic ─────────────────────────────────────────────────────
+# Replicates the diff-matching predicate from the SUT. Update both in the
+# same PR when the SUT changes.
+match_in_diff() {
+  local path="$1" diff_paths="$2"
+  if echo "$diff_paths" | grep -Fxq "$path" \
+     || echo "$diff_paths" | grep -Fq "/$path"; then
+    return 0
+  fi
+  return 1
+}
+
+assert_match() {
+  local name="$1" path="$2" diff_paths="$3"
+  if match_in_diff "$path" "$diff_paths"; then
+    echo "PASS [$name]"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL [$name]: expected '$path' to match diff"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_no_match() {
+  local name="$1" path="$2" diff_paths="$3"
+  if match_in_diff "$path" "$diff_paths"; then
+    echo "FAIL [$name]: did not expect '$path' to match diff"
+    FAIL=$((FAIL + 1))
+  else
+    echo "PASS [$name]"
+    PASS=$((PASS + 1))
+  fi
+}
+
+DIFF=$'plugins/soleur/skills/plan/SKILL.md\nplugins/soleur/skills/ship/SKILL.md\napps/web-platform/server/foo.ts\nAGENTS.core.md'
+
+# Exact-match cases (pre-existing behavior preserved)
+assert_match "exact-match-nested" \
+  "plugins/soleur/skills/plan/SKILL.md" \
+  "$DIFF"
+assert_match "exact-match-top-level" \
+  "AGENTS.core.md" \
+  "$DIFF"
+
+# Suffix-match cases (new behavior)
+assert_match "suffix-match-skill" \
+  "plan/SKILL.md" \
+  "$DIFF"
+assert_match "suffix-match-deep" \
+  "skills/ship/SKILL.md" \
+  "$DIFF"
+
+# Suffix match still requires the slash boundary (a citation like `an/SKILL.md`
+# must not match `plan/SKILL.md` just because the literal string appears).
+# Bare basenames like `SKILL.md` cannot reach the matcher in practice because
+# the extraction pipeline above filters them out via `grep -E '/'`; that filter
+# is the safety boundary for "cited without enough specificity to disambiguate."
+assert_no_match "no-substring-suffix" \
+  "an/SKILL.md" \
+  "$DIFF"
+
+# Orphan citations still detected
+assert_no_match "orphan-still-flagged" \
+  "plugins/soleur/skills/nonexistent/SKILL.md" \
+  "$DIFF"
+
 echo ""
 echo "Results: $PASS pass, $FAIL fail"
 [[ "$FAIL" -eq 0 ]] || exit 1
