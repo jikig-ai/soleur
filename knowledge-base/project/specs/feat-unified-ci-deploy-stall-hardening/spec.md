@@ -18,7 +18,7 @@ Three open GH issues describe one failure mode (`ci-deploy.sh` hanging on prod):
 
 - **#3712 (p1, follow-through):** `apply-deploy-pipeline-fix.yml` auto-apply failed for merge `dc7c8b71` (PR #3706) with `dial tcp 135.181.45.178:22: i/o timeout`. PR #3706 (the durable fix for #3704) is merged but not installed on prod. Operator must manually run `terraform apply -target=terraform_data.deploy_pipeline_fix` from an allowlisted IP.
 - **#3704 (p1):** Web Platform Release stalled at 900s for v0.81.0 + v0.82.0; prod was stranded on v0.80.4. Prod has since reached v0.82.1, but the stall protection (#3706's wrapper + TERM trap) is not yet active on the server. Closes once 2 organic releases verify the protection runs.
-- **#2207 (p3, deferred from PR #2187):** Proposed `systemd-run --scope --property=TimeoutSec=600` belt-and-suspenders. The #3706 deepen-pass explicitly rejected `systemd-run --scope` on polkit/non-TTY grounds for `User=deploy` (the webhook user) and chose `timeout(1)` instead. `ci-deploy-wrapper.sh` IS the implementation of #2207's intent via a different primitive.
+- **#2207 (p3, deferred from PR #2187):** Proposed `systemd-run --scope --property=TimeoutSec=600` belt-and-suspenders. The #3706 deepen-pass §49-59 ("systemd-run rejection rationale") explicitly rejected `systemd-run --scope` on polkit/non-TTY grounds for `User=deploy` (the webhook user) and chose `timeout(1)` instead. `ci-deploy-wrapper.sh` IS the implementation of #2207's intent via a different primitive.
 
 A cross-cutting infra problem also surfaced: the auto-apply path that should have run #3706 on prod failed because the GitHub Actions runner's outbound IP isn't in `var.admin_ips`. The `apply-deploy-pipeline-fix.yml` workflow ran exactly once (its inaugural invocation, the one that failed). Every future merge touching the 5 trigger files will fail identically until the auto-apply path itself is fixed — but the 2026-03-19 learning explicitly precludes allowlisting GH runner IPs (5000+ rotating ranges).
 
@@ -69,11 +69,24 @@ A cross-cutting infra problem also surfaced: the auto-apply path that should hav
 ## Acceptance Criteria
 
 - [ ] All 3 markdown files (FR1, FR2, plus this spec) exist on the feature branch and pass markdown-lint (if a lint hook is configured).
-- [ ] Compliance learning's Art. 32(1)(d) framing is operator-readable (≤500 words, cites the 5 relevant prior learnings).
+- [ ] Compliance learning's Art. 32(1)(d) framing is ≤900 words (verifiable via `wc -w`; ceiling accommodates Art. 32(1)(d) framing + SIGKILL audit caveat + docker-swap availability gap + atomicity proof + post-apply verification contract) and cites the 5 relevant prior learnings listed in brainstorm `References`.
 - [ ] Each of #3712, #3704, #2207 has a "Bundled scoping" comment with the artifact links (verify via `gh issue view`).
 - [ ] Follow-up issue for Hetzner runner exists and is linked from the brainstorm's Key Decisions table.
 - [ ] PR #3719 body references all four (`Closes #3712`, `Closes #2207`, `Ref #3704`, `Ref #3723` for the Hetzner-runner follow-up).
 - [ ] **Operator post-merge (not gating this PR):** run `terraform apply -target=terraform_data.deploy_pipeline_fix` per #3712's body, then verify file-SHA + `systemctl is-active webhook` from an allowlisted IP. After 2 organic Web Platform Release runs report `exit_code=0 reason=ok` <900s, close #3712 + #3704.
+
+## Key Decisions (carry-forward from brainstorm)
+
+Authoritative table lives in the brainstorm `Key Decisions` section. Spec-side index so plan-time readers don't have to re-read the brainstorm to know what's settled:
+
+| # | Decision (one-line) | See brainstorm row |
+|---|---|---|
+| 1 | #3712 → operator-manual `terraform apply -target=terraform_data.deploy_pipeline_fix` (re-litigating 2026-03-19 GH-runner-IP-allowlist decision is out of scope). | brainstorm #1 |
+| 2 | #3704 → passive close after 2 organic releases <900s, `exit_code=0 reason=ok`. | brainstorm #2 |
+| 3 | #2207 → comment-close as superseded by `ci-deploy-wrapper.sh` `timeout(1)` primitive. | brainstorm #3 |
+| 4 | Compliance learning entry (Art. 32(1)(d) framing + SIGKILL audit caveat) — this PR. | brainstorm #4 |
+| 5 | Hetzner self-hosted runner deferred to **#3723** (~€4/mo; cheapest durable fix for auto-apply IP drift). | brainstorm #5 |
+| 6 | No bash trap / `set -m` / docker-swap-atomicity code changes — plan Sharp Edge #5 ("SIGKILL → state-stays-running as accepted status quo") is load-bearing. | brainstorm #6 |
 
 ## Sharp Edges
 
@@ -83,7 +96,7 @@ A cross-cutting infra problem also surfaced: the auto-apply path that should hav
 
 3. **`scheduled-terraform-drift.yml` files an issue every 12h on drift but does NOT attempt apply.** Until #3712's apply runs, the drift cron will repeat-file `infra-drift`-labeled issues every 12h. Operator should run the apply within the first cron cycle to avoid issue-spam.
 
-4. **No code change ≠ no risk.** The act of comment-closing #2207 changes nothing in main but may signal to future-readers that the systemd-run path is "considered and rejected." Anchor that signal to the plan §49-59 citation so it cannot be re-litigated from cold-start.
+4. **No code change ≠ no risk.** The act of comment-closing #2207 changes nothing in main but may signal to future-readers that the systemd-run path is "considered and rejected." Anchor that signal to the plan §49-59 ("systemd-run rejection rationale") citation so it cannot be re-litigated from cold-start.
 
 ## Risks
 
@@ -102,6 +115,6 @@ A cross-cutting infra problem also surfaced: the auto-apply path that should hav
 ## References
 
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-13-unified-ci-deploy-stall-hardening-brainstorm.md`
-- #3706 plan: `knowledge-base/project/plans/2026-05-12-fix-harden-web-platform-release-pipeline-3704-plan.md` (§49-59, §190)
+- #3706 plan: `knowledge-base/project/plans/2026-05-12-fix-harden-web-platform-release-pipeline-3704-plan.md` (§49-59 "systemd-run rejection rationale"; §190 "risk table")
 - #3706 spec: `knowledge-base/project/specs/feat-one-shot-3704-harden-release-pipeline/spec.md`
 - Compliance learning (this PR): `knowledge-base/project/learnings/compliance/2026-05-13-pipeline-reliability-as-gdpr-art32-control.md`

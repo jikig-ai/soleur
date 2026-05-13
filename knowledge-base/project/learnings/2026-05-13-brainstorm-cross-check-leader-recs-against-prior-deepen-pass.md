@@ -15,7 +15,7 @@ tags: [brainstorm, multi-agent, decision-archaeology, bundle-disposition]
 
 During the 2026-05-13 unified-ci-deploy-stall-hardening brainstorm, the CTO subagent recommended shipping `systemd-run --scope --property=TimeoutSec=600` in `hooks.json.tmpl` as a belt-and-suspenders second layer on top of `ci-deploy-wrapper.sh` (the `timeout(1)` primitive shipped 24h earlier in PR #3706). The recommendation included a detailed gap table showing what `systemd-run --scope` catches that the bash TERM trap doesn't (cgroup-kill of orphan grandchildren, bash-segfault recovery, OOM-killer scenarios).
 
-In parallel, the repo-research-analyst subagent surfaced that the **#3706 deepen-pass had explicitly rejected `systemd-run --scope`** for documented reasons (plan §49-59, §190): `webhook.service` runs as `User=deploy` (unprivileged); `systemd-run --system` requires polkit, which cannot prompt in a non-TTY context and would *block indefinitely — making the original stall worse*. The deepen-pass had instead chosen `timeout(1)` for identical SIGTERM→SIGKILL semantic with zero permission elevation.
+In parallel, the repo-research-analyst subagent surfaced that the **#3706 deepen-pass had explicitly rejected `systemd-run --scope`** for documented reasons (plan §49-59 "systemd-run rejection rationale", §190 "risk table"): `webhook.service` runs as `User=deploy` (unprivileged); `systemd-run --system` requires polkit, which cannot prompt in a non-TTY context and would *block indefinitely — making the original stall worse*. The deepen-pass had instead chosen `timeout(1)` for identical SIGTERM→SIGKILL semantic with zero permission elevation.
 
 The CTO subagent's prompt did NOT include the plan path as required reading. It assessed from the issue bodies + adjacent code only. The recommendation was internally coherent but contradicted a settled architectural decision in a plan it had not read.
 
@@ -32,7 +32,7 @@ Concretely, for this session:
 The reconciliation that actually fired in this session:
 1. CTO recommended `systemd-run --scope` second layer.
 2. Repo-research independently surfaced the deepen-pass §49-59 systemd-run rejection.
-3. Brainstorm parent verified by reading `webhook.service` (`User=deploy`) and the plan §49-59 directly.
+3. Brainstorm parent verified by reading `webhook.service` (`User=deploy`) and the plan §49-59 ("systemd-run rejection rationale") directly.
 4. Recommendation rejected at brainstorm time, not at plan time (which would have been more expensive — plan-time pivot back to brainstorm).
 
 ## Key Insight

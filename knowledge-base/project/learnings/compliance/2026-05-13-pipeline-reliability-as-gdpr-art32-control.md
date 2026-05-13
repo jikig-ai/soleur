@@ -3,7 +3,9 @@ date: 2026-05-13
 category: compliance
 regulation: GDPR
 articles: ["32(1)(d)", "12(3)"]
+tags: [gdpr, art-32, release-pipeline, dsar, audit-trail]
 related_issues: ["#3704", "#3712", "#2207", "#3634"]
+related_prs: ["#3706", "#3719"]
 related_learnings:
   - 2026-05-12-pgid-inheritance-and-bash-trap-defer-on-foreground-commands.md
   - bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md
@@ -51,6 +53,14 @@ The recovery path is the next deploy attempt (workflow retry or manual operator 
 ## Cross-cutting
 
 When the next feature implementing data-subject rights ships through this pipeline (e.g., a future Art. 16 rectification endpoint, an Art. 17 erasure flow, an Art. 21 objection-handling surface), this learning should be re-read alongside the verification contract from [`bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md`](../bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md). The pipeline's effectiveness is not assumed — it's verified post-apply via file-SHA + `systemctl is-active`.
+
+**Inline contract (so a future PR author doesn't need to chase the parent learning to know the gate):** after every operator-driven apply that touches `ci-deploy.sh`, `ci-deploy-wrapper.sh`, `webhook.service`, or `hooks.json.tmpl`, run from an allowlisted IP:
+
+```bash
+ssh deploy@<prod-host> "sha256sum /usr/local/bin/ci-deploy.sh /usr/local/bin/ci-deploy-wrapper.sh && systemctl is-active webhook"
+```
+
+Expected: SHAs match `git show HEAD:apps/web-platform/infra/<file> | sha256sum` for the merged commit, and `webhook` reports `active`. Any mismatch is a re-apply trigger.
 
 ## References
 
