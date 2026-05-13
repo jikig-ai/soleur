@@ -73,7 +73,7 @@ If either layer fails review, the legal items scoped out in the brainstorm (Line
 - **Operator-facing stdout** (Phase E failure warnings, Phase D disclosure lines) intentionally names the Linear identifier (`SOL-39`) so operators can take corrective action. Operators sharing their Claude Code transcripts publicly (Slack, Discord, GitHub issues) are out of scope of this guard.
 - **Anthropic conversation retention** is the trust boundary for `agent_context` (the full markdown + image content blocks held in the parent conversation). Governed by Anthropic ToS; out of scope of this guard.
 
-The `pii-grep` CI job is the durable backstop for the URL class only — it does NOT scan for comment-body prose, display names, or identifiers. The single-user-incident threshold is bounded to **leaked signed bearer credentials**, not to prose PII or workspace identity leaks.
+The `pii-grep` CI job is the durable backstop for the URL class only — it does NOT scan for comment-body prose, display names, or identifiers. The single-user incident threshold is bounded to **leaked signed bearer credentials**, not to prose PII or workspace identity leaks.
 
 ## Implementation Phases
 

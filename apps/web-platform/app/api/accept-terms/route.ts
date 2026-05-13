@@ -3,8 +3,9 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
+import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 async function getRedirectDestination(
   supabase: SupabaseClient,
@@ -58,10 +59,14 @@ export async function POST(request: Request) {
     .select("id");
 
   if (error) {
-    logger.error({ err: error }, "Failed to record acceptance");
-    Sentry.captureException(error, {
-      tags: { feature: "accept-terms", op: "record" },
-      extra: { userId: user.id },
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(error, {
+        feature: "accept-terms",
+        op: "record",
+        message: "Failed to record acceptance",
+        extra: { userId: user.id },
+      });
     });
     return NextResponse.json(
       { error: "Failed to record acceptance" },
@@ -70,14 +75,17 @@ export async function POST(request: Request) {
   }
 
   if (!data || data.length === 0) {
-    logger.error({ userId: user.id }, "User row not found");
     // Data inconsistency — authenticated user has no row in `users`. No Error
-    // object to capture; use captureMessage so the condition is still
-    // observable in Sentry.
-    Sentry.captureMessage("User row not found", {
-      level: "error",
-      tags: { feature: "accept-terms", op: "record" },
-      extra: { userId: user.id },
+    // object to capture; reportSilentFallback routes to Sentry.captureMessage
+    // when `err` is not an `Error` (preserves Sentry-side observability).
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(null, {
+        feature: "accept-terms",
+        op: "record",
+        message: "User row not found",
+        extra: { userId: user.id },
+      });
     });
     return NextResponse.json(
       { error: "User profile not found. Please try again shortly." },

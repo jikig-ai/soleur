@@ -73,7 +73,7 @@ requires_cpo_signoff: true
 ## Phase 7: Review + ship
 
 - 7.1. Push branch (already pushed; verify with `git status`).
-- 7.2. Run `skill: soleur:review` for multi-agent review (architecture-strategist, agent-native-reviewer, user-impact-reviewer per single-user-incident threshold, type-design-analyzer for the discriminated union widening).
+- 7.2. Run `skill: soleur:review` for multi-agent review (architecture-strategist, agent-native-reviewer, user-impact-reviewer per single-user incident threshold, type-design-analyzer for the discriminated union widening).
 - 7.3. Address review findings inline (default = fix-inline per `rf-review-finding-default-fix-inline`).
 - 7.4. Mark PR #3419 ready for review. Body: `Closes #3269`. Add `## Changelog` per `plugins/soleur/AGENTS.md`.
 - 7.5. Set semver label: `semver:minor` (new WS variant + new lifecycle-notice family is feature-shaped).

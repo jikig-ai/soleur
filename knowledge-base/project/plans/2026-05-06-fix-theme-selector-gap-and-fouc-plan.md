@@ -53,7 +53,7 @@ All three fixes are scoped to the theme system itself and to `(dashboard)/layout
 **If this leaks, the user's [data / workflow / money] is exposed via:** Not applicable — this is a pure visual/styling change. No new code paths handle credentials, payments, or user data.
 **Brand-survival threshold:** none
 
-This change carries no data-exposure or single-user-incident risk. It is a visual quality bar enforcement against features already shipped publicly in #3271 and #3308.
+This change carries no data-exposure or single-user incident risk. It is a visual quality bar enforcement against features already shipped publicly in #3271 and #3308.
 
 ## Research Insights
 
