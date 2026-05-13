@@ -1,5 +1,10 @@
-import logger from "@/server/logger";
 import { sanitizeForLog } from "@/lib/log-sanitize";
+
+// This module is reached from edge middleware (`middleware.ts`) — do NOT
+// import `@/server/logger`, which transitively pulls `node:crypto` via
+// `server/observability.ts` (per ADR-029 §I10) and breaks the edge bundle.
+// `console.warn` is supported in edge runtime; the `rejectedOrigin` field
+// carries no user PII so the pino `userIdHash` rename hook is not needed.
 
 const PRODUCTION_ORIGINS = new Set(["https://app.soleur.ai"]);
 const DEV_ORIGINS = new Set([
@@ -41,6 +46,10 @@ export function validateOrigin(request: Request): {
 
 export function rejectCsrf(route: string, origin: string | null): Response {
   const sanitized = sanitizeForLog(origin ?? "none", 100);
-  logger.warn({ route, rejectedOrigin: sanitized }, "CSRF: rejected origin");
+  // eslint-disable-next-line no-console -- edge-runtime boundary; see comment above
+  console.warn(
+    "[validate-origin] CSRF: rejected origin",
+    JSON.stringify({ route, rejectedOrigin: sanitized }),
+  );
   return Response.json({ error: "Forbidden" }, { status: 403 });
 }
