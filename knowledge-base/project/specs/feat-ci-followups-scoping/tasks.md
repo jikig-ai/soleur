@@ -16,13 +16,13 @@ brand_survival_threshold: none
 ## Phase 1 — Pre-bump verification
 
 - [ ] 1.1 Read `.bun-version`; confirm contents = `1.3.11`.
-- [ ] 1.2 Re-confirm latest 1.3.x: `npm view bun versions --json | jq -r '.[]' | grep -E '^1\.3\.[0-9]+$' | tail -1`. If output > `1.3.13`, update plan target before Phase 2.
+- [ ] 1.2 Re-confirm latest 1.3.x: `npm view bun versions --json | jq -r '.[]' | grep -E '^1\.3\.[0-9]+$' | tail -1`. If output > `1.3.14`, update plan target before Phase 2.
 - [ ] 1.3 `git status --short` — confirm only docs changes pending.
 
 ## Phase 2 — Bump and push
 
-- [ ] 2.1 `echo "1.3.13" > .bun-version`.
-- [ ] 2.2 Commit: `chore(ci): probe bun 1.3.13 for FPE-class re-evaluation` with `Closes #3692` in body.
+- [ ] 2.1 `echo "1.3.14" > .bun-version`.
+- [ ] 2.2 Commit: `chore(ci): probe bun 1.3.14 for FPE-class re-evaluation` with `Closes #3692` in body.
 - [ ] 2.3 `git push`; capture run-id of the triggered CI run.
 
 ## Phase 3 — Observe and classify
@@ -35,7 +35,7 @@ brand_survival_threshold: none
 
 ## Phase 4a — Green outcome
 
-- [ ] 4a.1 Append `## 2026-05-12 probe: 1.3.13 clean` section to `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` using the plan's template.
+- [ ] 4a.1 Append `## 2026-05-12 probe: 1.3.14 clean` section to `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` using the plan's template.
 - [ ] 4a.2 `git commit --amend --no-edit`.
 - [ ] 4a.3 `git push --force-with-lease`.
 - [ ] 4a.4 Mark PR #3709 ready.
@@ -43,7 +43,7 @@ brand_survival_threshold: none
 ## Phase 4b — FPE outcome
 
 - [ ] 4b.1 `echo "1.3.11" > .bun-version`.
-- [ ] 4b.2 Append `## 2026-05-12 probe: 1.3.13 FPE class still live` section to the FPE learning file with full grep match + job URL + runner OS.
+- [ ] 4b.2 Append `## 2026-05-12 probe: 1.3.14 FPE class still live` section to the FPE learning file with full grep match + job URL + runner OS.
 - [ ] 4b.3 `git commit --amend --no-edit`.
 - [ ] 4b.4 `git push --force-with-lease`. If lease rejects, apply fallback from plan Phase 4b (two-commit shape).
 - [ ] 4b.5 File next-probe issue via the `gh issue create` invocation in plan Phase 4b.
@@ -51,7 +51,7 @@ brand_survival_threshold: none
 
 ## Phase 4c — Inconclusive outcome
 
-- [ ] 4c.1 Append `## 2026-05-12 probe: 1.3.13 inconclusive` section to the learning file with failing shard + read.
+- [ ] 4c.1 Append `## 2026-05-12 probe: 1.3.14 inconclusive` section to the learning file with failing shard + read.
 - [ ] 4c.2 Leave PR #3709 in draft. Do NOT auto-revert.
 - [ ] 4c.3 Comment on PR #3709 with failing-shard summary.
 - [ ] 4c.4 Pause work until unrelated red is understood; re-run Phase 3 after fix.

@@ -16,7 +16,7 @@ brand_survival_threshold: none
 
 Three open follow-ups from PR #3672 (merged 2026-05-12) have differing ship-readiness gates:
 
-- **#3692** — Bun FPE-class re-evaluation probe. No gate; informational. `.bun-version` currently 1.3.11 (6 patches past the FPE-1.3.5 baseline). Latest published 1.3.x: **1.3.13**.
+- **#3692** — Bun FPE-class re-evaluation probe. No gate; informational. `.bun-version` currently 1.3.11 (6 patches past the FPE-1.3.5 baseline). Latest published 1.3.x: **1.3.14**.
 - **#3693** — Suite-internal split of `apps/web-platform/test/`. Parent plan deferred to a conditional trigger (`test-webplat` shard >100s sustained); zero post-#3672 data exists. Plan-time discovery: 355 top-level files; would be a 200+ file refactor. **Excluded from this PR.**
 - **#3694** — `e2e` job synthetic-aggregator shard. Hard gate: ≥1 week post-#3672 stability. **Cannot be met today. Excluded from this PR.**
 
@@ -24,7 +24,7 @@ Per AGENTS.md `wg-after-merging-a-pr-that-adds-or-modifies` and the parent plan'
 
 ## Goals
 
-1. Bump `.bun-version` from `1.3.11` to `1.3.13` (latest published 1.3.x at plan time).
+1. Bump `.bun-version` from `1.3.11` to `1.3.14` (latest published 1.3.x at plan time).
 2. Push the bump on `feat-ci-followups-scoping`; observe a full CI run.
 3. **If the bun-test surfaces (`test-bun` shard: `bun test test/{content-publisher,x-community,pre-merge-rebase}.test.ts` + `bun test plugins/soleur/` + `bash scripts/validate-blog-links.sh`) green:** keep the bump, record the finding in learnings.
 4. **If any bun-test surface re-triggers FPE-class (SIGFPE crash, segfault, abnormal exit with crash artifacts):** revert `.bun-version` to `1.3.11` in the same commit and record the failing patch in learnings so the next minor-version probe has prior art.
@@ -41,16 +41,16 @@ Per AGENTS.md `wg-after-merging-a-pr-that-adds-or-modifies` and the parent plan'
 
 ## Functional Requirements
 
-- **FR1** — Single commit. Bumps `.bun-version` 1.3.11 → 1.3.13.
-- **FR2** — CI runs the existing `test-bun` shard against 1.3.13 with no workflow edits required.
-- **FR3** — On green: keep the bump and append a §`2026-05-12 probe: 1.3.13 clean` block to `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` documenting the outcome, runner OS, and which surfaces passed.
-- **FR4** — On FPE-class regression: revert `.bun-version` to 1.3.11 (amend the single commit), and append a §`2026-05-12 probe: 1.3.13 FPE` block to the same learnings file with the failing surface, crash signature, and revert decision. The PR still merges (the learning capture is the deliverable).
+- **FR1** — Single commit. Bumps `.bun-version` 1.3.11 → 1.3.14.
+- **FR2** — CI runs the existing `test-bun` shard against 1.3.14 with no workflow edits required.
+- **FR3** — On green: keep the bump and append a §`2026-05-12 probe: 1.3.14 clean` block to `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` documenting the outcome, runner OS, and which surfaces passed.
+- **FR4** — On FPE-class regression: revert `.bun-version` to 1.3.11 (amend the single commit), and append a §`2026-05-12 probe: 1.3.14 FPE` block to the same learnings file with the failing surface, crash signature, and revert decision. The PR still merges (the learning capture is the deliverable).
 - **FR5** — Cross-link this PR back to issue #3692 via `Closes #3692` in body.
 - **FR6** — #3693 and #3694 remain open with comments noting their re-evaluation triggers.
 
 ## Technical Requirements
 
-- **TR1** — `.bun-version` MUST contain exactly `1.3.13\n` (trailing newline) on green. Reverted to `1.3.11\n` on failure. The file is consumed by `scripts/test-all.sh`'s version-check guard (`expected=$(tr -d '[:space:]' < .bun-version)`) — whitespace handling is already robust.
+- **TR1** — `.bun-version` MUST contain exactly `1.3.14\n` (trailing newline) on green. Reverted to `1.3.11\n` on failure. The file is consumed by `scripts/test-all.sh`'s version-check guard (`expected=$(tr -d '[:space:]' < .bun-version)`) — whitespace handling is already robust.
 - **TR2** — No edits to `.github/workflows/*.yml`. The six workflow files (`ci.yml`, `main-health-monitor.yml`, `scheduled-bug-fixer.yml`, `scheduled-ship-merge.yml`, `scheduled-ux-audit.yml`, `skill-security-scan-corpus.yml`, `skill-security-scan-pr-trailer.yml`) all reference the file via `bun-version-file: ".bun-version"`.
 - **TR3** — No edits to `scripts/test-all.sh`. The sequential test-runner logic remains as defense-in-depth.
 - **TR4** — Learnings update preserves the existing taxonomy and adds a single dated section. Do not rewrite the original analysis.

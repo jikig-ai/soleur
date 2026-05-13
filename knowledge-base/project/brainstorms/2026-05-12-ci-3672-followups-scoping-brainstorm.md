@@ -40,7 +40,7 @@ The original framing in the feature description ("shared CI surface, possible or
 | Scope of this PR | **[Updated 2026-05-12]** Probe-only (#3692) | Plan-time discovery: 355 top-level webplat test files; parent plan deferred #3693 to a data-driven trigger; preempting it is over-engineering. Bundle calculus changed once the real scope was known. |
 | #3693 disposition | **[Updated 2026-05-12]** Defer; restore parent plan's conditional trigger | Re-open with plan-time discovery note. Re-evaluate when `test-webplat` shard wall-clock data exists post-#3672 (matrix shard timings are emitted via `TEST_TIMING_LOG`). |
 | #3694 disposition | Defer to own PR | Honors explicit ≥1-week post-#3672 stability gate (issue body). |
-| Probe result handling | If FPE no longer fires on 1.3.13: keep `.bun-version` at 1.3.13, record finding in learnings, unlock `--max-pool-size` discussion for future work. If FPE still fires: revert `.bun-version` to 1.3.11 in the same commit and record the failing patch. | Probe is a measurement, not a unilateral version bump commitment. |
+| Probe result handling | If FPE no longer fires on 1.3.14: keep `.bun-version` at 1.3.14, record finding in learnings, unlock `--max-pool-size` discussion for future work. If FPE still fires: revert `.bun-version` to 1.3.11 in the same commit and record the failing patch. | Probe is a measurement, not a unilateral version bump commitment. |
 | Regression-signal protection | Single-commit PR; full CI before merge | Addresses user-impact concern from Phase 0.1 (regression masked, slow feedback). Probe-only scope has the smallest possible blast radius. |
 
 ## Open Questions
@@ -85,5 +85,5 @@ Not user-brand-critical. CI test infra is internal; the user's Phase 0.1 selecti
 ## Resume Prompt
 
 ```text
-/soleur:work knowledge-base/project/plans/2026-05-12-chore-ci-bun-probe-plan.md. Branch: feat-ci-followups-scoping. Worktree: .worktrees/feat-ci-followups-scoping/. Issue: #3692. PR: #3709. Probe-only scope (single commit): bump .bun-version 1.3.11 → 1.3.13, observe CI for FPE-class regression on bun-test surfaces, revert + record on failure or keep + record on success. #3693 deferred to its parent-plan trigger (test-webplat shard >100s sustained). #3694 deferred to ≥2026-05-19.
+/soleur:work knowledge-base/project/plans/2026-05-12-chore-ci-bun-probe-plan.md. Branch: feat-ci-followups-scoping. Worktree: .worktrees/feat-ci-followups-scoping/. Issue: #3692. PR: #3709. Probe-only scope (single commit): bump .bun-version 1.3.11 → 1.3.14, observe CI for FPE-class regression on bun-test surfaces, revert + record on failure or keep + record on success. #3693 deferred to its parent-plan trigger (test-webplat shard >100s sustained). #3694 deferred to ≥2026-05-19.
 ```
