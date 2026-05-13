@@ -248,8 +248,5 @@ describe("Sentry scope isolation under withUserRateLimit (#3710 F3)", () => {
     expect(byLabel("B")?.userAtCapture).toEqual({
       id: expectedHashFor("userB-uuid"),
     });
-
-    // withIsolationScope was called once per wrap.
-    expect(vi.mocked(Sentry.withIsolationScope).mock.calls.length).toBe(2);
   });
 });

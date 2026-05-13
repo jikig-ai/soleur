@@ -187,6 +187,7 @@ export async function POST(request: Request) {
             reportSilentFallback(error, {
               feature: "stripe-webhook",
               op: "checkout.session.completed",
+              message: "Webhook: failed to update user on checkout.session.completed",
               extra: { userId },
             });
           });

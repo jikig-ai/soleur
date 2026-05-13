@@ -72,6 +72,7 @@ export async function POST(request: Request) {
       reportSilentFallback(err, {
         feature: "workspace",
         op: "provisioning",
+        message: "Workspace provisioning failed",
         extra: { userId: user.id },
       });
     });

@@ -108,11 +108,20 @@ describe("scrubSentryEvent — userId / user_id rename to userIdHash", () => {
   });
 
   test("null/undefined userId values resolve to the `pepper_unset_null` sentinel", () => {
-    const event = { extra: { userId: null } };
-    const result = scrubSentryEvent(event) as {
+    const eventNull = { extra: { userId: null } };
+    const resultNull = scrubSentryEvent(eventNull) as {
       extra: Record<string, unknown>;
     };
-    expect(result.extra).toEqual({ userIdHash: "pepper_unset_null" });
+    expect(resultNull.extra).toEqual({ userIdHash: "pepper_unset_null" });
+
+    // Verify the loose-equality `rawValue == null` branch in hashUserIdValue
+    // catches both null AND undefined. A strict-equality regression would
+    // silently hash the string "undefined" and this assertion would catch it.
+    const eventUndef = { extra: { userId: undefined } };
+    const resultUndef = scrubSentryEvent(eventUndef) as {
+      extra: Record<string, unknown>;
+    };
+    expect(resultUndef.extra).toEqual({ userIdHash: "pepper_unset_null" });
   });
 
   test("scrubSentryBreadcrumb applies the rename to breadcrumb.data", () => {

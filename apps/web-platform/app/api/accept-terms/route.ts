@@ -3,7 +3,6 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
@@ -60,10 +59,14 @@ export async function POST(request: Request) {
     .select("id");
 
   if (error) {
-    logger.error({ err: error }, "Failed to record acceptance");
-    Sentry.captureException(error, {
-      tags: { feature: "accept-terms", op: "record" },
-      extra: { userId: user.id },
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(error, {
+        feature: "accept-terms",
+        op: "record",
+        message: "Failed to record acceptance",
+        extra: { userId: user.id },
+      });
     });
     return NextResponse.json(
       { error: "Failed to record acceptance" },

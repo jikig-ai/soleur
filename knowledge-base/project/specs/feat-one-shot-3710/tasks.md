@@ -99,7 +99,7 @@ Derived from `knowledge-base/project/plans/2026-05-13-feat-sentry-symmetric-user
 - [ ] 8.2 CPO sign-off carry-forward verified
 - [ ] 8.3 `user-impact-reviewer` re-fires per single-user-incident threshold
 - [ ] 8.4 `gh pr merge <N> --squash --auto` after CI green
-- [ ] 8.5 Post-merge: `gh workflow run sentry-post-merge-smoke.yml` (assert prod boot Sentry event carries `user.id = hashUserIdValue(<known-test-uuid>)`)
+- [ ] 8.5 Post-merge: manual Sentry dashboard inspection — confirm a fresh `Sentry.captureException` event on an authenticated route carries `user.id = <64-hex-chars>` (HMAC, not the raw UUID). Workflow `sentry-post-merge-smoke.yml` automation deferred to a follow-up issue.
 - [ ] 8.6 `gh issue close 3710 --comment "closed by PR #<N>"` after Sentry smoke green
 
 ## Done-when

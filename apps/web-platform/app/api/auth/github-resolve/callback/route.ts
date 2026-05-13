@@ -157,6 +157,7 @@ export async function GET(request: Request) {
       reportSilentFallback(updateError, {
         feature: "github-resolve",
         op: "store-username",
+        message: "GitHub resolve callback: failed to store github_username",
         extra: { userId: user.id },
       });
     });

@@ -200,6 +200,7 @@ export async function POST(request: Request) {
         reportSilentFallback(err, {
           feature: "repo-setup",
           op: "clone",
+          message: "Repo clone failed",
           extra: { userId: user.id, repoUrl },
         });
       });

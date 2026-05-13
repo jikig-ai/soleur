@@ -314,6 +314,7 @@ async function ensureWorkspaceProvisioned(
         reportSilentFallback(insertError, {
           feature: "auth-callback",
           op: "user-upsert",
+          message: "Fallback user upsert failed",
           extra: { userId },
         });
       });
@@ -334,6 +335,7 @@ async function ensureWorkspaceProvisioned(
         reportSilentFallback(err, {
           feature: "auth-callback",
           op: "workspace-provisioning",
+          message: "Workspace provisioning failed",
           extra: { userId },
         });
       });

@@ -106,6 +106,7 @@ export async function POST(request: Request) {
       reportSilentFallback(dbError, {
         feature: "services",
         op: "store",
+        message: "Failed to store service token",
         extra: { userId: user.id, provider },
       });
     });
@@ -139,6 +140,7 @@ export async function GET() {
       reportSilentFallback(error, {
         feature: "services",
         op: "list",
+        message: "Failed to list services",
         extra: { userId: user.id },
       });
     });
@@ -207,6 +209,7 @@ export async function DELETE(request: Request) {
       reportSilentFallback(dbError, {
         feature: "services",
         op: "delete",
+        message: "Failed to delete service token",
         extra: { userId: user.id, provider },
       });
     });

@@ -158,6 +158,10 @@ describe("scrubSentryEvent (beforeSend hook)", () => {
     expect(json).toContain("req-123");
     expect(json).toContain("soleur");
     expect(json).toContain("42");
+    // Lock the rename rule: a future contributor reintroducing `userId` to
+    // this fixture would silently regress the negative-space guard.
+    expect(json).not.toContain("userId");
+    expect(json).not.toContain("user_id");
   });
 
   it("returns the event so it can be passed through Sentry's hook contract", () => {

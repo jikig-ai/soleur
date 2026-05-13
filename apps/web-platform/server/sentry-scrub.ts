@@ -26,6 +26,40 @@
 import { SENSITIVE_LOWER, SENSITIVE_KEY_NAMES } from "./sensitive-keys";
 import { hashUserIdValue } from "./userid-pseudonymize";
 
+// Canonical inventory of helper-migration sites bound to `Sentry.setUser` via
+// `Sentry.withIsolationScope`. Single source of truth for the Article 30
+// register PA8 §(c)(i) symmetric-coverage claim. Update this list whenever a
+// new authenticated emit site adopts the helper+isolation wrap; the legal
+// disclosure references this file path (not a PR number that ages out).
+//
+// HOC binding (4 routes inherit setUser via `server/with-user-rate-limit.ts`):
+//   - app/api/conversations/route.ts          (per `withUserRateLimit`)
+//   - app/api/kb/search/route.ts              (per `withUserRateLimit`)
+//   - app/api/kb/tree/route.ts                (per `withUserRateLimit`)
+//   - app/api/chat/thread-info/route.ts       (per `withUserRateLimit`)
+//
+// Inline helper-migration sites (each wraps reportSilentFallback in
+// Sentry.withIsolationScope + setUser({id: hashUserIdValue(userId)})):
+//   - app/(auth)/callback/route.ts            (auth-callback / user-upsert)
+//   - app/(auth)/callback/route.ts            (auth-callback / workspace-provisioning)
+//   - app/api/accept-terms/route.ts           (accept-terms / record — DB error)
+//   - app/api/accept-terms/route.ts           (accept-terms / record — user row missing)
+//   - app/api/auth/github-resolve/callback/route.ts (github-resolve / store-username)
+//   - app/api/repo/setup/route.ts             (repo-setup / clone)
+//   - app/api/services/route.ts               (services / store)
+//   - app/api/services/route.ts               (services / list)
+//   - app/api/services/route.ts               (services / delete)
+//   - app/api/webhooks/stripe/route.ts        (stripe-webhook / checkout.session.completed)
+//   - app/api/workspace/route.ts              (workspace / provisioning)
+//
+// Sites outside this inventory (e.g., server/ws-handler.ts, server/index.ts:120,
+// app/api/attachments/presign/route.ts, app/api/keys/route.ts,
+// app/api/checkout/route.ts, app/api/billing/portal/route.ts,
+// app/api/repo/create/route.ts, app/api/repo/setup/route.ts:126/175/194)
+// are covered by the rename special-case below as the structural backstop —
+// they emit raw `userId` in extras which is rewritten to `userIdHash` at the
+// scrub boundary.
+
 const REDACTED = "[Redacted]";
 
 // Re-export under the legacy name so existing test surface keeps stable.
@@ -58,11 +92,9 @@ function scrubRecursive(
   // dropped — prevents re-hashing an already-pseudonymous value across
   // re-entries (mirrors `renameUserIdToHash` defensive branch).
   // `userIdHash` is the ADR-029 §I8 reserved emit-key.
-  let userIdHashPreset: unknown;
   let hasUserIdHashPreset = false;
   for (const k of Object.keys(value as Record<string, unknown>)) {
     if (k === "userIdHash") {
-      userIdHashPreset = (value as Record<string, unknown>)[k];
       hasUserIdHashPreset = true;
       break;
     }
