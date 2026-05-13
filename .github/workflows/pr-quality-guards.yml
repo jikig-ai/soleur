@@ -140,7 +140,7 @@ jobs:
   pii-grep:
     name: Block Linear CDN URLs in PR diff (#3635)
     # Intentionally NO opt-out support. The redaction guard is the
-    # load-bearing defense for a single-user-incident threshold per
+    # load-bearing defense for a single-user incident threshold per
     # knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7.
     # An opt-out label would defeat the purpose. If a PR legitimately
     # needs to commit a uploads.linear.app reference (e.g., a test
@@ -186,7 +186,7 @@ jobs:
             | grep -iE 'https?://uploads\.linear\.app/' \
             | grep -ivE 'https?://uploads\.linear\.app/TEST-FIXTURE-NOT-REAL' || true)
           if [[ -n "$OFFENDERS" ]]; then
-            echo "::error::PR diff contains a uploads.linear.app URL. This is a Linear CDN signed URL — committing it on a public-GitHub repo is a single-user-incident threshold breach per knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7. Use Skill: soleur:linear-fetch to redact, or replace the URL with [linear-image: REDACTED]."
+            echo "::error::PR diff contains a uploads.linear.app URL. This is a Linear CDN signed URL — committing it on a public-GitHub repo is a single-user incident threshold breach per knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7. Use Skill: soleur:linear-fetch to redact, or replace the URL with [linear-image: REDACTED]."
             echo "Offending lines (first 10):"
             printf '%s\n' "$OFFENDERS" | head -n 10 | sed 's/^/  /'
             exit 1
@@ -196,7 +196,7 @@ jobs:
     name: Block direct userId emissions in apps/web-platform (#3698)
     # Intentionally NO opt-out support. The pino formatters.log rename hook
     # in apps/web-platform/server/logger.ts is the load-bearing defense for
-    # the single-user-incident threshold per ADR-028 / PA8 §(c)(ii). Future
+    # the single-user incident threshold per ADR-028 / PA8 §(c)(ii). Future
     # direct `logger.{error,warn,info,debug}({...userId...})` sites would be
     # caught at runtime by formatters.log, but raw-source readability suffers
     # and any silent regression of the formatter erodes the disclosure

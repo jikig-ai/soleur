@@ -95,6 +95,6 @@ their export did not complete.
 
 ## When this becomes a `compliance/critical`
 
-A single `CrossTenantViolation` event is single-user-incident threshold
+A single `CrossTenantViolation` event is single-user incident threshold
 and triggers Art. 33 (CNIL, 72h) + Art. 34 (data subject). Do NOT wait
 for batch confirmation — open the issue immediately.

@@ -2,7 +2,7 @@
 feature: gh-app-drift-guard
 issue: 3187
 related_issues: [3181, 3183, 1784, 2887]
-brand_survival: single-user-incident
+brand_survival_threshold: single-user incident
 status: spec
 date: 2026-05-05
 brainstorm: knowledge-base/project/brainstorms/2026-05-05-github-app-drift-guard-brainstorm.md

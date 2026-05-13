@@ -130,7 +130,7 @@ declared but doesn't actually fire." That's the integration test's job.
 
 ## Detection footprint
 
-A user-blocking, single-user-incident bug in a path the user follows on
+A user-blocking, single-user incident bug in a path the user follows on
 literally every "I'm done with this conversation" workflow. The 4010 close
 + "Concurrent-conversation limit reached" banner is loud at the surface,
 but the root cause (slot held by an archived conversation) was invisible

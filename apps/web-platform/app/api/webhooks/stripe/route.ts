@@ -13,6 +13,8 @@ import { PG_UNIQUE_VIOLATION } from "@/lib/postgres-errors";
 import type Stripe from "stripe";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
+import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // Map Stripe subscription statuses to the CHECK constraint values.
 // Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
@@ -177,10 +179,17 @@ export async function POST(request: Request) {
           .select("id");
 
         if (error) {
-          logger.error({ error, userId }, "Webhook: failed to update user on checkout.session.completed");
-          Sentry.captureException(error, {
-            tags: { feature: "stripe-webhook", op: "checkout.session.completed" },
-            extra: { userId },
+          // userId here comes from session.metadata?.supabase_user_id (Stripe
+          // checkout session metadata), not from a Supabase session — guarded
+          // by `if (userId)` above. Inline setUser uses the same source.
+          Sentry.withIsolationScope(() => {
+            Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
+            reportSilentFallback(error, {
+              feature: "stripe-webhook",
+              op: "checkout.session.completed",
+              message: "Webhook: failed to update user on checkout.session.completed",
+              extra: { userId },
+            });
           });
           await releaseDedupRow();
           return NextResponse.json({ error: "DB update failed" }, { status: 500 });

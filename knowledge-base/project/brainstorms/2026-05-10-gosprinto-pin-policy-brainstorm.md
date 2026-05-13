@@ -82,7 +82,7 @@ The policy ships as four coordinated artifacts:
 
 ### Product (CPO)
 
-**Summary:** The policy doc itself is meta-process and doesn't need single-user-incident shipping; the **freshness SLO does**. The gdpr-gate's weave-don't-append output makes 0-finding outputs on stale rules into single-user incidents. Recommends a runtime staleness gate (advisory-only mode if rules exceed SLO) — load-bearing protection independent of the cron. Initially recommended phasing to Phase 4 exit; user chose build-now after weighing CTO's low-cost argument. Staleness gate kept as the highest-leverage retained idea.
+**Summary:** The policy doc itself is meta-process and doesn't need single-user incident shipping; the **freshness SLO does**. The gdpr-gate's weave-don't-append output makes 0-finding outputs on stale rules into single-user incidents. Recommends a runtime staleness gate (advisory-only mode if rules exceed SLO) — load-bearing protection independent of the cron. Initially recommended phasing to Phase 4 exit; user chose build-now after weighing CTO's low-cost argument. Staleness gate kept as the highest-leverage retained idea.
 
 ## Capability Gaps
 
