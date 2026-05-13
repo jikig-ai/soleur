@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Job control (#3704). Isolates backgrounded jobs (the canary probe loop's
+# parallel curl `&` + wait $!) into their own process groups so a stray
+# PGID-targeted signal — e.g., a future operator running
+# `kill -TERM -<bash_pid>` to clean up — does not also propagate into bash's
+# own PGID (which it inherits from webhook.service: webhook fork-execs this
+# script without setpgid). NOT load-bearing for the TERM trap below: the
+# trap uses `pkill -TERM -P $$` (PPID-based), which is independent of job
+# control. set -m is defense-in-depth, not the kill primitive.
+set -m
 
 # Deploy script invoked by the webhook listener (adnanh/webhook).
 # The webhook sets SSH_ORIGINAL_COMMAND from the JSON payload's "command" field.
@@ -100,6 +109,40 @@ rm -f "${STATE_FILE}.final"
 # We also clear the sentinel so a future run starts clean.
 # shellcheck disable=SC2064
 trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
+
+# Wall-clock-induced kill (#3704). When ci-deploy-wrapper.sh hits its 900s
+# timeout, it sends SIGTERM to this script. Without a TERM trap, bash dies on
+# the default action and leaves the state file at "running" — the workflow
+# polls -1 (running) until its own 900s ceiling and exits 1 with no terminal
+# reason. With this trap:
+#   1. `trap - TERM INT` clears the trap FIRST so a second SIGTERM (e.g.,
+#      from the wrapper's --kill-after grace if the body races slow disk)
+#      cannot re-enter the handler mid-write.
+#   2. final_write_state touches the .final sentinel + writes terminal state
+#      so the EXIT trap's "unhandled" branch is skipped, AND the workflow
+#      sees exit_code=124 reason=timeout in the very next poll. The EXIT
+#      trap WILL still fire after `exit 124` below; the .final sentinel is
+#      what keeps it from overwriting reason=timeout with reason=unhandled.
+#   3. `pkill -TERM -P $$` sends TERM to every direct child of this bash by
+#      PPID (docker pull, docker exec, canary-bundle-claim-check.sh). We
+#      use -P (PPID-based) instead of `kill -TERM 0` (PGID-based) because
+#      ci-deploy.sh inherits its parent's PGID (webhook.service does not
+#      setpgid before fork-exec), so kill 0 would also TERM the webhook
+#      listener and cascade restart noise. Empirically verified via
+#      parent.sh/child.sh repro before shipping.
+#   4. `exit 124` matches GNU timeout(1)'s exit code on SIGTERM-by-timeout,
+#      so the workflow's `*)` case statement parses an actionable failure
+#      rather than the symptom-only `unhandled`.
+#
+# CAVEAT: bash defers TERM trap delivery while a foreground command is
+# running (e.g., `docker pull` blocked on a network syscall). For the
+# hung-foreground case, the wrapper's --kill-after=20s SIGKILL is the
+# load-bearing fallback — bash dies, no trap fires, state stays "running",
+# and the workflow's Pre-rerun lock probe degrades-permissive past it via
+# the elapsed>900s branch. This trap covers the subset of hangs where bash
+# IS able to dispatch the trap (between commands, in `wait`, in shell logic).
+# shellcheck disable=SC2064
+trap 'trap - TERM INT; final_write_state 124 "timeout"; pkill -TERM -P $$ 2>/dev/null || true; exit 124' TERM INT
 
 # Structured error output: on failure, emit the failing line number and exit code.
 # In async mode (include-command-output-in-response: false), stderr goes to syslog

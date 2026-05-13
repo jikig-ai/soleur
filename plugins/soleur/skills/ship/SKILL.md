@@ -474,9 +474,10 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 
 ### Deploy Pipeline Fix Drift Gate
 
-**Trigger:** PR touches any of the 5 `terraform_data.deploy_pipeline_fix` trigger files:
+**Trigger:** PR touches any of the 6 `terraform_data.deploy_pipeline_fix` trigger files:
 
 - `apps/web-platform/infra/ci-deploy.sh`
+- `apps/web-platform/infra/ci-deploy-wrapper.sh`
 - `apps/web-platform/infra/webhook.service`
 - `apps/web-platform/infra/cat-deploy-state.sh`
 - `apps/web-platform/infra/canary-bundle-claim-check.sh`
@@ -489,12 +490,13 @@ The five trigger files are enumerated as a single bash array. The regex below MU
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/ci-deploy-wrapper.sh"
   "apps/web-platform/infra/webhook.service"
   "apps/web-platform/infra/cat-deploy-state.sh"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/hooks.json.tmpl"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -505,7 +507,7 @@ If the grep matches at least one path, the gate fires. Trigger condition is "≥
 
 The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply.
 
-**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any of the 5 trigger files change. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies server-side hashes match the merged tree, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
+**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any of the 6 trigger files change. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies server-side hashes match the merged tree, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
 
 This gate's role is now purely informational: surface that the PR will trigger the auto-apply, and confirm the operator has not used the kill-switch unintentionally. Issue #3618 tracks the deeper refactor that eliminates the `terraform_data.deploy_pipeline_fix` pattern entirely (containerized deploy-orchestrator).
 
