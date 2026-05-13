@@ -9,7 +9,28 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 adrs: [ADR-029]
 date: 2026-05-13
+deepened: 2026-05-13
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-13
+**Sections enhanced:** Research Reconciliation, Acceptance Criteria, Implementation Phases (3), Risks
+**Research sources:** context7 `/getsentry/sentry-javascript` (Sentry SDK v10 isolation semantics), live codebase grep of 10 migration sites, live `gh pr/issue view` of cited references (#3701, #3698, #3711, #3708, #3696, #3703), retired-rule-ids registry cross-check.
+
+### Key Improvements
+
+1. **Site-by-site emission-pattern audit revealed two distinct migration shapes** (NOT a uniform "add Sentry mirror"). 5 of 10 sites already emit to Sentry via direct `Sentry.captureException`; migrating them to `reportSilentFallback` is a CONSOLIDATION (single helper call replaces two-call pattern). The other 5 sites are pino-only and gain Sentry coverage. Plan Phase 3 reorganised by migration shape.
+2. **Sentry SDK v10 isolation semantics pinned via context7 docs.** Confirmed `withIsolationScope` is the documented manual fallback for "Node <22.12 OR custom-server boot path"; our `node:22-slim` + custom `http.createServer` matches the manual-fallback criterion. The defensive `withIsolationScope` wrap is load-bearing, not optional.
+3. **Stripe webhook userId source verified at line 161** (`session.metadata?.supabase_user_id`, NOT a Supabase session). The plan's risk note is correct; the migration site at line 180 binds setUser from Stripe metadata, not from the HOC's `user.id`.
+4. **CI gate `userid-bypass-lint` covers logger paths only.** Sentry direct emits are NOT linted today. The `sentry-scrub.ts` rename special-case is the structural backstop. A follow-up to extend `userid-bypass-lint` to direct `Sentry.captureException({extra: {userId}})` sites is filed as `#3710-followup-sentry-lint` ONLY if multi-agent review surfaces a regression vector — not in scope for this PR.
+5. **Retired-rule audit:** all 3 cited rule IDs (`hr-weigh-every-decision-against-target-user-impact`, `hr-gdpr-gate-on-regulated-data-surfaces`, `hr-when-a-plan-specifies-relative-paths-e-g`, `cq-silent-fallback-must-mirror-to-sentry`) verified active in `AGENTS.core.md` / `AGENTS.rest.md`. No retired/fabricated citations.
+
+### New Considerations Discovered
+
+- **Site 103 in `services/route.ts`** has `tags: { feature: "services", op: "store" }` in its existing `Sentry.captureException`; the plan's `op: "token-store"` differs. Reconciled: use `op: "store"` for site 103 to preserve dashboard continuity, `op: "list"` for 133 (already matches), `op: "delete"` for 198 (rename `token-delete` → `delete` for dashboard continuity). Verbatim-preserved Sentry tag continuity is the highest-risk drift class.
+- **`accept-terms:73` has both `logger.error` AND `Sentry.captureMessage`** (NOT captureException) because there is no Error object. The helper migration must use the helper's non-Error path (passes `null` as `err`, sets `message`).
+- **`logger.info` success path at github-resolve:157** is scope-out per issue body. Re-confirmed via codebase: it currently emits `userId: user.id` to pino info-level. PR-A's `formatters.log` already renames this to `userIdHash`. No regression risk; verified.
 
 # feat(observability): Sentry symmetric userId pseudonymisation + setUser binding + 10-site helper migration
 
@@ -111,18 +132,26 @@ Brainstorm summary: CPO identified `Sentry.setUser` middleware binding as the hi
   - [ ] Inline at each of the 10 helper-migrated sites (deliverable 2) — every `reportSilentFallback`/`warnSilentFallback` call site preceded by `Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) })`. The helper itself already pseudonymises `extra.userId` (ADR-029 / `observability.ts:hashExtraUserId`); setUser is the parallel binding for Sentry's first-class `user` context field.
   - [ ] Imports `hashUserIdValue` from `@/server/userid-pseudonymize` (the shared primitive — single source of truth per ADR-029 I4).
 
-- [ ] **Deliverable 2: 10-site helper migration.** Each of the following sites replaced with `reportSilentFallback` (for `logger.error` of an Error) or `warnSilentFallback` (for `logger.warn` of a degraded condition):
-  - [ ] `apps/web-platform/app/(auth)/callback/route.ts:310` (`reportSilentFallback`, feature `"auth-callback"`, op `"user-upsert-fallback"`)
-  - [ ] `apps/web-platform/app/(auth)/callback/route.ts:323` (`reportSilentFallback`, feature `"auth-callback"`, op `"workspace-provisioning"`)
-  - [ ] `apps/web-platform/app/api/services/route.ts:103` (`reportSilentFallback`, feature `"services"`, op `"token-store"`)
-  - [ ] `apps/web-platform/app/api/services/route.ts:133` (`reportSilentFallback`, feature `"services"`, op `"list"`)
-  - [ ] `apps/web-platform/app/api/services/route.ts:198` (`reportSilentFallback`, feature `"services"`, op `"token-delete"`)
-  - [ ] `apps/web-platform/app/api/workspace/route.ts:68` (`reportSilentFallback`, feature `"workspace"`, op `"provisioning"`)
-  - [ ] `apps/web-platform/app/api/webhooks/stripe/route.ts:180` (`reportSilentFallback`, feature `"stripe-webhook"`, op `"checkout.session.completed"`)
-  - [ ] `apps/web-platform/app/api/repo/setup/route.ts:196` (`reportSilentFallback`, feature `"repo-setup"`, op `"clone"`)
-  - [ ] `apps/web-platform/app/api/auth/github-resolve/callback/route.ts:153` (`reportSilentFallback`, feature `"github-resolve"`, op `"callback"`)
-  - [ ] `apps/web-platform/app/api/accept-terms/route.ts:73` (`reportSilentFallback`, feature `"accept-terms"`, op `"user-row-missing"`)
-  - [ ] `auth/github-resolve/callback/route.ts:157` (logger.info success path) **NOT migrated** (issue-body-acknowledged scope-out; covered by `formatters.log` defence-in-depth).
+- [ ] **Deliverable 2: 10-site helper migration.** Each site replaced with `reportSilentFallback` (or `warnSilentFallback`). Two migration shapes (verified via codebase audit at deepen-plan time):
+
+  **Shape A — Consolidation** (site has BOTH `logger.error` + `Sentry.captureException` today; helper consolidates to single emit + inherits ADR-029 hashing):
+  - [ ] `apps/web-platform/app/api/services/route.ts:103` → `reportSilentFallback(dbError, { feature: "services", op: "store", extra: { userId: user.id, provider } })`. **Preserve Sentry tag `op: "store"`** (existing dashboard continuity; do NOT rename to `"token-store"`).
+  - [ ] `apps/web-platform/app/api/services/route.ts:133` → `reportSilentFallback(error, { feature: "services", op: "list", extra: { userId: user.id } })`.
+  - [ ] `apps/web-platform/app/api/services/route.ts:198` → `reportSilentFallback(dbError, { feature: "services", op: "delete", extra: { userId: user.id, provider } })`. **Preserve Sentry tag `op: "delete"`** (existing dashboard continuity; do NOT rename to `"token-delete"`).
+  - [ ] `apps/web-platform/app/api/webhooks/stripe/route.ts:180` → `reportSilentFallback(error, { feature: "stripe-webhook", op: "checkout.session.completed", extra: { userId } })`. **Note:** `userId` comes from `session.metadata?.supabase_user_id` (verified at `webhooks/stripe/route.ts:161`), NOT from a Supabase session. setUser binding reads from the Stripe metadata source.
+  - [ ] `apps/web-platform/app/api/repo/setup/route.ts:196` → `reportSilentFallback(err, { feature: "repo-setup", op: "clone", extra: { userId: user.id, repoUrl } })`. Note: this site has an UNTAGGED `Sentry.captureException(err)` today; the helper migration ADDS tags+extra (mild dashboard search-key shift — acceptable per "Sharp Edges → dashboard continuity").
+
+  **Shape B — Add Sentry mirror** (site is pino-only today; helper migration adds the Sentry emit + hashing):
+  - [ ] `apps/web-platform/app/(auth)/callback/route.ts:310` → `reportSilentFallback(insertError, { feature: "auth-callback", op: "user-upsert", extra: { userId } })`.
+  - [ ] `apps/web-platform/app/(auth)/callback/route.ts:323` → `reportSilentFallback(err, { feature: "auth-callback", op: "workspace-provisioning", extra: { userId } })`.
+  - [ ] `apps/web-platform/app/api/workspace/route.ts:68` → `reportSilentFallback(err, { feature: "workspace", op: "provisioning", extra: { userId: user.id } })`.
+  - [ ] `apps/web-platform/app/api/auth/github-resolve/callback/route.ts:153` → `reportSilentFallback(updateError, { feature: "github-resolve", op: "store-username", extra: { userId: user.id } })`.
+
+  **Shape C — Non-Error (captureMessage variant)** (site uses `Sentry.captureMessage` because no `Error` object exists):
+  - [ ] `apps/web-platform/app/api/accept-terms/route.ts:73` → `reportSilentFallback(null, { feature: "accept-terms", op: "record", message: "User row not found", extra: { userId: user.id } })`. The helper routes to `Sentry.captureMessage` when `err` is not an `Error` (verified at `observability.ts:166-172`). **Preserve Sentry tags `feature: "accept-terms"`, `op: "record"`** (existing dashboard continuity).
+
+  **Scope-out (NOT migrated):**
+  - `auth/github-resolve/callback/route.ts:157` (logger.info success path) — issue-body-acknowledged scope-out; covered by `formatters.log` defence-in-depth. Verified at deepen-plan time: this is the only `logger.info({userId})` in the 10-site target set.
 
 - [ ] **Deliverable 3: `sentry-scrub.ts` rename special-case.**
   - [ ] `apps/web-platform/server/sentry-scrub.ts:43-49` — inside `Object.entries(value)` loop of `scrubRecursive`, BEFORE the `SENSITIVE_LOWER.has()` branch, add:
@@ -192,6 +221,69 @@ No genuinely operator-only steps remain.
 4. Implement the 3 assertion shapes from the AC.
 5. Tests green BEFORE any production setUser code lands. **TDD invariant:** if Phase 1 tests fail at any point in Phase 2, halt Phase 2 and either tighten the wrap form (e.g., promote to `withIsolationScope` if started with bare) or escalate to architecture-strategist via multi-agent review.
 
+#### Research Insights (deepen-plan)
+
+**Sentry SDK v10 isolation semantics — verbatim from context7 `/getsentry/sentry-javascript` docs:**
+
+> `withIsolationScope` creates a **new async context boundary**, ideal for server-side request isolation. […] Manual Request Isolation: Use for Node.js versions below 22.12.0 by wrapping request handlers with withIsolationScope.
+
+> Automatic Request Isolation: Requires Node.js 22.12.0+. Initialize Sentry before the server to ensure context isolation per request.
+
+**Codebase state (verified at deepen-plan time):**
+- Dockerfile: `FROM node:22-slim@sha256:4f77a690...` — minor version not pinned; depends on the slim tag's current minor (≥22.12 as of 2026-02 but not contractually guaranteed across rebuilds).
+- `apps/web-platform/server/index.ts:3`: `import "../sentry.server.config"` is the first import — **automatic-isolation initialisation-ordering precondition is satisfied**.
+- `apps/web-platform/server/index.ts:51`: custom `http.createServer` delegates ALL Next.js routes to `handle(req, res, parsedUrl)` — this bypasses `@sentry/nextjs`'s Next.js request-wrapper. The automatic isolation that `@sentry/nextjs` would normally install via its build-time wrapping does NOT apply to the custom-server delegated request flow.
+
+**Conclusion:** the `withIsolationScope` defensive wrap is **load-bearing**, not optional. The 2-request integration test verifies isolation under the actual production code path. Without the wrap, the F3 cross-request bleed scenario (request A's `setUser(hashA)` leaking into request B's captured event) is the documented failure mode per the Sentry SDK README's "Manual Request Isolation" section.
+
+**Test mock fixture shape (reusable across `with-user-rate-limit.test.ts` and `sentry-scope-isolation.test.ts`):**
+
+```typescript
+// vi.mock placement at module top
+vi.mock("@sentry/nextjs", () => {
+  const calls = { captureException: [], captureMessage: [], setUser: [], isolationScopes: [] };
+  let currentUser: { id?: string } | null = null;
+
+  const getCurrentScope = () => ({
+    setUser: (u: { id?: string } | null) => {
+      currentUser = u;
+      calls.setUser.push({ user: u, isolationStack: [...calls.isolationScopes] });
+    },
+  });
+
+  return {
+    captureException: vi.fn((err, ctx) => {
+      calls.captureException.push({ err, ctx, userAtCapture: currentUser });
+    }),
+    captureMessage: vi.fn((msg, ctx) => {
+      calls.captureMessage.push({ msg, ctx, userAtCapture: currentUser });
+    }),
+    withIsolationScope: vi.fn((fn) => {
+      const savedUser = currentUser;
+      const scopeId = calls.isolationScopes.length;
+      calls.isolationScopes.push(scopeId);
+      try {
+        currentUser = null; // fresh isolation
+        return fn();
+      } finally {
+        currentUser = savedUser;
+        calls.isolationScopes.pop();
+      }
+    }),
+    getCurrentScope: vi.fn(getCurrentScope),
+    __calls: calls,
+  };
+});
+```
+
+This mock correctly models the `withIsolationScope` save-and-restore semantics that the SDK guarantees per `withIsolationScope` docs ("forks the current scope so that context modifications apply only within the callback"). Assertion shape 3 (concurrent requests) requires `Promise.all` against this mock; the per-promise isolation stack proves no cross-promise user bleed.
+
+**Edge case discovered at deepen-plan time:** the mock above seeds `currentUser = null` on `withIsolationScope` entry — this is the SDK's actual behaviour per Sentry docs (`withIsolationScope` "creates a new async context boundary"). If the production code path's `setUser` happens BEFORE the isolation scope opens (e.g., legacy code calling `Sentry.setUser` at module scope), the wrap would override it. Verified at deepen-plan time: no module-scope `Sentry.setUser` calls exist (`grep -rn "Sentry.setUser" apps/web-platform/` returns zero matches).
+
+**References:**
+- Sentry SDK README v10: https://github.com/getsentry/sentry-javascript/blob/develop/packages/node-core/README.md
+- Sentry isolation scope docs: https://docs.sentry.io/platforms/javascript/guides/node/configuration/scopes/
+
 ### Phase 2 — `Sentry.setUser` HOC binding + helper-migration setUser inlines
 
 1. Edit `apps/web-platform/server/with-user-rate-limit.ts`:
@@ -203,14 +295,30 @@ No genuinely operator-only steps remain.
 
 ### Phase 3 — 10-site helper migration
 
-For each site in the AC list:
+Three migration shapes (see Deliverable 2 above). For each shape:
 
-1. Read the surrounding context (full route handler).
-2. Replace `logger.error({ err, userId, ...rest }, "<msg>")` with `reportSilentFallback(err, { feature: "...", op: "...", extra: { userId, ...rest } })`. The helper hashes `userId` at its boundary (`hashExtraUserId`) → emit shape is `extra.userIdHash` automatically.
-3. Replace `logger.warn(...)` with `warnSilentFallback(...)` analogously.
-4. Add the `Sentry.withIsolationScope(...) { Sentry.getCurrentScope().setUser(...); ... }` wrap from Phase 2 step 2 around the migrated call.
-5. Verify each site individually: route handler unit test (if exists) green; full app suite green.
-6. After all 10 sites migrated, run `grep -nE 'logger\.(error|warn)\(.*userId' apps/web-platform/app/` — expect zero matches (the migration is complete). One known exception: `auth/github-resolve/callback/route.ts:157` (logger.info success path, scope-out per issue body).
+**Shape A (Consolidation, 5 sites):** the site has `logger.error` + `Sentry.captureException` today. The two-call pattern is replaced with one `reportSilentFallback` call:
+
+1. Delete the standalone `Sentry.captureException(...)` (`feature` + `op` tags carry forward to the helper's `tags` argument verbatim — see Deliverable 2 site list).
+2. Replace `logger.error({err, userId, ...}, "<msg>")` with `reportSilentFallback(err, { feature, op, extra: {userId, ...} })`.
+3. Wrap the call in `Sentry.withIsolationScope(() => { Sentry.getCurrentScope().setUser({id: hashUserIdValue(userId)}); reportSilentFallback(err, ...); })`.
+
+**Shape B (Add Sentry mirror, 4 sites):** the site is pino-only today.
+
+1. Replace `logger.error({err, userId, ...}, "<msg>")` with `reportSilentFallback(err, { feature, op, extra: {userId, ...} })`.
+2. Wrap in `Sentry.withIsolationScope(...)` per Shape A step 3.
+
+**Shape C (Non-Error captureMessage, 1 site — accept-terms:73):** the site uses `Sentry.captureMessage` because no Error object exists.
+
+1. Delete the standalone `Sentry.captureMessage(...)` AND the `logger.error({userId}, "<msg>")` call.
+2. Replace with `reportSilentFallback(null, { feature: "accept-terms", op: "record", message: "User row not found", extra: { userId: user.id } })`. The helper internally routes to `Sentry.captureMessage` when `err` is not an `Error` (verified at `observability.ts:166-172`).
+3. Wrap in `Sentry.withIsolationScope(...)` per Shape A step 3.
+
+**Verification sweep after all 10 sites:**
+
+- `grep -nE 'logger\.(error|warn)\(.*\b(userId|user_id)\b' apps/web-platform/app/` — expect zero matches. Known exception: `auth/github-resolve/callback/route.ts:157` (`logger.info` — out of migration scope).
+- `grep -nE 'Sentry\.capture(Exception|Message)\(' apps/web-platform/app/ | grep -E '\bextra:\s*\{[^}]*\b(userId|user_id)\b'` — expect zero matches (all direct `Sentry.captureException({extra: {userId}})` in `app/` are consolidated into helper calls; the `sentry-scrub.ts` rename special-case is the runtime backstop for ws-handler / index.ts which are NOT in scope).
+- Each migrated route's existing tests (where present) remain green; route handler integration tests catch most regressions.
 
 ### Phase 4 — `sentry-scrub.ts` rename special-case + tests
 
@@ -273,6 +381,14 @@ For each site in the AC list:
 - **`logger.info` success path (`auth/github-resolve/callback/route.ts:157`) coverage.** Scoped out by issue body; covered by PR-A's `formatters.log` defence-in-depth — no Sentry-side mirror exists for `logger.info` (intentional; helper migration is for `logger.error`/`logger.warn` only). No risk of regression.
 - **`renameUserIdToHash` defensive branch already drops raw `userId` when `userIdHash` is present.** The new `sentry-scrub` rename mirror does NOT introduce a double-hash path because (a) `scrubRecursive` is called on Sentry event payloads which never contain a pre-computed `userIdHash` from upstream code (helpers emit `extra.userIdHash` directly; `userId` keys reach the scrubber only via direct `Sentry.captureException({extra: {userId}})` from sites that bypass the helpers). The dual-write contract is therefore one-way at the scrub boundary.
 - **CI gate `userid-bypass-lint` blocks raw `userId` only in `logger.*` calls** (pino path). Sentry-side direct emits are NOT yet linted. Defence-in-depth is `sentry-scrub.ts` runtime rewrite. Filing a follow-up `userid-bypass-lint` extension for direct `Sentry.captureException({extra: {userId}})` sites is OUT OF SCOPE for this PR — track as `#3710-followup-sentry-lint` if it surfaces during multi-agent review.
+
+### Research Insights (deepen-plan additions)
+
+- **Dashboard search-key continuity.** Existing Sentry dashboards filter on `tags.feature` + `tags.op`. Verbatim preservation of the existing `op` strings is the highest-risk drift class — see Deliverable 2 Shape A site list for the verbatim-preserved tags (`store`, `list`, `delete`, `record`). Renaming `store` → `token-store` (etc.) would break dashboard search continuity. Issue body proposed renames; deepen-plan reconciliation chose dashboard continuity over issue-body convenience.
+- **Verbatim Sentry tag preservation cross-check** (paper-resolution-lint sibling): every `feature` + `op` string in Deliverable 2 must `grep -E "feature: \"<name>\".*op: \"<name>\"" apps/web-platform/app/api/<route>` against the pre-migration file at /work time; mismatch is a flag to either align the helper call to existing tags or escalate to dashboard-owner sign-off.
+- **`sentry-scrub.ts` rename special-case wins for ws-handler and index.ts direct emits.** `apps/web-platform/server/ws-handler.ts` (12 direct `Sentry.captureException` calls; some may carry `userId` in error context via `err.stack`) and `apps/web-platform/server/index.ts:120` (startup `captureMessage`) are NOT in scope for helper migration (they're server-process-scope code paths, not per-request authenticated routes). The `sentry-scrub.ts` rename special-case is the load-bearing structural backstop: any event reaching `beforeSend`/`beforeBreadcrumb` is rewritten regardless of caller origin. This is the symmetric coverage that ADR-029 §"Consequences — Negative" explicitly defers to PR-B and that this plan delivers.
+- **Risk of `userIdHash` collision with caller-supplied `userIdHash`.** ADR-029 §I8 declares `userIdHash` as a reserved emit-key. The `sentry-scrub.ts` rename special-case preserves a caller-supplied `userIdHash` when both `userId` and `userIdHash` are present (defensive precedence — drops the raw `userId`). Verified via the 8th AC test case (`{userId: "raw", userIdHash: "preset"}` → preserved `userIdHash`). No new collision surface introduced.
+- **No new external dependencies.** Deepen-plan verified: `@sentry/nextjs@^10.46.0` exposes `withIsolationScope`, `getCurrentScope`, `setUser` in the v10 API surface (context7 `/getsentry/sentry-javascript` docs return these methods unconditionally). `vi.mock` is already used at `apps/web-platform/test/observability.test.ts:282` for the same Sentry namespace — pattern is reusable verbatim.
 
 ## Sharp Edges
 
