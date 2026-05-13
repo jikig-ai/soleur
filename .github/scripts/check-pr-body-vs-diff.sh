@@ -41,13 +41,21 @@ if [[ -z "$cited" ]]; then
   exit 0
 fi
 
+# A citation matches the diff if either:
+#   (a) it equals a diff path exactly, OR
+#   (b) it is a slash-anchored suffix of a diff path
+#       (e.g., body cites `plan/SKILL.md`, diff has `plugins/soleur/skills/plan/SKILL.md`).
+# Suffix match is safe because the extraction above (`grep -E '/'`) already
+# requires at least one slash in the cited token — so bare basenames like
+# `SKILL.md` cannot suffix-match arbitrary nested paths.
 cited_count=0
 matched_count=0
 orphans=()
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
   cited_count=$((cited_count + 1))
-  if echo "$diff_paths" | grep -Fxq "$path"; then
+  if echo "$diff_paths" | grep -Fxq "$path" \
+     || echo "$diff_paths" | grep -Fq "/$path"; then
     matched_count=$((matched_count + 1))
   else
     orphans+=("$path")
