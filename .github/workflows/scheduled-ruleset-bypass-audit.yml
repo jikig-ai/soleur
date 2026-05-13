@@ -12,16 +12,20 @@
 # the gap with a 24h worst-case detection window.
 #
 # Auth surface (#3569): the rulesets endpoint redacts .bypass_actors
-# from the response when the caller lacks administration:read. The
-# default github.token workflow scope set does NOT include
-# administration - that permission exists ONLY as a GitHub-App
+# from the response when the caller lacks administration:write
+# (empirically; administration:read returns 200 OK with bypass_actors
+# stripped). The default github.token workflow scope set does NOT
+# include administration - that permission exists ONLY as a GitHub-App
 # permission, not as a GITHUB_TOKEN workflow scope. Adding it to the
 # permissions: block would silently no-op. The audit therefore mints
 # an installation token from the existing soleur-ai GitHub App
 # (drift-guard secrets) and uses that as GH_TOKEN for the audit step.
-# The mint POST scope-downs to {administration: read, metadata: read}
-# + repository_ids: [<this-repo-id>] so the issued token cannot be
-# misused even if the App installation is over-scoped at the App level.
+# The mint POST scope-downs to {administration: write, metadata: read}
+# + repository_ids: [<this-repo-id>]. Blast-radius mitigations: (a) 1h
+# token lifetime, (b) repo_ids scope filter, (c) ::add-mask:: registration,
+# (d) the audit script never PUTs to /rulesets - it only GETs - so even
+# an over-scoped token is unused at write surfaces, (e) per-run mint
+# (no persistence).
 #
 # Failure routing (3-output model, mirror of
 # scheduled-github-app-drift-guard.yml):
@@ -273,8 +277,19 @@ jobs:
           # returns HTTP 422 (so the audit cannot widen its own auth surface).
           # Body uses jq for safe JSON construction (no string interpolation
           # of REPO_ID into the JSON literal).
+          #
+          # NOTE on `administration: write` (#3569): empirical testing on
+          # 2026-05-13 showed that `administration: read` is INSUFFICIENT
+          # to see `.bypass_actors` in the GET /rulesets/{id} response -
+          # GitHub still redacts. The plan assumed read was sufficient
+          # (per its context7 research), but the live API contract requires
+          # write. The blast radius of a leaked install-token is mitigated
+          # by: (a) lifetime 1h, (b) repository_ids scoping to this repo
+          # only, (c) ::add-mask:: registration, (d) the audit script never
+          # PUTs to the rulesets endpoint so even an over-scoped token is
+          # unused at write surfaces, (e) per-run mint (no persistence).
           BODY=$(jq -nc --argjson rid "$REPO_ID" \
-            '{repository_ids: [$rid], permissions: {administration: "read", metadata: "read"}}')
+            '{repository_ids: [$rid], permissions: {administration: "write", metadata: "read"}}')
 
           TOKEN_RESPONSE=$(mktemp -p "$RUNNER_TEMP" install-token.XXXXXX)
           HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
