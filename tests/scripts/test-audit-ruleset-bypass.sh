@@ -310,6 +310,32 @@ t_token_scope_probe_override_gated() {
   rm -rf "$tmp"
 }
 
+# T12d: ruleset id matches but enforcement was paused (e.g., "disabled" or
+# "evaluate"). bypass_actors guarantee is gone — the operator triage path
+# must be "re-enable", not "recreate". Routes to ruleset_enforcement_disabled
+# / ci/auth-broken (auth surface widened, not guard malfunction).
+t_ruleset_enforcement_disabled() {
+  local live='{"id":14145388,"name":"CI Required","enforcement":"disabled","rules":[]}'
+  local tmp; tmp=$(mktemp -d)
+  printf '%s' "$live" > "$tmp/live.json"
+  printf '%s' "$CANONICAL" > "$tmp/canonical.json"
+  : > "$tmp/output"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$tmp/live.json" \
+  AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE="enabled" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canonical.json" \
+  GITHUB_OUTPUT="$tmp/output" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label detail; mode=$(_mode "$tmp"); label=$(_label "$tmp"); detail=$(_detail "$tmp")
+  if [[ "$mode" == "ruleset_enforcement_disabled" && "$label" == "ci/auth-broken" ]] \
+     && grep -qF "enforcement='disabled'" <<<"$detail"; then
+    _report "T12d ruleset enforcement disabled -> ruleset_enforcement_disabled / ci/auth-broken" ok
+  else
+    _report "T12d ruleset enforcement disabled -> ruleset_enforcement_disabled / ci/auth-broken" fail "mode='$mode' label='$label' detail='${detail:0:120}'"
+  fi
+  rm -rf "$tmp"
+}
+
 # T14: missing GH_TOKEN -> missing_gh_token / guard-broken
 t_missing_gh_token() {
   local tmp; tmp=$(mktemp -d)
@@ -659,6 +685,7 @@ t_number_vs_string_actor_id
 t_live_missing_bypass_actors
 t_token_scope_insufficient
 t_token_scope_probe_override_gated
+t_ruleset_enforcement_disabled
 t_missing_gh_token
 t_live_network_error
 t_canonical_invalid_schema

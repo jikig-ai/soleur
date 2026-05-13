@@ -43,6 +43,7 @@ The audit emits one of three outcomes via `$GITHUB_OUTPUT`:
 |----------------------------|--------------------|------------------------------------------------------------|
 | `""` (empty)               | `""`               | Green. Live `bypass_actors` matches canonical.             |
 | `bypass_actors_drift`      | `ci/auth-broken`   | Drift detected. **The load-bearing detection.**            |
+| `ruleset_enforcement_disabled` | `ci/auth-broken` | Ruleset id matches canonical but `enforcement` is no longer `active`; bypass_actors guarantee is suspended (#3569). |
 | `github_api_network`       | `ci/guard-broken`  | curl failed to reach api.github.com (>15s or unreachable). |
 | `github_api_http`          | `ci/guard-broken`  | GitHub returned non-200 for the ruleset GET.               |
 | `github_api_invalid_json`  | `ci/guard-broken`  | Response body did not parse as JSON.                       |
@@ -107,6 +108,33 @@ The audit itself failed — not the bypass_actors state. Common causes:
 | `token_scope_insufficient` | audit token lost `administration:read` (GitHub redacts `bypass_actors` from the response payload when caller is not admin-scoped) | See "Drift = `token_scope_insufficient`" subsection below. The ruleset itself is intact — the audit's App-installation-token mint is the broken surface. |
 | `canonical_file_missing`   | sparse-checkout misconfigured               | Verify the workflow's `sparse-checkout:` block includes the JSON path.                             |
 | `canonical_file_invalid_json` | bad merge to the canonical                | Run `jq -e . scripts/ci-required-ruleset-canonical-bypass-actors.json` locally; fix syntax.        |
+
+### Drift = `ruleset_enforcement_disabled` (#3569)
+
+The ruleset still exists at id `14145388` but `enforcement` is set to
+something other than `"active"` (e.g., `"disabled"`, `"evaluate"`).
+The `skill-security-scan PR gate` requirement is suspended for as
+long as enforcement stays non-active — every PR can merge without
+the gate running. Routes as `ci/auth-broken` because the auth
+surface IS effectively widened, even though the bypass_actors array
+is unchanged.
+
+1. Confirm the live state from an admin workstation:
+   ```bash
+   gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.enforcement'
+   ```
+2. If enforcement is `disabled` or `evaluate`, re-enable via Settings
+   → Rules → Rulesets → CI Required → Enforcement status → Active.
+   The org owner (or anyone with admin write on the ruleset) can do
+   this from the GitHub UI; there is no `gh` subcommand for
+   ruleset enforcement state today.
+3. Investigate via the GitHub organization audit log
+   (Settings → Audit log → filter `repository_ruleset`) to
+   identify who and when. If the change was unauthorized, treat as
+   the "Drift = unauthorized broadening" path above (rotate org
+   owner credentials, post-mortem).
+4. Re-run `gh workflow run scheduled-ruleset-bypass-audit.yml` from
+   an admin workstation to confirm green.
 
 ### Drift = `token_scope_insufficient` (#3569)
 

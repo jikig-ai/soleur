@@ -172,12 +172,29 @@ if [[ -z "$failure_mode" ]]; then
       # Test override path (AUDIT_FETCH_OVERRIDE set) opts in deterministically
       # via AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE=enabled so the legacy
       # `live_missing_bypass_actors` test shape (T12) stays reachable.
-      if { [[ -z "${AUDIT_FETCH_OVERRIDE:-}" ]] \
-           || [[ "${AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE:-}" == "enabled" ]]; } \
+      # Changing the `[[ -z "$AUDIT_FETCH_OVERRIDE" ]]` arm of the condition
+      # requires a paired refactor of the opt-in test override above; the
+      # live-fetch arm is otherwise unreachable from override-driven tests.
+      probe_active=0
+      if [[ -z "${AUDIT_FETCH_OVERRIDE:-}" ]] \
+         || [[ "${AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE:-}" == "enabled" ]]; then
+        probe_active=1
+      fi
+      if [[ "$probe_active" == "1" ]] \
          && jq -e '.id == 14145388 and .enforcement == "active"' "$LIVE_FILE" >/dev/null 2>&1; then
         record_failure "token_scope_insufficient" \
           "live ruleset has id+enforcement sentinel but no .bypass_actors; audit token likely lacks administration:read (GitHub redacts bypass_actors from non-admin responses)" \
           "ci/guard-broken"
+      elif [[ "$probe_active" == "1" ]] \
+           && jq -e '.id == 14145388 and (.enforcement // "") != "active"' "$LIVE_FILE" >/dev/null 2>&1; then
+        # Ruleset exists (id matches the canonical sentinel) but enforcement
+        # is paused/disabled. Bypass-actors guarantee is gone the moment
+        # enforcement leaves "active" — route as ci/auth-broken so the
+        # operator triage path is "re-enable", not "recreate".
+        live_enforcement=$(jq -r '.enforcement // "<missing>"' "$LIVE_FILE")
+        record_failure "ruleset_enforcement_disabled" \
+          "live ruleset id matches canonical but enforcement='${live_enforcement}' (was 'active'); bypass_actors guarantee is suspended" \
+          "ci/auth-broken"
       else
         record_failure "live_missing_bypass_actors" \
           "live ruleset response has no .bypass_actors array" \

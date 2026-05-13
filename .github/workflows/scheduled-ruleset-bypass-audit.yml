@@ -124,11 +124,29 @@ jobs:
 
           mint_failure_mode=""
           mint_failure_detail=""
+          mint_failure_label=""
 
+          # 3-arg signature mirrors drift-guard's record_failure (line 98-117)
+          # so the label-allowlist tripwire fires on a future typo (e.g.,
+          # ci/auth-borken). The audit step's failure-routing only consumes
+          # failure_label from the audit script (steps.check.outputs.*), but
+          # if a future edit emits a label from this step the allowlist
+          # guarantees a known-good route or a visible warning.
           record_mint_failure() {
+            local mode="$1"
+            local detail="$2"
+            local label="${3:-ci/guard-broken}"
+            case "$label" in
+              ci/auth-broken|ci/guard-broken) ;;
+              *)
+                echo "::warning::record_mint_failure called with unknown label '$label' - routing as ci/guard-broken"
+                label="ci/guard-broken"
+                ;;
+            esac
             if [[ -z "$mint_failure_mode" ]]; then
-              mint_failure_mode="$1"
-              mint_failure_detail="$2"
+              mint_failure_mode="$mode"
+              mint_failure_detail="$detail"
+              mint_failure_label="$label"
             fi
           }
 
@@ -209,13 +227,15 @@ jobs:
             printf '%s' "$JWT" > "$JWT_FILE"
             echo "jwt_file=${JWT_FILE}" >> "$GITHUB_OUTPUT"
           fi
-          # Always emit failure_mode/detail (empty on success). Sanitize
-          # via the same strip_log_injection bytes as the audit script.
-          # Minimal inline stripper - mirror of scripts/lib/strip-log-injection.sh.
-          strip_li() { tr -d '\r\n\f\v\x7f' | sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'; }
+          # Always emit failure_mode/detail (empty on success). Source the
+          # canonical sanitizer from scripts/lib (the workflow's sparse
+          # checkout includes it) so a future widening of the sanitizer's
+          # byte set propagates here without a forked-copy drift gate.
+          # shellcheck source=scripts/lib/strip-log-injection.sh
+          . scripts/lib/strip-log-injection.sh
           {
-            printf 'failure_mode=%s\n' "$(printf '%s' "$mint_failure_mode" | strip_li)"
-            printf 'failure_detail=%s\n' "$(printf '%s' "$mint_failure_detail" | strip_li)"
+            printf 'failure_mode=%s\n' "$(printf '%s' "$mint_failure_mode" | strip_log_injection)"
+            printf 'failure_detail=%s\n' "$(printf '%s' "$mint_failure_detail" | strip_log_injection)"
           } >> "$GITHUB_OUTPUT"
 
           if [[ -n "$mint_failure_mode" ]]; then
@@ -259,7 +279,12 @@ jobs:
 
           if [[ "$HTTP_CODE" != "200" ]]; then
             echo "::warning::installation_id lookup failed: HTTP ${HTTP_CODE}"
-            head -c 200 "$INSTALL_LOOKUP" || true
+            # Print only the GitHub-supplied error message field; never the raw
+            # body. A future tripwire false-positive on response bytes that
+            # token-shape-match would file a leak-suspected issue from a
+            # body that contains no actual leak (review F4).
+            ERR_MSG=$(jq -r '.message // empty' "$INSTALL_LOOKUP" 2>/dev/null || true)
+            [[ -n "$ERR_MSG" ]] && echo "  GitHub: ${ERR_MSG}"
             rm -f "$INSTALL_LOOKUP"
             exit 1
           fi
@@ -305,9 +330,10 @@ jobs:
 
           if [[ "$HTTP_CODE" != "201" ]]; then
             echo "::warning::install-token mint failed: HTTP ${HTTP_CODE}"
-            # Body may include error message; safe to print since jwt is
-            # already masked and the body shouldn't contain the token on error.
-            head -c 200 "$TOKEN_RESPONSE" || true
+            # Same rationale as the install-lookup path above: print only
+            # the GitHub-supplied error message, never raw response bytes.
+            ERR_MSG=$(jq -r '.message // empty' "$TOKEN_RESPONSE" 2>/dev/null || true)
+            [[ -n "$ERR_MSG" ]] && echo "  GitHub: ${ERR_MSG}"
             rm -f "$TOKEN_RESPONSE"
             exit 1
           fi
@@ -429,6 +455,14 @@ jobs:
               ISSUE_TITLE="[compliance/critical] CI Required ruleset required_status_checks drift detected"
               EXTRA_LABEL="compliance/critical"
               ;;
+            ruleset_enforcement_disabled)
+              # Auth-broken-class: enforcement was paused, the bypass_actors
+              # guarantee is suspended for as long as enforcement != active.
+              # Distinct title from drift so cross-class de-dupe doesn't
+              # silently swap one issue for the other.
+              ISSUE_TITLE="[compliance/critical] CI Required ruleset enforcement paused"
+              EXTRA_LABEL="compliance/critical"
+              ;;
             *)
               # All other failure_mode values route to guard-broken
               # (canonical_file_*, github_api_*, live_missing_*).
@@ -515,6 +549,7 @@ jobs:
           STALE_TITLES=(
             "[compliance/critical] CI Required ruleset bypass_actors drift detected"
             "[compliance/critical] CI Required ruleset required_status_checks drift detected"
+            "[compliance/critical] CI Required ruleset enforcement paused"
             "[ci/guard-broken] Ruleset bypass audit malfunctioned"
           )
           for title in "${STALE_TITLES[@]}"; do
