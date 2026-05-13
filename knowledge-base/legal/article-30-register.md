@@ -164,6 +164,22 @@ This is the canonical Register of Processing Activities maintained by **Jikigai*
 
 ---
 
+## Processing Activity 9 — cc-soleur-go Router In-Process MCP Tool Surface (Phase 1 status: not exposed)
+
+| Art. 30(1) limb | Entry |
+|---|---|
+| **(b) Purposes** | Recorded in advance per #2909 V2-13 Phase 1 (deny-by-default scaffolding). Phase 1 ships zero tool promotions; the legacy `agent-runner.ts startAgentSession` path retains the in-process `soleur_platform` MCP server, while the cc-soleur-go router (`cc-dispatcher.ts realSdkQueryFactory`) passes `mcpServers: readCcMcpAllowlist()` returning `{}` by default. Phase 2 (#3722, blocked-by Stage 6 #2939) tracks the actual promotion of 8 read-only Tier 1 candidates. Plausible tools (3) are PERMANENTLY blocked from the cc-router via `CC_ROUTER_TIER3_DENYLIST` (shared service-token cross-tenant credential by construction). |
+| **(c) Categories of data subjects** | End-users of the Web Platform (when Phase 2 promotion occurs). |
+| **(c) Categories of personal data** | **Phase 1: none — no tool surfaces personal data via cc-router.** Phase 2 candidates (per-tool, deferred to #3722 plan): **kb_share family** (user-authored KB entries, share tokens, share metadata); **conversations_lookup** (cross-conversation aggregation by `user_id` — closure-bound to requesting user); **GitHub tools (9)** — operator GitHub App installation tokens, issue bodies, commit author emails, repo metadata; **Plausible (3)** — PERMANENTLY blocked from cc-router. |
+| **Special categories** | None systematically. |
+| **Lawful basis** | Phase 1: N/A (nothing processed). Phase 2 candidates (per-family, deferred): kb_share + conversations_lookup → Art. 6(1)(b) contract; GitHub tools → Art. 6(1)(f) legitimate interest with balancing test documented at #3722 plan time. |
+| **(d) Recipients** | Phase 1: none. Phase 2 recipients (deferred): GitHub Inc (US sub-processor); Plausible Insights OÜ (EU sub-processor — but PERMANENTLY blocked from cc-router, listed for legacy-path completeness). |
+| **(e) Third-country transfers + safeguards** | Phase 1: none. Phase 2 (deferred): GitHub → DPF + SCCs Module 2 (US); Plausible → N/A if plausible.io EU-hosted, SCCs if self-hosted on US infra. |
+| **(f) Retention** | Phase 1: N/A. Phase 2: tied to underlying stores (`conversations`, `messages`, `kb_shares` — covered by retention policies of Processing Activities 1, 2, 4) and to third-party processor lifecycles (GitHub 60-day audit log; Plausible per their published policy). |
+| **(g) TOMs** | Phase 1: deny-by-default in code via `readCcMcpAllowlist()` (returns `{}` for empty env, throws on `CC_ROUTER_TIER3_DENYLIST` short-names); FR2 Sentry mirror at SDK iterator hook (`feature: "cc-mcp-tier"`) so unregistered-tool invocations are observable. Phase 2: per-tool TOMs documented at promotion time. |
+
+---
+
 ## Vendor / Sub-Processor Mapping (cross-cut of (d) + (e) + (g))
 
 | Vendor (role) | Region | DPA status | Transfer mechanism | Activities | Notes |
@@ -175,7 +191,8 @@ This is the canonical Register of Processing Activities maintained by **Jikigai*
 | **Resend Inc** (processor) | US | AUTO via ToS § 7 (verified 2026-04-13) | EU-US DPF + SCCs | (review-gate transactional email — adjunct to PA 5) | Transactional review-gate emails only — listed for completeness; not its own register activity because it is a downstream channel of PA 5's notification purpose. |
 | **Sentry (Functional Software GmbH)** (processor) | DE | SCCs (standard EU-region terms) | DE region, intra-EU | 8 | Error monitoring with user-context scrubbing. |
 | **Buttondown** (processor) | US | DPA in force (all tiers, free included) | SCCs M2 | 6 | Double opt-in newsletter. |
-| **GitHub Inc** (independent processor for repo / public-disclosure venue for CLAs) | US | Standard GitHub terms | DPF + SCCs | 7 | `cla-signatures` branch is public-by-design. |
+| **GitHub Inc** (independent processor for repo / public-disclosure venue for CLAs; sub-processor for cc-router MCP tool surface) | US | Standard GitHub terms; Customer DPA per `https://github.com/customer-terms/customer-data-protection-agreement` (#2909) | DPF + SCCs Module 2 | 7, 9 | `cla-signatures` branch is public-by-design (PA 7). cc-router scope (PA 9) Phase 1 status: not exposed — Phase 2 (#3722) tracks promotion of 9 GitHub MCP tools. |
+| **Plausible Insights OÜ** (sub-processor — legacy `agent-runner.ts` only; PERMANENTLY blocked from cc-router) | Estonia (plausible.io EU-hosted) — verify region at activation if self-hosted on US infra | AUTO via DPA at `https://plausible.io/dpa` (#2909 — pending operator verification) | N/A if EU-hosted; SCCs if US-hosted self-managed | 9 (legacy path only) | 3 tools (`plausible_create_site/add_goal/get_stats`) share a single backend `PLAUSIBLE_API_KEY`. Cross-tenant credential by construction — `CC_ROUTER_TIER3_DENYLIST` (`apps/web-platform/server/tool-tiers.ts`) permanently blocks router exposure. IP-pseudonymized event data per Plausible's published "no personal data" posture. |
 | **Anthropic PBC** (independent controller/processor — out of scope of this register for BYOK) | US | AUTO via Commercial Terms § C (DPA effective 2025-02-24; SCCs M2+3 + UK IDTA + Swiss Addendum) | DPF + SCCs M2+3 + UK IDTA + Swiss Addendum | — | In scope **only** for Jikigai-keyed Anthropic API surfaces (`claude-code-action` CI, compound-promotion-loop #2720). End-user BYOK plugin traffic is not intermediated by Jikigai (see privacy-policy.md §5.1). |
 
 ---
