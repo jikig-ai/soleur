@@ -234,8 +234,8 @@ jobs:
               ' \
             | grep -E '(log|logger)\.(error|warn|info|debug)' \
             | grep -E '\buserId\b|\buser_id\b' \
-            | grep -vE 'reportSilentFallback|warnSilentFallback|mirrorP0Deduped' \
-            | grep -vE 'userIdHash\b' \
+            | grep -vE '(reportSilentFallback|warnSilentFallback|mirrorP0Deduped)\s*\(' \
+            | grep -vE '\buserIdHash\s*:' \
             | grep -vE '^apps/web-platform/app/api/auth/github-resolve/callback/route\.ts:' \
             || true)
           if [[ -n "$OFFENDERS" ]]; then

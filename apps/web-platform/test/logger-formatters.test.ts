@@ -58,9 +58,11 @@ function makeLogger(opts: {
           } catch (err) {
             if (!formatterErrorReported) {
               formatterErrorReported = true;
+              const errStr =
+                err instanceof Error ? (err.stack ?? err.message) : String(err);
               console.warn(
                 "[logger] formatters.log threw; falling back to raw object",
-                err,
+                errStr,
               );
             }
             return obj;
@@ -152,7 +154,7 @@ describe("pino formatters.log rename hook", () => {
       expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[logger] formatters.log threw; falling back to raw object",
-        expect.any(Error),
+        expect.stringContaining("synthetic helper failure"),
       );
     });
   });

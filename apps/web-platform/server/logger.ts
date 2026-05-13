@@ -49,10 +49,16 @@ const logger = pino({
       } catch (err) {
         if (!formatterErrorReported) {
           formatterErrorReported = true;
+          // Serialise `err` to a primitive BEFORE handing it to `console.warn`.
+          // util.inspect would otherwise walk getters / Proxy traps on a
+          // caller-supplied Error, which can re-enter the logger and break
+          // the re-entrancy invariant the comment above (line 19-22) claims.
+          const errStr =
+            err instanceof Error ? (err.stack ?? err.message) : String(err);
           // eslint-disable-next-line no-console -- intentional one-time fail-safe
           console.warn(
             "[logger] formatters.log threw; falling back to raw object",
-            err,
+            errStr,
           );
         }
         return obj;

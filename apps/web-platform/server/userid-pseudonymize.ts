@@ -10,8 +10,14 @@ import { hashUserId } from "@/server/observability";
  *
  * Boundary invariants (do NOT widen without an explicit decision):
  * - Top-level only. Nested `{extra: {userId: "x"}}` shapes are NOT rewritten.
- *   This matches the 11 known direct call sites (verified at plan time);
- *   widening to nested requires a test fixture flip and ADR update.
+ *   At merge time the formatter covers all 61 direct call sites across
+ *   `apps/web-platform/{server,app}/**` (10 in `app/api/**` direct emit,
+ *   1 `app/api/auth/github-resolve/callback/route.ts:157` leave-and-cover,
+ *   ~50 in `server/**` via `createChildLogger` — pino inherits parent
+ *   `formatters.log` per `pino/lib/proto.js:102,142`). The plan-time
+ *   inventory captured 11; the corrected baseline is recorded in
+ *   `knowledge-base/project/specs/feat-pino-userid-redaction-3698/tasks.md` §5.7.2.
+ *   Widening to nested requires a test fixture flip and ADR update.
  * - Null/undefined values resolve to the `"pepper_unset_null"` sentinel —
  *   mirrors `observability.ts:hashExtraUserId` (L48-55) so the empty-string
  *   collision class doesn't occur.
