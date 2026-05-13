@@ -96,8 +96,26 @@ common root causes:
    secret to the prod Supabase project URL and trigger a redeploy.
 
 2. **`SUPABASE_AUTH_EXTERNAL_<PROVIDER>_REDIRECT_URI` allow-list drift
-   in Supabase Auth.** Check the Supabase dashboard auth settings; the
-   redirect URI list must contain `https://app.soleur.ai/callback`.
+   in Supabase Auth.** Pull the live auth config from the Management
+   API and grep for the callback (no dashboard-watching per
+   `hr-no-dashboard-eyeball-pull-data-yourself`):
+
+   ```bash
+   SUPA_TOKEN=$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd --plain)
+   REF=$(doppler secrets get SUPABASE_PROJECT_REF -p soleur -c prd --plain)
+   curl -sS -H "Authorization: Bearer $SUPA_TOKEN" \
+     "https://api.supabase.com/v1/projects/$REF/config/auth" \
+     | jq -r '.uri_allow_list' \
+     | tr ',' '\n' \
+     | grep -q '^https://app\.soleur\.ai/callback$' \
+     && echo "PASS: callback URI present" \
+     || echo "FAIL: callback URI missing from uri_allow_list"
+   ```
+
+   Remediation on FAIL: `PATCH /v1/projects/$REF/config/auth` with the
+   merged `uri_allow_list` value (do NOT rely on the dashboard UI —
+   capture the change as a Terraform diff against the
+   `supabase_auth_config` resource if managed in IaC).
 
 ### `settings_http`
 
