@@ -145,7 +145,7 @@ Verification only. No mutation. If any check fails, escalate to a fresh remediat
 
   Expect: a Hetzner public IPv4. If `terraform output` errors, the `.terraform/` cache is missing or backend creds are wrong — fix before proceeding.
 
-- [x] **Compute local SHAs for all 6 trigger inputs** (NOTE: 6, not 5 — #3706 added `ci-deploy-wrapper.sh`):
+- [x] **Compute local SHAs for the 5 file-shaped trigger inputs** (the 6th input is `local.hooks_json`, which is template-rendered and verified via permissions in step 6 — see AC reconciliation note below):
 
   ```bash
   cd apps/web-platform/infra
@@ -210,11 +210,11 @@ Superseded by #3712, which carried the same underlying drift state and was resol
 
 **Verification (Phase 1 of `knowledge-base/project/plans/2026-05-13-fix-terraform-drift-deploy-pipeline-fix-3620-plan.md`):**
 
-- 6 trigger-file SHAs on prod match local worktree exactly (per #3712 comment).
+- 5 SHA-compared file inputs (`ci-deploy.sh`, `ci-deploy-wrapper.sh`, `webhook.service`, `cat-deploy-state.sh`, `canary-bundle-claim-check.sh`) match local worktree exactly; 6th trigger input `local.hooks_json` is permission-checked (`stat /etc/webhook/hooks.json` → `640 root:deploy`) since it's template-rendered, not statically file-hashed.
 - `systemctl is-active webhook` → `active`.
 - `terraform plan` no longer reports drift on `terraform_data.deploy_pipeline_fix`.
 
-This is the 11th+ occurrence of the documented recurring class (`knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md`). The drift IS the feature working: PR #3706 modified `ci-deploy.sh` AND added `ci-deploy-wrapper.sh` to `triggers_replace` at `server.tf:222`; the apply re-provisioned the resulting 6-file bundle to the production host.
+This is the 11th+ occurrence of the documented recurring class (`knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md`). The drift IS the feature working: PR #3706 modified `ci-deploy.sh` AND added `ci-deploy-wrapper.sh` to `triggers_replace` at `server.tf:222`; the apply re-provisioned the resulting 6-input bundle to the production host.
 
 No new structural fix is filed against #3620. The durable fix for the auto-apply path's SSH-allowlist failure (which is why #3712 needed manual operator action) is tracked at #3723 (self-hosted GH Actions runner).
 
@@ -243,7 +243,7 @@ EOF
   git push -u origin feat-one-shot-3620
   ```
 
-- [ ] Open a draft PR with `Ref #3620` (NOT `Closes`, because #3620 is closed manually in Phase 2 via `gh issue close` after verification):
+- [x] Draft PR #3735 exists (created by `/soleur:one-shot` Step 0c). Title/body to be finalized by `/soleur:ship` Phase 3 with `Ref #3620 / Ref #3712` body (NOT `Closes`, because #3620 is closed in Phase 2 via `gh issue close` before merge):
 
   ```bash
   gh pr create --draft --base main --head feat-one-shot-3620 \
@@ -251,7 +251,7 @@ EOF
     --body "Documents the 11th+ occurrence of the recurring \`terraform_data.deploy_pipeline_fix\` drift class. The underlying apply already landed via #3712 on 2026-05-13 10:21 UTC. This PR captures the verification ritual + the close-out path so the cycle is on the record. Ref #3620. Ref #3712."
   ```
 
-- [ ] No `## Changelog` section needed beyond a `semver:patch` label (docs-only). Mark ready for review after Phase 1 verification passes.
+- [x] No `## Changelog` section needed beyond a `semver:patch` label (docs-only). Mark ready for review after Phase 1 verification passes — handled by `/soleur:ship`.
 
 ## Alternative Approaches Considered
 
