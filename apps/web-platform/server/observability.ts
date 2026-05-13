@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
+import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 
 const SENTRY_USERID_PEPPER = process.env.SENTRY_USERID_PEPPER;
 
@@ -38,20 +39,22 @@ export function hashUserId(userId: string, pepper = SENTRY_USERID_PEPPER): strin
 }
 
 /**
- * Rename `userId` → `userIdHash` (via `hashUserId`) on an emit `extra`
- * payload. Both silent-fallback helpers share this so the rename signal
- * lives in one place. Returns `extra` unchanged when no `userId` key is
- * present. Null/undefined `userId` values resolve to the sentinel
- * `"pepper_unset_null"` to avoid hashing the empty-string literal — which
- * would collide every nullable-userId emit under a single hash.
+ * Rename `userId` → `userIdHash` on an emit `extra` payload. Delegates to
+ * the shared `renameUserIdToHash` walker in `./userid-pseudonymize` so the
+ * rename signal lives in one place across the silent-fallback helpers, the
+ * pino `formatters.log` hook (`./logger`), and any future boundary that
+ * needs the same transform. Architectural contract: ADR-028.
+ *
+ * Returns `extra` unchanged when no `userId` key is present. Null/undefined
+ * `userId` values resolve to the sentinel `"pepper_unset_null"` to avoid
+ * hashing the empty-string literal — which would collide every
+ * nullable-userId emit under a single hash.
  */
 function hashExtraUserId(
   extra: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  if (!extra || typeof extra !== "object" || !("userId" in extra)) return extra;
-  const { userId: rawUserId, ...rest } = extra as { userId?: unknown } & Record<string, unknown>;
-  if (rawUserId == null) return { ...rest, userIdHash: "pepper_unset_null" };
-  return { ...rest, userIdHash: hashUserId(String(rawUserId)) };
+  if (!extra || typeof extra !== "object") return extra;
+  return renameUserIdToHash(extra);
 }
 
 /**
