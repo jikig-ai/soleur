@@ -10,16 +10,25 @@
  * runtime is in devDependencies; the operator already has Bun locally per
  * the existing TS-scripts pattern in this directory):
  *
- *   doppler run -p soleur -c prd -- npm run -w apps/web-platform hash-user-id <uuid>
+ *   cd apps/web-platform
+ *   doppler run -p soleur -c prd -- npm run --silent hash-user-id -- <uuid>
+ *
+ * Note: the invocation cd's into `apps/web-platform/` first (matching the
+ * sibling `verify-stripe-prices.ts` pattern). The repo root's package.json
+ * does not declare `workspaces:`, so `npm run -w apps/web-platform ...`
+ * from the root FAILS with "No workspaces found" — do not use that form.
+ * The explicit `--` separator between the npm-script name and the
+ * positional argument is load-bearing — without it, npm parses `<uuid>` as
+ * a candidate flag rather than argv to the bun script. `--silent` is bound
+ * to `npm run` and suppresses the wrapper banner so the captured value is
+ * pure 64-hex.
  *
  * Hardened operator pattern (see `recover-userid-from-pino-stdout.md`):
  *
- *   HASH=$(doppler run -p soleur -c prd -- npm run -w apps/web-platform hash-user-id $UUID --silent)
+ *   cd apps/web-platform
+ *   HASH=$(doppler run -p soleur -c prd -- npm run --silent hash-user-id -- "$UUID")
  *   ssh root@<prod-ip> "docker logs soleur-web-platform 2>&1 \
  *     | grep -F 'userIdHash' | grep -F \"$HASH\""
- *
- * The `--silent` flag suppresses the npm wrapper banner so $HASH captures only
- * the hex output.
  *
  * Exit codes:
  *   0  — hash printed to stdout (64 hex chars + newline)
@@ -44,14 +53,14 @@ const userId = process.argv[2];
 if (!userId) {
   fail(
     "usage: bun scripts/hash-user-id.ts <uuid>\n" +
-      "       (typical invocation: doppler run -p soleur -c prd -- npm run -w apps/web-platform hash-user-id <uuid>)",
+      "       (typical invocation, from apps/web-platform/: doppler run -p soleur -c prd -- npm run --silent hash-user-id -- <uuid>)",
   );
 }
 
 if (!process.env.SENTRY_USERID_PEPPER) {
   fail(
     "pepper not set: SENTRY_USERID_PEPPER env var required.\n" +
-      "Run via `doppler run -p soleur -c prd -- npm run -w apps/web-platform hash-user-id <uuid>` — never `export SENTRY_USERID_PEPPER=...` outside doppler run.",
+      "From apps/web-platform/, run `doppler run -p soleur -c prd -- npm run --silent hash-user-id -- <uuid>` — never `export SENTRY_USERID_PEPPER=...` outside doppler run.",
   );
 }
 

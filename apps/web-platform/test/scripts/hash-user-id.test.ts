@@ -28,7 +28,13 @@ function runScript(
   const result = spawnSync("bun", [SCRIPT_PATH, ...args], {
     env: { ...process.env, ...env, PATH: process.env.PATH },
     encoding: "utf8",
+    timeout: 10_000,
   });
+  if (result.error) {
+    throw new Error(
+      `bun spawn failed (is bun on PATH?): ${result.error.message}`,
+    );
+  }
   return {
     stdout: result.stdout?.toString() ?? "",
     stderr: result.stderr?.toString() ?? "",
@@ -38,6 +44,7 @@ function runScript(
 
 describe("scripts/hash-user-id — operator CLI", () => {
   test("happy path: emits 64-hex hash matching reference HMAC", () => {
+    // nosemgrep: javascript.lang.security.audit.hardcoded-hmac-key.hardcoded-hmac-key -- FIXTURE_PEPPER is a synthesized test fixture, not a real key
     const expected = createHmac("sha256", FIXTURE_PEPPER)
       .update(FIXTURE_UUID)
       .digest("hex");

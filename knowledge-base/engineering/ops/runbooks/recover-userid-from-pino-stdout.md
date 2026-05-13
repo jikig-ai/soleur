@@ -52,17 +52,37 @@ This runbook covers two operator flows:
    pepper enters the script via Doppler's env injection and never appears
    in shell history.
 
+   First, pre-check that the Doppler context is the prd config (not dev) —
+   a wrong-config invocation produces a syntactically-valid 64-hex hash
+   under the dev pepper that will match zero lines in prod docker logs,
+   which is indistinguishable from "user has no activity":
+
    ```bash
+   doppler run -p soleur -c prd -- printenv DOPPLER_CONFIG | grep -qx prd \
+     || { echo "Doppler context is not -c prd; aborting" >&2; exit 1; }
+   ```
+
+   Then compute the hash. The operator CLI must be invoked from
+   `apps/web-platform/` (the repo root does not declare
+   `workspaces:`, so `npm run -w apps/web-platform ...` from the root
+   FAILS with "No workspaces found"). The explicit `--` separator
+   between the npm-script name and the positional UUID is load-bearing
+   — without it, npm's wrapper parses `$UUID` as a candidate flag
+   rather than argv:
+
+   ```bash
+   cd apps/web-platform
    HASH=$(doppler run -p soleur -c prd -- \
-     npm run -w apps/web-platform hash-user-id --silent "$UUID")
+     npm run --silent hash-user-id -- "$UUID")
    echo "$HASH" | grep -E '^[0-9a-f]{64}$' || {
      echo "hash-user-id failed or returned non-hex output" >&2
      exit 1
    }
    ```
 
-   The `--silent` flag suppresses npm's wrapper banner so `$HASH` captures
-   only the 64-hex string.
+   The `--silent` flag is bound to `npm run` (not to the script) and
+   suppresses the wrapper banner so `$HASH` captures only the 64-hex
+   string.
 
 3. Grep the docker logs on the prod host. Use the **hardened double-grep**
    pattern to anchor on the `userIdHash` key prefix and avoid
@@ -80,6 +100,15 @@ This runbook covers two operator flows:
    files. The first grep narrows to lines emitted by `formatters.log()`;
    the second narrows to the operator's specific user.
 
+   **Anti-collision contract:** the double-grep is correct because
+   `userIdHash` is currently the only 64-hex-shaped pino field emitted by
+   `formatters.log()` (`apps/web-platform/server/userid-pseudonymize.ts`).
+   Any future pino-emitted 64-hex field (a content digest, bundle SHA,
+   request hash, etc.) must carry its own unique JSON-key prefix or this
+   runbook's grep target must be tightened to anchor on
+   `"userIdHash":"<hash>"` (full key-value pair). If you add a new
+   64-hex emission, update this section in the same PR.
+
 ### Load-bearing primitive distinction
 
 The CLI uses `hashUserId` (HMAC-SHA256 keyed by `SENTRY_USERID_PEPPER`) —
@@ -96,7 +125,7 @@ two-primitive separation.
 | `usage: bun scripts/hash-user-id.ts <uuid>` to stderr | Missing argv | Pass the UUID as the only positional. |
 | `pepper not set: SENTRY_USERID_PEPPER env var required` | Operator forgot to wrap in `doppler run -p soleur -c prd` | Re-run inside `doppler run`. Never `export SENTRY_USERID_PEPPER=` outside doppler. |
 | `hash-user-id: contract drift detected` | A future change to `hashUserId` widened the return shape (e.g., added a prefix) | File a P0 issue against `apps/web-platform/server/observability.ts` — the operator boundary contract is broken. |
-| Zero matches from `docker logs … grep` | (a) User has no pino activity in the rolling window (see PA8 §(f) — 30 MB rolling cap), OR (b) wrong pepper config (`-c dev` vs `-c prd`) | Verify Doppler config (`-c prd`); confirm the user authenticated recently; check rotated log files via `docker inspect soleur-web-platform | jq '.[0].LogPath'`. |
+| Zero matches from `docker logs … grep` | (a) User has no pino activity in the rolling window (see PA8 §(f) — 30 MB rolling cap), OR (b) wrong pepper config (`-c dev` vs `-c prd`), OR (c) `SENTRY_USERID_PEPPER` was rotated after the target log line was written — the pre-rotation pepper is required to reproduce the historical hash | Re-run the Doppler pre-check (step 2 above) to confirm `-c prd`; confirm the user authenticated recently. For (c): `hashUserId(userId, pepper?)` (`apps/web-platform/server/observability.ts`) accepts an optional pepper override — at the first rotation, wire a `SENTRY_USERID_PEPPER_PREVIOUS` Doppler key and extend the CLI with a `--prior-pepper` opt; until then, pre-rotation lines are un-grep-able by design (acceptable trade-off — the hash window aligns with the 30 MB rolling cap anyway). Check rotated log files via `docker inspect soleur-web-platform \| jq '.[0].LogPath'`. |
 | `kex_exchange_identification` on SSH | Operator IP not in `ADMIN_IPS` | Run `/soleur:admin-ip-refresh`; if still failing, see `admin-ip-drift.md`. |
 
 ## Flow 2 — PA8 §(f) retention pin (one-time measurement)
@@ -156,6 +185,13 @@ the PA8 §(f) row and this runbook in the same PR.
    # → effective retention (days) ≈ 30 MB / (bytes-per-day / 1_048_576)
    ```
 
+   **Agent execution note:** an agent invoked once cannot block for 16
+   hours between the three samples. Schedule the T+8h and T+16h captures
+   via `ScheduleWakeup` (delaySeconds=28800 each) or the equivalent cron
+   primitive; a human operator runs them inline. Each wake-up is a
+   single `du -sb` invocation — the agent reads the prior captures from
+   conversation state on resume.
+
 4. **Confirm no off-host shippers.**
 
    ```bash
@@ -188,7 +224,7 @@ After the follow-up PR merges:
 
 ```bash
 gh issue close 3711 \
-  --reason completed \
+  --reason "completed" \
   --comment "Operator-side §(f) measurement complete; observed <X> MB/day → ~<Y> days. Follow-up PR #<M> applied the value."
 ```
 
