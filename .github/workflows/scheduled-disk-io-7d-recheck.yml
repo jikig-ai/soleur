@@ -61,11 +61,18 @@ jobs:
 
       - name: Pull pg_stat_statements top-10 + Disk IO Budget snapshot
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_SCHEDULED }}
+          # `prd` Doppler config holds the SUPABASE_ACCESS_TOKEN this step needs.
+          # DOPPLER_TOKEN_SCHEDULED is scoped to the `prd_scheduled` config only
+          # (matches the ux-audit + community-monitor pattern); using it with
+          # `-c prd` was the 2026-05-07/2026-05-13 failure mode. Use the
+          # broader-scope DOPPLER_TOKEN_PRD (same pattern as
+          # web-platform-release.yml). The broader blast radius is acceptable
+          # for a self-deleting --once workflow run by maintainer dispatch.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
           if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
-            echo "::warning::DOPPLER_TOKEN_SCHEDULED secret not set; cannot fetch SUPABASE_ACCESS_TOKEN"
+            echo "::warning::DOPPLER_TOKEN_PRD secret not set; cannot fetch SUPABASE_ACCESS_TOKEN"
             exit 1
           fi
           SUPA_TOKEN=$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd --plain)
