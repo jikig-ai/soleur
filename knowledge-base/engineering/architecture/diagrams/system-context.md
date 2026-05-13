@@ -1,10 +1,12 @@
 # Soleur Platform — System Context (C4 Level 1)
 
-Generated: 2026-03-27
+Generated: 2026-05-13 (visual redesign per SOL-40, was 2026-03-27)
 
 ```mermaid
 C4Context
 title System Context diagram for Soleur Platform
+
+UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
 
 Person(founder, "Founder", "Solo founder using Soleur as their AI organization")
 
@@ -14,27 +16,33 @@ Enterprise_Boundary(b0, "Soleur Platform") {
     SystemDb(supabase, "Supabase", "Auth, PostgreSQL database, and file storage")
 }
 
-System_Ext(anthropic, "Anthropic API", "Claude LLM for agent reasoning and tool use")
-System_Ext(github, "GitHub", "Source control, CI/CD, issue tracking, and releases")
 System_Ext(cloudflare, "Cloudflare", "DNS, CDN, R2 storage, and zero-trust tunnel")
 System_Ext(doppler, "Doppler", "Centralized secrets management with runtime injection")
-System_Ext(discord, "Discord", "Community notifications and release announcements")
-System_Ext(stripe, "Stripe", "Payment processing and subscription billing")
-System_Ext(plausible, "Plausible Analytics", "Privacy-focused website analytics")
+System_Ext(anthropic, "Anthropic API", "Claude LLM for agent reasoning and tool use")
+System_Ext(github, "GitHub", "Source control, CI/CD, issue tracking, and releases")
+System_Ext(thirdparty, "Third-Party Services", "Discord + Stripe + Plausible — see Details")
 
 Rel(founder, webapp, "Interacts via browser", "HTTPS")
 Rel(webapp, engine, "Thin view/control layer", "WebSocket")
 Rel(webapp, supabase, "Auth and data", "HTTPS")
-Rel(webapp, stripe, "Checkout and billing", "HTTPS")
-Rel(webapp, plausible, "Page view events", "JS snippet")
-Rel(engine, anthropic, "LLM calls with BYOK keys", "HTTPS")
-Rel(engine, github, "Git operations and CI", "HTTPS/SSH")
 Rel(engine, supabase, "Sessions and encrypted keys", "HTTPS")
-Rel(engine, discord, "Notifications", "Webhook")
 Rel(cloudflare, webapp, "Tunnel, DNS, CDN", "HTTPS")
 Rel(doppler, engine, "Runtime secrets", "CLI")
-Rel(stripe, webapp, "Payment webhooks", "HTTPS")
+Rel(engine, anthropic, "LLM calls with BYOK keys", "HTTPS")
+Rel(engine, github, "Git operations and CI", "HTTPS/SSH")
+BiRel(webapp, thirdparty, "Checkout / webhooks / page events", "HTTPS")
+Rel(engine, thirdparty, "Notifications", "Webhook")
 ```
+
+## Details
+
+**`thirdparty` group contains** (original Mermaid aliases preserved for grep-ability):
+
+- `discord` — Discord — community notifications and release announcements
+- `stripe` — Stripe — payment processing and subscription billing (test mode)
+- `plausible` — Plausible Analytics — privacy-focused page-view tracking
+
+All three are external SaaS systems with low individual visual signal at the system-context level. The `BiRel(webapp, thirdparty)` covers Stripe checkout + Stripe webhooks + Plausible JS events. The `Rel(engine, thirdparty)` covers Discord webhook notifications.
 
 ## Notes
 
