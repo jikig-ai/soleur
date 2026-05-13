@@ -36,22 +36,22 @@ Per AGENTS.md `wg-after-merging-a-pr-that-adds-or-modifies` and the parent plan'
 - **NOT** shipping #3694 (`e2e --shard=2`). Hard 1-week gate unmet.
 - **NOT** introducing `bun test --max-pool-size` or any in-process parallelism — that is a downstream re-evaluation only unlocked if this probe shows the FPE-class is gone.
 - **NOT** modifying `scripts/test-all.sh`'s sequential test-runner logic. The sequential isolation remains as defense-in-depth even if the version bump is clean.
-- **NOT** editing any CI workflow file. All 6 workflows that read `.bun-version` use `bun-version-file: ".bun-version"` and pick up the bump automatically.
+- **NOT** editing `scripts/test-all.sh` or `.github/workflows/ci.yml`. The 5 workflows already using `bun-version-file: ".bun-version"` pick up the bump automatically. (Review-time addendum: this PR also pins `skill-security-scan-corpus.yml` and `skill-security-scan-pr-trailer.yml` from `bun-version: latest` to the file pin per review F1 — these 2 workflows had been silently floating to whatever Bun publishes as `latest`.)
 - **NOT** modifying `apps/web-platform`, `apps/telegram-bridge` (does not exist), `plugins/soleur/`, or any other code outside `.bun-version` itself + the learnings update.
 
 ## Functional Requirements
 
 - **FR1** — Single commit. Bumps `.bun-version` 1.3.11 → 1.3.14.
 - **FR2** — CI runs the existing `test-bun` shard against 1.3.14 with no workflow edits required.
-- **FR3** — On green: keep the bump and append a §`2026-05-12 probe: 1.3.14 clean` block to `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` documenting the outcome, runner OS, and which surfaces passed.
-- **FR4** — On FPE-class regression: revert `.bun-version` to 1.3.11 (amend the single commit), and append a §`2026-05-12 probe: 1.3.14 FPE` block to the same learnings file with the failing surface, crash signature, and revert decision. The PR still merges (the learning capture is the deliverable).
+- **FR3** — On green: keep the bump and append a `## 2026-05-13 probe: 1.3.14 clean` block to `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` documenting the outcome, runner OS, and which surfaces passed.
+- **FR4** — On FPE-class regression: revert `.bun-version` to 1.3.11 (amend the single commit), and append a `## 2026-05-13 probe: 1.3.14 FPE` block to the same learnings file with the failing surface, crash signature, and revert decision. The PR still merges (the learning capture is the deliverable).
 - **FR5** — Cross-link this PR back to issue #3692 via `Closes #3692` in body.
 - **FR6** — #3693 and #3694 remain open with comments noting their re-evaluation triggers.
 
 ## Technical Requirements
 
 - **TR1** — `.bun-version` MUST contain exactly `1.3.14\n` (trailing newline) on green. Reverted to `1.3.11\n` on failure. The file is consumed by `scripts/test-all.sh`'s version-check guard (`expected=$(tr -d '[:space:]' < .bun-version)`) — whitespace handling is already robust.
-- **TR2** — No edits to `.github/workflows/*.yml`. The six workflow files (`ci.yml`, `main-health-monitor.yml`, `scheduled-bug-fixer.yml`, `scheduled-ship-merge.yml`, `scheduled-ux-audit.yml`, `skill-security-scan-corpus.yml`, `skill-security-scan-pr-trailer.yml`) all reference the file via `bun-version-file: ".bun-version"`.
+- **TR2** — Of the 7 workflow files in `.github/workflows/` that touch Bun, 5 already used `bun-version-file: ".bun-version"` pre-PR (`ci.yml`, `main-health-monitor.yml`, `scheduled-bug-fixer.yml`, `scheduled-ship-merge.yml`, `scheduled-ux-audit.yml`). The remaining 2 (`skill-security-scan-corpus.yml`, `skill-security-scan-pr-trailer.yml`) pinned `bun-version: latest`; this PR aligns them to the file pin per review F1.
 - **TR3** — No edits to `scripts/test-all.sh`. The sequential test-runner logic remains as defense-in-depth.
 - **TR4** — Learnings update preserves the existing taxonomy and adds a single dated section. Do not rewrite the original analysis.
 - **TR5** — FPE-class detection criteria: any of (a) job exit non-zero with `Floating point error` in logs, (b) job exit non-zero with `panic:` from Bun, (c) any of the named bun-test surfaces fails with no Vitest/test-assertion explanation (i.e., crash-class, not test-class). Test-level failures unrelated to the runner do NOT trigger the revert protocol — they are a separate bug surface.

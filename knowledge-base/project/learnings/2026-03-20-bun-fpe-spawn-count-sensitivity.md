@@ -64,7 +64,7 @@ When Bun's test runner discovers files via directory traversal, it runs them in 
 
 ## 2026-05-13 probe: 1.3.14 clean
 
-Bumped `.bun-version` 1.3.11 → 1.3.14 in PR #3709 (commit `a2487053`). All 5 `test-bun` shard invocations green on GitHub-hosted `ubuntu-latest` runner (CI run [25791178419](https://github.com/jikig-ai/soleur/actions/runs/25791178419), `test-bun` job [75756842167](https://github.com/jikig-ai/soleur/actions/runs/25791178419/job/75756842167), 51s wall-clock):
+Bumped `.bun-version` 1.3.11 → 1.3.14 in PR #3709. All 5 `test-bun` shard invocations green on GitHub-hosted `ubuntu-latest` runner (CI run [25791178419](https://github.com/jikig-ai/soleur/actions/runs/25791178419), `test-bun` job [75756842167](https://github.com/jikig-ai/soleur/actions/runs/25791178419/job/75756842167), 51s wall-clock):
 
 - `bun test test/content-publisher.test.ts` — green
 - `bun test test/x-community.test.ts` — green

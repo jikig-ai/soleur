@@ -2,6 +2,7 @@
 title: "Bun version probe for FPE-class re-evaluation (#3692)"
 date: 2026-05-12
 issue: 3692
+deferred_issues: [3693, 3694]
 pr: 3709
 branch: feat-ci-followups-scoping
 worktree: .worktrees/feat-ci-followups-scoping
@@ -10,7 +11,7 @@ brainstorm: knowledge-base/project/brainstorms/2026-05-12-ci-3672-followups-scop
 parent_plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
 lane: single-domain
 brand_survival_threshold: none
-status: Draft
+status: Executed-4a (green, 2026-05-13)
 ---
 
 # Plan: Bun version probe for FPE-class re-evaluation
@@ -41,7 +42,7 @@ This is a probe, not a unilateral version bump commitment. The sequential test r
 ## Files to Edit
 
 - `.bun-version` — `1.3.11` → `1.3.14`.
-- `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` — append one `## 2026-05-12 probe: 1.3.14 <outcome>` section.
+- `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` — append one `## 2026-05-13 probe: 1.3.14 <outcome>` section.
 
 ## Files to Create
 
@@ -83,7 +84,7 @@ Watch the PR's check run (`gh run watch <run-id> --exit-status` for wall-clock b
 
 3. **Inconclusive** — `test-bun` test-level failure (Vitest assertion, no FPE grep match) OR any non-`test-bun` shard failure (`test-webplat`, `test-scripts`, `web-platform-build`, `e2e`).
 
-   Disposition: STOP work on `.bun-version`. Leave the file at `1.3.14` and the PR in draft. Open a comment on PR #3709 with the failing shard + the operator's read. Append a `## 2026-05-12 probe: 1.3.14 inconclusive` section to the learning file describing the failure mode. Do NOT auto-revert and do NOT mark ready — the probe is paused until the unrelated red is understood. Probe re-runs once the unrelated red is fixed (force-push amend OK, same fallback as 4b).
+   Disposition: STOP work on `.bun-version`. Leave the file at `1.3.14` and the PR in draft. Open a comment on PR #3709 with the failing shard + the operator's read. Append a `## 2026-05-13 probe: 1.3.14 inconclusive` section to the learning file describing the failure mode. Do NOT auto-revert and do NOT mark ready — the probe is paused until the unrelated red is understood. Probe re-runs once the unrelated red is fixed (force-push amend OK, same fallback as 4b).
 
 ### Phase 4a — Green outcome
 
@@ -92,7 +93,7 @@ Amend the Phase 2 commit to fold the learnings append into the same commit (pres
 ```bash
 cat >> knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md <<'EOF'
 
-## 2026-05-12 probe: 1.3.14 clean
+## 2026-05-13 probe: 1.3.14 clean
 
 Bumped `.bun-version` 1.3.11 → 1.3.14 in PR #3709. All 5 `test-bun` shard invocations green on Ubuntu 22.04 GitHub-hosted runner. Sequential runner kept as defense-in-depth — one green probe is not proof of class elimination for combined-suite execution. Next probe target: next minor bump.
 EOF
@@ -110,7 +111,7 @@ Amend the Phase 2 commit to (a) revert `.bun-version` and (b) append the failure
 echo "1.3.11" > .bun-version
 cat >> knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md <<'EOF'
 
-## 2026-05-12 probe: 1.3.14 FPE class still live
+## 2026-05-13 probe: 1.3.14 FPE class still live
 
 Bumped `.bun-version` 1.3.11 → 1.3.14 in PR #3709. FPE-class fired on <surface(s)>:
 
@@ -181,7 +182,7 @@ The probe IS the test — signal lives in CI on PR #3709's `test-bun` shard (Ubu
 
 ## Risks
 
-1. **Parallel uncontrolled exposure surface.** `skill-security-scan-corpus.yml:38` and `skill-security-scan-pr-trailer.yml:51` already pin `bun-version: latest` — they have been running on Bun 1.3.14 (or whatever `setup-bun` resolves as `latest`) on every workflow fire, independent of this probe. If FPE class still fires on 1.3.14, those workflows are already silently exposed. Out of scope here — file a follow-up to align them with the `.bun-version` pin only if this probe surfaces an FPE outcome (then the floating pin becomes a CVE-shaped risk). On green, no follow-up needed.
+1. **Parallel uncontrolled exposure surface — RESOLVED inline at review time.** `skill-security-scan-corpus.yml:38` and `skill-security-scan-pr-trailer.yml:51` previously pinned `bun-version: latest`. Original plan said "out of scope; file a follow-up only on FPE outcome." Review pass (security-sentinel F1, 2026-05-13) contested that framing on stronger grounds: Bun 1.3.14 ships concrete memory-safety fixes (HTTP/2 UAF, TLS UAFs, MySQL heap overflow, `crypto.randomFill` bounds), and the security-scanning workflows specifically are perverse to leave floating. Cost of fix: 4 lines × 2 files. Fixed inline; both workflows now use `bun-version-file: ".bun-version"`.
 
 2. **Force-push race.** Phase 4 amends + `--force-with-lease`. Mitigated by the lease flag and by the fact that PR #3709 is single-author. Concrete fallback documented in Phase 4b for the lease-rejected case.
 

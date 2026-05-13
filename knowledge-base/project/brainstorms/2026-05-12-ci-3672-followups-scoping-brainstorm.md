@@ -41,13 +41,14 @@ The original framing in the feature description ("shared CI surface, possible or
 | #3693 disposition | **[Updated 2026-05-12]** Defer; restore parent plan's conditional trigger | Re-open with plan-time discovery note. Re-evaluate when `test-webplat` shard wall-clock data exists post-#3672 (matrix shard timings are emitted via `TEST_TIMING_LOG`). |
 | #3694 disposition | Defer to own PR | Honors explicit ≥1-week post-#3672 stability gate (issue body). |
 | Probe result handling | If FPE no longer fires on 1.3.14: keep `.bun-version` at 1.3.14, record finding in learnings, unlock `--max-pool-size` discussion for future work. If FPE still fires: revert `.bun-version` to 1.3.11 in the same commit and record the failing patch. | Probe is a measurement, not a unilateral version bump commitment. |
+| Probe target version | **[Updated 2026-05-13]** Retargeted 1.3.13 → 1.3.14 after `npm view bun@latest version` returned 1.3.14 at work-skill execution time (precondition drift between plan-write and execution). | Phase 1 step 2 of the plan covers this drift path; retarget shipped as commit `7dd3950a`. |
 | Regression-signal protection | Single-commit PR; full CI before merge | Addresses user-impact concern from Phase 0.1 (regression masked, slow feedback). Probe-only scope has the smallest possible blast radius. |
 
 ## Open Questions
 
-- **Probe revert protocol:** If `bun test plugins/soleur/` (~25 .test.ts) or `bun test test/` (~3 named) re-triggers FPE on 1.3.11, do we leave `.bun-version` at 1.3.5 or fall back to a stable patch between 1.3.5 and 1.3.11? Plan skill should make this decision based on Bun's changelog scan.
-- **Webplat sub-directory shape:** Issue #3693 suggests `auth/`, `kb/`, `sandbox/` as example sub-dirs. Actual sub-suite boundaries should reflect cohesion in the current 20 `.test.ts` files (`accept-terms`, `agent-env`, `bash-sandbox`, `byok`, `callback`, `csp`, `kb-*`, `middleware`, `sandbox*`, `security-headers`, `share-*`, `shared-*`, `tc-version`). Plan-time decision.
-- **#3694 re-evaluation timer:** Track via a calendar entry / scheduled check rather than waiting for ad-hoc memory.
+- **Probe revert protocol:** **[Resolved 2026-05-12 — plan Phase 4b].** Plan defined the revert protocol (amend `.bun-version` back to 1.3.11 in the same commit, record failing patch in learnings, file next-probe issue). Did not fire on this probe (1.3.14 was clean).
+- **Webplat sub-directory shape:** **[Deferred → #3693].** Plan-time discovery surfaced 355 top-level files in `apps/web-platform/test/`. Decision deferred to the next pickup of #3693; the three scoping options (minimal / cluster / full refactor) are captured in the table below.
+- **#3694 re-evaluation timer:** **[Deferred → #3694].** Earliest re-evaluation 2026-05-19 per #3694's "≥1 week post-#3672 stability" gate; tracking via the issue comment on #3694.
 
 ## Approaches Considered
 

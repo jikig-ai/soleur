@@ -35,7 +35,7 @@ brand_survival_threshold: none
 
 ## Phase 4a — Green outcome
 
-- [ ] 4a.1 Append `## 2026-05-12 probe: 1.3.14 clean` section to `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` using the plan's template.
+- [ ] 4a.1 Append `## 2026-05-13 probe: 1.3.14 clean` section to `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` using the plan's template.
 - [ ] 4a.2 `git commit --amend --no-edit`.
 - [ ] 4a.3 `git push --force-with-lease`.
 - [ ] 4a.4 Mark PR #3709 ready.
@@ -43,7 +43,7 @@ brand_survival_threshold: none
 ## Phase 4b — FPE outcome
 
 - [ ] 4b.1 `echo "1.3.11" > .bun-version`.
-- [ ] 4b.2 Append `## 2026-05-12 probe: 1.3.14 FPE class still live` section to the FPE learning file with full grep match + job URL + runner OS.
+- [ ] 4b.2 Append `## 2026-05-13 probe: 1.3.14 FPE class still live` section to the FPE learning file with full grep match + job URL + runner OS.
 - [ ] 4b.3 `git commit --amend --no-edit`.
 - [ ] 4b.4 `git push --force-with-lease`. If lease rejects, apply fallback from plan Phase 4b (two-commit shape).
 - [ ] 4b.5 File next-probe issue via the `gh issue create` invocation in plan Phase 4b.
@@ -51,7 +51,7 @@ brand_survival_threshold: none
 
 ## Phase 4c — Inconclusive outcome
 
-- [ ] 4c.1 Append `## 2026-05-12 probe: 1.3.14 inconclusive` section to the learning file with failing shard + read.
+- [ ] 4c.1 Append `## 2026-05-13 probe: 1.3.14 inconclusive` section to the learning file with failing shard + read.
 - [ ] 4c.2 Leave PR #3709 in draft. Do NOT auto-revert.
 - [ ] 4c.3 Comment on PR #3709 with failing-shard summary.
 - [ ] 4c.4 Pause work until unrelated red is understood; re-run Phase 3 after fix.
