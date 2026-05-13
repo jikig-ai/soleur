@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
+import { renameUserIdToHash } from "@/server/userid-pseudonymize";
 
 const SENTRY_USERID_PEPPER = process.env.SENTRY_USERID_PEPPER;
 
@@ -38,20 +39,22 @@ export function hashUserId(userId: string, pepper = SENTRY_USERID_PEPPER): strin
 }
 
 /**
- * Rename `userId` → `userIdHash` (via `hashUserId`) on an emit `extra`
- * payload. Both silent-fallback helpers share this so the rename signal
- * lives in one place. Returns `extra` unchanged when no `userId` key is
- * present. Null/undefined `userId` values resolve to the sentinel
- * `"pepper_unset_null"` to avoid hashing the empty-string literal — which
- * would collide every nullable-userId emit under a single hash.
+ * Rename `userId` → `userIdHash` on an emit `extra` payload. Delegates to
+ * the shared `renameUserIdToHash` walker in `./userid-pseudonymize` so the
+ * rename signal lives in one place across the silent-fallback helpers, the
+ * pino `formatters.log` hook (`./logger`), and any future boundary that
+ * needs the same transform. Architectural contract: ADR-029 (rename-at-boundary). Note: ADR-028 is the DSAR/cross-tenant pseudonymisation contract (`hashUserIdForSentry`, `mirrorCrossTenantViolation`) — a deliberately distinct primitive (see ADR-029 §I10).
+ *
+ * Returns `extra` unchanged when no `userId` key is present. Null/undefined
+ * `userId` values resolve to the sentinel `"pepper_unset_null"` to avoid
+ * hashing the empty-string literal — which would collide every
+ * nullable-userId emit under a single hash.
  */
 function hashExtraUserId(
   extra: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  if (!extra || typeof extra !== "object" || !("userId" in extra)) return extra;
-  const { userId: rawUserId, ...rest } = extra as { userId?: unknown } & Record<string, unknown>;
-  if (rawUserId == null) return { ...rest, userIdHash: "pepper_unset_null" };
-  return { ...rest, userIdHash: hashUserId(String(rawUserId)) };
+  if (!extra || typeof extra !== "object") return extra;
+  return renameUserIdToHash(extra);
 }
 
 /**
@@ -506,6 +509,16 @@ export function mirrorCrossTenantViolation(
     offendingUserId === null ? null : hashUserIdForSentry(offendingUserId);
   const expectedHash = hashUserIdForSentry(expectedUserId);
 
+  // Defensive strip: if a caller mistakenly passed raw userId/user_id in
+  // `ctx`, drop them before they spread into Sentry's `extra` (pino emit
+  // below is already covered by formatters.log via ADR-029, but the
+  // Sentry capture path at the bottom bypasses that boundary). The
+  // canonical user identifiers for this function are `offendingUserId`
+  // and `expectedUserId` — `ctx` is for queryShape/jobId/etc.
+  const { userId: _stripUserId, user_id: _stripUserIdSnake, ...safeCtx } = ctx;
+  void _stripUserId;
+  void _stripUserIdSnake;
+
   const payload = {
     level: "fatal" as const,
     tags: {
@@ -518,7 +531,7 @@ export function mirrorCrossTenantViolation(
       offendingUserIdHash: offendingHash,
       expectedUserIdHash: expectedHash,
       tableName,
-      ...ctx,
+      ...safeCtx,
     },
   };
 
