@@ -65,6 +65,7 @@ import {
   mirrorP0Deduped,
   __resetMirrorDebounceForTests,
 } from "./observability";
+import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { updateConversationFor } from "./conversation-writer";
 import {
   getUserApiKey,
@@ -112,6 +113,70 @@ import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 // Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
 // (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
 // prod (1 QPS = 86k events/day per failure mode) from flooding Sentry.
+
+/**
+ * Read CC_MCP_ALLOWLIST and return the cc-router's mcpServers config (#2909).
+ *
+ * Phase 1 deny-by-default scaffolding (this PR): returns `{}` for empty /
+ * unset / whitespace-only env. Throws plain Error if any short-name in the
+ * env resolves to a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
+ * tools — cross-tenant credentials by construction). Phase 1 does NOT yet
+ * build a populated `soleur_platform` server even when valid non-denylist
+ * names are present — promotion is Phase 2 (#3722).
+ *
+ * Denylist-check-first ordering is pinned: a mixed env value like
+ * `"foo,plausible_create_site"` throws with the Plausible name in the
+ * message regardless of position. Future unknown-name validation (Phase 2)
+ * will fail-closed AFTER the denylist check.
+ *
+ * Exported for unit testability (`test/cc-mcp-tier-allowlist.test.ts`).
+ *
+ * @param env defaults to `process.env`; tests pass a synthetic record.
+ */
+export function readCcMcpAllowlist(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, unknown> {
+  const raw = env.CC_MCP_ALLOWLIST;
+  if (raw === undefined || raw.trim() === "") return {};
+  const names = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  for (const name of names) {
+    const fqn = `mcp__soleur_platform__${name}`;
+    if (CC_ROUTER_TIER3_DENYLIST.has(fqn)) {
+      throw new Error(
+        `CC_MCP_ALLOWLIST contains permanent Tier 3 denylist tool "${name}" — see CC_ROUTER_TIER3_DENYLIST in tool-tiers.ts`,
+      );
+    }
+  }
+  // Phase 1: even with valid non-denylist names present, return {} —
+  // building the populated soleur_platform server lives in Phase 2 (#3722).
+  return {};
+}
+
+/**
+ * Return true when the cc-router iterator observes a `tool_use` block
+ * referencing a `mcp__soleur_platform__*` tool that is NOT in the registered
+ * platform-tool list (#2909 FR2 — Candidate B per Kieran SDK-source read).
+ *
+ * Background: when `mcpServers` is empty (Phase 1 default), the Claude
+ * Agent SDK rejects unknown `mcp__soleur_platform__*` calls at
+ * model-validation time and `canUseTool` is NEVER invoked. The SDK
+ * returns a `tool_result` error to the model with no Sentry signal — a
+ * silent-failure surface that violates `cq-silent-fallback-must-mirror-to-sentry`.
+ * The router's SDK iterator hook (`onToolUse`) is the only observable
+ * surface; this helper is the predicate.
+ *
+ * Exported for unit testability.
+ */
+export function shouldMirrorUnregisteredPlatformToolUse(
+  toolName: string,
+  registeredPlatformToolNames: readonly string[],
+): boolean {
+  if (!toolName.startsWith("mcp__soleur_platform__")) return false;
+  return !registeredPlatformToolNames.includes(toolName);
+}
 
 // Hoisted module-level sets (avoid per-call construction in
 // `dispatchSoleurGo` / `handleInteractivePromptResponseCase`).
@@ -933,9 +998,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `agent-runner.ts startAgentSession` is guarded by
     // `agent-runner-query-options.test.ts`.
     //
-    // V1 — empty MCP allowlist. V2-13 (#2909) tracks
-    // tier-classification of `kb_share_*`, `conversations_*`,
-    // `github_*`, `plausible_*` for this path before widening.
+    // V2-13 Phase 1 (#2909): `readCcMcpAllowlist()` reads CC_MCP_ALLOWLIST
+    // and returns `{}` for empty/unset (current behavior preserved bit-for-bit),
+    // throws on Tier 3 denylist short-names (3 Plausible tools — permanent,
+    // shared service-token cross-tenant credentials). Promotion of non-denylist
+    // tools is Phase 2 (#3722, blocked-by Stage 6 #2939).
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -945,7 +1012,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         serviceTokens,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
-        mcpServers: {},
+        mcpServers: readCcMcpAllowlist(),
         // #3338 — auto-approve the cc-router's read-only tool surface so they
         // don't pay a canUseTool round-trip per call. This is auto-approve,
         // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
@@ -1398,6 +1465,28 @@ export async function dispatchSoleurGo(
       });
     },
     onToolUse: (block) => {
+      // #2909 FR2 — silent-failure mirror for unregistered platform tools.
+      // When `mcpServers === {}` (Phase 1 default), the Claude Agent SDK
+      // rejects `mcp__soleur_platform__*` calls at model-validation time
+      // and `canUseTool` is NEVER invoked. The model gets a `tool_result`
+      // error with no Sentry signal — a silent-failure surface that violates
+      // `cq-silent-fallback-must-mirror-to-sentry`. Mirror via
+      // `reportSilentFallback` so operators see attempted invocations.
+      // Intrinsically scoped to cc-router because this callback only fires
+      // from `dispatchSoleurGo` (legacy `startAgentSession` is a separate path).
+      if (shouldMirrorUnregisteredPlatformToolUse(block.name, [])) {
+        reportSilentFallback(null, {
+          feature: "cc-mcp-tier",
+          op: "unregistered-tool-invoked",
+          message: `cc-router skill attempted unregistered platform tool ${block.name}`,
+          extra: {
+            toolName: block.name,
+            userId,
+            conversationId,
+            leaderId: CC_ROUTER_LEADER_ID,
+          },
+        });
+      }
       // `buildToolUseWSMessage` pins the #2138 invariant: the raw SDK tool
       // name is NOT placed on the wire (information-disclosure mitigation,
       // see PR #2115). Shared with `agent-runner.ts` so a future schema
