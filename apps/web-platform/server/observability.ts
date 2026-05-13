@@ -43,7 +43,7 @@ export function hashUserId(userId: string, pepper = SENTRY_USERID_PEPPER): strin
  * the shared `renameUserIdToHash` walker in `./userid-pseudonymize` so the
  * rename signal lives in one place across the silent-fallback helpers, the
  * pino `formatters.log` hook (`./logger`), and any future boundary that
- * needs the same transform. Architectural contract: ADR-028.
+ * needs the same transform. Architectural contract: ADR-029 (rename-at-boundary). Note: ADR-028 is the DSAR/cross-tenant pseudonymisation contract (`hashUserIdForSentry`, `mirrorCrossTenantViolation`) — a deliberately distinct primitive (see ADR-029 §I10).
  *
  * Returns `extra` unchanged when no `userId` key is present. Null/undefined
  * `userId` values resolve to the sentinel `"pepper_unset_null"` to avoid
@@ -509,6 +509,16 @@ export function mirrorCrossTenantViolation(
     offendingUserId === null ? null : hashUserIdForSentry(offendingUserId);
   const expectedHash = hashUserIdForSentry(expectedUserId);
 
+  // Defensive strip: if a caller mistakenly passed raw userId/user_id in
+  // `ctx`, drop them before they spread into Sentry's `extra` (pino emit
+  // below is already covered by formatters.log via ADR-029, but the
+  // Sentry capture path at the bottom bypasses that boundary). The
+  // canonical user identifiers for this function are `offendingUserId`
+  // and `expectedUserId` — `ctx` is for queryShape/jobId/etc.
+  const { userId: _stripUserId, user_id: _stripUserIdSnake, ...safeCtx } = ctx;
+  void _stripUserId;
+  void _stripUserIdSnake;
+
   const payload = {
     level: "fatal" as const,
     tags: {
@@ -521,7 +531,7 @@ export function mirrorCrossTenantViolation(
       offendingUserIdHash: offendingHash,
       expectedUserIdHash: expectedHash,
       tableName,
-      ...ctx,
+      ...safeCtx,
     },
   };
 

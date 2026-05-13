@@ -27,7 +27,7 @@ Close PR #3685's deferred-scope-out by pseudonymising every `userId` emission at
 1. Shared rename helper `apps/web-platform/server/userid-pseudonymize.ts` (testability + single source of truth)
 2. pino `formatters.log()` rename hook in `apps/web-platform/server/logger.ts` (with defensive try/catch per Architecture F2)
 3. PA8 §(c) §(ii) wording update in `knowledge-base/legal/article-30-register.md` (single-path disclosure; explicit `formatters.log()` citation per Kieran P1.2)
-4. ADR-028 documenting the rename-at-boundary pattern (per Architecture AP-011)
+4. ADR-029 documenting the rename-at-boundary pattern (per Architecture AP-011)
 5. CI-enforceable bypass-grep (persistent regression gate per GDPR critical + Architecture F5)
 
 **Deferred to follow-up issues:**
@@ -63,7 +63,7 @@ Plan-time grep against worktree `main` HEAD surfaced these deltas. Each is resol
 1. **Single rename helper.** New `apps/web-platform/server/userid-pseudonymize.ts` exports `renameUserIdToHash(obj)` (top-level only) and `hashUserIdValue(rawValue)` primitive (per Kieran P1.4 — extract value-level primitive to avoid per-key allocation in any future caller). Handles `userId` and `user_id` keys, null/undefined → `"pepper_unset_null"` sentinel, missing pepper → `"pepper_unset"` sentinel via the existing `hashUserId()` in `observability.ts`.
 2. **Pino logger boundary** (`logger.ts`). Add `formatters.log: (obj) => safeRename(obj)` where `safeRename` wraps the rename in try/catch (per Architecture F2). Throw → return `obj` unchanged + one-time `console.warn` to avoid logger re-entrancy.
 3. **PA8 §(c) §(ii) wording update.** Single-path disclosure scoped explicitly to `apps/web-platform/server/**` pino emissions. Cites `formatters.log()` by name (per Kieran P1.2) so silent regression of the formatter would be visibly inconsistent with the legal text.
-4. **ADR-028.** Documents the rename-at-boundary pattern for future contributors (per Architecture AP-011).
+4. **ADR-029.** Documents the rename-at-boundary pattern for future contributors (per Architecture AP-011).
 5. **Persistent CI gate.** `.github/workflows/lint.yml` (or equivalent) adds a `pnpm lint:userid-bypass` step that runs the bypass-grep against PR diffs. Stops silent regression after merge (per GDPR critical + Architecture F5).
 
 **Why Option D (formatters.log) — Risks-section justification per learnings-researcher caution:** formatters.log is net-new pino infrastructure in this codebase (verified — zero `formatters:` hits in `apps/`). The trade-off vs. per-site migration (Option A) is justified because: (a) covers all 11 current sites + future sites for free; (b) preserves operator grep via hash; (c) enables PA8 §(c) single-path disclosure on day one. The brainstorm explicitly weighed this; the YAGNI counter (DHH/code-simplicity) was considered and rejected because the AC two-clause structure makes Option A more code-fragile under the brand-survival threshold framing.
@@ -73,7 +73,7 @@ Plan-time grep against worktree `main` HEAD surfaced these deltas. Each is resol
 1. `apps/web-platform/server/userid-pseudonymize.ts` — shared `renameUserIdToHash(obj)` + `hashUserIdValue(rawValue)` helpers.
 2. `apps/web-platform/test/userid-pseudonymize.test.ts` — synthesised-UUID-only fixtures (per `cq-test-fixtures-synthesized-only`); ~6 fixtures.
 3. `apps/web-platform/test/logger-formatters.test.ts` — vitest integration test wiring pino + formatters.log; uses `vi.hoisted` per `observability.test.ts:5-42` pattern.
-4. `knowledge-base/engineering/architecture/decisions/ADR-028-rename-at-boundary-userid-pseudonymisation.md` — documents the pattern.
+4. `knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md` — documents the pattern.
 5. `.github/workflows/lint-userid-bypass.yml` OR a step appended to existing CI — runs the bypass-grep on PR diff for persistent enforcement.
 
 ## Files to Edit
@@ -156,9 +156,9 @@ Phase order is contract-changing-before-consumer per `2026-05-10-plan-phase-orde
    > **(ii) pino stdout (Hetzner-resident, EU-only):** structured app logs — `conversation_id`, request metadata, and a `userId` field. From the deployment timestamp of #3698 forward, every `logger.{error,warn,info,debug}` emission across `apps/web-platform/server/**` and `apps/web-platform/app/**` is pseudonymised at the pino logger boundary via the `formatters.log()` rename hook in `apps/web-platform/server/logger.ts` (HMAC-SHA256 with a server-side pepper held in Doppler and not shared with the processor — Recital 26 pseudonymisation, retained as pseudonym to support breach-investigation linkage under PA8 §(b)(ii)). Every direct call site emits `userIdHash`; no raw `user_id` reaches stdout via the pino path. Pre-deployment historical lines remain on the Hetzner host until they age out per the retention window in §(f); no off-host copies are taken. Sentry-event payloads are pseudonymised at the helper boundary (`reportSilentFallback` / `warnSilentFallback` / `mirrorP0Deduped` in `apps/web-platform/server/observability.ts`); symmetric direct-capture coverage at the Sentry scrub layer is tracked under follow-up #3710.
 
 
-### Phase 4 — ADR-028 + persistent CI gate
+### Phase 4 — ADR-029 (rename-at-boundary) + persistent CI gate
 
-- [ ] **4.1** Create `knowledge-base/engineering/architecture/decisions/ADR-028-rename-at-boundary-userid-pseudonymisation.md`. Documents the pattern: rename-not-redact, single-source-of-truth helper, top-level boundary by design, try/catch fail-safe, PA8 §(c) coupling. Cross-references #3638, #3685, #3698 (this PR), #3696, ADR-026 (pii-gate).
+- [ ] **4.1** Create `knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md`. Documents the pattern: rename-not-redact, single-source-of-truth helper, top-level boundary by design, try/catch fail-safe, PA8 §(c) coupling. Cross-references #3638, #3685, #3698 (this PR), #3696, ADR-026 (pii-gate).
 - [ ] **4.2** Add a CI gate that runs the bypass-grep on every PR diff. Implementation: add a step to `.github/workflows/lint.yml` (or whichever workflow runs on `pull_request`):
    ```yaml
    - name: Lint userId bypass
@@ -227,7 +227,7 @@ Phase order is contract-changing-before-consumer per `2026-05-10-plan-phase-orde
    grep -n "formatters.log()" knowledge-base/legal/article-30-register.md  # ≥1 match
    grep -n "pending the follow-up migration" knowledge-base/legal/article-30-register.md  # 0 matches
    ```
-- [ ] **AC6** ADR-028 created at `knowledge-base/engineering/architecture/decisions/ADR-028-rename-at-boundary-userid-pseudonymisation.md`; cross-references #3638/#3685/#3698/#3696.
+- [ ] **AC6** ADR-029 created at `knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md`; cross-references #3638/#3685/#3698/#3696.
 - [ ] **AC7** Persistent CI gate landed: `.github/workflows/lint.yml` (or equivalent) includes a step that runs the bypass-grep and fails on disallowed matches. Verified by inspecting the YAML for the `lint-userid-bypass` step name.
 - [ ] **AC8** `user-impact-reviewer` auto-invoked at PR review per `brand_survival_threshold: single-user incident`; review concludes via the standard fix-inline flow.
 - [ ] **AC9** PR body uses `Closes #3698` (NOT `Ref` — this is a code change closing the issue at merge).
@@ -286,7 +286,7 @@ Phase order is contract-changing-before-consumer per `2026-05-10-plan-phase-orde
 - PA8 §(c) §(ii) wording is a load-bearing legal disclosure. Phase 3.1 wording explicitly cites `formatters.log()` by name (Kieran P1.2) — silent regression of the formatter would surface as a wording inconsistency at the next CLO audit. Do NOT remove the citation without coordinating with CLO.
 - `formatters.log()` runs synchronously on every log line. The try/catch wrapper at Phase 2.2 must NOT introduce async I/O. The `renameUserIdToHash` helper is pure (no I/O); confirmed at Phase 1.2.
 - `console.warn` is used inside the formatter try/catch (not `logger.warn`) to avoid re-entrancy. Do NOT change to `logger` calls — pino's formatter throwing during a logger emit while the recovery path also emits via the same logger is a guaranteed hang/recursion.
-- ADR-028 names follow-up issues by number. Update those numbers when PR-B and PR-C land.
+- ADR-029 names follow-up issues by number. Update those numbers when PR-B and PR-C land.
 
 ## References
 

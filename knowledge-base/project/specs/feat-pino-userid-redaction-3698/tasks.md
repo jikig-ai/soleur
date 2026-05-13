@@ -2,7 +2,7 @@
 
 Plan: `knowledge-base/project/plans/2026-05-12-feat-pino-userid-formatters-log-plan.md`
 Spec: `knowledge-base/project/specs/feat-pino-userid-redaction-3698/spec.md`
-ADR: `knowledge-base/engineering/architecture/decisions/ADR-028-rename-at-boundary-userid-pseudonymisation.md`
+ADR: `knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md`
 Follow-ups: #3710 (PR-B Sentry-side), #3711 (PR-C operator UX + retention), #3708 (DPD), #3696 (client-side).
 
 ## Phase 0: Preflight
@@ -32,9 +32,9 @@ Follow-ups: #3710 (PR-B Sentry-side), #3711 (PR-C operator UX + retention), #370
 
 - [x] 3.1 Edit `knowledge-base/legal/article-30-register.md:157` PA8 §(c) §(ii). Replace with the single-path explanation drafted in plan Phase 3.1 (explicit `formatters.log()` citation; forward-reference to #3710 for Sentry symmetric coverage; forward-reference to §(f) for retention).
 
-## Phase 4: ADR-028 + persistent CI gate
+## Phase 4: ADR-029 (rename-at-boundary) + persistent CI gate
 
-- [x] 4.1 Confirm ADR-028 (`knowledge-base/engineering/architecture/decisions/ADR-028-rename-at-boundary-userid-pseudonymisation.md`) is committed (already authored during planning).
+- [x] 4.1 Confirm ADR-029 (`knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md`) is committed (already authored during planning).
 - [x] 4.2 Add CI gate to `.github/workflows/lint.yml` (or PR-triggered workflow): `lint-userid-bypass` step that runs the bypass-grep on PR diff. Allowlist: `github-resolve/callback/route.ts:1\d+` (the leave-and-cover info site).
 - [x] 4.3 Test CI gate locally: simulate a PR diff adding `logger.error({userId: 'x'})` to a scratch file → grep returns it → step fails. Remove scratch file before commit.
 

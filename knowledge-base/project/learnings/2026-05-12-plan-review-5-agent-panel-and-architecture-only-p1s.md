@@ -28,7 +28,7 @@ The 6-agent plan-review panel (DHH + Kieran + code-simplicity + architecture-str
 
 The both-panels-fire heuristic (per `2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md`) triggered on six scope items where simplification AND correctness panels both fired. The trim produced a clean 3-PR split:
 
-- **PR-A (this PR / #3701):** formatters.log + try/catch + PA8 §(c) + ADR-028 + persistent CI gate.
+- **PR-A (this PR / #3701):** formatters.log + try/catch + PA8 §(c) + ADR-029 + persistent CI gate.
 - **PR-B (#3710):** Sentry.setUser + helper migration + sentry-scrub coverage. Architecture F3 gate (2-request scope-isolation test) is load-bearing prereq.
 - **PR-C (#3711):** operator CLI + PA8 §(f) retention pin + compliance-posture refresh.
 
@@ -54,8 +54,8 @@ Six review agents fanned out across distinct axes:
 Applied the trim at plan-review-finalisation time. Specific actions:
 
 1. **Rewrote the plan** to PR-A scope (`knowledge-base/project/plans/2026-05-12-feat-pino-userid-formatters-log-plan.md`). 5 phases, ~8 file-edits, ~6 ACs. Plan frontmatter records `plan_review_outcome: trim-per-both-panels-fire`.
-2. **Narrowed the spec** to match. FR1 (formatters.log) + new FR2 (PA8 §(c)) + new FR3 (ADR-028) + new FR4 (CI gate) + new FR5 (shared helper) stay. Original FR2-FR6 deferred to #3710/#3711. TR3 null-handling row corrected (`pepper_unset_null` sentinel matches `observability.ts:53`).
-3. **Created ADR-028** documenting the rename-at-boundary pattern (per Architecture AP-011 advisory). Names follow-up issues by number.
+2. **Narrowed the spec** to match. FR1 (formatters.log) + new FR2 (PA8 §(c)) + new FR3 (ADR-029) + new FR4 (CI gate) + new FR5 (shared helper) stay. Original FR2-FR6 deferred to #3710/#3711. TR3 null-handling row corrected (`pepper_unset_null` sentinel matches `observability.ts:53`).
+3. **Created ADR-029** documenting the rename-at-boundary pattern (per Architecture AP-011 advisory). Names follow-up issues by number.
 4. **Filed PR-B (#3710) and PR-C (#3711)** with concrete acceptance criteria. PR-B's body cites Architecture F3 scope-isolation gate as a load-bearing prereq.
 5. **Folded F2 fix into PR-A** — `formatters.log` wraps the rename in `try/catch` returning `obj` on throw + one-time `console.warn` (NOT `logger` — re-entrancy).
 6. **Folded GDPR critical findings into PR-A** — replaced the one-time AC2(ii) bypass-grep with a persistent CI gate (`.github/workflows/lint.yml` step); deferred compliance-posture.md line 88 refresh to PR-C.
@@ -112,4 +112,4 @@ The 3-agent panel (DHH + Kieran + code-simplicity) is enough for routine plans. 
 - Issue #3710 — PR-B follow-up (Sentry-side + helper migration).
 - Issue #3711 — PR-C follow-up (operator CLI + retention + compliance-posture).
 - Issue #3708 — DPD §(l) follow-up (separate track).
-- ADR-028 — rename-at-boundary pattern (created by this PR).
+- ADR-029 — rename-at-boundary pattern (created by this PR).

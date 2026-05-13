@@ -205,9 +205,15 @@ jobs:
     # Allowlist:
     # - reportSilentFallback / warnSilentFallback / mirrorP0Deduped — emit
     #   userIdHash via observability.ts:hashExtraUserId (already pseudonymised).
-    # - userIdHash explicit emissions — already in the post-rename naming.
+    #   Match position-anchored to (line-start | non-quote char) so a string
+    #   literal like `"warnSilentFallback("` cannot defeat the gate.
     # - github-resolve/callback/route.ts — known leave-and-cover info
     #   success log (covered by formatters.log defence-in-depth per #3698).
+    # Note: there is no `userIdHash:` exemption — the prior `grep -vE
+    # '\buserIdHash\s*:'` step let `{ userId: x, userIdHash: "decoy" }`
+    # silently pass. Lines containing ONLY `userIdHash:` (no raw `userId`)
+    # already filter out at the `\buserId\b|\buser_id\b` step (word
+    # boundary fails on `userIdHash`), so the exemption was unnecessary.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -234,8 +240,7 @@ jobs:
               ' \
             | grep -E '(log|logger)\.(error|warn|info|debug)' \
             | grep -E '\buserId\b|\buser_id\b' \
-            | grep -vE '(reportSilentFallback|warnSilentFallback|mirrorP0Deduped)\s*\(' \
-            | grep -vE '\buserIdHash\s*:' \
+            | grep -vE "(^|[^\"'])(reportSilentFallback|warnSilentFallback|mirrorP0Deduped)\s*\(" \
             | grep -vE '^apps/web-platform/app/api/auth/github-resolve/callback/route\.ts:' \
             || true)
           if [[ -n "$OFFENDERS" ]]; then

@@ -20,7 +20,7 @@ export { REDACT_PATHS };
 // `console.warn` (NOT `logger.warn`) to avoid re-entrancy: a logger.warn
 // inside the formatter would re-invoke the formatter on the warn line.
 // Module-scope flag ensures one warn per worker lifetime rather than
-// spamming on a persistent failure mode. See ADR-028 invariants.
+// spamming on a persistent failure mode. See ADR-029 invariants.
 let formatterErrorReported = false;
 
 const logger = pino({
@@ -38,10 +38,10 @@ const logger = pino({
       }
     : {}),
   // Single source of truth for `userId` → `userIdHash` pseudonymisation at
-  // the pino boundary (ADR-028). Renames before `redact` runs (verified at
+  // the pino boundary (ADR-029). Renames before `redact` runs (verified at
   // `pino/lib/tools.js:161-200`). Top-level only — nested `extra.userId`
   // shapes are NOT rewritten by design; widening requires an explicit
-  // ADR-028 amendment.
+  // ADR-029 amendment.
   formatters: {
     log: (obj) => {
       try {

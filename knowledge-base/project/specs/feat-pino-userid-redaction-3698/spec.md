@@ -54,9 +54,9 @@ Add a `formatters.log` config to the pino instance in `apps/web-platform/server/
 
 Replace the current `knowledge-base/legal/article-30-register.md:157` PA8 §(c) §(ii) wording with a single-path explanation scoped explicitly to server-side pino emissions: pseudonymisation happens at the pino logger boundary via `formatters.log()` for all `logger.{error,warn,info,debug}` emissions across `apps/web-platform/server/**` and `apps/web-platform/app/**`. Wording explicitly cites `formatters.log()` (per Kieran P1.2) so silent regression of the formatter is visibly inconsistent with the legal text. No "follow-up migration" forward-reference. Sentry-side and client-side cross-references point to deferred PR-B and #3696 respectively. Draft in plan §Phase 3.1.
 
-### FR3: ADR-028 — rename-at-boundary pattern
+### FR3: ADR-029 (rename-at-boundary) — rename-at-boundary pattern
 
-Create `knowledge-base/engineering/architecture/decisions/ADR-028-rename-at-boundary-userid-pseudonymisation.md` per architecture-strategist AP-011 advisory. Documents the pattern (rename-not-redact, single-source-of-truth helper, top-level boundary, try/catch fail-safe, PA8 §(c) coupling) for future contributors. Cross-references #3638/#3685/#3698/#3696/ADR-026.
+Create `knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md` per architecture-strategist AP-011 advisory. Documents the pattern (rename-not-redact, single-source-of-truth helper, top-level boundary, try/catch fail-safe, PA8 §(c) coupling) for future contributors. Cross-references #3638/#3685/#3698/#3696/ADR-026.
 
 ### FR4: Persistent CI bypass-grep gate
 
@@ -120,7 +120,7 @@ Original TR was a plan-time research task. Plan-time investigation surfaced Arch
 3. **Two-clause AC (per `2026-05-12-centralized-at-helper-boundary-...md`)** — (i) helper-routed test suite all green; (ii) bypass-grep returns exactly the expected 11 sites (10 emit + 1 leave-and-cover at github-resolve:157).
 4. **FR4 — Persistent CI gate** lands in `.github/workflows/lint.yml` (or equivalent) and rejects future direct-emit additions outside the allowlist.
 5. **FR2 — PA8 §(c) §(ii)** at `article-30-register.md:157` reflects single-path pino pseudonymisation, cites `formatters.log()` explicitly, no forward-reference to follow-up migration.
-6. **FR3 — ADR-028** created at `knowledge-base/engineering/architecture/decisions/ADR-028-rename-at-boundary-userid-pseudonymisation.md`.
+6. **FR3 — ADR-029** created at `knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md`.
 7. Test fixtures cover TR3 surface (6 fixtures, synthesised UUIDs only) + Architecture F2 adversarial throw-safety fixture.
 8. Multi-agent review (per `brand_survival_threshold: single-user incident`) signs off — `user-impact-reviewer` mandatory.
 9. PR-B + PR-C follow-up issues filed pre-merge.

@@ -6,7 +6,7 @@ import { hashUserId } from "@/server/observability";
  * Single source of truth for renaming `userId` → `userIdHash` across pino
  * (`logger.ts:formatters.log`) and the observability helper (`observability.ts:hashExtraUserId`).
  * Architectural contract documented in
- * `knowledge-base/engineering/architecture/decisions/ADR-028-rename-at-boundary-userid-pseudonymisation.md`.
+ * `knowledge-base/engineering/architecture/decisions/ADR-029-rename-at-boundary-userid-pseudonymisation.md`.
  *
  * Boundary invariants (do NOT widen without an explicit decision):
  * - Top-level only. Nested `{extra: {userId: "x"}}` shapes are NOT rewritten.

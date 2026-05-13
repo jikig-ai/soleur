@@ -1,13 +1,15 @@
 ---
-adr: 028
+adr: 029
 title: Rename-at-boundary userId pseudonymisation
 status: accepted
 date: 2026-05-12
 related: [3638, 3685, 3698, 3696]
-related_adrs: [ADR-026]
+related_adrs: [ADR-026, ADR-028]
 ---
 
-# ADR-028: Rename-at-boundary `userId` pseudonymisation
+# ADR-029: Rename-at-boundary `userId` pseudonymisation
+
+> Renumbered from ADR-028 → ADR-029 post-rebase: PR #3634 (`ADR-028-dsar-export-substrate-and-audit-retention.md`) had already claimed ADR-028 on `main` before this PR landed.
 
 ## Status
 
@@ -38,11 +40,25 @@ A single shared helper (`apps/web-platform/server/userid-pseudonymize.ts`) expor
 
 ### Invariants
 
-- **Rename, not redact.** Recital 26 pseudonymisation preserves operator-grep linkage via hash; full `[Redacted]` would drop the value entirely. The legal basis for retaining the pseudonym is breach-investigation linkage (PA8 §(b)(ii)).
-- **Top-level boundary.** The walker handles top-level `userId`/`user_id` only. All current call sites are top-level (verified via grep at plan time). Nested `{extra: {userId}}` shapes are NOT renamed; if they appear in future, widen the walker with intent (test fixture asserts the boundary).
-- **Try/catch fail-safe.** `formatters.log` must NOT propagate throws — pino drops the entire log line if the formatter throws. The catch path returns `obj` unchanged + emits one `console.warn` (NOT `logger.*` — re-entrancy hazard).
-- **Single source of truth.** All three consumers import from `userid-pseudonymize.ts`. Hash function (`hashUserId`) remains in `observability.ts` (cyclic-import-safe since `userid-pseudonymize.ts` imports it one-way).
-- **PA8 §(c) coupling.** The Article 30 register §(c) §(ii) wording explicitly cites `formatters.log()` by name. Silent regression of the formatter would surface as a wording inconsistency at the next CLO audit.
+- **I1 — Rename, not redact.** Recital 26 pseudonymisation preserves operator-grep linkage via hash; full `[Redacted]` would drop the value entirely. The legal basis for retaining the pseudonym is breach-investigation linkage (PA8 §(b)(ii)).
+- **I2 — Top-level boundary.** The walker handles top-level `userId`/`user_id` only. All current call sites are top-level (verified via grep at plan time). Nested `{extra: {userId}}` shapes are NOT renamed; if they appear in future, widen the walker with intent (test fixture asserts the boundary).
+- **I3 — Try/catch fail-safe.** `formatters.log` must NOT propagate throws — pino drops the entire log line if the formatter throws. The catch path returns `obj` unchanged + emits one `console.warn` (NOT `logger.*` — re-entrancy hazard). The `err` value handed to `console.warn` MUST be serialised to a primitive string first (`err.stack ?? err.message`) to prevent `util.inspect` from walking caller-supplied getters / Proxy traps and re-entering the logger via a getter side-effect.
+- **I4 — Single source of truth.** All three consumers import from `userid-pseudonymize.ts`. Hash function (`hashUserId`) remains in `observability.ts` (cyclic-import-safe since `userid-pseudonymize.ts` imports it one-way).
+- **I5 — PA8 §(c) coupling.** The Article 30 register §(c) §(ii) wording explicitly cites `formatters.log()` by name. Silent regression of the formatter would surface as a wording inconsistency at the next CLO audit.
+- **I8 — `userIdHash` is a reserved emit-key.** Callers MUST NOT use `userIdHash` for anything other than the post-rename HMAC-pseudonymous value emitted by this boundary. The defensive branch in `renameUserIdToHash` (drops `userId` when `userIdHash` is already present) silently discards the raw `userId` if a caller emits both — a future caller emitting `{userId, userIdHash: <other-domain-hash>}` would lose the raw identifier without diagnostic. Treat `userIdHash` as owned by the pino boundary.
+- **I10 — Two-primitive separation (pino-helper path vs DSAR cross-tenant path).** The codebase deliberately ships TWO distinct pseudonymisation primitives with two distinct key materials and two distinct emit field names. Do NOT consolidate them — the split reflects two threat models, not duplicate code.
+
+  | Aspect | `hashUserId` (this ADR) | `hashUserIdForSentry` (ADR-028 / DSAR) |
+  |---|---|---|
+  | Construction | HMAC-SHA256(pepper, userId) | SHA-256(salt ‖ \x00 ‖ userId)[:16] |
+  | Key material | `SENTRY_USERID_PEPPER` (Doppler) | `SOLEUR_SENTRY_PII_SALT` (Doppler) |
+  | Output | 64-hex (full digest) | 16-hex (64-bit truncation) |
+  | Consumers | pino `formatters.log`, helper `extra.userId` | `mirrorCrossTenantViolation` only |
+  | Emit field | `userIdHash` | `offendingUserIdHash` / `expectedUserIdHash` |
+  | Failure mode | fail-safe sentinel (`pepper_unset`) | fail-loud (throws in production) |
+  | Linkability | cross-deploy linkable (pepper stable) — supports PA8(b)(ii) breach investigation | salt-rotatable, dedup-class; alarm-only |
+
+  Cross-surface correlation between the two requires operator access to BOTH Doppler secrets — this is intentional separation under Art. 32. PA8 §(c)(ii) discloses the domain-distinct field names.
 
 ### Future consumer protocol
 
@@ -73,7 +89,7 @@ When adding a new pseudonymisation boundary:
 ### Risks
 
 - **F2 (formatters.log throw drops log line):** mitigated by the try/catch wrapper. Adversarial fixture in `logger-formatters.test.ts` asserts pass-through on throw.
-- **F3 (Sentry scope cross-request bleed under custom server):** deferred to PR-B. The PR-A scope does not introduce setUser; ADR-028's invariants do not depend on F3 resolution.
+- **F3 (Sentry scope cross-request bleed under custom server):** deferred to PR-B. The PR-A scope does not introduce setUser; ADR-029's invariants do not depend on F3 resolution.
 - **Performance:** HMAC-SHA256 per log line is ~microseconds; ws-handler is the highest-volume caller. Fast-path skip (early-return if no `userId`/`user_id` key) is a one-line addition if hot.
 
 ## References
