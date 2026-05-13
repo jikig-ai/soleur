@@ -192,6 +192,64 @@ jobs:
             exit 1
           fi
 
+  userid-bypass-lint:
+    name: Block direct userId emissions in apps/web-platform (#3698)
+    # Intentionally NO opt-out support. The pino formatters.log rename hook
+    # in apps/web-platform/server/logger.ts is the load-bearing defense for
+    # the single-user-incident threshold per ADR-028 / PA8 §(c)(ii). Future
+    # direct `logger.{error,warn,info,debug}({...userId...})` sites would be
+    # caught at runtime by formatters.log, but raw-source readability suffers
+    # and any silent regression of the formatter erodes the disclosure
+    # truthfulness. This guard enforces a baseline known-cover set.
+    #
+    # Allowlist:
+    # - reportSilentFallback / warnSilentFallback / mirrorP0Deduped — emit
+    #   userIdHash via observability.ts:hashExtraUserId (already pseudonymised).
+    #   Match position-anchored to (line-start | non-quote char) so a string
+    #   literal like `"warnSilentFallback("` cannot defeat the gate.
+    # - github-resolve/callback/route.ts — known leave-and-cover info
+    #   success log (covered by formatters.log defence-in-depth per #3698).
+    # Note: there is no `userIdHash:` exemption — the prior `grep -vE
+    # '\buserIdHash\s*:'` step let `{ userId: x, userIdHash: "decoy" }`
+    # silently pass. Lines containing ONLY `userIdHash:` (no raw `userId`)
+    # already filter out at the `\buserId\b|\buser_id\b` step (word
+    # boundary fails on `userIdHash`), so the exemption was unnecessary.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Scan PR diff for direct userId emissions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          DIFF=$(gh pr diff "$PR_NUMBER" --repo "$GH_REPO" 2>/dev/null || true)
+          if [[ -z "$DIFF" ]]; then
+            echo "::notice::Empty diff — nothing to scan."
+            exit 0
+          fi
+          # Restrict to added lines in apps/web-platform/(server|app)/**.
+          # Track current file via awk so we only flag scoped additions.
+          OFFENDERS=$(printf '%s' "$DIFF" \
+            | awk '
+                /^\+\+\+ b\// { file = substr($0, 7); next }
+                /^\+/ && !/^\+\+\+/ {
+                  if (file ~ /^apps\/web-platform\/(server|app)\//) print file ":" $0
+                }
+              ' \
+            | grep -E '(log|logger)\.(error|warn|info|debug)' \
+            | grep -E '\buserId\b|\buser_id\b' \
+            | grep -vE "(^|[^\"'])(reportSilentFallback|warnSilentFallback|mirrorP0Deduped)\s*\(" \
+            | grep -vE '^apps/web-platform/app/api/auth/github-resolve/callback/route\.ts:' \
+            || true)
+          if [[ -n "$OFFENDERS" ]]; then
+            echo "::error::Direct userId emit added in apps/web-platform/(server|app)/. The pino formatters.log rename hook covers all current sites; new direct emits should either route through the silent-fallback helpers (reportSilentFallback / warnSilentFallback) or emit userIdHash directly. If this is a genuinely-new leave-and-cover site, extend the allowlist in .github/workflows/pr-quality-guards.yml#userid-bypass-lint."
+            echo "Offending diff lines:"
+            printf '%s\n' "$OFFENDERS" | head -n 20 | sed 's/^/  /'
+            exit 1
+          fi
+
   auto-commit-message-density:
     name: Block PRs dominated by auto-commit headlines
     runs-on: ubuntu-latest
