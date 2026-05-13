@@ -86,6 +86,11 @@ Tracked in #2881 — not implemented in this PR. Implementation requires:
 
 **Resolved:** 2026-04-29 — `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" landed alongside the file+systemd verification contract from #3034. See plan `knowledge-base/project/plans/2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`.
 
+## Observed sub-states and invocation gotchas
+
+- **Tainted-mid-cycle sub-state** (first seen 2026-05-13 #3620 cycle 11+): when `apply-deploy-pipeline-fix.yml` auto-apply fails between cron ticks (typically `dial tcp <prod-ip>:22: i/o timeout` from the GH Actions runner egress-IP miss), the next cron tick reports `# (1 unchanged attribute hidden)` and the resource id changes (e.g., `967667d8-…` → `6bb222f8-…`) instead of the canonical `~ triggers_replace = (sensitive value) # forces replacement`. Same drift class — resolves via the same operator-manual apply ritual; the destroy+create cycle re-runs all provisioners regardless of which sub-state forced replacement.
+- **`doppler run --name-transformer tf-var` clobbers R2 backend AWS creds.** The transformer lowercases and prefixes EVERY env var with `TF_VAR_`, so `AWS_ACCESS_KEY_ID` becomes `TF_VAR_aws_access_key_id` and the S3-compatible backend fails with `No valid credential sources found`. Canonical pattern (per `scheduled-terraform-drift.yml` workflow): extract AWS creds via `doppler secrets get AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY --plain` into the shell env BEFORE the `doppler run --name-transformer tf-var -- terraform plan|apply` invocation, never both together.
+
 ## Deep-dive references
 
 - Resource definition: `apps/web-platform/infra/server.tf:209-269`
