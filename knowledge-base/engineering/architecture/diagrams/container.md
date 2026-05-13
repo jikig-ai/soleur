@@ -1,66 +1,85 @@
 # Soleur Platform — Container Diagram (C4 Level 2)
 
-Generated: 2026-03-27
+Generated: 2026-05-13 (visual redesign per SOL-40, was 2026-03-27)
 
 ```mermaid
 C4Container
 title Container diagram for Soleur Platform
 
+UpdateLayoutConfig($c4ShapeInRow="2", $c4BoundaryInRow="2")
+
 Person(founder, "Founder", "Solo founder using Soleur")
 
-System_Ext(anthropic, "Anthropic API", "Claude LLM")
-System_Ext(github, "GitHub", "Source control and CI/CD")
-System_Ext(cloudflare, "Cloudflare", "DNS, CDN, Tunnel, R2")
-System_Ext(doppler, "Doppler", "Secrets management")
-System_Ext(stripe, "Stripe", "Payment processing")
-System_Ext(plausible, "Plausible", "Privacy-focused analytics")
 Enterprise_Boundary(b0, "Soleur Platform") {
 
     Container_Boundary(web, "Web Application") {
-        Container(dashboard, "Dashboard", "React, Next.js", "Conversation UI, knowledge base viewer, session management")
-        Container(api, "API Routes", "Next.js API", "REST endpoints for auth, sessions, and agent control")
-        Container(auth, "Auth Module", "Supabase Auth", "JWT authentication, OAuth providers, session tokens")
+        Container(webapp, "Web Application", "Next.js PWA", "Dashboard UI + API routes + Supabase Auth — see Details")
     }
 
     Container_Boundary(cli, "Cloud CLI Engine") {
-        Container(claude, "Agent Runtime", "Claude Code", "Executes agent workflows with full orchestration tools")
-        Container(skillloader, "Skill Loader", "Plugin Discovery", "Discovers and loads skills, agents, commands from plugin directory")
-        Container(hooks, "Hook Engine", "PreToolUse Guards", "Enforces syntactic rules — blocks commits to main, rm -rf, etc.")
+        Container(engine, "Cloud CLI Engine", "Claude Code", "Agent runtime + plugin discovery + hook engine — see Details")
     }
 
     Container_Boundary(plugin, "Soleur Plugin") {
-        Container(skills, "Skills", "Markdown SKILL.md", "61 workflow skills — brainstorm, plan, work, review, compound, etc.")
-        Container(agents, "Agents", "Markdown Agent Defs", "65 domain agents across 8 departments")
-        Container(kb, "Knowledge Base", "Markdown + YAML", "Conventions, learnings, ADRs, specs, plans, brainstorms")
+        Container(plugin_box, "Soleur Plugin", "Markdown", "Skills + Agents + Knowledge Base — see L3 component-plugin.md")
     }
 
     Container_Boundary(infra, "Infrastructure") {
         ContainerDb(supabase, "Supabase PostgreSQL", "PostgreSQL", "Users, BYOK-encrypted API keys, conversation sessions")
-        Container(tunnel, "Cloudflare Tunnel", "cloudflared", "Zero-trust inbound access — no exposed ports")
-        Container(hetzner, "Compute", "Hetzner Cloud", "Docker containers running web app and CLI engine")
+        Container(compute, "Compute & Tunnel", "Hetzner Cloud + Cloudflare Tunnel", "Docker containers behind zero-trust tunnel")
     }
 }
 
-Rel(founder, dashboard, "Browses and converses", "HTTPS")
-Rel(dashboard, api, "Calls", "HTTPS")
-Rel(api, claude, "Spawns agent sessions", "WebSocket")
-Rel(claude, skillloader, "Loads plugin", "File I/O")
-Rel(skillloader, skills, "Discovers", "Directory scan")
-Rel(skillloader, agents, "Discovers", "Recursive scan")
-Rel(hooks, claude, "Guards tool calls", "Event hook")
-Rel(skills, kb, "Reads/writes", "File I/O")
-Rel(agents, kb, "Reads", "File I/O")
-Rel(api, supabase, "Auth and data", "HTTPS")
-Rel(claude, supabase, "Sessions and keys", "HTTPS")
-Rel(claude, anthropic, "LLM calls", "HTTPS")
-Rel(claude, github, "Git operations", "HTTPS/SSH")
-Rel(tunnel, api, "Routes traffic", "HTTPS")
-Rel(hetzner, claude, "Hosts", "Docker")
-Rel(doppler, claude, "Injects secrets", "CLI")
-Rel(auth, supabase, "Validates tokens", "HTTPS")
-Rel(api, stripe, "Checkout and webhooks", "HTTPS")
-Rel(dashboard, plausible, "Page view events", "JS snippet")
+System_Ext(cloudflare, "Cloudflare", "DNS, CDN, Tunnel, R2")
+System_Ext(doppler, "Doppler", "Secrets management")
+System_Ext(anthropic, "Anthropic API", "Claude LLM")
+System_Ext(github, "GitHub", "Source control and CI/CD")
+System_Ext(thirdparty, "Third-Party Services", "Discord + Stripe + Plausible — see Details")
+
+Rel(founder, webapp, "Browses and converses", "HTTPS")
+Rel(webapp, engine, "Spawns agent sessions", "WebSocket")
+Rel(engine, plugin_box, "Loads + guards", "File I/O + event hook")
+Rel(webapp, supabase, "Auth and data", "HTTPS")
+Rel(engine, supabase, "Sessions and keys", "HTTPS")
+Rel(engine, anthropic, "LLM calls", "HTTPS")
+Rel(engine, github, "Git operations", "HTTPS/SSH")
+Rel(compute, engine, "Hosts + tunnel", "Docker + cloudflared")
+Rel(doppler, engine, "Injects secrets", "CLI")
+Rel(cloudflare, webapp, "DNS / CDN / Tunnel", "HTTPS")
+BiRel(webapp, thirdparty, "Checkout / webhooks / page events", "HTTPS")
+Rel(engine, thirdparty, "Notifications", "Webhook")
 ```
+
+## Details
+
+**`webapp` (Web Application) — folded from L2 source for visual budget; original Mermaid aliases preserved:**
+
+- `dashboard` (React, Next.js) — conversation UI, knowledge base viewer, session management
+- `api` (Next.js API) — REST endpoints for auth, sessions, and agent control
+- `auth` (Supabase Auth) — JWT authentication, OAuth providers, session tokens
+
+**`engine` (Cloud CLI Engine) — folded from L2 source:**
+
+- `claude` (Claude Code) — executes agent workflows with full orchestration tools
+- `skillloader` (Plugin Discovery) — discovers and loads skills, agents, commands from the plugin directory
+- `hooks` (PreToolUse Guards) — enforces syntactic rules; blocks commits to main, `rm -rf`, etc.
+
+**`plugin_box` (Soleur Plugin) — see L3 `component-plugin.md` for full decomposition:**
+
+- `skills` — workflow skills (brainstorm, plan, work, review, compound, ship, one-shot, …) under `plugins/soleur/skills/`
+- `agents` — domain agents across 8 departments under `plugins/soleur/agents/`
+- `kb` — Markdown + YAML conventions, learnings, ADRs, specs, plans, brainstorms under `knowledge-base/`
+
+**`compute` (Compute & Tunnel) — folded from L2 source:**
+
+- `tunnel` (cloudflared) — zero-trust inbound access; no exposed ports (ADR-008)
+- `hetzner` (Hetzner Cloud) — Docker containers running web app and CLI engine (ADR-006)
+
+**`thirdparty` (Third-Party Services) — same fold as L1 `system-context.md`:**
+
+- `stripe` — payment processing and subscription checkout + webhooks (test mode)
+- `discord` — community notifications and release announcements via webhook
+- `plausible` — privacy-focused page-view analytics (no cookies, GDPR-compliant)
 
 ## Notes
 
