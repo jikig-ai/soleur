@@ -3,7 +3,7 @@ title: CI Required Ruleset `bypass_actors` Drift
 audience: operator
 on_page_for: scheduled-ruleset-bypass-audit
 issues: [3544, 3542, 2719]
-threshold: single-user-incident
+brand_survival_threshold: single-user incident
 last_updated: 2026-05-11
 ---
 

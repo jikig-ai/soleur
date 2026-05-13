@@ -7,7 +7,7 @@ applies_to:
   - apps/web-platform/scripts/verify-required-secrets.sh
 related_issues: [3187, 3181, 2997]
 related_prs: [3224]
-brand_survival: single-user-incident
+brand_survival_threshold: single-user incident
 ---
 
 # GitHub App drift-guard runbook
