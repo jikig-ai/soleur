@@ -14,7 +14,11 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { attachWsInjector, type WsInjector } from "./cc-soleur-go-ws-injector";
-import { MOCK_USER, MOCK_SESSION, AUTH_COOKIE_NAME } from "./mock-supabase";
+import { MOCK_USER } from "./mock-supabase";
+import {
+  injectFakeSupabaseSession,
+  mockSupabaseAuth,
+} from "./helpers/supabase-mocks";
 import type { StreamEvent } from "@/lib/chat-state-machine";
 
 const CONV_ID = "conv-stage-6-smoke";
@@ -37,33 +41,8 @@ const MOCK_CONVERSATION = {
  * `**\/ws`. Finally `page.goto` boots the chat surface which opens the WS.
  */
 async function bootChat(page: Page): Promise<WsInjector> {
-  // Inject a fake Supabase session so the client doesn't short-circuit auth
-  // before our /auth/v1/user mock fires. Mirrors start-fresh-onboarding.e2e.ts.
-  // Session shape is the MOCK_SESSION fixture from e2e/mock-supabase.ts; we
-  // serialize once in test context and replay inside the page via init-script.
-  const fakeSessionJson = JSON.stringify(MOCK_SESSION);
-  await page.addInitScript(
-    ({ json, cookieName }) => {
-      localStorage.setItem(cookieName, json);
-    },
-    { json: fakeSessionJson, cookieName: AUTH_COOKIE_NAME },
-  );
-
-  await page.route("**/auth/v1/user", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(MOCK_USER),
-    }),
-  );
-
-  await page.route("**/auth/v1/token*", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(MOCK_SESSION),
-    }),
-  );
+  await injectFakeSupabaseSession(page);
+  await mockSupabaseAuth(page);
 
   // PostgREST .single() expects an object, not an array — match the existing
   // mock-supabase behavior (see e2e/mock-supabase.ts:wantsSingle).
@@ -92,12 +71,6 @@ async function bootChat(page: Page): Promise<WsInjector> {
         },
       ]),
     }),
-  );
-
-  // Realtime mock: empty 200 to prevent retry loops (does NOT collide with
-  // /ws — the cc-soleur-go socket uses `/ws`, realtime uses `/realtime/**`).
-  await page.route("**/realtime/**", (route) =>
-    route.fulfill({ status: 200, contentType: "text/plain", body: "" }),
   );
 
   const injector = await attachWsInjector(page);
