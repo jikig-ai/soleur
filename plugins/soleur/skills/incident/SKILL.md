@@ -1,6 +1,6 @@
 ---
 name: incident
-description: "This skill should be used when classifying a live or recent production incident and scaffolding a redaction-gated internal post-incident report (PIR)."
+description: "This skill should be used when scaffolding a redaction-gated post-incident report (PIR) after a production incident."
 allowed-tools:
   - Read
   - Write
@@ -19,14 +19,14 @@ preconditions:
 
 **Purpose:** classify an incident's `brand_survival_threshold` in <60s, gate PIR drafting behind a GDPR Art. 33/34 notification-trigger evaluation, and scaffold a redaction-gated internal PIR matching the shape of `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`.
 
-**Operator-invoked only.** No Sentry/cron auto-fire substrate. Pre-write redaction sentinel (`scripts/redact-sentinel.sh`) is load-bearing — it runs BEFORE the draft is emitted inline to the conversation transcript AND before any file is written to disk. Transcripts ARE write boundaries; sentinel must precede inline-emit, not just file-commit.
+**Operator-invoked only.** No Sentry/cron auto-fire substrate. Pre-write redaction sentinel ([scripts/redact-sentinel.sh](./scripts/redact-sentinel.sh)) is load-bearing — it runs BEFORE the draft is emitted inline to the conversation transcript AND before any file is written to disk. Transcripts ARE write boundaries; sentinel must precede inline-emit, not just file-commit.
 
 All prod-touching steps are advisory + ack-gated per `hr-menu-option-ack-not-prod-write-auth`. The commit gate accepts a single literal token (`COMMIT-PIR`); LLM fuzzy-interpretation of "ok looks good" must never write a PIR.
 
 ## Headless / Dry-run modes
 
 - `--headless`: suppress interactive prompts. On any blocking ack, exit non-zero with a structured error message instead of waiting. Phase 8 still requires `status: resolved`.
-- `--dry-run <fixture.json>`: read fields from a synthetic JSON fixture instead of operator prompts. Used by `scripts/dry-run.sh` to drive AC8-AC13 against `test/fixtures/dry-run-*.json`. Dry-run never writes to `runbooks/` and never invokes `compound-capture`; it emits the would-be PIR to stdout.
+- `--dry-run <fixture.json>`: read fields from a synthetic JSON fixture instead of operator prompts. Used by [scripts/dry-run.sh](./scripts/dry-run.sh) to drive AC8-AC13 against fixtures under `test/fixtures/`. Dry-run never writes to `runbooks/` and never invokes `compound-capture`; it emits the would-be PIR to stdout.
 
 ## Phase 0 — Capture facts
 
