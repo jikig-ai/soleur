@@ -77,11 +77,11 @@ Pre-merge TDD: each phase is RED (failing test) → GREEN (smallest passing impl
 
 **Scope:** `apps/web-platform/lib/auth/validate-origin.ts` only.
 
-- [ ] **RED**: extend `apps/web-platform/test/validate-origin.test.ts` (or create it if absent) with three new cases:
+- [x] **RED**: extend `apps/web-platform/test/validate-origin.test.ts` (or create it if absent) with three new cases:
   1. `NEXT_PUBLIC_DEV_EXTRA_ORIGINS="http://localhost:3099,http://localhost:3100"` + `NODE_ENV=development` → both URLs accepted as origin.
   2. `NEXT_PUBLIC_DEV_EXTRA_ORIGINS=""` (or unset) + `NODE_ENV=development` → only `localhost:3000` + `https://app.soleur.ai` accepted (regression guard).
   3. `NEXT_PUBLIC_DEV_EXTRA_ORIGINS="http://localhost:3099"` + `NODE_ENV=production` → 3099 rejected (production behavior unchanged).
-- [ ] **GREEN**: edit `lib/auth/validate-origin.ts:10-14`. Add comma-split parser for `NEXT_PUBLIC_DEV_EXTRA_ORIGINS`. Keep existing single-value `NEXT_PUBLIC_APP_URL` for backward compatibility. Concrete shape:
+- [x] **GREEN**: edit `lib/auth/validate-origin.ts:10-14`. Add comma-split parser for `NEXT_PUBLIC_DEV_EXTRA_ORIGINS`. Keep existing single-value `NEXT_PUBLIC_APP_URL` for backward compatibility. Concrete shape:
   ```ts
   const DEV_EXTRA = (process.env.NEXT_PUBLIC_DEV_EXTRA_ORIGINS ?? "")
     .split(",")
@@ -94,8 +94,8 @@ Pre-merge TDD: each phase is RED (failing test) → GREEN (smallest passing impl
     ...DEV_EXTRA,
   ]);
   ```
-- [ ] **Document**: append a one-line block to `apps/web-platform/.env.example` documenting `NEXT_PUBLIC_DEV_EXTRA_ORIGINS` (Playwright-only, comma-separated).
-- [ ] **Verify**: `bun run vitest apps/web-platform/test/validate-origin.test.ts` green.
+- [x] **Document**: append a one-line block to `apps/web-platform/.env.example` documenting `NEXT_PUBLIC_DEV_EXTRA_ORIGINS` (Playwright-only, comma-separated).
+- [x] **Verify**: `bun run vitest apps/web-platform/test/validate-origin.test.ts` green.
 
 ### Phase 2 — WS-injector helper (GREEN only, no separate unit test)
 
