@@ -14,28 +14,14 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { attachWsInjector, type WsInjector } from "./cc-soleur-go-ws-injector";
+import { MOCK_USER, MOCK_SESSION, AUTH_COOKIE_NAME } from "./mock-supabase";
 import type { StreamEvent } from "@/lib/chat-state-machine";
 
 const CONV_ID = "conv-stage-6-smoke";
 
-const MOCK_AUTH_USER = {
-  id: "test-user-id",
-  aud: "authenticated",
-  role: "authenticated",
-  email: "test@e2e.com",
-  email_confirmed_at: "2024-01-01T00:00:00Z",
-  phone: "",
-  confirmed_at: "2024-01-01T00:00:00Z",
-  app_metadata: { provider: "email", providers: ["email"] },
-  user_metadata: {},
-  identities: [],
-  created_at: "2024-01-01T00:00:00Z",
-  updated_at: "2024-01-01T00:00:00Z",
-};
-
 const MOCK_CONVERSATION = {
   id: CONV_ID,
-  user_id: "test-user-id",
+  user_id: MOCK_USER.id,
   title: "Stage 6 smoke",
   active_workflow: "cc-router",
   created_at: "2024-01-01T00:00:00Z",
@@ -53,36 +39,21 @@ const MOCK_CONVERSATION = {
 async function bootChat(page: Page): Promise<WsInjector> {
   // Inject a fake Supabase session so the client doesn't short-circuit auth
   // before our /auth/v1/user mock fires. Mirrors start-fresh-onboarding.e2e.ts.
-  await page.addInitScript(() => {
-    const fakeSession = {
-      access_token: "test-access-token",
-      token_type: "bearer",
-      expires_in: 86400,
-      expires_at: Math.floor(Date.now() / 1000) + 86400,
-      refresh_token: "test-refresh-token",
-      user: {
-        id: "test-user-id",
-        aud: "authenticated",
-        role: "authenticated",
-        email: "test@e2e.com",
-        email_confirmed_at: "2024-01-01T00:00:00Z",
-        phone: "",
-        confirmed_at: "2024-01-01T00:00:00Z",
-        app_metadata: { provider: "email", providers: ["email"] },
-        user_metadata: {},
-        identities: [],
-        created_at: "2024-01-01T00:00:00Z",
-        updated_at: "2024-01-01T00:00:00Z",
-      },
-    };
-    localStorage.setItem("sb-localhost-auth-token", JSON.stringify(fakeSession));
-  });
+  // Session shape is the MOCK_SESSION fixture from e2e/mock-supabase.ts; we
+  // serialize once in test context and replay inside the page via init-script.
+  const fakeSessionJson = JSON.stringify(MOCK_SESSION);
+  await page.addInitScript(
+    ({ json, cookieName }) => {
+      localStorage.setItem(cookieName, json);
+    },
+    { json: fakeSessionJson, cookieName: AUTH_COOKIE_NAME },
+  );
 
   await page.route("**/auth/v1/user", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(MOCK_AUTH_USER),
+      body: JSON.stringify(MOCK_USER),
     }),
   );
 
@@ -90,14 +61,7 @@ async function bootChat(page: Page): Promise<WsInjector> {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({
-        access_token: "test-access-token",
-        token_type: "bearer",
-        expires_in: 86400,
-        expires_at: Math.floor(Date.now() / 1000) + 86400,
-        refresh_token: "test-refresh-token",
-        user: MOCK_AUTH_USER,
-      }),
+      body: JSON.stringify(MOCK_SESSION),
     }),
   );
 
@@ -138,12 +102,6 @@ async function bootChat(page: Page): Promise<WsInjector> {
 
   const injector = await attachWsInjector(page);
 
-  // Capture any uncaught client-side error so a render crash in 3.4
-  // (FQN composite key) fails the test loudly instead of silently passing.
-  const pageErrors: Error[] = [];
-  page.on("pageerror", (err) => pageErrors.push(err));
-  (injector as unknown as { _pageErrors: Error[] })._pageErrors = pageErrors;
-
   const response = await page.goto(`/dashboard/chat/${CONV_ID}`);
   if (response && response.status() >= 500) {
     test.skip(true, "Dev server compile error — skipped in worktree, passes in CI");
@@ -153,21 +111,19 @@ async function bootChat(page: Page): Promise<WsInjector> {
 
   // Server-side confirmation frame. The reducer enters its happy path only
   // after `session_started`; without it `useWebSocket` won't accept follow-up
-  // events on the resolved conversation id. Cast to StreamEvent-superset
-  // (session_started is in WSMessage but excluded from StreamEvent because
-  // it's a control frame, not a reducer-visible state event).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (injector as any).send({
-    type: "session_started",
-    conversationId: CONV_ID,
-  });
+  // events on the resolved conversation id. `session_started` is a control
+  // frame outside the reducer-visible `StreamEvent` subset, so it goes
+  // through the typed `sendControl` channel rather than `send`.
+  injector.sendControl({ type: "session_started", conversationId: CONV_ID });
 
   return injector;
 }
 
 function assertNoPageErrors(injector: WsInjector) {
-  const errs = (injector as unknown as { _pageErrors?: Error[] })._pageErrors ?? [];
-  expect(errs, `page errors: ${errs.map((e) => e.message).join("; ")}`).toHaveLength(0);
+  expect(
+    injector.pageErrors,
+    `page errors: ${injector.pageErrors.map((e) => e.message).join("; ")}`,
+  ).toHaveLength(0);
 }
 
 // ---------------------------------------------------------------------------

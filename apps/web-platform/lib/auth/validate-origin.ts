@@ -12,15 +12,21 @@ const PRODUCTION_ORIGINS = new Set(["https://app.soleur.ai"]);
 // of dev-mode origins (e.g. "http://localhost:3099,http://localhost:3100").
 // Production behavior is unaffected — only PRODUCTION_ORIGINS is consulted
 // when NODE_ENV !== "development".
+//
+// Entries are lowercased on insert so `HTTP://Localhost:3099` and the
+// request-side lowercased lookup (line 38) agree. The `i` flag on the
+// scheme regex is hygiene — without it `HTTP://x` survives the filter but
+// would never match a lowercased Origin header, producing a silent-no-op
+// allowlist entry.
 function buildDevOrigins(): Set<string> {
   const extra = (process.env.NEXT_PUBLIC_DEV_EXTRA_ORIGINS ?? "")
     .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0 && /^https?:\/\//.test(s));
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0 && /^https?:\/\//i.test(s));
   return new Set([
     "https://app.soleur.ai",
     "http://localhost:3000",
-    ...(process.env.NEXT_PUBLIC_APP_URL ? [process.env.NEXT_PUBLIC_APP_URL] : []),
+    ...(process.env.NEXT_PUBLIC_APP_URL ? [process.env.NEXT_PUBLIC_APP_URL.toLowerCase()] : []),
     ...extra,
   ]);
 }
