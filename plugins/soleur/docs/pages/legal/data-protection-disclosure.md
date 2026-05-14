@@ -164,7 +164,7 @@ For processing activities where Jikigai acts as Controller (see Sections 2.1b an
 | Stripe Inc ([stripe.com](https://stripe.com)) | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | Contract performance (Article 6(1)(b)) | [Stripe Sub-processors](https://stripe.com/legal/service-providers) |
 | Hetzner Online GmbH ([hetzner.com](https://hetzner.com)) | Web Platform infrastructure hosting (Helsinki, EU-only) | User workspaces, encrypted API keys, Docker containers | Contract performance (Article 6(1)(b)) | [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/) |
 | Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) for authenticated users; legitimate interest (Article 6(1)(f)) for unauthenticated traffic | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
-| Sentry (Functional Software GmbH) ([sentry.io](https://sentry.io)) | Web Platform error monitoring and breach detection (Sentry SDK) | Error messages, stack traces, request metadata, pseudonymous user identifier (`userIdHash`) | Legitimate interest (Article 6(1)(f)) for service reliability; legal obligation (Article 6(1)(c)) for Article 33 breach-notification timeliness | [Sentry Sub-processors](https://sentry.io/legal/dpa/) |
+| Sentry (Functional Software GmbH) ([sentry.io](https://sentry.io)) | Web Platform error monitoring and breach detection (Sentry SDK) | Error messages, stack traces, request metadata (URL paths, HTTP headers, navigation breadcrumbs), pseudonymous user identifier (`userIdHash`) | Legitimate interest (Article 6(1)(f)) for service reliability; legal obligation (Article 6(1)(c)) for Article 33 breach-notification timeliness | [Sentry Sub-processors](https://sentry.io/legal/dpa/) |
 | Resend Inc ([resend.com](https://resend.com)) | Web Platform transactional email notifications (review gate alerts) | Recipient email address, email content (notification summaries) | Legitimate interest (Article 6(1)(f)) for transactional notifications | [Resend DPA](https://resend.com/legal/dpa) |
 
 This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), 2.3(h), 2.3(i), 2.3(j), 2.3(k), 2.3(l), and 2.3(m).
@@ -253,7 +253,7 @@ Soleur has no visibility into the User's local environment and therefore cannot 
 
 In the unlikely event that a breach affects the Soleur GitHub repository, Docs Site, Web Platform (app.soleur.ai), or distribution channels:
 
-- **(a)** We will notify affected Users without undue delay, and in any event within 72 hours of becoming aware of the breach, where feasible.
+- **(a)** We will notify affected Users without undue delay, and in any event within 72 hours of becoming aware of the breach, where feasible (Article 33 GDPR).
 - **(b)** Notification will be provided via the [Soleur GitHub repository](https://github.com/jikig-ai/soleur) and, where possible, through direct communication (including email notification for Web Platform users with an account on file).
 - **(c)** The notification will include the nature of the breach, likely consequences, and measures taken or proposed to address it.
 
