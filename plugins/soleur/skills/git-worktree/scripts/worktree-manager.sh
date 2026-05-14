@@ -54,6 +54,11 @@ fi
 # Auto-confirm flag (--yes skips all interactive prompts)
 YES_FLAG=false
 
+# When true, `create` also fast-forwards the local <from> ref (legacy behavior).
+# Default false: new worktrees base on refs/remotes/origin/<from> directly so
+# `create` no longer fails when a sibling worktree holds <from> checked out (#3741).
+UPDATE_LOCAL_MAIN=false
+
 # Get repo root and detect bare repo (single subprocess for both)
 # IS_BARE: true when the parent/root repo is bare (affects fetch strategy, file sync)
 # IS_IN_WORKTREE: true when running from inside a worktree (has a working tree)
@@ -239,9 +244,38 @@ ensure_gitignore() {
   fi
 }
 
+# Fetch from origin without mutating the local <branch> ref, then echo the
+# best ref to use as the worktree base. Safe to run while the local <branch>
+# is checked out in another worktree — only refs/remotes/origin/<branch> (if
+# tracked) and FETCH_HEAD are updated. Default base path for `create` since #3741.
+#
+# Precedence:
+#   1. refs/remotes/origin/<branch>  — normal clone with standard fetch refspec
+#   2. FETCH_HEAD                    — bare clones without remotes.origin.fetch
+#                                      get FETCH_HEAD written by `git fetch origin <b>`
+#   3. <branch>                      — offline fallback to local ref
+fetch_origin_branch_base() {
+  local branch="$1"
+  # All progress/warning output goes to stderr — only the chosen ref name is
+  # written to stdout so callers can capture it via $(...).
+  echo -e "${BLUE}Fetching latest origin/$branch...${NC}" >&2
+  if ! git fetch origin "$branch" 2>/dev/null; then
+    echo -e "${YELLOW}Warning: Could not fetch origin/$branch -- using cached ref${NC}" >&2
+  fi
+  if git rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    echo "origin/$branch"
+  elif git rev-parse --verify --quiet FETCH_HEAD >/dev/null 2>&1; then
+    echo "FETCH_HEAD"
+  else
+    echo "$branch"
+  fi
+}
+
 # Update a branch ref to latest remote, handling bare vs non-bare repos.
 # In bare repos: uses fetch with refspec (no working tree needed).
 # In non-bare repos: uses checkout + pull.
+# Kept for `--update-local-main` opt-in path and for cleanup_merged_worktrees
+# (post-cleanup main advancement).
 update_branch_ref() {
   local branch="$1"
   echo -e "${BLUE}Updating $branch...${NC}"
@@ -421,18 +455,32 @@ create_worktree() {
     return
   fi
 
-  # Update base branch (bare-aware)
-  update_branch_ref "$from_branch"
-
   # Create worktree
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
 
-  echo -e "${BLUE}Creating worktree...${NC}"
-  git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
+  # Base on origin/<from> by default (avoids local-ref lock contention, #3741).
+  # --update-local-main opt-in keeps the legacy behavior for operators who want
+  # the local <from> ref fast-forwarded.
+  local base_ref
+  local track_flag=""
+  if [[ "$UPDATE_LOCAL_MAIN" == "true" ]]; then
+    update_branch_ref "$from_branch"
+    base_ref="$from_branch"
+  else
+    base_ref="$(fetch_origin_branch_base "$from_branch")"
+    # --no-track is load-bearing: without it, branch.<new>.merge would be set
+    # to refs/heads/<from>, breaking bare `git push` from inside the worktree.
+    # Pre-fix behavior left upstream UNSET; this preserves that exactly.
+    track_flag="--no-track"
+  fi
+
+  echo -e "${BLUE}Creating worktree from $base_ref...${NC}"
+  # shellcheck disable=SC2086 # intentional unquoted $track_flag: empty string must elide
+  git worktree add $track_flag -b "$branch_name" "$worktree_path" "$base_ref"
 
   # Verify BEFORE fixing config — most honest check of worktree health
-  verify_worktree_created "$worktree_path" "$branch_name" "$from_branch"
+  verify_worktree_created "$worktree_path" "$branch_name" "$base_ref"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
@@ -484,19 +532,31 @@ create_for_feature() {
   echo "  Spec dir: $spec_dir"
   echo ""
 
-  # Update base branch (bare-aware)
-  update_branch_ref "$from_branch"
-
   # Ensure directories exist
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
 
-  # Create worktree with new branch
-  echo -e "${BLUE}Creating worktree...${NC}"
-  git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
+  # Base on origin/<from> by default (avoids local-ref lock contention, #3741).
+  # --update-local-main opt-in keeps the legacy behavior for operators who want
+  # the local <from> ref fast-forwarded.
+  local base_ref
+  local track_flag=""
+  if [[ "$UPDATE_LOCAL_MAIN" == "true" ]]; then
+    update_branch_ref "$from_branch"
+    base_ref="$from_branch"
+  else
+    base_ref="$(fetch_origin_branch_base "$from_branch")"
+    # --no-track is load-bearing: without it, branch.<new>.merge would be set
+    # to refs/heads/<from>, breaking bare `git push` from inside the worktree.
+    track_flag="--no-track"
+  fi
+
+  echo -e "${BLUE}Creating worktree from $base_ref...${NC}"
+  # shellcheck disable=SC2086 # intentional unquoted $track_flag: empty string must elide
+  git worktree add $track_flag -b "$branch_name" "$worktree_path" "$base_ref"
 
   # Verify BEFORE fixing config — most honest check of worktree health
-  verify_worktree_created "$worktree_path" "$branch_name" "$from_branch"
+  verify_worktree_created "$worktree_path" "$branch_name" "$base_ref"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
@@ -1325,10 +1385,15 @@ show_help() {
   cat << EOF
 Git Worktree Manager
 
-Usage: worktree-manager.sh [--yes] <command> [options]
+Usage: worktree-manager.sh [--yes] [--update-local-main] <command> [options]
 
 Global Flags:
   --yes                               Auto-confirm all prompts (for headless/scripted use)
+  --update-local-main                 (create only) Also fast-forward the local <from>
+                                      ref to origin/<from>. Default: only the remote-
+                                      tracking ref is updated; local <from> is never
+                                      mutated. Bypasses the local-main lock contention
+                                      class of failures (#3741).
 
 Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
@@ -1376,11 +1441,13 @@ Examples:
 EOF
 }
 
-# Parse --yes flag from arguments before dispatching
+# Parse global flags from arguments before dispatching
 args=()
 for arg in "$@"; do
   if [[ "$arg" == "--yes" ]]; then
     YES_FLAG=true
+  elif [[ "$arg" == "--update-local-main" ]]; then
+    UPDATE_LOCAL_MAIN=true
   else
     args+=("$arg")
   fi
