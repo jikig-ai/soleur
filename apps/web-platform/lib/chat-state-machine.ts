@@ -241,7 +241,7 @@ export interface StreamEventResult {
  * `interactive_prompt_response` is intentionally excluded — it's a
  * client→server event and never reaches the reducer.
  */
-type StreamEvent = Extract<
+export type StreamEvent = Extract<
   WSMessage,
   | { type: "stream_start" }
   | { type: "stream" }

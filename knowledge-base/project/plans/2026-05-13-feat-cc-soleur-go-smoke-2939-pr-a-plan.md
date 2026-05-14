@@ -101,8 +101,8 @@ Pre-merge TDD: each phase is RED (failing test) → GREEN (smallest passing impl
 
 **Scope:** new file `apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` (~15-20 LoC). Per plan-review (DHH + Simplicity convergent): drop the generic `buildStreamEvent<T>` builder + separate vitest unit test. The 4 e2e tests in Phase 3 are the effective test of the helper; `tsc --noEmit` (AC7) covers the type-safety check; call-site `satisfies StreamEvent` gives shape verification without an indirection layer.
 
-- [ ] **Fold in #2224 (partial)**: add `export` keyword to `type StreamEvent = ...` declaration in `apps/web-platform/lib/chat-state-machine.ts:244` (currently internal). 1-line edit.
-- [ ] **GREEN**: implement helper. Final shape:
+- [x] **Fold in #2224 (partial)**: add `export` keyword to `type StreamEvent = ...` declaration in `apps/web-platform/lib/chat-state-machine.ts:244` (currently internal). 1-line edit.
+- [x] **GREEN**: implement helper. Final shape:
   ```ts
   import type { Page, WebSocketRoute } from "@playwright/test";
   import type { StreamEvent } from "@/lib/chat-state-machine";
@@ -139,19 +139,19 @@ Mandatory pre-test setup (mirror `start-fresh-onboarding.e2e.ts:62-153` pattern)
 
 **Per-bubble tests:**
 
-- [ ] **3.1 subagent-group expand-boundary** (FR1.1):
+- [x] **3.1 subagent-group expand-boundary** (FR1.1):
   - Inject 3× `subagent_spawn` events with same `parentId="p-test-1"`, different `spawnId`/`leaderId`.
   - Assert `await expect(page.locator('[data-parent-spawn-id="p-test-1"]')).toHaveCount(1)`.
   - Assert `await expect(page.locator('[data-parent-spawn-id="p-test-1"] [data-child-spawn-id]')).toHaveCount(3)`.
   - Assert `await expect(page.locator('[data-parent-spawn-id="p-test-1"][data-expanded="false"]')).toBeVisible()` (collapsed when N=3).
   - Second test case (or chained injection): inject only 2× `subagent_spawn` with a new `parentId`; assert `[data-expanded="true"]` (auto-expand boundary at N≤2).
 
-- [ ] **3.2 interactive-prompt-card resolved-state** (FR1.2):
+- [x] **3.2 interactive-prompt-card resolved-state** (FR1.2):
   - Inject `interactive_prompt(kind="ask_user", promptId="pid-test-1", options=[{id:"a"},{id:"b"},{id:"c"}], multi_select=true)`.
   - Assert `await expect(page.locator('[data-prompt-id="pid-test-1"][data-prompt-kind="ask_user"]')).toBeVisible()`.
   - (Resolved-state assertion — derived from `interactive-prompt-card-resolved.test.tsx`): inject a follow-up event resolving the prompt with `selectedIds=["a","c"]`; assert the card's resolved-state grammar renders (specific selector form to confirm in Phase 0 from the `*-resolved.test.tsx` file).
 
-- [ ] **3.3 workflow-lifecycle-bar chip-removal — BOTH trigger paths** (FR1.3, **covers both `stream_end` AND `workflow_started` triggers per Research Reconciliation row 5**). Two sub-test cases in the same `test()` block (or two adjacent `test()` blocks sharing the same setup):
+- [x] **3.3 workflow-lifecycle-bar chip-removal — BOTH trigger paths** (FR1.3, **covers both `stream_end` AND `workflow_started` triggers per Research Reconciliation row 5**). Two sub-test cases in the same `test()` block (or two adjacent `test()` blocks sharing the same setup):
   - **3.3a `tool_use → workflow_started` path:**
     - Inject `{ type: "tool_use", leaderId: "cc_router", label: "Routing via /soleur:go" } satisfies StreamEvent`.
     - Assert chip present: `await expect(page.locator('[data-tool-chip-id^="cc_router-"]')).toHaveCount(1)`.
@@ -166,20 +166,20 @@ Mandatory pre-test setup (mirror `start-fresh-onboarding.e2e.ts:62-153` pattern)
     - Assert chip removed: `await expect(page.locator('[data-tool-chip-id^="cc_router-"]')).toHaveCount(0)`.
   - **Why both:** the reducer ships both removal paths (chat-state-machine.ts lines 522 + 716). A test that asserts only one would silently green-light a regression that removes the other. Per enumerate-extend pattern (2026-04-18 learning).
 
-- [ ] **3.4 tool-use-chip unregistered-mcp-fqn render** (FR1.4, **reframed per Research Reconciliation row 4 — degraded UX is literal FQN appearing as `data-tool-chip-id`**):
+- [x] **3.4 tool-use-chip unregistered-mcp-fqn render** (FR1.4, **reframed per Research Reconciliation row 4 — degraded UX is literal FQN appearing as `data-tool-chip-id`**):
   - Inject `{ type: "tool_use", leaderId: "cc_router", label: "mcp__soleur_platform__test_synthesized_smoke" } satisfies StreamEvent` — synthesized name that is NEITHER registered NOR on the Tier 3 denylist (`mcp__soleur_platform__plausible_*`), per Spec TR9. The reducer expands `label` to BOTH `toolName` and `toolLabel` per `chat-state-machine.ts:362-364`, producing `data-tool-chip-id="cc_router-mcp__soleur_platform__test_synthesized_smoke-mcp__soleur_platform__test_synthesized_smoke"`. **Sentry-mirror impact:** none — this is a synthesized client-side injection; the production iterator-hook mirror (`cc-dispatcher.ts:1044`) fires only on real cc-router-dispatched tool calls.
   - Assert chip rendered with FQN-in-key: `await expect(page.locator('[data-tool-chip-id^="cc_router-mcp__soleur_platform__test_synthesized_smoke-"]')).toHaveCount(1)`.
   - Assert chip renders WITHOUT crash (test reaches the assertion without `page.on("pageerror", ...)` firing — wire an error capture at setup).
 
 ### Phase 4 — Integration verification
 
-- [ ] `bun run vitest apps/web-platform/test/validate-origin.test.ts` green (Phase 1 only — no separate WS-injector unit test per plan-review).
-- [ ] `cd apps/web-platform && bun playwright test --project=authenticated cc-soleur-go-bubbles.e2e.ts` green.
-- [ ] **No-Sentry-flood guard** (per Spec NG4 / TR9): `grep -n "mcp__soleur_platform__plausible_" apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns zero. Anchor is the literal denylist prefix (`*` is not regex; trailing pattern stripped). False-pass risk on shorthand object literals (`{ label }` where `label === "...plausible_..."`) is acknowledged but low — Phase 3 tests use only the synthesized `test_synthesized_smoke` FQN.
-- [ ] **No-real-SDK guard** (per Spec NG2): `grep -n "ANTHROPIC_API_KEY\|claude-agent-sdk" apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns zero.
-- [ ] **No-screenshot-baseline guard** (per Spec NG1): `grep -rn "toHaveScreenshot" apps/web-platform/e2e/` returns no NEW matches vs main.
-- [ ] **`tsc --noEmit` clean** for `apps/web-platform`. Verifies the `export StreamEvent` change doesn't break downstream consumers; verifies WS-injector call-site `satisfies StreamEvent` shapes (the type-safety check that replaces the dropped unit test).
-- [ ] **Auth-gate enumeration** (TR10): PR-A does NOT introduce a new auth primitive — confirm via `grep -n "withUserRateLimit\|authenticateAndResolveKbPath\|getUser" apps/web-platform/lib/auth/validate-origin.ts` returns zero. No enumeration extension needed.
+- [x] `bun run vitest apps/web-platform/test/validate-origin.test.ts` green (Phase 1 only — no separate WS-injector unit test per plan-review).
+- [x] `cd apps/web-platform && bun playwright test --project=authenticated cc-soleur-go-bubbles.e2e.ts` green.
+- [x] **No-Sentry-flood guard** (per Spec NG4 / TR9): `grep -n "mcp__soleur_platform__plausible_" apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns zero. Anchor is the literal denylist prefix (`*` is not regex; trailing pattern stripped). False-pass risk on shorthand object literals (`{ label }` where `label === "...plausible_..."`) is acknowledged but low — Phase 3 tests use only the synthesized `test_synthesized_smoke` FQN.
+- [x] **No-real-SDK guard** (per Spec NG2): `grep -n "ANTHROPIC_API_KEY\|claude-agent-sdk" apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns zero.
+- [x] **No-screenshot-baseline guard** (per Spec NG1): `grep -rn "toHaveScreenshot" apps/web-platform/e2e/` returns no NEW matches vs main.
+- [x] **`tsc --noEmit` clean** for `apps/web-platform`. Verifies the `export StreamEvent` change doesn't break downstream consumers; verifies WS-injector call-site `satisfies StreamEvent` shapes (the type-safety check that replaces the dropped unit test).
+- [x] **Auth-gate enumeration** (TR10): PR-A does NOT introduce a new auth primitive — confirm via `grep -n "withUserRateLimit\|authenticateAndResolveKbPath\|getUser" apps/web-platform/lib/auth/validate-origin.ts` returns zero. No enumeration extension needed.
 
 ### Phase 5 — Compound + ship handoff (post-implementation)
 
