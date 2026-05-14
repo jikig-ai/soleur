@@ -79,7 +79,7 @@ The Soleur GitHub App is installed per tenant repo with the narrowest permission
 
 ### TR3: Per-tenant Terraform roots, R2 backend
 
-Each tenant's infrastructure is managed by a per-tenant Terraform root. R2 backend pattern from `apps/web-platform/infra/main.tf:1-14` is copied. Each tenant has a dedicated R2 key: `tenants/<tenant-id>/terraform.tfstate`. Per `hr-every-new-terraform-root-must-include-an` (AGENTS.core.md:16).
+Each tenant's infrastructure is managed by a per-tenant Terraform root **inside that tenant's GitHub repo** (NOT inside the Soleur monorepo — the scaffold template at `apps/_templates/tenant-stack/infra/` is the source pattern, copied into each tenant repo at provisioning time). R2 backend pattern from `apps/web-platform/infra/main.tf:1-14` is copied. Each tenant has a dedicated R2 key: `tenants/<founder-id>/terraform.tfstate` (the data-layer term for "tenant" in this codebase is `founder_id` — see TR5 reconciliation). Per `hr-every-new-terraform-root-must-include-an` (AGENTS.core.md:16) — the rule mandates the **R2 backend**, NOT a destroy runbook; the original issue body misread the rule (correction documented in ADR-030).
 
 ### TR4: CF Tunnel + webhook per tenant
 
@@ -87,7 +87,11 @@ Each tenant's prod deploy uses the #749 architecture: a CF Tunnel from the tenan
 
 ### TR5: Day-1 audit log to Supabase eu-west-1
 
-Meta-audit log table schema, retention policy (24 months), and write path ship in v1. SECURITY DEFINER functions for log writes pin `search_path` per `cq-pg-security-definer-search-path-pin-pg-temp`. RLS forbids cross-tenant reads.
+Meta-audit log table schema, retention policy (12 months — orchestration-plane events do not justify 24mo per legal-compliance review; PA 8 P0 mirror precedent), and write path ship in v1. SECURITY DEFINER functions for log writes pin `SET search_path = public, pg_temp` (public FIRST, in that order, per `cq-pg-security-definer-search-path-pin-pg-temp` verbatim). RLS forbids cross-tenant reads.
+
+**Data-layer term reconciliation:** the brainstorm and product framing use "tenant"; the codebase's existing convention is `founder_id` / `user_id` (see `apps/web-platform/supabase/migrations/041_dsar_export_jobs.sql:127-216` for the audit-table precedent). v1 maps `founder_id` ↔ "tenant" 1:1 (one founder owns one tenant stack). The new audit table uses `founder_id` as the FK column to match precedent. ADR-030 documents the mapping; future multi-stack-per-founder support is out of v1 scope.
+
+**Audit shape:** writes go via SECURITY DEFINER RPC only (direct INSERT blocked by table-level REVOKE per learning `2026-03-20-supabase-column-level-grant-override.md` — table-level REVOKE + GRANT-only-on-RPC, never column-level). Include `gh_run_id bigint` + `oidc_jti text` (RFC 7519 §4.1.7 — jti is a case-sensitive string, NOT uuid) as non-forgeable upstream discriminators per learning `2026-03-20-gdpr-remediation-migration-discriminator-strategy.md`. Include `retention_until timestamptz NOT NULL DEFAULT (now() + interval '12 months')` per GDPR Art. 5(1)(e) fixture. `founder_id` FK uses `ON DELETE RESTRICT` (NOT `SET NULL`) so the Art. 17 `anonymise_tenant_deploy_audit()` RPC runs BEFORE `auth.users` deletion; offboarding runbook documents the explicit ordering.
 
 ### TR6: RoPA entry for the multi-tenant deploy processing activity
 
