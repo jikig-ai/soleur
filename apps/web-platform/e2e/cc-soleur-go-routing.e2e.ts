@@ -18,17 +18,24 @@
 //     one-shot, brainstorm, plan, work, review, drain-labeled-backlog). cc-
 //     router is the dispatcher itself; what it routes INTO is the WorkflowName.
 //     Tests pick `"brainstorm"` as the routed workflow.
-//   - FR2.4 cost circuit-breaker — `usage_update` is in ws-zod-schemas.ts:300
-//     but NOT in the reducer StreamEvent union (chat-state-machine.ts:244-258)
-//     and `WorkflowLifecycleBar` has no `circuit_breaker` state. Ships as
-//     `test.fixme` + scope-out #3774.
-//   - FR2.8 subprocess reuse — `subagent_spawn` reducer
-//     (chat-state-machine.ts:596-665) appends without spawnId dedup; reuse
-//     is a server-runner invariant. Ships as `test.fixme` + scope-out #3775.
-//   - FR2.10 container-restart pendingPrompts drop — neither `context_reset`
-//     (chat-state-machine.ts:783) nor the `session_started` control frame
-//     clears resident `interactive_prompt` cards. Ships as `test.fixme` +
-//     scope-out #3776.
+//   - FR2.4 cost circuit-breaker — closed inline (#3774). Threaded the
+//     existing `usageData.totalCostUsd` (driven by ws-client.ts:791-806's
+//     out-of-reducer setState) into `WorkflowLifecycleBar` via a chat-
+//     surface prop-merge. Added `data-lifecycle-status` attribute on the
+//     bar's ended branch so the existing `cost_ceiling` terminal status
+//     (lib/types.ts:WORKFLOW_END_STATUSES) is DOM-distinguishable from a
+//     `completed` termination. The server-side threshold + emission of
+//     `workflow_ended(status="cost_ceiling")` already existed; the client
+//     just had no way to surface either signal.
+//   - FR2.8 subprocess reuse — closed inline (#3775). `subagent_spawn`
+//     reducer now dedupes via `priorSpawnIndex.has(event.spawnId)` at the
+//     top of the arm, mirroring the F7 shape on `interactive_prompt`
+//     (chat-state-machine.ts:751-770).
+//   - FR2.10 container-restart pendingPrompts drop — remains `test.fixme` +
+//     scope-out #3776 (contested-design — extending `context_reset` vs.
+//     promoting `session_started` to a reducer event flips the WS control-
+//     frame boundary the WsInjector explicitly draws). Deferred to its own
+//     design-locked PR.
 
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
@@ -217,22 +224,73 @@ test.describe("cc-soleur-go routing: FR2.3 @CTO mid-workflow", () => {
 });
 
 // ---------------------------------------------------------------------------
-// FR2.4 — Cost circuit-breaker. SCOPE-OUT.
+// FR2.4 — Cost circuit-breaker (lifted to live test).
 //
-// `usage_update` is wired at the WS schema layer (ws-zod-schemas.ts:300-314)
-// but NOT consumed by the chat-state-machine reducer; no `circuit_breaker`
-// lifecycle state exists on WorkflowLifecycleBar. The threshold and refusal
-// live server-side. Scope-out #3774 — when the client reducer learns to
-// consume `usage_update` and `WorkflowLifecycleState` gains a circuit-breaker
-// variant, flip this back to a live `test()`.
+// Originally scoped out as #3774; flipped inline per code-simplicity DISSENT
+// at review time. The minimal client wire added in this PR:
+//   - `usage_update` (handled out-of-reducer at `ws-client.ts:791-806` as
+//     today, via setUsageData) is now threaded into `WorkflowLifecycleBar`
+//     via a chat-surface prop-merge — when `workflow.state === "active"`,
+//     `cumulativeCostUsd` is overridden with `usageData.totalCostUsd` so
+//     the bar can render the running total without introducing a second
+//     handler.
+//   - `data-lifecycle-status` attribute added to `WorkflowLifecycleBar`'s
+//     ended branch (workflow-lifecycle-bar.tsx) so the existing
+//     `cost_ceiling` terminal status (lib/types.ts:WORKFLOW_END_STATUSES)
+//     is DOM-distinguishable from a `completed` termination.
+// Server-side threshold + emission of `workflow_ended(status="cost_ceiling")`
+// already existed; the client just had no way to surface the distinction.
 // ---------------------------------------------------------------------------
 
-test.fixme(
-  "cc-soleur-go routing: FR2.4 cost circuit-breaker — no client reducer wire (scope-out)",
-  async () => {
-    // intentionally empty — scope-out documented in file header + PR body.
-  },
-);
+test.describe("cc-soleur-go routing: FR2.4 cost circuit-breaker", () => {
+  test("usage_update updates cost AND workflow_ended(cost_ceiling) exposes lifecycle-status", async ({
+    page,
+  }) => {
+    const injector = await bootChat(page);
+
+    injector.send({
+      type: "workflow_started",
+      workflow: "brainstorm",
+      conversationId: CONV_ID,
+    } satisfies StreamEvent);
+    await expect(page.locator('[data-lifecycle-state="active"]')).toBeVisible();
+
+    // Synthesized cumulative cost — `usage_update` is handled by an out-of-
+    // reducer setState (`ws-client.ts:791-806`) and threaded into the
+    // lifecycle bar via a chat-surface prop merge (#3774). Therefore it goes
+    // through the typed `sendControl` channel, not `send`.
+    injector.sendControl({
+      type: "usage_update",
+      conversationId: CONV_ID,
+      totalCostUsd: 1.2345,
+      inputTokens: 1000,
+      outputTokens: 2000,
+    });
+    await expect(page.locator('[data-lifecycle-state="active"]')).toContainText("$1.2345");
+
+    // Server-side breaker trips → emit `workflow_ended` with the existing
+    // `cost_ceiling` status (lib/types.ts:WORKFLOW_END_STATUSES). The
+    // existing reducer arm transitions lifecycle to `ended`; the new
+    // `data-lifecycle-status` attribute on the bar lets the test distinguish
+    // it from a `completed` termination without coupling to copy.
+    injector.send({
+      type: "workflow_ended",
+      workflow: "brainstorm",
+      status: "cost_ceiling",
+      summary: "Per-conversation cost ceiling reached",
+    } satisfies StreamEvent);
+
+    const endedBar = page.locator(
+      '[data-lifecycle-state="ended"][data-lifecycle-status="cost_ceiling"]',
+    );
+    await expect(endedBar).toBeVisible();
+    // Refusal-of-further-turns proven by the ChatInput's disabled+placeholder
+    // hook (same path FR2.9 exercises for `completed`).
+    await expect(
+      page.getByPlaceholder("This conversation has ended"),
+    ).toBeDisabled();
+  });
+});
 
 // ---------------------------------------------------------------------------
 // FR2.5 — CFO gate spawn renders.
@@ -360,23 +418,50 @@ test.describe("cc-soleur-go routing: FR2.7 narration before Skill", () => {
 });
 
 // ---------------------------------------------------------------------------
-// FR2.8 — Subprocess reuse. SCOPE-OUT.
+// FR2.8 — Subprocess reuse (lifted to live test).
 //
-// `subagent_spawn` reducer (chat-state-machine.ts:596-665) finds an existing
-// group by `parentId` and APPENDS the new child — no `spawnId` dedup. A
-// second back-to-back skill call with the same `spawnId` produces a duplicate
-// child row rather than reusing the existing one. The "shared spawn"
-// invariant is enforced on the server-runner side. Scope-out #3775 — flip
-// back to a live `test()` once the reducer learns to detect and merge
-// duplicate spawnIds.
+// Originally scoped out as #3775; flipped inline per code-simplicity DISSENT
+// at review time. The `subagent_spawn` reducer now dedupes on `spawnId` via
+// `priorSpawnIndex.has(event.spawnId)` at the top of the arm
+// (chat-state-machine.ts), mirroring the F7 shape on `interactive_prompt`
+// (line 751-770). Two consecutive Skill calls that share a spawnId now
+// produce exactly one child row — the client-side regression net for what
+// the server-runner already guarantees.
 // ---------------------------------------------------------------------------
 
-test.fixme(
-  "cc-soleur-go routing: FR2.8 subprocess reuse — no spawnId dedup in reducer (scope-out)",
-  async () => {
-    // intentionally empty — scope-out documented in file header + PR body.
-  },
-);
+test.describe("cc-soleur-go routing: FR2.8 subprocess reuse", () => {
+  test("duplicate subagent_spawn with same spawnId produces exactly one child row", async ({
+    page,
+  }) => {
+    const injector = await bootChat(page);
+    const parentId = "parent-reuse";
+    const spawnId = `${parentId}-skill-shared`;
+
+    // First spawn — establishes the group + child.
+    injector.send({
+      type: "subagent_spawn",
+      parentId,
+      leaderId: "cto",
+      spawnId,
+      task: "First skill invocation",
+    } satisfies StreamEvent);
+
+    // Second spawn with the SAME spawnId — reducer idempotent path; should
+    // NOT produce a duplicate child row.
+    injector.send({
+      type: "subagent_spawn",
+      parentId,
+      leaderId: "cto",
+      spawnId,
+      task: "Second skill invocation (reuse)",
+    } satisfies StreamEvent);
+
+    const group = page.locator(`[data-parent-spawn-id="${parentId}"]`);
+    await expect(group).toHaveAttribute("data-expanded", "true");
+    await expect(group.locator(`[data-child-spawn-id="${spawnId}"]`)).toHaveCount(1);
+    await expect(group.locator("[data-child-spawn-id]")).toHaveCount(1);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // FR2.9 — Ended-state UX.

@@ -14,13 +14,26 @@ import type { StreamEvent } from "@/lib/chat-state-machine";
 
 /** Control frames the page expects from the server but that live outside the
  *  reducer-visible `StreamEvent` subset (`chat-state-machine.ts:244`).
- *  `session_started` is the only one PR-A tests need; widen this if PR-B/PR-C
- *  inject more control frames. */
-export type WsControlEvent = {
-  type: "session_started";
-  conversationId: string;
-  capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] };
-};
+ *  `session_started` (PR-A) lets the WS hook resolve a session before the
+ *  reducer accepts follow-up events. `usage_update` (PR-B #3774) is handled
+ *  by an out-of-reducer `setUsageData` setState in `ws-client.ts:791-806`;
+ *  threaded into the lifecycle bar via a chat-surface prop merge. Widen
+ *  this union when a future test needs another out-of-reducer frame. */
+export type WsControlEvent =
+  | {
+      type: "session_started";
+      conversationId: string;
+      capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] };
+    }
+  | {
+      type: "usage_update";
+      conversationId: string;
+      totalCostUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    };
 
 export interface WsInjector {
   /** Resolves once the page has opened the intercepted `/ws` connection. */
