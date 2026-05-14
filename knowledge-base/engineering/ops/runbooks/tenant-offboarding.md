@@ -28,14 +28,14 @@ provisioning runbook's individual teardown paths do **not** cover:
    agent (e.g., transferring the Hetzner sub-project to the tenant's own
    master account billing).
 
-## Pre-offboarding gate
+### Step 0 — Pre-offboarding gate
 
 Confirm the tenant has either (a) signed a written notice of offboarding
 or (b) breached the Tenant DPA in a way that justifies termination per
 the DPA's termination clause. Record the basis in
 `knowledge-base/legal/tenant-dpa-register.md` row before proceeding.
 
-## Step A — Art. 17 audit-log anonymise (MUST run before any auth.users
+### Step 1 — Art. 17 audit-log anonymise (MUST run before any auth.users
 delete)
 
 **Action**: From a `psql` session against Soleur's prd Supabase with
@@ -66,7 +66,7 @@ SELECT count(*) AS total, count(*) FILTER (WHERE founder_id = '<tenant-founder-u
 
 `total` before == `total` after. `remaining_attributed` after == 0.
 
-## Step B — GitHub App uninstall + ruleset bypass-actor sweep
+### Step 2 — GitHub App uninstall + ruleset bypass-actor sweep
 
 **Action**:
 
@@ -104,31 +104,45 @@ SELECT count(*) AS total, count(*) FILTER (WHERE founder_id = '<tenant-founder-u
      -p soleur -c prd_orchestration
    ```
 
-**Verify**:
+**Verify** (the silent-skip risk on the ruleset sweep is real — the cheap "no output" check from earlier wording cannot distinguish "swept clean" from "operator skipped the UI step entirely", because a repo with zero rulesets also produces no output. The verification below explicitly counts rulesets first and forces an attestation if any exist):
 
 ```bash
-# App is uninstalled
+# 1. App is uninstalled
 gh api /repos/<tenant-org>/<tenant-repo>/installation
 # Must return 404 Not Found.
 
-# No bypass-actor ghost entries
-gh api /repos/<tenant-org>/<tenant-repo>/rulesets --jq '.[].id' | \
-  while read ruleset_id; do
-    gh api /repos/<tenant-org>/<tenant-repo>/rulesets/$ruleset_id \
-      --jq '.bypass_actors[] | select(.actor_id == <soleur-app-install-id>)'
-  done
-# Must produce no output.
+# 2. Enumerate rulesets and assert sweep coverage. The two outputs MUST
+# both be inspected — a zero ruleset count silently passes the
+# bypass-actor check even if Step 2 sub-step 2 was skipped.
+RULESET_COUNT=$(gh api /repos/<tenant-org>/<tenant-repo>/rulesets --jq 'length')
+echo "Ruleset count: $RULESET_COUNT"
 
-# Doppler secret is removed
+if [[ "$RULESET_COUNT" -gt 0 ]]; then
+  echo "Manual attestation required: confirm you opened each ruleset"
+  echo "in the GitHub UI and removed any bypass_actor entry whose"
+  echo "actor_id matches the (now-uninstalled) Soleur App. Paste the"
+  echo "edit timestamps from the GitHub UI into the offboarding row in"
+  echo "knowledge-base/legal/tenant-dpa-register.md BEFORE proceeding."
+  # API-side ghost check (best-effort; UI is the source of truth):
+  gh api /repos/<tenant-org>/<tenant-repo>/rulesets --jq '.[].id' | \
+    while read ruleset_id; do
+      gh api /repos/<tenant-org>/<tenant-repo>/rulesets/$ruleset_id \
+        --jq '.bypass_actors[] | select(.actor_id == <soleur-app-install-id>)'
+    done
+  # Must produce no output AND the tenant-dpa-register row must carry
+  # the UI-edit-timestamp attestation.
+fi
+
+# 3. Doppler secret is removed
 doppler secrets get TENANT_<id>_INSTALLATION_ID -p soleur -c prd_orchestration --plain 2>&1
 # Must return a "secret not found" error.
 ```
 
-## Step C — Provider-side account wind-down (per tenant agreement)
+### Step 3 — Provider-side account wind-down (per tenant agreement)
 
 For each upstream provider, follow the tenant's chosen wind-down path:
 
-### Hetzner
+#### Hetzner
 
 - **Tenant continues to operate** the Hetzner sub-project: transfer
   billing ownership to the tenant's master account (UI-only via
@@ -139,7 +153,7 @@ For each upstream provider, follow the tenant's chosen wind-down path:
 - **Always**: revoke the project-scoped API token from
   `Security → API tokens`.
 
-### Cloudflare
+#### Cloudflare
 
 - **Tenant continues**: revoke only the Soleur-issued scoped account-API
   token from `My Profile → API Tokens`. The tenant retains the account
@@ -147,7 +161,7 @@ For each upstream provider, follow the tenant's chosen wind-down path:
 - **Tenant wants wind-down**: tenant's choice to close the CF account
   (My Profile → Account → Close); Soleur does not perform this step.
 
-### Doppler
+#### Doppler
 
 - **Tenant continues**: revoke the Service Account Identity from
   `Settings → Service Accounts → <identity-name> → Revoke`. Tenant
@@ -156,7 +170,7 @@ For each upstream provider, follow the tenant's chosen wind-down path:
   (`Projects → <project-name> → Delete`); Soleur does not perform this
   step.
 
-### GitHub
+#### GitHub
 
 - The repository remains under the tenant's organization unless the
   tenant explicitly requests Soleur to delete it (Soleur should not
@@ -168,32 +182,32 @@ For each upstream provider, follow the tenant's chosen wind-down path:
 provider's `me`/`whoami` command with the previously-active token; the
 command must return 401/403 confirming revocation.
 
-## Step D — Tenant data subject deletion (per Art. 17 if requested)
+### Step 4 — Tenant data subject deletion (per Art. 17 if requested)
 
 If the tenant invokes Art. 17 erasure for the founder's personal data:
 
-1. **First** confirm Step A (`anonymise_tenant_deploy_audit`) has run
+1. **First** confirm Step 1 (`anonymise_tenant_deploy_audit`) has run
    successfully. Re-run if not.
 2. Call `auth.admin.deleteUser('<tenant-founder-uuid>')` via Supabase
    service_role context.
 3. Verify the FK `ON DELETE RESTRICT` does NOT raise an error (it would
-   only raise if Step A was skipped or failed).
+   only raise if Step 1 was skipped or failed).
 
 If `auth.admin.deleteUser` raises a FK constraint error, **STOP**:
-Step A did not anonymise all `tenant_deploy_audit` rows. Investigate
-(possibly the founder_id used in Step A did not match the actual
+Step 1 did not anonymise all `tenant_deploy_audit` rows. Investigate
+(possibly the founder_id used in Step 1 did not match the actual
 auth.users.id — common cause: a copy-paste UUID typo).
 
 **Verify**: `SELECT count(*) FROM auth.users WHERE id = '<tenant-founder-uuid>'::uuid;`
 returns 0.
 
-## Step E — Document offboarding outcome
+### Step 5 — Document offboarding outcome
 
 Update `knowledge-base/legal/tenant-dpa-register.md` row with:
 
-- Status: `offboarded` (or `offboarded-with-data-deleted` if Step D ran).
+- Status: `offboarded` (or `offboarded-with-data-deleted` if Step 4 ran).
 - Date of offboarding.
-- Provider wind-down disposition per Step C (transferred / wound-down /
+- Provider wind-down disposition per Step 3 (transferred / wound-down /
   retained).
 
 ## References

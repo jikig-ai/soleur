@@ -34,8 +34,8 @@ onboards his first non-Soleur tenant under this substrate.
 - `provisioning-in-progress` — Step 1 of `tenant-provisioning.md` has started.
 - `provisioned` — all provisioning runbook steps complete and verified.
 - `aborted-provisioning-at-step-N` — provisioning aborted at Step N; teardown completed; reason recorded in Notes.
-- `offboarded` — `tenant-offboarding.md` Steps A-C complete; founder retains personal data.
-- `offboarded-with-data-deleted` — `tenant-offboarding.md` Step D also complete; founder personal data erased per Art. 17.
+- `offboarded` — `tenant-offboarding.md` Steps 1-3 complete; founder retains personal data.
+- `offboarded-with-data-deleted` — `tenant-offboarding.md` Step 4 also complete; founder personal data erased per Art. 17.
 
 ## Re-evaluation triggers
 

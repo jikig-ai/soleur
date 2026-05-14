@@ -59,10 +59,20 @@ CREATE TABLE IF NOT EXISTS public.tenant_deploy_audit (
   founder_id        uuid         REFERENCES auth.users(id) ON DELETE RESTRICT,
   event_type        text         NOT NULL
     CHECK (event_type IN ('workflow_dispatch_triggered','workflow_run_completed','workflow_run_failed')),
+  -- target_repo: GitHub `owner/repo` shape. Owner: 1-39 chars, must
+  -- start AND end with alnum (rejects leading/trailing `-` and any `.`).
+  -- Repo: 1-100 chars, must start with alnum or `_` (rejects `..`, `.`,
+  -- and leading `-`). Combined: ≤140 chars, exactly one `/`. Rejects
+  -- path-traversal shapes (`..`, `./.`, `-rf`) and any value lacking the
+  -- slash separator. Defense-in-depth against log-injection via
+  -- downstream path-aware viewers; tightens from the original
+  -- `[A-Za-z0-9_./-]{1,255}` permissive charset.
   target_repo       text         NOT NULL
-    CHECK (target_repo ~ '^[A-Za-z0-9_./-]{1,255}$'),
+    CHECK (target_repo ~ '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$'),
+  -- target_workflow: must start with alnum or `_`, alnum/`._-` charset,
+  -- end in `.yml` or `.yaml`. Matches GitHub Actions workflow naming.
   target_workflow   text         NOT NULL
-    CHECK (target_workflow ~ '^[A-Za-z0-9_./-]{1,255}\.ya?ml$'),
+    CHECK (target_workflow ~ '^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}\.ya?ml$'),
   gh_run_id         bigint,
   oidc_jti          text
     CHECK (oidc_jti IS NULL OR length(oidc_jti) BETWEEN 1 AND 255),
@@ -92,7 +102,9 @@ COMMENT ON TABLE public.tenant_deploy_audit IS
 -- WORM trigger: tenant_deploy_audit is append-only EXCEPT during the
 -- Art. 17 anonymisation flow.
 --
--- Bypass permitted iff ALL of:
+-- Two bypasses defined; UPDATE attempts NEVER bypass.
+--
+-- Bypass 1 (Art. 17 anonymise) requires ALL of:
 --   (a) GUC `app.tenant_deploy_anonymise_in_progress` is set (any
 --       non-empty value)
 --   (b) `current_user = 'service_role'`
@@ -102,6 +114,15 @@ COMMENT ON TABLE public.tenant_deploy_audit IS
 --       file-parse test for this GUC can land alongside the writer
 --       module at N=2 when the orchestration TS module is extracted —
 --       deferred per plan revision-2 scope cut.)
+--
+-- Bypass 2 (Art. 5(1)(e) retention sweep) requires ALL of:
+--   (a) TG_OP = 'DELETE' (UPDATEs never bypass)
+--   (b) OLD.retention_until IS NOT NULL AND OLD.retention_until < now()
+-- This bypass is role-independent because pg_cron's scheduling role is
+-- `postgres` (not `service_role`) and the retention-sweep DELETE must
+-- still succeed. The row-state predicate is the authorization basis,
+-- which matches Art. 5(1)(e) (the regulation makes retention the legal
+-- basis for deletion, not access role).
 --
 -- Trigger function is INVOKER (not DEFINER) per ADR-028's data-integrity
 -- learning: a SECURITY DEFINER trigger evaluates `current_user` to the
@@ -124,9 +145,27 @@ BEGIN
   v_anonymise_flag := current_setting('app.tenant_deploy_anonymise_in_progress', true);
 
   IF v_anonymise_flag <> '' AND current_user = 'service_role' THEN
-    -- Bypass: Art. 17 anonymisation flow. The single SET site is in
+    -- Bypass 1: Art. 17 anonymisation flow. The single SET site is in
     -- anonymise_tenant_deploy_audit's body below.
     RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  -- Bypass 2: Retention sweep. The pg_cron daily DELETE (scheduled below)
+  -- runs as the migration owner role (typically `postgres`), NOT as
+  -- `service_role`, so it cannot use Bypass 1's role gate. Instead the
+  -- bypass condition is mechanically tight on the row's own state: only
+  -- DELETE, only rows whose retention_until is past now(). UPDATE attempts
+  -- remain rejected unconditionally (the WORM property is preserved for
+  -- record integrity), and DELETEs of non-expired rows remain rejected
+  -- (the retention window is enforced). The clause is independent of the
+  -- caller's role, so any operator with DML access (service_role,
+  -- superuser, or pg_cron's scheduling role) can reap expired rows — by
+  -- design, since Art. 5(1)(e) makes retention the authorization basis,
+  -- not role.
+  IF TG_OP = 'DELETE'
+     AND OLD.retention_until IS NOT NULL
+     AND OLD.retention_until < now() THEN
+    RETURN OLD;
   END IF;
 
   RAISE EXCEPTION 'tenant_deploy_audit is append-only (WORM)' USING ERRCODE = 'P0001';
@@ -146,10 +185,12 @@ CREATE TRIGGER tenant_deploy_audit_no_delete
   EXECUTE FUNCTION public.tenant_deploy_audit_no_mutate();
 
 COMMENT ON FUNCTION public.tenant_deploy_audit_no_mutate() IS
-  'WORM gate for tenant_deploy_audit. Allows UPDATE/DELETE only during '
-  'the Art. 17 anonymisation flow (GUC + service_role). The single SET '
-  'site for app.tenant_deploy_anonymise_in_progress is in '
-  'anonymise_tenant_deploy_audit''s body.';
+  'WORM gate for tenant_deploy_audit. Two bypasses: (1) Art. 17 '
+  'anonymisation (GUC + service_role) — the SET site is in '
+  'anonymise_tenant_deploy_audit''s body. (2) Retention sweep '
+  '(DELETE-only, retention_until < now()) — gates by row state not '
+  'caller role so pg_cron''s scheduling-role DELETE is permitted while '
+  'WORM integrity is preserved for non-expired rows and all UPDATEs.';
 
 -- ============================================================================
 -- write_tenant_deploy_audit — append-only audit row writer.

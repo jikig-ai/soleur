@@ -62,15 +62,22 @@ token with a known-write op (create + delete a dummy resource) per
 **read-only tokens silently succeed for reads**, so a read-only verify
 gives a false-positive ALLOWED signal.
 
-**Verify:** run
+**Verify:** run (per the token-quarantine discipline below — use `read -s`
++ subshell, never inline literals that leak into shell history):
 
 ```bash
-HCLOUD_TOKEN=<tenant-token> hcloud server create --name probe --type cx11 --image ubuntu-22.04
-HCLOUD_TOKEN=<tenant-token> hcloud server delete probe
+read -rs -p "Hetzner token: " HCLOUD_TOKEN; echo
+(
+  export HCLOUD_TOKEN
+  hcloud server create --name probe --type cx11 --image ubuntu-22.04
+  hcloud server delete probe
+)
+unset HCLOUD_TOKEN
 ```
 
-Both commands must exit 0. If `hcloud server create` returns 401/403, the
-token has insufficient scope.
+Both commands inside the subshell must exit 0. If `hcloud server create`
+returns 401/403, the token has insufficient scope. The `unset` removes
+the token from the parent shell after the subshell exits.
 
 **Teardown (Step 1)**: `hcloud project delete <sub-project-name>` from the
 tenant's master account UI (CLI does not support project deletion at
@@ -426,6 +433,38 @@ Once Steps 0–9 complete, the tenant's stack is operational. Set the
 tenant's row in `knowledge-base/legal/tenant-dpa-register.md` to status
 `provisioned`. Schedule the first quarterly token-rotation review per
 the offboarding runbook's rotation cadence.
+
+## Token-quarantine discipline (applies to Steps 1, 2, 3)
+
+The hard constraint per ADR-030 is "Soleur never holds a tenant cloud
+credential." During Steps 1-3 (Hetzner, Cloudflare, Doppler), the
+operator's laptop is a transient quarantine zone between tenant-provider
+and tenant-GitHub-repo-secret. To preserve the quarantine:
+
+- **Do NOT `export TOKEN=...`** at any shell level — exported env vars
+  leak into every subprocess and persist for the shell session lifetime.
+- **Do NOT prefix commands with the token literal**
+  (`HCLOUD_TOKEN=xxx hcloud ...`) — `bash` records the entire command
+  (token included) in `~/.bash_history`. Use either `read -s TOKEN` (no
+  echo, no history) followed by a one-shot subshell
+  `( HCLOUD_TOKEN="$TOKEN" hcloud server create ... )`, or pipe the token
+  in via `<<<` heredoc into a wrapper script.
+- **Do NOT `echo $TOKEN`** at any point — terminal scrollback may persist
+  beyond your session.
+- **Do NOT paste tokens into Soleur Doppler, Soleur env files, or any
+  Soleur-side store en route to Step 6.** The transit path is
+  tenant-provider → operator subshell → tenant-GitHub-repo-secret. The
+  installation_id in Step 8 is the only token-shaped value that may land
+  in Soleur Doppler, because it is an App-mint-context identifier
+  (1-hour TTL minting capability bounded by App permissions), not a
+  tenant cloud credential.
+- After Step 6 stores the token in the tenant's GitHub repo Secrets,
+  clear it from the operator subshell with `unset TOKEN` (or just exit
+  the subshell) before proceeding.
+
+These rules apply equally to the Hetzner project-scoped API token
+(Step 1), the Cloudflare scoped account-API token (Step 2), and the
+Doppler Service Account Identity OIDC token / config token (Step 3).
 
 ## Abort-mid-provisioning (general)
 
