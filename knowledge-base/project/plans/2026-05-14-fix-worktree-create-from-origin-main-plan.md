@@ -10,6 +10,26 @@ requires_cpo_signoff: false
 
 # fix(git-worktree): create new worktrees from origin/main directly to bypass local-main lock contention
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-14
+**Sections enhanced:** 5 (Overview, Risks, Implementation Phases Step 2.3, Test Scenarios, Sharp Edges)
+**Research sources:** empirical `/tmp` git reproducers, `man git-worktree` (git 2.53.0), caller-graph grep across `plugins/soleur/skills/`, learning files 2026-04-13/2026-03-23/2026-04-21.
+
+### Key Improvements
+
+1. **Empirically falsified R1 (tracking-branch confusion) as a regression class** — verified that today's `worktree-manager.sh create` already produces worktree branches with NO upstream binding (`branch.feat-X.remote = unset`). Bare `git push` from such a worktree already fails today with `fatal: no upstream branch`. The new behavior fails with a different message (`upstream does not match name`) but both require the same fix (`git push -u origin <branch>`), which every soleur caller already does. R1 is downgraded from "risk" to "non-regression note".
+2. **Added `--no-track` to the `git worktree add` invocation in the default path.** The naked `git worktree add -b feat-X origin/main` invocation sets up tracking against `origin/main` (`branch.feat-X.merge = refs/heads/main`), which is semantically wrong for feature branches (they push to `origin/feat-X`, not `origin/main`). `--no-track` produces upstream state identical to the current behavior, preserving exact backward compatibility for downstream `git push` flows.
+3. **Caller-graph audit complete.** All scripted callers (`/soleur:one-shot`, `/soleur:work`, `/soleur:fix-issue`, `brainstorm-*-workshop`) pass through `worktree-manager.sh`'s own `git push -u origin <branch>` step before any bare `git push` is invoked. No caller regresses.
+4. **Reconfirmed the 2026-04-13 stale-ref fallback is preserved.** AC6 explicitly names the `git update-ref refs/heads/main origin/main` line — the deepen-pass verified line 257 in the current script and that it remains untouched in the `--update-local-main` opt-in path.
+5. **Sanity-confirmed `update_branch_ref()` is shared between `create` (line 425/488) and `cleanup_merged_worktrees` (line 972).** The plan correctly scopes the change to the call site, not the function definition, so the cleanup-merged main-advancement behavior is preserved verbatim.
+
+### New Considerations Discovered
+
+- `git fetch origin <branch>` (no refspec) is idempotent — re-running has no error and no mutation. The new path is safe to invoke unconditionally.
+- The `lease-protects-active.test.sh` test under `plugins/soleur/skills/git-worktree/test/` has been silently NOT running in CI (the test-all.sh glob only covers `plugins/soleur/test/*.test.sh`). AC8's wiring extension closes both gaps in one edit. R4 documents the rollback plan if the silently-broken test surfaces a regression.
+- `git worktree add` accepts a `<commit-ish>` per `man git-worktree` — remote-tracking refs like `origin/main` are valid. Confirmed in git 2.53.0.
+
 ## Overview
 
 `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create` currently runs `git fetch origin <from>:<from>` (or `git checkout <from> && git pull` in non-bare repos) before `git worktree add`. Both of those commands try to mutate the local `<from>` ref. When ANY sibling worktree has that branch checked out, git aborts with `fatal: refusing to fetch into branch 'refs/heads/<from>' checked out at '...'` (bare path) or refuses to checkout the locked branch (non-bare path).
@@ -147,6 +167,13 @@ ORIGIN_MAIN=$(git -C "$LOCAL" rev-parse refs/remotes/origin/main)
   && pass "AC3: worktree HEAD == origin/main ($WT_HEAD)" \
   || fail "AC3: worktree HEAD ($WT_HEAD) != origin/main ($ORIGIN_MAIN)"
 
+# --- R1 mitigation: --no-track produces empty upstream (same as pre-fix behavior) ---
+WT_REMOTE=$(git -C "$TMP/.worktrees/feat-bar" config --get branch.feat-bar.remote 2>/dev/null || true)
+WT_MERGE=$(git -C "$TMP/.worktrees/feat-bar" config --get branch.feat-bar.merge 2>/dev/null || true)
+[[ -z "$WT_REMOTE" && -z "$WT_MERGE" ]] \
+  && pass "R1: upstream is unset (matches pre-fix behavior; --no-track is in effect)" \
+  || fail "R1: branch tracks $WT_REMOTE/$WT_MERGE — should be unset (downstream git push would regress)"
+
 # --- AC6: --update-local-main advances local main ---
 # Add yet another upstream commit
 SEED3="$TMP/seed3"
@@ -233,16 +260,49 @@ Keep `update_branch_ref()` exactly as-is (it remains the implementation of the o
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
   local base_ref
+  local track_flag=""
   if [[ "$UPDATE_LOCAL_MAIN" == "true" ]]; then
     update_branch_ref "$from_branch"
     base_ref="$from_branch"
   else
     fetch_origin_branch "$from_branch" >/dev/null
     base_ref="origin/$from_branch"
+    # --no-track is essential: without it, `git worktree add -b feat-X origin/main`
+    # sets branch.feat-X.merge = refs/heads/main, so subsequent bare `git push`
+    # from inside the worktree fails with `fatal: upstream does not match`. The
+    # CURRENT (pre-fix) behavior leaves upstream UNSET — this preserves that
+    # state exactly so no downstream caller's `git push` flow regresses.
+    track_flag="--no-track"
   fi
   echo -e "${BLUE}Creating worktree from $base_ref...${NC}"
-  git worktree add -b "$branch_name" "$worktree_path" "$base_ref"
+  git worktree add $track_flag -b "$branch_name" "$worktree_path" "$base_ref"
 ```
+
+### Research Insights — `--no-track` is load-bearing
+
+Empirically verified in `/tmp` (git 2.53.0):
+
+```text
+# CURRENT BEHAVIOR (create from local main, no --track flag):
+git worktree add -b feat-old <path> main
+  → branch.feat-old.remote: UNSET
+  → branch.feat-old.merge:  UNSET
+  → bare 'git push': fatal: no upstream branch (current state)
+
+# NEW BEHAVIOR WITHOUT --no-track:
+git worktree add -b feat-new <path> origin/main
+  → branch.feat-new.remote: origin
+  → branch.feat-new.merge:  refs/heads/main  ← WRONG
+  → bare 'git push': fatal: upstream does not match name
+
+# NEW BEHAVIOR WITH --no-track:
+git worktree add --no-track -b feat-new <path> origin/main
+  → branch.feat-new.remote: UNSET           ← matches current
+  → branch.feat-new.merge:  UNSET           ← matches current
+  → bare 'git push': fatal: no upstream branch (same as today)
+```
+
+The bash trick of using a bare `$track_flag` variable is intentional: unquoted expansion preserves the "no flag" case (empty string is elided by the shell rather than passed as an empty argv element). The alternative — splitting into two `git worktree add` invocations with/without the flag — is more code with no behavior advantage.
 
 Apply the identical edit to `create_for_feature()` at lines 487-496.
 
@@ -297,9 +357,15 @@ This is a one-line edit that picks up BOTH the new `create-from-origin-main.test
 
 ## Risks
 
-### R1: Tracking-branch semantics change
-**Risk:** New worktrees are set up to track `origin/main` (via `branch 'feat-X' set up to track 'origin/main'`) rather than local `main`. Operators who run `git pull` from inside the worktree will now pull from `origin/main` directly. Verified in preflight (`/tmp` repro) — `git worktree add -b feat-b origin/main` produces `branch 'feat-b' set up to track 'origin/main'`.
-**Mitigation:** Acceptable — feature branches typically rebase/merge from `origin/main` anyway. The issue body's Risks section explicitly accepts this.
+### R1: Tracking-branch semantics — empirically de-risked via `--no-track`
+
+**Original concern (from issue body):** New worktrees would be set up to track `origin/main` rather than local `main`. Operators who run `git pull` from inside the worktree would pull from `origin/main` directly.
+
+**Empirical finding (deepen-pass):** Without `--no-track`, the new path produces a strictly WORSE state than today — `branch.feat-X.merge = refs/heads/main` causes `git push` to fail with `fatal: The upstream branch of your current branch does not match the name of your current branch`. The CURRENT pre-fix behavior actually leaves upstream UNSET (verified in `/tmp` repro with git 2.53.0).
+
+**Mitigation:** Add `--no-track` to `git worktree add` in the default path (see Implementation Phase Step 2.3 — Research Insights block). This produces upstream-tracking state identical to today's behavior (`branch.feat-X.remote = UNSET`, `branch.feat-X.merge = UNSET`). All downstream callers — `worktree-manager.sh create_draft_pr`'s `git push -u origin <branch>` (line 1186), `create_for_feature`'s push (line 548), and the bare `git push` in `brainstorm/SKILL.md:411`, `ship/SKILL.md:852`, `plan/SKILL.md:564,591`, `review/SKILL.md:751` — see the SAME upstream state as before the fix. No regression in any caller.
+
+**Verified callers:** `/soleur:one-shot` (one-shot/SKILL.md:31 then draft-pr at :45 sets `-u origin <branch>`), `/soleur:work` (work/SKILL.md:143 creates; pushes via skills that pass through `worktree-manager.sh draft-pr` first), `/soleur:fix-issue` (fix-issue/SKILL.md:162 uses explicit `-u origin <branch>`). All scripted callers either (a) push via `create_draft_pr`'s explicit `-u`, or (b) hit the bare `git push` only AFTER the explicit `-u` step has rebound the upstream to `origin/feat-X`.
 
 ### R2: Stale `origin/<from>` ref
 **Risk:** If `git fetch origin <from>` fails silently (network error, auth issue), the new worktree could be based on a stale `refs/remotes/origin/<from>`.
@@ -338,6 +404,8 @@ No cross-domain implications — infrastructure/tooling change scoped to one she
    - Output contains `Fetching latest origin/main...` (NOT `Updating main...`).
    - `git -C .worktrees/feat-b rev-parse HEAD == git rev-parse refs/remotes/origin/main`.
    - `git rev-parse refs/heads/main` unchanged.
+   - **Upstream-tracking parity (added by deepen-pass):** `git -C .worktrees/feat-b config --get branch.feat-b.remote` returns empty (matches current pre-fix behavior — confirms `--no-track` is in effect).
+   - **Upstream-tracking parity:** `git -C .worktrees/feat-b config --get branch.feat-b.merge` returns empty (same — no misleading `refs/heads/main` upstream that would break bare `git push`).
 
 ### Scenario B — No sibling holds main (the common case)
 
@@ -399,6 +467,8 @@ done
 - The Sharp Edges entry at SKILL.md:312 is load-bearing documentation of the underlying git refspec-fetch behavior — it must be amended (note default-bypass) NOT removed. The git behavior is still relevant for the `--update-local-main` opt-in path and for any future tool that ships a similar refspec-fetch.
 - `scripts/test-all.sh`'s test-discovery glob extension (`plugins/soleur/skills/*/test/*.test.sh`) WILL also pick up the pre-existing `lease-protects-active.test.sh`. If that test fails on main HEAD (it has not been CI-run before), the test-all.sh wiring change becomes a separate-PR concern. Verify local-pass BEFORE merging this PR's AC8.
 - The `fetch_origin_branch` helper deliberately does NOT mutate any local ref. Do NOT add an "as a convenience" `update-ref` call to it — that would silently bring back the lock-contention class via a different path. Locally-advancing main is an opt-in operation, full stop.
+- The `git worktree add $track_flag -b ... origin/main` invocation uses an UNQUOTED `$track_flag` deliberately. Quoting it (`"$track_flag"`) would pass an empty argv element when `--update-local-main` is in effect, which `git worktree add` parses as an empty `<commit-ish>` and rejects. If a future linter (shellcheck SC2086) flags this, the fix is to refactor into two parallel `git worktree add` invocations OR an explicit `if/else` — NOT to quote the variable. Add a `# shellcheck disable=SC2086` directive directly above the line.
+- The `--no-track` flag is load-bearing. Without it, the new worktree's `branch.feat-X.merge` is set to `refs/heads/main`, causing bare `git push` from inside the worktree to fail with `fatal: upstream does not match name`. This is a different failure than the current pre-fix behavior (`fatal: no upstream branch`) and would silently regress every caller that depends on `git push -u origin <branch>` being a no-op rebind. The test file's R1 assertion is the load-bearing verification — do NOT remove it.
 - When the issue body says "Replace the current logic at ~`scripts/worktree-manager.sh:960-1000`", trust the codebase line ranges in `Files to Edit` over the issue's line citation. The 960-1000 block is `cleanup_merged_worktrees`, NOT the `create` path. Following the issue line citation literally would edit the wrong function and ship a no-op for the user's actual symptom.
 
 ## Non-Goals (Scope-Outs)
