@@ -1140,11 +1140,33 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
    sla_business_days: 5
    ```
 
-   To enable automated verification, edit the YAML block above. Supported types:
+   Per `hr-no-dashboard-eyeball-pull-data-yourself`, default to automated verification — `type: manual` should be the exception, not the rule. Before emitting `type: manual`, check whether the verification can be expressed as a query against a credentialed API.
+
+   **Types currently implemented by `scheduled-follow-through.yml`** (the daily monitor):
 
    - `http-200` — add `url: https://example.com`
    - `dns-txt` — add `domain: example.com` and `expected: verification-string`
    - `dns-a` — add `domain: example.com` and `expected: 1.2.3.4`
+
+   **Types in the prescriptive spec but not yet implemented by the daily monitor** (the monitor lacks Doppler secret access; widening that scope is a separate PR). When `/ship` Phase 7 Step 3.5 would otherwise emit `type: manual` for one of these, instead scaffold a dedicated `--once` GitHub Actions workflow via `/soleur:schedule --once` with the verdict baked in (the workflow brings its own Doppler env without widening the monitor's blast radius):
+
+   - `sql-query` — `doppler_token_secret: DOPPLER_TOKEN_PRD`, `project: soleur`, `config: prd`, `supabase_ref: <REF>`, `query: |` (multi-line SQL — read-only `SELECT` only), `verdict: |` (single jq expression returning `"PASS"` or `"FAIL: <detail>"` against the `/database/query` JSON response). Example:
+
+     ```yaml
+     type: sql-query
+     doppler_token_secret: DOPPLER_TOKEN_PRD
+     project: soleur
+     config: prd
+     supabase_ref: ifsccnjhymdmidffkzhl
+     query: |
+       SELECT SUM(reads + writes + extends + fsyncs) AS iops FROM pg_stat_io
+     verdict: |
+       if (.[0].iops | tonumber) < 1000 then "PASS" else "FAIL: iops=\(.[0].iops)" end
+     ```
+
+   - `api-curl` — `url:`, `headers_from_doppler:` (map of header → Doppler secret), `verdict:` (jq expression). For Sentry rate, Vercel deployment status, Cloudflare zone settings. HTTPS-only; host allow-list enforced at scaffold time.
+
+   When emitting `type: manual`, include a one-line `manual_because:` justification (`captcha-gated`, `oauth-consent-screen`, `subjective-design-call`, etc.). Bare `type: manual` without justification trips the review-time gate that enforces `hr-no-dashboard-eyeball-pull-data-yourself` — "the operator can read the gauge" is not a valid justification when the gauge value is API-accessible.
 
    ## Status
 

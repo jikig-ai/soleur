@@ -224,6 +224,19 @@ We use **Resend** ([resend.com](https://resend.com)) to send transactional email
 - Resend is a US-based service. International data transfers are covered by the EU-US Data Privacy Framework (DPF) and Standard Contractual Clauses (SCCs).
 - **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR) -- transactional notifications are necessary to inform users of pending decisions that block AI agent progress, which is core to the service functionality.
 
+### 5.10 Sentry (Web Platform Error Monitoring and Breach Detection)
+
+We use **Sentry** ([sentry.io](https://sentry.io)) for Web Platform error monitoring and breach detection. Functional Software GmbH acts as a data processor on our behalf.
+
+- **Data processed:** Error messages, stack traces, request metadata (URL paths, HTTP headers, navigation breadcrumbs), and a pseudonymous user identifier (`userIdHash`). The Sentry SDK on the server and client emits this data when an unexpected error or noteworthy breadcrumb event occurs.
+- **Pseudonymisation:** User identifiers are pseudonymised at the emission boundary by replacing the raw `userId` with a keyed cryptographic hash (`userIdHash`) using a server-resident secret pepper. Under GDPR Recital 26, the controller cannot re-identify a data subject from the hash alone without the pepper.
+- **Purpose:** Detecting, diagnosing, and responding to service errors and security incidents; meeting the Article 33 breach-notification timeline. The processing surface is the Soleur Web Platform (app.soleur.ai) only.
+- **DPA:** [Sentry Sub-processors](https://sentry.io/legal/dpa/) (Sentry's standard EU-region terms; SCCs incorporated).
+- Sentry processes data in the DE region (Frankfurt, Germany). **Intra-EU processing -- no third-country transfer.** SCCs apply as belt-and-braces against any future routing change.
+- **Retention:** Sentry events retained for 90 days (rolling). Operational logs on the Web Platform infrastructure (pino stdout) are retained in a fixed-capacity Hetzner-local rolling buffer with no off-host copies (see DPD §2.3(m)).
+- **Legal basis:** Dual basis. **Legitimate interest** (Article 6(1)(f) GDPR) for service reliability, security, and abuse prevention, balanced against the pseudonymisation safeguard; together with **legal obligation** (Article 6(1)(c) GDPR) for compliance with the Article 33 breach-notification timeline.
+- **Right to erasure (Article 17):** Hashed identifiers age out per the rolling retention windows; the controller cannot perform processor-side targeted erasure of a pseudonym whose subject cannot be re-identified, consistent with Recital 26.
+
 ## 6. Legal Basis for Processing (GDPR -- EU Users)
 
 For users in the European Union or European Economic Area:

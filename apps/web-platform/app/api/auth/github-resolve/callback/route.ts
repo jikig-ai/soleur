@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
 
 const REDIRECT_BASE = "/connect-repo";
@@ -150,7 +152,15 @@ export async function GET(request: Request) {
     .eq("id", user.id);
 
   if (updateError) {
-    logger.error({ err: updateError, userId: user.id }, "GitHub resolve callback: failed to store github_username");
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(updateError, {
+        feature: "github-resolve",
+        op: "store-username",
+        message: "GitHub resolve callback: failed to store github_username",
+        extra: { userId: user.id },
+      });
+    });
     return redirectWithDeletedCookie(ERROR_REDIRECT, request);
   }
 

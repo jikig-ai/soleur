@@ -36,7 +36,7 @@ The plan is intentionally small: one file edit, one test file, one dogfood run. 
 
 ## Five Load-Bearing Defenses
 
-The plan-review consensus stripped the audit-checklist framing in favor of naming the defenses that actually carry the brand-survival weight. D5 was added during multi-agent review (PR #3067) after `user-impact-reviewer` flagged comment-mutability between schedule and fire as an unaddressed single-user-incident vector.
+The plan-review consensus stripped the audit-checklist framing in favor of naming the defenses that actually carry the brand-survival weight. D5 was added during multi-agent review (PR #3067) after `user-impact-reviewer` flagged comment-mutability between schedule and fire as an unaddressed single-user incident vector.
 
 | # | Defense | What it prevents | Where it lives |
 |---|---------|------------------|----------------|

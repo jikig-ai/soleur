@@ -4,7 +4,7 @@ issue: 3548
 branch: feat-one-shot-3548-lint-glob-extend
 type: ops-tooling
 classification: ci-lint
-threshold: none
+brand_survival_threshold: none
 requires_cpo_signoff: false
 created: 2026-05-11
 labels: [domain/engineering, chore, deferred-scope-out, priority/p3-low]

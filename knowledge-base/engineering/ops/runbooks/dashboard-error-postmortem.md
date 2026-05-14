@@ -4,7 +4,7 @@ date: 2026-04-28
 incident_pr: 3014
 incident_window: "2026-04-28 ~22:22Z (Sentry first-seen `TypeError: Unknown encoding: base64url`) → 2026-04-28 22:37:08Z (v0.58.2 canary swap completed; recovery delivered by PR #3017's browser-safe JWT decode + Layer 2 promotion)"
 suspected_change: "PR #3007 — JWT-claims guardrails for NEXT_PUBLIC_SUPABASE_ANON_KEY (validator's runtime base64url decode fails in browser; fixed in PR #3017)"
-brand_threshold: single-user incident
+brand_survival_threshold: single-user incident
 status: closed
 closed_on: 2026-04-29
 closed_via: "#3015 follow-through (see Recovery Verification)"
@@ -16,6 +16,8 @@ triggers:
   - validate-anon-key throw
   - validate-url throw
 ---
+
+> **Future PIRs scaffold via `/soleur:incident`.** This file is the canonical shape the skill substitutes into `plugins/soleur/skills/incident/templates/pir.md`. To author a new PIR, run `/soleur:incident` (or `/soleur:go "production is down"`).
 
 ## Actor key
 

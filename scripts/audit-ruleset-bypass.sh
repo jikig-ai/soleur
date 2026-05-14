@@ -24,13 +24,20 @@
 # scheduled-github-app-drift-guard.yml's 3-output failure-routing model.
 #
 # Test-only env vars (documented for tests/scripts/test-audit-ruleset-bypass.sh):
-#   AUDIT_FETCH_OVERRIDE          path to a file with mocked live JSON;
-#                                 if set, skip the curl fetch entirely
-#   AUDIT_HTTP_CODE_OVERRIDE      simulate a non-200 HTTP code from the
-#                                 fetch step (e.g. "503"); requires
-#                                 AUDIT_FETCH_OVERRIDE to also be set
-#   AUDIT_CANONICAL_FILE_OVERRIDE override the canonical bypass-actors JSON path
+#   AUDIT_FETCH_OVERRIDE              path to a file with mocked live JSON;
+#                                     if set, skip the curl fetch entirely
+#   AUDIT_HTTP_CODE_OVERRIDE          simulate a non-200 HTTP code from the
+#                                     fetch step (e.g. "503"); requires
+#                                     AUDIT_FETCH_OVERRIDE to also be set
+#   AUDIT_CANONICAL_FILE_OVERRIDE     override the canonical bypass-actors JSON path
 #   AUDIT_RSC_CANONICAL_FILE_OVERRIDE override the canonical RSC JSON path (#3547)
+#   AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE  set to "enabled" to opt a test fixture
+#                                     into the token-scope sentinel path
+#                                     (#3569). Off by default for override-
+#                                     driven tests so legacy
+#                                     `live_missing_bypass_actors` shape stays
+#                                     reachable. The live-fetch path always
+#                                     runs the sentinel.
 #
 # Refs: #3544 (bypass-actors audit), #3547 (RSC audit), #3542 (parent R15), #2719 (origin).
 
@@ -156,9 +163,43 @@ if [[ -z "$failure_mode" ]]; then
     if jq -e '.bypass_actors // null | type == "array"' "$LIVE_FILE" >/dev/null 2>&1; then
       LIVE_BYPASS=$(jq -c '.bypass_actors' "$LIVE_FILE")
     else
-      record_failure "live_missing_bypass_actors" \
-        "live ruleset response has no .bypass_actors array" \
-        "ci/guard-broken"
+      # Distinguish token-scope redaction from actual ruleset delete (#3569).
+      # GitHub's `GET /repos/.../rulesets/{id}` returns HTTP 200 but redacts
+      # `bypass_actors` from the JSON when the caller lacks
+      # `administration: read`. If id+enforcement sentinel matches the
+      # canonical ruleset, the live state is intact and the audit token
+      # is the broken surface — distinct triage path from "ruleset is gone".
+      # Test override path (AUDIT_FETCH_OVERRIDE set) opts in deterministically
+      # via AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE=enabled so the legacy
+      # `live_missing_bypass_actors` test shape (T12) stays reachable.
+      # Changing the `[[ -z "$AUDIT_FETCH_OVERRIDE" ]]` arm of the condition
+      # requires a paired refactor of the opt-in test override above; the
+      # live-fetch arm is otherwise unreachable from override-driven tests.
+      probe_active=0
+      if [[ -z "${AUDIT_FETCH_OVERRIDE:-}" ]] \
+         || [[ "${AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE:-}" == "enabled" ]]; then
+        probe_active=1
+      fi
+      if [[ "$probe_active" == "1" ]] \
+         && jq -e '.id == 14145388 and .enforcement == "active"' "$LIVE_FILE" >/dev/null 2>&1; then
+        record_failure "token_scope_insufficient" \
+          "live ruleset has id+enforcement sentinel but no .bypass_actors; audit token likely lacks administration:read (GitHub redacts bypass_actors from non-admin responses)" \
+          "ci/guard-broken"
+      elif [[ "$probe_active" == "1" ]] \
+           && jq -e '.id == 14145388 and (.enforcement // "") != "active"' "$LIVE_FILE" >/dev/null 2>&1; then
+        # Ruleset exists (id matches the canonical sentinel) but enforcement
+        # is paused/disabled. Bypass-actors guarantee is gone the moment
+        # enforcement leaves "active" — route as ci/auth-broken so the
+        # operator triage path is "re-enable", not "recreate".
+        live_enforcement=$(jq -r '.enforcement // "<missing>"' "$LIVE_FILE")
+        record_failure "ruleset_enforcement_disabled" \
+          "live ruleset id matches canonical but enforcement='${live_enforcement}' (was 'active'); bypass_actors guarantee is suspended" \
+          "ci/auth-broken"
+      else
+        record_failure "live_missing_bypass_actors" \
+          "live ruleset response has no .bypass_actors array" \
+          "ci/guard-broken"
+      fi
     fi
     if [[ -z "$failure_mode" ]]; then
       # required_status_checks lives at .rules[<type=required_status_checks>].parameters.required_status_checks.

@@ -94,21 +94,36 @@ SELECT status, COUNT(*) FROM records GROUP BY status;
 
 ### 6. Post-Deploy Monitoring (First 24 Hours)
 
-| Metric/Log | Alert Condition | Dashboard Link |
-|------------|-----------------|----------------|
-| Error rate | > 1% for 5 min | /dashboard/errors |
-| Missing data count | > 0 for 5 min | /dashboard/data |
-| User reports | Any report | Support queue |
+Per `hr-no-dashboard-eyeball-pull-data-yourself`: emit concrete queries with deterministic verdict rules, not dashboard URLs. Each row below must include the API call AND the threshold that flips the verdict to FAIL.
 
-**Sample console verification (run 1 hour after deploy):**
-```ruby
-# Quick sanity check
-Record.where(new_column: nil, old_column: [present values]).count
-# Expected: 0
+| Metric | Source query | FAIL verdict |
+|--------|-------------|--------------|
+| Error rate | `curl -sS -H "Authorization: Bearer $SENTRY_TOKEN" "https://sentry.io/api/0/projects/$ORG/$PROJ/stats/?stat=received&since=$(date -u +%s --date='5 minutes ago')&until=$(date -u +%s)&resolution=10s"` divided by request count from Vercel `/v6/deployments/$ID/events?logType=request` | error_rate > 0.01 sustained 5 min |
+| Missing data count | `SELECT COUNT(*) FROM <table> WHERE <new_column> IS NULL AND <old_column> IS NOT NULL` via Supabase Management API `/database/query` | count > 0 |
+| User-impact signal | `gh issue list --label "incident" --search "created:>$(date -u +%Y-%m-%dT%H:%M:%S --date='deploy time')" --json number,title --jq length` | count >= 1 |
 
-# Spot check random records
-Record.order("RANDOM()").limit(10).pluck(:old_column, :new_column)
-# Verify mapping is correct
+Schedule the verdict rules as a `--once` GitHub Actions workflow firing at +1h / +24h via `/soleur:schedule --once`. The workflow runs the queries and either auto-closes the deployment ticket (all FAIL verdicts false) or opens a follow-through issue with the failing query output. **Do not** prescribe operator dashboard-watching.
+
+**Sample auto-verification query (run 1 hour after deploy via the scheduled workflow, NOT manually):**
+
+```sql
+-- Sanity: no rows have NULL in new column where old column was present
+SELECT
+  COUNT(*) AS bad_rows,
+  CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS verdict
+FROM <table>
+WHERE <new_column> IS NULL AND <old_column> IS NOT NULL;
+
+-- Mapping sanity: distribution of new column matches expected
+SELECT
+  <new_column>,
+  COUNT(*),
+  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS pct
+FROM <table>
+GROUP BY <new_column>
+ORDER BY COUNT(*) DESC;
+-- Compare against baseline pre-deploy distribution. Verdict: each bucket's
+-- delta must be < 1% absolute. >= 1% delta on any non-empty bucket = FAIL.
 ```
 
 ## Output Format
@@ -130,15 +145,14 @@ Produce a complete Go/No-Go checklist that an engineer can literally execute:
 3. [ ] Enable feature flag
 
 ## 🟢 Post-Deploy (Within 5 Minutes)
-- [ ] Run verification queries
-- [ ] Compare with baseline
-- [ ] Check error dashboard
-- [ ] Spot check in console
+- [ ] Run verification queries (commands from §2/§3 above)
+- [ ] Compare with baseline (deterministic threshold from §6 table)
+- [ ] Query Sentry error rate via API (cmd from §6 table) — FAIL if > 1%/5min
+- [ ] Run sanity SQL via Supabase Management API (cmd from §6) — FAIL if bad_rows > 0
 
 ## 🔵 Monitoring (24 Hours)
-- [ ] Set up alerts
-- [ ] Check metrics at +1h, +4h, +24h
-- [ ] Close deployment ticket
+- [ ] Schedule `--once` workflow firing at +1h / +24h that runs §6 queries and posts verdict
+- [ ] Workflow auto-closes deployment ticket on all-PASS; opens follow-through issue on any FAIL with the failing query's output
 
 ## 🔄 Rollback (If Needed)
 1. [ ] Disable feature flag

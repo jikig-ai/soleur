@@ -113,7 +113,7 @@ This plan implements all decisions in the brainstorm + spec while reconciling fi
 | `lefthook.yml` | Add new stanza `skill-security-scan-advisory` with priority 7 (after gdpr-gate's priority 6), array-of-globs path matching, `{staged_files}` pass-through. Per `2026-03-21-lefthook-gobwas-glob-double-star.md`. | 10 |
 | `plugins/soleur/docs/_data/skills.js` | Add `"skill-security-scan"` entry to `SKILL_CATEGORIES["Review & Planning"]` array | 11 |
 | `plugins/soleur/README.md` | Update skill count + add row in skill table | 11 |
-| `knowledge-base/legal/compliance-posture.md` | Append Active Compliance Item: "Skill-install advisory gate (#2719) — single-user-incident threshold, EU jurisdiction, advisory disclaimer mandatory" | 11 |
+| `knowledge-base/legal/compliance-posture.md` | Append Active Compliance Item: "Skill-install advisory gate (#2719) — single-user incident threshold, EU jurisdiction, advisory disclaimer mandatory" | 11 |
 | `docs/legal/disclaimer.md` | Append automated-tooling clause per CLO requirement | 11 |
 | `knowledge-base/product/roadmap.md` | Update Phase 4 row 4.11 status: `Brainstormed` → `Planned` | 11 |
 | `plugins/soleur/test/components.test.ts` | No edit if Phase 0 reclamation succeeds; otherwise raise `SKILL_DESCRIPTION_WORD_BUDGET` (line 12) with documented justification | 0 |
@@ -515,7 +515,7 @@ Runs on push to `main`. Re-runs `parse-override.sh` against the merged diff. If 
 **`plugins/soleur/README.md`:** Update skill count + add row in skill table.
 
 **`knowledge-base/legal/compliance-posture.md`:** Append to Active Compliance Items:
-> **Skill-install advisory gate (#2719)** — single-user-incident threshold, EU jurisdiction. Verdict naming `LOW-RISK | REVIEW | HIGH-RISK` with mandatory advisory disclaimer (CLO requirement). Override = git trailer + structured artifact (GDPR Art. 32 evidence). Self-defense: SHA-pinned rule pack, OSV untrusted-input handling, fail-loud self-test.
+> **Skill-install advisory gate (#2719)** — single-user incident threshold, EU jurisdiction. Verdict naming `LOW-RISK | REVIEW | HIGH-RISK` with mandatory advisory disclaimer (CLO requirement). Override = git trailer + structured artifact (GDPR Art. 32 evidence). Self-defense: SHA-pinned rule pack, OSV untrusted-input handling, fail-loud self-test.
 
 **`docs/legal/disclaimer.md`:** Append automated-tooling clause:
 > Soleur skills may include automated static-analysis tools that emit advisory verdicts (e.g., `LOW-RISK | REVIEW | HIGH-RISK`) on third-party content. These verdicts are advisory only and do not constitute a security audit, certification, or warranty of safety. Users remain responsible for reviewing third-party content before installation and execution.

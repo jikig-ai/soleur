@@ -15,7 +15,8 @@
     "test": "vitest",
     "test:ci": "vitest run",
     "test:e2e": "npx playwright test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "hash-user-id": "bun scripts/hash-user-id.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.85",
