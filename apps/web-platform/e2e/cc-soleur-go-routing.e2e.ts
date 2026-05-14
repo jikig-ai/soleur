@@ -51,15 +51,22 @@ const MOCK_CONVERSATION = {
   updated_at: "2024-01-01T00:00:00Z",
 };
 
-/** Mirror of bootChat in cc-soleur-go-bubbles.e2e.ts. PR-B keeps a sibling
- *  copy rather than extracting a third helper file — the two e2e specs share
- *  no per-test state and a premature extraction would force a config-globals
- *  dance for very little payoff. Fold when a third spec lands.
+/**
+ * Mirror of bootChat in cc-soleur-go-bubbles.e2e.ts. PR-B keeps a sibling
+ * copy rather than extracting a third helper file — the two e2e specs share
+ * no per-test state and a premature extraction would force a config-globals
+ * dance for very little payoff. Fold when a third spec lands.
+ *
+ * NOTE: order matters — `addInitScript` runs before any page script, then
+ * `page.route` registers HTTP intercepts, then `attachWsInjector` claims
+ * `**\/ws`. Finally `page.goto` boots the chat surface which opens the WS.
  */
 async function bootChat(page: Page): Promise<WsInjector> {
   await injectFakeSupabaseSession(page);
   await mockSupabaseAuth(page);
 
+  // PostgREST .single() expects an object, not an array — match the existing
+  // mock-supabase behavior (see e2e/mock-supabase.ts:wantsSingle).
   await page.route("**/rest/v1/conversations*", (route) => {
     const accept = route.request().headers().accept ?? "";
     const single = accept.includes("application/vnd.pgrst.object+json");
@@ -95,6 +102,12 @@ async function bootChat(page: Page): Promise<WsInjector> {
   }
 
   await injector.ready;
+
+  // Server-side confirmation frame. The reducer enters its happy path only
+  // after `session_started`; without it `useWebSocket` won't accept follow-up
+  // events on the resolved conversation id. `session_started` is a control
+  // frame outside the reducer-visible `StreamEvent` subset, so it goes
+  // through the typed `sendControl` channel rather than `send`.
   injector.sendControl({ type: "session_started", conversationId: CONV_ID });
   return injector;
 }
@@ -188,8 +201,15 @@ test.describe("cc-soleur-go routing: FR2.3 @CTO mid-workflow", () => {
       task: "Engineering deep-dive",
     } satisfies StreamEvent);
 
+    // Pin the auto-expand contract: child rows are conditionally rendered
+    // inside `{expanded ? (…) : null}` (subagent-group.tsx:157). N=1 ≤
+    // SUBAGENT_GROUP_AUTO_EXPAND_MAX (=2, subagent-group.tsx:36) so the
+    // group defaults to expanded. Asserting `data-expanded="true"` here
+    // names the contract — a regression that lowers the boundary fails
+    // explicitly rather than producing a misleading "child not visible".
     const group = page.locator(`[data-parent-spawn-id="${parentId}"]`);
     await expect(group).toHaveCount(1);
+    await expect(group).toHaveAttribute("data-expanded", "true");
     await expect(
       group.locator(`[data-child-spawn-id="${parentId}-cto-1"]`),
     ).toBeVisible();
@@ -238,24 +258,33 @@ test.describe("cc-soleur-go routing: FR2.5 CFO gate spawn renders", () => {
       task: "Cost review",
     } satisfies StreamEvent);
 
+    // Same auto-expand contract pin as FR2.3 — N=1 ≤ 2 so the group
+    // defaults to expanded; the child row only renders inside the
+    // expanded branch of subagent-group.tsx:157.
+    const group = page.locator(`[data-parent-spawn-id="${parentId}"]`);
+    await expect(group).toHaveAttribute("data-expanded", "true");
     await expect(
-      page.locator(
-        `[data-parent-spawn-id="${parentId}"] [data-child-spawn-id="${parentId}-cfo-1"]`,
-      ),
+      group.locator(`[data-child-spawn-id="${parentId}-cfo-1"]`),
     ).toBeVisible();
   });
 });
 
 // ---------------------------------------------------------------------------
-// FR2.6 — Chip render < 8s.
+// FR2.6 — Chip render under spec ceiling.
 //
-// `tool_use` for cc_router with no active stream is a pure sync reducer hop +
-// immediate React render. 8s is a generous ceiling — its purpose is to catch
-// a dev-server cold-start regression, not a sub-100ms one.
+// The spec sets an 8s budget. The actual codepath is a pure-sync reducer arm
+// (chat-state-machine.ts:344-389) + immediate React render — no debounce, no
+// async hop. Tightened the assertion to a 2s ceiling so a regression that
+// adds a 5s async hop (e.g., misplaced `await`, hydration race, sentry-
+// instrumented wrapper) fails AT THIS ASSERTION rather than passing within
+// the 8s slack. The 8s spec budget lives in the FR text; the test enforces
+// the order-of-magnitude that actually matters. Also wires a pageerror
+// listener so a render-throw fails loud rather than producing an unmounted-
+// chip false-pass.
 // ---------------------------------------------------------------------------
 
-test.describe("cc-soleur-go routing: FR2.6 chip render under 8s", () => {
-  test("[data-tool-chip-id] mounts within 8s of tool_use injection", async ({
+test.describe("cc-soleur-go routing: FR2.6 chip render under spec ceiling", () => {
+  test("[data-tool-chip-id] mounts within 2s of tool_use and no render-throw", async ({
     page,
   }) => {
     const injector = await bootChat(page);
@@ -266,9 +295,13 @@ test.describe("cc-soleur-go routing: FR2.6 chip render under 8s", () => {
       label: "Routing handoff",
     } satisfies StreamEvent);
 
-    await expect(
-      page.locator('[data-tool-chip-id^="cc_router-Routing handoff-"]'),
-    ).toHaveCount(1, { timeout: 8_000 });
+    const chip = page.locator('[data-tool-chip-id^="cc_router-Routing handoff-"]');
+    await expect(chip).toBeVisible({ timeout: 2_000 });
+    await expect(chip).toHaveCount(1);
+    expect(
+      injector.pageErrors,
+      `page errors during chip render: ${injector.pageErrors.map((e) => e.message).join("; ")}`,
+    ).toHaveLength(0);
   });
 });
 
@@ -289,7 +322,7 @@ test.describe("cc-soleur-go routing: FR2.6 chip render under 8s", () => {
 // ---------------------------------------------------------------------------
 
 test.describe("cc-soleur-go routing: FR2.7 narration before Skill", () => {
-  test("stream content before tool_use(skill_*) lands narration first, then skill toolLabel", async ({
+  test("narration is visible AND skill toolLabel is absent before tool_use is injected", async ({
     page,
   }) => {
     const injector = await bootChat(page);
@@ -306,8 +339,15 @@ test.describe("cc-soleur-go routing: FR2.7 narration before Skill", () => {
       leaderId: "cc_router",
     } satisfies StreamEvent);
 
-    // Order proof — narration must be observable BEFORE tool_use is injected.
+    // Order proof, half 1 — narration visible at this point in time.
     await expect(page.getByText(narration)).toBeVisible();
+    // Order proof, half 2 — at the same point in time, the skill toolLabel
+    // is NOT yet observable. Without this, the test only proves the test
+    // author's send-order; with it, a reducer that ever flipped the order
+    // (`tool_use` racing ahead of `stream`) would produce a visible skill
+    // chip here and fail the test — that's the actual invariant the FR
+    // claims to pin.
+    await expect(page.getByText("skill_brainstorm")).toHaveCount(0);
 
     injector.send({
       type: "tool_use",
