@@ -98,12 +98,12 @@ No fold-in required.
 
 **Acceptance Criteria (Phase 0):**
 
-- [ ] `grep -c 'Verdict: ALLOWED' knowledge-base/legal/tos-research/2026-05-14-tenant-account-provisioning-tos-research.md` returns ≥4 (one per provider section), OR explicit `ALLOWED_WITH_CONDITIONS` / `NOT_ALLOWED` with operator ack documented in `compliance-posture.md` Active Items.
-- [ ] LIA artifact exists with the three Art. 6(1)(f) sections present (`grep -cE '^## (Purpose|Necessity|Balancing)' knowledge-base/legal/legitimate-interest-assessments/2026-05-14-tenant-deploy-substrate-lia.md` returns 3).
-- [ ] ADR-030 published with all 6 required `## H2` sub-sections present (`grep -c '^## ' knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md` returns ≥6; each subsection title grepped explicitly).
-- [ ] gdpr-gate report committed at `knowledge-base/legal/gdpr-gate-report-2026-05-14.md`; if any Critical, operator-ack written to `compliance-posture.md` Active Items.
-- [ ] RoPA row added at `knowledge-base/legal/article-30-register.md` enumerating all 7 Art. 30(1) limbs (b)-(g) as named subsections.
-- [ ] `compliance-posture.md` updated with the explicit scope-out for privacy-policy disclosure at v1 + re-evaluation trigger.
+- [x] `grep -c 'Verdict: ALLOWED' knowledge-base/legal/tos-research/2026-05-14-tenant-account-provisioning-tos-research.md` returns ≥4 (one per provider section), OR explicit `ALLOWED_WITH_CONDITIONS` / `NOT_ALLOWED` with operator ack documented in `compliance-posture.md` Active Items.
+- [x] LIA artifact exists with the three Art. 6(1)(f) sections present (`grep -cE '^## (Purpose|Necessity|Balancing)' knowledge-base/legal/legitimate-interest-assessments/2026-05-14-tenant-deploy-substrate-lia.md` returns 3).
+- [x] ADR-030 published with all 6 required `## H2` sub-sections present (`grep -c '^## ' knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md` returns ≥6; each subsection title grepped explicitly).
+- [x] gdpr-gate report committed at `knowledge-base/legal/gdpr-gate-report-2026-05-14.md`; if any Critical, operator-ack written to `compliance-posture.md` Active Items.
+- [x] RoPA row added at `knowledge-base/legal/article-30-register.md` enumerating all 7 Art. 30(1) limbs (b)-(g) as named subsections.
+- [x] `compliance-posture.md` updated with the explicit scope-out for privacy-policy disclosure at v1 + re-evaluation trigger.
 
 ### Phase 1 — Meta-audit log Supabase migration
 
@@ -140,10 +140,10 @@ No fold-in required.
 - [ ] **Anonymise semantics verified** (legal-compliance BLOCKING #3): `SELECT count(*) FROM public.tenant_deploy_audit;` before and after calling `anonymise_tenant_deploy_audit('<test-uuid>')` returns the same count. Per-row `founder_id` is NULL for the anonymised rows.
 - [ ] `SET search_path = public, pg_temp` confirmed on the writer RPC: `SELECT prosrc FROM pg_proc WHERE proname = 'write_tenant_deploy_audit';` shows `SET search_path = public, pg_temp` (in that order; Kieran P0-1).
 - [ ] Retention sweep cron scheduled: `SELECT jobname FROM cron.job WHERE jobname = 'tenant-deploy-audit-retention';` returns exactly 1 row.
-- [ ] Retention column + comment present: `grep -cE 'retention_until|RETENTION: 12 months' apps/web-platform/supabase/migrations/043_tenant_deploy_audit.sql` returns ≥2.
-- [ ] `oidc_jti` column type is `text NOT NULL CHECK (...)`, not `uuid`: `\d+ public.tenant_deploy_audit` shows `text` for that column.
-- [ ] `founder_id` FK uses `ON DELETE RESTRICT`: `\d+ public.tenant_deploy_audit` shows `ON DELETE RESTRICT` (not `SET NULL`).
-- [ ] Event-type enum has exactly 3 members (no `provisioning_step_*` ghost values).
+- [x] Retention column + comment present: `grep -cE 'retention_until|RETENTION: 12 months' apps/web-platform/supabase/migrations/043_tenant_deploy_audit.sql` returns ≥2.
+- [x] `oidc_jti` column type is `text NOT NULL CHECK (...)`, not `uuid`: `\d+ public.tenant_deploy_audit` shows `text` for that column.
+- [x] `founder_id` FK uses `ON DELETE RESTRICT`: `\d+ public.tenant_deploy_audit` shows `ON DELETE RESTRICT` (not `SET NULL`).
+- [x] Event-type enum has exactly 3 members (no `provisioning_step_*` ghost values).
 
 ### Phase 2 — Manual provisioning runbook + offboarding runbook
 
@@ -172,12 +172,12 @@ No fold-in required.
 
 **Acceptance Criteria (Phase 2):**
 
-- [ ] Provisioning runbook has 10 steps (Step 0 through Step 9), each as a `### Step N` numbered heading: `grep -c '^### Step ' knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` returns 10.
-- [ ] Each step has an inline `**Verify:**` line: `grep -c '^\*\*Verify:\*\*' knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` returns ≥10.
-- [ ] Abort-mid-provisioning teardown path documented: `grep -c 'teardown' knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` returns ≥4 (Steps 1-4 each have teardown).
-- [ ] Per-provider OIDC auth probes (`hcloud server list`, `wrangler whoami`, `doppler me`) explicitly named in Step 6 verify section.
-- [ ] Offboarding runbook includes: bypass-actor sweep + `anonymise_tenant_deploy_audit` BEFORE `auth.users` deletion.
-- [ ] `knowledge-base/legal/tenant-dpa-register.md` created (initially empty; first row written at first onboarding).
+- [x] Provisioning runbook has 10 steps (Step 0 through Step 9), each as a `### Step N` numbered heading: `grep -c '^### Step ' knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` returns 10.
+- [x] Each step has an inline `**Verify:**` line: `grep -c '^\*\*Verify:\*\*' knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` returns ≥10.
+- [x] Abort-mid-provisioning teardown path documented: `grep -c 'teardown' knowledge-base/engineering/ops/runbooks/tenant-provisioning.md` returns ≥4 (Steps 1-4 each have teardown).
+- [x] Per-provider OIDC auth probes (`hcloud server list`, `wrangler whoami`, `doppler me`) explicitly named in Step 6 verify section.
+- [x] Offboarding runbook includes: bypass-actor sweep + `anonymise_tenant_deploy_audit` BEFORE `auth.users` deletion.
+- [x] `knowledge-base/legal/tenant-dpa-register.md` created (initially empty; first row written at first onboarding).
 
 ### Phase 3 — Documentation: capability-gap learning + follow-up issues
 
@@ -201,10 +201,10 @@ All 5 follow-ups filed with `--label deferred-scope-out --milestone "Post-MVP / 
 
 **Acceptance Criteria (Phase 3):**
 
-- [ ] Capability-gap learning published with the chosen subject-claim format documented.
-- [ ] All 5 follow-up issues filed with explicit re-evaluation triggers in each issue body.
-- [ ] Each follow-up issue body contains links to: this plan, the brainstorm, the spec, ADR-030.
-- [ ] Issue numbers backfilled into this plan's `## Follow-up tracking` section.
+- [x] Capability-gap learning published with the chosen subject-claim format documented.
+- [x] All 5 follow-up issues filed with explicit re-evaluation triggers in each issue body.
+- [x] Each follow-up issue body contains links to: this plan, the brainstorm, the spec, ADR-030.
+- [x] Issue numbers backfilled into this plan's `## Follow-up tracking` section.
 
 ## Acceptance Criteria
 
@@ -273,13 +273,14 @@ All 5 follow-ups filed with `--label deferred-scope-out --milestone "Post-MVP / 
 
 ## Follow-up tracking
 
-To be filled at Phase 3 issue-filing time:
+Filed at Phase 3 issue-filing time (2026-05-14):
 
-- [ ] Hetzner provisioning automation skill: #TBD
-- [ ] Cloudflare provisioning automation skill: #TBD
-- [ ] Doppler provisioning automation skill: #TBD
-- [ ] GitHub repo + App install + Environment automation skill: #TBD
-- [ ] Deploy-failure UI surface (Art. 13 transparency): #TBD
+- [x] Hetzner provisioning automation skill: #3769
+- [x] Cloudflare provisioning automation skill: #3770
+- [x] Doppler provisioning automation skill: #3771
+- [x] GitHub repo + App install + Environment automation skill: #3772
+- [x] Deploy-failure UI surface (Art. 13 transparency): #3773
+- [ ] pg_cron `tenant-deploy-audit-retention` health probe (deferred per Risks R6): #TBD (file at first cron-failure signal; uses same pg_cron substrate as PA 8 P0 mirror retention)
 
 Approach B (CF Worker executor) and Approach C (BYOInfra OAuth) — captured in ADR-030's `## Open escape hatches`, NOT filed as backlog issues. Re-evaluation triggers documented inline in the ADR.
 
