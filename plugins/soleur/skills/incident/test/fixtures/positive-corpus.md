@@ -10,7 +10,7 @@ This keeps the fixture safe to commit while still exercising every regex class.
 
 ## JWT three-segment
 
-eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMtZml4dHVyZS1ub3QtcmVhbCJ9.SyNtHeTiC0SiGnAtUrE_DoNoTuSe_XXXXXX
+eyJaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaa
 
 ## Email
 
