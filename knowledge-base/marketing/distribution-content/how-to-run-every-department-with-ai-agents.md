@@ -3,7 +3,7 @@ title: "How to Run Every Business Department with AI Agents: A Solo Founder's Pl
 type: pillar
 publish_date: 2026-05-14
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 ---
 
 ## Discord
