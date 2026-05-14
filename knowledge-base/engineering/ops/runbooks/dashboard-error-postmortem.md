@@ -17,6 +17,8 @@ triggers:
   - validate-url throw
 ---
 
+> **Future PIRs scaffold via `/soleur:incident`.** This file is the canonical shape the skill substitutes into `plugins/soleur/skills/incident/templates/pir.md`. To author a new PIR, run `/soleur:incident` (or `/soleur:go "production is down"`).
+
 ## Actor key
 
 Each step below is tagged with one of:

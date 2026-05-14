@@ -19,6 +19,8 @@ date: 2026-05-13
 
 ## Problem Statement
 
+> [Updated 2026-05-13: D1 direction reversed per plan Research Reconciliation — the dominant frontmatter form is `brand_survival_threshold:` (97 files), not the singular `brand_threshold:` (1 file). D1 (PR #3737, merged) renamed the minority forms toward the dominant key; references below to `brand_threshold` reflect the spec's original framing but the canonical key is `brand_survival_threshold`. Likewise `single-user-incident` (hyphenated) was renamed to `single-user incident` (space-form).]
+
 Soleur has organic incident-response practice (24 runbooks, 1 worked post-incident review at `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`) but no skill or agent that:
 
 1. Classifies a live incident's `brand_threshold` (`none` / `single-user incident` / `aggregate pattern`) under time pressure — operators currently classify by feel.
@@ -31,6 +33,8 @@ Secondary problem: the `brand_threshold` frontmatter key has four inconsistent s
 
 ## Goals
 
+> [Updated 2026-05-13: D1 direction reversed — `brand_threshold` references below reflect spec original framing; canonical key is `brand_survival_threshold`. Public-safe PIR artifact deferred to #3732 per plan-review YAGNI consensus.]
+
 - Ship a standalone `/soleur:incident` skill at `plugins/soleur/skills/incident/SKILL.md` that classifies in <60s, gates on Art. 33/34, and scaffolds two PIR artifacts (internal + public-safe) after recovery.
 - Standardize `brand_threshold` frontmatter key + value-form repo-wide as a separate prerequisite PR (D1).
 - Add a pre-write redaction sentinel (mechanical regex pass) that blocks markdown commit if any pattern matches the proposed PIR body or public-summary body.
@@ -39,6 +43,8 @@ Secondary problem: the `brand_threshold` frontmatter key has four inconsistent s
 - Defer Sentry auto-fetch, on-call rotation, paging integrations, status-page automation as explicit out-of-scope.
 
 ## Non-Goals (Explicitly Out of Scope)
+
+> [Updated 2026-05-13: D1 direction reversed — references below to `brand_threshold` reflect spec original framing; canonical key is `brand_survival_threshold`.]
 
 - **Sentry / webhook / cron auto-firing.** Skill is operator-invoked only (`/soleur:incident` or via `/soleur:go` intent routing).
 - **On-call rotation, paging integrations (PagerDuty / Opsgenie), incident-channel auto-creation, status page CMS.** Cannibalization vs parent #2718 wholesale-port rejection. Track separately if demand surfaces.
@@ -54,6 +60,8 @@ Secondary problem: the `brand_threshold` frontmatter key has four inconsistent s
 ## Functional Requirements
 
 ### FR1: `brand_threshold` key + value-form rename sweep (D1 — PR1, separate PR)
+
+> [Updated 2026-05-13: D1 direction REVERSED per plan Research Reconciliation. Dominant form is `brand_survival_threshold:` (97 files); the original FR1 framing renamed TOWARD the minority singular form. Plan FR1 + PR #3737 (merged) reverse the direction: minority forms (`brand_threshold:` 1 file, `brand_survival:` 5, semantic `threshold:` 4) → `brand_survival_threshold:`. Value-form `single-user-incident` (50 files) → `single-user incident` (space).]
 
 Standardize repo-wide BEFORE the skill PR:
 
@@ -167,6 +175,8 @@ Skill output frontmatter includes `brand_threshold` value. PRs that ADD or MODIF
 Spec leaves `art_33_triggered` / `art_34_triggered` / `notification_deadline` / `affected_user_count` / `data_categories_breached` as frontmatter fields, BUT the wiring to `knowledge-base/legal/article-30-register.md` consumption is **out of scope for this PR**. ROPA wiring tracked separately. PIR emits the structured fields; whoever owns Art. 30 register reads them later.
 
 ## Acceptance Criteria
+
+> [Updated 2026-05-13: AC1-AC3 below reflect the spec's original D1 direction (rename TOWARD `brand_threshold:` singular). Plan reversed the direction and PR #3737 merged the reversed sweep. The plan's AC1-AC3 in `2026-05-13-feat-incident-commander-skill-plan.md` are the binding ACs for D1; the spec ACs here are kept for historical context.]
 
 - [ ] **AC1 (D1, PR1):** `git grep -l "brand_survival\|brand_survival_threshold"` returns zero hits across `*.md`, `*.sh`, `*.py`, `*.ts`, `*.yml` files (excluding archived brainstorms).
 - [ ] **AC2 (D1, PR1):** `git grep -l "^threshold:" -- '*.md'` returns only architectural-decision review-threshold cases (verified against the existing 4 hits during plan phase). All `brand_threshold`-semantic uses migrated.

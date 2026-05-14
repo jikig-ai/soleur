@@ -56,7 +56,7 @@ Smaller blast radius per PR. PR1: `brand_threshold` key-rename across all caller
 | Outcome | SEV <60s + redaction-gated PIR scaffold | Founder bottleneck is classification + Art. 33/34 routing, not authoring |
 | Implementation shape | Skill, not agent | No automation substrate; one-shot template + classification fits SKILL.md contract |
 | Severity taxonomy | Reuse `brand_threshold` 3-tier (`none` / `single-user incident` / `aggregate pattern`) | Already canonical in `AGENTS.core.md`; `user-impact-reviewer` already gates on it |
-| Frontmatter standardization | Rename `brand_survival`, `brand_survival_threshold`, `threshold` → `brand_threshold` (singular) repo-wide | Resolves the 4-key inconsistency; ships as D1 PR1 |
+| Frontmatter standardization | Rename `brand_survival`, `brand_survival_threshold`, `threshold` → `brand_threshold` (singular) repo-wide [Updated 2026-05-13: REVERSED at plan-time — the dominant form is `brand_survival_threshold:` (97 files); minority forms were renamed toward the dominant key. PR #3737 (merged) implements the reversed direction.] | Resolves the 4-key inconsistency; ships as D1 PR1 |
 | Value-form standardization | `single-user incident` (space form) is canonical; `single-user-incident` (hyphenated) gets renamed | One canonical form to grep for; included in D1 PR1 |
 | Skill location | `plugins/soleur/skills/incident/SKILL.md` | Avoids name collision with `.claude/hooks/lib/incidents.sh` (rule-telemetry, NOT incidents); skill is singular, hooks library is plural |
 | PIR write location | `knowledge-base/engineering/ops/runbooks/<slug>-postmortem.md` | Matches existing `dashboard-error-postmortem.md` convention; same dir as runbooks for discoverability |
