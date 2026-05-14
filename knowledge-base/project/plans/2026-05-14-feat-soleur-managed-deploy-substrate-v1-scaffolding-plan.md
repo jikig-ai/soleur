@@ -212,7 +212,7 @@ All 5 follow-ups filed with `--label deferred-scope-out --milestone "Post-MVP / 
 
 - [ ] All Phase 0-3 acceptance criteria met.
 - [ ] CPO sign-off on ADR-030 framing (founder-as-first-tenant validation; explicit acknowledgment of unvalidated-by-external-founder demand).
-- [ ] `bunx tsc --noEmit` passes in `apps/web-platform/` (no orchestration TS module added in v1; the typecheck is a sanity-no-regression gate).
+- [x] `bunx tsc --noEmit` passes in `apps/web-platform/` (no orchestration TS module added in v1; the typecheck is a sanity-no-regression gate). Verified 2026-05-14 at work Phase 4.
 - [ ] No new credentials added to Soleur Doppler for tenant cloud accounts EXCEPT the installation_id Doppler secret (verify: `doppler secrets -p soleur -c prd_orchestration | grep -iE 'TENANT_'` returns at most installation_id rows; no Hetzner/CF/Doppler tokens).
 - [ ] `Ref #3723` in the PR body (NOT `Closes #3723`) — #3723 remains open because v1 ships scaffolding; the issue closes when Jean's first non-Soleur project actually deploys via this substrate.
 
