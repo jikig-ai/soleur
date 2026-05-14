@@ -176,16 +176,7 @@ Review the draft. To commit, type exactly: COMMIT-PIR
 Anything else (yes, y, ok, approved, looks good, etc.) is REJECTED. To abort, press Ctrl-C.
 ```
 
-Parse the operator response with a case-sensitive literal-string equality check:
-
-```bash
-if [[ "${response}" == "COMMIT-PIR" ]]; then
-  # write the PIR
-else
-  echo "Rejected. Type exactly: COMMIT-PIR" >&2
-  exit 1
-fi
-```
+Parse the operator response with a case-sensitive literal-string equality check. Strip trailing `\r` and surrounding whitespace first so a `printf "COMMIT-PIR\r\n"` from a Windows-origin caller or an autonomous-orchestrator stdin pipe is not silently rejected (agent-user parity per `hr-weigh-every-decision-against-target-user-impact`): `response="${response%$'\r'}"; response="${response//[[:space:]]/}"`, then `[[ "${response}" == "COMMIT-PIR" ]]`.
 
 On `COMMIT-PIR`: write `<slug>-postmortem.md` to `knowledge-base/engineering/ops/runbooks/`. Do not git-add — operator commits manually per their convention.
 
@@ -209,20 +200,16 @@ When the file shows `status: resolved`:
 
 ## Naming-collision avoidance (FR6)
 
-This skill must not collide with the rule-telemetry surface defined at `.claude/hooks/lib/incidents.sh`. Specifically the skill must not:
-
-- Define a shell function with the same name as that file's telemetry-emit helper.
-- Write to that file's jsonl output path under `.claude/`.
-- Emit a PIR frontmatter field whose name matches the telemetry enum field used by the hook library.
-
-Plan AC6 enforces all three via a `grep -lE` block in `plan #2725`; the grep is the source of truth for the literal tokens.
+This skill must not collide with the rule-telemetry surface at `.claude/hooks/lib/incidents.sh`. See plan #2725 AC6 for the literal collision-token grep that enforces the three forbidden surfaces.
 
 ## LLM-trust boundary (FR7 / TR8)
 
 Skill computes identifiers locally and validates format-sensitive LLM-emitted fields before substitution:
 
 - `slug` — local `awk`, never LLM-emitted.
-- `incident_pr` — numeric regex match (`^[0-9]+$`) before substituting into frontmatter.
+- `incident_pr` — prefer the first `#NNNN` token in `suspected_change` (regex `#[0-9]+`); fall back to leading numeric run only when no `#NNNN` exists. Prevents `"see #3721 (replaces #2725)"` from resolving to `3721` against an unrelated prose-leading numeric.
 - `detected_at` — ISO-8601 regex match before passing to `date -u -d`.
+- `title` and `symptom` — these are operator-supplied free-form prose that flows into `sed`-substitution against `templates/pir.md`. Run them through `sed`-metacharacter escaping (`s|[\\/&]|\\&|g` plus newline strip) before substituting, OR perform substitution with `awk` literal-replace semantics. An LLM-emitted title containing `&` or `/` will otherwise corrupt the template.
+- Phase 0 / dry-run mode: run the redaction sentinel against the operator-supplied `symptom` / `suspected_change` / `title` strings the moment they are captured, BEFORE any echo to the conversation transcript. Phase 6's sentinel-on-draft is the second pass; this is the first.
 
 Validation failure halts the skill with an explicit operator-fix prompt; the substitution never happens with malformed input.

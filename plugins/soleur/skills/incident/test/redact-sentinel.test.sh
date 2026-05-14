@@ -60,7 +60,8 @@ rc=$?
 assert_exit "Test 2: positive-corpus exits non-zero" 1 "${rc}"
 
 # Every regex class triggers ≥1 (look for the matched-pattern label in output)
-for class in JWT email UUID stripe_key stripe_whsec stripe_acct stripe_cust_pi_seti_sub_in IPv4 env_var; do
+for class in JWT email UUID stripe_key stripe_whsec stripe_acct stripe_cust_pi_seti_sub_in IPv4 env_var \
+             github_token anthropic_key openai_key supabase_pat pem_private_key; do
   assert_grep "Test 2.${class}: pattern '${class}' present" "matched pattern ${class}" "${out}"
 done
 

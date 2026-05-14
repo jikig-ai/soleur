@@ -51,3 +51,25 @@ in_9999999999999999
 SUPABASE_SERVICE_ROLE_KEY=zzzzzzzz-zzzz-zzzz-zzzz-placeholder
 DOPPLER_TOKEN=dp.placeholder.zzzzzzzzzzzzzzzz
 STRIPE_SECRET_KEY=sk_test_aaaaaaaaaaaaaaaa
+
+## GitHub PAT / OAuth / Actions (added 2026-05-14 review)
+
+ghp_PLACEHOLDERaaaaaaaaaaaaaaaaaaaaaaaa
+github_pat_PLACEHOLDERaaaaaaaaaaaaaaaaaaaa
+
+## Anthropic key
+
+sk-ant-PLACEHOLDERaaaaaaaaaaaaaaaaaaaaaaaa
+
+## OpenAI key
+
+sk-proj-PLACEHOLDERaaaaaaaaaaaaaaaaaaaaa
+
+## Supabase PAT / project key
+
+sbp_zzzzzzzzzzzzzzzzzzzzzzzzz
+sb_secret_zzzzzzzzzzzzzzzzzzzz
+
+## PEM private-key header
+
+-----BEGIN RSA PRIVATE KEY-----

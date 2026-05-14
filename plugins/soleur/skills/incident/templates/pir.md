@@ -20,9 +20,7 @@ art_33_deadline: "{{ART_33_DEADLINE}}"
 - `agent-with-ack` — Claude Code did this AFTER operator confirmed via menu option per `hr-menu-option-ack-not-prod-write-auth`.
 - `human` — Operator did this directly.
 
-<!-- SECRET_LEAK_PREAMBLE_START -->
 {{SECRET_LEAK_PREAMBLE}}
-<!-- SECRET_LEAK_PREAMBLE_END -->
 
 ## Symptom
 
@@ -39,7 +37,6 @@ art_33_deadline: "{{ART_33_DEADLINE}}"
 | Actor | Time (UTC) | Action |
 |---|---|---|
 | human | {{DETECTED_AT}} | Incident detected. |
-| agent-with-ack | TBD | TBD |
 
 ## Recovery verification
 

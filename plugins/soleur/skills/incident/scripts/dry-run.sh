@@ -12,13 +12,12 @@
 # (`cq-test-fixtures-synthesized-only`).
 set -uo pipefail
 
-if [[ $# -lt 1 ]]; then
-  echo "usage: dry-run.sh <fixture.json> [phase]" >&2
+if [[ $# -ne 1 ]]; then
+  echo "usage: dry-run.sh <fixture.json>" >&2
   exit 2
 fi
 
 FIXTURE="$1"
-PHASE="${2:-all}"
 
 if [[ ! -r "${FIXTURE}" ]]; then
   echo "dry-run: fixture not readable: ${FIXTURE}" >&2
@@ -153,10 +152,17 @@ EOF
 esac
 
 draft_file=$(mktemp)
-trap 'rm -f "${draft_file}"' EXIT
+sentinel_out=$(mktemp)
+trap 'rm -f "${draft_file}" "${sentinel_out}"' EXIT
 
-# Numeric extraction for incident_pr (FR7 validation)
-incident_pr=$(printf '%s\n' "${suspected_change}" | grep -oE '[0-9]+' | head -1)
+# Numeric extraction for incident_pr (FR7 validation). Prefer an explicit `#NNNN`
+# token over any leading numeric fragment so prose like "see #3721 (replaces #2725)"
+# resolves to 3721, not e.g. a date fragment. Falls back to first numeric only when
+# no `#NNNN` is found (covers "PR 3704 broke X" shape).
+incident_pr=$(printf '%s\n' "${suspected_change}" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+if [[ -z "${incident_pr}" ]]; then
+  incident_pr=$(printf '%s\n' "${suspected_change}" | grep -oE '[0-9]+' | head -1)
+fi
 incident_pr="${incident_pr:-0}"
 
 today=$(date -u +%Y-%m-%d)
@@ -234,17 +240,30 @@ echo
 
 # --- Phase 6: sentinel BEFORE Phase 7 inline-emit (AC10 ordering) ---
 echo "=== Phase 6: redaction sentinel (pre-inline-emit) ==="
-if bash "${SENTINEL}" "${draft_file}" >/tmp/sentinel.$$.out 2>&1; then
+# Also sentinel-scan the operator-supplied input fields BEFORE the draft is
+# scaffolded — covers the user-impact-reviewer finding that operator-pasted
+# log fragments in symptom/suspected_change would otherwise reach the Phase 4
+# draft via sed-substitution without an earlier scan in dry-run/headless mode.
+input_check=$(mktemp)
+printf '%s\n%s\n%s\n' "${symptom}" "${suspected_change}" "${title}" > "${input_check}"
+if ! bash "${SENTINEL}" "${input_check}" >"${sentinel_out}" 2>&1; then
+  echo "sentinel: FAIL on operator-supplied fields (symptom/suspected_change/title)"
+  cat "${sentinel_out}"
+  rm -f "${input_check}"
+  echo "[dry-run] BLOCKING — redact operator-supplied input before re-running."
+  exit 1
+fi
+rm -f "${input_check}"
+
+if bash "${SENTINEL}" "${draft_file}" >"${sentinel_out}" 2>&1; then
   echo "sentinel: pass"
 else
   rc=$?
-  echo "sentinel: FAIL (exit ${rc})"
-  cat /tmp/sentinel.$$.out
-  rm -f /tmp/sentinel.$$.out
+  echo "sentinel: FAIL on draft (exit ${rc})"
+  cat "${sentinel_out}"
   echo "[dry-run] BLOCKING — operator would iterate. Halting dry-run."
   exit 1
 fi
-rm -f /tmp/sentinel.$$.out
 echo
 
 # --- Phase 7: commit gate (literal COMMIT-PIR token only) ---
