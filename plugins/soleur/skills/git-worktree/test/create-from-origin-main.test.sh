@@ -47,8 +47,8 @@ LOCAL_MAIN_BEFORE=$(git -C "$LOCAL" rev-parse refs/heads/main)
 # --- AC1: create succeeds when sibling holds main ---
 (
   cd "$LOCAL"
-  bash "$WM" --yes create feat-bar >/tmp/wt-out.$$ 2>&1
-) && pass "AC1: create succeeds with sibling holding main" || fail "AC1: create FAILED (output: $(cat /tmp/wt-out.$$))"
+  bash "$WM" --yes create feat-bar >$TMP/wt-out.1.log 2>&1
+) && pass "AC1: create succeeds with sibling holding main" || fail "AC1: create FAILED (output: $(cat $TMP/wt-out.1.log))"
 
 # --- AC2: local main unchanged ---
 LOCAL_MAIN_AFTER=$(git -C "$LOCAL" rev-parse refs/heads/main)
@@ -83,15 +83,15 @@ rm -rf "$SEED3"
 LOCAL_MAIN_BEFORE_UPDATE=$(git -C "$LOCAL" rev-parse refs/heads/main)
 (
   cd "$LOCAL"
-  bash "$WM" --yes --update-local-main create feat-baz >/tmp/wt-out2.$$ 2>&1
-) && pass "AC6a: --update-local-main create succeeded" || fail "AC6a: --update-local-main create failed (output: $(cat /tmp/wt-out2.$$))"
+  bash "$WM" --yes --update-local-main create feat-baz >$TMP/wt-out.2.log 2>&1
+) && pass "AC6a: --update-local-main create succeeded" || fail "AC6a: --update-local-main create failed (output: $(cat $TMP/wt-out.2.log))"
 
 LOCAL_MAIN_AFTER_UPDATE=$(git -C "$LOCAL" rev-parse refs/heads/main)
 [[ "$LOCAL_MAIN_AFTER_UPDATE" != "$LOCAL_MAIN_BEFORE_UPDATE" ]] \
-  && pass "AC6b: --update-local-main advanced local main" \
-  || fail "AC6b: --update-local-main did NOT advance local main"
+  && pass "AC6b: --update-local-main advanced local main ($LOCAL_MAIN_BEFORE_UPDATE -> $LOCAL_MAIN_AFTER_UPDATE)" \
+  || fail "AC6b: --update-local-main did NOT advance local main (still at $LOCAL_MAIN_BEFORE_UPDATE)"
 
-rm -f /tmp/wt-out.$$ /tmp/wt-out2.$$
+# stdout logs live under $TMP so the EXIT trap cleans them on any abort path
 echo
 echo "=== Results ==="
 echo "PASS: $PASS"

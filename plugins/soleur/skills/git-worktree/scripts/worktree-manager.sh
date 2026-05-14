@@ -271,6 +271,26 @@ fetch_origin_branch_base() {
   fi
 }
 
+# Resolve the base ref to use for `git worktree add` based on whether the
+# operator passed --update-local-main. Sets globals BASE_REF and TRACK_FLAG.
+# Used by create_worktree() and create_for_feature() — both call sites need
+# identical behavior so the helper keeps the load-bearing --no-track comment
+# (see fetch_origin_branch_base) and the --update-local-main branch in one place.
+resolve_base_ref() {
+  local from="$1"
+  if [[ "$UPDATE_LOCAL_MAIN" == "true" ]]; then
+    update_branch_ref "$from"
+    BASE_REF="$from"
+    TRACK_FLAG=""
+  else
+    BASE_REF="$(fetch_origin_branch_base "$from")"
+    # --no-track is load-bearing: without it, branch.<new>.merge would be set
+    # to refs/heads/<from>, breaking bare `git push` from inside the worktree.
+    # Pre-fix behavior left upstream UNSET; this preserves that exactly.
+    TRACK_FLAG="--no-track"
+  fi
+}
+
 # Update a branch ref to latest remote, handling bare vs non-bare repos.
 # In bare repos: uses fetch with refspec (no working tree needed).
 # In non-bare repos: uses checkout + pull.
@@ -459,28 +479,17 @@ create_worktree() {
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
 
-  # Base on origin/<from> by default (avoids local-ref lock contention, #3741).
-  # --update-local-main opt-in keeps the legacy behavior for operators who want
-  # the local <from> ref fast-forwarded.
-  local base_ref
-  local track_flag=""
-  if [[ "$UPDATE_LOCAL_MAIN" == "true" ]]; then
-    update_branch_ref "$from_branch"
-    base_ref="$from_branch"
-  else
-    base_ref="$(fetch_origin_branch_base "$from_branch")"
-    # --no-track is load-bearing: without it, branch.<new>.merge would be set
-    # to refs/heads/<from>, breaking bare `git push` from inside the worktree.
-    # Pre-fix behavior left upstream UNSET; this preserves that exactly.
-    track_flag="--no-track"
-  fi
+  # Base on origin/<from> by default (avoids local-ref lock contention, #3741);
+  # --update-local-main opt-in keeps the legacy behavior.
+  local BASE_REF TRACK_FLAG
+  resolve_base_ref "$from_branch"
 
-  echo -e "${BLUE}Creating worktree from $base_ref...${NC}"
-  # shellcheck disable=SC2086 # intentional unquoted $track_flag: empty string must elide
-  git worktree add $track_flag -b "$branch_name" "$worktree_path" "$base_ref"
+  echo -e "${BLUE}Creating worktree from $BASE_REF...${NC}"
+  # shellcheck disable=SC2086 # intentional unquoted $TRACK_FLAG: empty string must elide
+  git worktree add $TRACK_FLAG -b "$branch_name" "$worktree_path" "$BASE_REF"
 
   # Verify BEFORE fixing config — most honest check of worktree health
-  verify_worktree_created "$worktree_path" "$branch_name" "$base_ref"
+  verify_worktree_created "$worktree_path" "$branch_name" "$BASE_REF"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
