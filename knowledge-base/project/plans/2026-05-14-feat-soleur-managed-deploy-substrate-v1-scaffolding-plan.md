@@ -133,13 +133,13 @@ No fold-in required.
 
 **Acceptance Criteria (Phase 1):**
 
-- [ ] Migration applies cleanly in dev (`doppler run -p soleur -c dev -- npx supabase migration up`). prd application is post-merge.
-- [ ] WORM trigger rejects direct UPDATE/DELETE: `psql -c "UPDATE public.tenant_deploy_audit SET trigger_outcome = 'X' WHERE id = '<test-id>';"` → returns `P0001`.
-- [ ] Writer RPC works under service_role context for valid input; rejects malformed `target_repo` / `target_workflow` per CHECK constraints.
-- [ ] Anon role cannot SELECT: returns zero rows (RLS-blocked).
-- [ ] **Anonymise semantics verified** (legal-compliance BLOCKING #3): `SELECT count(*) FROM public.tenant_deploy_audit;` before and after calling `anonymise_tenant_deploy_audit('<test-uuid>')` returns the same count. Per-row `founder_id` is NULL for the anonymised rows.
-- [ ] `SET search_path = public, pg_temp` confirmed on the writer RPC: `SELECT prosrc FROM pg_proc WHERE proname = 'write_tenant_deploy_audit';` shows `SET search_path = public, pg_temp` (in that order; Kieran P0-1).
-- [ ] Retention sweep cron scheduled: `SELECT jobname FROM cron.job WHERE jobname = 'tenant-deploy-audit-retention';` returns exactly 1 row.
+- [x] Migration applies cleanly in dev (`doppler run -p soleur -c dev -- npx supabase migration up`). prd application is post-merge.
+- [x] WORM trigger rejects direct UPDATE/DELETE: `psql -c "UPDATE public.tenant_deploy_audit SET trigger_outcome = 'X' WHERE id = '<test-id>';"` → returns `P0001`.
+- [x] Writer RPC works under service_role context for valid input; rejects malformed `target_repo` / `target_workflow` per CHECK constraints.
+- [x] Anon role cannot SELECT: returns zero rows (RLS-blocked).
+- [x] **Anonymise semantics verified** (legal-compliance BLOCKING #3): `SELECT count(*) FROM public.tenant_deploy_audit;` before and after calling `anonymise_tenant_deploy_audit('<test-uuid>')` returns the same count. Per-row `founder_id` is NULL for the anonymised rows.
+- [x] `SET search_path = public, pg_temp` confirmed on the writer RPC: `SELECT prosrc FROM pg_proc WHERE proname = 'write_tenant_deploy_audit';` shows `SET search_path = public, pg_temp` (in that order; Kieran P0-1).
+- [x] Retention sweep cron scheduled: `SELECT jobname FROM cron.job WHERE jobname = 'tenant-deploy-audit-retention';` returns exactly 1 row.
 - [x] Retention column + comment present: `grep -cE 'retention_until|RETENTION: 12 months' apps/web-platform/supabase/migrations/043_tenant_deploy_audit.sql` returns ≥2.
 - [x] `oidc_jti` column type is `text NOT NULL CHECK (...)`, not `uuid`: `\d+ public.tenant_deploy_audit` shows `text` for that column.
 - [x] `founder_id` FK uses `ON DELETE RESTRICT`: `\d+ public.tenant_deploy_audit` shows `ON DELETE RESTRICT` (not `SET NULL`).
@@ -211,7 +211,7 @@ All 5 follow-ups filed with `--label deferred-scope-out --milestone "Post-MVP / 
 ### Pre-merge (PR #3744)
 
 - [ ] All Phase 0-3 acceptance criteria met.
-- [ ] CPO sign-off on ADR-030 framing (founder-as-first-tenant validation; explicit acknowledgment of unvalidated-by-external-founder demand).
+- [x] CPO sign-off on ADR-030 framing (founder-as-first-tenant validation; explicit acknowledgment of unvalidated-by-external-founder demand). **CPO sign-off (2026-05-14, jean.deruelle@jikigai.com)**: ADR-030's founder-as-first-tenant validation gate is acknowledged; unvalidated-by-external-founder posture is acknowledged; revision-2 scope cuts (no scaffold template, no orchestration module, no registry table, no synthesized cross-tenant test) are verified intact in PR #3744. Approach B/C deferred to ADR-030 escape-hatch triggers, not backlog. Abstraction re-evaluation at N=2.
 - [x] `bunx tsc --noEmit` passes in `apps/web-platform/` (no orchestration TS module added in v1; the typecheck is a sanity-no-regression gate). Verified 2026-05-14 at work Phase 4.
 - [ ] No new credentials added to Soleur Doppler for tenant cloud accounts EXCEPT the installation_id Doppler secret (verify: `doppler secrets -p soleur -c prd_orchestration | grep -iE 'TENANT_'` returns at most installation_id rows; no Hetzner/CF/Doppler tokens).
 - [ ] `Ref #3723` in the PR body (NOT `Closes #3723`) — #3723 remains open because v1 ships scaffolding; the issue closes when Jean's first non-Soleur project actually deploys via this substrate.
