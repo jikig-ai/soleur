@@ -82,7 +82,7 @@ Brand-survival threshold: `single-user incident` — CPO sign-off required befor
 
 Per Kieran P0-3 — pre-commit gitleaks hook reads allowlist from HEAD, not staged. STRICTLY TWO COMMITS in this order:
 
-- [ ] 9.1 Commit 1: `.gitleaks.toml` allowlist entry for `plugins/soleur/skills/code-to-prd/test/fixture/.env.example` citing `cq-test-fixtures-synthesized-only`. Push. Confirm landed.
+- [x] 9.1 Commit 1: `.gitleaks.toml` allowlist entry for `plugins/soleur/skills/code-to-prd/test/fixture/.env.example` citing `cq-test-fixtures-synthesized-only`. Push. Confirm landed.
 - [ ] 9.2 Commit 2: fixture `.env.example` with the synthetic secret. Push.
 
 Never bundle these two commits. Verify locally before pushing each.
