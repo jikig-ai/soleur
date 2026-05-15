@@ -38,14 +38,14 @@ Without these audits, over-engineering or partial implementations can ship under
 
 ## Functional Requirements
 
-- FR1: Edit `plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` review-process list to include a "Surface Hidden Assumptions" bullet (parallel to existing "Challenge Abstractions"), with sub-bullets enumerating: unstated invariants, magic numbers without justification, implicit callsite contracts, hidden ordering / timing dependencies.
-- FR2: Same file: add a "Verify Goals" bullet (parallel to existing "Apply YAGNI Rigorously"), with sub-bullets enumerating: read acceptance criteria from the PR body and any linked spec/issue; map each criterion to evidence in the diff; flag unmet criteria; flag added behavior not in the criteria as out-of-scope.
-- FR3: Same file: append two output-format sections — `### Hidden Assumptions` and `### Goal Verification` — each structured with bullet items mirroring `### YAGNI Violations` (item / why it matters / suggested fix or verdict).
-- FR4: Extend `knowledge-base/project/learnings/best-practices/2026-05-03-karpathy-claude-md-prior-art.md` with a `## Audit Direction (pre-merge check)` section that names the extended `code-simplicity-reviewer` as the implementation and links to this brainstorm + spec + issue #2727.
+- FR1: Edit existing review-process bullet `4. Challenge Abstractions` in `plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` to add two sub-bullets covering "unstated invariants the diff silently relies on" and "magic numbers / implicit callsite contracts without inline justification." (Hidden Assumptions is an extension of the existing Challenge Abstractions axis — no separate process bullet needed.)
+- FR2: Same file: add one new review-process bullet `7. Verify Stated Goals Against Diff` (matching the format `N. **Name**:` of existing bullets — see line 11). Sub-bullets MUST cover: (a) read acceptance criteria from PR body + linked issue body + any linked `spec.md`; (b) map each criterion to evidence in the diff; (c) flag unmet criteria; (d) flag added behavior not in the criteria as out-of-scope; (e) **fallback for off-diff invocations**: render `### Hidden Assumptions` and `### Goal Verification` as `_N/A — no diff in scope._` when invoked by CONCUR-gate, `/soleur:plan-review`, `atdd-developer`, or `compound`.
+- FR3: Same file: append two output-format sections — `### Hidden Assumptions` and `### Goal Verification` — between `### YAGNI Violations` and `### Final Assessment`. Both sections MUST end with the instruction "If no findings, render `_None._`" so reviewers can distinguish audit-ran-no-findings from audit-skipped.
+- FR4: Extend `knowledge-base/project/learnings/best-practices/2026-05-03-karpathy-claude-md-prior-art.md` with a `## Audit Direction (pre-merge check)` section between `## When This Note Becomes Load-Bearing` and `## Related`. The section names the extended `code-simplicity-reviewer` as the implementation and links to this brainstorm, spec, plan, the audit-vs-guidance learning, and issue #2727.
 
 ## Technical Requirements
 
-- TR1: No changes to `plugins/soleur/skills/review/SKILL.md`. `code-simplicity-reviewer` is already on the class=code agent list.
+- TR1: No changes to `plugins/soleur/skills/review/SKILL.md`. The agent is already routed by section 4 (line 380-382), CONCUR-gate (line 502-524), `/soleur:plan-review` 3-agent panel, `/soleur:work` final validation, and opportunistic spawns in `atdd-developer` + `compound`. Extending the agent body propagates to every surface.
 - TR2: Agent frontmatter unchanged. `description:`, `model: inherit`, and filename remain as-is to satisfy `plugins/soleur/AGENTS.md` agent compliance checklist (no token-budget impact, no example-block additions).
 - TR3: No changes to `plugins/soleur/README.md` component counts (no new component).
 - TR4: Semver label: `semver:patch` (content addition to an existing agent body).
@@ -53,11 +53,11 @@ Without these audits, over-engineering or partial implementations can ship under
 
 ## Acceptance Criteria
 
-- AC1: `code-simplicity-reviewer.md` contains the two new review-process bullets and the two new output-format sections (FR1, FR2, FR3).
-- AC2: A representative invocation of `/soleur:review` against a synthetic PR with one unstated invariant and one unmet acceptance criterion surfaces both findings in the agent's output (manual smoke test recorded in PR body).
+- AC1: `code-simplicity-reviewer.md` contains the extended bullet `4. Challenge Abstractions` (FR1), the new bullet `7. Verify Stated Goals Against Diff` matching the canonical `N. **Name**:` format (FR2), and both output-format sections (FR3).
+- AC2: The fallback instruction text `N/A — no diff in scope` appears in the agent body bullet 7's sub-bullets (FR2.e). Grep: `grep -c 'N/A — no diff in scope' plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` returns `1`.
 - AC3: The 2026-05-03 prior-art learning has the Audit Direction section (FR4) with working links.
-- AC4: `grep -h 'description:' plugins/soleur/agents/**/*.md | wc -w` reports the same word count before/after (description unchanged per TR2).
-- AC5: PR body includes a `## Changelog` section with `semver:patch`, references issue #2727 via `Closes #2727`.
+- AC4: `shopt -s globstar; grep -h 'description:' plugins/soleur/agents/**/*.md | wc -w` reports the same word count before/after (description unchanged per TR2).
+- AC5: PR body includes a `## Changelog` section with `semver:patch`, references issue #2727 via `Closes #2727`, and surfaces the AC1–AC4 grep commands in a manual-verification block.
 
 ## Out-of-Scope (parking lot)
 
