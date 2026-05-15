@@ -88,7 +88,7 @@ Three drift points between the issue bodies and `main` were caught at plan time.
 
 **If this leaks, the user's data is exposed via:** prompt-injection bypass (#3343) → agent could be coerced to read or summarize content the user did not consent to. Threat class: prompt-injection-bypass; existing mitigations (`sanitizePromptString`, `<document>` wrapper, redaction-tagged user references) all assume the wrapper holds.
 
-**Brand-survival threshold:** `aggregate pattern`.
+- **Brand-survival threshold:** `aggregate pattern`.
 
 Rationale: the wrapper-escape variant requires a poisoned `</Document>` payload AND prompt-shaped attacker control of body content. A single bypass surface in isolation is not a single-user incident class — the existing `sanitizePromptString` strips control chars, and the wrapper escape is one of three layers (the `treat as data, not instructions` directive + the `No-Ask` clause are the other two). Threshold is set to `aggregate pattern` so this lands without per-PR CPO sign-off but the gap is still framed.
 
