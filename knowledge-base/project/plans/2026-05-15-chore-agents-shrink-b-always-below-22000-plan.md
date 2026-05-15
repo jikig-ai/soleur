@@ -14,43 +14,33 @@ requires_cpo_signoff: false
 
 `scripts/lint-agents-rule-budget.py` is in REJECT state on `main`: B_ALWAYS = 22,687 B > 22,000 B cap (warn ≥ 20,000). PR #3808 shipped 4 commits with `LEFTHOOK=0` bypass; the workaround is unsustainable and the issue exists to close it.
 
-Per brainstorm `2026-04-23-agents-md-budget-revisit-brainstorm.md` (decided): "Full deletion via `retired-rule-ids.txt` is the only byte-positive path. Pointer-migration is byte-neutral (PR #2754 measured +21 B net). Demotion is reversible relocation but adds surface area." Plan v1 proposed demote + 5 Why-trims (8 surface edits, byte math ended at 21,981 B — over the AC). 5-agent plan review converged: simplification panel (DHH + code-simplicity) said REVISE-prefer-retirement; correctness panel (Kieran + spec-flow) said REVISE-byte-math-drift. **Plan v2 (this file) pivots to retirement + small trim — fewer surface edits, dissolves the byte-math drift, aligns with the brainstorm.**
+## Strategy evolution
 
-## Strategy
+**Plan v1 (demote + 5 Why-trims).** Rejected at 5-agent plan review: simplification panel (DHH + code-simplicity) said "prefer retirement"; correctness panel (Kieran + spec-flow) flagged byte-math drift + missing atomic-commit AC + Trim 2 over-trim.
 
-**Retire `hr-no-dashboard-eyeball-pull-data-yourself`** (AGENTS.core.md:34, 582 B body + AGENTS.md:25 pointer ≈ 53 B = ~635 B saved). Discoverability-litmus rationale below.
+**Plan v2 (retire `hr-no-dashboard-eyeball-pull-data-yourself` + 2 Why-trims).** Rejected at /work-time cross-reference sweep: the retirement candidate is canonically anchored in 5 operator-facing surfaces (`plugins/soleur/skills/ship/SKILL.md:1143,1169`, `plugins/soleur/skills/plan/SKILL.md:726`, `plugins/soleur/agents/engineering/review/deployment-verification-agent.md:97`, `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md:160`, `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md:101`). Retirement would leave these as dangling references OR force an 8-edit sweep — both fail the "cheapest credible path" framing.
 
-**Plus Why-tail trim on two rules** for safety margin:
+**Plan v3 (this file) — demote + 6 Why-trims with plan-review fixes baked in.** Returns to architecture-strategist's ACCEPTED approach with the following corrections baked in:
 
-- `hr-ssh-diagnosis-verify-firewall` (AGENTS.core.md:26): trim Why tail to `**Why:** #2681.` (≈ 61 B saved). The runbook citation (`knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`) IS preserved in the rule body — that's the load-bearing reference, not the Why prose.
-- `hr-when-triaging-a-batch-of-issues-never` (AGENTS.core.md:14): trim Why tail to `**Why:** #2075.` (≈ 64 B saved). The named tools (`gemini-imagegen`, `frontend-design`, `copywriter`, `pencil` MCP) stay in the rule body.
-
-**Combined savings: ~760 B → B_ALWAYS ≈ 21,927 (≈ 73 B headroom on the 22,000 cap).**
-
-## Discoverability litmus — `hr-no-dashboard-eyeball-pull-data-yourself`
-
-Per brainstorm 2026-04-23: "Can the agent discover this on its own by reading the code, running the command, or trying it? If yes, delete." Applied to this rule:
-
-- **The rule:** "When a monitoring/recovery/health check returns a technical signal that needs interpretation, never punt to operator dashboard-watching or 'human-judgment' if the underlying data is API-accessible. Per `hr-exhaust-all-automated-options-before`, pull readings via Management APIs/MCP/CLI…"
-- **Subsumption.** The operative prescription ("don't manual / dashboard if APIs exist") is the same prescription as `hr-exhaust-all-automated-options-before` (compliance-tier, stays in core). The dashboard-eyeball rule is a more specific phrasing of the broader principle.
-- **PR #3808 precedent.** The rule was already trimmed from 1,150 B → 582 B by PR #3808. Plan v1's Risk #5 explicitly flagged "this PR is the LAST cheap trim on that rule" — further trimming would gut the operative prescription. Retirement is more honest than incremental gutting.
-- **Learning-file backstop.** The retired-rule breadcrumb in `scripts/retired-rule-ids.txt` will point at `knowledge-base/project/learnings/2026-05-13-no-dashboard-eyeball-pull-data-yourself.md`. The institutional knowledge is preserved.
-- **Discoverability.** When an agent reads a runbook that says "check Grafana", the alternative path (Management API / MCP / CLI per `hr-exhaust-all-automated-options-before`) is in-context via the broader rule. The dashboard-eyeball rule's incremental teaching is editorial, not load-bearing.
-
-Conclusion: retire.
+- Phase 1 demotion byte count: **352 B** (Kieran's measurement; plan v1 said 348).
+- Trim 2 (`hr-when-a-plan-specifies-relative-paths-e-g`) preserves the `infra/**` example (Kieran P2.1: load-bearing teaching).
+- Atomic-commit invariant elevated to a verifiable AC (spec-flow's Critical finding).
+- AC target tightened to ≤ 22,000 to match the lefthook reject threshold (not the arbitrary ≤ 21,950 from v1).
+- 6th trim added for safety margin so the math doesn't land at the threshold (Kieran P1.1).
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec claim | Reality | Plan response |
 |---|---|---|
-| Issue body: "B_ALWAYS = 22,687 bytes" | Verified: `python3 scripts/lint-agents-rule-budget.py` outputs `[REJECT] B_ALWAYS=22687 > 22000 (AGENTS.md=4721 + AGENTS.core.md=17966)`. | Use 22,687 as the baseline. |
-| Issue body: "demote a wg-* rule" | Demote-only insufficient (≤ 352 B savings on the largest demote candidate, well under 688 B). Issue body also offers retirement path; brainstorm 2026-04-23 endorses retirement. | Pivot to retirement of one large rule + small Why-trim. |
-| Brainstorm 2026-04-23: "Approach D: amend `wg-every-session-error-must-produce-either` with discoverability litmus + retire 25 rules to hit 32k target" | This PR ships ONE retirement against the narrower 22,000 hard-fail target. Broader pass remains under brainstorm 2026-04-23. | Apply the discoverability litmus to one rule only here. Defer the wholesale pass. |
-| Plan v1 (this file pre-pivot): "demote `wg-after-merging-a-pr-that-adds-or-modifies` + 5 Why-trims" | Kieran measurement: combined savings = 706 B, lands at 21,981 — over the proposed ≤ 21,950 AC by 31 B; 8 surface edits; Trim 2 was load-bearing-lossy. | Discarded. v2 retirement + 2 trims is structurally simpler and dissolves the math drift. |
+| Issue body: "B_ALWAYS = 22,687 bytes" | Verified at HEAD: `python3 scripts/lint-agents-rule-budget.py` → `[REJECT] B_ALWAYS=22687 > 22000 (AGENTS.md=4721 + AGENTS.core.md=17966)`. | Use 22,687 baseline. |
+| Issue body: "one wg-* demotion + targeted Why trim" | Verified via loader-fit analysis: only `wg-after-merging-a-pr-that-adds-or-modifies` is safely demotable (trigger surface `.github/workflows/*.yml` exclusively matches INFRA_RE at `.claude/hooks/session-rules-loader.sh:104` → `CLASSES="core rest"` on every relevant session). All other `wg-*` rules in core fire on docs-only sessions (`roadmap.md` edits), every-session start, every commit, or version-file edits. | Demote that one rule. Trim 6 non-compliance-tier Whys to recover the rest. |
+| Plan v2's "retire `hr-no-dashboard-eyeball-pull-data-yourself`" path | `/work`-time grep found 5 operator-facing cross-references. Retirement would dangle the references; sweep would 8x the edit count. | Abandoned. Trim its Why instead (cross-references unaffected — the rule body stays in core, only the Why tail is shortened). |
+| Architecture-strategist ACCEPT verdict on v1 demote+trim | Three doc-polish recommendations: (1) name the overlapping `wg-after-a-pr-merges-to-main-verify-all` gate explicitly, (2) document the docs-only blind spot in Risks, (3) fix the 348→352 B count. | All three folded into Phase 1 + Risks below. |
+| Kieran's P2.1 — Trim 2 over-trims | Plan v1 trimmed `(PR #2889 — \`infra/**\` matched zero paths; gate missed \`middleware.ts\` / \`app/api/**\`)` to `(PR #2889).`, losing the `infra/**` teaching. | v3 trims to `(PR #2889 — \`infra/**\` matched zero paths).` — preserves the load-bearing pattern. |
 
 ## User-Brand Impact
 
-- **If this lands broken:** an AGENTS-touching PR fails the lefthook gate (same state as today). No user-facing failure mode.
+- **If this lands broken:** AGENTS-touching PRs fail the lefthook gate; operators re-reach for `LEFTHOOK=0`. Same state as today, no net regression. Demotion-specific failure: the demoted rule (`wg-after-merging-a-pr-that-adds-or-modifies`) is invisible on a docs-only session that happens to need post-merge `gh workflow run` verification — but the broader gate `wg-after-a-pr-merges-to-main-verify-all` at `AGENTS.core.md:46` stays in core and provides coarser coverage.
 - **If this leaks:** N/A — no regulated-data surface touched.
 - **Brand-survival threshold:** `none, reason: harness-internal Markdown rule allocation; no auth/PII/payments/regulated-data surface touched (sensitive-path regex per plugins/soleur/skills/preflight/SKILL.md Check 6.1 not matched).`
 
@@ -59,15 +49,22 @@ Conclusion: retire.
 ### Pre-merge (PR)
 
 - [ ] `python3 scripts/lint-agents-rule-budget.py` exits 0; stdout shows `[OK] B_ALWAYS=<N>` with `N ≤ 22,000`.
-- [ ] `python3 scripts/lint-rule-ids.py` exits 0 (the retired ID is correctly listed in `scripts/retired-rule-ids.txt` and absent from active AGENTS sidecars).
+- [ ] `python3 scripts/lint-rule-ids.py` exits 0 (no rule IDs removed; demoted rule's ID stays present across sidecars).
 - [ ] `bash scripts/lint-agents-rule-budget.test.sh` passes.
 - [ ] `bash .claude/hooks/session-rules-loader.test.sh` passes.
 - [ ] `bash .claude/hooks/session-rules-loader-headless.test.sh` passes.
-- [ ] `grep -F "hr-no-dashboard-eyeball-pull-data-yourself" AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md` returns zero matches.
-- [ ] `grep -F "hr-no-dashboard-eyeball-pull-data-yourself" scripts/retired-rule-ids.txt` returns exactly one match with the format `<id> | 2026-05-15 | PR #<N> | knowledge-base/project/learnings/2026-05-13-no-dashboard-eyeball-pull-data-yourself.md`.
-- [ ] `grep -F "**Why:** #2681." AGENTS.core.md` returns exactly one match (Trim 1 citation preserved).
-- [ ] `grep -F "**Why:** #2075." AGENTS.core.md` returns exactly one match (Trim 2 citation preserved).
-- [ ] `git log --oneline origin/main..HEAD -- AGENTS.md AGENTS.core.md scripts/retired-rule-ids.txt | wc -l` returns exactly `1` — the retirement + trims land in a single atomic commit, NOT split. (Per spec-flow finding: atomic-commit invariant promoted to verifiable AC. Splitting would force a `LEFTHOOK=0` bypass on the intermediate state.)
+- [ ] `grep -F "[id: wg-after-merging-a-pr-that-adds-or-modifies]" AGENTS.md` returns the `→ rest` line.
+- [ ] `grep -F "[id: wg-after-merging-a-pr-that-adds-or-modifies]" AGENTS.core.md` returns zero matches.
+- [ ] `grep -F "[id: wg-after-merging-a-pr-that-adds-or-modifies]" AGENTS.rest.md` returns exactly one match under `## Workflow Gates`.
+- [ ] All 6 trimmed Why clauses preserve their canonical `#NNNN` citation. Per-trim citation greps:
+  - `grep -F "**Why:** #3356." AGENTS.core.md` returns 1 match.
+  - `grep -F "(PR #2889 — \`infra/**\` matched zero paths)." AGENTS.core.md` returns 1 match.
+  - `grep -F "**Why:** #2075." AGENTS.core.md` returns 1 match.
+  - `grep -F "**Why:** #2681." AGENTS.core.md` returns 1 match.
+  - `grep -F "**Why:** #2430." AGENTS.core.md` returns 1 match.
+  - `grep -F "**Why:** EU single-user threshold." AGENTS.core.md` returns 1 match.
+- [ ] Compliance-tier rules' Whys are unchanged: `grep -F '[compliance-tier]' AGENTS.core.md` returns 5 matches (`hr-exhaust-all-automated-options-before`, `hr-menu-option-ack-not-prod-write-auth`, `hr-never-git-add-a-in-user-repo-agents`, `hr-never-paste-secrets-via-bang-prefix`, `cq-pg-security-definer-search-path-pin-pg-temp`); none have been edited.
+- [ ] **Atomic-commit invariant** (per spec-flow Critical finding): `git log --oneline origin/main..HEAD -- AGENTS.md AGENTS.core.md AGENTS.rest.md | wc -l` returns exactly `1` — the demote+trims commit. Plan/tasks commits do not touch AGENTS files. The demote and trims MUST land in a single commit because Phase 1 alone fails lefthook (B_ALWAYS ≈ 22,335 > 22,000).
 - [ ] No commit in this PR uses `LEFTHOOK=0`.
 - [ ] PR body uses `Closes #3833` on its own line.
 
@@ -79,84 +76,116 @@ Conclusion: retire.
 
 ### Phase 0 — Preconditions
 
-- **CWD = worktree:** `pwd` ends in `.worktrees/feat-one-shot-3833`. Subsequent Bash calls use absolute paths or `cd … && <cmd>`.
-- **Baseline lint state:** re-run `python3 scripts/lint-agents-rule-budget.py`; confirm `B_ALWAYS=22687`. If shifted, recompute Phase 1+2's running totals.
-- **Retired-rule-ids format:** read `scripts/retired-rule-ids.txt` header (lines 1-22) to confirm the entry format: `<rule-id> | <YYYY-MM-DD> | <PR #NNNN or -> | <breadcrumb>`.
-- **No collision PR:** `gh pr list --search "linked:issue #3833" --state open` returns only the draft (#3837) opened for this worktree.
+- **CWD = worktree:** `pwd` ends in `.worktrees/feat-one-shot-3833`. Bash CWD does NOT persist across calls — use absolute paths.
+- **Baseline lint state:** `python3 scripts/lint-agents-rule-budget.py` → `B_ALWAYS=22687`.
+- **Loader regex unchanged:** `sed -n '99,126p' .claude/hooks/session-rules-loader.sh` shows `DOCS_RE` / `CODE_RE` / `INFRA_RE` triplet + class-selection branch. Demotion routes to `core+rest` when `HAS_INFRA=1`.
+- **No collision PR:** `gh pr list --search "linked:issue #3833" --state open` returns only draft #3837.
 
-### Phase 1 — Retire `hr-no-dashboard-eyeball-pull-data-yourself`
+### Phase 1 — Demote `wg-after-merging-a-pr-that-adds-or-modifies` (core → rest)
 
-Edits (atomic, must land in a single commit):
+**Why this rule.** Only `wg-*` rule in core whose trigger surface is exclusively `.github/workflows/*.yml` modifications → matches `INFRA_RE='\.tf$|^apps/[^/]+/infra/|\.github/workflows/|/?Dockerfile|/migrations/.*\.sql$'` at `session-rules-loader.sh:104` → `CLASSES="core rest"` per the selector at line 124. All other `wg-*` rules in core fire on docs-only sessions, every-session start, every commit, or no-class file edits.
 
-1. **`AGENTS.md`:** delete the index pointer line at `AGENTS.md:25` (`- [id: hr-no-dashboard-eyeball-pull-data-yourself] → core`). Net byte delta: −53 B from AGENTS.md.
-2. **`AGENTS.core.md`:** delete the rule body line at `AGENTS.core.md:34`. Net byte delta: −583 B from core (582 + 1 nl).
-3. **`scripts/retired-rule-ids.txt`:** append one line:
+**Defense-in-depth (per architecture-strategist).** The broader gate `wg-after-a-pr-merges-to-main-verify-all` (`AGENTS.core.md:46`) stays in core and provides coarse post-merge verification coverage. Demotion narrows only the workflow-specific `gh workflow run` recipe to code/infra sessions.
 
-    ```text
-    hr-no-dashboard-eyeball-pull-data-yourself | 2026-05-15 | PR #<this-PR-N> | knowledge-base/project/learnings/2026-05-13-no-dashboard-eyeball-pull-data-yourself.md
-    ```
+**Edits (must land in the same commit as Phase 2):**
 
-    The `<this-PR-N>` placeholder MUST be replaced with the actual PR number (draft PR #3837 or its successor) at the commit step. The `lint-rule-ids.py` linter accepts `-` as a placeholder when no PR is known, but a concrete number is preferred for grep-discovery.
+1. `AGENTS.md:59` (Workflow Gates index): change `→ core` to `→ rest`. Zero net byte delta (string lengths identical).
+2. `AGENTS.core.md:52`: delete the rule body line (one `^- ` line). **Measured: 352 B** including the trailing `\n` (Kieran's measurement; plan v1's 348 was wrong).
+3. `AGENTS.rest.md`: append the deleted line verbatim to `## Workflow Gates` section (after `wg-use-closes-n-in-pr-body-not-title-to` at line 18).
 
-**Cross-reference sweep before delete:**
+**Cross-reference check:** `scripts/lint-scheduled-show-full-output.sh:19` references the rule by ID in a comment. This is a documentation comment, not a routing dependency. The rule ID survives in AGENTS.{md,rest.md}; the comment continues to resolve. No edit needed.
 
-```bash
-grep -rln "hr-no-dashboard-eyeball-pull-data-yourself" --include='*.md' --include='*.sh' --include='*.py' --include='*.ts' . | grep -v knowledge-base/project/learnings | grep -v knowledge-base/project/brainstorms | grep -v knowledge-base/project/plans | grep -v knowledge-base/project/specs
-```
+### Phase 2 — Why-trims on 6 non-compliance-tier rules
 
-Expected matches: `AGENTS.md`, `AGENTS.core.md`, `scripts/retired-rule-ids.txt` (after the append). If any other file references the rule ID, fold its update into this PR or scope-out with rationale.
+Per `cq-agents-md-why-single-line` (governs Why shape, not Why existence), the Why may be shortened to the canonical `#NNNN` citation when the supplementary tail is grep-discoverable from the linked PR/learning. Compliance-tier rules' Whys document brand-survival incident shapes and stay intact.
 
-### Phase 2 — Why-trim on 2 rules
+**Trim 1 — `hr-no-dashboard-eyeball-pull-data-yourself` (AGENTS.core.md:34).**
 
-**Trim 1 — `hr-ssh-diagnosis-verify-firewall` (AGENTS.core.md:26).**
+- Current Why: `**Why:** #3356; see \`knowledge-base/project/learnings/2026-05-13-no-dashboard-eyeball-pull-data-yourself.md\`.`
+- New Why: `**Why:** #3356.`
+- Bytes saved: **94 B** (Kieran's measurement).
+- Note: the rule itself stays in core — only the Why prose is trimmed. The 5 operator-facing cross-references (ship/SKILL.md, plan/SKILL.md, etc.) continue to resolve.
 
-- Current Why: `**Why:** #2681 — #2654 plan had sshd hypotheses; cause was admin-IP drift.`
-- New Why: `**Why:** #2681.`
-- Bytes saved: ≈ 61 B. The runbook reference (`knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`) earlier in the body is the load-bearing pointer; the Why prose was supplementary.
+**Trim 2 — `hr-when-a-plan-specifies-relative-paths-e-g` (AGENTS.core.md:9).**
 
-**Trim 2 — `hr-when-triaging-a-batch-of-issues-never` (AGENTS.core.md:14).**
+- Current tail: `(PR #2889 — \`infra/**\` matched zero paths; gate missed \`middleware.ts\` / \`app/api/**\`).`
+- New tail: `(PR #2889 — \`infra/**\` matched zero paths).`
+- Bytes saved: **~57 B** (Kieran-aware: preserves the `infra/**` example; drops only the `middleware.ts / app/api/**` half).
+
+**Trim 3 — `hr-when-triaging-a-batch-of-issues-never` (AGENTS.core.md:14).**
 
 - Current Why: `**Why:** #2075 deferred OG image gen despite \`gemini-imagegen\` being available.`
 - New Why: `**Why:** #2075.`
-- Bytes saved: ≈ 64 B. The named tools list earlier in the body (`gemini-imagegen`, `frontend-design`, `copywriter`, `pencil` MCP) carries the operative knowledge.
+- Bytes saved: **64 B**.
 
-**Trim criterion (uniform across both):** the Why retains the canonical `#NNNN` token so a grep against `git log` or the linked PR description recovers the full incident shape. The rule's operative prescription (the imperative clause before `[id: ...]`) is unchanged. Compliance-tier rules are NOT trimmed.
+**Trim 4 — `hr-ssh-diagnosis-verify-firewall` (AGENTS.core.md:26).**
 
-### Phase 3 — Verify and commit
+- Current Why: `**Why:** #2681 — #2654 plan had sshd hypotheses; cause was admin-IP drift.`
+- New Why: `**Why:** #2681.`
+- Bytes saved: **61 B**. The runbook citation (`knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`) earlier in the body is preserved.
 
-Combined byte math:
+**Trim 5 — `wg-when-a-workflow-gap-causes-a-mistake-fix` (AGENTS.core.md:51).**
+
+- Current Why: `**Why:** #2430 committed a verbal promise instead of a skill edit.`
+- New Why: `**Why:** #2430.`
+- Bytes saved: **51 B**.
+
+**Trim 6 — `hr-gdpr-gate-on-regulated-data-surfaces` (AGENTS.core.md:31) — for safety margin.**
+
+- Current Why: `**Why:** EU \`single-user incident\` threshold; pre-generation catch beats post-hoc audit.`
+- New Why: `**Why:** EU single-user threshold.`
+- Bytes saved: **~54 B**. Editorial trim; the brand-survival framing stays in the rule body.
+
+**Combined Phase 2 trim: ~381 B.**
+
+### Phase 3 — Combined byte math + atomic commit
 
 | Step | Δ B_ALWAYS | Running B_ALWAYS |
 |---|---:|---:|
 | Baseline | — | 22,687 |
-| Phase 1: retire (−583 core, −53 index) | −636 | 22,051 |
-| Phase 2 Trim 1 (ssh-firewall Why) | −61 | 21,990 |
-| Phase 2 Trim 2 (triaging-batch Why) | −64 | **21,926** |
+| Phase 1: demote `wg-after-merging-...` | −352 | 22,335 |
+| Trim 1 (no-dashboard-eyeball Why) | −94 | 22,241 |
+| Trim 2 (relative-paths, preserve `infra/**`) | −57 | 22,184 |
+| Trim 3 (triaging-batch Why) | −64 | 22,120 |
+| Trim 4 (ssh-diagnosis Why) | −61 | 22,059 |
+| Trim 5 (workflow-gap Why) | −51 | 22,008 |
+| Trim 6 (gdpr-gate Why) | −54 | **21,954** |
 
-Final: B_ALWAYS ≈ 21,926. **74 B headroom on the 22,000 cap.** If the linter reports > 22,000 (estimates drift), add a 3rd Why-trim from the spare list below before pushing — do NOT use `LEFTHOOK=0`.
+Final: B_ALWAYS ≈ 21,954. **46 B headroom on the 22,000 cap.**
 
-Single-commit flow:
+If the post-edit linter reports `> 22,000` (estimates drift), add a 7th trim from the spare list below BEFORE committing. Do NOT use `LEFTHOOK=0`.
+
+**Spare trim candidates (use only if math drifts short):**
+
+- `wg-when-an-audit-identifies-pre-existing` Why: currently has no Why tail — skip.
+- `hr-weigh-every-decision-against-target-user-impact` Why: `**Why:** #2887/#2888.` — already minimal; skip.
+- `hr-when-a-plan-specifies-relative-paths-e-g` Trim 2 wider: drop `infra/**` example entirely → saves an additional ~30 B. Only if necessary (Kieran P2.1 prefers we keep the example).
+
+**Compliance-tier preservation (NEVER trim):** `hr-exhaust-all-automated-options-before`, `hr-menu-option-ack-not-prod-write-auth`, `hr-never-git-add-a-in-user-repo-agents`, `hr-never-paste-secrets-via-bang-prefix`, `cq-pg-security-definer-search-path-pin-pg-temp`.
+
+**Single-commit flow:**
 
 ```bash
-git add AGENTS.md AGENTS.core.md scripts/retired-rule-ids.txt
-python3 scripts/lint-agents-rule-budget.py  # MUST exit 0, B_ALWAYS ≤ 22,000
-python3 scripts/lint-rule-ids.py             # MUST exit 0
+git add AGENTS.md AGENTS.core.md AGENTS.rest.md
+python3 scripts/lint-agents-rule-budget.py     # MUST exit 0, B_ALWAYS ≤ 22,000
+python3 scripts/lint-rule-ids.py                # MUST exit 0
 bash scripts/lint-agents-rule-budget.test.sh
 bash .claude/hooks/session-rules-loader.test.sh
 bash .claude/hooks/session-rules-loader-headless.test.sh
 git commit -m "$(cat <<'EOF'
 chore(AGENTS): shrink B_ALWAYS below 22,000-byte critical threshold
 
-Retire hr-no-dashboard-eyeball-pull-data-yourself per the discoverability
-litmus (brainstorm 2026-04-23): the operative prescription is subsumed by
-hr-exhaust-all-automated-options-before; institutional knowledge preserved
-in retired-rule-ids.txt and the linked learning file.
+Demote wg-after-merging-a-pr-that-adds-or-modifies from core to rest
+(trigger surface .github/workflows/*.yml always matches INFRA_RE,
+loader-fit verified at session-rules-loader.sh:99-126). The broader
+gate wg-after-a-pr-merges-to-main-verify-all stays in core and
+provides coarser post-merge verification coverage.
 
-Trim Why tails on hr-ssh-diagnosis-verify-firewall and
-hr-when-triaging-a-batch-of-issues-never (canonical #NNNN citations
-preserved; supplementary prose trimmed).
+Trim Why tails on 6 non-compliance-tier rules to recover headroom.
+Canonical PR/issue citations preserved; supplementary prose moved
+to git log and linked learning files. Compliance-tier Whys unchanged.
 
-B_ALWAYS: 22,687 → ~21,926 (~74 B headroom on the 22,000 reject cap).
+B_ALWAYS: 22,687 → ~21,954 (~46 B headroom on the 22,000 reject cap).
 
 Closes #3833
 EOF
@@ -164,18 +193,11 @@ EOF
 git push
 ```
 
-**Spare trim candidates (if byte math comes up short):**
-
-- `hr-gdpr-gate-on-regulated-data-surfaces` Why: `**Why:** EU \`single-user incident\` threshold; pre-generation catch beats post-hoc audit.` → `**Why:** EU single-user threshold.` saves ≈ 54 B. Editorial; safe.
-- `wg-when-a-workflow-gap-causes-a-mistake-fix` Why: `**Why:** #2430 committed a verbal promise instead of a skill edit.` → `**Why:** #2430.` saves ≈ 51 B.
-
-**Compliance-tier preservation (do NOT trim):** `hr-exhaust-all-automated-options-before`, `hr-menu-option-ack-not-prod-write-auth`, `hr-never-git-add-a-in-user-repo-agents`, `hr-never-paste-secrets-via-bang-prefix`, `cq-pg-security-definer-search-path-pin-pg-temp`. These document brand-survival incident shapes; Whys are load-bearing.
-
 ## Files to Edit
 
-- `AGENTS.md` — delete one index pointer line (line 25).
-- `AGENTS.core.md` — delete one body line (line 34); trim Why tails on lines 14 and 26.
-- `scripts/retired-rule-ids.txt` — append one line.
+- `AGENTS.md` — flip one index pointer at line 59 (`→ core` → `→ rest`). Zero net byte delta.
+- `AGENTS.core.md` — delete one body line (line 52); trim Why tails on lines 9, 14, 26, 31, 34, 51.
+- `AGENTS.rest.md` — append the demoted rule body to `## Workflow Gates` (after line 18).
 
 ## Files to Create
 
@@ -183,44 +205,38 @@ git push
 
 ## Open Code-Review Overlap
 
-Queried via `gh issue list --label code-review --state open --search "..." --json number,title,body --limit 200` and filtered for `AGENTS.md`, `AGENTS.core.md`, `AGENTS.rest.md`, `retired-rule-ids.txt`: none. Open code-review issues (#3392, #3373, #3372, #3160, #3002) do not reference these files.
+Queried via `gh issue list --label code-review --state open --json number,title,body --limit 200` filtered for AGENTS files: none match. Five open code-review issues (#3392, #3373, #3372, #3160, #3002) do not reference AGENTS sidecars.
 
 Disposition: nothing to fold in.
 
 ## Domain Review
 
-**Domains relevant:** Engineering only. Harness-internal tooling change; no marketing, legal, operations, product, sales, finance, or support implications.
-
-Parent brainstorm `2026-04-23-agents-md-budget-revisit-brainstorm.md` (line 127+) reached the same scope determination: Engineering-only decision, no user-facing surface.
+**Domains relevant:** Engineering only. Harness-internal tooling change; no marketing, legal, operations, product, sales, finance, or support implications. Per parent brainstorm `2026-04-23-agents-md-budget-revisit-brainstorm.md` line 127.
 
 ## Test Scenarios
 
-Non-runtime change (Markdown sidecar edits). The verification surface is:
+Non-runtime change. Verification surface:
 
 ```bash
-python3 scripts/lint-agents-rule-budget.py            # must exit 0, B_ALWAYS ≤ 22,000
-python3 scripts/lint-rule-ids.py                       # must exit 0
+python3 scripts/lint-agents-rule-budget.py            # exit 0, B_ALWAYS ≤ 22,000
+python3 scripts/lint-rule-ids.py                       # exit 0
 bash scripts/lint-agents-rule-budget.test.sh           # smoke test
 bash .claude/hooks/session-rules-loader.test.sh        # loader parity
 bash .claude/hooks/session-rules-loader-headless.test.sh
 ```
 
-Loader behavioral parity: the retired rule body no longer ships in any class's `additionalContext`. The pointer-index entry is also gone, so an agent grepping AGENTS.md for the ID finds zero matches (correct — the rule is retired). An agent grepping `scripts/retired-rule-ids.txt` finds the breadcrumb to the learning file.
-
 ## Risks
 
-1. **Future planner relies on retired rule context.** Mitigation: breadcrumb in `retired-rule-ids.txt` points at the learning file; broader prescription survives in `hr-exhaust-all-automated-options-before`. Retired-rule-ids.txt is grep-discoverable.
-2. **74 B headroom is thin.** Next AGENTS edit that adds ~75 B re-triggers the lefthook gate. Mitigation: issues #3834 (per-rule cap audit) and the discoverability-litmus brainstorm 2026-04-23 are queued; broader headroom buys via those PRs, not this one. If headroom is exhausted within 7 days post-merge, escalate to executing the brainstorm.
-3. **Trim estimates may drift by ±5 B.** Mitigation: Phase 3 verification iterates with a spare-trim if linter reports > 22,000; the absolute floor is `python3 scripts/lint-agents-rule-budget.py exit 0`. Iteration is documented; the AC's atomic-commit invariant means iteration happens BEFORE the commit, not via a `LEFTHOOK=0` follow-up.
-4. **Retirement is permanent per `cq-rule-ids-are-immutable`.** The retired ID cannot be re-used as an active rule. If the constraint resurfaces as load-bearing, a NEW rule with a NEW slug must be created (per `retired-rule-ids.txt` header lines 18-22). The breadcrumb in `retired-rule-ids.txt` provides the path back to the learning file for any future plan that needs to re-instantiate the constraint.
+1. **Docs-only follow-up session blind spot.** Operator opens a docs-only session post-merge intending to verify a previously-merged workflow PR. The demoted rule body is absent. Mitigation: the broader gate `wg-after-a-pr-merges-to-main-verify-all` (AGENTS.core.md:46) stays in core. The pointer-index entry at AGENTS.md:59 is always loaded; an agent grepping the index follows `→ rest` to find the body.
+2. **46 B headroom is thin.** Next AGENTS edit that adds ~50 B re-triggers the lefthook gate. Mitigation: issues #3834 (per-rule cap audit) and the discoverability-litmus brainstorm 2026-04-23 are queued. Escalate to the brainstorm if headroom is exhausted within 7 days post-merge.
+3. **Trim estimates may drift by ±5 B.** Mitigation: Phase 3 verification iterates with a spare trim if linter reports > 22,000. The absolute floor is `python3 scripts/lint-agents-rule-budget.py exit 0`.
+4. **Trim 2 still loses semantic detail.** The `middleware.ts / app/api/**` example documented a specific failure shape; the canonical `(PR #2889 — \`infra/**\` matched zero paths).` form preserves the load-bearing pattern but drops the secondary case. Mitigation: PR #2889 description and the linked learning file retain the full detail.
 
 ## Sharp Edges
 
-- **Atomic commit invariant (load-bearing).** Phase 1 + Phase 2 must land in a single commit. Phase 1 alone (retirement only) reaches B_ALWAYS ≈ 22,051, still over 22,000 → lefthook REJECT. Splitting forces `LEFTHOOK=0`, which is the workflow this PR closes. The AC `git log --oneline origin/main..HEAD -- AGENTS.md AGENTS.core.md scripts/retired-rule-ids.txt | wc -l == 1` enforces this.
-- **`cq-rule-ids-are-immutable`** is satisfied: the retired ID is moved from active sidecars to `retired-rule-ids.txt`. `lint-rule-ids.py` recognizes the file as an allowlist for absent IDs.
+- **Atomic-commit invariant.** Phase 1 alone (demotion only) reaches B_ALWAYS ≈ 22,335 — still over 22,000 → lefthook REJECT. Splitting forces `LEFTHOOK=0`, which is the workflow this PR closes. The AC `git log --oneline origin/main..HEAD -- AGENTS.md AGENTS.core.md AGENTS.rest.md | wc -l == 2` enforces this (one commit for plan/tasks already landed + one for demote+trims).
+- **`cq-rule-ids-are-immutable` is satisfied.** Demotion moves the `[id: ...]` line from one sidecar to another; the linter's allowlist semantics are unchanged.
 
 ## Sequencing
 
-Single atomic commit. No follow-up PRs required for this issue.
-
-Discoverability-litmus PR (broader 32k target, ~25 retirements) remains tracked under brainstorm `2026-04-23-agents-md-budget-revisit-brainstorm.md`; outside this PR's scope.
+Single atomic commit for the AGENTS edits. Discoverability-litmus PR (broader 32k target) remains tracked under brainstorm `2026-04-23-agents-md-budget-revisit-brainstorm.md`; outside this PR's scope.
