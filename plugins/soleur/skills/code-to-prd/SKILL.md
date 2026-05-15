@@ -15,7 +15,9 @@ Reverse-engineer a Next.js codebase (App Router + Pages Router) into a PRD markd
 
 ## Output
 
-Single PRD at `knowledge-base/product/prd/<project>-prd.md` where `<project>` is the kebab-cased `package.json` `name`. The PRD contains:
+Single PRD at `knowledge-base/product/prd/<project>-prd.md` where `<project>` is the kebab-cased `package.json` `name`. **A second run with a target whose `package.json` `name` matches an earlier run overwrites the prior PRD** — the script emits a loud `WARNING — overwriting existing PRD at ...` on stderr so a wrong-codebase PRD does not reach a buyer's data room silently. Commit or rename the previous PRD before regenerating against a different codebase.
+
+The PRD contains:
 
 1. **Banners** — dual non-removable disclaimers (due-diligence + PII/confidentiality) + inline `### How to Read This PRD` subsection explaining redaction tokens.
 2. **Overview** — project name, framework detected, walk stats.

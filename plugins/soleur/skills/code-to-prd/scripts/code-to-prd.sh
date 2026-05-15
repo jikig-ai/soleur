@@ -526,23 +526,36 @@ GENERATED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 # Layer 2 — pre-write sentinel (fail-closed)
 # ---------------------------------------------------------------------------
 if [[ "${CODE_TO_PRD_SKIP_LAYER_2:-0}" != "1" ]]; then
-  if ! bash "${REDACT_SENTINEL}" "${STAGING}" >/dev/null 2>&1; then
-    sentinel_rc=$?
-    if (( sentinel_rc == 1 )); then
-      echo "code-to-prd: Layer 2 sentinel found redaction-class matches in the rendered PRD." >&2
-      echo "  Aborting write — no partial PRD lands on disk." >&2
-      echo "  Run \`bash ${REDACT_SENTINEL} <staging>\` against a debug copy to see the matched classes." >&2
-      exit 1
-    elif (( sentinel_rc == 2 )); then
-      echo "code-to-prd: Layer 2 sentinel invocation failed (exit 2). Investigate before retrying." >&2
-      exit 1
-    else
-      echo "code-to-prd: Layer 2 sentinel returned unexpected exit ${sentinel_rc}." >&2
-      exit 1
-    fi
+  # Capture sentinel exit code WITHOUT `! cmd` negation — bash's `$?` after
+  # `! cmd` reflects the negation, not the original exit, so the rc=1 branch
+  # would always render as "unexpected 0". Three-branch dispatch on the real
+  # exit preserves operator-facing diagnostics.
+  bash "${REDACT_SENTINEL}" "${STAGING}" >/dev/null 2>&1
+  sentinel_rc=$?
+  if (( sentinel_rc == 1 )); then
+    echo "code-to-prd: Layer 2 sentinel found redaction-class matches in the rendered PRD." >&2
+    echo "  Aborting write — no partial PRD lands on disk." >&2
+    echo "  Run \`bash ${REDACT_SENTINEL} <staging>\` against a debug copy to see the matched classes." >&2
+    exit 1
+  elif (( sentinel_rc == 2 )); then
+    echo "code-to-prd: Layer 2 sentinel invocation failed (exit 2). Investigate before retrying." >&2
+    exit 1
+  elif (( sentinel_rc != 0 )); then
+    echo "code-to-prd: Layer 2 sentinel returned unexpected exit ${sentinel_rc}." >&2
+    exit 1
   fi
 else
   echo "code-to-prd: WARNING — CODE_TO_PRD_SKIP_LAYER_2=1 is set; bypassing Layer 2 (test-only path)." >&2
+fi
+
+# Loud-overwrite warning — Finding 6 (user-impact-reviewer): two distinct
+# codebases sharing a package.json `name` resolve to the same OUTPUT_PATH;
+# silent overwrite of the prior PRD lets a wrong-codebase PRD reach a
+# buyer's data room. Emit a visible WARN so the operator sees the collision
+# before committing/sharing the new PRD.
+if [[ -e "${OUTPUT_PATH}" ]]; then
+  echo "code-to-prd: WARNING — overwriting existing PRD at ${OUTPUT_PATH}" >&2
+  echo "  If this run targets a different codebase than the prior one, commit or rename the previous PRD before sharing." >&2
 fi
 
 # Write to disk.
