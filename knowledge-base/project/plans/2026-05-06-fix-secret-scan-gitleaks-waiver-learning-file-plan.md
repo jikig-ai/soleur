@@ -406,7 +406,7 @@ This is a CI-tooling triage with no cross-domain implications:
   `TBD`/`TODO`/placeholder text, or omits the threshold will fail
   `deepen-plan` Phase 4.6. (Filled above with `threshold: none` plus the
   CI-only-no-credentials-touched rationale per the
-  `single-user-incident → CPO sign-off` carve-out — sensitive-path scope-out
+  `single-user incident → CPO sign-off` carve-out — sensitive-path scope-out
   is satisfied because `.gitleaks.toml` is in CODEOWNERS but the diff
   preserves all detection capability.)
 - **Same-id rule replacement is already in place:** the codebase's

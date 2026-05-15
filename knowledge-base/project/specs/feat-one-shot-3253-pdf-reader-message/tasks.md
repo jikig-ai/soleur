@@ -69,7 +69,7 @@ Derived from `knowledge-base/project/plans/2026-05-05-fix-cc-pdf-read-capability
     - 13.4. Labels: `bug`, `priority/p3-low`, `semver:patch` (carry from issue).
 
 14. **Review pipeline.**
-    - 14.1. `user-impact-reviewer` runs at review time per AGENTS.md `hr-weigh-every-decision-against-target-user-impact` (single-user-incident threshold).
+    - 14.1. `user-impact-reviewer` runs at review time per AGENTS.md `hr-weigh-every-decision-against-target-user-impact` (single-user incident threshold).
     - 14.2. Address any review findings inline per `rf-review-finding-default-fix-inline`.
     - 14.3. Resolve all open review threads before merging.
 

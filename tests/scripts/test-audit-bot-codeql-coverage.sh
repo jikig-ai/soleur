@@ -104,15 +104,17 @@ t_in_progress() {
   rm -rf "$tmp"
 }
 
-# T6: dynamic enumeration smoke — script can list >= 8 workflows from
+# T6: dynamic enumeration smoke — script can list >= 7 workflows from
 # the bot-workflow union (composite + inline) without AUDIT_FIXED_WORKFLOWS.
+# Threshold lowered from 8 → 7 in PR #3734 alongside the matching change in
+# scripts/audit-bot-codeql-coverage.sh:148.
 t_enumeration_count() {
   local tmp; tmp=$(mktemp -d)
   local count; count=$(AUDIT_ENUMERATE_ONLY=1 bash "$SCRIPT" 2>"$tmp/stderr" | wc -l)
-  if [[ "$count" -ge 8 ]]; then
-    _report "T6 dynamic enumeration -> >= 8 workflows (got $count)" ok
+  if [[ "$count" -ge 7 ]]; then
+    _report "T6 dynamic enumeration -> >= 7 workflows (got $count)" ok
   else
-    _report "T6 dynamic enumeration -> >= 8 workflows (got $count)" fail "count=$count stderr=$(cat "$tmp/stderr")"
+    _report "T6 dynamic enumeration -> >= 7 workflows (got $count)" fail "count=$count stderr=$(cat "$tmp/stderr")"
   fi
   rm -rf "$tmp"
 }

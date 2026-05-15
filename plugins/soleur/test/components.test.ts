@@ -9,7 +9,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 1800; // see #618
+const SKILL_DESCRIPTION_WORD_BUDGET = 1850; // see #618; bumped +50 for #2725 incident skill (PR was at 1798/1800 baseline, no headroom for new skills)
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
