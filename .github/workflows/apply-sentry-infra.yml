@@ -59,8 +59,12 @@ jobs:
       - id: kill_switch
         env:
           HEAD_MSG: ${{ github.event.head_commit.message }}
+        # Anchor `[skip-sentry-apply]` to its own line so it cannot
+        # fire from a quoted block, code fence, or trailer that happens
+        # to carry the literal substring. Symmetric posture with the
+        # `[ack-destroy]` gate in the apply job.
         run: |
-          if [[ "$HEAD_MSG" == *"[skip-sentry-apply]"* ]]; then
+          if [[ "$HEAD_MSG" =~ (^|$'\n')\[skip-sentry-apply\]($|$'\n') ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Kill switch detected in commit message — skipping apply."
           else
@@ -114,7 +118,12 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
-        run: terraform init -input=false
+        # `-lockfile=readonly` refuses to download a provider whose
+        # checksum is not already in `.terraform.lock.hcl`. Combined with
+        # the committed lockfile, this defends against a malicious
+        # republish of the pinned beta provider version (beta tags are
+        # mutable on the Terraform registry by policy).
+        run: terraform init -input=false -lockfile=readonly
 
       - name: Terraform plan (cron monitors only)
         id: plan
@@ -140,10 +149,24 @@ jobs:
             exit $rc
           fi
           terraform show -no-color tfplan > tfplan.txt
-          destroy_count=$(grep -cE '^Plan: .* to destroy' tfplan.txt || true)
-          if [[ "$destroy_count" -gt 0 ]] && [[ "$HEAD_MSG" != *"[ack-destroy]"* ]]; then
+          # Authoritative destroy count via the structured plan, not the
+          # `Plan: …` summary line. The summary-line grep is brittle (it
+          # returns 0 or 1, never the real count) and can be silently
+          # bypassed by Terraform's formatting changes. `terraform show
+          # -json` is documented as stable.
+          destroy_count=$(terraform show -json tfplan | \
+            jq '[.resource_changes[]? | select(.change.actions? | index("delete"))] | length')
+          # Anchor `[ack-destroy]` to its own line (start-of-string OR
+          # preceded by newline; followed by newline OR end-of-string) so
+          # the token cannot fire from a quoted block, code fence, or
+          # `Co-Authored-By:` trailer carrying that literal substring.
+          ack_destroy=false
+          if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+            ack_destroy=true
+          fi
+          if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
             echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on cron monitors."
-            echo "::error::Include '[ack-destroy]' in the merge commit message to acknowledge, or revert the trigger commit."
+            echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi

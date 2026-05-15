@@ -342,6 +342,115 @@ fi
 rm -rf "$TMP10"
 
 # ------------------------------------------------------------------------
+# T11 — Class B narrow extraction: a `TaggedEventFilter`-shaped rule
+# whose `key` is NOT `monitor.slug` must NOT produce a Class B orphan,
+# even if its `value` happens to be kebab-shaped (matches the regex used
+# by the existing slug-shape guard). Mirrors the production rule shape
+# emitted by `apps/web-platform/scripts/configure-sentry-alerts.sh`
+# (filters carry `{"key":"feature","value":"auth"}` etc.).
+# ------------------------------------------------------------------------
+echo "T11: Class B narrow extraction — generic TaggedEventFilter does not false-flag"
+TMP11=$(mktemp -d)
+cat > "$TMP11/monitors.json" <<'EOF'
+[
+  {"slug": "scheduled-daily-triage", "name": "Daily triage", "type": "cron_job", "config": {"schedule": "0 4 * * *"}}
+]
+EOF
+cat > "$TMP11/rules.json" <<'EOF'
+[
+  {
+    "id": "9200",
+    "name": "auth-exchange-code-burst",
+    "conditions": [{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":50}],
+    "filters": [
+      {"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},
+      {"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"action","match":"eq","value":"exchangeCodeForSession"}
+    ],
+    "actions": [{"id":"NotifyEmailAction"}]
+  }
+]
+EOF
+SENTRY_AUTH_TOKEN=fake \
+  SENTRY_ORG=jikigai \
+  SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP11/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP11/rules.json" \
+  AUDIT_OUT_DIR="$TMP11" \
+  bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP11"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+# `auth` is a tag-filter value, NOT a monitor.slug binding. The narrow
+# extraction must skip it. Anything containing "Class B" or a backtick-
+# wrapped `auth` orphan ref is a false-positive regression.
+if [[ -f "$report" ]] \
+   && ! grep -qE 'Class B' "$report" \
+   && ! grep -qE '`auth`' "$report"; then
+  pass "tag-filter value 'auth' did not flag as Class B orphan"
+else
+  fail "tag-filter value false-flagged as Class B"
+  sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP11"
+
+# ------------------------------------------------------------------------
+# T12 — Class C shape-branch: Metric Alerts store routing under
+# `.triggers[].actions[]`, not top-level `.actions[]`. A Metric Alert with
+# non-empty `triggers[].actions[]` must NOT flag as Class C; a Metric
+# Alert whose triggers all have empty actions[] (paging unpaired by 2026
+# auto-migration) MUST flag. Without the shape branch every Metric Alert
+# false-positives because `.actions // []` is `[]`.
+# ------------------------------------------------------------------------
+echo "T12: Class C alert-shape branch — Metric Alert routing handled"
+TMP12=$(mktemp -d)
+printf '[]' > "$TMP12/monitors.json"
+cat > "$TMP12/rules.json" <<'EOF'
+[
+  {
+    "id": "8001",
+    "name": "metric-alert-with-routing",
+    "triggers": [
+      {"label": "critical", "actions": [{"id":"sentry.integrations.slack","targetIdentifier":"#alerts"}]}
+    ]
+  },
+  {
+    "id": "8002",
+    "name": "metric-alert-orphan-routing",
+    "triggers": [
+      {"label": "critical", "actions": []}
+    ]
+  },
+  {
+    "id": "8003",
+    "name": "issue-alert-has-routing",
+    "conditions": [],
+    "filters": [],
+    "actions": [{"id":"NotifyEmailAction"}]
+  }
+]
+EOF
+SENTRY_AUTH_TOKEN=fake \
+  SENTRY_ORG=jikigai \
+  SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP12/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP12/rules.json" \
+  AUDIT_OUT_DIR="$TMP12" \
+  bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP12"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+# 8002 has the unpaired routing → MUST flag. 8001 has routing → MUST NOT
+# flag. 8003 is an Issue Alert WITH routing → MUST NOT flag (regression
+# guard for the existing T9 contract).
+if grep -qE 'rule id `8002`' "$report" \
+   && ! grep -qE 'rule id `8001`' "$report" \
+   && ! grep -qE 'rule id `8003`' "$report"; then
+  pass "8002 (unpaired Metric Alert) flagged; 8001/8003 (paired) not flagged"
+else
+  fail "Class C shape branch mis-fired"
+  sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP12"
+
+# ------------------------------------------------------------------------
 echo
 echo "Results: $PASS passed, $FAIL failed"
 exit $((FAIL > 0 ? 1 : 0))
