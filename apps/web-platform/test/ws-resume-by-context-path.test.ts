@@ -52,7 +52,17 @@ vi.mock("@/lib/supabase/service", () => ({
               return eqChain;
             },
             single: vi.fn().mockResolvedValue({
-              data: { id: "conv-1", status: "active", repo_url: mockUserRepoUrl },
+              // tc_accepted_version added for recheckTcMidSession
+              // (feat-oauth-tc-consent-3205) which queries users on
+              // every gated inbound message. Existing test surfaces
+              // are unaffected — they read different columns from
+              // this same row.
+              data: {
+                id: "conv-1",
+                status: "active",
+                repo_url: mockUserRepoUrl,
+                tc_accepted_version: "1.0.0",
+              },
               error: null,
             }),
             ...tail,

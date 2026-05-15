@@ -43,6 +43,15 @@ vi.mock("@/lib/supabase/service", () => ({
             data: { repo_url: mockUserRepoUrl },
             error: null,
           })),
+          // recheckTcMidSession (feat-oauth-tc-consent-3205) reads
+          // tc_accepted_version via .single() on every gated inbound
+          // message. Return the current TC_VERSION so the mid-session
+          // re-check passes; tests that want to exercise the close
+          // branch override .single via mockReturnValueOnce.
+          single: vi.fn(async () => ({
+            data: { tc_accepted_version: "1.0.0", repo_url: mockUserRepoUrl },
+            error: null,
+          })),
         };
         return chain;
       }

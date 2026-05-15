@@ -88,6 +88,14 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // BYOK usage audit — Art. 15 (controller-collected, not user-
   // provided). Note non-standard owner column name.
   audit_byok_use: { ownerField: "founder_id", article: "15" },
+
+  // T&C consent ledger (migration 044, feat-oauth-tc-consent-3205).
+  // Art. 15: the user has the right to know which T&C versions they
+  // accepted (with timestamp + document fingerprint). The row is the
+  // user's own consent record — they provided it (by clicking
+  // accept), so 15+20 also applies. The WORM trigger + Art. 17
+  // anonymise RPC handle erasure separately.
+  tc_acceptances: { ownerField: "user_id", article: "15+20" },
 };
 
 /**
