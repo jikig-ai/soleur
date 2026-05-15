@@ -53,10 +53,20 @@ legacy `configure-sentry-alerts.sh` script. Import each into state matching
 the rule id from the migration audit report:
 
 ```bash
-# Get the rule ids from the most recent audit report:
-ids=$(grep -oE '<!-- ids: \[(.*)\] -->' \
-  knowledge-base/legal/audits/sentry-migration-audit-*.md | \
-  tail -1 | sed -E 's/.*\[//;s/\].*//' | tr -d '"' | tr ',' ' ')
+# Get the rule ids from the most recent audit report. `ls -t | head -1`
+# picks the most recently-modified report (filename-lex tail-1 would break
+# under future naming changes such as `…-rerun` suffixes).
+latest_audit=$(ls -t knowledge-base/legal/audits/sentry-migration-audit-*.md | head -1)
+ids=$(grep -oE '<!-- ids: \[(.*)\] -->' "$latest_audit" | \
+  head -1 | sed -E 's/.*\[//;s/\].*//' | tr -d '"' | tr ',' ' ')
+# Defense-in-depth: validate every id is purely numeric before feeding to
+# `terraform import` / curl. A maliciously-shaped audit (compromised Sentry
+# response, MitM, fixture tampering) cannot land shell metacharacters in
+# the loop below — the audit script also rejects non-numeric ids at write
+# time per scripts/sentry-monitors-audit.sh.
+for id in $ids; do
+  [[ "$id" =~ ^[0-9]+$ ]] || { echo "FATAL: non-numeric rule id '$id'"; exit 1; }
+done
 echo "Rule ids from audit: $ids"
 
 # Map to resource names — ORDER must match issue-alerts.tf:

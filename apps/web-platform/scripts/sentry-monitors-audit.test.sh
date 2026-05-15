@@ -96,11 +96,15 @@ set -e
 report=$(ls "$TMP3"/sentry-migration-audit-*.md 2>/dev/null | head -1)
 if [[ "$rc" == "0" ]] && [[ -f "$report" ]] \
    && grep -qE '^\| monitor-b ' "$report" \
-   && ! grep -qE '^\| monitor-a .* orphan' "$report"; then
-  pass "monitor-b flagged as orphan, monitor-a not"
+   && grep -qE 'monitor-b.*orphan: not referenced' "$report" \
+   && ! grep -qE 'monitor-a.*orphan: not referenced' "$report"; then
+  pass "monitor-b flagged as Class A orphan, monitor-a not"
 else
-  fail "rc=$rc report contents:"
-  [[ -f "$report" ]] && grep -A2 -E 'orphan|monitor-' "$report" >&2 || true
+  fail "rc=$rc"
+  if [[ -f "$report" ]]; then
+    echo "    --- ## Orphans section dump ---" >&2
+    sed -n '/^## Orphans/,/^## /{p}' "$report" | head -30 >&2
+  fi
 fi
 rm -rf "$TMP3"
 
@@ -112,6 +116,8 @@ echo "T4: same-day re-run overwrites cleanly"
 TMP4=$(mktemp -d)
 printf '[]' > "$TMP4/monitors.json"
 printf '[]' > "$TMP4/rules.json"
+# Pin AUDIT_DATE_OVERRIDE so the three invocations cannot straddle midnight
+# UTC and produce two dated reports under heavy CI scheduling.
 for i in 1 2 3; do
   SENTRY_AUTH_TOKEN=fake \
     SENTRY_ORG=jikigai \
@@ -120,6 +126,7 @@ for i in 1 2 3; do
     SENTRY_FIXTURE_MONITORS="$TMP4/monitors.json" \
     SENTRY_FIXTURE_RULES="$TMP4/rules.json" \
     AUDIT_OUT_DIR="$TMP4" \
+    AUDIT_DATE_OVERRIDE="2026-05-15" \
     bash "$SCRIPT" >/dev/null 2>&1
 done
 n_reports=$(ls "$TMP4"/sentry-migration-audit-*.md 2>/dev/null | wc -l)
@@ -186,12 +193,153 @@ SENTRY_AUTH_TOKEN=fake \
   AUDIT_OUT_DIR="$TMP6" \
   bash "$SCRIPT" >/dev/null 2>&1
 report=$(ls "$TMP6"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-if grep -qE '<!-- ids: \[.*"9001".*"9002".*\] -->' "$report"; then
-  pass "id manifest emitted with both ids"
+# Parse the manifest as JSON rather than byte-regexp — decouples test from
+# quoting/spacing quirks of jq's compact form.
+manifest_line=$(grep -oE '<!-- ids: .* -->' "$report" 2>/dev/null | head -1)
+manifest_json=$(printf '%s' "$manifest_line" | sed -E 's/^<!-- ids: //;s/ -->$//')
+if [[ -n "$manifest_json" ]] && \
+   printf '%s' "$manifest_json" | jq -e 'type == "array" and (index("9001")) and (index("9002"))' >/dev/null 2>&1; then
+  pass "id manifest parses as JSON array containing both ids"
 else
-  fail "manifest missing or malformed in $report"
+  fail "manifest parse failed"
+  echo "    --- last 3 lines of report ---" >&2
+  tail -3 "$report" >&2 2>/dev/null || true
 fi
 rm -rf "$TMP6"
+
+# ------------------------------------------------------------------------
+# T7 — Manifest ↔ README import-procedure handshake. Pipe the script's
+# emitted manifest through the same `grep|sed|tr|tr` pipeline the README's
+# import runbook uses, and assert the resulting whitespace-separated id
+# list matches the rules fixture. Catches drift in either direction.
+# ------------------------------------------------------------------------
+echo "T7: manifest survives README's extraction pipeline"
+TMP7=$(mktemp -d)
+printf '[]' > "$TMP7/monitors.json"
+cat > "$TMP7/rules.json" <<'EOF'
+[
+  {"id": "1234", "name": "auth-exchange-code-burst", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]},
+  {"id": "5678", "name": "auth-callback-no-code-burst", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]}
+]
+EOF
+SENTRY_AUTH_TOKEN=fake \
+  SENTRY_ORG=jikigai \
+  SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP7/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP7/rules.json" \
+  AUDIT_OUT_DIR="$TMP7" \
+  bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP7"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+# Mirror README import-procedure extraction byte-for-byte:
+ids=$(grep -oE '<!-- ids: \[(.*)\] -->' "$report" | head -1 | \
+      sed -E 's/.*\[//;s/\].*//' | tr -d '"' | tr ',' ' ')
+ids_sorted=$(printf '%s\n' $ids | sort | tr '\n' ' ' | sed 's/ $//')
+if [[ "$ids_sorted" == "1234 5678" ]]; then
+  pass "README extraction yields exactly the fixture's rule ids"
+else
+  fail "extraction yielded: '$ids_sorted' (expected '1234 5678')"
+  echo "    --- manifest line ---" >&2
+  grep '<!-- ids:' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP7"
+
+# ------------------------------------------------------------------------
+# T8 — Class B orphan detection (alert references missing monitor).
+# Plan §2.1.5 enumerated three classes; the script previously only emitted
+# Class A. Class B is required for the runbook to be load-bearing.
+# ------------------------------------------------------------------------
+echo "T8: Class B orphan — alert references missing monitor"
+TMP8=$(mktemp -d)
+cat > "$TMP8/monitors.json" <<'EOF'
+[
+  {"slug": "live-monitor", "name": "Live", "type": "cron_job", "config": {"schedule": "0 * * * *"}}
+]
+EOF
+cat > "$TMP8/rules.json" <<'EOF'
+[
+  {"id": "9100", "name": "Alert for ghost", "conditions": [], "filters": [{"key":"monitor.slug","value":"ghost-monitor"}], "actions": [{"id":"NotifyEmailAction"}]}
+]
+EOF
+SENTRY_AUTH_TOKEN=fake \
+  SENTRY_ORG=jikigai \
+  SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP8/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP8/rules.json" \
+  AUDIT_OUT_DIR="$TMP8" \
+  bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP8"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qE 'Class B' "$report" && grep -qE '`ghost-monitor`' "$report"; then
+  pass "Class B orphan 'ghost-monitor' detected"
+else
+  fail "Class B section missing or ghost-monitor not flagged"
+  sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP8"
+
+# ------------------------------------------------------------------------
+# T9 — Class C orphan detection (alert with empty actions[]).
+# Covers the UI-side regression where an operator removes the action target
+# from a Sentry alert and Terraform's lifecycle.ignore_changes hides the
+# drift.
+# ------------------------------------------------------------------------
+echo "T9: Class C orphan — alert with empty actions[]"
+TMP9=$(mktemp -d)
+printf '[]' > "$TMP9/monitors.json"
+cat > "$TMP9/rules.json" <<'EOF'
+[
+  {"id": "7777", "name": "auth-exchange-code-burst", "conditions": [], "filters": [], "actions": []},
+  {"id": "7778", "name": "auth-signout-burst",     "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]}
+]
+EOF
+SENTRY_AUTH_TOKEN=fake \
+  SENTRY_ORG=jikigai \
+  SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP9/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP9/rules.json" \
+  AUDIT_OUT_DIR="$TMP9" \
+  bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP9"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qE 'Class C' "$report" && grep -qE 'rule id `7777`' "$report" && ! grep -qE 'rule id `7778`' "$report"; then
+  pass "Class C flagged 7777 (empty actions), not 7778 (has action)"
+else
+  fail "Class C detection mis-fired"
+  sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP9"
+
+# ------------------------------------------------------------------------
+# T10 — Non-numeric rule ids are filtered from the manifest. Defense-in-
+# depth against a compromised Sentry response shipping shell metacharacters.
+# ------------------------------------------------------------------------
+echo "T10: non-numeric rule ids filtered from manifest"
+TMP10=$(mktemp -d)
+printf '[]' > "$TMP10/monitors.json"
+cat > "$TMP10/rules.json" <<'EOF'
+[
+  {"id": "1234", "name": "good", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]},
+  {"id": "1; rm -rf .", "name": "evil", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]},
+  {"id": "abc", "name": "stringy", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]}
+]
+EOF
+SENTRY_AUTH_TOKEN=fake \
+  SENTRY_ORG=jikigai \
+  SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP10/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP10/rules.json" \
+  AUDIT_OUT_DIR="$TMP10" \
+  bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP10"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+manifest_json=$(grep -oE '<!-- ids: .* -->' "$report" | head -1 | sed -E 's/^<!-- ids: //;s/ -->$//')
+if printf '%s' "$manifest_json" | jq -e '. == ["1234"]' >/dev/null 2>&1; then
+  pass "manifest contains only the numeric id"
+else
+  fail "manifest = $manifest_json (expected exactly [\"1234\"])"
+fi
+rm -rf "$TMP10"
 
 # ------------------------------------------------------------------------
 echo

@@ -14,6 +14,14 @@
 #
 # All monitors use UTC timezone — workflow cron expressions are UTC by GHA
 # convention.
+#
+# `failure_issue_threshold` default is 1 (single missed check-in opens an
+# issue). The two exceptions (oauth-probe and github-app-drift-guard, set
+# to 2) fire every 15 minutes / every hour respectively, where a single
+# transient network hiccup is more likely than a real failure — requiring
+# two consecutive misses raises the noise floor without losing the signal.
+# All other monitors fire daily/weekly where a single miss is itself
+# noteworthy.
 
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org
@@ -39,17 +47,13 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
   timezone                = "UTC"
 }
 
-resource "sentry_cron_monitor" "scheduled_cf_token_expiry_check" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-cf-token-expiry-check"
-  schedule                = { crontab = "0 9 * * 1" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
+# scheduled-cf-token-expiry-check: NOT wired this cycle. The workflow's
+# `schedule:` block is currently commented out (manual-dispatch only —
+# waiting on end-to-end validation per its own header). A cron monitor
+# with no firing workflow would surface a permanent "missed check-in"
+# false-positive page every Monday. Re-introduce this resource when the
+# workflow's schedule line lands in `.github/workflows/scheduled-cf-token-
+# expiry-check.yml` lines 13-15.
 
 resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
   organization            = var.sentry_org
@@ -103,7 +107,7 @@ resource "sentry_cron_monitor" "scheduled_content_vendor_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-content-vendor-drift"
-  schedule                = { crontab = "17 11 * * 1" }
+  schedule                = { crontab = "17 11 * * MON" }
   checkin_margin_minutes  = 60
   max_runtime_minutes     = 15
   failure_issue_threshold = 1

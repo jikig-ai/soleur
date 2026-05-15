@@ -125,7 +125,6 @@ jobs:
           terraform plan \
             -target=sentry_cron_monitor.scheduled_terraform_drift \
             -target=sentry_cron_monitor.scheduled_oauth_probe \
-            -target=sentry_cron_monitor.scheduled_cf_token_expiry_check \
             -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
             -target=sentry_cron_monitor.scheduled_daily_triage \
             -target=sentry_cron_monitor.scheduled_realtime_probe \
@@ -143,7 +142,6 @@ jobs:
           terraform apply \
             -target=sentry_cron_monitor.scheduled_terraform_drift \
             -target=sentry_cron_monitor.scheduled_oauth_probe \
-            -target=sentry_cron_monitor.scheduled_cf_token_expiry_check \
             -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
             -target=sentry_cron_monitor.scheduled_daily_triage \
             -target=sentry_cron_monitor.scheduled_realtime_probe \
