@@ -9,9 +9,13 @@ export type { WorkflowName } from "@/server/conversation-routing";
 export type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
 
 /**
- * Terminal states a `/soleur:go` workflow run can end in (#2885 Stage 3).
- * The tuple is the single source of truth — both the TS union below and the
- * Zod schema in `lib/ws-zod-schemas.ts` derive from it.
+ * Terminal states a `/soleur:go` workflow run can end in. The runner's
+ * `WorkflowEnd["status"]` union in `server/soleur-go-runner.ts` is the
+ * canonical source; this tuple mirrors it (enforced by
+ * `_AssertWorkflowEndStatusMatches` in `soleur-go-runner.ts` — adding to
+ * either side without the other is a TS error there). Both the Zod
+ * schema in `lib/ws-zod-schemas.ts` and the TS union below derive from
+ * this tuple. #3827 + ADR-031 amendment 2026-05-15.
  */
 export const WORKFLOW_END_STATUSES = [
   "completed",
@@ -19,8 +23,6 @@ export const WORKFLOW_END_STATUSES = [
   "cost_ceiling",
   "idle_timeout",
   "plugin_load_failure",
-  "sandbox_denial",
-  "runner_crash",
   "runner_runaway",
   "internal_error",
 ] as const;
