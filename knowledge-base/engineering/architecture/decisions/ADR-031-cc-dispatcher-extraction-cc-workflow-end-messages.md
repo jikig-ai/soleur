@@ -70,7 +70,7 @@ The pre-existing `lib/types.ts` vs. runner enum drift named in the original `Neg
 |---|---|---|
 | `apps/web-platform/lib/types.ts` (`WORKFLOW_END_STATUSES`) | wire-protocol enum, post-narrow | 7 |
 | `apps/web-platform/server/soleur-go-runner.ts` (`WorkflowEnd` union) | runner-emitted terminal states | 7 |
-| `cc-dispatcher.ts:212` re-derive + `cc-workflow-end-messages.ts:7` re-derive | runner-bound | 7 |
+| `cc-dispatcher.ts` + `cc-workflow-end-messages.ts` local `WorkflowEndStatus` re-derives | runner-bound | 7 |
 
 **Why option (b), not option (a).** Both removed statuses had ~2 months with zero production emit sites. `sandbox_denial` is already observable via the existing `feature: agent-sandbox` Sentry channel (cc-dispatcher.ts:1077, agent-runner.ts:2138 mirror + re-throw); option (a) would have duplicated, not added, that signal. `runner_crash` has no failure-mode semantic distinct from the existing `internal_error` / `runner_runaway` paths. Adding emit-site logic for either would be a feature add disguised as cleanup; option (b) is the YAGNI fix this ADR's `Negative / out of scope` section originally identified as "cheaper if vestigial."
 

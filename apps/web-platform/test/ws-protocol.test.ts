@@ -554,15 +554,24 @@ describe("Stage 3 protocol — new variant round-trip via parseWSMessage (#2885)
   // both. If a future PR widens the runner with new variants, this
   // negative-assertion shape is the regression gate that catches
   // re-introduction of `sandbox_denial` / `runner_crash` specifically.
-  test("workflow_ended rejects removed statuses (#3827)", async () => {
-    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
-    for (const status of ["sandbox_denial", "runner_crash"]) {
+  // `test.each` is used so the failing status name appears in the test
+  // report; the error-message check pins the failure to the `status` field
+  // (prevents a false-green if the envelope shape changes and the message
+  // starts failing for unrelated structural reasons).
+  test.each(["sandbox_denial", "runner_crash"])(
+    "workflow_ended rejects removed status %s (#3827)",
+    async (status) => {
+      const { parseWSMessage } = await import("../lib/ws-zod-schemas");
       const r = parseWSMessage(
         JSON.parse(JSON.stringify({ type: "workflow_ended", workflow: "plan", status })),
       );
       expect(r.ok).toBe(false);
-    }
-  });
+      // Pin: the rejection MUST be on the `status` field, not the envelope.
+      if (!r.ok) {
+        expect(JSON.stringify(r.error)).toContain("status");
+      }
+    },
+  );
 
   test("interactive_prompt round-trip for every kind", async () => {
     const { parseWSMessage } = await import("../lib/ws-zod-schemas");

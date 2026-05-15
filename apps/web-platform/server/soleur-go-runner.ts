@@ -45,6 +45,10 @@ import { randomUUID } from "crypto";
 import path from "path";
 import { readFile } from "node:fs/promises";
 import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
+// Type-only reverse-direction reference for the bidirectional cardinality
+// assert below (#3827). The runner's `WorkflowEnd["status"]` is the
+// canonical authority post-ADR-031 amendment; this import lets the assert
+// pin the wire-protocol mirror in `lib/types.ts` to it at compile time.
 import type { WorkflowEndStatus } from "@/lib/types";
 import {
   parseConversationRouting,
@@ -660,14 +664,16 @@ export type WorkflowEnd =
 // (nested ternary, not &-intersection). Closes the wire→runner direction
 // the existing `_workflowEndExhaustive` (`cc-workflow-end-messages.ts:42`)
 // and `_abortFlushExhaustive` (`cc-dispatcher.ts:247`) rails do not cover.
+// Arm order is bidirectional set-equality; either arm can be read first
+// without semantic change. Source-of-truth-first ordering keeps lexical
+// parity with `_AssertKindsMatch` at `lib/types.ts:96-103` (registry-first).
 type _AssertWorkflowEndStatusMatches =
   WorkflowEndStatus extends WorkflowEnd["status"]
     ? WorkflowEnd["status"] extends WorkflowEndStatus
       ? true
       : never
     : never;
-const _exhaustiveWorkflowEndStatusCheck: _AssertWorkflowEndStatusMatches =
-  true;
+const _exhaustiveWorkflowEndStatusCheck: _AssertWorkflowEndStatusMatches = true;
 void _exhaustiveWorkflowEndStatusCheck;
 
 export interface DispatchEvents {
