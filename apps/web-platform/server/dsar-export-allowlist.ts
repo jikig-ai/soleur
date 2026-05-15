@@ -125,6 +125,22 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "Per-founder JWT-mint rate-limit counter (security telemetry). " +
     "Rolling 60/hour bucket; no user-provided content. Per spec FR8 " +
     "not enumerated as Art. 15 personal data.",
+  tenant_deploy_audit:
+    "Multi-tenant deploy substrate orchestration-plane meta-audit log " +
+    "(migration 043, ADR-030, plan #3723). v1 single-tenant scope " +
+    "(Soleur-as-tenant-zero only): the controller and data subject for " +
+    "any rows that exist are the same legal entity (Jikigai's operator). " +
+    "Substrate is explicitly scope-outed for end-user disclosure at v1 " +
+    "per compliance-posture.md Active Items row #3723 — the re-" +
+    "evaluation trigger is first non-Soleur tenant onboarding, at which " +
+    "point this row moves to DSAR_TABLE_ALLOWLIST (founder_id, Art. 15) " +
+    "and Privacy Policy §4.7 + GDPR Policy §6.1.b + DPD §2.3 are " +
+    "updated in lockstep via the legal-doc cross-document gate. Until " +
+    "then, no non-Soleur founder data subject exists for whom Art. 15 " +
+    "export of this table would be non-empty. Art. 17 anonymise is " +
+    "handled separately via the `anonymise_tenant_deploy_audit` RPC " +
+    "called BEFORE `auth.admin.deleteUser()` per the ON DELETE " +
+    "RESTRICT FK ordering.",
 };
 
 /**
