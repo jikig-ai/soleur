@@ -1,4 +1,7 @@
-import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
 import type { Conversation } from "@/lib/types";
 
@@ -25,15 +28,13 @@ import type { Conversation } from "@/lib/types";
  * concurrent-close race), not an attacker probing a foreign id.
  */
 
-// Module-scoped lazy singleton mirroring `agent-runner.ts` and
-// `ws-handler.ts`. Tests that need to drive the wrapper without hitting a
-// real client mock at the module boundary via
-// `vi.mock("@supabase/supabase-js", () => ({ createClient: ... }))`.
-let _supabase: ReturnType<typeof createServiceClient> | null = null;
-function supabase() {
-  if (!_supabase) _supabase = createServiceClient();
-  return _supabase;
-}
+// PR-C §2.4 (#3244): the single `.from("conversations").update(...)` site
+// below migrates to a per-call tenant client. RLS on `conversations`
+// enforces `auth.uid() = user_id`, layered on top of the composite-key
+// `.eq("id", conversationId).eq("user_id", userId)` invariant the
+// wrapper enforces. The module-level lazy `supabase()` singleton is
+// retired; `getFreshTenantClient(userId)` has its own TTL cache so
+// per-call mint cost is bounded.
 
 /**
  * Per-(feature, op, kind) Sentry-mirror dedup window. Caps the
@@ -153,7 +154,52 @@ export async function updateConversationFor(
   patch: ConversationPatch,
   options: UpdateConversationOptions = {},
 ): Promise<UpdateConversationResult> {
-  const baseQuery = supabase()
+  // PR-C §2.4 (#3244): tenant client + per-handler RLS-baseline probe.
+  // Probe surfaces mid-TTL jti revocation or RLS policy churn that a
+  // cached JWT inside the TTL window would otherwise mask as 0 rows
+  // affected (silent-success path of this wrapper). On probe failure
+  // we return `{ ok: false }` so the caller surfaces a degraded outcome
+  // — same contract as a Supabase error.
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(userId);
+    const { error: probeErr } = await tenant
+      .from("users")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle();
+    if (probeErr) {
+      const feature = options.feature ?? "conversation-writer";
+      const op = options.op ?? "update";
+      if (shouldReportToSentry(feature, op, "auth-probe")) {
+        reportSilentFallback(probeErr, {
+          feature,
+          op: `${op}.auth-probe`,
+          extra: { userId, conversationId, ...options.extra },
+        });
+      }
+      return {
+        ok: false,
+        error: new Error(probeErr.message, { cause: probeErr }),
+      };
+    }
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      const feature = options.feature ?? "conversation-writer";
+      const op = options.op ?? "update";
+      if (shouldReportToSentry(feature, op, "auth-probe")) {
+        reportSilentFallback(err, {
+          feature,
+          op: `${op}.auth-probe`,
+          extra: { userId, conversationId, ...options.extra },
+        });
+      }
+      return { ok: false, error: err };
+    }
+    throw err;
+  }
+
+  const baseQuery = tenant
     .from("conversations")
     .update(patch)
     .eq("id", conversationId)
