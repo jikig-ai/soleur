@@ -305,7 +305,7 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST || 'sentry.io' }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST || 'de.sentry.io' }}
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
@@ -327,7 +327,7 @@ jobs:
           script_rc=$?
           set -e
           if [[ "$script_rc" -ne 0 ]]; then
-            echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. If the script output reads 'Sentry token not valid against either US or EU ingest', verify SENTRY_API_HOST is reaching the script (defaults to 'sentry.io'; override via repo secret if residency changed). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
+            echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. If the script output reads 'Sentry token not valid against either US or EU ingest', verify SENTRY_API_HOST is reaching the script (defaults to 'de.sentry.io'; override via repo secret if residency changed). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
             exit 0
           fi
           report=$(ls "${RUNNER_TEMP}/sentry-audit"/sentry-migration-audit-*.md 2>/dev/null | head -1 || true)

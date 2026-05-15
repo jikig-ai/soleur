@@ -32,7 +32,7 @@ set -euo pipefail
 # personal tokens) 403 on /users/me/. Set SENTRY_API_HOST to bypass.
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
-  for candidate in sentry.io de.sentry.io; do
+  for candidate in de.sentry.io sentry.io; do
     http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/")
