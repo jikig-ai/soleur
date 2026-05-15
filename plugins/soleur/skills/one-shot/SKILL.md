@@ -59,6 +59,7 @@ BRANCH: [insert current branch name]
 ARGUMENTS: $ARGUMENTS
 
 STEPS:
+0. **CWD verification (first tool call):** run `cd <WORKING_DIRECTORY> && pwd`. The output MUST equal the WORKING DIRECTORY value above. If it does not, abort and return an error in the Session Summary — do NOT proceed; the plan will land in the bare-root synced mirror (gets clobbered on next sync) instead of the worktree. Bash CWD is per-agent and does NOT inherit from the parent's persistent `cd`.
 1. Use the Skill tool: skill: soleur:plan, args: "$ARGUMENTS"
 2. After plan is created, use the Skill tool: skill: soleur:deepen-plan, args: "<plan_file_path>"
 
