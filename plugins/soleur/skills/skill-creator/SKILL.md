@@ -258,6 +258,7 @@ For detailed guidance on skill authoring, see:
 - [iteration-and-testing.md](./references/iteration-and-testing.md) - Iteration and testing guidance
 - [workflows-and-validation.md](./references/workflows-and-validation.md) - Workflow and validation patterns
 - [api-security.md](./references/api-security.md) - API security considerations
+- [fail-closed redaction pattern](../../../../knowledge-base/project/learnings/2026-05-15-fail-closed-redaction-enables-committed-default-output.md) - Designing output paths for skills that generate user-derived artifacts intended for external sharing
 
 ## Workflows
 
