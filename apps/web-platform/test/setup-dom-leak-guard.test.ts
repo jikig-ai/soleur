@@ -25,4 +25,16 @@ describe("setup-dom.ts cleanup surfaces", () => {
   ])("retains %s", (_label, token) => {
     expect(source).toContain(token);
   });
+
+  // The worker-level scrub MUST live inside `afterAll`, not `afterEach`.
+  // Per learning 2026-04-22-vitest-cross-file-leaks-and-module-scope-stubs.md
+  // Error 1: silently rewriting the hook to `afterEach` defeats intra-file
+  // `vi.stubGlobal("fetch", ...)` survival across tests in the same file
+  // and re-introduces the cross-file leak class (#2594, #2505). #3818
+  // recurrence prevention.
+  it("scrubs inside afterAll (not afterEach) with vi.restoreAllMocks adjacent", () => {
+    expect(source).toMatch(
+      /afterAll\([^)]*\)\s*=>\s*\{[\s\S]{0,200}vi\.restoreAllMocks\(\)/,
+    );
+  });
 });
