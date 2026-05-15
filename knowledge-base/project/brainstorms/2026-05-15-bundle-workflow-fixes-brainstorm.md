@@ -41,7 +41,7 @@ All three are small, well-scoped, and originate from the same audit session. Bun
 |---|---|---|
 | 1 | **Bundle into one PR (single worktree, single review).** | Three small, related changes from one audit session; #2733 and #2741 touch the same skill file. Splitting would create three round-trips of CI for ~400 LOC total. |
 | 2 | **#2732 approach: Option 1 (fenced-code skip).** | Decided upfront by user. Smallest surface area. Documented in the bundle so authors know to tag scanner-pattern fences with `text`/`prose`/`diff`. |
-| 3 | **#2741 rule lands in `AGENTS.rest.md`, not `AGENTS.core.md`.** | Trigger fires only on PRs editing SKILL.md `description:` lines — code-class change. `rest.md` is the conditionally-loaded sidecar for code-touching sessions. |
+| 3 | **#2741 rule lands in `AGENTS.docs.md`, not `AGENTS.core.md` or `AGENTS.rest.md`.** | Trigger fires on PRs editing `plugins/soleur/skills/*/SKILL.md` `description:` lines. SKILL.md is markdown → `.md` → `docs-only` class per `.claude/hooks/session-rules-loader.sh` lines 102-126. (**[Updated 2026-05-15 — plan-review correction]** Initial brainstorm claim said `AGENTS.rest.md` / "code-class"; architecture-strategist caught the loader-class misfit at plan-review. `AGENTS.rest.md` does NOT load on docs-only sessions, which would have made the rule silent-no-op for its own trigger. Third real-time demonstration that #2733's Phase 1.0.5 pays for itself.) |
 | 4 | **No AGENTS.md rule retirement required.** | #2741's issue body cited a 100-rule / 40,000-byte cap on a single AGENTS.md file. Verification (Phase 1.1) found AGENTS.md was refactored into sidecars: 75 rules across `AGENTS.{core,docs,rest}.md`, 32,470 bytes total. The budget premise is obsolete. |
 | 5 | **Ordering inside brainstorm SKILL.md: #2733 first, then #2741.** | #2733 inserts new structural phases (1.0.5, 2.5). #2741 adds an inline checkpoint inside Phase 2. Applying #2733 first means #2741's checkpoint anchors to a stable section. |
 | 6 | **Skip Phase 0.5 domain triad (CPO/CLO/CTO) despite `USER_BRAND_CRITICAL=true`.** | Sole user-brand vector (hook docs allowance) has Option 1 already decided. Triad spawn would be ceremonial. The user-impact-reviewer agent at PR review time remains the load-bearing gate per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`. |
@@ -53,7 +53,7 @@ The most load-bearing moment in this brainstorm was Phase 1.1's premise check on
 ## Open Questions
 
 - **Test coverage for #2732:** How aggressive should the regression test be? Minimum: a fenced ```` ```text ```` block with a real `sk_test_*` literal still triggers via a fall-back high-entropy check. Decide during plan phase.
-- **AGENTS.rest.md rule placement:** Insert under `## Code Quality` heading (where `cq-*` rules cluster) or as a new sub-section? Plan phase will decide based on grep of existing `cq-` rules in `rest.md`.
+- **AGENTS.docs.md rule placement:** Append at the end of the existing `cq-*` cluster (after `cq-eleventy-critical-css-screenshot-gate`). [Resolved at plan-review.]
 
 ## Non-Goals
 
@@ -71,5 +71,5 @@ The most load-bearing moment in this brainstorm was Phase 1.1's premise check on
 - AC2: `plugins/soleur/skills/brainstorm/SKILL.md` gains Phase 1.0.5 (Premise Validation) and Phase 2.5 (Productize Checkpoint) with text matching #2733's issue body.
 - AC3: `plugins/soleur/skills/plan/SKILL.md` Phase 1 gains the SKILL.md description budget measurement step with text matching #2741's issue body.
 - AC4: `plugins/soleur/skills/brainstorm/SKILL.md` Phase 2 gains the budget-measurement checkpoint per #2741.
-- AC5: `AGENTS.rest.md` gains `[id: cq-skill-description-budget-headroom]` rule with the body text from #2741's issue.
-- AC6: `AGENTS.md` index gains a pointer line `- [id: cq-skill-description-budget-headroom] → rest`.
+- AC5: `AGENTS.docs.md` gains `[id: cq-skill-description-budget-headroom]` rule with the body text from #2741's issue.
+- AC6: `AGENTS.md` index gains a pointer line `- [id: cq-skill-description-budget-headroom] → docs-only`.

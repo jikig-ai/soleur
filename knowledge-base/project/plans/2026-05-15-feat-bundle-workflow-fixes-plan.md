@@ -23,7 +23,9 @@ brand_survival_threshold: none
 Bundle two small workflow-improvement issues from the 2026-04-21 peer-plugin-audit session into one PR. Originally three issues; **#2732 closed at plan time** (the named hook is external — not in our repo — see Research Reconciliation).
 
 - **#2733** — Add `#### 1.0.5 Premise Validation` and `### Phase 2.5: Productize Checkpoint` to brainstorm SKILL.md, plus a Phase 2 inline budget checkpoint for skill-editing brainstorms.
-- **#2741** — Add SKILL.md description word-budget headroom enforcement: new `### 1.8` sub-section in plan SKILL.md Phase 1, and new `[id: cq-skill-description-budget-headroom]` rule in `AGENTS.rest.md` + pointer in `AGENTS.md` index.
+- **#2741** — Add SKILL.md description word-budget headroom enforcement: new `### 1.8` sub-section in plan SKILL.md Phase 1, and new `[id: cq-skill-description-budget-headroom]` rule in `AGENTS.docs.md` + pointer in `AGENTS.md` index.
+
+> **[Updated 2026-05-15 — post-plan-review]** Architecture-strategist caught a P0 sidecar misfit: SKILL.md edits classify as `.md` → `docs-only` per `.claude/hooks/session-rules-loader.sh` lines 102-126. `AGENTS.rest.md` does NOT load on docs-only sessions, so the rule would have been silent-no-op for its own trigger. Moved rule body to `AGENTS.docs.md` and pointer to `→ docs-only`. Also dropped Phase 5 dogfood verification (the bundle doesn't edit any `description:` field, so the measurement is theater) and three duplicate Sharp Edges. Reordered Phase 2 brainstorm edits to FR1 → FR4 → FR2 to avoid anchor drift.
 
 Approximate diff: ~80 LOC across 4 files.
 
@@ -52,8 +54,8 @@ The brainstorm's original `single-user incident` framing was anchored to the now
    - Insert `### Phase 2.5: Productize Checkpoint` block between current `### Phase 2:` (line ~262) and the existing `### Phase 3:` section.
    - Insert inline Phase 2 budget-checkpoint paragraph at the end of `### Phase 2: Explore Approaches` body (before the new `### Phase 2.5:` heading).
 2. **`plugins/soleur/skills/plan/SKILL.md`** — one edit: insert `### 1.8. Skill Description Budget Check (Conditional)` between current `### 1.7.5. Code-Review Overlap Check` (line ~186) and `### 2. Issue Planning & Structure` (line ~227).
-3. **`AGENTS.rest.md`** — one edit: insert new `cq-skill-description-budget-headroom` rule body under `## Code Quality` (line 3 heading), immediately before the existing `[id: cq-regex-unicode-separators-escape-only]` line.
-4. **`AGENTS.md`** (index) — one edit: insert `- [id: cq-skill-description-budget-headroom] → rest` under `## Code Quality` (line 62 region), immediately before the existing `cq-regex-unicode-separators-escape-only` pointer.
+3. **`AGENTS.docs.md`** — one edit: insert new `cq-skill-description-budget-headroom` rule body under `## Code Quality` (line 3 heading), at the end of the existing `cq-*` cluster (after the current last entry `cq-eleventy-critical-css-screenshot-gate`).
+4. **`AGENTS.md`** (index) — one edit: insert `- [id: cq-skill-description-budget-headroom] → docs-only` under `## Code Quality`, immediately after the existing `- [id: cq-eleventy-critical-css-screenshot-gate] → docs-only` pointer (keeps `→ docs-only` cluster contiguous).
 
 ## Files to Create
 
@@ -72,50 +74,44 @@ None. Verified via `gh issue list --label code-review --state open --json number
   ```bash
   grep -n "^#### 1\.0 External\|^#### 1\.1 Research\|^### Phase 2:\|^### Phase 3:" plugins/soleur/skills/brainstorm/SKILL.md
   grep -n "^### 1\.7\.5\.\|^### 2\. Issue Planning" plugins/soleur/skills/plan/SKILL.md
-  grep -n "\[id: cq-regex-unicode-separators-escape-only\]" AGENTS.md AGENTS.rest.md
+  grep -n "\[id: cq-eleventy-critical-css-screenshot-gate\]" AGENTS.md AGENTS.docs.md
   ```
   If any expected anchor is missing, halt and re-check the file structure before editing.
 - T1.3 Read each target file once (Edit tool requires prior Read) and confirm the current text around each insertion point matches what this plan assumes.
 
 ### Phase 2 — Edits to `plugins/soleur/skills/brainstorm/SKILL.md`
 
-Structural inserts (FR1, FR2) first, then inline budget-checkpoint (FR4).
+**Order: FR1 → FR4 → FR2** (per architecture-strategist P2 — avoids anchor drift). FR1 lands in its own zone (between Phase 1.0 and Phase 1.1). FR4 appends to the **untouched** end of Phase 2 body. FR2 then inserts a new sub-section after Phase 2 (now containing the FR4 paragraph). This sequence means each edit anchors against text the previous edit did not modify.
 
 - T2.1 (FR1): Insert new `#### 1.0.5 Premise Validation` subsection between `#### 1.0 External Platform Verification` and `#### 1.1 Research (Context Gathering)`. Body MUST match #2733 issue body verbatim:
   > Before launching research agents, grep existing truth sources (CI report, roadmap, prior brainstorms) for named external entities or claims in the feature description. If the framing contradicts what the ground truth documents say, surface the contradiction and re-scope with the user before continuing. A framing defect caught here is worth more than a full research sprint built on it.
-- T2.2 (FR2): Insert new `### Phase 2.5: Productize Checkpoint` subsection between `### Phase 2: Explore Approaches` and `### Phase 3: Create Worktree (if knowledge-base/ exists)`. Body MUST match #2733 issue body verbatim:
-  > When proposing an action plan, ask: is the inciting work pattern likely to recur (scheduled workflow output, weekly review cadence, batch-triggered task, recurring competitive-intel finding)? If yes, propose a skill or sub-mode of an existing skill that captures the workflow. A recurring-work plan that produces issues but no reusable artifact has done half the work.
-- T2.3 (FR4): Append a one-paragraph Phase 2 budget-checkpoint at the end of `### Phase 2: Explore Approaches` body (before the new Phase 2.5 heading from T2.2). Exact text:
+- T2.2 (FR4): Append a one-paragraph Phase 2 budget-checkpoint at the end of `### Phase 2: Explore Approaches` body, **immediately before the existing `### Phase 3:` heading** (anchor BEFORE FR2's new heading is inserted). Exact text:
   > **Budget checkpoint:** If the brainstorm proposes adding or restructuring skills, run the SKILL.md description word-budget measurement one-liner (Node form, see `knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md` line 33) before authoring approach proposals. Surface headroom as a first-class constraint if < 10 words remain against the 1800-word cumulative cap.
+- T2.3 (FR2): Insert new `### Phase 2.5: Productize Checkpoint` subsection between the now-FR4-tail-ending `### Phase 2:` body and `### Phase 3: Create Worktree (if knowledge-base/ exists)`. Body MUST match #2733 issue body verbatim:
+  > When proposing an action plan, ask: is the inciting work pattern likely to recur (scheduled workflow output, weekly review cadence, batch-triggered task, recurring competitive-intel finding)? If yes, propose a skill or sub-mode of an existing skill that captures the workflow. A recurring-work plan that produces issues but no reusable artifact has done half the work.
 
 ### Phase 3 — Edit to `plugins/soleur/skills/plan/SKILL.md`
 
-- T3.1 (FR3): Insert new `### 1.8. Skill Description Budget Check (Conditional)` subsection between `### 1.7.5. Code-Review Overlap Check` and `### 2. Issue Planning & Structure`. Body:
-  > If the plan edits any `description:` in `plugins/soleur/skills/*/SKILL.md`, run the budget one-liner (Node form, see [`knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`](../../../knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md) line 33). Record baseline headroom in Research Insights. If headroom < 10 words, include exact sibling-trim text (before/after) in `## Files to Edit` before proceeding to Step 2. Cap: 1800 cumulative words, enforced by `plugins/soleur/test/components.test.ts`. Skip silently if no SKILL.md `description:` edit is proposed.
+- T3.1 (FR3): Insert new `### 1.8. Skill Description Budget Check (Conditional)` subsection between `### 1.7.5. Code-Review Overlap Check` and `### 2. Issue Planning & Structure`. Body (clarified per spec-flow Flow 4 — addresses Phase 1 vs Phase 2 timing):
+  > If the feature description, research findings (1.1), or repo grep (Phase 1.7 consolidation) surfaces a candidate `description:` edit to any `plugins/soleur/skills/*/SKILL.md`, run the budget one-liner now (Node form, see [`knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`](../../../knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md) line 33). Record baseline headroom in Research Insights. Re-run in Step 2 once `## Files to Edit` is finalized to confirm the budget impact of the actual edits. If headroom < 10 words at either check, include exact sibling-trim text (before/after) in `## Files to Edit` before proceeding. Cap: 1800 cumulative words, enforced by `plugins/soleur/test/components.test.ts`. Skip silently if no SKILL.md `description:` edit is candidate or finalized.
 
 ### Phase 4 — Edits to AGENTS files (single atomic commit)
 
 Per spec TR4 (`cq-rule-ids-are-immutable` enforcement): FR5 and FR6 MUST commit together so `scripts/lint-rule-ids.py` sees both sides of the ID.
 
-- T4.1 (FR5): Insert into `AGENTS.rest.md` under `## Code Quality`, immediately before the existing `[id: cq-regex-unicode-separators-escape-only]` line. Exact rule body (one line, ≤ 600 B per `cq-agents-md-why-single-line` cap):
+- T4.1 (FR5): Append to `AGENTS.docs.md` under `## Code Quality`, immediately after the existing `cq-eleventy-critical-css-screenshot-gate` line (end of the cluster). Exact rule body (one line, ≤ 600 B per `cq-agents-md-why-single-line` cap):
   > `- When a PR edits any \`description:\` in \`plugins/soleur/skills/*/SKILL.md\`, the plan MUST measure current cumulative word headroom (cap: 1800) [id: cq-skill-description-budget-headroom] [skill-enforced: plan §1.8, brainstorm Phase 2 budget checkpoint]. If headroom < 10 words, the plan MUST prescribe exact sibling-description trims with before/after text. **Why:** #2741 — see \`knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md\`.`
-  - Measure rule body length after insert with `awk '/cq-skill-description-budget-headroom/ {print length}' AGENTS.rest.md`. Must be ≤ 600 (target ≤ 580 to leave margin).
-- T4.2 (FR6): Insert into `AGENTS.md` index under `## Code Quality`, immediately before the existing `- [id: cq-regex-unicode-separators-escape-only] → rest` line:
-  > `- [id: cq-skill-description-budget-headroom] → rest`
+  - Kieran's plan-review measurement: 489 B (under 600 B cap, well under the 580 B margin target). Re-measure after insert with `awk '/cq-skill-description-budget-headroom/ {print length}' AGENTS.docs.md`.
+- T4.2 (FR6): Insert into `AGENTS.md` index under `## Code Quality`, immediately after the existing `- [id: cq-eleventy-critical-css-screenshot-gate] → docs-only` line (keeps `→ docs-only` cluster contiguous):
+  > `- [id: cq-skill-description-budget-headroom] → docs-only`
 - T4.3 Run `python3 scripts/lint-rule-ids.py` (no args). Expect exit 0.
-- T4.4 Run `python3 scripts/lint-agents-rule-budget.py` (no args). Expect exit 0 for the bundle-induced delta. The script will likely surface the pre-existing B_ALWAYS warning (23,196 > 22,000) — that's a pre-existing state, not a bundle regression. If the script exits non-zero specifically because of the new rule (per-rule body > 600 B), trim the rule body's prose (drop the `[skill-enforced: ...]` annotation first) and re-measure.
+- T4.4 Run `python3 scripts/lint-agents-rule-budget.py` (no args). Expect exit 0 for the bundle-induced delta. The script will likely surface the pre-existing B_ALWAYS warning (23,196 > 22,000) — that's a pre-existing state, not a bundle regression. The new rule lands in `AGENTS.docs.md` (conditionally-loaded), NOT in always-loaded core/index, so B_ALWAYS is unchanged by this bundle except for the ~50-byte index pointer line.
 
-### Phase 5 — Dogfood verification (TR6)
+### Phase 5 — Commit + push + PR ready
 
-- T5.1 Run the source-learning's Node one-liner against the current working tree. Use the exact form at `knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md` line 33-57 — do NOT inline-modify (any `child_process` introduction will trip the upstream `security-guidance` plugin hook). Run via `bash` from the worktree root and capture stdout.
-- T5.2 Cumulative headroom MUST be ≥ 0 (i.e., total description words ≤ 1800). Paste the output into the PR body under a `## Budget check` section.
-- T5.3 If T5.2 reports headroom < 0, halt; the bundle is itself violating its own rule. Not expected — the bundle does not edit any `description:` field; headroom should be unchanged from `main`.
-
-### Phase 6 — Commit + push + PR ready
-
-- T6.1 Stage edits: `git add plugins/soleur/skills/brainstorm/SKILL.md plugins/soleur/skills/plan/SKILL.md AGENTS.rest.md AGENTS.md`.
-- T6.2 Run `skill: soleur:compound` before commit per `wg-before-every-commit-run-compound-skill`.
-- T6.3 Commit. Suggested message (heredoc; do NOT include `Closes #2732`):
+- T5.1 Stage edits: `git add plugins/soleur/skills/brainstorm/SKILL.md plugins/soleur/skills/plan/SKILL.md AGENTS.docs.md AGENTS.md`.
+- T5.2 Run `skill: soleur:compound` before commit per `wg-before-every-commit-run-compound-skill`.
+- T5.3 Commit. Suggested message (heredoc; do NOT include `Closes #2732`):
   ```
   feat(workflow): brainstorm Phase 1.0.5/2.5 + SKILL.md description budget rule
 
@@ -133,30 +129,26 @@ Per spec TR4 (`cq-rule-ids-are-immutable` enforcement): FR5 and FR6 MUST commit 
   Closes #2733
   Closes #2741
   ```
-- T6.4 Push and mark PR #3808 ready: `git push && gh pr ready 3808`.
-- T6.5 Queue auto-merge per `wg-after-marking-a-pr-ready-run-gh-pr-merge`: `gh pr merge 3808 --squash --auto`.
+- T5.4 Push and mark PR #3808 ready: `git push && gh pr ready 3808`.
+- T5.5 Queue auto-merge per `wg-after-marking-a-pr-ready-run-gh-pr-merge`: `gh pr merge 3808 --squash --auto`.
 
 ## Test Strategy
 
 Bundle is documentation-class (skill instruction additions + AGENTS.md rule). No unit tests added.
 
-**Verification surface (all run in Phases 1, 4, 5):**
+**Verification surface (all run in Phases 1, 4):**
 - `grep -n` checks against insertion-point anchors before and after edits.
 - `python3 scripts/lint-rule-ids.py` (FR6 pointer parity with FR5 body).
 - `python3 scripts/lint-agents-rule-budget.py` (per-rule ≤ 600 B; pre-existing B_ALWAYS state acknowledged as out-of-scope).
-- Source-learning Node one-liner (T5.1) — proves the bundle does not violate the rule it introduces.
 
 ## Sharp Edges
 
-- **B_ALWAYS critical pre-existing state (23,196 > 22,000).** Compound Phase 1.5 step 8 rule-budget output during the brainstorm session flagged this. The bundle does NOT contribute to B_ALWAYS (new rule lands in `AGENTS.rest.md`, not core), but `lint-agents-rule-budget.py` may surface the existing warning on every run. **File a separate issue** to address the pre-existing critical state outside this bundle's scope.
-- **Longest pre-existing rule is 1150 bytes (> 600 cap).** Pre-existing violation of `cq-agents-md-why-single-line`. The bundle does not touch it. Same disposition as B_ALWAYS — outside scope.
-- **External `security-guidance` plugin hook will trip on `child_process` / `exec*` / `subprocess.call(..., shell=True)` patterns in any Write or Edit, including markdown.** The bundle's plan body learned this the hard way. Do NOT inline-paste the source-learning's Node one-liner into Phase 5 verification scripts that get committed as text; reference by pointer.
+- **External `security-guidance` plugin hook will trip on `child_process` / `exec*` / `subprocess.call(..., shell=True)` patterns in any Write or Edit, including markdown.** The plan body learned this the hard way. Reference the source-learning's Node one-liner by pointer (path + line 33), never re-paste an inline-modified copy.
 - **`### 1.8` numbering risk in plan SKILL.md.** Current Phase 1 sub-sections are 1, 1.4, 1.5, 1.5b, 1.6, 1.6b, 1.7, 1.7.5. Inserting 1.8 follows the existing numbering pattern. Do NOT renumber existing sub-sections — that would invalidate every existing cross-reference (this skill itself has cross-references between sub-sections).
-- **#2733's value already demonstrated TWICE in this brainstorm/plan cycle.** Once at brainstorm Phase 1.1 (#2741 AGENTS.md byte-cap premise dissolved), once at plan Phase 1 (#2732 hook-scope premise dissolved + re-dissolved with corrected upstream-plugin attribution). Mention in PR description for review-time context — the rule pays for itself before it ships.
-- **Phase 2.5 of brainstorm SKILL.md (#2733's productize checkpoint) is text-only — no enforcement gate.** This is per the issue body's intent. If recurrence of "produced issues but no reusable artifact" continues, that's a follow-up workflow-gates rule, not in scope here.
-- **Don't reach into `.claude/hooks/security_reminder_hook.py` thinking it's part of this bundle.** It was investigated and excluded at plan time (see Research Reconciliation). The actual blocking hook is external; touching the in-repo one now would orphan the closure narrative.
+- **#2733's value already demonstrated THREE times in this brainstorm/plan/plan-review cycle.** (1) Brainstorm Phase 1.1 caught the #2741 AGENTS.md byte-cap premise dissolution. (2) Plan Phase 1 caught the #2732 hook-scope premise dissolution + re-dissolved with corrected upstream-plugin attribution. (3) Plan-review architecture-strategist caught the rule-placement loader-class misfit — exactly the kind of premise-validation defect #2733 is designed to surface earlier. The rule pays for itself three times before it ships. Worth mentioning in PR description for review-time context.
+- **Phase 2.5 of brainstorm SKILL.md (#2733's productize checkpoint) is text-only — no enforcement gate.** This is per the issue body's intent. If recurrence of "produced issues but no reusable artifact" continues, that's a follow-up workflow-gates rule, not in scope here. Spec-flow-analyzer also flagged that several FR1/FR2/FR4 body texts have ambiguous exit branches — those gaps are present in #2733's own issue body which the FR text is verbatim with; tightening them is a follow-up issue against #2733's prose, not in this bundle.
 - **PR title vs body for `Closes #N`.** Per `wg-use-closes-n-in-pr-body-not-title-to`, closure directives MUST be in the PR body. PR title should be terse: `feat(workflow): brainstorm phases + SKILL.md description budget` (or similar). Do NOT include `Closes #2732`.
-- **AGENTS.md insertion ordering inside `## Code Quality`.** The pointer line MUST land at the same relative position as the body line in `AGENTS.rest.md` (both immediately before the `cq-regex-unicode-separators-escape-only` sibling). Mis-ordering won't fail lint, but `git diff` reviewability suffers.
+- **AGENTS.md insertion ordering inside `## Code Quality`.** The pointer line MUST land at the same relative position as the body line in `AGENTS.docs.md` (both at the end of the `cq-*` cluster, after the existing `cq-eleventy-critical-css-screenshot-gate` sibling). Mis-ordering won't fail lint, but `git diff` reviewability suffers.
 
 ## Out of Scope / Deferrals
 
