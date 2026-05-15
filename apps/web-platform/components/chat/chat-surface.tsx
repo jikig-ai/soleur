@@ -553,6 +553,9 @@ export function ChatSurface({
 
       <div className={`min-w-0 flex-1 overflow-y-auto px-4 py-4 ${isFull ? "md:px-6" : ""}`}>
         {lastError && activeErrorKey !== dismissedErrorKey && (
+          // `data-rate-limit-exceeded` is a load-bearing canary attribute —
+          // see e2e/cc-soleur-go-security.e2e.ts FR3.4 (Stage 6 PR-C #2939).
+          // Pattern mirrors `data-error-boundary` at error-boundary-view.tsx.
           <div
             className={`mb-4 ${widthWrapper}`}
             data-rate-limit-exceeded={lastError.code === "rate_limited" ? "" : undefined}

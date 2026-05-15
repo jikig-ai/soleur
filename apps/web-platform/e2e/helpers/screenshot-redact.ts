@@ -24,19 +24,43 @@ export interface RedactionRect {
  * Overlay opaque-black rectangles on `inputPath` and write the redacted PNG
  * to `outputPath`. Existing pixels outside the rects are preserved.
  *
- * Coordinates are in pixels measured from the top-left corner. Rectangles
- * that fall partially outside the image bounds are clipped silently — sharp
- * handles the clipping in `extract`/`composite`. Zero-size rects are ignored.
+ * Coordinates are in pixels from the top-left corner. Fractional values
+ * (common when copying from devtools `getBoundingClientRect()`) are coerced
+ * — `x`/`y` floored, `width`/`height` ceiled — so the rounded rect strictly
+ * covers the floating-point region. Rects that extend beyond the right or
+ * bottom edge are clipped silently by sharp's `composite`. Rects fully
+ * outside the bounds, with non-positive size after coercion, or `NaN`
+ * components are dropped. Zero-rects produce a copy-through (caller's
+ * "redacted PNG at outputPath" contract still holds).
+ *
+ * @throws when `inputPath` is missing, unreadable, or not a decodable
+ * image; when `outputPath` parent is unwritable; or when sharp itself
+ * rejects a coerced rect (e.g., rect strictly larger than the source).
  */
 export async function redactScreenshot(
   inputPath: string,
   outputPath: string,
   rects: readonly RedactionRect[],
 ): Promise<void> {
-  const valid = rects.filter((r) => r.width > 0 && r.height > 0);
+  const { width: imgWidth, height: imgHeight } = await sharp(inputPath).metadata();
+  if (!imgWidth || !imgHeight) {
+    throw new Error(`redactScreenshot: cannot read dimensions of ${inputPath}`);
+  }
+
+  const valid: RedactionRect[] = [];
+  for (const rect of rects) {
+    if (!Number.isFinite(rect.x) || !Number.isFinite(rect.y)) continue;
+    if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height)) continue;
+    const x = Math.max(0, Math.floor(rect.x));
+    const y = Math.max(0, Math.floor(rect.y));
+    if (x >= imgWidth || y >= imgHeight) continue;
+    const width = Math.min(imgWidth - x, Math.ceil(rect.x + rect.width) - x);
+    const height = Math.min(imgHeight - y, Math.ceil(rect.y + rect.height) - y);
+    if (width <= 0 || height <= 0) continue;
+    valid.push({ x, y, width, height, label: rect.label });
+  }
+
   if (valid.length === 0) {
-    // No-op redaction — copy input through unchanged so the caller's
-    // contract ("redacted PNG at outputPath") still holds.
     await sharp(inputPath).png().toFile(outputPath);
     return;
   }

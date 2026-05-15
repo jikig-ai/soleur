@@ -175,9 +175,11 @@ test.describe("cc-soleur-go security: FR3.1 prompt-injection drain", () => {
     await expect(page.getByText(CANARY)).toBeVisible();
 
     // Load-bearing negative invariant — proves the renderer does not
-    // interpret inline text as a tool-use directive.
+    // interpret inline text as a tool-use directive. The `data-tool-chip-id`
+    // template is `${leaderId}-${toolName}-${toolLabel}` (tool-use-chip.tsx:42);
+    // anchor on the `cc_router-${TOOL}-` prefix to ignore label drift.
     await expect(
-      page.locator(`[data-tool-chip-id*="${INJECTION_NAMED_TOOL}"]`),
+      page.locator(`[data-tool-chip-id^="cc_router-${INJECTION_NAMED_TOOL}-"]`),
     ).toHaveCount(0);
 
     assertNoPageErrors(injector);
@@ -223,7 +225,9 @@ test.describe("cc-soleur-go security: FR3.2 bash review-gate", () => {
     await expect(page.locator('[data-tool-chip-id*="bash"]')).toHaveCount(0);
 
     // Drive the resolved state — mirrors `interactive-prompt-card-resolved.test.tsx`.
-    await card.getByRole("button", { name: "Approve" }).click();
+    // `exact: true` guards against future "Approve all" / "Approve and run"
+    // accessible-name collisions.
+    await card.getByRole("button", { name: "Approve", exact: true }).click();
 
     // Resolved-row grammar: "Approved" verb visible, no buttons, card root
     // still carries data-prompt-id + data-prompt-kind.
@@ -328,13 +332,14 @@ test.describe("cc-soleur-go security: FR3.4 rate-limit canary", () => {
 
     // Canary attribute — Phase 1 chat-surface.tsx edit.
     await expect(page.locator("[data-rate-limit-exceeded]")).toBeVisible();
-    // ErrorCard title (chat-surface.tsx:558).
+    // ErrorCard title (chat-surface.tsx:558). The FR3.4 invariant is "client
+    // renders the rate-limit ErrorCard when `errorCode: rate_limited` arrives",
+    // keyed on the errorCode discriminator at ws-client.ts:667-672. Asserting
+    // canary attribute + title is sufficient; the body message is hardcoded
+    // client-side ("You've been rate limited...") and the server's raw
+    // message text is sanitized at ws-handler.ts:1011 vs literal at :1042,
+    // so an assertion on the raw text would over-couple to one prod path.
     await expect(page.getByText("Rate Limited")).toBeVisible();
-    // Server message also lands as an assistant-error-bubble (ws-client.ts:686-693
-    // dispatches `add_message` with `Error: ${msg.message}`).
-    await expect(
-      page.getByText(/Rate limited.*too many conversations/i),
-    ).toBeVisible();
 
     assertNoPageErrors(injector);
   });
