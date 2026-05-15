@@ -3,8 +3,13 @@
 // file and emit a deduped JSON array on stdout.
 //
 // Used by:
-//   - apps/web-platform/scripts/rename-guard.sh    (#3160)
-//   - apps/web-platform/scripts/allowlist-diff.sh  (#3323)
+//   - apps/web-platform/scripts/rename-guard.sh    (#3160) — uses output as PCRE
+//   - apps/web-platform/scripts/allowlist-diff.sh  (#3323) — uses output as set
+//
+// Output contract: each emitted string is BOTH a deduplication key AND a PCRE
+// regex. If gitleaks ever introduces a non-regex glob syntax (or path metadata
+// like description/commits) and the dual-contract breaks, fork into two parsers
+// rather than parameterize one with a `--shape=glob` flag.
 //
 // Why no @iarna/toml dep: mirrors the no-dep convention of
 // lint-fixture-content.mjs. The .gitleaks.toml today uses ONLY triple-quoted

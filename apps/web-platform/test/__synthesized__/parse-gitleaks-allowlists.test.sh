@@ -4,6 +4,11 @@
 # Pattern mirrors plugins/soleur/skills/incident/test/redact-sentinel.test.sh.
 # Tests T1-T8 cover: missing file, malformed TOML, empty allowlist, top-level
 # only, per-rule only, mixed dedupe, regex-meta-char-safe, v8.25+ shape detection.
+# T9 is a sanity-check against the real .gitleaks.toml (lower bound, not exact).
+#
+# `set -uo pipefail` (no `-e`): assertion failures must NOT abort the suite —
+# the PASS/FAIL counter pattern needs every test to run. `-e` would short-circuit
+# on the first failed `node` exit code and skip the remaining cases.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -92,7 +97,8 @@ paths = [
 EOF
 node "${PARSER}" "${TMP_DIR}/t4.toml" >"${TMP_DIR}/t4.out" 2>&1
 assert_exit "T4: top-level allowlist exits 0" 0 $?
-assert_jq "T4: top-level paths emitted" '. == ["top-level/path-one\\.txt$", "top-level/path-two\\.md$"]' "${TMP_DIR}/t4.out"
+# Order-agnostic equality (parser contract is "deduped union", not insertion order).
+assert_jq "T4: top-level paths emitted" '(. | sort) == (["top-level/path-one\\.txt$", "top-level/path-two\\.md$"] | sort)' "${TMP_DIR}/t4.out"
 
 # ---------------------------------------------------------------------------
 # T5: per-rule [[rules.allowlists]] only, multiple rules
@@ -169,11 +175,15 @@ assert_exit "T8: v8.25+ shape exits 4" 4 $?
 assert_grep "T8: stderr warns about [[allowlists]] block" '\[\[allowlists\]\]' "${TMP_DIR}/t8.err"
 
 # ---------------------------------------------------------------------------
-# T9: real .gitleaks.toml — ≥14 unique paths (matches deepen-pass baseline)
+# T9: real .gitleaks.toml smoke — exits 0 + emits ≥1 path. Loose floor is
+# intentional: the precise count drifts as the floor evolves (additions in
+# #2726 took it to 14; future net-tightening could reduce it). The
+# allowlist-diff CI gate is the precise drift detector — this test is just
+# proving the parser still reads the live file shape without erroring.
 # ---------------------------------------------------------------------------
 node "${PARSER}" "${REPO_ROOT}/.gitleaks.toml" >"${TMP_DIR}/t9.out" 2>&1
 assert_exit "T9: real .gitleaks.toml exits 0" 0 $?
-assert_jq "T9: real .gitleaks.toml extracts >=14 unique paths" '(. | length) >= 14' "${TMP_DIR}/t9.out"
+assert_jq "T9: real .gitleaks.toml extracts >=1 path" '(. | length) >= 1' "${TMP_DIR}/t9.out"
 
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"

@@ -34,12 +34,27 @@ GITLEAKS_TOML="${GITLEAKS_TOML:-.gitleaks.toml}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 PARSER="${REPO_ROOT}/apps/web-platform/scripts/parse-gitleaks-allowlists.mjs"
 
-if [[ ! -x "${PARSER}" && ! -f "${PARSER}" ]]; then
+# Hoisted constants — keep in sync with the runbook
+# (knowledge-base/engineering/operations/secret-scanning.md §Rename-laundering).
+readonly OVERRIDE_LABEL="secret-scan-allow-rename"
+readonly TRAILER_KEY="Rename-Allowed-By"
+
+if [[ ! -f "${PARSER}" ]]; then
   echo "rename-guard: parser not found at ${PARSER}" >&2
   exit 2
 fi
 
-mapfile -t ALLOW_RES < <(node "${PARSER}" "${GITLEAKS_TOML}" | jq -r '.[]')
+# Run the parser into a tmpfile so its exit code (3 = malformed, 4 = v8.25+
+# schema) propagates instead of being swallowed by `mapfile < <(...)` process
+# substitution. Without this, a parser failure produces ALLOW_RES=() and the
+# guard silently exits 0 — disabling the whole gate.
+TMP_PATHS="$(mktemp)"
+trap 'rm -f "${TMP_PATHS}"' EXIT
+if ! node "${PARSER}" "${GITLEAKS_TOML}" | jq -r '.[]' > "${TMP_PATHS}"; then
+  echo "rename-guard: parser failed for ${GITLEAKS_TOML}" >&2
+  exit 2
+fi
+mapfile -t ALLOW_RES < "${TMP_PATHS}"
 if [[ ${#ALLOW_RES[@]} -eq 0 ]]; then
   echo "rename-guard: no allowlist paths to guard; skipping."
   exit 0
@@ -76,23 +91,23 @@ if [[ -z "${violations}" ]]; then
 fi
 
 # Override 1: PR has the label.
-if printf '%s' "${PR_LABELS}" | jq -e 'index("secret-scan-allow-rename")' >/dev/null 2>&1; then
-  echo "::notice::rename-guard suppressed by 'secret-scan-allow-rename' label."
+if printf '%s' "${PR_LABELS}" | jq -e --arg label "${OVERRIDE_LABEL}" 'index($label)' >/dev/null 2>&1; then
+  echo "::notice::rename-guard suppressed by '${OVERRIDE_LABEL}' label."
   printf 'Renames into allowlisted paths (label-suppressed):\n%s' "${violations}"
   exit 0
 fi
 
 # Override 2: any commit in range carries the trailer.
-trailers=$(git log --format='%(trailers:key=Rename-Allowed-By,valueonly)' "${BASE_SHA}..${HEAD_SHA}" | tr -d '\r')
+trailers=$(git log --format="%(trailers:key=${TRAILER_KEY},valueonly)" "${BASE_SHA}..${HEAD_SHA}" | tr -d '\r')
 trailers_clean=$(printf '%s' "${trailers}" | grep -v '^[[:space:]]*$' || true)
 if [[ -n "${trailers_clean}" ]]; then
   # Strip CR/LF before echoing into annotations (log-injection guard).
   safe="${trailers_clean//[$'\n\r']/, }"
-  echo "::notice::rename-guard suppressed by Rename-Allowed-By trailer: ${safe}"
+  echo "::notice::rename-guard suppressed by ${TRAILER_KEY} trailer: ${safe}"
   printf 'Renames into allowlisted paths (trailer-suppressed):\n%s' "${violations}"
   exit 0
 fi
 
-echo "::error::Rename(s) into gitleaks-allowlisted paths require either the 'secret-scan-allow-rename' label OR a 'Rename-Allowed-By: <name>' commit trailer." >&2
+echo "::error::Rename(s) into gitleaks-allowlisted paths require either the '${OVERRIDE_LABEL}' label OR a '${TRAILER_KEY}: <name>' commit trailer." >&2
 printf '%s' "${violations}" >&2
 exit 1
