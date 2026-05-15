@@ -14,6 +14,24 @@ requires_cpo_signoff: false
 
 # fix(bug-fixer): skip [Content Publisher] operational notifications
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-15
+**Sections enhanced:** 3 (Phase 1 regex semantics, Phase 5 actionlint baseline, Acceptance Criteria — added AC10 baseline-delta + Phase 4.6 gate evidence)
+**Gates run:** Phase 4.5 (network-outage) — skipped (no triggers); Phase 4.6 (User-Brand Impact) — PASSED (heading present, valid `none` threshold, file not in sensitive-path regex so no scope-out reason required); rule-id citations — N/A (none cited); cited PR/issue numbers verified live.
+
+### Key Improvements
+
+1. **Pre-existing actionlint baseline captured.** `actionlint` already reports one SC2016 warning at `scheduled-bug-fixer.yml:97` (unrelated single-quote issue inside the `Select issue` step) — AC6 must compare against this baseline, not assert "exits 0".
+2. **Sibling-workflow precedent located.** `.github/workflows/scheduled-daily-triage.yml` uses the same `index("ux-audit") | not` jq pattern (canonical clause source: `plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md`). Our extension is consistent with the canonical exclusion shape.
+3. **Regex YAML-escape semantics double-checked end-to-end.** The literal-bracket-inside-character-class trap (the `[` in `\[Content Publisher\]` is metacharacter-escaped; the `[` opening `[: \[(]` is bare; the `\[` member inside the class is escaped) survived a fresh `jq -Rr 'test(...)'` round-trip on the exact YAML source form (Phase 4 in plan body).
+
+### New Considerations Discovered
+
+- **The fix-issue skill's `--exclude-label content-publisher` flag must already be supported.** Confirmed via the canonical reference file `plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md` — `--exclude-label <label>` is the established skill contract; no skill-side change required (matches Out-of-Scope item).
+- **No false-positive collateral risk on `agent:*` titles.** An `[Content Publisher]`-prefixed title would not also carry an `agent:*` label in current corpus (operational notifications are not agent-authored); the new title-regex exclusion is independent of the existing `agent:*` label exclusion and the two cleanly compose.
+- **The override (`workflow_dispatch`) path also benefits from the title-regex.** Wait — actually NOT: the override branches at line 98-105 with `OVERRIDE` and skips the jq filter entirely. The `--exclude-label content-publisher` flag in the prompt is therefore the SOLE defense for the override path. Plan Phase 3 already names this — re-emphasized here.
+
 ## Overview
 
 Harden `.github/workflows/scheduled-bug-fixer.yml` against `[Content Publisher]` operational-notification issues so the daily bug-fixer no longer burns its full turn budget attempting to "fix" issues that are inherently un-fixable in code.
@@ -209,6 +227,17 @@ actionlint .github/workflows/scheduled-bug-fixer.yml         # workflow-shape ch
 
 `actionlint` is the canonical gate for GitHub Actions YAML — `bash -n` does not apply to YAML files with embedded shell (see plan sharp-edge re. YAML-vs-bash parse errors).
 
+### Research Insights — actionlint baseline captured 2026-05-15
+
+Pre-edit `actionlint .github/workflows/scheduled-bug-fixer.yml` reports exactly one warning, unrelated to this PR's edits:
+
+```
+.github/workflows/scheduled-bug-fixer.yml:97:9: shellcheck reported issue in this script:
+SC2016:info:38:10: Expressions don't expand in single quotes, use double quotes for that [shellcheck]
+```
+
+This is a SC2016 info-level warning inside the `Select issue` step's heredoc (the `--jq '...'` single-quoted string). It is intentional — the jq expression is meant to be evaluated by jq, not interpolated by shell. AC6 below is updated to specify the **delta** (no NEW warnings beyond this baseline) rather than "exits 0".
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
@@ -218,13 +247,14 @@ actionlint .github/workflows/scheduled-bug-fixer.yml         # workflow-shape ch
 - [ ] **AC3 — Rationale comment updated.** `grep -nE 'scripts/content-publisher\.sh' .github/workflows/scheduled-bug-fixer.yml` returns ≥1 match inside the filter-rationale comment block (lines ~122-140); the comment names the regex branch and the run-id `25908353568`.
 - [ ] **AC4 — Title-regex matches all known operational-notification shapes.** Running the Phase 4 verification script yields `true` for all 6 `[Content Publisher]` rows AND all 5 flaky/test rows.
 - [ ] **AC5 — Title-regex does NOT false-positive on legitimate bug/feat/fix/review/bug-with-content-publisher-scope titles.** Phase 4 script yields `false` for `fix(api): handle null user`, `feat: add login`, `bug(content-publisher): ...`, and `review: content-publisher ...`.
-- [ ] **AC6 — actionlint clean.** `actionlint .github/workflows/scheduled-bug-fixer.yml` exits 0 (no new errors beyond pre-existing baseline).
+- [ ] **AC6 — actionlint baseline-delta clean.** `actionlint .github/workflows/scheduled-bug-fixer.yml` returns the same one pre-existing SC2016 warning at line 97:9 (captured 2026-05-15, see Phase 5 Research Insights) and zero NEW errors/warnings. Capture pre-edit output as baseline; diff against post-edit output; assert delta is empty.
 - [ ] **AC7 — No collateral edits.** `git diff main -- .github/workflows/scheduled-bug-fixer.yml | grep -cE '^[+-]'` shows changes only in (a) the jq `test(...)` line at ~line 142, (b) the comment block at ~lines 122-140, and (c) the prompt line at ~line 171. No edits to any other file in the PR diff.
 - [ ] **AC8 — PR body contains `## Changelog` section.** Per task framing, PR body must have a `## Changelog` heading enumerating the user-visible change ("bug-fixer skips Content Publisher operational notifications").
 
 ### Post-merge (operator)
 
 - [ ] **AC9 — Next scheduled run skips Content Publisher backlog.** After merge, on the next 06:00 UTC `scheduled-bug-fixer.yml` run (or via `gh workflow run scheduled-bug-fixer.yml`), the `Select issue` step does NOT pick any of the currently-open `[Content Publisher]` issues; the chosen issue (if any) is verified via `gh run view <run-id> --log` to be a non-Content-Publisher title. Verification automated via `gh run view` + `grep "Selected issue"`.
+- [ ] **AC10 — Sibling-clause precedent preserved.** `grep -nE 'index\("(ux-audit\|synthetic-test\|bot-fix/attempted)"\) \| not' .github/workflows/scheduled-bug-fixer.yml` returns exactly the same three matches as before the edit (3 label-exclusion clauses). The existing canonical `agent:*` clause (`any(startswith("agent:")) | not`) also returns its pre-existing single match. The PR adds NO new label-exclusion clauses to the jq selector — the title-regex is the right encoding location for `[Content Publisher]` because labels can be stripped, but titles are stable.
 
 ## Test Scenarios
 
