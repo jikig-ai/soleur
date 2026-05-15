@@ -1388,7 +1388,22 @@ export async function dispatchSoleurGo(
   // enforces FK-join to `conversations.user_id`; the `assertWriteScope`
   // sentinel above is the defense-in-depth layer. The implicit JWT mint
   // is the auth probe — see ws-handler `tenantFor` doc-comment.
-  const tenant = await getFreshTenantClient(userId);
+  //
+  // Wrap mint in try/catch so a transient RuntimeAuthError gets a
+  // structured Sentry mirror before the throw bubbles into the outer
+  // dispatch pipeline (the dispatch's existing user-INSERT-failure path
+  // produces an unstructured generic error otherwise).
+  let tenant: Awaited<ReturnType<typeof getFreshTenantClient>>;
+  try {
+    tenant = await getFreshTenantClient(userId);
+  } catch (mintErr) {
+    reportSilentFallback(mintErr, {
+      feature: "cc-dispatcher",
+      op: "tenant-mint.persistUserMessage",
+      extra: { userId, conversationId },
+    });
+    throw mintErr;
+  }
   const messageId = randomUUID();
   const { error: insertErr } = await tenant.from("messages").insert({
     id: messageId,

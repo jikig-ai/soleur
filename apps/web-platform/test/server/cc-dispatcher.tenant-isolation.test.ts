@@ -21,7 +21,7 @@ import {
   createClient,
   type SupabaseClient,
 } from "@supabase/supabase-js";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import {
   mintFounderJwt,
@@ -140,7 +140,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { data, error } = await aClient
         .from("messages")
         .insert({
-          id: randomBytes(16).toString("hex"),
+          id: randomUUID(),
           conversation_id: bConvId,
           role: "user",
           content: "spoofed by A",
@@ -169,7 +169,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { data } = await aClient
         .from("messages")
         .insert({
-          id: randomBytes(16).toString("hex"),
+          id: randomUUID(),
           conversation_id: bConvId,
           role: "assistant",
           content: "fake assistant text",
