@@ -26,6 +26,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Sentry check-in (in_progress)
+        if: always()
+        continue-on-error: true
+        env:
+          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
+          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
+          MONITOR_SLUG: scheduled-cf-token-expiry-check
+        run: |
+          set -u
+          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
+            echo "::warning::Sentry Crons secrets not configured; skipping check-in."
+            exit 0
+          fi
+          resp=$(curl --max-time 10 -fSs -X POST \
+            "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/?status=in_progress" || true)
+          if [[ -n "$resp" ]]; then
+            printf '%s' "$resp" | jq -r '.id // empty' > "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" || true
+          fi
       - name: Check service token expiry
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
@@ -147,4 +166,38 @@ jobs:
               gh issue close "$STALE" --repo "$GH_REPO" \
                 --comment "Token check ran $(date -u '+%Y-%m-%d %H:%M UTC') -- $DAYS_REMAINING days remaining. Auto-closing."
             fi
+          fi
+
+      - name: Sentry check-in (ok)
+        if: success()
+        continue-on-error: true
+        env:
+          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
+          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
+          MONITOR_SLUG: scheduled-cf-token-expiry-check
+        run: |
+          set -u
+          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" ]]; then exit 0; fi
+          CHECKIN_ID=$(cat "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" 2>/dev/null || true)
+          if [[ -n "${CHECKIN_ID}" ]]; then
+            curl --max-time 10 -fSs -X PUT \
+              "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/${CHECKIN_ID}/?status=ok" || true
+          fi
+
+      - name: Sentry check-in (error)
+        if: failure()
+        continue-on-error: true
+        env:
+          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
+          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
+          MONITOR_SLUG: scheduled-cf-token-expiry-check
+        run: |
+          set -u
+          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" ]]; then exit 0; fi
+          CHECKIN_ID=$(cat "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" 2>/dev/null || true)
+          if [[ -n "${CHECKIN_ID}" ]]; then
+            curl --max-time 10 -fSs -X PUT \
+              "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/${CHECKIN_ID}/?status=error" || true
           fi
