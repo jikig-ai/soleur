@@ -1,11 +1,13 @@
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   discoverAgents,
   discoverCommands,
   discoverSkills,
   parseComponent,
   getComponentName,
+  PLUGIN_ROOT,
 } from "./helpers";
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus"];
@@ -253,7 +255,7 @@ describe("Autonomous-loop API-budget disclosure", () => {
 
   for (const skillName of AUTONOMOUS_LOOP_SKILLS) {
     test(`${skillName} carries API-budget <decision_gate> disclosure`, () => {
-      const skillPath = `plugins/soleur/skills/${skillName}/SKILL.md`;
+      const skillPath = resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md");
       const raw = readFileSync(skillPath, "utf-8");
 
       const gateBlocks = raw.match(/<decision_gate>[\s\S]*?<\/decision_gate>/g) ?? [];
