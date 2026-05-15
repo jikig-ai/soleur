@@ -5,7 +5,7 @@ status: draft
 brand_survival_threshold: single-user incident
 lane: cross-domain
 brainstorm: knowledge-base/project/brainstorms/2026-05-15-sentry-monitors-alerts-adaptation-brainstorm.md
-related_issues: [3814, 3815]
+related_issues: [3814, 3815, 3236]
 ---
 
 # Feature: Adapt Sentry Integration to Monitors/Alerts Split
@@ -55,18 +55,22 @@ A one-shot script (location: `plugins/soleur/skills/preflight/scripts/sentry-mon
 
 ### FR2: Cron monitors for scheduled workflows
 
-Wire `Sentry.checkIn()` (or equivalent HTTP ping) at job start + success ping at end for every workflow under `.github/workflows/` that has a `schedule:` (cron) trigger. At minimum: daily community digest, scheduled triage. Each gets a unique `monitorSlug`. Failure to ping or late ping produces an issue via the Monitor.
+Wire HTTP check-ins (Sentry Crons DSN-derived endpoint, `in_progress` + `ok|error` two-call form) at job start and at success/failure for **9 scoped scheduled workflows** (closes #3236 — cross-workflow heartbeat for secret-touching scheduled workflows):
+
+- `scheduled-terraform-drift.yml`, `scheduled-oauth-probe.yml`, `scheduled-cf-token-expiry-check.yml`, `scheduled-github-app-drift-guard.yml` (the 4 of 5 #3236-named workflows that exist on main)
+- `scheduled-daily-triage.yml`, `scheduled-realtime-probe.yml`, `scheduled-skill-freshness.yml`, `scheduled-content-vendor-drift.yml`, `scheduled-community-monitor.yml`
+
+Each gets a unique `monitorSlug` (the workflow filename without `.yml`). Failure to ping or late ping produces an issue via the Monitor. Three new GitHub repo secrets are required: `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` (DSN-derived). The `scheduled-canary-bundle-claim-check.yml` workflow named by #3236 does not exist on main — dropped from scope with a comment on #3236 at close time.
 
 ### FR3: Terraform Sentry root
 
-New `terraform/sentry/` root:
+New `apps/web-platform/infra/sentry/` root (sibling to existing `apps/web-platform/infra/` per repo convention — not repo-root `terraform/`):
 
-- Uses `getsentry/sentry` provider, pinned.
-- **Imports** the 4 existing issue-alert rules (auth-exchange-code-burst, auth-callback-no-code-burst, auth-per-user-loop, auth-signout-burst) via `terraform import` against state — does not recreate them.
-- Imports the cron monitors created in FR2 (after they exist).
-- Imports auto-migrated Metric Monitors + paired Alerts found in FR1.
-- Per-environment workspaces if needed (dev/prd). Per `hr-dev-prd-distinct-supabase-projects` spirit: distinct Sentry projects per env.
-- ADR at `knowledge-base/engineering/architecture/adr-NNN-sentry-as-iac.md` documenting decision, provider choice, import strategy, rollback.
+- Uses **`jianyuan/sentry`** provider (canonical; `getsentry/terraform-provider-sentry` is a stale fork last pushed 2024-06-24). Pinned to v0.15.0-beta2 with beta-status note in ADR.
+- **Imports** the 4 existing issue-alert rules (auth-exchange-code-burst, auth-callback-no-code-burst, auth-per-user-loop, auth-signout-burst) via `terraform import sentry_issue_alert.<name> <org>/<project>/<rule-id>` — does not recreate them. Match by **id**, never by name (Sentry API allows duplicate names).
+- Declares 9 `sentry_cron_monitor` resources for FR2 (Terraform creates them on first apply; not imported).
+- R2 backend (same `soleur-terraform-state` bucket as existing infra root, distinct key `web-platform/sentry/terraform.tfstate`). Lockfile disabled per R2 limitation.
+- ADR at `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md` documenting decision, provider choice, beta-status risk, import strategy, rollback.
 
 ### FR4: Legal corpus update
 
@@ -94,7 +98,7 @@ The audit script (FR1) and Terraform provider config (FR3) must both detect Sent
 
 ### TR2: Secret management
 
-`SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` continue to flow through Doppler (per `hr-dev-prd-distinct-supabase-projects` discipline applied to Sentry: dev and prd tokens are distinct, never shared). Terraform reads these via env vars from Doppler in CI; locally via `doppler run`.
+`SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` are stored as **GitHub repository secrets** (current convention; not Doppler). Terraform reads them via env vars exported in the CI workflow step before `terraform plan`/`apply`. R2 backend creds (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) are pulled from Doppler `prd_terraform` via `doppler secrets get --plain` per the canonical pattern in `scheduled-terraform-drift.yml:54-65`. This divergence from the spec's original "all-Doppler" assumption is documented in ADR-031. Three new repo secrets are added for FR2: `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` (all DSN-derived).
 
 ### TR3: Idempotent imports
 
