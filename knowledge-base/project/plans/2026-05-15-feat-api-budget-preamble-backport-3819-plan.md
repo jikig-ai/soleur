@@ -409,23 +409,23 @@ git push
 
 ### Pre-merge (PR)
 
-- [ ] **AC1:** All six target SKILL.md files carry a `<decision_gate>` block whose body contains the literal string `disclaims warranty for runtime cost`.
-- [ ] **AC2:** The Soleur/Anthropic billing-split prose ("Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.") appears verbatim in each of the six skills' disclosure blocks.
-- [ ] **AC3:** Each block's cost-model paragraph is tailored per skill:
+- [x] **AC1:** All six target SKILL.md files carry a `<decision_gate>` block whose body contains the literal string `disclaims warranty for runtime cost`.
+- [x] **AC2:** The Soleur/Anthropic billing-split prose ("Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.") appears verbatim in each of the six skills' disclosure blocks.
+- [x] **AC3:** Each block's cost-model paragraph is tailored per skill:
   - `test-fix-loop`: cites `max iterations` cap (default 5) as the cost ceiling.
   - `drain-labeled-backlog`: cites cluster × `/soleur:one-shot` multiplier; cites `--top-n N` and `--dry-run`.
   - `resolve-todo-parallel`: cites N TODOs = N parallel agents.
   - `resolve-pr-parallel`: cites N PR comments = N parallel agents.
   - `work`: cites Tier A (~7x), Tier B (moderate), Tier C (single-agent) cost framing.
   - `one-shot`: cites 30–90 min wall-clock pipeline; cites collision-check Step 0a/0a.5 as the last approval point.
-- [ ] **AC4:** `AGENTS.docs.md` contains the new `hr-autonomous-loop-skill-api-budget-disclosure` rule body with `**Why:**` line and `[skill-enforced: ...]` / `[id: ...]` tags.
-- [ ] **AC5:** `AGENTS.md` index has a new entry `[id: hr-autonomous-loop-skill-api-budget-disclosure] → docs-only` in slug-alphabetical position within the `## Hard Rules` section.
-- [ ] **AC6:** `plugins/soleur/test/components.test.ts` contains the new `Autonomous-loop API-budget disclosure` describe block with hardcoded list of 6 skills and sentinel `disclaims warranty for runtime cost`. The test fails when any one of the 6 skills' `<decision_gate>` blocks is missing the sentinel (self-evident from the `gateBlocks.some(b => b.includes(SENTINEL))` shape).
-- [ ] **AC7:** `bun test plugins/soleur/test/components.test.ts` passes (all existing assertions + 6 new autonomous-loop assertions).
-- [ ] **AC8:** Post-trim B_ALWAYS ≤ Phase 0.1 captured pre-PR baseline. Measured by `B_INDEX=$(wc -c < AGENTS.md); B_CORE=$(wc -c < AGENTS.core.md); echo $((B_INDEX + B_CORE))`.
-- [ ] **AC9:** `python3 scripts/lint-rule-ids.py` and `python3 scripts/lint-agents-rule-budget.py` pass.
-- [ ] **AC10:** PR body carries `## Changelog` section and `semver:patch` label (docs/rule-only change).
-- [ ] **AC11:** PR body uses `Closes #3819`. `requires_cpo_signoff: true` frontmatter automatically fires `user-impact-reviewer` at PR review — review passes with no Critical findings.
+- [x] **AC4:** `AGENTS.docs.md` contains the new `hr-autonomous-loop-skill-api-budget-disclosure` rule body with `**Why:**` line and `[skill-enforced: ...]` / `[id: ...]` tags.
+- [x] **AC5:** `AGENTS.md` index has a new entry `[id: hr-autonomous-loop-skill-api-budget-disclosure] → docs-only` in slug-alphabetical position within the `## Hard Rules` section.
+- [x] **AC6:** `plugins/soleur/test/components.test.ts` contains the new `Autonomous-loop API-budget disclosure` describe block with hardcoded list of 6 skills and sentinel `disclaims warranty for runtime cost`. The test fails when any one of the 6 skills' `<decision_gate>` blocks is missing the sentinel (self-evident from the `gateBlocks.some(b => b.includes(SENTINEL))` shape).
+- [x] **AC7:** `bun test plugins/soleur/test/components.test.ts` passes (all existing assertions + 6 new autonomous-loop assertions).
+- [x] **AC8:** Post-trim B_ALWAYS ≤ Phase 0.1 captured pre-PR baseline. Measured by `B_INDEX=$(wc -c < AGENTS.md); B_CORE=$(wc -c < AGENTS.core.md); echo $((B_INDEX + B_CORE))`.
+- [x] **AC9:** `python3 scripts/lint-rule-ids.py` and `python3 scripts/lint-agents-rule-budget.py` pass.
+- [x] **AC10:** PR body carries `## Changelog` section and `semver:patch` label (docs/rule-only change).
+- [x] **AC11:** PR body uses `Closes #3819`. `requires_cpo_signoff: true` frontmatter automatically fires `user-impact-reviewer` at PR review — review passes with no Critical findings.
 
 ### Post-merge (operator)
 

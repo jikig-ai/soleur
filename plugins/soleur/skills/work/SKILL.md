@@ -19,6 +19,12 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 
 <input_document> #$ARGUMENTS </input_document>
 
+<decision_gate>
+**API budget.** This skill executes a work plan iteratively across many phases. Tier A (Agent Teams) carries ~7x per-task token cost; Tier B (Subagent Fan-Out) is moderate; Tier C is single-agent. Total cost scales with plan length, chosen tier, and per-task RED/GREEN/REFACTOR cycles. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
+The tier offer fires inline at the right phase. Decline if running an unfamiliar plan against a tight budget.
+</decision_gate>
+
 ## Execution Workflow
 
 ### Phase 0: Load Knowledge Base Context (if exists)

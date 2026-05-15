@@ -5,6 +5,12 @@ description: "This skill should be used when running the full autonomous enginee
 
 Run these steps in order. Do not do anything else.
 
+<decision_gate>
+**API budget.** This skill runs the full autonomous engineering pipeline: plan → work → review → resolve-pr-parallel → ship. Typical wall-clock 30–90 min; per-run Anthropic credit cost is non-trivial and scales with plan complexity, review-cycle count, and PR comment volume. The pipeline runs autonomously once Step 0a/0a.5 collision checks pass — there are no per-phase approval gates after that. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
+If running against a tight budget, run `/soleur:plan` instead and review the plan before invoking `/soleur:work` separately.
+</decision_gate>
+
 **Step 0a: Linear context preflight.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/]+/issue/`. If any match:
 
 1. Use the **Skill tool**: `skill: soleur:linear-fetch`, args: "$ARGUMENTS". The skill returns two artifacts: `agent_context` (markdown blob + image content blocks, streamed into THIS parent conversation only) and `persist_safe_summary` (the same text with every `uploads.linear.app/*` URL redacted to `[linear-image: REDACTED]`).

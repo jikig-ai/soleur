@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   discoverAgents,
   discoverCommands,
@@ -228,6 +229,46 @@ describe("No backtick file references in skills", () => {
       const { body } = parseComponent(skillPath);
       const backtickRefs = body.match(/`(?:references|assets|scripts)\/[^`]+`/g);
       expect(backtickRefs).toBeNull();
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Autonomous-loop skills must disclose API budget (#3819)
+// ---------------------------------------------------------------------------
+
+describe("Autonomous-loop API-budget disclosure", () => {
+  const AUTONOMOUS_LOOP_SKILLS = [
+    "test-fix-loop",
+    "drain-labeled-backlog",
+    "resolve-todo-parallel",
+    "resolve-pr-parallel",
+    "work",
+    "one-shot",
+  ];
+
+  // Sentinel chosen for distinctiveness + verbatim across all 6 disclosures.
+  // Tracks the BSL 1.1 disclaimer carried over from `goal-primitive.md`.
+  const SENTINEL = "disclaims warranty for runtime cost";
+
+  for (const skillName of AUTONOMOUS_LOOP_SKILLS) {
+    test(`${skillName} carries API-budget <decision_gate> disclosure`, () => {
+      const skillPath = `plugins/soleur/skills/${skillName}/SKILL.md`;
+      const raw = readFileSync(skillPath, "utf-8");
+
+      const gateBlocks = raw.match(/<decision_gate>[\s\S]*?<\/decision_gate>/g) ?? [];
+
+      expect(
+        gateBlocks.length,
+        `${skillName} has no <decision_gate> block`,
+      ).toBeGreaterThan(0);
+
+      const hasDisclosure = gateBlocks.some((b) => b.includes(SENTINEL));
+      expect(
+        hasDisclosure,
+        `${skillName} <decision_gate> blocks do not contain API-budget sentinel "${SENTINEL}". ` +
+          `Each autonomous-loop skill must disclose the per-iteration cost model and Soleur/Anthropic billing split.`,
+      ).toBe(true);
     });
   }
 });

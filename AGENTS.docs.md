@@ -1,5 +1,9 @@
 # AGENTS Docs-class — loaded for docs-only sessions (markdown / Eleventy / AGENTS-md meta)
 
+## Hard Rules
+
+- Autonomous-loop Soleur skills (bounded iteration, parallel agent fan-out, chained plan→work→review→ship) must include an API-budget `<decision_gate>` carrying the sentinel `disclaims warranty for runtime cost`, a per-iteration cost-model line, and the Soleur/Anthropic billing split [id: hr-autonomous-loop-skill-api-budget-disclosure] [skill-enforced: `plugins/soleur/test/components.test.ts`]. Add new skill basenames to the test's `AUTONOMOUS_LOOP_SKILLS` constant. **Why:** #3819 backport closing #3809 asymmetry.
+
 ## Code Quality
 
 - Rule IDs on AGENTS.md rules are immutable [id: cq-rule-ids-are-immutable] [hook-enforced: lefthook lint-rule-ids.py]. Remove a rule by appending its ID to `scripts/retired-rule-ids.txt` (`<id> | date | PR | breadcrumb`); reintroducing a retired ID is linter-rejected. Section prefixes (`hr`, `wg`, `cq`, `rf`, `pdr`, `cm`) match the section.
