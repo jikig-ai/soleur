@@ -47,9 +47,12 @@ provider, scoped to:
 - **Import** the 4 existing `auth-*` issue-alert rules into Terraform state
   using `terraform import` — names match `configure-sentry-alerts.sh`
   byte-for-byte to preserve operator dashboard queries.
-- **Create** 9 net-new `sentry_cron_monitor` resources, one per scoped
-  scheduled workflow, with vendor-hosted heartbeat via the existing Sentry
-  trust boundary (closes #3236).
+- **Create** 8 net-new `sentry_cron_monitor` resources, one per scoped
+  scheduled workflow currently on a `schedule:` block, with vendor-hosted
+  heartbeat via the existing Sentry trust boundary (closes #3236). The
+  plan originally enumerated 9; `scheduled-cf-token-expiry-check` is
+  deferred (manual-dispatch only) and gets a 9th resource when its
+  schedule re-lands.
 - **Defer** migration from `sentry_issue_alert` (deprecated in v0.15-beta) to
   the new unified `sentry_alert` resource until provider GA.
 - **Defer** enabling new monitor classes (log-condition, custom-metric) until
@@ -104,7 +107,7 @@ below applies.
 
 `.github/workflows/apply-sentry-infra.yml` fires on push to `main` when
 `apps/web-platform/infra/sentry/cron-monitors.tf` changes. It runs
-`terraform apply -target=sentry_cron_monitor.* -auto-approve` so the 9
+`terraform apply -target=sentry_cron_monitor.* -auto-approve` so the 8
 monitors exist within ~2 minutes of merge, closing the window where check-in
 curls would 404. Issue-alert resources stay import-only post-merge per AC13.
 
@@ -158,7 +161,7 @@ This ADR is validated by:
 - **AC13:** First `terraform import` of all 4 rules followed by `terraform plan`
   is no-op (modulo lifecycle-ignored v2 drift).
 - **AC14/AC15:** API-GET (per `hr-no-dashboard-eyeball-pull-data-yourself`)
-  confirms the 9 cron monitors exist and the first scheduled run of each
+  confirms the 8 cron monitors exist and the first scheduled run of each
   workflow produces a recognized check-in.
 - **AC16:** One full `reusable-release.yml` cycle ships under Terraform
   management with the audit artifact uploaded.
@@ -169,7 +172,8 @@ DHH-style review at plan time argued for cutting Phase 5 entirely: leave the
 working 176-line script alone for 4 unchanging rules; wait for a second
 Sentry change before paying IaC ceremony. The decision rejected this for the
 current PR because (a) #3815 multi-tenant DPA work assumes the IaC foundation,
-(b) the 9-workflow Crons scope closes #3236 independently. **Re-evaluate
+(b) the 8-workflow Crons scope closes #3236 independently (a 9th workflow
+joins when `scheduled-cf-token-expiry-check` re-schedules). **Re-evaluate
 trigger:** if the escape-hatch criteria above fire, the dissent becomes the
 operative reframe.
 

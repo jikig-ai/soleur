@@ -1,5 +1,11 @@
-# Cron monitors for the 9 scoped scheduled GitHub Actions workflows. Closes
-# #3236 (vendor-hosted dead-man's-switch). Sentry derives the monitor slug
+# Cron monitors for the 8 currently-scheduled GitHub Actions workflows that
+# touch secrets. Closes #3236 (vendor-hosted dead-man's-switch). The plan
+# enumerated 9 workflows; `scheduled-cf-token-expiry-check` is deferred
+# this cycle (its `schedule:` block is commented out — see the
+# breadcrumb-only resource gap at lines 50-56). Re-introduce a 9th
+# resource when that workflow's schedule lands.
+#
+# Sentry derives the monitor slug
 # from `name` (slugified); we use the workflow filename without `.yml` so
 # the slug matches the MONITOR_SLUG env var in each workflow's check-in
 # steps (Phase 4).

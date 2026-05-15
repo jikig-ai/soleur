@@ -4,9 +4,11 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
 - **4 issue alerts** (auth observability stack) — imported from existing
   rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`.
-- **9 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **8 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
-  push-to-main via `.github/workflows/apply-sentry-infra.yml`.
+  push-to-main via `.github/workflows/apply-sentry-infra.yml`. A 9th monitor
+  for `scheduled-cf-token-expiry-check` is deferred until that workflow's
+  `schedule:` block is re-enabled (currently manual-dispatch only).
 
 ADR: [ADR-031 — Sentry alert and cron monitor configuration as IaC](../../../../knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md)
 
@@ -117,7 +119,7 @@ and revert this directory.
 
 ## Cron monitors are net-new (no import)
 
-The 9 `sentry_cron_monitor` resources do not exist in Sentry yet. The first
+The 8 `sentry_cron_monitor` resources do not exist in Sentry yet. The first
 `terraform apply` (or, in CI, the first run of `apply-sentry-infra.yml` after
 push to main) creates them. Per-workflow grace periods (`checkin_margin_minutes`,
 `max_runtime_minutes`) come from observed run durations + 2x safety margin —

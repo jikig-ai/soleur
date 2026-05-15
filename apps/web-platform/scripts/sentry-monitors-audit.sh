@@ -110,9 +110,11 @@ done
 
 monitor_slugs=$(jq -r '.[].slug // empty' <<<"$monitors_json")
 
-# Structured: pull every literal "value" field from each rule's conditions
-# and filters, plus the legacy `monitor_slug` field if present. The result
-# is one slug-candidate per line; absent → no binding.
+# Broad extraction — every literal "value" field across each rule's
+# conditions and filters, plus the legacy `monitor_slug` field. Used ONLY
+# for Class A's "is this monitor referenced anywhere?" non-orphan check,
+# where over-counting is safe (it suppresses false-positive Class A) and
+# under-counting is dangerous.
 rule_slug_refs=$(jq -r '
   .[] | (
     (.conditions // [])[]?.value? // empty,
@@ -121,9 +123,33 @@ rule_slug_refs=$(jq -r '
   )
 ' <<<"$rules_json" | sort -u)
 
+# Narrow extraction — only values from filters / conditions whose `key`
+# explicitly binds a monitor slug (`monitor.slug`), plus the legacy
+# `monitor_slug` field. Used for Class B orphan flagging, where
+# over-counting floods false-positives. Production `TaggedEventFilter`
+# rules carry generic shapes like `{"key":"feature","value":"auth"}`
+# whose `.value` is a tag value, NOT a monitor slug; without this gate
+# every tag-bound rule would emit a spurious "alert references missing
+# monitor `auth`" line on every release audit.
+#
+# Note on the array-build-then-iterate pattern: a bare comma-separated
+# stream of `select | .value? // empty` branches inside `(...)` returns
+# no values in jq 1.6+ when any branch's left-hand iterator is empty
+# (the `?` swallows the empty-stream and the comma operator's union
+# collapses). Wrapping each branch in `[... | ...]` then re-iterating
+# via `[]` makes each branch independent.
+monitor_bound_slug_refs=$(jq -r '
+  .[] | (
+    ([.conditions // [] | .[] | select(.key? == "monitor.slug") | .value])[],
+    ([.filters    // [] | .[] | select(.key? == "monitor.slug") | .value])[],
+    (.monitor_slug? // empty)
+  )
+' <<<"$rules_json" | sort -u)
+
 # Fallback substring sweep for forward-compat — only consulted if the
 # structured pass found nothing. Stored in a separate var so we never mix
-# substring matches into the rule_slug_refs set used by Class B.
+# substring matches into the rule_slug_refs set used by Class A non-orphan
+# check.
 rules_serialized=$(jq -c '.' <<<"$rules_json")
 
 orphan_monitors=()  # Class A
@@ -143,23 +169,43 @@ while IFS= read -r slug; do
   fi
 done <<<"$monitor_slugs"
 
-# Class B: every slug in rule_slug_refs that does NOT appear in monitor_slugs.
-# Substring collisions are filtered by the `grep -Fx` exact-line match.
+# Class B: every monitor-bound slug ref that does NOT appear in monitor_slugs.
+# Uses the NARROW extraction (`monitor_bound_slug_refs`) so generic tag-filter
+# values (e.g. `{"key":"feature","value":"auth"}`) cannot flood the report
+# with false-positive "alert references missing monitor `auth`" lines.
 monitor_slug_set=$(printf '%s\n' "$monitor_slugs" | sort -u)
 while IFS= read -r ref; do
   [[ -z "$ref" ]] && continue
-  # Filter to plausibly-slug-shaped refs only (kebab-case, no spaces).
+  # Belt-and-braces: also require slug shape (kebab-case, no spaces). The
+  # narrow extraction should already guarantee this, but defends against a
+  # future Sentry API change shipping a monitor.slug binding with a
+  # non-slug-shaped value.
   [[ "$ref" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
   if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
     orphan_alerts+=("$ref")
   fi
-done <<<"$rule_slug_refs"
+done <<<"$monitor_bound_slug_refs"
 
-# Class C: issue-alert rules with empty actions[].
+# Class C: alert rules with empty routing. Two shapes to handle:
+#   - Issue Alerts have top-level `.actions[]`.
+#   - Metric Alerts (returned from /organizations/<org>/alert-rules/) store
+#     routing under `.triggers[].actions[]` and have NO top-level `.actions`.
+# Without the shape branch, every Metric Alert flags as Class C because
+# `.actions // []` evaluates to `[]` (length 0) — drowning real orphans.
+# Branch by the presence of `.triggers`: if a rule has triggers, count
+# their flattened actions; otherwise check top-level actions.
 while IFS= read -r rid; do
   [[ -z "$rid" ]] && continue
   empty_action_rule_ids+=("$rid")
-done < <(jq -r '.[] | select((.actions // []) | length == 0) | .id | tostring' <<<"$rules_json")
+done < <(jq -r '
+  .[] | select(
+    if has("triggers") then
+      ([.triggers[]?.actions[]?] | length == 0)
+    else
+      ((.actions // []) | length == 0)
+    end
+  ) | .id | tostring
+' <<<"$rules_json")
 
 # --- Resolve report path --------------------------------------------------
 # AUDIT_DATE_OVERRIDE is honored by the test suite to defeat the midnight
