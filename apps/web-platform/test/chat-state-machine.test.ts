@@ -744,3 +744,57 @@ describe("Stage 4 — new ChatMessage variants from /soleur:go events", () => {
     expect(result.activeStreams.has("cmo" as DomainLeaderId)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #3775 — subagent_spawn idempotency on duplicate spawnId
+// ---------------------------------------------------------------------------
+
+describe("subagent_spawn idempotency (#3775)", () => {
+  test("duplicate spawnId returns prev unchanged (no second child appended)", () => {
+    const r1 = applyStreamEvent([], new Map(), {
+      type: "subagent_spawn",
+      parentId: "p-dup",
+      leaderId: "cto" as DomainLeaderId,
+      spawnId: "s-dup-1",
+      task: "first",
+    } as any);
+    // Second call with the same spawnId — should be idempotent.
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, {
+      type: "subagent_spawn",
+      parentId: "p-dup",
+      leaderId: "cto" as DomainLeaderId,
+      spawnId: "s-dup-1",
+      task: "second",
+    } as any, r1.spawnIndex);
+    expect(r2.messages).toBe(r1.messages);
+    expect(r2.spawnIndex).toBe(r1.spawnIndex);
+    const group = r2.messages[r2.messages.length - 1];
+    expect(group.type).toBe("subagent_group");
+    if (group.type === "subagent_group") {
+      expect(group.children.length).toBe(1);
+      // First-write-wins: original task preserved.
+      expect(group.children[0].task).toBe("first");
+    }
+  });
+
+  test("different spawnIds still append normally (regression guard)", () => {
+    const r1 = applyStreamEvent([], new Map(), {
+      type: "subagent_spawn",
+      parentId: "p-multi",
+      leaderId: "cto" as DomainLeaderId,
+      spawnId: "s-multi-1",
+    } as any);
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, {
+      type: "subagent_spawn",
+      parentId: "p-multi",
+      leaderId: "cmo" as DomainLeaderId,
+      spawnId: "s-multi-2",
+    } as any, r1.spawnIndex);
+    const group = r2.messages[r2.messages.length - 1];
+    expect(group.type).toBe("subagent_group");
+    if (group.type === "subagent_group") {
+      expect(group.children.length).toBe(2);
+    }
+  });
+});
+
