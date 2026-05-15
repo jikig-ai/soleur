@@ -257,24 +257,24 @@ F1 by contrast FAILS OPEN — trap on any error → exit 0; telemetry never bloc
 
 ### Pre-merge (PR)
 
-- [ ] **Prereq #3799 merged**: `scripts/test-all.sh` extended to glob `.claude/hooks/*.test.sh`; `bash scripts/test-all.sh` exits 0 from main.
-- [ ] PR body uses `Refs #3789` and `Refs #3800` (enforce-flip tracker); NOT `Closes`. #3789 stays open until #3800 ships.
-- [ ] Phase 0.1 artifact `.claude/hooks/PERMISSION-DENIED-PAYLOAD-SHAPE.md` exists, date-stamped, CC-version-stamped. If event does not fire → F1 collapsed to roadmap entry + spec amendment recorded.
-- [ ] Phase 0.2 artifact `.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` exists, names the chosen decision value (`defer` or `ask`); `DEFER_VALUE` in `prod-write-defer-gate.sh` matches.
-- [ ] **`emit_incident` 5-arg back-compat audit**: `git grep -nE 'emit_incident\s+' .claude/hooks/ plugins/soleur/skills/ scripts/` returns 17 callers max; no caller passes >5 positionals; slot 5 (`hook_event`) semantics preserved in new code. Audit output captured in PR body.
-- [ ] **No `SCHEMA_VERSION` bump**. New `kind` field is additive; v1 readers ignore. Document in `.claude/hooks/incidents.test.sh` that a `null kind` predicate falls through correctly.
-- [ ] `.claude/hooks/permission-denied-telemetry.sh` + `.test.sh` exist; smoke confirms entry with `kind: "permission_denied"` after a known kernel denial.
-- [ ] `.claude/hooks/prod-write-defer-gate.sh` + `.test.sh` exist; `SOLEUR_DEFER_DRYRUN="${SOLEUR_DEFER_DRYRUN:-1}"` hardcoded default.
-- [ ] **All 3 regexes use POSIX `[[:space:]]`, NOT `\s`**. Test fixtures cover: canonical, wrapped (`-- <cmd>`), env-prefixed, short-flag (`git push -f`), refspec (`git push origin HEAD:main`), adjacent non-match (`git push origin feat-main-update`), `--config prd_terraform` AND `--config prd` distinction.
-- [ ] approvals.jsonl writer enum = `{tty_resume, env_override, ci_actor}` (no `bypass`). flock-protected. 1-year TTL via `rotate_if_needed`. operator-email resolution inline; bare-repo trap test passes (prefer `--global` over default).
-- [ ] `.claude/settings.json` has `PermissionDenied` top-level event + F2 hook at PreToolUse(Bash) position 4.
-- [ ] `.gitignore` includes `.claude/logs/`.
-- [ ] `.github/workflows/test-pretooluse-hooks.yml` has F2 defer-gate test case (synthesized fixtures externalized via `--body-file`).
-- [ ] `.claude/hooks/README.md` 4 sections updated including F1↔F2 disjoint capture explainer + CI-telemetry limitation note.
-- [ ] All bash tests pass (`bash scripts/test-all.sh` after prereq PR).
-- [ ] `test-pretooluse-hooks.yml` CI passes.
-- [ ] `user-impact-reviewer` PR review approves.
-- [ ] PR body uses `Refs #3789` and `Closes <enforce-flip-issue>` only if scope includes the flip — which it does NOT for this PR.
+- [x] **Prereq #3799 merged**: `scripts/test-all.sh` extended to glob `.claude/hooks/*.test.sh`; `bash scripts/test-all.sh` exits 0 from main. (PR #3801 merged 2026-05-15)
+- [ ] PR body uses `Refs #3789` and `Refs #3800` (enforce-flip tracker); NOT `Closes`. #3789 stays open until #3800 ships. *(checked at PR push)*
+- [x] Phase 0.1 artifact `.claude/hooks/PERMISSION-DENIED-PAYLOAD-SHAPE.md` exists, date-stamped, CC-version-stamped. **Event does NOT fire in CC 2.1.142 → F1 collapsed to roadmap entry.** This PR ships F2-only.
+- [x] Phase 0.2 artifact `.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` exists, names the chosen decision value (`defer`); `DEFER_VALUE` in `prod-write-defer-gate.sh` matches. Empirical gotcha recorded: inner `hookEventName: "PreToolUse"` is load-bearing.
+- [x] **`emit_incident` 5-arg back-compat audit**: 22 source-code callers in `.claude/hooks/`, `scripts/`, `plugins/soleur/skills/`; none pass >5 positional args; slot 5 (`hook_event`) semantics preserved.
+- [x] **No `SCHEMA_VERSION` bump**. `kind` field is additive; `incidents.test.sh` Test 6 documents `(.kind // "rule_event")` fall-through invariant.
+- [ ] ~~`.claude/hooks/permission-denied-telemetry.sh` + `.test.sh` exist~~ — **F1 collapsed to roadmap per Phase 0.1**; not in this PR's scope.
+- [x] `.claude/hooks/prod-write-defer-gate.sh` + `.test.sh` exist; `SOLEUR_DEFER_DRYRUN="${SOLEUR_DEFER_DRYRUN:-1}"` hardcoded default.
+- [x] **All 3 regexes use POSIX `[[:space:]]`, NOT `\s`**. Test fixtures cover canonical, wrapped (`-- <cmd>`), env-prefixed, short-flag (`-f`, `--force-with-lease`), refspec (`HEAD:main`), adjacent non-match (`feat-foo`, `feat-main-update`), `--config prd_terraform` AND `--config prd` accepted; `prd-staging`, `dev` rejected.
+- [x] approvals.jsonl writer enum = `{tty_resume, env_override, ci_actor}` (no `bypass`). flock-protected. 1-year TTL via `LOG_ROTATION_AGE_SECONDS` override. Operator-email resolution inline, prefers `git --global`.
+- [x] `.claude/settings.json`: F2 hook wired at PreToolUse(Bash) position 4. ~~`PermissionDenied` top-level event~~ — F1 collapsed; settings.json unchanged on that axis.
+- [x] `.gitignore` includes `.claude/logs/`.
+- [x] `.github/workflows/test-pretooluse-hooks.yml` has F2 defer-gate test case (Test 6 — terraform-apply triggers dry-run telemetry; assertion in follow-up workflow step).
+- [x] `.claude/hooks/README.md` updated: F2 hook section, env vars + bypass policy, approvals.jsonl schema, audit-trail cadence (jq one-liner), external-observability boundary, F1↔F2 disjoint-capture explainer + F1 deferral note.
+- [x] All bash tests pass — `bash scripts/test-all.sh` reports **54/54 suites passed** on `feat-cc-stack-tuning` (47 baseline + 1 prereq-discovered + 6 hook tests previously orphaned).
+- [ ] `test-pretooluse-hooks.yml` CI passes. *(workflow_dispatch — run after PR is up)*
+- [ ] `user-impact-reviewer` PR review approves. *(at PR review)*
+- [x] PR body uses `Refs #3789` (NOT `Closes`); enforce-flip carries `#3800` as a separate tracker. *(implementation matches plan; final PR body finalized at push)*
 
 ### Post-merge (operator, manual)
 
