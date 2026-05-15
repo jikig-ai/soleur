@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-05-11
-last_reviewed: 2026-05-11
+last_updated: 2026-05-15
+last_reviewed: 2026-05-15
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -74,8 +74,8 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Financial posture | Product COGS ~$81/mo, break-even 2 users at $49/mo. All-in burn ~$491/mo (includes ~$410/mo R&D: Claude Code Max seats + GitHub Copilot), break-even ~11 users. Gross margin at 50 users: ~97% vs COGS, ~80% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). See [finance/cost-model.md](../finance/cost-model.md). |
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
-| Phase 3 (Make it Sticky) | Near-complete. 1 open, 168 closed (milestone). All features shipped. Only remaining: QA gate (#2108). Previously "Not started" items (#1944, #2341, #2342, #2344, #2550, #2662) confirmed closed. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
-| Phase 4 (Validate + Scale) | In progress. 54 open, 70 closed (milestone). Marketing Gate substantially complete (21 of 40 items closed). Multi-User Readiness Gate complete (MU1-MU3 all closed). Remaining open: M3 (#1051 marketing strategy), M4 (#1445 recruitment templates), Phase 4 core validation issues, plus internal engineering-tooling work (e.g. #3493 AGENTS.md change-class loader, un-deferred 2026-05-09). Internal-tooling issues live in Phase 4 milestone for sequencing but are not customer-facing roadmap rows. |
+| Phase 3 (Make it Sticky) | Near-complete. 3 open, 169 closed (milestone). All features shipped. Only remaining: QA gate (#2108). Previously "Not started" items (#1944, #2341, #2342, #2344, #2550, #2662) confirmed closed. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
+| Phase 4 (Validate + Scale) | In progress. 55 open, 76 closed (milestone). Marketing Gate substantially complete (21 of 40 items closed). Multi-User Readiness Gate complete (MU1-MU3 all closed). Remaining open: M3 (#1051 marketing strategy), M4 (#1445 recruitment templates), Phase 4 core validation issues, plus internal engineering-tooling work (e.g. #3493 AGENTS.md change-class loader, un-deferred 2026-05-09). Internal-tooling issues live in Phase 4 milestone for sequencing but are not customer-facing roadmap rows. |
 | Phase 5 (Desktop Native App) | Defined. 6 open, 0 closed. Trigger-gated on user demand. Note: #2625 (A/B test Solo cap) is in this milestone but not yet in roadmap table. |
 | Post-MVP / Later | 326 open, 600 closed. |
 | Beta users | 0 |
