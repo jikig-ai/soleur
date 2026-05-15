@@ -9,21 +9,35 @@ process.env.STRIPE_PRICE_ID_ENTERPRISE = "price_enterprise";
 
 const { mockRpc } = vi.hoisted(() => ({ mockRpc: vi.fn() }));
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({
-    rpc: mockRpc,
-    from: () => ({
-      insert: vi.fn().mockResolvedValue({ error: null }),
-      update: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }),
-      select: () => ({
-        eq: () => ({
-          single: vi.fn().mockResolvedValue({
-            data: { id: "conv-1", status: "active", subscription_status: "active", plan_tier: "solo" },
-            error: null,
-          }),
+function makeFromMock() {
+  return () => ({
+    insert: vi.fn().mockResolvedValue({ error: null }),
+    update: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }),
+    select: () => ({
+      eq: () => ({
+        single: vi.fn().mockResolvedValue({
+          data: {
+            id: "conv-1",
+            status: "active",
+            subscription_status: "active",
+            plan_tier: "solo",
+          },
+          error: null,
+        }),
+        // PR-C §2.10 (#3244): auth-probe ends in .maybeSingle()
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { id: "user-1" },
+          error: null,
         }),
       }),
     }),
+  });
+}
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    rpc: mockRpc,
+    from: makeFromMock(),
     auth: {
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },
@@ -31,6 +45,14 @@ vi.mock("@/lib/supabase/service", () => ({
       }),
     },
   }),
+}));
+
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: makeFromMock(),
+    rpc: mockRpc,
+  })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
 vi.mock("./agent-runner", () => ({

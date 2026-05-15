@@ -44,6 +44,15 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
 }));
+
+// PR-C §2.4 (#3244): conversation-writer now mints tenant clients via
+// `getFreshTenantClient`. Reuse `mockFrom` so existing per-table chains
+// drive the new code path.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn(), addBreadcrumb: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: vi.fn() }));
 vi.mock("../server/logger", () => ({

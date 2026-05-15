@@ -90,6 +90,14 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockSupabaseFrom })),
 }));
 
+// PR-C §2.4 / §2.10 (#3244): tenant migration of conversation-writer
+// and agent-runner. Mock so the test does not pull `mintFounderJwt`.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockSupabaseFrom })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
 vi.mock("@/server/ws-handler", () => ({

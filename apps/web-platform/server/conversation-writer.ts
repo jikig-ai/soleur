@@ -154,43 +154,25 @@ export async function updateConversationFor(
   patch: ConversationPatch,
   options: UpdateConversationOptions = {},
 ): Promise<UpdateConversationResult> {
-  // PR-C §2.4 (#3244): tenant client + per-handler RLS-baseline probe.
-  // Probe surfaces mid-TTL jti revocation or RLS policy churn that a
-  // cached JWT inside the TTL window would otherwise mask as 0 rows
-  // affected (silent-success path of this wrapper). On probe failure
-  // we return `{ ok: false }` so the caller surfaces a degraded outcome
-  // — same contract as a Supabase error.
+  // PR-C §2.4 (#3244): tenant client. Auth probe is IMPLICIT in
+  // `getFreshTenantClient` — the `precheck_jwt_mint` RPC throws
+  // `RuntimeAuthError` on rate-limit, RPC error, or missing secret.
+  // Per `agent-runner.ts:188` precedent we do NOT layer an additional
+  // SELECT probe: the subsequent UPDATE is itself RLS-filtered to
+  // `auth.uid()`, and the wrapper's `expectMatch:false` default treats
+  // 0-rows-affected as silent-success — adding a probe would change
+  // the silent-success semantics for a transient JWT blip.
   let tenant;
   try {
     tenant = await getFreshTenantClient(userId);
-    const { error: probeErr } = await tenant
-      .from("users")
-      .select("id")
-      .eq("id", userId)
-      .maybeSingle();
-    if (probeErr) {
-      const feature = options.feature ?? "conversation-writer";
-      const op = options.op ?? "update";
-      if (shouldReportToSentry(feature, op, "auth-probe")) {
-        reportSilentFallback(probeErr, {
-          feature,
-          op: `${op}.auth-probe`,
-          extra: { userId, conversationId, ...options.extra },
-        });
-      }
-      return {
-        ok: false,
-        error: new Error(probeErr.message, { cause: probeErr }),
-      };
-    }
   } catch (err) {
     if (err instanceof RuntimeAuthError) {
       const feature = options.feature ?? "conversation-writer";
       const op = options.op ?? "update";
-      if (shouldReportToSentry(feature, op, "auth-probe")) {
+      if (shouldReportToSentry(feature, op, "tenant-mint")) {
         reportSilentFallback(err, {
           feature,
-          op: `${op}.auth-probe`,
+          op: `${op}.tenant-mint`,
           extra: { userId, conversationId, ...options.extra },
         });
       }

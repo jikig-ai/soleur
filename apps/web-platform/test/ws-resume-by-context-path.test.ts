@@ -19,48 +19,65 @@ const { mockRpc } = vi.hoisted(() => ({
   }),
 }));
 
+// Shared `from(table)` dispatcher reused by both the service mock
+// (legacy auth.getUser path) and the PR-C tenant mock (all tenant
+// data reads).
+function makeFromDispatcher(): (table: string) => unknown {
+  return (table: string) => {
+    if (table === "users") {
+      // PR-C §2.10 (#3244): probe + repo_url SELECT both terminate
+      // in `.maybeSingle()` and return the same row shape.
+      const chain: { select: unknown; eq: unknown; maybeSingle: unknown } = {
+        select: vi.fn(() => chain),
+        eq: vi.fn(() => chain),
+        maybeSingle: vi.fn(async () => ({
+          data: { id: "user-1", repo_url: mockUserRepoUrl },
+          error: null,
+        })),
+      };
+      return chain;
+    }
+    if (table === "messages") {
+      return {
+        select: () => ({
+          eq: () => mockCountQuery(),
+        }),
+      };
+    }
+    return {
+      insert: mockInsert,
+      update: mockUpdate,
+      select: () => {
+        const tail = {
+          is: () => ({
+            order: () => ({
+              limit: () => ({
+                maybeSingle: mockMaybeSingle,
+              }),
+            }),
+          }),
+        };
+        const eqChain: Record<string, unknown> = {
+          eq: (...args: unknown[]) => {
+            void args;
+            return eqChain;
+          },
+          single: vi.fn().mockResolvedValue({
+            data: { id: "conv-1", status: "active", repo_url: mockUserRepoUrl },
+            error: null,
+          }),
+          ...tail,
+        };
+        return eqChain;
+      },
+    };
+  };
+}
+
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     rpc: mockRpc,
-    from: (table: string) => {
-      if (table === "messages") {
-        return {
-          select: () => ({
-            eq: () => mockCountQuery(),
-          }),
-        };
-      }
-      return {
-        insert: mockInsert,
-        update: mockUpdate,
-        select: () => {
-          // Recursive eq() chain so any length of predicates terminates at
-          // is().order().limit().maybeSingle(). The ws-handler lookup now
-          // uses 3 .eq() calls (user_id, repo_url, context_path).
-          const tail = {
-            is: () => ({
-              order: () => ({
-                limit: () => ({
-                  maybeSingle: mockMaybeSingle,
-                }),
-              }),
-            }),
-          };
-          const eqChain: Record<string, unknown> = {
-            eq: (...args: unknown[]) => {
-              void args;
-              return eqChain;
-            },
-            single: vi.fn().mockResolvedValue({
-              data: { id: "conv-1", status: "active", repo_url: mockUserRepoUrl },
-              error: null,
-            }),
-            ...tail,
-          };
-          return eqChain;
-        },
-      };
-    },
+    from: makeFromDispatcher(),
     auth: {
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },
@@ -68,6 +85,14 @@ vi.mock("@/lib/supabase/service", () => ({
       }),
     },
   }),
+}));
+
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: makeFromDispatcher(),
+    rpc: mockRpc,
+  })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
 vi.mock("./agent-runner", () => ({

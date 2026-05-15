@@ -59,19 +59,6 @@ function captureUpdateChain(
   const updateCalls: UpdateCall[] = [];
 
   mockSupabaseFrom.mockImplementation((table: string) => {
-    if (table === "users") {
-      // PR-C §2.4 (#3244): auth probe `tenant.from("users")...maybeSingle()`.
-      return {
-        select: () => ({
-          eq: () => ({
-            maybeSingle: async () => ({
-              data: { id: "user-1" },
-              error: null,
-            }),
-          }),
-        }),
-      };
-    }
     if (table !== "conversations") {
       throw new Error(`unexpected table: ${table}`);
     }
