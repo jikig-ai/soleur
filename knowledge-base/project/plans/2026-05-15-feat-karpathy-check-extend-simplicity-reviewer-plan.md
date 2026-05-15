@@ -53,11 +53,11 @@ None.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `grep -cE '^7\. \*\*Verify Stated Goals Against Diff\*\*' plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` returns `1`. Bullet format MUST match existing bullets exactly: `N. **Name**:` (asterisks outside the name, colon outside the asterisks).
-- [ ] AC2: `grep -cE '^### (Hidden Assumptions|Goal Verification)$' plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` returns `2`.
-- [ ] AC3: `grep -c 'N/A — no diff in scope' plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` returns `1` (the fallback instruction text is present in bullet 7).
-- [ ] AC4: `grep -c '^## Audit Direction' knowledge-base/project/learnings/best-practices/2026-05-03-karpathy-claude-md-prior-art.md` returns `1`.
-- [ ] AC5: `shopt -s globstar; grep -h 'description:' plugins/soleur/agents/**/*.md | wc -w` returns the same value as the pre-edit baseline (frontmatter `description:` unchanged).
+- [x] AC1: `grep -cE '^7\. \*\*Verify Stated Goals Against Diff\*\*' plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` returns `1`. Bullet format MUST match existing bullets exactly: `N. **Name**:` (asterisks outside the name, colon outside the asterisks).
+- [x] AC2: `grep -cE '^### (Hidden Assumptions|Goal Verification)$' plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` returns `2`.
+- [x] AC3: `grep -c 'N/A — no diff in scope' plugins/soleur/agents/engineering/review/code-simplicity-reviewer.md` returns `1` (the fallback instruction text is present in bullet 7).
+- [x] AC4: `grep -c '^## Audit Direction' knowledge-base/project/learnings/best-practices/2026-05-03-karpathy-claude-md-prior-art.md` returns `1`.
+- [x] AC5: `shopt -s globstar; grep -h 'description:' plugins/soleur/agents/**/*.md | wc -w` returns the same value as the pre-edit baseline (frontmatter `description:` unchanged).
 - [ ] AC6: PR body includes the AC1–AC5 grep commands and their expected output in a manual-verification section. PR body also includes `Closes #2727` and a `## Changelog` section noting `semver:patch`.
 
 ### Post-merge
