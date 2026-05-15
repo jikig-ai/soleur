@@ -46,36 +46,48 @@ Each file's commit must include: code edits + auth probe at literal entry
 points + new tenant-isolation test (inline `vi.mock`, no helper extraction
 in this PR).
 
-- [ ] 2.1 `apps/web-platform/server/session-sync.ts` (4 sites; probe in
-      `syncPull(userId)` and `syncPush(userId, ...)`).
-- [ ] 2.2 `apps/web-platform/server/api-messages.ts` (2 SELECTs at `:55`
+- [x] 2.1 `apps/web-platform/server/session-sync.ts` (4 sites; probe in
+      `syncPull(userId)` and `syncPush(userId, ...)`). **Commit d0e7740b.**
+- [x] 2.2 `apps/web-platform/server/api-messages.ts` (2 SELECTs at `:55`
       + `:79` migrate; `auth.getUser` at `:36` UNCHANGED — file stays on
-      allowlist as PERMANENT).
-- [ ] 2.3 `apps/web-platform/server/api-usage.ts` (1 SELECT migrates; RPC
+      allowlist as PERMANENT). **Commit c2b20702.**
+- [x] 2.3 `apps/web-platform/server/api-usage.ts` (1 SELECT migrates; RPC
       at `:104` keeps service-role with `// SERVICE-ROLE: RPC revoked from
-      authenticated — see migration 027` comment).
-- [ ] 2.4 `apps/web-platform/server/conversation-writer.ts` (1 UPDATE;
+      authenticated — see migration 027` comment). **Commit 900c4241.**
+- [x] 2.4 `apps/web-platform/server/conversation-writer.ts` (1 UPDATE;
       preserve the canonical `conversations.update` lint contract per file
-      header).
-- [ ] 2.5 `apps/web-platform/server/lookup-conversation-for-path.ts` (1 site).
-- [ ] 2.6 `apps/web-platform/server/current-repo-url.ts` (1 site;
-      `getCurrentRepoUrl(userId)` probe).
-- [ ] 2.7 `apps/web-platform/server/kb-document-resolver.ts` (1 site;
-      `fetchUserWorkspacePath(userId)` probe).
-- [ ] 2.8 `apps/web-platform/server/kb-route-helpers.ts` (2 sites; probes
+      header). **Commit 41fc7e18. Note: explicit auth probe removed mid-
+      migration in favor of implicit `getFreshTenantClient` mint
+      (RuntimeAuthError = probe) mirroring `agent-runner.ts:188`
+      precedent; finalized in commit 0ee90ac0.**
+- [x] 2.5 `apps/web-platform/server/lookup-conversation-for-path.ts` (1 site).
+      **Commit 9c32fef0.**
+- [x] 2.6 `apps/web-platform/server/current-repo-url.ts` (1 site;
+      `getCurrentRepoUrl(userId)` probe). **Commit 4ab30dec.**
+- [x] 2.7 `apps/web-platform/server/kb-document-resolver.ts` (1 site;
+      `fetchUserWorkspacePath(userId)` probe). **Commit c25d27f9.**
+- [x] 2.8 `apps/web-platform/server/kb-route-helpers.ts` (2 sites; probes
       in `authenticateAndResolveKbPath`, `resolveUserKbRoot(userId)`,
-      `syncWorkspace(userId, ...)`).
-- [ ] 2.9 `apps/web-platform/server/conversations-tools.ts` (4 sites; probe
+      `syncWorkspace(userId, ...)`). **Commit c22f6ec2. `resolveUserKbRoot`
+      signature refactored to drop caller-supplied `serviceClient` param;
+      both route handlers (`app/api/kb/share`, `app/api/kb/upload`)
+      updated.**
+- [x] 2.9 `apps/web-platform/server/conversations-tools.ts` (4 sites; probe
       at each of the 4 tool factories returned by
-      `buildConversationsTools(userId)`).
-- [ ] 2.10 `apps/web-platform/server/ws-handler.ts` (13 sites migrate;
+      `buildConversationsTools(userId)`). **Commit 732aaae2. Probe is
+      implicit via `getCurrentRepoUrl(userId)` preceding each tool body.**
+- [x] 2.10 `apps/web-platform/server/ws-handler.ts` (13 sites migrate;
       `auth.getUser` at `:1812` UNCHANGED). Probes at
       `tryLedgerDivergenceRecovery`, `refreshSubscriptionStatus`,
       `dispatchSoleurGoForConversation`, `setupWebSocket` handshake-completion,
       `handleMessage` router top. Per-site UPDATE-vs-SELECT classification
       done at start of this commit using the plan §0.3 rows marked
-      "classify at /work."
-- [ ] 2.11 `apps/web-platform/server/cc-dispatcher.ts` — wrap
+      "classify at /work." **Commit 0ee90ac0. `tenantFor` helper uses
+      implicit-mint probe (RuntimeAuthError) per agent-runner.ts:188
+      precedent; explicit SELECT probe omitted for test-ergonomics +
+      architectural symmetry. 12 consumer test files updated with
+      `vi.mock("@/lib/supabase/tenant")`.**
+- [x] 2.11 `apps/web-platform/server/cc-dispatcher.ts` — wrap
       `realSdkQueryFactory` body in `runWithByokLease(args.userId, async
       (lease) => { ... })`. Hoist `const apiKey = await lease.getApiKey();`
       OUT of `Promise.all` (per `agent-runner.ts:2361` canonical pattern;
@@ -83,22 +95,26 @@ in this PR).
       type). Migrate 2 `messages.insert` writes at `:1367` + `:1464` to
       tenant-client. Site `:1395` (attachments injection into
       `persistAndDownloadAttachments`) UNCHANGED; file stays on allowlist.
+      **Commit b0daedee. Added `supabaseTenantFactory` to test harness;
+      6 cc-dispatcher tests updated.**
 
 ## Phase 4 — Shrink `.service-role-allowlist` (single commit; CODEOWNERS-pinned)
 
-- [ ] 4.1 Remove 7 fully-migrated TRANSITIONAL entries
+- [x] 4.1 Remove 7 fully-migrated TRANSITIONAL entries
       (`conversations-tools`, `session-sync`, `conversation-writer`,
       `lookup-conversation-for-path`, `current-repo-url`,
-      `kb-document-resolver`, `kb-route-helpers`).
-- [ ] 4.2 Convert 2 TRANSITIONAL → PERMANENT with new comments:
+      `kb-document-resolver`, `kb-route-helpers`). **Commit 75ddb7e2.**
+- [x] 4.2 Convert 2 TRANSITIONAL → PERMANENT with new comments:
       `ws-handler.ts` (WS auth.getUser handshake) and `api-messages.ts`
-      (HTTP Bearer auth.getUser bootstrap).
-- [ ] 4.3 Update 2 PERMANENT-pending rationales: `api-usage.ts` (RPC
+      (HTTP Bearer auth.getUser bootstrap). **Commit 75ddb7e2.**
+- [x] 4.3 Update 2 PERMANENT-pending rationales: `api-usage.ts` (RPC
       revoke), `cc-dispatcher.ts` (attachments injection, pending PR-D).
-- [ ] 4.4 Verify
+      **Commit 75ddb7e2.**
+- [x] 4.4 Verify
       `bash apps/web-platform/scripts/service-role-allowlist-gate.sh` and
       `bash apps/web-platform/test/ci/service-role-allowlist-gate.test.sh`
-      (3/3 green).
+      (3/3 green). **Both gates green: 13 importers enumerated; 3/3 test
+      cases pass (green / red / allowlisted).**
 
 ## Phase 5 — Update `tasks.md` (single commit)
 
