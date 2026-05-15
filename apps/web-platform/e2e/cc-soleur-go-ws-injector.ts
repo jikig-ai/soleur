@@ -11,14 +11,17 @@
 
 import type { Page, WebSocketRoute } from "@playwright/test";
 import type { StreamEvent } from "@/lib/chat-state-machine";
+import type { WSErrorCode } from "@/lib/types";
 
 /** Control frames the page expects from the server but that live outside the
  *  reducer-visible `StreamEvent` subset (`chat-state-machine.ts:244`).
  *  `session_started` (PR-A) lets the WS hook resolve a session before the
  *  reducer accepts follow-up events. `usage_update` (PR-B #3774) is handled
  *  by an out-of-reducer `setUsageData` setState in `ws-client.ts:791-806`;
- *  threaded into the lifecycle bar via a chat-surface prop merge. Widen
- *  this union when a future test needs another out-of-reducer frame. */
+ *  threaded into the lifecycle bar via a chat-surface prop merge. `error`
+ *  (PR-C #2939) is handled in `ws-client.ts:655-700` via `setLastError`,
+ *  out-of-reducer; required by FR3.4 rate-limit smoke. Widen this union
+ *  when a future test needs another out-of-reducer frame. */
 export type WsControlEvent =
   | {
       type: "session_started";
@@ -33,6 +36,18 @@ export type WsControlEvent =
       outputTokens: number;
       cacheReadInputTokens?: number;
       cacheCreationInputTokens?: number;
+    }
+  | {
+      type: "error";
+      message: string;
+      errorCode?: WSErrorCode;
+      gateId?: string;
+      // Shape mirrors lib/types.ts:303-316 — fields optional, FR3.4 only
+      // needs `errorCode: "rate_limited"`. Carrying the full optional set
+      // keeps the union forward-compatible with runner-runaway diagnostics.
+      runnerRunawayReason?: "idle_window" | "max_turn_duration";
+      runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
+      runnerRunawayLastBlockToolName?: string | null;
     };
 
 export interface WsInjector {
