@@ -121,11 +121,15 @@ jobs:
           #   plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md
           # - synthetic-test: repo-canonical label for test-only issues.
           # - title regex ^(\[Content Publisher\]|flaky|flake|test-flake|test)[: \[(]:
+          #   (Comment shows the post-parse regex; the YAML source below
+          #    encodes \[ as \\[ because YAML eats one level of backslash
+          #    before jq parses the test() pattern.)
           #   - [Content Publisher] branch: skips operational-notification issues
           #     created by scripts/content-publisher.sh (LinkedIn/Bluesky/Discord/
-          #     IndieHackers/Hacker News/X manual-posting prompts). These issues
-          #     are post-by-hand reminders, not code defects -- the fix-issue
-          #     skill cannot make progress and burns the entire turn budget.
+          #     IndieHackers/Hacker News/X manual-posting prompts; see the
+          #     create_dedup_issue calls in that script). These issues are
+          #     post-by-hand reminders, not code defects -- the fix-issue skill
+          #     cannot make progress and burns the entire turn budget.
           #     Belt-and-braces with the prompt's --exclude-label content-publisher
           #     below: the label survives if the triage agent strips type/bug but
           #     the title-regex survives if a user strips content-publisher.
