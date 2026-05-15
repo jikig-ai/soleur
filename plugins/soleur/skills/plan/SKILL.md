@@ -224,6 +224,10 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
 **Why this matters:** In the 2026-04-17 window, PR #2486 closed three scope-outs (#2467 + #2468 + #2469) because the planner noticed the overlap. PRs #2463 and #2477 grew the backlog instead because no overlap check ran. This phase makes the #2486 pattern the default, not the exception. See `knowledge-base/project/learnings/best-practices/2026-04-17-review-backlog-net-positive-filing.md`.
 
+### 1.8. Skill Description Budget Check (Conditional)
+
+If the feature description, research findings (1.1), or repo grep (Phase 1.7 consolidation) surfaces a candidate `description:` edit to any `plugins/soleur/skills/*/SKILL.md`, run the budget one-liner now (Node form, see [`knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`](../../../knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md) line 33). Record baseline headroom in Research Insights. Re-run in Step 2 once `## Files to Edit` is finalized to confirm the budget impact of the actual edits. If headroom < 10 words at either check, include exact sibling-trim text (before/after) in `## Files to Edit` before proceeding. Cap: 1800 cumulative words, enforced by `plugins/soleur/test/components.test.ts`. Skip silently if no SKILL.md `description:` edit is candidate or finalized.
+
 ### 2. Issue Planning & Structure
 
 <thinking>
