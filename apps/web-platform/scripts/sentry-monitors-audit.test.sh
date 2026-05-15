@@ -12,6 +12,14 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$SCRIPT_DIR/sentry-monitors-audit.sh"
 
+# Inherited by every `bash "$SCRIPT"` invocation below. The script's
+# residency mismatch detector (added in #3863, refs #3861) compares the
+# DSN cluster substring against the probed API host region; tests use
+# SENTRY_API_HOST=de.sentry.io so the DSN must match that cluster or the
+# detector trips exit 2 before any fixture is read. T1's env -i strips
+# this (correctly — that test exercises the missing-token branch).
+export NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456'
+
 if [[ ! -x "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT not found or not executable" >&2
   exit 1
@@ -449,6 +457,67 @@ else
   sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
 fi
 rm -rf "$TMP12"
+
+# ------------------------------------------------------------------------
+# T13 — Residency mismatch detector (refs #3861): when the probed API host
+# region disagrees with the DSN cluster substring, the script MUST refuse
+# to emit an audit artifact (exit 2, stderr error). Guards the §5(2)
+# accountability surface against the A1↔A2 half-state hole.
+# ------------------------------------------------------------------------
+echo "T13: residency mismatch detector — DE DSN + US host refuses to emit"
+TMP13=$(mktemp -d)
+printf '[]' > "$TMP13/monitors.json"
+printf '[]' > "$TMP13/rules.json"
+set +e
+out=$(SENTRY_AUTH_TOKEN=fake \
+      SENTRY_ORG=jikigai \
+      SENTRY_API_HOST=sentry.io \
+      NEXT_PUBLIC_SENTRY_DSN='https://abc@o123.ingest.de.sentry.io/456' \
+      SENTRY_FIXTURE_MONITORS="$TMP13/monitors.json" \
+      SENTRY_FIXTURE_RULES="$TMP13/rules.json" \
+      AUDIT_OUT_DIR="$TMP13" \
+      bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+n_reports=$(ls "$TMP13"/sentry-migration-audit-*.md 2>/dev/null | wc -l)
+if [[ "$rc" == "2" ]] \
+   && printf '%s' "$out" | grep -qE 'residency mismatch — probed=sentry\.io DSN cluster=de' \
+   && [[ "$n_reports" == "0" ]]; then
+  pass "exit 2, stderr names both sides, no artifact written"
+else
+  fail "rc=$rc n_reports=$n_reports out=$out"
+fi
+rm -rf "$TMP13"
+
+# ------------------------------------------------------------------------
+# T14 — Frontmatter emits both residency signals: the renamed
+# `**Probed host:**` (the actual API call destination) and the new
+# `**DSN cluster:**` (the authoritative ingest cluster substring). Two
+# signals are load-bearing: if one is bypassed (operator override, env
+# misconfig), the other gives an auditor a second read.
+# ------------------------------------------------------------------------
+echo "T14: frontmatter emits Probed host + DSN cluster"
+TMP14=$(mktemp -d)
+printf '[]' > "$TMP14/monitors.json"
+printf '[]' > "$TMP14/rules.json"
+SENTRY_AUTH_TOKEN=fake \
+  SENTRY_ORG=jikigai \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP14/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP14/rules.json" \
+  AUDIT_OUT_DIR="$TMP14" \
+  bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP14"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if [[ -f "$report" ]] \
+   && grep -qE '^- \*\*Probed host:\*\* de\.sentry\.io$' "$report" \
+   && grep -qE '^- \*\*DSN cluster:\*\* de$' "$report" \
+   && ! grep -qE '^- \*\*API host:\*\*' "$report"; then
+  pass "Probed host + DSN cluster present; legacy API host line removed"
+else
+  fail "frontmatter shape regression"
+  head -8 "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP14"
 
 # ------------------------------------------------------------------------
 echo
