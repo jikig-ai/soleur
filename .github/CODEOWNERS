@@ -74,3 +74,19 @@
 /scripts/audit-bot-codeql-coverage.sh                   @jeanderuelle
 /scripts/fixtures/audit-bot-codeql-coverage/            @jeanderuelle
 /tests/scripts/test-audit-bot-codeql-coverage.sh        @jeanderuelle
+
+# P1-G — Sentry IaC root + scheduled-workflow surface (PR #3811
+# post-merge review). Without these rows, a leaked PAT with
+# `contents:write` could land a `.tf` change AND merge it without
+# code-owner review; combined with the `apply-sentry-infra.yml`
+# auto-apply on push-to-main, that's a silent Sentry-org write
+# primitive. Paired runtime defense: the `sentry-infra-apply`
+# GitHub Environment requires manual reviewer approval before any
+# apply job step runs (configured via Settings → Environments).
+#
+# Scope "Medium": all per-app infra (Sentry root + future siblings)
+# and an umbrella over all GitHub Actions workflows so future
+# scheduled-* or check-in additions inherit gating by default.
+/apps/web-platform/infra/                               @jeanderuelle
+/.github/workflows/                                     @jeanderuelle
+/.github/workflows/apply-sentry-infra.yml               @jeanderuelle
