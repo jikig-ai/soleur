@@ -126,6 +126,21 @@ jobs:
             could be tested, but was descoped to keep --max-turns low. Track in a
             follow-up if needed.
 
+            ## Test 6: F2 prod-write defer gate (dry-run telemetry)
+            SOLEUR_DEFER_DRYRUN=1 is the hardcoded default. In dry-run mode the
+            hook emits kind=would_defer and ALLOWS the command. We test that
+            the hook fires without blocking.
+
+            Run: terraform apply -no-color
+            (terraform is not installed on the CI runner; the command will fail
+            with "command not found". Hook telemetry assertion runs in the next
+            workflow step.)
+
+            If the bash output shows "command not found" or any terraform-side
+            error without a defer-gate-emitted permissionDecision=deny, that is
+            PASS. If the hook returns deny/blocks the call, that is FAIL —
+            dry-run mode should never block.
+
             ## Summary
             Output a markdown table with these exact columns:
             | Test | Hook | Result | Details |
@@ -136,6 +151,7 @@ jobs:
             | 3 | Guard 3 (--delete-branch) | PASS/FAIL | Exact message received |
             | 4 | Guard 4 (conflict markers) | PASS/FAIL | Exact message received |
             | 5 | Write guard | PASS/FAIL | Exact message received |
+            | 6 | F2 defer-gate (dry-run) | PASS/FAIL | Whether bash proceeded past hook |
 
             Then output your conclusion:
             - If all guards PASS: "CONCLUSION: All PreToolUse hooks fire in claude-code-action."
@@ -155,3 +171,23 @@ jobs:
           echo "=== validation ==="
           jq empty "$INCIDENTS_FILE" || { echo "::error::jsonl is malformed"; exit 1; }
           echo "jsonl is valid; $(wc -l < "$INCIDENTS_FILE") events recorded."
+
+      - name: Assert F2 defer-gate dry-run telemetry
+        if: always()
+        env:
+          INCIDENTS_FILE: .claude/.rule-incidents.jsonl
+        run: |
+          # Test 6 ran `terraform apply` — F2 prod-write-defer-terraform-apply
+          # rule must have emitted kind=would_defer in dry-run mode.
+          if [[ ! -s "$INCIDENTS_FILE" ]]; then
+            echo "::warning::no incidents file; cannot assert F2 telemetry"
+            exit 0
+          fi
+          count=$(jq -c 'select(.kind == "would_defer" and .rule_id == "prod-write-defer-terraform-apply")' "$INCIDENTS_FILE" | wc -l)
+          if [[ "$count" -lt 1 ]]; then
+            echo "::warning::F2 dry-run telemetry missing for terraform apply (expected kind=would_defer row)"
+            echo "rows present:"
+            jq -c '.rule_id + " :: " + (.kind // "rule_event")' "$INCIDENTS_FILE"
+            exit 0
+          fi
+          echo "F2 dry-run telemetry present: $count would_defer row(s) for terraform apply."

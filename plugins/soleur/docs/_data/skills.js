@@ -8,7 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Category mapping -- update here when skills are added/reorganized
 // Source of truth: plugins/soleur/docs/pages/skills.njk (renders at /skills/)
-// Last verified: 2026-05-12 (4 categories, 71 skills)
+// Last verified: 2026-05-15 (4 categories, 73 skills)
 const SKILL_CATEGORIES = {
   // Content & Release (17)
   "brainstorm-techniques": "Review & Planning",
@@ -33,11 +33,12 @@ const SKILL_CATEGORIES = {
   "social-distribute": "Content & Release",
   triage: "Content & Release",
 
-  // Development (11)
+  // Development (12)
   "agent-native-architecture": "Development",
   "agent-native-audit": "Development",
   "andrew-kane-gem-writer": "Development",
   "atdd-developer": "Development",
+  "code-to-prd": "Development",
   "dhh-rails-style": "Development",
   "docs-site": "Development",
   "dspy-ruby": "Development",
