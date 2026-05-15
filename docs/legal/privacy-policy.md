@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** May 12, 2026 (added `usage` jsonb token-consumption and cost metadata to Section 4.7 Conversation data bullet, added Section 4.7 SIGKILL persistence-limitation sentence, added Section 8.1 cross-reference to Section 4.7 persistence limitation for conversation-history exports)
+**Last Updated:** May 15, 2026 (extended Section 5.10 Sentry with explicit monitor-class enumeration and "Sentry log ingestion NOT enabled" carve-out following the 2026 Sentry Monitors/Alerts split; previous: May 12, 2026 added `usage` jsonb token-consumption and cost metadata to Section 4.7 Conversation data bullet)
 
 ## 1. Introduction
 
@@ -236,6 +236,7 @@ We use **Sentry** ([sentry.io](https://sentry.io)) for Web Platform error monito
 - **Retention:** Sentry events retained for 90 days (rolling). Operational logs on the Web Platform infrastructure (pino stdout) are retained in a fixed-capacity Hetzner-local rolling buffer with no off-host copies (see DPD §2.3(m)).
 - **Legal basis:** Dual basis. **Legitimate interest** (Article 6(1)(f) GDPR) for service reliability, security, and abuse prevention, balanced against the pseudonymisation safeguard; together with **legal obligation** (Article 6(1)(c) GDPR) for compliance with the Article 33 breach-notification timeline.
 - **Right to erasure (Article 17):** Hashed identifiers age out per the rolling retention windows; the controller cannot perform processor-side targeted erasure of a pseudonym whose subject cannot be re-identified, consistent with Recital 26.
+- **Sentry monitor classes processed:** issue alerts and cron monitor check-ins (vendor-hosted heartbeat for scheduled GitHub Actions jobs). Both carry no application log content -- only structural metadata (job slug, status, timestamp, pseudonymous identifier where applicable). **Sentry log ingestion (Logs product) is NOT enabled and no application log content is forwarded to Sentry.** A future change introducing a Sentry log channel requires re-disclosure here and an extension of the scrub boundary at `apps/web-platform/server/sentry-scrub.ts`.
 
 ## 6. Legal Basis for Processing (GDPR -- EU Users)
 
