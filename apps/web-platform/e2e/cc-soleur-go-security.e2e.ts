@@ -339,7 +339,12 @@ test.describe("cc-soleur-go security: FR3.4 rate-limit canary", () => {
     // client-side ("You've been rate limited...") and the server's raw
     // message text is sanitized at ws-handler.ts:1011 vs literal at :1042,
     // so an assertion on the raw text would over-couple to one prod path.
-    await expect(page.getByText("Rate Limited")).toBeVisible();
+    //
+    // Role-scoped to the `<h3>` to avoid Playwright strict-mode violations:
+    // ws-client.ts:686-693 ALSO dispatches `add_message` with `Error: ${msg.message}`
+    // so the body of the assistant-error-bubble contains the substring "Rate limited"
+    // and a plain getByText("Rate Limited") matches 3 elements.
+    await expect(page.getByRole("heading", { name: "Rate Limited" })).toBeVisible();
 
     assertNoPageErrors(injector);
   });
