@@ -15,7 +15,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-never-label-any-step-as-manual-without] → core
 - [id: hr-when-triaging-a-batch-of-issues-never] → core
 - [id: hr-all-infrastructure-provisioning-servers] → core
-- [id: hr-autonomous-loop-skill-api-budget-disclosure] → docs-only
+- [id: hr-autonomous-loop-skill-api-budget-disclosure] → core
 - [id: hr-every-new-terraform-root-must-include-an] → core
 - [id: hr-new-skills-agents-or-user-facing] → core
 - [id: hr-before-shipping-ship-phase-5-5-runs] → core
