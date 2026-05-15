@@ -228,7 +228,7 @@ SENTRY_AUTH_TOKEN=<paste-from-sentry-ui> \
   SENTRY_ORG=jikigai \
   bash apps/web-platform/scripts/sentry-monitors-audit.sh
 ```
-The report writes to `knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md` (path resolved per OQ1: commit-back-to-repo for Article 30 evidence). The script MUST emit rule IDs in machine-readable form (JSON array at end of report, prefixed `<!-- ids: [...] -->`) so Phase 5 import can consume them without dashboard scraping.
+The report writes to `knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md` for operator runs (Phase 2.1 default — `AUDIT_OUT_DIR` unset, script defaults to the tracked dir). CI release runs override `AUDIT_OUT_DIR` to `$RUNNER_TEMP/sentry-audit/` and upload the report as a release asset (Phase 2.2). Both paths produce Article 30 §5(2) evidence — see OQ1 for the dual-path rationale. The script MUST emit rule IDs in machine-readable form (JSON array at end of report, prefixed `<!-- ids: [...] -->`) so Phase 5 import can consume them without dashboard scraping.
 
 2.1.5. **Orphan reconciliation runbook (if Phase 2.1 returns non-zero orphans).** The audit script may surface three kinds of orphan:
 
@@ -568,7 +568,13 @@ None named by brainstorm leaders. Spec-flow-analyzer to run as Phase 3 of plan s
 
 ## Open Questions
 
-- **OQ1. RESOLVED.** Audit-artifact home: **commit-back to `knowledge-base/legal/audits/sentry-migration-audit-<YYYY-MM-DD>.md`** per release cadence. Produces an immutable Article 30 evidence trail co-located with the rest of the legal-audits corpus.
+- **OQ1. RESOLVED (dual-path; post-merge correction).** Audit-artifact home depends on caller, not a single location:
+  - **Operator runs** (Phase 2.1 pre-import baseline, ad-hoc local re-runs) default `AUDIT_OUT_DIR` unset → write to `knowledge-base/legal/audits/sentry-migration-audit-<YYYY-MM-DD>.md` (tracked in git history). Produces the canonical pre-import snapshot.
+  - **CI release runs** (Phase 2.2 — `reusable-release.yml` after each `gh release create`) override `AUDIT_OUT_DIR=${RUNNER_TEMP}/sentry-audit/` → write to ephemeral runner storage and upload the report as a GitHub release asset keyed by the release tag. Produces the per-release durable evidence record.
+
+  Both paths satisfy Article 30 §5(2) accountability: operator runs land an immutable git-history snapshot; release-asset runs land a durable per-release artifact (GitHub release assets are non-expiring and tag-keyed). **Why dual-path vs. commit-back-from-CI:** committing from every release would generate a noisy commit-per-release, require a bot identity with branch-protection bypass, and open a write-to-main authorization surface that the `sentry-infra-apply` Environment gate (PR #3843) was designed to close on the apply side — symmetric posture matters.
+
+  *(Originally OQ1 resolved single-path commit-back; post-merge 8-agent review of #3811 surfaced the inconsistency between the plan's single-path claim and the workflow's actual `RUNNER_TEMP` override at `reusable-release.yml:313`. This entry corrects the docs to match shipped reality — see PR #3811 review P1-H.)*
 - **OQ2.** ADR-031 lists ADR-006 (initial Cloudflare infra) and ADR-030 (multi-tenant deploy substrate) as `related`? Confirm during ADR drafting.
 - **OQ3.** Provider beta — pin to v0.15.0-beta2 exactly. The version-renovate workflow will surface upgrades; promote to GA pin when v0.15.0 ships.
 - **OQ4. (DHH dissent — kept for re-evaluation).** DHH plan review recommended cutting scope significantly: drop Phase 5 (Terraform onramp + ADR) and Phase 7 entirely, cut Phase 4 from 9 workflows to 3, inline the audit script (drop `.test.sh`). Argument: replacing a working 176-line script for 4 unchanging rules with a beta-pinned provider + new TF root + `ignore_changes` workaround + ADR is ceremony; wait for a second Sentry change. **Decision: rejected for this PR** — user picked Approach C (full scope) at brainstorm time, multi-tenant DPA issue (#3815) assumes the IaC foundation, and the 9-workflow scope closes #3236 which is independently brand-survival material. **Re-evaluate trigger:** if Phase 0.1.5 DE region smoke test fails OR if `terraform plan` shows non-trivial drift after import on >1 of 4 rules, fall back to DHH's reframe (escape hatch in ADR-031).
