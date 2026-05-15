@@ -33,11 +33,12 @@ const SKILL_CATEGORIES = {
   "social-distribute": "Content & Release",
   triage: "Content & Release",
 
-  // Development (11)
+  // Development (12)
   "agent-native-architecture": "Development",
   "agent-native-audit": "Development",
   "andrew-kane-gem-writer": "Development",
   "atdd-developer": "Development",
+  "code-to-prd": "Development",
   "dhh-rails-style": "Development",
   "docs-site": "Development",
   "dspy-ruby": "Development",

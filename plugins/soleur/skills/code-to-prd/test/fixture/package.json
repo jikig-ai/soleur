@@ -1,0 +1,11 @@
+{
+  "name": "code-to-prd-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Synthetic Next.js skeleton used by plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh. Do not deploy.",
+  "dependencies": {
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  }
+}
