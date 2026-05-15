@@ -117,11 +117,13 @@ jobs:
         run: terraform init -input=false
 
       - name: Terraform plan (cron monitors only)
+        id: plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           terraform plan \
             -target=sentry_cron_monitor.scheduled_terraform_drift \
             -target=sentry_cron_monitor.scheduled_oauth_probe \
@@ -131,7 +133,20 @@ jobs:
             -target=sentry_cron_monitor.scheduled_skill_freshness \
             -target=sentry_cron_monitor.scheduled_content_vendor_drift \
             -target=sentry_cron_monitor.scheduled_community_monitor \
-            -no-color -input=false
+            -no-color -input=false -out=tfplan
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan failed (exit $rc)"
+            exit $rc
+          fi
+          terraform show -no-color tfplan > tfplan.txt
+          destroy_count=$(grep -cE '^Plan: .* to destroy' tfplan.txt || true)
+          if [[ "$destroy_count" -gt 0 ]] && [[ "$HEAD_MSG" != *"[ack-destroy]"* ]]; then
+            echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on cron monitors."
+            echo "::error::Include '[ack-destroy]' in the merge commit message to acknowledge, or revert the trigger commit."
+            grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
+            exit 1
+          fi
 
       - name: Terraform apply (cron monitors only)
         working-directory: ${{ env.INFRA_DIR }}
@@ -139,16 +154,7 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           set -euo pipefail
-          terraform apply \
-            -target=sentry_cron_monitor.scheduled_terraform_drift \
-            -target=sentry_cron_monitor.scheduled_oauth_probe \
-            -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
-            -target=sentry_cron_monitor.scheduled_daily_triage \
-            -target=sentry_cron_monitor.scheduled_realtime_probe \
-            -target=sentry_cron_monitor.scheduled_skill_freshness \
-            -target=sentry_cron_monitor.scheduled_content_vendor_drift \
-            -target=sentry_cron_monitor.scheduled_community_monitor \
-            -auto-approve -input=false
+          terraform apply -auto-approve -input=false tfplan
 
       - name: Post-apply summary
         if: always()
