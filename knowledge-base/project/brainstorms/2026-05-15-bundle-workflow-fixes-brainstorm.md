@@ -1,15 +1,20 @@
 ---
 date: 2026-05-15
-topic: bundle-workflow-fixes-2732-2733-2741
-issues: ["#2732", "#2733", "#2741"]
+topic: bundle-workflow-fixes-2733-2741
+issues: ["#2733", "#2741"]
 branch: feat-bundle-workflow-fixes
 pr: "#3808"
 lane: cross-domain
-brand_survival_threshold: single-user incident
+brand_survival_threshold: none
 status: complete
+updated: 2026-05-15
 ---
 
-# Bundle: Workflow Improvements (#2732, #2733, #2741)
+# Bundle: Workflow Improvements (#2733, #2741)
+
+> **[Updated 2026-05-15 — scope reduction]** Plan-phase Phase 1 verification dissolved #2732's premise. The named hook (`.claude/hooks/security_reminder_hook.py`, not `plugins/soleur/hooks/` as the issue body said) only scans `.github/workflows/*.yml` for GitHub Actions injection sinks — it never scanned markdown for literal Python tokens. PR #2528 narrowed it to that scope on 2026-04-18, three days before #2732 was filed. Whatever blocked the 2026-04-21 audit-session writes was not this hook. #2732 closed as fixed-by-#2528. USER_BRAND_CRITICAL dropped to false. The reduced bundle (#2733 + #2741) has no user-data surface. Original brainstorm body preserved below for the historical record; only Key Decisions table and User-Brand Impact section retain operative authority post-reduction.
+>
+> **Meta-irony:** the dissolved premise on #2732 is exactly the workflow defect that #2733's Phase 1.0.5 (premise validation before research) is designed to catch. Two of the three bundled issues had load-bearing premise errors in their issue bodies, both caught by Phase 1.1 (research) checks — first at brainstorm time (#2741 AGENTS.md byte cap), second at plan time (#2732 hook scope). Strong real-world evidence that #2733's addition pays for itself.
 
 ## What We're Building
 

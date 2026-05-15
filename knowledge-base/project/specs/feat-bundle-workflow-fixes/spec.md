@@ -1,84 +1,104 @@
 ---
 lane: cross-domain
-brand_survival_threshold: single-user incident
-issues: ["#2732", "#2733", "#2741"]
+brand_survival_threshold: none
+issues: ["#2733", "#2741"]
 branch: feat-bundle-workflow-fixes
 pr: "#3808"
 brainstorm: "knowledge-base/project/brainstorms/2026-05-15-bundle-workflow-fixes-brainstorm.md"
 ---
 
-# Spec: Bundle Workflow Fixes (#2732 + #2733 + #2741)
+# Spec: Bundle Workflow Fixes (#2733 + #2741)
 
-**Issues:** [#2732](https://github.com/jikig-ai/soleur/issues/2732), [#2733](https://github.com/jikig-ai/soleur/issues/2733), [#2741](https://github.com/jikig-ai/soleur/issues/2741)
+**Issues:** [#2733](https://github.com/jikig-ai/soleur/issues/2733), [#2741](https://github.com/jikig-ai/soleur/issues/2741)
 **Branch:** feat-bundle-workflow-fixes
 **Date:** 2026-05-15
 **Brainstorm:** [2026-05-15-bundle-workflow-fixes-brainstorm.md](../../brainstorms/2026-05-15-bundle-workflow-fixes-brainstorm.md)
 **Draft PR:** #3808
 
+> **[Updated 2026-05-15 — scope reduction]** Originally scoped to bundle #2732 + #2733 + #2741. Plan-phase Phase 1 verification dissolved #2732's premise (the named hook lives at `.claude/hooks/`, not `plugins/soleur/hooks/`, AND only scans `.github/workflows/*.yml` for injection sinks — it never scanned markdown for literal Python tokens; PR #2528 narrowed it on 2026-04-18, three days before #2732 was filed). #2732 closed as fixed-by-#2528. FR1-FR3 + AC1 removed. Bundle reduced to #2733 + #2741.
+
 ## Problem Statement
 
-Three workflow-improvement issues from the 2026-04-21 peer-plugin-audit session remain open. Each is small, well-scoped, and overlaps with the others (#2733 and #2741 both edit `plugins/soleur/skills/brainstorm/SKILL.md`). Shipping them in three separate PRs would burn three CI cycles and three review rounds for ~400 LOC total.
+Two workflow-improvement issues from the 2026-04-21 peer-plugin-audit session remain open. Both edit `plugins/soleur/skills/brainstorm/SKILL.md`, so bundling them avoids two CI cycles and two review rounds for ~80 LOC total.
 
-- **#2732** — `plugins/soleur/hooks/security_reminder_hook.py` blocks legitimate doc authoring when specs / learning files describe scanner patterns (false positive on literal token names).
 - **#2733** — Two workflow patterns observed during the 2026-04-21 brainstorm (premise validation before research; productize checkpoint for recurring work) are unencoded in the brainstorm skill, so future brainstorms re-discover them session-by-session.
 - **#2741** — SKILL.md `description:` fields have a cumulative word-budget cap; the plan and brainstorm skills don't measure headroom before approving edits, so descriptions can be silently truncated.
 
 ## User-Brand Impact
 
-- **Artifact:** `plugins/soleur/hooks/security_reminder_hook.py` literal-token guard.
-- **Vector:** Operator pastes a real credential into a fenced ```` ```text ```` block (mistaking it for a sample); the post-fix hook skips the block; the credential lands on `main`.
-- **Threshold:** `single-user incident` — one leaked credential is one operator's brand-survival event.
-- **Carry-forward to plan:** plan Phase 2.6 must reproduce this `User-Brand Impact` block verbatim. The PR review phase MUST invoke the `user-impact-reviewer` agent.
+- **If this lands broken, the user experiences:** A future brainstorm/plan run uses outdated guardrails until next session-start. Worst case: a SKILL.md description over-cap gets silently truncated by the test harness, weakening agent discoverability for one skill until the next /work pass notices.
+- **If this leaks, the user's data is exposed via:** N/A — neither edit touches credentials, auth, data, payments, or user-owned resources.
+- **Brand-survival threshold:** none — workflow-skill self-improvement, no user-data surface, no agent capability outside the operator's own session.
+
+The brainstorm's original `single-user incident` framing was anchored to the (now-dissolved) #2732 hook docs-allowance vector. With #2732 removed, no vector remains.
 
 ## Goals
 
-- G1 (#2732): Allow doc authors to describe scanner patterns inside fenced ```` ```text ````, ```` ```prose ````, or ```` ```diff ```` blocks without tripping the security-reminder hook.
-- G2 (#2733): Encode the premise-validation pattern as brainstorm Phase 1.0.5 and the productize-checkpoint pattern as brainstorm Phase 2.5.
-- G3 (#2741): Enforce SKILL.md description word-budget headroom at plan time (Phase 1) and brainstorm time (Phase 2 checkpoint), backed by a hard rule in `AGENTS.rest.md`.
-- G4: Ship all three as a single PR with a single review round.
+- G1 (#2733): Encode the premise-validation pattern as brainstorm Phase 1.0.5 and the productize-checkpoint pattern as brainstorm Phase 2.5.
+- G2 (#2741): Enforce SKILL.md description word-budget headroom at plan time (Phase 1) and brainstorm time (Phase 2 checkpoint), backed by a hard rule in `AGENTS.rest.md`.
+- G3: Ship as a single PR with a single review round.
 
 ## Non-Goals
 
 - N1: Backfill of existing SKILL.md descriptions (the new budget rule fires on future PRs only).
-- N2: Broader docs-allowance approaches for the security hook (path whitelist; allow-marker comment). Option 1 is sole accepted approach.
-- N3: Retirement of any existing AGENTS.md rule. #2741's "rule retirement required" premise is dissolved by AGENTS.md sidecar refactor (75 rules across 4 files, 32,470 bytes total — well under any prior cap).
-- N4: Cross-session pattern analysis or scheduled scans against the rule corpus.
+- N2: Retirement of any existing AGENTS.md rule. #2741's "rule retirement required" premise is dissolved by the AGENTS.md sidecar refactor (75 rules across 4 files, 32,470 bytes total — well under any prior cap).
+- N3: Cross-session pattern analysis or scheduled scans against the rule corpus.
+- N4: Re-investigation of what actually blocked the 2026-04-21 audit-session writes (scope-out of #2732 closure; if recurrence happens, file fresh).
+- N5: Adding `cq-*` rules to `AGENTS.core.md` — the new rule must land in `AGENTS.rest.md` (code-class trigger surface). Demoting any other rule is out of scope.
+
+## Research Reconciliation — Spec vs. Codebase
+
+| Claim source | Claim | Reality | Plan response |
+|---|---|---|---|
+| Issue #2741 body | `AGENTS.md` is at 106/100 rules, 36566/40000 bytes — "rule retirement required" | `AGENTS.md` sharded into sidecars: 75 rules across 4 files, 32,470 bytes total. No per-file cap binding. | Drop rule-retirement work entirely; new rule lands in `AGENTS.rest.md` only. |
+| Issue #2741 body | New rule applies to "plugins/soleur/skills/*/SKILL.md" descriptions | Confirmed — `plugins/soleur/test/components.test.ts` enforces the 1800-word cumulative cap. | Adopt path glob verbatim. |
+| Issue #2733 body | Two new phases (1.0.5, 2.5) in brainstorm SKILL.md | Confirmed insertion points: Phase 1.0 at line 195, Phase 1.1 at line 199 (insert 1.0.5 between); Phase 2 at line 262, Phase 3 elsewhere (insert 2.5 between). | Adopt insertion points; cite line numbers in plan but verify at /work time since the file is live. |
+| Source learning (`2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`) | Provides the canonical measurement one-liner | Confirmed at line 33: Node one-liner is preferred over `awk` (avoids edge cases on quoted strings). | Reuse Node one-liner verbatim in both Phase 1 (plan) and Phase 2 (brainstorm) checkpoint text. |
 
 ## Functional Requirements
 
-- FR1 (#2732): `security_reminder_hook.py` skips literal-token detection inside markdown fenced-code blocks whose info-string is `text`, `prose`, or `diff`.
-- FR2 (#2732): The fence-skip is implemented as a token-stream filter (track fence open/close), NOT a regex over the entire file body — to avoid pathological backtracking on long docs.
-- FR3 (#2732 — defense-in-depth): Inside a fence-skipped block, the hook STILL flags any line matching a high-entropy credential pattern (e.g., `sk_(test|live)_[A-Za-z0-9]{20,}`, `xox[bp]-`, `ghp_[A-Za-z0-9]{36}`). The fence allowance is for literal token NAMES, not for credential bodies.
-- FR4 (#2733): `plugins/soleur/skills/brainstorm/SKILL.md` gains a `### Phase 1.0.5 — Premise Validation` subsection between current Phase 1.0 and Phase 1.1, with text matching #2733's issue body.
-- FR5 (#2733): Same file gains a `### Phase 2.5 — Productize Checkpoint` subsection between current Phase 2 and Phase 3, with text matching #2733's issue body.
-- FR6 (#2741): `plugins/soleur/skills/plan/SKILL.md` Phase 1 gains a step measuring cumulative SKILL.md `description:` word headroom (cap: 1800) when the plan edits any `description:` in `plugins/soleur/skills/*/SKILL.md`; if headroom < 10 words, the plan must prescribe exact sibling-description trims with before/after text.
-- FR7 (#2741): `plugins/soleur/skills/brainstorm/SKILL.md` Phase 2 gains a budget-measurement checkpoint when the brainstorm proposes adding or restructuring skills.
-- FR8 (#2741): `AGENTS.rest.md` gains `[id: cq-skill-description-budget-headroom]` with body: "When a PR edits any `description:` in `plugins/soleur/skills/*/SKILL.md`, the plan MUST measure current cumulative word headroom (cap: 1800). If headroom < 10 words, the plan MUST prescribe exact sibling-description trims with before/after text."
-- FR9 (#2741): `AGENTS.md` index gains `- [id: cq-skill-description-budget-headroom] → rest` under `## Code Quality`.
+- FR1 (#2733): `plugins/soleur/skills/brainstorm/SKILL.md` gains a `#### 1.0.5 Premise Validation` subsection between current `#### 1.0 External Platform Verification` and `#### 1.1 Research (Context Gathering)`. Body text encodes: "Before launching research agents, grep existing truth sources (CI report, roadmap, prior brainstorms) for named external entities or claims in the feature description. If the framing contradicts what the ground truth documents say, surface the contradiction and re-scope with the user before continuing. A framing defect caught here is worth more than a full research sprint built on it." (Match #2733 issue body verbatim.)
+- FR2 (#2733): Same file gains a `### Phase 2.5: Productize Checkpoint` subsection between current `### Phase 2: Explore Approaches` and `### Phase 3: Create Worktree (if knowledge-base/ exists)`. Body text encodes: "When proposing an action plan, ask: is the inciting work pattern likely to recur (scheduled workflow output, weekly review cadence, batch-triggered task, recurring competitive-intel finding)? If yes, propose a skill or sub-mode of an existing skill that captures the workflow. A recurring-work plan that produces issues but no reusable artifact has done half the work." (Match #2733 issue body verbatim.)
+- FR3 (#2741): `plugins/soleur/skills/plan/SKILL.md` Phase 1 (Local Research) gains a new sub-step `### 1.8. Skill Description Budget Check (Conditional)` after `### 1.7.5. Code-Review Overlap Check`. Body: "If the plan edits any `description:` in `plugins/soleur/skills/*/SKILL.md`, run the budget one-liner (Node form below), record baseline headroom in Research Insights, and if headroom < 10 words, include exact sibling-trim text in the plan's Files-to-Edit before proceeding to Step 2." Include the Node one-liner verbatim from the source learning.
+- FR4 (#2741): `plugins/soleur/skills/brainstorm/SKILL.md` Phase 2 (Explore Approaches) gains a Phase 2 checkpoint paragraph (NOT a new sub-section — inline addition): "If the brainstorm proposes adding or restructuring skills, run the SKILL.md description word-budget measurement one-liner before authoring approach proposals. Surface headroom as a first-class constraint if < 10 words remain (cap: 1800 cumulative words)."
+- FR5 (#2741): `AGENTS.rest.md` gains `[id: cq-skill-description-budget-headroom]` rule body under the existing `## Code Quality` heading, immediately before `[id: cq-regex-unicode-separators-escape-only]` (preserves the longest-tail ordering convention). Body: "When a PR edits any `description:` in `plugins/soleur/skills/*/SKILL.md`, the plan MUST measure current cumulative word headroom (cap: 1800). If headroom < 10 words, the plan MUST prescribe exact sibling-description trims with before/after text. **Why:** #2741 — see `knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`."
+- FR6 (#2741): `AGENTS.md` index gains `- [id: cq-skill-description-budget-headroom] → rest` under `## Code Quality` (line 62 region), preserving alphabetical / topical ordering inside the cluster.
 
 ## Technical Requirements
 
 - TR1: All edits land in `feat-bundle-workflow-fixes` worktree (already created, draft PR #3808 already open).
-- TR2: Test coverage for FR1-FR3 is in `plugins/soleur/hooks/tests/` (or wherever `security_reminder_hook.py` tests live — discover in plan phase). Three required cases: (a) `text` fence skips literal token names; (b) `python` fence still detects literal token names; (c) `text` fence containing a `sk_test_*` literal still trips FR3's high-entropy check.
-- TR3: FR6-FR7 use a one-line `awk` or `wc -w` measurement script. Reuse the exact one-liner from the source learning at `knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`.
-- TR4: PR description must use `Closes #2732, Closes #2733, Closes #2741` in the body (NOT the title) per `wg-use-closes-n-in-pr-body-not-title-to`.
+- TR2: Reuse the Node measurement one-liner from `knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md` line 33 verbatim. Do NOT invent a new awk form (the source learning specifically chose Node because awk has edge-case bugs on quoted values).
+- TR3: New AGENTS.rest.md rule body MUST end with `**Why:** #2741 — see <learning path>.` per `cq-agents-md-why-single-line` convention.
+- TR4: The new rule's `[id: ...]` slug `cq-skill-description-budget-headroom` is **immutable** per `cq-rule-ids-are-immutable` once committed. Verify slug presence in `AGENTS.md` index AND `AGENTS.rest.md` body in same commit; `scripts/lint-rule-ids.py` will reject a missing-side state.
+- TR5: PR description must use `Closes #2733, Closes #2741` in the body (NOT the title) per `wg-use-closes-n-in-pr-body-not-title-to`. #2732 already closed; do NOT include `Closes #2732`.
+- TR6: After edits to `plugins/soleur/skills/{brainstorm,plan}/SKILL.md`, FR3's budget one-liner MUST run against the **modified** files to verify the bundle does not itself violate the cap it introduces. This is the "eat your own dogfood" check. Run inline in /work, record output, paste into PR body.
+- TR7: After AGENTS.md edit, `scripts/lint-agents-rule-budget.py` MUST exit 0 against the bundle. The script is the authoritative commit-gate (warns at B_ALWAYS ≥ 20000, rejects at > 22000, rejects any rule body > 600 B). The bundle adds to `AGENTS.rest.md` not core, so B_ALWAYS does not increase, but the new rule body must stay ≤ 600 B.
 
 ## Implementation Order
 
-1. `security_reminder_hook.py` + tests (#2732) — isolated change, no cross-coupling.
-2. `plugins/soleur/skills/brainstorm/SKILL.md` — apply #2733 first (structural phase inserts), then #2741's Phase 2 checkpoint (inline addition anchored to the now-stable Phase 2).
-3. `plugins/soleur/skills/plan/SKILL.md` — #2741 Phase 1 step.
-4. `AGENTS.rest.md` + `AGENTS.md` index — #2741 rule landing.
+1. **`plugins/soleur/skills/brainstorm/SKILL.md`** — apply FR1 (Phase 1.0.5 insert), FR2 (Phase 2.5 insert), FR4 (Phase 2 inline checkpoint). Three edits to one file; do FR1 + FR2 (structural inserts) first, then FR4 (inline checkpoint anchored to Phase 2 which is now untouched-by-FR2-since-2.5-comes-after).
+2. **`plugins/soleur/skills/plan/SKILL.md`** — apply FR3 (new `### 1.8` sub-step inserted after `### 1.7.5`).
+3. **`AGENTS.rest.md`** — apply FR5 (new rule body under `## Code Quality`).
+4. **`AGENTS.md`** (index) — apply FR6 (pointer line under `## Code Quality`). Must land in same commit as FR5 to keep `cq-rule-ids-are-immutable` happy.
+5. **Dogfood verification** — run TR6 one-liner against the modified `brainstorm/SKILL.md` and `plan/SKILL.md`; run TR7 `lint-agents-rule-budget.py` against the bundle. Paste both outputs into PR body.
 
-## Domain Review (carry-forward)
+## Domain Review (carry-forward + reduction)
 
-Phase 0.5 leader triad skipped per brainstorm Key Decision #6 (USER_BRAND_CRITICAL=true was tagged on hook docs-allowance vector, but Option 1 was already decided and triad would be ceremonial). `user-impact-reviewer` agent at PR review time is the load-bearing gate.
+Phase 0.5 leader triad skipped per brainstorm Key Decision #6. With the scope reduction (USER_BRAND_CRITICAL → false), the original sole basis for spawning CPO/CLO/CTO is also gone. **Domain assessment: Engineering only — internal tooling, no cross-domain implications.**
+
+`user-impact-reviewer` agent at PR review time is NOT required for the reduced scope (no user-data surface). Standard `/soleur:review` flow applies.
 
 ## Acceptance Criteria
 
-- AC1: Hook tests for #2732 cover (a) fence-skip works, (b) non-allowed fences still scan, (c) high-entropy literals inside allowed fences still trip.
-- AC2: Brainstorm SKILL.md diff shows Phase 1.0.5 and Phase 2.5 inserted at correct positions with body text matching issue #2733.
-- AC3: Plan SKILL.md Phase 1 contains the budget-measurement step.
-- AC4: Brainstorm SKILL.md Phase 2 contains the budget-measurement checkpoint.
-- AC5: `AGENTS.rest.md` contains the new rule; `AGENTS.md` index contains the pointer.
-- AC6: All three issues close on PR merge via `Closes` in PR body.
+### Pre-merge (PR)
+
+- AC1: `plugins/soleur/skills/brainstorm/SKILL.md` diff shows the three additions per FR1/FR2/FR4 at the correct positions; body text matches #2733 issue body verbatim (FR1, FR2) and FR4 body matches the spec text.
+- AC2: `plugins/soleur/skills/plan/SKILL.md` diff shows the new `### 1.8` sub-section per FR3 with the Node one-liner from the source learning included verbatim.
+- AC3: `AGENTS.rest.md` contains the new rule per FR5; `AGENTS.md` index contains the pointer per FR6; both in the same commit.
+- AC4: `scripts/lint-agents-rule-budget.py` and `scripts/lint-rule-ids.py` both exit 0 against the bundle.
+- AC5: Dogfood check (TR6): the budget one-liner run against the modified `brainstorm/SKILL.md` and `plan/SKILL.md` reports headroom ≥ 0 (cumulative description word count ≤ 1800). Outputs pasted into PR body.
+- AC6: PR body contains `Closes #2733` and `Closes #2741`. PR title does NOT.
+
+### Post-merge (operator)
+
+- AC7: None — the bundle has no operator-driven post-merge steps. Auto-merge handles the standard release/deploy workflows per `wg-after-marking-a-pr-ready-run-gh-pr-merge`.
