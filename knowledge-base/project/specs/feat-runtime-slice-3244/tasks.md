@@ -17,20 +17,28 @@ plan). Per-file commits within Phase 2; single commit per other phase.
 
 ## Phase 0 — Preconditions (single commit)
 
-- [ ] 0.1 Re-run per-file site enumeration at /work-time HEAD; compare
+- [x] 0.1 Re-run per-file site enumeration at /work-time HEAD; compare
       against plan §0.3 table. Halt + plan-delta if drift ≥ 5 lines or
-      count mismatch.
-- [ ] 0.2 Verify infrastructure shapes at the installed version
+      count mismatch. **Verified 2026-05-15 at HEAD b5f09d35: all 11
+      files match plan line numbers exactly (0 drift).**
+- [x] 0.2 Verify infrastructure shapes at the installed version
       (`getFreshTenantClient` at `tenant.ts:236`, `mintFounderJwt` at
       `tenant.ts:124`, `runWithByokLease` at `byok-lease.ts:213`,
       `lease.getApiKey(): string | Promise<string>` at `byok-lease.ts:104`).
-- [ ] 0.3 Confirm plan §0.3 classification table by walking each row
+      **Adaptation:** plan §0.4 sample code uses `const { client } = await
+      getFreshTenantClient(userId)` but the actual signature returns
+      `Promise<SupabaseClient>` directly (no `{client, jwt}` destructure).
+      Canonical pattern in `agent-runner.ts:188,280,419,548,883,2275` is
+      `const tenant = await getFreshTenantClient(userId)`. PR-C uses the
+      codebase-correct shape.
+- [x] 0.3 Confirm plan §0.3 classification table by walking each row
       against the file at HEAD. Pay special attention to the 3 PERMANENT
       auth/attachments sites: `ws-handler.ts:1812`, `api-messages.ts:36`,
-      `cc-dispatcher.ts:1395`.
-- [ ] 0.4 Confirm migration cite: `027_mtd_cost_aggregate.sql:68`
+      `cc-dispatcher.ts:1395`. **All 3 confirmed.**
+- [x] 0.4 Confirm migration cite: `027_mtd_cost_aggregate.sql:68`
       (`REVOKE EXECUTE … FROM authenticated`) and
       `029_plan_tier_and_concurrency_slots.sql:91-92` (`slots_owner_read`).
+      **Both confirmed.**
 
 ## Phase 2 — Per-file migration (one commit per file; smallest first)
 

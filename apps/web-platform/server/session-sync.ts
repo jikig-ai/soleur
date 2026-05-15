@@ -9,8 +9,11 @@
 import { execFileSync } from "child_process";
 import { readdirSync } from "fs";
 import { join } from "path";
-import { createServiceClient } from "@/lib/supabase/service";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
+import { reportSilentFallback } from "@/server/observability";
 import { gitWithInstallationAuth } from "./git-auth";
 import { createChildLogger } from "./logger";
 
@@ -126,17 +129,56 @@ export function getAllowlistedChanges(workspacePath: string): string[] {
   return paths;
 }
 
-let _supabase: SupabaseClient | null = null;
+// PR-C §2.1 (#3244): all four `.from("users")` sites in this file migrate
+// from service-role to tenant-scoped (RLS `auth.uid() = id` on `users`).
+// Module-level lazy service-role cache is gone — `getFreshTenantClient`
+// has its own per-userId TTL cache, so per-call mint cost is bounded
+// regardless of fan-out. Offline-dev (no SUPABASE_SERVICE_ROLE_KEY) now
+// surfaces as a `RuntimeAuthError` thrown from `getFreshTenantClient`,
+// caught by the outer `syncPull`/`syncPush` try/catch (this file's
+// best-effort contract — failures never block the agent session).
 
-function getSupabase(): SupabaseClient | null {
-  if (_supabase) return _supabase;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!key) {
-    log.warn("Supabase env vars not set — session sync disabled");
-    return null;
+/**
+ * Per-handler RLS-baseline probe. Plan §0.4 form throws
+ * `RuntimeAuthError` on probe failure; `session-sync`'s best-effort
+ * contract (file header: "failures are logged but never throw") means
+ * we mirror to Sentry and return `false` instead, letting the entry
+ * function early-return cleanly. Same probe semantics, different
+ * failure mode for this file. See learning
+ * `2026-04-12-silent-rls-failures-in-team-names` for why this is
+ * load-bearing distinct from the implicit `getFreshTenantClient` mint:
+ * a cached JWT inside the TTL window does not re-run `precheck_jwt_mint`,
+ * so a mid-session jti revocation or RLS policy churn would otherwise
+ * silently return zero rows on the first real read.
+ */
+async function authProbe(userId: string, op: string): Promise<boolean> {
+  try {
+    const tenant = await getFreshTenantClient(userId);
+    const { error: probeErr } = await tenant
+      .from("users")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle();
+    if (probeErr) {
+      reportSilentFallback(probeErr, {
+        feature: "session-sync",
+        op: `auth-probe.${op}`,
+        extra: { userId },
+      });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      reportSilentFallback(err, {
+        feature: "session-sync",
+        op: `auth-probe.${op}`,
+        extra: { userId },
+      });
+      return false;
+    }
+    throw err;
   }
-  _supabase = createServiceClient();
-  return _supabase;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,10 +222,9 @@ function hasLocalCommits(workspacePath: string): boolean {
 }
 
 async function getInstallationId(userId: string): Promise<number | null> {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-
-  const { data, error } = await supabase
+  // PR-C §2.1 (#3244): tenant-scoped; RLS `auth.uid() = id` on `users`.
+  const tenant = await getFreshTenantClient(userId);
+  const { data, error } = await tenant
     .from("users")
     .select("github_installation_id")
     .eq("id", userId)
@@ -226,13 +267,12 @@ async function recordKbSyncHistory(
   userId: string,
   workspacePath: string,
 ): Promise<void> {
-  const supabase = getSupabase();
-  if (!supabase) return;
-
+  // PR-C §2.1 (#3244): tenant-scoped SELECT + UPDATE on `users`.
+  const tenant = await getFreshTenantClient(userId);
   const kbPath = join(workspacePath, "knowledge-base");
   const fileCount = countMdFiles(kbPath);
 
-  const { data: user, error: fetchError } = await supabase
+  const { data: user, error: fetchError } = await tenant
     .from("users")
     .select("kb_sync_history")
     .eq("id", userId)
@@ -250,7 +290,7 @@ async function recordKbSyncHistory(
   const today = new Date().toISOString().slice(0, 10);
   const updated = [...history, { date: today, count: fileCount }].slice(-14);
 
-  const { error: updateError } = await supabase
+  const { error: updateError } = await tenant
     .from("users")
     .update({ kb_sync_history: updated })
     .eq("id", userId);
@@ -263,10 +303,9 @@ async function recordKbSyncHistory(
 }
 
 async function updateLastSynced(userId: string): Promise<void> {
-  const supabase = getSupabase();
-  if (!supabase) return;
-
-  const { error } = await supabase
+  // PR-C §2.1 (#3244): tenant-scoped UPDATE on `users`.
+  const tenant = await getFreshTenantClient(userId);
+  const { error } = await tenant
     .from("users")
     .update({ repo_last_synced_at: new Date().toISOString() })
     .eq("id", userId);
@@ -290,6 +329,13 @@ export async function syncPull(
 ): Promise<void> {
   if (!hasRemote(workspacePath)) {
     return; // Empty workspace, no remote
+  }
+
+  // PR-C §2.1 (#3244): per-entry-function RLS-baseline probe — see
+  // `authProbe` doc-comment for the load-bearing rationale.
+  if (!(await authProbe(userId, "syncPull"))) {
+    log.warn({ userId }, "Sync pull aborted — auth probe failed");
+    return;
   }
 
   try {
@@ -346,6 +392,13 @@ export async function syncPush(
 ): Promise<void> {
   if (!hasRemote(workspacePath)) {
     return; // Empty workspace, no remote
+  }
+
+  // PR-C §2.1 (#3244): per-entry-function RLS-baseline probe — see
+  // `authProbe` doc-comment for the load-bearing rationale.
+  if (!(await authProbe(userId, "syncPush"))) {
+    log.warn({ userId }, "Sync push aborted — auth probe failed");
+    return;
   }
 
   try {
