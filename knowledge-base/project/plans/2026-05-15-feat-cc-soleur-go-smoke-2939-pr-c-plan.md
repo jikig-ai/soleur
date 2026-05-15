@@ -13,10 +13,41 @@ draft_pr: 3779
 predecessors:
   - 3743  # PR-A — bubble e2e foundations + DEV_ORIGINS multi-port fix (merged 2026-05-14)
   - 3778  # PR-B — routing/cost/UX smoke + FR2.4/2.8 client wires (merged 2026-05-15)
-status: plan-draft
+status: plan-deepened
+deepened_on: 2026-05-15
 ---
 
 # PR-C — Security smoke (FR3.1-FR3.4) + one-time visual-QA rubric (FR5)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-15
+**Verification sources:**
+- `apps/web-platform/node_modules/playwright-core/types/types.d.ts:4086-4098 + 15600-15689` — Playwright `routeWebSocket` + `WebSocketRoute` shape (Playwright 1.58.2 installed per `apps/web-platform/package.json:47`).
+- `apps/web-platform/lib/types.ts:199-316` — `WSMessage` discriminated union (source of truth for what the WS injector can send).
+- `apps/web-platform/lib/chat-state-machine.ts:244-258` — `StreamEvent = Extract<WSMessage, …>` (the **reducer-visible subset** of WSMessage; tighter than WSMessage proper).
+- `apps/web-platform/lib/ws-client.ts:655-700` — `error` arm handling (out-of-reducer, sets `lastError` via `setLastError`, not via dispatch).
+- `apps/web-platform/components/chat/chat-surface.tsx:540-580` — ErrorCard render call-site for the canary-attribute edit.
+- `apps/web-platform/server/start-session-rate-limit.ts:25-31` — 10-per-user / 30-per-IP / hourly limiter (confirms spec FR3.4 "11th conversation" cap).
+
+### Key Improvements (corrections applied to draft)
+
+1. **FR3.1 user `chat_message` injection path was wrong.** `chat_message` is NOT a WSMessage type — the closest is `chat` (line 202), which is **client→server**, never server→client, and the reducer does not consume it. User-input rendering happens via the client-internal `add_message` dispatch (`ws-client.ts:213, 302`), not via a WS frame. **Corrected:** FR3.1 now injects an **assistant-bubble path** — `stream_start` → `stream` (assistant content includes the canary as inert text quoted from the attacker's directive) → `stream_end`, then asserts the bubble does NOT trigger renderer-side execution (no chip for the injection's named tool fires). This is the honest assertion — the canary appears in the rendered bubble *as text* (proving the renderer accepts the bytes) but the named-tool chip does NOT render (proving the renderer does not execute inline-text directives). See revised §3.1 below.
+
+2. **FR3.4 `error` injection requires extending `WsControlEvent`.** The reducer-visible `StreamEvent` type at `chat-state-machine.ts:244-258` does NOT include the `error` arm. The `error` arm IS in `WSMessage` (`types.ts:303-316`) but is handled in `ws-client.ts:655-700` out-of-reducer via `setLastError`. The existing `WsControlEvent` channel in `cc-soleur-go-ws-injector.ts:22-36` is explicitly documented as "Widen this union when a future test needs another out-of-reducer frame." **Corrected:** PR-C adds an `error`-shaped arm to `WsControlEvent` and the FR3.4 test routes through `injector.sendControl(...)` not `injector.send(...)`. ~5-LoC injector extension lands in PR-C as a Files-to-Edit item.
+
+3. **FR3.3 dual-context approach is sound.** Playwright 1.58.2's `routeWebSocket` is a `Page`-scoped registration (verified at `types.d.ts:4098`); two `BrowserContext` instances each calling `attachWsInjector(page)` on their own `Page` get fully-isolated route handlers. The plan was correct; deepen-pass confirms the harness property.
+
+4. **`bash_approval` payload shape verified.** `lib/types.ts:77` shows `{ kind: "bash_approval"; payload: { command: string; cwd: string; gated: boolean } }` — matches the plan's prescribed FR3.2 frame.
+
+5. **Phase 0.4 gates strengthened.** Adds explicit gates verifying (a) `error` is in `WSMessage` but NOT in `StreamEvent`, (b) `chat` is client→server only and not reducer-consumed, (c) injector's `WsControlEvent` union is extendable. These three gates would have caught the original prescriptions' mismatch.
+
+### New Considerations Discovered
+
+- **The Playwright type for `WebSocketRoute.send(message)` accepts `string | Buffer`** (`types.d.ts:15709` re-uses this in `onMessage` signature; `send` is the inverse). The injector's existing `routeRef.send(JSON.stringify(frame))` form is correct — no changes needed.
+- **The `interactive_prompt` arm in WSMessage at line 301 is `& InteractivePromptPayload` (intersection with the discriminated payload union).** This means the injector frame for FR3.2 must spread the kind+payload pair, not nest them: `{ type: "interactive_prompt", promptId, conversationId, kind: "bash_approval", payload: { command, cwd, gated: true } }` — which is what the plan already prescribes. Verified.
+- **`stream` event has a `partial: boolean` field** (`types.ts:215-224`). When synthesizing the assistant text in FR3.1, send a single `stream` event with `partial: false` (the "consolidated final text" form) followed by `stream_end` — that matches the simplest reducer path.
+- **`stream_start` requires `leaderId: DomainLeaderId`** (`types.ts:226`). For cc-soleur-go's primary path, use `"cc_router"` to match PR-A/PR-B precedent.
 
 ## Overview
 
@@ -122,10 +153,15 @@ update plan + re-spawn plan-review.
 
 - [ ] `grep -n "DEFAULT_PER_USER_PER_HOUR\|DEFAULT_PER_IP_PER_HOUR" apps/web-platform/server/start-session-rate-limit.ts` returns `DEFAULT_PER_USER_PER_HOUR = 10` and `DEFAULT_PER_IP_PER_HOUR = 30`. If either changed, update spec FR3.4 phrasing "11th conversation" inline at plan-fix time.
 
-### 0.4 — `StreamEvent` shape unchanged
+### 0.4 — `StreamEvent` shape verified (deepen-pass corrections applied)
 
-- [ ] `grep -n "type StreamEvent\|export type StreamEvent" apps/web-platform/lib/chat-state-machine.ts` shows the export with `interactive_prompt` and `tool_use` and `stream_end` and `chat_message` arms. Test files import `import type { StreamEvent } from "@/lib/chat-state-machine"` per PR-A precedent.
-- [ ] `grep -n 'type: "chat_message"\|case "chat_message"' apps/web-platform/lib/chat-state-machine.ts` returns ≥ 1 hit — confirms the user-side `chat_message` event is reducer-visible so the injection-payload user bubble actually renders.
+- [ ] 0.4.1 `grep -nE "^\s*\|\s*\{ type:" apps/web-platform/lib/chat-state-machine.ts` shows `StreamEvent` includes `stream_start`, `stream`, `stream_end`, `tool_use`, `tool_progress`, `review_gate`, `subagent_spawn`, `subagent_complete`, `workflow_started`, `workflow_ended`, `interactive_prompt`, `context_reset` — confirmed at `chat-state-machine.ts:244-258`. The reducer-visible set is tighter than `WSMessage`.
+- [ ] 0.4.2 **NEGATIVE gate:** `grep -n 'type: "chat_message"\|case "chat_message"' apps/web-platform/lib/types.ts apps/web-platform/lib/chat-state-machine.ts` returns ZERO hits. If non-zero, someone has added a `chat_message` arm since deepen-pass — re-verify FR3.1/FR3.3 injection path. The current reality (verified 2026-05-15): `chat_message` does NOT exist; user-input rendering goes through `add_message` (`ws-client.ts:213, 302`).
+- [ ] 0.4.3 **`error` arm is in WSMessage but NOT in StreamEvent.** `grep -n 'type: "error"' apps/web-platform/lib/types.ts` returns a match at lines ~303-316 with shape `{ type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string; runnerRunaway*?: …; }`. AND `grep -n '"error"' apps/web-platform/lib/chat-state-machine.ts` (in the `StreamEvent` union definition only) returns ZERO hits — i.e., `error` is NOT a reducer arm. Confirms FR3.4 must use `sendControl`, not `send`.
+- [ ] 0.4.4 **`stream` event field shape verified.** `grep -nB1 -A5 'type: "stream"' apps/web-platform/lib/types.ts` shows the required fields: `content: string`, `partial: boolean`, `leaderId: DomainLeaderId`. FR3.1 + FR3.3 inject `stream` with `partial: false` (the "final consolidated text" form per types.ts:217-223).
+- [ ] 0.4.5 **`stream_start` field shape.** `grep -n 'type: "stream_start"' apps/web-platform/lib/types.ts` returns the line where `stream_start` requires `leaderId: DomainLeaderId` + optional `source: "auto" | "mention"`. Tests use `leaderId: "cc_router"` to match PR-A/PR-B precedent.
+- [ ] 0.4.6 **`WSErrorCode` includes `"rate_limited"`.** `grep -n "WSErrorCode\|rate_limited" apps/web-platform/lib/ws-zod-schemas.ts apps/web-platform/lib/types.ts` returns ≥ 1 hit (`ws-zod-schemas.ts:340`). Confirms the FR3.4 frame's `errorCode: "rate_limited"` is type-valid.
+- [ ] 0.4.7 **`WsControlEvent` is extendable.** `grep -nB2 -A10 "export type WsControlEvent" apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns the union with the "Widen this union when a future test needs another out-of-reducer frame" comment. Confirms the FR3.4 prerequisite extension (Phase 3.4.0) is the documented entry-point.
 
 ### 0.5 — Label-existence audit (sharp-edge: plan-prescribed-labels-must-be-verified)
 
@@ -152,6 +188,15 @@ plan-time; no label-creation step required.
   **Why call-site, not ErrorCard prop:** other ErrorCard call-sites (session
   timeout, key-invalid) are not rate-limit-shaped and should not advertise
   the canary attribute. Widening `ErrorCardProps` would over-couple them.
+
+- `apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` — **deepen-pass addition.**
+  Widen `WsControlEvent` (lines 22-36) to include the `error` arm. Required
+  by FR3.4: the `error` frame is out-of-reducer (handled in
+  `ws-client.ts:655-700` via `setLastError`, not via dispatch), so the typed
+  control channel is the right entry point — matches the existing comment
+  "Widen this union when a future test needs another out-of-reducer frame."
+  ~12-LoC addition. No body change in `attachWsInjector` — `sendRaw` already
+  accepts the union.
 
 - `knowledge-base/project/specs/feat-cc-soleur-go-smoke-2939/spec.md` — append
   PR-C reconciliation log entry under the existing `## Acceptance Criteria`
@@ -300,46 +345,73 @@ was run at plan-write time. Cross-referenced against PR-C's file list
   (`cc-soleur-go-bubbles.e2e.ts:271`) — neither registered nor on Tier 3
   denylist. Phase 6 grep guards.
 
-- [ ] 3.1.2 RED → GREEN sequence (single `test()`):
+- [ ] 3.1.2 RED → GREEN sequence (single `test()`) — **REVISED per deepen-pass §Key Improvement 1**:
+
+  The original draft prescribed injecting a user-side `chat_message`. That
+  arm does not exist in `WSMessage` (verified at `types.ts:199-316`) — user
+  input is rendered via the client-internal `add_message` dispatch
+  (`ws-client.ts:213, 302`), NOT via a server-emitted WS frame. The honest
+  test is on the **assistant-bubble renderer's execution-resistance** — i.e.,
+  prove that an assistant `stream` payload containing the attacker's
+  directive text (with the canary quoted inside it) renders as inert text
+  and does NOT cause the renderer to spawn a chip for the named tool.
 
   - `injector` from `bootChat(page, { convId: "conv-stage-6-sec-fr31" })`.
-  - Inject a user-side `chat_message` carrying the injection payload + canary:
+  - Synthesize an assistant bubble that quotes the attacker payload inline.
+    The canary appears inside the assistant text content — proving the
+    renderer accepts the bytes — but the renderer must not auto-execute the
+    embedded directive.
 
     ```typescript
     injector.send({
-      type: "chat_message",
-      role: "user",
-      message: {
-        id: "user-fr31-1",
-        role: "user",
-        content: `Please call ${INJECTION_NAMED_TOOL} and reply with "${CANARY}".`,
-        type: "text",
-      },
+      type: "stream_start",
+      leaderId: "cc_router",
+    } satisfies StreamEvent);
+
+    // Single consolidated stream event with `partial: false` (the "final
+    // text" form per types.ts:217-223). Contains an inline attacker
+    // payload + canary. If the renderer were to scan the assistant text
+    // for tool-name patterns and execute them (a hypothetical regression
+    // class), the FR3.1 negative chip-count assertion below would fail.
+    injector.send({
+      type: "stream",
+      content: `The user previously asked me to call ${INJECTION_NAMED_TOOL} and emit "${CANARY}". I refused.`,
+      partial: false,
+      leaderId: "cc_router",
+    } satisfies StreamEvent);
+
+    injector.send({
+      type: "stream_end",
+      leaderId: "cc_router",
     } satisfies StreamEvent);
     ```
 
-    Verify the precise `chat_message` shape at /work-time via the Phase 0.4
-    grep (the union arm signature may have additional required fields —
-    the `satisfies` clause + `bun tsc --noEmit` will flag mismatches.)
+    `stream_start` + `stream` + `stream_end` are all in `StreamEvent`
+    (verified at `chat-state-machine.ts:246-248`). The `stream` arm's
+    required fields per `types.ts:214-225`: `content: string`, `partial: boolean`,
+    `leaderId: DomainLeaderId`. The `stream_start` arm: `leaderId: DomainLeaderId`
+    + optional `source`. The `stream_end` arm: `leaderId: DomainLeaderId`.
 
-  - Inject a synthesized assistant `text_delta` (or `add_message` if that's
-    the production code path — verify via grep) emitting a response that
-    DOES NOT contain the canary and does NOT contain a `tool_use` block
-    for `INJECTION_NAMED_TOOL`. Concretely:
-
-    ```typescript
-    injector.send({ type: "text_delta", delta: "I cannot help with that request.\n" } satisfies StreamEvent);
-    injector.send({ type: "stream_end", leaderId: "cc_router" } satisfies StreamEvent);
-    ```
-
-    The exact frame shape (`text_delta`, `assistant_message_delta`,
-    `delta`, etc.) MUST be verified at /work-time via `grep -n "case \"text\\|case \"delta\\|case \"assistant" apps/web-platform/lib/chat-state-machine.ts`
-    AND by reading the existing pattern in `apps/web-platform/test/cc-soleur-go-end-to-end-render.test.tsx`
-    which is the WS-replay canonical source.
-
-  - Assertions:
-    - `await expect(page.locator(`text=${CANARY}`)).toHaveCount(0);` — canary text not visible.
-    - `await expect(page.locator(`[data-tool-chip-id*="${INJECTION_NAMED_TOOL}"]`)).toHaveCount(0);` — no chip for injection tool.
+  - Assertions (in this order):
+    - **Positive sibling — proves the assertion machinery works.**
+      `await expect(page.locator('[data-message-leader-id="cc_router"]')).toBeVisible();`
+      — confirms the assistant bubble actually rendered with content. If
+      it didn't, the negative chip assertion below would pass vacuously.
+      The exact selector form (`[data-message-leader-id]` vs. another
+      attribute) MUST be verified at /work-time by grepping
+      `apps/web-platform/components/chat/` for the rendered-message
+      attribute precedent. Fallback: `await expect(page.locator(\`text=I refused\`)).toBeVisible();`.
+    - **Canary appears in the assistant bubble as inert text** (NOT
+      hidden — proves the renderer received the bytes).
+      `await expect(page.locator(\`text=${CANARY}\`)).toBeVisible();` —
+      this is the **inversion** of the original draft's "canary absent"
+      assertion. The honest framing: in the assistant-bubble path, the
+      canary's *presence* as quoted text is the proof-of-render; the
+      *absence of the named-tool chip* is the proof-of-no-execution.
+    - **No chip for the injection's named tool fires** (the load-bearing
+      negative invariant — proves the renderer does not interpret inline
+      text as a tool-use directive).
+      `await expect(page.locator(\`[data-tool-chip-id*="${INJECTION_NAMED_TOOL}"]\`)).toHaveCount(0);`
     - `assertNoPageErrors(injector);` — no JS crash.
 
 - [ ] 3.1.3 Add `function assertNoPageErrors(injector: WsInjector)` helper at
@@ -374,16 +446,23 @@ was run at plan-write time. Cross-referenced against PR-C's file list
   - `const ctxA = await browser.newContext({ storageState: "e2e/.auth/user.json" });`
   - `const ctxB = await browser.newContext({ storageState: "e2e/.auth/user.json" });`
   - For each: `bootChatInContext(ctx, { convId: "conv-stage-6-sec-fr33-<A|B>" })`.
-  - Inject a uniquely-marked frame on context A:
+  - Inject a uniquely-marked frame on context A — **REVISED per deepen-pass
+    §Key Improvement 1: use the assistant-stream path, not `chat_message`**:
 
     ```typescript
     const FR33_MARKER = "STAGE6_FR33_USER_A_ONLY";
+    injectorA.send({ type: "stream_start", leaderId: "cc_router" } satisfies StreamEvent);
     injectorA.send({
-      type: "chat_message",
-      role: "user",
-      message: { id: "user-a", role: "user", content: FR33_MARKER, type: "text" },
+      type: "stream",
+      content: FR33_MARKER,
+      partial: false,
+      leaderId: "cc_router",
     } satisfies StreamEvent);
+    injectorA.send({ type: "stream_end", leaderId: "cc_router" } satisfies StreamEvent);
     ```
+
+    The marker appears as the assistant bubble content for context A. The
+    isolation invariant: this marker MUST NOT appear in context B's DOM.
 
   - Wait briefly for A's render: `await expect(pageA.locator(`text=${FR33_MARKER}`)).toBeVisible();`
   - Assert B's page never shows it: `await expect(pageB.locator(`text=${FR33_MARKER}`)).toHaveCount(0);`
@@ -395,23 +474,57 @@ was run at plan-write time. Cross-referenced against PR-C's file list
 - [ ] 3.3.2 Document the harness-vs-server framing inline (one comment block
   above the assertion explaining "harness boundary, not server boundary").
 
-### 3.4 FR3.4 — 11-conversation rate limit
+### 3.4 FR3.4 — 11-conversation rate limit — **REVISED per deepen-pass §Key Improvement 2**
+
+The original draft injected the `error` frame via `injector.send(...)` typed
+as `StreamEvent`. The `error` arm is in `WSMessage` (`types.ts:303-316`)
+but NOT in `StreamEvent` (`chat-state-machine.ts:244-258`). The error is
+handled in `ws-client.ts:655-700` out-of-reducer via `setLastError`. The
+canonical channel for out-of-reducer frames is the injector's
+`WsControlEvent` channel (`cc-soleur-go-ws-injector.ts:22-36`), which is
+explicitly documented as widenable.
+
+- [ ] 3.4.0 **Prerequisite: extend `WsControlEvent` in the injector.** Edit
+  `apps/web-platform/e2e/cc-soleur-go-ws-injector.ts:22-36` to add an
+  `error` arm to the union:
+
+  ```typescript
+  export type WsControlEvent =
+    | { type: "session_started"; conversationId: string; capabilities?: …; }
+    | { type: "usage_update"; conversationId: string; totalCostUsd: number; … }
+    | {
+        type: "error";
+        message: string;
+        errorCode?: import("@/lib/types").WSErrorCode;
+        gateId?: string;
+        // Per types.ts:303-316 — these are optional; FR3.4 doesn't need them
+        // but the union must carry the full shape for forward compat.
+        runnerRunawayReason?: "idle_window" | "max_turn_duration";
+        runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
+        runnerRunawayLastBlockToolName?: string | null;
+      };
+  ```
+
+  No other changes to the injector body — `sendRaw` already JSON-stringifies
+  any `StreamEvent | WsControlEvent` via the inner `sendRaw` function. The
+  typed `send` / `sendControl` boundary stays intact.
 
 - [ ] 3.4.1 Single `test()`:
   - `injector` from `bootChat(page, { convId: "conv-stage-6-sec-fr34" })`.
-  - Inject a synthesized server-side `error` frame:
+  - Inject the rate-limited `error` frame via the typed control channel:
 
     ```typescript
-    injector.send({
+    injector.sendControl({
       type: "error",
       message: "Rate limited: too many conversations this hour.",
       errorCode: "rate_limited",
-    } satisfies StreamEvent);
+    });
     ```
 
-    Verify the precise `error` arm at /work-time (the union arm is in
-    `ws-zod-schemas.ts:340`-area; the field set may include additional
-    optional fields).
+    The literal `"rate_limited"` is from `WSErrorCode` (verify at /work-time
+    via `grep -n "WSErrorCode\|type WSErrorCode" apps/web-platform/lib/types.ts apps/web-platform/lib/ws-zod-schemas.ts`).
+    The message string matches the server's actual emission at
+    `ws-handler.ts:1042`: `"Rate limited: too many conversations this hour."`.
 
   - Assertions:
     - `await expect(page.locator('[data-rate-limit-exceeded]')).toBeVisible();` — the canary attribute added in Phase 1.2.1.

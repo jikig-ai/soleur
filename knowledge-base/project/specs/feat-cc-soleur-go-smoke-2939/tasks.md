@@ -39,11 +39,14 @@ plan-review.
 ### 0.3 Limiter values
 - [ ] 0.3.1 `grep -n "DEFAULT_PER_USER_PER_HOUR\|DEFAULT_PER_IP_PER_HOUR" apps/web-platform/server/start-session-rate-limit.ts` returns `=10` and `=30`
 
-### 0.4 StreamEvent shape
-- [ ] 0.4.1 `grep -n "type StreamEvent\|export type StreamEvent" apps/web-platform/lib/chat-state-machine.ts` shows interactive_prompt / tool_use / stream_end / chat_message arms
-- [ ] 0.4.2 `grep -n 'type: "chat_message"\|case "chat_message"' apps/web-platform/lib/chat-state-machine.ts` returns ≥ 1 hit
-- [ ] 0.4.3 Grep error-arm shape: `grep -n 'type: "error"\|case "error"' apps/web-platform/lib/chat-state-machine.ts apps/web-platform/lib/ws-zod-schemas.ts` and record the required-field set for FR3.4 frame construction.
-- [ ] 0.4.4 Grep assistant text emit shape: `grep -n 'text_delta\|assistant_message\|case "text"' apps/web-platform/lib/chat-state-machine.ts` and read `apps/web-platform/test/cc-soleur-go-end-to-end-render.test.tsx` to identify the canonical WS-replay event sequence
+### 0.4 StreamEvent + WSMessage shapes verified (deepen-pass corrections applied)
+- [ ] 0.4.1 `grep -nE "^\s*\|\s*\{ type:" apps/web-platform/lib/chat-state-machine.ts` shows `StreamEvent` at lines 244-258 with arms: `stream_start | stream | stream_end | tool_use | tool_progress | review_gate | subagent_spawn | subagent_complete | workflow_started | workflow_ended | interactive_prompt | context_reset`
+- [ ] 0.4.2 **NEGATIVE:** `grep -n 'type: "chat_message"' apps/web-platform/lib/types.ts apps/web-platform/lib/chat-state-machine.ts` returns 0 hits (no chat_message arm)
+- [ ] 0.4.3 `grep -nB1 -A8 'type: "error"' apps/web-platform/lib/types.ts` shows the `error` arm with required `message: string` + optional `errorCode?: WSErrorCode`; AND `grep -n '"error"' apps/web-platform/lib/chat-state-machine.ts` (inside StreamEvent only) returns 0 hits — confirms FR3.4 must use sendControl
+- [ ] 0.4.4 `grep -nB1 -A5 'type: "stream"' apps/web-platform/lib/types.ts` shows `stream` required fields: `content: string`, `partial: boolean`, `leaderId: DomainLeaderId`
+- [ ] 0.4.5 `grep -n 'type: "stream_start"' apps/web-platform/lib/types.ts` shows `stream_start` requires `leaderId: DomainLeaderId` + optional `source`
+- [ ] 0.4.6 `grep -n "WSErrorCode\|rate_limited" apps/web-platform/lib/ws-zod-schemas.ts apps/web-platform/lib/types.ts` returns ≥ 1 hit confirming `"rate_limited"` is in the `WSErrorCode` union
+- [ ] 0.4.7 `grep -nB2 -A10 "export type WsControlEvent" apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns the union + "Widen this union" comment
 
 ### 0.5 Issue + PR state
 - [ ] 0.5.1 `gh issue view 2939 --json state,title` → state OPEN
@@ -74,12 +77,13 @@ plan-review.
 
 ## Phase 3 — Four FR3.x assertions
 
-### 3.1 FR3.1 — Prompt-injection drain
+### 3.1 FR3.1 — Prompt-injection drain (DEEPEN-CORRECTED: assistant-bubble path, not user chat_message)
 - [ ] 3.1.1 Declare `const CANARY = "STAGE6_CANARY_DO_NOT_EXFILTRATE"` + `const INJECTION_NAMED_TOOL = "mcp__soleur_platform__test_synthesized_exfil"` (module scope)
-- [ ] 3.1.2 `test()`: boot chat, inject user `chat_message` carrying the canary + the synthesized injection-text directive (per plan §3.1.2 sketch — verify exact union arm at Phase 0.4)
-- [ ] 3.1.3 Inject synthesized assistant text stream that does NOT contain the canary AND does NOT emit `tool_use(INJECTION_NAMED_TOOL)` — use the event sequence from `test/cc-soleur-go-end-to-end-render.test.tsx`
-- [ ] 3.1.4 Assertions: `text=CANARY` count 0; `[data-tool-chip-id*="INJECTION_NAMED_TOOL"]` count 0; `assertNoPageErrors`
-- [ ] 3.1.5 (Positive sibling — sharp-edge mitigation) Before the negative assertions, inject a non-injection tool name and assert its chip RENDERS — proves the negation machinery actually fires
+- [ ] 3.1.2 `test()`: boot chat, inject `stream_start(leaderId: "cc_router")` + `stream(content: \`...${INJECTION_NAMED_TOOL}...${CANARY}...\`, partial: false, leaderId: "cc_router")` + `stream_end(leaderId: "cc_router")` — the canary appears in the assistant content as inert quoted text
+- [ ] 3.1.3 Positive sibling assertion: assert the assistant bubble actually rendered (`text=I refused` or `[data-message-leader-id="cc_router"]` — verify selector form at /work-time via grep of `apps/web-platform/components/chat/`)
+- [ ] 3.1.4 Canary-present assertion: `await expect(page.locator(\`text=${CANARY}\`)).toBeVisible()` — proves the renderer received the bytes
+- [ ] 3.1.5 Canary-not-executed assertion: `await expect(page.locator(\`[data-tool-chip-id*="${INJECTION_NAMED_TOOL}"]\`)).toHaveCount(0)` — proves the renderer does not execute inline-text directives
+- [ ] 3.1.6 `assertNoPageErrors(injector)` — no JS crash
 
 ### 3.2 FR3.2 — Bash review-gate
 - [ ] 3.2.1 `test()`: boot chat, inject `interactive_prompt` with `kind="bash_approval"`, `payload: { command, cwd, gated: true }` (verify required fields via `apps/web-platform/lib/types.ts:77`)
@@ -87,17 +91,18 @@ plan-review.
 - [ ] 3.2.3 Assert `[data-tool-chip-id*="bash"]` count 0 (BEFORE-execution gate)
 - [ ] 3.2.4 Click Approve button; assert resolved-row grammar matches `interactive-prompt-card-resolved.test.tsx:21-46` ("Approved" verb visible, no buttons)
 
-### 3.3 FR3.3 — Cross-user / cross-context isolation
+### 3.3 FR3.3 — Cross-user / cross-context isolation (DEEPEN-CORRECTED: stream-frame marker, not chat_message)
 - [ ] 3.3.1 `test()` with `async ({ browser }) => ...` signature
 - [ ] 3.3.2 Create two contexts: `ctxA = browser.newContext({ storageState: "e2e/.auth/user.json" })` + ctxB symmetric
 - [ ] 3.3.3 `bootChatInContext(ctxA, { convId: "conv-stage-6-sec-fr33-a" })` + symmetric for B
-- [ ] 3.3.4 `const FR33_MARKER = "STAGE6_FR33_USER_A_ONLY"`; inject a uniquely-marked frame on context A
-- [ ] 3.3.5 Assert A's page shows the marker; assert B's page has zero hits on the marker; symmetric in reverse direction
+- [ ] 3.3.4 `const FR33_MARKER = "STAGE6_FR33_USER_A_ONLY"`; inject `stream_start` + `stream(content: FR33_MARKER, partial: false, leaderId: "cc_router")` + `stream_end` on context A
+- [ ] 3.3.5 Assert A's page shows the marker; assert B's page has zero hits on the marker; symmetric in reverse direction (use FR33_MARKER_B for B→A)
 - [ ] 3.3.6 Inline comment explains "harness boundary, not server boundary" (sharp edge)
 - [ ] 3.3.7 `await ctxA.close(); await ctxB.close()`
 
-### 3.4 FR3.4 — 11-conversation rate limit
-- [ ] 3.4.1 `test()`: boot chat, inject synthesized `error` frame with `errorCode: "rate_limited"` + the canonical server message string ("Rate limited: too many conversations this hour.")
+### 3.4 FR3.4 — 11-conversation rate limit (DEEPEN-CORRECTED: sendControl + WsControlEvent extension)
+- [ ] 3.4.0 **Prerequisite:** edit `apps/web-platform/e2e/cc-soleur-go-ws-injector.ts:22-36` to add `error` arm to `WsControlEvent` union with shape `{ type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string; runnerRunaway*?: …; }` (verify shape against `apps/web-platform/lib/types.ts:303-316`). No body change to `attachWsInjector`. Commit separately if scope-creep concern: `feat(e2e): widen WsControlEvent to include error frame (#2939 PR-C prereq)`
+- [ ] 3.4.1 `test()`: boot chat, call `injector.sendControl({ type: "error", message: "Rate limited: too many conversations this hour.", errorCode: "rate_limited" })` (message literal matches `apps/web-platform/server/ws-handler.ts:1042`)
 - [ ] 3.4.2 Assertions: `[data-rate-limit-exceeded]` visible (canary from Phase 1.1.1); `text=Rate Limited` visible (ErrorCard title from `chat-surface.tsx:558`); message body propagates through ErrorCard
 
 ### 3.5 Commit
