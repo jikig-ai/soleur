@@ -196,6 +196,10 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 If the feature description references an external platform, marketplace, or service, **WebFetch the URL first** before launching any research agents. Classify by: (1) self-service or waitlist? (2) discovery surface or procurement layer? (3) does it accept the product category? (4) what are the per-plan quantitative limits? (number of tasks, storage, API calls, concurrent sessions) (5) does the limit cover the migration/feature scope? (6) if the brainstorm is evaluating the candidate as a **replacement** for an existing headless/MCP/CLI integration, does the candidate expose a programmatic surface (MCP server, CLI, or HTTP API) that agents can call without a browser? If no, it is a complement for human-led work, not a replacement — do not spawn agents to design a migration. (7) if the URL points to a third-party Claude Code skill / plugin / vendor-branded repo, run `gh api repos/<o>/<r>/contents/<entry>/SKILL.md --jq .content | base64 -d` to detect vendor-marketing surface (utm-tagged links, vendor logos, "powered by" footers) injected into agent output. Vendor surface is usually localized to README + repo-scan footers — share the contamination map with the user before spawning leaders, and price three options (vendor-as-is / lift-with-MIT-attribution / clean-room) rather than two. This 30-second gate prevents spawning agents that analyze a false premise. **Why:** In #1094, a 9-workflow migration plan was built before discovering the Max plan allows only 3 Cloud scheduled tasks — a limit only discoverable by attempting to create the 4th task or checking via the `RemoteTrigger` API. **Why (6):** #2699 — Claude Design (GUI-only) would have broken `ux-design-lead`, `/soleur:frontend-design`, `/soleur:ux-audit`, and the Product/UX Gate if treated as a Pencil replacement. **Why (7):** 2026-05-09 brainstorm of `gosprinto/compliance-skills` — utm-tagged Sprinto links inside skill description would have leaked operator prompt context to a third party as a *de facto* sub-processor; see `knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md`.
 
+#### 1.0.5 Premise Validation
+
+Before launching research agents, grep existing truth sources (CI report, roadmap, prior brainstorms) for named external entities or claims in the feature description. If the framing contradicts what the ground truth documents say, surface the contradiction and re-scope with the user before continuing. A framing defect caught here is worth more than a full research sprint built on it.
+
 #### 1.1 Research (Context Gathering)
 
 **Pre-research: check existing KB artifacts first.** Before spawning any agents, run one local check for prior brainstorms and specs matching the feature's topic keywords:
@@ -276,6 +280,12 @@ Lead with your recommendation and explain why. Apply YAGNI—prefer simpler solu
 Use **AskUserQuestion tool** to ask which approach the user prefers.
 
 **Domain re-assessment.** If the scope has materially changed from the original feature description (e.g., from internal tooling to user-facing product feature, or from a single-domain change to a cross-domain capability), re-run Phase 0.5 domain assessment for any domains not already consulted. Scope pivots during brainstorming are common — the domain assessment must reflect the final scope, not just the initial description.
+
+**Budget checkpoint.** If the brainstorm proposes adding or restructuring skills, run the SKILL.md description word-budget measurement one-liner (Node form, see `knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md` **Measurement one-liner** section) before authoring approach proposals. Surface headroom as a first-class constraint if < 10 words remain against the 1800-word cumulative cap.
+
+### Phase 2.5: Productize Checkpoint
+
+When proposing an action plan, ask: is the inciting work pattern likely to recur (scheduled workflow output, weekly review cadence, batch-triggered task, recurring competitive-intel finding)? If yes, propose a skill or sub-mode of an existing skill that captures the workflow. A recurring-work plan that produces issues but no reusable artifact has done half the work.
 
 ### Phase 3: Create Worktree (if knowledge-base/ exists)
 

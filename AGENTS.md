@@ -72,6 +72,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: cq-union-widening-grep-three-patterns] → rest
 - [id: cq-pg-security-definer-search-path-pin-pg-temp] → core
 - [id: cq-eleventy-critical-css-screenshot-gate] → docs-only
+- [id: cq-skill-description-budget-headroom] → docs-only
 - [id: cq-test-fixtures-synthesized-only] → rest
 - [id: cq-regex-unicode-separators-escape-only] → rest
 
