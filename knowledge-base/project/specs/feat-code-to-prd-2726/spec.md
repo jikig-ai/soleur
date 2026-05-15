@@ -54,12 +54,13 @@ For each route, identify top-level state hooks (`useState`, `useReducer`, server
 
 Scan all walked files for: `fetch()` call sites with literal string URLs, named imports from `@/lib/api*` or `@/server/*`, and `process.env.*` references (env var *names* only — values never read). Cross-reference `package.json` dependencies and flag third-party SDK packages (e.g., `stripe`, `@supabase/*`, `openai`).
 
-### FR6: Redaction stack (4 layers, fail-closed)
+### FR6: Redaction stack (3 layers, fail-closed)
 
-- **Layer 1 — pre-scan exclusion:** FR2 path filter.
-- **Layer 2 — input sanitization:** every file content chunk passes through `redact-sentinel.sh` before being incorporated into the PRD template. Matches replaced with `[REDACTED:type]`.
-- **Layer 3 — pre-write sentinel:** rendered PRD passes through `redact-sentinel.sh` immediately before disk write. Exit code 1 (matches found) MUST abort write and surface the matched secret types to the operator. No partial PRD ever lands on disk.
-- **Layer 4 — post-write verifier:** if `gitleaks` is on PATH, run `gitleaks detect --source <prd-file> --no-git --report-format json`. Any finding MUST delete the written PRD and re-raise to the operator. If `gitleaks` is absent, the skill MUST emit a high-severity warning naming the missing binary and recommending install.
+Revised post-plan-review (DHH + Simplicity converge: the original Layer 2 input-sanitization ran the same sentinel script on overlapping bytes as Layer 3 — redundant defense-in-paint, not defense-in-depth).
+
+- **Layer 1 — pre-scan exclusion:** FR2 path filter (walker output filtered through deny-list before any file is read).
+- **Layer 2 — pre-write sentinel:** rendered PRD passes through `redact-sentinel.sh` immediately before disk write. Exit code 1 (matches found) MUST abort write and surface the matched secret types to the operator. No partial PRD ever lands on disk.
+- **Layer 3 — post-write verifier:** `gitleaks detect --source <prd-file> --no-git --report-format json`. Any finding MUST delete the written PRD and verify `test ! -e <path>` (FR6.1). `gitleaks` is a Phase 0 preflight precondition (FR6.2) — the skill aborts at Phase 0 if the binary is not on PATH. Layer 3 is always present at runtime.
 
 ### FR7: PRD output
 
@@ -79,7 +80,7 @@ After PRD is written and post-write verifier passes, skill spawns `@agent-soleur
 
 ### FR9: MIT attribution
 
-SKILL.md footer reads: `Adapted from alirezarezvani/claude-skills (MIT) — see NOTICE`. Repo root `NOTICE` (or `THIRD_PARTY_LICENSES.md` if convention prefers) contains full MIT text and upstream copyright line.
+SKILL.md footer reads: `Adapted from alirezarezvani/claude-skills (MIT) — see plugins/soleur/NOTICE`. **Plugin-root** `plugins/soleur/NOTICE` (NOT repo-root per Kieran plan-review P1 — plugin is the unit of redistribution) contains full MIT text and upstream copyright line. Drift detection is NOT in v1 (DHH + Simplicity converge on YAGNI); v2 may add a dedicated `scripts/check-notice-drift.sh`.
 
 ### FR10: Coverage Caveats block
 
@@ -117,7 +118,7 @@ Add a `prd.md` template to `plugins/soleur/skills/spec-templates/SKILL.md` docum
 
 ### TR8: Test fixture
 
-`plugins/soleur/skills/code-to-prd/test/fixture/` contains a minimal Next.js skeleton (3 routes, 1 server action, 1 deliberate `STRIPE_SECRET_KEY=sk_test_DELIBERATE_FIXTURE` line). Test asserts: (a) all 3 routes captured, (b) no secret appears in PRD output, (c) Coverage Caveats block non-empty, (d) banners present and intact. Fixture is synthesized only — never real secrets (per `cq-test-fixtures-synthesized-only`).
+`plugins/soleur/skills/code-to-prd/test/fixture/` contains a minimal Next.js skeleton (3 routes, NO server action — v1 does not extract them) with deliberate `STRIPE_SECRET_KEY=sk_test_<<24+ alnum chars, no underscores>>` (alnum-only after prefix, verified to match sentinel regex `sk_(test|live)_[A-Za-z0-9]{16,}` — the original `sk_test_<<tail-with-underscores>>` would NOT have matched because `_` ∉ `[A-Za-z0-9]`; caught by Kieran plan-review P0). Test asserts the full 11-assertion set in plan Phase 6. Fixture is synthesized only — never real secrets (per `cq-test-fixtures-synthesized-only`). Allowlist sequencing: commit `.gitleaks.toml` allowlist entry FIRST, then fixture in a SEPARATE commit (Kieran P0-3 — pre-commit hook reads allowlist from HEAD).
 
 ### TR9: Sequencing
 
