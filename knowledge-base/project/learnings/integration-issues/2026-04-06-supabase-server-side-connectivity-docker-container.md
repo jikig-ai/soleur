@@ -50,7 +50,7 @@ The production server's Supabase service client calls fail silently, causing the
 
 ## Session Errors
 
-**Wrong email for OTP auth** — Used `jean@jikigai.com` but actual account email is `jean.deruelle@jikigai.com`.
+**Wrong email for OTP auth** — Used `jean@example.com` but actual account email is `jean.deruelle@example.com`.
 
 - **Recovery:** Queried Supabase admin API `GET /auth/v1/admin/users` to list all users and find the correct email.
 - **Prevention:** Store the founder's auth email in Doppler `dev` config as `E2E_TEST_EMAIL` for future verification sessions.

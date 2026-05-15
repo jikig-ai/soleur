@@ -35,7 +35,7 @@ either GitHub's docs or the codebase:
    - `https://app.soleur.ai/api/auth/github-resolve/callback` (Flow B)
    - `https://api.soleur.ai/auth/v1/callback` (Flow A custom-domain
      advertised state)
-   - `https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback`
+   - `https://<PRD_REF>.supabase.co/auth/v1/callback`
      (Flow A canonical, advertised during custom-domain re-provisioning)
 
    Per Supabase's own custom-domain docs:

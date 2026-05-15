@@ -21,7 +21,7 @@ While bundling three MU1 ops fixes (#2837 / #2838 / #2839), two subtle defects w
    if (actualRef !== DEV_PROJECT_REF) throw new Error(...);
    ```
 
-   That accepts `https://ifsccnjhymdmidffkzhl.supabase.co.evil.com` — the
+   That accepts `https://<PRD_REF>.supabase.co.evil.com` — the
    first DNS label equals `DEV_PROJECT_REF`, so the guard passes. An
    attacker who controls `NEXT_PUBLIC_SUPABASE_URL` at cleanup time (and
    can register a DNS suffix) exfiltrates the dev service-role key to an

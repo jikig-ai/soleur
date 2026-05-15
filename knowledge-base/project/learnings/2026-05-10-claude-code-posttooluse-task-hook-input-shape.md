@@ -26,7 +26,7 @@ Claude Code CLI version: **2.1.138** (`claude --version`).
 
 ```json
 {
-  "session_id": "d1485fdc-e8d8-4778-94da-8ede6e063854",
+  "session_id": "deadbeef-dead-beef-dead-beefdeadbeef",
   "transcript_path": "/home/jean/.claude/projects/.../<session_id>.jsonl",
   "cwd": "/abs/path/to/cwd",
   "permission_mode": "auto",
