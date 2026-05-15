@@ -4,6 +4,7 @@ import { TC_VERSION } from "@/lib/legal/tc-version";
 import { buildCspHeader } from "@/lib/csp";
 import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { PUBLIC_PATHS, TC_EXEMPT_PATHS } from "@/lib/routes";
+import { reportSilentFallback } from "@/server/observability";
 
 function withCspHeaders(response: NextResponse, cspValue: string): NextResponse {
   response.headers.set("Content-Security-Policy", cspValue);
@@ -108,9 +109,13 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  function redirectWithCookies(pathname: string) {
+  function redirectWithCookies(pathname: string, searchParams?: URLSearchParams) {
     const url = request.nextUrl.clone();
     url.pathname = pathname;
+    if (searchParams) {
+      // Replace the query string entirely with the caller-supplied params.
+      url.search = searchParams.toString();
+    }
     const redirectResponse = NextResponse.redirect(url);
     response.cookies.getAll().forEach((cookie) =>
       redirectResponse.cookies.set(cookie.name, cookie.value),
@@ -131,10 +136,22 @@ export async function middleware(request: NextRequest) {
       .single();
 
     if (tcError) {
-      // Fail open: allow request if we cannot verify T&C or billing status.
-      // Auth is already verified by getUser() above.
-      console.error(`[middleware] user query failed: ${tcError.message}`);
-      return withCspHeaders(response, cspValue);
+      // Fail CLOSED. The exempt-path short-circuit at line 126 already
+      // covers /accept-terms + /api/accept-terms + the github-resolve
+      // recovery callback; this branch fires only on non-exempt paths.
+      // Without this redirect, a Supabase outage silently lets every
+      // authenticated user reach /dashboard without consent verification
+      // — Art. 7(1) demonstrability breach (plan §"User-Brand Impact").
+      // The Sentry mirror gives operations a paging signal.
+      reportSilentFallback(tcError, {
+        feature: "middleware",
+        op: "tc_query_failed",
+        message: "users.tc_accepted_version SELECT failed",
+        extra: { userId: user.id },
+      });
+      const params = new URLSearchParams();
+      params.set("error", "db_unavailable");
+      return redirectWithCookies("/accept-terms", params);
     }
 
     if (userRow?.tc_accepted_version !== TC_VERSION) {
