@@ -1,131 +1,184 @@
 ---
-title: Tasks — cc-soleur-go Stage 6 PR-A
-date: 2026-05-13
+title: Tasks — cc-soleur-go Stage 6 PR-C (security smoke FR3.1-3.4 + visual-QA rubric FR5)
+date: 2026-05-15
 issue: 2939
-plan: knowledge-base/project/plans/2026-05-13-feat-cc-soleur-go-smoke-2939-pr-a-plan.md
+plan: knowledge-base/project/plans/2026-05-15-feat-cc-soleur-go-smoke-2939-pr-c-plan.md
 spec: knowledge-base/project/specs/feat-cc-soleur-go-smoke-2939/spec.md
 lane: cross-domain
 brand_survival_threshold: single-user incident
 status: tasks-complete
 ---
 
-# Tasks: PR-A (bubble e2e foundations + DEV_ORIGINS multi-port fix)
+# Tasks: PR-C — Security smoke + visual-QA rubric + #2939 reconciliation
 
-TDD-structured. Each task: RED (failing test) → GREEN (smallest impl) → REFACTOR if needed. No commit until tests pass.
+> **PR-A tasks (closed):** see git history of this file at the merge of #3743.
+> **PR-B tasks (closed):** see git history at the merge of #3778.
+>
+> This rewrite reflects PR-C scope only.
+
+TDD-structured. Each task: RED (failing test) → GREEN (smallest impl) →
+REFACTOR if needed. No commit until tests pass.
 
 ## Phase 0 — Preconditions (HARD GATE)
 
-Block /work GREEN if any verification disagrees. Update plan + re-spawn plan-review.
+Block /work GREEN if any verification disagrees. Update plan + re-spawn
+plan-review.
 
-- [ ] 0.1 Verify Playwright supports `routeWebSocket()`: `grep '"@playwright/test":' apps/web-platform/package.json` → expect `^1.58.2`
-- [ ] 0.2 Verify `StreamEvent` union shape: `grep -n "type StreamEvent" apps/web-platform/lib/chat-state-machine.ts` → expect line 244
-- [ ] 0.3 Verify WS endpoint path is `/ws`: `grep -n "/ws" apps/web-platform/lib/ws-client.ts` → expect line 496 with `${proto}://${host}/ws`
-- [ ] 0.4 Verify mock fixtures: `grep -n "MOCK_USER\|MOCK_SESSION" apps/web-platform/e2e/mock-supabase.ts` → expect lines 12-37
-- [ ] 0.5 Verify all 4 bubble data-* selectors per plan §Phase 0
-- [ ] 0.6 Verify chip-removal trigger count: `grep -n "tool_use_chip" apps/web-platform/lib/chat-state-machine.ts` — both `case "stream_end"` (line 522) AND `case "workflow_started"` (line 716) must show filters. If count ≠ 2, extend FR1.3.
+### 0.1 Foundations exist
+- [ ] 0.1.1 `git log --oneline main | grep -E '^[a-f0-9]+ .*#3743|^[a-f0-9]+ .*#3778'` returns ≥ 2 lines
+- [ ] 0.1.2 `ls apps/web-platform/e2e/cc-soleur-go-ws-injector.ts apps/web-platform/e2e/helpers/supabase-mocks.ts apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts apps/web-platform/e2e/cc-soleur-go-routing.e2e.ts` all exist
+- [ ] 0.1.3 `grep -n "export async function attachWsInjector" apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns 1 hit
+- [ ] 0.1.4 `grep -n "WsControlEvent\|sendControl" apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns ≥ 2 hits
 
-## Phase 1 — DEV_ORIGINS multi-port fix
+### 0.2 DOM / selector verification
+- [ ] 0.2.1 `grep -rn "data-rate-limit-exceeded" apps/web-platform/components/ apps/web-platform/app/` returns 0 hits
+- [ ] 0.2.2 `grep -n "data-error-boundary" apps/web-platform/components/error-boundary-view.tsx` returns ≥ 1 hit
+- [ ] 0.2.3 `grep -n 'errorCode === "rate_limited"\|code === "rate_limited"\|code: "rate_limited"' apps/web-platform/lib/ws-client.ts apps/web-platform/components/chat/chat-surface.tsx` returns ≥ 3 hits
+- [ ] 0.2.4 `grep -n '"bash_approval"' apps/web-platform/lib/ws-zod-schemas.ts apps/web-platform/components/chat/interactive-prompt-card.tsx apps/web-platform/components/chat/chat-surface.tsx apps/web-platform/lib/chat-state-machine.ts apps/web-platform/lib/types.ts apps/web-platform/test/interactive-prompt-card-resolved.test.tsx` returns ≥ 6 hits
 
-### 1.1 Setup
-- [ ] 1.1.1 `ls apps/web-platform/test/validate-origin.test.ts` — note whether file exists (RED creates if absent; otherwise extends)
+### 0.3 Limiter values
+- [ ] 0.3.1 `grep -n "DEFAULT_PER_USER_PER_HOUR\|DEFAULT_PER_IP_PER_HOUR" apps/web-platform/server/start-session-rate-limit.ts` returns `=10` and `=30`
 
-### 1.2 RED — failing tests
-- [ ] 1.2.1 Add test case: `NEXT_PUBLIC_DEV_EXTRA_ORIGINS="http://localhost:3099,http://localhost:3100"` + `NODE_ENV=development` → both URLs accepted (currently fails — env var not read)
-- [ ] 1.2.2 Add regression test: empty `NEXT_PUBLIC_DEV_EXTRA_ORIGINS` + `NODE_ENV=development` → only `localhost:3000` + `https://app.soleur.ai` accepted
-- [ ] 1.2.3 Add production-unchanged test: `NEXT_PUBLIC_DEV_EXTRA_ORIGINS="http://localhost:3099"` + `NODE_ENV=production` → 3099 rejected
-- [ ] 1.2.4 Run `bun run vitest apps/web-platform/test/validate-origin.test.ts` → confirm 1.2.1 fails
+### 0.4 StreamEvent + WSMessage shapes verified (deepen-pass corrections applied)
+- [ ] 0.4.1 `grep -nE "^\s*\|\s*\{ type:" apps/web-platform/lib/chat-state-machine.ts` shows `StreamEvent` at lines 244-258 with arms: `stream_start | stream | stream_end | tool_use | tool_progress | review_gate | subagent_spawn | subagent_complete | workflow_started | workflow_ended | interactive_prompt | context_reset`
+- [ ] 0.4.2 **NEGATIVE:** `grep -n 'type: "chat_message"' apps/web-platform/lib/types.ts apps/web-platform/lib/chat-state-machine.ts` returns 0 hits (no chat_message arm)
+- [ ] 0.4.3 `grep -nB1 -A8 'type: "error"' apps/web-platform/lib/types.ts` shows the `error` arm with required `message: string` + optional `errorCode?: WSErrorCode`; AND `grep -n '"error"' apps/web-platform/lib/chat-state-machine.ts` (inside StreamEvent only) returns 0 hits — confirms FR3.4 must use sendControl
+- [ ] 0.4.4 `grep -nB1 -A5 'type: "stream"' apps/web-platform/lib/types.ts` shows `stream` required fields: `content: string`, `partial: boolean`, `leaderId: DomainLeaderId`
+- [ ] 0.4.5 `grep -n 'type: "stream_start"' apps/web-platform/lib/types.ts` shows `stream_start` requires `leaderId: DomainLeaderId` + optional `source`
+- [ ] 0.4.6 `grep -n "WSErrorCode\|rate_limited" apps/web-platform/lib/ws-zod-schemas.ts apps/web-platform/lib/types.ts` returns ≥ 1 hit confirming `"rate_limited"` is in the `WSErrorCode` union
+- [ ] 0.4.7 `grep -nB2 -A10 "export type WsControlEvent" apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns the union + "Widen this union" comment
 
-### 1.3 GREEN — implementation
-- [ ] 1.3.1 Edit `apps/web-platform/lib/auth/validate-origin.ts:10-14`: add `DEV_EXTRA` parser per plan Phase 1 sketch
-- [ ] 1.3.2 Verify `https?://` regex prefix-check (no protocol-relative or malformed URLs sneak in)
-- [ ] 1.3.3 Run vitest → all 3 new cases green
-- [ ] 1.3.4 Run existing `validate-origin.test.ts` cases → still green (no regression)
+### 0.5 Issue + PR state
+- [ ] 0.5.1 `gh issue view 2939 --json state,title` → state OPEN
+- [ ] 0.5.2 `gh pr view 3779 --json state,title,isDraft` → state OPEN, isDraft true
+- [ ] 0.5.3 `gh label list --limit 200 | grep -E 'type/security|domain/engineering|priority/p2-medium'` returns ≥ 3 labels (used for any §DS2-DS5 scope-out issues)
 
-### 1.4 Documentation
-- [ ] 1.4.1 Append `NEXT_PUBLIC_DEV_EXTRA_ORIGINS` documentation block to `apps/web-platform/.env.example` (1-line description + example value `http://localhost:3099,http://localhost:3100`)
+## Phase 1 — DOM canary contract (`data-rate-limit-exceeded`)
 
-### 1.5 Commit
-- [ ] 1.5.1 `git add apps/web-platform/lib/auth/validate-origin.ts apps/web-platform/test/validate-origin.test.ts apps/web-platform/.env.example`
-- [ ] 1.5.2 Commit: `feat(auth): DEV_ORIGINS honors NEXT_PUBLIC_DEV_EXTRA_ORIGINS comma-list for Playwright multi-port (#2939)`
+### 1.1 GREEN — call-site edit
+- [ ] 1.1.1 Edit `apps/web-platform/components/chat/chat-surface.tsx:555-566`. Add `data-rate-limit-exceeded={lastError.code === "rate_limited" ? "" : undefined}` to the wrapping `<div className="mb-4 ${widthWrapper}">` of the ErrorCard render
+- [ ] 1.1.2 `bun tsc --noEmit` from `apps/web-platform/` → green
+- [ ] 1.1.3 (Optional) Add a small jsdom test in `apps/web-platform/test/chat-surface-rate-limit-canary.test.tsx` that renders with `lastError.code === "rate_limited"` and asserts `[data-rate-limit-exceeded]` exists. Skip if no existing chat-surface render harness — the e2e in Phase 3.4 is the canonical consumer.
 
-## Phase 2 — WS-injector helper
+### 1.2 Commit
+- [ ] 1.2.1 `git add apps/web-platform/components/chat/chat-surface.tsx` (+ optional unit test)
+- [ ] 1.2.2 Commit: `feat(chat): data-rate-limit-exceeded canary attribute on rate_limited ErrorCard branch (#2939)`
 
-### 2.1 Fold-in #2224 (partial)
-- [ ] 2.1.1 Edit `apps/web-platform/lib/chat-state-machine.ts:244` — change `type StreamEvent = ...` to `export type StreamEvent = ...` (1-token edit)
-- [ ] 2.1.2 Run `bun tsc --noEmit` from `apps/web-platform/` → green
+## Phase 2 — Security e2e scaffold + bootChat helper
 
-### 2.2 GREEN — helper implementation
-- [ ] 2.2.1 Create `apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` per plan Phase 2 sketch (~15-20 LoC)
-- [ ] 2.2.2 Verify glob `"**/ws"` matches the Playwright baseURL-relative path (cross-reference Phase 0.3)
-- [ ] 2.2.3 No separate unit test — `tsc --noEmit` + 4 e2e tests in Phase 3 are the effective test (per plan-review)
+### 2.1 GREEN — file scaffold
+- [ ] 2.1.1 Create `apps/web-platform/e2e/cc-soleur-go-security.e2e.ts` with the header comment + imports per plan Phase 2.1
+- [ ] 2.1.2 Add `assertNoPageErrors(injector)` helper at file bottom (mirror `cc-soleur-go-bubbles.e2e.ts:95-100`)
 
-### 2.3 Commit
-- [ ] 2.3.1 `git add apps/web-platform/lib/chat-state-machine.ts apps/web-platform/e2e/cc-soleur-go-ws-injector.ts`
-- [ ] 2.3.2 Commit: `feat(e2e): export StreamEvent + add cc-soleur-go WS injector helper (#2939 #2224)`
+### 2.2 Per-context bootChat helper
+- [ ] 2.2.1 Define `bootChat(page: Page, opts: { convId: string }): Promise<WsInjector>` — near-copy of `cc-soleur-go-routing.e2e.ts:71-120` with convId parameterised
+- [ ] 2.2.2 Define `bootChatInContext(ctx: BrowserContext, opts: { convId: string }): Promise<{ page: Page; injector: WsInjector }>` — used only by FR3.3
+- [ ] 2.2.3 Inline-copy NOT extracted yet — file scope-out §DS1 ticket BEFORE writing the third copy (see Phase 7)
 
-## Phase 3 — Per-bubble Playwright e2e tests
+## Phase 3 — Four FR3.x assertions
 
-Single file: `apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts` (~250 LoC). Build incrementally; each sub-bubble's tests merge into the same file.
+### 3.1 FR3.1 — Prompt-injection drain (DEEPEN-CORRECTED: assistant-bubble path, not user chat_message)
+- [ ] 3.1.1 Declare `const CANARY = "STAGE6_CANARY_DO_NOT_EXFILTRATE"` + `const INJECTION_NAMED_TOOL = "mcp__soleur_platform__test_synthesized_exfil"` (module scope)
+- [ ] 3.1.2 `test()`: boot chat, inject `stream_start(leaderId: "cc_router")` + `stream(content: \`...${INJECTION_NAMED_TOOL}...${CANARY}...\`, partial: false, leaderId: "cc_router")` + `stream_end(leaderId: "cc_router")` — the canary appears in the assistant content as inert quoted text
+- [ ] 3.1.3 Positive sibling assertion: assert the assistant bubble actually rendered (`text=I refused` or `[data-message-leader-id="cc_router"]` — verify selector form at /work-time via grep of `apps/web-platform/components/chat/`)
+- [ ] 3.1.4 Canary-present assertion: `await expect(page.locator(\`text=${CANARY}\`)).toBeVisible()` — proves the renderer received the bytes
+- [ ] 3.1.5 Canary-not-executed assertion: `await expect(page.locator(\`[data-tool-chip-id*="${INJECTION_NAMED_TOOL}"]\`)).toHaveCount(0)` — proves the renderer does not execute inline-text directives
+- [ ] 3.1.6 `assertNoPageErrors(injector)` — no JS crash
 
-### 3.1 Shared test setup
-- [ ] 3.1.1 Create the file with describe block + shared `setupAuth` helper (mirror `start-fresh-onboarding.e2e.ts:62-153`):
-  - `page.addInitScript` BEFORE `page.route` mocks (per TR7)
-  - `page.route("**/auth/v1/user"|"**/rest/v1/conversations*"|"**/rest/v1/messages*"|"**/realtime/**", ...)` — return `.single()`-compatible objects (per TR8)
-  - Seed 1 conversation `id="conv-stage-6-smoke"` with `active_workflow="cc-router"`
-  - `await attachWsInjector(page)`
-  - `await page.goto("/dashboard/chat/conv-stage-6-smoke")`
-- [ ] 3.1.2 Wire `page.on("pageerror", ...)` capture for the "no crash" assertion in 3.5
+### 3.2 FR3.2 — Bash review-gate
+- [ ] 3.2.1 `test()`: boot chat, inject `interactive_prompt` with `kind="bash_approval"`, `payload: { command, cwd, gated: true }` (verify required fields via `apps/web-platform/lib/types.ts:77`)
+- [ ] 3.2.2 Assert `[data-prompt-id][data-prompt-kind="bash_approval"]` visible
+- [ ] 3.2.3 Assert `[data-tool-chip-id*="bash"]` count 0 (BEFORE-execution gate)
+- [ ] 3.2.4 Click Approve button; assert resolved-row grammar matches `interactive-prompt-card-resolved.test.tsx:21-46` ("Approved" verb visible, no buttons)
 
-### 3.2 subagent-group expand-boundary (FR1.1)
-- [ ] 3.2.1 RED: assert `[data-parent-spawn-id]` count = 1 after injecting 3× `subagent_spawn` (test fails initially — no injection yet)
-- [ ] 3.2.2 GREEN: inject 3× `subagent_spawn(parentId="p-test-1", spawnId=...)` via `injector.send(...)`; assertion passes
-- [ ] 3.2.3 Add 2× injection sub-case (different `parentId`) → assert `[data-expanded="true"]` (auto-expand boundary)
-- [ ] 3.2.4 Run `bun playwright test --project=authenticated cc-soleur-go-bubbles.e2e.ts -g "subagent-group"` → green
+### 3.3 FR3.3 — Cross-user / cross-context isolation (DEEPEN-CORRECTED: stream-frame marker, not chat_message)
+- [ ] 3.3.1 `test()` with `async ({ browser }) => ...` signature
+- [ ] 3.3.2 Create two contexts: `ctxA = browser.newContext({ storageState: "e2e/.auth/user.json" })` + ctxB symmetric
+- [ ] 3.3.3 `bootChatInContext(ctxA, { convId: "conv-stage-6-sec-fr33-a" })` + symmetric for B
+- [ ] 3.3.4 `const FR33_MARKER = "STAGE6_FR33_USER_A_ONLY"`; inject `stream_start` + `stream(content: FR33_MARKER, partial: false, leaderId: "cc_router")` + `stream_end` on context A
+- [ ] 3.3.5 Assert A's page shows the marker; assert B's page has zero hits on the marker; symmetric in reverse direction (use FR33_MARKER_B for B→A)
+- [ ] 3.3.6 Inline comment explains "harness boundary, not server boundary" (sharp edge)
+- [ ] 3.3.7 `await ctxA.close(); await ctxB.close()`
 
-### 3.3 interactive-prompt-card resolved-state (FR1.2)
-- [ ] 3.3.1 RED: assert `[data-prompt-id="pid-test-1"][data-prompt-kind="ask_user"]` visible (fails initially)
-- [ ] 3.3.2 GREEN: inject `interactive_prompt(kind="ask_user", promptId="pid-test-1", options=[{id:"a"},{id:"b"},{id:"c"}], multi_select=true)`
-- [ ] 3.3.3 Read `apps/web-platform/test/interactive-prompt-card-resolved.test.tsx` to confirm resolved-state selector form; add resolution event + assertion (selectedIds=["a","c"], `aria-checked="true"` on multi-select checkboxes)
-- [ ] 3.3.4 Run `-g "interactive-prompt-card"` → green
+### 3.4 FR3.4 — 11-conversation rate limit (DEEPEN-CORRECTED: sendControl + WsControlEvent extension)
+- [ ] 3.4.0 **Prerequisite:** edit `apps/web-platform/e2e/cc-soleur-go-ws-injector.ts:22-36` to add `error` arm to `WsControlEvent` union with shape `{ type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string; runnerRunaway*?: …; }` (verify shape against `apps/web-platform/lib/types.ts:303-316`). No body change to `attachWsInjector`. Commit separately if scope-creep concern: `feat(e2e): widen WsControlEvent to include error frame (#2939 PR-C prereq)`
+- [ ] 3.4.1 `test()`: boot chat, call `injector.sendControl({ type: "error", message: "Rate limited: too many conversations this hour.", errorCode: "rate_limited" })` (message literal matches `apps/web-platform/server/ws-handler.ts:1042`)
+- [ ] 3.4.2 Assertions: `[data-rate-limit-exceeded]` visible (canary from Phase 1.1.1); `text=Rate Limited` visible (ErrorCard title from `chat-surface.tsx:558`); message body propagates through ErrorCard
 
-### 3.4 workflow-lifecycle-bar chip-removal — BOTH paths (FR1.3)
-- [ ] 3.4.1 RED: test 3.4a assert chip present after `tool_use(cc_router, label)` (fails initially)
-- [ ] 3.4.2 GREEN 3.4a (`tool_use → workflow_started`): inject sequence per plan §3.3a; assert chip removed + lifecycle-bar active + lifecycle-bar ended
-- [ ] 3.4.3 GREEN 3.4b (`tool_use → stream_end`): fresh page or reset state; inject `tool_use → stream_end(leaderId="cc_router")`; assert chip removed
-  - Verify required fields on `stream_end` via Phase 0.6 grep against `chat-state-machine.ts:522-529`
-- [ ] 3.4.4 Run `-g "workflow-lifecycle-bar"` → both sub-cases green
+### 3.5 Commit
+- [ ] 3.5.1 `git add apps/web-platform/e2e/cc-soleur-go-security.e2e.ts`
+- [ ] 3.5.2 Commit: `feat(e2e): Stage 6 PR-C security smoke FR3.1-FR3.4 (#2939)`
 
-### 3.5 tool-use-chip unregistered-mcp-fqn render (FR1.4)
-- [ ] 3.5.1 RED: assert `[data-tool-chip-id^="cc_router-mcp__soleur_platform__test_synthesized_smoke-"]` count = 1 (fails initially)
-- [ ] 3.5.2 GREEN: inject `tool_use(leaderId="cc_router", label="mcp__soleur_platform__test_synthesized_smoke")`; assertion passes
-- [ ] 3.5.3 Confirm `pageerror` capture from 3.1.2 fired ZERO times (no-crash assertion)
-- [ ] 3.5.4 Pre-commit check: `grep "test_synthesized_smoke" apps/web-platform/server/tool-tiers.ts` returns zero (synthesized FQN must NOT pollute the production tier registry — Sharp Edge)
-- [ ] 3.5.5 Run `-g "tool-use-chip"` → green
+## Phase 4 — Screenshot redaction helper
 
-### 3.6 Commit
-- [ ] 3.6.1 `git add apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts`
-- [ ] 3.6.2 Commit: `feat(e2e): per-bubble Stage 6 regression assertions (#2939)`
+### 4.1 GREEN — `screenshot-redact.ts`
+- [ ] 4.1.1 `grep -n '"sharp":' apps/web-platform/package.json` — if present, use `sharp.composite`; if absent, run `bun add -d sharp` AFTER operator ack (sharp-edge: package.json change in security PR warrants ack)
+- [ ] 4.1.2 Create `apps/web-platform/e2e/helpers/screenshot-redact.ts` with the API per plan §4.1.1
+- [ ] 4.1.3 Add `apps/web-platform/test/screenshot-redact.test.ts` — synthetic 4×4 PNG, 2×2 redaction at (1,1), assert opaque-black pixels at (1,1)..(2,2) + original elsewhere
+- [ ] 4.1.4 `grep -rn 'from.*screenshot-redact\|require.*screenshot-redact' apps/web-platform/app/ apps/web-platform/lib/ apps/web-platform/server/` returns 0 (helper must not leak into runtime paths)
 
-## Phase 4 — Integration verification
+### 4.2 Commit
+- [ ] 4.2.1 `git add apps/web-platform/e2e/helpers/screenshot-redact.ts apps/web-platform/test/screenshot-redact.test.ts` (+ `package.json` + `bun.lock` if sharp added)
+- [ ] 4.2.2 Commit: `feat(e2e-helpers): screenshot redaction helper for Stage 6 visual-QA (#2939)`
 
-### 4.1 Run all tests
-- [ ] 4.1.1 `bun run vitest apps/web-platform/test/validate-origin.test.ts` → green
-- [ ] 4.1.2 `cd apps/web-platform && bun playwright test --project=authenticated cc-soleur-go-bubbles.e2e.ts` → all 4 bubble test groups green
-- [ ] 4.1.3 `bun tsc --noEmit` from `apps/web-platform/` → green (verifies `export StreamEvent` consumers + `satisfies StreamEvent` call-sites)
+## Phase 5 — Visual-QA rubric
 
-### 4.2 Guard greps (Spec NG enforcement)
-- [ ] 4.2.1 `grep -n "mcp__soleur_platform__plausible_" apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns zero (NG4 / TR9)
-- [ ] 4.2.2 `grep -n "ANTHROPIC_API_KEY\|claude-agent-sdk" apps/web-platform/e2e/cc-soleur-go-bubbles.e2e.ts apps/web-platform/e2e/cc-soleur-go-ws-injector.ts` returns zero (NG2)
-- [ ] 4.2.3 `grep -rn "toHaveScreenshot" apps/web-platform/e2e/` returns no NEW matches vs `git diff main -- apps/web-platform/e2e/` (NG1)
-- [ ] 4.2.4 `grep -n "withUserRateLimit\|authenticateAndResolveKbPath\|getUser" apps/web-platform/lib/auth/validate-origin.ts` returns zero (TR10 — no new auth primitive)
+### 5.1 GREEN — `visual-qa-rubric.md`
+- [ ] 5.1.1 Create `knowledge-base/project/specs/feat-cc-soleur-go-smoke-2939/visual-qa-rubric.md` with the YAML frontmatter + body sections per plan §5.1.1 (FR5.1-FR5.6)
+- [ ] 5.1.2 `grep -rn "test@e2e.com\|test-user-id" knowledge-base/project/specs/feat-cc-soleur-go-smoke-2939/visual-qa-rubric.md` returns 0 (no test-user identifiers leak into the rubric doc itself)
 
-## Phase 5 — Ship handoff
+### 5.2 Operator capture (POST-merge work, run by operator at QA time)
+- [ ] 5.2.1 Capture 8 redacted screenshots (4 bubbles × 2 themes) to `$(pwd)/tmp/screenshots/` per rubric step 1
+- [ ] 5.2.2 Run redaction helper on each
+- [ ] 5.2.3 Paste redacted PNGs into PR-C body (GitHub user-attachment textbox, NOT git-add)
 
-- [ ] 5.1 Run `skill: soleur:compound` — capture any session learnings
-- [ ] 5.2 Run `skill: soleur:ship` — PR-A title prefix: `feat(cc-soleur-go): Stage 6 PR-A — bubble e2e foundations + DEV_ORIGINS multi-port (#2939)`
-- [ ] 5.3 PR body: `Closes #2939 (partial — PR-A of 3); Partially addresses #2224 (export StreamEvent line item only)`. Apply `semver:minor` label (new env var surface)
-- [ ] 5.4 Append "PR-A scope" note to #2939 body referencing this plan + listing PR-B/PR-C as follow-ups
+### 5.3 Commit
+- [ ] 5.3.1 `git add knowledge-base/project/specs/feat-cc-soleur-go-smoke-2939/visual-qa-rubric.md`
+- [ ] 5.3.2 Commit: `docs(spec): Stage 6 one-time visual-QA rubric for cc-soleur-go (#2939)`
 
-## Phase 6 — Post-merge (operator)
+## Phase 6 — Integration verification + guard greps + PR body
 
-- [ ] 6.1 (operator decision, no automation) Schedule PR-B planning within 7 days. Either keep `feat-cc-soleur-go-smoke-2939` branch open OR cut `feat-cc-soleur-go-smoke-2939-pr-b` at PR-A merge time (preferred — avoids 3-PR-on-1-branch confusion).
+### 6.1 Run tests
+- [ ] 6.1.1 `cd apps/web-platform && bun playwright test --project=authenticated cc-soleur-go-security.e2e.ts` → all 4 FR3.x test groups green
+- [ ] 6.1.2 `cd apps/web-platform && bun playwright test --project=authenticated cc-soleur-go-bubbles.e2e.ts cc-soleur-go-routing.e2e.ts` → no regression from Phase 1 chat-surface edit
+- [ ] 6.1.3 `bun tsc --noEmit` from `apps/web-platform/` → green
+- [ ] 6.1.4 `bun run vitest apps/web-platform/test/screenshot-redact.test.ts` → green
+
+### 6.2 Guard greps
+- [ ] 6.2.1 `grep -n "mcp__soleur_platform__plausible_" apps/web-platform/e2e/cc-soleur-go-security.e2e.ts` returns 0 (TR9 / NG4)
+- [ ] 6.2.2 `grep -n "ANTHROPIC_API_KEY\|claude-agent-sdk\|@anthropic-ai/" apps/web-platform/e2e/cc-soleur-go-security.e2e.ts` returns 0 (NG2)
+- [ ] 6.2.3 `grep -n "toHaveScreenshot" apps/web-platform/e2e/cc-soleur-go-security.e2e.ts` returns 0 (NG1)
+- [ ] 6.2.4 `grep -n "test_synthesized_exfil\|test_synthesized_smoke" apps/web-platform/server/tool-tiers.ts` returns 0
+- [ ] 6.2.5 `grep -rn "test@e2e.com\|test-user-id" knowledge-base/project/specs/feat-cc-soleur-go-smoke-2939/` returns 0
+- [ ] 6.2.6 `grep -rn 'STAGE6_CANARY_DO_NOT_EXFILTRATE\|STAGE6_FR33_USER_A_ONLY' apps/web-platform/ --include="*.ts" --include="*.tsx"` returns only matches inside `e2e/cc-soleur-go-security.e2e.ts`
+
+### 6.3 PR body
+- [ ] 6.3.1 `gh pr edit 3779 --body-file <file>` with content per plan §6.3.1 (Closes #2939; Refs #3743 #3778; honest-framing notes)
+- [ ] 6.3.2 Apply labels: `semver:patch`, `domain/engineering`, `type/chore`
+
+## Phase 7 — Scope-out filing (during /work, BEFORE bug-class assertions)
+
+Per plan-author bug-handling policy: file scope-out issues BEFORE writing
+the assertion that fails the bug, NOT after.
+
+### 7.1 §DS1 — bootChat extraction
+- [ ] 7.1.1 `gh issue create --title "[stage-6-smoke / cleanup] Extract bootChat into e2e/helpers/cc-soleur-go-boot.ts" --label "domain/engineering,type/chore,priority/p3-low" --body "Three e2e specs each carry near-identical bootChat (bubbles, routing, security). ~60-LoC extraction. Cleanup-only."`
+
+### 7.2 §DS2-DS5 — Real-bug filings (CONDITIONAL on Phase 3 surfacing bugs)
+- [ ] 7.2.1 IF FR3.1 prompt-injection drain assertion fails on a real bug: `gh issue create --title "[stage-6-smoke / prompt-injection-drain] <symptom>" --label "type/security,domain/engineering,priority/<tier>"` and record the issue number in PR body "Deferred bugs found"
+- [ ] 7.2.2 IF FR3.2 bash review-gate fails on a real bug: `gh issue create --title "[stage-6-smoke / bash-review-gate] <symptom>" --label "type/security,domain/engineering,priority/<tier>"`
+- [ ] 7.2.3 IF FR3.3 cross-user isolation fails on a real bug: `gh issue create --title "[stage-6-smoke / cross-user-isolation] <symptom>" --label "type/security,domain/engineering,priority/<tier>"`
+- [ ] 7.2.4 IF FR3.4 rate-limit assertion fails on a real bug: `gh issue create --title "[stage-6-smoke / rate-limit-window] <symptom>" --label "type/security,domain/engineering,priority/<tier>"`
+
+## Phase 8 — Ship + merge
+
+- [ ] 8.1 Run `skill: soleur:compound` — capture any session learnings
+- [ ] 8.2 Run `skill: soleur:ship` — PR title prefix: `feat(cc-soleur-go): Stage 6 PR-C — security smoke (FR3.1-3.4) + visual-QA rubric (#2939)`
+- [ ] 8.3 Verify PR body has `Closes #2939` (auto-closes umbrella on merge)
+
+## Phase 9 — Post-merge (operator + automation)
+
+- [ ] 9.1 Verify auto-close: `gh issue view 2939 --json state` → `CLOSED`
+- [ ] 9.2 `gh issue edit 2939 --body-file <reconciliation-block>` appending the 3-PR landed reconciliation per plan §7.1.1
+- [ ] 9.3 Verify each scope-out issue from §7.2 (if any filed) shows `state: "OPEN"` and the correct title prefix
+- [ ] 9.4 If #3722 is the next dependent: leave a comment on #3722 referencing the closed #2939 to unblock its Stage 6 dependency
