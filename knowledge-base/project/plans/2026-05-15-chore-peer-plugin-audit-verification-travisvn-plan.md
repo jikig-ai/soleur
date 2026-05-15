@@ -16,6 +16,22 @@ deliverable is a structured advisory entry written to the appropriate tier of
 `knowledge-base/product/competitive-intelligence.md`, then issue `#2749` closed
 with the artifact linked.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-15
+**Detail level:** MINIMAL (procedural verification — see "Implementation Detail Level" below)
+**Live verifications run during deepen-pass:**
+
+- `gh pr view 2734 --json state` → `MERGED` ✓ (citation accurate)
+- `gh issue view 2749 --json state` → `OPEN` ✓ (citation accurate)
+- `gh repo view travisvn/awesome-claude-skills --json licenseInfo,stargazerCount,forkCount` → `licenseInfo: null`, 12,561 stars, 1,363 forks ✓
+- `gh api "repos/travisvn/awesome-claude-skills/git/trees/HEAD?recursive=1" --jq '.tree[].path \| select(endswith("SKILL.md"))'` → empty (zero SKILL.md files) ✓ — load-bearing finding driving the Research Reconciliation pivot from 4-section report to "Non-audit outcome" branch.
+- AGENTS.md rule-ID citation grep over plan body → zero matches (no fabricated/retired rule IDs to fix).
+- SSH / network-outage keyword scan → no triggers (Phase 4.5 skipped per spec).
+- User-Brand Impact section validation → present, non-empty, threshold `none` with valid scope-out reason; `Files to Edit` does not match the canonical sensitive-path regex (single internal CI markdown file).
+
+**Per-section deepen agent fan-out — intentionally not spawned.** This plan is a single-skill invocation against a documented branch of an existing procedure (`peer-plugin-audit.md` §"Non-audit outcome") with one file edited. The load-bearing risks (procedure routing, non-audit branch coverage, single-file scope, Closes-keyword automation) are encoded in 12 ACs + 4 Sharp Edges already; spawning architecture-strategist / pattern-recognition / type-design / data-integrity agents on a markdown advisory entry would inflate the artifact without changing the work shape. The autonomous-loop API-budget operator preamble (`hr-autonomous-loop-skill-api-budget-disclosure`) authorizes scoping deepen-plan fan-out down for procedural lanes.
+
 ## Research Reconciliation — Issue Body vs. Codebase Reality
 
 Plan-time probe of the target repo (`gh repo view travisvn/awesome-claude-skills` +
