@@ -270,6 +270,40 @@ jobs:
           printf 'released=%s\n' "true" >> "$GITHUB_OUTPUT"
           echo "Created release $TAG"
 
+      # Sentry Monitors/Alerts migration audit (Phase 2.2 of #3814).
+      # Re-runs the audit after each release and uploads the dated Markdown
+      # report as a release asset. Provides an evergreen Article 30 §5(2)
+      # accountability evidence trail co-located with release notes.
+      # Skips silently when SENTRY_AUTH_TOKEN is unavailable (e.g. component
+      # release where the secret isn't required).
+      - name: Sentry Monitors/Alerts migration audit
+        if: steps.create_release.outputs.released == 'true'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
+            echo "::notice::SENTRY_AUTH_TOKEN unavailable; skipping migration audit (no Article 30 evidence uploaded for this release)."
+            exit 0
+          fi
+          if [[ ! -x apps/web-platform/scripts/sentry-monitors-audit.sh ]]; then
+            echo "::notice::Audit script not present in this checkout; skipping."
+            exit 0
+          fi
+          AUDIT_OUT_DIR="${RUNNER_TEMP}/sentry-audit" \
+            bash apps/web-platform/scripts/sentry-monitors-audit.sh
+          report=$(ls "${RUNNER_TEMP}/sentry-audit"/sentry-migration-audit-*.md 2>/dev/null | head -1 || true)
+          if [[ -z "$report" ]]; then
+            echo "::warning::Audit produced no report file."
+            exit 0
+          fi
+          gh release upload "$TAG" "$report" --clobber
+          echo "Uploaded $(basename "$report") to release $TAG."
+
       - name: Count plugin components
         id: plugin_stats
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
