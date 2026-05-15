@@ -70,6 +70,7 @@ Each check has a stable `check_id` for cross-referencing in `compliance-posture.
 | `GDPR-Art-6` | Art. 6 lawful basis | New schema column without `-- LAWFUL_BASIS: <basis>` annotation | `Important` |
 | `GDPR-Art-5e` | Art. 5(1)(e) retention | New PII table without retention metadata | `Important` |
 | `GDPR-Art-17` | Art. 17 erasure | New FK to `users` without `ON DELETE CASCADE` or anonymisation migration | `Important` |
+| `GDPR-Art-17-caller` | Art. 17 erasure (caller-site) | Diff adds an `ON DELETE RESTRICT` FK to `public.users` AND an `anonymise_*` RPC, AND `git grep -n '<rpc_name>'` returns zero matches outside `supabase/migrations/`, `knowledge-base/`, and plan files | `Important` (see [[2026-05-16-migration-mandates-must-have-wired-call-sites-in-same-pr]]) |
 | `GDPR-Chapter-V` | Art. 44–49 cross-border | New non-EEA vendor env var / SDK without `compliance-posture.md` Vendor DPA row | `Important` |
 | `GDPR-Art-9` | Art. 9 special-category | New column matching the Art. 9 list in [fields.md](./references/fields.md) | **`Critical`** |
 
