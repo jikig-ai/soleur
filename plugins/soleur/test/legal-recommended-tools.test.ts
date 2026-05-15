@@ -85,16 +85,33 @@ describe("recommended-tools.md", () => {
     }
   })();
 
-  test(`has exactly ${EXPECTED_THRESHOLDS} H2 sections (frozen catalog)`, () => {
-    const h2Count = md.split("\n").filter((l) => l.startsWith("## ")).length;
-    expect(h2Count).toBe(EXPECTED_THRESHOLDS);
-  });
-
-  test("each H2 section has a tool table with at least 2 data rows", () => {
+  test(`has exactly ${EXPECTED_THRESHOLDS} tool-table H2 sections (frozen catalog)`, () => {
+    // Count H2s that are followed by a tool table — page-metadata H2s
+    // (e.g., "## About this page") are intentionally excluded so the test
+    // doesn't shape document structure. The five tool-table sections are
+    // the load-bearing invariant.
     const sections = extractTableSections(md);
     expect(sections.length).toBe(EXPECTED_THRESHOLDS);
+  });
+
+  test("each tool-table section has at least 2 data rows", () => {
+    const sections = extractTableSections(md);
     for (const section of sections) {
       expect(section.rows.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  test("threshold-section H2 headings are lowercase-kebab (locks anchor form)", () => {
+    // Anchor stability requires the heading text to BE the anchor literal
+    // already (lowercase, kebab, no punctuation). A future contributor who
+    // "fixes" the heading to readable English (`## Vendor MSA review`)
+    // changes the rendered anchor to `vendor-msa-review` via the renderer's
+    // slugger — not necessarily the same as `kebab(text)`. Locking the
+    // heading form prevents silent anchor drift.
+    const KEBAB_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+    const sections = extractTableSections(md);
+    for (const section of sections) {
+      expect(section.heading).toMatch(KEBAB_RE);
     }
   });
 

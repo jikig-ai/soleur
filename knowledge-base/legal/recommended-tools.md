@@ -8,6 +8,8 @@ related-issues: ["#3785", "#3786"]
 # Recommended downstream legal-tooling specialists
 
 > **DRAFT — Recommendations on this page are starting points for evaluating downstream specialists. They are not endorsements, partnerships, or legal advice. Verify suitability with retained counsel before relying on any tool's output. Soleur is a developer tool, not a law firm.**
+>
+> **Vendor links last verified: 2026-05-15.** If a link 404s under deadline pressure, the founder-accessible counsel marketplaces in this page's tables — LawTrades (US, https://lawtrades.com), Priori (US, https://www.priorilegal.com), IAPP Member Directory (global, https://iapp.org/connect/find-a-member/) — are the always-on fallbacks; pick whichever responds first.
 
 When a Soleur user (founder) hits a legal need that exceeds founder-grade compliance helping (`/soleur:legal-audit`, `/soleur:legal-generate`, `/soleur:gdpr-gate`, the `clo` agent), this page lists vendor-neutral downstream specialists for the threshold the user has crossed. Each section names ≥ 2 specialists; `anthropics/claude-for-legal` plugins are listed alongside founder-accessible counsel marketplaces and (where applicable) classification SaaS.
 
@@ -89,6 +91,8 @@ If you are handling an inbound event, jump straight to the relevant section:
 **If you have no retained counsel.** The 72-hour clock means "engage someone immediately, don't wait for a tool eval." Marketplace privacy/security specialist is the fastest path; the IAPP Member Directory is the backup if marketplaces are slow.
 
 ---
+
+## About this page
 
 ### Why this page exists
 

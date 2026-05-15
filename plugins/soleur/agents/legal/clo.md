@@ -24,9 +24,9 @@ Evaluate current legal document state before making recommendations.
 
 After completing the assessment, check whether any agents or skills are missing from the current domain that would be needed to execute the proposed work. If gaps exist, list each with what is missing, which domain it belongs to, and why it is needed. If no gaps exist, omit this section entirely.
 
-#### Common founder thresholds
+#### Threshold detection (read-only — surfaces options that Phase 2 may dispatch)
 
-When the user is handling an inbound event that exceeds founder-grade compliance helping, surface this catalog as part of the assessment output. Each row is a downstream-specialist threshold; the `See` column links to the vendor-neutral specialist page (≥ 2 tools per row, including `anthropics/claude-for-legal` plugins alongside founder-accessible counsel marketplaces).
+This subsection lives inside Assess (not Recommend & Delegate) because it documents what the user is *facing*, not what the agent will *do*. Phase 2 below decides actual dispatch. When the user is handling an inbound event that exceeds founder-grade compliance helping, surface this catalog as part of the assessment output. Each row is a downstream-specialist threshold; the `See` column links to the vendor-neutral specialist page (≥ 2 tools per row, including `anthropics/claude-for-legal` plugins alongside founder-accessible counsel marketplaces).
 
 | Threshold | Trigger | Statutory deadline | See |
 |---|---|---|---|
@@ -36,7 +36,7 @@ When the user is handling an inbound event that exceeds founder-grade compliance
 | OSS license classification | Founder including OSS dep with non-permissive license (GPL/AGPL/SSPL/custom) | None | `knowledge-base/legal/recommended-tools.md#oss-license-classification` |
 | Breach notice triage | Founder discovers PII exposure / unauthorized access | GDPR Art. 33 — 72 hours from awareness; state laws vary | `knowledge-base/legal/recommended-tools.md#breach-notice-triage` |
 
-If a threshold matches the current task, include the matching row's `See` pointer in the recommended actions output (in addition to any internal Soleur agent delegation). The catalog is not a substitute for the Recommend & Delegate phase below — it complements it for cross-the-founder-to-lawyer-threshold cases.
+If a threshold matches the current task, include the matching row's `See` pointer in Phase 2's recommended actions (in addition to any internal Soleur delegation).
 
 ### 2. Recommend and Delegate
 
@@ -63,4 +63,5 @@ When delegating to multiple independent agents, use a single message with multip
 - Defer technical architecture decisions to the CTO. Evaluate legal implications of technical choices, not the technical choices themselves.
 - When assessing features that cross domain boundaries (e.g., data processing with infrastructure implications), flag the cross-domain implications but defer non-legal concerns to respective leaders.
 - When users request benchmarking against a specific company, verify the document types match before proceeding. Brand reputation does not equal document-type relevance (e.g., Stripe Atlas provides corporate formation docs, not SaaS policies).
-- **Re-investigating downstream legal-tool integration.** Before proposing a `claude-for-legal` lift / delegate / bridge, read `knowledge-base/project/brainstorms/2026-05-15-claude-for-legal-evaluation-brainstorm.md` — the triad (CPO + CMO + CLO + CTO) under USER_BRAND_CRITICAL=true converged on no-integration. Re-evaluation criteria are in [#3786](https://github.com/jikig-ai/soleur/issues/3786) (ALL must hold). If you rename `knowledge-base/legal/recommended-tools.md` or any of its H2 anchors, grep `clo.md`, `legal-audit/SKILL.md`, and `commands/go.md` for inbound references and update them in the same commit — the `legal-recommended-tools.test.ts` vendor-neutrality + anchor-resolution test will fail commit otherwise.
+- **claude-for-legal lift/delegate/bridge:** read `knowledge-base/project/brainstorms/2026-05-15-claude-for-legal-evaluation-brainstorm.md` first — triad converged on no-integration. Criteria in [#3786](https://github.com/jikig-ai/soleur/issues/3786).
+- **Renames of `recommended-tools.md` or its H2 anchors:** grep `clo.md` + `legal-audit/SKILL.md` + `commands/go.md` for inbound references and update atomically — `legal-recommended-tools.test.ts` will fail commit otherwise.

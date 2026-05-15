@@ -95,7 +95,12 @@ See `knowledge-base/legal/recommended-tools.md#breach-notice-triage`.
 
 ---
 
-**Zero-findings + threshold-in-flight catch.** If the audit produces zero findings AND the project contains regulated-data surfaces (privacy policy, ToS mentioning data processing, breach-response doc, anything matching `**/{privacy,terms,gdpr,dpa,disclaimer}*`), ALWAYS append the full threshold catalog pointer at the bottom of the report. A clean audit does NOT mean no threshold is in flight — a founder mid-DSAR may have a clean privacy policy.
+**Zero-findings + threshold-in-flight catch.** If the audit produces zero findings AND the project contains regulated-data surfaces (privacy policy, ToS mentioning data processing, breach-response doc, anything matching `**/{privacy,terms,gdpr,dpa,disclaimer}*`):
+
+1. **ALWAYS append the full threshold catalog pointer at the bottom of the report.** A clean audit does NOT mean no threshold is in flight — a founder mid-DSAR may have a clean privacy policy.
+2. **Additionally, surface a top-of-report deadline-check banner**: a single inline-prose question asking the user to confirm whether any of the deadline-bearing thresholds (DSAR Art. 12 — 30 days; breach Art. 33 — 72 hours from awareness) is in flight right now. If yes, the founder should treat the corresponding `### Escalation required` H3 (with its statutory deadline interpolated into the heading) as the primary output of this audit — the catalog at the bottom is secondary.
+
+This dual surfacing closes the failure mode where a founder under deadline pressure runs an audit on docs that happen to be clean and never sees the deadline H3 (because no finding triggered it via category-match alone).
 
 **Inline only.** NEVER write the escalation pointer or catalog pointer to a file — Phase 3 `<critical_sequence>` (above) applies to every output of this skill.
 
