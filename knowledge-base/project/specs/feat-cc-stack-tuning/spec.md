@@ -1,8 +1,10 @@
 ---
 title: Deterministic permissions — PermissionDenied telemetry + deferred-permission hook for prod-writes
 date: 2026-05-15
+issue: 3789
 branch: feat-cc-stack-tuning
 draft_pr: 3787
+deferred_children: [3790, 3791, 3792, 3793]
 brainstorm: knowledge-base/project/brainstorms/2026-05-15-cc-stack-tuning-brainstorm.md
 lane: cross-domain
 brand_survival_threshold: single-user incident

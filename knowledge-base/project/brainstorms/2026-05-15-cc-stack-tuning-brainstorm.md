@@ -1,8 +1,10 @@
 ---
 title: Claude Code stack tuning — deterministic permissions + deferred candidates
 date: 2026-05-15
+issue: 3789
 branch: feat-cc-stack-tuning
 draft_pr: 3787
+deferred_children: [3790, 3791, 3792, 3793]
 lane: cross-domain
 brand_survival_threshold: single-user incident
 user_brand_critical: true
@@ -67,6 +69,14 @@ The synthesis converges across five domain leaders + repo-research + learnings-r
 | 11 | Approval channel architecture for F3 (when un-deferred): Discord ops bot + GH Actions Environments + Cloudflare Worker HMAC resume endpoint | COO assessment; uses only ledger-existing infra | COO assessment (carry-forward) |
 
 ## Non-Goals (deferred to tracking issues)
+
+- **F3** — CI defer-then-resume — tracking #3790
+- **F5** — Agent model-downshift — tracking #3791
+- **F6** — Path-scoped AGENTS sidecars — tracking #3792
+- **F7** — Per-skill MCP activation — tracking #3793
+- **F4 expanded scope** — rejected as premature
+
+### Detail
 
 - **F3 — CI defer-then-resume in `soleur:schedule`.** Deferred post-Phase 4. Re-evaluation criteria: `soleur:schedule` has 2+ active nightly tasks where defer-on-prod-write is the bottleneck AND F2 has shipped in enforce mode AND COO's approval-channel architecture (Discord bot + GH Env + CFW HMAC) is approved.
 - **F5 — Agent model-downshift audit.** Deferred entirely. `plugins/soleur/AGENTS.md` Model Selection Policy mandates `model: inherit` (zero overrides among 67 agents); revising the policy is a separate decision. Re-evaluation criteria: BYOK cost telemetry shows clear waste OR a per-agent quality regression justifies the revision conversation.
