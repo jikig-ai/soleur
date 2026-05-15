@@ -115,15 +115,15 @@ Edit #2939 body in-place with a **Reconciliation** block:
 
 ## Acceptance Criteria
 
-- [ ] PR-A merges with: DEV_ORIGINS fix + WS-injector helper + 4 per-bubble assertions (FR1.1-FR1.4). New e2e tests green on CI.
-- [ ] PR-B merges with: FR2.1-FR2.10 routing/cost/UX smoke. New e2e tests green on CI.
-- [ ] PR-C merges with: FR3.1-FR3.4 security smoke + visual-QA rubric doc (FR5). Manual QA screenshots attached to PR-C description with test-user identifiers redacted (FR5.6).
-- [ ] Issue #2939 body updated with Reconciliation block citing #3270 (FR6).
+- [x] PR-A merges with: DEV_ORIGINS fix + WS-injector helper + 4 per-bubble assertions (FR1.1-FR1.4). New e2e tests green on CI. **Landed 2026-05-14 as #3743 (SHA `837484d0`).**
+- [x] PR-B merges with: FR2.1-FR2.10 routing/cost/UX smoke. New e2e tests green on CI. **Landed 2026-05-15 as #3778 (SHA `05663ed6`).**
+- [x] PR-C merges with: FR3.1-FR3.4 security smoke + visual-QA rubric doc (FR5). Manual QA screenshots attached to PR-C description with test-user identifiers redacted (FR5.6). **Landing as #3779.**
+- [ ] Issue #2939 body updated with Reconciliation block citing #3270 (FR6). **Post-merge operator action — auto-closed by `Closes #2939` in PR-C body; reconciliation block appended via `gh issue edit 2939` after merge.**
 - [ ] #3722 unblocked: Stage 6 closure is one of its 3 blockers; CLO DPA-row status and #3720 merge are the other two.
-- [ ] No `toHaveScreenshot()` baselines committed (Spec NG1).
-- [ ] No real-SDK calls from CI (Spec NG2).
-- [ ] No MCP allowlist non-empty default (Spec NG3, NG4).
-- [ ] Smoke does not exercise denied MCP tools (TR9).
+- [x] No `toHaveScreenshot()` baselines committed (Spec NG1). Guard grep at PR-C Phase 6.2.3 returns 0.
+- [x] No real-SDK calls from CI (Spec NG2). Guard grep at PR-C Phase 6.2.2 returns 0.
+- [x] No MCP allowlist non-empty default (Spec NG3, NG4). Unchanged.
+- [x] Smoke does not exercise denied MCP tools (TR9). Guard grep at PR-C Phase 6.2.1 returns 0.
 
 ## Risks & Mitigations
 
