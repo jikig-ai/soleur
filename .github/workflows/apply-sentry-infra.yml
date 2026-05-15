@@ -76,6 +76,14 @@ jobs:
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # Required-reviewer gate. Configured at the repo level
+    # (Settings → Environments → sentry-infra-apply) with deruelle as the
+    # sole required reviewer and a custom branch policy restricting
+    # deployments to `main`. Defense layer paired with `.github/CODEOWNERS`
+    # for PR-time review — a leaked PAT with `contents:write` would have
+    # to bypass BOTH (the PR can't merge without code-owner review AND
+    # the apply can't run without manual approval click).
+    environment: sentry-infra-apply
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

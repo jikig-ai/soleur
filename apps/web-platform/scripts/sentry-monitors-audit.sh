@@ -21,6 +21,15 @@
 #   SENTRY_FIXTURE_RULES      — file path; serve as project rules response
 #   AUDIT_OUT_DIR             — write report here instead of repo legal dir
 #
+# Dual-path output by caller (plan OQ1; PR #3811 review P1-H):
+#   - Operator runs (Phase 2.1 baseline, local re-runs): AUDIT_OUT_DIR
+#     unset → tracked dir `knowledge-base/legal/audits/`. Produces the
+#     canonical pre-import snapshot in git history.
+#   - CI release runs (Phase 2.2 — `reusable-release.yml`): override
+#     AUDIT_OUT_DIR to `$RUNNER_TEMP/sentry-audit/`; the workflow then
+#     uploads the resulting report as a per-release GitHub release
+#     asset. Avoids commit-storm + write-to-main authorization surface.
+#
 # Plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
 # Phase: 1 (script) + 2.1 (operator run) + 2.2 (CI re-run on release)
 
