@@ -65,9 +65,9 @@ Direct thesis-level competitors — entities claiming to run a company's non-eng
 3. **Paperclip + BYO-agents is the open-source path that undercuts the revenue model.** A solo founder can run `alirezarezvani/claude-skills` inside Paperclip with their own Claude API key and approximate the Soleur experience for the cost of the API. The hosted-platform revenue plan must provide meaningfully more than that combination can assemble.
 4. **The plugin distribution channel is now contested.** Soleur is no longer the only CaaS-flavored Claude Code plugin, and is not the largest skills library on the marketplace.
 
-### Peer-Plugin Audit Log
+### Peer-Plugin Audit Log (non-audit outcomes)
 
-Verification log for `soleur:competitive-analysis peer-plugin-audit` invocations. Entries here record audits whose target did not produce an Overlap Matrix row (per `peer-plugin-audit.md` §"Non-audit outcome"). For audits that DID produce an entry, find them inline in the matrix above.
+Verification log for `soleur:competitive-analysis peer-plugin-audit` invocations whose target did NOT produce an Overlap Matrix row (per `peer-plugin-audit.md` §"Non-audit outcome" — e.g., target repo has zero `SKILL.md` files and is therefore not a skill library). Happy-path audits land as Overlap Matrix rows above (see the alirezarezvani/claude-skills row); this section is reserved for the error branch only — do NOT file happy-path audits here.
 
 #### travisvn/awesome-claude-skills — 2026-05-15
 
@@ -76,7 +76,7 @@ Verification log for `soleur:competitive-analysis peer-plugin-audit` invocations
 - **Stars / forks (at audit time):** 12,562 / 1,364
 - **Auditor:** `soleur:competitive-analysis peer-plugin-audit`
 - **Outcome:** **category mismatch; no audit produced.** Repo is an awesome-list (curated README of links to other skill libraries) and contains zero `SKILL.md` files. The procedure's `Non-audit outcome` branch fired correctly (`peer-plugin-audit.md:207-209`); no Overlap Matrix row added, no parallel file under `research/peer-plugin-audits/`.
-- **Verification value:** confirms the sub-mode's error branch works against a non-skill-library target. The seeding-corpus audit (`alirezarezvani/claude-skills`, PR `#2734`) only exercised the happy path; this entry closes follow-through `#2749`.
+- **Verification value:** confirms the sub-mode's error branch works against a non-skill-library target. The seeding-corpus audit (`alirezarezvani/claude-skills`, introduced by the 2026-04-18 monthly scan PR `#2697` and refined in PR `#2734`) only exercised the happy path; this entry closes follow-through `#2749`.
 
 ---
 
