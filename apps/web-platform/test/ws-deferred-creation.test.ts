@@ -20,6 +20,15 @@ const { mockRpc } = vi.hoisted(() => ({
   }),
 }));
 
+// Pin TC_VERSION so the mock row's tc_accepted_version stays in lockstep
+// with recheckTcMidSession. Insulates this test from future TC_VERSION
+// bumps (the bump PR would otherwise need to touch unrelated WS tests).
+vi.mock("@/lib/legal/tc-version", () => ({
+  TC_VERSION: "1.0.0",
+  TC_DOCUMENT_SHA:
+    "79b2d2c00136cfcd1e61cb7ee9654aeb2b80cf21f2b2d33d1f063f10948d9300",
+}));
+
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     from: (table: string) => {

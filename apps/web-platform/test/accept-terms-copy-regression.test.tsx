@@ -40,3 +40,20 @@ describe.each([
     ).toBe(true);
   });
 });
+
+// Middleware redirects to /accept-terms?error=db_unavailable on a Supabase
+// SELECT failure (fail-closed). The page MUST read the param and surface
+// the outage, otherwise the redirect becomes a dead-letter UX during real
+// incidents.
+describe("accept-terms/page.tsx middleware-outage banner", () => {
+  const src = readFileSync(ACCEPT_TERMS_PAGE, "utf8");
+
+  test("reads ?error=db_unavailable from searchParams", () => {
+    expect(src.includes("db_unavailable")).toBe(true);
+    expect(src.includes("useSearchParams")).toBe(true);
+  });
+
+  test("renders a non-form banner when the outage param is present", () => {
+    expect(src.includes('role="status"')).toBe(true);
+  });
+});

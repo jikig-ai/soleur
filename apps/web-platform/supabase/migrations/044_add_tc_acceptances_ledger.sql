@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS public.tc_acceptances (
 ALTER TABLE public.tc_acceptances ENABLE ROW LEVEL SECURITY;
 -- Zero policies: service-role-only via accept_terms / anonymise RPCs.
 
-CREATE INDEX tc_acceptances_user_accepted_idx
+CREATE INDEX IF NOT EXISTS tc_acceptances_user_accepted_idx
   ON public.tc_acceptances (user_id, accepted_at DESC);
 
 COMMENT ON TABLE public.tc_acceptances IS
@@ -130,11 +130,13 @@ $$;
 
 REVOKE ALL ON FUNCTION public.tc_acceptances_no_mutate() FROM PUBLIC, anon, authenticated, service_role;
 
+DROP TRIGGER IF EXISTS tc_acceptances_no_update ON public.tc_acceptances;
 CREATE TRIGGER tc_acceptances_no_update
   BEFORE UPDATE ON public.tc_acceptances
   FOR EACH ROW
   EXECUTE FUNCTION public.tc_acceptances_no_mutate();
 
+DROP TRIGGER IF EXISTS tc_acceptances_no_delete ON public.tc_acceptances;
 CREATE TRIGGER tc_acceptances_no_delete
   BEFORE DELETE ON public.tc_acceptances
   FOR EACH ROW

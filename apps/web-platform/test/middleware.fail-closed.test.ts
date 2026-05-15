@@ -36,8 +36,8 @@ vi.mock("@supabase/ssr", () => ({
   })),
 }));
 
-vi.mock("@/server/observability", () => ({
-  reportSilentFallback: mockReportSilentFallback,
+vi.mock("@/lib/observability-edge", () => ({
+  reportEdgeSilentFallback: mockReportSilentFallback,
 }));
 
 // ---------------------------------------------------------------------------

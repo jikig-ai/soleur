@@ -161,6 +161,8 @@ describe("deleteAccount", () => {
     mockRpc.mockImplementation(async (name: string) => {
       if (name === "anonymise_dsar_export_audit_pii") {
         callOrder.push("anonymise-dsar-audit");
+      } else if (name === "anonymise_tc_acceptances") {
+        callOrder.push("anonymise-tc-acceptances");
       }
       return { data: 0, error: null };
     });
@@ -172,14 +174,14 @@ describe("deleteAccount", () => {
     const result = await deleteAccount("user-123", "test@example.com");
 
     expect(result.success).toBe(true);
-    // AC25: ["abort-dsar-jobs", "abort", "workspace", "storage-purge",
-    //        "anonymise-dsar-audit", "auth"]. No storage objects here
-    // so storage-purge is absent from the trace; other steps preserved.
+    // AC25 + migration 044: anonymise-tc-acceptances MUST precede auth
+    // (FK is ON DELETE RESTRICT).
     expect(callOrder).toEqual([
       "abort-dsar-jobs",
       "abort",
       "workspace",
       "anonymise-dsar-audit",
+      "anonymise-tc-acceptances",
       "auth",
     ]);
   });
@@ -339,6 +341,8 @@ describe("deleteAccount", () => {
     mockRpc.mockImplementation(async (name: string) => {
       if (name === "anonymise_dsar_export_audit_pii") {
         callOrder.push("anonymise-dsar-audit");
+      } else if (name === "anonymise_tc_acceptances") {
+        callOrder.push("anonymise-tc-acceptances");
       }
       return { data: 0, error: null };
     });
@@ -362,8 +366,51 @@ describe("deleteAccount", () => {
       "workspace",
       "storage-purge",
       "anonymise-dsar-audit",
+      "anonymise-tc-acceptances",
       "auth",
     ]);
+  });
+
+  test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {
+    setupSupabaseMocks();
+    const callOrder: string[] = [];
+
+    mockRpc.mockImplementation(async (name: string) => {
+      callOrder.push(`rpc:${name}`);
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      callOrder.push("auth.deleteUser");
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    const tcIdx = callOrder.indexOf("rpc:anonymise_tc_acceptances");
+    const authIdx = callOrder.indexOf("auth.deleteUser");
+    expect(tcIdx).toBeGreaterThanOrEqual(0);
+    expect(authIdx).toBeGreaterThanOrEqual(0);
+    expect(tcIdx).toBeLessThan(authIdx);
+  });
+
+  test("Art. 17 — anonymise_tc_acceptances failure aborts cascade BEFORE auth-delete", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_tc_acceptances") {
+        return { data: null, error: { message: "RPC unavailable" } };
+      }
+      return { data: 0, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/failed/i);
+    // FK is ON DELETE RESTRICT — auth-delete must NOT be attempted
+    // because the cascade would abort with a FK violation anyway.
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
   });
 
   test("paginates when folder list returns PAGE_SIZE (1000) items", async () => {

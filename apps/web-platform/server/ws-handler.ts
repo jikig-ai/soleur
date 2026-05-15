@@ -1035,9 +1035,28 @@ export const TC_RECHECK_CACHE_MS = 30_000;
 export async function recheckTcMidSession(
   userId: string,
   session: ClientSession,
-  msgType: string,
+  msgType: WSMessage["type"],
 ): Promise<boolean> {
   if (!TC_RECHECK_MESSAGE_TYPES.has(msgType)) return false;
+
+  // Fast-path: if the handshake baseline already disagrees with the current
+  // TC_VERSION constant, close immediately — no DB round-trip needed. The
+  // baseline is captured once at handshake (line ~1978) and reads the same
+  // column the SELECT below would read; the only way they diverge is if
+  // TC_VERSION was bumped mid-session, in which case the cached baseline is
+  // authoritatively stale and we must close.
+  if (
+    session.tcVersionAtHandshake !== undefined &&
+    session.tcVersionAtHandshake !== TC_VERSION
+  ) {
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.close(
+        WS_CLOSE_CODES.TC_NOT_ACCEPTED,
+        "T&C not accepted (mid-session)",
+      );
+    }
+    return true;
+  }
 
   const cacheUntil = session.tcRecheckCacheUntil ?? 0;
   if (cacheUntil && Date.now() < cacheUntil) return false;
@@ -1051,6 +1070,18 @@ export async function recheckTcMidSession(
   const rowTyped = row as { tc_accepted_version?: string | null } | null;
 
   if (error || rowTyped?.tc_accepted_version !== TC_VERSION) {
+    // Sentry mirror on the DB-error branch so a Supabase outage during a
+    // live WS session is observable (cq-silent-fallback-must-mirror-to-sentry).
+    // The TC_VERSION-mismatch branch is expected and not an error — only
+    // the `error` arm pages operations.
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "ws-handler",
+        op: "tc_recheck_query_failed",
+        message: "users.tc_accepted_version SELECT failed mid-session",
+        extra: { userId, msgType },
+      });
+    }
     if (session.ws.readyState === WebSocket.OPEN) {
       session.ws.close(
         WS_CLOSE_CODES.TC_NOT_ACCEPTED,

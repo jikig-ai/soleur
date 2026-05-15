@@ -4,7 +4,8 @@ feature: feat-oauth-tc-consent-3205
 pr: 3853
 issue: 3205
 migration: apps/web-platform/supabase/migrations/044_add_tc_acceptances_ledger.sql
-migration_sha256: 0580ea5465eb68d90d316871a4f74e8cf87a230f4cc00f2de71863fc6698d864
+migration_sha256: 8ff3974289094d188ac94944c63bd0022d7c1580e24852eca90332af564836f4
+migration_sha256_pre_idempotency_guards: 0580ea5465eb68d90d316871a4f74e8cf87a230f4cc00f2de71863fc6698d864
 ---
 
 # Migration 044 — Apply Checklist
@@ -35,7 +36,8 @@ checklist records the correct refs.
       a single transaction. Pooler avoids the IPv6-only direct-DB route
       (`db.<ref>.supabase.co:5432`) which is unreachable from the
       operator's network.
-- [x] SQL file SHA-256: `0580ea5465eb68d90d316871a4f74e8cf87a230f4cc00f2de71863fc6698d864`
+- [x] SQL file SHA-256 at apply time: `0580ea5465eb68d90d316871a4f74e8cf87a230f4cc00f2de71863fc6698d864`
+- [x] SQL file SHA-256 after idempotency-guard edit (post-merge re-apply only — same DDL semantics): `8ff3974289094d188ac94944c63bd0022d7c1580e24852eca90332af564836f4`
 - [x] Migration wrapped in `BEGIN; …; COMMIT;` — atomic.
 
 ### Post-apply structural verification (dev)
@@ -101,3 +103,49 @@ SELECT user_id FROM public.tc_acceptances WHERE version = '1.0.0';
 - [ ] AC23-2 Row visible:
 - [ ] AC23-3 UPDATE rejected with P0001:
 - [ ] AC23-4 user_id NULL after anonymise:
+
+## Rollback (emergency-only)
+
+Roll back **only** if structural verification fails or AC23 spot-check
+identifies a P0 defect. Rolling back DESTROYS audit-trail rows; if a single
+user has already accepted under v1.0.0 in production, prefer fix-forward
+(see "Fix-forward" below).
+
+```sql
+-- Safety check first: how many rows would be lost?
+SELECT COUNT(*) FROM public.tc_acceptances;
+-- If > 0, escalate before continuing. The WORM ledger has no GDPR-safe
+-- recovery path after this point.
+
+BEGIN;
+
+-- Reverse-order teardown: drop dependents before the table.
+DROP TRIGGER IF EXISTS tc_acceptances_no_delete ON public.tc_acceptances;
+DROP TRIGGER IF EXISTS tc_acceptances_no_update ON public.tc_acceptances;
+DROP FUNCTION IF EXISTS public.anonymise_tc_acceptances(uuid);
+DROP FUNCTION IF EXISTS public.accept_terms(uuid, text, text);
+DROP FUNCTION IF EXISTS public.tc_acceptances_no_mutate();
+DROP INDEX IF EXISTS public.tc_acceptances_user_accepted_idx;
+DROP TABLE IF EXISTS public.tc_acceptances;
+
+COMMIT;
+```
+
+**Application-side rollback prerequisites:**
+
+1. Revert `app/api/accept-terms/route.ts` to the pre-PR version (idempotent
+   UPDATE on `public.users.tc_accepted_version`, no `accept_terms` RPC).
+2. Revert `middleware.ts` fail-closed branch to fail-open (DO NOT redeploy
+   without this — middleware will hard-fail every request once the table
+   is dropped because `users.tc_accepted_version` is still referenced).
+3. Revert `server/ws-handler.ts` mid-session re-check (DB query against the
+   deleted table will crash every gated WS message).
+4. Re-apply DB rollback **only after** the application revert is live.
+
+### Fix-forward (preferred over rollback for any defect that has touched user data)
+
+If `accept_terms()` is misbehaving but the WORM rows are intact, write a
+forward-migration `045_fix_accept_terms.sql` that `CREATE OR REPLACE`s the
+RPC. The migration's idempotency guards (`CREATE INDEX IF NOT EXISTS`,
+`DROP TRIGGER IF EXISTS`) make re-applies safe; teardown is a last resort
+that violates Art. 7(1) demonstrability for every row dropped.

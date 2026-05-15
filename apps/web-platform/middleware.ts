@@ -4,7 +4,10 @@ import { TC_VERSION } from "@/lib/legal/tc-version";
 import { buildCspHeader } from "@/lib/csp";
 import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { PUBLIC_PATHS, TC_EXEMPT_PATHS } from "@/lib/routes";
-import { reportSilentFallback } from "@/server/observability";
+// Edge middleware cannot import `@/server/observability` (pulls `node:crypto`
+// + `pino`, breaks edge bundle). Use the lib/ edge-safe variant instead;
+// see `lib/auth/validate-origin.ts:3-7` for the documented constraint.
+import { reportEdgeSilentFallback } from "@/lib/observability-edge";
 
 function withCspHeaders(response: NextResponse, cspValue: string): NextResponse {
   response.headers.set("Content-Security-Policy", cspValue);
@@ -143,7 +146,12 @@ export async function middleware(request: NextRequest) {
       // authenticated user reach /dashboard without consent verification
       // — Art. 7(1) demonstrability breach (plan §"User-Brand Impact").
       // The Sentry mirror gives operations a paging signal.
-      reportSilentFallback(tcError, {
+      // Best-effort fire-and-forget: edge runtime can outlive the response
+      // via waitUntil semantics, but Next.js middleware does not give us a
+      // waitUntil handle on the response object. We accept that some events
+      // may be lost on cold-edge isolate teardown; the redirect itself is
+      // the load-bearing signal and runs synchronously below.
+      void reportEdgeSilentFallback(tcError, {
         feature: "middleware",
         op: "tc_query_failed",
         message: "users.tc_accepted_version SELECT failed",

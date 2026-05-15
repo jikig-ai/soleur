@@ -78,15 +78,21 @@ collapse() {
     s|\(\./disclaimer\.md\)|(LINK_DISCLAIMER)|g
     s|\(/legal/disclaimer/\)|(LINK_DISCLAIMER)|g
     s|\(\./privacy-policy\.md\)|(LINK_PRIVACY)|g
+    s|\(\./gdpr-policy\.md\)|(LINK_GDPR)|g
     s|\(individual-cla\.md\)|(LINK_CLA_IND)|g
+    s|\(\./individual-cla\.md\)|(LINK_CLA_IND)|g
     s|\(/legal/individual-cla/\)|(LINK_CLA_IND)|g
     s|\(corporate-cla\.md\)|(LINK_CLA_CORP)|g
+    s|\(\./corporate-cla\.md\)|(LINK_CLA_CORP)|g
     s|\(/legal/corporate-cla/\)|(LINK_CLA_CORP)|g
     s|\(acceptable-use-policy\.md\)|(LINK_AUP)|g
+    s|\(\./acceptable-use-policy\.md\)|(LINK_AUP)|g
     s|\(/legal/acceptable-use-policy/\)|(LINK_AUP)|g
     s|\(cookie-policy\.md\)|(LINK_COOKIE)|g
+    s|\(\./cookie-policy\.md\)|(LINK_COOKIE)|g
     s|\(/legal/cookie-policy/\)|(LINK_COOKIE)|g
     s|\(data-protection-disclosure\.md\)|(LINK_DPD)|g
+    s|\(\./data-protection-disclosure\.md\)|(LINK_DPD)|g
     s|\(/legal/data-protection-disclosure/\)|(LINK_DPD)|g
     s|\(https://soleur\.ai\)|(LINK_HOME)|g
     s|\(https://www\.soleur\.ai\)|(LINK_HOME)|g
@@ -131,6 +137,48 @@ if [ -z "$LITERAL_SHA" ]; then
   echo "    Expected: export const TC_DOCUMENT_SHA = \"<64-char-lowercase-hex>\";" >&2
   exit 1
 fi
+
+# ----------------------------------------------------------------------
+# Step 2.5: seed-script TC_VERSION parity
+# ----------------------------------------------------------------------
+#
+# seed-dev-users.sh and seed-qa-user.sh hardcode TC_VERSION="…" so QA
+# users can log in past the T&C gate after a fresh re-seed. If the
+# canonical lib/legal/tc-version.ts is bumped but the seed scripts are
+# not, QA users get the middleware redirect-to-/accept-terms loop on
+# their next sign-in — silent failure shape that only surfaces during
+# QA cycles, often days after the bump.
+
+CANONICAL_TC_VERSION=$(grep -oE 'TC_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' "$LITERAL_FILE" \
+                       | head -n 1 \
+                       | sed -E 's/.*"([^"]+)".*/\1/')
+
+if [ -z "$CANONICAL_TC_VERSION" ]; then
+  echo "::error::TC_VERSION literal not found in $LITERAL_FILE" >&2
+  exit 1
+fi
+
+SEED_SCRIPTS=(
+  "apps/web-platform/scripts/seed-dev-users.sh"
+  "apps/web-platform/scripts/seed-qa-user.sh"
+)
+
+for seed in "${SEED_SCRIPTS[@]}"; do
+  if [ ! -f "$seed" ]; then
+    # Seed script absent in this checkout (e.g., docs-only branch) — skip.
+    continue
+  fi
+  SEED_VERSION=$(grep -oE '^TC_VERSION="[^"]+"' "$seed" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+  if [ -z "$SEED_VERSION" ]; then
+    echo "::error::$seed missing TC_VERSION=\"…\" literal" >&2
+    exit 1
+  fi
+  if [ "$SEED_VERSION" != "$CANONICAL_TC_VERSION" ]; then
+    echo "::error::$seed TC_VERSION=$SEED_VERSION drifted from canonical $CANONICAL_TC_VERSION ($LITERAL_FILE)" >&2
+    echo "    Remediation: update the TC_VERSION literal in the seed script to match." >&2
+    exit 1
+  fi
+done
 
 # ----------------------------------------------------------------------
 # Step 3: canonical SHA matches the literal (unless TC_VERSION was bumped)
