@@ -5,7 +5,7 @@ audience: operators, on-call, contributors
 related:
   - https://github.com/jikig-ai/soleur/issues/3121
   - knowledge-base/engineering/operations/golden-tests.md
-last_updated: 2026-05-06
+last_updated: 2026-05-15
 ---
 
 # Secret-scanning floor
@@ -100,25 +100,67 @@ apps/web-platform/test/__synthesized__/now-allowed.ts` followed by
 
 Mitigations in place:
 
-1. **GitHub push protection** independently scans every committed line for
+1. **`rename-guard` CI job** (added 2026-05-15, [#3160](https://github.com/jikig-ai/soleur/issues/3160))
+   — fails the PR check on any `git mv` whose destination matches a regex
+   in `.gitleaks.toml`'s allowlist surface. Override paths:
+   - Apply the `secret-scan-allow-rename` label to the PR, OR
+   - Include `Rename-Allowed-By: <name>` as a trailer on any commit in
+     the PR (mirrors the `Co-Authored-By` convention; case-sensitive).
+
+   Logic lives in `apps/web-platform/scripts/rename-guard.sh`; the smoke
+   matrix exercises it via three cases (`rename-guard-fires`,
+   `rename-guard-label-override`, `rename-guard-trailer-override`).
+2. **GitHub push protection** independently scans every committed line for
    well-known token shapes (Doppler, AWS, Stripe, etc.) and blocks the push
    regardless of allowlist scope. We confirmed this empirically when
    GitHub blocked our own smoke-test fixture commit until we split the
    token into prefix + body composed at runtime.
-2. **CODEOWNERS** requires 2nd-reviewer for any change touching
+3. **CODEOWNERS** requires 2nd-reviewer for any change touching
    `.gitleaks.toml`, the workflow, the linter, or `AGENTS.md` — humans
    review the diff before merge.
-3. **Reviewer awareness** — this runbook documents the gap so reviewers
-   know to look for `git mv` into `__goldens__/` / `__synthesized__/`.
+4. **Reviewer awareness** — `git mv` into `__goldens__/` / `__synthesized__/`
+   warrants extra scrutiny even when the gate is overridden.
 
-**Follow-up tracked:** [#3160](https://github.com/jikig-ai/soleur/issues/3160)
-adds a CI rename-guard job that fails on rename targets landing in
-allowlisted paths unless overridden via label or commit trailer.
+The smoke matrix `rename-laundering` case stays as a **canary** on gitleaks
+bumps — if a green run flips to blocked on a future bump, the upstream
+behavior shifted and our smoke expectations need updating in the same PR.
 
-Re-check on every gitleaks bump — the upstream behavior may change. The
-PR1 smoke matrix's `rename-laundering` job is the canary; a green run on
-a future bump where it should fail means the gitleaks behavior shifted
-and our smoke expectations need updating in the same PR.
+**Operator note on label-based override.** Applying the
+`secret-scan-allow-rename` label triggers a fresh `labeled` workflow event
+that re-runs the gate with the new label list. This is why the workflow's
+`pull_request:` trigger lists `types: [opened, synchronize, reopened,
+labeled, unlabeled]` — without that, manually applying the label after a
+failing run would NOT re-fetch labels (workflow re-runs replay the original
+event payload per actions/runner #3149).
+
+### Allowlist-diff gate (#3323)
+
+Any PR that modifies `paths = [...]` under `[allowlist]` or
+`[[rules.allowlists]]` in `.gitleaks.toml` triggers the `allowlist-diff`
+CI job. The job:
+
+1. Extracts the path-regex set at PR base and head via
+   `apps/web-platform/scripts/parse-gitleaks-allowlists.mjs` (regex-only
+   walker — no `@iarna/toml` dep).
+2. Computes added / removed paths via `comm -13` / `comm -23`.
+3. Posts (or updates) a sticky PR comment listing both sets. The comment
+   is keyed on a leading marker line (`<!-- allowlist-diff-comment -->`)
+   so re-runs `PATCH` the existing comment instead of stacking.
+4. Blocks merge for **additions** until the PR carries either:
+   - The `secret-scan-allowlist-ack` label, OR
+   - An `Allowlist-Widened-By: <name>` trailer on any commit in the PR.
+
+**Removals are auto-allowed** — a net-tightening edit shouldn't require
+ceremony. Only widening fires the gate.
+
+Same operator note as rename-guard: applying the
+`secret-scan-allowlist-ack` label after a failing run requires the
+`labeled` event variant on the workflow trigger (already wired) so the
+gate re-runs naturally. Manual workflow re-runs do NOT re-fetch labels.
+
+Logic lives in `apps/web-platform/scripts/allowlist-diff.sh`; the smoke
+matrix's `allowlist-diff-fires` case proves the script exits 1 on
+un-acknowledged widening.
 
 ### `# gitleaks:allow` waivers
 
@@ -142,9 +184,13 @@ the underlying constraint is gone.
 **Why the trailer is enforced in CI, not just by `lint-fixture-content`:**
 Native gitleaks `# gitleaks:allow` is honored on **any line in any file**
 with no trailer enforcement. `lint-fixture-content.mjs` is glob-scoped to
-fixture/golden/snapshot directories — a developer could waive a real
-`whsec_` or `sk-ant-` token in a server-path file with bare
-`# gitleaks:allow` and gitleaks would honor it.
+fixture/golden/snapshot directories AND, as of 2026-05-15
+([#3322](https://github.com/jikig-ai/soleur/issues/3322)),
+`knowledge-base/project/learnings/**/*.md` so future learning-file waivers
+also carry the `issue:#NNN <reason>` trailer. A developer could still
+waive a real `whsec_` or `sk-ant-` token in a server-path file with bare
+`# gitleaks:allow` outside those globs and gitleaks would honor it — that
+gap is what the `waiver-discipline` job closes.
 
 The `waiver-discipline` CI job closes this gap: it greps every PR-added
 line containing `gitleaks:allow` (across the whole tree) and rejects any

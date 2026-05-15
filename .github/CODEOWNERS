@@ -19,6 +19,10 @@
 /knowledge-base/engineering/ops/runbooks/github-app-drift.md @jeanderuelle
 /lefthook.yml                                           @jeanderuelle
 /apps/web-platform/scripts/lint-fixture-content.mjs     @jeanderuelle
+/apps/web-platform/scripts/parse-gitleaks-allowlists.mjs @jeanderuelle
+/apps/web-platform/scripts/rename-guard.sh              @jeanderuelle
+/apps/web-platform/scripts/allowlist-diff.sh            @jeanderuelle
+/apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @jeanderuelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
 # Both workflow files are load-bearing: scheduled-content-vendor-drift.yml is

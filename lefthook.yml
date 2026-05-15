@@ -41,6 +41,12 @@ pre-commit:
         - "apps/web-platform/test/__goldens__/**"
         - "**/__goldens__/**"
         - "**/*.snap"
+        # #3322 — cover learning files so future `gitleaks:allow` waivers
+        # there carry the `issue:#NNN <reason>` trailer. Dual-glob mirrors
+        # kb-structure-guard (gobwas `**` requires intermediate dirs;
+        # see learning 2026-03-21-lefthook-gobwas-glob-double-star.md).
+        - "knowledge-base/project/learnings/*.md"
+        - "knowledge-base/project/learnings/**/*.md"
       run: node apps/web-platform/scripts/lint-fixture-content.mjs {staged_files}
     rule-id-lint:
       priority: 4
