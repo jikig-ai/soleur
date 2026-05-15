@@ -34,7 +34,7 @@ Approximate diff: ~80 LOC across 4 files.
 | Claim source | Claim | Reality | Plan response |
 |---|---|---|---|
 | Spec / brainstorm (carry-forward from #2732 issue body) | `plugins/soleur/hooks/security_reminder_hook.py` scans markdown for literal Python tokens | TWO hooks share the name. The Soleur-repo hook at `.claude/hooks/security_reminder_hook.py` only scans `.github/workflows/*.yml` (narrowed by PR #2528 on 2026-04-18). The hook that actually blocks docs is the **external `claude-plugins-official/security-guidance` plugin** at `~/.claude/plugins/marketplaces/claude-plugins-official/plugins/security-guidance/hooks/security_reminder_hook.py` — confirmed by tripping it during plan authoring. | Drop #2732 from bundle. Close as out-of-scope (external plugin, not Soleur-owned). Fix path is upstream PR or plugin disable, not in-repo. FR1-FR3 + AC1 removed from spec. |
-| Issue #2741 body | `AGENTS.md` at 106/100 rules and 36566/40000 bytes — retire-a-rule required | Sidecar refactor: 75 rules across 4 files, 32,470 bytes total. No per-file cap binding. Always-loaded payload (B_ALWAYS) IS critical (23,196 > 22,000) but the new rule lands in `AGENTS.rest.md` (not always-loaded). | Drop rule-retirement work. New rule lands in `AGENTS.rest.md` only. Acknowledge pre-existing B_ALWAYS critical state in Sharp Edges. |
+| Issue #2741 body | `AGENTS.md` at 106/100 rules and 36566/40000 bytes — retire-a-rule required | Sidecar refactor: 75 rules across 4 files, 32,470 bytes total. No per-file cap binding. Always-loaded payload (B_ALWAYS) IS critical (23,196 > 22,000) but the new rule lands in `AGENTS.docs.md` (not always-loaded; see post-plan-review correction banner above for the rest.md→docs.md fix). | Drop rule-retirement work. New rule lands in `AGENTS.docs.md` only. Acknowledge pre-existing B_ALWAYS critical state in Sharp Edges. |
 | Source learning (`2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`) line 33 | Canonical measurement one-liner is Node, not awk | Verified — source learning explicitly says "portable; avoids awk edge cases" then provides Node form. The Node form uses `fs.readdirSync`/`fs.readFileSync` only (no shell-invocation primitives). | Reference the one-liner BY POINTER (`source-learning §line 33`) from FR3 and FR4 — do NOT re-quote a modified copy in the plan body. (Lessons-learned during plan authoring: a re-quoted modified form using `child_process` tripped the external `security-guidance` plugin's hook.) |
 | Brainstorm SKILL.md insertion points | Phase 1.0 at line 195, Phase 1.1 at line 199, Phase 2 at line 262 | Verified via `grep -n "^### Phase\|^#### 1\."`. | Cite line numbers as anchors; re-grep at /work-time before editing (file may have shifted since plan write). |
 | Plan SKILL.md insertion point | Phase 1 has sub-sections 1, 1.4, 1.5, 1.5b, 1.6, 1.6b, 1.7, 1.7.5 then jumps to `### 2.` | Verified via `grep -n "^### "` — confirmed §1.7.5 Code-Review Overlap Check followed by §2 Issue Planning. | Insert new `### 1.8. Skill Description Budget Check (Conditional)` between §1.7.5 and §2. Do NOT renumber existing sub-sections. |
@@ -123,7 +123,7 @@ Per spec TR4 (`cq-rule-ids-are-immutable` enforcement): FR5 and FR6 MUST commit 
     and Phase 2.5 (productize checkpoint after approach selection); add a
     Phase 2 inline budget checkpoint for skill-editing brainstorms.
   - plan SKILL.md: add §1.8 Skill Description Budget Check.
-  - AGENTS.rest.md + AGENTS.md index: add cq-skill-description-budget-headroom
+  - AGENTS.docs.md + AGENTS.md index: add cq-skill-description-budget-headroom
     rule with **Why:** pointer to the source learning.
 
   Closes #2733
@@ -163,7 +163,7 @@ Bundle is documentation-class (skill instruction additions + AGENTS.md rule). No
 Run `/plan_review knowledge-base/project/plans/2026-05-15-feat-bundle-workflow-fixes-plan.md` after writing this plan. Reviewers should focus on:
 
 - (DHH) Is bundling these two issues into one PR overengineered when the bundle is only ~80 LOC? Would two parallel single-issue PRs be simpler? Counter: both issues edit the same file (`plugins/soleur/skills/brainstorm/SKILL.md`), so two parallel PRs would create a merge conflict — bundling is the cheaper path.
-- (Kieran) Are FR1/FR2 body texts truly verbatim with #2733's issue body? Verify by re-reading #2733. Also: is the `[skill-enforced: ...]` annotation in T4.1 worth its bytes given B_ALWAYS is already critical? Counter: this lands in `AGENTS.rest.md`, not core; the annotation is informative for grep-discovery of the enforcing surface.
+- (Kieran) Are FR1/FR2 body texts truly verbatim with #2733's issue body? Verify by re-reading #2733. Also: is the `[skill-enforced: ...]` annotation in T4.1 worth its bytes given B_ALWAYS is already critical? Counter: this lands in `AGENTS.docs.md`, not core; the annotation is informative for grep-discovery of the enforcing surface.
 - (Code-simplicity) Could the Phase 2 inline budget-checkpoint paragraph (FR4) be dropped — does the AGENTS.md rule + plan Phase 1.8 already cover the same surface? Counter: brainstorm runs BEFORE plan; without the brainstorm-time checkpoint, the constraint surfaces only after research has burned ~10 minutes of agent time. The checkpoint pays for itself.
 
 ## Domain Review

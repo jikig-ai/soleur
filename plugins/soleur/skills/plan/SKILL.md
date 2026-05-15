@@ -226,7 +226,11 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
 ### 1.8. Skill Description Budget Check (Conditional)
 
-If the feature description, research findings (1.1), or repo grep (Phase 1.7 consolidation) surfaces a candidate `description:` edit to any `plugins/soleur/skills/*/SKILL.md`, run the budget one-liner now (Node form, see [`knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`](../../../knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md) line 33). Record baseline headroom in Research Insights. Re-run in Step 2 once `## Files to Edit` is finalized to confirm the budget impact of the actual edits. If headroom < 10 words at either check, include exact sibling-trim text (before/after) in `## Files to Edit` before proceeding. Cap: 1800 cumulative words, enforced by `plugins/soleur/test/components.test.ts`. Skip silently if no SKILL.md `description:` edit is candidate or finalized.
+**Phase 1 baseline.** If the feature description, research findings (1.1), or repo grep (Phase 1.7 consolidation) surfaces a candidate `description:` edit to any `plugins/soleur/skills/*/SKILL.md`, run the budget one-liner now (Node form, see [`knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md`](../../../knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md) **Measurement one-liner** section). Record baseline headroom in Research Insights.
+
+**Step 2 re-check.** Once `## Files to Edit` is finalized in Step 2 (Issue Planning), re-run the one-liner if any candidate `description:` edit landed in the file list — including candidates the planner introduced in Step 2 that Phase 1 did not surface. The check fires on the final list, not the Phase 1 candidate set.
+
+**Headroom failure action.** If either check reports < 10 words remaining against the 1800-word cumulative cap (enforced by `plugins/soleur/test/components.test.ts`), include exact sibling-trim text (before/after) in `## Files to Edit` before proceeding. Skip silently if no SKILL.md `description:` edit is ever candidate or finalized.
 
 ### 2. Issue Planning & Structure
 

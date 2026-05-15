@@ -53,8 +53,3 @@ PR #3356's +7d Disk IO Budget check (2026-05-13) defaulted to "human-judgment re
 - AGENTS.core.md `[id: hr-exhaust-all-automated-options-before]`
 - AGENTS.core.md `[id: hr-no-dashboard-eyeball-pull-data-yourself]` (this rule's home)
 - `knowledge-base/project/learnings/2026-05-06-supabase-disk-io-structural-overhead-dominates-at-low-scale.md`
-
-## Tags
-
-category: hard-rule-evidence
-module: AGENTS.core.md

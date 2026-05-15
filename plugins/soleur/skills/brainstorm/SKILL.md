@@ -279,7 +279,7 @@ Use **AskUserQuestion tool** to ask which approach the user prefers.
 
 **Domain re-assessment.** If the scope has materially changed from the original feature description (e.g., from internal tooling to user-facing product feature, or from a single-domain change to a cross-domain capability), re-run Phase 0.5 domain assessment for any domains not already consulted. Scope pivots during brainstorming are common — the domain assessment must reflect the final scope, not just the initial description.
 
-**Budget checkpoint.** If the brainstorm proposes adding or restructuring skills, run the SKILL.md description word-budget measurement one-liner (Node form, see `knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md` line 33) before authoring approach proposals. Surface headroom as a first-class constraint if < 10 words remain against the 1800-word cumulative cap.
+**Budget checkpoint.** If the brainstorm proposes adding or restructuring skills, run the SKILL.md description word-budget measurement one-liner (Node form, see `knowledge-base/project/learnings/2026-04-21-skill-description-budget-at-cap-requires-plan-time-surgery.md` **Measurement one-liner** section) before authoring approach proposals. Surface headroom as a first-class constraint if < 10 words remain against the 1800-word cumulative cap.
 
 ### Phase 2.5: Productize Checkpoint
 
