@@ -529,7 +529,7 @@ describe("Stage 3 protocol — new variant round-trip via parseWSMessage (#2885)
     expect(r.ok).toBe(true);
   });
 
-  test("workflow_ended round-trip with all 9 statuses", async () => {
+  test("workflow_ended round-trip with all 7 statuses", async () => {
     const { parseWSMessage } = await import("../lib/ws-zod-schemas");
     const statuses = [
       "completed",
@@ -537,8 +537,6 @@ describe("Stage 3 protocol — new variant round-trip via parseWSMessage (#2885)
       "cost_ceiling",
       "idle_timeout",
       "plugin_load_failure",
-      "sandbox_denial",
-      "runner_crash",
       "runner_runaway",
       "internal_error",
     ];
@@ -547,6 +545,22 @@ describe("Stage 3 protocol — new variant round-trip via parseWSMessage (#2885)
         JSON.parse(JSON.stringify({ type: "workflow_ended", workflow: "plan", status })),
       );
       expect(r.ok).toBe(true);
+    }
+  });
+
+  // #3827 + ADR-031 amendment: the wire enum was narrowed from 9 to 7 to
+  // match the runner's `WorkflowEnd` union (`sandbox_denial` /
+  // `runner_crash` were never emitted in production). Zod now rejects
+  // both. If a future PR widens the runner with new variants, this
+  // negative-assertion shape is the regression gate that catches
+  // re-introduction of `sandbox_denial` / `runner_crash` specifically.
+  test("workflow_ended rejects removed statuses (#3827)", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    for (const status of ["sandbox_denial", "runner_crash"]) {
+      const r = parseWSMessage(
+        JSON.parse(JSON.stringify({ type: "workflow_ended", workflow: "plan", status })),
+      );
+      expect(r.ok).toBe(false);
     }
   });
 

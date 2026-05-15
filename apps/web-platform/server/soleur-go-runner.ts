@@ -45,6 +45,7 @@ import { randomUUID } from "crypto";
 import path from "path";
 import { readFile } from "node:fs/promises";
 import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
+import type { WorkflowEndStatus } from "@/lib/types";
 import {
   parseConversationRouting,
   serializeConversationRouting,
@@ -650,6 +651,24 @@ export type WorkflowEnd =
   | { status: "idle_timeout" }
   | { status: "plugin_load_failure"; error: string }
   | { status: "internal_error"; error: string };
+
+// Cardinality assert (#3827 + ADR-031 amendment 2026-05-15): the runner's
+// `WorkflowEnd["status"]` union MUST equal the wire-protocol
+// `WorkflowEndStatus` source-of-truth in `lib/types.ts`. Adding to either
+// side without the other is a TS error here. Mirrors the
+// `_AssertKindsMatch` pattern at `lib/types.ts:94-110` for style parity
+// (nested ternary, not &-intersection). Closes the wire→runner direction
+// the existing `_workflowEndExhaustive` (`cc-workflow-end-messages.ts:42`)
+// and `_abortFlushExhaustive` (`cc-dispatcher.ts:247`) rails do not cover.
+type _AssertWorkflowEndStatusMatches =
+  WorkflowEndStatus extends WorkflowEnd["status"]
+    ? WorkflowEnd["status"] extends WorkflowEndStatus
+      ? true
+      : never
+    : never;
+const _exhaustiveWorkflowEndStatusCheck: _AssertWorkflowEndStatusMatches =
+  true;
+void _exhaustiveWorkflowEndStatusCheck;
 
 export interface DispatchEvents {
   onText: (text: string) => void;

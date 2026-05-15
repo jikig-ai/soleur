@@ -59,3 +59,23 @@ Prior extractions establish the cadence: PR #3608 (`mirrorWithDebounce` → `obs
 - Sibling-extraction precedents: PR #3608 (`mirrorWithDebounce`), PR #3670 (cluster drain), PR #3802 (deferred-scope-out drain).
 - Plan: `knowledge-base/project/plans/2026-05-15-refactor-extract-cc-workflow-end-messages-plan.md` — Research Reconciliation table verifies issue-body claims against current code; Enhancement Summary documents the type-source pivot caught at deepen time.
 - Learning: `knowledge-base/project/learnings/2026-05-15-drain-plan-must-revalidate-issue-state-against-codebase.md` — applied here (file is 1927 LoC, not 937 as the issue body claimed).
+
+## Amendment — 2026-05-15 (#3827)
+
+The pre-existing `lib/types.ts` vs. runner enum drift named in the original `Negative / out of scope` section above is resolved in the PR closing #3827. Decision: **narrow the wire enum** (Option b from the issue body), not extend the runner.
+
+**Resolution.** `WORKFLOW_END_STATUSES` in `apps/web-platform/lib/types.ts` is reduced from 9 → 7 entries by removing `sandbox_denial` and `runner_crash`. The cardinality table from the original Decision section §2 now reads:
+
+| Source | Status set | Cardinality |
+|---|---|---|
+| `apps/web-platform/lib/types.ts` (`WORKFLOW_END_STATUSES`) | wire-protocol enum, post-narrow | 7 |
+| `apps/web-platform/server/soleur-go-runner.ts` (`WorkflowEnd` union) | runner-emitted terminal states | 7 |
+| `cc-dispatcher.ts:212` re-derive + `cc-workflow-end-messages.ts:7` re-derive | runner-bound | 7 |
+
+**Why option (b), not option (a).** Both removed statuses had ~2 months with zero production emit sites. `sandbox_denial` is already observable via the existing `feature: agent-sandbox` Sentry channel (cc-dispatcher.ts:1077, agent-runner.ts:2138 mirror + re-throw); option (a) would have duplicated, not added, that signal. `runner_crash` has no failure-mode semantic distinct from the existing `internal_error` / `runner_runaway` paths. Adding emit-site logic for either would be a feature add disguised as cleanup; option (b) is the YAGNI fix this ADR's `Negative / out of scope` section originally identified as "cheaper if vestigial."
+
+**Source of truth flipped: runner now canonical.** The `WorkflowEnd["status"]` union in `soleur-go-runner.ts` is now the canonical authority; the `WORKFLOW_END_STATUSES` tuple in `lib/types.ts` mirrors it. The JSDoc comment on the tuple was updated to reflect this contract. The Zod schema (`lib/ws-zod-schemas.ts:381` `z.enum(WORKFLOW_END_STATUSES)`) and the consumers in `lib/chat-state-machine.ts` + `lib/types.ts:300` continue to derive from the tuple — narrowing propagates automatically.
+
+**Compile-time re-drift gate.** A bidirectional `_AssertWorkflowEndStatusMatches` rail was added in `soleur-go-runner.ts` adjacent to the `WorkflowEnd` union. It uses the nested-ternary pattern from `lib/types.ts:94-110` (`_AssertKindsMatch`) and forces `WorkflowEnd["status"]` and `WorkflowEndStatus` to remain set-equal. Adding to either side without the other produces a TS error at the assert. This closes the gap left by the existing `_workflowEndExhaustive` (`cc-workflow-end-messages.ts:42`) and `_abortFlushExhaustive` (`cc-dispatcher.ts:247`) rails, which cover only the runner→consumer direction.
+
+**Out of scope for this PR.** The duplicate ADR-031 filename collision (`ADR-031-sentry-as-iac.md` shares this number) is pre-existing and tracked separately. The `cc-dispatcher.ts:212` re-derive removal remains deferred per the original `Negative / out of scope` section. The historical `migrations/032_conversation_workflow_state.sql:48` column comment enumerating all 9 statuses is preserved per append-only migration convention; a forward-migration refresh is a separate concern.
