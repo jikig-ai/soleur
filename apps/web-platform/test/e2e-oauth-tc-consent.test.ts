@@ -5,6 +5,7 @@ process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
 
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { NextRequest } from "next/server";
 import { TC_VERSION, TC_DOCUMENT_SHA } from "@/lib/legal/tc-version";
 
 // Plan AC9 / Phase 8: end-to-end vitest covering the
@@ -113,9 +114,9 @@ import { POST as acceptTermsPOST } from "@/app/api/accept-terms/route";
 
 const USER_ID = "user-uuid-e2e";
 
-function makeCallbackRequest(code: string): Request {
-  return new Request(
-    `https://app.soleur.ai/callback?code=${encodeURIComponent(code)}`,
+function makeCallbackRequest(code: string): NextRequest {
+  return new NextRequest(
+    new URL(`https://app.soleur.ai/callback?code=${encodeURIComponent(code)}`),
     {
       method: "GET",
       headers: {
