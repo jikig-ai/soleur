@@ -40,10 +40,25 @@ DEFER_VALUE="defer"
 #
 # Expansion gate: NEW entries only after 2-week dry-run telemetry from operator
 # (see .claude/hooks/README.md). CI/scheduled-runs do not accumulate hits.
+# Trailing class `([[:space:]]|;|\)|&|$)` mirrors the leading anchor — without
+# `;`/`)`/`&` a `git push origin main;` or `(git push origin main)` slips past
+# the gate even though the leading anchor already treats those operators as
+# significant.
 declare -a DEFAULT_TARGETS=(
-  "prod-write-defer-git-push-main|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|[[:space:]]--[[:space:]])[[:space:]]*git[[:space:]]+push([[:space:]]+(-f|--force(-with-lease)?))?[[:space:]]+origin[[:space:]]+(main|master|HEAD:main|HEAD:master)([[:space:]]|$)"
-  "prod-write-defer-terraform-apply|hr-all-infrastructure-provisioning-servers|(^|&&|\\|\\||;|[[:space:]]--[[:space:]])[[:space:]]*(terraform|tofu)[[:space:]]+apply([[:space:]]|$)"
-  "prod-write-defer-doppler-prd-secrets|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|[[:space:]]--[[:space:]])[[:space:]]*([A-Za-z_]+=[A-Za-z0-9_]+[[:space:]]+)*doppler[[:space:]]+secrets[[:space:]]+set([[:space:]]+[^[:space:]]+)*[[:space:]]+(--config|-c)[[:space:]]+(prd|prd_terraform)([[:space:]]|$)"
+  "prod-write-defer-git-push-main|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*git[[:space:]]+push([[:space:]]+(-f|--force(-with-lease)?))?[[:space:]]+origin[[:space:]]+(main|master|HEAD:main|HEAD:master)([[:space:]]|;|\\)|&|$)"
+  "prod-write-defer-terraform-apply|hr-all-infrastructure-provisioning-servers|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*(terraform|tofu)[[:space:]]+apply([[:space:]]|;|\\)|&|$)"
+  "prod-write-defer-doppler-prd-secrets|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*([A-Za-z_]+=[A-Za-z0-9_]+[[:space:]]+)*doppler[[:space:]]+secrets[[:space:]]+set([[:space:]]+[^[:space:]]+)*[[:space:]]+(--config|-c)[[:space:]]+(prd|prd_terraform)([[:space:]]|;|\\)|&|$)"
+)
+
+# Post-match read-only escape: a few command classes are matched by the
+# above regexes because the verb (`apply`) is the same, but a `-help` /
+# `-version` / `-h` / `-v` flag is read-only. Operators run these to
+# inspect, not to mutate prod — gating them on this surface would
+# realize the plan §User-Brand Impact bullet-1 "paralyzing-ship" vector.
+# Per-rule allowlist: rule_id → bash glob fragments that mark the
+# command as read-only when present anywhere after the verb.
+declare -A READONLY_FLAG_PATTERNS=(
+  ["prod-write-defer-terraform-apply"]='(^|[[:space:]])-(-?)(help|version|h|v)([[:space:]]|=|$)'
 )
 
 # Allow tests to inject broken regex for fail-closed verification.
@@ -100,10 +115,12 @@ append_approval_log() {
   mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
   [[ -f "$file" ]] || : > "$file" 2>/dev/null || return 0
 
-  # 1-year TTL: 365 * 24 * 3600 seconds. rotate_if_needed honors
-  # LOG_ROTATION_AGE_SECONDS as an override (set in this scope only).
+  # 1-year TTL via rotate_if_needed's 3rd positional `age_threshold_days`
+  # (see log-rotation.sh:82). Earlier draft used LOG_ROTATION_AGE_SECONDS
+  # which the rotator does not honor — it would have silently downgraded
+  # to the 30-day default.
   if declare -F rotate_if_needed >/dev/null 2>&1; then
-    LOG_ROTATION_AGE_SECONDS=$((365 * 24 * 3600)) rotate_if_needed "$file" 2>/dev/null || true
+    rotate_if_needed "$file" "" 365 2>/dev/null || true
   fi
 
   local line
@@ -155,6 +172,11 @@ for entry in "${TARGETS[@]}"; do
     deny_self_fault "regex compile failure for $rule_id" "$CMD_SNIPPET"
   fi
   if [[ "$rc" -eq 0 ]]; then
+    # Post-match read-only escape (terraform apply -help / -version etc.).
+    readonly_pat="${READONLY_FLAG_PATTERNS[$rule_id]:-}"
+    if [[ -n "$readonly_pat" ]] && [[ "$CMD" =~ $readonly_pat ]]; then
+      continue
+    fi
     MATCHED_RULE="$rule_id"
     MATCHED_RULE_PROSE="$prose_ref"
     break
@@ -185,7 +207,10 @@ if [[ "${CLAUDE_HOOK_BYPASS:-}" == "1" ]]; then
   emit_incident "$MATCHED_RULE" "bypass" \
     "F2 defer-gate bypass: $MATCHED_RULE_PROSE" \
     "$CMD_SNIPPET" "PreToolUse" "bypass"
-  echo "[prod-write-defer-gate] BYPASS by $BYPASS_OPERATOR — $BYPASS_REASON" >&2
+  # Strip C0 control bytes + DEL + U+2028/U+2029 from operator-facing stderr
+  # (CWE-117 log/terminal injection — operator's terminal hygiene).
+  CMD_DISPLAY=$(printf '%s' "$CMD_SNIPPET" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g')
+  echo "[prod-write-defer-gate] BYPASS by $BYPASS_OPERATOR — $BYPASS_REASON :: $CMD_DISPLAY" >&2
   echo '{}'
   exit 0
 fi
@@ -209,17 +234,21 @@ case "$SOLEUR_DEFER_DRYRUN" in
     append_approval_log "$MATCHED_RULE" "$CMD" "$OPERATOR_EMAIL" "tty_resume" "$SESSION_ID"
     # Resume hint on stderr — CC renders defer silently, operator needs the
     # session_id+command somewhere visible. See DEFER-DECISION-PAYLOAD-SHAPE.md.
-    echo "[prod-write-defer-gate] DEFERRED $MATCHED_RULE: $CMD" >&2
-    if [[ -n "$SESSION_ID" ]]; then
-      echo "[prod-write-defer-gate] resume via: claude --resume $SESSION_ID" >&2
+    # Strip C0 control bytes + DEL + U+2028/U+2029 from operator-facing stderr.
+    CMD_DISPLAY=$(printf '%s' "$CMD_SNIPPET" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g')
+    SESSION_ID_SAFE=$(printf '%s' "$SESSION_ID" | LC_ALL=C tr -d '\000-\037\177')
+    echo "[prod-write-defer-gate] DEFERRED $MATCHED_RULE: $CMD_DISPLAY" >&2
+    if [[ -n "$SESSION_ID_SAFE" ]]; then
+      echo "[prod-write-defer-gate] resume via: claude --resume $SESSION_ID_SAFE" >&2
     fi
     jq -n \
       --arg rule "$MATCHED_RULE" \
       --arg cmd "$CMD_SNIPPET" \
+      --arg decision "$DEFER_VALUE" \
       '{
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
-          permissionDecision: "defer",
+          permissionDecision: $decision,
           permissionDecisionReason: ($rule + ": prod-write deferred for explicit operator approval. Command: " + $cmd)
         }
       }'

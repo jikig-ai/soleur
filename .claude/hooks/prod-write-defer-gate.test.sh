@@ -155,7 +155,11 @@ assert_match_dry "B6 chained ;"                       "echo go; terraform apply"
 assert_match_dry "B7 env-prefixed doppler prd"        "DOPPLER_CONFIG=prd_terraform doppler secrets set X=Y --config prd_terraform" "prod-write-defer-doppler-prd-secrets"
 assert_match_dry "B8 short-flag doppler -c prd"       "doppler secrets set FOO=bar -c prd"                           "prod-write-defer-doppler-prd-secrets"
 assert_match_dry "B9 tofu apply"                      "tofu apply"                                                   "prod-write-defer-terraform-apply"
-assert_match_dry "B10 push master alias"              "git push origin master"                                       "prod-write-defer-git-push-main"
+assert_match_dry "B10 push master alias"               "git push origin master"                                       "prod-write-defer-git-push-main"
+assert_match_dry "B11 trailing semicolon"              "git push origin main;"                                        "prod-write-defer-git-push-main"
+assert_match_dry "B12 wrapped in subshell parens"      "(git push origin main)"                                       "prod-write-defer-git-push-main"
+assert_match_dry "B13 trailing chained sequence"       "git push origin main; echo done"                              "prod-write-defer-git-push-main"
+assert_match_dry "B14 backgrounded"                    "git push origin main &"                                       "prod-write-defer-git-push-main"
 
 # ============================================================
 # Tier C: adjacent non-matches (must NOT fire)
@@ -169,6 +173,14 @@ assert_nomatch "C5 doppler --config prd-staging"         "doppler secrets set FO
 assert_nomatch "C6 doppler --config dev"                 "doppler secrets set FOO=bar --config dev"
 assert_nomatch "C7 git pull origin main"                 "git pull origin main"
 assert_nomatch "C8 echo gh pr merge example"             "echo 'gh pr merge example'"
+assert_nomatch "C9 terraform apply -help (read-only)"    "terraform apply -help"
+assert_nomatch "C10 terraform apply --help (read-only)"  "terraform apply --help"
+assert_nomatch "C11 terraform apply -version"            "terraform apply -version"
+assert_nomatch "C12 tofu apply -v (short read-only)"     "tofu apply -v"
+assert_nomatch "C13 push to branch with main-fixup"      "git push origin main-fixup"
+assert_nomatch "C14 push to slash-separated feat/main"   "git push origin feat/dashboard-main"
+assert_nomatch "C15 doppler secrets get (read-only)"     "doppler secrets get --config prd_terraform"
+assert_nomatch "C16 doppler --config=prd (equals-form)"  "doppler secrets set FOO=bar --config=prd_terraform"
 
 # ============================================================
 # Tier D: enforce-mode wrapped envelope + decision value

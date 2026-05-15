@@ -287,6 +287,17 @@ controller and data subject. No third-party data subject content flows.
 `.claude/logs/*`) to Sentry, Datadog, Plausible, or any external service
 requires a DPA review — out of scope for this PR.
 
+**Secret-in-argv caveat:** `doppler secrets set FOO=<value> --config prd_terraform`
+captures the secret VALUE verbatim in `resolved_command` (capped 1024B,
+unredacted) and in `.claude/.rule-incidents.jsonl` `command_snippet`. The
+gate exists to surface the call for explicit approval, NOT to scrub it —
+the originally-planned F1 redaction sibling was deferred to roadmap (see
+PERMISSION-DENIED-PAYLOAD-SHAPE.md). Until that lands, treat `doppler
+secrets set FOO=<value>` as a sensitive command surface; do not paste
+`approvals.jsonl` / `.rule-incidents.jsonl` contents into bug reports or
+external services. The `.gitignore` exclusion prevents accidental commit;
+this caveat covers the share-into-tracker surface.
+
 ### Audit-trail review cadence (2-week dry-run window)
 
 Run weekly during the dry-run window:
