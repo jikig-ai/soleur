@@ -1,6 +1,8 @@
 // User-facing copy for runner `WorkflowEnd` statuses.
-// Type source is `./soleur-go-runner` (7 emitted statuses), NOT
-// `@/lib/types` (9 wire-protocol statuses, drifted). See ADR-031.
+// Type source is `./soleur-go-runner` — the runner is canonical post-ADR-031
+// amendment (2026-05-15, #3827). The wire-protocol mirror in `@/lib/types`
+// (`WORKFLOW_END_STATUSES`) is now kept in lockstep at 7 statuses via the
+// bidirectional `_AssertWorkflowEndStatusMatches` rail in `soleur-go-runner.ts`.
 
 import type { WorkflowEnd } from "./soleur-go-runner";
 

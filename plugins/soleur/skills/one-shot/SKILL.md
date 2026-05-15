@@ -116,9 +116,10 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 
 **If absent or subagent failed (fallback):**
 
-1. Write to session-state.md: `## Plan Phase\n- Status: fallback (subagent failed)\n`
-2. Use the **Skill tool**: `skill: soleur:plan`, args: "$ARGUMENTS" and then `skill: soleur:deepen-plan` inline (no compaction benefit, but pipeline continues)
-3. Continue to step 3.
+1. **Partial-artifact recovery check.** Before re-running plan inline, look for artifacts the crashed subagent may have written: `ls "knowledge-base/project/plans/$(date -u +%Y-%m-%d)-"*.md 2>/dev/null` and `ls "knowledge-base/project/specs/$(git branch --show-current)/tasks.md" 2>/dev/null`. If a plan file exists with frontmatter + Overview + Acceptance Criteria sections, the subagent completed plan generation before crashing (only the Session Summary emission failed). Load it and continue from `/soleur:plan-review` rather than re-running `/soleur:plan` from scratch. Note in session-state.md: `Status: recovered from partial-artifact (subagent crashed mid-Session-Summary; plan body was on disk).` See `knowledge-base/project/learnings/2026-05-15-subagent-crash-recovery-via-on-disk-artifacts.md`.
+2. Write to session-state.md: `## Plan Phase\n- Status: fallback (subagent failed)\n` (or `recovered from partial-artifact` per step 1).
+3. If no partial artifact was found, use the **Skill tool**: `skill: soleur:plan`, args: "$ARGUMENTS" and then `skill: soleur:deepen-plan` inline (no compaction benefit, but pipeline continues).
+4. Continue to step 3.
 
 **Steps 3-8: Implementation, Review, and Ship**
 
