@@ -16,10 +16,11 @@ lane: cross-domain
 
 ## Phase 1 — Shared parser
 
-2.1. Create `apps/web-platform/scripts/parse-gitleaks-allowlists.mjs` per spec (no-dep regex walker, JSON-array stdout, exit codes 0/2/3).
-2.2. Create `apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh` with 7 RED/GREEN cases.
-2.3. Run the harness (`bash apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh`) — must report `Total: 7 pass, 0 fail`.
+2.1. Create `apps/web-platform/scripts/parse-gitleaks-allowlists.mjs` per spec (no-dep regex walker, JSON-array stdout, exit codes 0/2/3/4 per Plan §Phase 1).
+2.2. Create `apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh` with 8 RED/GREEN cases (T1-T7 per Plan §Phase 1 + T8 v8.25-shape detection per Plan §Enhancement Summary).
+2.3. Run the harness (`bash apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh`) — must report `Total: 8 pass, 0 fail`.
 2.4. Verify dispatcher contract: `node apps/web-platform/scripts/parse-gitleaks-allowlists.mjs .gitleaks.toml | jq -e 'type == "array"'` exits 0.
+2.5. Verify empirical baseline (AC22): `node apps/web-platform/scripts/parse-gitleaks-allowlists.mjs .gitleaks.toml | jq 'length'` returns ≥14.
 
 ## Phase 2 — JWT fixture synthesis (#3759)
 
@@ -37,10 +38,12 @@ lane: cross-domain
 
 ## Phase 4 — Rename-laundering guard (#3160)
 
+5.0. Update `.github/workflows/secret-scan.yml` `on:` block to `pull_request: types: [opened, synchronize, reopened, labeled, unlabeled]` (Plan §Phase 4.0). REQUIRED for label-based override path to react without empty-commit dance.
 5.1. Create `apps/web-platform/scripts/rename-guard.sh` per spec.
 5.2. Add `rename-guard` job to `.github/workflows/secret-scan.yml` (after `waiver-discipline`, before `smoke-tests`) calling `apps/web-platform/scripts/rename-guard.sh`.
 5.3. Add 3 new smoke matrix cases: `rename-guard-fires`, `rename-guard-label-override`, `rename-guard-trailer-override`. Keep existing `rename-laundering` as canary.
 5.4. Run `bash -c '<rename-guard.sh test-driver>'` locally with synthetic baseline + rename + trailer/label permutations to verify all 3 paths.
+5.5. Verify trailer-key case-sensitivity: smoke fixture commit uses `Rename-Allowed-By: smoke-tests` (title-case-with-hyphens, mirroring `Co-Authored-By`). Script `--format='%(trailers:key=Rename-Allowed-By,valueonly)'` MUST match this exact case.
 
 ## Phase 5 — Allowlist-diff CI gate (#3323)
 

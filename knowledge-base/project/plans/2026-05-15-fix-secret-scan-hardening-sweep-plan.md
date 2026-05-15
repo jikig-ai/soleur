@@ -4,6 +4,7 @@ type: bundled-fix
 classification: ci-tooling-hardening
 lane: cross-domain
 created: 2026-05-15
+deepened: 2026-05-15
 branch: feat-one-shot-secret-scan-hardening-sweep
 closes: [3759, 3322, 3323, 3160]
 related: [3121, 3268, 3281, 3194]
@@ -11,6 +12,29 @@ requires_cpo_signoff: false
 ---
 
 # Bundled secret-scan hardening sweep — fix #3759 #3322 #3323 #3160 in one PR
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-15
+**Sections enhanced:** Overview, Research Reconciliation, Phase 1, Phase 2, Phase 4, Phase 5, Risks, Sharp Edges, Acceptance Criteria
+**Research signals used:** WebSearch (gitleaks v8.24→v8.25 syntax migration, GitHub Actions PR-comment idempotency, label payload at event-time semantics, label-rerun limitation), live `gh api` verification (PR-comment endpoint shape), local empirical tests (git trailers `valueonly` modifier, regex-only TOML extractor working on 14 paths), `cq-test-fixtures-synthesized-only` cross-check, AGENTS.md rule-ID validation.
+
+### Key Improvements
+1. **JWT placeholder shape verified empirically** — new form `eyJsynthesized_HEADER_placeholder.synthesized_PAYLOAD_placeholder.synthesized_SIGNATURE_placeholder` confirmed to (a) match the redact-sentinel JWT regex, (b) NOT match gitleaks default `jwt` regex (segment 2 lacks `ey` prefix). Test 2.JWT stays green; gitleaks does not fire. Bash verification commands embedded in Phase 2.
+2. **Workflow MUST listen to `pull_request: types: [opened, synchronize, reopened, labeled, unlabeled]`** — without `labeled`/`unlabeled`, adding the `secret-scan-allow-rename` or `secret-scan-allowlist-ack` label after-the-fact will NOT re-trigger the gate; operators would be forced to push an empty commit. Plan now extends the workflow trigger.
+3. **TOML parser confirmed feasible without deps** — empirical test on actual `.gitleaks.toml` extracted 14 unique paths via 9-line regex walker (`/paths\s*=\s*\[([\s\S]*?)\]/g` then `/'''([\s\S]*?)'''/g`). No `@iarna/toml` dep needed.
+4. **gh API endpoint shape verified live** — `repos/.../issues/{N}/comments` returns objects with `body` and `id` fields (confirmed via `gh api` against issue #3759); marker-line idempotency pattern is supported.
+5. **gitleaks v8.25+ migration path documented** — top-level `[[allowlists]] targetRules = [...]` form replaces per-rule `[[rules.allowlists]]`; parser MUST log a warning if `[[allowlists]]` block lacks `targetRules` handling. Future-proofs the gate.
+6. **git trailer `valueonly` modifier verified empirically** — `git log --format='%(trailers:key=Rename-Allowed-By,valueonly)' BASE..HEAD` returns the value when the trailer exists in any commit in range (case-sensitive on key). Edge case: requires `>= 1` commits in range; empty range returns empty string (handled in script via `[[ -n "$trailers" ]]` guard).
+7. **Phase ordering enforced** — Phase 1 (parser) blocks Phase 4 + Phase 5; Phase 0 (labels) blocks AC7/AC8 verification. Documented in Sharp Edges.
+
+### New Considerations Discovered
+- **`labeled`/`unlabeled` event variant** is REQUIRED for label-based override gates to react to runtime label changes (was missing from v1 plan).
+- **Label-payload-at-event-time** semantic means the `secret-scan-allow-rename` label, when added AFTER the workflow ran, requires either a re-trigger via `labeled` event variant OR a manual `gh workflow run`. Documented in runbook.
+- **`pull_request_target` is NOT used** — the existing workflow comment hardening explicitly notes `pull_request` (NOT `pull_request_target`) for fork-PR safety. The new jobs inherit this posture.
+- **CODEOWNERS coverage gap** — three new helper scripts (`parse-gitleaks-allowlists.mjs`, `rename-guard.sh`, `allowlist-diff.sh`) need explicit `@jeanderuelle` coverage; otherwise a future PR could quietly modify the gate logic without 2nd-reviewer.
+
+
 
 ## Overview
 
@@ -84,9 +108,12 @@ The four sub-fixes:
 - [ ] AC12 — Existing smoke matrix `rename-laundering` case still runs and prints VERDICT (canary on gitleaks bumps). Verification: `grep -c "rename-laundering" .github/workflows/secret-scan.yml` returns ≥1, AND a freshly-triggered CI run on a draft PR shows `VERDICT: rename-laundering=allowed` in the step summary.
 - [ ] AC13 — Runbook §Rename-laundering "Follow-up tracked: #3160" callout removed; replaced with "Mitigation: `rename-guard` CI job fails on `git mv` into allowlisted paths unless overridden by label/trailer".
 - [ ] AC14 — Runbook gains a new §Allowlist-diff gate section AND §Waiver linter (now covers learnings).
-- [ ] AC15 — `git diff main..HEAD --name-only` shows no other files modified beyond the 6 in `## Files to Edit` + 2 in `## Files to Create`.
-- [ ] AC16 — PR body includes `Closes #3759 #3322 #3323 #3160` on its own line (per `wg-use-closes-n-in-pr-body-not-title-to`).
+- [ ] AC15 — `git diff main..HEAD --name-only` shows no other files modified beyond the 6 in `## Files to Edit` + 2 in `## Files to Create` + the 3 new helper scripts (rename-guard.sh, allowlist-diff.sh, parse-gitleaks-allowlists.mjs/test.sh) + the CODEOWNERS amendment.
+- [ ] AC16 — PR body includes `Closes #3759`, `Closes #3322`, `Closes #3323`, `Closes #3160` each on its own line (per `wg-use-closes-n-in-pr-body-not-title-to`).
 - [ ] AC17 — All review agents pass (DHH, Kieran, code-simplicity, security-sentinel, architecture-strategist).
+- [ ] AC20 — `secret-scan.yml` `on:` block includes `types: [opened, synchronize, reopened, labeled, unlabeled]`. Verification: `awk '/^on:/,/^[a-z]+:/' .github/workflows/secret-scan.yml | grep -E "labeled|unlabeled"` returns 1 line.
+- [ ] AC21 — `parse-gitleaks-allowlists.mjs` Test T8 (v8.25+ shape detection) exits 4 with stderr warning when input contains `[[allowlists]]` block lacking `targetRules`. Verification: harness adds T8 case with synthetic v8.25-shape input.
+- [ ] AC22 — `apps/web-platform/scripts/parse-gitleaks-allowlists.mjs` against current `.gitleaks.toml` extracts ≥14 unique paths (matches the deepen-pass empirical baseline). Verification: `node apps/web-platform/scripts/parse-gitleaks-allowlists.mjs .gitleaks.toml | jq 'length'` returns ≥14.
 
 ### Post-merge (operator)
 
@@ -130,6 +157,18 @@ Create `apps/web-platform/scripts/parse-gitleaks-allowlists.mjs`:
 
 **Implementation note:** Adding `toml` as a runtime dep for one helper script is overkill. A regex-based walker over `\[\[rules\.allowlists\]\]` and `\[allowlist\]` blocks with `paths\s*=\s*\[(.*?)\]` (DOTALL) extraction is sufficient and parallels the existing `lint-fixture-content.mjs` no-dep convention. Cite this rationale in a top-of-file comment.
 
+**Empirical proof of feasibility (deepen-pass 2026-05-15):** A 9-line regex walker — verified locally against the current `.gitleaks.toml`, extracts 14 unique paths. Pattern: `/paths\s*=\s*\[([\s\S]*?)\]/g` to find each `paths = [...]` array, then `/'''([\s\S]*?)'''/g` to extract triple-quoted regex literals from inside. Output (truncated): `["(__snapshots__|__goldens__)/.*\\.snap$", "__goldens__/.*", "apps/web-platform/(?:infra|test)/.*\\.test\\.(?:sh|ts)$", ...]` — 14 entries.
+
+**v8.25+ forward-compatibility (R1 mitigation):** Per gitleaks release notes, v8.25.0 added a top-level `[[allowlists]]` block with a `targetRules = [...]` field. The current `.gitleaks.toml` is locked to v8.24.2 (per file header comment). The parser MUST detect any `[[allowlists]]` block (v8.25+ shape) WITHOUT `targetRules` handling and emit a stderr warning + non-zero exit code, prompting the operator to update the parser before merging the gitleaks bump. Add this as a Phase 1 unit test (T8: encounter v8.25+ shape → exit 4 with warning).
+
+**TOML edge cases not covered by the regex walker (intentional scope-out — flagged in top-of-file comment):**
+
+- Nested arrays: `paths = [['a', 'b']]` — not used in `.gitleaks.toml` today.
+- Multi-line single-quoted strings: only triple-quoted (`'''…'''`) regex literals are extracted; double-quoted strings (`"…"`) are not, but `.gitleaks.toml` uses only triple-quote for path regexes.
+- Comments inside arrays: `paths = ['a', # comment\n 'b']` — handled because `[\s\S]*?` is greedy-non-greedy across newlines and the inner item regex only matches `'''…'''` blocks.
+
+If `.gitleaks.toml` evolves to use any of the above shapes, switch to a structural TOML parser (`bun add -d @iarna/toml` or Node 22's experimental TOML support).
+
 Create `apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh` — RED/GREEN harness mirroring `redact-sentinel.test.sh` shape. Test cases:
 
 - T1: missing file → exit 2.
@@ -158,6 +197,24 @@ This shape:
 - Matches the redact-sentinel JWT regex `eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}` ✓
 - Does NOT match the gitleaks default `jwt` regex (seg 2 is `synthesized_PAYLOAD_placeholder`, no `ey` prefix) ✓
 - Reads as obviously synthetic on visual inspection (placeholder words instead of opaque `aaaa` padding) — closes the original "looks like a real-shape JWT" aesthetic concern.
+
+#### Research Insights
+
+**Empirical verification (deepen-pass 2026-05-15):**
+
+```bash
+# Verified locally — this command MUST exit 0 (sentinel matches new shape):
+echo "eyJsynthesized_HEADER_placeholder.synthesized_PAYLOAD_placeholder.synthesized_SIGNATURE_placeholder" \
+  | grep -E "eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+# → MATCHES sentinel JWT regex (Test 2 stays green)
+
+# Verified locally — this command MUST exit 1 (gitleaks does NOT fire):
+echo "eyJsynthesized_HEADER_placeholder.synthesized_PAYLOAD_placeholder.synthesized_SIGNATURE_placeholder" \
+  | grep -E "ey[A-Za-z0-9_-]{17,}\.ey[A-Za-z0-9_-]{17,}\.[A-Za-z0-9_-]{10,}"
+# → NO match (good — segment 2 lacks ey prefix; gitleaks default jwt rule does not fire)
+```
+
+**Why the issue's literal `eyJ.HEADER.PLACEHOLDER.SIG` cannot be used:** the redact-sentinel regex requires `eyJ` + ≥10 chars before the first dot, then ≥10 chars per remaining segment. `eyJ.HEADER.PLACEHOLDER.SIG` has 0 chars after `eyJ` before the dot, breaking Test 2.JWT. The placeholder-word form preserves the test contract while making the synthetic intent unmistakable.
 
 Verify: re-run `bash plugins/soleur/skills/incident/test/redact-sentinel.test.sh` (Test 2.JWT must remain green) and `gitleaks git --no-banner --exit-code 1` (still 0 findings).
 
@@ -191,6 +248,20 @@ Verify: re-run `bash plugins/soleur/skills/incident/test/redact-sentinel.test.sh
 3.4. GREEN test: re-run lefthook + the CI workflow's grep against a staged learnings file. Confirm both fire on a malformed-trailer waiver. Delete `_red-test.md` before commit.
 
 ### Phase 4 — Rename-laundering CI guard (#3160)
+
+4.0. **Workflow trigger update (REQUIRED prerequisite for label-based override).** The existing `secret-scan.yml` `on:` block uses bare `pull_request:` which defaults to `[opened, synchronize, reopened]`. Adding the `secret-scan-allow-rename` (or `secret-scan-allowlist-ack`) label after the workflow first ran will NOT re-trigger the gate — the override path becomes "push an empty commit" which is operator-hostile. Extend to:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+```
+
+This adds 2 events. Cost: marginal — the `labeled`/`unlabeled` events fire at most a few times per PR. Benefit: operators can apply the override label and the gate re-runs naturally without the empty-commit dance. Per gh community discussion #4679, this is the canonical pattern for label-based gates.
 
 4.1. Add a new job `rename-guard` to `.github/workflows/secret-scan.yml` (after `waiver-discipline`, before `smoke-tests`):
 
@@ -374,7 +445,8 @@ CODEOWNERS update (Phase 0.3 list): add `/apps/web-platform/scripts/rename-guard
           # Build a comment body.
           body=$(printf '## Secret-scan allowlist diff\n\nThis PR modifies `.gitleaks.toml` allowlist paths.\n\n### Added paths\n```\n%s\n```\n\n### Removed paths\n```\n%s\n```\n\nAcknowledge via either:\n- Add the `secret-scan-allowlist-ack` label, OR\n- Include `Allowlist-Widened-By: <name>` in any commit trailer.\n' "${added:-(none)}" "${removed:-(none)}")
 
-          # Post / update the comment (idempotent — keyed on a marker line in the body).
+          # Post / update the comment (idempotent — keyed on a marker line that
+          # MUST be the FIRST line of the body so jq `startswith` matches).
           marker="<!-- allowlist-diff-comment -->"
           full_body="${marker}"$'\n'"${body}"
           # Find existing comment with the marker; update if present, else create.
@@ -427,7 +499,9 @@ Edit `knowledge-base/engineering/operations/secret-scanning.md`:
 
 6.3. § `# gitleaks:allow` waivers — add a sentence: "As of 2026-05-15 (#3322), the lefthook + CI `lint-fixture-content` linter also covers `knowledge-base/project/learnings/**/*.md` so future learning-file waivers carry the `issue:#NNN <reason>` trailer."
 
-6.4. Update `last_updated:` frontmatter to 2026-05-15.
+6.4. Add an operator note in both the §Allowlist-diff gate and §Rename-laundering sections: "Label-based overrides require the workflow's `pull_request:` trigger to include `types: [labeled, unlabeled]` (added in this PR). Manually re-running a workflow does NOT re-fetch labels — the override label must be applied BEFORE the gate fires, OR a fresh push (or `labeled` event) must trigger a new run."
+
+6.5. Update `last_updated:` frontmatter to 2026-05-15.
 
 ## Open Code-Review Overlap
 
@@ -443,6 +517,10 @@ Result: **Folded in** — #3759 (bug, not code-review), #3322 + #3323 + #3160 (t
 - **R4 — `gh pr comment` rate limit.** Idempotent comment-update via the marker line means at most one comment per PR. Re-runs `PATCH` the existing comment. ✓
 - **R5 — Per Sharp Edge `2026-05-15-github-push-protection-rejects-synthetic-tokens-in-plan-prose`:** This plan uses the literal Doppler-shape token `dp.pt.‹SMOKETEST-40-alnum-body›` only in the existing `secret-scan.yml` smoke matrix (already gated through `FAKE_DOPPLER_PREFIX`/`FAKE_DOPPLER_BODY` split). Plan prose uses non-alnum placeholders so GitHub push protection's regex (`dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{40,}`) does not match. ✓
 - **R6 — Sharp Edge `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug`**: any `bash -c '<snippet>'` verification commands in this plan extract from YAML; per the sharp edge, verify embedded shell with `bash -c '<snippet>'` not `bash -n <file.yml>`. Phase 1 RED/GREEN harness uses `bash -n script.sh` (script files, not YAML) ✓.
+- **R7 — Label-payload-at-event-time semantic.** Per gh community discussion #39062, `github.event.pull_request.labels` reflects labels at the event-trigger time, not the current state. Phase 4.0 mitigates by adding `labeled`/`unlabeled` event types, so applying the override label fires a fresh event with the new label list. WITHOUT Phase 4.0, the operator workflow would be: push, see fail, apply label, push empty commit. With Phase 4.0: push, see fail, apply label, gate auto-reruns. ✓
+- **R8 — Workflow-rerun does NOT pick up new labels.** Per actions/runner issue #3149, manually re-running a workflow does NOT re-fetch the PR label list — it replays the original event payload. Operators should apply the label THEN trigger via a fresh event (push, or `labeled` activity). Documented in runbook §Allowlist-diff gate.
+- **R9 — `pull_request_target` NOT used.** The existing `secret-scan.yml` header explicitly notes the use of `pull_request` (not `pull_request_target`) for fork-PR safety: fork PRs run in untrusted context with no secrets exposure. The two new jobs inherit this. The trade-off is that fork PRs cannot post comments (the `gh pr comment` call requires `pull-requests: write` which is unavailable to fork PRs). For fork PRs, the `allowlist-diff` job's comment step will fail; the gate's exit-1 still blocks merge. Acceptable — fork PRs editing `.gitleaks.toml` is a high-suspicion event that warrants manual operator review anyway.
+- **R10 — gitleaks v8.25+ schema.** When the `.gitleaks.toml` file header migrates to v8.25+ syntax (`[[allowlists]] targetRules = […]`), the parser MUST be updated in the SAME PR. The parser's T8 unit test (Phase 1) emits exit code 4 on encountering the v8.25 shape without `targetRules` handling, blocking the gitleaks bump until the parser catches up. ✓
 
 ## Sharp Edges
 
@@ -454,6 +532,11 @@ Result: **Folded in** — #3759 (bug, not code-review), #3322 + #3323 + #3160 (t
 - Per `2026-05-12-plan-time-api-contract-verification-and-pipeline-via-package-json`: the `gh api repos/.../issues/{N}/comments` and `repos/.../issues/comments/{id}` endpoints used in Phase 5 are GitHub REST v3 issue-comment endpoints (PRs are issues for comment purposes); contract verified via `gh api -X GET /repos/{owner}/{repo}/issues/{number}/comments --include` (returns 200 + array of comment objects with `.id` and `.body` fields).
 - Per `2026-05-10-plan-phase-order-load-bearing-when-contract-changes`: Phase 1 (parser) MUST land before Phase 4 (rename-guard) and Phase 5 (allowlist-diff) — both consume the parser. Phase 0 labels MUST land before AC7/AC8 verification. Phase 2 fixture synthesis is independent of all other phases. Phase 6 runbook lands last (documents the new gates). Documented; `/work` will execute in this order.
 - Per `cq-test-fixtures-synthesized-only`: the Phase 2 JWT replacement uses placeholder words (`synthesized_HEADER_placeholder`, etc.) so the fixture's intent is unmistakable. The shape still triggers the redact-sentinel JWT regex (Test 2 stays green) but cannot be mistaken for a real JWT shape on visual review.
+- **`labeled`/`unlabeled` event types are LOAD-BEARING for the override path** (Phase 4.0). Without them, the operator workflow becomes: push → see fail → apply label → push empty commit → see pass. With them: push → see fail → apply label → gate auto-reruns. Removing the activity types from the trigger silently breaks the override UX for both `secret-scan-allow-rename` and `secret-scan-allowlist-ack`.
+- **Fork-PR comment posting failure is not a regression.** The `allowlist-diff` job's `gh pr comment` step fails for fork PRs (no `pull-requests: write` token in untrusted-context). This is by design — fork PRs editing `.gitleaks.toml` warrants manual operator review. The gate's exit-1 still blocks merge regardless of the comment-step outcome. Document this as a known-and-intentional limitation in the runbook.
+- **Comment marker line MUST be the first line of the body** (`<!-- allowlist-diff-comment -->\n...`). The `gh api` `.body | startswith(...)` jq filter requires exact prefix match — putting the marker mid-body would fail the idempotency check and produce duplicate comments. Verified against gh API response shape (`body` is a free-form string field).
+- **Trailer key is case-sensitive in `--format='%(trailers:key=…,valueonly)'`.** The script's key MUST match the case used in the commit message (`Rename-Allowed-By`, `Allowlist-Widened-By` — title-case-with-hyphens, mirroring `Co-Authored-By`). Documented in the rename-guard.sh / allowlist-diff.sh top-of-file comment + smoke matrix exercises both cases via fixture commits.
+- **Empty BASE..HEAD range edge case.** `git log --format='%(trailers:…)' BASE..HEAD` returns empty string when the range is empty (no commits between BASE and HEAD — possible on first-push to PR branch with squash-base equal to head). The script guards this via `[[ -n "$trailers" ]]` AFTER the log call, so empty output falls through to "no override → block". Confirmed empirically.
 
 ## Test Plan
 
