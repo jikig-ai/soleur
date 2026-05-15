@@ -1,7 +1,9 @@
 ---
 title: PR-C — Sibling-query migration (#3244 §2)
 date: 2026-05-15
-status: ready-for-plan
+status: planned
+plan: knowledge-base/project/plans/2026-05-15-feat-pr-c-sibling-query-migration-plan.md
+tasks: knowledge-base/project/specs/feat-runtime-slice-3244/tasks.md
 umbrella_issue: 3244
 predecessor_prs: [3240, 3395]
 umbrella_spec: knowledge-base/project/specs/feat-agent-runtime-platform/spec.md
