@@ -101,10 +101,18 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create fea
 **What happens:**
 
 1. Checks if worktree already exists
-2. Updates the base branch from remote
-3. Creates new worktree and branch
+2. Fetches `refs/remotes/origin/<from-branch>` (the local `<from-branch>` ref is NOT touched — this lets `create` succeed even when a sibling worktree has `<from-branch>` checked out; see #3741)
+3. Creates the new worktree from `origin/<from-branch>` with `--no-track` (preserves the pre-fix upstream-unset state so downstream `git push -u origin <branch>` flows are unchanged)
 4. **Copies all .env files from main repo** (.env, .env.local, .env.test, etc.)
 5. Shows path for cd-ing to the worktree
+
+**Opt-in: also update local `<from-branch>`**
+
+Pass `--update-local-main` (as a global flag, before `create`) to additionally fast-forward the local `<from-branch>` ref. Default behavior leaves the local ref untouched.
+
+```bash
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --update-local-main create feature-login
+```
 
 ### `list` or `ls`
 
@@ -309,7 +317,7 @@ Navigate back to the repository root directory.
 - When lefthook hangs in a worktree (>60s), kill it (`pkill -f "lefthook run"`), verify checks manually, then commit with `LEFTHOOK=0 git commit`. This is a known lefthook/worktree interaction bug. (ex-`cq-when-lefthook-hangs-in-a-worktree-60s`; also guarded by `.claude/hooks/lib/incidents.sh` detect_bypass)
 - Never pass `-c user.email=<fake>` / `-c user.name=<fake>` to `git commit` to bypass author-identity errors — fix the worktree's local git config instead (`worktree-manager.sh create` auto-runs `ensure_worktree_identity`). (ex-`hr-never-fake-git-author`; PR #2815 forced a destructive force-push after 4 commits were authored as `test@test` and blocked CLA; `knowledge-base/project/learnings/2026-04-24-fake-git-author-bare-repo-bot-override.md`)
 - After `git worktree add` on bare repos, verify both `rev-parse --show-toplevel` (directory validity) and `git worktree list --porcelain` (registration). See learning: `knowledge-base/project/learnings/2026-04-10-worktree-registration-verification-insufficient.md`.
-- In bare repos with multiple worktrees, `git fetch origin branch:branch` fails when the target branch is checked out in any worktree -- git rejects the refspec update. The fallback `git fetch origin branch` only updates `origin/branch`, NOT the local ref. Use `git update-ref refs/heads/branch origin/branch` to force-sync when the fetch refspec is rejected.
+- In bare repos with multiple worktrees, `git fetch origin branch:branch` fails when the target branch is checked out in any worktree -- git rejects the refspec update. The fallback `git fetch origin branch` only updates `origin/branch`, NOT the local ref. Use `git update-ref refs/heads/branch origin/branch` to force-sync when the fetch refspec is rejected. As of #3741 (2026-05-14), `worktree-manager.sh create` bypasses this failure mode by default — new worktrees are based on `refs/remotes/origin/<from>` directly. The refspec-fetch path only runs when `--update-local-main` is passed.
 - After creating a worktree via the script, always verify it exists in `git worktree list` before attempting to `cd` into it -- the script may report success for names that silently fail (e.g., excessively long names). A 2026-04-18 recurrence under a normal short name (#2611) confirms the silent-failure mode is not limited to edge-case names; see `knowledge-base/project/learnings/2026-04-18-worktree-manager-silent-registration-failure.md`.
 - In bare repos, `git branch --show-current` from the bare root returns `main` (or empty), not the worktree's branch. Always ensure CWD is inside the target worktree before running branch-detecting git commands.
 

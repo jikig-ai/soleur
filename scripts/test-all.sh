@@ -160,7 +160,7 @@ fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)
 if want_scripts; then
-  for f in plugins/soleur/test/*.test.sh; do
+  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh; do
     [[ -f "$f" ]] || continue
     run_suite "$f" bash "$f"
   done
