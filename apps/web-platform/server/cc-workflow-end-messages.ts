@@ -1,15 +1,6 @@
-// User-facing copy for each `WorkflowEndStatus`. Extracted from
-// `cc-dispatcher.ts` per the #3243 status comment recommendation
-// (`apps/web-platform/scripts/3243-status-comment.md`). See ADR-031.
-//
-// Type source: `./soleur-go-runner`'s `WorkflowEnd["status"]` — matches
-// the local re-derive at `cc-dispatcher.ts:212`. NOT `@/lib/types`
-// `WorkflowEndStatus`, which has 9 wire-protocol values (`sandbox_denial`,
-// `runner_crash` included) that the runner's `WorkflowEnd` union does not
-// currently emit. Importing from `@/lib/types` would fire the
-// exhaustiveness rail below on two missing keys. The lib/types-vs-runner
-// enum drift is real and tracked separately — out of scope for this pure
-// extraction.
+// User-facing copy for runner `WorkflowEnd` statuses.
+// Type source is `./soleur-go-runner` (7 emitted statuses), NOT
+// `@/lib/types` (9 wire-protocol statuses, drifted). See ADR-031.
 
 import type { WorkflowEnd } from "./soleur-go-runner";
 
