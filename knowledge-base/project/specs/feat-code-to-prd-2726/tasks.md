@@ -58,7 +58,7 @@ Brand-survival threshold: `single-user incident` — CPO sign-off required befor
 - [x] 6.1 Create fixture `package.json` (declares `name: "code-to-prd-fixture"`, minimal deps).
 - [x] 6.2 Create fixture `next.config.mjs` (export default `{}`).
 - [x] 6.3 Create fixture routes: `app/page.tsx`, `app/about/page.tsx`, `app/api/health/route.ts` (with `GET` export).
-- [ ] 6.4 Create fixture `.env.example` with `STRIPE_SECRET_KEY=sk_test_<<24+ alnum chars, no underscores>>` (alnum-only after prefix per Kieran P0-1). **Deferred to Phase 9b — must land AFTER `.gitleaks.toml` allowlist commit per Kieran P0-3.**
+- [x] 6.4 Create fixture `.env.example` with `STRIPE_SECRET_KEY=sk_test_<<24+ alnum chars, no underscores>>` (alnum-only after prefix per Kieran P0-1). Landed in Phase 9b commit after the `.gitleaks.toml` allowlist (Phase 9a) per Kieran P0-3 — pre-commit gitleaks honors the staged file because the allowlist exists in HEAD.
 - [x] 6.5 NO `app/actions.ts` — v1 doesn't extract server actions (Simplicity review #3).
 - [x] 6.6 Verify sentinel matches the fixture token: `echo 'STRIPE_SECRET_KEY=sk_test_<<24+ alnum chars, no underscores>>' | bash plugins/soleur/skills/incident/scripts/redact-sentinel.sh /dev/stdin; echo "exit=$?"` → `exit=1`. Failing this aborts implementation immediately. (Verified via temp file — `/dev/stdin` quirk with sentinel's multi-pattern loop; test uses temp file.)
 - [x] 6.7 Create test harness `plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh` mirroring `incident/test/redact-sentinel.test.sh` shape (set -uo pipefail, PASS/FAIL counter, trap cleanup).
@@ -83,7 +83,7 @@ Brand-survival threshold: `single-user incident` — CPO sign-off required befor
 Per Kieran P0-3 — pre-commit gitleaks hook reads allowlist from HEAD, not staged. STRICTLY TWO COMMITS in this order:
 
 - [x] 9.1 Commit 1: `.gitleaks.toml` allowlist entry for `plugins/soleur/skills/code-to-prd/test/fixture/.env.example` citing `cq-test-fixtures-synthesized-only`. Push. Confirm landed.
-- [ ] 9.2 Commit 2: fixture `.env.example` with the synthetic secret. Push.
+- [x] 9.2 Commit 2: fixture `.env.example` with the synthetic secret. Push. **Operator step at push time:** GitHub push protection rejects synthetic Stripe-format tokens at the server side regardless of local `.gitleaks.toml` (see learning `2026-05-15-github-push-protection-rejects-synthetic-tokens-in-plan-prose.md`). Click the bypass URL printed in the rejection message and select "Used in tests" with reason "code-to-prd skill fixture — alnum-only synthetic token, `cq-test-fixtures-synthesized-only`, allowlisted at `plugins/soleur/skills/.*/test/fixture/.env.example`".
 
 Never bundle these two commits. Verify locally before pushing each.
 
