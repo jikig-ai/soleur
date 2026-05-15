@@ -42,6 +42,7 @@ import {
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps } from "./cc-cost-caps";
+import { WORKFLOW_END_USER_MESSAGES } from "./cc-workflow-end-messages";
 import { persistTurnCost } from "./cost-writer";
 import { PendingPromptRegistry } from "./pending-prompt-registry";
 import {
@@ -566,43 +567,6 @@ export function __resetCcPersistUsageObservationForTests(): void {
   _ccPersistUsageFirstTrueObserved = false;
 }
 
-/**
- * User-facing copy for each `WorkflowEndStatus`. Replaces the previous
- * ad-hoc `"Workflow ended (${status}) — retry to continue."` template
- * which leaked an internal status enum to the user.
- *
- * Type-level exhaustiveness: `Record<WorkflowEndStatus, string>` forces
- * every union variant to have an entry — adding a new status to the
- * runner without updating this map is a TS error here. The
- * `_exhaustive: never` rail below is belt-and-suspenders for the rare
- * case where the union is widened via an intersection.
- *
- * Empty string for `"completed"` — that branch is handled via the
- * terminal `session_ended` WS event and never produces a user-visible
- * error message; the empty string is intentional and asserted by the
- * snapshot test.
- */
-export const WORKFLOW_END_USER_MESSAGES: Record<WorkflowEndStatus, string> = {
-  completed: "",
-  cost_ceiling:
-    "This conversation reached the per-workflow cost cap. Start a new conversation to continue.",
-  runner_runaway:
-    "The agent went idle without finishing. Try sending another message to nudge it forward.",
-  user_aborted: "Conversation stopped at your request.",
-  idle_timeout:
-    "This conversation was idle for too long and was closed. Start a new conversation to continue.",
-  plugin_load_failure:
-    "The agent could not start because a plugin failed to load. Try again shortly.",
-  internal_error: "Something went wrong on our side. Try sending the message again.",
-};
-
-// Compile-time exhaustiveness rail. If a new variant lands in
-// `WorkflowEnd["status"]` without an entry above, this assertion will
-// fail (the type narrows to `never` for the missing key).
-const _workflowEndExhaustive: Record<WorkflowEndStatus, string> =
-  WORKFLOW_END_USER_MESSAGES;
-void _workflowEndExhaustive;
-
 type InteractivePromptResponseError =
   | "invalid_payload"
   | "invalid_response"
@@ -626,7 +590,7 @@ let _reaperInterval: ReturnType<typeof setInterval> | null = null;
 const REAPER_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
- * Hard-block list for the cc-soleur-go path (#3338).
+ * Tool-surface configuration for the cc-soleur-go router.
  *
  * Two SDK options govern tool surface, with DIFFERENT semantics
  * (sdk.d.ts:855-892):
@@ -635,11 +599,30 @@ const REAPER_INTERVAL_MS = 5 * 60 * 1000;
  *   - `tools`: closed allowlist of available built-ins (alternative to
  *     disallowedTools).
  *
- * The cc-router's job is to dispatch via the Skill tool to a routed sub-skill;
- * it never needs Bash, Edit, or Write itself. We add Bash/Edit/Write to
- * `disallowedTools` so the model literally cannot emit them — without this,
- * Bash falls through to `canUseTool` and pops the review_gate modal in the
- * end-user Concierge surface (the bug this PR fixes).
+ * The cc-router's primary job is to dispatch via the Skill tool to a routed
+ * sub-skill; it never needs Edit or Write itself, so those stay hard-blocked.
+ *
+ * Bash routing (#3338 → #3344). Bash was originally hard-blocked alongside
+ * Edit/Write because it triggered a `find . -name "*.pdf"` / `apt-get install
+ * poppler-utils` modal cascade when the agent tried to summarize a large PDF
+ * (review-gate modals popping in the end-user Concierge surface). Two
+ * structural mitigations have since landed and made the hard-block over-broad:
+ *
+ *   - #3338 PDF Read 24 MB ceiling — large PDFs route through the gated
+ *     directive instead of the inline-Read path that triggered the cascade.
+ *   - #3430 page-count gate on the PDF soft-route — large PDFs are
+ *     classified before the agent attempts inline read.
+ *
+ * Bash now routes through `canUseTool` and shares the legacy path's
+ * `safe-bash` allowlist (`apps/web-platform/server/safe-bash.ts`). Read-only
+ * KB-exploration verbs (`pwd`, `ls`, `cat`, `head`, `tail`, `wc`, `git
+ * status/log/diff/show/branch/rev-parse`, `echo`, etc.) auto-approve with no
+ * modal; verbs NOT in the allowlist (including `find`/`grep`/`rg`/`apt-get` —
+ * intentionally omitted per the omission rationale at the top of
+ * `safe-bash.ts` because they accept `-exec` and
+ * could shell out) still route to `review_gate`. The structural mitigations
+ * above prevent the cascade triggers, and the allowlist covers the verbs the
+ * cc-router actually emits during KB exploration. See Closes #3344.
  *
  * The auto-approve list (`CC_PATH_ALLOWED_TOOLS`) is kept as a separate
  * concern: it eliminates a `canUseTool` round-trip for read-only tools
@@ -647,9 +630,9 @@ const REAPER_INTERVAL_MS = 5 * 60 * 1000;
  * legitimately uses on its own. This is auto-approve, not restriction.
  *
  * Routed sub-skills load their own toolset via the soleur plugin and the
- * legacy domain-leader path (`agent-runner.ts startAgentSession`), so this
- * narrowing is scoped to the cc-router only — exploration within routed
- * workflows is unaffected.
+ * legacy domain-leader path (`agent-runner.ts startAgentSession`), so the
+ * Edit/Write narrowing is scoped to the cc-router only — exploration within
+ * routed workflows is unaffected.
  */
 const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
   "Read",
@@ -664,8 +647,12 @@ const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
 /**
  * Tools removed from the cc-router's surface entirely. Adds to the
  * canonical `[WebSearch, WebFetch]` shared with the legacy path.
+ *
+ * Bash was removed from this list in #3344 — see the routing rationale on
+ * the doc-comment block above. Bash now routes through `canUseTool` and
+ * shares the legacy path's `safe-bash` allowlist + review_gate fallback.
  */
-const CC_PATH_DISALLOWED_TOOLS: readonly string[] = ["Bash", "Edit", "Write"];
+const CC_PATH_DISALLOWED_TOOLS: readonly string[] = ["Edit", "Write"];
 
 export function getPendingPromptRegistry(): PendingPromptRegistry {
   if (_registry) return _registry;

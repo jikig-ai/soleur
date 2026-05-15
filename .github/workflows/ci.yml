@@ -266,8 +266,28 @@ jobs:
     # Verified at plan time: `grep -l '^bun ' plugins/soleur/test/*.test.sh`
     # returned zero matches. If a future .test.sh adds a `bun` invocation,
     # add `setup-bun` here (still no install needed).
+    #
+    # gitleaks is installed because plugins/soleur/skills/code-to-prd/test/
+    # (#2726) preflights `command -v gitleaks` and aborts exit 2 if absent.
+    # Version + SHA pinned identically to .github/workflows/secret-scan.yml —
+    # to upgrade, bump both files together. Variables are workflow-internal
+    # literals; no untrusted input is interpolated into the run: block.
+    env:
+      GITLEAKS_VERSION: "8.24.2"
+      GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install gitleaks (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
 
       - name: Run scripts-side tests (bash + python3)
         run: bash scripts/test-all.sh scripts
