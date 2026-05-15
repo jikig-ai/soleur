@@ -47,10 +47,11 @@ Analyze the user input and classify intent using semantic assessment:
 | fix | The user describes broken behavior, errors, regressions, or something that needs fixing | `soleur:one-shot` |
 | drain | "fix all issues labeled X", "drain the Y backlog", "close all label:Z", "clean up the X backlog" | `soleur:drain-labeled-backlog` |
 | review | "review PR", "check this code", PR number reference | `soleur:review` |
-| incident | The user describes a live or recent production incident (outage, breach, customer-impact, Sentry alert) needing classification + PIR | `soleur:incident` |
+| legal-threshold | The user input mentions an inbound vendor MSA, DSAR (data subject access request) / right-to-be-forgotten / data deletion request / account deletion request / data export request / "what data do you have on me", AI vendor terms / vendor AI review, OSS license question (GPL/AGPL/SSPL/copyleft), OR a personal-data exposure / unauthorized access / PII leak that crosses a statutory clock (GDPR Art. 33 72h) — events that exceed founder-grade compliance helping and warrant a downstream specialist | `clo` agent (Task spawn; the Assess phase emits the threshold catalog from `knowledge-base/legal/recommended-tools.md`) |
+| incident | The user describes a live or recent production incident (outage, customer-impact, Sentry alert) needing classification + PIR. NOTE: pure data breaches without an operational outage route to `legal-threshold` above (statutory clock takes precedence); use `incident` for ops-postmortem scope (uptime, latency, error-rate). | `soleur:incident` |
 | default | Everything else — features, exploration, questions, generation, vague scope | `soleur:brainstorm` |
 
-If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step.
+If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step. **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill use the **Task tool** to spawn the agent — the agent's prompt receives the original user input as the task description. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
 
 When routing to `soleur:drain-labeled-backlog`, extract the label value from the user's message. If the user used a bare name (e.g., "security"), resolve it to the namespaced form by running `gh label list --limit 100 | grep -i <name>` before invoking — `gh` rejects an invalid `--label` with a clear error, so verify against the live label set. Pass the resolved label via `--label <resolved>` in the skill arguments.
 
