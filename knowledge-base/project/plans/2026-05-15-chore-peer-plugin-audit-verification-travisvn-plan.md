@@ -63,16 +63,16 @@ Stars/forks at audit time (for the audit-trail line): **12,561 stars / 1,363 for
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Sub-mode invoked end-to-end.** Run `skill: soleur:competitive-analysis peer-plugin-audit https://github.com/travisvn/awesome-claude-skills` from `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-2749`. Skill exits without abort.
-- [ ] **AC2 — Procedure routing correct.** SKILL.md Step 1 routes to `references/peer-plugin-audit.md` before the `--tiers` branch (verifiable via skill output mentioning peer-plugin-audit; procedure says "checked first").
-- [ ] **AC3 — `gh repo view` succeeds at Step 1.** No HTTP 404/401 during input validation; license recorded as "not detected" per `licenseInfo: null`.
-- [ ] **AC4 — Step 2 inventory enumeration confirms zero SKILL.md.** The skill's Step 2 `gh api ... | select(endswith("SKILL.md"))` invocation against the target returns empty. This is the load-bearing check that triggers the non-audit branch.
-- [ ] **AC5 — Non-audit outcome branch fires.** Per `peer-plugin-audit.md` §"Non-audit outcome": skill writes a short advisory note (or log-only note) and does NOT add an Overlap Matrix row. Verify by reading the diff to `competitive-intelligence.md`: the diff MUST NOT contain a new row in the Tier 0 or Tier 3 Overlap Matrix table (`| **<name>** | ... |` shape). The diff MAY contain a short prose advisory under an existing tier OR a new "Peer-plugin audits" log section, with the words "category mismatch" and "no audit produced".
-- [ ] **AC6 — Advisory entry includes audit-trail metadata.** The advisory entry contains: repo URL, license classification ("not detected"), audit date (`2026-05-15`), auditor (`soleur:competitive-analysis peer-plugin-audit`), star/fork counts at audit time, and a one-line statement that the repo is an awesome-list (no SKILL.md files).
-- [ ] **AC7 — Frontmatter timestamp updated.** `competitive-intelligence.md` frontmatter `last_updated:` and `last_reviewed:` set to `2026-05-15`.
-- [ ] **AC8 — No parallel files written.** Verify no file created under `knowledge-base/product/research/peer-plugin-audits/` (procedure §"Output routing": "Single destination prevents stale copies"). `find knowledge-base/product/research/ -type f -newer .` returns nothing peer-plugin-audit-shaped.
-- [ ] **AC9 — Single-repo update.** `git diff --name-only main..HEAD` lists exactly `knowledge-base/product/competitive-intelligence.md` (plus the plan/spec/tasks artifacts emitted by the pipeline itself).
-- [ ] **AC10 — PR body cites verification artifact.** PR body links to the modified `competitive-intelligence.md` line(s) via GitHub permalink AND uses `Closes #2749`.
+- [x] **AC1 — Sub-mode invoked end-to-end.** Run `skill: soleur:competitive-analysis peer-plugin-audit https://github.com/travisvn/awesome-claude-skills` from `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-2749`. Skill exits without abort.
+- [x] **AC2 — Procedure routing correct.** SKILL.md Step 1 routes to `references/peer-plugin-audit.md` before the `--tiers` branch (verifiable via skill output mentioning peer-plugin-audit; procedure says "checked first").
+- [x] **AC3 — `gh repo view` succeeds at Step 1.** No HTTP 404/401 during input validation; license recorded as "not detected" per `licenseInfo: null`.
+- [x] **AC4 — Step 2 inventory enumeration confirms zero SKILL.md.** The skill's Step 2 `gh api ... | select(endswith("SKILL.md"))` invocation against the target returns empty. This is the load-bearing check that triggers the non-audit branch.
+- [x] **AC5 — Non-audit outcome branch fires.** Per `peer-plugin-audit.md` §"Non-audit outcome": skill writes a short advisory note (or log-only note) and does NOT add an Overlap Matrix row. Verify by reading the diff to `competitive-intelligence.md`: the diff MUST NOT contain a new row in the Tier 0 or Tier 3 Overlap Matrix table (`| **<name>** | ... |` shape). The diff MAY contain a short prose advisory under an existing tier OR a new "Peer-plugin audits" log section, with the words "category mismatch" and "no audit produced".
+- [x] **AC6 — Advisory entry includes audit-trail metadata.** The advisory entry contains: repo URL, license classification ("not detected"), audit date (`2026-05-15`), auditor (`soleur:competitive-analysis peer-plugin-audit`), star/fork counts at audit time, and a one-line statement that the repo is an awesome-list (no SKILL.md files).
+- [x] **AC7 — Frontmatter timestamp updated.** `competitive-intelligence.md` frontmatter `last_updated:` and `last_reviewed:` set to `2026-05-15`.
+- [x] **AC8 — No parallel files written.** Verify no file created under `knowledge-base/product/research/peer-plugin-audits/` (procedure §"Output routing": "Single destination prevents stale copies"). `find knowledge-base/product/research/ -type f -newer .` returns nothing peer-plugin-audit-shaped.
+- [x] **AC9 — Single-repo update.** `git diff --name-only main..HEAD` lists exactly `knowledge-base/product/competitive-intelligence.md` (plus the plan/spec/tasks artifacts emitted by the pipeline itself).
+- [ ] **AC10 — PR body cites verification artifact.** PR body links to the modified `competitive-intelligence.md` line(s) via GitHub permalink AND uses `Closes #2749`. _(deferred to ship phase)_
 
 ### Post-merge (operator)
 
