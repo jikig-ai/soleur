@@ -65,7 +65,7 @@ silently breaks DKIM signing).
 **Existing strict DMARC (`p=reject`) is intentionally retained.** Proton's
 suggested `p=quarantine` is laxer; with proper SPF + DKIM in place,
 `p=reject` is the correct posture and was kept untouched. Caveat: the
-`rua=mailto:dmarc-reports@soleur.ai` mailbox is a future-Proton mailbox --
+`rua=mailto:dmarc-reports@example.com` mailbox is a future-Proton mailbox --
 DMARC reports will silently bounce until that mailbox is provisioned in the
 Proton panel.
 

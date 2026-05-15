@@ -16,7 +16,7 @@ tags: [oauth, google-cloud, consent-screen, dns, terraform, playwright]
 
 ## Problem
 
-When users signed in to Soleur via Google OAuth, the consent screen displayed "Sign in to ifsccnjhymdmidffkzhl.supabase.co" instead of "Soleur". The original OAuth sign-in implementation (#1211) explicitly listed consent screen branding as a non-goal, creating a trust gap for users.
+When users signed in to Soleur via Google OAuth, the consent screen displayed "Sign in to <PRD_REF>.supabase.co" instead of "Soleur". The original OAuth sign-in implementation (#1211) explicitly listed consent screen branding as a non-goal, creating a trust gap for users.
 
 ## Root Cause
 
@@ -37,7 +37,7 @@ Navigated to Google Cloud Console > Auth Platform > Branding and configured:
 - Homepage: `https://soleur.ai`
 - Privacy policy: `https://soleur.ai/pages/legal/privacy-policy.html`
 - Terms of service: `https://soleur.ai/pages/legal/terms-and-conditions.html`
-- Authorized domain: `soleur.ai` (added alongside existing `ifsccnjhymdmidffkzhl.supabase.co`)
+- Authorized domain: `soleur.ai` (added alongside existing `<PRD_REF>.supabase.co`)
 - Publishing status: Changed from "Testing" to "In production"
 
 ### Part 2: Domain Verification (Terraform + Search Console)
