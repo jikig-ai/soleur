@@ -553,7 +553,10 @@ export function ChatSurface({
 
       <div className={`min-w-0 flex-1 overflow-y-auto px-4 py-4 ${isFull ? "md:px-6" : ""}`}>
         {lastError && activeErrorKey !== dismissedErrorKey && (
-          <div className={`mb-4 ${widthWrapper}`}>
+          <div
+            className={`mb-4 ${widthWrapper}`}
+            data-rate-limit-exceeded={lastError.code === "rate_limited" ? "" : undefined}
+          >
             <ErrorCard
               title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : "Connection Error"}
               message={lastError.message}
