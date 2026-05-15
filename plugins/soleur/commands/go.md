@@ -48,6 +48,7 @@ Analyze the user input and classify intent using semantic assessment:
 | drain | "fix all issues labeled X", "drain the Y backlog", "close all label:Z", "clean up the X backlog" | `soleur:drain-labeled-backlog` |
 | review | "review PR", "check this code", PR number reference | `soleur:review` |
 | incident | The user describes a live or recent production incident (outage, breach, customer-impact, Sentry alert) needing classification + PIR | `soleur:incident` |
+| legal-threshold | The user input mentions an inbound vendor MSA, DSAR (data subject access request), AI vendor terms / vendor AI review, OSS license question (GPL/AGPL/SSPL/copyleft), or breach / data exposure / unauthorized access — events that exceed founder-grade compliance helping and warrant a downstream specialist | `clo` agent (Task spawn; the Assess phase emits the threshold catalog from `knowledge-base/legal/recommended-tools.md`) |
 | default | Everything else — features, exploration, questions, generation, vague scope | `soleur:brainstorm` |
 
 If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step.
