@@ -81,6 +81,12 @@ paths = [
   '''apps/web-platform/(?:infra|test)/.*\.test\.(?:sh|ts)$''',
   '''knowledge-base/(?:plans|project/(?:plans|specs))/.*\.md$''',
   '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''',
+  # code-to-prd skill (#2726): per-skill `test/fixture/.env.example` carries a
+  # synthesized Stripe key shape for Layer-2/Layer-3 RED tests. Path is the
+  # singular-`fixture` precedent (mirrors `incident/test/redact-sentinel.test.sh`
+  # shape). cq-test-fixtures-synthesized-only — every token under this path is
+  # alnum-only after the `sk_(test|live)_` prefix and is never a real credential.
+  '''plugins/soleur/skills/.*/test/fixture/\.env\.example$''',
 ]
 
 # ---------------------------------------------------------------------------

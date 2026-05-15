@@ -1,0 +1,6 @@
+{
+  "name": "code-to-prd-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Synthetic Next.js skeleton used by plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh. Dependencies are intentionally omitted — the fixture is a walker target and is never installed. Adding real dependency versions trips the dependency-review CI gate on transient upstream CVEs unrelated to this codebase."
+}
