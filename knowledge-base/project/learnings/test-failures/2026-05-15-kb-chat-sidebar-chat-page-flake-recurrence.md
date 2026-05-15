@@ -94,3 +94,9 @@ deterministic vector.
 - `knowledge-base/project/learnings/2026-04-22-vitest-cross-file-leaks-and-module-scope-stubs.md`:
   the `afterAll`-vs-`afterEach` regression class this drift-guard pins.
 - Issue #3818 (this PR's `Ref` target).
+
+## Session Errors
+
+1. **Plan/deepen subagent hit Anthropic usage limit before emitting structured Session Summary.** Plan + tasks.md artifacts landed on disk correctly, but the parent one-shot relied on parsing a `## Session Summary` heading to extract the plan file path. **Recovery:** parent one-shot read the artifacts directly and wrote session-state.md from them. **Prevention:** plan/deepen subagents should write a `session-summary.txt` to the spec dir as a final tool call so the file persists across both subagent context loss AND usage-limit exits — heading-parsing of agent stdout is fragile against rate-limit exits.
+
+2. **Hardened drift-guard regex was too greedy across hook block boundaries.** Initial review-fix used `expect(source).not.toMatch(/afterEach\s*\([\s\S]*?vi\.restoreAllMocks\(\)/)` — non-greedy `*?` is greedy enough to span from `afterEach(async () => {` through its closing `});` into the following `afterAll(() => {` block and consume the legitimate `vi.restoreAllMocks()` call there. False-fail on first run. **Recovery:** switched to block-extraction (`source.match(/afterEach\s*\([\s\S]*?\n\}\);/)?.[0]`) then `expect(block).not.toContain(...)`. **Prevention:** when asserting "X must NOT be inside Y-block" via regex on a file containing multiple hook blocks, extract Y's body using a closing-delimiter anchor (`\n});` or equivalent) BEFORE asserting on the extracted body — never rely on `[\s\S]*?` to keep a regex inside one block. The non-greedy operator stops at the FIRST allowable end, but the end the regex sees is `vi.restoreAllMocks()` in the *next* block, not the current block's `})`.
