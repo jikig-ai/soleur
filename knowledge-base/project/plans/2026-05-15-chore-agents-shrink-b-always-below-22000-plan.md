@@ -58,7 +58,7 @@ requires_cpo_signoff: false
 - [ ] `grep -F "[id: wg-after-merging-a-pr-that-adds-or-modifies]" AGENTS.rest.md` returns exactly one match under `## Workflow Gates`.
 - [ ] All 6 trimmed Why clauses preserve their canonical `#NNNN` citation. Per-trim citation greps:
   - `grep -F "**Why:** #3356." AGENTS.core.md` returns 1 match.
-  - `grep -F "(PR #2889 — \`infra/**\` matched zero paths)." AGENTS.core.md` returns 1 match.
+  - `grep -F '(PR #2889 — `infra/**` matched zero paths).' AGENTS.core.md` returns 1 match. (Single quotes deliberate: prevents backtick command-substitution if the AC is later copy-pasted into a `bash -c "..."` wrapper or CI step.)
   - `grep -F "**Why:** #2075." AGENTS.core.md` returns 1 match.
   - `grep -F "**Why:** #2681." AGENTS.core.md` returns 1 match.
   - `grep -F "**Why:** #2430." AGENTS.core.md` returns 1 match.
@@ -149,9 +149,9 @@ Per `cq-agents-md-why-single-line` (governs Why shape, not Why existence), the W
 | Trim 3 (triaging-batch Why) | −64 | 22,120 |
 | Trim 4 (ssh-diagnosis Why) | −61 | 22,059 |
 | Trim 5 (workflow-gap Why) | −51 | 22,008 |
-| Trim 6 (gdpr-gate Why) | −54 | **21,954** |
+| Trim 6 (gdpr-gate Why) | −54 | **21,954** (projected) — actual measured post-commit: **21,966** (12 B drift) |
 
-Final: B_ALWAYS ≈ 21,954. **46 B headroom on the 22,000 cap.**
+Final (projected): B_ALWAYS ≈ 21,954 (46 B headroom). **Actual post-commit: B_ALWAYS = 21,966 (34 B headroom).** The 12 B drift is per-trim estimate noise; the absolute floor is `lint-agents-rule-budget.py exit 0`, which holds.
 
 If the post-edit linter reports `> 22,000` (estimates drift), add a 7th trim from the spare list below BEFORE committing. Do NOT use `LEFTHOOK=0`.
 
@@ -228,13 +228,13 @@ bash .claude/hooks/session-rules-loader-headless.test.sh
 ## Risks
 
 1. **Docs-only follow-up session blind spot.** Operator opens a docs-only session post-merge intending to verify a previously-merged workflow PR. The demoted rule body is absent. Mitigation: the broader gate `wg-after-a-pr-merges-to-main-verify-all` (AGENTS.core.md:46) stays in core. The pointer-index entry at AGENTS.md:59 is always loaded; an agent grepping the index follows `→ rest` to find the body.
-2. **46 B headroom is thin.** Next AGENTS edit that adds ~50 B re-triggers the lefthook gate. Mitigation: issues #3834 (per-rule cap audit) and the discoverability-litmus brainstorm 2026-04-23 are queued. Escalate to the brainstorm if headroom is exhausted within 7 days post-merge.
+2. **34 B headroom is thin** (12 B less than the projected 46 B). Next AGENTS edit that adds ~50 B re-triggers the lefthook gate. Mitigation: issues #3834 (per-rule cap audit) and the discoverability-litmus brainstorm 2026-04-23 are queued. Escalate to the brainstorm if headroom is exhausted within 7 days post-merge. **Explicitly accepted at review time** — operator chose to defer broader cleanup to the brainstorm rather than expand this PR's scope.
 3. **Trim estimates may drift by ±5 B.** Mitigation: Phase 3 verification iterates with a spare trim if linter reports > 22,000. The absolute floor is `python3 scripts/lint-agents-rule-budget.py exit 0`.
 4. **Trim 2 still loses semantic detail.** The `middleware.ts / app/api/**` example documented a specific failure shape; the canonical `(PR #2889 — \`infra/**\` matched zero paths).` form preserves the load-bearing pattern but drops the secondary case. Mitigation: PR #2889 description and the linked learning file retain the full detail.
 
 ## Sharp Edges
 
-- **Atomic-commit invariant.** Phase 1 alone (demotion only) reaches B_ALWAYS ≈ 22,335 — still over 22,000 → lefthook REJECT. Splitting forces `LEFTHOOK=0`, which is the workflow this PR closes. The AC `git log --oneline origin/main..HEAD -- AGENTS.md AGENTS.core.md AGENTS.rest.md | wc -l == 2` enforces this (one commit for plan/tasks already landed + one for demote+trims).
+- **Atomic-commit invariant.** Phase 1 alone (demotion only) reaches B_ALWAYS ≈ 22,335 — still over 22,000 → lefthook REJECT. Splitting forces `LEFTHOOK=0`, which is the workflow this PR closes. The AC `git log --oneline origin/main..HEAD -- AGENTS.md AGENTS.core.md AGENTS.rest.md | wc -l == 1` enforces this (one atomic commit for the demote+trims; plan/tasks commits don't touch AGENTS files and aren't counted).
 - **`cq-rule-ids-are-immutable` is satisfied.** Demotion moves the `[id: ...]` line from one sidecar to another; the linter's allowlist semantics are unchanged.
 
 ## Sequencing
