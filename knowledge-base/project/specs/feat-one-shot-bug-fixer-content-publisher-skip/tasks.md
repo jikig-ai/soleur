@@ -9,22 +9,22 @@ created: 2026-05-15
 
 ## Phase 1 — Setup
 
-- [ ] 1.1 Capture pre-edit `actionlint .github/workflows/scheduled-bug-fixer.yml` output as baseline (for AC6 delta comparison).
-- [ ] 1.2 Re-run the Phase 4 regex test in the plan against the current (un-edited) regex — confirm baseline misses are exactly the 6 `[Content Publisher]` rows.
+- [x] 1.1 Capture pre-edit `actionlint .github/workflows/scheduled-bug-fixer.yml` output as baseline (for AC6 delta comparison).
+- [x] 1.2 Re-run the Phase 4 regex test in the plan against the current (un-edited) regex — confirm baseline misses are exactly the 6 `[Content Publisher]` rows.
 
 ## Phase 2 — Core Implementation
 
-- [ ] 2.1 Edit `.github/workflows/scheduled-bug-fixer.yml:142` — replace the jq `test(...)` regex with the new `^(\\[Content Publisher\\]|flaky|flake|test-flake|test)[: \\[(]` form.
-- [ ] 2.2 Edit `.github/workflows/scheduled-bug-fixer.yml:122-128` — replace the rationale comment block with the expanded form covering BOTH the `[Content Publisher]` branch and the existing flaky/test branch (preserve the original flaky/test rationale verbatim; reference `scripts/content-publisher.sh` and run `25908353568`).
-- [ ] 2.3 Edit `.github/workflows/scheduled-bug-fixer.yml:171` — append `--exclude-label content-publisher` to the `Run /soleur:fix-issue ...` prompt line.
+- [x] 2.1 Edit `.github/workflows/scheduled-bug-fixer.yml:142` — replace the jq `test(...)` regex with the new `^(\\[Content Publisher\\]|flaky|flake|test-flake|test)[: \\[(]` form.
+- [x] 2.2 Edit `.github/workflows/scheduled-bug-fixer.yml:122-128` — replace the rationale comment block with the expanded form covering BOTH the `[Content Publisher]` branch and the existing flaky/test branch (preserve the original flaky/test rationale verbatim; reference `scripts/content-publisher.sh` and run `25908353568`).
+- [x] 2.3 Edit `.github/workflows/scheduled-bug-fixer.yml:171` — append `--exclude-label content-publisher` to the `Run /soleur:fix-issue ...` prompt line.
 
 ## Phase 3 — Verification
 
-- [ ] 3.1 Run the Phase 4 regex test (in plan) against the edited file's actual regex string — confirm all 6 `[Content Publisher]` rows AND all 5 flaky/test rows return `true`; confirm `fix(api):`, `feat:`, `bug(content-publisher):`, `review: content-publisher` return `false` (AC4 + AC5).
-- [ ] 3.2 Run `actionlint .github/workflows/scheduled-bug-fixer.yml`; compare to Task 1.1 baseline; confirm zero new errors (AC6).
-- [ ] 3.3 Run `grep -nE '\\\[Content Publisher\\\]' .github/workflows/scheduled-bug-fixer.yml` → returns ≥1 match in the jq line and ≥1 match in the comment block (AC1, AC3).
-- [ ] 3.4 Run `grep -nE -- '--exclude-label content-publisher' .github/workflows/scheduled-bug-fixer.yml` → returns exactly 1 match on the prompt line (AC2).
-- [ ] 3.5 Run `git diff main -- .github/workflows/scheduled-bug-fixer.yml` → diff is bounded to the three regions in plan Phases 1-3 (AC7).
+- [x] 3.1 Run the Phase 4 regex test (in plan) against the edited file's actual regex string — confirm all 6 `[Content Publisher]` rows AND all 5 flaky/test rows return `true`; confirm `fix(api):`, `feat:`, `bug(content-publisher):`, `review: content-publisher` return `false` (AC4 + AC5).
+- [x] 3.2 Run `actionlint .github/workflows/scheduled-bug-fixer.yml`; compare to Task 1.1 baseline; confirm zero new errors (AC6).
+- [x] 3.3 Run `grep -nE '\\\[Content Publisher\\\]' .github/workflows/scheduled-bug-fixer.yml` → returns ≥1 match in the jq line and ≥1 match in the comment block (AC1, AC3).
+- [x] 3.4 Run `grep -nE -- '--exclude-label content-publisher' .github/workflows/scheduled-bug-fixer.yml` → returns exactly 1 match on the prompt line (AC2).
+- [x] 3.5 Run `git diff main -- .github/workflows/scheduled-bug-fixer.yml` → diff is bounded to the three regions in plan Phases 1-3 (AC7).
 
 ## Phase 4 — Commit & PR
 
