@@ -52,7 +52,7 @@ Adopted the PR-based commit pattern already used by `scheduled-weekly-analytics.
 
 The 5 stale content files were manually fixed by running the same pattern in a one-off worktree PR.
 
-Additionally, the bot author email was corrected from the generic `github-actions@github.com` to the canonical `41898282+github-actions[bot]@users.noreply.github.com` format required by GitHub.
+Additionally, the bot author email was corrected from the generic `github-actions@example.com` to the canonical `41898282+github-actions[bot]@users.noreply.github.com` format required by GitHub.
 
 ## Key Insight
 

@@ -5,37 +5,37 @@
 # in the same diff. Branch protection on `main` requiring CODEOWNERS
 # review is a separate operator follow-up (requires repo-admin scope).
 #
-# Owner: @jeanderuelle (replace with team alias when one exists).
+# Owner: @deruelle (replace with team alias when one exists).
 
 # Default fallback — keeps all otherwise-unowned files reviewable.
-*                                                       @jeanderuelle
+*                                                       @deruelle
 
 # Secret-scanning floor (gitleaks rule pack + workflow).
-/.gitleaks.toml                                         @jeanderuelle
-/.github/workflows/secret-scan.yml                      @jeanderuelle
-/.github/workflows/pr-quality-guards.yml                @jeanderuelle
-/.github/workflows/scheduled-github-app-drift-guard.yml @jeanderuelle
-/apps/web-platform/test/github-app-drift-guard-contract.test.ts @jeanderuelle
-/knowledge-base/engineering/ops/runbooks/github-app-drift.md @jeanderuelle
-/lefthook.yml                                           @jeanderuelle
-/apps/web-platform/scripts/lint-fixture-content.mjs     @jeanderuelle
-/apps/web-platform/scripts/parse-gitleaks-allowlists.mjs @jeanderuelle
-/apps/web-platform/scripts/rename-guard.sh              @jeanderuelle
-/apps/web-platform/scripts/allowlist-diff.sh            @jeanderuelle
-/apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @jeanderuelle
+/.gitleaks.toml                                         @deruelle
+/.github/workflows/secret-scan.yml                      @deruelle
+/.github/workflows/pr-quality-guards.yml                @deruelle
+/.github/workflows/scheduled-github-app-drift-guard.yml @deruelle
+/apps/web-platform/test/github-app-drift-guard-contract.test.ts @deruelle
+/knowledge-base/engineering/ops/runbooks/github-app-drift.md @deruelle
+/lefthook.yml                                           @deruelle
+/apps/web-platform/scripts/lint-fixture-content.mjs     @deruelle
+/apps/web-platform/scripts/parse-gitleaks-allowlists.mjs @deruelle
+/apps/web-platform/scripts/rename-guard.sh              @deruelle
+/apps/web-platform/scripts/allowlist-diff.sh            @deruelle
+/apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
 # Both workflow files are load-bearing: scheduled-content-vendor-drift.yml is
 # the workflow whose run timestamp feeds cron-run-stale (a rename silently
 # bypasses the MIN-binding); gdpr-gate-self-test.yml is the self-test that
 # asserts the operator-attested-mode banner literal.
-/plugins/soleur/skills/gdpr-gate/NOTICE                 @jeanderuelle
-/.github/workflows/scheduled-content-vendor-drift.yml   @jeanderuelle
-/.github/workflows/gdpr-gate-self-test.yml              @jeanderuelle
-/plugins/soleur/test/fixtures/gdpr-gate-stale/          @jeanderuelle
+/plugins/soleur/skills/gdpr-gate/NOTICE                 @deruelle
+/.github/workflows/scheduled-content-vendor-drift.yml   @deruelle
+/.github/workflows/gdpr-gate-self-test.yml              @deruelle
+/plugins/soleur/test/fixtures/gdpr-gate-stale/          @deruelle
 
 # Always-loaded workflow rules.
-/AGENTS.md                                              @jeanderuelle
+/AGENTS.md                                              @deruelle
 
 # PR-B §1.6 — Service-role allowlist gate. Without these pins, an
 # attacker-modeled PR (or a careless agent loop) could add a
@@ -43,13 +43,13 @@
 # would pass and tenant isolation would silently break. CODEOWNERS is
 # the only structural defense that survives this — see plan
 # §1.5 (architecture F5).
-/apps/web-platform/.service-role-allowlist              @jeanderuelle
-/apps/web-platform/lib/supabase/service.ts              @jeanderuelle
-/apps/web-platform/lib/supabase/tenant.ts               @jeanderuelle
-/apps/web-platform/server/byok-lease.ts                 @jeanderuelle
-/apps/web-platform/scripts/service-role-allowlist-gate.sh @jeanderuelle
-/apps/web-platform/supabase/migrations/                 @jeanderuelle
-/.github/workflows/ci.yml                               @jeanderuelle
+/apps/web-platform/.service-role-allowlist              @deruelle
+/apps/web-platform/lib/supabase/service.ts              @deruelle
+/apps/web-platform/lib/supabase/tenant.ts               @deruelle
+/apps/web-platform/server/byok-lease.ts                 @deruelle
+/apps/web-platform/scripts/service-role-allowlist-gate.sh @deruelle
+/apps/web-platform/supabase/migrations/                 @deruelle
+/.github/workflows/ci.yml                               @deruelle
 
 # R15 bypass-audit trust loop (#3544 / R15 follow-up D1). Brand-survival
 # threshold: single-user incident (#2719). An attacker-merged PR that
@@ -57,20 +57,36 @@
 # auto-green the daily audit and silently disable the trust loop that
 # protects `skill-security-scan PR gate`. Without these pins, R15's
 # bypass authority is one admin-PR away from being self-greened.
-/scripts/ci-required-ruleset-canonical-bypass-actors.json @jeanderuelle
-/scripts/ci-required-ruleset-canonical-required-status-checks.json @jeanderuelle
-/scripts/lib/canonicalize-bypass-actors.sh              @jeanderuelle
-/scripts/lib/canonicalize-required-status-checks.sh     @jeanderuelle
-/scripts/lib/strip-log-injection.sh                     @jeanderuelle
-/scripts/audit-ruleset-bypass.sh                        @jeanderuelle
-/scripts/update-ci-required-ruleset.sh                  @jeanderuelle
-/scripts/create-ci-required-ruleset.sh                  @jeanderuelle
-/.github/workflows/scheduled-ruleset-bypass-audit.yml   @jeanderuelle
+/scripts/ci-required-ruleset-canonical-bypass-actors.json @deruelle
+/scripts/ci-required-ruleset-canonical-required-status-checks.json @deruelle
+/scripts/lib/canonicalize-bypass-actors.sh              @deruelle
+/scripts/lib/canonicalize-required-status-checks.sh     @deruelle
+/scripts/lib/strip-log-injection.sh                     @deruelle
+/scripts/audit-ruleset-bypass.sh                        @deruelle
+/scripts/update-ci-required-ruleset.sh                  @deruelle
+/scripts/create-ci-required-ruleset.sh                  @deruelle
+/.github/workflows/scheduled-ruleset-bypass-audit.yml   @deruelle
 
 # R15 follow-up D2 — CodeQL coverage audit (#3545). Same false-pass
 # attack surface as #3544: mutating classify_codeql() to accept
 # `failure` as `passing` would auto-green a real CodeQL drift on bot
 # PRs. CODEOWNERS forces second-reviewer on the audit script + fixtures.
-/scripts/audit-bot-codeql-coverage.sh                   @jeanderuelle
-/scripts/fixtures/audit-bot-codeql-coverage/            @jeanderuelle
-/tests/scripts/test-audit-bot-codeql-coverage.sh        @jeanderuelle
+/scripts/audit-bot-codeql-coverage.sh                   @deruelle
+/scripts/fixtures/audit-bot-codeql-coverage/            @deruelle
+/tests/scripts/test-audit-bot-codeql-coverage.sh        @deruelle
+
+# P1-G — Sentry IaC root + scheduled-workflow surface (PR #3811
+# post-merge review). Without these rows, a leaked PAT with
+# `contents:write` could land a `.tf` change AND merge it without
+# code-owner review; combined with the `apply-sentry-infra.yml`
+# auto-apply on push-to-main, that's a silent Sentry-org write
+# primitive. Paired runtime defense: the `sentry-infra-apply`
+# GitHub Environment requires manual reviewer approval before any
+# apply job step runs (configured via Settings → Environments).
+#
+# Scope "Medium": all per-app infra (Sentry root + future siblings)
+# and an umbrella over all GitHub Actions workflows so future
+# scheduled-* or check-in additions inherit gating by default.
+/apps/web-platform/infra/                               @deruelle
+/.github/workflows/                                     @deruelle
+/.github/workflows/apply-sentry-infra.yml               @deruelle

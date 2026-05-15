@@ -45,7 +45,7 @@ The `pre-merge-rebase.sh` PreToolUse hook blocks `gh pr merge` with "Uncommitted
 
 **Test setup failed: missing git user config in bare repo**
 
-- **Recovery:** Added `-c user.email=test@test.com -c user.name=Test` flags to bare repo git commands
+- **Recovery:** Added `-c user.email=test@example.com -c user.name=Test` flags to bare repo git commands
 - **Prevention:** When creating git commits in test fixtures with `GIT_CONFIG_GLOBAL=/dev/null`, always provide user identity via `-c` flags or env vars.
 
 **Test passed vacuously (false green) -- Guard 6 denied before diff check**

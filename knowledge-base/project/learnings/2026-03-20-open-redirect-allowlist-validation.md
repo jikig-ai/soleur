@@ -10,7 +10,7 @@ Extracted origin resolution into a pure function `resolveOrigin()` in `apps/web-
 
 Key design choices:
 
-- **`Set.has()` exact-match** -- zero bypass surface. No regex patterns to escape, no URL parsing to confuse, no substring matching to exploit. Subdomain spoofing (`app.soleur.ai.evil.com`), userinfo abuse (`app.soleur.ai@evil.com`), port variants, and URL encoding all fail because they never produce an exact match.
+- **`Set.has()` exact-match** -- zero bypass surface. No regex patterns to escape, no URL parsing to confuse, no substring matching to exploit. Subdomain spoofing (`app.soleur.ai.evil.com`), userinfo abuse (`app@example.com`), port variants, and URL encoding all fail because they never produce an exact match.
 - **Pure function with no framework dependencies** -- testable with vitest directly, no Next.js runtime or path alias resolution needed.
 - **Fail-closed** -- any origin not in the set returns the production default, never the attacker-controlled value.
 
