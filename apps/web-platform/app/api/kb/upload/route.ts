@@ -64,8 +64,11 @@ export async function POST(request: Request) {
   // Fetch workspace data. resolveUserKbRoot centralizes the "user row
   // → kbRoot + extras" pattern shared with /api/kb/share and
   // /api/kb/file/*.
+  // PR-C §2.8 (#3244): tenant client minted internally by
+  // resolveUserKbRoot. createServiceClient still constructed below for
+  // downstream consumers (storage / GH installation).
   const serviceClient = createServiceClient();
-  const workspace = await resolveUserKbRoot(serviceClient, user.id, {
+  const workspace = await resolveUserKbRoot(user.id, {
     extras: ["repo_url", "github_installation_id"] as const,
   });
   if (!workspace.ok) return workspace.response;
