@@ -23,22 +23,27 @@ set -euo pipefail
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
 : "${SENTRY_PROJECT:?SENTRY_PROJECT must be set}"
 
-# --- Region detection ----------------------------------------------------
+# --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
 # Sentry has US (sentry.io) and EU (de.sentry.io) ingest clusters; the API
 # hostname follows the same split. Probe /users/me/ on each candidate and
 # pick whichever returns 200.
-api_host=""
-for candidate in sentry.io de.sentry.io; do
-  http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${candidate}/api/0/users/me/")
-  if [[ "$http" == "200" ]]; then
-    api_host="$candidate"
-    break
-  fi
-done
+#
+# Escape hatch: tokens minted without member:read scope (e.g. project-scoped
+# personal tokens) 403 on /users/me/. Set SENTRY_API_HOST to bypass.
+api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
-  echo "ERROR: Sentry token not valid against either US or EU ingest" >&2
+  for candidate in sentry.io de.sentry.io; do
+    http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+      "https://${candidate}/api/0/users/me/")
+    if [[ "$http" == "200" ]]; then
+      api_host="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$api_host" ]]; then
+  echo "ERROR: Sentry token not valid against either US or EU ingest (set SENTRY_API_HOST to bypass)" >&2
   exit 1
 fi
 echo "[info] Using Sentry API host: ${api_host}"
