@@ -69,10 +69,15 @@ import {
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { updateConversationFor } from "./conversation-writer";
 import {
-  getUserApiKey,
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
+// PR-C §2.11 (#3244): BYOK lease wrap on realSdkQueryFactory — the
+// plaintext API key fetch surface moves from `getUserApiKey(userId)`
+// (which returns a bare string) to `lease.getApiKey()` inside
+// `runWithByokLease`. Closes #3392 (cc-dispatcher BYOK item).
+import { runWithByokLease } from "./byok-lease";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import {
   fetchUserWorkspacePath,
   resolveConciergeDocumentContext,
@@ -873,11 +878,26 @@ function supabase() {
 export const realSdkQueryFactory: QueryFactory = async (
   args: QueryFactoryArgs,
 ): Promise<Query> => {
-  const [workspacePath, apiKey, serviceTokens] = await Promise.all([
-    fetchUserWorkspacePath(args.userId),
-    getUserApiKey(args.userId),
-    getUserServiceTokens(args.userId),
-  ]);
+  // PR-C §2.11 (#3244): wrap body in `runWithByokLease` so the plaintext
+  // Anthropic key is zeroized on exit and captured-leak attempts throw
+  // `ByokLeaseError{cause:"escape"}`. Mirrors agent-runner.ts's
+  // startAgentSession pattern at :863 + sendUserMessage routing at
+  // :2360. By the time this body returns the Query AsyncGenerator,
+  // `sdkQuery({apiKey, ...})` below has already passed the key into the
+  // SDK's internal state — the lease's finally-zeroize fires after the
+  // SDK has captured what it needs.
+  return runWithByokLease(args.userId, async (lease): Promise<Query> => {
+    // Plan §2.11 canonical pattern (mirrors agent-runner.ts:2361):
+    // hoist `await lease.getApiKey()` OUT of `Promise.all` so the
+    // `string | Promise<string>` union in `getApiKey`'s return type
+    // does not surface awkwardly through `Promise.all`'s array element
+    // inference. `buildAgentQueryOptions.apiKey: string` consumes the
+    // unwrapped value.
+    const apiKey = await lease.getApiKey();
+    const [workspacePath, serviceTokens] = await Promise.all([
+      fetchUserWorkspacePath(args.userId),
+      getUserServiceTokens(args.userId),
+    ]);
 
   // Workspace-permissions patch and the #3250 prefill-guard probe both
   // depend on `workspacePath` but not on each other — parallelize so the
@@ -1092,6 +1112,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     }
     throw err;
   }
+  }); // end runWithByokLease
 };
 
 let _runner: SoleurGoRunner | null = null;
@@ -1363,8 +1384,13 @@ export async function dispatchSoleurGo(
       "cc-dispatcher: assertWriteScope halted user-message persistence",
     );
   }
+  // PR-C §2.11 (#3244): tenant-scoped message INSERTs. RLS on `messages`
+  // enforces FK-join to `conversations.user_id`; the `assertWriteScope`
+  // sentinel above is the defense-in-depth layer. The implicit JWT mint
+  // is the auth probe — see ws-handler `tenantFor` doc-comment.
+  const tenant = await getFreshTenantClient(userId);
   const messageId = randomUUID();
-  const { error: insertErr } = await supabase().from("messages").insert({
+  const { error: insertErr } = await tenant.from("messages").insert({
     id: messageId,
     conversation_id: conversationId,
     role: "user",
@@ -1461,7 +1487,9 @@ export async function dispatchSoleurGo(
     if (!text) return;
 
     const row = buildRow(mode, text, conversationId);
-    const { error } = await supabase().from("messages").insert(row);
+    // PR-C §2.11 (#3244): tenant-scoped assistant-row INSERT. Reuses
+    // the `tenant` minted at function entry (above the user-row INSERT).
+    const { error } = await tenant.from("messages").insert(row);
     if (error) {
       mirrorInsertError(error, mode, userId, conversationId, text);
     }

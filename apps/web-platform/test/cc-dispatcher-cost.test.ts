@@ -64,6 +64,13 @@ vi.mock("@/server/kb-document-resolver", async () => {
   return kbDocumentResolverFactory({ mockFetchUserWorkspacePath });
 });
 
+vi.mock("@/lib/supabase/tenant", async () => {
+  const { supabaseTenantFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return supabaseTenantFactory({ mockMessagesInsert });
+});
+
 vi.mock("@/lib/supabase/service", async () => {
   const { supabaseServiceFactory } = await import(
     "@/test/helpers/cc-dispatcher-harness"
