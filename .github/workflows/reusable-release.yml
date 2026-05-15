@@ -285,6 +285,17 @@ jobs:
       # plugin release AND the web-platform release skipped Docker push
       # while the GitHub Release tags landed — production stayed stale.
       #
+      # SENTRY_API_HOST bypasses the audit script's `/users/me/` region
+      # probe (which requires `member:read` scope — a scope that personal
+      # tokens minted for CI commonly lack even after the post-#3849 token
+      # rotation). Mirrors the escape hatch added to
+      # `configure-sentry-alerts.sh` in #3858. Falls back to `sentry.io`
+      # (US ingest — the empirically-verified host the operator's
+      # 2026-05-15 baseline audit ran against per the committed artifact
+      # at `knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md`).
+      # Override via the `SENTRY_API_HOST` repo secret if Sentry residency
+      # changes (e.g., migration to `de.sentry.io`).
+      #
       # Skips silently when SENTRY_AUTH_TOKEN is unavailable (e.g. component
       # release where the secret isn't required).
       - name: Sentry Monitors/Alerts migration audit
@@ -294,6 +305,7 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST || 'sentry.io' }}
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
@@ -315,7 +327,7 @@ jobs:
           script_rc=$?
           set -e
           if [[ "$script_rc" -ne 0 ]]; then
-            echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. Operator should re-run with a SENTRY_AUTH_TOKEN that has org:read scope for /users/me/ region probe."
+            echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. If the script output reads 'Sentry token not valid against either US or EU ingest', verify SENTRY_API_HOST is reaching the script (defaults to 'sentry.io'; override via repo secret if residency changed). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
             exit 0
           fi
           report=$(ls "${RUNNER_TEMP}/sentry-audit"/sentry-migration-audit-*.md 2>/dev/null | head -1 || true)
