@@ -21,7 +21,7 @@ same process that we do in here in the claude code plugin").
 
 ## Why this was deferred from PR #3802
 
-`safe-bash.ts:97` carries an explicit **load-bearing** rationale for
+the omission-rationale comment at the top of `safe-bash.ts` carries an explicit **load-bearing** rationale for
 omitting `find` and `grep` from the allowlist:
 
 > `find` and `grep` are intentionally OMITTED — both accept `-exec` and
@@ -55,7 +55,7 @@ Open a security-sentinel review pass on:
 1. Extend `SAFE_BASH_PATTERNS` in `safe-bash.ts:69` with narrow per-verb
    regexes for `find` (path-scoped, no `-exec`), `grep` (no `-P`/`-e`-
    starting-with-dash), `rg`, `sort`, `uniq`.
-2. Update the load-bearing comment at `safe-bash.ts:97` explaining why
+2. Update the load-bearing comment at the omission-rationale comment at the top of `safe-bash.ts` explaining why
    the new allowlist additions are safe (per-verb argument shapes).
 3. Add `cc-dispatcher-bash-safe-allowlist.test.ts` regression rows
    pinning each new verb's auto-approve behavior AND the `-exec`/option-
@@ -68,12 +68,12 @@ Open a security-sentinel review pass on:
   positive (auto-approve) AND negative (review-gate routing) cases
   per verb.
 - [ ] security-sentinel review pass approves the new allowlist shape.
-- [ ] `safe-bash.ts:97` comment updated to reflect the new state.
+- [ ] the omission-rationale comment at the top of `safe-bash.ts` comment updated to reflect the new state.
 
 ## Ref
 
 - PR #3802 (`Closes #3344` — wiring-only Bash widening; deferred this
   extension).
-- `safe-bash.ts:97` (load-bearing `find`/`grep` omission rationale).
+- the omission-rationale comment at the top of `safe-bash.ts` (load-bearing `find`/`grep` omission rationale).
 - #3338 follow-through plan §"Follow-Through Issues" (the original
   user-stated requirement).

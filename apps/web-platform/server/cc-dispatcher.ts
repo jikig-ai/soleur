@@ -654,7 +654,8 @@ const REAPER_INTERVAL_MS = 5 * 60 * 1000;
  * KB-exploration verbs (`pwd`, `ls`, `cat`, `head`, `tail`, `wc`, `git
  * status/log/diff/show/branch/rev-parse`, `echo`, etc.) auto-approve with no
  * modal; verbs NOT in the allowlist (including `find`/`grep`/`rg`/`apt-get` —
- * intentionally omitted per `safe-bash.ts:97` because they accept `-exec` and
+ * intentionally omitted per the omission rationale at the top of
+ * `safe-bash.ts` because they accept `-exec` and
  * could shell out) still route to `review_gate`. The structural mitigations
  * above prevent the cascade triggers, and the allowlist covers the verbs the
  * cc-router actually emits during KB exploration. See Closes #3344.
