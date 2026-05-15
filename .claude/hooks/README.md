@@ -224,3 +224,96 @@ The directory is gitignored.
   the parent directory is insufficient.
 - **Symlinked sidecars are an injection vector.** Reject `[[ -L ]]` reads
   before concatenating into `additionalContext`.
+
+## F2 prod-write defer gate (`prod-write-defer-gate.sh`)
+
+A PreToolUse(Bash) hook that defers a hardcoded list of prod-write commands
+for explicit operator approval. Position 4 in the PreToolUse(Bash) chain,
+after `ship-unpushed-commits-gate.sh`.
+
+### Starter manifest (3 entries, telemetry-driven expansion)
+
+| `rule_id` | matches |
+|---|---|
+| `prod-write-defer-git-push-main` | `git push origin {main,master,HEAD:main,HEAD:master}` incl. `-f`, `--force-with-lease`, refspec, env-prefix, wrapped via `-- <cmd>`, chained `&&`/`;` |
+| `prod-write-defer-terraform-apply` | `terraform apply` and `tofu apply` (same anchors) |
+| `prod-write-defer-doppler-prd-secrets` | `doppler secrets set ... --config {prd,prd_terraform}` (rejects `prd-staging`, `dev`) |
+
+Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
+`(^|&&|\|\||;|[[:space:]]--[[:space:]])` catches wrapped invocations per
+`knowledge-base/project/learnings/2026-05-12-cross-session-lock-lease-bash-primitives.md`.
+
+### Modes
+
+- **`SOLEUR_DEFER_DRYRUN=1`** (DEFAULT, hardcoded fallback). Match → emit
+  `kind: "would_defer"`, return `{}` (allow). Collects telemetry without
+  blocking work.
+- **`SOLEUR_DEFER_DRYRUN=0`** (enforce; flipped via follow-up PR #3800 after
+  ~2 weeks of dry-run review). Match → emit `kind: "defer_requested"`,
+  append `.claude/logs/approvals.jsonl` row, return the wrapped defer
+  envelope:
+  ```json
+  {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer","permissionDecisionReason":"..."}}
+  ```
+  CC pauses the session silently; the resume hint
+  (`claude --resume <session_id>`) is emitted to stderr so the operator can
+  see it. See `DEFER-DECISION-PAYLOAD-SHAPE.md` for the empirical decision
+  on `"defer"` and the load-bearing `hookEventName` field requirement.
+
+### Bypass policy
+
+`CLAUDE_HOOK_BYPASS=1` allows the call **only when**
+`CLAUDE_HOOK_BYPASS_REASON` is also set (authorial requirement; no
+interactive TTY-prompt path). Missing reason → `kind: "hook_self_fault"`
+and DENY (fail-CLOSED). Operator identity is resolved
+`CLAUDE_HOOK_BYPASS_OPERATOR` → `SOLEUR_OPERATOR_EMAIL` → `GITHUB_ACTOR` →
+`git config --global --get user.email` → `unknown@local`. Bypass entries
+go to `.claude/.rule-incidents.jsonl` as `kind: "bypass"`, NOT to the
+approvals log — approvals.jsonl only records `tty_resume`/`env_override`/
+`ci_actor` per the approval-method enum.
+
+### Approval log (`.claude/logs/approvals.jsonl`)
+
+Append-only, flock-guarded, 1-year TTL via `LOG_ROTATION_AGE_SECONDS`.
+Schema:
+
+```json
+{"timestamp":"...","tool":"Bash","args_hash":"<sha256>","resolved_command":"...","operator_email":"...","approval_method":"tty_resume|env_override|ci_actor","rule_id":"...","session_id":"..."}
+```
+
+GDPR boundary: operator email = operator's own data; operator is both
+controller and data subject. No third-party data subject content flows.
+**External-observability boundary:** piping `approvals.jsonl` (or any
+`.claude/logs/*`) to Sentry, Datadog, Plausible, or any external service
+requires a DPA review — out of scope for this PR.
+
+### Audit-trail review cadence (2-week dry-run window)
+
+Run weekly during the dry-run window:
+
+```bash
+jq -c 'select(.kind == "would_defer") | .rule_id' \
+  .claude/.rule-incidents.jsonl \
+  | sort | uniq -c | sort -rn
+```
+
+Top-rule-id offenders inform manifest refinement. Add a new TARGETS entry
+only after observer-side telemetry shows the pattern in actual workflow —
+the dry-run window does NOT include CI/scheduled-runs (their
+`.rule-incidents.jsonl` is ephemeral). Candidates parked for telemetry-
+gated addition: `wrangler secret put` (prod), `supabase --linked db push`,
+`stripe ... --live`, `gh release create`, `gh pr merge --admin`.
+
+The enforce-flip (`SOLEUR_DEFER_DRYRUN` default 1 → 0) ships in a separate
+follow-up PR (#3800) once the operator confirms manifest hit-rate.
+
+### F1 PermissionDenied event hook (deferred)
+
+A complementary kernel-decided-denial telemetry hook was planned but
+**collapsed to a roadmap entry** at Phase 0.1 empirical probe: CC 2.1.142
+does NOT fire a `PermissionDenied` hook event. See
+`PERMISSION-DENIED-PAYLOAD-SHAPE.md` for the probe details. F1↔F2 were
+designed to capture **disjoint** event sets — F1 for kernel-decided
+denials, F2 for hook-decided defers; with F1 deferred, F2 is the
+load-bearing piece.
+
