@@ -20,7 +20,7 @@ For a solo founder, the answer is usually the workflow plugin -- with library sk
 
 Full breakdown of when each shape wins:
 
-https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_source=discord&utm_medium=community&utm_campaign=skill-libraries-vs-workflow-plugins
+https://soleur.ai/blog/skill-libraries-vs-workflow-plugins/?utm_source=discord&utm_medium=community&utm_campaign=skill-libraries-vs-workflow-plugins
 
 ---
 
@@ -38,7 +38,7 @@ Two shapes of Claude Code extension keep getting ranked on the wrong axis. Skill
 
 Full breakdown of when each shape fits:
 
-https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_source=x&utm_medium=social&utm_campaign=skill-libraries-vs-workflow-plugins
+https://soleur.ai/blog/skill-libraries-vs-workflow-plugins/?utm_source=x&utm_medium=social&utm_campaign=skill-libraries-vs-workflow-plugins
 
 #solofounder
 
@@ -50,7 +50,7 @@ https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_sourc
 
 **Body:**
 
-When I started looking at Claude Code extensions, the comparison everyone defaulted to was head-count. The bigger catalog wins, right? I spent some time on that framing and concluded it misses the actual question.
+When I started looking at Claude Code extensions, the comparison most folks default to is inventory size. I spent some time with that framing and concluded it asks the wrong question.
 
 There are two different shapes of Claude Code extension, and they answer different questions:
 
@@ -62,7 +62,7 @@ For a solo founder running every department alone -- marketing, legal, finance, 
 
 The category-creation point is the one that took me longest to internalize: these aren't on the same leaderboard. The right question is "which shape does what I need this week?" Sometimes both.
 
-Full comparison with a when-each-wins breakdown: https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_source=indiehackers&utm_medium=community&utm_campaign=skill-libraries-vs-workflow-plugins
+Full comparison with a when-each-wins breakdown: https://soleur.ai/blog/skill-libraries-vs-workflow-plugins/?utm_source=indiehackers&utm_medium=community&utm_campaign=skill-libraries-vs-workflow-plugins
 
 ---
 
@@ -74,26 +74,26 @@ Full comparison with a when-each-wins breakdown: https://soleur.ai/blog/2026-05-
 
 **Body:**
 
-Spent the last month looking at how solo founders are evaluating Claude Code extensions. The comparison everyone defaults to is head-count, which misses the actual question.
+Spent the last month looking at how solo founders are evaluating Claude Code extensions. The default comparison sizes up the catalog, which asks the wrong question.
 
-There are two different shapes:
+There are two structurally different shapes, and they answer different questions:
 
 - **Portable skill library** (alirezarezvani/claude-skills is the canonical exemplar): a catalog of self-contained skills, breadth-first coverage, unopinionated about orchestration. You pick what you need and drop it into your existing workflow.
 
-- **Workflow plugin** (Soleur is the canonical exemplar): opinionated orchestration across a brainstorm → plan → work → review → compound lifecycle, with a compounding knowledge base every agent reads from and writes to. The plugin runs an organization, not a tool.
+- **Workflow plugin** (Soleur is the canonical exemplar of this category): opinionated orchestration across a brainstorm → plan → work → review → compound lifecycle, with a compounding knowledge base every agent reads from and writes to. Runs an organization, not a tool.
 
 Library skills compose horizontally -- more skills, more coverage. Workflow plugins compose vertically -- the lifecycle stack, the knowledge that compounds across sessions, the cross-domain coherence between marketing, legal, ops, finance.
 
 Solo founders running every department without a team typically need the workflow-plugin shape as the substrate, with library skills layered on top to fill specific capability gaps.
 
-Full comparison with a when-each-wins breakdown: https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_source=reddit
+Full comparison with a when-each-wins breakdown: https://soleur.ai/blog/skill-libraries-vs-workflow-plugins/?utm_source=reddit
 
 ---
 
 ## Hacker News
 
 **Title:** Skill libraries vs. workflow plugins: two shapes of Claude Code extension, when to use each
-**URL:** https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_source=hackernews&utm_medium=community&utm_campaign=skill-libraries-vs-workflow-plugins
+**URL:** https://soleur.ai/blog/skill-libraries-vs-workflow-plugins/?utm_source=hackernews&utm_medium=community&utm_campaign=skill-libraries-vs-workflow-plugins
 
 ---
 
@@ -111,7 +111,7 @@ The framing change is the practical one: stop ranking these against each other. 
 
 Full breakdown:
 
-https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=skill-libraries-vs-workflow-plugins
+https://soleur.ai/blog/skill-libraries-vs-workflow-plugins/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=skill-libraries-vs-workflow-plugins
 
 #solofounder #buildinpublic
 
@@ -129,7 +129,7 @@ The category-creation argument matters: choose the shape based on what you need 
 
 Soleur's latest article breaks down when each shape wins -- and why the right comparison is shape-against-shape, not count-against-count:
 
-https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_source=linkedin-company&utm_medium=social&utm_campaign=skill-libraries-vs-workflow-plugins
+https://soleur.ai/blog/skill-libraries-vs-workflow-plugins/?utm_source=linkedin-company&utm_medium=social&utm_campaign=skill-libraries-vs-workflow-plugins
 
 #solofounder #AIagents
 
@@ -137,4 +137,4 @@ https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_sourc
 
 ## Bluesky
 
-Two structurally different shapes of Claude Code extension. A portable library is breadth-first capability coverage. A workflow plugin is opinionated lifecycle orchestration with a compounding knowledge base. Different categories, different questions -- not different sizes of the same thing. https://soleur.ai/blog/2026-05-15-skill-libraries-vs-workflow-plugins/?utm_source=bluesky&utm_medium=social&utm_campaign=skill-libraries-vs-workflow-plugins
+Skill libraries cover breadth. Workflow plugins run an opinionated lifecycle with a compounding knowledge base. Different shapes, different questions. https://soleur.ai/blog/skill-libraries-vs-workflow-plugins/?utm_source=bluesky&utm_medium=social&utm_campaign=skill-libraries-vs-workflow-plugins
