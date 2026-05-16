@@ -111,6 +111,19 @@ export interface ClientSession {
   disconnectTimer?: ReturnType<typeof setTimeout>;
   /** Timestamp of last user activity (auth or chat message). */
   lastActivity: number;
+  /**
+   * tc_accepted_version observed at handshake. Used as a baseline so a
+   * mid-session TC_VERSION bump triggers the next gated message to close
+   * the socket with TC_NOT_ACCEPTED. See `recheckTcMidSession`.
+   */
+  tcVersionAtHandshake?: string | null;
+  /**
+   * Cache expiry (ms epoch) for the mid-session TC re-check. Bounded at
+   * 30 s — see `TC_RECHECK_CACHE_MS`. Up to 30 s of stale-consent agent
+   * traffic may pass between a TC_VERSION bump and enforcement; the
+   * trade-off is explicit in plan AC6.
+   */
+  tcRecheckCacheUntil?: number | null;
   /** Timer that closes the connection after WS_IDLE_TIMEOUT_MS of inactivity. */
   idleTimer?: ReturnType<typeof setTimeout>;
   /** Cached subscription status — set at auth, refreshed by billing check timer. */
@@ -976,6 +989,113 @@ export async function dispatchSoleurGoForConversation(
 }
 
 // ---------------------------------------------------------------------------
+// Mid-session T&C re-check (AC6/AC11, feat-oauth-tc-consent-3205)
+// ---------------------------------------------------------------------------
+
+/**
+ * Inbound message types that must re-validate users.tc_accepted_version
+ * mid-session. After a TC_VERSION bump (operator-initiated), the next
+ * gated message on each live socket closes with 4004 TC_NOT_ACCEPTED.
+ *
+ * EXEMPT inbound types: `abort_turn`, `close_conversation`. RC8: a user
+ * must always be able to stop a stream / close a conversation even with
+ * stale consent — refusing those would worsen UX without changing GDPR
+ * demonstrability.
+ *
+ * Server→client types (stream, tool_use, etc.) are rejected on inbound
+ * by the ws-zod-schemas guard before reaching this point, so they need
+ * no explicit listing.
+ */
+const TC_RECHECK_MESSAGE_TYPES = new Set([
+  "start_session",
+  "resume_session",
+  "chat",
+  "interactive_prompt_response",
+  "review_gate_response",
+]);
+
+/**
+ * Per-session cache window for the mid-session TC re-check. Bounds DB
+ * load: at most one users.tc_accepted_version SELECT per gated message
+ * per 30 s per user. Trade-off: up to 30 s of stale-consent traffic
+ * after a TC_VERSION bump (plan AC6, accepted).
+ */
+export const TC_RECHECK_CACHE_MS = 30_000;
+
+/**
+ * Re-validate the user's tc_accepted_version against the current
+ * `TC_VERSION` constant. Returns true if the socket was closed (caller
+ * must return early). On stale consent, mismatch, or DB error: closes
+ * with WS_CLOSE_CODES.TC_NOT_ACCEPTED (fail-closed — Art. 7(1)
+ * demonstrability).
+ *
+ * Exported for test isolation; handleMessage invokes this above the
+ * switch.
+ */
+export async function recheckTcMidSession(
+  userId: string,
+  session: ClientSession,
+  msgType: WSMessage["type"],
+): Promise<boolean> {
+  if (!TC_RECHECK_MESSAGE_TYPES.has(msgType)) return false;
+
+  // Fast-path: if the handshake baseline already disagrees with the current
+  // TC_VERSION constant, close immediately — no DB round-trip needed. The
+  // baseline is captured once at handshake (line ~1978) and reads the same
+  // column the SELECT below would read; the only way they diverge is if
+  // TC_VERSION was bumped mid-session, in which case the cached baseline is
+  // authoritatively stale and we must close.
+  if (
+    session.tcVersionAtHandshake !== undefined &&
+    session.tcVersionAtHandshake !== TC_VERSION
+  ) {
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.close(
+        WS_CLOSE_CODES.TC_NOT_ACCEPTED,
+        "T&C not accepted (mid-session)",
+      );
+    }
+    return true;
+  }
+
+  const cacheUntil = session.tcRecheckCacheUntil ?? 0;
+  if (cacheUntil && Date.now() < cacheUntil) return false;
+
+  const { data: row, error } = await supabase
+    .from("users")
+    .select("tc_accepted_version")
+    .eq("id", userId)
+    .single();
+
+  const rowTyped = row as { tc_accepted_version?: string | null } | null;
+
+  if (error || rowTyped?.tc_accepted_version !== TC_VERSION) {
+    // Sentry mirror on the DB-error branch so a Supabase outage during a
+    // live WS session is observable (cq-silent-fallback-must-mirror-to-sentry).
+    // The TC_VERSION-mismatch branch is expected and not an error — only
+    // the `error` arm pages operations.
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "ws-handler",
+        op: "tc_recheck_query_failed",
+        message: "users.tc_accepted_version SELECT failed mid-session",
+        extra: { userId, msgType },
+      });
+    }
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.close(
+        WS_CLOSE_CODES.TC_NOT_ACCEPTED,
+        "T&C not accepted (mid-session)",
+      );
+    }
+    return true;
+  }
+
+  session.tcRecheckCacheUntil = Date.now() + TC_RECHECK_CACHE_MS;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
 
@@ -996,6 +1116,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
   }
 
   log.debug({ userId, msgType: msg.type }, "Message received");
+
+  // Mid-session T&C re-check. Closes the socket on stale consent or DB
+  // error for gated types only (see TC_RECHECK_MESSAGE_TYPES). Exempt
+  // types (abort_turn, close_conversation) pass through unchanged.
+  if (await recheckTcMidSession(userId, session, msg.type)) {
+    return;
+  }
 
   switch (msg.type) {
     // ------------------------------------------------------------------
@@ -1877,6 +2004,10 @@ export function setupWebSocket(server: HTTPServer) {
           concurrencyOverride: userRowTyped.concurrency_override ?? null,
           stripeSubscriptionId: userRowTyped.stripe_subscription_id ?? null,
           ip: clientIp,
+          // feat-oauth-tc-consent-3205: baseline + cache slot for the
+          // mid-session TC re-check (recheckTcMidSession).
+          tcVersionAtHandshake: userRowTyped.tc_accepted_version ?? null,
+          tcRecheckCacheUntil: null,
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);
