@@ -17,6 +17,7 @@ extract_cited() {
   echo "$body" \
     | awk '/^```/ {f = !f; next} !f {print}' \
     | sed -E 's@https?://[^[:space:]]+@@g' \
+    | sed -E 's@`[^`]*`@@g' \
     | grep -oE '[A-Za-z0-9_./-]+\.(ts|tsx|js|jsx|md|njk|yml|yaml|json|sh|py)' \
     | grep -E '/' \
     | sort -u || true
@@ -68,6 +69,26 @@ assert_excludes "fenced-block-strips-yml" \
 assert_excludes "url-stripped" \
   "See https://example.com/path/url.json for context." \
   "example.com/path/url.json"
+
+# Excludes paths inside inline `code` spans (#3882 register-update trap class).
+# Backticked cross-reference citations are exempt; plain-prose still checked.
+assert_excludes "inline-backtick-strips-ts" \
+  'Mirrors `apps/web-platform/server/foo.ts` (cross-ref, not in this diff).' \
+  "apps/web-platform/server/foo.ts"
+assert_excludes "inline-backtick-strips-md" \
+  'See `docs/legal/privacy-policy.md` for the public disclosure.' \
+  "docs/legal/privacy-policy.md"
+# Plain-prose path (no backticks) is still extracted.
+assert_contains "plain-prose-path-still-caught" \
+  "Mirrors apps/web-platform/server/bar.ts in plain prose." \
+  "apps/web-platform/server/bar.ts"
+# Multiple inline spans on one line are each stripped.
+assert_excludes "multi-inline-backticks-line1" \
+  'Edits `a/b.ts` then references `c/d.md` in same line.' \
+  "a/b.ts"
+assert_excludes "multi-inline-backticks-line2" \
+  'Edits `a/b.ts` then references `c/d.md` in same line.' \
+  "c/d.md"
 
 # Single token without slash is excluded
 assert_excludes "no-slash-excluded" \
