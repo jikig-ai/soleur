@@ -22,12 +22,20 @@ if [[ -z "$diff_paths" ]]; then
   exit 0
 fi
 
-# Strip fenced code blocks and URLs from body before extracting paths.
+# Strip fenced code blocks, URLs, and inline-backtick code spans from body
+# before extracting paths.
 # - awk toggle on ``` lines
 # - sed strips http(s) URLs that may contain .json/.md extensions
+# - sed strips inline `code` spans: legitimate cross-reference citations in
+#   backticks (e.g., describing controls implemented by an already-merged
+#   upstream PR, typical for register/policy-update PRs) shouldn't trigger
+#   the gate. Plain-prose paths (no backticks) are still checked — a body
+#   that says "I edited foo.ts to fix the bug" must still have foo.ts in
+#   the diff. See PR #3882 register-update trap class.
 prose=$(echo "$body" \
   | awk '/^```/ {f = !f; next} !f {print}' \
-  | sed -E 's@https?://[^[:space:]]+@@g')
+  | sed -E 's@https?://[^[:space:]]+@@g' \
+  | sed -E 's@`[^`]*`@@g')
 
 # Extract file path candidates: tokens with at least one slash and a known
 # extension. Anchors loosely; allow leading word boundary.
