@@ -12,7 +12,7 @@ variable "cf_api_token" {
 variable "cf_admin_token" {
   type        = string
   sensitive   = true
-  description = "Bootstrap-only Cloudflare admin token with R2:Edit + API Tokens:Edit scopes. Used by the null_resource provisioner to PUT the bucket lock rule via the CF native REST API. Same value as cf_api_token in practice; held as a distinct variable so the lock-rule trigger hash detects token rotation independently of provider-level config."
+  description = "Bootstrap-only Cloudflare admin token with R2:Edit + API Tokens:Edit scopes. Used by the null_resource provisioner to PUT the bucket lock rule via the CF native REST API. Same value as cf_api_token at bootstrap time; the split exists to localize the future deletion when FW1 swaps the null_resource shim for a native TF resource. Admin tokens are ephemeral one-hour creds (see bootstrap.sh header), so triggers.token_hash guarantees a re-fire on every bootstrap rather than detecting drift; the CF Lock Rules PUT is idempotent so re-fires are no-ops state-wise."
 }
 
 variable "r2_s3_endpoint" {

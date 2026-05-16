@@ -27,7 +27,10 @@
 #   3. Copy the token value, then run:
 #        CF_ADMIN_TOKEN_BOOTSTRAP=<paste> \
 #          bash apps/cla-evidence/infra/bootstrap.sh
-#   4. Revoke the token in the dashboard after the script exits 0.
+#   4. The script self-revokes the admin token via the CF API at the
+#      end of a successful run. If that step fails (network blip, etc.),
+#      the script warns and the operator must revoke manually in the
+#      dashboard.
 #
 # Optional opt-in (closes #3908): set SENTINEL_PR_AUTOMATION=1 to run the
 # Phase 8 sentinel-PR driver (human signer + allowlist-bypass) at the end
@@ -71,6 +74,15 @@ verify=$(curl -fsS \
   || { red "CF_ADMIN_TOKEN_BOOTSTRAP failed verify; rotate and retry"; exit 1; }
 status=$(printf '%s' "$verify" | jq -r '.result.status // "unknown"')
 [[ "$status" == "active" ]] || { red "admin token status=$status (not active)"; exit 1; }
+# Capture token id for the post-bootstrap self-revoke step.
+CF_ADMIN_TOKEN_ID=$(printf '%s' "$verify" | jq -r '.result.id // ""')
+
+# Compute total step count once so the step counter is consistent end-to-end.
+if [[ "${SENTINEL_PR_AUTOMATION:-0}" == "1" ]]; then
+  TOTAL_STEPS=6
+else
+  TOTAL_STEPS=5
+fi
 
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$INFRA_DIR"
@@ -78,7 +90,7 @@ cd "$INFRA_DIR"
 # ─────────────────────────────────────────────────────────────────────────
 # Step 1 — terraform apply (creates bucket + Lock Rules + 2 scoped tokens)
 # ─────────────────────────────────────────────────────────────────────────
-step "[1/5] terraform apply (R2 bucket + CF Lock Rules + 2 scoped tokens)"
+step "[1/${TOTAL_STEPS}] terraform apply (R2 bucket + CF Lock Rules + 2 scoped tokens)"
 
 # Pull supporting values from prd_terraform (existing config — no admin scope
 # needed for these specific values).
@@ -133,7 +145,7 @@ R2_SECRET=$(printf '%s' "$OBJECT_WRITE_TOKEN_VALUE" | openssl dgst -sha256 -hex 
 # ─────────────────────────────────────────────────────────────────────────
 # Step 2 — Doppler prd_cla config + secrets
 # ─────────────────────────────────────────────────────────────────────────
-step "[2/5] Doppler prd_cla config + secrets"
+step "[2/${TOTAL_STEPS}] Doppler prd_cla config + secrets"
 
 if ! doppler configs --project soleur --json | jq -e '.[] | select(.name == "prd_cla")' >/dev/null 2>&1; then
   doppler configs create prd_cla --project soleur --environment prd
@@ -158,7 +170,7 @@ green "  pushed 4 secrets to prd_cla (S3-compat HMAC pair + endpoint + bucket)"
 # ─────────────────────────────────────────────────────────────────────────
 # Step 3 — Doppler service token + GH repo secret
 # ─────────────────────────────────────────────────────────────────────────
-step "[3/5] Doppler service token + DOPPLER_TOKEN_CLA repo secret"
+step "[3/${TOTAL_STEPS}] Doppler service token + DOPPLER_TOKEN_CLA repo secret"
 
 if existing=$(doppler configs tokens --project soleur --config prd_cla --json 2>/dev/null \
               | jq -r '.[] | select(.name == "ci-cla-evidence-workflow") | .slug' | head -n 1) \
@@ -178,7 +190,7 @@ green "  service token created + uploaded as repo secret DOPPLER_TOKEN_CLA"
 # ─────────────────────────────────────────────────────────────────────────
 # Step 4 — live CF Lock Rules verification
 # ─────────────────────────────────────────────────────────────────────────
-step "[4/5] live CF Lock Rules verification (age-based, maxAgeSeconds >= 315360000)"
+step "[4/${TOTAL_STEPS}] live CF Lock Rules verification (age-based, maxAgeSeconds >= 315360000)"
 
 CF_ADMIN_TOKEN_BOOTSTRAP="$CF_ADMIN_TOKEN_BOOTSTRAP" \
 CF_ACCOUNT_ID="$CF_ACCOUNT_ID" \
@@ -188,7 +200,7 @@ R2_CLA_EVIDENCE_BUCKET="$BUCKET_NAME" \
 # ─────────────────────────────────────────────────────────────────────────
 # Step 5 — trigger cla-evidence-timestamp.yml first run
 # ─────────────────────────────────────────────────────────────────────────
-step "[5/5] trigger cla-evidence-timestamp.yml first run"
+step "[5/${TOTAL_STEPS}] trigger cla-evidence-timestamp.yml first run"
 
 gh workflow run cla-evidence-timestamp.yml --repo jikig-ai/soleur 2>&1 \
   | tail -n 1
@@ -198,10 +210,33 @@ green "  workflow dispatched — watch the run at \`gh run list --workflow cla-e
 # Step 6 — Phase 8 sentinel PRs (opt-in via SENTINEL_PR_AUTOMATION=1)
 # ─────────────────────────────────────────────────────────────────────────
 if [[ "${SENTINEL_PR_AUTOMATION:-0}" == "1" ]]; then
-  step "[6/6] Phase 8 sentinel PRs (closes #3908)"
+  step "[6/${TOTAL_STEPS}] Phase 8 sentinel PRs (closes #3908)"
   bash "$INFRA_DIR/../scripts/sentinel-pr.sh" both
 else
   yellow "Sentinel-PR automation skipped (set SENTINEL_PR_AUTOMATION=1 to enable; closes #3908)."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
+# Self-revoke the bootstrap admin token. The admin token carries
+# `User → API Tokens → Edit` scope (required to create the two scoped
+# tokens earlier), which by definition includes the right to revoke
+# itself. Operator no longer needs to remember to do this in the
+# dashboard — closes the residual window between bootstrap exit and
+# manual revocation.
+# ─────────────────────────────────────────────────────────────────────────
+if [[ -n "$CF_ADMIN_TOKEN_ID" ]]; then
+  if curl -fsS -X DELETE \
+      -H "Authorization: Bearer $CF_ADMIN_TOKEN_BOOTSTRAP" \
+      "https://api.cloudflare.com/client/v4/user/tokens/$CF_ADMIN_TOKEN_ID" \
+      >/dev/null 2>&1; then
+    green ""
+    green "  CF_ADMIN_TOKEN_BOOTSTRAP self-revoked via CF API."
+  else
+    yellow ""
+    yellow "  WARN: self-revoke of CF_ADMIN_TOKEN_BOOTSTRAP failed; revoke manually in the dashboard."
+  fi
+else
+  yellow "  WARN: could not capture token id; revoke CF_ADMIN_TOKEN_BOOTSTRAP manually in the dashboard."
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -210,8 +245,7 @@ fi
 green ""
 green "BOOTSTRAP COMPLETE."
 green "Operator follow-ups:"
-green "  1. REVOKE the CF_ADMIN_TOKEN_BOOTSTRAP token in the Cloudflare dashboard NOW."
-green "  2. Verify the dispatched cla-evidence-timestamp.yml run reached green."
+green "  1. Verify the dispatched cla-evidence-timestamp.yml run reached green."
 if [[ "${SENTINEL_PR_AUTOMATION:-0}" != "1" ]]; then
-  green "  3. (Optional) Re-run with SENTINEL_PR_AUTOMATION=1 to exercise the sentinel-PR path (closes #3908)."
+  green "  2. (Optional) Re-run with SENTINEL_PR_AUTOMATION=1 to exercise the sentinel-PR path (closes #3908)."
 fi

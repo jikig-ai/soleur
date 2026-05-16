@@ -30,8 +30,12 @@ set -euo pipefail
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$INFRA_DIR"
 
-red()   { printf '\033[31m%s\033[0m\n' "$*"; }
+red()   { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
+
+# Single source for the 10-year retention floor; mirrored in object_lock.tf
+# via local.lock_rule.rules[0].condition.maxAgeSeconds.
+readonly MIN_LOCK_SECONDS=315360000
 
 LIVE_MODE=0
 for arg in "$@"; do
@@ -64,8 +68,16 @@ if ! grep -q 'prevent_destroy *= *true' bucket.tf; then
   red "FAIL: bucket.tf must declare lifecycle { prevent_destroy = true } on the bucket."
   fail=1
 fi
-if ! grep -q '"condition":{"type":"Age","maxAgeSeconds":315360000}' object_lock.tf; then
-  red "FAIL: object_lock.tf must declare the CF Lock Rules age-based retention rule with maxAgeSeconds=315360000 (10 years)."
+# Anchor on the canonical HCL source (single source of truth in
+# local.lock_rule). Format-tolerant: survives heredoc reformats /
+# `jq -n` builder migrations as long as the load-bearing values
+# remain in the HCL.
+if ! grep -qE 'type[[:space:]]*=[[:space:]]*"Age"' object_lock.tf; then
+  red "FAIL: object_lock.tf must declare a CF Lock Rule with condition.type = \"Age\"."
+  fail=1
+fi
+if ! grep -qE 'maxAgeSeconds[[:space:]]*=[[:space:]]*315360000' object_lock.tf; then
+  red "FAIL: object_lock.tf must declare maxAgeSeconds = 315360000 (10-year retention floor)."
   fail=1
 fi
 if ! grep -qE 'r2/buckets/.*/lock' object_lock.tf; then
@@ -93,30 +105,49 @@ if [[ "$LIVE_MODE" -eq 1 ]]; then
   echo "→ live CF Lock Rules assertion (--live)"
   : "${CF_ADMIN_TOKEN_BOOTSTRAP:?missing — required for --live mode}"
   : "${CF_ACCOUNT_ID:?missing — required for --live mode}"
-  bucket="${R2_CLA_EVIDENCE_BUCKET:-soleur-cla-evidence}"
-  lock_json=$(curl --max-time 30 -fsS \
-    -H "Authorization: Bearer $CF_ADMIN_TOKEN_BOOTSTRAP" \
-    "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/r2/buckets/$bucket/lock" 2>&1) || {
-      red "FAIL: GET /r2/buckets/$bucket/lock failed — the CF Lock Rules config is NOT readable."
-      red "      The WORM guarantee may be void. Investigate the null_resource.cla_evidence_object_lock state."
-      red "      Output: $lock_json"
-      fail=1
-      lock_json=""
-    }
+  : "${R2_CLA_EVIDENCE_BUCKET:?missing — required for --live mode (e.g. soleur-cla-evidence)}"
+  bucket="$R2_CLA_EVIDENCE_BUCKET"
+  # Capture stderr separately so curl warnings (TLS, retry) do not corrupt
+  # the JSON body fed to jq.
+  curl_err=$(mktemp)
+  trap 'rm -f "$curl_err"' EXIT
+  if ! lock_json=$(curl --max-time 30 -fsS \
+        -H "Authorization: Bearer $CF_ADMIN_TOKEN_BOOTSTRAP" \
+        "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/r2/buckets/$bucket/lock" 2>"$curl_err"); then
+    red "FAIL: GET /r2/buckets/$bucket/lock failed — the CF Lock Rules config is NOT readable."
+    red "      The WORM guarantee may be void. Investigate the null_resource.cla_evidence_object_lock state."
+    # Emit only the curl stderr — never echo body bytes that could contain
+    # an Authorization header reflection or other sensitive material.
+    red "      curl stderr: $(cat "$curl_err")"
+    fail=1
+    lock_json=""
+  fi
   if [[ -n "$lock_json" ]]; then
     success=$(printf '%s' "$lock_json" | jq -r '.success // false')
     if [[ "$success" != "true" ]]; then
-      red "FAIL: CF API returned success=false. Body: $lock_json"
+      # Project only .errors[] (not the full body) so the failure log
+      # cannot accidentally include a reflected Authorization header.
+      err_msg=$(printf '%s' "$lock_json" | jq -r '.errors // [] | map("\(.code // "?"): \(.message // "?")") | join("; ")')
+      red "FAIL: CF API returned success=false. Errors: $err_msg"
       fail=1
     else
-      rule_count=$(printf '%s' "$lock_json" | jq -r '.result.rules | length // 0')
+      rule_count=$(printf '%s' "$lock_json" | jq -r '.result.rules | length')
       max_age=$(printf '%s' "$lock_json" | jq -r '[.result.rules[]? | select(.condition.type == "Age") | .condition.maxAgeSeconds] | max // 0')
-      if [[ "$rule_count" -lt 1 ]]; then
+      # Defensive numeric coercion guards — jq can emit "null" if the
+      # response shape is unexpected; without these, [[ -lt ]] would
+      # silently coerce to 0 and pass the floor check.
+      if ! [[ "$rule_count" =~ ^[0-9]+$ ]]; then
+        red "FAIL: rule_count is not numeric (got: $rule_count). Response shape unexpected."
+        fail=1
+      elif [[ "$rule_count" -lt 1 ]]; then
         red "FAIL: bucket $bucket has zero Lock Rules; expected at least one Age rule."
         fail=1
       fi
-      if [[ "$max_age" -lt 315360000 ]]; then
-        red "FAIL: bucket $bucket maxAgeSeconds=$max_age, expected >= 315360000 (10 years)."
+      if ! [[ "$max_age" =~ ^[0-9]+$ ]]; then
+        red "FAIL: max_age is not numeric (got: $max_age). Response shape unexpected."
+        fail=1
+      elif [[ "$max_age" -lt "$MIN_LOCK_SECONDS" ]]; then
+        red "FAIL: bucket $bucket maxAgeSeconds=$max_age, expected >= $MIN_LOCK_SECONDS (10 years)."
         fail=1
       fi
       if [[ "$fail" -eq 0 ]]; then

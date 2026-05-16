@@ -6,7 +6,9 @@ date: 2026-05-16
 
 # CLA Signature Evidence Retrieval
 
-Operations runbook for the off-site CLA evidence archive (`soleur-cla-evidence` R2 bucket, region `weur`, Object Lock Governance, 10-year retention). Covers IP-dispute response, DMCA notice handling, GDPR Article 17 erasure requests, and contributor-revocation flows.
+Operations runbook for the off-site CLA evidence archive (`soleur-cla-evidence` R2 bucket, region `weur`, R2 Lock Rules with 10-year age-based retention floor — functionally equivalent to S3 Object Lock Governance). Covers IP-dispute response, DMCA notice handling, GDPR Article 17 erasure requests, and contributor-revocation flows.
+
+> **§7 admin-override procedure under revision (2026-05-16).** PR #3920 replaced the underlying retention mechanism: R2 does NOT implement S3 Object Lock / `--bypass-governance-retention`. The override now requires editing the bucket Lock Rule list (PUT a modified list excluding the offending object, DELETE, PUT-restore) rather than the S3 bypass-flag path described in §7.3 below. The §7.1/§7.3 instructions are STALE and will fail if followed verbatim against the live bucket. Tracking issue: #3924. Until the rewrite lands, DO NOT execute §7.3 verbatim — coordinate with the CLO and the cla-evidence infra owner for an interim procedure.
 
 **Cross-references:**
 - Architecture: `apps/cla-evidence/infra/` (Terraform) + `apps/cla-evidence/scripts/` (helpers) + `.github/workflows/cla-evidence.yml` (sidecar) + `.github/workflows/cla-evidence-timestamp.yml` (monthly RFC 3161).
@@ -177,7 +179,12 @@ Use this procedure ONLY when the CLO has confirmed in writing that Article 17(3)
 
 ### 7.1 Generate one-time admin token
 
-The standard sidecar token cannot delete or bypass Object Lock Governance. Generate a fresh admin token in the Cloudflare dashboard:
+**[STALE — see banner at top of runbook; #3924 tracking issue will replace this section.]** The procedure below describes the deprecated S3 Object Lock bypass-permission path that R2 does not implement. Until the rewrite, treat §7.1–§7.3 as a historical reference for the *intent* (mint short-lived admin creds; perform the override; tombstone; revoke), not the *commands*.
+
+Interim guidance: mint a one-hour CF admin token with `Account → Cloudflare R2 → Edit` scope (same as the bootstrap admin token at `apps/cla-evidence/infra/bootstrap.sh:21-26`). This token can read AND write the Lock Rule list at `PUT /accounts/{id}/r2/buckets/{name}/lock`. The override flow is: GET current rules → PUT a modified list with the rule's `enabled` flipped to `false` (or `condition.maxAgeSeconds` lowered to 1) → DELETE the offending object via the operator's HMAC creds from Doppler `prd_cla` → PUT-restore the original rules → write the tombstone (§7.4) → revoke the admin token (§7.6). The original §7.1 dashboard click-path is preserved below for historical reference.
+
+<details>
+<summary>Historical: deprecated dashboard click-path (R2 does NOT implement Bypass Governance Retention)</summary>
 
 1. **Cloudflare dashboard → R2 → Manage R2 API Tokens → Create API Token**.
 2. Configure:
@@ -191,6 +198,8 @@ The standard sidecar token cannot delete or bypass Object Lock Governance. Gener
    export R2_CLA_EVIDENCE_ADMIN_SECRET="<from dashboard>"
    ```
 
+</details>
+
 ### 7.2 Locate the offending object
 
 ```bash
@@ -201,7 +210,20 @@ bash apps/cla-evidence/scripts/inspect-evidence.sh by-contributor <login> \
 
 Capture this key and the full record body — both are needed for the tombstone.
 
-### 7.3 Delete the object with governance bypass
+### 7.3 Delete the object via Lock Rule edit (interim procedure)
+
+**[STALE COMMANDS — DO NOT EXECUTE]** The `aws s3api delete-object --bypass-governance-retention` form is an S3 Object Lock primitive that R2 does NOT implement. The corrected high-level shape under R2 Lock Rules is:
+
+1. Capture the current rule list: `curl -fsS -H "Authorization: Bearer $CF_ADMIN_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/r2/buckets/$R2_CLA_EVIDENCE_BUCKET/lock"`.
+2. PUT a modified rule list with the rule's `enabled` flipped to `false` (or `condition.maxAgeSeconds` lowered) using the same endpoint.
+3. DELETE the object via the operator's HMAC creds from Doppler `prd_cla` (`aws s3api delete-object --bucket $R2_CLA_EVIDENCE_BUCKET --key signatures/<sha>.json` — NO bypass flag; the rule is currently disabled).
+4. PUT-restore the original rule list (verbatim from step 1).
+5. Verify via `bash apps/cla-evidence/infra/main.test.sh --live` that `rule_count >= 1` and `maxAgeSeconds >= 315360000` post-restore.
+
+Exact commands + a tested driver script are deferred to #3924. The procedure above is the operationally correct shape; full validation against a synthetic dispute-resolution test fixture is the missing piece.
+
+<details>
+<summary>Historical: deprecated S3 Object Lock command (R2 returns NotImplemented)</summary>
 
 ```bash
 AWS_ACCESS_KEY_ID="$R2_CLA_EVIDENCE_ADMIN_KEY_ID" \
@@ -214,6 +236,8 @@ aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3api delete-object \
 ```
 
 The `--bypass-governance-retention` flag is the load-bearing argument. Without it, R2 returns 403 because of Object Lock. The flag is honoured because the token was provisioned with the "Bypass Governance Retention" permission.
+
+</details>
 
 ### 7.4 Tombstone protocol (mandatory)
 

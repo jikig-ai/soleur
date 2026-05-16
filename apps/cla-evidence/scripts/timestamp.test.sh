@@ -87,7 +87,12 @@ fi
 check_cert_expiry() {
   local enddate="$1" floor_seconds="$2"
   local end_epoch now_epoch remaining
-  end_epoch=$(date -u -d "$enddate" +%s) || return 2
+  # GNU first, BSD fallback (matches the synthetic-date helper below
+  # and the workflow step in cla-evidence-timestamp.yml). BSD `-j -f`
+  # parses the canonical openssl `enddate` format directly.
+  end_epoch=$(date -u -d "$enddate" +%s 2>/dev/null \
+    || date -u -j -f "%b %d %H:%M:%S %Y %Z" "$enddate" +%s 2>/dev/null) \
+    || return 2
   now_epoch=$(date -u +%s)
   remaining=$(( end_epoch - now_epoch ))
   [[ "$remaining" -ge "$floor_seconds" ]]
