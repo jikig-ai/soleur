@@ -76,17 +76,26 @@ CREATE POLICY "Users can write own attachment objects"
 DROP FUNCTION IF EXISTS public.is_message_owner(uuid, uuid);
 CREATE FUNCTION public.is_message_owner(p_message_id uuid, p_user_id uuid)
   RETURNS boolean
-  LANGUAGE sql
-  STABLE
+  LANGUAGE plpgsql
   SECURITY DEFINER
   SET search_path = pg_catalog, pg_temp
 AS $$
+DECLARE
+  v_exists boolean;
+BEGIN
+  -- LANGUAGE plpgsql (not sql) + no STABLE/IMMUTABLE keyword is required:
+  -- Postgres's planner inlines sql-language STABLE functions, dissolving
+  -- the SECURITY DEFINER boundary back into the caller's tenant-JWT RLS
+  -- context. plpgsql functions are NOT inlinable, so the inner SELECT
+  -- runs at the function owner's superuser RLS context as intended.
   SELECT EXISTS (
     SELECT 1 FROM public.messages m
     JOIN public.conversations c ON c.id = m.conversation_id
     WHERE m.id = p_message_id
       AND c.user_id = p_user_id
-  );
+  ) INTO v_exists;
+  RETURN v_exists;
+END;
 $$;
 
 REVOKE EXECUTE ON FUNCTION public.is_message_owner(uuid, uuid) FROM PUBLIC;
