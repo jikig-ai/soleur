@@ -177,3 +177,21 @@ Idempotent: re-running produces identical content-addressed keys.
 - Smoke test: hard-fail behavior when R2 is unreachable.
 
 Per `cq-write-failing-tests-before` (skill-enforced at work Phase 2), tests are written before implementation when the plan includes Test Scenarios.
+
+## Spec-Flow Gap Resolutions (post-work, 2026-05-16)
+
+The plan's `## Research Reconciliation` and `## Sharp Edges` sections resolved 11 spec-flow gaps surfaced during plan-phase analysis. Captured here for spec-fidelity:
+
+1. **Sign-then-edit / sign-then-delete sequences** — sidecar workflow triggers on `issue_comment` actions `created`, `edited`, AND `deleted`; `edited`/`deleted` append to existing tombstone (per Phase 2 step 3i + the GDPR Art. 17 tombstone protocol in the retrieval runbook). Resolves gap #1.
+2. **Reconciliation #1 + #2: no Sentry-from-workflow helper.** `reportSilentFallback` is server-side TS; cannot run in a GitHub Actions shell step. Sidecar uses `::error::` + `$GITHUB_STEP_SUMMARY` + Check Run RED + GitHub workflow-failure email instead. Resolves Reconciliation #1, #2.
+3. **Bootstrap chicken-and-egg** — first merge via `gh pr merge --admin` (operator action, ack-required); Phase 8 sentinel PR exercises the live sidecar post-merge. Resolves gap #3.
+4. **Dual-check folding** — sidecar polls upstream `license/cla` status for up to 30s, then runs; cla-evidence's `cla-check` is the only required check (integration_id 15368, learning #12). Brief two-check window during which `license/cla` is visible but informational. Resolves gap #4.
+5. **`reportSilentFallback` server-only** — see resolution #2 above; converged on no Sentry-from-workflow helper. Resolves gap #5.
+6. **Doppler `prd_cla` config + `DOPPLER_TOKEN_CLA`** — config-pinned per learning #9; new config separate from `prd_terraform`. Token sync is operator post-merge step. Resolves gap #6.
+7. **Allowlist-bypass timing race** — resolved via R2 `If-None-Match: *` per-quarter canonical record (Phase 4 + brainstorm Q3 final answer). Resolves gap #7.
+8. **TR8 backfill: Elvalio's correct sign PR** — backfill record uses `pr_of_record.number = 3196` (actual sign location) and `first_pr_signed_against = 3186` (where the action originally accepted). Implemented in `apps/web-platform/scripts/cla-backfill-evidence.ts`. Resolves gap #8 (Elvalio pr_of_record correction).
+9. **Always-timestamp YYYY-MM in manifest pre-image** — monthly cron's manifest header line includes `{"manifest_yyyy_mm":"YYYY-MM","schema_version":"1.0"}` so each month's TSQ is unique even on a quiet bucket; the timestamp chain advances regardless of activity. Resolves gap #9.
+10. **GDPR Art. 17 admin-override + tombstone protocol** — documented in `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` §7; tombstone written to `tombstones/<sha>.deleted.json` with no contributor PII, included in next monthly manifest so chain shows "object H → tombstone T at M+1." Resolves gap #10.
+11. **Receipt comment soft-fail** — folded into sidecar workflow as final step with `continue-on-error: true` (Code-Simplicity F4); receipt failure does NOT block the merge gate (canonical evidence is the R2 object). Resolves gap #11.
+
+The PR's Acceptance Criteria (plan §Pre-merge / Post-merge) cover every resolution above. Sharp-edges and pattern reuse captured in [2026-05-04-cla-evidence-sidecar-pattern.md](../../learnings/2026-05-04-cla-evidence-sidecar-pattern.md).

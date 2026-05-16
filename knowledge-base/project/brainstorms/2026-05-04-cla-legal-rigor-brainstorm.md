@@ -81,6 +81,16 @@ Re-signing imposes friction on the two onboarded contributors (deruelle internal
 4. **Cloudflare R2 IP-allowlist for the workflow token.** GitHub Actions egress IP ranges are documented; whether to enforce IP-allowlist on the R2 token is a plan-phase tradeoff (operational rigidity vs. defense-in-depth).
 5. **Right-to-erasure handling under Governance mode.** Process is "admin override + record the override + document in DPA" but the runbook for that scenario doesn't exist yet. Defer to ops runbook creation.
 
+## Open Questions — Final Answers (post-work, 2026-05-16)
+
+Resolutions reached during plan and work phases (PR #3201 / issue #3209):
+
+1. **CCLA / PII expansion** — DEFERRED as planned. Tracked at #3210 (joint CPO+CLO sync). Out of scope for this PR.
+2. **RFC 3161 TSA selection** — **FreeTSA primary; paid TSA fallback documented but not implemented.** Switch trigger: FreeTSA fails 3 consecutive monthly cron runs (auto-tracking-issue via Kieran F9). Paid fallback procedure (DigiCert / GlobalSign) lives in `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` §9.
+3. **Allowlist-bypass logging semantics** — **Per-quarter canonical record** (one row per principal per quarter), race-free via R2 `If-None-Match: *` conditional PUT. First write succeeds (201/200); subsequent same-principal-same-quarter writes return 412 and exit cleanly with `duplicate status=412`. `github-actions[bot]` (DB-id 41898282) is filtered out entirely before any record is written (learning #2 + Kieran F2). Implemented in `apps/web-platform/scripts/cla-evidence/allowlist.ts` + sidecar workflow Phase 4 path.
+4. **Cloudflare R2 IP-allowlist for the workflow token** — **No IP-allowlist** (plan-review converged on this; DHH F1 + Code-Simplicity F2). Reasoning: recurring CIDR-refresh ops cost (quarterly forgotten-chore risk) exceeds marginal security gain on an already-public-data bucket. Defense-in-depth provided instead by: (a) distinct object-write-only token vs state-write-only token (no state-compromise replay), (b) Object Lock Governance prevents tampering even with token leak, (c) 4xx fast-fail surfaces stale-token issues immediately. Revisit if threat model changes (e.g., bucket starts holding PII per #3210).
+5. **Right-to-erasure under Governance mode** — **Admin-override + tombstone protocol.** Documented in `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md` §7: operator generates a one-hour admin token (Cloudflare dashboard, never Doppler), deletes the offending object with `--bypass-governance-retention`, immediately writes `tombstones/<sha>.deleted.json` (no contributor PII — only sha + timestamp + admin actor + GDPR ref + override reason). The tombstone is included in the next monthly RFC 3161 manifest (`cla-evidence-timestamp.yml` lists `tombstones/` alongside `signatures/` and `allowlist/`) so the chain shows "object H replaced by tombstone T at month M+1" — erasure honoured without breaking the evidentiary chain. Captured in learning `2026-05-04-cla-evidence-sidecar-pattern.md` §7.
+
 ## Domain Assessments
 
 **Assessed:** Engineering (CTO), Legal (CLO), Product (CPO), Operations (COO). Not assessed: Marketing, Sales, Finance, Support — none of these domains have a relevant signal in the feature description.
