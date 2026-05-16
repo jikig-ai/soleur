@@ -68,10 +68,10 @@ requires_cpo_signoff: true
 - [x] 1.4.4 Add `zeroize(buf: Buffer)` helper to `byok.ts`. **`buf.fill(0)` with empty-buffer no-op guard. Verified by 3 zeroize unit tests including a wipe-after-decrypt assertion.**
 
 ### 1.5 agent-runner migration (9 user-scoped sites + 2 stay service-role)
-- [ ] 1.5.1 Migrate **9 user-scoped sites** to `getFreshTenantClient(userId)`: `agent-runner.ts:182, 213, 256, 289, 329, 376, 528, 1071, 1315, 1326, 1363, 1373, 1390, 1456` (the 1315/1326/1363/1373/1390 cluster is the `sendUserMessage` path counted as one site per plan §1.1). **Do NOT migrate** `:421 cleanupOrphanedConversations`, `:441 startInactivityTimer` (bulk sweeps with no userId — `getFreshTenantClient(userId)` structurally inapplicable per type-design F2), or `:839 kbShareTools` (allowlisted per §1.5 plan).
-- [ ] 1.5.2 Add `// SERVICE-ROLE: bulk sweep — keyed on staleness/runtime_paused_at, not data ownership` comments at `:421` and `:441`. Both paths added to `.service-role-allowlist`.
-- [ ] 1.5.3 Wrap `startAgentSession` body in `runWithByokLease`.
-- [ ] 1.5.4 Wire JWT mint at session start.
+- [x] 1.5.1 Migrate **9 user-scoped sites** to `getFreshTenantClient(userId)`: `agent-runner.ts:182, 213, 256, 289, 329, 376, 528, 1071, 1315, 1326, 1363, 1373, 1390, 1456` (the 1315/1326/1363/1373/1390 cluster is the `sendUserMessage` path counted as one site per plan §1.1). **Do NOT migrate** `:421 cleanupOrphanedConversations`, `:441 startInactivityTimer` (bulk sweeps with no userId — `getFreshTenantClient(userId)` structurally inapplicable per type-design F2), or `:839 kbShareTools` (allowlisted per §1.5 plan). **Closed in PR-B (#3395).**
+- [x] 1.5.2 Add `// SERVICE-ROLE: bulk sweep — keyed on staleness/runtime_paused_at, not data ownership` comments at `:421` and `:441`. Both paths added to `.service-role-allowlist`. **Closed in PR-B (#3395).**
+- [x] 1.5.3 Wrap `startAgentSession` body in `runWithByokLease`. **Closed in PR-B (#3395).**
+- [x] 1.5.4 Wire JWT mint at session start. **Closed in PR-B (#3395).**
 - [ ] 1.5.5 §1.7 timeout pair: `idle_window` (90s, resets per assistant block) + `max_turn_duration` (10min, anchored on `firstToolUseAt`, NOT reset). Add `WorkflowEnd` 8-variant discriminated union: `{ reason: "idle_window" | "max_turn_duration" | "max_turns" | "cost_kill" | "byok_invalid" | "tenant_revoked" | "user_cancelled" | "subprocess_crash" }` with appropriate per-variant payloads (per type-design F1). `_exhaustive: never` rails at every consumer.
 - [ ] 1.5.6 [RED] Add a test asserting a captured `lease` reference outside the ALS scope throws `ByokLeaseError { cause: 'escape' }` from `lease.getApiKey()` (per type-design F3 — the function-not-property contract is the load-bearing test).
 - [ ] 1.5.7 [RED] Subprocess env-leak test: spawn child inside `runWithByokLease`, then read `/proc/<child-pid>/environ` from a SIBLING process (NOT from inside the child). Assert either `ANTHROPIC_API_KEY` absent OR `EACCES` due to `PR_SET_DUMPABLE=0` (per security P1-A — original "subprocess `process.env`" test is INSUFFICIENT and removed).
@@ -80,14 +80,14 @@ requires_cpo_signoff: true
 
 ### 1.6 CI grep gate (replaces ESLint rule)
 - [ ] 1.6.1 [RED] `apps/web-platform/test/ci/service-role-allowlist.test.sh` — synthetic violator file rejected; allowlisted file accepted.
-- [ ] 1.6.2 Write `apps/web-platform/.service-role-allowlist` — include `server/agent-runner.ts` (for `:421`, `:441` bulk sweeps), `server/ws-handler.ts` (transitional, PR-C migrates), `app/api/webhooks/stripe/route.ts` (signature-verified webhook).
-- [ ] 1.6.3 Edit `.github/workflows/lint.yml` — add grep step.
-- [ ] 1.6.4 Add allowlist comments: `server/health.ts:15`, `server/byok-lease.ts`, `server/session-sync.ts:133` (transitional), `server/kb-share-tools.ts`, `server/ws-handler.ts` (transitional).
-- [ ] 1.6.5 Write `.github/CODEOWNERS` (per architecture F5) — pin security owner approval on `.service-role-allowlist`, `lib/supabase/{service,tenant}.ts`, `server/byok-lease.ts`, `supabase/migrations/**`, `.github/workflows/lint.yml`. Without this pin, an attacker-modeled PR can add a service-role import AND its allowlist line in one commit; gate passes, isolation broken.
+- [x] 1.6.2 Write `apps/web-platform/.service-role-allowlist` — include `server/agent-runner.ts` (for `:421`, `:441` bulk sweeps), `server/ws-handler.ts` (transitional, PR-C migrates), `app/api/webhooks/stripe/route.ts` (signature-verified webhook). **Closed in PR-B (#3395). Allowlist further shrunk in PR-C: 7 TRANSITIONAL entries removed (fully migrated); 2 entries converted TRANSITIONAL→PERMANENT (ws-handler, api-messages) with new auth-bootstrap rationales; 2 entries retained with updated PERMANENT rationales (api-usage RPC, cc-dispatcher attachments).**
+- [x] 1.6.3 Edit `.github/workflows/lint.yml` — add grep step. **Closed in PR-B (#3395).**
+- [x] 1.6.4 Add allowlist comments: `server/health.ts:15`, `server/byok-lease.ts`, `server/session-sync.ts:133` (transitional), `server/kb-share-tools.ts`, `server/ws-handler.ts` (transitional). **Closed in PR-B (#3395); transitional entries lifted by PR-C §4.**
+- [x] 1.6.5 Write `.github/CODEOWNERS` (per architecture F5) — pin security owner approval on `.service-role-allowlist`, `lib/supabase/{service,tenant}.ts`, `server/byok-lease.ts`, `supabase/migrations/**`, `.github/workflows/lint.yml`. Without this pin, an attacker-modeled PR can add a service-role import AND its allowlist line in one commit; gate passes, isolation broken. **Closed in PR-B (#3395).**
 
 ### 1.7 Error sanitization + typed classes
 - [ ] 1.7.1 Edit `apps/web-platform/lib/auth/error-messages.ts` — add `RlsDenyError`, `ByokLeaseError`, `RuntimeAuthError { cause }`. Mapper extended.
-- [ ] 1.7.2 Wire `sanitizeErrorForClient` + `reportSilentFallback` at every new error path.
+- [x] 1.7.2 Wire `sanitizeErrorForClient` + `reportSilentFallback` at every new error path. **Closed in PR-B (#3395); PR-C extends `reportSilentFallback` to every new tenant-mint failure path in the 11 migrated files.**
 
 ### 1.8 Verify + ship
 - [ ] 1.8.1 `bun run typecheck && bun run test && bun run build` green.
@@ -98,13 +98,13 @@ requires_cpo_signoff: true
 ## Phase 2 — Multi-turn Continuity + Episodic Memory + Inngest + CFO function (PR-C, runtime layer)
 
 ### 2.1 Sibling-query migration (~30 sites)
-- [ ] 2.1.1 Migrate `server/ws-handler.ts` (10 sites): `:294, :432, :452, :754, :767, :812, :896, :1116, :1410`.
-- [ ] 2.1.2 Migrate `server/conversations-tools.ts` (4 sites): `:150, :211, :248, :291`.
-- [ ] 2.1.3 Migrate `server/session-sync.ts` (4 sites): `:187, :236, :254, :270` — lifts the Increment 1 transitional allowlist.
-- [ ] 2.1.4 Migrate `server/api-messages.ts`, `api-usage.ts`, `conversation-writer.ts`, `lookup-conversation-for-path.ts`, `current-repo-url.ts`, `kb-document-resolver.ts`, `kb-route-helpers.ts` (10 sites total).
-- [ ] 2.1.5 Sample-audit 5 random `app/api/**/route.ts` files to verify they use SSR cookie-anon-key client (NOT service-role).
-- [ ] 2.1.6 Allowlist comment for `app/api/webhooks/stripe/route.ts` (signature-verified webhook legitimately uses service-role).
-- [ ] 2.1.7 Audit table-of-30 in PR-C body with `tenantClient | service-role-allowlisted | refactored-out` per row.
+- [x] 2.1.1 Migrate `server/ws-handler.ts` (13 sites; spec line numbers were stale — fresh enumeration in PR-C plan §0.3 against HEAD `c0f1e3ab`: `:265, :283, :326, :506, :541, :644, :664, :1101, :1114, :1159, :1262, :1514, :1834`). **Closed in PR-C §2.10 (#3854); `auth.getUser(token)` at `:1812` (now `:1947`) preserved as PERMANENT auth-bootstrap.**
+- [x] 2.1.2 Migrate `server/conversations-tools.ts` (4 sites; fresh enumeration: `:156, :217, :254, :297`). **Closed in PR-C §2.9 (#3854).**
+- [x] 2.1.3 Migrate `server/session-sync.ts` (4 sites: `:187, :236, :254, :270`) — lifts the Increment 1 transitional allowlist. **Closed in PR-C §2.1 (#3854); allowlist entry removed in PR-C §4.**
+- [x] 2.1.4 Migrate `server/api-messages.ts` (2 tenant sites; `auth.getUser` at `:36` preserved PERMANENT), `api-usage.ts` (1 SELECT; `sum_user_mtd_cost` RPC at `:104` PERMANENT), `conversation-writer.ts` (1 UPDATE), `lookup-conversation-for-path.ts` (1), `current-repo-url.ts` (1), `kb-document-resolver.ts` (1), `kb-route-helpers.ts` (2). **Closed in PR-C §2.2-§2.8 (#3854). cc-dispatcher BYOK lease wrap + 2 message inserts also migrated in PR-C §2.11 (closes #3392).**
+- [ ] 2.1.5 Sample-audit 5 random `app/api/**/route.ts` files to verify they use SSR cookie-anon-key client (NOT service-role). **DEFERRED — filed as tracked issue per PR-C plan §3 "app/api SSR sample audit (5 routes)". Doc-only artifact; out of PR-C scope.**
+- [x] 2.1.6 Allowlist comment for `app/api/webhooks/stripe/route.ts` (signature-verified webhook legitimately uses service-role). **Closed in PR-B (#3395).**
+- [x] 2.1.7 Audit table-of-30 in PR-C body with `tenantClient | service-role-allowlisted | refactored-out` per row. **Closed in PR-C plan §0.3 + §"Sharp Edges" Aggregate target consistency: 34 tenant-migration sites + 3 PERMANENT auth/attachments sites (under-classified in spec).**
 
 ### 2.2 Replay correctness + catch-block fix
 - [ ] 2.2.1 [RED] `apps/web-platform/test/server/agent-runner.replay.test.ts` — founder A 5 messages over 3 turns; resume reads all 5; B's JWT against A's conversation = RLS deny.

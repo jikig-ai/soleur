@@ -90,6 +90,36 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockSupabaseFrom })),
 }));
 
+// PR-C §2.4 / §2.10 / §2.11 (#3244): tenant migration of conversation-
+// writer + agent-runner + cc-dispatcher (BYOK lease wrap). Mock so the
+// test does not pull `mintFounderJwt` or the lease's `fetchAndDecrypt`
+// chain.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockSupabaseFrom })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
+vi.mock("@/server/byok-lease", async () => {
+  const actual = await vi.importActual<typeof import("@/server/byok-lease")>(
+    "@/server/byok-lease",
+  );
+  return {
+    ...actual,
+    // Bridge legacy `mockGetUserApiKey` setups (which used to mock the
+    // direct `getUserApiKey()` call in cc-dispatcher pre-PR-C) to the
+    // new `lease.getApiKey()` surface. Tests that
+    // `mockResolvedValue("sk-test")` / `mockRejectedValueOnce(KeyInvalidError)`
+    // continue to drive the same code path.
+    runWithByokLease: vi.fn(
+      async <T>(
+        _userId: string,
+        body: (lease: { getApiKey: () => string | Promise<string> }) => Promise<T>,
+      ) => body({ getApiKey: () => mockGetUserApiKey() }),
+    ),
+  };
+});
+
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
 vi.mock("@/server/ws-handler", () => ({

@@ -18,30 +18,39 @@ vi.mock("@/lib/legal/tc-version", () => ({
     "79b2d2c00136cfcd1e61cb7ee9654aeb2b80cf21f2b2d33d1f063f10948d9300",
 }));
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({
-    rpc: mockRpc,
-    from: () => ({
-      insert: vi.fn().mockResolvedValue({ error: null }),
-      update: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }),
-      select: () => ({
-        eq: () => ({
-          single: vi.fn().mockResolvedValue({
-            // tc_accepted_version added for recheckTcMidSession
-            // (feat-oauth-tc-consent-3205) — gated inbound messages
-            // now SELECT tc_accepted_version against TC_VERSION.
-            data: {
-              id: "conv-1",
-              status: "active",
-              subscription_status: "active",
-              plan_tier: "solo",
-              tc_accepted_version: "1.0.0",
-            },
-            error: null,
-          }),
+function makeFromMock() {
+  return () => ({
+    insert: vi.fn().mockResolvedValue({ error: null }),
+    update: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }),
+    select: () => ({
+      eq: () => ({
+        single: vi.fn().mockResolvedValue({
+          // tc_accepted_version added for recheckTcMidSession
+          // (feat-oauth-tc-consent-3205) — gated inbound messages
+          // now SELECT tc_accepted_version against TC_VERSION.
+          data: {
+            id: "conv-1",
+            status: "active",
+            subscription_status: "active",
+            plan_tier: "solo",
+            tc_accepted_version: "1.0.0",
+          },
+          error: null,
+        }),
+        // PR-C §2.10 (#3244): auth-probe ends in .maybeSingle()
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { id: "user-1" },
+          error: null,
         }),
       }),
     }),
+  });
+}
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    rpc: mockRpc,
+    from: makeFromMock(),
     auth: {
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },
@@ -49,6 +58,14 @@ vi.mock("@/lib/supabase/service", () => ({
       }),
     },
   }),
+}));
+
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: makeFromMock(),
+    rpc: mockRpc,
+  })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
 vi.mock("./agent-runner", () => ({

@@ -34,8 +34,9 @@ const {
   reportSilentFallbackSpy: vi.fn(),
 }));
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({
+// PR-C §2.7 (#3244): tenant-client migration.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: async () => ({
     from: () => ({
       select: () => ({
         eq: () => ({
@@ -44,6 +45,7 @@ vi.mock("@/lib/supabase/service", () => ({
       }),
     }),
   }),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
 vi.mock("@/server/observability", () => ({

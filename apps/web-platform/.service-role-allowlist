@@ -46,33 +46,49 @@ apps/web-platform/server/byok-lease.ts
 # the same file MUST migrate (per spec tasks §1.5.1).
 apps/web-platform/server/agent-runner.ts
 
-# ── Transitional surface — migrated by PR-C (spec tasks §2.1.*) ───────
+# ── PR-C closeouts (#3244 §2) ─────────────────────────────────────────
+#
+# 7 files fully migrated to tenant in PR-C and REMOVED from this
+# allowlist (no entries below for them): conversations-tools,
+# session-sync, conversation-writer, lookup-conversation-for-path,
+# current-repo-url, kb-document-resolver, kb-route-helpers.
+#
+# 4 files retain a service-role import for a load-bearing
+# auth-bootstrap or storage-injection surface that the tenant migration
+# cannot cover. Each gets its own PERMANENT rationale below.
 
-# WS handler — 10 sites migrate in PR-C (spec §2.1.1). The allowlist
-# entry is the disclosure that makes PR-B's grep gate pass.
+# PERMANENT — WS auth handshake (server/ws-handler.ts:1947
+# supabase.auth.getUser(token)) validates the operator-supplied token
+# BEFORE userId exists. Auth-domain bootstrap, structurally pre-tenant-
+# JWT. All 13 tenant data sites in this file migrated in PR-C §2.10.
 apps/web-platform/server/ws-handler.ts
 
-# Conversations tools — 4 sites migrate in PR-C (spec §2.1.2).
-apps/web-platform/server/conversations-tools.ts
-
-# Session sync — 4 sites migrate in PR-C (spec §2.1.3).
-apps/web-platform/server/session-sync.ts
-
-# Per-tenant data writers — migrate in PR-C (spec §2.1.4).
+# PERMANENT — HTTP Bearer-token validation (server/api-messages.ts:36
+# supabase.auth.getUser(token)) for the /api/conversations/:id/messages
+# route. Auth-domain bootstrap, pre-tenant-JWT. The 2 tenant data sites
+# (:55 conversations SELECT, :79 messages SELECT) migrated in PR-C §2.2.
 apps/web-platform/server/api-messages.ts
-apps/web-platform/server/api-usage.ts
-apps/web-platform/server/conversation-writer.ts
-apps/web-platform/server/lookup-conversation-for-path.ts
-apps/web-platform/server/current-repo-url.ts
-apps/web-platform/server/kb-document-resolver.ts
-apps/web-platform/server/kb-route-helpers.ts
 
-# Account / process-level helpers. Re-evaluated post-PR-C; migration
-# requires either user-scoped JWT (account-delete) or process-scoped
-# infrastructure that has no founder identity (cc-dispatcher,
-# concurrency, notifications).
-apps/web-platform/server/account-delete.ts
+# PERMANENT — sum_user_mtd_cost RPC is REVOKE EXECUTE FROM authenticated
+# (migration 027:68). Per-row `WHERE user_id = uid` + RPC call must stay
+# service-role; a tenant-JWT call would 42501 silently. The 1 tenant
+# data site (:96 conversations SELECT) migrated in PR-C §2.3.
+apps/web-platform/server/api-usage.ts
+
+# PERMANENT (pending PR-D attachments review) — server/cc-dispatcher.ts:1421
+# passes service-role into persistAndDownloadAttachments({supabase: supabase()})
+# for attachments-storage I/O. Tenant migration of attachments depends on
+# storage RLS work scheduled for PR-D (tracked in plan §"Tracked Deferrals").
+# The 3 tenant data sites (BYOK lease wrap + 2 messages.insert) migrated
+# in PR-C §2.11.
 apps/web-platform/server/cc-dispatcher.ts
+
+# ── Account / process-level helpers (unchanged by PR-C) ───────────────
+#
+# Re-evaluated post-PR-C; migration requires either user-scoped JWT
+# (account-delete) or process-scoped infrastructure that has no founder
+# identity (concurrency, notifications). Out of PR-C scope.
+apps/web-platform/server/account-delete.ts
 apps/web-platform/server/concurrency.ts
 apps/web-platform/server/notifications.ts
 

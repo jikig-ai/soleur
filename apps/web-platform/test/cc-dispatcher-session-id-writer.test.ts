@@ -63,6 +63,18 @@ vi.mock("@/lib/supabase/service", () => ({
   }),
 }));
 
+// PR-C §2.11 (#3244): tenant migration of cc-dispatcher message inserts.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: (table: string) => {
+      if (table === "messages") return { insert: mockMessagesInsert };
+      throw new Error(`unexpected table: ${table}`);
+    },
+  })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 import {
   dispatchSoleurGo,
   __setCcRunnerForTests,
