@@ -1,0 +1,130 @@
+# One-shot verification workflow for ruleset 14145388 (CI Required) post-terraform-apply.
+# Verifies that ruleset.rules[0].parameters.required_status_checks count == 14
+# (the post-#3891-apply target), comments PASS/FAIL on the tracking issue #3896,
+# and closes #3896 on PASS.
+#
+# Trigger: workflow_dispatch only. Operator runs `gh workflow run
+# verify-ci-ruleset-14145388.yml` AFTER completing terraform apply per
+# infra/github/README.md Phase 2. No cron — repeat fires would just re-comment
+# the same verdict on an open issue.
+#
+# Auth model: GH_RULESET_PAT (fine-grained PAT with Administration:R+W on
+# jikig-ai/soleur) is read from Doppler `prd_terraform`. The ambient
+# github.token does not have Administration scope and would 404 on the
+# rulesets endpoint. The Doppler secret is the same one terraform uses (see
+# infra/github/README.md Phase 0).
+#
+# Why not the daily follow-through monitor? The monitor (.github/workflows/
+# scheduled-follow-through.yml) supports http-200/dns-txt/dns-a/manual
+# predicates but does NOT have Doppler scope — widening that scope is a
+# separate PR per #3896's body. This dedicated workflow runs once post-apply
+# and is then dormant until either the ruleset count drifts or a future
+# widening adds new required checks (re-run manually each time the target
+# count is bumped).
+#
+# Untrusted-input handling: the only workflow_dispatch input is
+# `expected_count`, which is regex-validated to a 1-4 digit positive integer
+# in the "Validate inputs" step before being used in any comparison or
+# string interpolation. All other interpolations use env: indirection per the
+# github.blog workflow-injection guidance.
+
+name: Verify CI Required ruleset (14145388) has 14 required checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_count:
+        description: "Expected required_status_checks count (default 14 per #3891)"
+        required: false
+        default: "14"
+
+concurrency:
+  group: verify-ci-ruleset-14145388
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      RULESET_ID: "14145388"
+      TRACKING_ISSUE: "3896"
+      EXPECTED_COUNT_RAW: ${{ inputs.expected_count }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_COUNT_RAW" =~ ^[0-9]{1,4}$ ]]; then
+            echo "::error::expected_count must be a 1-4 digit integer, got: $EXPECTED_COUNT_RAW"
+            exit 1
+          fi
+          echo "EXPECTED_COUNT=$EXPECTED_COUNT_RAW" >> "$GITHUB_ENV"
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Fetch GH_RULESET_PAT from Doppler
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          PAT=$(doppler secrets get GH_RULESET_PAT --plain 2>/dev/null) || {
+            echo "::error::GH_RULESET_PAT not found in Doppler prd_terraform. Run Phase 0 of infra/github/README.md first."
+            exit 1
+          }
+          if [[ -z "$PAT" ]]; then
+            echo "::error::GH_RULESET_PAT is empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$PAT"
+          printf 'RULESET_PAT=%s\n' "$PAT" >> "$GITHUB_ENV"
+
+      - name: Fetch ruleset and compute count
+        id: probe
+        env:
+          GH_TOKEN: ${{ env.RULESET_PAT }}
+        run: |
+          set -euo pipefail
+          RULESET_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${RULESET_ID}")
+          ACTUAL=$(echo "$RULESET_JSON" | jq '.rules[0].parameters.required_status_checks | length')
+          if [[ ! "$ACTUAL" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected jq result for required_status_checks count: $ACTUAL"
+            exit 1
+          fi
+          echo "actual=$ACTUAL" >> "$GITHUB_OUTPUT"
+          if [[ "$ACTUAL" == "$EXPECTED_COUNT" ]]; then
+            echo "verdict=PASS" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=FAIL" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Ruleset $RULESET_ID: required_status_checks count = $ACTUAL (expected $EXPECTED_COUNT)"
+
+      - name: Comment and close on PASS
+        if: steps.probe.outputs.verdict == 'PASS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTUAL: ${{ steps.probe.outputs.actual }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh issue comment "$TRACKING_ISSUE" --body "PASS — ruleset $RULESET_ID has $ACTUAL required_status_checks (workflow run: $RUN_URL)."
+          gh issue close "$TRACKING_ISSUE" --reason completed
+
+      - name: Comment FAIL
+        if: steps.probe.outputs.verdict == 'FAIL'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTUAL: ${{ steps.probe.outputs.actual }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh issue comment "$TRACKING_ISSUE" --body "FAIL — ruleset $RULESET_ID has $ACTUAL required_status_checks, expected $EXPECTED_COUNT. Re-run after terraform apply completes (workflow run: $RUN_URL)."
+          exit 1
