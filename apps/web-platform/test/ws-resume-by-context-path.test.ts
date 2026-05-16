@@ -34,13 +34,32 @@ vi.mock("@/lib/legal/tc-version", () => ({
 function makeFromDispatcher(): (table: string) => unknown {
   return (table: string) => {
     if (table === "users") {
-      // PR-C §2.10 (#3244): probe + repo_url SELECT both terminate
-      // in `.maybeSingle()` and return the same row shape.
-      const chain: { select: unknown; eq: unknown; maybeSingle: unknown } = {
+      // PR-C §2.10 (#3244): probe + repo_url SELECT terminate in
+      // `.maybeSingle()`. T&C mid-session re-check (#3853 / main
+      // feat-oauth-tc-consent-3205) terminates in `.single()` and
+      // needs `tc_accepted_version` on the row to pass.
+      const chain: {
+        select: unknown;
+        eq: unknown;
+        maybeSingle: unknown;
+        single: unknown;
+      } = {
         select: vi.fn(() => chain),
         eq: vi.fn(() => chain),
         maybeSingle: vi.fn(async () => ({
-          data: { id: "user-1", repo_url: mockUserRepoUrl },
+          data: {
+            id: "user-1",
+            repo_url: mockUserRepoUrl,
+            tc_accepted_version: "1.0.0",
+          },
+          error: null,
+        })),
+        single: vi.fn(async () => ({
+          data: {
+            id: "user-1",
+            repo_url: mockUserRepoUrl,
+            tc_accepted_version: "1.0.0",
+          },
           error: null,
         })),
       };

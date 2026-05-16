@@ -13,7 +13,7 @@ import {
   getFreshTenantClient,
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
-import { reportSilentFallback } from "@/server/observability";
+import { hashUserId, reportSilentFallback } from "@/server/observability";
 import { gitWithInstallationAuth } from "./git-auth";
 import { createChildLogger } from "./logger";
 
@@ -334,7 +334,7 @@ export async function syncPull(
   // PR-C §2.1 (#3244): per-entry-function RLS-baseline probe — see
   // `authProbe` doc-comment for the load-bearing rationale.
   if (!(await authProbe(userId, "syncPull"))) {
-    log.warn({ userId }, "Sync pull aborted — auth probe failed");
+    log.warn({ userIdHash: hashUserId(userId) }, "Sync pull aborted — auth probe failed");
     return;
   }
 
@@ -397,7 +397,7 @@ export async function syncPush(
   // PR-C §2.1 (#3244): per-entry-function RLS-baseline probe — see
   // `authProbe` doc-comment for the load-bearing rationale.
   if (!(await authProbe(userId, "syncPush"))) {
-    log.warn({ userId }, "Sync push aborted — auth probe failed");
+    log.warn({ userIdHash: hashUserId(userId) }, "Sync push aborted — auth probe failed");
     return;
   }
 
