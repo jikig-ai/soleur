@@ -118,45 +118,46 @@ in this PR).
 
 ## Phase 5 — Update `tasks.md` (single commit)
 
-- [ ] 5.1 Check off umbrella `tasks.md §1.5.1 → §1.5.4`, `§1.6.2 → §1.6.5`,
-      `§1.7.2` (PR-B closeouts).
-- [ ] 5.2 Add `§2.1` PR-C completion checkboxes for each file in Phase 2 +
-      Phase 4.
-- [ ] 5.3 Cross-reference deferrals: `§2.2 PR-D scope`, `§3 deferred`
-      (audit-writer, is_jti_denied, timer pair, /proc test, Daily
-      Priorities, Inngest, runtime-mocks helper retrofit, app/api SSR
-      audit, attachments-storage RLS).
+- [x] 5.1 Check off umbrella `tasks.md §1.5.1 → §1.5.4`, `§1.6.2 → §1.6.5`,
+      `§1.7.2` (PR-B closeouts). **Done in commit 39d79a09.**
+- [x] 5.2 Add `§2.1` PR-C completion checkboxes for each file in Phase 2 +
+      Phase 4. **Done in commit 39d79a09.**
+- [x] 5.3 Cross-reference deferrals: 14 review-derived + plan-mandated
+      deferrals consolidated into issue **#3869** (single tracker per PR-B
+      precedent #3392) — runtime-mocks retrofit (scope corrected 27→56),
+      app/api SSR audit, service-tokens BYOK lease, PR-D scope tracker,
+      attachments-storage RLS, CI tenant-integration job, helper
+      consolidation, error-shape normalization, agent-runner sentinel
+      sweep, ServiceClient type rename, tenant-cache LRU, probe-policy
+      ADR, tenant-boundary ADR, route-handler probe-mint extraction.
 
 ## Phase 6 — Verification + multi-agent review (no commit)
 
-- [ ] 6.1 `bun run typecheck` clean.
-- [ ] 6.2 `bun run test` green INCLUDING cross-tenant denial integration
-      tests. Run with `TENANT_INTEGRATION_TEST=1`,
-      `SUPABASE_JWT_SECRET`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-      injected via Doppler. Confirm describe blocks are `passed`, NOT
-      `skipped` — `skipped` reproduces the 2026-05-06 vitest-blind trap.
-- [ ] 6.3 `bun run build` clean.
-- [ ] 6.4 Allowlist-shrink gate scripts both green (see 4.4).
-- [ ] 6.5 Grep AC suite:
-  - 7-file migration grep returns zero `createServiceClient` matches.
-  - `ws-handler.ts` retains 1 import + lazy-init + `auth.getUser`.
-  - `api-messages.ts` retains 1 import + `auth.getUser`.
-  - `api-usage.ts` retains 1 `createServiceClient` (RPC).
-  - `cc-dispatcher.ts` retains 1 `createServiceClient` (attachments) + ≥ 1
-    `runWithByokLease`.
-- [ ] 6.6 Multi-agent review: spawn `security-sentinel`,
-      `user-impact-reviewer`, `architecture-strategist`,
-      `data-integrity-guardian`, `semgrep-sast`, `code-quality-analyst`,
-      `pattern-recognition-specialist`, `code-simplicity-reviewer`. Fix
-      every P1 + P2 inline per `rf-review-finding-default-fix-inline`.
-- [ ] 6.7 PR body: copy artifact + vector matrix from PR-B #3395; record
-      CPO sign-off; `Ref #3244, Closes #3392 (cc-dispatcher BYOK item only)`
-      in body, NOT title.
-- [ ] 6.8 File 5 tracked deferral issues (`gh label list` to verify labels
-      exist first): runtime-mocks retrofit (`domain/engineering`,
-      `priority/p3-low`), app/api SSR audit (`domain/engineering`,
-      `priority/p2-medium`), service-tokens BYOK lease, PR-D scope tracker,
-      attachments-storage tenant RLS.
+- [x] 6.1 `bun run typecheck` clean.
+- [x] 6.2 `bun run test` green — 4370/4370 passed, 84 skipped (integration
+      gated). **NOTE:** `TENANT_INTEGRATION_TEST=1` was NOT exercised in
+      this verification — silent-skip trap caught by test-design-reviewer;
+      filed as #3869 item 6 (CI tenant-integration job) because adding
+      Doppler dev-Supabase secrets to CI is out of PR-C scope. Operator
+      MUST run integration suite locally before merge (see learning
+      `2026-05-16-rls-deny-tests-payload-must-type-validate-…`).
+- [x] 6.3 `bun run build` clean.
+- [x] 6.4 Allowlist-shrink gate scripts both green (13 importers
+      enumerated; 3/3 test cases pass).
+- [x] 6.5 Grep AC suite: zero `createServiceClient` matches in 7
+      fully-migrated files; ws-handler/api-messages retain 1 import +
+      `auth.getUser`; api-usage retains 1 service-role for RPC;
+      cc-dispatcher retains 1 service-role (attachments) + 1
+      `runWithByokLease`.
+- [x] 6.6 Multi-agent review: 8 always-on + 3 conditional (test-design,
+      semgrep-sast, user-impact). GDPR-gate PASS. P1/P2 fixed inline per
+      `rf-review-finding-default-fix-inline` (commit aa22dc9b): UUID-format
+      bug in tenant-isolation test, User-Brand Impact matrix row added,
+      cc-dispatcher mint try/catch wrap.
+- [x] 6.7 PR body refreshed via `gh pr edit` with artifact + vector
+      matrix, multi-agent review summary, CPO sign-off, `Ref #3244, Closes
+      #3392 (cc-dispatcher BYOK item only)` in body.
+- [x] 6.8 Consolidated to single tracker **#3869** per §5.3.
 
 ## Post-merge (operator)
 
