@@ -510,7 +510,10 @@ silently introduce:
 - [x] AC2: `session-sync.tenant-isolation.test.ts` contains exactly **4**
       `expect(<err>.code).toBe("42501")` assertions. Verified: grep returned 4.
 - [x] AC3: Symmetric test destructures both `data` AND `error` on both sides.
-      Verified: grep returned 2 (`error: readErr` + `error: writeErr`).
+      Verified: grep returned 2 (`error: readError` + `error: writeError`).
+      Note: review-pass renamed `readErr`/`writeErr` → `readError`/`writeError`
+      to match sibling tenant-isolation suite naming (convError, msgError,
+      nameError) per code-quality-analyst P2 finding.
 - [x] AC4: Migration `018_team_names.sql` unchanged. Verified: `git diff main -- migrations/` empty.
 - [x] AC5: No `GRANT` add/remove. Verified.
 - [x] AC6: No `.github/` touch. Verified.
