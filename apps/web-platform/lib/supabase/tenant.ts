@@ -32,6 +32,7 @@
 
 import { createHmac } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { reportSilentFallback } from "@/server/observability";
 import { getServiceClient, serverUrl } from "./service";
 
 export type UserId = string;
@@ -46,6 +47,12 @@ export interface MintedJwt {
   ttlSec: number;
   /** Wall-clock ms when this JWT was minted (Date.now() snapshot). */
   mintedAt: number;
+  /**
+   * The jti claim baked into the JWT. Mirrored at the boundary so the
+   * deny-list consumer (`getFreshTenantClient`) can probe `is_jti_denied`
+   * without redundantly base64url-decoding the JWT payload.
+   */
+  jti: string;
 }
 
 /**
@@ -183,6 +190,7 @@ export async function mintFounderJwt(
     jwt: `${signingInput}.${signature}`,
     ttlSec,
     mintedAt: Date.now(),
+    jti: row.jti,
   };
 }
 
@@ -204,6 +212,7 @@ interface CacheEntry {
   mintedAt: number;
   ttlSec: number;
   client: SupabaseClient;
+  jti: string;
 }
 
 /**
@@ -219,6 +228,63 @@ interface CacheEntry {
  * subsequent header changes).
  */
 const cache = new Map<UserId, Promise<CacheEntry>>();
+
+/**
+ * Test-only seam — replaces the `mintFounderJwt` call inside
+ * `getFreshTenantClient`'s cache-miss path for the next call.
+ *
+ * Required for Test C of `tenant-jwt-deny.tenant-isolation.test.ts`: the
+ * deny-check at the cache-miss boundary can only fire when a freshly-
+ * minted jti is already on the deny-list — a structurally impossible
+ * race under random-UUID minting. The seam lets the test inject a
+ * pre-denied jti deterministically.
+ *
+ * Null default. Production callers MUST NOT use this.
+ */
+let __mintFnForTest:
+  | ((userId: UserId, opts?: MintFounderJwtOpts) => Promise<MintedJwt>)
+  | null = null;
+export function _setMintFnForTest(
+  fn: typeof __mintFnForTest,
+): void {
+  __mintFnForTest = fn;
+}
+
+async function callMint(userId: UserId): Promise<MintedJwt> {
+  const fn = __mintFnForTest ?? mintFounderJwt;
+  return fn(userId, { ttlSec: DEFAULT_TTL_SEC });
+}
+
+/**
+ * Probe the deny-list for `jti`. Returns `true` iff the row exists.
+ *
+ * Centralizes the RPC call + Sentry mirror so the cache-hit (falls
+ * through to remint) and cache-miss (throws) paths in
+ * `getFreshTenantClient` share identical observability.
+ */
+async function denyProbe(jti: string, userId: UserId): Promise<boolean> {
+  const service = getServiceClient();
+  const { data, error } = await service.rpc("is_jti_denied", { p_jti: jti });
+  if (error) {
+    // RPC failure ≠ revoked — fall through as "not denied" but mirror the
+    // failure to Sentry so a misconfigured deny-list surface is observable.
+    reportSilentFallback(error, {
+      feature: "tenant-jwt",
+      op: "is_jti_denied.error",
+      extra: { userId, jti },
+    });
+    return false;
+  }
+  const denied = data === true;
+  if (denied) {
+    reportSilentFallback(null, {
+      feature: "tenant-jwt",
+      op: "is_jti_denied.deny",
+      extra: { userId, jti },
+    });
+  }
+  return denied;
+}
 
 /**
  * Get a tenant-scoped Supabase client for the given founder, transparently
@@ -246,25 +312,45 @@ export async function getFreshTenantClient(
     // dedup is to await and then re-validate freshness. Cost on a hot
     // path is one extra microtask vs the alternative double-mint.
     const entry = await inflight;
-    if (now - entry.mintedAt < (entry.ttlSec * 1000) / 2) {
+    // Deny-list check FIRST: a denied jti must not be returned even when
+    // the entry is otherwise fresh. On deny: evict + fall through to
+    // remint (the next caller for this userId gets a clean cache-miss).
+    if (await denyProbe(entry.jti, userId)) {
+      if (cache.get(userId) === inflight) cache.delete(userId);
+      // Fall through to the cache-miss path below.
+    } else if (now - entry.mintedAt < (entry.ttlSec * 1000) / 2) {
       return entry.client;
     }
     // Stale — fall through to remint.
   }
 
   const minting: Promise<CacheEntry> = (async () => {
-    const minted = await mintFounderJwt(userId, { ttlSec: DEFAULT_TTL_SEC });
+    const minted = await callMint(userId);
     return {
       jwt: minted.jwt,
       mintedAt: minted.mintedAt,
       ttlSec: minted.ttlSec,
       client: createTenantClient(minted.jwt),
+      jti: minted.jti,
     };
   })();
   cache.set(userId, minting);
 
   try {
     const entry = await minting;
+    // Post-mint deny probe: a freshly-minted jti landing on the deny-list
+    // is a near-zero-probability race (random UUID), but the WORM-audit
+    // assertion at Art. 5(2) requires the surface to be closed regardless.
+    // On deny: evict + throw `RuntimeAuthError("denied_jti")` so the
+    // caller gets an explicit auth-domain failure instead of a silently
+    // unusable client.
+    if (await denyProbe(entry.jti, userId)) {
+      if (cache.get(userId) === minting) cache.delete(userId);
+      throw new RuntimeAuthError(
+        "denied_jti",
+        "Authentication unavailable; retry shortly",
+      );
+    }
     return entry.client;
   } catch (err) {
     // Don't keep a rejected Promise in the cache — every subsequent
@@ -272,6 +358,21 @@ export async function getFreshTenantClient(
     if (cache.get(userId) === minting) cache.delete(userId);
     throw err;
   }
+}
+
+/**
+ * Test-only introspection — decode the cached entry's JWT payload and
+ * return the `jti` claim. Returns `null` if no cache entry exists.
+ *
+ * Reads through the same Promise<CacheEntry> the production path consults,
+ * so concurrent test setup that races with a mint sees a consistent view.
+ * Production callers MUST NOT use this.
+ */
+export async function _peekCachedJti(userId: UserId): Promise<string | null> {
+  const inflight = cache.get(userId);
+  if (!inflight) return null;
+  const entry = await inflight;
+  return entry.jti;
 }
 
 /**

@@ -12,78 +12,60 @@ lane: cross-domain
 
 ## 1. Phase 0 — Preconditions (verify before TDD)
 
-- [ ] 1.1 Confirm CWD = worktree path.
-- [ ] 1.2 Confirm branch = `feat-pr-e-audit-byok-jti-deny`.
-- [ ] 1.3 `grep -rn "is_jti_denied" apps/` returns 0 production consumers.
-- [ ] 1.4 `grep -rn "persistTurnCost" apps/` returns 2 callers (agent-runner, cc-dispatcher).
-- [ ] 1.5 Migration 037 shape matches PR-B plan §1.4 (re-verify per `2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`).
-- [ ] 1.6 13 existing `*.tenant-isolation.test.ts` files inventoried.
+- [x] 1.1 Confirm CWD = worktree path.
+- [x] 1.2 Confirm branch = `feat-pr-e-audit-byok-jti-deny`.
+- [x] 1.3 `grep -rn "is_jti_denied" apps/` returns 0 production consumers.
+- [x] 1.4 `grep -rn "persistTurnCost" apps/` returns 2 callers (agent-runner, cc-dispatcher).
+- [x] 1.5 Migration 037 shape matches PR-B plan §1.4 (re-verify per `2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`).
+- [x] 1.6 13 existing `*.tenant-isolation.test.ts` files inventoried.
 
 ## 2. Phase 2 — Consumer wiring (RED → GREEN → REFACTOR)
 
 ### 2.1 RED — write failing integration tests
 
-- [ ] 2.1.1 Create `apps/web-platform/test/server/tenant-jwt-deny.tenant-isolation.test.ts` with Tests A, B, C, D outlined in plan §Test Detail.
-- [ ] 2.1.2 Add a test-only export `_peekCachedJti(userId)` (or analogous introspection) in `lib/supabase/tenant.ts` so Test B can read the cached jti without re-decoding the JWT.
-- [ ] 2.1.3 Run the new suite under `TENANT_INTEGRATION_TEST=1` → Tests B + C fail (no consumer wired yet). Tests A + D pass (no behavior change for empty deny-list or unrelated jti). Commit RED state.
+- [x] 2.1.1 Create `apps/web-platform/test/server/tenant-jwt-deny.tenant-isolation.test.ts` with Tests A, B, C, D outlined in plan §Test Detail.
+- [x] 2.1.2 Add a test-only export `_peekCachedJti(userId)` (or analogous introspection) in `lib/supabase/tenant.ts` so Test B can read the cached jti without re-decoding the JWT.
+- [x] 2.1.3 Pipeline-mode TDD: RED commit is rolled into the GREEN commit because (a) test seam (`_setMintFnForTest`) is a no-behavior-change null-default seam, and (b) the assertion shape (`expect(client2).not.toBe(client1)`, `rejects.toMatchObject({ cause: "denied_jti" })`) would unambiguously fail without the deny-check wiring. Verified 5/5 green under `TENANT_INTEGRATION_TEST=1` (2026-05-16).
 
 ### 2.2 GREEN — wire the consumer
 
-- [ ] 2.2.1 Widen `MintedJwt` interface (`lib/supabase/tenant.ts:44`) with `jti: string`.
-- [ ] 2.2.2 Widen `CacheEntry` interface (`lib/supabase/tenant.ts:202`) with `jti: string`.
-- [ ] 2.2.3 In `mintFounderJwt`, surface `row.jti` in the returned `MintedJwt`.
-- [ ] 2.2.4 In `getFreshTenantClient` cache-hit branch: after `await inflight`, BEFORE the freshness check, call the deny probe on `entry.jti`. On `true`: evict the cache entry, emit Sentry mirror via `reportSilentFallback(null, { feature: "tenant-jwt", op: "is_jti_denied.deny", extra: { userId, jti: entry.jti } })`, fall through to remint. On `false`: continue.
-- [ ] 2.2.5 In `getFreshTenantClient` cache-miss branch: after `minting` resolves, before returning `entry.client`, call the deny probe on `entry.jti`. On `true`: evict from cache, emit Sentry mirror (same shape), throw `new RuntimeAuthError("denied_jti", "Authentication unavailable; retry shortly")`. On `false`: return `entry.client`.
-- [ ] 2.2.6 Run the test suite → Tests B + C now pass.
+- [x] 2.2.1 Widen `MintedJwt` interface (`lib/supabase/tenant.ts:44`) with `jti: string`.
+- [x] 2.2.2 Widen `CacheEntry` interface (`lib/supabase/tenant.ts:202`) with `jti: string`.
+- [x] 2.2.3 In `mintFounderJwt`, surface `row.jti` in the returned `MintedJwt`.
+- [x] 2.2.4 In `getFreshTenantClient` cache-hit branch: after `await inflight`, BEFORE the freshness check, call the deny probe on `entry.jti`. On `true`: evict the cache entry, emit Sentry mirror via `reportSilentFallback(null, { feature: "tenant-jwt", op: "is_jti_denied.deny", extra: { userId, jti: entry.jti } })`, fall through to remint. On `false`: continue.
+- [x] 2.2.5 In `getFreshTenantClient` cache-miss branch: after `minting` resolves, before returning `entry.client`, call the deny probe on `entry.jti`. On `true`: evict from cache, emit Sentry mirror (same shape), throw `new RuntimeAuthError("denied_jti", "Authentication unavailable; retry shortly")`. On `false`: return `entry.client`.
+- [x] 2.2.6 Run the test suite → Tests B + C now pass.
 
 ### 2.3 REFACTOR
 
-- [ ] 2.3.1 Extract a private `async function denyProbe(jti: string, userId: UserId): Promise<boolean>` that calls `getServiceClient().rpc("is_jti_denied", { p_jti: jti })` and emits the Sentry mirror on `true`. Both call sites use it; throw at the call site (cache-miss) only.
-- [ ] 2.3.2 Add JSDoc to `denyProbe` explaining the cache-hit-vs-cache-miss contract.
-- [ ] 2.3.3 Re-run the suite → still green.
+- [x] 2.3.1 Extract a private `async function denyProbe(jti: string, userId: UserId): Promise<boolean>` that calls `getServiceClient().rpc("is_jti_denied", { p_jti: jti })` and emits the Sentry mirror on `true`. Both call sites use it; throw at the call site (cache-miss) only.
+- [x] 2.3.2 Add JSDoc to `denyProbe` explaining the cache-hit-vs-cache-miss contract.
+- [x] 2.3.3 Re-run the suite → still green.
 
 ## 3. Phase 3 — WORM enforcement tests
 
-- [ ] 3.1 Create `apps/web-platform/test/server/audit-byok-use.tenant-isolation.test.ts` with three tests:
-  - 3.1.1 UPDATE raises P0001.
-  - 3.1.2 DELETE raises P0001.
-  - 3.1.3 Tenant-client SELECT returns only own-founder rows.
-- [ ] 3.2 Run under `TENANT_INTEGRATION_TEST=1` → green.
+- [x] 3.1 Create `apps/web-platform/test/server/audit-byok-use.tenant-isolation.test.ts` with three tests:
+  - [x] 3.1.1 UPDATE raises P0001.
+  - [x] 3.1.2 DELETE raises P0001.
+  - [x] 3.1.3 Tenant-client SELECT returns only own-founder rows.
+- [x] 3.2 Run under `TENANT_INTEGRATION_TEST=1` → green (3/3, 2.33s).
 
 ## 4. Phase 4 — Writer-sweep CI lint
 
-- [ ] 4.1 Create `apps/web-platform/test/server/byok-audit-writer-sweep.test.ts` per plan §Phase 3 code block.
-- [ ] 4.2 Sweep MUST cover (NARROW FILTER per deepen-plan 2026-05-16):
-  - Every `.ts` file under `apps/web-platform/server/**` (excluding `**/*.test.ts` and `byok-lease.ts` itself).
-  - That contains `runWithByokLease\s*\(` (the BYOK-lease opening call).
-  - Asserts the file ALSO contains `persistTurnCost(` OR the structured marker `// byok-audit-writer-sweep: out-of-scope`.
-- [ ] 4.3 Do NOT widen the sweep to grep `query(` / `sdkQuery(` from `@anthropic-ai/claude-agent-sdk` — narrow filter already covers all 4 BYOK SDK paths via the parent lease (verified deepen-plan 2026-05-16). Do NOT assert an `OUT_OF_SCOPE_MARKER` count guard — see plan §Phase 3 design lock.
-- [ ] 4.4 (Optional, documentation-only.) Add the marker comment line above `query({` at `apps/web-platform/server/pdf-chapter-router.ts:148` to make the cost-rollup posture explicit for future readers: `// byok-audit-writer-sweep: out-of-scope — cost rolls up via routingCostUsd into parent persistTurnCost at agent-runner.ts:1876 (plan rev-2026-05-16 row 5a)`. Not load-bearing for the sweep test under the narrow filter.
-- [ ] 4.5 Run the sweep test → green.
-- [ ] 4.6 Verify the sweep test catches a regression: temporarily add a `runWithByokLease(...)` block to a fresh file under `server/` with no `persistTurnCost`; sweep must fail. Revert.
+- [x] 4.1 Create `apps/web-platform/test/server/byok-audit-writer-sweep.test.ts` per plan §Phase 3 code block.
+- [x] 4.2 Sweep covers narrow filter (deepen-plan 2026-05-16): every `.ts` file under `server/**` (excluding `**/*.test.ts` and `byok-lease.ts`) that contains `runWithByokLease\s*\(` after comment-stripping; asserts paired `persistTurnCost(` or structured marker.
+- [x] 4.3 Sweep does NOT widen to `query(` / `sdkQuery(`; no marker-count assertion.
+- [x] 4.4 Marker comment added at `apps/web-platform/server/pdf-chapter-router.ts:148`. Documentation-only — comment-stripping in the sweep filter means pdf-chapter-router.ts is NOT in the sweepable set (no actual `runWithByokLease(` call); marker is for future readers.
+- [x] 4.5 Run the sweep test → green (3/3 file-level + 1 sentinel sanity = 4 tests, 6ms).
+- [x] 4.6 Regression verification: copying a fixture with `runWithByokLease(` but no `persistTurnCost` into `server/_sweep_regression_fixture.ts` made the sweep fail with 1 file-level fail / 3 pass. Reverted.
 
 ## 5. Phase 5 — Verification
 
-- [ ] 5.1 Run the tenant-isolation pass:
-  ```
-  cd apps/web-platform && \
-    doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 \
-      ./node_modules/.bin/vitest run test/server/*.tenant-isolation.test.ts --reporter=verbose
-  ```
-  Expected: 13 existing + 2 new = 15 suites green.
-- [ ] 5.2 Run the sweep standalone:
-  ```
-  cd apps/web-platform && \
-    ./node_modules/.bin/vitest run test/server/byok-audit-writer-sweep.test.ts --reporter=verbose
-  ```
-  Expected: green.
-- [ ] 5.3 Run the full webplat group:
-  ```
-  bash scripts/test-all.sh
-  ```
-  Expected: no pre-existing regression.
-- [ ] 5.4 Run `.service-role-allowlist` enforcement (CI gate) → pass.
-- [ ] 5.5 Run plan-review skill (DHH + Kieran + code-simplicity) → apply or document responses.
+- [x] 5.1 Tenant-isolation pass — 13 existing + 2 new = 15 suites green (67 tests + 1 todo, 6.71s under TENANT_INTEGRATION_TEST=1).
+- [x] 5.2 Sweep standalone — green.
+- [x] 5.3 Full webplat group — 415 passed | 20 skipped (4478 tests passed, 95 skipped, 1 todo). The 20 skipped files = 15 tenant-isolation suites (no env) + 5 unrelated. Including `tenant-jwt-refresh.test.ts` mock-dispatch update for `is_jti_denied`.
+- [x] 5.4 `.service-role-allowlist` enforcement — `Service-role allowlist gate: 12 importer(s) — all enumerated. OK.` No new importers.
+- [ ] 5.5 Run plan-review skill (DHH + Kieran + code-simplicity) → apply or document responses. **Deferred to /soleur:review step** of the one-shot pipeline.
 
 ## 6. Phase 6 — PR + reviewer pipeline
 

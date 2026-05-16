@@ -144,6 +144,13 @@ export async function selectChapter(
   // (network, key invalid, rate-limit, abort) and are mirrored to Sentry
   // per `cq-silent-fallback-must-mirror-to-sentry` — pino stdout alone
   // is not enough on a code path that can decide a user answer turn.
+  // byok-audit-writer-sweep: out-of-scope — cost rolls up via
+  // routingCostUsd into the parent persistTurnCost at
+  // agent-runner.ts:1876. This `query(...)` call executes INSIDE the
+  // `runWithByokLease(userId, ...)` scope opened at agent-runner.ts:863
+  // (closed at :1991) via the selectChapter call-graph at
+  // agent-runner.ts:1402. No BYOK lease is opened here; no separate
+  // audit row is written. Plan rev-2026-05-16 §Files to Edit row 5.
   try {
     const q = query({
       prompt: routerUserStream(userMessage),
