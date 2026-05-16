@@ -1,7 +1,11 @@
 # infra/github/ -- GitHub branch-protection Terraform root
 
-Mirrors `apps/web-platform/infra/sentry/` pattern. State key:
-`github/terraform.tfstate` in R2 bucket `soleur-terraform-state`.
+Companion to `apps/web-platform/infra/sentry/` — same auto-apply-on-merge
+boundary per ADR-031 (revised in ADR-032 for this root). Structured as a
+phased runbook for the one-time PAT + import bootstrap; the sibling Sentry
+README is structured as a reference doc because cron-monitors + issue-alerts
+have parallel lifecycles. State key: `github/terraform.tfstate` in R2 bucket
+`soleur-terraform-state`.
 
 Managed resource: ruleset 14145388 ("CI Required") on the `main` branch of
 `jikig-ai/soleur`. Adopted via `terraform import` (idempotent, runs in CI on
@@ -90,11 +94,18 @@ cd infra/github/
 export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
 export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
 terraform init -input=false
+
+# Skip the `terraform import` line below if the CI workflow has already
+# applied at least once — the resource is already in R2 state and
+# re-importing returns `Error: Resource already managed by Terraform`.
+# Run `terraform state list | grep github_repository_ruleset` to check.
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform import github_repository_ruleset.ci_required soleur:14145388
+
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform plan
-# Expected: 9 required_check additions, no destroys.
+# Expected (first apply): 9 required_check additions, no destroys.
+# Expected (post-apply, idle): no changes.
 ```
 
 (This is read-only against R2 state once import runs — apply still belongs in CI.)

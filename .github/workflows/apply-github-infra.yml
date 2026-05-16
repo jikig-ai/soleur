@@ -126,8 +126,18 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
@@ -143,7 +153,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          if terraform state list 2>/dev/null | grep -qx "github_repository_ruleset.ci_required"; then
+          # Match any github_repository_ruleset.* address (not just .ci_required)
+          # so a future `moved {}` block rename doesn't silently re-trigger an
+          # import that would fail with "resource already managed".
+          if terraform state list 2>/dev/null | grep -qE '^github_repository_ruleset\.'; then
             echo "Resource already in state, skipping import."
           else
             echo "Importing existing ruleset 14145388 into state (one-time bootstrap)."
@@ -158,17 +171,29 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
+          # `-e` is intentionally omitted so we can capture terraform plan's
+          # exit code in $rc — plan exits non-zero on legitimate failures we
+          # want to surface, not abort silently. All later commands re-enable
+          # fail-fast semantics inline.
           set -uo pipefail
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
-            echo "::error::terraform plan failed (exit $rc)"
+            echo "::error::terraform plan failed (exit $rc)."
             exit $rc
           fi
+          set -e
           terraform show -no-color tfplan > tfplan.txt
           destroy_count=$(terraform show -json tfplan | \
             jq '[.resource_changes[]? | select(.change.actions? | index("delete"))] | length')
+          # Validate destroy_count parsed correctly — an empty value from a jq
+          # failure would silently evaluate false in the `-gt 0` test and let
+          # destructive plans slip past the guard.
+          if [[ ! "$destroy_count" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy_count parse failed (jq returned: '${destroy_count}')."
+            exit 1
+          fi
           ack_destroy=false
           if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
             ack_destroy=true
@@ -192,17 +217,23 @@ jobs:
       - name: Post-apply verify (ruleset 14145388 required check count)
         id: verify
         env:
+          # Doppler PAT, NOT the default workflow GITHUB_TOKEN — the rulesets
+          # API requires Administration:Read scope which the default token
+          # does not carry.
           GH_TOKEN: ${{ env.GITHUB_TOKEN_PAT }}
         run: |
           set -euo pipefail
-          ACTUAL=$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/14145388" \
-            | jq '.rules[0].parameters.required_status_checks | length')
+          RULESET_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/14145388" 2>&1) || {
+            echo "::error::gh api rulesets/14145388 failed — PAT lacks Administration:Read or ruleset deleted. Response: ${RULESET_JSON}"
+            exit 1
+          }
+          ACTUAL=$(echo "$RULESET_JSON" | jq '.rules[0].parameters.required_status_checks | length')
           if [[ ! "$ACTUAL" =~ ^[0-9]+$ ]]; then
-            echo "::error::Unexpected jq result for required_status_checks count: $ACTUAL"
+            echo "::error::Unexpected jq result for required_status_checks count: ${ACTUAL}."
             exit 1
           fi
           echo "actual_count=$ACTUAL" >> "$GITHUB_OUTPUT"
-          echo "Ruleset 14145388: required_status_checks count = $ACTUAL"
+          echo "Ruleset 14145388: required_status_checks count = ${ACTUAL}."
 
       - name: Post-apply summary
         if: always()
