@@ -57,13 +57,26 @@ REVOKE/GRANT patterns on every PR run.
 
 ## Prd apply
 
-- [ ] Applied: _(post-merge via `/soleur:ship` Phase 5)_
-- [ ] Method:
-- [ ] SQL file SHA-256: _(same canonical file; matches dev)_
+- [x] Applied: **2026-05-16 12:26 UTC** (via `/soleur:ship` Phase 5.4 preflight remediation — operator ack per `hr-menu-option-ack-not-prod-write-auth`).
+- [x] Method: `pg` (node `pg@8.20.0`) → `DATABASE_URL_POOLER` rewritten to session mode (`:6543` → `:5432`). Same path as dev apply.
+- [x] SQL file SHA-256: `8ff3974289094d188ac94944c63bd0022d7c1580e24852eca90332af564836f4` (post-idempotency-guard variant; matches the prd-applied file byte-for-byte).
+- [x] Migration wrapped in `BEGIN; …; COMMIT;` — atomic.
 
 ### Post-apply structural verification (prd)
 
-_(filled in post-merge by `/soleur:ship` Phase 5; same invariants as dev)_
+Verified via session-mode `pg` against `ifsccnjhymdmidffkzhl.supabase.co` at 2026-05-16 12:26 UTC:
+
+| Invariant | Result |
+|---|---|
+| Table `public.tc_acceptances` with 9 expected columns | ✅ id, user_id, version, document_sha, accepted_at, ip_hash, user_agent, retention_until, created_at |
+| RLS enabled, 0 policies | ✅ rls_enabled=true, policy_count=0 |
+| Triggers wired | ✅ `tc_acceptances_no_update` (BEFORE UPDATE), `tc_acceptances_no_delete` (BEFORE DELETE) |
+| `accept_terms(uuid, text, text)` registered + SECURITY DEFINER | ✅ prosecdef=true |
+| `anonymise_tc_acceptances(uuid)` registered + SECURITY DEFINER | ✅ prosecdef=true |
+| `tc_acceptances_no_mutate()` registered + INVOKER (not DEFINER) | ✅ prosecdef=false |
+| `UNIQUE(user_id, version)` constraint | ✅ `tc_acceptances_user_id_version_key` |
+
+REST probe via Supabase API: `GET /rest/v1/tc_acceptances?select=user_id,version&limit=1` → `[]` HTTP 200 (column exists, no rows).
 
 ### Post-apply behavioural verification (prd — AC23)
 
