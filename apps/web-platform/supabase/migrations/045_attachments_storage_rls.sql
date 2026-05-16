@@ -42,6 +42,7 @@
 --
 -- DROP POLICY IF EXISTS "Users can write own attachment objects" ON storage.objects;
 -- DROP POLICY IF EXISTS "Users can insert own message attachments" ON public.message_attachments;
+-- DROP FUNCTION IF EXISTS public.is_message_owner(uuid, uuid);
 
 -- 1. storage.objects FOR ALL policy — INSERT/UPDATE/DELETE for chat-attachments
 --    bucket scoped to the caller's user-folder prefix. SELECT policy with the
@@ -58,16 +59,43 @@ CREATE POLICY "Users can write own attachment objects"
     AND (storage.foldername(name))[1] = auth.uid()::text
   );
 
--- 2. message_attachments INSERT policy. SELECT policy already exists from
---    migration 019 with the same join shape.
+-- 2. SECURITY DEFINER ownership helper for message_attachments.
+--    Bypasses chained RLS evaluation: the migration 019 SELECT policy
+--    on `messages` itself filters via conversations.user_id, which means
+--    a WITH CHECK predicate that joins `messages JOIN conversations`
+--    under a tenant JWT triggers a chain of RLS-gated reads that empirically
+--    returns zero rows even for the legitimate same-tenant case (caught by
+--    the same-tenant positive-control integration test in PR-D's first CI
+--    run). Running the ownership check inside a SECURITY DEFINER function
+--    elevates the inner JOIN out of the tenant-JWT RLS chain so the check
+--    resolves correctly. The function is `SECURITY DEFINER` per Postgres
+--    convention; `search_path` is pinned to `pg_catalog, pg_temp` per
+--    `cq-pg-security-definer-search-path-pin-pg-temp` to defend against
+--    schema-search-path attacks. EXECUTE is granted only to the
+--    `authenticated` role so the function is unreachable from anon.
+DROP FUNCTION IF EXISTS public.is_message_owner(uuid, uuid);
+CREATE FUNCTION public.is_message_owner(p_message_id uuid, p_user_id uuid)
+  RETURNS boolean
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = pg_catalog, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.messages m
+    JOIN public.conversations c ON c.id = m.conversation_id
+    WHERE m.id = p_message_id
+      AND c.user_id = p_user_id
+  );
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.is_message_owner(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_message_owner(uuid, uuid) TO authenticated;
+
+-- 3. message_attachments INSERT policy.
 DROP POLICY IF EXISTS "Users can insert own message attachments" ON public.message_attachments;
 CREATE POLICY "Users can insert own message attachments"
   ON public.message_attachments FOR INSERT
   WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.messages m
-      JOIN public.conversations c ON c.id = m.conversation_id
-      WHERE m.id = message_attachments.message_id
-        AND c.user_id = auth.uid()
-    )
+    public.is_message_owner(message_attachments.message_id, auth.uid())
   );
