@@ -86,6 +86,41 @@ vi.mock("@/lib/supabase/service", () => ({
   }),
 }));
 
+// PR-C §2.10 (#3244): ws-handler now mints tenant clients via
+// `getFreshTenantClient`. Reuse the same dispatcher shape from the
+// service mock — `users` chain serves both `repo_url` reads and the
+// auth-probe (`.maybeSingle()` returns non-error).
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: (table: string) => {
+      if (table === "users") {
+        const chain: { select: unknown; eq: unknown; maybeSingle: unknown } = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn(async () => ({
+            data: { id: "user-1", repo_url: mockUserRepoUrl },
+            error: null,
+          })),
+        };
+        return chain;
+      }
+      return {
+        insert: mockInsert,
+        update: mockUpdate,
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              single: mockSelectSingle,
+            }),
+          }),
+        }),
+      };
+    },
+    rpc: mockRpc,
+  })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 vi.mock("./agent-runner", () => ({
   startAgentSession: vi.fn().mockResolvedValue(undefined),
   sendUserMessage: vi.fn().mockResolvedValue(undefined),

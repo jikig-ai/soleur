@@ -1,10 +1,17 @@
-// Caller MUST have verified the userId belongs to the authenticated session.
-// This function trusts its input — it uses createServiceClient(), which
-// bypasses RLS. Authorization reduces to "the caller passed the correct
-// userId." The UUID validation below is a guardrail against IDOR from a
-// future caller that forgets to authenticate.
+// PR-C §2.3 (#3244): the conversations SELECT below now uses tenant-
+// scoped JWT (`getFreshTenantClient(userId)`) — RLS on `conversations`
+// enforces `auth.uid() = user_id`, layered on top of the explicit
+// `.eq("user_id", userId)` filter. The `sum_user_mtd_cost` RPC stays
+// service-role because migration 027:68 REVOKEd EXECUTE FROM
+// authenticated — a tenant-JWT call would 42501 silently. Callers
+// MUST still pass the authenticated session's userId; the UUID
+// validation below is the IDOR guardrail.
 
 import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { relativeTime } from "@/lib/relative-time";
 import { reportSilentFallback } from "@/server/observability";
@@ -88,11 +95,49 @@ export async function loadApiUsageForUser(
     throw new Error("loadApiUsageForUser: userId must be a UUID");
   }
 
+  // PR-C §2.3 (#3244): tenant client for the conversations SELECT.
+  // Per-handler RLS-baseline auth probe per plan §0.4 — surfaces
+  // mid-TTL jti revocation or RLS policy churn that a cached JWT
+  // would otherwise silently mask as zero rows.
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(userId);
+    const { error: probeErr } = await tenant
+      .from("users")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle();
+    if (probeErr) {
+      reportSilentFallback(probeErr, {
+        feature: "api-usage",
+        op: "auth-probe",
+        extra: { userId },
+      });
+      return null;
+    }
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      reportSilentFallback(err, {
+        feature: "api-usage",
+        op: "auth-probe",
+        extra: { userId },
+      });
+      return null;
+    }
+    throw err;
+  }
+
+  // SERVICE-ROLE: `sum_user_mtd_cost` is REVOKEd from authenticated
+  // (migration 027:68). A tenant-JWT call would 42501 silently. The
+  // explicit `uid` parameter is the load-bearing access control — the
+  // RPC body filters cost rows to `WHERE user_id = uid`, and the caller
+  // (this function) passes the authenticated session's userId. File
+  // stays on `.service-role-allowlist` as PERMANENT for this surface.
   const service = createServiceClient();
   const monthStartIso = computeMonthStartIso();
 
   const [listRes, monthRes] = await Promise.all([
-    service
+    tenant
       .from("conversations")
       .select(
         "id, domain_leader, created_at, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, total_cost_usd",

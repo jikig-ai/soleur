@@ -31,6 +31,19 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
+// PR-C §2.8 (#3244): kb-route-helpers now imports `getFreshTenantClient`
+// from `@/lib/supabase/tenant`. Mock to the same `mockFrom` so the
+// existing per-table setup (`setupUserData`) drives both legacy
+// service-role and the new tenant path without per-test duplication.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
+
 vi.mock("@/lib/auth/validate-origin", () => ({
   validateOrigin: mockValidateOrigin,
   rejectCsrf: mockRejectCsrf,
