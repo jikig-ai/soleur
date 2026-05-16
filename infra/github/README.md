@@ -52,7 +52,9 @@ terraform init -input=false
 ## Phase 2 -- Import + plan + apply (one-time bootstrap)
 
 Capture the import oracle FIRST so the plan-diff probe in step 3 has a
-deterministic reference:
+deterministic reference. Uses ambient `gh auth` (read-only API call —
+the new PAT was already verified in Phase 0 step 3 and is not required
+for the read-side oracle capture):
 
 ```bash
 gh api repos/jikig-ai/soleur/rulesets/14145388 > /tmp/ruleset-live-pre-import.json
@@ -66,7 +68,9 @@ doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform import github_repository_ruleset.ci_required soleur:14145388
 ```
 
-Plan and verify the diff is exactly the 9 additions:
+Plan and verify the diff is exactly the 9 additions. The probe asserts
+all three contract dimensions (action shape, before-count, after-count)
+so a re-ordering or property drift surfaces here rather than at apply:
 
 ```bash
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
@@ -75,10 +79,13 @@ doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
 terraform show -json tfplan.binary | jq '
   .resource_changes[]
   | select(.address == "github_repository_ruleset.ci_required")
-  | .change.after.rules[0].required_status_checks[0].required_check
-  | length
+  | {
+      actions:      .change.actions,
+      before_count: (.change.before.rules[0].required_status_checks[0].required_check | length),
+      after_count:  (.change.after.rules[0].required_status_checks[0].required_check  | length)
+    }
 '
-# Expected: 14 (5 pre-existing + 9 new)
+# Expected: {"actions":["update"],"before_count":5,"after_count":14}
 ```
 
 If the diff includes anything beyond the 9 `required_check` additions
@@ -138,7 +145,16 @@ If a Terraform apply broke the ruleset:
      --bucket soleur-terraform-state --key github/terraform.tfstate
    ```
 
-3. `terraform apply -refresh-only` to sync R2-restored state to the GitHub API.
+3. Apply the restored state with operator attestation (`apply` — NOT
+   `apply -refresh-only`; the latter pulls state FROM the API and would
+   reconcile the rollback away):
+
+   ```bash
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+     terraform plan -out=tfplan-rollback.binary
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+     terraform apply tfplan-rollback.binary
+   ```
 
 For catastrophic ruleset corruption: emergency fallback is the GitHub UI at
 <https://github.com/jikig-ai/soleur/rules/14145388> -- operator can manually

@@ -44,7 +44,7 @@ jobs:
           # sed -E anchors on ^apps/[^/]+/infra and ^infra/[^/]+ -- both shapes
           # collapse to their single-ancestor directory. Deep-nested paths
           # (infra/github/some-subdir/file) STILL collapse to infra/github
-          # because the regex non-greedy-matches the first non-slash segment.
+          # because [^/]+ matches the first slash-bounded segment.
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
                        find infra/* -maxdepth 0 -type d 2>/dev/null ; } \

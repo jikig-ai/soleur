@@ -93,15 +93,17 @@ the ruleset mutation is a write-to-prod-policy event requiring single
 human attestation per `hr-menu-option-ack-not-prod-write-auth`.
 
 The mandatory pre-apply gate is the `terraform show -json | jq` probe
-that asserts the diff is exactly:
+that asserts ALL THREE contract dimensions:
 
 ```text
-before_count: 5,
-after_count:  14,
-actions:      ["update"]
+{"actions":["update"],"before_count":5,"after_count":14}
 ```
 
-with zero other property changes. Any deviation (a bypass-actor diff,
+with zero other property changes. The probe in `infra/github/README.md`
+Phase 2 returns this exact shape — `before_count` and `actions` are
+load-bearing because an `after_count` of 14 alone passes for any
+14-element collection, including one produced by an unexpected
+`replace` instead of `update`. Any deviation (a bypass-actor diff,
 condition tweak, integration_id phantom drift) signals that the import
 surfaced unmanaged state the Terraform config does not yet model — the
 operator reconciles by editing the config to match live state BEFORE
@@ -149,17 +151,21 @@ applying, never by applying the unreviewed diff.
 
 If any of the following triggers fire, revert the import + apply:
 
-- **`terraform import` fails 3+ times** with provider-incompatible
-  schema. Action: keep the UI as source-of-truth, mark this ADR
+- **`terraform import` returns a non-transient schema-shape error not
+  enumerated in `2026-03-19-github-ruleset-stale-bypass-actors.md` or
+  provider issues #2317 / #2467 / #2504 / #2536 / #2952.** Transient
+  failures (network, 502, rate-limit) do not trigger this hatch — retry
+  with backoff. Action: keep the UI as source-of-truth, mark this ADR
   `status: rejected`, revert `infra/github/` and the
   `infra-validation.yml` extension.
-- **Phase 2.3 plan-diff shows >1 unrelated property change** that the
-  operator cannot reconcile via config edits (e.g. provider rejects
-  `actor_id = 0` AND `actor_id = 1` AND `actor_id = null` for
-  OrganizationAdmin). Action: add
-  `lifecycle.ignore_changes = [bypass_actors]` as the documented
-  escape hatch (mirrors ADR-031's `ignore_changes` posture on imported
-  Sentry rules); document the diff for next provider upgrade.
+- **Phase 2.3 plan-diff surfaces `bypass_actors` churn the operator
+  cannot suppress.** Concretely: the operator has tried
+  `actor_id = 0`, then `actor_id = 1`, then `actor_id = null` for the
+  OrganizationAdmin block (in that order), and the plan still shows a
+  non-empty diff on that block. Action: add
+  `lifecycle.ignore_changes = [bypass_actors]` as the documented escape
+  hatch (mirrors ADR-031's `ignore_changes` posture on imported Sentry
+  rules); document the diff for the next provider upgrade.
 - **A required-check entry produces a permanent-pending merge gate**
   (the job is not running on the PR for any reason). Action: remove
   the entry from `ruleset-ci-required.tf`, file a follow-up to

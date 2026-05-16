@@ -47,7 +47,7 @@ resource "github_repository_ruleset" "ci_required" {
       strict_required_status_checks_policy = true
       do_not_enforce_on_create             = false
 
-      # --- Pre-existing 5 (carried over unchanged) ---
+      # --- Baseline 5 (verified against ruleset-live-pre-import.json at adoption) ---
       required_check {
         context        = "test"
         integration_id = var.actions_integration_id

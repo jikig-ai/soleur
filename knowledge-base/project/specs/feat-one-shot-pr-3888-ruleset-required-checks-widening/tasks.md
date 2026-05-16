@@ -55,7 +55,7 @@ required BEFORE Phase 1 implementation tasks begin.
 ## Phase 2 — Import (operator-driven, post-merge)
 
 - [ ] **2.1** `cd infra/github/`; export R2 backend creds
-  (AWS_ACCESS_KEY_ID + AWS_ACCESS_KEY_SECRET from
+  (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY from
   `prd_terraform` — raw, NOT tf-var-transformed);
   `terraform init -input=false`.
 - [ ] **2.2** Import existing ruleset:
@@ -81,8 +81,9 @@ required BEFORE Phase 1 implementation tasks begin.
 - [ ] **4.2** Refactor `detect-changes` to handle both
   `apps/*/infra/` and `infra/*` pathspecs. Verify with the fixture
   test in plan body §Phase 4.2.
-- [ ] **4.3** Verify matrix consumes `infra/github` correctly via a
-  scratch local probe.
+- [ ] **4.3** Verify in PR CI run that `infra/github` appears in the
+  `validate` matrix output (post-push observation, not a pre-push
+  authoring step).
 
 ## Phase 5 — ADR-032 (architecture decision record)
 
