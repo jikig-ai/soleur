@@ -144,6 +144,31 @@ jobs:
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
           echo "Manifest lines: $lines, sha256: $sha"
 
+      # Silent-rot guard for the bundled FreeTSA cert chain. If either
+      # cacert.pem or tsa.crt has <180 days remaining, fail this run so
+      # the operator refreshes the bundle BEFORE the chain silently
+      # breaks. The 180-day floor matches FreeTSA's documented ~yearly
+      # rotation cadence; tighter floors risk false-positive failures
+      # right before scheduled rotation, looser floors shrink the
+      # response window. Bundled certs are valid through 2040+ today;
+      # this guard catches the next rotation event proactively.
+      - name: Verify FreeTSA cert expiry (>180 days remaining; silent-rot guard)
+        run: |
+          set -euo pipefail
+          floor_seconds=$(( 180 * 86400 ))
+          for cert in apps/cla-evidence/freetsa/cacert.pem apps/cla-evidence/freetsa/tsa.crt; do
+            enddate=$(openssl x509 -in "$cert" -noout -enddate | sed 's/notAfter=//')
+            end_epoch=$(date -u -d "$enddate" +%s)
+            now_epoch=$(date -u +%s)
+            remaining=$(( end_epoch - now_epoch ))
+            if [[ "$remaining" -lt "$floor_seconds" ]]; then
+              days_left=$(( remaining / 86400 ))
+              echo "::error::FreeTSA cert $cert expires in $days_left days (<180); refresh the bundle"
+              exit 1
+            fi
+            echo "OK: $cert valid for $((remaining / 86400)) more days (enddate=$enddate)"
+          done
+
       # Build the RFC 3161 TSQ (SHA-256, --no_nonce, --cert). FreeTSA accepts
       # POST application/timestamp-query; response is a binary .tsr. Bound by
       # --max-time 30 per AGENTS.md plan-skill sharp-edge.

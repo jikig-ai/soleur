@@ -7,22 +7,23 @@
 #   2. terraform validate       — HCL + provider schema (init -backend=false)
 #   3. policy lint              — content invariants the plan promises:
 #       - prevent_destroy = true on the bucket
-#       - Governance object-lock mode
-#       - 3650-day retention
+#       - CF native Lock Rules age-based retention (maxAgeSeconds=315360000)
+#       - Lock Rules PUT URL substring (r2/buckets/.../lock)
 #       - no IP-allowlist on the API tokens
 #
 # Optional --live flag adds:
-#   4. live Object Lock assertion — calls `aws s3api get-object-lock-configuration`
-#      against R2 and verifies Mode=GOVERNANCE, Days=3650. Requires:
-#        R2_CLA_EVIDENCE_ADMIN_KEY_ID, R2_CLA_EVIDENCE_ADMIN_SECRET,
-#        R2_CLA_EVIDENCE_ENDPOINT, R2_CLA_EVIDENCE_BUCKET.
+#   4. live CF Lock Rules assertion — GETs the bucket lock-rule config from
+#      the CF native REST API and verifies at least one Age rule with
+#      maxAgeSeconds >= 315360000 exists. Requires:
+#        CF_ADMIN_TOKEN_BOOTSTRAP, CF_ACCOUNT_ID, R2_CLA_EVIDENCE_BUCKET.
 #      The operator MUST run this after `terraform apply` per the plan's
 #      Phase 1 Step 3 (post-apply verification). The bucket-creation path
 #      relies on a null_resource provisioner whose failure mode is silent —
-#      a bucket can complete create but reach the apply step without Object
-#      Lock if the null_resource errored (e.g., wrong credentials). Without
-#      Object Lock the WORM guarantee underpinning the legal-evidence claim
-#      is void; this check is the load-bearing post-apply gate.
+#      a bucket can complete create but reach the apply step without the
+#      Lock Rule applied if the null_resource errored (e.g., wrong
+#      credentials). Without the Lock Rule the WORM guarantee underpinning
+#      the legal-evidence claim is void; this check is the load-bearing
+#      post-apply gate.
 
 set -euo pipefail
 
@@ -63,12 +64,12 @@ if ! grep -q 'prevent_destroy *= *true' bucket.tf; then
   red "FAIL: bucket.tf must declare lifecycle { prevent_destroy = true } on the bucket."
   fail=1
 fi
-if ! grep -q '"Mode":"GOVERNANCE"' object_lock.tf; then
-  red "FAIL: object_lock.tf must set Object Lock Mode to GOVERNANCE."
+if ! grep -q '"condition":{"type":"Age","maxAgeSeconds":315360000}' object_lock.tf; then
+  red "FAIL: object_lock.tf must declare the CF Lock Rules age-based retention rule with maxAgeSeconds=315360000 (10 years)."
   fail=1
 fi
-if ! grep -q '"Days":3650' object_lock.tf; then
-  red "FAIL: object_lock.tf must set 10-year (3650 day) retention."
+if ! grep -qE 'r2/buckets/.*/lock' object_lock.tf; then
+  red "FAIL: object_lock.tf must call the CF native Lock Rules PUT endpoint (.../r2/buckets/<name>/lock)."
   fail=1
 fi
 if grep -q 'allowed_ips' iam.tf; then
@@ -89,37 +90,38 @@ if ! grep -qE 'com\.cloudflare\.edge\.r2\.bucket\.\$\{var\.cf_account_id\}_defau
 fi
 
 if [[ "$LIVE_MODE" -eq 1 ]]; then
-  echo "→ live Object Lock assertion (--live)"
-  : "${R2_CLA_EVIDENCE_ADMIN_KEY_ID:?missing — required for --live mode}"
-  : "${R2_CLA_EVIDENCE_ADMIN_SECRET:?missing — required for --live mode}"
-  : "${R2_CLA_EVIDENCE_ENDPOINT:?missing — required for --live mode}"
+  echo "→ live CF Lock Rules assertion (--live)"
+  : "${CF_ADMIN_TOKEN_BOOTSTRAP:?missing — required for --live mode}"
+  : "${CF_ACCOUNT_ID:?missing — required for --live mode}"
   bucket="${R2_CLA_EVIDENCE_BUCKET:-soleur-cla-evidence}"
-  lock_json=$(AWS_ACCESS_KEY_ID="$R2_CLA_EVIDENCE_ADMIN_KEY_ID" \
-    AWS_SECRET_ACCESS_KEY="$R2_CLA_EVIDENCE_ADMIN_SECRET" \
-    AWS_REGION=auto \
-    aws s3api get-object-lock-configuration \
-      --bucket "$bucket" \
-      --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" \
-      --output json 2>&1) || {
-        red "FAIL: get-object-lock-configuration failed — Object Lock is NOT configured on bucket $bucket."
-        red "      The WORM guarantee is void. Investigate the null_resource.cla_evidence_object_lock state."
-        red "      Output: $lock_json"
-        fail=1
-        lock_json=""
-      }
+  lock_json=$(curl --max-time 30 -fsS \
+    -H "Authorization: Bearer $CF_ADMIN_TOKEN_BOOTSTRAP" \
+    "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/r2/buckets/$bucket/lock" 2>&1) || {
+      red "FAIL: GET /r2/buckets/$bucket/lock failed — the CF Lock Rules config is NOT readable."
+      red "      The WORM guarantee may be void. Investigate the null_resource.cla_evidence_object_lock state."
+      red "      Output: $lock_json"
+      fail=1
+      lock_json=""
+    }
   if [[ -n "$lock_json" ]]; then
-    mode=$(printf '%s' "$lock_json" | jq -r '.ObjectLockConfiguration.Rule.DefaultRetention.Mode // "<missing>"')
-    days=$(printf '%s' "$lock_json" | jq -r '.ObjectLockConfiguration.Rule.DefaultRetention.Days // "<missing>"')
-    if [[ "$mode" != "GOVERNANCE" ]]; then
-      red "FAIL: Object Lock Mode=$mode, expected GOVERNANCE."
+    success=$(printf '%s' "$lock_json" | jq -r '.success // false')
+    if [[ "$success" != "true" ]]; then
+      red "FAIL: CF API returned success=false. Body: $lock_json"
       fail=1
-    fi
-    if [[ "$days" != "3650" ]]; then
-      red "FAIL: Object Lock Days=$days, expected 3650 (10 years)."
-      fail=1
-    fi
-    if [[ "$fail" -eq 0 ]]; then
-      green "OK: live Object Lock = Mode=$mode, Days=$days."
+    else
+      rule_count=$(printf '%s' "$lock_json" | jq -r '.result.rules | length // 0')
+      max_age=$(printf '%s' "$lock_json" | jq -r '[.result.rules[]? | select(.condition.type == "Age") | .condition.maxAgeSeconds] | max // 0')
+      if [[ "$rule_count" -lt 1 ]]; then
+        red "FAIL: bucket $bucket has zero Lock Rules; expected at least one Age rule."
+        fail=1
+      fi
+      if [[ "$max_age" -lt 315360000 ]]; then
+        red "FAIL: bucket $bucket maxAgeSeconds=$max_age, expected >= 315360000 (10 years)."
+        fail=1
+      fi
+      if [[ "$fail" -eq 0 ]]; then
+        green "OK: live CF Lock Rules — rule_count=$rule_count, maxAgeSeconds(max)=$max_age."
+      fi
     fi
   fi
 fi

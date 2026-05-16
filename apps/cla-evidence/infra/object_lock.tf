@@ -1,63 +1,68 @@
-# Cloudflare R2 Object Lock — Governance mode, 10-year (3650 day) default retention.
+# Cloudflare R2 native Lock Rules — 10-year (315360000 second) age-based
+# retention floor on the cla-evidence bucket.
 #
-# As of cloudflare/cloudflare provider v4.x, neither cloudflare_r2_bucket nor
-# cloudflare_r2_bucket_lock exposes the bucket-default retention mode (Governance/
-# Compliance) — cloudflare_r2_bucket_lock only configures rule-based age/date
-# expirations, which is a different feature.
+# Cloudflare R2's S3-compatible API does NOT implement the
+# PutObjectLockConfiguration surface — verified empirically during the
+# 2026-05-16 post-merge bootstrap of PR #3201. The functional equivalent
+# is R2's native Lock Rules endpoint:
+#   PUT /accounts/{id}/r2/buckets/{name}/lock
+# with body `{"rules":[{...}]}`. Age-based rules pin a `maxAgeSeconds`
+# floor; combined with `prefix:""` the rule applies bucket-wide and
+# delivers the WORM property the GDPR §3.4 balancing test rests on.
 #
-# R2's Governance/Compliance bucket-default retention is configured via the
-# S3-compatible Object Lock API: PUT /<bucket>?object-lock with
-# <ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled>
-# <Rule><DefaultRetention><Mode>GOVERNANCE</Mode><Days>3650</Days></DefaultRetention></Rule>
-# </ObjectLockConfiguration>.
-#
-# The plan's Risk #3 anticipated this gap; this null_resource is the documented
-# fallback. It runs the AWS CLI against the R2 endpoint to set Object Lock once,
-# triggered on a content hash so re-applies only re-fire when the desired config
-# changes. R2 admin credentials are supplied via Doppler at apply time and never
-# enter Terraform state.
+# The cloudflare/cloudflare provider v4.52.x ships `cloudflare_r2_bucket_lock`
+# only for object-key-level rule-based age/date conditions (a different
+# feature surface), so the bucket-default Lock Rules PUT remains the
+# `null_resource` + curl shim below. FW1 in the plan tracks swapping the
+# shim for a native TF resource when one ships.
 #
 # Operator preconditions:
-#   - aws CLI installed
-#   - var.r2_admin_access_key_id and var.r2_admin_secret_access_key sourced from
-#     Doppler `prd_cla` (operator-managed, separate from the workflow tokens).
+#   - curl + jq installed.
+#   - var.cf_admin_token sourced from the bootstrap-only one-hour
+#     CF admin token (Account → Cloudflare R2 → Edit scope).
+#   - the bucket already exists (cloudflare_r2_bucket.cla_evidence).
 #
-# Caveat: R2 Object Lock requires the bucket to have been created with the
-# `cf-create-bucket-if-missing` flow and Object Lock enabled at create-time; if
-# the bucket pre-exists without Object Lock, the API call below will return an
-# error. In that case, contact Cloudflare R2 support to enable Object Lock on
-# the existing bucket, or recreate via aws s3api create-bucket
-# --object-lock-enabled-for-bucket.
+# The rule JSON wraps a single Age rule with `maxAgeSeconds = 315360000`
+# (10 years = 365 * 24 * 3600 * 10). The wrapping `rules:` key is
+# load-bearing — a bare array body returns HTTP 400 from the CF API.
 
 resource "null_resource" "cla_evidence_object_lock" {
   depends_on = [cloudflare_r2_bucket.cla_evidence]
 
   triggers = {
     bucket_name = cloudflare_r2_bucket.cla_evidence.name
-    config_hash = sha256("governance-3650")
+    config_hash = sha256(jsonencode({
+      rules = [{
+        id      = "cla-evidence-10yr-retention"
+        enabled = true
+        prefix  = ""
+        condition = {
+          type          = "Age"
+          maxAgeSeconds = 315360000
+        }
+      }]
+    }))
+    token_hash = sha256(var.cf_admin_token)
   }
 
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
     command     = <<-EOT
       set -euo pipefail
-      AWS_ACCESS_KEY_ID="${var.r2_admin_access_key_id}" \
-      AWS_SECRET_ACCESS_KEY="${var.r2_admin_secret_access_key}" \
-      AWS_REGION=auto \
-      aws s3api put-object-lock-configuration \
-        --bucket ${cloudflare_r2_bucket.cla_evidence.name} \
-        --endpoint-url ${var.r2_s3_endpoint} \
-        --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"GOVERNANCE","Days":3650}}}'
+      lock_rule='{"rules":[{"id":"cla-evidence-10yr-retention","enabled":true,"prefix":"","condition":{"type":"Age","maxAgeSeconds":315360000}}]}'
+      response=$(curl --max-time 30 -fsS -X PUT \
+        "https://api.cloudflare.com/client/v4/accounts/${var.cf_account_id}/r2/buckets/${cloudflare_r2_bucket.cla_evidence.name}/lock" \
+        -H "Authorization: Bearer ${var.cf_admin_token}" \
+        -H "Content-Type: application/json" \
+        --data "$lock_rule")
+      echo "$response" | jq -e '.success == true' >/dev/null \
+        || { echo "CF Lock Rules PUT failed: $response" >&2; exit 1; }
     EOT
   }
 }
 
-# Tombstones prefix: separately object-locked sub-prefix used by the GDPR Art. 17
-# admin-override flow (see Phase 7 runbook). The tombstone is itself retained
-# under Governance for the same 10yr period so the chain shows "object H replaced
-# by tombstone T at month M+1" in the next monthly RFC 3161 manifest.
-#
-# In R2 Object Lock there is no per-prefix retention configuration distinct from
-# the bucket default; the bucket-default Governance + 3650 days already covers
-# the tombstones/ prefix. This is documented here for inspection clarity rather
-# than configured separately.
+# Tombstones prefix: the GDPR Art. 17 admin-override flow writes
+# `tombstones/<sha>.deleted.json` records. R2 Lock Rules apply bucket-wide
+# when `prefix:""`, so the same 10-year `maxAgeSeconds` floor covers the
+# tombstones/ prefix automatically. Documented here for inspection clarity
+# rather than configured separately.

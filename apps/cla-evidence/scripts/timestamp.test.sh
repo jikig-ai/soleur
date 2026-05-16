@@ -76,6 +76,46 @@ if [[ "$fail" -eq 0 ]]; then
   fi
 fi
 
+# TS17.d: cert-expiry silent-rot guard math (mirrors
+# .github/workflows/cla-evidence-timestamp.yml "Verify FreeTSA cert expiry"
+# step). Logic: parse `notAfter` from each bundled cert, compute remaining
+# days, compare against a 180-day floor. The check must:
+#   (i) PASS against the bundled certs today (valid through 2040+),
+#   (ii) FAIL against a synthetic expiry strictly inside the floor.
+# Synthetic-date arithmetic verifies the math without depending on real
+# cert rotation.
+check_cert_expiry() {
+  local enddate="$1" floor_seconds="$2"
+  local end_epoch now_epoch remaining
+  end_epoch=$(date -u -d "$enddate" +%s) || return 2
+  now_epoch=$(date -u +%s)
+  remaining=$(( end_epoch - now_epoch ))
+  [[ "$remaining" -ge "$floor_seconds" ]]
+}
+
+if [[ "$fail" -eq 0 ]]; then
+  floor=$(( 180 * 86400 ))
+  ok_d=true
+  for cert in "$FREETSA/cacert.pem" "$FREETSA/tsa.crt"; do
+    enddate=$(openssl x509 -in "$cert" -noout -enddate | sed 's/notAfter=//')
+    if ! check_cert_expiry "$enddate" "$floor"; then
+      red "FAIL: TS17.d bundled cert $cert is inside the 180-day expiry floor (enddate=$enddate); refresh apps/cla-evidence/freetsa/"
+      ok_d=false
+    fi
+  done
+  # Negative case: a synthetic enddate 30 days from now MUST fail the floor.
+  near_enddate=$(date -u -d "+30 days" +"%b %d %H:%M:%S %Y GMT" 2>/dev/null || date -u -v+30d +"%b %d %H:%M:%S %Y GMT")
+  if check_cert_expiry "$near_enddate" "$floor"; then
+    red "FAIL: TS17.d cert-expiry math accepted enddate=$near_enddate (30 days) against a 180-day floor"
+    ok_d=false
+  fi
+  if $ok_d; then
+    green "PASS: TS17.d cert-expiry guard math (real certs >180d; synthetic 30d rejected)"
+  else
+    fail=1
+  fi
+fi
+
 if [[ "$fail" -eq 0 ]]; then
   green "ALL Phase 5 timestamp.test.sh tests passed."
 fi

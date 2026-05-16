@@ -1,15 +1,16 @@
 # cla-evidence — Terraform root
 
 Provisions the off-site evidence archive for the CLA signature flow:
-`soleur-cla-evidence` R2 bucket (EU region, Governance object-lock, 10-year
-retention) plus the two scoped Cloudflare API tokens used by the sidecar
-workflow and by Terraform itself.
+`soleur-cla-evidence` R2 bucket (EU region, Cloudflare R2 Lock Rules with
+a 10-year age-based retention floor — functionally equivalent to S3
+Object Lock Governance mode) plus the two scoped Cloudflare API tokens
+used by the sidecar workflow and by Terraform itself.
 
 **Owner:** deruelle / ops@jikigai.com
 **Issue:** #3209
 **Plan:** `knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md`
 **Runbook:** `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md`
-**Retention:** 10 years (3650 days) from object creation, Governance mode.
+**Retention:** 10 years (`maxAgeSeconds = 315360000`) from object creation, enforced by an R2 native Lock Rule.
 **Region:** `weur` (Western Europe, best-effort per Cloudflare R2 placement).
 
 ## Change-control gate
@@ -22,9 +23,9 @@ Edits to this root must:
    (`hr-menu-option-ack-not-prod-write-auth`) — the operator runs
    `terraform plan`, the assistant shows the diff, the operator types go-ahead,
    then the assistant runs `terraform apply -auto-approve`.
-3. Never relax `prevent_destroy`, `Governance`/`COMPLIANCE`, or the 3650-day
-   retention without paired updates to `gdpr-policy.md` (off-site-archive
-   balancing test) and the inspection runbook.
+3. Never relax `prevent_destroy` or the 10-year (`maxAgeSeconds = 315360000`)
+   Lock Rule retention floor without paired updates to `gdpr-policy.md`
+   (off-site-archive balancing test) and the inspection runbook.
 
 ## Single-writer apply
 
@@ -34,41 +35,46 @@ needed for `use_lockfile = true`). Two operators applying simultaneously will
 overwrite each other's state. Coordinate via the standard `#ops` Slack channel
 before running `terraform apply` here.
 
-## Object Lock provisioning
+## Retention enforcement (R2 native Lock Rules)
 
-The Cloudflare Terraform provider (v4.x and v5.x) does not expose Governance/
-Compliance bucket-default retention modes — `cloudflare_r2_bucket_lock` is for
-rule-based age/date conditions, a different feature. The bucket-default Object
-Lock configuration is set via a `null_resource` calling the S3-compatible API
-(`aws s3api put-object-lock-configuration`) — see `object_lock.tf`. The R2 admin
-credentials for this provisioner are passed in via `r2_admin_access_key_id` /
-`r2_admin_secret_access_key` and never enter Terraform state (only their hash
-trigger does).
+Cloudflare R2 does NOT implement the S3 `PutObjectLockConfiguration` API
+surface — verified empirically during the 2026-05-16 bootstrap (PR #3201).
+The native equivalent is the R2 Lock Rules REST endpoint:
 
-If the bucket pre-exists without Object Lock enabled, the provisioner will fail.
-Resolution: contact Cloudflare R2 support to enable Object Lock on the existing
-bucket, or recreate the bucket via `aws s3api create-bucket
---object-lock-enabled-for-bucket`.
+```
+PUT /accounts/{account_id}/r2/buckets/{bucket_name}/lock
+Body: {"rules":[{"id":"...","enabled":true,"prefix":"","condition":{"type":"Age","maxAgeSeconds":315360000}}]}
+```
+
+A `null_resource` in `object_lock.tf` calls this endpoint via `curl` using
+`var.cf_admin_token` (the bootstrap-only one-hour admin token). The
+`cloudflare_r2_bucket_lock` provider resource ships only for object-key-level
+rule-based age/date conditions — a different feature surface — so the `curl`
+shim remains the bridge until a native TF resource for the bucket-default
+endpoint ships (FW1 in PR #3920 plan).
+
+If the lock-rule PUT silently fails (token rotated, scope missing), the
+post-apply verification step below catches it before the bootstrap proceeds.
 
 ### Mandatory post-apply verification (operator step)
 
 After every `terraform apply` that touches this root, the operator MUST run:
 
 ```bash
-R2_CLA_EVIDENCE_ADMIN_KEY_ID=... \
-R2_CLA_EVIDENCE_ADMIN_SECRET=... \
-R2_CLA_EVIDENCE_ENDPOINT=https://<account>.r2.cloudflarestorage.com \
+CF_ADMIN_TOKEN_BOOTSTRAP=<one-hour token> \
+CF_ACCOUNT_ID=<jikigai account id> \
 R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
   bash apps/cla-evidence/infra/main.test.sh --live
 ```
 
-The `--live` flag calls `aws s3api get-object-lock-configuration` against R2 and
-asserts `Mode=GOVERNANCE, Days=3650`. Exit code 0 confirms the WORM guarantee is
-live; non-zero means the bucket completed creation but the Object Lock
-provisioner failed silently and the bucket is unprotected. **Do not proceed to
-the bootstrap PR merge until this assertion passes** — the entire
-legal-evidence claim rests on Object Lock being active. See user-impact-reviewer
-Finding 8 from PR #3201 multi-agent review for the failure-mode rationale.
+The `--live` flag GETs `/accounts/{id}/r2/buckets/<name>/lock` and asserts at
+least one Age rule with `maxAgeSeconds >= 315360000` exists. Exit code 0
+confirms the WORM guarantee is live; non-zero means the bucket completed
+creation but the Lock Rule provisioner failed silently and the bucket is
+unprotected. **Do not proceed to the bootstrap PR merge until this assertion
+passes** — the entire legal-evidence claim rests on the Lock Rule being
+active. See user-impact-reviewer Finding 8 from PR #3201 multi-agent review
+for the failure-mode rationale.
 
 ## Token rotation
 

@@ -9,13 +9,13 @@
 #
 # Without this script, the operator would run 5 separate post-merge steps
 # (terraform apply, capture outputs, create Doppler config, create service
-# token, set GH secret, live-verify Object Lock, trigger first timestamp
+# token, set GH secret, live-verify the Lock Rule, trigger first timestamp
 # cron). Each step is mechanical and chainable — they're only "operator-only"
 # because they need credentials that scoped TF tokens can't carry. This
 # script collapses them into ONE operator step: paste a one-time CF admin
 # token, walk away.
 #
-# Workflow contract codified at `wg-multi-step-post-merge-bootstrap-script`.
+# Workflow contract codified at `hr-multi-step-post-merge-bootstrap-script`.
 #
 # Operator step (one-time):
 #   1. Open https://dash.cloudflare.com/profile/api-tokens
@@ -28,6 +28,10 @@
 #        CF_ADMIN_TOKEN_BOOTSTRAP=<paste> \
 #          bash apps/cla-evidence/infra/bootstrap.sh
 #   4. Revoke the token in the dashboard after the script exits 0.
+#
+# Optional opt-in (closes #3908): set SENTINEL_PR_AUTOMATION=1 to run the
+# Phase 8 sentinel-PR driver (human signer + allowlist-bypass) at the end
+# of the bootstrap. Default OFF.
 #
 # Idempotent: every step checks current state before mutating. Re-run is
 # safe.
@@ -46,7 +50,7 @@ step()   { printf '\n→ %s\n' "$*"; }
 # Pre-flight: deps + auth + admin token
 # ─────────────────────────────────────────────────────────────────────────
 
-for bin in terraform doppler gh aws jq curl; do
+for bin in terraform doppler gh jq curl openssl; do
   command -v "$bin" >/dev/null || { red "missing $bin on PATH"; exit 64; }
 done
 
@@ -72,9 +76,9 @@ INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$INFRA_DIR"
 
 # ─────────────────────────────────────────────────────────────────────────
-# Step 1 — terraform apply (creates bucket + Object Lock + 2 scoped tokens)
+# Step 1 — terraform apply (creates bucket + Lock Rules + 2 scoped tokens)
 # ─────────────────────────────────────────────────────────────────────────
-step "[1/5] terraform apply (R2 bucket + Object Lock + 2 scoped tokens)"
+step "[1/5] terraform apply (R2 bucket + CF Lock Rules + 2 scoped tokens)"
 
 # Pull supporting values from prd_terraform (existing config — no admin scope
 # needed for these specific values).
@@ -84,50 +88,47 @@ CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID -p soleur -c prd_terraform --p
 STATE_KEY=$(doppler secrets get AWS_ACCESS_KEY_ID    -p soleur -c prd_terraform --plain)
 STATE_SEC=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
 
-# r2_admin_* vars are used by the null_resource Object Lock provisioner.
-# We pass the BOOTSTRAP token here too — the put-object-lock-configuration
-# S3 call accepts the CF bearer token in HMAC form when the token has
-# R2:Edit scope on the bucket (which the admin token does, transitively).
-TF_VAR_cf_account_id="$CF_ACCOUNT_ID" \
-TF_VAR_cf_api_token="$CF_ADMIN_TOKEN_BOOTSTRAP" \
-TF_VAR_r2_admin_access_key_id="$STATE_KEY" \
-TF_VAR_r2_admin_secret_access_key="$STATE_SEC" \
-AWS_ACCESS_KEY_ID="$STATE_KEY" \
-AWS_SECRET_ACCESS_KEY="$STATE_SEC" \
-  terraform init -input=false -no-color >/dev/null
+# Common TF env (reused across init/apply/output calls).
+tf_env() {
+  TF_VAR_cf_account_id="$CF_ACCOUNT_ID" \
+  TF_VAR_cf_api_token="$CF_ADMIN_TOKEN_BOOTSTRAP" \
+  TF_VAR_cf_admin_token="$CF_ADMIN_TOKEN_BOOTSTRAP" \
+  AWS_ACCESS_KEY_ID="$STATE_KEY" \
+  AWS_SECRET_ACCESS_KEY="$STATE_SEC" \
+    "$@"
+}
 
-TF_VAR_cf_account_id="$CF_ACCOUNT_ID" \
-TF_VAR_cf_api_token="$CF_ADMIN_TOKEN_BOOTSTRAP" \
-TF_VAR_r2_admin_access_key_id="$STATE_KEY" \
-TF_VAR_r2_admin_secret_access_key="$STATE_SEC" \
-AWS_ACCESS_KEY_ID="$STATE_KEY" \
-AWS_SECRET_ACCESS_KEY="$STATE_SEC" \
-  terraform apply -auto-approve -input=false -no-color
+tf_env terraform init -input=false -no-color >/dev/null
+tf_env terraform apply -auto-approve -input=false -no-color
 
 # Capture outputs (sensitive — never echo).
-OBJECT_WRITE_TOKEN=$(TF_VAR_cf_account_id="$CF_ACCOUNT_ID" \
-  TF_VAR_cf_api_token="$CF_ADMIN_TOKEN_BOOTSTRAP" \
-  TF_VAR_r2_admin_access_key_id="$STATE_KEY" \
-  TF_VAR_r2_admin_secret_access_key="$STATE_SEC" \
-  terraform output -raw object_write_token_value)
-STATE_WRITE_TOKEN=$(TF_VAR_cf_account_id="$CF_ACCOUNT_ID" \
-  TF_VAR_cf_api_token="$CF_ADMIN_TOKEN_BOOTSTRAP" \
-  TF_VAR_r2_admin_access_key_id="$STATE_KEY" \
-  TF_VAR_r2_admin_secret_access_key="$STATE_SEC" \
-  terraform output -raw state_write_token_value)
-BUCKET_NAME=$(TF_VAR_cf_account_id="$CF_ACCOUNT_ID" \
-  TF_VAR_cf_api_token="$CF_ADMIN_TOKEN_BOOTSTRAP" \
-  TF_VAR_r2_admin_access_key_id="$STATE_KEY" \
-  TF_VAR_r2_admin_secret_access_key="$STATE_SEC" \
-  terraform output -raw bucket_name)
-BUCKET_ENDPOINT=$(TF_VAR_cf_account_id="$CF_ACCOUNT_ID" \
-  TF_VAR_cf_api_token="$CF_ADMIN_TOKEN_BOOTSTRAP" \
-  TF_VAR_r2_admin_access_key_id="$STATE_KEY" \
-  TF_VAR_r2_admin_secret_access_key="$STATE_SEC" \
-  terraform output -raw bucket_endpoint)
-[[ -n "$OBJECT_WRITE_TOKEN" ]] || { red "object_write_token_value missing"; exit 1; }
-[[ -n "$STATE_WRITE_TOKEN"  ]] || { red "state_write_token_value missing";  exit 1; }
+OBJECT_WRITE_TOKEN_VALUE=$(tf_env terraform output -raw object_write_token_value)
+OBJECT_WRITE_TOKEN_ID=$(tf_env terraform output -raw object_write_token_id)
+STATE_WRITE_TOKEN=$(tf_env terraform output -raw state_write_token_value)
+BUCKET_NAME=$(tf_env terraform output -raw bucket_name)
+BUCKET_ENDPOINT=$(tf_env terraform output -raw bucket_endpoint)
+[[ -n "$OBJECT_WRITE_TOKEN_VALUE" ]] || { red "object_write_token_value missing"; exit 1; }
+[[ -n "$OBJECT_WRITE_TOKEN_ID"    ]] || { red "object_write_token_id missing — older TF state may need a re-apply"; exit 1; }
+[[ -n "$STATE_WRITE_TOKEN"        ]] || { red "state_write_token_value missing";  exit 1; }
 green "  bucket=$BUCKET_NAME endpoint=$BUCKET_ENDPOINT (tokens captured, not logged)"
+
+# Derive R2 S3-compat HMAC creds from the object-write API token per
+# Cloudflare's documented contract:
+#   Access Key ID    = the API token id  (32-char hex)
+#   Secret Access Key = sha256(API token value)  (64-char hex)
+# Reference: https://developers.cloudflare.com/r2/api/tokens/
+#
+# The previous bootstrap revision pushed the bearer-token value (~53 chars)
+# as both halves of the HMAC pair. R2's S3-compat API enforces a 32-char
+# access-key-id length invariant, so the first cron run failed with
+# `Credential access key has length 53, should be 32`. Length assertions
+# below surface any shape drift immediately, before any Doppler write.
+R2_ACCESS_KEY="$OBJECT_WRITE_TOKEN_ID"
+R2_SECRET=$(printf '%s' "$OBJECT_WRITE_TOKEN_VALUE" | openssl dgst -sha256 -hex | awk '{print $NF}')
+[[ ${#R2_ACCESS_KEY} -eq 32 ]] \
+  || { red "R2 access key length=${#R2_ACCESS_KEY}, expected 32 (token id from TF output)"; exit 1; }
+[[ ${#R2_SECRET} -eq 64 ]] \
+  || { red "R2 secret length=${#R2_SECRET}, expected 64 (sha256 hex of token value)"; exit 1; }
 
 # ─────────────────────────────────────────────────────────────────────────
 # Step 2 — Doppler prd_cla config + secrets
@@ -147,14 +148,12 @@ R2_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
 doppler secrets set \
   --project soleur --config prd_cla \
   --no-interactive \
-  R2_CLA_EVIDENCE_ACCESS_KEY_ID="$OBJECT_WRITE_TOKEN" \
-  R2_CLA_EVIDENCE_SECRET="$OBJECT_WRITE_TOKEN" \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID="$R2_ACCESS_KEY" \
+  R2_CLA_EVIDENCE_SECRET="$R2_SECRET" \
   R2_CLA_EVIDENCE_ENDPOINT="$R2_ENDPOINT" \
   R2_CLA_EVIDENCE_BUCKET="$BUCKET_NAME" \
-  R2_CLA_EVIDENCE_ADMIN_KEY_ID="$OBJECT_WRITE_TOKEN" \
-  R2_CLA_EVIDENCE_ADMIN_SECRET="$OBJECT_WRITE_TOKEN" \
   >/dev/null
-green "  pushed 6 secrets to prd_cla"
+green "  pushed 4 secrets to prd_cla (S3-compat HMAC pair + endpoint + bucket)"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Step 3 — Doppler service token + GH repo secret
@@ -177,13 +176,12 @@ gh secret set DOPPLER_TOKEN_CLA --body "$SERVICE_TOKEN" --repo jikig-ai/soleur >
 green "  service token created + uploaded as repo secret DOPPLER_TOKEN_CLA"
 
 # ─────────────────────────────────────────────────────────────────────────
-# Step 4 — live Object Lock verification
+# Step 4 — live CF Lock Rules verification
 # ─────────────────────────────────────────────────────────────────────────
-step "[4/5] live Object Lock verification (GOVERNANCE / 3650 days)"
+step "[4/5] live CF Lock Rules verification (age-based, maxAgeSeconds >= 315360000)"
 
-R2_CLA_EVIDENCE_ADMIN_KEY_ID="$OBJECT_WRITE_TOKEN" \
-R2_CLA_EVIDENCE_ADMIN_SECRET="$OBJECT_WRITE_TOKEN" \
-R2_CLA_EVIDENCE_ENDPOINT="$R2_ENDPOINT" \
+CF_ADMIN_TOKEN_BOOTSTRAP="$CF_ADMIN_TOKEN_BOOTSTRAP" \
+CF_ACCOUNT_ID="$CF_ACCOUNT_ID" \
 R2_CLA_EVIDENCE_BUCKET="$BUCKET_NAME" \
   bash "$INFRA_DIR/main.test.sh" --live
 
@@ -197,11 +195,23 @@ gh workflow run cla-evidence-timestamp.yml --repo jikig-ai/soleur 2>&1 \
 green "  workflow dispatched — watch the run at \`gh run list --workflow cla-evidence-timestamp.yml\`"
 
 # ─────────────────────────────────────────────────────────────────────────
+# Step 6 — Phase 8 sentinel PRs (opt-in via SENTINEL_PR_AUTOMATION=1)
+# ─────────────────────────────────────────────────────────────────────────
+if [[ "${SENTINEL_PR_AUTOMATION:-0}" == "1" ]]; then
+  step "[6/6] Phase 8 sentinel PRs (closes #3908)"
+  bash "$INFRA_DIR/../scripts/sentinel-pr.sh" both
+else
+  yellow "Sentinel-PR automation skipped (set SENTINEL_PR_AUTOMATION=1 to enable; closes #3908)."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
 # Done — closing reminders
 # ─────────────────────────────────────────────────────────────────────────
 green ""
 green "BOOTSTRAP COMPLETE."
 green "Operator follow-ups:"
 green "  1. REVOKE the CF_ADMIN_TOKEN_BOOTSTRAP token in the Cloudflare dashboard NOW."
-green "  2. Close GitHub issues: #3905 #3906 #3907 #3909 (this script covers all four)."
-green "  3. Open the Phase 8 sentinel PRs (issue #3908) — those genuinely need a human signer."
+green "  2. Verify the dispatched cla-evidence-timestamp.yml run reached green."
+if [[ "${SENTINEL_PR_AUTOMATION:-0}" != "1" ]]; then
+  green "  3. (Optional) Re-run with SENTINEL_PR_AUTOMATION=1 to exercise the sentinel-PR path (closes #3908)."
+fi

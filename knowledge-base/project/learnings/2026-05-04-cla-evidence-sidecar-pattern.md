@@ -12,7 +12,7 @@ Captured during the feat-cla-legal-rigor build (PR #3201 / issue #3209). The wor
 
 ---
 
-## 1. First `cloudflare_r2_bucket` Terraform resource in the repo
+## 1. First `cloudflare_r2_bucket` Terraform resource in the repo [Updated 2026-05-16 — see §12]
 
 Before this PR, the repo's only R2 usage was the *backend* for Terraform state (`bucket = "soleur-terraform-state"`, provisioned out-of-band). There was no `cloudflare_r2_bucket` resource declared anywhere. The plan-time research surfaced this as Reconciliation #3 — the spec assumed we'd "copy the existing bucket-resource pattern" but no such pattern existed.
 
@@ -91,7 +91,7 @@ Related: when building sanitized bucket keys for allowlist-bypass records (`allo
 
 ---
 
-## 7. GDPR Art. 17 tombstone protocol for Object Lock Governance
+## 7. GDPR Art. 17 tombstone protocol for Object Lock Governance [Updated 2026-05-16 — see §12]
 
 Object Lock Compliance mode is root-immutable — no escape hatch for Art. 17 erasure requests. Object Lock Governance mode permits an administrator override (`--bypass-governance-retention`), but a naive override breaks the evidence chain: the next month's RFC 3161 manifest will show "object H vanished" rather than "object H legitimately removed."
 
@@ -176,6 +176,73 @@ The pragmatic guard (in `apps/web-platform/test/legal-doc-consistency.test.ts`) 
 3. **Last Updated date parity** — the date (not the "previous:" history fragment) must match between source body, mirror body, and mirror hero `<p>`.
 
 Tightening to full body equality is a follow-up after a one-off legacy-drift cleanup PR. The structural+sentinel guard catches all Phase 6-class drift today without false positives.
+
+---
+
+## 12. Cloudflare R2 has no S3 Object Lock — use native Lock Rules instead
+
+Discovered during the 2026-05-16 post-merge bootstrap of PR #3201 and remediated in PR #3920 (closes #3918, #3919, #3908). Sections 1 and 7 above are kept for historical record but their "S3 Object Lock via `aws s3api put-object-lock-configuration`" claim is incorrect against Cloudflare R2's actual API surface — the substitute is R2 native Lock Rules.
+
+### (a) S3 Object Lock paths return `NotImplemented` on R2
+
+Cloudflare R2's S3-compatible API does NOT implement:
+
+- `x-amz-bucket-object-lock-enabled: true` header on `CreateBucket`
+- `PutObjectLockConfiguration` / `aws s3api put-object-lock-configuration`
+- `GetObjectLockConfiguration` / `aws s3api get-object-lock-configuration` (returns success with empty body when no config exists)
+
+The `null_resource` provisioner originally written for §1 (calling `aws s3api put-object-lock-configuration`) silently no-ops or errors against R2. Empirically verified during bootstrap.
+
+### (b) The CF native equivalent: Lock Rules
+
+R2's bucket-level retention is configured via the **R2 native REST endpoint**, not the S3-compat layer:
+
+- `PUT /accounts/{account_id}/r2/buckets/{bucket_name}/lock`
+- Body shape: `{"rules":[<rule>, ...]}` — the wrapping `rules:` key is load-bearing; a bare array body returns HTTP 400.
+- Per-rule required fields: `id` (string), `condition` (object), `enabled` (boolean).
+- Per-rule optional: `prefix` (string). Empty string `""` = bucket-wide.
+- Three valid `condition.type` values: `"Age"` (with `maxAgeSeconds: number`), `"Date"` (with `date: string`), `"Indefinite"` (no other fields).
+- `GET /accounts/{id}/r2/buckets/{name}/lock` returns `{success:true, result:{rules:[...]}}`.
+- Permission scope on the bootstrap token: `Account → Cloudflare R2 → Edit` (the same admin token the bootstrap mints transiently).
+
+`cloudflare/cloudflare` provider v4.52.x ships `cloudflare_r2_bucket_lock` only for **object-key-level** rule-based age/date conditions — a different feature surface. The bucket-default Lock Rules PUT is implemented via a `null_resource` + `curl` shim in `apps/cla-evidence/infra/object_lock.tf`. Tracking FW1 (#3920 plan) to swap when CF ships a native TF resource for the bucket-default endpoint.
+
+The 10-year retention floor is preserved verbatim: `condition.maxAgeSeconds = 315360000` (= 365 × 24 × 3600 × 10).
+
+### (c) CF API bearer token ≠ R2 S3-compat HMAC creds (the 53-vs-32-char trap)
+
+Run 25971610911 (first cron after bootstrap) failed at the **R2 upload step**, NOT openssl ts -verify as the original #3919 title suggested. Error: `InvalidArgument ... Credential access key has length 53, should be 32`. Root cause: bootstrap.sh pushed the 53-char Cloudflare API bearer token as both `R2_CLA_EVIDENCE_ACCESS_KEY_ID` and `R2_CLA_EVIDENCE_SECRET`.
+
+R2's S3-compatible API requires a 32-char access-key + 64-char secret-key HMAC pair, **derived from but distinct from** the bearer token. Per Cloudflare's documented contract (`developers.cloudflare.com/r2/api/tokens/`):
+
+- Access Key ID = `result.id` of the API token (32-char hex, returned at token creation time).
+- Secret Access Key = SHA-256 hex of `result.value` (64-char hex).
+
+Both fields must be captured at token-creation time; `value` is shown once. Bootstrap.sh now:
+
+1. Reads `object_write_token_id` + `object_write_token_value` from the TF outputs.
+2. Derives the HMAC pair: `access_key=id`, `secret=$(printf '%s' "$value" | openssl dgst -sha256 -hex | awk '{print $NF}')`.
+3. Length-asserts 32 / 64 chars before pushing to Doppler — fail-fast on any shape drift.
+
+The bearer token is NOT pushed as a credential; it's not even kept post-bootstrap.
+
+### (d) Monthly cert-expiry assertion (silent-rot guard)
+
+Bundled FreeTSA certs are valid through 2040+ today, so no rotation needed. But there's no detection mechanism for the next rotation — if FreeTSA rotates and we don't refresh the bundle, the monthly cron fails silently and the chain breaks.
+
+`.github/workflows/cla-evidence-timestamp.yml` now includes a step that asserts both `apps/cla-evidence/freetsa/cacert.pem` and `tsa.crt` have >180 days remaining (`openssl x509 -noout -enddate` → date math). The 180-day floor matches FreeTSA's ~yearly rotation cadence — gives the operator a 6-month window to refresh, retest with `apps/cla-evidence/scripts/timestamp.test.sh`, and merge the refresh PR before the cron actually fails. Tighter floors risk false-positives near scheduled rotation; looser floors shrink the response window.
+
+The test in `timestamp.test.sh` (TS17.d) covers both real-cert assertion and synthetic-date math: a synthetic enddate 30 days from now MUST be rejected by the floor.
+
+### (e) §3.4 vocabulary update for legal alignment
+
+`docs/legal/gdpr-policy.md` §2.2 + §3.4 (and the `plugins/soleur/docs/pages/legal/gdpr-policy.md` mirror) referred to "Object Lock in Governance mode" — vocabulary inherited from S3. PR #3920 rewords to "R2 Lock Rules (age-based retention floor, 10 years; functionally equivalent to S3 Object Lock Governance)" with a one-sentence note that the implementations are equivalent for the §3.4 balancing test. The legal claim — 10-year WORM-protected off-site archive — is unchanged.
+
+Sentinel patterns enforced by `apps/web-platform/test/legal-doc-consistency.test.ts` (`Three-part balancing test (off-site evidence archive)`, `Cloudflare R2 (CLA evidence archive):`, `FreeTSA (RFC 3161 Time Stamp Authority):`, `Article 17(3)(e)`) do not anchor on the deprecated "Object Lock Governance" string — vocabulary update is mechanical.
+
+### (f) Phase 8 sentinel-PR automation
+
+Issue #3908 was originally labeled `type: manual` (`manual_because: end-to-end smoke requires opening real PRs against main`). Per `hr-exhaust-all-automated-options-before` + `hr-never-label-any-step-as-manual-without`, the automation path is `apps/cla-evidence/scripts/sentinel-pr.sh` with modes `human` / `bypass` / `both`. Each opens a docs-only sentinel PR, polls `inspect-evidence.sh by-pr <N>` for up to 5 minutes, asserts the record landed in R2, then `gh pr close --delete-branch` to avoid history pollution. Wired into `bootstrap.sh` Step 6 as opt-in (`SENTINEL_PR_AUTOMATION=1`); only the operator's per-command ack remains (`hr-menu-option-ack-not-prod-write-auth`).
 
 ---
 
