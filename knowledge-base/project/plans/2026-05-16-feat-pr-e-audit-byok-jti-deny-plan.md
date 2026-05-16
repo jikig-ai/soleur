@@ -13,6 +13,34 @@ spec: knowledge-base/project/specs/feat-pr-e-audit-byok-jti-deny/spec.md
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 lane: cross-domain
+deepened: 2026-05-16
+---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-16
+**Sections enhanced:** 4 (Research Reconciliation, Files to Edit, Risks, Implementation Phases)
+**Verifications run:**
+- Predecessor PR existence: `gh pr view 3395 / 3854 / 3883` — all MERGED. Titles confirmed.
+- Cited GitHub labels (`deferred-scope-out`, `domain/engineering`, `priority/p3-low`) — all present via `gh label list --limit 200`.
+- Cited AGENTS.md rule IDs (12 IDs total) — all ACTIVE via `grep -q "[id: <id>]" AGENTS.md`.
+- `MintedJwt` consumers — sole consumer is `tenant.ts:127` (return type of internal `mintFounderJwt`). R4 widening confirmed safe.
+- Type-only SDK imports — only `cc-dispatcher.ts:19` uses `import type { Query }`. Sweep test regex must filter `^import\s+type\s` lines (confirmed R3 mitigation).
+- `selectChapter` call-graph — invoked at `agent-runner.ts:1402` INSIDE the `runWithByokLease(userId, ...)` scope opened at `:863` (closed at `:1991`). Confirms brainstorm row 5a rollup claim: pdf-chapter-router cost flows through parent `persistTurnCost` at `:1876`.
+- No existing `byok-audit-writer-sweep` marker anywhere in `apps/` — clean start, allowlist count baseline = 0.
+
+### Key Improvements (verified additions to plan body)
+
+1. **Sweep test regex hardened.** Plan §Phase 3 / §Risks R3 already names the type-only filter; deepen verified only ONE type-only SDK import exists today (`cc-dispatcher.ts:19`) — sweep regex must exclude it. Added to §Test Detail.
+2. **pdf-chapter-router ALS chain proven.** Verified `selectChapter` at `agent-runner.ts:1402` sits inside the parent `runWithByokLease` scope (line 863 → 1991). Brainstorm row 5a (cost rollup) is structurally correct, not an assumption.
+3. **`MintedJwt` widening fully audited.** Sole consumer is the same-module `mintFounderJwt` return type. AC6 widening is safe (no external consumer to update). R4 confirmed.
+4. **Verification gate on cited rule IDs.** All 12 cited `hr-*` / `wg-*` / `cq-*` IDs ACTIVE in AGENTS.md at HEAD. No fabricated or retired citations.
+
+### New Considerations Discovered
+
+- **Sweep regex placement matters.** If the sweep test naively greps `"@anthropic-ai/claude-agent-sdk"` it would match `cc-dispatcher.ts` twice (line 19 type-only + line 20 runtime). Filter on `^import\s+type\s` line-prefix; canonical test below.
+- **`pdf-chapter-router.ts` does NOT need an out-of-scope marker** if the sweep filter is **only on `runWithByokLease(`** (the brainstorm's original framing). The expanded sweep (Phase 3's discussion of broadening to `query(`) would require the marker. Decision: **keep the sweep narrow** — `runWithByokLease(` only — because all 4 BYOK lease openings already cover the audit boundary; widening to `query(` adds a marker-allowlist coupling for marginal benefit. The pdf-chapter-router marker becomes nice-to-have documentation rather than a sweep-test prerequisite.
+
 ---
 
 # PR-E — audit_byok_use writer sweep + is_jti_denied consumer
@@ -230,26 +258,45 @@ describe("BYOK audit writer sweep", () => {
 });
 ```
 
-Edge cases:
-- `pdf-chapter-router.ts` does NOT use `runWithByokLease` directly (it's
-  inside the parent lease via ALS) but DOES call `query(...)`. The
-  sweep above filters on `runWithByokLease(` so pdf-chapter-router is
-  not asserted — its rollup posture is documented in the brainstorm
-  table only.
-- Decision: extend the sweep to ALSO grep for `query({` / `sdkQuery({`
-  / `import { query } from "@anthropic-ai/claude-agent-sdk"` and
-  require the same coverage. This catches the pdf-chapter-router case
-  AND any future SDK-query site that lands without a `runWithByokLease`
-  parent. The out-of-scope marker becomes the load-bearing exception
-  for the rollup case. Final sweep grep matrix:
-  - Find every `.ts` file under `server/**` that imports `query` or
-    `sdkQuery` from `@anthropic-ai/claude-agent-sdk` OR contains
-    `runWithByokLease(`.
-  - For each: assert `persistTurnCost(` OR `OUT_OF_SCOPE_MARKER`.
-- Allowlist guard: count `OUT_OF_SCOPE_MARKER` occurrences across the
-  swept files; assert ≤ 2 (pdf-chapter-router + one slack reserve)
-  so adding a new out-of-scope marker requires explicit allowlist
-  bump.
+**Deepen-plan design lock (narrow sweep):**
+
+Sweep filter is `runWithByokLease\s*\(` ONLY. Rationale:
+
+- All 4 BYOK SDK call paths today open with `runWithByokLease(userId, ...)`:
+  `agent-runner.ts:863, :2363`, `cc-dispatcher.ts:883`. The fourth path
+  is `agent-runner.ts:1607` (a `query()` INSIDE the `:863` lease), and
+  the fifth is `selectChapter` at `agent-runner.ts:1402` calling
+  `pdf-chapter-router.ts:148` (also INSIDE the `:863` lease via ALS).
+  Verified call-graph: `selectChapter` at `agent-runner.ts:1402` sits
+  in the `runWithByokLease` scope opened at `:863` and closed at `:1991`.
+
+- A new BYOK SDK call path cannot land without opening a NEW
+  `runWithByokLease` (the lease is the ONLY way the SDK picks up the
+  user's BYOK key — see `byok-lease.ts` ALS contract). Sweeping the
+  lease-opening call site is therefore canonical.
+
+- Widening to `query(`/`sdkQuery(` (deepen-pass earlier consideration)
+  would force a type-only import filter (only one type-only import
+  exists today at `cc-dispatcher.ts:19`) and an out-of-scope marker
+  for `pdf-chapter-router.ts` — added coupling for marginal benefit
+  on a 1-file edge case that the narrow sweep already covers via the
+  parent lease.
+
+Edge case still handled:
+
+- `pdf-chapter-router.ts` does NOT open its own lease; the sweep does
+  NOT assert against it. Its cost rolls up via `routingCostUsd` →
+  parent `persistTurnCost` at `agent-runner.ts:1876`. The marker
+  comment at line 148 (Phase 5 of this plan) is documentation-only,
+  not load-bearing for the sweep test.
+
+Marker-allowlist count: NOT asserted. The sweep does not require
+out-of-scope markers under the narrow filter; if a future
+`runWithByokLease(` site legitimately cannot call `persistTurnCost`,
+the contributor adds the marker AND a follow-up issue documenting
+why — the count guard would force a coupled allowlist bump for every
+such case. Skip the count assertion; rely on PR-review attention
+when a marker comment appears in a diff.
 
 ### Phase 4 — Audit-byok-use WORM tests (`audit-byok-use.tenant-isolation.test.ts`)
 

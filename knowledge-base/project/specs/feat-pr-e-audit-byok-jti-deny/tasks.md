@@ -53,12 +53,12 @@ lane: cross-domain
 ## 4. Phase 4 — Writer-sweep CI lint
 
 - [ ] 4.1 Create `apps/web-platform/test/server/byok-audit-writer-sweep.test.ts` per plan §Phase 3 code block.
-- [ ] 4.2 Sweep MUST cover:
+- [ ] 4.2 Sweep MUST cover (NARROW FILTER per deepen-plan 2026-05-16):
   - Every `.ts` file under `apps/web-platform/server/**` (excluding `**/*.test.ts` and `byok-lease.ts` itself).
-  - That contains `runWithByokLease(` OR a runtime import of `query` / `sdkQuery` from `@anthropic-ai/claude-agent-sdk` (filter out `import type` lines via regex).
+  - That contains `runWithByokLease\s*\(` (the BYOK-lease opening call).
   - Asserts the file ALSO contains `persistTurnCost(` OR the structured marker `// byok-audit-writer-sweep: out-of-scope`.
-- [ ] 4.3 Assert the `OUT_OF_SCOPE_MARKER` count across all swept files is ≤ 2.
-- [ ] 4.4 Add the marker comment line above `query({` at `apps/web-platform/server/pdf-chapter-router.ts:148`. Single line, no behavior change: `// byok-audit-writer-sweep: out-of-scope — cost rolls up via routingCostUsd into parent persistTurnCost (see plan rev-2026-05-16 row 5a)`.
+- [ ] 4.3 Do NOT widen the sweep to grep `query(` / `sdkQuery(` from `@anthropic-ai/claude-agent-sdk` — narrow filter already covers all 4 BYOK SDK paths via the parent lease (verified deepen-plan 2026-05-16). Do NOT assert an `OUT_OF_SCOPE_MARKER` count guard — see plan §Phase 3 design lock.
+- [ ] 4.4 (Optional, documentation-only.) Add the marker comment line above `query({` at `apps/web-platform/server/pdf-chapter-router.ts:148` to make the cost-rollup posture explicit for future readers: `// byok-audit-writer-sweep: out-of-scope — cost rolls up via routingCostUsd into parent persistTurnCost at agent-runner.ts:1876 (plan rev-2026-05-16 row 5a)`. Not load-bearing for the sweep test under the narrow filter.
 - [ ] 4.5 Run the sweep test → green.
 - [ ] 4.6 Verify the sweep test catches a regression: temporarily add a `runWithByokLease(...)` block to a fresh file under `server/` with no `persistTurnCost`; sweep must fail. Revert.
 
