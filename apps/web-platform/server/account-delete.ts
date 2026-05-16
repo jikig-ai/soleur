@@ -58,13 +58,15 @@ export interface DeleteAccountResult {
  *                             MUST come before auth-delete so the
  *                             WORM-trigger GUC is available before
  *                             the auth row vanishes.
+ *   5.5 anonymise-tc-acceptances — anonymise_tc_acceptances RPC (migration 044).
+ *                             MUST come before auth-delete: tc_acceptances.user_id
+ *                             has ON DELETE RESTRICT, so the auth cascade to
+ *                             public.users would abort without prior anonymisation.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
- * Recoverability invariant: anonymise-dsar-audit is idempotent. If
- * "anonymise succeeds, auth-delete fails", the job tombstone (DSAR
- * abort) + re-running this cascade is safe — anonymise re-runs as a
- * no-op, then auth-delete is re-attempted.
+ * Recoverability invariant: anonymise-dsar-audit and anonymise-tc-acceptances
+ * are both idempotent. If a later step fails, re-running this cascade is safe.
  *
  * GDPR Article 17 — Right to Erasure
  */
@@ -193,6 +195,32 @@ export async function deleteAccount(
       { userId, err },
       "anonymise-dsar-audit threw during deletion (non-fatal)",
     );
+  }
+
+  // 3.85 Anonymise tc_acceptances rows for this user BEFORE auth-delete
+  //      (migration 044). FK is ON DELETE RESTRICT — the cascade from
+  //      auth.users → public.users would abort without this. Failure here
+  //      is FATAL: skipping it guarantees the auth-delete fails too, leaving
+  //      a half-deleted user (GDPR Art. 17 violation). SECURITY DEFINER RPC,
+  //      idempotent (UPDATE … WHERE user_id IS NOT NULL).
+  try {
+    const { error: anonTcErr } = await service.rpc(
+      "anonymise_tc_acceptances",
+      { p_user_id: userId },
+    );
+    if (anonTcErr) {
+      log.error(
+        { userId, err: anonTcErr },
+        "anonymise_tc_acceptances failed — aborting deletion to avoid FK-block",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_tc_acceptances threw — aborting deletion to avoid FK-block",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

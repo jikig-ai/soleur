@@ -85,6 +85,22 @@ jobs:
       - name: Service-role allowlist gate self-test
         run: bash apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
 
+  # T&C document SHA + mirror drift guardrail (feat-oauth-tc-consent-3205).
+  # Asserts (a) canonical doc and plugin docs-site mirror have identical
+  # normalised prose bodies and (b) TC_DOCUMENT_SHA literal in
+  # apps/web-platform/lib/legal/tc-version.ts matches sha256(canonical)
+  # unless the same PR also bumped TC_VERSION. See plan AC7 + Phase 6.
+  tc-document-sha-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Verify T&C document SHA pinned in tc-version.ts
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: bash apps/web-platform/scripts/check-tc-document-sha.sh
+
   rule-metrics-shape:
     runs-on: ubuntu-latest
     steps:

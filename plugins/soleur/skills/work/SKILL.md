@@ -281,6 +281,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    - Supabase migrations + `cron.job` queries + Storage bucket
      existence + RLS spot-checks → `mcp__plugin_supabase_supabase__*`
+     **with Doppler `DATABASE_URL_POOLER` fallback when MCP is
+     unavailable** — see "Supabase fallback chain" below.
    - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close`
      → Bash via `gh` CLI
    - End-to-end UI flow → Playwright MCP (`mcp__playwright__*`)
@@ -300,6 +302,37 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    "post-merge todo" instead of being executed; deployed code
    expected the new schema and broke). Same class as the
    Playwright-first audit in Phase 4: if a tool exists, use it.
+
+   **Supabase fallback chain (when MCP OAuth fails).** The Supabase
+   MCP OAuth flow at `https://api.supabase.com/v1/oauth/authorize`
+   intermittently rejects valid URLs at the dashboard `auth_id`
+   handoff (cause: external — Supabase-side). When that happens, do
+   NOT fall back to "paste this SQL into the dashboard SQL editor"
+   handoff — that's a manual-step rationalisation that violates
+   `hr-never-label-any-step-as-manual-without`. Instead walk down the
+   `hr-exhaust-all-automated-options-before` priority chain:
+   (1) Doppler `DATABASE_URL_POOLER` — already provisioned for every
+   env; the migration apply path. (2) Verify the project ref in the
+   URL matches the plan's stated dev/prd refs — Doppler is the
+   source of truth (plan-quoted project refs are preconditions to
+   verify, never facts; the plan can drift). (3) Rewrite the URL's
+   port `:6543` → `:5432` so the pooler runs in session mode (multi-
+   statement DDL works; transaction mode rejects with SQLSTATE 42601
+   "cannot insert multiple commands into a prepared statement").
+   (4) Apply via `pg` (node-pg, bun-installed in `/tmp` if missing)
+   wrapped in `BEGIN; <migration>; COMMIT;`. The direct DB host
+   `db.<ref>.supabase.co:5432` is IPv6-only and typically
+   unreachable from operator/CI networks; the pooler is IPv4.
+   (5) Post-apply, verify schema via the same connection — RLS
+   enabled, policy_count, trigger names, RPC signatures + SECURITY
+   DEFINER flag, UNIQUE constraints. Write the verification artifact
+   to `knowledge-base/project/specs/feat-<name>/migration-checklist.md`.
+   **Why:** PR #3853 / #3205 — Supabase MCP OAuth was rejecting URLs
+   at the auth_id handoff; the agent first proposed "paste SQL into
+   dashboard" (manual-step violation), then pivoted to Playwright-
+   first audit on dashboard navigation (correct), then discovered
+   Doppler had the working `DATABASE_URL_POOLER` and applied via
+   pg directly — the path it should have taken at step 1.
 
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 

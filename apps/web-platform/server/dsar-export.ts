@@ -464,6 +464,25 @@ export async function exportSqlTable(
     });
   }
 
+  // -- tc_acceptances (T&C consent ledger; migration 044, AC15) ----------
+  {
+    const { data, error } = await service
+      .from("tc_acceptances")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`tc_acceptances read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "tc_acceptances", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "tc_acceptances",
+      spec: DSAR_TABLE_ALLOWLIST.tc_acceptances,
+      rows,
+    });
+  }
+
   return results;
 }
 

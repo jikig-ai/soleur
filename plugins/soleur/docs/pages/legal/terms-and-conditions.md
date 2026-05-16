@@ -20,7 +20,7 @@ permalink: legal/terms-and-conditions/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 -- added Web Platform service terms, scoped local-only statements to Plugin, updated data practices and GDPR rights sections for Web Platform; added subscription cancellation, refund, and EU withdrawal policy (Section 5); added Article 12(3) two-month extension provision to response timeline.
+**Last Updated:** April 10, 2026 -- added Section 8.1c Shared Content terms.
 
 ---
 
@@ -188,8 +188,8 @@ The Web Platform allows you to share individual knowledge base documents via pub
 
 - **Your responsibility:** You are solely responsible for the content you choose to share. You must ensure that shared documents do not contain confidential third-party information, personally identifiable information of others without their consent, or material that infringes third-party intellectual property rights. See the [Acceptable Use Policy](/legal/acceptable-use-policy/) for detailed rules.
 - **Jikigai's role:** Jikigai acts as a processor making the document content available at the shared URL on your instruction. Jikigai does not review, moderate, or approve shared content prior to publication.
-- **Revocation:** You may revoke a share link at any time from the Web Platform. Revocation takes immediate effect. However, Jikigai cannot guarantee that recipients have not copied, downloaded, or redistributed the content prior to revocation.
-- **No warranty of recipient conduct:** Jikigai makes no representation regarding how recipients will use shared content and accepts no liability for any downstream use by recipients.
+- **Revocation:** You may revoke a share link at any time from the Web Platform. Revocation takes immediate effect -- the shared URL will no longer serve the document content. However, Jikigai cannot guarantee that recipients have not copied, downloaded, or redistributed the content prior to revocation. You acknowledge that once content is shared via a public link, Jikigai has no ability to enforce deletion by recipients.
+- **No warranty of recipient conduct:** Jikigai makes no representation regarding how recipients will use shared content and accepts no liability for any downstream use by recipients after they access the shared document.
 
 <!-- End: KB sharing -->
 

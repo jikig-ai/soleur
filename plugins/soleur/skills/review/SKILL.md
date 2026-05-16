@@ -202,6 +202,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `data-migration-expert`: Verifies hard-coded mappings match production reality (prevents swapped IDs), checks for orphaned associations, validates dual-write patterns
 - `deployment-verification-agent`: Produces executable pre/post-deploy checklists with SQL queries, rollback procedures, and monitoring plans
+- **Runbook-obligation caller-site sweep:** When a migration adds an `ON DELETE RESTRICT` FK AND a same-PR RPC documented in the migration COMMENT as the cascade pre-step (pattern: `MUST call <rpc_name>` or `runbook MUST call`), the reviewer MUST run `git grep -n '<rpc_name>'` and require at least one match outside `supabase/migrations/`, `knowledge-base/`, and the plan file. The migration's own prose is the STATEMENT of the obligation, not evidence the obligation is satisfied. See [[2026-05-16-migration-mandates-must-have-wired-call-sites-in-same-pr]] (PR #3853 surfaced this via five concurring agent findings).
 
 **If PR contains test files:**
 

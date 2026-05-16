@@ -19,6 +19,15 @@ const { mockRpc } = vi.hoisted(() => ({
   }),
 }));
 
+// Pin TC_VERSION so the mock row's tc_accepted_version stays in lockstep
+// with recheckTcMidSession. Insulates this test from future TC_VERSION
+// bumps.
+vi.mock("@/lib/legal/tc-version", () => ({
+  TC_VERSION: "1.0.0",
+  TC_DOCUMENT_SHA:
+    "79b2d2c00136cfcd1e61cb7ee9654aeb2b80cf21f2b2d33d1f063f10948d9300",
+}));
+
 // Shared `from(table)` dispatcher reused by both the service mock
 // (legacy auth.getUser path) and the PR-C tenant mock (all tenant
 // data reads).
@@ -63,7 +72,15 @@ function makeFromDispatcher(): (table: string) => unknown {
             return eqChain;
           },
           single: vi.fn().mockResolvedValue({
-            data: { id: "conv-1", status: "active", repo_url: mockUserRepoUrl },
+            // tc_accepted_version added for recheckTcMidSession
+            // (feat-oauth-tc-consent-3205) which queries users on
+            // every gated inbound message.
+            data: {
+              id: "conv-1",
+              status: "active",
+              repo_url: mockUserRepoUrl,
+              tc_accepted_version: "1.0.0",
+            },
             error: null,
           }),
           ...tail,
