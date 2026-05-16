@@ -50,8 +50,8 @@ lane: single-domain
 
 ## Phase 3 — Push, verify CI fires
 
-- [x] 3.1 Push commit to `feat-ci-tenant-integration-job`. (Handled by
-  pipeline-mode ship phase.)
+- [ ] 3.1 Push commit to `feat-ci-tenant-integration-job`. (Deferred to
+  pipeline-mode ship phase; local commits exist, not yet pushed to origin.)
 - [ ] 3.2 Confirm `tenant-integration` check appears on PR #3893 via
   `gh pr checks 3893`. (Handled by ship phase.)
 - [ ] 3.3 Confirm workflow runs green; vitest summary matches AC6 band

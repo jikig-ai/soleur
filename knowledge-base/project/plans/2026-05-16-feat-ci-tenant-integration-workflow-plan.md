@@ -204,7 +204,7 @@ would be unrelated scope creep. #3272 remains open.
     (NOT load-bearing here since we use bun, but kept available)
   - `oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2`
   - `actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0`
-  - `DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c # v4`
+  - `DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4`
     (matching `apply-deploy-pipeline-fix.yml:95` — the freshest pin)
 - **AC10.** Workflow inherits the bun cache key from `test-webplat`:
   `bun-webplat-${{ runner.os }}-${{ hashFiles('apps/web-platform/bun.lock') }}`.
@@ -424,7 +424,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c # v4
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
       - name: Verify DOPPLER_TOKEN_DEV_SCHEDULED is provisioned
         env:
