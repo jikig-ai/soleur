@@ -69,16 +69,26 @@ CREATE POLICY "Users can write own attachment objects"
 --    run). Running the ownership check inside a SECURITY DEFINER function
 --    elevates the inner JOIN out of the tenant-JWT RLS chain so the check
 --    resolves correctly. The function is `SECURITY DEFINER` per Postgres
---    convention; `search_path` is pinned to `pg_catalog, pg_temp` per
---    `cq-pg-security-definer-search-path-pin-pg-temp` to defend against
---    schema-search-path attacks. EXECUTE is granted only to the
---    `authenticated` role so the function is unreachable from anon.
+--    convention; `search_path` is pinned to `public, pg_temp` (public FIRST
+--    per `cq-pg-security-definer-search-path-pin-pg-temp`) and every body
+--    relation is qualified `public.<table>` as belt-and-suspenders against
+--    `pg_temp.<table>` planting attacks. EXECUTE is REVOKEd from PUBLIC,
+--    anon, authenticated then GRANTed back to authenticated only — the
+--    explicit role-list REVOKE neutralises Supabase's `ALTER DEFAULT
+--    PRIVILEGES` bootstrap grants (per
+--    `2026-05-06-supabase-default-privileges-defeat-revoke-from-public.md`)
+--    so the function is unreachable from anon.
+-- Drop the dependent policy BEFORE the function so DROP FUNCTION succeeds on
+-- replay. Postgres refuses `DROP FUNCTION` while any policy references it
+-- (cannot DROP, other objects depend on it). The policy is recreated in
+-- section 3 below after the function is re-created.
+DROP POLICY IF EXISTS "Users can insert own message attachments" ON public.message_attachments;
 DROP FUNCTION IF EXISTS public.is_message_owner(uuid, uuid);
 CREATE FUNCTION public.is_message_owner(p_message_id uuid, p_user_id uuid)
   RETURNS boolean
   LANGUAGE plpgsql
   SECURITY DEFINER
-  SET search_path = pg_catalog, pg_temp
+  SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_exists boolean;
@@ -98,7 +108,7 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.is_message_owner(uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_message_owner(uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.is_message_owner(uuid, uuid) TO authenticated;
 
 -- 3. message_attachments INSERT policy.
