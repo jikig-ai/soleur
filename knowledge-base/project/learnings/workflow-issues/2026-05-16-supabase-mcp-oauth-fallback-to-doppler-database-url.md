@@ -40,7 +40,8 @@ at the `auth_id` handoff. The agent's response was wrong twice:
 ```bash
 # 1. Get the pooler URL from Doppler (priority 1).
 doppler run -p soleur -c dev -- bash -c 'echo $DATABASE_URL_POOLER'
-# → postgresql://postgres.mlwiodleouzwniehynfz:***@aws-0-eu-west-1.pooler.supabase.com:6543/postgres
+# → postgresql://<user>:<password>@aws-0-eu-west-1.pooler.supabase.com:6543/postgres
+#   (project ref and password redacted; the real values live in Doppler DATABASE_URL_POOLER)
 
 # 2. Verify the project ref matches the plan's dev/prd refs — Doppler is
 #    the source of truth (plan project refs are preconditions, not facts).

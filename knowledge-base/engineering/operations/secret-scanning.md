@@ -4,8 +4,9 @@ status: active
 audience: operators, on-call, contributors
 related:
   - https://github.com/jikig-ai/soleur/issues/3121
+  - https://github.com/jikig-ai/soleur/issues/3874
   - knowledge-base/engineering/operations/golden-tests.md
-last_updated: 2026-05-15
+last_updated: 2026-05-16
 ---
 
 # Secret-scanning floor
@@ -70,16 +71,23 @@ intentional. Examples:
   - `apps/web-platform/test/__synthesized__/.*` — fixtures with semi-sensitive
     shapes that need to look real (e.g., a JWT shape for a parser test).
   - `reports/mutation/.*` — Stryker output (also gitignored; defensive belt-and-suspenders).
-- The `private-key` rule (and **only** that rule) additionally allowlists
-  `knowledge-base/project/learnings/.*\.md$`. Learning files routinely document
-  private-key-shape symptom reproductions (e.g.,
+- The `private-key` rule **and** the `database-url-with-password` rule
+  additionally allowlist `knowledge-base/project/learnings/.*\.md$`. Learning
+  files routinely document credential-shape symptoms in recovery runbooks —
+  private-key-shape blocks (e.g.,
   `2026-05-05-leak-tripwire-self-trips-on-mask-registrations.md` — the file that
-  motivated this carve-out via [#3268](https://github.com/jikig-ai/soleur/issues/3268)
-  / [#3281](https://github.com/jikig-ai/soleur/issues/3281)). Default-pack rules
-  (AWS, Stripe, etc.) and the other 13 custom rules (Doppler, Supabase JWT,
-  Anthropic, Resend, Cloudflare, Sentry, Discord webhook, database URL, VAPID,
+  motivated the first carve-out via
+  [#3268](https://github.com/jikig-ai/soleur/issues/3268) /
+  [#3281](https://github.com/jikig-ai/soleur/issues/3281)) AND asterisk-redacted
+  Postgres connection strings pasted from operator `doppler run` output (e.g.,
+  `2026-05-16-supabase-mcp-oauth-fallback-to-doppler-database-url.md` — the file
+  that motivated the second carve-out via
+  [#3874](https://github.com/jikig-ai/soleur/issues/3874)).
+  Default-pack rules (AWS, Stripe, etc.) and the other 12 custom rules (Doppler,
+  Supabase JWT, Anthropic, Resend, Cloudflare, Sentry, Discord webhook, VAPID,
   JWT, generic-API-key, Soleur BYOK, Stripe webhook secret) remain LIVE on the
-  learnings tree — only literal `BEGIN/END PRIVATE KEY` blocks are silenced.
+  learnings tree — only literal `BEGIN/END PRIVATE KEY` blocks and
+  `postgres(ql)?://user:password@host` URLs are silenced.
 
 `apps/web-platform/test/fixtures/qa-auth.ts` is **NOT** allowlisted. It is a
 real auth-test fixture that interacts with a live Supabase test project; if
