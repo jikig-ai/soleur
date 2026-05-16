@@ -460,6 +460,16 @@ When a new token shape lands in Doppler that the current pack misses:
    token in `__goldens__/` (expect pass) and at a server path (expect fail).
 3. The weekly cron will re-scan history on Monday with the new rule pack;
    any pre-existing leak surfaces there.
+4. **When widening a rule's `paths` allowlist toward a path already
+   covered by another rule's allowlist** (e.g., adding
+   `knowledge-base/project/learnings/.*\.md$` to a second rule when
+   `private-key` already carves it out), the `allowlist-diff` CI gate
+   will NOT fire — the parser dedups paths across the union of all
+   rules' allowlists. Add the `Allowlist-Widened-By: <name>` commit
+   trailer manually as belt-and-suspenders. Diagnostic: run
+   `gitleaks git --no-banner --exit-code 1 --redact -v` (with `-v`) to
+   surface per-finding file/line/rule on stdout; `--redact` alone hides
+   the metadata you need. See #3874 / #2026-05-16 learning.
 
 ## Upgrading gitleaks
 
