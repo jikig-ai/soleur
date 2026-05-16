@@ -505,14 +505,15 @@ Reviewer pipeline at `/soleur:review` time MUST include:
    latency tolerance OR 2nd hosted founder. Labels:
    `deferred-scope-out`, `domain/engineering`, `priority/p3-low`.
 
-7. **`mapRuntimeAuthCauseToErrorCode` parity with `mapByokLeaseCauseToErrorCode`.**
-   The auth-domain error class has a 3-value union (`jwt_mint | rotation |
-   denied_jti`) but no per-cause client error code mapping. Today every
-   consumer collapses to a generic toast; on-call cannot distinguish
-   revocation from rate-limit from RPC outage at the Sentry tag layer.
-   Re-evaluation trigger: distinct UX desired per auth-failure cause,
-   OR on-call playbook bifurcation needed. Labels: `deferred-scope-out`,
-   `domain/engineering`, `priority/p3-low`.
+7. **(LANDED INLINE post-review-CONCUR-DISSENT.)** `mapRuntimeAuthCauseToErrorCode`
+   helper shipped in `lib/supabase/tenant.ts` mirroring the
+   `mapByokLeaseCauseToErrorCode` precedent. 3-value union has stable
+   client-code mapping (`session_revoked` / `auth_throttled` /
+   `auth_unavailable`); exhaustive switch with `: never` rail enforces
+   future-widening as TS build break. Catch-site adoption deferred —
+   today every site collapses to a generic toast; adopting the mapper
+   at each `reportSilentFallback` call is a follow-up UX cycle (per-
+   cause copy + on-call playbook bifurcation).
 
 8. **Synthetic-fixture sweeper for `audit_byok_use`.** WORM trigger +
    `ON DELETE RESTRICT` FK means integration test runs accumulate one

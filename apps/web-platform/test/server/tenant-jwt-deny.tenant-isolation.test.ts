@@ -34,6 +34,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
   RuntimeAuthError,
   getFreshTenantClient,
+  mapRuntimeAuthCauseToErrorCode,
   _peekCachedJti,
   _resetTenantCache,
   _setMintFnForTest,
@@ -200,5 +201,16 @@ describe("RuntimeAuthError shape (unit, no integration env)", () => {
     expect(e.cause).toBe("denied_jti");
     expect(e.message).toBe("msg");
     expect(e instanceof Error).toBe(true);
+  });
+
+  test("mapRuntimeAuthCauseToErrorCode is exhaustive over the 3-value cause union", () => {
+    // Pins the cq-union-widening-grep-three-patterns contract: every
+    // member of `RuntimeAuthError["cause"]` must map to a stable
+    // client-side error-code string. A future cause widening that
+    // forgets to extend this mapper is a TS build break, not a silent
+    // `undefined` fall-through at every catch site.
+    expect(mapRuntimeAuthCauseToErrorCode("denied_jti")).toBe("session_revoked");
+    expect(mapRuntimeAuthCauseToErrorCode("rotation")).toBe("auth_throttled");
+    expect(mapRuntimeAuthCauseToErrorCode("jwt_mint")).toBe("auth_unavailable");
   });
 });

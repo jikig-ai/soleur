@@ -78,6 +78,43 @@ export class RuntimeAuthError extends Error {
   }
 }
 
+/**
+ * Map a `RuntimeAuthError.cause` to a stable client-side error-code string.
+ * Mirrors the `mapByokLeaseCauseToErrorCode` precedent in
+ * `apps/web-platform/server/byok-lease.ts` so on-call playbooks and any
+ * future per-cause UX can distinguish revocation (`session_revoked`)
+ * from rate-limit (`auth_throttled`) from RPC outage / missing-secret
+ * (`auth_unavailable`).
+ *
+ * Per `cq-union-widening-grep-three-patterns`: the exhaustive `switch` +
+ * `: never` rail makes a future `cause` widening a TS build break here
+ * rather than a silent fall-through to `undefined` at every call site.
+ *
+ * Catch sites that today collapse all three causes to a generic toast
+ * MAY adopt this mapper to emit `extra: { code: mapRuntimeAuthCauseToErrorCode(err.cause) }`
+ * on the existing `reportSilentFallback` calls. Widening the user-facing
+ * message per cause is out of scope (the sanitized "Authentication
+ * unavailable; retry shortly" message is intentional to avoid leaking
+ * cause-discriminant info to the user surface — see the docblock on
+ * `RuntimeAuthError` above).
+ */
+export function mapRuntimeAuthCauseToErrorCode(
+  cause: RuntimeAuthError["cause"],
+): "session_revoked" | "auth_throttled" | "auth_unavailable" {
+  switch (cause) {
+    case "denied_jti":
+      return "session_revoked";
+    case "rotation":
+      return "auth_throttled";
+    case "jwt_mint":
+      return "auth_unavailable";
+    default: {
+      const _exhaustive: never = cause;
+      return _exhaustive;
+    }
+  }
+}
+
 const DEFAULT_TTL_SEC = 600;
 const JWT_AUDIENCE = "soleur-runtime";
 
