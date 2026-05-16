@@ -28,15 +28,16 @@ command -v jq >/dev/null || { red "FAIL: jq not on PATH; cannot run inspect.test
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Stub `aws`. The SUT calls:
-#   1) list-objects-v2 --bucket ... --prefix signatures/by-pr/<n>/ --query 'Contents[].Key' --output text
-#   2) s3 cp s3://bucket/<key> -
-# We dispatch on the args.
+# Stub `aws`. The SUT (by-pr mode) calls:
+#   1) list-objects-v2 --bucket ... --prefix signatures/ --query 'Contents[].Key' --output text
+#   2) s3 cp s3://bucket/<key> - (per matching record)
+# The fixture body is then filtered server-side by .pr_of_record.number; the
+# stub returns ONE key so the body filter is the gate under test.
 mk_aws_stub() {
   local fixture_body="$1"
   cat > "$work/aws" <<EOF
 #!/usr/bin/env bash
-# Stub aws — recognise list-objects-v2 and s3 cp.
+# Stub aws — recognise list-objects-v2 (JSON output for pagination) and s3 cp.
 for a in "\$@"; do
   case "\$a" in
     list-objects-v2) MODE=list ;;
@@ -44,7 +45,7 @@ for a in "\$@"; do
   esac
 done
 case "\${MODE:-}" in
-  list) echo "signatures/by-pr/4242/100.json" ;;
+  list) printf '{"Contents":[{"Key":"signatures/abc123def.json"}]}\n' ;;
   cp)   cat "$work/body.json" ;;
   *)    exit 0 ;;
 esac

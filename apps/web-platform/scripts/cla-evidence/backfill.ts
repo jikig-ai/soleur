@@ -17,7 +17,7 @@ interface SignerRow {
 }
 
 interface ClaJsonInput {
-  schema_version: "1.0";
+  schema_version: typeof SCHEMA_VERSION;
   signedContributors: SignerRow[];
 }
 

@@ -47,9 +47,24 @@ assert_schema_version() {
 }
 
 list_keys() {
-  local prefix="$1"
-  aws_exec s3api list-objects-v2 --bucket "$bucket" --prefix "$prefix" \
-    --query 'Contents[].Key' --output text 2>/dev/null || true
+  # list-objects-v2 returns at most 1000 keys per call. Paginate via
+  # ContinuationToken so the inspector still works past the first ~3 years of
+  # signatures (we expect <1k/yr at steady-state but the bound matters for
+  # disaster-recovery + GDPR Art. 15 SAR completeness).
+  local prefix="$1" token=""
+  while :; do
+    local page
+    if [[ -z "$token" ]]; then
+      page=$(aws_exec s3api list-objects-v2 --bucket "$bucket" --prefix "$prefix" \
+        --output json 2>/dev/null) || break
+    else
+      page=$(aws_exec s3api list-objects-v2 --bucket "$bucket" --prefix "$prefix" \
+        --starting-token "$token" --output json 2>/dev/null) || break
+    fi
+    printf '%s' "$page" | jq -r '.Contents[]?.Key // empty'
+    token=$(printf '%s' "$page" | jq -r '.NextContinuationToken // empty')
+    [[ -z "$token" ]] && break
+  done
 }
 
 fetch_and_print() {
@@ -65,14 +80,32 @@ fetch_and_print() {
 
 case "$mode" in
   by-pr)
+    # Records are written content-addressed at signatures/<sha>.json (no
+    # signatures/by-pr/ pointer prefix is emitted at write-time). We filter
+    # the full signatures/ listing by .pr_of_record.number, paralleling
+    # by-contributor below — keeps the write-path single-source-of-truth and
+    # avoids a second R2 PUT per sign event.
     pr="$arg"
-    keys=$(list_keys "signatures/by-pr/${pr}/" | tr '\t' '\n')
-    [[ -z "$keys" ]] && { echo "no records for PR #${pr}" >&2; exit 0; }
-    for k in $keys; do fetch_and_print "$k"; done
+    keys=$(list_keys "signatures/" | tr '\t' '\n')
+    [[ -z "$keys" ]] && { echo "no signature records found" >&2; exit 0; }
+    matched=0
+    for k in $keys; do
+      body=$(aws_exec s3 cp "s3://$bucket/$k" - 2>/dev/null) || continue
+      assert_schema_version "$body" "$k"
+      if jq -e --argjson n "$pr" '.pr_of_record.number == $n' >/dev/null 2>&1 <<< "$body"; then
+        jq --arg key "$k" '. + { _key: $key }' <<< "$body"
+        matched=$(( matched + 1 ))
+      fi
+    done
+    # `set -e` + `[[ ]] && cmd` gotcha: when matched > 0 the bracket-test
+    # returns 1, which would abort the script. Use an if-block instead.
+    if [[ "$matched" -eq 0 ]]; then
+      echo "no records for PR #${pr}" >&2
+    fi
     ;;
   by-contributor)
     login="$arg"
-    keys=$(list_keys "signatures/" | tr '\t' '\n' | grep -v '^signatures/by-pr/' || true)
+    keys=$(list_keys "signatures/" | tr '\t' '\n')
     [[ -z "$keys" ]] && { echo "no signature records found" >&2; exit 0; }
     for k in $keys; do
       body=$(aws_exec s3 cp "s3://$bucket/$k" - 2>/dev/null) || continue

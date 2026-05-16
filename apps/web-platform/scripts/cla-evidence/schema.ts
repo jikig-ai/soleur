@@ -58,15 +58,29 @@ export const EvidenceRecordSchema = z
 export type EvidenceRecord = z.infer<typeof EvidenceRecordSchema>;
 
 /**
- * Consumer-boundary assertion. Throws on schema mismatch. Callers in shell
- * context should treat the throw as exit 3 (paralleling the cited learning's
- * convention).
+ * Typed schema-mismatch error. Callers in shell context map this to exit 3
+ * (paralleling the cited learning's convention). Parallels
+ * `BackfillSchemaMismatchError` so both paths surface the same boundary
+ * via `instanceof` rather than message-regex sniffing.
+ */
+export class SchemaVersionMismatchError extends Error {
+  readonly exitCode = 3;
+  constructor(messages: string) {
+    super(`evidence record invalid (schema_version=${SCHEMA_VERSION}): ${messages}`);
+    this.name = "SchemaVersionMismatchError";
+  }
+}
+
+/**
+ * Consumer-boundary assertion. Throws SchemaVersionMismatchError on schema
+ * mismatch. The thrower's caller distinguishes via `instanceof`; the
+ * exit-3 contract is honoured uniformly across backfill / sidecar / inspect.
  */
 export function validateEvidenceRecord(payload: unknown): EvidenceRecord {
   const parsed = EvidenceRecordSchema.safeParse(payload);
   if (!parsed.success) {
     const messages = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-    throw new Error(`evidence record invalid (schema_version=${SCHEMA_VERSION}): ${messages}`);
+    throw new SchemaVersionMismatchError(messages);
   }
   return parsed.data;
 }

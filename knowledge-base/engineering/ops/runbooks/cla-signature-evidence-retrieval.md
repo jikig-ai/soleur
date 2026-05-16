@@ -1,6 +1,6 @@
 ---
 category: legal
-tags: [cla, evidence, r2, rfc3161, gdpr, dmca, freetsa]
+tags: [cla, evidence, r2, rfc-3161, gdpr, dmca, freetsa]
 date: 2026-05-16
 ---
 
@@ -104,7 +104,7 @@ bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr 9999 \
   | tee /tmp/cla-evidence-pr-9999.json
 ```
 
-This reads from the `signatures/by-pr/<pr-number>/` prefix, which holds pointer objects keyed by sign-comment-id. The pointer's payload includes the content-addressed `signatures/<sha>.json` key for the canonical record.
+Records are written content-addressed at `signatures/<sha>.json`. `by-pr` mode lists the full `signatures/` prefix and filters server-side by `.pr_of_record.number` matching the PR number — this avoids a second R2 PUT per sign event (no pointer prefix is maintained at write-time). The output is the same JSON shape as `by-contributor` with a `_key` field appended.
 
 For allowlist-bypass records (bot accounts):
 
@@ -278,11 +278,26 @@ If the tombstone is missing, the chain has a gap; file P1 and re-run the timesta
 
 Every operation against the bucket (read, write, delete, governance bypass) is recorded in the Cloudflare account audit log. After any admin-override (Section 7) or notarized export (Section 6), pull the audit log entries and attach to the incident ticket:
 
+**Option A — dashboard (interactive):**
+
 1. **Cloudflare dashboard → Manage Account → Audit Log**.
 2. Filter:
    - **Action:** R2 (Object operations).
    - **Time range:** the window of your operations.
 3. Export to CSV. Attach to the incident ticket.
+
+**Option B — API (scriptable, preferred for incidents):**
+
+```bash
+# Replace the placeholders. The token must have "Account Audit Logs: Read".
+curl -sS \
+  -H "Authorization: Bearer $CF_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/audit_logs?since=2026-01-01T00:00:00Z&before=2026-01-31T23:59:59Z&action.type=write&per_page=1000" \
+  | jq '.result[] | select(.resource.type | test("r2|bucket"))' \
+  > audit-log.json
+```
+
+Pagination: response includes `result_info.next_page` when more entries exist; iterate by appending `&page=<n>`. Reference: <https://developers.cloudflare.com/api/operations/audit-logs-get-account-audit-logs>.
 
 The audit log captures: API token ID used, operation (Read/Write/Delete + BypassGovernance flag), key, timestamp, source IP. This is the operator-side counterpart to the tombstone — both must reconcile.
 

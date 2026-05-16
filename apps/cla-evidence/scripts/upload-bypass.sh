@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
-# upload-bypass.sh — R2 conditional-PUT for the per-quarter allowlist-bypass
-# canonical record. Companion to upload-evidence.sh (Phase 2).
+# upload-bypass.sh — R2 conditional-PUT wrapper for the per-quarter
+# allowlist-bypass canonical record. Companion to upload-evidence.sh (Phase 2).
 #
-# Differs from upload-evidence.sh in the key derivation only:
-#   - Signature record key:   signatures/<sha-of-payload>.json
-#   - Bypass record key:      allowlist/<principal_safe>/<yyyy-qN>.json
+# Differs from upload-evidence.sh only in key derivation:
+#   - Evidence record key: signatures/<sha-of-payload>.json
+#   - Bypass record key:   allowlist/<principal_safe>/<yyyy-qN>.json
 #
-# Behaviour matches upload-evidence.sh: 200/201 → exit 0; 412 → exit 0
-# (idempotent, the canonical record already exists for this principal+quarter);
-# 5xx/429 → retry up to 3 with backoff; 4xx ≠ 412 → fast-fail (Kieran F5).
+# All retry / classification logic lives in r2-conditional-put.sh; this script
+# computes the key and delegates so the two upload paths stay in lockstep.
+#
+# Security: principal_safe is RE-DERIVED here from payload.principal via the
+# canonical `[bot]` -> `-bot` substitution. The payload's own principal_safe
+# field is NOT trusted for key construction — if a future caller (or attacker
+# in the build-bypass.ts path) emits `principal_safe: "dependabot[bot]"`, the
+# `[bot]` substring would otherwise appear in object keys and defeat Kieran F8.
+# By re-deriving here, the key is unforgeable from any payload field other
+# than principal itself.
 
 set -euo pipefail
 
@@ -18,63 +25,27 @@ if [[ "$#" -lt 1 ]]; then
 fi
 
 payload="$1"
-bucket="${R2_CLA_EVIDENCE_BUCKET:-soleur-cla-evidence}"
-endpoint="${R2_CLA_EVIDENCE_ENDPOINT:?R2_CLA_EVIDENCE_ENDPOINT must be set}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Extract principal_safe + quarter from payload (jq is available on
-# ubuntu-latest runners by default).
-principal_safe=$(printf '%s' "$payload" | jq -r '.principal_safe')
+principal=$(printf '%s' "$payload" | jq -r '.principal')
 quarter=$(printf '%s' "$payload" | jq -r '.quarter')
-if [[ -z "$principal_safe" || "$principal_safe" == "null" || -z "$quarter" || "$quarter" == "null" ]]; then
-  echo "::error::upload-bypass: payload missing principal_safe or quarter" >&2
+if [[ -z "$principal" || "$principal" == "null" || -z "$quarter" || "$quarter" == "null" ]]; then
+  echo "::error::upload-bypass: payload missing principal or quarter" >&2
   exit 64
 fi
+
+# Canonical sanitisation: literal `[bot]` -> `-bot`. Mirrors
+# apps/web-platform/scripts/cla-evidence/allowlist-bypass.ts sanitizePrincipal().
+# Per Kieran F8 the key must never contain the `[bot]` substring; deriving here
+# (not trusting payload.principal_safe) is the load-bearing defense.
+#
+# Note the escape on `\[bot\]`: bash pattern substitution treats unescaped
+# `[bot]` as a character class (matches any of b/o/t), which would mangle
+# `dependabot[bot]` to `dependa-bot-bot-bot...`. The backslashes force a
+# literal-substring match.
+principal_safe="${principal//\[bot\]/-bot}"
 key="allowlist/${principal_safe}/${quarter}.json"
-url="${endpoint%/}/${bucket}/${key}"
 
-put_once() {
-  curl -sS -o /dev/null -w "%{http_code}\n" --max-time 30 \
-    -X PUT \
-    -H "If-None-Match: *" \
-    -H "Content-Type: application/json" \
-    --aws-sigv4 "aws:amz:auto:s3" \
-    --user "${R2_CLA_EVIDENCE_ACCESS_KEY_ID}:${R2_CLA_EVIDENCE_SECRET}" \
-    --data-binary "$payload" \
-    "$url" 2>/dev/null || echo "000"
-}
-
-attempt_max=3
-backoff=250
-attempt=1
-while [[ "$attempt" -le "$attempt_max" ]]; do
-  code=$(put_once)
-  case "$code" in
-    200|201)
-      echo "ok status=$code key=$key attempt=$attempt"
-      exit 0
-      ;;
-    412)
-      echo "duplicate-quarter status=412 key=$key attempt=$attempt (idempotent)"
-      exit 0
-      ;;
-    429|5*)
-      if [[ "$attempt" -lt "$attempt_max" ]]; then
-        sleep "$(awk "BEGIN { printf \"%.3f\", $backoff / 1000 }")"
-        backoff=$(( backoff * 2 ))
-        attempt=$(( attempt + 1 ))
-        continue
-      fi
-      echo "::error::upload-bypass: ${attempt_max} 5xx/429; last status=$code key=$key" >&2
-      exit 2
-      ;;
-    4*)
-      echo "::error::upload-bypass: fatal-4xx status=$code key=$key" >&2
-      exit 2
-      ;;
-    *)
-      echo "::error::upload-bypass: unexpected status=$code key=$key" >&2
-      exit 2
-      ;;
-  esac
-done
-exit 2
+LABEL=upload-bypass \
+DUP_LABEL=duplicate-quarter \
+  exec bash "$script_dir/r2-conditional-put.sh" "$key" "$payload"

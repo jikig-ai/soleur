@@ -17,9 +17,11 @@
 //   doppler run -p soleur -c prd_cla -- bun run apps/web-platform/scripts/cla-backfill-evidence.ts [--dry-run]
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { buildBackfillPayloads } from "./cla-evidence/backfill";
-import { computeBodyHash, computeDocHash } from "./cla-evidence/hash";
+import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { buildBackfillPayloads, BackfillSchemaMismatchError } from "./cla-evidence/backfill";
+import { computeBodyHash } from "./cla-evidence/hash";
 
 const dryRun = process.argv.includes("--dry-run");
 
@@ -73,9 +75,11 @@ function resolveDocSha(repoRoot: string, createdAt: string): { sha: string; cont
     preExisted = true;
   }
   if (!sha) throw new Error(`could not resolve doc sha for createdAt=${createdAt}`);
-  // computeDocHash is async; do the sync subset inline.
+  // Inline sha256 over the git-show buffer. computeDocHash() is async (reads
+  // the working tree); the backfill needs a historical revision via `git show`,
+  // so sync hashing is intentional here.
   const content = execFileSync("git", ["show", `${sha}:${pathArg}`], { encoding: "buffer" });
-  const contentSha256 = require("node:crypto").createHash("sha256").update(content).digest("hex") as string;
+  const contentSha256 = createHash("sha256").update(content).digest("hex");
   return { sha, contentSha256, preExisted };
 }
 
@@ -116,7 +120,9 @@ async function main(): Promise<void> {
       process.stdout.write(json + "\n");
       continue;
     }
-    const uploader = "apps/cla-evidence/scripts/upload-evidence.sh";
+    // Resolve uploader path via the repo root so the script works from any
+    // cwd (e.g., `doppler run` from apps/web-platform/ vs from repo root).
+    const uploader = join(repoRoot, "apps/cla-evidence/scripts/upload-evidence.sh");
     if (!existsSync(uploader)) throw new Error(`uploader not found at ${uploader}`);
     const r = spawnSync("bash", [uploader, json], { stdio: "inherit" });
     if (r.status !== 0) process.exit(r.status ?? 1);
@@ -126,9 +132,8 @@ async function main(): Promise<void> {
 
 main().catch((e: unknown) => {
   process.stderr.write(`::error::${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(1);
+  // Honour the exit-3 contract uniformly: schema_version mismatch from
+  // buildBackfillPayloads must surface as exit 3, same as the sidecar and
+  // inspect-evidence.sh consumers (learning #18).
+  process.exit(e instanceof BackfillSchemaMismatchError ? 3 : 1);
 });
-
-// Touch unused imports so tsc doesn't strip them in --noEmit mode.
-void computeDocHash;
-void readFileSync;

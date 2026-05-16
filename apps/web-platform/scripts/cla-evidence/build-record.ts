@@ -9,7 +9,12 @@
 
 import { computeBodyHash } from "./hash";
 import { fetchCommentBody } from "./comment-fetch";
-import { validateEvidenceRecord, type EvidenceRecord, SCHEMA_VERSION } from "./schema";
+import {
+  validateEvidenceRecord,
+  SchemaVersionMismatchError,
+  type EvidenceRecord,
+  SCHEMA_VERSION,
+} from "./schema";
 
 const env = (k: string, optional = false): string => {
   const v = process.env[k];
@@ -94,7 +99,12 @@ async function main(): Promise<void> {
       git_sha: env("DOC_GIT_SHA"),
       content_sha256: env("DOC_CONTENT_SHA256"),
     },
-    signed_at: new Date().toISOString(),
+    // Bind signed_at to the comment's own timestamp (created_at for new
+    // signs, updated_at for edits) so the payload is fully content-
+    // addressable. Sourcing from `new Date()` here would break the
+    // R2 If-None-Match: * 412 idempotency: a workflow re-run mints a
+    // fresh timestamp -> different sha -> duplicate record under a new key.
+    signed_at: new Date(env("COMMENT_TIMESTAMP")).toISOString(),
     capture_method,
     workflow_run_id: Number(env("RUN_ID")),
     ...flags,
@@ -105,5 +115,5 @@ async function main(): Promise<void> {
 
 main().catch((e: unknown) => {
   process.stderr.write(`::error::${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(/schema_version/i.test(String(e)) ? 3 : 1);
+  process.exit(e instanceof SchemaVersionMismatchError ? e.exitCode : 1);
 });

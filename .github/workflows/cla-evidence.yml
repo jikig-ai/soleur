@@ -146,6 +146,11 @@ jobs:
           DOC_CONTENT_SHA256: ${{ steps.doc_hash.outputs.doc_content_sha256 }}
           COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_ACTION: ${{ github.event.action }}
+          # signed_at must be content-stable (per learning #18 idempotency rule):
+          # use comment.updated_at when present (edit), otherwise created_at.
+          # Workflow retries with new `new Date()` would otherwise produce a
+          # different content-addressed sha per attempt -> duplicate R2 records.
+          COMMENT_TIMESTAMP: ${{ github.event.comment.updated_at || github.event.comment.created_at }}
           ACTOR_LOGIN: ${{ github.event.comment.user.login }}
           ACTOR_ID: ${{ github.event.comment.user.id }}
           ACTOR_TYPE: ${{ github.event.comment.user.type }}
@@ -171,7 +176,13 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-bypass.ts) || exit 0
+          # build-bypass.ts contract: exits 0 with empty stdout when not a
+          # bypass; exits 0 with a JSON payload when it IS a bypass; exits 1
+          # only on a real error (missing env var, unparseable allowlist).
+          # Do NOT swallow non-zero with `|| exit 0` — that would silently
+          # erase audit records on parse failures (cq-silent-fallback-must-
+          # mirror-to-sentry).
+          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-bypass.ts)
           if [[ -z "$payload" ]]; then
             echo "Not an allowlist-bypass; skipping."
             exit 0
@@ -195,5 +206,11 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          body="Recorded: signed against \`docs/legal/individual-cla.md\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:docs/legal/individual-cla.md | sha256sum\`. Receipt: \`signatures/by-pr/$PR_NUMBER/$COMMENT_ID.json\` in the cla-evidence bucket."
+          # Receipt content references only fields the contributor can verify
+          # independently: the doc git-sha + content-sha (verifiable via
+          # `git show`) and the lookup command (`inspect-evidence.sh by-pr`).
+          # The R2 record itself is content-addressed at signatures/<sha>.json,
+          # but the sha is not predictable from the contributor's view (depends
+          # on workflow_run_id), so we don't promise a specific bucket key.
+          body="Recorded: signed against \`docs/legal/individual-cla.md\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:docs/legal/individual-cla.md | sha256sum\`. The evidence record is archived off-site under R2 Object Lock (Governance, 10yr) and retrievable via \`bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr $PR_NUMBER\` (operator-only, see retrieval runbook)."
           gh api "repos/$REPO_FULL/issues/$PR_NUMBER/comments" -X POST -f body="$body"

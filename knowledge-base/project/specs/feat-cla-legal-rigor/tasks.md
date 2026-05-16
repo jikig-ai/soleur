@@ -24,7 +24,7 @@
 - [ ] 1.15 **Operator action:** `gh secret set DOPPLER_TOKEN_CLA --body "$token"`
 - [x] 1.16 Add expense ledger entry to `knowledge-base/operations/expenses.md`
 - [x] 1.17 Add cross-link section to `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`
-- [ ] 1.18 Extend `infra-validation.yml` to run `terraform plan` against `apps/cla-evidence/infra/` (zero-drift gate)
+- [x] 1.18 Extend `infra-validation.yml` to run `terraform plan` against `apps/cla-evidence/infra/` (zero-drift gate)
 
 ## Phase 2: Sidecar workflow + receipt comment (TDD, RED first)
 
@@ -69,7 +69,7 @@
   - [ ] 2.16.15 Set `cla-check` Check Run status (RED on failure)
   - [ ] 2.16.16 Bounded `--max-time 30` on the `license/cla` status poll (dual-check folding)
 
-- [ ] 2.17 Add comment cross-link in `.github/workflows/cla.yml` pointing to `cla-evidence.yml`
+- [x] 2.17 Add comment cross-link in `.github/workflows/cla.yml` pointing to `cla-evidence.yml`
 - [x] 2.18 Extend `scripts/create-cla-required-ruleset.sh` to include `cla-evidence` Check Run (integration_id 15368) — full PUT replacement per learning #11
 - [x] 2.19 Update `scripts/required-checks.txt` with `cla-evidence`
 - [ ] 2.20 **Operator action (per-command ack required):** `bash scripts/create-cla-required-ruleset.sh`
@@ -87,7 +87,7 @@
   - [ ] 3.2.6 Invoke `bash apps/cla-evidence/scripts/upload-evidence.sh` (same path as sidecar — single source of truth)
 - [x] 3.3 Add `--dry-run` flag (prints payloads without R2 calls — pre-merge fixture verification)
 - [x] 3.4 Run tests — confirm GREEN
-- [ ] 3.5 Commit Phase 3
+- [x] 3.5 Commit Phase 3
 
 ## Phase 4: Allowlist-bypass logging (per-quarter canonical)
 
@@ -99,13 +99,13 @@
   - [ ] 4.2.4 Conditional PUT with `If-None-Match: *`; 412 → exit 0
   - [ ] 4.2.5 **Skip recording entirely if DB-id === 41898282** (`github-actions[bot]`)
 - [x] 4.3 Run tests — confirm GREEN
-- [ ] 4.4 Commit Phase 4
+- [x] 4.4 Commit Phase 4
 
 ## Phase 5: RFC 3161 monthly timestamping
 
-- [ ] 5.1 Download FreeTSA cacert + TSA cert; commit to `apps/cla-evidence/freetsa/` (`cacert.pem`, `tsa.crt`)
-- [ ] 5.2 Write `apps/cla-evidence/scripts/timestamp.test.sh` (RED-first; verify-replay + TS18b auto-issue trigger)
-- [ ] 5.3 Write `.github/workflows/cla-evidence-timestamp.yml`:
+- [x] 5.1 Download FreeTSA cacert + TSA cert; commit to `apps/cla-evidence/freetsa/` (`cacert.pem`, `tsa.crt`)
+- [x] 5.2 Write `apps/cla-evidence/scripts/timestamp.test.sh` (RED-first; verify-replay + TS18b auto-issue trigger)
+- [x] 5.3 Write `.github/workflows/cla-evidence-timestamp.yml`:
   - [ ] 5.3.1 Schedule `cron: '0 6 1 * *'` (NOT `[skip ci]`)
   - [ ] 5.3.2 Permissions: `contents: read`, `pull-requests: write`
   - [ ] 5.3.3 Doppler step loads `R2_CLA_EVIDENCE_READ_*`
@@ -117,27 +117,27 @@
   - [ ] 5.3.9 Upload `timestamps/<yyyy-mm>/manifest.tsr` + `manifest.jsonl` to R2
   - [ ] 5.3.10 7-day retry on TSA outage; auto-file `gh issue create --label cla-evidence,timestamp-failure` after 7 consecutive failures (Kieran F9)
   - [ ] 5.3.11 PR-with-auto-merge for `.tsr` commits (not direct push per learning #3)
-- [ ] 5.4 Run tests — confirm GREEN
-- [ ] 5.5 Commit Phase 5
+- [x] 5.4 Run tests — confirm GREEN
+- [x] 5.5 Commit Phase 5
 
 ## Phase 6: Legal-document updates
 
 - [ ] 6.1 Invoke `legal-document-generator` agent for revocation-clause preamble draft
 - [ ] 6.2 Invoke `legal-compliance-auditor` to review draft against existing CLA + Privacy Policy + DPA + GDPR Policy
-- [ ] 6.3 Update `docs/legal/individual-cla.md` with revocation-clause preamble
-- [ ] 6.4 Update `docs/legal/corporate-cla.md` with revocation-clause preamble
-- [ ] 6.5 Update `docs/legal/privacy-policy.md` with R2 sub-processor entry
-- [ ] 6.6 Update `docs/legal/data-protection-disclosure.md` with new processing activity
-- [ ] 6.7 Update `docs/legal/gdpr-policy.md` with three-part balancing test (Art. 17(3)(e) basis)
-- [ ] 6.8 Mirror updates to `plugins/soleur/docs/pages/legal/individual-cla.md` (both `Last Updated` locations per learning #15)
-- [ ] 6.9 Mirror updates to `plugins/soleur/docs/pages/legal/corporate-cla.md`
-- [ ] 6.10 Mirror updates to `plugins/soleur/docs/pages/legal/privacy-policy.md`
-- [ ] 6.11 Mirror updates to `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
-- [ ] 6.12 Mirror updates to `plugins/soleur/docs/pages/legal/gdpr-policy.md`
-- [ ] 6.13 Write `apps/web-platform/test/legal-doc-consistency.test.ts` (source ↔ mirror diff guard per learning #16)
-- [ ] 6.14 Run consistency test — confirm GREEN
+- [x] 6.3 Update `docs/legal/individual-cla.md` with revocation-clause preamble
+- [x] 6.4 Update `docs/legal/corporate-cla.md` with revocation-clause preamble
+- [x] 6.5 Update `docs/legal/privacy-policy.md` with R2 sub-processor entry
+- [x] 6.6 Update `docs/legal/data-protection-disclosure.md` with new processing activity
+- [x] 6.7 Update `docs/legal/gdpr-policy.md` with three-part balancing test (Art. 17(3)(e) basis)
+- [x] 6.8 Mirror updates to `plugins/soleur/docs/pages/legal/individual-cla.md` (both `Last Updated` locations per learning #15)
+- [x] 6.9 Mirror updates to `plugins/soleur/docs/pages/legal/corporate-cla.md`
+- [x] 6.10 Mirror updates to `plugins/soleur/docs/pages/legal/privacy-policy.md`
+- [x] 6.11 Mirror updates to `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
+- [x] 6.12 Mirror updates to `plugins/soleur/docs/pages/legal/gdpr-policy.md`
+- [x] 6.13 Write `apps/web-platform/test/legal-doc-consistency.test.ts` (source ↔ mirror diff guard per learning #16)
+- [x] 6.14 Run consistency test — confirm GREEN
 - [ ] 6.15 CLO-equivalent review at PR review time (separate from work-time)
-- [ ] 6.16 Commit Phase 6
+- [x] 6.16 Commit Phase 6
 
 ## Phase 7: Inspection runbook + retrieval script
 
@@ -146,8 +146,8 @@
   - [ ] 7.1.2 Subcommand `by-contributor <login>` → grep + fetch
   - [ ] 7.1.3 **Schema-version assertion (consumer #3):** `jq -e --arg v "1.0" '.schema_version == $v'` on every fetched record; exit 3 on mismatch
   - [ ] 7.1.4 Output JSON to stdout for legal-counsel piping
-- [ ] 7.2 Write `__tests__/inspect.test.sh` (TS25 schema mismatch → exit 3)
-- [ ] 7.3 Create `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md`:
+- [x] 7.2 Write `__tests__/inspect.test.sh` (TS25 schema mismatch → exit 3)
+- [x] 7.3 Create `knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md`:
   - [ ] 7.3.1 Trigger section (DMCA, IP dispute, Art. 17, revocation)
   - [ ] 7.3.2 Pre-step: CLO scope confirmation
   - [ ] 7.3.3 Read-token generation (Cloudflare dashboard, 24h TTL)
@@ -159,7 +159,7 @@
   - [ ] 7.3.9 Paid-TSA fallback procedure (DigiCert/GlobalSign)
 - [x] 7.4 Cross-link from `cloudflare-service-token-rotation.md`
 - [x] 7.5 Verify runbook contains no real PII (synthesized fixtures only per `cq-test-fixtures-synthesized-only`)
-- [ ] 7.6 Commit Phase 7
+- [x] 7.6 Commit Phase 7
 
 ## Phase 8: Bootstrap & smoke (post-merge)
 
@@ -192,15 +192,15 @@
 ## Phase 9: Expense ledger entry + sharp-edges sweep + post-merge verification
 
 - [ ] 9.1 Re-read `knowledge-base/operations/expenses.md` post-merge — confirm Phase 1 entry landed
-- [ ] 9.2 Write `knowledge-base/project/learnings/2026-05-04-cla-evidence-sidecar-pattern.md`:
+- [x] 9.2 Write `knowledge-base/project/learnings/2026-05-04-cla-evidence-sidecar-pattern.md`:
   - [ ] 9.2.1 First `cloudflare_r2_bucket` Terraform resource declaration (greenfield precedent)
   - [ ] 9.2.2 Bootstrap chicken-and-egg lesson (`gh pr merge --admin`)
   - [ ] 9.2.3 Schema-version consumer-boundary assertion across 3 consumers
   - [ ] 9.2.4 `If-None-Match: *` race-free conditional-PUT pattern
   - [ ] 9.2.5 Allowlist-bypass DB-id 41898282 filter
   - [ ] 9.2.6 4xx (≠412) fast-fail vs 5xx/429 retry classification
-- [ ] 9.3 Update brainstorm doc with open-question final answers (a/b/c/d resolutions)
-- [ ] 9.4 Update spec.md with: spec-flow gap resolutions; Elvalio's `pr_of_record.number = 3196` correction
+- [x] 9.3 Update brainstorm doc with open-question final answers (a/b/c/d resolutions)
+- [x] 9.4 Update spec.md with: spec-flow gap resolutions; Elvalio's `pr_of_record.number = 3196` correction
 - [ ] 9.5 Open follow-up PR with brainstorm + spec updates (separate from main feature PR per `wg-when-a-workflow-gap-causes-a-mistake-fix`)
 
 ## Notes

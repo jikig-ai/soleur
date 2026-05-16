@@ -50,6 +50,26 @@ Resolution: contact Cloudflare R2 support to enable Object Lock on the existing
 bucket, or recreate the bucket via `aws s3api create-bucket
 --object-lock-enabled-for-bucket`.
 
+### Mandatory post-apply verification (operator step)
+
+After every `terraform apply` that touches this root, the operator MUST run:
+
+```bash
+R2_CLA_EVIDENCE_ADMIN_KEY_ID=... \
+R2_CLA_EVIDENCE_ADMIN_SECRET=... \
+R2_CLA_EVIDENCE_ENDPOINT=https://<account>.r2.cloudflarestorage.com \
+R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
+  bash apps/cla-evidence/infra/main.test.sh --live
+```
+
+The `--live` flag calls `aws s3api get-object-lock-configuration` against R2 and
+asserts `Mode=GOVERNANCE, Days=3650`. Exit code 0 confirms the WORM guarantee is
+live; non-zero means the bucket completed creation but the Object Lock
+provisioner failed silently and the bucket is unprotected. **Do not proceed to
+the bootstrap PR merge until this assertion passes** — the entire
+legal-evidence claim rests on Object Lock being active. See user-impact-reviewer
+Finding 8 from PR #3201 multi-agent review for the failure-mode rationale.
+
 ## Token rotation
 
 - **Object-write token (`R2_CLA_EVIDENCE_*`):** synced to Doppler `prd_cla`
@@ -57,6 +77,24 @@ bucket, or recreate the bucket via `aws s3api create-bucket
   cadence: yearly, or on any leak signal. See sibling section in
   `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`.
 - **State-write token:** consumed by Terraform only. Rotation cadence: yearly.
+
+## Token blast radius
+
+Both API tokens are **bucket-scoped**, not account-scoped (per PR #3201
+multi-agent review). Each token's `resources` map names exactly the bucket it
+needs via `com.cloudflare.edge.r2.bucket.<account>_default_<bucket>`:
+
+- `cla_evidence_object_write` → `soleur-cla-evidence` only.
+- `cla_evidence_state_write` → `soleur-terraform-state` only.
+
+R2 tokens don't support prefix-level scoping — bucket is the finest grain. The
+state-write token therefore covers all of `soleur-terraform-state` (which holds
+other Terraform roots' state too). Tightening below bucket level requires a
+dedicated state bucket per root and is deferred as out-of-scope for this layer.
+
+`main.test.sh` includes a static-lint regression guard: any future edit
+reverting to account-wide `com.cloudflare.api.account.<id>` scope fails the
+gate.
 
 ## NOT in this root
 
