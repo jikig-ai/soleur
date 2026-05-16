@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# Create the "CLA Required" repository ruleset on jikig-ai/soleur.
+# Create or update the "CLA Required" repository ruleset on jikig-ai/soleur.
 #
-# This script adds the `cla-check` status check as a required check on main,
-# ensuring all contributors have signed the CLA before merging.
+# Required status checks (integration_id 15368 = GitHub Actions Check Runs API):
+#   - cla-check     (existing job in .github/workflows/cla.yml)
+#   - cla-evidence  (sidecar evidence-write gate from .github/workflows/cla-evidence.yml)
 #
 # bypass_mode is "pull_request" for OrganizationAdmin and RepositoryRole,
 # blocking direct pushes to main while allowing admin bypass on PRs.
 # The CLA bot Integration retains "always" so it can update CLA status.
 #
-# Refs: #1655
+# Re-apply semantics: GitHub ruleset PUT is full-replace, not partial (learning
+# #11). When the ruleset exists, this script PUTs the entire desired payload to
+# the ruleset's ID — sweeping any ghost bypass actors and reconciling the
+# required-checks list. When it does not exist, it POSTs to create.
+#
+# Refs: #1655, #3209
 
 set -euo pipefail
 
@@ -17,10 +23,6 @@ RULESET_NAME="CLA Required"
 
 # Check if ruleset already exists
 existing=$(gh api "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | .id" 2>/dev/null || true)
-if [[ -n "$existing" ]]; then
-  echo "Ruleset '${RULESET_NAME}' already exists (ID: ${existing}). Skipping creation."
-  exit 0
-fi
 
 # Write payload to temp file to avoid shell escaping issues (per institutional learning)
 payload=$(mktemp)
@@ -47,6 +49,10 @@ cat > "$payload" << 'EOF'
           {
             "context": "cla-check",
             "integration_id": 15368
+          },
+          {
+            "context": "cla-evidence",
+            "integration_id": 15368
           }
         ]
       }
@@ -72,8 +78,13 @@ cat > "$payload" << 'EOF'
 }
 EOF
 
-echo "Creating '${RULESET_NAME}' ruleset on ${REPO}..."
-result=$(gh api "repos/${REPO}/rulesets" -X POST --input "$payload")
-
-echo "Ruleset created. Verification:"
+if [[ -n "$existing" ]]; then
+  echo "Updating '${RULESET_NAME}' ruleset (ID: ${existing}) via full-replace PUT (learning #11)..."
+  result=$(gh api "repos/${REPO}/rulesets/${existing}" -X PUT --input "$payload")
+  echo "Ruleset updated. Verification:"
+else
+  echo "Creating '${RULESET_NAME}' ruleset on ${REPO}..."
+  result=$(gh api "repos/${REPO}/rulesets" -X POST --input "$payload")
+  echo "Ruleset created. Verification:"
+fi
 echo "$result" | jq '{id, name, enforcement, checks: .rules[0].parameters.required_status_checks, bypass_actors: [.bypass_actors[] | {actor_type, bypass_mode}]}'

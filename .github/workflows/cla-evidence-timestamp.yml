@@ -1,0 +1,333 @@
+name: cla-evidence-timestamp
+
+# Monthly RFC 3161 timestamp of the CLA evidence archive (per plan Phase 5).
+# Produces an unbroken evidentiary chain over time so a future BSL → Apache 2.0
+# relicensing event is defensible: every month, hash the current state of the
+# off-site R2 archive (signatures/, allowlist/, tombstones/) and timestamp the
+# manifest at FreeTSA. Resulting .tsr proves the archive contents existed at
+# the timestamp's UTC time, even if R2 is later compromised.
+#
+# Plan: knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md
+# Issue: #3209
+#
+# IMPORTANT: do NOT add a CI-skip directive to any commit message this
+# workflow produces — required Check Runs would deadlock per learning #12.
+# (The literal directive token is intentionally not spelled here so the
+# `lint-bot-statuses` gate, which substring-matches commit/workflow bodies,
+# does not flag this comment as a real skip token. See #3548.)
+# Direct push from github-actions[bot] is rejected by the CLA Required ruleset
+# (learning #3); persist via PR-with-auto-merge instead.
+#
+# SECURITY: workflow_dispatch input is regex-validated before any shell use.
+# All step outputs that flow into run: blocks are routed via env: (no direct
+# ${{ }} substitution inside run: commands) per workflow-injection guidance.
+
+on:
+  schedule:
+    # 1st of every month at 06:00 UTC. Light load on FreeTSA; well within
+    # "do not abuse" caveat for a single submission per month.
+    - cron: '0 6 1 * *'
+  workflow_dispatch:
+    # Operator-triggered retry path used after a TSA outage. Up to 7 days of
+    # retries before the persistent-failure escalation fires (Kieran F9).
+    inputs:
+      manifest_yyyy_mm:
+        description: 'YYYY-MM to use in the manifest (defaults to current UTC month). Use to retry a prior month.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write # auto-file tracking issue on persistent failure (Kieran F9)
+
+concurrency:
+  group: cla-evidence-timestamp
+  cancel-in-progress: false
+
+jobs:
+  timestamp:
+    runs-on: ubuntu-latest
+    env:
+      REPO_FULL: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      # DOPPLER_TOKEN_CLA is scoped to `prd_cla` config (learning #9).
+      # The cron job needs both list (signatures/, allowlist/, tombstones/) and
+      # put (timestamps/<yyyy-mm>/) — the operator provisions the R2 token
+      # accordingly and syncs it as R2_CLA_EVIDENCE_*. Same Doppler token as
+      # the sidecar workflow; secrets are not auto-masked per learning #6.
+      - name: Load Doppler secrets
+        id: doppler
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_CLA }}
+        run: |
+          set -euo pipefail
+          access_key=$(doppler secrets get R2_CLA_EVIDENCE_ACCESS_KEY_ID --plain)
+          secret=$(doppler secrets get R2_CLA_EVIDENCE_SECRET --plain)
+          endpoint=$(doppler secrets get R2_CLA_EVIDENCE_ENDPOINT --plain)
+          bucket=$(doppler secrets get R2_CLA_EVIDENCE_BUCKET --plain)
+          echo "::add-mask::$access_key"
+          echo "::add-mask::$secret"
+          echo "access_key=$access_key" >> "$GITHUB_OUTPUT"
+          echo "secret=$secret" >> "$GITHUB_OUTPUT"
+          echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
+          echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
+
+      # Resolve target YYYY-MM. workflow_dispatch input overrides; otherwise
+      # use the current UTC month. The always-timestamp invariant (spec-flow
+      # gap #9): YYYY-MM is folded into the manifest pre-image so each month
+      # produces a unique TSQ even if no signers were added.
+      - name: Resolve target month
+        id: month
+        env:
+          INPUT_YYYY_MM: ${{ github.event.inputs.manifest_yyyy_mm }}
+        run: |
+          set -euo pipefail
+          ym="${INPUT_YYYY_MM:-}"
+          if [[ -z "$ym" ]]; then
+            ym=$(date -u +%Y-%m)
+          fi
+          # Defense-in-depth: reject anything that isn't YYYY-MM.
+          if ! [[ "$ym" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+            echo "::error::manifest_yyyy_mm must match YYYY-MM (got: $ym)"
+            exit 64
+          fi
+          echo "yyyy_mm=$ym" >> "$GITHUB_OUTPUT"
+          echo "Target month: $ym"
+
+      # Build the manifest. List every object under signatures/, allowlist/,
+      # and tombstones/ via the S3-compatible API; capture {key, etag, size,
+      # last_modified} as one JSONL row per object, sorted by key for
+      # determinism. Then prepend a header line carrying the YYYY-MM
+      # invariant (spec-flow gap #9) so the same archive state produces a
+      # distinct manifest each month.
+      - name: Build manifest
+        id: manifest
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.doppler.outputs.access_key }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.doppler.outputs.secret }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ steps.doppler.outputs.endpoint }}
+          R2_BUCKET: ${{ steps.doppler.outputs.bucket }}
+          YYYY_MM: ${{ steps.month.outputs.yyyy_mm }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          : > out/manifest.jsonl
+          # Header carries the always-timestamp invariant. Distinct per month
+          # even when the archive is unchanged.
+          printf '{"manifest_yyyy_mm":"%s","schema_version":"1.0"}\n' "$YYYY_MM" >> out/manifest.jsonl
+          for prefix in signatures/ allowlist/ tombstones/; do
+            # ListObjectsV2 paginates; --output json gives a stable structure.
+            aws --endpoint-url "$R2_ENDPOINT" s3api list-objects-v2 \
+              --bucket "$R2_BUCKET" --prefix "$prefix" \
+              --output json 2>/dev/null \
+              | jq -r --arg p "$prefix" \
+                  '(.Contents // []) | sort_by(.Key) | .[] |
+                   {key: .Key, etag: .ETag, size: .Size, last_modified: .LastModified} |
+                   tojson' >> out/manifest.jsonl || true
+          done
+          lines=$(wc -l < out/manifest.jsonl)
+          sha=$(sha256sum out/manifest.jsonl | awk '{print $1}')
+          echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "Manifest lines: $lines, sha256: $sha"
+
+      # Build the RFC 3161 TSQ (SHA-256, --no_nonce, --cert). FreeTSA accepts
+      # POST application/timestamp-query; response is a binary .tsr. Bound by
+      # --max-time 30 per AGENTS.md plan-skill sharp-edge.
+      - name: Build TSQ + POST to FreeTSA
+        id: freetsa
+        run: |
+          set -euo pipefail
+          openssl ts -query -data out/manifest.jsonl -sha256 -cert -no_nonce -out out/request.tsq
+          http=$(curl -sS --max-time 30 -w '%{http_code}' \
+            -H "Content-Type: application/timestamp-query" \
+            --data-binary @out/request.tsq \
+            -o out/response.tsr \
+            https://freetsa.org/tsr || echo "000")
+          echo "freetsa_http=$http" >> "$GITHUB_OUTPUT"
+          if [[ "$http" != "200" ]]; then
+            echo "::error::FreeTSA submission failed: http=$http"
+            exit 1
+          fi
+          # Sanity: response must be non-empty DER.
+          if [[ ! -s out/response.tsr ]]; then
+            echo "::error::FreeTSA returned empty body"
+            exit 1
+          fi
+
+      # openssl ts -verify proves: the .tsr binds the SHA-256 of our
+      # manifest.jsonl AND the TSA signature chains up to the bundled FreeTSA
+      # root CA. If certs rotate, the test fixture timestamp.test.sh fails
+      # first — the operator refreshes apps/cla-evidence/freetsa/{cacert,tsa}
+      # before next month's cron.
+      - name: Verify .tsr against bundled FreeTSA certs
+        run: |
+          set -euo pipefail
+          out=$(openssl ts -verify \
+            -in out/response.tsr \
+            -data out/manifest.jsonl \
+            -CAfile apps/cla-evidence/freetsa/cacert.pem \
+            -untrusted apps/cla-evidence/freetsa/tsa.crt 2>&1)
+          echo "$out"
+          if ! grep -qE '^Verification: OK$' <<<"$out"; then
+            echo "::error::openssl ts -verify did not report Verification: OK"
+            exit 1
+          fi
+
+      # Upload both artifacts to R2 at timestamps/<yyyy-mm>/. The manifest and
+      # the .tsr together let any future auditor re-run the verify command
+      # offline using only the bundled FreeTSA certs.
+      - name: Upload manifest + .tsr to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.doppler.outputs.access_key }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.doppler.outputs.secret }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ steps.doppler.outputs.endpoint }}
+          R2_BUCKET: ${{ steps.doppler.outputs.bucket }}
+          YYYY_MM: ${{ steps.month.outputs.yyyy_mm }}
+        run: |
+          set -euo pipefail
+          aws --endpoint-url "$R2_ENDPOINT" s3 cp out/manifest.jsonl \
+            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest.jsonl" \
+            --content-type application/x-ndjson
+          aws --endpoint-url "$R2_ENDPOINT" s3 cp out/response.tsr \
+            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest.tsr" \
+            --content-type application/timestamp-reply
+
+      # Persist via PR-with-auto-merge to the cla-signatures branch (learning
+      # #3 — direct push from github-actions[bot] is rejected by the CLA
+      # Required ruleset). The cla-signatures branch already exists; we
+      # commit the two artifacts as a paper trail in git as well as R2.
+      # NO CI-skip directive anywhere in the produced commit message — the
+      # bracket-style skip token deadlocks the required Check Runs on the PR
+      # (learning #12). The commit body below is intentionally plain prose.
+      - name: Persist via PR-with-auto-merge to cla-signatures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          YYYY_MM: ${{ steps.month.outputs.yyyy_mm }}
+          MANIFEST_SHA: ${{ steps.manifest.outputs.sha256 }}
+          MANIFEST_LINES: ${{ steps.manifest.outputs.lines }}
+          FREETSA_HTTP: ${{ steps.freetsa.outputs.freetsa_http }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Branch off cla-signatures to keep evidence + timestamps on the
+          # same legal-paper-trail branch.
+          git fetch origin cla-signatures --quiet
+          branch="cla-evidence/timestamp-${YYYY_MM}-$(date -u +%Y%m%d%H%M%S)"
+          git checkout -b "$branch" origin/cla-signatures
+
+          mkdir -p "timestamps/${YYYY_MM}"
+          cp out/manifest.jsonl "timestamps/${YYYY_MM}/manifest.jsonl"
+          cp out/response.tsr "timestamps/${YYYY_MM}/manifest.tsr"
+          git add "timestamps/${YYYY_MM}/manifest.jsonl" "timestamps/${YYYY_MM}/manifest.tsr"
+
+          # If a prior run for the same month already landed identical bytes,
+          # there is nothing to commit; exit cleanly. The R2 upload above is
+          # idempotent in practice (PUT overwrites).
+          if git diff --cached --quiet; then
+            echo "No new bytes for ${YYYY_MM}; nothing to commit."
+            exit 0
+          fi
+
+          # Heredoc into a file to keep YAML block-scalar indentation sane.
+          {
+            printf 'chore(cla-evidence): RFC 3161 timestamp %s\n\n' "$YYYY_MM"
+            printf 'Manifest sha256: %s (%s lines)\n' "$MANIFEST_SHA" "$MANIFEST_LINES"
+            printf 'FreeTSA HTTP: %s\n' "$FREETSA_HTTP"
+            printf 'Run: %s\n\n' "$RUN_URL"
+            printf 'Auto-generated by .github/workflows/cla-evidence-timestamp.yml.\n'
+          } > out/commit-msg.txt
+          git commit -F out/commit-msg.txt
+          git push -u origin "$branch"
+
+          {
+            printf 'Monthly RFC 3161 timestamp for the CLA evidence archive (plan Phase 5).\n\n'
+            printf -- '- Manifest sha256: `%s` (%s lines)\n' "$MANIFEST_SHA" "$MANIFEST_LINES"
+            printf -- '- FreeTSA HTTP: %s\n' "$FREETSA_HTTP"
+            printf -- '- Run: %s\n\n' "$RUN_URL"
+            printf 'Verify locally:\n```\n'
+            printf 'openssl ts -verify -in timestamps/%s/manifest.tsr -data timestamps/%s/manifest.jsonl -CAfile apps/cla-evidence/freetsa/cacert.pem -untrusted apps/cla-evidence/freetsa/tsa.crt\n' "$YYYY_MM" "$YYYY_MM"
+            printf '```\n'
+          } > out/pr-body.txt
+          gh pr create \
+            --base cla-signatures \
+            --head "$branch" \
+            --title "chore(cla-evidence): RFC 3161 timestamp ${YYYY_MM}" \
+            --body-file out/pr-body.txt
+          gh pr merge "$branch" --squash --auto
+
+      # Kieran F9: persistent-failure escalation. On any failure, file or
+      # update a tracking issue. If an issue for this month already exists
+      # and is older than 7 days, escalate via the `action-required` label.
+      # Dedupes via the canonical title pattern.
+      - name: Auto-file tracking issue on persistent failure (Kieran F9)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          YYYY_MM: ${{ steps.month.outputs.yyyy_mm }}
+        run: |
+          set -euo pipefail
+          ym="${YYYY_MM:-$(date -u +%Y-%m)}"
+          title="[CLA Evidence] FreeTSA outage ${ym}"
+          runbook="knowledge-base/engineering/ops/runbooks/cla-signature-evidence-retrieval.md"
+          # Body file keeps YAML block-scalar indentation sane (multi-line
+          # strings inside run: blocks are parsed as YAML, not bash).
+          mkdir -p out
+          {
+            printf 'Monthly RFC 3161 timestamp workflow failed. See run: %s\n\n' "$RUN_URL"
+            printf 'Retry via Actions → cla-evidence-timestamp → Run workflow (workflow_dispatch).\n'
+            printf 'After 7 consecutive failures, switch to the paid-TSA fallback documented at `%s`.\n' "$runbook"
+          } > out/issue-body.txt
+
+          # Dedup by exact title match (deterministic; no list-search needed
+          # to construct unique titles).
+          N=$(gh issue list \
+            --repo "$REPO_FULL" \
+            --label cla-evidence,timestamp-failure \
+            --state open \
+            --search "\"$title\" in:title" \
+            --json number,title,createdAt \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | "\(.number) \(.createdAt)"' \
+            | head -1)
+          if [[ -z "$N" ]]; then
+            gh issue create \
+              --repo "$REPO_FULL" \
+              --title "$title" \
+              --label cla-evidence,timestamp-failure \
+              --body-file out/issue-body.txt
+            exit 0
+          fi
+          num=$(echo "$N" | awk '{print $1}')
+          created=$(echo "$N" | awk '{print $2}')
+          {
+            printf 'Re-detected on %s.\n\n' "$(date -u +%Y-%m-%d)"
+            cat out/issue-body.txt
+          } > out/issue-comment.txt
+          gh issue comment "$num" --repo "$REPO_FULL" --body-file out/issue-comment.txt
+          # Escalate after 7 days.
+          if [[ -n "$created" ]]; then
+            created_epoch=$(date -u -d "$created" +%s 2>/dev/null || echo 0)
+            now_epoch=$(date -u +%s)
+            age_days=$(( (now_epoch - created_epoch) / 86400 ))
+            if [[ "$age_days" -ge 7 ]]; then
+              gh issue edit "$num" --repo "$REPO_FULL" --add-label action-required || true
+              gh issue comment "$num" --repo "$REPO_FULL" \
+                --body "ESCALATION: outage has persisted for ${age_days} days. Operator action required — switch to paid-TSA fallback (DigiCert/GlobalSign) per \`${runbook}\`."
+            fi
+          fi

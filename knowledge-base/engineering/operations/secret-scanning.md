@@ -4,8 +4,10 @@ status: active
 audience: operators, on-call, contributors
 related:
   - https://github.com/jikig-ai/soleur/issues/3121
+  - https://github.com/jikig-ai/soleur/issues/3874
+  - https://github.com/jikig-ai/soleur/issues/3877
   - knowledge-base/engineering/operations/golden-tests.md
-last_updated: 2026-05-15
+last_updated: 2026-05-16
 ---
 
 # Secret-scanning floor
@@ -64,27 +66,55 @@ intentional. Examples:
   default pack's `aws-access-token` rule. AWS keys never belong in fixtures
   even synthesized — if you need one for a contract test, paste it through
   the official sandbox docs and document the source.
-- Our 13 custom rules each carry the same `paths` allowlist:
+- Our 12 custom rules each carry the same `paths` allowlist:
   - `__goldens__/.*` — golden snapshots from the A2 surface (#3121, #3143, #3144).
   - `(__snapshots__|__goldens__)/.*\.snap$` — anchored snapshot files.
   - `apps/web-platform/test/__synthesized__/.*` — fixtures with semi-sensitive
     shapes that need to look real (e.g., a JWT shape for a parser test).
   - `reports/mutation/.*` — Stryker output (also gitignored; defensive belt-and-suspenders).
-- The `private-key` rule (and **only** that rule) additionally allowlists
-  `knowledge-base/project/learnings/.*\.md$`. Learning files routinely document
-  private-key-shape symptom reproductions (e.g.,
-  `2026-05-05-leak-tripwire-self-trips-on-mask-registrations.md` — the file that
-  motivated this carve-out via [#3268](https://github.com/jikig-ai/soleur/issues/3268)
-  / [#3281](https://github.com/jikig-ai/soleur/issues/3281)). Default-pack rules
-  (AWS, Stripe, etc.) and the other 13 custom rules (Doppler, Supabase JWT,
-  Anthropic, Resend, Cloudflare, Sentry, Discord webhook, database URL, VAPID,
-  JWT, generic-API-key, Soleur BYOK, Stripe webhook secret) remain LIVE on the
-  learnings tree — only literal `BEGIN/END PRIVATE KEY` blocks are silenced.
+- Two custom rules carry an **additional** carve-out for
+  `knowledge-base/project/learnings/.*\.md$`, because learning files routinely
+  document credential-shape symptoms in recovery runbooks:
+  - The `private-key` rule — motivated by literal `BEGIN/END PRIVATE KEY`
+    blocks in symptom reproductions (e.g.,
+    `2026-05-05-leak-tripwire-self-trips-on-mask-registrations.md`, added via
+    [#3268](https://github.com/jikig-ai/soleur/issues/3268) /
+    [#3281](https://github.com/jikig-ai/soleur/issues/3281)).
+  - The `database-url-with-password` rule — motivated by asterisk-redacted
+    Postgres connection strings pasted from operator `doppler run` output
+    (e.g., `2026-05-16-supabase-mcp-oauth-fallback-to-doppler-database-url.md`,
+    motivated by issue [#3874](https://github.com/jikig-ai/soleur/issues/3874),
+    landed in PR [#3875](https://github.com/jikig-ai/soleur/pull/3875)).
+- Default-pack rules (AWS, Stripe, etc.) and the other 12 custom rules
+  (Doppler, Supabase JWT, Anthropic, Resend, Cloudflare, Sentry, Discord
+  webhook, VAPID, JWT, generic-API-key, Soleur BYOK, Stripe webhook secret)
+  remain LIVE on the learnings tree — only literal `BEGIN/END PRIVATE KEY`
+  blocks and `postgres(ql)?://user:password@host` URLs are silenced.
 
 `apps/web-platform/test/fixtures/qa-auth.ts` is **NOT** allowlisted. It is a
 real auth-test fixture that interacts with a live Supabase test project; if
 it ever needs a synthesized token, the file should move under
 `apps/web-platform/test/__synthesized__/`.
+
+### Placeholder-regex allowlist — `database-url-with-password`
+
+Orthogonal to the path carve-out above, the `database-url-with-password` rule
+carries a per-rule `regexes = [...]` placeholder allowlist that silences
+documentation-shape connection strings regardless of path. The current
+allowlist covers:
+
+- Literal placeholder user-and-password shapes — `postgres://USER:PASSWORD@host`,
+  `postgres://user:password@host`, `postgres://postgres:secret@host`.
+- Angle-bracket placeholders — `postgres://<user>:<password>@host`.
+- Asterisk-redacted password shapes — `postgres://user:***@host` (one or more
+  literal asterisks) — added via
+  [#3877](https://github.com/jikig-ai/soleur/issues/3877) to recognize the
+  canonical Doppler/`psql`/pooler-output redaction convention.
+
+The placeholder regex covers ONLY the canonical shapes. Prose-style redactions
+that extend beyond placeholder form (e.g., a Supabase pooler URL like
+`postgres.<projectref>:***@`, where the user portion is dotted-with-projectref)
+still rely on the path carve-out for the learnings tree.
 
 ### Rename-laundering — empirical behavior (gitleaks v8.24.2)
 
@@ -452,6 +482,16 @@ When a new token shape lands in Doppler that the current pack misses:
    token in `__goldens__/` (expect pass) and at a server path (expect fail).
 3. The weekly cron will re-scan history on Monday with the new rule pack;
    any pre-existing leak surfaces there.
+4. **When widening a rule's `paths` allowlist toward a path already
+   covered by another rule's allowlist** (e.g., adding
+   `knowledge-base/project/learnings/.*\.md$` to a second rule when
+   `private-key` already carves it out), the `allowlist-diff` CI gate
+   will NOT fire — the parser dedups paths across the union of all
+   rules' allowlists. Add the `Allowlist-Widened-By: <name>` commit
+   trailer manually as belt-and-suspenders. Diagnostic: run
+   `gitleaks git --no-banner --exit-code 1 --redact -v` (with `-v`) to
+   surface per-finding file/line/rule on stdout; `--redact` alone hides
+   the metadata you need. See #3874 / #2026-05-16 learning.
 
 ## Upgrading gitleaks
 
