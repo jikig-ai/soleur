@@ -1,0 +1,65 @@
+# Daily sweep of `follow-through` labeled issues. Parses the
+# `<!-- soleur:followthrough script=... earliest=... secrets=... -->`
+# directive in each open issue body and runs the referenced script with
+# only the secrets it declared. Closes with PASS comment on exit 0,
+# comments FAIL on exit 1, comments TRANSIENT on any other exit.
+#
+# Convention: knowledge-base/engineering/ops/runbooks/followthrough-convention.md
+#
+# Cron `0 18 * * *` (daily 18:00 UTC) — aligns with the issue-body
+# convention to express `earliest` in UTC and gives one sweep per
+# wall-clock day.
+#
+# Security model:
+#   - Verification scripts MUST live under scripts/followthroughs/ in the
+#     repo. The sweeper rejects any other path before exec. This means
+#     issue body editors cannot point the runner at arbitrary files.
+#   - The sweeper exports ONLY the secrets listed in the directive's
+#     `secrets=` clause. Add new secrets here as new follow-throughs
+#     declare them.
+#   - Issue body content is parsed via awk on stdin (never shell
+#     interpolation), then passed to bash as parameter values. Issue
+#     creators cannot inject shell commands via body content.
+#
+# To test manually: gh workflow run scheduled-followthrough-sweeper.yml
+
+name: "Scheduled: Follow-Through Sweeper"
+
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'If true, parse + report but do not comment or close'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: schedule-followthrough-sweeper
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Run sweeper
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          # Secrets that one or more verification scripts may declare via
+          # the `secrets=` directive clause. Add new ones here when a new
+          # follow-through ships needing them.
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash scripts/sweep-followthroughs.sh

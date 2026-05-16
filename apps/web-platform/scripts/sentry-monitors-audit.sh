@@ -42,7 +42,7 @@ SENTRY_PROJECT="${SENTRY_PROJECT:-}"
 # --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
-  for candidate in sentry.io de.sentry.io; do
+  for candidate in de.sentry.io sentry.io; do
     http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
@@ -55,6 +55,49 @@ if [[ -z "$api_host" ]]; then
     echo "ERROR: Sentry token not valid against either US or EU ingest" >&2
     exit 1
   fi
+fi
+
+# --- DSN cluster + residency mismatch detector ----------------------------
+# DSN cluster substring is the authoritative residency signal (per learning
+# 2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md): the
+# SDK ingests events at the cluster encoded in `NEXT_PUBLIC_SENTRY_DSN` /
+# `SENTRY_DSN`, not at the API host the auditor happens to probe.
+#
+# Extract the cluster segment (e.g., `de` from
+# `https://abc@o123.ingest.de.sentry.io/456`). Fail-closed default `us`
+# covers bare `ingest.sentry.io` DSNs and missing-DSN envs (which means a
+# DE-host probe against an unset DSN env will trip the mismatch detector
+# below — the right failure mode for §5(2) accountability).
+# `|| true` keeps `set -e` happy when the DSN env is unset or US-shaped
+# (both `grep -oE` calls exit 1 on no-match). The fallback below resolves
+# to `us`, which is the correct US-cluster default.
+dsn_cluster=$(printf '%s' "${NEXT_PUBLIC_SENTRY_DSN:-${SENTRY_DSN:-}}" \
+  | { grep -oE 'ingest\.[a-z0-9]{2,}\.sentry\.io' || true; } \
+  | { grep -oE '\.[a-z0-9]{2,}\.' || true; } \
+  | tr -d '.')
+[[ -z "$dsn_cluster" ]] && dsn_cluster="us"
+
+# Mismatch detector: if the region segment of the probed host differs from
+# the DSN cluster, refuse to emit the audit artifact. The audit workflow's
+# `set +e` + `::warning::` branch handles the non-zero exit gracefully (no
+# `gh release upload`). Refs #3861.
+#
+# `sentry.io` is the US cluster's bare form (no region prefix). Explicit
+# case branch — parameter-expansion arithmetic on the bare host produces
+# `io`, not `us`, and would fire a false-positive mismatch in the all-US
+# pre-migration configuration.
+case "$api_host" in
+  sentry.io)    host_region="us" ;;
+  de.sentry.io) host_region="de" ;;
+  *.sentry.io)
+    host_region="${api_host%.sentry.io}"
+    host_region="${host_region##*.}"
+    ;;
+  *) host_region="$api_host" ;;
+esac
+if [[ "$host_region" != "$dsn_cluster" ]]; then
+  echo "ERROR: residency mismatch — probed=${api_host} DSN cluster=${dsn_cluster} — refusing to emit audit artifact (refs #3861)" >&2
+  exit 2
 fi
 
 # --- Fetch monitors (org-wide) -------------------------------------------
@@ -230,7 +273,8 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   printf '# Sentry Monitors/Alerts Migration Audit\n\n'
   printf -- '- **Date (UTC):** %s\n' "$date_iso"
   printf -- '- **Sentry org:** %s\n' "$SENTRY_ORG"
-  printf -- '- **API host:** %s\n' "$api_host"
+  printf -- '- **Probed host:** %s\n' "$api_host"
+  printf -- '- **DSN cluster:** %s\n' "$dsn_cluster"
   printf -- '- **Project filter:** %s\n\n' "${SENTRY_PROJECT:-<org-wide>}"
 
   printf '## Monitors\n\n'

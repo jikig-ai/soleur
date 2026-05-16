@@ -6,8 +6,8 @@ variable "sentry_org" {
 
 variable "sentry_project" {
   type        = string
-  description = "Sentry project slug for the Web Platform (e.g. web-platform)."
-  default     = "web-platform"
+  description = "Sentry project slug for the Web Platform (e.g. soleur-web-platform — the production slug as of #3849)."
+  default     = "soleur-web-platform"
 }
 
 variable "sentry_region" {
