@@ -8,29 +8,29 @@ lane: single-domain
 
 ## Phase 1 — Preconditions
 
-- [ ] 1.1 Verify worktree: `pwd` must end in `.worktrees/feat-one-shot-bump-next-15-5-18-dependabot`.
-- [ ] 1.2 Verify branch: `git branch --show-current` returns `feat-one-shot-bump-next-15-5-18-dependabot`.
-- [ ] 1.3 Snapshot baseline of open `next` alerts to `/tmp/pre-bump-open-alerts.txt` (expect 13 IDs).
+- [x] 1.1 Verify worktree: `pwd` must end in `.worktrees/feat-one-shot-bump-next-15-5-18-dependabot`.
+- [x] 1.2 Verify branch: `git branch --show-current` returns `feat-one-shot-bump-next-15-5-18-dependabot`.
+- [x] 1.3 Snapshot baseline of open `next` alerts to `/tmp/pre-bump-open-alerts.txt` (expect 13 IDs).
 
 ## Phase 2 — Bump pins
 
-- [ ] 2.1 Edit `apps/web-platform/package.json`: `dependencies.next` → `"^15.5.18"`.
-- [ ] 2.2 Edit `apps/web-platform/package.json`: `devDependencies."eslint-config-next"` → `"^15.5.18"`.
+- [x] 2.1 Edit `apps/web-platform/package.json`: `dependencies.next` → `"^15.5.18"`.
+- [x] 2.2 Edit `apps/web-platform/package.json`: `devDependencies."eslint-config-next"` → `"^15.5.18"`.
 
 ## Phase 3 — Regenerate lockfiles
 
-- [ ] 3.1 From `apps/web-platform/`: `bun install` (regenerates `bun.lock`).
-- [ ] 3.2 From `apps/web-platform/`: `npm install --package-lock-only` (regenerates `package-lock.json`).
-- [ ] 3.3 Verify `bun.lock` contains `next@15.5.18` and no `next@15.5.15` entries.
-- [ ] 3.4 Verify `package-lock.json` `.packages."node_modules/next".version == "15.5.18"`.
+- [x] 3.1 From `apps/web-platform/`: `bun install` (regenerates `bun.lock`).
+- [x] 3.2 From `apps/web-platform/`: `npm install --package-lock-only` (regenerates `package-lock.json`).
+- [x] 3.3 Verify `bun.lock` contains `next@15.5.18` and no `next@15.5.15` entries.
+- [x] 3.4 Verify `package-lock.json` `.packages."node_modules/next".version == "15.5.18"`.
 
 ## Phase 4 — Local verification gates
 
-- [ ] 4.1 From `apps/web-platform/`: `bun install --frozen-lockfile` → exit 0 (AC3).
-- [ ] 4.2 From `apps/web-platform/`: `npm ci` → exit 0 (AC4, mirrors Dockerfile).
-- [ ] 4.3 From `apps/web-platform/`: `bun run typecheck` → exit 0 (AC5).
-- [ ] 4.4 From `apps/web-platform/`: `bun run build` → exit 0 (AC6).
-- [ ] 4.5 From `apps/web-platform/`: `bun run test:ci` → exit 0 (AC7).
+- [x] 4.1 From `apps/web-platform/`: `bun install --frozen-lockfile` → exit 0 (AC3).
+- [x] 4.2 From `apps/web-platform/`: `npm ci` → exit 0 (AC4, mirrors Dockerfile).
+- [x] 4.3 From `apps/web-platform/`: `bun run typecheck` → exit 0 (AC5).
+- [x] 4.4 From `apps/web-platform/`: `bun run build` → exit 0 (AC6).
+- [x] 4.5 From `apps/web-platform/`: `bun run test:ci` → exit 0 (AC7).
 
 ## Phase 5 — Commit, push, PR
 
