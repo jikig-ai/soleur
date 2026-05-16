@@ -32,7 +32,6 @@ import { persistAndDownloadAttachments } from "./attachment-pipeline";
  * map flows through automatically.
  */
 const CONVERSATION_STATUS_VALUES = new Set(Object.keys(STATUS_LABELS));
-import { createServiceClient } from "@/lib/supabase/service";
 import {
   createSoleurGoRunner,
   type SoleurGoRunner,
@@ -499,12 +498,13 @@ function mirrorInsertError(
 
 // #3603 W1 — Write-boundary tenant-isolation sentinel.
 //
-// cc-dispatcher.ts uses the service-role Supabase client (`supabase()` —
-// see `createServiceClient` import) for the `messages` INSERT path, which
-// **bypasses RLS on writes**. RLS catches reads only. A bug routing user A's
-// dispatch with user B's `conversation_id` would write into B's conversation
-// undetected. This helper is the single sentinel call site that every
-// assistant-row write runs through.
+// Post-PR-C, cc-dispatcher.ts writes via tenant-scoped clients
+// (`getFreshTenantClient(userId)`). RLS on `messages` enforces the FK-join
+// through `conversations.user_id`, but a bug routing user A's dispatch with
+// user B's `conversation_id` could still produce a structurally-legal write
+// (A's JWT, A-owned `conversation_id`) that misroutes payload. This helper
+// is the single sentinel call site that every assistant-row write runs
+// through.
 //
 // At HEAD the SDK callback shape (`DispatchEvents` in `soleur-go-runner.ts`)
 // does NOT carry payload-derived `user_id` / `conversation_id`, so the
@@ -851,12 +851,6 @@ export function cleanupCcBashGatesForConversation(
 // (`soleur-go-runner.ts createSoleurGoRunner.dispatch`) only invokes
 // the factory once per cold conversation; reused dispatches skip.
 // ---------------------------------------------------------------------------
-
-let _supabase: ReturnType<typeof createServiceClient> | null = null;
-function supabase() {
-  if (!_supabase) _supabase = createServiceClient();
-  return _supabase;
-}
 
 // `fetchUserWorkspacePath`, `resolveConciergeDocumentContext`, and the
 // per-process workspace memo were extracted to `./kb-document-resolver`
@@ -1430,10 +1424,16 @@ export async function dispatchSoleurGo(
   // dispatch catch, which mirrors via `mirrorWithDebounce` (no inner
   // try/catch — that would double-mirror and bypass the dispatch
   // debounce, flooding Sentry on a misconfigured Storage URL).
+  // PR-D §3 (#3244 §4): tenant-scoped attachments. Reuse the `tenant` mint
+  // from the persistUserMessage block above (same userId, same turn — minting
+  // a second client would add an unnecessary RTT per Kieran P2-2). Storage
+  // RLS in migration 019 (SELECT) + 045 (INSERT/UPDATE/DELETE) is now
+  // load-bearing; the path-prefix check at attachment-pipeline.ts:83-86 is
+  // defense-in-depth.
   let userMessage = rawUserMessage;
   if (attachments && attachments.length > 0) {
     const { attachmentContext } = await persistAndDownloadAttachments({
-      supabase: supabase(),
+      supabase: tenant,
       userId,
       conversationId,
       messageId,
