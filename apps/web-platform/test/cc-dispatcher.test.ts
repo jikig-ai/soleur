@@ -60,8 +60,17 @@ vi.mock("@/server/kb-document-resolver", async () => {
 
 // #3254 — `dispatchSoleurGo` now persists a `messages` row per turn
 // (so `message_attachments.message_id` FK can be satisfied for cc-path
-// attachments). Harness's `supabaseServiceFactory` stubs the
-// service-role client to the harness's `mockMessagesInsert`.
+// attachments). PR-C §2.11 migrates these 2 inserts to tenant client;
+// harness's `supabaseTenantFactory` drives them via `mockMessagesInsert`.
+// `supabaseServiceFactory` still wires the storage/attachments injection
+// (cc-dispatcher.ts:1421 — PERMANENT pending PR-D).
+vi.mock("@/lib/supabase/tenant", async () => {
+  const { supabaseTenantFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return supabaseTenantFactory({ mockMessagesInsert });
+});
+
 vi.mock("@/lib/supabase/service", async () => {
   const { supabaseServiceFactory } = await import(
     "@/test/helpers/cc-dispatcher-harness"

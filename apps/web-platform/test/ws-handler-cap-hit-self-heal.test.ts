@@ -49,6 +49,14 @@ vi.mock("@/lib/supabase/service", () => ({
   serverUrl: "https://test.supabase.co",
 }));
 
+// PR-C §2.10 (#3244): ws-handler tenant migration. Reuse the same
+// from-mock so existing predicate-aware setups continue to drive the
+// new tenant-client code paths without per-test duplication.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockServiceFrom })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
   addBreadcrumb: vi.fn(),

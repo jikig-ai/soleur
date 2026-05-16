@@ -401,6 +401,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    | Brand guide alignment pass completes | Alignment still in progress |
 
    - When lefthook hangs during commit in a worktree (common with `core.bare=true` repos), verify typecheck and tests pass manually, then use `LEFTHOOK=0 git commit`. Always check for stalled lefthook processes (`pgrep -fa lefthook`) before retrying.
+   - **When a commit needs a machine-readable trailer (`Allowlist-Widened-By:`, `Signed-off-by:`, `Reviewed-by:`, etc. — anything downstream parses via `git log --format='%(trailers:key=NAME,valueonly)'`), keep the FINAL paragraph as a pure contiguous block of `Token: value` lines.** Two silent-drop shapes: (a) blank line between the new trailer and `Co-Authored-By:` makes the former part of the body, not a trailer; (b) ANY non-key:value line in the final paragraph (e.g., `Closes #3877.`, `Refs #3874 (precedent).`) invalidates the WHOLE block — both legitimate trailer lines below it drop silently. Put `Closes`/`Refs`/`Fixes` in mid-body prose; GitHub auto-close still works anywhere in the body. Verify locally with `git interpret-trailers --parse < <(git log -1 --format=%B)` — empty output for a trailer that should exist is a hard fail. See `knowledge-base/project/learnings/2026-05-16-git-trailer-parser-requires-contiguous-key-value-block.md`.
 
    **Heuristic:** "Can I write a commit message that describes a complete, valuable change? If yes, commit. If the message would be 'WIP' or 'partial X', wait."
 
