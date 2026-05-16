@@ -1,0 +1,226 @@
+# Auto-apply `github_repository_ruleset` resources whenever a PR that touches
+# `infra/github/*.tf` merges to main. Replaces the deprecated follow-through
+# pattern (#3895/#3896) where operator was required to mint PAT, run
+# terraform import + apply manually at terminal, then file verify-workflow
+# follow-up.
+#
+# Mirrors `apply-sentry-infra.yml` (ADR-031) with adjustments for the
+# `infra/github/` root:
+#   - Auth: GH_RULESET_PAT from Doppler `prd_terraform` (replaces SENTRY_AUTH_TOKEN).
+#   - First-apply import: if state does not yet contain
+#     github_repository_ruleset.ci_required, the workflow imports it before
+#     plan. Idempotent — subsequent runs no-op the import.
+#   - No `environment:` reviewer gate. Sentry uses one because Sentry resource
+#     destruction has cross-tenant blast radius; `infra/github/` only affects
+#     the founder's repo, so CODEOWNERS + [ack-destroy] gate is sufficient.
+#
+# Authorization model: the PR merge IS the human authorization
+# (`hr-menu-option-ack-not-prod-write-auth`). Same boundary drawn by ADR-031.
+#
+# Kill switch: include `[skip-github-apply]` on its own line in the merge
+# commit message to skip auto-apply for that merge.
+#
+# Manual escape hatch: `workflow_dispatch` is kept for the FIRST apply
+# post-PAT-mint (no infra/github/ files change in that flow — operator runs
+# `gh workflow run apply-github-infra.yml` once after Phase 0 of
+# infra/github/README.md), and for re-runs after a transient failure.
+#
+# Untrusted-input handling: HEAD_MSG and REASON are routed through env vars
+# (never interpolated directly into run: blocks) per the github.blog
+# workflow-injection guidance. All action references are SHA-pinned.
+
+name: Apply github infra (rulesets)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/github/*.tf"
+      - "infra/github/.terraform.lock.hcl"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you applying? (manual re-run only — e.g. first-apply post-PAT-mint)"
+        required: true
+        type: string
+
+concurrency:
+  group: terraform-apply-github-infra
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  INFRA_DIR: infra/github
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    outputs:
+      skip: ${{ steps.kill_switch.outputs.skip }}
+    steps:
+      - id: kill_switch
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [[ "$HEAD_MSG" =~ (^|$'\n')\[skip-github-apply\]($|$'\n') ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Kill switch detected in commit message — skipping apply."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  apply:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Fetch GH_RULESET_PAT from Doppler
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          PAT=$(doppler secrets get GH_RULESET_PAT --plain 2>/dev/null) || {
+            echo "::error::GH_RULESET_PAT not found in Doppler prd_terraform. Mint PAT per infra/github/README.md Phase 0 (one-time setup)."
+            exit 1
+          }
+          if [[ -z "$PAT" ]]; then
+            echo "::error::GH_RULESET_PAT is empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$PAT"
+          printf 'GITHUB_TOKEN_PAT=%s\n' "$PAT" >> "$GITHUB_ENV"
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: First-apply import (idempotent)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if terraform state list 2>/dev/null | grep -qx "github_repository_ruleset.ci_required"; then
+            echo "Resource already in state, skipping import."
+          else
+            echo "Importing existing ruleset 14145388 into state (one-time bootstrap)."
+            doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+              terraform import github_repository_ruleset.ci_required soleur:14145388
+          fi
+
+      - name: Terraform plan
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan failed (exit $rc)"
+            exit $rc
+          fi
+          terraform show -no-color tfplan > tfplan.txt
+          destroy_count=$(terraform show -json tfplan | \
+            jq '[.resource_changes[]? | select(.change.actions? | index("delete"))] | length')
+          ack_destroy=false
+          if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+            ack_destroy=true
+          fi
+          if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
+            echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on github infra."
+            echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
+            grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
+            exit 1
+          fi
+
+      - name: Terraform apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false tfplan
+
+      - name: Post-apply verify (ruleset 14145388 required check count)
+        id: verify
+        env:
+          GH_TOKEN: ${{ env.GITHUB_TOKEN_PAT }}
+        run: |
+          set -euo pipefail
+          ACTUAL=$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/14145388" \
+            | jq '.rules[0].parameters.required_status_checks | length')
+          if [[ ! "$ACTUAL" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected jq result for required_status_checks count: $ACTUAL"
+            exit 1
+          fi
+          echo "actual_count=$ACTUAL" >> "$GITHUB_OUTPUT"
+          echo "Ruleset 14145388: required_status_checks count = $ACTUAL"
+
+      - name: Post-apply summary
+        if: always()
+        env:
+          TRIGGER: ${{ github.event_name }}
+          MERGE_SHA: ${{ github.sha }}
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTUAL: ${{ steps.verify.outputs.actual_count }}
+        run: |
+          {
+            echo "## Apply github infra (rulesets)"
+            echo ""
+            echo "**Trigger:** ${TRIGGER}"
+            echo "**Merge SHA:** ${MERGE_SHA}"
+            echo "**Reason (manual only):** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Ruleset 14145388 required_status_checks count:** ${ACTUAL:-n/a}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
