@@ -33,9 +33,24 @@
 --     (granted by supabase's anon/authenticated role bootstrap). Phase
 --     0.4b GRANT presence check confirms this at apply time.
 
+-- Rollback procedure: drop both policies via the matching DROP statements
+-- below. The 019 SELECT policy survives the drop, so reads keep working;
+-- INSERT/UPDATE/DELETE through tenant clients fall back to the pre-PR-D
+-- "no policy → authenticated deny" posture. Application code must roll
+-- back to service-role at the same time to keep the attachment pipeline
+-- functional.
+--
+-- DROP POLICY IF EXISTS "Users can write own attachment objects" ON storage.objects;
+-- DROP POLICY IF EXISTS "Users can insert own message attachments" ON public.message_attachments;
+
 -- 1. storage.objects FOR ALL policy — INSERT/UPDATE/DELETE for chat-attachments
 --    bucket scoped to the caller's user-folder prefix. SELECT policy with the
 --    same predicate already exists from migration 019.
+--
+--    Idempotent DROP-then-CREATE preamble so the migration runner can replay
+--    safely after a partial failure or dev reset. Postgres has no
+--    `CREATE POLICY IF NOT EXISTS`; the standard pattern is drop-first.
+DROP POLICY IF EXISTS "Users can write own attachment objects" ON storage.objects;
 CREATE POLICY "Users can write own attachment objects"
   ON storage.objects FOR ALL
   USING (
@@ -45,6 +60,7 @@ CREATE POLICY "Users can write own attachment objects"
 
 -- 2. message_attachments INSERT policy. SELECT policy already exists from
 --    migration 019 with the same join shape.
+DROP POLICY IF EXISTS "Users can insert own message attachments" ON public.message_attachments;
 CREATE POLICY "Users can insert own message attachments"
   ON public.message_attachments FOR INSERT
   WITH CHECK (

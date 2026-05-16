@@ -1487,11 +1487,14 @@ export async function dispatchSoleurGo(
     mode: PersistMode,
     text: string,
   ): Promise<void> {
-    // #3603 W1 — Cross-tenant write-boundary sentinel. cc-path uses
-    // service-role for INSERT (RLS-bypass on writes). RLS catches reads;
-    // this guard catches writes. Returns `false` only via the test seam
-    // today (sentinel placeholder); load-bearing call site for a future
-    // SDK-payload-derived identifier comparison. See `assertWriteScope`
+    // #3603 W1 — Cross-tenant write-boundary sentinel. Post-PR-C/PR-D,
+    // cc-path writes via tenant-scoped clients (RLS enforces FK-join to
+    // conversations.user_id). This guard catches the residual case where
+    // the dispatch closure's userId/conversationId disagree with a future
+    // SDK-payload-derived identifier — RLS cannot, since the JWT is A's
+    // and the row's conversation_id is A-owned. Returns `false` only via
+    // the test seam today (sentinel placeholder); load-bearing call site
+    // for that future identifier comparison. See `assertWriteScope`
     // module-level doc.
     if (!assertWriteScope(userId, conversationId)) return;
 
