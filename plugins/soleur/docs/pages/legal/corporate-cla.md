@@ -20,6 +20,12 @@ Thank you for your organization's interest in contributing to the Soleur project
 
 This Corporate Contributor License Agreement ("Agreement") defines the terms under which Contributions are submitted to the Project on behalf of the signing organization. By signing this Agreement, the organization ("You" or "Your") accepts and agrees to the following terms and conditions for present and future Contributions submitted to the Project by Your employees, contractors, or other authorized representatives.
 
+## 0. Legal Nature of This Agreement
+
+This Agreement is a copyright license grant, not a contract requiring ongoing consent under GDPR Article 7. Once signed, the grant is irrevocable for the Contributions covered by Your signature. A withdrawal of signature does not retract the license previously granted, but does indicate that future Contributions will not be made.
+
+The lawful basis for processing the signature record is **legitimate interest** under GDPR Article 6(1)(f) -- maintaining an enforceable record of contributor IP license grants to defend the integrity of the Project's licensing framework. The signature record is retained for ten (10) years from the date of signature, balancing GDPR proportionality against the German and UK statutory limitation periods applicable to copyright disputes. Under Article 17(3)(e), the right to erasure does not apply to data necessary for the establishment, exercise, or defense of legal claims regarding the Contributions; see the [Privacy Policy](privacy-policy.md) and [GDPR Policy](gdpr-policy.md) for details.
+
 ## 1. Definitions
 
 - **"You" (or "Your")** means the organization that is entering into this Agreement, and all entities that control, are controlled by, or are under common control with that organization. For the purposes of this definition, "control" means (i) the power, direct or indirect, to cause the direction or management of such entity, whether by contract or otherwise, or (ii) ownership of fifty percent (50%) or more of the outstanding shares, or (iii) beneficial ownership of such entity.
