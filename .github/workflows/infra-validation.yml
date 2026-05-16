@@ -84,6 +84,20 @@ jobs:
           terraform validate
         working-directory: ${{ matrix.directory }}
 
+      # Optional per-app lint hook: any infra root that ships a `main.test.sh`
+      # gets it executed after fmt/validate. Used by apps/cla-evidence/infra
+      # to assert content invariants (Governance mode, 3650-day retention,
+      # prevent_destroy, no IP-allowlist) that fmt/validate alone can't see.
+      - name: Run per-app main.test.sh (if present)
+        run: |
+          if [[ -f main.test.sh ]]; then
+            echo "→ bash main.test.sh"
+            bash main.test.sh
+          else
+            echo "No main.test.sh in this directory; skipping."
+          fi
+        working-directory: ${{ matrix.directory }}
+
   deploy-script-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
