@@ -4,8 +4,10 @@ agent-workflow, mcp-integration
 architecture
 architecture-decisions
 best-practices
+brainstorm-patterns
 bug-fixes
 build-errors
+capability-gap
 ci-cd
 ci-infrastructure
 ci-testing
@@ -22,7 +24,6 @@ documentation
 documentation-accuracy
 engineering
 implementation-patterns
-incat
 infrastructure
 integration-issues
 learnings
@@ -39,6 +40,7 @@ prevention
 process
 process-workflows
 process_improvement
+project
 prompt-engineering
 refactoring
 review
@@ -47,12 +49,12 @@ review-process
 review-workflow
 runtime-errors
 security
-security-imatrix-sharding
 security-issues
 seo
 shell-scripting
 technical-debt
 test-design
+test-failug
 test-failures
 testing
 ui-bugs
@@ -62,7 +64,6 @@ workflow
 workflow-discipline
 workflow-gap
 workflow-issues
-workflow-pacat
 workflow-patterns
 workflow-traps
 workflow-violations

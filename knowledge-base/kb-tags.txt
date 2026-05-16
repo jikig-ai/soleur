@@ -10,6 +10,7 @@ abort-controller
 abort-feature
 abort-signal
 abortcontroller
+ac-filter
 acceptance-criteria
 account-consolidation
 account-deletion
@@ -32,6 +33,7 @@ agent-autonomy
 agent-browser
 agent-coverage-gap
 agent-design
+agent-extension
 agent-improvisation
 agent-loop
 agent-native
@@ -49,6 +51,8 @@ agents
 agents-cant-find-commands
 agents-md
 agents-md-sidecar
+agents-md-sidecars
+agents-md-tier-gate
 agents.md
 agents/engineering/infra
 agents/operations
@@ -62,10 +66,12 @@ allowlist-audit
 always-function
 analytics
 analytics-track
+anchor-resolution-over-architecture
 anomaly-detection
 anon-key
 anti-priming
 anti-sycophancy
+apache-2.0
 api
 api key in git history
 api-contract
@@ -89,15 +95,19 @@ archive-kb
 argument-list
 aria
 aria-current
+art-17
 art-32
+art-5
 article-28
 article-30
 artifacts
 as-const-satisfies
 askuserquestion
 async-await
+async-cat
+async-context
 async-events
-async-io
+asynclocalstorage
 at-least-once
 atdd
 atomic-delivery
@@ -105,6 +115,7 @@ atomic-write
 attachments
 attribution
 attribution-heuristic
+audience-fit
 audit
 audit-surface-coverage
 audit-trail
@@ -149,6 +160,7 @@ beforeeach
 behavioral-rules
 behavioral-tests
 best
+beta-provider
 better-stack
 binary
 binary-serving
@@ -181,6 +193,7 @@ brand-guide
 brand-guide-stale
 brand-identity
 brand-integrity
+brand-positioning
 brand-survival
 brand-survival-threshold
 brand-voice
@@ -232,15 +245,19 @@ cannibalization
 canonical-pattern
 canusetool
 cap-coupling
+capability-precedent
+cascade
 cascade-architecture
+case-arms
 case-sensitivity
-cat
 category-design
 cc-chat
 cc-pdf
 cc-permissions
+cc-router
 cc-soleur-go
 cert-provisioning
+cf-tunnel-749
 changelog
 chapter-chunking
 chat
@@ -262,10 +279,12 @@ ci-gap
 ci-guards
 ci-planning
 ci-workflows
+citation-verification
 citations
 cla
 classification-gate
 classifier
+classifier-prose-table
 claude mcp add fails on duplicate
 claude-agent-sdk
 claude-api
@@ -304,6 +323,7 @@ code-simplicity-reviewer
 codebase-precedent
 codeql
 column-level-security
+comm
 command-center
 command-creation
 command-optimization
@@ -332,11 +352,15 @@ component-reuse
 composite-action
 compound
 compound-capture
+compound-from-no-integration
+compound-from-revision-pass
 compound_skill
 concurrency
 conditional-logic
+conditional-render
 conditional-rendering
 config-drift
+config-glob
 config-parity
 configuration-drift
 configuration-fixes
@@ -386,6 +410,7 @@ copywriter
 cost-efficiency
 cost-estimate
 cost-of-filing
+cost-of-filing-gate
 cost-slo
 count-mismatch
 counts
@@ -399,8 +424,11 @@ critical-css-gate
 cross-artifact
 cross-document-consistency
 cross-file-leak
+cross-implementation
 cross-language
 cross-reconcile
+cross-reference-sweep
+cross-reviewer-convergence
 cross-runner
 cross-runtime
 crypto
@@ -416,12 +444,14 @@ custom-icon
 cwd-management
 cwe-22
 cwe-59
+dashboards
 data-consistency
 data-integrity
 data-module
 data-validation
 ddl
 dead-code
+debounce
 decision-archaeology
 decodeuricomponent
 dedup
@@ -434,8 +464,10 @@ defense-in-depth
 defense-pair
 defense_in_depth
 defensive-coding
+defer-vs-ship
 definition-of-done
 demotion
+deny-by-default
 dependabot
 dependencies
 dependency check for gui app without package manager
@@ -476,8 +508,10 @@ discord
 discord-automation
 discord-bot
 discovery
+discrete-enumeration
 discriminated-union
 discriminated-union-widening
+discrtag
 disk-monitoring
 disk-space
 dispatcher
@@ -493,6 +527,7 @@ docs
 docs-build
 docs-fix
 docs-site
+docs-sync
 docs-trust
 documentation
 documentation-gap
@@ -511,7 +546,9 @@ dommatrix
 doppler
 downshift
 dpa
+dpd
 dpf
+drain
 drain-pr
 drift
 drift-guard
@@ -521,6 +558,7 @@ drift-remediation
 drift-resistance
 dry-run
 dsar
+dsn
 dual-location-sync
 dual-runner
 dual-source-of-truth
@@ -557,6 +595,7 @@ escape-hatch
 esm-hooks
 etag
 event-emitter
+evidence
 exacerbation-rule
 exhaustive-switch
 exhaustiveness
@@ -578,7 +617,9 @@ fail-closed
 fail-open
 fail2ban
 fake-timers
+fallback
 fallback-path
+fallback-strings
 false-assertions
 false-negative
 false-positive
@@ -644,6 +685,7 @@ gate-detection-gap
 gc
 gdpr
 gdpr-gate
+gdpr-gate-signature
 gdpr-recital-26
 gemini-api
 gemini-cli
@@ -651,6 +693,7 @@ geo
 getuserbyid
 gh-api
 gh-cli
+gh-cli-search
 gh-secret-set
 git
 git-branching
@@ -676,7 +719,6 @@ github-api
 github-app
 github-auto-close
 github-issues
-github-issuescat
 github-oauth
 github-pages
 github-push-protection
@@ -711,6 +753,9 @@ hallucination
 handoff
 handshake-protocol
 happy-dom
+hard-rule
+hard-rule-citation-drift
+hard-rule-paraphrase
 harness
 hash-based-csp
 hash-cli
@@ -726,6 +771,7 @@ health-scanner
 health-snapshot
 helper-boundary-transform
 helper-extraction
+helper-migration
 helpers
 heredoc
 hetzner
@@ -736,8 +782,11 @@ hkdf
 hook_enforcement
 hooks
 hot-path
+hr-exhaust-all-automated-options-before
+hr-never-label-any-step-as-manual-without
 hr-rules
 hr-ssh-diagnosis-verify-firewall
+hr-write-boundary-sentinel-sweep-all-write-sites
 hsts
 html
 http-caching
@@ -758,6 +807,7 @@ image-context
 image-export
 image-generation
 implementation-patterns
+import-only-resources
 importlib
 imports
 in-component-state
@@ -788,6 +838,7 @@ interactive-mode
 interface-contract
 internal-consistency
 inventory-grep
+invocation-surface
 ip-spoofing
 irreversible
 isclassifying-gate
@@ -798,6 +849,7 @@ issue-deduplication
 issue-filing
 issue-tracking
 issue-verification
+jianyuan-sentry-provider
 jq
 jsdoc
 jsdom
@@ -815,6 +867,8 @@ kb-security
 kb-share
 key-derivation
 keyword-detection
+keyword-scanner
+kieran-review
 knowledge-base
 knowledge-base-archiving
 landing-page
@@ -827,17 +881,20 @@ layouts
 lazy-quantifier
 lcp
 leader
+leader-assessment
 leader-avatar
 leader-carry-forward
+leader-spawn
+leader-substrate-verification
 leak-detection
 leaked secret
 learnings-researcher
 leases
 ledger
 lefthook
-lefttag
 legal
 legal-agents
+legal-ares
 legal-audit-trail
 legal-compliance
 legal-compliance-auditor
@@ -849,6 +906,7 @@ lib-helpers
 libuv-threadpool
 license-migration
 lifecycle
+lifecycle-ignore-changes
 light-theme
 lighthouse
 linear
@@ -862,6 +920,7 @@ loader-class-fit
 loading-state
 local-testing
 lockfile
+lockstep
 log-injection
 logic-errors
 login
@@ -870,6 +929,7 @@ macos
 magic-link
 maintenance
 manual-trigger
+mariminated-union
 markdown
 markdown-links
 markdown-tables
@@ -878,15 +938,18 @@ marketing
 marketing agents operating independently
 marketing-pipeline
 marketplace
+matrix-sharding
 mawk
 mcp
 mcp server cannot be bundled in plugin.json
 mcp-adapter
+mcp-connectors
 mcp-integration
 mcp-registration
 mcp-tools
 measurement
 mechanical-changes
+mechanical-rename
 medium
 merge-conflicts
 merge-direction
@@ -899,6 +962,7 @@ migrations
 milestone-enforcement
 milestones
 min-w-0
+mirror
 misaligned business validation
 misdiagnosis
 mit-licensing
@@ -923,17 +987,21 @@ multi-agent-cascade
 multi-agent-coordination
 multi-agent-cross-reconcile
 multi-agent-review
+multi-cluster
 multi-file-consistency
 multi-leader
 multi-platform
+multi-pr-series
 multi-pr-split
 multi-runtime
 multi-signal
+multi-tenant
 multi-tenant-scoping
 multi-turn
 multi_agent_review
 multimodal
 mutation-testing
+n1-validation-gate
 name-transformer
 named-exports
 namespace
@@ -976,9 +1044,11 @@ npx
 null-test
 numeric-precision
 nunjucks
+o
 oauth
 oauth-probe
 oauth2
+object-lock
 objection-window
 observability
 observability-tests
@@ -986,7 +1056,6 @@ og-image
 oidc
 on-click-fetch
 on-conflict
-onboagrep
 onboarding
 onboarding describes dev plugin not platform
 one-shot
@@ -994,8 +1063,8 @@ one-shot-pipeline
 open-redirect
 openhands
 openssl
-operations
 operator-burden
+operator-dashboards
 operator-precedence
 ops
 ops-directory
@@ -1028,9 +1097,11 @@ parallel-runner-paths
 parallel-tests
 parallel-tools
 parameter-expansion
+paraphrase-without-verification
 parity-tests
 parser-underread
 parsing-patterns
+partial-artifact-recovery
 partial-copy
 partial-index
 partial-unique-index
@@ -1046,6 +1117,7 @@ pathignorepatterns
 paths-filter
 pathspec
 pattern
+pcre
 pdf
 pdf-extractor
 pdfjs
@@ -1056,11 +1128,13 @@ pencil cli name collision with evolus/pencil
 pencil-cli
 pencil-mcp
 pencil-setup
+per-rule-cap
 performance
 permalink
 permission-prompt
 permissions
 persistence-asymmetry
+pg-cron
 pgsodium
 phase-5.5
 phase-7
@@ -1085,20 +1159,28 @@ plan-drift
 plan-fidelity
 plan-gap
 plan-gates
+plan-inventory
+plan-phase
 plan-quality
 plan-review
 plan-review-catch
+plan-review-panel
+plan-review-vs-impl-review
+plan-revision
 plan-skill
 plan-time-architecture-review
 plan-verification
 plan-vs-code-drift
 plan-vs-prompt-conflict
+plan-vs-reality-drift
 plan_review
+planner-prescriptions
 planning
 platform-integration
 platform-risk
 plausible
 playwright
+playwrightcat
 plugin
 plugin-architecture
 plugin-commands
@@ -1109,6 +1191,7 @@ plugin-hooks
 plugin-instructions
 plugin-json
 plugin-loader
+plugin-marketplace
 plugin-structure
 plugin-system
 plugin-versioning
@@ -1119,7 +1202,6 @@ plugins/soleur/skills/archive-kb
 plugins/soleur/skills/git-worktree
 plugins/soleur/skills/one-shot
 plugins/soleur/skills/work
-pohook
 polling
 portability
 porting
@@ -1151,6 +1233,7 @@ pre-public
 pre-push-hook
 pre-research
 pre-run-assertion
+precondition
 precondition-staleness
 predicate-placement
 preflight
@@ -1162,8 +1245,10 @@ prevention-infrastructure
 pricing-page
 prior-art
 prior-art-discovery
+prior-decision-recovery
 private-documents
 private_key
+probe
 process-env
 process-failure
 process-issues
@@ -1197,11 +1282,13 @@ protecthome
 protocol
 protocol-gate
 proton-mail
+provenance
 provenance-tracking
 provider-alias
 provisioner
 proxy-anti-pattern
 prune
+pseudonymisation
 pseudonymization
 psql
 public-repo
@@ -1216,6 +1303,7 @@ quality-gates
 query-builder
 queuemicrotask
 quoting
+r2
 r2-backend
 race-condition
 race-conditions
@@ -1263,6 +1351,7 @@ referrer-policy
 regex
 regex-concurrency
 regex-parity
+regex-sentinels
 region-replacement
 registry-integration
 regression
@@ -1289,6 +1378,7 @@ rerender
 research
 research-reconciliation
 resend
+residency
 resource-leak
 resource-management
 responsive
@@ -1297,6 +1387,8 @@ rest-api
 restructure
 resume
 resume-session
+retention
+retired-symbol
 retroactive-sweep
 review
 review-agents
@@ -1313,6 +1405,7 @@ review-resolver
 review-workflow
 reviewer-consensus
 revocation
+rfc-3161
 rfc-5869
 rich-results
 rls
@@ -1325,6 +1418,7 @@ route-group
 route-handlers
 routes
 routing accuracy degrades
+row-ordering
 rpc
 rsa
 rule-audit
@@ -1332,12 +1426,14 @@ rule-budget
 rule-governance
 rule-ids
 rule-metrics
+rule-retirement
 rule-utility
 rule_retirement
 ruleset
 rulesets
 runbook
 runbook-authoring
+runbook-vs-code
 runner-reap
 runtime-errors
 runtime-vs-cron
@@ -1391,11 +1487,13 @@ sdk-router
 sdk-shape
 sdk-tooling
 search
+search-path-injection
 search-path-pinning
 seccomp
 second-reviewer-concur
 second-reviewer-gate
 secret-leak
+secret-scan
 secret-scanning
 secrets
 secrets-leak
@@ -1417,7 +1515,9 @@ self-healing-tests
 self-hosting
 self-leak
 self-references
+self-referential-skip
 semantic-grouping
+semantic-routing
 semver
 sensitive aggregated findings in public repos
 sentinel
@@ -1566,6 +1666,7 @@ state-management
 static-content-extraction
 static-site
 stderr
+stderr-stdout
 step-output
 stop-hook
 strategy-review
@@ -1582,10 +1683,13 @@ stuck-active
 stuck-detection
 sub-command-merging
 sub-processor
+subagent
 subagent-coordination
 subagent-delegation
+subagent-sequencing
 subagent-verification
 subagents
+subject-claim-binding
 subprocess
 substrate
 substring-match
@@ -1609,7 +1713,6 @@ table-driven-config
 table-layout
 tablet-breakpoint
 tabular-nums
-tag
 tag-corruption
 tagged-union
 tailwind
@@ -1661,11 +1764,13 @@ thenable
 thinking-api
 thinking-indicator
 third-party-actions
+three-dot-diff
 three-tier detection removes ide hard dependency
 threshold-carry-forward
 threshold-coupling
 tier-0
 tier-2-port
+tier-classification
 tiered-gating
 timeout
 timer-design
@@ -1687,6 +1792,7 @@ tooling
 tr4
 trace-tests
 transaction-safety
+transcript-judging
 transparency
 trap-cleanup
 traversal
@@ -1695,6 +1801,7 @@ trigger-logic
 triggers_replace
 truncation
 trust-binding
+trust-policy
 try-catch-scoping
 tsc
 tsx
@@ -1718,12 +1825,14 @@ update-ref
 upload
 url-concatenation
 url-validation
+usage-limit
 useeffect
 user friction for experimental features
 user-brand-critical
 user-confirmation
 user-event
 user-impact-reviewer
+user-impact-reviewer-catch
 user-namespace
 user-namespaces
 usereducer
@@ -1744,7 +1853,9 @@ vapid
 variable-fonts
 vault
 vendor-evaluation
+vendor-lift
 vendor-lock-in
+vendor-misclassification
 vendor-pin
 vendor-pinning
 vendored-upstream
@@ -1789,6 +1900,7 @@ welcome-hook
 wire-path
 wire-protocol
 wire-schema
+withisolationscope
 woff2
 word-budget
 work
@@ -1824,6 +1936,7 @@ workspace-cleanup
 workspace-paths
 workspace-provisioning
 workspace-sync
+workspaces
 worktree
 worktree convention violated
 worktree deleted
@@ -1833,6 +1946,7 @@ worktree-hygiene
 worktree-manager
 worktree-race
 worktrees
+worm-trigger
 write-tool
 wrong-skill-count
 ws-handler

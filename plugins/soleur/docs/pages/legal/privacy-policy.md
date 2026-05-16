@@ -8,7 +8,7 @@ permalink: legal/privacy-policy/
 <section class="page-hero">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated May 15, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 16, 2026</p>
   </div>
 </section>
 
@@ -17,7 +17,7 @@ permalink: legal/privacy-policy/
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** May 15, 2026 (extended Section 5.10 Sentry with explicit monitor-class enumeration and "Sentry log ingestion NOT enabled" carve-out following the 2026 Sentry Monitors/Alerts split; previous: May 12, 2026 forward-ported §4.9 Push Notification Subscriptions and §5.9 Resend from canonical per #3666)
+**Last Updated:** May 16, 2026 (extended Section 4.5 with the off-site Cloudflare R2 evidence archive for CLA signatures and added Section 5.11 Cloudflare R2 sub-processor entry per #3209; previous: May 15, 2026 extended Section 5.10 Sentry with explicit monitor-class enumeration and "Sentry log ingestion NOT enabled" carve-out following the 2026 Sentry Monitors/Alerts split)
 
 ## 1. Introduction
 
@@ -86,9 +86,9 @@ If you contribute code to the Soleur project via pull requests, you are asked to
 - **Timestamp** of signature
 - **Pull request reference** associated with the signing event
 
-This data is stored in the Soleur GitHub repository on a dedicated branch (`cla-signatures`) and is publicly visible. The legal basis for this processing is **legitimate interest** (Article 6(1)(f) GDPR) -- specifically, the legitimate interest of Jikigai in maintaining an enforceable record of contributor IP license grants to protect the integrity of the Soleur project's licensing framework.
+This data is stored in the Soleur GitHub repository on a dedicated branch (`cla-signatures`) and is publicly visible. In addition, an off-site **CLA evidence archive** is maintained at a Cloudflare R2 bucket (`soleur-cla-evidence`, region `weur` -- Western Europe) with Object Lock in Governance mode and a ten (10) year retention floor; the bucket contains a content-addressed record per signature (doc-hash, verbatim sign-comment body, PR-of-record, signed_at, capture_method) plus a monthly RFC 3161 timestamp of the bucket manifest (FreeTSA) to provide tamper-evidence over time. The legal basis for this processing is **legitimate interest** (Article 6(1)(f) GDPR) -- specifically, the legitimate interest of Jikigai in maintaining an enforceable record of contributor IP license grants to protect the integrity of the Soleur project's licensing framework, including for the establishment, exercise, and defense of legal claims under Article 17(3)(e).
 
-**Retention:** CLA signature data is retained indefinitely because the license grants in the CLA are irrevocable and survive any withdrawal of the signature record. If you exercise your right to erasure under GDPR Article 17, your signature record may be deleted, but the license grants made under the CLA continue in full effect for all contributions made prior to deletion, as stated in the CLA itself.
+**Retention:** CLA signature data is retained for ten (10) years on the off-site archive (Object Lock Governance mode, EU region), balancing GDPR proportionality against the German and UK statutory limitation periods for copyright disputes. The public `cla-signatures` branch is retained indefinitely as a contributor-facing receipt. The license grants in the CLA are irrevocable and survive any withdrawal of the signature record. If you exercise your right to erasure under GDPR Article 17, your signature record on the public branch may be deleted, and the off-site archive object may be removed via an administrator override that writes a permanent tombstone (`tombstones/<sha>.deleted.json`) included in the next monthly RFC 3161 manifest -- preserving the integrity of the timestamp chain. The license grants made under the CLA continue in full effect for all contributions made prior to deletion, as stated in the CLA itself.
 
 ### 4.6 Newsletter Subscription Data
 
@@ -241,6 +241,19 @@ We use **Sentry** ([sentry.io](https://sentry.io)) for Web Platform error monito
 - **Legal basis:** Dual basis. **Legitimate interest** (Article 6(1)(f) GDPR) for service reliability, security, and abuse prevention, balanced against the pseudonymisation safeguard; together with **legal obligation** (Article 6(1)(c) GDPR) for compliance with the Article 33 breach-notification timeline.
 - **Right to erasure (Article 17):** Hashed identifiers age out per the rolling retention windows; the controller cannot perform processor-side targeted erasure of a pseudonym whose subject cannot be re-identified, consistent with Recital 26.
 - **Sentry monitor classes processed:** issue alerts and cron monitor check-ins (vendor-hosted heartbeat for scheduled GitHub Actions jobs). Both carry no application log content -- only structural metadata (job slug, status, timestamp, pseudonymous identifier where applicable). **Sentry log ingestion (Logs product) is NOT enabled and no application log content is forwarded to Sentry.** A future change introducing a Sentry log channel requires re-disclosure here and an extension of the scrub boundary at `apps/web-platform/server/sentry-scrub.ts`.
+
+### 5.11 Cloudflare R2 (CLA Evidence Archive)
+
+We use **Cloudflare R2** ([cloudflare.com/products/r2](https://www.cloudflare.com/products/r2/)) to operate the off-site CLA evidence archive described in Section 4.5. Cloudflare, Inc. acts as a data processor on our behalf for this distinct processing surface, separate from the Section 5.8 Cloudflare CDN/proxy role.
+
+- **Data processed:** Per-signature evidence records (GitHub username, signature timestamp, signing-comment body, pull request reference, doc-hash, and capture method) plus monthly RFC 3161 timestamp responses derived from the bucket manifest. Bypass records for allowlisted bot accounts (`dependabot[bot]`, `renovate[bot]`, `claude[bot]`) are also recorded; the upstream CLA action filters `github-actions[bot]` (DB-id 41898282) before any record is written.
+- **Purpose:** Tamper-evident off-site archive supporting the legitimate-interest basis in Section 4.5 -- defense of legal claims regarding contributor IP grants under Article 17(3)(e).
+- **Storage location:** Cloudflare R2 bucket `soleur-cla-evidence`, region `weur` (Western Europe). Intra-EU processing -- no third-country transfer for archive contents at rest.
+- **Object Lock:** Governance mode with a ten (10) year retention floor. Administrator override is permitted only via the GDPR Article 17 admin-override procedure documented in the operations runbook; every override writes a permanent tombstone (`tombstones/<sha>.deleted.json`) that is included in the next monthly RFC 3161 manifest, so the timestamp chain reflects deletions transparently.
+- **Tamper-evidence:** A monthly cron submits the bucket-state manifest hash to **FreeTSA** ([freetsa.org](https://freetsa.org)), an RFC 3161 timestamp authority. FreeTSA receives only the SHA-256 of the manifest (no signer data, no comment bodies, no PR references); it returns a binary `.tsr` signed by the FreeTSA Time Stamp Authority. The `.tsr` and the source manifest are committed to R2 and to the `cla-signatures` branch of the GitHub repository.
+- **DPA:** [Cloudflare Customer Data Processing Agreement](https://www.cloudflare.com/cloudflare-customer-dpa/) (same instrument as Section 5.8).
+- **Retention:** Ten (10) years on the bucket; monthly RFC 3161 timestamps retained indefinitely as part of the chain.
+- **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR), with the balancing test documented in the GDPR Policy §3.4.
 
 ## 6. Legal Basis for Processing (GDPR -- EU Users)
 
