@@ -254,6 +254,7 @@ tags = ["url", "database", "credential"]
   # for learnings that document credential-shape symptoms in recovery runbooks
   # (e.g., asterisk-redacted Doppler pooler URLs pasted from `doppler run` output).
   [[rules.allowlists]]
+  description = "Synthesized fixtures, test files, plan/spec/skill-reference docs, learning files (database-url-with-password only — see issue:#3874; mirrors private-key:#3268)"
   paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/project/learnings/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''']
   # Allow placeholder URLs that ship in docs (postgres://USER:PASSWORD@HOST/DB).
   regexes = ['''postgres(?:ql)?://(?:USER|user|postgres|<[^>]+>):(?:PASSWORD|password|secret|<[^>]+>)@''']

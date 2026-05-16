@@ -65,29 +65,29 @@ intentional. Examples:
   default pack's `aws-access-token` rule. AWS keys never belong in fixtures
   even synthesized — if you need one for a contract test, paste it through
   the official sandbox docs and document the source.
-- Our 13 custom rules each carry the same `paths` allowlist:
+- Our 12 custom rules each carry the same `paths` allowlist:
   - `__goldens__/.*` — golden snapshots from the A2 surface (#3121, #3143, #3144).
   - `(__snapshots__|__goldens__)/.*\.snap$` — anchored snapshot files.
   - `apps/web-platform/test/__synthesized__/.*` — fixtures with semi-sensitive
     shapes that need to look real (e.g., a JWT shape for a parser test).
   - `reports/mutation/.*` — Stryker output (also gitignored; defensive belt-and-suspenders).
-- The `private-key` rule **and** the `database-url-with-password` rule
-  additionally allowlist `knowledge-base/project/learnings/.*\.md$`. Learning
-  files routinely document credential-shape symptoms in recovery runbooks —
-  private-key-shape blocks (e.g.,
-  `2026-05-05-leak-tripwire-self-trips-on-mask-registrations.md` — the file that
-  motivated the first carve-out via
-  [#3268](https://github.com/jikig-ai/soleur/issues/3268) /
-  [#3281](https://github.com/jikig-ai/soleur/issues/3281)) AND asterisk-redacted
-  Postgres connection strings pasted from operator `doppler run` output (e.g.,
-  `2026-05-16-supabase-mcp-oauth-fallback-to-doppler-database-url.md` — the file
-  that motivated the second carve-out via
-  [#3874](https://github.com/jikig-ai/soleur/issues/3874)).
-  Default-pack rules (AWS, Stripe, etc.) and the other 12 custom rules (Doppler,
-  Supabase JWT, Anthropic, Resend, Cloudflare, Sentry, Discord webhook, VAPID,
-  JWT, generic-API-key, Soleur BYOK, Stripe webhook secret) remain LIVE on the
-  learnings tree — only literal `BEGIN/END PRIVATE KEY` blocks and
-  `postgres(ql)?://user:password@host` URLs are silenced.
+- Two custom rules carry an **additional** carve-out for
+  `knowledge-base/project/learnings/.*\.md$`, because learning files routinely
+  document credential-shape symptoms in recovery runbooks:
+  - The `private-key` rule — motivated by literal `BEGIN/END PRIVATE KEY`
+    blocks in symptom reproductions (e.g.,
+    `2026-05-05-leak-tripwire-self-trips-on-mask-registrations.md`, added via
+    [#3268](https://github.com/jikig-ai/soleur/issues/3268) /
+    [#3281](https://github.com/jikig-ai/soleur/issues/3281)).
+  - The `database-url-with-password` rule — motivated by asterisk-redacted
+    Postgres connection strings pasted from operator `doppler run` output
+    (e.g., `2026-05-16-supabase-mcp-oauth-fallback-to-doppler-database-url.md`,
+    added via [#3874](https://github.com/jikig-ai/soleur/issues/3874)).
+- Default-pack rules (AWS, Stripe, etc.) and the other 12 custom rules
+  (Doppler, Supabase JWT, Anthropic, Resend, Cloudflare, Sentry, Discord
+  webhook, VAPID, JWT, generic-API-key, Soleur BYOK, Stripe webhook secret)
+  remain LIVE on the learnings tree — only literal `BEGIN/END PRIVATE KEY`
+  blocks and `postgres(ql)?://user:password@host` URLs are silenced.
 
 `apps/web-platform/test/fixtures/qa-auth.ts` is **NOT** allowlisted. It is a
 real auth-test fixture that interacts with a live Supabase test project; if

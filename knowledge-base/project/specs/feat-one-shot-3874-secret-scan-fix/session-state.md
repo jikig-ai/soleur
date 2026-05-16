@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-3874-secret-scan-fix/knowledge-base/project/plans/2026-05-16-fix-secret-scan-database-url-allowlist-and-sanitize-learning-plan.md
+- Plan file: knowledge-base/project/plans/2026-05-16-fix-secret-scan-database-url-allowlist-and-sanitize-learning-plan.md
 - Status: complete
 
 ### Errors
