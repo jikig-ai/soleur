@@ -139,7 +139,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         const { error: nameError } = await service.from("team_names").insert({
           user_id: user.id,
           leader_id: "cpo",
-          custom_name: `Synthetic-${user.id.slice(0, 8)}`,
+          custom_name: `Synthetic ${user.id.slice(0, 8)}`,
         });
         expect(nameError, `seed team_names for ${user.email}`).toBeNull();
       }
