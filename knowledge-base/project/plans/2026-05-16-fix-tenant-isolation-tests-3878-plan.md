@@ -13,6 +13,84 @@ requires_cpo_signoff: false
 
 # fix(tenant-isolation): unblock #3878 — accept grant-deny shape + fix team_names seed
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-16
+**Sections enhanced:** Overview, Research Reconciliation, Implementation Phase 2,
+Acceptance Criteria, Risks & Sharp Edges
+**Verification mode:** live `gh api` + `grep` against `main@HEAD` and the
+worktree's installed file state — every load-bearing claim re-confirmed
+(see "Live Citation Audit" below)
+
+### Key improvements
+
+1. **Live citation audit (all green).** Every PR / issue / learning / AGENTS.md
+   rule citation in the plan was re-verified against the live source. No
+   fabricated, retired, or stale references.
+2. **Codebase precedent for dual-shape.** Discovered that
+   `apps/web-platform/test/server/cc-dispatcher.tenant-isolation.test.ts:151-155`
+   ALREADY uses a related (but looser) dual-shape pattern; the plan now
+   documents the deliberate choice to use the tighter form here and the
+   migration path if helper consolidation lands per #3869 item 1.
+3. **42501-OR-message-substring sibling form.** Identified two existing
+   sites (`api-usage.tenant-isolation.test.ts:165-167` +
+   `agent-runner.tenant-isolation.test.ts:317-319 / 328-330`) that use the
+   broader `error.code === "42501" || /permission/i.test(error.message)`
+   shape for RPC-grant denies. Plan now justifies why session-sync uses
+   the tighter `error.code === "42501"` exact-match.
+4. **Positive-control gap surfaced.** The 2026-05-16 learning rule §4
+   ("For each RLS policy under test, run a positive control") is partially
+   honored by `session-sync.tenant-isolation.test.ts:150` (SELECT side) but
+   the UPDATE side has NO positive control. Documented as a defer-to-#3869
+   follow-up — out of scope for this PR but tracked.
+5. **Verification grep section-scoping.** AC2/AC3's verification greps run
+   against the whole `session-sync.tenant-isolation.test.ts` file (single
+   describe block, no out-of-scope subsections), so whole-file grep is
+   semantically correct — confirmed no contradiction between AC scope and
+   `Out of Scope` section.
+6. **AC8 numeric-claim correction.** The plan's pre-fix vitest summary
+   reports `(55)` total tests, with `42 passed | 3 failed | 10 skipped`;
+   42 + 3 + 10 = 55. Post-fix: 42 + 3 (now passing) + 10 (now passing) = 55.
+   Per-suite tally (sum of right column) is also 55 (4+4+3+4+6+2+2+3+3+5+6+10
+   for the 12 suites including agent-runner's 10). Numbers reconcile.
+7. **AC2 grep-count correction.** Original AC2 claimed `3` `42501` assertions
+   in `session-sync.tenant-isolation.test.ts`; actual count under the Phase 2
+   code samples is `4` — the symmetric test at line 214 has dual-shape on
+   BOTH the read side (`readErr.code`) and the write side (`writeErr.code`).
+   AC2 corrected to `4` with explicit per-test breakdown. Numeric
+   self-consistency between Phase 2 code samples and AC counts is now
+   verified.
+
+### New considerations discovered
+
+- The unique constraint on `team_names` is `(user_id, leader_id)` — confirmed
+  via `grep -n "unique"` against migration 018. `custom_name` is NOT in any
+  unique index. Hyphen→space substitution cannot cause collision.
+- `cc-dispatcher.tenant-isolation.test.ts:151-155` already proves there's a
+  precedent for "dual-deny shape" thinking in PR-C's suite set — this PR is
+  consistent with codebase direction, not a one-off.
+
+### Live citation audit (all green)
+
+| Citation | Verification command | Result |
+|---|---|---|
+| PR-C #3854 merged | `gh pr view 3854 --json state,mergedAt` | `{"state":"MERGED","mergedAt":"2026-05-16T12:53:02Z"}` |
+| Issue #3878 open | `gh issue view 3878 --json state` | `{"state":"OPEN"}` |
+| Issue #3869 open (deferrals tracker) | `gh issue view 3869 --json state,title` | `{"state":"OPEN","title":"review: PR-C …"}` |
+| Learning 2026-05-06 exists | `test -f knowledge-base/project/learnings/2026-05-06-tenant-jwt-rpc-grant-mismatch-vitest-blind.md` | OK |
+| Learning 2026-05-16 exists | `test -f knowledge-base/project/learnings/2026-05-16-rls-deny-tests-payload-must-type-validate-or-they-pass-for-wrong-reason.md` | OK |
+| Migration 018 check constraint | `grep -n "custom_name ~" apps/web-platform/supabase/migrations/018_team_names.sql` | line 12: `check (custom_name ~ '^[a-zA-Z0-9 ]+$'),` |
+| Migration 018 unique constraint | `grep -n "unique" apps/web-platform/supabase/migrations/018_team_names.sql` | line 15: `unique (user_id, leader_id)` (custom_name NOT unique) |
+| Seed line 142 in agent-runner | `sed -n '142p' apps/web-platform/test/server/agent-runner.tenant-isolation.test.ts` | `custom_name: \`Synthetic-${user.id.slice(0, 8)}\`,` |
+| Symmetric test destructure bug at line 221 | `sed -n '221p' apps/web-platform/test/server/session-sync.tenant-isolation.test.ts` | `const { data: writeByB } = await bClient` (no `error:` — confirmed bug) |
+| AGENTS.md rule `wg-use-closes-n-in-pr-body-not-title-to` | `grep -qE '\[id: wg-use-closes-n-in-pr-body-not-title-to\]' AGENTS.md` | ACTIVE |
+| AGENTS.md rule `hr-weigh-every-decision-against-target-user-impact` | same form | ACTIVE |
+| AGENTS.md rule `hr-when-in-a-worktree-never-read-from-bare` | same form | ACTIVE |
+| AGENTS.md rule `cq-test-fixtures-synthesized-only` | same form | ACTIVE |
+| Retired-rule registry check | `for id in <above ids>; do grep -q "$id" scripts/retired-rule-ids.txt && echo RETIRED || echo ACTIVE; done` | 4× ACTIVE (none retired) |
+
+No fabricated, retired, or stale citations.
+
 ## Overview
 
 Issue #3878 is the post-merge follow-through gate that PR-C (#3854 — `feat(runtime): PR-C sibling-query tenant migration`) needs cleared before prod promotion. The
@@ -257,6 +335,106 @@ the test would silently false-pass against any future grant alignment
 survives both grant configurations + the future grant alignment work
 without further edit.
 
+### Research Insights — Codebase precedent for the dual-shape pattern
+
+Plan-time grep against the 12 `*.tenant-isolation.test.ts` suites surfaced
+three sibling sites that already encode a "this might 42501 or might not"
+mental model:
+
+**1. `cc-dispatcher.tenant-isolation.test.ts:151-155` — RLS-deny on INSERT**
+
+```ts
+// RLS denies the INSERT; PostgREST returns error code 42501 or
+// similar. Either way, the row is NOT persisted.
+const succeeded = data && data.length > 0;
+expect(succeeded).toBeFalsy();
+if (error) expect(error.code).toBeTruthy();
+```
+
+This is a LOOSER form than this PR's chosen pattern:
+- Pro: agnostic to which deny code Postgres returns (handles `42501`,
+  `42P01`, future RLS-flavor codes uniformly).
+- Con: the `if (error) expect(error.code).toBeTruthy()` guard is weak — a
+  non-deny error with any truthy `code` would also pass. The 2026-05-16
+  learning's "pass for the wrong reason" trap is partially open here.
+
+**2/3. `api-usage.tenant-isolation.test.ts:165-167` + `agent-runner.tenant-isolation.test.ts:317-319, 328-330` — RPC-grant deny**
+
+```ts
+expect(error).not.toBeNull();
+expect(error!.code === "42501" || /permission/i.test(error!.message)).toBe(true);
+```
+
+This form ASSERTS the error fires (no `if (error)` early-out) and accepts
+either `42501` exact-match OR a `/permission/i` message-substring fallback.
+Used for RPC-grant denies where the assertion is "the deny WAS produced",
+not "the deny may or may not have shape X".
+
+**Why this PR uses the tighter form** (`if (error) { expect(error.code).toBe("42501"); expect(data).toBeNull(); } else { expect(data).toEqual([]); }`):
+
+The session-sync sites are testing a **table** RLS+grant stack, not an RPC.
+The two valid outcomes are:
+
+| Stack state | Result shape | Path |
+|---|---|---|
+| `GRANT UPDATE ON users TO authenticated` revoked + RLS policy | `{ error: { code: "42501", … }, data: null }` | grant-deny (current dev) |
+| `GRANT UPDATE ON users TO authenticated` granted + RLS policy denies row | `{ error: null, data: [] }` | RLS-deny (canonical) |
+
+Both outcomes are LOAD-BEARING SAFE — the row is unchanged either way.
+Other deny codes (`42P01` missing table, `23502` NOT NULL violation,
+`23514` check-constraint, etc.) would be **bugs**, not load-bearing safe
+denies; the tight `error.code === "42501"` form catches a regression that
+introduces a new failure class.
+
+The `cc-dispatcher.ts:151-155` form is appropriate where any-deny-counts;
+the session-sync form is appropriate where only-these-two-denies-count.
+The two forms are NOT in tension — they encode different policy properties.
+
+**Future helper consolidation (out of scope, tracked in #3869 item 1).**
+If/when a shared `expectRlsOrGrantDeny(result, expectedColumn?)` helper
+lands, this PR's three call sites become trivial replacements. The plan
+deliberately does NOT introduce that helper inline — three call sites is
+below the threshold where extracting a helper pays for the noise.
+
+### Research Insights — Positive-control gap (defer)
+
+The 2026-05-16 learning's rule §4 reads:
+
+> For each RLS policy under test, run a positive control. A test that
+> "user B's tenant client successfully INSERTs into B's own conversation"
+> confirms the payload shape, FK seeding, and policy-evaluation order are
+> correct.
+
+`session-sync.tenant-isolation.test.ts` has a SELECT positive control at
+line 150 (`baseline: A reads own github_installation_id`) but NO
+UPDATE positive control. Adding one would catch the case where the
+`authenticated` role's UPDATE grant is GRANTED but the RLS policy is
+broken in a different way (e.g., a policy edit that accidentally inverts
+the predicate).
+
+**This is explicitly deferred to #3869 item 1 (helper consolidation).**
+Adding a positive UPDATE control requires either (a) a new seed step that
+prepares a non-poison value for A to update on A's own row, or (b) an
+end-of-test verify-and-restore step. Both are cleaner inside the planned
+helper consolidation than as a one-off here. The minimum-perturbation
+fix that this PR scopes to is correct; the helper consolidation is the
+right place for the positive-control work.
+
+### Research Insights — Seed value uniqueness under hyphen→space
+
+The migration's unique constraint is `unique (user_id, leader_id)` (line 15).
+`custom_name` participates in NO unique index. The hyphen→space substitution
+preserves:
+
+- **Per-tenant uniqueness:** the `user.id.slice(0, 8)` differs per user.id
+  (Supabase auth user IDs are UUIDs; the first 8 hex chars vary).
+- **Constraint compliance:** post-fix value `Synthetic ${first8hex}` is
+  17 chars (well within 1-30), all chars in `[a-zA-Z0-9 ]`.
+- **Human readability:** `Synthetic 29216516` is still grep-able in logs.
+
+No further constraint exists on the `custom_name` column. The fix is the
+minimum perturbation.
+
 ## Verification (MUST run before opening PR)
 
 Run from the worktree root in a single Bash call so CWD is per-call-absolute:
@@ -331,10 +509,14 @@ silently introduce:
       Verify via: `grep -n "custom_name: \`Synthetic " apps/web-platform/test/server/agent-runner.tenant-isolation.test.ts`
       returns exactly 1 line at line 142.
 - [ ] AC2: `apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
-      contains exactly 3 `expect(error.code).toBe("42501")` assertions —
-      one in each of the 3 fixed tests. Verify via:
-      `grep -cE 'expect\(\w+(\.code|Err\.code)\)\.toBe\("42501"\)' apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
-      returns `3`.
+      contains exactly **4** `expect(<err>.code).toBe("42501")` assertions:
+      one each in the `:178` and `:196` tests (variable named `error`), and
+      **two** in the `:214` symmetric test (variables `readErr` and
+      `writeErr` — both sides get the dual-shape per Phase 2). Verify via:
+      `grep -cE 'expect\(\w+\.code\)\.toBe\("42501"\)' apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
+      returns `4`. (Deepen-pass correction: original AC2 claimed `3` —
+      missed that the symmetric test has both read and write dual-shape
+      branches.)
 - [ ] AC3: The symmetric test at line 214 destructures both `data` AND `error`
       on both the read and write sides. Verify via:
       `grep -cE '(error: (readErr|writeErr))' apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
@@ -451,6 +633,51 @@ These are explicitly NOT touched by this PR:
   PR should use the same pattern. The 2026-05-16 learning is the source of
   truth; this PR's edits exemplify it. (Promotion of the pattern into a
   helper is tracked in #3869 item 1 — out of scope here.)
+
+- **Sharp edge (deepen-pass):** Two existing sibling forms remain in the
+  codebase after this PR: the looser `cc-dispatcher.tenant-isolation.test.ts:151-155`
+  form (`if (error) expect(error.code).toBeTruthy()` — any-deny-counts) and
+  the RPC-grant form (`error.code === "42501" || /permission/i.test(error.message)`
+  in `api-usage` and `agent-runner`). Both are appropriate for their
+  respective contexts. Anyone touching this area in the future should
+  read the "Research Insights — Codebase precedent" subsection above
+  before unifying — the three forms encode DIFFERENT policy properties.
+
+- **Sharp edge (deepen-pass):** AC2 and AC3 use whole-file grep against
+  `session-sync.tenant-isolation.test.ts`. This is safe ONLY because the
+  file has a single top-level `describe.skipIf(...)` block — no
+  out-of-scope subsection contains a competing pattern. If a future PR
+  splits the file into multiple `describe` blocks, the AC greps must be
+  section-scoped via `awk '/^  describe\(/,/^  \)/'` or equivalent. The
+  current single-block topology is verified via:
+  `grep -c "^describe" apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
+  returns `0` (the `describe.skipIf` is indented inside an export; the
+  TOP-LEVEL `describe` form returns 0); `grep -cE "^describe\.skipIf|^\s*describe\(" apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
+  confirms exactly 1 outer block.
+
+- **Sharp edge (deepen-pass):** AC2's regex was simplified from
+  `expect\(\w+(\.code|Err\.code)\)\.toBe\("42501"\)` (had dead alternation
+  — `\w+` already matches `readErr`/`writeErr`) to
+  `expect\(\w+\.code\)\.toBe\("42501"\)`. Both regexes match the same
+  4 lines, but the simpler form is harder to misread.
+
+- **Sharp edge (deepen-pass):** The dev/prod grant model on `public.users`
+  is INTENTIONALLY divergent in the safety direction (dev returns `42501`
+  via missing grant; prod presumably the same). If a future Supabase
+  upgrade or migration aligns the grants to RLS-only (`GRANT UPDATE ON
+  public.users TO authenticated` re-added with RLS doing the row-level
+  filtering), the dual-shape's `else` branch becomes the firing path on
+  both dev and prod — still safe. The plan's choice to keep `if (error)
+  ... else ...` (rather than `try/catch` or `expect(error || data).…`)
+  makes the path-of-deny visible to the test runner: a future reviewer
+  reading a failure log can tell at a glance which branch fired.
+
+- **Sharp edge (deepen-pass):** No positive UPDATE control exists for the
+  RLS UPDATE policy. The 2026-05-16 learning rule §4 calls for one; this
+  PR explicitly defers to #3869 item 1 (helper consolidation) where the
+  positive-control work belongs. Anyone adding new UPDATE tests against
+  `public.users` after this PR should follow the helper consolidation,
+  not add a one-off here.
 
 ## Related
 
