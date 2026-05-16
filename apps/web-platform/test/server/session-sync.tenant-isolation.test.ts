@@ -182,9 +182,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .update({ kb_sync_history: poison })
         .eq("id", userB.id)
         .select("id");
-      expect(error).toBeNull();
-      expect(data).toEqual([]);
+      // Accept either RLS-deny (error=null, data=[]) or grant-deny (42501,
+      // data=null). Both are load-bearing safe; see
+      // 2026-05-16-rls-deny-tests-payload-must-type-validate-or-they-pass-for-wrong-reason.
+      if (error) {
+        expect(error.code).toBe("42501");
+        expect(data).toBeNull();
+      } else {
+        expect(data).toEqual([]);
+      }
 
+      // invariant: service-role re-read confirms B's row is unchanged.
       const { data: stillThere } = await service
         .from("users")
         .select("kb_sync_history")
@@ -200,9 +208,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .update({ repo_last_synced_at: poison })
         .eq("id", userB.id)
         .select("id");
-      expect(error).toBeNull();
-      expect(data).toEqual([]);
+      if (error) {
+        expect(error.code).toBe("42501");
+        expect(data).toBeNull();
+      } else {
+        expect(data).toEqual([]);
+      }
 
+      // invariant: service-role re-read confirms B's row is unchanged.
       const { data: stillThere } = await service
         .from("users")
         .select("repo_last_synced_at")
@@ -212,18 +225,48 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     test("symmetric: B cannot read or write A's users row either", async () => {
-      const { data: readByB } = await bClient
+      // Read side — SELECT does not require an UPDATE grant; RLS-deny is the
+      // expected path. Accept either shape for methodology hygiene.
+      const { data: readByB, error: readError } = await bClient
         .from("users")
         .select("github_installation_id, kb_sync_history, repo_last_synced_at")
         .eq("id", userA.id);
-      expect(readByB).toEqual([]);
+      if (readError) {
+        expect(readError.code).toBe("42501");
+        expect(readByB).toBeNull();
+      } else {
+        expect(readByB).toEqual([]);
+      }
 
-      const { data: writeByB } = await bClient
+      // Write side — destructure error: pre-fix this surfaced as "expected null to equal []".
+      const poison = "1999-01-01T00:00:00.000Z";
+      const { data: writeByB, error: writeError } = await bClient
         .from("users")
-        .update({ repo_last_synced_at: "1999-01-01T00:00:00.000Z" })
+        .update({ repo_last_synced_at: poison })
         .eq("id", userA.id)
         .select("id");
-      expect(writeByB).toEqual([]);
+      if (writeError) {
+        expect(writeError.code).toBe("42501");
+        expect(writeByB).toBeNull();
+      } else {
+        expect(writeByB).toEqual([]);
+      }
+
+      // invariant: service-role re-read confirms A's row is unchanged.
+      const { data: stillThereA } = await service
+        .from("users")
+        .select("repo_last_synced_at")
+        .eq("id", userA.id)
+        .maybeSingle();
+      expect(stillThereA?.repo_last_synced_at).not.toBe(poison);
     });
+
+    // Positive control (defer): A successfully UPDATEs A's own users row.
+    // Fails today under the missing GRANT UPDATE ON public.users TO authenticated
+    // (intentional defense-in-depth, see migration 006). Tracked in #3869 item 1
+    // (helper consolidation) where the helper + positive control land together.
+    test.todo(
+      "positive control: A can UPDATE own users.repo_last_synced_at (pending #3869 grant alignment)",
+    );
   },
 );
