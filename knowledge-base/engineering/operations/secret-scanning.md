@@ -5,6 +5,7 @@ audience: operators, on-call, contributors
 related:
   - https://github.com/jikig-ai/soleur/issues/3121
   - https://github.com/jikig-ai/soleur/issues/3874
+  - https://github.com/jikig-ai/soleur/issues/3877
   - knowledge-base/engineering/operations/golden-tests.md
 last_updated: 2026-05-16
 ---
@@ -83,6 +84,14 @@ intentional. Examples:
     Postgres connection strings pasted from operator `doppler run` output
     (e.g., `2026-05-16-supabase-mcp-oauth-fallback-to-doppler-database-url.md`,
     added via [#3874](https://github.com/jikig-ai/soleur/issues/3874)).
+    Additionally, the rule's per-rule `regexes = [...]` placeholder allowlist
+    now matches `\*+` (one or more asterisks) as the password branch, so
+    `postgres://user:***@host` (and any asterisk-redaction shape) is
+    recognized as a documentation convention rather than a leak — added via
+    [#3877](https://github.com/jikig-ai/soleur/issues/3877). The path
+    carve-out above remains the safety net for prose-style redactions that
+    extend beyond the canonical placeholder form (e.g., a learning that
+    embeds a Supabase pooler URL like `postgres.<projectref>:***@`).
 - Default-pack rules (AWS, Stripe, etc.) and the other 12 custom rules
   (Doppler, Supabase JWT, Anthropic, Resend, Cloudflare, Sentry, Discord
   webhook, VAPID, JWT, generic-API-key, Soleur BYOK, Stripe webhook secret)
