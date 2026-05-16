@@ -60,7 +60,12 @@ processors. No new personal-data surface. Same review surface as PR-C
 + PR-D for the audit-writer expectation, narrower than PR-B for the
 auth-domain change (single-file `tenant.ts` edit).
 
-Closes: `Closes #3887` (in PR body per `wg-use-closes-n-in-pr-body-not-title-to`).
+Closes-after-apply: `Ref #3887` (NOT `Closes` — operator closes
+manually after `knowledge-base/legal/compliance-posture.md` Active
+Items row "Art. 5(2) audit-writer gap" is updated with this PR # and
+date per AC18. See `2026-05-11-plan-r6-closes-after-apply-deferral-pattern.md`.
+Auto-close would fire at merge time, decoupled from whether the
+proof-of-compliance artifact actually lands.)
 Umbrella: `Ref #3244`.
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -79,6 +84,35 @@ Umbrella: `Ref #3244`.
 
 ## User-Brand Impact
 
+**Scope of this PR's kill-switch — read this first.** PR-E adds a
+Node-process-local deny-list consumer at the JWT-mint boundary. It
+invalidates the **Node-side cached `SupabaseClient` instance** when a
+jti lands on `denied_jti`. It does **NOT** add PostgREST-side RLS
+predicates that consult `is_jti_denied`. Consequences:
+
+- A stolen JWT used **directly against PostgREST from outside this Node
+  process** continues to authorize requests for its full TTL. The Art. 5(2)
+  "in-band kill-switch" framing applies only to in-Node sessions; the
+  cross-process surface needs a PostgREST-side RLS predicate (or a
+  shortened TTL + signing-key rotation) and is tracked as Tracked
+  Deferral #5 (RLS-side `is_jti_denied` predicate, promoted at GA or
+  on the first real-world JWT compromise drill).
+- An honest founder whose cached jti is denied gets a fresh remint on
+  the next `getFreshTenantClient` call — by design. PR-E's deny-list
+  semantics are **per-jti**, not per-founder. Founder-level revocation
+  (kick a compromised founder out of every session) requires the admin
+  `revoke_jti` RPC paired with a per-founder predicate; tracked as
+  Tracked Deferral #3.
+- In-flight tool calls that already hold a `SupabaseClient` reference
+  (header-pinned with the old JWT) keep transacting until they
+  complete. The deny eviction is "next-call-bounded," not
+  "in-flight-aware." See Tracked Deferral #6.
+- Deny-RPC error → fall-open ("not denied"). A deny-list outage
+  silently bypasses the kill-switch until the RPC recovers. Mirrored
+  to Sentry via `mirrorWithDebounce` so on-call sees it. Fail-open is
+  the right closed-preview posture; promote to fail-closed via
+  circuit-breaker when the founder fleet >1.
+
 **If this lands broken, the user experiences:** a closed-preview founder
 sees `RuntimeAuthError(denied_jti)` falsely on a fresh JWT (false-
 positive on the deny-list check) and loses access to the runtime
@@ -86,24 +120,21 @@ mid-session, OR a BYOK audit row is silently dropped on a path the
 writer sweep missed and the founder's billing dashboard under-reports
 a turn that actually spent against their key.
 
-**If this leaks, the user's data / money is exposed via:** a stolen
-runtime JWT remains valid for its full 10-min TTL (no in-band
-kill-switch even after revocation intent is recorded), OR a BYOK
-SDK call path that bypasses `persistTurnCost` charges the founder's
-Anthropic key without leaving a row in the WORM ledger — Art. 5(2)
-"ability to demonstrate" fails on a DSAR or audit request.
-
 **Brand-survival threshold:** `single-user incident`. Carry-forward
 from PR-B + PR-C + PR-D. `requires_cpo_signoff: true`. CPO sign-off
 gathered at brainstorm (this file's CTO+CLO+CPO domain-assessment
 block). `user-impact-reviewer` MUST run at review time per
 `plugins/soleur/skills/review/SKILL.md` conditional-agent block #15.
 
-| Artifact | Vector | Mitigation in PR-E |
-|----------|--------|---------------------|
-| Runtime JWT (jti claim) | Stolen / leaked / replayed bearer token usable for full TTL with no in-band kill-switch | `is_jti_denied(jti)` check on cache-hit + cache-miss paths inside `getFreshTenantClient` / post-mint. Operator inserts `(jti, founder_id, now(), reason)` directly into `denied_jti` to revoke. Sentry mirror on deny event. |
-| BYOK SDK call path | Founder's Anthropic key spent without an `audit_byok_use` row | Writer-sweep CI lint over every `runWithByokLease(` call site — fails CI if a new BYOK path lands without `persistTurnCost` (or explicit out-of-scope comment). |
-| `audit_byok_use` WORM rows | Service-role accidentally UPDATEs/DELETEs an audit row | Migration 037's `audit_byok_use_no_mutate` trigger raises P0001 — covered in PR-E by new integration test that asserts the trigger fires. |
+| Artifact | Vector | Mitigation in PR-E | Residual exposure |
+|----------|--------|---------------------|-------------------|
+| Runtime JWT (jti claim) — in-Node cached client | Stolen jti reused via the same Node process | `is_jti_denied(jti)` check on cache-hit + cache-miss paths inside `getFreshTenantClient` / post-mint. Operator inserts `(jti, founder_id, now(), reason)` directly into `denied_jti` to revoke. Sentry mirror on deny event (debounced 5-min per-key). | **NONE** for the in-Node surface. The cached client is invalidated; next `getFreshTenantClient` issues a fresh jti. |
+| Runtime JWT (jti claim) — direct PostgREST | Stolen jti wielded from outside the Node process | None in PR-E. PostgREST verifies the JWT signature against `SUPABASE_JWT_SECRET`; no RLS-side `is_jti_denied` predicate. | Stolen JWT remains usable for its full 10-min TTL. Mitigation = TTL bound + Tracked Deferral #5 (RLS-side predicate). |
+| Founder-level revocation (kick out a compromised founder) | Compromised founder; operator wants to revoke ALL their sessions | None in PR-E. Tracked Deferral #3 (admin `revoke_jti` RPC + per-founder predicate). | Founder reminta on every `getFreshTenantClient` call until #3 ships. Mitigation = TTL bound + signing-key rotation. |
+| In-flight `SupabaseClient` reference | Long-running tool call holds the client header-pinned with the now-denied jti | None in PR-E. Eviction is "next-call-bounded." | In-flight call completes against the revoked JWT. Tracked Deferral #6 (in-flight client invalidation hook). |
+| Deny-list RPC unreachable | Network blip, RLS misconfig, RPC permission rollback | `denyProbe` is fail-open; mirrors `is_jti_denied.error` via `mirrorWithDebounce` to Sentry. | A misconfigured deny-list bypasses the kill-switch silently from the user's perspective. Mitigation = Sentry alarm; circuit-breaker promotion deferred. |
+| BYOK SDK call path | Founder's Anthropic key spent without an `audit_byok_use` row | Writer-sweep CI lint over every `runWithByokLease(` call site — fails CI if a new BYOK path lands without `persistTurnCost` (or explicit out-of-scope comment). | Narrow sweep filter — new BYOK key-acquisition mechanisms that bypass `runWithByokLease` would not be caught. Documented in §Risks R3. |
+| `audit_byok_use` WORM rows | Service-role accidentally UPDATEs/DELETEs an audit row | Migration 037's `audit_byok_use_no_mutate` trigger raises P0001 — covered in PR-E by new integration test that asserts the trigger fires. | **NONE** — trigger is database-enforced. |
 
 ## Domain Review
 
@@ -349,7 +380,7 @@ plan review section of soleur:plan.
 Per the spec AC + Soleur conventions:
 - PR title: `feat(runtime): PR-E audit_byok_use writer sweep + is_jti_denied consumer (#3887)`
 - PR body must include:
-  - `Closes #3887`
+  - `Ref #3887` (NOT `Closes` — operator closes manually after AC18 compliance-posture.md update; per `2026-05-11-plan-r6-closes-after-apply-deferral-pattern.md`).
   - Brand-survival vector context (closes Art. 5(2) accountability gap before 2nd hosted founder or GA exposure)
   - Per-suite re-run tally (≥13 suites + PR-E suites, all green)
   - "No PA1/PA2 surface change" note
@@ -457,6 +488,41 @@ Reviewer pipeline at `/soleur:review` time MUST include:
 4. **Cache the deny RPC result with the JWT TTL (R1).** Promote at
    beta scale if Sentry shows hot-path latency.
 
+5. **PostgREST-side RLS predicate consulting `is_jti_denied`.** Closes
+   the residual exposure named in §User-Brand Impact for stolen JWTs
+   wielded directly against PostgREST (outside this Node process).
+   Re-evaluation trigger: first real-world JWT compromise drill OR GA
+   exposure. Labels: `deferred-scope-out`, `domain/engineering`,
+   `priority/p2-medium` (note: P2 reflects "load-bearing for full
+   threat model"; for closed-preview alpha the TTL bound is acceptable
+   mitigation per the User-Brand Impact residual table).
+
+6. **In-flight `SupabaseClient` invalidation hook.** On cache-hit deny,
+   notify holders of the about-to-be-revoked client reference so they
+   can abort gracefully. Today the eviction is "next-call-bounded" —
+   in-flight tool calls complete against the now-denied JWT. Re-
+   evaluation trigger: long-running BYOK turns exceeding the deny-
+   latency tolerance OR 2nd hosted founder. Labels:
+   `deferred-scope-out`, `domain/engineering`, `priority/p3-low`.
+
+7. **`mapRuntimeAuthCauseToErrorCode` parity with `mapByokLeaseCauseToErrorCode`.**
+   The auth-domain error class has a 3-value union (`jwt_mint | rotation |
+   denied_jti`) but no per-cause client error code mapping. Today every
+   consumer collapses to a generic toast; on-call cannot distinguish
+   revocation from rate-limit from RPC outage at the Sentry tag layer.
+   Re-evaluation trigger: distinct UX desired per auth-failure cause,
+   OR on-call playbook bifurcation needed. Labels: `deferred-scope-out`,
+   `domain/engineering`, `priority/p3-low`.
+
+8. **Synthetic-fixture sweeper for `audit_byok_use`.** WORM trigger +
+   `ON DELETE RESTRICT` FK means integration test runs accumulate one
+   orphan founder + one audit row per run on dev. Ship a
+   SECURITY DEFINER RPC `_test_purge_synthetic_audit_byok_use(p_role text)`
+   that disables the trigger inside a single transaction, restricted
+   to `agent_role LIKE 'test-%'`. Re-evaluation trigger: dev DB
+   accumulation noticeable OR CI nightlies. Labels:
+   `deferred-scope-out`, `domain/engineering`, `priority/p3-low`.
+
 ## Verification (must run before opening PR — non-draft)
 
 ```bash
@@ -553,7 +619,7 @@ Marker-allowlist count asserted ≤ 2.
 
 ## Lifecycle gates honored
 
-- `wg-use-closes-n-in-pr-body-not-title-to` — `Closes #3887` in PR body, not title.
+- `wg-use-closes-n-in-pr-body-not-title-to` — `Ref #3887` in PR body (NOT `Closes`; closes-after-apply discipline — operator runs `gh issue close 3887` after AC18 compliance-posture.md update).
 - `wg-before-every-commit-run-compound-skill` — invoke at commit time.
 - `wg-after-marking-a-pr-ready-run-gh-pr-merge` — auto-merge after green CI + reviews.
 - `hr-write-boundary-sentinel-sweep-all-write-sites` — discharged by the writer-sweep CI lint.

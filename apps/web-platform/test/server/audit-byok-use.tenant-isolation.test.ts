@@ -106,16 +106,22 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     afterAll(async () => {
-      // WORM trigger blocks DELETE — clean up users (cascade is RESTRICT on
-      // founder_id, so audit rows must be cleared first via direct SQL if
-      // we want to delete the synthetic founder). For the closed-preview
-      // alpha we leave the audit rows behind: they're tagged
-      // agent_role=test-worm with synthetic founder_id, and the WORM
-      // contract is exactly what we're testing here. Skip the user cleanup
-      // attempt that would otherwise fail on the FK.
-      // (If this drift causes test-row accumulation, file a follow-up to
-      // add a synthetic-fixture sweeper that disables the trigger inside a
-      // single transaction; out of scope for PR-E.)
+      // userB was provisioned for the RLS scope test but never had an
+      // audit_byok_use row written for it, so its `users` row has no
+      // dependent rows under the ON DELETE RESTRICT FK. Clean it.
+      if (userB.id) {
+        assertSynthetic(userB.email);
+        await service.auth.admin.deleteUser(userB.id);
+      }
+      // userA holds the seeded test-worm audit row. The WORM trigger
+      // blocks DELETE on `audit_byok_use`, and the founder_id FK is
+      // ON DELETE RESTRICT, so userA cannot be removed without first
+      // disabling the trigger inside a transaction. That maintenance
+      // path is a synthetic-fixture sweeper RPC tracked as a follow-up
+      // scope-out (see the PR-E review log / `denied_jti` cleanup
+      // follow-up). For the closed-preview alpha the single per-run
+      // orphan is acceptable; long-running CI nightlies should adopt the
+      // sweeper before promotion.
     });
 
     test("UPDATE on audit_byok_use raises P0001 (service-role)", async () => {

@@ -32,7 +32,7 @@
 
 import { createHmac } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { reportSilentFallback } from "@/server/observability";
+import { mirrorWithDebounce } from "@/server/observability";
 import { getServiceClient, serverUrl } from "./service";
 
 export type UserId = string;
@@ -239,7 +239,9 @@ const cache = new Map<UserId, Promise<CacheEntry>>();
  * race under random-UUID minting. The seam lets the test inject a
  * pre-denied jti deterministically.
  *
- * Null default. Production callers MUST NOT use this.
+ * Null default. Production callers MUST NOT use this. Guarded against
+ * production use by a `NODE_ENV === "production"` check in
+ * `_setMintFnForTest`.
  */
 let __mintFnForTest:
   | ((userId: UserId, opts?: MintFounderJwtOpts) => Promise<MintedJwt>)
@@ -247,6 +249,11 @@ let __mintFnForTest:
 export function _setMintFnForTest(
   fn: typeof __mintFnForTest,
 ): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "_setMintFnForTest is a test-only seam and must not be called in production",
+    );
+  }
   __mintFnForTest = fn;
 }
 
@@ -256,32 +263,88 @@ async function callMint(userId: UserId): Promise<MintedJwt> {
 }
 
 /**
+ * Cache-eviction guard — delete only if the caller is still the current
+ * inflight Promise for `userId`. Three call sites in `getFreshTenantClient`
+ * use this: cache-hit deny, post-mint deny throw, and the trailing
+ * `catch` that handles thrown mint failures. Centralizing the
+ * referential-equality check prevents subtle drift between them (e.g.,
+ * a racing caller installing a fresh `minting` after eviction should
+ * NOT be clobbered).
+ */
+function evictIf(userId: UserId, expected: Promise<CacheEntry>): void {
+  if (cache.get(userId) === expected) cache.delete(userId);
+}
+
+/**
  * Probe the deny-list for `jti`. Returns `true` iff the row exists.
  *
  * Centralizes the RPC call + Sentry mirror so the cache-hit (falls
  * through to remint) and cache-miss (throws) paths in
  * `getFreshTenantClient` share identical observability.
+ *
+ * Sentry mirrors use `mirrorWithDebounce` (5-min per-key TTL) so a
+ * misconfigured RPC or a sustained revocation campaign cannot bury
+ * other signals with thousands of identical events. RPC failures —
+ * including thrown errors (network reject, malformed client) — are
+ * caught and treated as "not denied" (fail-open) so a transient deny-
+ * list outage does not lock out every founder; the Sentry mirror is the
+ * durable signal that the deny surface is unreachable. **Why fail-open
+ * vs fail-closed:** at the `single-user incident` brand-survival
+ * threshold for the closed-preview alpha, the user-impact of a
+ * wholesale lockout (every founder loses access until a flake clears)
+ * dominates the impact of missed revocation latency (bounded by the
+ * cache TTL/2 ≤ 5min). Promote to fail-closed via a circuit-breaker if
+ * the deny surface drops repeatedly under steady state — Tracked in
+ * the deny-list-circuit-breaker follow-up.
  */
 async function denyProbe(jti: string, userId: UserId): Promise<boolean> {
-  const service = getServiceClient();
-  const { data, error } = await service.rpc("is_jti_denied", { p_jti: jti });
-  if (error) {
-    // RPC failure ≠ revoked — fall through as "not denied" but mirror the
-    // failure to Sentry so a misconfigured deny-list surface is observable.
-    reportSilentFallback(error, {
-      feature: "tenant-jwt",
-      op: "is_jti_denied.error",
-      extra: { userId, jti },
-    });
+  let denied = false;
+  try {
+    const service = getServiceClient();
+    const { data, error } = await service.rpc("is_jti_denied", { p_jti: jti });
+    if (error) {
+      mirrorWithDebounce(
+        error,
+        {
+          feature: "tenant-jwt",
+          op: "is_jti_denied.error",
+          extra: { userId, jti },
+        },
+        userId,
+        "is_jti_denied.error",
+      );
+      return false;
+    }
+    denied = data === true;
+  } catch (err) {
+    // Thrown RPC failure — fall-open same as the `{error}` branch and
+    // mirror to Sentry. Without this catch, a thrown deny probe on the
+    // cache-hit branch would propagate as an uncaught exception out of
+    // `getFreshTenantClient` (a different failure mode from the
+    // documented `{error}` path).
+    mirrorWithDebounce(
+      err,
+      {
+        feature: "tenant-jwt",
+        op: "is_jti_denied.error",
+        extra: { userId, jti },
+      },
+      userId,
+      "is_jti_denied.error",
+    );
     return false;
   }
-  const denied = data === true;
   if (denied) {
-    reportSilentFallback(null, {
-      feature: "tenant-jwt",
-      op: "is_jti_denied.deny",
-      extra: { userId, jti },
-    });
+    mirrorWithDebounce(
+      null,
+      {
+        feature: "tenant-jwt",
+        op: "is_jti_denied.deny",
+        extra: { userId, jti },
+      },
+      userId,
+      "is_jti_denied.deny",
+    );
   }
   return denied;
 }
@@ -315,8 +378,17 @@ export async function getFreshTenantClient(
     // Deny-list check FIRST: a denied jti must not be returned even when
     // the entry is otherwise fresh. On deny: evict + fall through to
     // remint (the next caller for this userId gets a clean cache-miss).
+    //
+    // Concurrent-callers note: N callers awaiting the same `inflight` may
+    // each independently observe `denied=true` and race the eviction. The
+    // first wins; the rest no-op via `evictIf`'s referential check. Each
+    // racing caller then falls through to its own `minting` Promise at
+    // line :337 — the LAST `cache.set` wins. The orphaned mints consume
+    // slots from the 60/hr `precheck_jwt_mint` ceiling but cannot return
+    // a denied client (post-mint deny probe re-checks). Bounded waste;
+    // acceptable at single-founder closed-preview scale.
     if (await denyProbe(entry.jti, userId)) {
-      if (cache.get(userId) === inflight) cache.delete(userId);
+      evictIf(userId, inflight);
       // Fall through to the cache-miss path below.
     } else if (now - entry.mintedAt < (entry.ttlSec * 1000) / 2) {
       return entry.client;
@@ -345,7 +417,7 @@ export async function getFreshTenantClient(
     // caller gets an explicit auth-domain failure instead of a silently
     // unusable client.
     if (await denyProbe(entry.jti, userId)) {
-      if (cache.get(userId) === minting) cache.delete(userId);
+      evictIf(userId, minting);
       throw new RuntimeAuthError(
         "denied_jti",
         "Authentication unavailable; retry shortly",
@@ -355,20 +427,26 @@ export async function getFreshTenantClient(
   } catch (err) {
     // Don't keep a rejected Promise in the cache — every subsequent
     // caller would re-throw the same error without retrying the mint.
-    if (cache.get(userId) === minting) cache.delete(userId);
+    evictIf(userId, minting);
     throw err;
   }
 }
 
 /**
- * Test-only introspection — decode the cached entry's JWT payload and
- * return the `jti` claim. Returns `null` if no cache entry exists.
+ * Test-only introspection — return the `jti` baked into the cached
+ * entry. Returns `null` if no cache entry exists.
  *
  * Reads through the same Promise<CacheEntry> the production path consults,
  * so concurrent test setup that races with a mint sees a consistent view.
- * Production callers MUST NOT use this.
+ * Production callers MUST NOT use this. Guarded against production use
+ * by a `NODE_ENV === "production"` check.
  */
 export async function _peekCachedJti(userId: UserId): Promise<string | null> {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "_peekCachedJti is a test-only seam and must not be called in production",
+    );
+  }
   const inflight = cache.get(userId);
   if (!inflight) return null;
   const entry = await inflight;
