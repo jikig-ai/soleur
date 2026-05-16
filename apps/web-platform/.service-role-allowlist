@@ -46,14 +46,19 @@ apps/web-platform/server/byok-lease.ts
 # the same file MUST migrate (per spec tasks §1.5.1).
 apps/web-platform/server/agent-runner.ts
 
-# ── PR-C closeouts (#3244 §2) ─────────────────────────────────────────
+# ── PR-C/PR-D closeouts (#3244 §2 + §4) ──────────────────────────────
 #
 # 7 files fully migrated to tenant in PR-C and REMOVED from this
 # allowlist (no entries below for them): conversations-tools,
 # session-sync, conversation-writer, lookup-conversation-for-path,
 # current-repo-url, kb-document-resolver, kb-route-helpers.
 #
-# 4 files retain a service-role import for a load-bearing
+# cc-dispatcher.ts fully migrated to tenant in PR-D §4 (attachments-
+# storage moved from service-role to `getFreshTenantClient(userId)`,
+# the last remaining service-role-bypassed write path in that file)
+# and REMOVED from this allowlist.
+#
+# 3 files retain a service-role import for a load-bearing
 # auth-bootstrap or storage-injection surface that the tenant migration
 # cannot cover. Each gets its own PERMANENT rationale below.
 
@@ -75,15 +80,7 @@ apps/web-platform/server/api-messages.ts
 # data site (:96 conversations SELECT) migrated in PR-C §2.3.
 apps/web-platform/server/api-usage.ts
 
-# PERMANENT (pending PR-D attachments review) — server/cc-dispatcher.ts:1421
-# passes service-role into persistAndDownloadAttachments({supabase: supabase()})
-# for attachments-storage I/O. Tenant migration of attachments depends on
-# storage RLS work scheduled for PR-D (tracked in plan §"Tracked Deferrals").
-# The 3 tenant data sites (BYOK lease wrap + 2 messages.insert) migrated
-# in PR-C §2.11.
-apps/web-platform/server/cc-dispatcher.ts
-
-# ── Account / process-level helpers (unchanged by PR-C) ───────────────
+# ── Account / process-level helpers (unchanged by PR-C / PR-D) ───────
 #
 # Re-evaluated post-PR-C; migration requires either user-scoped JWT
 # (account-delete) or process-scoped infrastructure that has no founder

@@ -2297,13 +2297,16 @@ export async function sendUserMessage(
 
   // Persist attachment metadata and download files to workspace.
   // Extracted in #3254 — see `attachment-pipeline.ts` for the lifted body.
-  // SERVICE-ROLE: persistAndDownloadAttachments uses service-role for
-  // attachment-storage writes (signed URL plumbing). Migrated in PR-C
-  // alongside the rest of the attachment pipeline (spec §2.1.4).
+  // PR-D #3244 §4: tenant-client persistAndDownloadAttachments. Storage
+  // RLS in migration 019 (SELECT) + 045 (INSERT/UPDATE/DELETE) is now
+  // load-bearing; the application-layer path-prefix check at
+  // attachment-pipeline.ts:83-86 is defense-in-depth. Reuse the
+  // `sendTenant` mint from above — same userId, same turn — per
+  // Kieran P2-2 single-RTT rule.
   let attachmentContext: string | undefined;
   if (attachments && attachments.length > 0) {
     const result = await persistAndDownloadAttachments({
-      supabase: supabase(),
+      supabase: sendTenant,
       userId,
       conversationId,
       messageId,

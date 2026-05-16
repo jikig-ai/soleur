@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import type { AttachmentRef } from "@/lib/types";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 // ── Signed-URL cache with 50-minute TTL ──────────────────────────────
 // Signed URLs expire after 1 hour; we cache for 50 minutes to avoid
@@ -9,18 +10,30 @@ import type { AttachmentRef } from "@/lib/types";
 const URL_TTL_MS = 50 * 60 * 1_000; // 50 minutes
 const urlCache = new Map<string, { url: string; expiresAt: number }>();
 
-function useAttachmentUrl(storagePath: string): string | null {
-  const [url, setUrl] = useState<string | null>(() => {
-    const cached = urlCache.get(storagePath);
-    if (cached && cached.expiresAt > Date.now()) return cached.url;
-    return null;
-  });
+interface AttachmentUrlState {
+  url: string | null;
+  loadFailed: boolean;
+}
 
-  useEffect(() => {
-    // Return early if we already have a valid cached URL
+function useAttachmentUrl(
+  storagePath: string,
+): AttachmentUrlState & { retry: () => void } {
+  const [state, setState] = useState<AttachmentUrlState>(() => {
     const cached = urlCache.get(storagePath);
     if (cached && cached.expiresAt > Date.now()) {
-      setUrl(cached.url);
+      return { url: cached.url, loadFailed: false };
+    }
+    return { url: null, loadFailed: false };
+  });
+  // Bumping `retryNonce` re-triggers the fetch effect after a Retry click.
+  // No `userId` in this client component — `ClientExtra` brands it `never`,
+  // so all Sentry mirror calls below pass `{ feature, op, message }` only.
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  useEffect(() => {
+    const cached = urlCache.get(storagePath);
+    if (cached && cached.expiresAt > Date.now()) {
+      setState({ url: cached.url, loadFailed: false });
       return;
     }
 
@@ -32,21 +45,45 @@ function useAttachmentUrl(storagePath: string): string | null {
     })
       .then((r) => r.json())
       .then((data) => {
-        if (!cancelled && data.url) {
+        if (cancelled) return;
+        if (data?.url) {
           urlCache.set(storagePath, {
             url: data.url,
             expiresAt: Date.now() + URL_TTL_MS,
           });
-          setUrl(data.url);
+          setState({ url: data.url, loadFailed: false });
+        } else {
+          // Server returned 200 but no `url` field — treat as load failure
+          // rather than rendering a permanent skeleton.
+          reportSilentFallback(null, {
+            feature: "attachments",
+            op: "url-fetch",
+            message: "Attachment URL response missing url field",
+          });
+          setState({ url: null, loadFailed: true });
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (cancelled) return;
+        reportSilentFallback(err, {
+          feature: "attachments",
+          op: "url-fetch",
+          message: "Attachment URL fetch failed",
+        });
+        setState({ url: null, loadFailed: true });
+      });
     return () => {
       cancelled = true;
     };
-  }, [storagePath]);
+  }, [storagePath, retryNonce]);
 
-  return url;
+  const retry = () => {
+    urlCache.delete(storagePath);
+    setState({ url: null, loadFailed: false });
+    setRetryNonce((n) => n + 1);
+  };
+
+  return { ...state, retry };
 }
 
 // ── Components ───────────────────────────────────────────────────────
@@ -71,9 +108,37 @@ export function AttachmentDisplay({ attachments }: AttachmentDisplayProps) {
   );
 }
 
+function PreviewUnavailable({
+  filename,
+  onRetry,
+}: {
+  filename: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 p-3 text-sm">
+      <p className="text-soleur-text-secondary">
+        Preview unavailable
+        <span className="sr-only"> for {filename}</span>
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-1 text-soleur-text-accent underline"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
-  const url = useAttachmentUrl(attachment.storagePath);
+  const { url, loadFailed, retry } = useAttachmentUrl(attachment.storagePath);
   const [expanded, setExpanded] = useState(false);
+
+  if (loadFailed) {
+    return <PreviewUnavailable filename={attachment.filename} onRetry={retry} />;
+  }
 
   if (!url) {
     return (
@@ -115,9 +180,13 @@ function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
 }
 
 function FileAttachment({ attachment }: { attachment: AttachmentRef }) {
-  const url = useAttachmentUrl(attachment.storagePath);
+  const { url, loadFailed, retry } = useAttachmentUrl(attachment.storagePath);
 
   const sizeKb = Math.round(attachment.sizeBytes / 1_024);
+
+  if (loadFailed) {
+    return <PreviewUnavailable filename={attachment.filename} onRetry={retry} />;
+  }
 
   return (
     <a
