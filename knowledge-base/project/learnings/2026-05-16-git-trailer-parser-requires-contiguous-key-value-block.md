@@ -36,7 +36,7 @@ Two distinct shapes triggered the silent drop:
 
 Allowlist-Widened-By: Jean Deruelle
 
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@example.com>
 ```
 
 Git's parser treats only the LAST contiguous paragraph of `Token: value` lines as the trailer block. Inserting a blank line between `Allowlist-Widened-By:` and `Co-Authored-By:` makes the former part of the body, not a trailer.
@@ -47,7 +47,7 @@ Git's parser treats only the LAST contiguous paragraph of `Token: value` lines a
 Closes #3877.
 Refs #3874 (path-allowlist precedent), #3888 (sibling parser refactor).
 Allowlist-Widened-By: Jean Deruelle
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@example.com>
 ```
 
 Git requires EVERY line in the final paragraph to be parseable as `Token: value` (or a continuation line starting with whitespace). The `Closes #3877.` and `Refs #3874 (...)` lines don't match — they have a number sign and a period, not `Closes: #3877`. The parser falls back to "no trailers detected" for the entire block; even valid `Allowlist-Widened-By:` and `Co-Authored-By:` lines below are dropped.
@@ -72,7 +72,7 @@ Closes #3877. Refs #3874 (motivating issue), #3875 (precedent PR),
 ...more prose, code block list, etc...
 
 Allowlist-Widened-By: Jean Deruelle
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@example.com>
 ```
 
 ## Verification
