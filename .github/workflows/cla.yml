@@ -1,5 +1,18 @@
 name: CLA Assistant
 
+# Upstream filter for CLA signatures. After a contributor types "I have read the
+# CLA Document and I hereby sign the CLA" (or a PR is opened by a non-bot,
+# non-allowlisted user), the `contributor-assistant/github-action` records the
+# signature in the `cla-signatures` branch of this repo.
+#
+# The PR-evidence sidecar at `.github/workflows/cla-evidence.yml` watches the
+# same events and writes a content-addressed canonical record (PR number, doc
+# hash, RFC 3161 timestamp inputs) to the `soleur-cla-evidence` R2 bucket. The
+# sidecar is independent — failures here do not block the sidecar, and failures
+# in the sidecar do not block the merge gate. Edits that change the allowlist
+# below MUST be mirrored in the sidecar's `build-bypass.ts` parser (the sidecar
+# reads this file at run-time to stay in sync).
+
 on:
   issue_comment:
     types: [created]
