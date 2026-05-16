@@ -114,6 +114,38 @@ jobs:
           fi
           echo "Doppler config dev_scheduled -> environment=dev (verified)."
 
+      # Apply migrations to dev before running tests. Without this step,
+      # tenant-integration tests run against whatever schema dev happens to
+      # have, which can lag behind the PR's migration files — producing
+      # ambiguous "RLS deny" failures whose root cause is "migration never
+      # applied" rather than "policy logic incorrect." See PR #3911
+      # diagnosis: the same 42501 error fires whether the migration is
+      # absent (default RLS deny) or present-but-broken (policy returns
+      # false), which makes CI useless for distinguishing the two cases
+      # until the apply gap is closed.
+      #
+      # SAFETY: dev only. Per `hr-menu-option-ack-not-prod-write-auth`,
+      # prd migration apply MUST remain operator-gated. This step uses
+      # the dev_scheduled Doppler config (asserted as environment=dev
+      # by the preceding step), and `run-migrations.sh` uses
+      # `DATABASE_URL_POOLER` which is the dev-pooler endpoint.
+      #
+      # `psql` is pre-installed on github-hosted ubuntu runners, so no
+      # explicit setup step is needed. The script tracks applied
+      # migrations in `public._schema_migrations` and is idempotent on
+      # re-runs (skips already-applied filenames). `--bootstrap=skip`
+      # is correct for dev (which has a populated tracking table;
+      # bootstrap-auto's 001-010 sentinel-row seed is meant for the
+      # legacy prd-first apply path, not dev).
+      - name: Apply migrations to dev
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/run-migrations.sh --bootstrap=skip
+
       - name: Run tenant-isolation tests
         working-directory: apps/web-platform
         env:
