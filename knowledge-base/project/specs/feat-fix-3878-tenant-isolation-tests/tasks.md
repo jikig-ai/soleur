@@ -9,32 +9,29 @@ lane: single-domain
 
 ## Phase 1 — Setup
 
-- [ ] 1.1 Verify worktree is `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-3878-tenant-isolation-tests` and branch is `feat-fix-3878-tenant-isolation-tests`. Single Bash call: `cd <abs-worktree> && git branch --show-current && pwd`.
-- [ ] 1.2 Confirm Doppler `soleur/dev` is reachable: `doppler secrets get SUPABASE_URL -p soleur -c dev --plain | head -c 30` returns a non-empty URL string (do NOT log the value).
-- [ ] 1.3 Baseline the failing run to confirm the verification comment's reproduction:
-      `cd <abs-worktree>/apps/web-platform && doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 ./node_modules/.bin/vitest run test/server/agent-runner.tenant-isolation.test.ts test/server/session-sync.tenant-isolation.test.ts --reporter=verbose`.
-      Expected: `agent-runner` suite shows 10 skipped, `session-sync` shows 3 failed / 2 passed.
+- [x] 1.1 Worktree + branch verified.
+- [x] 1.2 Doppler `soleur/dev` reachable (SUPABASE_URL fetched, non-empty).
+- [x] 1.3 Baseline confirmed via the pre-fix verification run (issue #3878 comment 4466926265).
 
 ## Phase 2 — Core Implementation
 
 ### 2.1 agent-runner seed fix
 
-- [ ] 2.1.1 Edit `apps/web-platform/test/server/agent-runner.tenant-isolation.test.ts:142` — replace the hyphen in `` `Synthetic-${user.id.slice(0, 8)}` `` with a space: `` `Synthetic ${user.id.slice(0, 8)}` ``. No other changes to this file.
-- [ ] 2.1.2 Re-run JUST the agent-runner suite: `cd apps/web-platform && doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 ./node_modules/.bin/vitest run test/server/agent-runner.tenant-isolation.test.ts --reporter=verbose`. All 10 tests must report `passed`. If any still skip, the seed throws elsewhere — read the actual Postgres error before any further edit.
+- [x] 2.1.1 Edited line 142: hyphen → space.
+- [x] 2.1.2 agent-runner re-run: all 10 tests `passed` (now included in full glob below).
 
 ### 2.2 session-sync dual-shape
 
-- [ ] 2.2.1 Edit `apps/web-platform/test/server/session-sync.tenant-isolation.test.ts` lines 178-194 (`:254 recordKbSyncHistory UPDATE`) — replace the rigid `expect(error).toBeNull(); expect(data).toEqual([])` pair with the dual-shape block from plan Phase 2. Keep the service-role re-read poison-check intact.
-- [ ] 2.2.2 Edit lines 196-212 (`:270 updateLastSynced`) — same dual-shape pattern; the column is `repo_last_synced_at`, the re-read assertion stays `not.toBe(poison)`.
-- [ ] 2.2.3 Edit lines 214-227 (symmetric) — three sub-fixes: (a) destructure `error` on the read side, (b) destructure `error` on the write side, (c) apply dual-shape to both sides. The pre-fix bug is that the write side destructures only `data: writeByB`, surfacing `expected null to deeply equal []` when Postgres returns `42501`.
-- [ ] 2.2.4 Re-run just the session-sync suite: `cd apps/web-platform && doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 ./node_modules/.bin/vitest run test/server/session-sync.tenant-isolation.test.ts --reporter=verbose`. All 5 tests must report `passed`.
+- [x] 2.2.1 Edited `:254` test — dual-shape applied.
+- [x] 2.2.2 Edited `:270` test — dual-shape applied.
+- [x] 2.2.3 Edited symmetric test — dual-shape + error destructure on both sides.
+- [x] 2.2.4 session-sync re-run: all 5 tests `passed` (included in full glob below).
 
 ## Phase 3 — Verification
 
-- [ ] 3.1 Full glob re-run (the verification command from #3878 issue body):
-      `cd apps/web-platform && doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 ./node_modules/.bin/vitest run test/server/*.tenant-isolation.test.ts --reporter=verbose`. Expected: `Test Files 12 passed (12); Tests 55 passed (55)` and zero skipped, zero failed.
-- [ ] 3.2 Capture the vitest summary line verbatim and the per-suite tally for the PR body. The plan's Verification section has the canonical table — paste it into the PR with the post-fix column populated.
-- [ ] 3.3 AC sweep (run each in a single Bash chain):
+- [x] 3.1 Full glob re-run: `Test Files 12 passed (12); Tests 55 passed (55)` — 0 failed, 0 skipped.
+- [x] 3.2 Vitest summary + per-suite tally captured for PR body.
+- [x] 3.3 AC sweep (all passed):
       - AC1: `grep -n "custom_name: \`Synthetic " apps/web-platform/test/server/agent-runner.tenant-isolation.test.ts | wc -l` returns `1`.
       - AC2: `grep -cE 'expect\(\w+(\.code|Err\.code)\)\.toBe\("42501"\)' apps/web-platform/test/server/session-sync.tenant-isolation.test.ts` returns `3`.
       - AC3: `grep -cE 'error: (readErr|writeErr)' apps/web-platform/test/server/session-sync.tenant-isolation.test.ts` returns `2`.

@@ -182,8 +182,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .update({ kb_sync_history: poison })
         .eq("id", userB.id)
         .select("id");
-      expect(error).toBeNull();
-      expect(data).toEqual([]);
+      // Accept either RLS-deny (error=null, data=[]) or grant-deny (42501,
+      // data=null). Both are load-bearing safe; see
+      // 2026-05-16-rls-deny-tests-payload-must-type-validate-or-they-pass-for-wrong-reason.
+      if (error) {
+        expect(error.code).toBe("42501");
+        expect(data).toBeNull();
+      } else {
+        expect(data).toEqual([]);
+      }
 
       const { data: stillThere } = await service
         .from("users")
@@ -200,8 +207,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .update({ repo_last_synced_at: poison })
         .eq("id", userB.id)
         .select("id");
-      expect(error).toBeNull();
-      expect(data).toEqual([]);
+      if (error) {
+        expect(error.code).toBe("42501");
+        expect(data).toBeNull();
+      } else {
+        expect(data).toEqual([]);
+      }
 
       const { data: stillThere } = await service
         .from("users")
@@ -212,18 +223,35 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     test("symmetric: B cannot read or write A's users row either", async () => {
-      const { data: readByB } = await bClient
+      // Read side — SELECT does not require an UPDATE grant; RLS-deny is the
+      // expected path. Accept either shape for methodology hygiene.
+      const { data: readByB, error: readErr } = await bClient
         .from("users")
         .select("github_installation_id, kb_sync_history, repo_last_synced_at")
         .eq("id", userA.id);
-      expect(readByB).toEqual([]);
+      if (readErr) {
+        expect(readErr.code).toBe("42501");
+        expect(readByB).toBeNull();
+      } else {
+        expect(readByB).toEqual([]);
+      }
 
-      const { data: writeByB } = await bClient
+      // Write side — currently fails grant-deny under dev's missing UPDATE
+      // grant on public.users. Destructuring `error` (not just `data`) is
+      // load-bearing: pre-fix the test surfaced a misleading
+      // `expected null to deeply equal []` because `data` was null when
+      // Postgres returned 42501 and `error` was discarded.
+      const { data: writeByB, error: writeErr } = await bClient
         .from("users")
         .update({ repo_last_synced_at: "1999-01-01T00:00:00.000Z" })
         .eq("id", userA.id)
         .select("id");
-      expect(writeByB).toEqual([]);
+      if (writeErr) {
+        expect(writeErr.code).toBe("42501");
+        expect(writeByB).toBeNull();
+      } else {
+        expect(writeByB).toEqual([]);
+      }
     });
   },
 );

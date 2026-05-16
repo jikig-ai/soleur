@@ -504,44 +504,20 @@ silently introduce:
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `apps/web-platform/test/server/agent-runner.tenant-isolation.test.ts:142`
+- [x] AC1: `apps/web-platform/test/server/agent-runner.tenant-isolation.test.ts:142`
       contains `` `Synthetic ${user.id.slice(0, 8)}` `` (space, not hyphen).
-      Verify via: `grep -n "custom_name: \`Synthetic " apps/web-platform/test/server/agent-runner.tenant-isolation.test.ts`
-      returns exactly 1 line at line 142.
-- [ ] AC2: `apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
-      contains exactly **4** `expect(<err>.code).toBe("42501")` assertions:
-      one each in the `:178` and `:196` tests (variable named `error`), and
-      **two** in the `:214` symmetric test (variables `readErr` and
-      `writeErr` — both sides get the dual-shape per Phase 2). Verify via:
-      `grep -cE 'expect\(\w+\.code\)\.toBe\("42501"\)' apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
-      returns `4`. (Deepen-pass correction: original AC2 claimed `3` —
-      missed that the symmetric test has both read and write dual-shape
-      branches.)
-- [ ] AC3: The symmetric test at line 214 destructures both `data` AND `error`
-      on both the read and write sides. Verify via:
-      `grep -cE '(error: (readErr|writeErr))' apps/web-platform/test/server/session-sync.tenant-isolation.test.ts`
-      returns `2`.
-- [ ] AC4: Migration `apps/web-platform/supabase/migrations/018_team_names.sql`
-      is **unchanged** by this PR. Verify via:
-      `git diff main -- apps/web-platform/supabase/migrations/` is empty.
-- [ ] AC5: No `GRANT` statement is added or removed in any migration by this PR.
-      Verify via:
-      `git diff main -- apps/web-platform/supabase/migrations/ | grep -iE "^\+.*GRANT|^-.*GRANT"` is empty.
-- [ ] AC6: No CI workflow file is touched by this PR (deferred to #3869 item 6).
-      Verify via: `git diff main --name-only -- .github/` is empty.
-- [ ] AC7: No file under `apps/web-platform/server/` or `apps/web-platform/lib/`
-      is touched (test-only change). Verify via:
-      `git diff main --name-only | grep -E "apps/web-platform/(server|lib)/"` is empty.
-- [ ] AC8: Vitest run produces `Test Files 12 passed (12); Tests 55 passed (55)`
-      for the tenant-isolation glob (or, if vitest reports a different total
-      from added afterEach context, the summary must still show `0 failed | 0 skipped`
-      and 12 passing files). Paste the literal vitest summary line into the
-      PR body.
-- [ ] AC9: PR body includes the per-suite re-run tally table from the
-      Verification section with all 12 rows marked passed.
-- [ ] AC10: PR body uses `Closes #3878` (NOT `Ref #3878`) — this is a test-fix
-      PR whose merge alone resolves the follow-through gate; no post-merge
-      operator action is needed. Per `wg-use-closes-n-in-pr-body-not-title-to`.
+      Verified: `grep -n` returns 1 hit.
+- [x] AC2: `session-sync.tenant-isolation.test.ts` contains exactly **4**
+      `expect(<err>.code).toBe("42501")` assertions. Verified: grep returned 4.
+- [x] AC3: Symmetric test destructures both `data` AND `error` on both sides.
+      Verified: grep returned 2 (`error: readErr` + `error: writeErr`).
+- [x] AC4: Migration `018_team_names.sql` unchanged. Verified: `git diff main -- migrations/` empty.
+- [x] AC5: No `GRANT` add/remove. Verified.
+- [x] AC6: No `.github/` touch. Verified.
+- [x] AC7: No `server/` or `lib/` touch. Verified.
+- [x] AC8: Vitest summary on tenant-isolation glob: `Test Files 12 passed (12); Tests 55 passed (55)` — 0 failed, 0 skipped. Webplat suite: 4422 passed, 0 failed.
+- [ ] AC9: PR body includes the per-suite re-run tally table (handled in Phase 4 ship).
+- [ ] AC10: PR body uses `Closes #3878` (handled in Phase 4 ship).
 
 ### Post-merge (operator) — none
 
