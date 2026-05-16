@@ -6,8 +6,8 @@ rule's per-rule `paths = [...]` allowlist, so every example here is allowlisted
 by path. The point of the fixture is to demonstrate the regex semantics on real
 inputs so a future widening event can re-run them as a regression check.
 
-Refs #3877 (asterisk-redaction `\*+` widening), #3874 (path-allowlist on
-learnings tree).
+Refs #3877 (asterisk-redaction `\*+` widening), #3875 (path-allowlist on
+learnings tree, closes #3874).
 
 ## Positive — placeholder shapes that the per-rule `regexes` allowlist silences
 

@@ -256,9 +256,9 @@ tags = ["url", "database", "credential"]
   [[rules.allowlists]]
   description = "Synthesized fixtures, test files, plan/spec/skill-reference docs, learning files (database-url-with-password only — see issue:#3874; mirrors private-key:#3268)"
   paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/project/learnings/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''']
-  # Allow placeholder URLs that ship in docs (postgres://USER:PASSWORD@HOST/DB)
-  # and asterisk-redacted shapes (postgres://user:***@HOST/DB) — added per #3877
-  # to recognize the canonical Doppler/psql/pooler-output redaction convention.
+  # Allow placeholder URLs (USER:PASSWORD shapes) AND asterisk-redacted shapes
+  # (postgres://user:***@HOST) — `\*+` branch per #3877 recognizes the canonical
+  # Doppler/psql/pooler-output redaction convention.
   regexes = ['''postgres(?:ql)?://(?:USER|user|postgres|<[^>]+>):(?:PASSWORD|password|secret|<[^>]+>|\*+)@''']
 
 # ---------------------------------------------------------------------------

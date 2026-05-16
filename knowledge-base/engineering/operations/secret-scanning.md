@@ -83,15 +83,8 @@ intentional. Examples:
   - The `database-url-with-password` rule — motivated by asterisk-redacted
     Postgres connection strings pasted from operator `doppler run` output
     (e.g., `2026-05-16-supabase-mcp-oauth-fallback-to-doppler-database-url.md`,
-    added via [#3874](https://github.com/jikig-ai/soleur/issues/3874)).
-    Additionally, the rule's per-rule `regexes = [...]` placeholder allowlist
-    now matches `\*+` (one or more asterisks) as the password branch, so
-    `postgres://user:***@host` (and any asterisk-redaction shape) is
-    recognized as a documentation convention rather than a leak — added via
-    [#3877](https://github.com/jikig-ai/soleur/issues/3877). The path
-    carve-out above remains the safety net for prose-style redactions that
-    extend beyond the canonical placeholder form (e.g., a learning that
-    embeds a Supabase pooler URL like `postgres.<projectref>:***@`).
+    motivated by issue [#3874](https://github.com/jikig-ai/soleur/issues/3874),
+    landed in PR [#3875](https://github.com/jikig-ai/soleur/pull/3875)).
 - Default-pack rules (AWS, Stripe, etc.) and the other 12 custom rules
   (Doppler, Supabase JWT, Anthropic, Resend, Cloudflare, Sentry, Discord
   webhook, VAPID, JWT, generic-API-key, Soleur BYOK, Stripe webhook secret)
@@ -102,6 +95,26 @@ intentional. Examples:
 real auth-test fixture that interacts with a live Supabase test project; if
 it ever needs a synthesized token, the file should move under
 `apps/web-platform/test/__synthesized__/`.
+
+### Placeholder-regex allowlist — `database-url-with-password`
+
+Orthogonal to the path carve-out above, the `database-url-with-password` rule
+carries a per-rule `regexes = [...]` placeholder allowlist that silences
+documentation-shape connection strings regardless of path. The current
+allowlist covers:
+
+- Literal placeholder user-and-password shapes — `postgres://USER:PASSWORD@host`,
+  `postgres://user:password@host`, `postgres://postgres:secret@host`.
+- Angle-bracket placeholders — `postgres://<user>:<password>@host`.
+- Asterisk-redacted password shapes — `postgres://user:***@host` (one or more
+  literal asterisks) — added via
+  [#3877](https://github.com/jikig-ai/soleur/issues/3877) to recognize the
+  canonical Doppler/`psql`/pooler-output redaction convention.
+
+The placeholder regex covers ONLY the canonical shapes. Prose-style redactions
+that extend beyond placeholder form (e.g., a Supabase pooler URL like
+`postgres.<projectref>:***@`, where the user portion is dotted-with-projectref)
+still rely on the path carve-out for the learnings tree.
 
 ### Rename-laundering — empirical behavior (gitleaks v8.24.2)
 

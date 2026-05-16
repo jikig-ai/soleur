@@ -5,7 +5,7 @@ type: enhancement
 status: planned
 lane: cross-domain
 issue: 3877
-related_prs: [3874, 3875]
+related_prs: [3875]
 related_issues: [3874, 3268, 3323]
 classification: secret-scan-config-edit
 requires_cpo_signoff: false
