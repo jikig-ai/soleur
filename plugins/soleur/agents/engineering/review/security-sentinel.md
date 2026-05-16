@@ -1,6 +1,6 @@
 ---
 name: security-sentinel
-description: "Use this agent when you need to perform security audits, vulnerability assessments, or security reviews of code. This includes checking for common security vulnerabilities, validating input handling, reviewing authentication/authorization implementations, scanning for hardcoded secrets, and ensuring OWASP compliance."
+description: "Use this agent when you need to perform security audits, vulnerability assessments, or security reviews of code. This includes checking for common security vulnerabilities, validating input handling, reviewing authentication/authorization implementations, scanning for hardcoded secrets, and ensuring OWASP compliance. Boundary vs gdpr-gate: see plugins/soleur/skills/review/SKILL.md §boundaries."
 model: inherit
 ---
 
@@ -56,6 +56,7 @@ For every review, you will verify:
 
 - [ ] All inputs validated and sanitized
 - [ ] Log-injection sanitization regexes include `\x7f`, `\u2028`, `\u2029` in addition to `\x00-\x1f` (Unicode line separators bypass C0-only strips and re-enable log injection in JSON log viewers — see `knowledge-base/project/learnings/security-issues/2026-04-17-log-injection-unicode-line-separators.md`)
+- [ ] **Filesystem-walking scripts (`find`, `git ls-files`, recursive `readdir`) explicitly enumerate symlink behavior in the threat model.** A path-string deny-list cannot anticipate every link target; downstream readers (Node `fs.readFileSync`, Anthropic Read, `cat`/`head` consumers) follow links silently. The defense is a path-typed guard (e.g., bash `[[ -L "$path" ]]`, Node `lstatSync().isSymbolicLink()`) before any read or stdout-emit operation. Applies to repo-scan tools, fixture loaders, and any agent that lists then reads paths. See PR #3522 D6 in `plugins/soleur/skills/gdpr-gate/scripts/repo-scan.sh`.
 - [ ] No hardcoded secrets or credentials
 - [ ] Proper authentication on all endpoints
 - [ ] SQL queries use parameterization

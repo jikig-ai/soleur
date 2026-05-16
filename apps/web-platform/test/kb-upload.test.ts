@@ -1,4 +1,15 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { createHmac } from "node:crypto";
+
+// Pepper must be set BEFORE observability.ts module-init reads
+// `process.env.SENTRY_USERID_PEPPER`. vi.hoisted runs above top-level imports.
+vi.hoisted(() => {
+  process.env.SENTRY_USERID_PEPPER = "test-pepper";
+});
+
+const TEST_PEPPER = "test-pepper";
+const expectedUserIdHash = (userId: string) =>
+  createHmac("sha256", TEST_PEPPER).update(userId).digest("hex");
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -511,10 +522,14 @@ describe("POST /api/kb/upload", () => {
         detail: expect.stringContaining("encrypted"),
         inputSize: original.length,
         durationMs: expect.any(Number),
-        userId: TEST_USER_ID,
+        userIdHash: expectedUserIdHash(TEST_USER_ID),
         path: expect.stringContaining("enc.pdf"),
       }),
       expect.stringMatching(/pdf linearization failed/i),
+    );
+    expect(loggerMod.default.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ userId: TEST_USER_ID }),
+      expect.anything(),
     );
 
     // Post-refactor: warnSilentFallback emits feature+op tags (reason moves
@@ -531,8 +546,16 @@ describe("POST /api/kb/upload", () => {
         extra: expect.objectContaining({
           reason: "non_zero_exit",
           inputSize: original.length,
-          userId: TEST_USER_ID,
+          userIdHash: expectedUserIdHash(TEST_USER_ID),
         }),
+      }),
+    );
+    // Sentry-side negative assertion — raw `userId` MUST NOT appear in the
+    // Sentry payload extra (mirror of the pino-side negative above).
+    expect(Sentry.captureMessage).not.toHaveBeenCalledWith(
+      "pdf linearization failed",
+      expect.objectContaining({
+        extra: expect.objectContaining({ userId: TEST_USER_ID }),
       }),
     );
   });
@@ -558,5 +581,41 @@ describe("POST /api/kb/upload", () => {
     const res = await POST(createRequest(formData, "https://app.soleur.ai"));
     expect(res.status).toBe(201);
     expect(mockLinearize).not.toHaveBeenCalled();
+  });
+
+  // Closes #3332: defense-in-depth PDF size cap. The PDF branch (24 MB)
+  // is ordered BEFORE the generic 20 MB MAX_FILE_SIZE gate, so a 25 MB
+  // PDF is rejected by the PDF branch with the PDF-specific message — the
+  // body assertion below is what makes the test RED-distinguishing rather
+  // than a plain contract-lock.
+  describe("PDF size cap (#3332)", () => {
+    test("returns 413 with PDF-specific message for 25 MB application/pdf", async () => {
+      setupFullMocks();
+
+      const bigPdf = new File([new Uint8Array(25 * 1024 * 1024)], "big.pdf", {
+        type: "application/pdf",
+      });
+      const formData = createFormData(bigPdf, "uploads");
+      const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+      expect(res.status).toBe(413);
+
+      const body = await res.json();
+      expect(body.error).toMatch(/PDF/);
+      expect(body.error).toContain("24 MB");
+      expect(body.error).toMatch(/Anthropic/i);
+    });
+
+    test("returns 201 for 19 MB application/pdf (under both caps)", async () => {
+      setupFullMocks();
+
+      const okPdf = new File(
+        [new Uint8Array(19 * 1024 * 1024)],
+        "ok.pdf",
+        { type: "application/pdf" },
+      );
+      const formData = createFormData(okPdf, "uploads");
+      const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+      expect(res.status).toBe(201);
+    });
   });
 });

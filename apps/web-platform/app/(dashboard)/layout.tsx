@@ -2,11 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 import { ConversationsRail } from "@/components/chat/conversations-rail";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
+import { useSignOut } from "@/components/auth/use-sign-out";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -57,21 +60,21 @@ export function PaymentWarningBanner({
   return (
     <div className="border-b border-orange-800/50 bg-orange-950/30 px-4 py-3">
       <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
-        <p className="text-sm text-neutral-200">
+        <p className="text-sm text-soleur-text-primary">
           <span className="font-medium text-orange-400">Your last payment failed.</span>{" "}
           Update your payment method to avoid service interruption.
         </p>
         <div className="flex shrink-0 items-center gap-2">
           <a
             href="/dashboard/settings"
-            className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-500"
+            className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:bg-orange-500"
           >
             Update Payment
           </a>
           <button
             onClick={dismissBanner}
             aria-label="Dismiss payment warning"
-            className="rounded p-1 text-neutral-400 hover:text-neutral-200"
+            className="rounded p-1 text-soleur-text-secondary hover:text-soleur-text-primary"
           >
             <XIcon className="h-4 w-4" />
           </button>
@@ -82,9 +85,8 @@ export function PaymentWarningBanner({
 }
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Command Center", icon: GridIcon },
+  { href: "/dashboard", label: "Dashboard", icon: GridIcon },
   { href: "/dashboard/kb", label: "Knowledge Base", icon: BookIcon },
-  { href: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 const ADMIN_NAV_ITEMS = [
@@ -97,12 +99,13 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
+  const [signOutModalOpen, setSignOutModalOpen] = useState(false);
+  const { handleSignOut, isSigningOut } = useSignOut();
 
   // Check admin status on mount
   useEffect(() => {
@@ -130,6 +133,7 @@ export default function DashboardLayout({
   }, []);
 
   const navItems = isAdmin ? [...NAV_ITEMS, ...ADMIN_NAV_ITEMS] : NAV_ITEMS;
+  const settingsActive = pathname.startsWith("/dashboard/settings");
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -153,8 +157,9 @@ export default function DashboardLayout({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if ((e.target as HTMLElement)?.isContentEditable) return;
-      // Only fire on routes that are NOT KB, Settings, or chat. On chat
-      // pages the ConversationsRail owns Cmd/Ctrl+B for its own collapse.
+      // Only fire on routes that are NOT KB, Settings, or chat. ConversationsRail
+      // owns the keystroke on chat routes; SettingsShell owns it under
+      // /dashboard/settings — both have their own inner collapse state.
       if (
         pathname.startsWith("/dashboard/kb") ||
         pathname.startsWith("/dashboard/settings") ||
@@ -190,37 +195,20 @@ export default function DashboardLayout({
     return () => mediaQuery.removeEventListener("change", handler);
   }, []);
 
-  async function handleSignOut() {
-    const supabase = createClient();
-    // Sign-out tears down ALL channels by design. removeAllChannels() is
-    // best-effort cleanup — if the Phoenix WS rejects phx_leave (network
-    // blip, already-closed transport), the inner await throws. We MUST
-    // still complete signOut + redirect: leaving the user authenticated
-    // with the click "doing nothing" is exactly the shared-device leak
-    // the plan's User-Brand Impact paragraph names. try/finally ensures
-    // session teardown is the contract, not a happy-path-only effect.
-    try {
-      await supabase.removeAllChannels();
-    } finally {
-      await supabase.auth.signOut();
-      router.push("/login");
-    }
-  }
-
   return (
     <TeamNamesProvider>
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Mobile top bar — only visible below md breakpoint */}
-      <div className="flex h-14 shrink-0 items-center border-b border-neutral-800 bg-neutral-900 px-4 safe-top md:hidden">
+      <div className="flex h-14 shrink-0 items-center border-b border-soleur-border-default bg-soleur-bg-surface-1 px-4 safe-top md:hidden">
         <button
           onClick={() => setDrawerOpen(true)}
           aria-label="Open navigation"
           aria-expanded={drawerOpen}
-          className="flex h-10 w-10 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          className="flex h-10 w-10 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           <MenuIcon className="h-5 w-5" />
         </button>
-        <span className="ml-3 text-lg font-semibold tracking-tight text-white">
+        <span className="ml-3 text-lg font-semibold tracking-tight text-soleur-text-primary">
           Soleur
         </span>
       </div>
@@ -234,10 +222,14 @@ export default function DashboardLayout({
         onClick={() => setDrawerOpen(false)}
       />
 
-      {/* Sidebar / mobile drawer — always rendered for CSS transitions */}
+      {/* Sidebar / mobile drawer — always rendered for CSS transitions.
+          `inert` while the sign-out modal is open removes the sidebar
+          Sign out button from the a11y tree so agent-driven selectors
+          (and screen readers) target only the modal's confirm button. */}
       <aside
+        inert={signOutModalOpen || undefined}
         className={`
-          fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-neutral-800 bg-neutral-900
+          fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-soleur-border-default bg-soleur-bg-surface-1
           transition-transform duration-200 ease-out
           ${drawerOpen ? "translate-x-0" : "-translate-x-full"}
           md:relative md:z-auto md:translate-x-0
@@ -247,13 +239,13 @@ export default function DashboardLayout({
       >
         {/* Brand + close/collapse buttons */}
         <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-5 py-5"}`}>
-          <span className={`text-lg font-semibold tracking-tight text-white overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
+          <span className={`text-lg font-semibold tracking-tight text-soleur-text-primary overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
             Soleur
           </span>
           <button
             onClick={() => setDrawerOpen(false)}
             aria-label="Close navigation"
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white md:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:hidden"
           >
             <XIcon className="h-5 w-5" />
           </button>
@@ -262,7 +254,7 @@ export default function DashboardLayout({
             onClick={toggleCollapsed}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
-            className="hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+            className="hidden md:flex h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
           >
             {collapsed ? (
               <ChevronRightIcon className="h-4 w-4" />
@@ -272,8 +264,13 @@ export default function DashboardLayout({
           </button>
         </div>
 
+        {/* Theme toggle — sidebar header (spec TR7). */}
+        <div className={`border-b border-soleur-border-default ${collapsed ? "px-2 py-3" : "px-3 py-3"}`}>
+          <ThemeToggle collapsed={collapsed} />
+        </div>
+
         {/* Navigation */}
-        <nav className={`flex-1 space-y-1 ${collapsed ? "px-1" : "px-3"}`}>
+        <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
           {navItems.map((item) => {
             const active =
               item.href === "/dashboard"
@@ -285,10 +282,11 @@ export default function DashboardLayout({
                 key={item.href}
                 href={item.href}
                 title={collapsed ? item.label : undefined}
+                aria-current={active ? "page" : undefined}
                 className={`flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                   active
-                    ? "bg-neutral-800 text-white"
-                    : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
+                    ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                    : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
                 } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
@@ -313,17 +311,17 @@ export default function DashboardLayout({
         {drawerOpen && pathname.startsWith("/dashboard/chat") && (
           <div
             data-testid="conversations-rail-drawer"
-            className="flex min-h-0 flex-1 flex-col border-t border-neutral-800 md:hidden"
+            className="flex min-h-0 flex-1 flex-col border-t border-soleur-border-default md:hidden"
           >
             <ConversationsRail />
           </div>
         )}
 
         {/* Footer links */}
-        <div className={`border-t border-neutral-800 safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
+        <div className={`border-t border-soleur-border-default safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
           {userEmail && !collapsed && (
             <p
-              className="truncate px-3 py-1 text-xs text-neutral-500"
+              className="truncate px-3 py-1 text-xs text-soleur-text-muted"
               title={userEmail}
             >
               {userEmail}
@@ -334,15 +332,28 @@ export default function DashboardLayout({
             target="_blank"
             rel="noopener noreferrer"
             title={collapsed ? "Status" : undefined}
-            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200 ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
           >
             <StatusIcon className="h-4 w-4 shrink-0" />
             <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
           </a>
+          <Link
+            href="/dashboard/settings"
+            title={collapsed ? "Settings" : undefined}
+            aria-current={settingsActive ? "page" : undefined}
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+              settingsActive
+                ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
+            } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+          >
+            <SettingsIcon className="h-4 w-4 shrink-0" />
+            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Settings</span>
+          </Link>
           <button
-            onClick={handleSignOut}
+            onClick={() => setSignOutModalOpen(true)}
             title={collapsed ? "Sign out" : undefined}
-            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200 ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
           >
             <LogOutIcon className="h-4 w-4 shrink-0" />
             <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Sign out</span>
@@ -352,20 +363,20 @@ export default function DashboardLayout({
 
       {/* Main content — inert when drawer is open for focus trapping */}
       <main
-        className="flex-1 overflow-y-auto bg-neutral-950"
+        className="flex-1 overflow-y-auto bg-soleur-bg-base"
         inert={drawerOpen || undefined}
       >
         {/* Payment banners */}
         {subscriptionStatus === "unpaid" && (
           <div className="border-b border-red-800/50 bg-red-950/30 px-4 py-3">
             <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
-              <p className="text-sm text-neutral-200">
+              <p className="text-sm text-soleur-text-primary">
                 <span className="font-medium text-red-400">Your subscription is unpaid.</span>{" "}
                 Your account is in read-only mode.
               </p>
               <a
                 href="/dashboard/settings"
-                className="shrink-0 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500"
+                className="shrink-0 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:bg-red-500"
               >
                 Resolve Payment
               </a>
@@ -375,6 +386,13 @@ export default function DashboardLayout({
         <PaymentWarningBanner subscriptionStatus={subscriptionStatus} />
         {children}
       </main>
+
+      <SignOutConfirmModal
+        open={signOutModalOpen}
+        onClose={() => setSignOutModalOpen(false)}
+        onConfirm={handleSignOut}
+        isSigningOut={isSigningOut}
+      />
     </div>
     </TeamNamesProvider>
   );

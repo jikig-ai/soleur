@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { createRepo, GitHubApiError } from "@/server/github-app";
+import { reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
 /**
@@ -72,6 +73,17 @@ export async function POST(request: Request) {
         { statusCode: err.statusCode, userId: user.id, repoName: name },
         "GitHub API rejected repo creation (user-correctable)",
       );
+      // 403 here is unexpected post-fix (the original /user/repos 403 is gone);
+      // it now means an installation lost administration:write or the App was
+      // partially uninstalled. Mirror to Sentry so ops triages — pino warn goes
+      // to stdout only. 422 stays warn-only (legitimate user-side name conflict).
+      if (err.statusCode === 403) {
+        reportSilentFallback(err, {
+          feature: "repo-create",
+          op: "createRepo",
+          extra: { statusCode: 403, userId: user.id, repoName: name },
+        });
+      }
       return NextResponse.json({ error: err.message }, { status });
     }
 

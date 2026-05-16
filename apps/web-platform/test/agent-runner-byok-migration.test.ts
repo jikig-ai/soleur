@@ -35,6 +35,30 @@ vi.mock("@/lib/supabase/service", () => ({
     from: mockSupabaseFrom,
     rpc: mockSupabaseRpc,
   }),
+  getServiceClient: () => ({
+    from: mockSupabaseFrom,
+    rpc: mockSupabaseRpc,
+  }),
+  serverUrl: () => "https://test.supabase.co",
+}));
+
+// PR-B (#3244 §1.5.1): getFreshTenantClient routes user-scoped reads
+// through a tenant JWT. Stub it onto the same mockFrom/mockRpc chain
+// the test already wires so the existing assertions still apply.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: mockSupabaseFrom,
+    rpc: mockSupabaseRpc,
+  })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {
+    cause: string;
+    constructor(cause: string, msg: string) {
+      super(msg);
+      this.name = "RuntimeAuthError";
+      this.cause = cause;
+    }
+  },
 }));
 
 vi.mock("@/server/byok", () => ({

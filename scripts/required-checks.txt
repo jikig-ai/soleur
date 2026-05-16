@@ -1,8 +1,9 @@
 # Required synthetic check-run names for bot PRs.
 #
 # These checks span multiple GitHub rulesets:
-#   - "CI Required" ruleset: test, dependency-review, e2e
-#     (managed by scripts/create-ci-required-ruleset.sh)
+#   - "CI Required" ruleset: test, dependency-review, e2e, skill-security-scan PR gate
+#     (created by scripts/create-ci-required-ruleset.sh,
+#      `skill-security-scan PR gate` added by scripts/update-ci-required-ruleset.sh per #3542 R15)
 #   - "CLA Required" ruleset: cla-check
 #
 # Every scheduled-*.yml workflow that creates PRs via GITHUB_TOKEN must post
@@ -12,13 +13,32 @@
 #
 # When adding a new required check to any ruleset, add it here too.
 #
+# CodeQL is INTENTIONALLY OMITTED from this file. The "CI Required" ruleset
+# pins `CodeQL` to integration_id 57789 (github-advanced-security). A synthetic
+# check-run posted by `github-actions[bot]` (integration_id 15368) with
+# `name=CodeQL` would NOT satisfy the ruleset — the GHAS integration_id is the
+# load-bearing match condition. CodeQL default setup runs on every PR and
+# concludes `neutral` for bot PRs with no analyzable changes; per GitHub Docs,
+# `neutral` satisfies a required status check. See:
+#   - scripts/audit-bot-codeql-coverage.sh — empirical audit
+#   - knowledge-base/engineering/ops/runbooks/codeql-bot-coverage.md — runbook
+#   - #3545 — verification + as-built codification
+#
+# bypass_actors for the "CI Required" ruleset are canonicalized in
+# scripts/ci-required-ruleset-canonical-bypass-actors.json. Both
+# scripts/create-ci-required-ruleset.sh (via jq --slurpfile) and the
+# daily audit (.github/workflows/scheduled-ruleset-bypass-audit.yml,
+# #3544) read from that file as the single source of truth. Edit the
+# JSON, not bypass arrays inlined anywhere else.
+#
 # Format: one check name per line, blank lines and # comments ignored.
-# Refs: #826, #1468
+# Refs: #826, #1468, #3544, #3545
 
 # CI Required ruleset
 test
 dependency-review
 e2e
+skill-security-scan PR gate
 
 # CLA Required ruleset
 cla-check

@@ -29,7 +29,7 @@ export function KbDocShell({
           onClick={onExpand}
           aria-label="Expand file tree"
           title="Expand file tree (⌘B)"
-          className="absolute left-2 top-5 z-10 flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          className="absolute left-2 top-5 z-10 flex h-6 w-6 items-center justify-center rounded text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           <svg
             className="h-4 w-4"
@@ -47,7 +47,9 @@ export function KbDocShell({
         </button>
       )}
       <div
-        className={`min-h-0 flex-1 overflow-y-auto ${collapsed ? "pl-10" : ""}`}
+        className={`min-h-0 flex-1 overflow-y-auto md:transition-[padding] md:duration-200 md:ease-out ${
+          collapsed ? "pl-10 md:pl-[18rem]" : ""
+        }`}
       >
         <KbErrorBoundary>
           {isContentView ? children : <DesktopPlaceholder />}

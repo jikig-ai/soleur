@@ -38,7 +38,7 @@ ssh -o ConnectTimeout=5 root@"$SERVER_IP" \
 
 The remote hash must equal `$LOCAL_HASH` and `systemctl is-active webhook` must return `active`. Extend the same pattern to `webhook.service`, `cat-deploy-state.sh`, and `hooks.json` if you want to verify all four provisioners landed (the `ci-deploy.sh` hash typically suffices because the provisioners run in sequence and any earlier failure aborts the resource creation).
 
-The `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contract automatically when a PR edits any of the four trigger files. See [`2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md`](../../../../knowledge-base/project/learnings/bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md) for the root cause and contract design.
+The `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contract automatically when a PR edits any of the four trigger files. See [`2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md`](../../../../../knowledge-base/project/learnings/bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md) for the root cause and contract design.
 
 ## Reason Taxonomy
 
@@ -63,8 +63,19 @@ The `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contract au
 | `production_start_failed` | 1 | Production container didn't start post-swap | Check docker state; consider manual rollback |
 | `no_handler` | 1 | Component has no case handler in ci-deploy.sh | Add handler (code change) |
 | `unhandled` | 1 | EXIT trap fired; specific reason not instrumented | Check journalctl; consider adding explicit final_write_state call |
+| `timeout` | 124 | Wall-clock cap (`ci-deploy-wrapper.sh` 900s) sent SIGTERM and `ci-deploy.sh`'s TERM trap fired before bash exited (#3704) | SSH and run `journalctl -u webhook -t ci-deploy --since '-15m'` for the last successful step before silence; likely culprit is hung `docker pull`, `docker exec bwrap`, or canary probe. |
 | `corrupt_state` | -3 | State file is unparseable JSON | Server-side disk issue; SSH to investigate |
 
 ## When NOT to SSH
 
 Per AGENTS.md: SSH is for infrastructure provisioning (Terraform) only, never for logs. Use `/hooks/deploy-status` + Sentry API + Better Stack as the three observability layers. SSH is read-only last-resort diagnosis for `canary_sandbox_failed` only (bwrap capability errors live in journalctl).
+
+## Rerun Safety
+
+**Do not `gh run rerun --failed` while ci-deploy.sh may still be running on prod.** A new `/hooks/deploy` POST will hit `flock -n` failure and write `reason=lock_contention` -- masking the original deploy's actual fate. The advisory flock in ci-deploy.sh is held by FD 200 for the full lifetime of the script (release is implicit on FD close at process exit; there is no manual `flock -u` path that could leak). A `lock_contention` reason on rerun therefore means the prior invocation is **still in its critical section**, not a release-path leak.
+
+**In-workflow self-gating (PR #3408).** `web-platform-release.yml`'s `deploy` job now begins with a `Pre-rerun lock probe` step that GETs `/hooks/deploy-status` before the deploy POST and short-circuits with an `::error::` annotation when the prior run is still in its critical section (`.exit_code == -1` and `(now - start_ts) <= 900s`). The probe is degraded-permissive: any non-JSON / empty / HTTP-error response falls through to the deploy step. flock remains the load-bearing safety net; the probe is a fast-path UX improvement that surfaces "still running" up front instead of after a 900s downstream-step timeout. `gh run rerun --failed` therefore self-gates against in-flight POSTs in the common case.
+
+The operator-side advice below still applies for **out-of-workflow** scenarios (manual triggers, cross-component deploys, ad-hoc curl reruns) where the in-workflow probe doesn't run.
+
+If the workflow's verify-completion step times out, **first poll `/hooks/deploy-status` directly** (per the call pattern at the top of this file) and confirm `exit_code` is no longer `-1` before retrying. The verify-completion ceiling is **900s** as of PR #3398 (`STATUS_POLL_MAX_ATTEMPTS=180 × INTERVAL_S=5` in `.github/workflows/web-platform-release.yml`); the matching `Verify deploy health and version` ceiling is also 900s (`HEALTH_POLL_MAX_ATTEMPTS=90 × INTERVAL_S=10`); the new `Pre-rerun lock probe` `IN_FLIGHT_CEILING_S` is also 900s and must be kept in sync with the verify-completion ceiling if either is changed. Wait at least that long before considering the workflow truly stuck. See [`2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`](../../../../../knowledge-base/project/learnings/best-practices/2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md) for the recurrence pattern and prevention checklist, and issue [#3408](https://github.com/jikig-ai/soleur/issues/3408) for the workflow-level pre-rerun probe.

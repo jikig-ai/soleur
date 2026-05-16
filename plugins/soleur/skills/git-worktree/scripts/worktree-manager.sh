@@ -26,8 +26,38 @@ NC='\033[0m' # No Color
 # without knowing where plugins/ lives relative to their CWD.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Source session-state helpers (locks + leases + headless visibility). The
+# live copy lives in the worktree filesystem; SCRIPT_DIR resolves to
+# plugins/soleur/skills/git-worktree/scripts/, so 5 levels up is the worktree
+# root. When invoked from a worktree that predates this file (legacy state),
+# the file is missing and we degrade to no-op stubs so the script keeps
+# running — old worktrees lose lock/lease protection but don't crash.
+_SS_LIB="$SCRIPT_DIR/../../../../../.claude/hooks/lib/session-state.sh"
+if [[ -f "$_SS_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_SS_LIB"
+else
+  # Loud one-shot warn so an operator (or CI log scrape) sees that lease
+  # protection is OFF in this worktree. Silent stubs would mask the
+  # 2026-04-21 regression class the lease layer was added to prevent.
+  echo "[warn] session-state.sh missing at $_SS_LIB — lease/lock protection disabled in this worktree." >&2
+  acquire_lock() { return 0; }
+  release_lock() { return 0; }
+  acquire_lease() { return 0; }
+  release_lease() { return 0; }
+  is_lease_active() { return 1; }
+  sweep_orphan_leases() { return 0; }
+  _register_lease_release_trap() { return 0; }
+  headless_or_stderr() { echo "[$1] $2" >&2; }
+fi
+
 # Auto-confirm flag (--yes skips all interactive prompts)
 YES_FLAG=false
+
+# When true, `create` also fast-forwards the local <from> ref (legacy behavior).
+# Default false: new worktrees base on refs/remotes/origin/<from> directly so
+# `create` no longer fails when a sibling worktree holds <from> checked out (#3741).
+UPDATE_LOCAL_MAIN=false
 
 # Get repo root and detect bare repo (single subprocess for both)
 # IS_BARE: true when the parent/root repo is bare (affects fetch strategy, file sync)
@@ -168,6 +198,14 @@ verify_worktree_created() {
     fi
     echo -e "${GREEN}Repair successful — worktree now registered${NC}"
   fi
+
+  # Check 3: Verify the branch was actually created
+  if ! git show-ref --verify --quiet "refs/heads/$branch_name"; then
+    echo -e "${RED}Error: Branch $branch_name was not created despite successful worktree add${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
 }
 
 # Ensure the worktree uses the operator's global git identity, not the bare repo's
@@ -206,9 +244,58 @@ ensure_gitignore() {
   fi
 }
 
+# Fetch from origin without mutating the local <branch> ref, then echo the
+# best ref to use as the worktree base. Safe to run while the local <branch>
+# is checked out in another worktree — only refs/remotes/origin/<branch> (if
+# tracked) and FETCH_HEAD are updated. Default base path for `create` since #3741.
+#
+# Precedence:
+#   1. refs/remotes/origin/<branch>  — normal clone with standard fetch refspec
+#   2. FETCH_HEAD                    — bare clones without remotes.origin.fetch
+#                                      get FETCH_HEAD written by `git fetch origin <b>`
+#   3. <branch>                      — offline fallback to local ref
+fetch_origin_branch_base() {
+  local branch="$1"
+  # All progress/warning output goes to stderr — only the chosen ref name is
+  # written to stdout so callers can capture it via $(...).
+  echo -e "${BLUE}Fetching latest origin/$branch...${NC}" >&2
+  if ! git fetch origin "$branch" 2>/dev/null; then
+    echo -e "${YELLOW}Warning: Could not fetch origin/$branch -- using cached ref${NC}" >&2
+  fi
+  if git rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    echo "origin/$branch"
+  elif git rev-parse --verify --quiet FETCH_HEAD >/dev/null 2>&1; then
+    echo "FETCH_HEAD"
+  else
+    echo "$branch"
+  fi
+}
+
+# Resolve the base ref to use for `git worktree add` based on whether the
+# operator passed --update-local-main. Sets globals BASE_REF and TRACK_FLAG.
+# Used by create_worktree() and create_for_feature() — both call sites need
+# identical behavior so the helper keeps the load-bearing --no-track comment
+# (see fetch_origin_branch_base) and the --update-local-main branch in one place.
+resolve_base_ref() {
+  local from="$1"
+  if [[ "$UPDATE_LOCAL_MAIN" == "true" ]]; then
+    update_branch_ref "$from"
+    BASE_REF="$from"
+    TRACK_FLAG=""
+  else
+    BASE_REF="$(fetch_origin_branch_base "$from")"
+    # --no-track is load-bearing: without it, branch.<new>.merge would be set
+    # to refs/heads/<from>, breaking bare `git push` from inside the worktree.
+    # Pre-fix behavior left upstream UNSET; this preserves that exactly.
+    TRACK_FLAG="--no-track"
+  fi
+}
+
 # Update a branch ref to latest remote, handling bare vs non-bare repos.
 # In bare repos: uses fetch with refspec (no working tree needed).
 # In non-bare repos: uses checkout + pull.
+# Kept for `--update-local-main` opt-in path and for cleanup_merged_worktrees
+# (post-cleanup main advancement).
 update_branch_ref() {
   local branch="$1"
   echo -e "${BLUE}Updating $branch...${NC}"
@@ -388,18 +475,21 @@ create_worktree() {
     return
   fi
 
-  # Update base branch (bare-aware)
-  update_branch_ref "$from_branch"
-
   # Create worktree
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
 
-  echo -e "${BLUE}Creating worktree...${NC}"
-  git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
+  # Base on origin/<from> by default (avoids local-ref lock contention, #3741);
+  # --update-local-main opt-in keeps the legacy behavior.
+  local BASE_REF TRACK_FLAG
+  resolve_base_ref "$from_branch"
+
+  echo -e "${BLUE}Creating worktree from $BASE_REF...${NC}"
+  # shellcheck disable=SC2086 # intentional unquoted $TRACK_FLAG: empty string must elide
+  git worktree add $TRACK_FLAG -b "$branch_name" "$worktree_path" "$BASE_REF"
 
   # Verify BEFORE fixing config — most honest check of worktree health
-  verify_worktree_created "$worktree_path" "$branch_name" "$from_branch"
+  verify_worktree_created "$worktree_path" "$branch_name" "$BASE_REF"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
@@ -451,19 +541,31 @@ create_for_feature() {
   echo "  Spec dir: $spec_dir"
   echo ""
 
-  # Update base branch (bare-aware)
-  update_branch_ref "$from_branch"
-
   # Ensure directories exist
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
 
-  # Create worktree with new branch
-  echo -e "${BLUE}Creating worktree...${NC}"
-  git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
+  # Base on origin/<from> by default (avoids local-ref lock contention, #3741).
+  # --update-local-main opt-in keeps the legacy behavior for operators who want
+  # the local <from> ref fast-forwarded.
+  local base_ref
+  local track_flag=""
+  if [[ "$UPDATE_LOCAL_MAIN" == "true" ]]; then
+    update_branch_ref "$from_branch"
+    base_ref="$from_branch"
+  else
+    base_ref="$(fetch_origin_branch_base "$from_branch")"
+    # --no-track is load-bearing: without it, branch.<new>.merge would be set
+    # to refs/heads/<from>, breaking bare `git push` from inside the worktree.
+    track_flag="--no-track"
+  fi
+
+  echo -e "${BLUE}Creating worktree from $base_ref...${NC}"
+  # shellcheck disable=SC2086 # intentional unquoted $track_flag: empty string must elide
+  git worktree add $track_flag -b "$branch_name" "$worktree_path" "$base_ref"
 
   # Verify BEFORE fixing config — most honest check of worktree health
-  verify_worktree_created "$worktree_path" "$branch_name" "$from_branch"
+  verify_worktree_created "$worktree_path" "$branch_name" "$base_ref"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
@@ -484,8 +586,40 @@ create_for_feature() {
   # Install dependencies
   install_deps "$worktree_path"
 
+  # Sweep stale leases lazily; cheap and idempotent.
+  sweep_orphan_leases
+
+  # Acquire a lease on this worktree so sibling cleanup-merged invocations
+  # see it as active and refuse to reap it. Skill name and expected duration
+  # come from the invoking skill's env (see skills/*/SKILL.md Phase 0).
+  acquire_lease "$branch_name" "${SOLEUR_SKILL_NAME:-unknown}" "${SOLEUR_EXPECTED_DURATION_MIN:-240}" \
+    || headless_or_stderr warn "could not acquire lease for $branch_name"
+  # Multi-signal trap so an interrupted session (SIGINT/SIGTERM/SIGHUP)
+  # still releases the lease — without this the lease leaks until the
+  # 24h sweep, blocking sibling cleanup-merged unnecessarily.
+  _register_lease_release_trap "$branch_name"
+
+  # Push -u immediately so the branch has a remote anchor before the operator
+  # writes any local commits. Per plan AC line 158, verify the remote ref
+  # exists via `git ls-remote` after push so a silent push-failure does NOT
+  # leave a local-only branch that a later `cleanup-merged` could reap.
+  local push_ok=true
+  if ! git -C "$worktree_path" push -u origin "$branch_name" 2>/dev/null; then
+    push_ok=false
+  elif [[ -z "$(git -C "$worktree_path" ls-remote --heads origin "$branch_name" 2>/dev/null)" ]]; then
+    push_ok=false
+  fi
+  if [[ "$push_ok" == "false" ]]; then
+    # Emit BOTH the human warn and a structured marker on stdout — the
+    # marker is grep-able by orchestrating agents so push failure surfaces
+    # under `claude --bg` where warn-to-log-file is otherwise invisible.
+    echo "SOLEUR_FEATURE_PUSH_FAILED branch=$branch_name"
+    headless_or_stderr warn "git push -u origin $branch_name failed; branch is local-only and may be reaped after the lease expires. Run \`git push -u origin $branch_name\` once network is available."
+  fi
+
   echo ""
   echo -e "${GREEN}Feature setup complete!${NC}"
+  echo -e "${BLUE}Worktree leased; release on session exit.${NC}"
   echo ""
   echo "Next steps:"
   echo -e "  1. ${BLUE}cd $worktree_path${NC}"
@@ -721,6 +855,17 @@ cleanup_orphan_worktree_dirs() {
 
 # Clean up worktrees for merged branches (detects [gone] and merged-to-main)
 cleanup_merged_worktrees() {
+  # Serialize concurrent cleanup-merged invocations across sibling sessions.
+  # 5s is the operator-perception threshold; longer waits in headless mode
+  # are invisible. Skip (don't fail) when contended — the holder will
+  # finish the work and the next session-start cycle picks up any residue.
+  if ! acquire_lock cleanup-merged 5; then
+    headless_or_stderr warn "cleanup-merged lock contended; skipping"
+    return 0
+  fi
+  # RETURN trap fires on any function-level return without clobbering EXIT.
+  trap 'release_lock cleanup-merged' RETURN
+
   # Fix bare repo config if broken (defense-in-depth on every session start)
   ensure_bare_config
 
@@ -728,12 +873,18 @@ cleanup_merged_worktrees() {
   local verbose=false
   [[ -t 1 ]] && verbose=true
 
-  # Fetch to update remote tracking info
+  # Fetch to update remote tracking info — guarded by a separate lock so an
+  # interactive `git fetch` and our background cleanup don't collide on the
+  # ref-update path. flock semantics are inode-bound, so acquiring a second
+  # distinct lock name does not deadlock with cleanup-merged above.
   local fetch_error
+  acquire_lock fetch-prune 30 || headless_or_stderr warn "fetch-prune lock contended; proceeding without"
   if ! fetch_error=$(git fetch --prune 2>&1); then
+    release_lock fetch-prune
     [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not fetch from remote: $fetch_error${NC}"
     return 0
   fi
+  release_lock fetch-prune
 
   # Find stale branches using two complementary detection methods:
   # 1. [gone] tracking: remote branch was deleted (e.g., GitHub auto-delete after PR merge)
@@ -787,6 +938,30 @@ cleanup_merged_worktrees() {
     if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
       continue
+    fi
+
+    # Skip if a sibling session holds an active lease on this worktree
+    # (PID alive, hostname matches, within expected duration).
+    if [[ -n "$worktree_path" ]] && is_lease_active "$(basename "$worktree_path")"; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - active lease${NC}"
+      continue
+    fi
+
+    # Skip if worktree HEAD was committed to in the last 10 minutes — a
+    # foreground operator working without a lease (e.g., pre-skill manual
+    # session) still gets a grace window. Clock-skew guard: negative
+    # delta = future-dated commit; treat as fresh.
+    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
+      local last_commit_age
+      last_commit_age=$(git -C "$worktree_path" log -1 --format=%ct HEAD 2>/dev/null || true)
+      if [[ -n "$last_commit_age" ]]; then
+        local _now=$(date +%s)
+        local _delta=$(( _now - last_commit_age ))
+        if (( _delta < 0 || _delta < 600 )); then
+          [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - recent commit (<10min) or clock-skew${NC}"
+          continue
+        fi
+      fi
     fi
 
     # Skip if worktree has uncommitted changes (safety check)
@@ -1219,10 +1394,15 @@ show_help() {
   cat << EOF
 Git Worktree Manager
 
-Usage: worktree-manager.sh [--yes] <command> [options]
+Usage: worktree-manager.sh [--yes] [--update-local-main] <command> [options]
 
 Global Flags:
   --yes                               Auto-confirm all prompts (for headless/scripted use)
+  --update-local-main                 (create only) Also fast-forward the local <from>
+                                      ref to origin/<from>. Default: only the remote-
+                                      tracking ref is updated; local <from> is never
+                                      mutated. Bypasses the local-main lock contention
+                                      class of failures (#3741).
 
 Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
@@ -1270,11 +1450,13 @@ Examples:
 EOF
 }
 
-# Parse --yes flag from arguments before dispatching
+# Parse global flags from arguments before dispatching
 args=()
 for arg in "$@"; do
   if [[ "$arg" == "--yes" ]]; then
     YES_FLAG=true
+  elif [[ "$arg" == "--update-local-main" ]]; then
+    UPDATE_LOCAL_MAIN=true
   else
     args+=("$arg")
   fi

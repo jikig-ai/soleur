@@ -1,0 +1,349 @@
+"use client";
+
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
+import { reportSilentFallback } from "@/lib/client-observability";
+import {
+  NO_TRANSITION_CSS_TEXT,
+  NO_TRANSITION_STYLE_ID,
+} from "@/components/theme/no-transition-contract";
+
+export type Theme = "dark" | "light" | "system";
+export type ResolvedTheme = "dark" | "light";
+
+const THEMES: readonly Theme[] = ["dark", "light", "system"] as const;
+
+const STORAGE_KEY = "soleur:theme";
+
+function isTheme(value: unknown): value is Theme {
+  return typeof value === "string" && (THEMES as readonly string[]).includes(value);
+}
+
+function readStoredTheme(): Theme {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (isTheme(raw)) return raw;
+  } catch {
+    // localStorage unavailable (private mode, SSR, disabled cookies).
+  }
+  return "system";
+}
+
+/**
+ * Resolve the canonical post-bootstrap theme on the client.
+ *
+ * The inline `NoFoucScript` runs synchronously in `<head>` before React mounts
+ * and writes `documentElement.dataset.theme` from `localStorage["soleur:theme"]`.
+ * That attribute is the canonical, post-bootstrap theme — by the time React's
+ * lazy `useState` initializer runs on the client, the DOM is already correct.
+ *
+ * Reading from `dataset.theme` first (rather than re-reading `localStorage`)
+ * makes the initial React state match the painted palette without an
+ * effect-driven swap. The effect at line ~174 stays as a defense-in-depth
+ * fallback for environments where the inline script never ran (tests, dev
+ * preview that scrubbed the attribute, very old browsers).
+ *
+ * No-op on the server (`document` is undefined).
+ *
+ * **Why this matters:** prior to this helper, the lazy initializer called
+ * `readStoredTheme()` directly. The SSR snapshot returned `"system"` (window
+ * undefined). React 18 hydration reuses the server-rendered state and does
+ * NOT re-call lazy initializers — so the client's first paint rendered the
+ * `aria-pressed` indicator on the System segment even when the page palette
+ * (resolved via `dataset.theme`) was already Dark or Light. The first-mount
+ * useEffect re-synced state, but the wrong-segment paint persisted long
+ * enough for users to perceive it as "stuck on System after reload"
+ * (#3312 attempted to fix this; this is the structural fix).
+ */
+function resolveClientInitialTheme(): Theme {
+  if (typeof document === "undefined") return "system";
+  const fromDom = document.documentElement.dataset.theme;
+  if (isTheme(fromDom)) return fromDom;
+  // Fallback: dataset.theme not set (test fixture scrubbed it, or the
+  // inline script failed to run). Read localStorage directly.
+  return readStoredTheme();
+}
+
+/**
+ * Suppress CSS transitions and keyframe animations for one paint frame.
+ *
+ * Theme switches re-resolve every `var(--soleur-*)` token that surfaces
+ * consume; surfaces with `transition-colors` (theme-toggle squares, active
+ * nav indicator, conversations-rail rows, chat bubbles) animate the change
+ * over Tailwind's default 150ms while the body and non-transitioning
+ * surfaces snap instantly. The user perceives this as different parts of
+ * the page changing theme at different speeds.
+ *
+ * Mirrors `next-themes`' `disableTransitionOnChange` pattern: inject a
+ * transient `<style>` with `transition: none !important;` BEFORE the
+ * `data-theme` attribute flips, force a synchronous style recalc so the
+ * override is committed, then remove the style on the next paint via
+ * double-rAF. Browsers commit the theme change as a single paint with no
+ * transition cascade.
+ *
+ * Also forces `animation-duration: 0s !important;` because `globals.css`
+ * declares a `pulse-border` keyframe used by `.message-bubble-active` —
+ * without this rule, an in-progress pulse would mid-animate during a
+ * theme switch.
+ *
+ * No-op on the server.
+ */
+function disableTransitionsForOneFrame(): void {
+  if (typeof document === "undefined") return;
+  // Bail if a previous call (e.g., the inline boot script's transient
+  // style, or a fast user toggle within the same frame) already injected
+  // the override. The existing element is on its own rAF cleanup
+  // schedule — we do not extend it here.
+  if (document.getElementById(NO_TRANSITION_STYLE_ID)) return;
+
+  const style = document.createElement("style");
+  style.id = NO_TRANSITION_STYLE_ID;
+  style.textContent = NO_TRANSITION_CSS_TEXT;
+  document.head.appendChild(style);
+
+  // Force a synchronous style recalc so the override is committed BEFORE
+  // the data-theme attribute change. Reading getComputedStyle on a
+  // non-pseudo element is the standard reflow-forcing trick; opacity is
+  // cheap to read and defends against dead-code-elimination.
+  if (typeof window !== "undefined" && document.body) {
+    void window.getComputedStyle(document.body).opacity;
+  }
+
+  // Double-rAF cleanup: gives the browser one full frame to commit the
+  // theme change without animation, then removes the override on the
+  // following frame. Resolve via globalThis so test stubs (vi.stubGlobal)
+  // override the lookup; a bare `requestAnimationFrame` reference may bind
+  // to the host's native function past property writes on globalThis.
+  function schedule(cb: FrameRequestCallback): void {
+    const g = globalThis as unknown as {
+      requestAnimationFrame?: (cb: FrameRequestCallback) => number;
+    };
+    if (typeof g.requestAnimationFrame === "function") {
+      g.requestAnimationFrame(cb);
+      return;
+    }
+    setTimeout(() => cb(0), 0);
+  }
+  schedule(() => {
+    schedule(() => {
+      const existing = document.getElementById(NO_TRANSITION_STYLE_ID);
+      if (existing) existing.remove();
+    });
+  });
+}
+
+function getSystemPreference(): ResolvedTheme {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "dark";
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function resolveInitial(theme: Theme): ResolvedTheme {
+  if (theme === "system") return getSystemPreference();
+  return theme;
+}
+
+type ThemeContextValue = {
+  theme: Theme;
+  resolvedTheme: ResolvedTheme;
+  setTheme(next: Theme): void;
+};
+
+const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  // Lazy initializers read documentElement.dataset.theme on first client
+  // render so the initial paint matches the inline <NoFoucScript>'s value
+  // (which it already wrote synchronously in <head> from localStorage). No
+  // effect-driven swap, no flicker, no "stuck on System" first paint.
+  //
+  // SSR (where document is undefined) falls back to "system" + dark; the
+  // hydration mismatch on <html data-theme> set by the inline script is
+  // silenced via suppressHydrationWarning in app/layout.tsx.
+  //
+  // INVARIANT: the inline <NoFoucScript> in app/layout.tsx <head> has
+  // already written document.documentElement.dataset.theme before React
+  // mounts. This provider's first paint and that script MUST agree on the
+  // value or the user sees a one-frame flash. The first-mount useEffect
+  // below stays as a defense-in-depth fallback for environments where the
+  // inline script never ran (test fixtures that scrubbed the attribute,
+  // very old browsers, CSP-blocked inline scripts).
+  const [theme, setThemeState] = useState<Theme>(() =>
+    typeof window === "undefined" ? "system" : resolveClientInitialTheme(),
+  );
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    typeof window === "undefined"
+      ? "dark"
+      : resolveInitial(resolveClientInitialTheme()),
+  );
+
+  // Apply data-theme on the html element whenever theme changes.
+  //
+  // First-mount behaviour: the inline <NoFoucScript> in app/layout.tsx
+  // already wrote document.documentElement.dataset.theme from
+  // localStorage before this provider hydrated. Treat THAT value as the
+  // canonical post-bootstrap theme and sync React state to it if React's
+  // SSR-vs-client lazy initializer landed on a divergent value (in
+  // practice, the SSR snapshot is "system" because window is undefined
+  // server-side; React 18 hydration does not always re-run the lazy
+  // initializer with the localStorage-derived value).
+  //
+  // Without this sync, ThemeToggle reads `theme` from context and
+  // highlights the wrong segment even though the page palette is
+  // correct (CSS resolves via dataset.theme, which IS correct). The
+  // user-visible symptom: the active-segment indicator is stuck on
+  // "system" until the user clicks any segment, at which point setTheme
+  // re-syncs state implicitly. The same-value guard in setTheme then
+  // makes a single click a no-op when the click target equals the
+  // (incorrect) cur state, producing the "click back-and-forth to
+  // switch" bug.
+  //
+  // We do NOT write dataset.theme on the first run — the inline script's
+  // value is already correct AND already canonical; overwriting it
+  // before the React-state-sync re-render would briefly resolve CSS
+  // through the @media (prefers-color-scheme) fallback (visible flicker
+  // for users whose OS preference doesn't match their stored choice).
+  // Subsequent runs (real theme changes) still write dataset.theme and
+  // run disableTransitionsForOneFrame.
+  const prevThemeRef = useRef<Theme | null>(null);
+  useEffect(() => {
+    if (prevThemeRef.current === null) {
+      const fromDom = document.documentElement.dataset.theme;
+      if (isTheme(fromDom)) {
+        // Inline boot script set a valid dataset.theme — that is the
+        // canonical post-bootstrap value. Sync React state to it if the
+        // lazy initializer landed elsewhere (SSR fallback). Do NOT
+        // overwrite dataset.theme here: it's already correct, and an
+        // overwrite before the state-sync re-render would briefly
+        // resolve CSS through the @media (prefers-color-scheme)
+        // fallback (visible flicker for users whose OS preference does
+        // not match their stored choice).
+        prevThemeRef.current = fromDom;
+        if (fromDom !== theme) {
+          setThemeState(fromDom);
+          setResolvedTheme(resolveInitial(fromDom));
+        }
+        return;
+      }
+      // No (or invalid) dataset.theme — inline script did not run, or
+      // we are mid-test in an environment that scrubs the attribute.
+      // Establish the baseline by writing React's current state.
+      document.documentElement.dataset.theme = theme;
+      prevThemeRef.current = theme;
+      return;
+    }
+    if (prevThemeRef.current === theme) return;
+    disableTransitionsForOneFrame();
+    document.documentElement.dataset.theme = theme;
+    prevThemeRef.current = theme;
+  }, [theme]);
+
+  // Re-assert html.style.colorScheme whenever the resolved palette flips.
+  // The inline boot script seeds colorScheme once at first paint; without
+  // re-assertion here, a user who boots Dark and toggles Light keeps
+  // `style.colorScheme = "dark"` permanently because nothing in the CSS
+  // cascade declares `color-scheme` for our data-theme blocks. Inline
+  // style beats stylesheet, so this assignment is the only path that
+  // updates UA-rendered widgets (scrollbars, form controls, default <body>
+  // background) after the boot frame.
+  useEffect(() => {
+    document.documentElement.style.colorScheme = resolvedTheme;
+  }, [resolvedTheme]);
+
+  // Live OS-change listener: only matters when theme === "system". The CSS
+  // @media (prefers-color-scheme) block in globals.css already handles the
+  // visual swap; this effect updates `resolvedTheme` so consumers (e.g. the
+  // dynamic <meta name="theme-color"> updater) stay in sync.
+  useEffect(() => {
+    if (theme !== "system") {
+      setResolvedTheme(theme);
+      return;
+    }
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    setResolvedTheme(mq.matches ? "dark" : "light");
+    const handler = (e: { matches: boolean }) => {
+      // OS flipped under "system" — same instant-switch invariant.
+      disableTransitionsForOneFrame();
+      setResolvedTheme(e.matches ? "dark" : "light");
+    };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [theme]);
+
+  // Cross-tab sync: another tab's setTheme should be reflected here without
+  // requiring a reload. localStorage 'storage' events fire only in OTHER tabs.
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key !== STORAGE_KEY) return;
+      // newValue=null means the key was removed — reset to default. A
+      // non-null value that doesn't match the Theme union means another
+      // tab (or extension, or attacker) wrote garbage; fall back to
+      // "system" but mirror to Sentry so we notice if it's not isolated.
+      if (event.newValue !== null && !isTheme(event.newValue)) {
+        reportSilentFallback(null, {
+          feature: "theme-provider",
+          op: "storage-event",
+          extra: { newValue: event.newValue },
+          message: "theme-provider received non-Theme storage event value",
+        });
+      }
+      const next = isTheme(event.newValue) ? event.newValue : "system";
+      disableTransitionsForOneFrame();
+      // No localStorage.setItem here by design — the originating tab
+      // already persisted; mirroring the write would cause an event loop.
+      setThemeState(next);
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const setTheme = useCallback((next: Theme) => {
+    let changed = false;
+    setThemeState((cur) => {
+      if (cur === next) return cur;
+      changed = true;
+      return next;
+    });
+    if (!changed) return;
+    disableTransitionsForOneFrame();
+    try {
+      localStorage.setItem(STORAGE_KEY, next);
+    } catch (err) {
+      // Persistence failed (quota, private mode, disabled cookies) —
+      // in-memory state still applies for the current session, which is
+      // acceptable degradation. Mirror to Sentry so we can detect if the
+      // failure mode becomes systemic (browser update, quota explosion).
+      reportSilentFallback(err, {
+        feature: "theme-provider",
+        op: "setItem",
+        extra: { theme: next },
+      });
+    }
+  }, []);
+
+  const value = useMemo<ThemeContextValue>(
+    () => ({ theme, resolvedTheme, setTheme }),
+    [theme, resolvedTheme, setTheme],
+  );
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+
+export function useTheme(): ThemeContextValue {
+  const ctx = useContext(ThemeContext);
+  if (!ctx) {
+    throw new Error("useTheme must be used inside <ThemeProvider>");
+  }
+  return ctx;
+}

@@ -11,7 +11,7 @@ export function OutlinedButton({
     <button
       type="button"
       onClick={onClick}
-      className="rounded-lg border border-neutral-700 bg-transparent px-6 py-3 text-sm font-medium text-neutral-200 transition-colors hover:bg-neutral-800"
+      className="rounded-lg border border-soleur-border-default bg-transparent px-6 py-3 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2"
     >
       {children}
     </button>

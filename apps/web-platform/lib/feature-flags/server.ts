@@ -9,7 +9,7 @@
 
 const FLAG_VARS = {
   "kb-chat-sidebar": "FLAG_KB_CHAT_SIDEBAR",
-  "command-center-soleur-go": "FLAG_CC_SOLEUR_GO",
+  "dev-signin": "FLAG_DEV_SIGNIN",
 } as const;
 
 type FlagName = keyof typeof FLAG_VARS;

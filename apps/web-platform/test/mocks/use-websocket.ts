@@ -44,6 +44,10 @@ export function createWebSocketMock(
     resumedFrom: null,
     workflow: { state: "idle" } as const,
     workflowEndedAt: null,
+    conversationCreatedAt: null,
+    historyLoading: false,
+    streamState: "idle" as const,
+    abort: vi.fn(),
   } satisfies WebSocketState;
   return { ...base, ...overrides };
 }

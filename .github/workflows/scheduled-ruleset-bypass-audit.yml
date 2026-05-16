@@ -1,0 +1,578 @@
+# Daily audit of the "CI Required" ruleset's bypass_actors (#3544, R15
+# follow-up D1). Compares live bypass_actors on ruleset #14145388 against
+# scripts/ci-required-ruleset-canonical-bypass-actors.json. Drift fires a
+# compliance/critical issue routed to CLO + CPO.
+#
+# Brand-survival threshold: single-user incident (carries from #2719 /
+# #3542 R15). A widened bypass_actors entry would let a malicious skill-
+# install PR merge without the `skill-security-scan PR gate` running.
+# update-ci-required-ruleset.sh PUTs bypass_actors verbatim from the live
+# snapshot, so an admin-broadening between two PUTs leaves no repo-side
+# trace - GitHub's audit log is the only surface. This daily audit closes
+# the gap with a 24h worst-case detection window.
+#
+# Auth surface (#3569): the rulesets endpoint redacts .bypass_actors
+# from the response when the caller lacks administration:write
+# (empirically; administration:read returns 200 OK with bypass_actors
+# stripped). The default github.token workflow scope set does NOT
+# include administration - that permission exists ONLY as a GitHub-App
+# permission, not as a GITHUB_TOKEN workflow scope. Adding it to the
+# permissions: block would silently no-op. The audit therefore mints
+# an installation token from the existing soleur-ai GitHub App
+# (drift-guard secrets) and uses that as GH_TOKEN for the audit step.
+# The mint POST scope-downs to {administration: write, metadata: read}
+# + repository_ids: [<this-repo-id>]. Blast-radius mitigations: (a) 1h
+# token lifetime, (b) repo_ids scope filter, (c) ::add-mask:: registration,
+# (d) the audit script never PUTs to /rulesets - it only GETs - so even
+# an over-scoped token is unused at write surfaces, (e) per-run mint
+# (no persistence).
+#
+# Failure routing (3-output model, mirror of
+# scheduled-github-app-drift-guard.yml):
+#   - bypass_actors_drift              -> ci/auth-broken + compliance/critical
+#   - canonical_file_*, github_api_*   -> ci/guard-broken
+#   - token_scope_insufficient (#3569) -> ci/guard-broken (audit token
+#     lost administration:read; ruleset itself is intact - distinct
+#     triage path from live_missing_bypass_actors which now means
+#     ruleset deleted)
+#
+# Untrusted input: this workflow has no github.event.* inputs. All step
+# outputs (failure_mode, failure_detail, failure_label) are produced by
+# scripts/audit-ruleset-bypass.sh which sanitizes via strip_log_injection
+# (CR/LF/FF/VT/DEL + U+0085/U+2028/U+2029 stripped) before writing to
+# $GITHUB_OUTPUT. Step-output values used in run: blocks are still copied
+# through env: blocks per the GitHub Actions security hardening guide.
+#
+# Ref #3544, #3542, #2719, #3569.
+
+name: "Scheduled: Ruleset Bypass Audit"
+
+on:
+  schedule:
+    # Off-peak vs other 0 6 * * * jobs (codeql-to-issues, scheduled-bug-fixer)
+    # — shift to 13 6 to avoid GHA thundering-herd queue delay.
+    - cron: '13 6 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-ruleset-bypass-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    if: github.repository == 'jikig-ai/soleur'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          sparse-checkout: |
+            .github/actions
+            scripts/audit-ruleset-bypass.sh
+            scripts/ci-required-ruleset-canonical-bypass-actors.json
+            scripts/ci-required-ruleset-canonical-required-status-checks.json
+            scripts/lib/canonicalize-bypass-actors.sh
+            scripts/lib/canonicalize-required-status-checks.sh
+            scripts/lib/strip-log-injection.sh
+            knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md
+          sparse-checkout-cone-mode: false
+
+      - name: Defensively create labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create ci/auth-broken --repo "$GH_REPO" \
+            --description "Synthetic CI probe detected an auth-flow regression" \
+            --color B60205 2>/dev/null || true
+          gh label create ci/guard-broken --repo "$GH_REPO" \
+            --description "Synthetic CI guard malfunctioned" \
+            --color D93F0B 2>/dev/null || true
+          gh label create compliance/critical --repo "$GH_REPO" \
+            --description "Single-user-incident threshold: requires CPO + user-impact-reviewer sign-off" \
+            --color B60205 2>/dev/null || true
+          gh label create security/leak-suspected --repo "$GH_REPO" \
+            --description "Workflow log scan suggests credential leak" \
+            --color B60205 2>/dev/null || true
+
+      # ---- App-JWT -> installation-token mint (#3569) ----
+      # Three-step chain: (1) mint RS256 App-JWT inline (drift-guard pattern,
+      # lines 119-150 of scheduled-github-app-drift-guard.yml), (2) resolve
+      # this repo's installation_id at runtime via /repos/{owner}/{repo}/installation
+      # so we don't need a new INSTALLATION_ID secret, (3) POST to
+      # /app/installations/{id}/access_tokens with scope-down body so the
+      # issued ghs_* token only carries administration:read + metadata:read
+      # for THIS repo. The audit step then uses that token instead of
+      # github.token, which carries no administration scope at all.
+      - id: mint-jwt
+        name: Mint App-JWT for soleur-ai App
+        env:
+          APP_ID: ${{ secrets.GH_APP_DRIFTGUARD_APP_ID }}
+          PRIVATE_KEY_B64: ${{ secrets.GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 }}
+        run: |
+          # NOT set -e - mirror drift-guard's collect-failures shape so a
+          # bad PEM/missing secret surfaces as a distinct failure_mode at
+          # the next routing step, not a generic step-failure.
+          set -uo pipefail
+          exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1
+
+          mint_failure_mode=""
+          mint_failure_detail=""
+          mint_failure_label=""
+
+          # 3-arg signature mirrors drift-guard's record_failure (line 98-117)
+          # so the label-allowlist tripwire fires on a future typo (e.g.,
+          # ci/auth-borken). The audit step's failure-routing only consumes
+          # failure_label from the audit script (steps.check.outputs.*), but
+          # if a future edit emits a label from this step the allowlist
+          # guarantees a known-good route or a visible warning.
+          record_mint_failure() {
+            local mode="$1"
+            local detail="$2"
+            local label="${3:-ci/guard-broken}"
+            case "$label" in
+              ci/auth-broken|ci/guard-broken) ;;
+              *)
+                echo "::warning::record_mint_failure called with unknown label '$label' - routing as ci/guard-broken"
+                label="ci/guard-broken"
+                ;;
+            esac
+            if [[ -z "$mint_failure_mode" ]]; then
+              mint_failure_mode="$mode"
+              mint_failure_detail="$detail"
+              mint_failure_label="$label"
+            fi
+          }
+
+          b64url() {
+            base64 -w 0 | tr '+/' '-_' | tr -d '=\n'
+          }
+
+          mint_jwt() {
+            # Local pipefail (outer set -uo pipefail does NOT propagate
+            # through function bodies). Stderr captured so a silent-success
+            # with empty output surfaces the actual openssl error.
+            set -o pipefail
+            local backdate_s=60 lifetime_s=540
+            local now header payload unsigned signature
+            now=$(date +%s)
+            header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+            payload=$(jq -nc \
+              --argjson iss "$APP_ID" \
+              --argjson iat "$((now - backdate_s))" \
+              --argjson exp "$((now + lifetime_s))" \
+              '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+            unsigned="${header}.${payload}"
+            signature=$(printf '%s' "$unsigned" | \
+              openssl dgst -sha256 -sign "$KEY_FILE" -binary 2>"${RUNNER_TEMP}/mint-stderr.log" | b64url)
+            printf '%s.%s\n' "$unsigned" "$signature"
+          }
+
+          if [[ -z "${APP_ID:-}" ]]; then
+            record_mint_failure "missing_app_id" "GH_APP_DRIFTGUARD_APP_ID secret is not set"
+          elif ! [[ "$APP_ID" =~ ^[1-9][0-9]+$ ]]; then
+            # --argjson iss "$APP_ID" crashes jq if APP_ID is non-numeric.
+            record_mint_failure "app_id_not_numeric" "GH_APP_DRIFTGUARD_APP_ID is not a positive integer"
+          fi
+
+          KEY_FILE=""
+          if [[ -z "$mint_failure_mode" ]]; then
+            if [[ -z "${PRIVATE_KEY_B64:-}" ]]; then
+              record_mint_failure "missing_private_key" "GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 secret is not set"
+            else
+              umask 077
+              KEY_FILE=$(mktemp -p "$RUNNER_TEMP" app.pem.XXXXXX)
+              if ! printf '%s' "$PRIVATE_KEY_B64" | base64 -d > "$KEY_FILE" 2>/dev/null; then
+                record_mint_failure "pem_b64_decode_failed" "GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 did not base64-decode"
+              else
+                while IFS= read -r line; do
+                  [[ -n "$line" ]] && echo "::add-mask::$line"
+                done < "$KEY_FILE"
+                if ! openssl rsa -in "$KEY_FILE" -check -noout 2>/dev/null; then
+                  record_mint_failure "pem_shape_invalid" "Decoded PRIVATE_KEY_B64 is not a valid RSA PEM"
+                fi
+              fi
+            fi
+          fi
+
+          JWT=""
+          if [[ -z "$mint_failure_mode" ]]; then
+            export KEY_FILE
+            JWT=$(mint_jwt) || {
+              mint_err=$(head -c 200 "$RUNNER_TEMP/mint-stderr.log" 2>/dev/null || true)
+              record_mint_failure "jwt_mint_failed" "openssl/jq pipeline returned non-zero: ${mint_err:-no stderr captured}"
+            }
+            if [[ -n "${JWT:-}" ]]; then
+              echo "::add-mask::$JWT"
+            else
+              # Defensive: silent-success-with-empty-output trap from the
+              # JWT-mint dossier (2026-05-05 learning).
+              [[ -z "$mint_failure_mode" ]] && record_mint_failure "jwt_mint_empty" "mint_jwt produced empty output despite zero exit status"
+            fi
+          fi
+
+          # Stash the JWT for the next step via a runner-temp file (NOT a
+          # step output - step outputs are logged in plaintext on rendered
+          # workflow YAML and the ::add-mask:: registration only redacts in
+          # rendered logs, not in the API-exposed step-outputs payload).
+          if [[ -n "${JWT:-}" ]]; then
+            JWT_FILE=$(mktemp -p "$RUNNER_TEMP" app-jwt.XXXXXX)
+            chmod 600 "$JWT_FILE"
+            printf '%s' "$JWT" > "$JWT_FILE"
+            echo "jwt_file=${JWT_FILE}" >> "$GITHUB_OUTPUT"
+          fi
+          # Always emit failure_mode/detail (empty on success). Source the
+          # canonical sanitizer from scripts/lib (the workflow's sparse
+          # checkout includes it) so a future widening of the sanitizer's
+          # byte set propagates here without a forked-copy drift gate.
+          # shellcheck source=scripts/lib/strip-log-injection.sh
+          . scripts/lib/strip-log-injection.sh
+          {
+            printf 'failure_mode=%s\n' "$(printf '%s' "$mint_failure_mode" | strip_log_injection)"
+            printf 'failure_detail=%s\n' "$(printf '%s' "$mint_failure_detail" | strip_log_injection)"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ -n "$mint_failure_mode" ]]; then
+            echo "::warning::App-JWT mint failed: ${mint_failure_mode} - ${mint_failure_detail}"
+            exit 1
+          fi
+          echo "App-JWT minted (lifetime 540s)."
+
+      - id: mint-install-token
+        name: Mint installation access token (scope-down)
+        if: steps.mint-jwt.outcome == 'success'
+        env:
+          JWT_FILE: ${{ steps.mint-jwt.outputs.jwt_file }}
+          REPO_ID: ${{ github.repository_id }}
+          REPO_FULL: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1
+
+          # Resolve installation_id at runtime via App-JWT-authenticated
+          # GET /repos/{owner}/{repo}/installation. Avoids a new
+          # INSTALLATION_ID secret + the operator step to populate it.
+          # The App-JWT call is admin-only and returns 404 if the App is
+          # not installed on this repo - distinct from "ruleset deleted".
+          if [[ ! -f "$JWT_FILE" ]]; then
+            echo "::warning::JWT file from mint-jwt step missing"
+            exit 1
+          fi
+          JWT=$(cat "$JWT_FILE")
+          rm -f "$JWT_FILE"  # one-shot use; stop further sourcing
+          echo "::add-mask::$JWT"
+
+          INSTALL_LOOKUP=$(mktemp -p "$RUNNER_TEMP" install-lookup.XXXXXX)
+          HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
+            -o "$INSTALL_LOOKUP" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            --header @<(printf 'Authorization: Bearer %s' "$JWT") \
+            "https://api.github.com/repos/${REPO_FULL}/installation") \
+            || HTTP_CODE="network_error"
+
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::warning::installation_id lookup failed: HTTP ${HTTP_CODE}"
+            # Print only the GitHub-supplied error message field; never the raw
+            # body. A future tripwire false-positive on response bytes that
+            # token-shape-match would file a leak-suspected issue from a
+            # body that contains no actual leak (review F4).
+            ERR_MSG=$(jq -r '.message // empty' "$INSTALL_LOOKUP" 2>/dev/null || true)
+            [[ -n "$ERR_MSG" ]] && echo "  GitHub: ${ERR_MSG}"
+            rm -f "$INSTALL_LOOKUP"
+            exit 1
+          fi
+
+          INSTALLATION_ID=$(jq -r '.id // empty' "$INSTALL_LOOKUP")
+          rm -f "$INSTALL_LOOKUP"
+          if ! [[ "${INSTALLATION_ID:-}" =~ ^[1-9][0-9]+$ ]]; then
+            echo "::warning::installation_id from /repos/.../installation is not a positive integer: '${INSTALLATION_ID}'"
+            exit 1
+          fi
+
+          # POST to /app/installations/{id}/access_tokens with scope-down
+          # body. The repository_ids + permissions fields are subset filters
+          # on what the App holds - requesting more than the App is granted
+          # returns HTTP 422 (so the audit cannot widen its own auth surface).
+          # Body uses jq for safe JSON construction (no string interpolation
+          # of REPO_ID into the JSON literal).
+          #
+          # NOTE on `administration: write` (#3569): empirical testing on
+          # 2026-05-13 showed that `administration: read` is INSUFFICIENT
+          # to see `.bypass_actors` in the GET /rulesets/{id} response -
+          # GitHub still redacts. The plan assumed read was sufficient
+          # (per its context7 research), but the live API contract requires
+          # write. The blast radius of a leaked install-token is mitigated
+          # by: (a) lifetime 1h, (b) repository_ids scoping to this repo
+          # only, (c) ::add-mask:: registration, (d) the audit script never
+          # PUTs to the rulesets endpoint so even an over-scoped token is
+          # unused at write surfaces, (e) per-run mint (no persistence).
+          BODY=$(jq -nc --argjson rid "$REPO_ID" \
+            '{repository_ids: [$rid], permissions: {administration: "write", metadata: "read"}}')
+
+          TOKEN_RESPONSE=$(mktemp -p "$RUNNER_TEMP" install-token.XXXXXX)
+          HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
+            -o "$TOKEN_RESPONSE" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H 'Content-Type: application/json' \
+            --header @<(printf 'Authorization: Bearer %s' "$JWT") \
+            -X POST \
+            -d "$BODY" \
+            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens") \
+            || HTTP_CODE="network_error"
+
+          if [[ "$HTTP_CODE" != "201" ]]; then
+            echo "::warning::install-token mint failed: HTTP ${HTTP_CODE}"
+            # Same rationale as the install-lookup path above: print only
+            # the GitHub-supplied error message, never raw response bytes.
+            ERR_MSG=$(jq -r '.message // empty' "$TOKEN_RESPONSE" 2>/dev/null || true)
+            [[ -n "$ERR_MSG" ]] && echo "  GitHub: ${ERR_MSG}"
+            rm -f "$TOKEN_RESPONSE"
+            exit 1
+          fi
+
+          INSTALL_TOKEN=$(jq -r '.token // empty' "$TOKEN_RESPONSE")
+          GRANTED_PERMS=$(jq -c '.permissions // {}' "$TOKEN_RESPONSE")
+          REPO_SELECTION=$(jq -r '.repository_selection // ""' "$TOKEN_RESPONSE")
+          rm -f "$TOKEN_RESPONSE"
+
+          if [[ -z "$INSTALL_TOKEN" ]]; then
+            echo "::warning::install-token response had no .token field"
+            exit 1
+          fi
+          echo "::add-mask::$INSTALL_TOKEN"
+
+          # Sanity check: granted permissions must include administration:read.
+          # Without this, the audit will fail downstream with token_scope_insufficient.
+          if ! jq -e '.administration == "read" or .administration == "write"' <<<"$GRANTED_PERMS" >/dev/null 2>&1; then
+            echo "::warning::install-token does not include administration permission - granted=$GRANTED_PERMS"
+            # Don't exit - let the audit fire token_scope_insufficient, which
+            # routes to the right runbook section.
+          fi
+
+          # Stash via temp file - same plaintext-leakage rationale as the JWT.
+          TOKEN_FILE=$(mktemp -p "$RUNNER_TEMP" install-token-file.XXXXXX)
+          chmod 600 "$TOKEN_FILE"
+          printf '%s' "$INSTALL_TOKEN" > "$TOKEN_FILE"
+          echo "token_file=${TOKEN_FILE}" >> "$GITHUB_OUTPUT"
+          echo "Installation token minted (selection=${REPO_SELECTION}, perms=${GRANTED_PERMS})."
+
+      - id: check
+        name: Audit CI Required ruleset bypass_actors
+        # Run even if mint failed - the audit script handles missing GH_TOKEN
+        # via its existing missing_gh_token failure mode, which routes to
+        # ci/guard-broken. The mint step's own failure also surfaces (above)
+        # via ::warning::; the issue-create step below picks up steps.check.
+        if: always()
+        env:
+          TOKEN_FILE: ${{ steps.mint-install-token.outputs.token_file }}
+        run: |
+          set -uo pipefail
+          exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1
+          # Read the minted installation token from disk (set if mint
+          # succeeded). Falls back to empty so the audit script's
+          # missing_gh_token branch fires correctly when mint failed.
+          if [[ -n "${TOKEN_FILE:-}" && -f "${TOKEN_FILE}" ]]; then
+            GH_TOKEN=$(cat "$TOKEN_FILE")
+            rm -f "$TOKEN_FILE"
+          else
+            GH_TOKEN=""
+          fi
+          export GH_TOKEN
+          bash scripts/audit-ruleset-bypass.sh
+
+      - id: tripwire
+        name: Leak tripwire (token-shape scan of step output)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          LOG="$RUNNER_TEMP/step-output.log"
+          if [[ ! -f "$LOG" ]]; then
+            echo "No step-output.log captured."
+            exit 0
+          fi
+          # Strip runner-directives (::add-mask::, ::warning::, ::error::)
+          # before scanning. A real leak via plain echo still matches.
+          # Token-shape alternations cover gho_, ghp_, ghs_, ghu_ (36-char
+          # body) and github_pat_ prefix used by fine-grained PATs.
+          # Token shapes: gho_ (OAuth), ghp_ (PAT), ghs_ (server), ghu_ (user),
+          # ghr_ (refresh), plus github_pat_v1_ (fine-grained PAT).
+          if grep -v '^::' "$LOG" | grep -E 'gh[oprsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}' >/dev/null; then
+            echo "::error::Leak tripwire fired."
+            BODY_FILE=$(mktemp)
+            NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+            {
+              printf '## Leak tripwire fired\n\n'
+              printf 'A GitHub-token-shaped string was found in this run'\''s captured step output. Treat as credential leak suspected until proven otherwise.\n\n'
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '**Tracks:** #3544\n'
+            } > "$BODY_FILE"
+            gh issue create --repo "$GH_REPO" \
+              --title "[security/leak-suspected] Ruleset bypass audit log-leak tripwire" \
+              --label "security/leak-suspected" \
+              --label "ci/guard-broken" \
+              --label "priority/p1-high" \
+              --body-file "$BODY_FILE" || true
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+          echo "Leak tripwire passed."
+
+      - name: File or comment on tracking issue (failure)
+        if: steps.check.outputs.failure_mode != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAILURE_MODE: ${{ steps.check.outputs.failure_mode }}
+          FAILURE_DETAIL: ${{ steps.check.outputs.failure_detail }}
+          FAILURE_LABEL: ${{ steps.check.outputs.failure_label }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUNBOOK_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md
+        run: |
+          set -euo pipefail
+          # Title routing keys on FAILURE_MODE (not FAILURE_LABEL): the two
+          # drift classes (bypass_actors_drift vs required_status_checks_drift)
+          # share label `ci/auth-broken` but need distinct titles for
+          # operator triage and to prevent cross-class de-dupe collision.
+          case "$FAILURE_MODE" in
+            bypass_actors_drift)
+              ISSUE_TITLE="[compliance/critical] CI Required ruleset bypass_actors drift detected"
+              EXTRA_LABEL="compliance/critical"
+              ;;
+            required_status_checks_drift)
+              ISSUE_TITLE="[compliance/critical] CI Required ruleset required_status_checks drift detected"
+              EXTRA_LABEL="compliance/critical"
+              ;;
+            ruleset_enforcement_disabled)
+              # Auth-broken-class: enforcement was paused, the bypass_actors
+              # guarantee is suspended for as long as enforcement != active.
+              # Distinct title from drift so cross-class de-dupe doesn't
+              # silently swap one issue for the other.
+              ISSUE_TITLE="[compliance/critical] CI Required ruleset enforcement paused"
+              EXTRA_LABEL="compliance/critical"
+              ;;
+            *)
+              # All other failure_mode values route to guard-broken
+              # (canonical_file_*, github_api_*, live_missing_*).
+              if [[ "$FAILURE_LABEL" != "ci/guard-broken" ]]; then
+                echo "::warning::unknown FAILURE_MODE=${FAILURE_MODE} with non-guard FAILURE_LABEL=${FAILURE_LABEL}; defaulting to ci/guard-broken" >&2
+                FAILURE_LABEL="ci/guard-broken"
+              fi
+              ISSUE_TITLE="[ci/guard-broken] Ruleset bypass audit malfunctioned"
+              EXTRA_LABEL=""
+              ;;
+          esac
+
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp)
+          trap 'rm -f "$BODY_FILE"' EXIT
+          # shellcheck disable=SC2016 # markdown backticks, not command substitution
+          {
+            printf '## Ruleset bypass_actors audit failed\n\n'
+            printf -- '- **Failure mode:** `%s`\n' "$FAILURE_MODE"
+            printf -- '- **Detail:** %s\n' "$FAILURE_DETAIL"
+            printf -- '- **Routed to:** `%s`\n' "$FAILURE_LABEL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What to do\n\nSee [ruleset-bypass-drift.md runbook](%s).\n\n' "$RUNBOOK_URL"
+            printf '**Tracks:** #3544, #3542, #2719\n'
+          } > "$BODY_FILE"
+
+          # De-dupe by label + exact-title match. Different drift classes
+          # (bypass_actors_drift, required_status_checks_drift, malfunction)
+          # get distinct titles so they don't collide across classes —
+          # search by the exact title string we are about to file.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+            --label "$FAILURE_LABEL" \
+            --search "in:title \"${ISSUE_TITLE}\"" \
+            --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Existing tracking issue #$EXISTING — adding comment."
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Audit failed again at ${NOW} — \`${FAILURE_MODE}\`: ${FAILURE_DETAIL}. Run: ${RUN_URL}"
+          else
+            args=(
+              issue create --repo "$GH_REPO"
+              --title "$ISSUE_TITLE"
+              --label "$FAILURE_LABEL"
+              --label "priority/p1-high"
+              --body-file "$BODY_FILE"
+            )
+            if [[ -n "$EXTRA_LABEL" ]]; then
+              args+=(--label "$EXTRA_LABEL")
+              args+=(--label "domain/legal")
+            fi
+            gh "${args[@]}"
+          fi
+
+      - id: notify
+        name: Notify ops on failure
+        if: steps.check.outputs.failure_mode != '' || steps.tripwire.outcome == 'failure'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "[Soleur Ops] Ruleset bypass audit: ${{ steps.check.outputs.failure_mode || 'leak-suspected' }}"
+          body: |
+            <p><strong>Failure mode:</strong> ${{ steps.check.outputs.failure_mode || 'leak_tripwire_fired' }}</p>
+            <p><strong>Detail:</strong> ${{ steps.check.outputs.failure_detail || 'Token-shaped string found in step output' }}</p>
+            <p><strong>Label:</strong> ${{ steps.check.outputs.failure_label || 'security/leak-suspected' }}</p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Run log</a></p>
+            <p>Runbook: <a href="https://github.com/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md">ruleset-bypass-drift.md</a></p>
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Auto-close stale tracking issue (audit green)
+        if: steps.check.outputs.failure_mode == '' && steps.tripwire.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # Close stale tracking issues for ALL drift classes by walking the
+          # known title set. Each drift class has a distinct title; cross-class
+          # de-dupe is not desired (a bypass-actors-drift issue should not
+          # auto-close a required-status-checks-drift issue and vice versa).
+          STALE_TITLES=(
+            "[compliance/critical] CI Required ruleset bypass_actors drift detected"
+            "[compliance/critical] CI Required ruleset required_status_checks drift detected"
+            "[compliance/critical] CI Required ruleset enforcement paused"
+            "[ci/guard-broken] Ruleset bypass audit malfunctioned"
+          )
+          for title in "${STALE_TITLES[@]}"; do
+            STALE=$(gh issue list --repo "$GH_REPO" --state open \
+              --search "in:title \"${title}\"" \
+              --json number --jq '.[0].number // empty' 2>/dev/null) || STALE=""
+            if [[ -n "$STALE" ]]; then
+              echo "Closing stale tracking issue #$STALE (title=${title})."
+              gh issue close "$STALE" --repo "$GH_REPO" \
+                --comment "Audit green at ${NOW}. Live ruleset matches canonical. Run: ${RUN_URL}"
+            fi
+          done
+
+      - name: Cleanup PEM, JWT, install-token files (best-effort)
+        if: always()
+        run: |
+          # Cleanup all step-scoped temp files (PEM, JWTs, install tokens,
+          # mint stderr, lookup responses). rm -f, not shred - runners are
+          # ephemeral cloud VMs on COW filesystems; shred adds no security.
+          # Mirror of drift-guard cleanup step (yaml :466-474).
+          rm -f "$RUNNER_TEMP"/app.pem.* \
+                "$RUNNER_TEMP"/app-jwt.* \
+                "$RUNNER_TEMP"/install-lookup.* \
+                "$RUNNER_TEMP"/install-token.* \
+                "$RUNNER_TEMP"/install-token-file.* \
+                "$RUNNER_TEMP/mint-stderr.log" 2>/dev/null || true

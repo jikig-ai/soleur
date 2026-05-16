@@ -16,15 +16,15 @@ export function PwaInstallBanner({ dismissed, onDismiss }: PwaInstallBannerProps
   if (dismissed || !isIosSafari()) return null;
 
   return (
-    <div className="mb-4 flex w-full items-start gap-3 rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
-      <span className="mt-0.5 text-lg text-neutral-400">
+    <div className="mb-4 flex w-full items-start gap-3 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/80 p-4">
+      <span className="mt-0.5 text-lg text-soleur-text-secondary">
         <ShareIcon />
       </span>
       <div className="flex-1">
-        <p className="text-sm font-semibold text-white">
+        <p className="text-sm font-semibold text-soleur-text-primary">
           Add Soleur to Your Home Screen
         </p>
-        <p className="mt-1 text-sm text-neutral-400">
+        <p className="mt-1 text-sm text-soleur-text-secondary">
           Open on any device, no app store needed. Tap the Share icon, then
           &ldquo;Add to Home Screen.&rdquo;
         </p>
@@ -32,7 +32,7 @@ export function PwaInstallBanner({ dismissed, onDismiss }: PwaInstallBannerProps
       <button
         type="button"
         onClick={onDismiss}
-        className="shrink-0 rounded p-1 text-neutral-500 transition-colors hover:text-neutral-300"
+        className="shrink-0 rounded p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
         aria-label="Dismiss PWA install banner"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

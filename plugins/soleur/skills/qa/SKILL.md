@@ -33,6 +33,8 @@ Read the plan file passed as `$ARGUMENTS`. Find the `## Test Scenarios` section.
 
 **If Test Scenarios section is empty:** Same as above — warn and skip.
 
+**If Test Scenarios contains only Given/When/Then prose with no `Browser:`, `API verify:`, or `Cleanup:` prefixed steps:** Output "Test Scenarios are integration-level Given/When/Then prose (no executable Browser:/API verify: steps) — covered by unit test suite + manual Phase 6 cross-check. Skipping automated QA." and stop. Do not start the dev server. This case is common for plans whose QA gate is explicitly manual (e.g., requires a real Anthropic key + live Supabase apply); a dev-server smoke would not add coverage beyond what the typecheck + unit suite already validate. Never block the pipeline on a confirmation prompt for the dev server in a test environment — auto-skip silently.
+
 ### Step 1.5: Ensure Dev Server is Running
 
 Before executing any browser scenarios, check whether the dev server is reachable. If not, attempt to start it automatically.
@@ -150,3 +152,4 @@ The skill handles missing prerequisites without blocking the pipeline:
 - This skill does NOT test error paths (network failure simulation, invalid input). That capability is deferred to a future iteration.
 - Screenshots from Playwright MCP resolve from the repo root, not the shell CWD. Always use absolute paths when in a worktree.
 - Test data cleanup is critical — always include cleanup steps in test scenarios to avoid accumulating garbage data in external services.
+- For pure-CSS-utility-class fixes whose plan declares `User-Brand Impact: none` AND whose className contracts are fully unit-tested (vitest asserts on `toHaveClass`/`className.match`), a dev-server outage degrades QA to unit-test coverage rather than blocking the pipeline — file the dev-server bug separately with `pre-existing-unrelated` scope-out. For functional, data, auth, or payment fixes, the dev-server bug becomes load-bearing and must be fixed before merge. See `knowledge-base/project/learnings/2026-05-11-qa-degradation-when-dev-server-broken-on-css-only-fix.md`.

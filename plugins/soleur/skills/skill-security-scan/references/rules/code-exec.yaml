@@ -1,0 +1,70 @@
+# Category 1 rules: code-execution anti-patterns
+#
+# Consumed by ../scripts/check-codeexec.sh via simple `grep -nE` per rule_id.
+# Severity is the per-rule severity assigned to any match. The script filters
+# matches to fenced code blocks (lines between ``` markers) and excludes
+# format-only fence languages: json, yaml, toml, csv, text.
+#
+# Each rule's `regex` is POSIX extended (grep -E) syntax. Patterns are
+# ReDoS-bounded.
+
+rules:
+  - id: dynamic-eval-js
+    severity: HIGH-RISK
+    description: JavaScript dynamic-evaluation primitives. Anchored against method-call false positives.
+    regex: '(^|[^.[:alnum:]_])(eval|Function)[[:space:]]*\(|new[[:space:]]+Function[[:space:]]*\('
+
+  - id: dynamic-exec-py
+    severity: HIGH-RISK
+    description: Python dynamic-evaluation primitives. Anchored to top-level builtins (not method calls like obj.compile()).
+    regex: '(^|[^.[:alnum:]_])(eval|exec|compile)[[:space:]]*\('
+
+  - id: shell-spawn-shell-true
+    severity: HIGH-RISK
+    description: Shell-true variants in subprocess module that interpolate args into a shell.
+    regex: '(subprocess\.(call|run|Popen|check_output|check_call))[^)]{0,200}shell[[:space:]]*=[[:space:]]*True'
+
+  - id: shell-spawn-c-flag
+    severity: HIGH-RISK
+    description: POSIX shell -c form invoking shell with concatenated args.
+    regex: '(/bin/sh|/bin/bash|sh|bash)[[:space:]]+-c[[:space:]]+(\$|"\$|`)'
+
+  - id: shell-spawn-os-system
+    severity: HIGH-RISK
+    description: OS-level shell-invocation helper.
+    regex: '\bos\.system[[:space:]]*\('
+
+  - id: shell-spawn-node-exec
+    severity: HIGH-RISK
+    description: Node child-process spawn-into-shell variants.
+    regex: '\bchild_process\.(exec|execSync)[[:space:]]*\('
+
+  - id: obfuscation-base64-pipe-decode
+    severity: HIGH-RISK
+    description: base64-decode-then-execute pipeline.
+    regex: '(base64[[:space:]]+(-d|--decode|-D)|atob[[:space:]]*\()[^|]{0,80}\|[^|]{0,80}(sh|bash|eval)'
+
+  - id: obfuscation-hex-payload
+    severity: HIGH-RISK
+    description: Hex-encoded payload of length >= 40 (likely obfuscation).
+    regex: '\\x[0-9a-fA-F]{2}(\\x[0-9a-fA-F]{2}){19,}'
+
+  - id: shell-spawn-hardcoded
+    severity: REVIEW
+    description: Shell-spawn with hardcoded args (lower severity; see calibration).
+    regex: 'subprocess\.(call|run|Popen)[[:space:]]*\([[:space:]]*\['
+
+  - id: fetch-pipe-shell
+    severity: HIGH-RISK
+    description: Network-fetched payload piped (directly OR via intermediate pipe stages like tee) into a shell interpreter, optionally wrapped in sudo/env/nice/nohup/exec. Canonical RCE pattern (curl <url> | bash). ReDoS-bounded with {0,200}.
+    regex: '(curl|wget|fetch)[[:space:]]+[^&;]{0,200}\|[[:space:]]*((sudo|env|nice|nohup|exec)[[:space:]]+)?(bash|sh|zsh|ksh|fish|/bin/(ba)?sh)([[:space:]]|$)'
+
+  - id: fetch-process-sub-shell
+    severity: HIGH-RISK
+    description: Shell consumes network-fetched payload via process substitution. Covers `bash <(curl ...)`, `sh <(wget ...)`, `. <(curl ...)`, `source <(...)`.
+    regex: '(^|[^.[:alnum:]_])(bash|sh|zsh|ksh|\.|source)[[:space:]]+<\([[:space:]]*(curl|wget|fetch)[^)]{0,200}\)'
+
+  - id: fetch-cmdsub-exec
+    severity: HIGH-RISK
+    description: eval / -c / -e interpreter consumes network-fetched payload via command substitution. Covers BOTH `$(...)` and POSIX backtick `` `...` `` forms. Examples eval "$(curl ...)", eval `curl ...`, sh -c "$(curl ...)", python -c "$(curl ...)".
+    regex: '(eval|exec|(sh|bash|zsh|python[23]?|node)[[:space:]]+-(c|e))[[:space:]]+["'"'"']?(\$\([[:space:]]*(curl|wget|fetch)[^)]{0,200}\)|`[[:space:]]*(curl|wget|fetch)[^`]{0,200}`)'

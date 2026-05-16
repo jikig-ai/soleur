@@ -112,6 +112,17 @@ mode="${MOCK_DOCKER_MODE:-default}"
 
 case "$mode" in
   trace)
+    # `ps` is read by the ADR-027 pre-run assertion; the script greps stdout
+    # for the container name, so the DOCKER_TRACE marker must not appear on
+    # stdout for ps calls. Route the trace to stderr and emit name only when
+    # explicitly armed.
+    if [[ "${1:-}" == "ps" ]]; then
+      echo "DOCKER_TRACE:ps" >&2
+      if [[ "${MOCK_DOCKER_PS_PROD_RUNNING:-}" == "1" ]]; then
+        echo "soleur-web-platform"
+      fi
+      exit 0
+    fi
     echo "DOCKER_TRACE:$1"
     if [[ "${1:-}" == "pull" ]] && [[ "${MOCK_DOCKER_PULL_FAIL:-}" == "1" ]]; then
       exit 1
@@ -176,6 +187,14 @@ case "$mode" in
       echo "abc123"
     fi
     if [[ "${1:-}" == "exec" ]]; then
+      exit 0
+    fi
+    if [[ "${1:-}" == "ps" ]]; then
+      # ADR-027 pre-run assertion mock — emit the leftover prod container name
+      # only when the test explicitly arms this mode.
+      if [[ "${MOCK_DOCKER_PS_PROD_RUNNING:-}" == "1" ]]; then
+        echo "soleur-web-platform"
+      fi
       exit 0
     fi
     exit 0
@@ -572,10 +591,11 @@ assert_canary_trace_order() {
 }
 
 # Canary success: prune → pull → stop(stale canary) → rm(stale canary) → run(canary) →
-#   bwrap sandbox check (docker exec) → stop(old) → rm(old) → run(prod) → stop(canary) → rm(canary)
+#   bwrap sandbox check (docker exec) → stop(old) → rm(old) →
+#   ps(ADR-027 single-replica assertion) → run(prod) → stop(canary) → rm(canary)
 assert_canary_trace_order "canary success: correct docker trace order" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "image|pull|stop|rm|run|exec|stop|rm|run|stop|rm"
+  "image|pull|stop|rm|run|exec|stop|rm|ps|run|stop|rm"
 
 # Canary failure / rollback: prune → pull → stop(stale) → rm(stale) → run(canary) →
 #   logs(canary) → stop(canary) → rm(canary)
@@ -740,8 +760,9 @@ assert_prod_start_failure() {
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
   # prune, pull, stale cleanup (stop, rm), canary run (ok), canary health ok,
-  # bwrap sandbox check, old stop, old rm, prod run (fails), canary stop, canary rm
-  local expected="image|pull|stop|rm|run|exec|stop|rm|run|stop|rm"
+  # bwrap sandbox check, old stop, old rm, ADR-027 ps assertion (empty in this
+  # mock mode), prod run (fails), canary stop, canary rm
+  local expected="image|pull|stop|rm|run|exec|stop|rm|ps|run|stop|rm"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -1540,6 +1561,203 @@ assert_stale_sentinel_cleared() {
 }
 
 assert_stale_sentinel_cleared
+
+# ADR-027 — pre-`docker run` single-replica assertion. When a leftover
+# soleur-web-platform container is still running after docker stop|| rm
+# masked a failure (|| true), the script must abort with a clear,
+# ADR-027-referencing error rather than letting docker run produce a
+# cryptic "name already in use".
+echo ""
+echo "--- ADR-027 pre-run single-replica assertion ---"
+
+assert_adr027_pre_run_assertion() {
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export MOCK_DOCKER_MODE="trace"
+    export MOCK_DOCKER_PS_PROD_RUNNING=1
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  # Three invariants must hold:
+  # 1. Exit non-zero (assertion fired).
+  # 2. Output names ADR-027 (operator can grep the doc).
+  # 3. The production docker-run trace must NOT appear after the assertion —
+  #    without this, a regression that fired the assertion but still ran the
+  #    `docker run -d --name soleur-web-platform` would pass invariants 1&2
+  #    while corrupting the deploy. The canary trace uses a -canary suffix and
+  #    is permitted; the bare prod-name run is what we forbid.
+  local prod_run_lines
+  prod_run_lines=$(
+    printf '%s\n' "$output" \
+      | awk '/ADR-027/{found=1} found' \
+      | grep -E 'DOCKER_TRACE:run' \
+      | grep -vE -- '-canary' \
+      || true
+  )
+
+  if [[ "$actual_exit" -ne 0 ]] \
+    && printf '%s\n' "$output" | grep -qF "ADR-027" \
+    && [[ -z "$prod_run_lines" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: leftover soleur-web-platform aborts deploy with ADR-027 message (no prod docker-run after abort)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: leftover soleur-web-platform aborts deploy with ADR-027 message"
+    echo "        expected: non-zero exit AND output contains 'ADR-027' AND no prod 'docker run' after abort"
+    echo "        actual exit: $actual_exit"
+    echo "        prod_run_after_abort: $prod_run_lines"
+    echo "        output: $output"
+  fi
+}
+
+assert_adr027_pre_run_assertion
+
+# SIGTERM trap (#3704). The trap pattern in ci-deploy.sh writes terminal
+# state (exit_code=124 reason=timeout) when SIGTERM is delivered to the
+# script's bash AND bash can run the trap. The latter holds when bash is
+# between commands, in `wait`, or in shell logic — NOT during a hung
+# foreground command (bash queues the trap until the foreground command
+# returns). For the hung-foreground case, the wall-clock fallback is
+# ci-deploy-wrapper.sh's `--kill-after=20s`, which sends SIGKILL after the
+# 20s grace; the bash dies, no trap fires, the state stays at "running"
+# until the workflow's pre-rerun probe sees `elapsed > 900s` and falls
+# through (degraded-permissive). This is documented in the plan's Risks
+# section.
+#
+# Two assertions:
+#   1. STATIC: ci-deploy.sh has `set -m` AND the canonical TERM/INT trap.
+#   2. RUNTIME: the trap pattern, exercised in an isolated reproduction
+#      (bash script in `sleep & wait $!`), writes the expected state file
+#      and exits 124. Covers the trap's correctness contract without
+#      depending on ci-deploy.sh's specific code path.
+echo ""
+echo "--- SIGTERM trap (#3704) ---"
+
+assert_ci_deploy_has_trap_installed() {
+  TOTAL=$((TOTAL + 1))
+  local found_set_m found_trap
+  found_set_m=$(grep -cE '^set -m\b' "$DEPLOY_SCRIPT" || true)
+  # Canonical trap shape: final_write_state 124 "timeout" followed by
+  # pkill -P $$ and exit 124, bound to TERM/INT. We don't pin every
+  # token (set -m vs trap order can shift), just the load-bearing parts.
+  found_trap=$(grep -cE 'trap .*final_write_state 124 "timeout".*pkill -TERM -P .*TERM INT' "$DEPLOY_SCRIPT" || true)
+  if [[ "$found_set_m" -ge 1 ]] && [[ "$found_trap" -ge 1 ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: ci-deploy.sh has 'set -m' and the canonical TERM/INT trap installed"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: trap-install static check (set -m matches: $found_set_m, trap matches: $found_trap)"
+  fi
+}
+
+assert_ci_deploy_has_trap_installed
+
+assert_trap_writes_timeout_state_in_isolation() {
+  TOTAL=$((TOTAL + 1))
+  local verdict
+  verdict=$(
+    set +e
+    local mock_dir state_file repro pid i
+    mock_dir=$(mktemp -d)
+    state_file="$mock_dir/state"
+    repro="$mock_dir/repro.sh"
+
+    # Minimal reproduction of ci-deploy.sh's trap setup. Uses `sleep & wait`
+    # so the TERM trap fires immediately (vs. foreground `sleep` which would
+    # defer until the sleep returns — the production limitation called out
+    # above). The trap line MUST be byte-identical to ci-deploy.sh's.
+    cat > "$repro" <<REPRO
+#!/usr/bin/env bash
+set -euo pipefail
+set -m
+STATE_FILE="$state_file"
+START_TS=\$(date +%s)
+COMPONENT="web-platform"
+IMAGE="test"
+TAG="v1.0.0"
+write_state() {
+  local tmp
+  tmp=\$(mktemp "\$STATE_FILE.XXXXXX") || return 0
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"}\n' \\
+    "\$START_TS" "\$(date +%s)" "\$1" "\$COMPONENT" "\$IMAGE" "\$TAG" "\$2" > "\$tmp"
+  mv "\$tmp" "\$STATE_FILE"
+}
+final_write_state() {
+  touch "\$STATE_FILE.final" 2>/dev/null || true
+  write_state "\$1" "\$2"
+}
+trap 'final_write_state 124 "timeout"; trap - TERM INT; pkill -TERM -P \$\$ 2>/dev/null || true; exit 124' TERM INT
+sleep 30 &
+wait \$!
+REPRO
+    chmod +x "$repro"
+
+    "$repro" &
+    pid=$!
+
+    # Let the script enter `wait` (interruptible builtin).
+    sleep 0.3
+
+    kill -TERM "$pid" 2>/dev/null || true
+
+    # Wait up to 5s for the script to exit.
+    for i in $(seq 1 50); do
+      if ! kill -0 "$pid" 2>/dev/null; then break; fi
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      echo "FAIL: repro script did not exit within 5s after SIGTERM"
+      rm -rf "$mock_dir"
+      return 0
+    fi
+    wait "$pid" 2>/dev/null
+    local exit_rc=$?
+
+    # Verify state file
+    if [[ ! -f "$state_file" ]]; then
+      echo "FAIL: state file not written by trap (exit_rc=$exit_rc)"
+      rm -rf "$mock_dir"
+      return 0
+    fi
+
+    local actual_reason actual_exit_code
+    read_state_reason_and_exit "$state_file" actual_reason actual_exit_code
+
+    # Verify no orphan sleep child (pkill -P $$ should have killed it).
+    local orphan
+    orphan=$(pgrep -P "$pid" 2>/dev/null || true)
+    if [[ -n "$orphan" ]]; then
+      kill -KILL $orphan 2>/dev/null || true
+      echo "FAIL: orphan child PIDs survived pkill -P (pids: $orphan)"
+      rm -rf "$mock_dir"
+      return 0
+    fi
+
+    if [[ "$actual_reason" == "timeout" ]] && [[ "$actual_exit_code" == "124" ]] && [[ "$exit_rc" -eq 124 ]]; then
+      echo "PASS: trap writes exit_code=124 reason=timeout, repro exits 124, no orphan children"
+      rm -rf "$mock_dir"
+      return 0
+    else
+      echo "FAIL: state/exit mismatch (expected reason=timeout exit_code=124 rc=124; got reason=$actual_reason exit_code=$actual_exit_code rc=$exit_rc)"
+      rm -rf "$mock_dir"
+      return 0
+    fi
+  )
+
+  if [[ "$verdict" == PASS:* ]]; then
+    PASS=$((PASS + 1))
+    echo "  $verdict"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  $verdict"
+  fi
+}
+
+assert_trap_writes_timeout_state_in_isolation
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

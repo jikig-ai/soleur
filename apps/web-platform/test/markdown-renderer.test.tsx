@@ -60,3 +60,42 @@ describe("MarkdownRenderer — chat markdown overflow (issue #2229)", () => {
     expect(fullA.getAttribute("rel")).toBe("nofollow noopener noreferrer");
   });
 });
+
+describe("MarkdownRenderer — table column widths (shared-doc readability)", () => {
+  const tableMd =
+    "| ConfigurationKey | Value | Description |\n" +
+    "|---|---|---|\n" +
+    "| timeout | 30 | request timeout in seconds |\n";
+
+  it("renders the table with auto width (not w-full forced fill)", () => {
+    const { container } = render(<MarkdownRenderer content={tableMd} />);
+    const table = container.querySelector("table");
+    expect(table).not.toBeNull();
+    expect(table!.className).toContain("w-auto");
+    expect(table!.className).not.toMatch(/(^|\s)w-full(\s|$)/);
+  });
+
+  it("renders header cells with whitespace-nowrap so column names don't break mid-word", () => {
+    const { container } = render(<MarkdownRenderer content={tableMd} />);
+    const headers = container.querySelectorAll("th");
+    expect(headers.length).toBeGreaterThan(0);
+    headers.forEach((th) => {
+      expect(th.className).toContain("whitespace-nowrap");
+      // Regression guard: th must not silently re-acquire w-full (would defeat the auto-layout fix).
+      expect(th.className).not.toMatch(/(^|\s)w-full(\s|$)/);
+    });
+  });
+
+  it("renders data cells with a min/max width band so columns are readable", () => {
+    const { container } = render(<MarkdownRenderer content={tableMd} />);
+    const cells = container.querySelectorAll("td");
+    expect(cells.length).toBeGreaterThan(0);
+    cells.forEach((td) => {
+      expect(td.className).toContain("min-w-[8ch]");
+      expect(td.className).toContain("max-w-[40ch]");
+      expect(td.className).toContain("align-top");
+      // Regression guard: td must not silently re-acquire w-full (would override the band).
+      expect(td.className).not.toMatch(/(^|\s)w-full(\s|$)/);
+    });
+  });
+});

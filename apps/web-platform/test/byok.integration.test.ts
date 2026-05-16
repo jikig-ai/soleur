@@ -247,6 +247,7 @@ describe.skipIf(!INTEGRATION_ENABLED)("BYOK per-tenant isolation (integration)",
     const tag = Buffer.from(data!.auth_tag, "base64");
 
     const decrypted = decryptKey(encrypted, iv, tag, userA.id);
-    expect(decrypted).toBe(seededPlaintext);
+    // PR-B §1.4.2: decryptKey returns Buffer; toString boundary call.
+    expect(decrypted.toString("utf8")).toBe(seededPlaintext);
   });
 });

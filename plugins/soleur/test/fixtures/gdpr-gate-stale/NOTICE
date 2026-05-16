@@ -1,0 +1,54 @@
+---
+upstream: github.com/example/synthetic-fixture
+pinned-commit: 1111111111111111111111111111111111111111
+last-verified: 2025-11-01
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+  # Synthetic fixture — used by the gdpr-gate self-test workflow to
+  # exercise the staleness banner + operator-attested-mode banner paths
+  # against a deliberately-stale `last-verified` (>180 days at any plausible
+  # CI run date). Upstream paths are intentionally synthetic so this fixture
+  # cannot collide with `vendor-pin-verify.yml`'s blob-fetch checks against
+  # the live upstream.
+  - path: references/synthetic/fixture-a.md
+    upstream-path: synthetic/fixture-a.md
+    upstream-blob-sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    local-blob-sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    status: synthetic-fixture
+  - path: references/synthetic/fixture-b.md
+    upstream-path: synthetic/fixture-b.md
+    upstream-blob-sha: cccccccccccccccccccccccccccccccccccccccc
+    local-blob-sha: dddddddddddddddddddddddddddddddddddddddd
+    status: synthetic-fixture
+  - path: references/synthetic/fixture-c.md
+    upstream-path: synthetic/fixture-c.md
+    upstream-blob-sha: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: synthetic-fixture
+  - path: references/synthetic/fixture-d.md
+    upstream-path: synthetic/fixture-d.md
+    upstream-blob-sha: 2222222222222222222222222222222222222222
+    local-blob-sha: 3333333333333333333333333333333333333333
+    status: synthetic-fixture
+  - path: references/synthetic/fixture-e.md
+    upstream-path: synthetic/fixture-e.md
+    upstream-blob-sha: 4444444444444444444444444444444444444444
+    local-blob-sha: 5555555555555555555555555555555555555555
+    status: synthetic-fixture
+---
+
+# NOTICE (synthetic test fixture — deliberately-stale `last-verified`)
+
+Used by:
+
+- `.github/workflows/gdpr-gate-self-test.yml` to assert the runtime
+  staleness banner + POSTURE_FAIL line fire on stale fixtures, and the
+  operator-attested-mode banner fires when `GH_TOKEN`/`GITHUB_TOKEN` are
+  absent (issue #3535).
+- `plugins/soleur/test/gdpr-gate-self-test.test.sh` for the local mirror.
+
+`last-verified: 2025-11-01` pins this fixture far enough in the past that
+the >90d POSTURE_FAIL threshold holds against any plausible CI run date
+through ~2026-12. Upstream paths are intentionally synthetic so this
+fixture cannot collide with `vendor-pin-verify.yml`'s blob-fetch checks
+against the live upstream registry.

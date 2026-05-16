@@ -37,6 +37,28 @@ describe("LeaderAvatar", () => {
     ).not.toBeNull();
   });
 
+  it("renders the Soleur logo for cc_router (Concierge) — not a yellow square", () => {
+    const { container } = render(
+      <LeaderAvatar leaderId="cc_router" size="md" />,
+    );
+    const img = container.querySelector(
+      'img[src="/icons/soleur-logo-mark.png"]',
+    );
+    expect(img).not.toBeNull();
+    // Negative: no yellow background and no lucide icon (the bug shape).
+    expect(container.firstElementChild?.className ?? "").not.toMatch(
+      /\bbg-yellow-500\b/,
+    );
+    expect(container.querySelector("svg")).toBeNull();
+  });
+
+  it("labels the cc_router avatar as Soleur Concierge", () => {
+    render(<LeaderAvatar leaderId="cc_router" size="md" />);
+    expect(
+      screen.getByLabelText(/Soleur Concierge avatar/i),
+    ).toBeInTheDocument();
+  });
+
   it("applies the sm/md/lg tailwind size classes to the wrapper", () => {
     // Assert on wrapper class rather than internal svg dimensions — lucide's
     // width attribute is a library detail, the Tailwind class is the contract.

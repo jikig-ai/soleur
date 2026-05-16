@@ -1,0 +1,96 @@
+# PR-B §1.6 — service-role allowlist for the agent runtime.
+#
+# Files in apps/web-platform/{server,lib} that legitimately import
+# `createServiceClient` or `getServiceClient`. The CI grep gate
+# (.github/workflows/ci.yml, "service-role-allowlist-gate" job)
+# rejects any other importer.
+#
+# CODEOWNERS pins this file: @jeanderuelle approval is required to add
+# a path. Without this, an attacker-modeled PR could add a service-role
+# import AND its allowlist line in one commit and the gate would pass.
+#
+# Format: one path per line, RELATIVE TO REPO ROOT (not apps/web-platform).
+# Comments and blank lines are ignored by the gate.
+#
+# Each path declares one of:
+#   - PERMANENT: legitimate by design (auth-domain RPC, signature-
+#     verified webhook, bulk sweep with no per-tenant key, etc.)
+#   - TRANSITIONAL: enumerated in a follow-up PR's spec; remove the
+#     line when that PR migrates the call sites.
+
+# ── Permanent service-role surface ────────────────────────────────────
+
+# Defines `createServiceClient` / `getServiceClient`. The functions
+# themselves must reside somewhere; this is the canonical home.
+apps/web-platform/lib/supabase/service.ts
+
+# Thin re-export shim (`export { ... } from "./service"`). Historical
+# import path; new code should import from `./service` directly.
+apps/web-platform/lib/supabase/server.ts
+
+# Tenant-client factory. Uses service-role only for the auth-domain
+# `precheck_jwt_mint` RPC (rate-limit + jti generation). Tenant data
+# reads/writes go through `createTenantClient(jwt)` (per PR-B §1.1).
+apps/web-platform/lib/supabase/tenant.ts
+
+# BYOK lease — reads `api_keys` via tenant-scoped client INSIDE the
+# lease body. Service-role here is for the auth-domain RPC plumbing
+# (`mintFounderJwt` chain). Lease never bypasses RLS for tenant data.
+apps/web-platform/server/byok-lease.ts
+
+# Bulk sweeps in agent-runner.ts at `cleanupOrphanedConversations`
+# and `startInactivityTimer`. Both are staleness-keyed
+# (`last_active < cutoff`) — no per-tenant key, no userId in scope.
+# `getFreshTenantClient(userId)` is structurally inapplicable
+# (per type-design F2 + architecture F1). The user-scoped sites in
+# the same file MUST migrate (per spec tasks §1.5.1).
+apps/web-platform/server/agent-runner.ts
+
+# ── Transitional surface — migrated by PR-C (spec tasks §2.1.*) ───────
+
+# WS handler — 10 sites migrate in PR-C (spec §2.1.1). The allowlist
+# entry is the disclosure that makes PR-B's grep gate pass.
+apps/web-platform/server/ws-handler.ts
+
+# Conversations tools — 4 sites migrate in PR-C (spec §2.1.2).
+apps/web-platform/server/conversations-tools.ts
+
+# Session sync — 4 sites migrate in PR-C (spec §2.1.3).
+apps/web-platform/server/session-sync.ts
+
+# Per-tenant data writers — migrate in PR-C (spec §2.1.4).
+apps/web-platform/server/api-messages.ts
+apps/web-platform/server/api-usage.ts
+apps/web-platform/server/conversation-writer.ts
+apps/web-platform/server/lookup-conversation-for-path.ts
+apps/web-platform/server/current-repo-url.ts
+apps/web-platform/server/kb-document-resolver.ts
+apps/web-platform/server/kb-route-helpers.ts
+
+# Account / process-level helpers. Re-evaluated post-PR-C; migration
+# requires either user-scoped JWT (account-delete) or process-scoped
+# infrastructure that has no founder identity (cc-dispatcher,
+# concurrency, notifications).
+apps/web-platform/server/account-delete.ts
+apps/web-platform/server/cc-dispatcher.ts
+apps/web-platform/server/concurrency.ts
+apps/web-platform/server/notifications.ts
+
+# Shared per-turn cost writer (PR #3626). Service-role required for the
+# atomic `increment_conversation_cost` + `write_byok_audit` RPCs which
+# are SECURITY DEFINER + service-role-only by migrations 017/037/042.
+# Both callers (agent-runner.ts, cc-dispatcher.ts) are already on this
+# allowlist for the same posture; the helper inherits.
+apps/web-platform/server/cost-writer.ts
+
+# DSAR Art. 15 + Art. 20 self-serve export worker (#3637, plan rev-2).
+# Service-role is load-bearing per Q-credential / R-extra1 / C1: an
+# in-process worker that authenticates as the data subject would
+# require either storing per-user JWT-at-rest (credential-vault risk
+# class) or minting per-user session JWTs at runtime (no Supabase
+# admin primitive demonstrated for that). C1 alternative: service-role
+# + mandatory per-row `WHERE owner_id = $1` (file-parse lint AC30 in
+# `dsar-worker-per-row-where.test.ts`) + `assertReadScope` runtime
+# invariant on every result set (AC12) + cross-tenant golden fixture
+# integration test (AC15). Two-layer defense.
+apps/web-platform/server/dsar-export.ts

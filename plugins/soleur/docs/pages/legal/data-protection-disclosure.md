@@ -8,7 +8,7 @@ permalink: legal/data-protection-disclosure/
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 15, 2026</p>
   </div>
 </section>
 
@@ -18,11 +18,11 @@ permalink: legal/data-protection-disclosure/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 29, 2026 (added conversation data to Section 2.1b(c), added Section 2.3(i) conversation management, updated Supabase processor row in Section 4.2, added conversation data to Section 10.3 account deletion)
+**Last Updated:** May 15, 2026 (extended Section 2.3(m) with explicit Sentry monitor-class enumeration and "Sentry log ingestion NOT enabled" carve-out following the 2026 Sentry Monitors/Alerts split; previous: May 13, 2026 added Section 2.3(m) Operational telemetry & breach detection covering pino stdout and Sentry processing)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
-- **Jikigai** ("Provider," "we," "us," or "our"), the operator and maintainer of the Soleur Claude Code plugin, accessible at [https://soleur.ai](https://soleur.ai) and the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur); and
+- **Jikigai** ("Provider," "we," "us," or "our"), the operator and maintainer of the Soleur Claude Code plugin, accessible at [https://www.soleur.ai](https://www.soleur.ai) and the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur); and
 
 - **You** ("User," "Controller," or "you"), the individual or entity using the Soleur plugin.
 
@@ -48,7 +48,7 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 **1.7** "Local Data" means all files, knowledge-base entries, brainstorms, plans, specs, code, and other data generated or stored on the User's local filesystem through use of the Plugin.
 
-**1.8** "Docs Site" means the Soleur documentation website hosted at [https://soleur.ai](https://soleur.ai) via GitHub Pages.
+**1.8** "Docs Site" means the Soleur documentation website hosted at [https://www.soleur.ai](https://www.soleur.ai) via GitHub Pages.
 
 ---
 
@@ -105,7 +105,11 @@ Soleur's data processing activities are limited to:
 - **(f)** **Web Platform account management:** The Web Platform (app.soleur.ai) processes email addresses, authentication tokens, and session data for user account management and authentication. Users may authenticate via magic link or OAuth providers (Google, Apple, GitHub, Microsoft). OAuth sign-in additionally processes provider user IDs, display names, and profile picture URLs. Accounts with matching verified email addresses are automatically linked. OAuth identity data is managed by Supabase. Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request.
 - **(g)** **Web Platform payment processing:** The Web Platform processes customer email addresses and subscription metadata via Stripe Checkout. Card data is handled exclusively by Stripe and never reaches Jikigai servers (PCI SAQ-A). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
 - **(h)** **Web Platform infrastructure hosting:** The Web Platform hosts user workspaces, encrypted API keys (AES-256-GCM), and Docker containers on Hetzner servers in Helsinki, Finland (EU-only). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active.
-- **(i)** **Web Platform conversation management:** The Web Platform stores conversation metadata and message content associated with user accounts. Data processed: conversation status, domain leader assignment, user messages, assistant responses, tool call metadata. Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request (cascade delete).
+- **(i)** **Web Platform conversation management:** The Web Platform stores conversation metadata and message content associated with user accounts. Data processed: conversation status, domain leader assignment, user messages, assistant responses, tool call metadata, and -- when usage telemetry is enabled per operator configuration -- per-message `usage` jsonb (token consumption and cost metadata). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request (cascade delete).
+- **(j)** **Web Platform push notification subscriptions:** The Web Platform stores push notification subscription data (endpoint URL, encryption keys) when users enable browser push notifications. Data processed: push subscription endpoint, p256dh and auth encryption keys, timestamps. Legal basis: consent (Article 6(1)(a) GDPR) -- subscriptions are created only after explicit browser permission grant. Retention: while account is active; expired subscriptions (HTTP 410 Gone) deleted automatically; all data deleted on account deletion (cascade delete).
+- **(k)** **Web Platform transactional email notifications:** The Web Platform sends email notifications via Resend when an AI agent requires user input and the user has no active push subscriptions. Data processed: recipient email address, notification content (agent name, question summary, conversation deep link). Legal basis: legitimate interest (Article 6(1)(f) GDPR) -- transactional notifications are necessary to inform users of pending decisions that block AI agent progress. Retention: email delivery logs retained per Resend's data retention policy.
+- **(l)** **DSAR (Articles 15 + 20) self-serve export:** The Web Platform packages a user's data into a ZIP archive on request at `/dashboard/settings/privacy`. Data processed: the categories enumerated in Section 5.3 below (account profile, conversations, messages, message attachments, KB share links, team / agent names, BYOK credentials and usage audit, workspace files). The bundle is delivered as a one-time signed URL bound to the requesting session and IP prefix, valid for 7 days. An audit row (`dsar_export_audit_pii`) recording requester IP, user agent, and event timestamp is written for each lifecycle event (enqueue, download_complete, reissue, expire, fail). Legal basis for the bundle generation: legal obligation (Article 6(1)(c) GDPR) under Articles 15 + 20. Legal basis for the audit row: legal obligation (Article 6(1)(c)) under Article 5(2) accountability. Retention: bundle Storage object 7 days hard-cap (whichever first: download or pg_cron sweep); audit row 24 months then automatic delete; both anonymised on account erasure via the Article 17 cascade. Sub-processors: Supabase Storage (bundle ZIP), Resend (delivery email containing the download link).
+- **(m)** **Operational telemetry & breach detection:** The Web Platform emits two operational telemetry streams to support service reliability and breach-detection obligations under GDPR Articles 32 and 33. (i) **Structured application logs** are written to standard output by the application server on Hetzner infrastructure in Helsinki, Finland (EU-only) and retained in a rolling Docker log buffer (capacity-bounded; no off-host log shipping is configured). (ii) **Error and breadcrumb events** are sent to Sentry (Functional Software GmbH, DE region; Standard Contractual Clauses) for error monitoring. In both streams, user identifiers are pseudonymised at the emission boundary by replacing the raw `userId` with a keyed cryptographic hash (`userIdHash`) computed using a server-resident secret pepper. Under GDPR Recital 26, the controller cannot re-identify a data subject from the hash alone without the pepper. Legal basis: legitimate interest (Article 6(1)(f) GDPR) in service reliability, security, and abuse prevention, balanced against the pseudonymisation safeguard; together with legal obligation (Article 6(1)(c) GDPR) for compliance with the Article 33 breach-notification timeline (see Section 7.2). Retention: Sentry events retained for 90 days (rolling); pino stdout retained in a fixed-capacity Hetzner-local rolling buffer (no off-host copies). Right to erasure (Article 17 GDPR): hashed identifiers age out per the rolling retention windows; the controller cannot perform processor-side targeted erasure of a pseudonym whose subject cannot be re-identified, consistent with Recital 26. **Sentry monitor classes processed:** issue alerts and cron monitor check-ins (vendor-hosted heartbeat for scheduled GitHub Actions jobs); both carry no application log content and only structural metadata (job slug, status, timestamp, pseudonymous identifier where applicable). **Sentry log ingestion (Logs product) is NOT enabled and no application log content is forwarded to Sentry**; if a future change introduces a Sentry log channel, the disclosure must be re-extended in advance and the scrub boundary at `apps/web-platform/server/sentry-scrub.ts` must be widened to cover it.
 
 For these activities, Jikigai acts as a Controller with respect to data it directly collects and processes (including CLA signature data and Web Platform account data). Third-party processors are engaged as described in Section 4.2.
 
@@ -160,8 +164,10 @@ For processing activities where Jikigai acts as Controller (see Sections 2.1b an
 | Stripe Inc ([stripe.com](https://stripe.com)) | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | Contract performance (Article 6(1)(b)) | [Stripe Sub-processors](https://stripe.com/legal/service-providers) |
 | Hetzner Online GmbH ([hetzner.com](https://hetzner.com)) | Web Platform infrastructure hosting (Helsinki, EU-only) | User workspaces, encrypted API keys, Docker containers | Contract performance (Article 6(1)(b)) | [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/) |
 | Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) for authenticated users; legitimate interest (Article 6(1)(f)) for unauthenticated traffic | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
+| Sentry (Functional Software GmbH) ([sentry.io](https://sentry.io)) | Web Platform error monitoring and breach detection (Sentry SDK) | Error messages, stack traces, request metadata (URL paths, HTTP headers, navigation breadcrumbs), pseudonymous user identifier (`userIdHash`) | Legitimate interest (Article 6(1)(f)) for service reliability; legal obligation (Article 6(1)(c)) for Article 33 breach-notification timeliness | [Sentry Sub-processors](https://sentry.io/legal/dpa/) |
+| Resend Inc ([resend.com](https://resend.com)) | Web Platform transactional email notifications (review gate alerts) | Recipient email address, email content (notification summaries) | Legitimate interest (Article 6(1)(f)) for transactional notifications | [Resend DPA](https://resend.com/legal/dpa) |
 
-This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), 2.3(h), and 2.3(i).
+This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), 2.3(h), 2.3(i), 2.3(j), 2.3(k), 2.3(l), and 2.3(m).
 
 ### 4.3 Third-Party Services Used by Users
 
@@ -227,6 +233,7 @@ For the Web Platform (app.soleur.ai):
 - **Stripe:** US-based (Stripe, LLC). Transfer via EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2. DPA auto-incorporated in Services Agreement (verified 2026-03-19).
 - **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.** DPA (AVV) signed 2026-03-19 via Cloud Console.
 - **Cloudflare:** Global CDN. Transfer via EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification. DPA self-executing via Self-Serve Subscription Agreement (verified 2026-03-19).
+- **Sentry:** DE region (Frankfurt, Germany), processed by Functional Software GmbH. Transfer mechanism: Standard Contractual Clauses (Sentry's standard EU-region terms). Intra-EU processing — no third-country transfer. DPA self-executing via Sentry's terms of service (verified 2026-05-13).
 
 ### 6.5 Docs Site
 
@@ -246,7 +253,7 @@ Soleur has no visibility into the User's local environment and therefore cannot 
 
 In the unlikely event that a breach affects the Soleur GitHub repository, Docs Site, Web Platform (app.soleur.ai), or distribution channels:
 
-- **(a)** We will notify affected Users without undue delay, and in any event within 72 hours of becoming aware of the breach, where feasible.
+- **(a)** We will notify affected Users without undue delay, and in any event within 72 hours of becoming aware of the breach, where feasible (Article 33 GDPR).
 - **(b)** Notification will be provided via the [Soleur GitHub repository](https://github.com/jikig-ai/soleur) and, where possible, through direct communication (including email notification for Web Platform users with an account on file).
 - **(c)** The notification will include the nature of the breach, likely consequences, and measures taken or proposed to address it.
 
@@ -336,7 +343,7 @@ For questions, concerns, or requests related to this DPD:
 
 - **Email:** <legal@jikigai.com>
 - **GitHub Repository:** [https://github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
-- **Website:** [https://soleur.ai](https://soleur.ai)
+- **Website:** [https://www.soleur.ai](https://www.soleur.ai)
 
 ---
 

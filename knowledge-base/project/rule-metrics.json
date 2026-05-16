@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-05-03T01:25:34Z",
+  "generated_at": "2026-05-10T01:29:15Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -133,6 +133,19 @@
       "rule_text_prefix": "Before removing a `useRef` declaration, grep the r"
     },
     {
+      "id": "cq-regex-unicode-separators-escape-only",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Regex character classes containing U+2028/U+2029 ("
+    },
+    {
       "id": "cq-rule-ids-are-immutable",
       "section": "Code Quality",
       "hit_count": 0,
@@ -157,6 +170,19 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "When a code path catches an error (or detects a de"
+    },
+    {
+      "id": "cq-test-fixtures-synthesized-only",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Test fixtures and golden files (`__goldens__/**`, "
     },
     {
       "id": "cq-union-widening-grep-three-patterns",
@@ -352,6 +378,19 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "Never label any step as \"manual\" without first att"
+    },
+    {
+      "id": "hr-never-paste-secrets-via-bang-prefix",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never paste secrets via the Claude Code `! ` shell"
     },
     {
       "id": "hr-never-run-commands-with-unbounded-output",
@@ -741,7 +780,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Use `Closes #N` in PR **body** (not title) to auto"
+      "rule_text_prefix": "Auto-close keywords (`close|fix|resolve`[sd]? + `#"
     },
     {
       "id": "wg-when-a-test-runner-crashes-segfault-oom",
@@ -862,8 +901,8 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 66,
-    "rules_unused_over_8w": 66,
+    "total_rules_tagged": 69,
+    "rules_unused_over_8w": 69,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": []
   }

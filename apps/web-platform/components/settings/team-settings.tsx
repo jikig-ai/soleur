@@ -17,18 +17,18 @@ export function TeamSettingsContent() {
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <span className="text-sm text-neutral-400">Loading team...</span>
+        <span className="text-sm text-soleur-text-secondary">Loading team...</span>
       </div>
     );
   }
 
   return (
     <div>
-      <div className="mb-1 text-xs font-medium uppercase tracking-wider text-amber-500">
+      <div className="mb-1 text-xs font-medium uppercase tracking-wider text-soleur-accent-gold-fg">
         Your Team
       </div>
-      <h1 className="mb-2 text-2xl font-semibold text-white">Domain Leaders</h1>
-      <p className="mb-8 text-sm text-neutral-400">
+      <h1 className="mb-2 text-2xl font-semibold text-soleur-text-primary">Domain Leaders</h1>
+      <p className="mb-8 text-sm text-soleur-text-secondary">
         Give your leaders custom names and icons. Names display as &quot;Name (Role)&quot; across conversations and mentions.
       </p>
 
@@ -47,7 +47,7 @@ export function TeamSettingsContent() {
         ))}
       </div>
 
-      <p className="mt-6 text-xs text-neutral-500">Changes save automatically</p>
+      <p className="mt-6 text-xs text-soleur-text-muted">Changes save automatically</p>
     </div>
   );
 }
@@ -171,7 +171,7 @@ function LeaderRow({
       <button
         type="button"
         onClick={handleAvatarClick}
-        className="relative shrink-0 cursor-pointer rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
+        className="relative shrink-0 cursor-pointer rounded-lg focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized"
         aria-label={`${name} avatar — click to upload custom icon`}
       >
         <LeaderAvatar leaderId={leaderId} size="lg" customIconPath={customIconPath} />
@@ -192,13 +192,13 @@ function LeaderRow({
         <button
           type="button"
           onClick={handleReset}
-          className="shrink-0 text-xs text-neutral-500 hover:text-neutral-300"
+          className="shrink-0 text-xs text-soleur-text-muted hover:text-soleur-text-secondary"
           aria-label={`Reset ${name} icon to default`}
         >
           Reset
         </button>
       )}
-      <span className="min-w-0 flex-1 text-sm text-neutral-300">{title}</span>
+      <span className="min-w-0 flex-1 text-sm text-soleur-text-secondary">{title}</span>
       <div className="w-48">
         <input
           type="text"
@@ -206,8 +206,8 @@ function LeaderRow({
           onChange={handleChange}
           placeholder="Enter a name..."
           maxLength={30}
-          className={`w-full rounded-lg border bg-neutral-800/50 px-3 py-2 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-amber-600 ${
-            error ? "border-red-500" : "border-neutral-700"
+          className={`w-full rounded-lg border bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none transition-colors focus:border-soleur-border-emphasized ${
+            error ? "border-red-500" : "border-soleur-border-default"
           }`}
         />
         {error && <p className="mt-1 text-xs text-red-400">{error}</p>}

@@ -1,0 +1,26 @@
+{
+  "total_count": 3,
+  "check_runs": [
+    {
+      "id": 1,
+      "name": "test",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {"id": 15368, "slug": "github-actions"}
+    },
+    {
+      "id": 2,
+      "name": "dependency-review",
+      "status": "completed",
+      "conclusion": "success",
+      "app": {"id": 15368, "slug": "github-actions"}
+    },
+    {
+      "id": 3,
+      "name": "CodeQL",
+      "status": "completed",
+      "conclusion": "neutral",
+      "app": {"id": 57789, "slug": "github-advanced-security"}
+    }
+  ]
+}

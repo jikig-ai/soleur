@@ -127,6 +127,15 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
 
   const handleMessageCountChange = useCallback(
     (count: number) => {
+      // Invariant owned by this consumer: once handleThreadResumed has set
+      // historicalCountRef to N>0 (server confirmed a resumed thread of N
+      // messages), messageCount must never regress below that floor for the
+      // life of this mount. The KB sidebar has no "clear thread" code path
+      // today — messages only grow via filter_prepend or stream events — so
+      // a `count === 0` write after a confirmed resume is necessarily
+      // transient (race with hydration). If a future feature adds an
+      // explicit clear, replace this guard with a `resumed`-flag check.
+      if (count === 0 && historicalCountRef.current > 0) return;
       setMessageCount(count);
       if (count > historicalCountRef.current) {
         setResumedBanner(null);
@@ -137,10 +146,10 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-kb-chat>
-      <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-3 py-2">
+      <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-3 py-2">
         <div className="min-w-0 flex-1 truncate">
           <span
-            className="truncate font-mono text-xs text-neutral-300"
+            className="truncate font-mono text-xs text-soleur-text-secondary"
             title={filename}
           >
             {filename}
@@ -150,7 +159,7 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
           type="button"
           aria-label="Close panel"
           onClick={onClose}
-          className="ml-2 shrink-0 rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          className="ml-2 shrink-0 rounded p-1 text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="18" y1="6" x2="6" y2="18" />
@@ -159,7 +168,7 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
         </button>
       </header>
       {resumedBanner && (
-        <div className="shrink-0 border-b border-neutral-800 bg-neutral-900/60 px-3 py-1.5 text-xs text-neutral-400">
+        <div className="shrink-0 border-b border-soleur-border-default bg-soleur-bg-surface-1/60 px-3 py-1.5 text-xs text-soleur-text-secondary">
           Continuing from {new Date(resumedBanner.timestamp).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
         </div>
       )}

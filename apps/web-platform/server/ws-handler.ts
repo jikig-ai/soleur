@@ -2,6 +2,7 @@ import { Server as HTTPServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import { randomUUID } from "crypto";
+import { basename as pathBasename } from "path";
 
 import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation } from "@/lib/types";
 import type { ConversationContext } from "@/lib/types";
@@ -20,6 +21,8 @@ import {
   abortSession,
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
+import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
+import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { createChildLogger } from "./logger";
@@ -42,7 +45,6 @@ import {
 } from "./concurrency";
 import {
   parseConversationRouting,
-  resolveInitialRouting,
   serializeConversationRouting,
   type ConversationRouting,
   type WorkflowName,
@@ -51,9 +53,12 @@ import {
   dispatchSoleurGo,
   getCcStartSessionRateLimiter,
   handleInteractivePromptResponseCase,
+  hasActiveCcQuery,
   resolveCcBashGate,
+  resolveConciergeDocumentContext,
 } from "./cc-dispatcher";
-import { getFlag } from "@/lib/feature-flags/server";
+import { fetchUserWorkspacePath } from "./kb-document-resolver";
+import { stripAndReportImagePlaceholders } from "./image-paste-strip";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 const log = createChildLogger("ws");
@@ -90,9 +95,10 @@ export interface PendingConversation {
   context?: ConversationContext;
   /** KB document path that will become conversations.context_path at materialization. */
   contextPath?: string;
-  /** Stage 2 (#2853): soleur-go routing decided at start_session time
-   *  (flag is read once per conversation — never again) and persisted
-   *  alongside the conversations row on first materialization. */
+  /** soleur-go routing decided at start_session time and persisted
+   *  alongside the conversations row on first materialization. Always
+   *  `{ kind: "soleur_go_pending" }` since #3270 retired FLAG_CC_SOLEUR_GO;
+   *  read-path stickiness is enforced by `parseConversationRouting`. */
   routing?: ConversationRouting;
 }
 
@@ -105,6 +111,19 @@ export interface ClientSession {
   disconnectTimer?: ReturnType<typeof setTimeout>;
   /** Timestamp of last user activity (auth or chat message). */
   lastActivity: number;
+  /**
+   * tc_accepted_version observed at handshake. Used as a baseline so a
+   * mid-session TC_VERSION bump triggers the next gated message to close
+   * the socket with TC_NOT_ACCEPTED. See `recheckTcMidSession`.
+   */
+  tcVersionAtHandshake?: string | null;
+  /**
+   * Cache expiry (ms epoch) for the mid-session TC re-check. Bounded at
+   * 30 s — see `TC_RECHECK_CACHE_MS`. Up to 30 s of stale-consent agent
+   * traffic may pass between a TC_VERSION bump and enforcement; the
+   * trade-off is explicit in plan AC6.
+   */
+  tcRecheckCacheUntil?: number | null;
   /** Timer that closes the connection after WS_IDLE_TIMEOUT_MS of inactivity. */
   idleTimer?: ReturnType<typeof setTimeout>;
   /** Cached subscription status — set at auth, refreshed by billing check timer. */
@@ -131,6 +150,21 @@ export interface ClientSession {
    *  DB fetch (performance P1-A). Undefined means "not yet
    *  materialized OR cache cold" — read DB on cache miss. */
   routing?: ConversationRouting;
+  /** Cached `conversations.context_path` for the active conversation.
+   *  Populated at materialization (from `pending.contextPath`) + on
+   *  cache-miss DB lookup so chat-case follow-up turns can re-inject the
+   *  open KB document into the Concierge system prompt without a
+   *  per-turn DB fetch. `null` means "no scoped artifact"; `undefined`
+   *  means "cache cold". */
+  contextPath?: string | null;
+  /** #3266 — cached `conversations.session_id` for the active
+   *  conversation. Seeded on chat-case cache miss from the SELECT (and
+   *  written back by the runner via `onSessionIdCaptured`). Threaded into
+   *  `dispatchSoleurGo({ sessionId })` so cold-Query construction after
+   *  reap/restart resumes the SDK session and activates the prefill
+   *  guard. `null` means "no persisted session_id"; `undefined` means
+   *  "cache cold". */
+  sessionId?: string | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -187,6 +221,10 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   // Invalidate the per-session routing cache so the next conversation
   // on this socket re-reads active_workflow from DB.
   session.routing = undefined;
+  // Same invalidation contract for the KB context cache.
+  session.contextPath = undefined;
+  // Same for the session_id cache (#3266).
+  session.sessionId = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // The wrapper enforces the R8 composite-key invariant; errors mirror to
@@ -201,6 +239,204 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   }
 
   session.conversationId = undefined;
+}
+
+/**
+ * Self-healing ledger-divergence recovery for `start_session` cap_hit
+ * (#stuck-active fix, AC4).
+ *
+ * When `acquireSlot` returns `cap_hit` and the user's *visible* active
+ * conversations (status in active/waiting_for_user, archived_at IS NULL)
+ * are FEWER than the slot count, the slot ledger has at least one
+ * orphan row — its `conversation_id` does not appear in the visible set.
+ * Reasons: a transient bug or process kill stranded a conversation row
+ * (covered by AC1 + AC2), or an archive trigger fired but a slot
+ * insertion raced after.
+ *
+ * This helper detects divergence and force-releases each orphan slot,
+ * then mirrors a single Sentry event so a non-zero rate is visible to
+ * on-call. The caller is expected to retry `acquireSlot` ONCE on
+ * `didRecover: true`. Recursion on a second cap_hit is forbidden — fall
+ * through to the existing close path so genuine cap denials behave
+ * unchanged.
+ *
+ * Best-effort: errors during the SELECT or releaseSlot calls do not
+ * throw — they short-circuit to `didRecover: false` so the caller's
+ * fallback (close with `concurrency_cap_hit` preamble) still runs.
+ *
+ * Exported for tests; call site is the `start_session` cap_hit branch
+ * below.
+ */
+export async function tryLedgerDivergenceRecovery(
+  userId: string,
+): Promise<{ didRecover: boolean }> {
+  try {
+    // Visible active conversations — what the user perceives as "in
+    // flight". Mirrors the ledger denominator the cap was checked
+    // against.
+    const visibleResp = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("user_id", userId)
+      .is("archived_at", null)
+      .in("status", ["active", "waiting_for_user"]);
+    if (visibleResp.error) {
+      reportSilentFallback(visibleResp.error, {
+        feature: "concurrency-ledger-divergence",
+        op: "start_session-recovery-select-visible",
+        extra: { userId },
+      });
+      return { didRecover: false };
+    }
+    const visibleIds = new Set<string>(
+      ((visibleResp.data ?? []) as Array<{ id: string }>).map((r) => r.id),
+    );
+
+    const slotsResp = await supabase
+      .from("user_concurrency_slots")
+      .select("conversation_id")
+      .eq("user_id", userId);
+    if (slotsResp.error) {
+      reportSilentFallback(slotsResp.error, {
+        feature: "concurrency-ledger-divergence",
+        op: "start_session-recovery-select-slots",
+        extra: { userId },
+      });
+      return { didRecover: false };
+    }
+    const slotConversationIds = ((slotsResp.data ?? []) as Array<{ conversation_id: string }>)
+      .map((r) => r.conversation_id);
+
+    const orphans = slotConversationIds.filter((cid) => !visibleIds.has(cid));
+
+    // Stale-heartbeat detector (May-6 #3354). The orphan check above only
+    // catches slots whose conversation is NOT in the visible-active set;
+    // it misses the boundary case where a `status='active'` conversation row
+    // IS visible but its slot's `last_heartbeat_at` lapsed past 120 s
+    // between the RPC's lazy sweep and this helper's processing — e.g.
+    // a tab supersession that clears the old WS's `pingInterval` so no
+    // refresh fires while the helper runs. Catching it here (vs waiting
+    // up to 60 s for the agent-runner reaper) flips the conv row to
+    // `failed` synchronously so the dashboard "Active conversations" rail
+    // truths up, and surfaces the divergence to Sentry.
+    //
+    // THRESHOLD-COUPLING: 120 s here matches the four pre-existing sites:
+    //   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
+    //   (2) migration 029 line ~224 (pg_cron user_concurrency_slots_sweep)
+    //   (3) migration 037 line ~39 (find_stuck_active_conversations default)
+    //   (4) agent-runner.ts STUCK_ACTIVE_THRESHOLD_SECONDS
+    // Changing this constant without updating the four sibling sites
+    // desyncs the sweep mechanisms — one will reap rows the others
+    // consider live. Naming + unit mirror agent-runner.ts so a grep on
+    // `STUCK_ACTIVE_THRESHOLD_SECONDS` surfaces this site too. Index
+    // path: `user_concurrency_slots_user_heartbeat_idx` (migration 029)
+    // on `(user_id, last_heartbeat_at)`.
+    const STALE_HEARTBEAT_THRESHOLD_SECONDS = 120;
+    const staleCutoff = new Date(
+      Date.now() - STALE_HEARTBEAT_THRESHOLD_SECONDS * 1_000,
+    ).toISOString();
+    const staleResp = await supabase
+      .from("user_concurrency_slots")
+      .select("conversation_id")
+      .eq("user_id", userId)
+      .lt("last_heartbeat_at", staleCutoff);
+    let staleConversationIds: string[] = [];
+    if (staleResp.error) {
+      // Fail-open: a SELECT error on the new branch must NOT regress the
+      // existing orphan-recovery path. Mirror once and continue.
+      reportSilentFallback(staleResp.error, {
+        feature: "concurrency-ledger-divergence",
+        op: "start_session-recovery-select-stale-heartbeat",
+        extra: { userId },
+      });
+    } else {
+      staleConversationIds = ((staleResp.data ?? []) as Array<{ conversation_id: string }>)
+        .map((r) => r.conversation_id);
+    }
+
+    // Dedup union: one releaseSlot + one finalize per unique conversation_id.
+    const orphanSet = new Set<string>(orphans);
+    const reapableSet = new Set<string>([...orphans, ...staleConversationIds]);
+    const reapable = Array.from(reapableSet);
+
+    if (reapable.length === 0) {
+      // No divergence — genuine cap_hit; caller proceeds to close path.
+      return { didRecover: false };
+    }
+
+    // Release every reapable slot in parallel — keyed DELETE is idempotent.
+    await Promise.all(
+      reapable.map((cid) => releaseSlot(userId, cid)),
+    );
+
+    // Conversation-row finalize. Status-only — do NOT bump `last_active`:
+    // this is a server-initiated cleanup, not user activity, and bumping
+    // would float wedged-and-failed rows above genuinely-recent ones in
+    // sort-by-last-active surfaces (`conversations-tools.ts` MCP list,
+    // `lookup-conversation-for-path.ts`). Per-row op tag distinguishes
+    // the finalize cause for Sentry breadcrumb consumers — orphan rows
+    // are typically already terminal/archived (no-op), stale-heartbeat
+    // rows are the load-bearing case where the user-visible row flips
+    // from Executing to failed. `expectMatch: false` because both classes
+    // include benign zero-row outcomes (archived row, already-terminal,
+    // hard-deleted). #3463: `onlyIfStatusIn: ["active"]` narrows the
+    // race surface where divergence detection ran ≤Xms before a
+    // legitimate result-branch flipped the row to `waiting_for_user` —
+    // without the guard the recovery path stomps a healthy terminal
+    // state to `failed`.
+    await Promise.all(
+      reapable.map((cid) =>
+        updateConversationFor(
+          userId,
+          cid,
+          { status: "failed" },
+          {
+            feature: "concurrency-ledger-divergence",
+            op: orphanSet.has(cid)
+              ? "start_session-recovery-finalize-orphan"
+              : "start_session-recovery-finalize-stale-heartbeat",
+            expectMatch: false,
+            onlyIfStatusIn: ["active"],
+          },
+        ).catch(() => undefined),
+      ),
+    );
+
+    // Single Sentry mirror for the divergence detection itself. AC4
+    // excludes the recovered-OK path. `recoveryCause` lets dashboards
+    // segment orphan vs stale-heartbeat without spawning a new feature
+    // key; existing aggregations on `feature` + `op` are preserved.
+    const recoveryCause: "orphan" | "stale-heartbeat" | "orphan-and-stale" =
+      orphans.length > 0 && staleConversationIds.length > 0
+        ? "orphan-and-stale"
+        : orphans.length > 0
+          ? "orphan"
+          : "stale-heartbeat";
+    reportSilentFallback(new Error("ledger-divergence"), {
+      feature: "concurrency-ledger-divergence",
+      op: "start_session-recovery",
+      extra: {
+        userId,
+        visibleCount: visibleIds.size,
+        slotCount: slotConversationIds.length,
+        orphanCount: orphans.length,
+        staleHeartbeatCount: staleConversationIds.length,
+        reapableCount: reapable.length,
+        recoveryCause,
+      },
+    });
+
+    return { didRecover: true };
+  } catch (err) {
+    // Defensive: any unexpected throw must NOT prevent the caller's
+    // close path from running. Mirror once so the failure surfaces.
+    reportSilentFallback(err, {
+      feature: "concurrency-ledger-divergence",
+      op: "start_session-recovery-throw",
+      extra: { userId },
+    });
+    return { didRecover: false };
+  }
 }
 
 /**
@@ -439,7 +675,7 @@ async function createConversation(
     if (contextPath && isContextPathUniqueViolation(error)) {
       const { data: existing, error: lookupErr } = await supabase
         .from("conversations")
-        .select("id, active_workflow")
+        .select("id, active_workflow, context_path")
         .eq("user_id", userId)
         .eq("repo_url", repoUrl)
         .eq("context_path", contextPath)
@@ -459,14 +695,21 @@ async function createConversation(
       // visible and observable. The authoritative row's routing still
       // gets returned (first-writer-wins is the correct UX — both tabs
       // converge on the same conversation history).
-      const existingRow = existing as { id: string; active_workflow?: string | null };
+      const existingRow = existing as {
+        id: string;
+        active_workflow?: string | null;
+        context_path?: string | null;
+      };
       const existingWorkflow = existingRow.active_workflow ?? null;
       const intendedWorkflow = activeWorkflow ?? null;
       if (activeWorkflow !== undefined && existingWorkflow !== intendedWorkflow) {
-        Sentry.captureMessage(
-          "createConversation 23505 fallback: activeWorkflow diverged — first-writer-wins",
+        warnSilentFallback(
+          new Error(
+            "createConversation 23505 fallback: activeWorkflow diverged — first-writer-wins",
+          ),
           {
-            level: "warning",
+            feature: "create-conversation",
+            op: "23505-fallback-active-workflow",
             extra: {
               conversationId: existingRow.id,
               existingWorkflow,
@@ -478,6 +721,35 @@ async function createConversation(
         log.warn(
           { conversationId: existingRow.id, existingWorkflow, intendedWorkflow },
           "23505 fallback: active_workflow diverged; second-tab choice discarded (first-writer-wins)",
+        );
+      }
+      // Defense-in-depth: today the unique index is
+      // `(user_id, repo_url, context_path)` so a 23505 collision means
+      // both tabs supplied the SAME path — no divergence is reachable.
+      // If a future schema change widens the index without including
+      // `context_path`, divergence would silently leak the wrong path
+      // into the second tab's session. Mirror so we see it before users
+      // do (cq-silent-fallback-must-mirror-to-sentry).
+      const existingContextPath = existingRow.context_path ?? null;
+      if (existingContextPath !== (contextPath ?? null)) {
+        warnSilentFallback(
+          new Error(
+            "createConversation 23505 fallback: context_path diverged — invariant assumed unreachable today",
+          ),
+          {
+            feature: "create-conversation",
+            op: "23505-fallback-context-path",
+            extra: {
+              conversationId: existingRow.id,
+              existingContextPath,
+              intendedContextPath: contextPath,
+              userId,
+            },
+          },
+        );
+        log.warn(
+          { conversationId: existingRow.id, existingContextPath, intendedContextPath: contextPath },
+          "23505 fallback: context_path diverged; first-writer-wins — second-tab path silently discarded",
         );
       }
       return existingRow.id;
@@ -494,11 +766,94 @@ async function createConversation(
  * UPDATE so the sticky-workflow detection in the runner writes through
  * to the DB.
  */
-async function dispatchSoleurGoForConversation(
+/**
+ * Diagnostic breadcrumb for the cc-soleur-go cold-Query construction site.
+ *
+ * Fires for every cold-Query construction in `dispatchSoleurGoForConversation`
+ * so two production reproductions of the #3287 poppler-utils install cascade
+ * can disambiguate hypothesis A (PDF directive missed cold-Query construction)
+ * from hypothesis B (directive present, model overrode it). The data payload
+ * is PII-safe: no full path, no document content, no userId.
+ *
+ * Pairs with a `level: "warning"` `Sentry.captureMessage` ONLY when the
+ * resolver was invoked (cold Query) AND a `context.path` was provided AND the
+ * resolver dropped it (`documentKindResolved === null`). That branch is the
+ * suspicious-skip case — a path arrived but never reached the directive — and
+ * needs its own searchable Sentry event since breadcrumbs are scope-attached
+ * (only surface when an event is sent in the same scope).
+ *
+ * Exported for unit testing; production call site is just below in
+ * `dispatchSoleurGoForConversation`.
+ */
+export function emitConciergeDocumentResolutionBreadcrumb(args: {
+  conversationId: string;
+  contextPath: string | null | undefined;
+  hasActiveCcQuery: boolean;
+  documentArgs: Awaited<ReturnType<typeof resolveConciergeDocumentContext>>;
+  routingKind: string;
+}): void {
+  const { conversationId, contextPath, hasActiveCcQuery, documentArgs, routingKind } = args;
+  const path = typeof contextPath === "string" && contextPath.length > 0 ? contextPath : null;
+  const basenameStr = path === null ? null : pathBasename(path);
+  // Use lastIndexOf so a dotless basename (e.g., "Makefile") yields null —
+  // not the whole filename — and `pathExtension` stays a clean enum-shaped
+  // dimension in Sentry filters.
+  const dot = basenameStr === null ? -1 : basenameStr.lastIndexOf(".");
+  const extension = dot > 0 && basenameStr !== null
+    ? basenameStr.slice(dot + 1).toLowerCase()
+    : null;
+  const documentKindResolved = documentArgs.documentKind ?? null;
+  const documentContentBytes = documentArgs.documentContent?.length ?? 0;
+  // 2026-05-06 follow-up — operators triaging "Concierge gave the apt-get
+  // cascade" reach for THIS breadcrumb first (it sits at the resolution
+  // boundary). Naming the typed extractor failure class here prevents the
+  // ambiguity between "no path was sent" and "path was sent, parse failed
+  // with class X" and lets a Sentry filter pivot directly to the user's
+  // actual failure shape without crawling extractor breadcrumbs.
+  const documentExtractError = documentArgs.documentExtractError ?? null;
+
+  Sentry.addBreadcrumb({
+    category: "cc-pdf-resolver",
+    message: "concierge document context resolved",
+    level: "info",
+    data: {
+      hasContextPath: path !== null,
+      pathBasename: basenameStr,
+      pathExtension: extension,
+      hasActiveCcQuery,
+      documentKindResolved,
+      documentContentBytes,
+      documentExtractError,
+      conversationId,
+      routingKind,
+    },
+  });
+
+  // Suspicious-skip: cold Query (resolver was invoked) AND a path was sent
+  // AND the resolver returned no documentKind. Warm turns deliberately skip
+  // resolution and must NOT trigger this — that's the documented happy path.
+  if (path !== null && !hasActiveCcQuery && documentKindResolved === null) {
+    Sentry.captureMessage("cc-pdf-resolver-skip: path provided but resolver returned no documentKind", {
+      level: "warning",
+      tags: { feature: "cc-pdf-resolver", op: "skip" },
+      extra: {
+        conversationId,
+        pathBasename: basenameStr,
+        pathExtension: extension,
+        routingKind,
+      },
+    });
+  }
+}
+
+export async function dispatchSoleurGoForConversation(
   userId: string,
   conversationId: string,
   userMessage: string,
   routing: ConversationRouting,
+  context?: ConversationContext,
+  attachments?: import("@/lib/types").AttachmentRef[],
+  sessionId?: string | null,
 ): Promise<void> {
   const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
     // data-integrity P1-A: never regress a soleur-go conversation back
@@ -547,6 +902,64 @@ async function dispatchSoleurGoForConversation(
     }
   };
 
+  // KB Concierge document context (regression fix). When the chat is
+  // scoped to a KB document (PDF or text), inject the document into the
+  // system prompt so the Concierge can answer questions about it instead
+  // of replying that no document was attached. Mirrors the legacy
+  // `agent-runner.ts § "Inject artifact context"` injection — see
+  // `resolveConciergeDocumentContext` in cc-dispatcher for kind/path/
+  // workspace-validation logic.
+  //
+  // Skip resolution when the runner already owns a live Query for this
+  // conversation: the system prompt is baked at cold-Query construction
+  // and reused across turns (streaming-input mode). Resolving on warm
+  // turns wastes a Supabase RTT + 2 realpathSync + a 50KB readFile per
+  // turn for bytes that never reach the LLM.
+  // Bind the resolver's return shape directly so new fields
+  // (`documentExtractError` etc.) flow through the spread at line 851
+  // without a parallel literal type that drifts silently.
+  let documentArgs: Awaited<
+    ReturnType<typeof resolveConciergeDocumentContext>
+  > = {};
+  const warmCcQuery = hasActiveCcQuery(conversationId);
+  if (context?.path && !warmCcQuery) {
+    documentArgs = await resolveConciergeDocumentContext({
+      userId,
+      contextPath: context.path,
+      providedContent: context.content ?? null,
+    });
+  }
+
+  // 2026-05-06 Bug A1 fix — resolve workspacePath up-front when an
+  // artifact directive is going to be built. The resolver above already
+  // populated the per-process `_workspacePathCache` for non-warm turns
+  // with a contextPath; this fetch is a synchronous map lookup in that
+  // case. For warm turns or no-context dispatches, the runner skips
+  // system-prompt construction entirely (the prompt is baked at cold
+  // construction), so a missing workspacePath here is a no-op. On
+  // failure (DB transient error, missing workspace_path row), fall
+  // through with undefined — the runner's directive builder gracefully
+  // falls back to the relative path, which the Bug A2 sandbox fix
+  // tolerates for in-workspace files.
+  let workspacePath: string | undefined;
+  if (context?.path && !warmCcQuery) {
+    try {
+      workspacePath = await fetchUserWorkspacePath(userId);
+    } catch {
+      // Resolver already mirrored to Sentry on the same failure mode;
+      // skip a duplicate mirror here.
+    }
+  }
+
+  // #3287 Phase 1 diagnostic — see helper JSDoc.
+  emitConciergeDocumentResolutionBreadcrumb({
+    conversationId,
+    contextPath: context?.path ?? null,
+    hasActiveCcQuery: warmCcQuery,
+    documentArgs,
+    routingKind: routing.kind,
+  });
+
   await dispatchSoleurGo({
     userId,
     conversationId,
@@ -554,7 +967,132 @@ async function dispatchSoleurGoForConversation(
     currentRouting: routing,
     sendToClient,
     persistActiveWorkflow,
+    attachments,
+    workspacePath,
+    sessionId,
+    // #3266 — refresh the in-process `ClientSession.sessionId` cache
+    // alongside the DB write/clear so a subsequent chat-case warm-cache
+    // turn forwards the just-persisted value. Without this, runner-reap-
+    // while-WS-alive uses the stale seeded `null` on the next cold-Query
+    // construction and the prefill guard's history-probe branch never
+    // activates. Guards on `liveSession.conversationId === conversationId`
+    // to avoid clobbering a value bound to a different conversation that
+    // the user switched to mid-dispatch.
+    onSessionIdPersisted: (nextSessionId) => {
+      const liveSession = sessions.get(userId);
+      if (liveSession && liveSession.conversationId === conversationId) {
+        liveSession.sessionId = nextSessionId;
+      }
+    },
+    ...documentArgs,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Mid-session T&C re-check (AC6/AC11, feat-oauth-tc-consent-3205)
+// ---------------------------------------------------------------------------
+
+/**
+ * Inbound message types that must re-validate users.tc_accepted_version
+ * mid-session. After a TC_VERSION bump (operator-initiated), the next
+ * gated message on each live socket closes with 4004 TC_NOT_ACCEPTED.
+ *
+ * EXEMPT inbound types: `abort_turn`, `close_conversation`. RC8: a user
+ * must always be able to stop a stream / close a conversation even with
+ * stale consent — refusing those would worsen UX without changing GDPR
+ * demonstrability.
+ *
+ * Server→client types (stream, tool_use, etc.) are rejected on inbound
+ * by the ws-zod-schemas guard before reaching this point, so they need
+ * no explicit listing.
+ */
+const TC_RECHECK_MESSAGE_TYPES = new Set([
+  "start_session",
+  "resume_session",
+  "chat",
+  "interactive_prompt_response",
+  "review_gate_response",
+]);
+
+/**
+ * Per-session cache window for the mid-session TC re-check. Bounds DB
+ * load: at most one users.tc_accepted_version SELECT per gated message
+ * per 30 s per user. Trade-off: up to 30 s of stale-consent traffic
+ * after a TC_VERSION bump (plan AC6, accepted).
+ */
+export const TC_RECHECK_CACHE_MS = 30_000;
+
+/**
+ * Re-validate the user's tc_accepted_version against the current
+ * `TC_VERSION` constant. Returns true if the socket was closed (caller
+ * must return early). On stale consent, mismatch, or DB error: closes
+ * with WS_CLOSE_CODES.TC_NOT_ACCEPTED (fail-closed — Art. 7(1)
+ * demonstrability).
+ *
+ * Exported for test isolation; handleMessage invokes this above the
+ * switch.
+ */
+export async function recheckTcMidSession(
+  userId: string,
+  session: ClientSession,
+  msgType: WSMessage["type"],
+): Promise<boolean> {
+  if (!TC_RECHECK_MESSAGE_TYPES.has(msgType)) return false;
+
+  // Fast-path: if the handshake baseline already disagrees with the current
+  // TC_VERSION constant, close immediately — no DB round-trip needed. The
+  // baseline is captured once at handshake (line ~1978) and reads the same
+  // column the SELECT below would read; the only way they diverge is if
+  // TC_VERSION was bumped mid-session, in which case the cached baseline is
+  // authoritatively stale and we must close.
+  if (
+    session.tcVersionAtHandshake !== undefined &&
+    session.tcVersionAtHandshake !== TC_VERSION
+  ) {
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.close(
+        WS_CLOSE_CODES.TC_NOT_ACCEPTED,
+        "T&C not accepted (mid-session)",
+      );
+    }
+    return true;
+  }
+
+  const cacheUntil = session.tcRecheckCacheUntil ?? 0;
+  if (cacheUntil && Date.now() < cacheUntil) return false;
+
+  const { data: row, error } = await supabase
+    .from("users")
+    .select("tc_accepted_version")
+    .eq("id", userId)
+    .single();
+
+  const rowTyped = row as { tc_accepted_version?: string | null } | null;
+
+  if (error || rowTyped?.tc_accepted_version !== TC_VERSION) {
+    // Sentry mirror on the DB-error branch so a Supabase outage during a
+    // live WS session is observable (cq-silent-fallback-must-mirror-to-sentry).
+    // The TC_VERSION-mismatch branch is expected and not an error — only
+    // the `error` arm pages operations.
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "ws-handler",
+        op: "tc_recheck_query_failed",
+        message: "users.tc_accepted_version SELECT failed mid-session",
+        extra: { userId, msgType },
+      });
+    }
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.close(
+        WS_CLOSE_CODES.TC_NOT_ACCEPTED,
+        "T&C not accepted (mid-session)",
+      );
+    }
+    return true;
+  }
+
+  session.tcRecheckCacheUntil = Date.now() + TC_RECHECK_CACHE_MS;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +1117,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
   log.debug({ userId, msgType: msg.type }, "Message received");
 
+  // Mid-session T&C re-check. Closes the socket on stale consent or DB
+  // error for gated types only (see TC_RECHECK_MESSAGE_TYPES). Exempt
+  // types (abort_turn, close_conversation) pass through unchanged.
+  if (await recheckTcMidSession(userId, session, msg.type)) {
+    return;
+  }
+
   switch (msg.type) {
     // ------------------------------------------------------------------
     // start_session: create conversation, boot agent, reply with ID
@@ -597,38 +1142,36 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         return;
       }
 
-      // Stage 2.13 — soleur-go path gets an additional per-user + per-IP
+      // soleur-go path applies an additional per-user + per-IP
       // sliding-window limiter (10/user/hour, 30/IP/hour) on top of the
-      // legacy `sessionThrottle` above. Fail-closed at either cap.
-      // Flag is read ONCE here — the routing decision is sticky.
-      const ccFlagEnabled = getFlag("command-center-soleur-go");
-      if (ccFlagEnabled) {
-        // security P2: use userId as the per-IP fallback when no IP
-        // was captured. Falling back to a literal string like
-        // `"unknown"` collides every IP-missing user into one 30/hr
-        // bucket — a trivial DoS pivot if a proxy misconfiguration
-        // ever strips headers. Using userId preserves per-user
-        // isolation; the per-user cap still applies above it.
-        const rateLimitIp = session.ip && session.ip.length > 0 ? session.ip : userId;
-        const rate = getCcStartSessionRateLimiter().check({
-          userId,
-          ip: rateLimitIp,
+      // legacy `sessionThrottle` above. Fail-closed at either cap. As
+      // of #3270 (FLAG_CC_SOLEUR_GO retired) this runs unconditionally
+      // for every `start_session` — cc-soleur-go is the only path.
+      // security P2: use userId as the per-IP fallback when no IP was
+      // captured. Falling back to a literal string like `"unknown"`
+      // collides every IP-missing user into one 30/hr bucket — a
+      // trivial DoS pivot if a proxy misconfiguration ever strips
+      // headers. Using userId preserves per-user isolation; the
+      // per-user cap still applies above it.
+      const rateLimitIp = session.ip && session.ip.length > 0 ? session.ip : userId;
+      const rate = getCcStartSessionRateLimiter().check({
+        userId,
+        ip: rateLimitIp,
+      });
+      if (!rate.allowed) {
+        logRateLimitRejection(`cc-${rate.reason}`, userId, {
+          ip: session.ip,
+          ipFallback: session.ip === rateLimitIp ? undefined : "userId",
+          retryAfterMs: rate.retryAfterMs,
         });
-        if (!rate.allowed) {
-          logRateLimitRejection(`cc-${rate.reason}`, userId, {
-            ip: session.ip,
-            ipFallback: session.ip === rateLimitIp ? undefined : "userId",
-            retryAfterMs: rate.retryAfterMs,
-          });
-          sendToClient(userId, {
-            type: "error",
-            message: "Rate limited: too many conversations this hour.",
-            errorCode: "rate_limited",
-          });
-          return;
-        }
+        sendToClient(userId, {
+          type: "error",
+          message: "Rate limited: too many conversations this hour.",
+          errorCode: "rate_limited",
+        });
+        return;
       }
-      const initialRouting: ConversationRouting = resolveInitialRouting(ccFlagEnabled);
+      const initialRouting: ConversationRouting = { kind: "soleur_go_pending" };
 
       try {
         // Validate context payload before any side effects
@@ -756,6 +1299,21 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           }
         }
 
+        // Self-healing ledger-divergence recovery (#stuck-active fix, AC4).
+        // Run BEFORE the existing cap_hit close path. If the slot ledger
+        // has orphan rows (slot present, conversation invisible/missing),
+        // release the orphans and retry acquire once. If the retry still
+        // returns cap_hit, fall through to the genuine cap-deny close
+        // path unchanged — DO NOT recurse.
+        // non-recursive by construction; do not refactor into a loop
+        if (acquire.status === "cap_hit") {
+          const recovered = await tryLedgerDivergenceRecovery(userId);
+          if (recovered.didRecover) {
+            const cap = effectiveCap(session.planTier, session.concurrencyOverride);
+            acquire = await acquireSlot(userId, pendingId, cap);
+          }
+        }
+
         if (acquire.status === "cap_hit" || acquire.status === "error") {
           // Emit telemetry at the deny site (plan Phase 9).
           emitConcurrencyCapHit({
@@ -795,7 +1353,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           "start_session (deferred creation)",
         );
 
-        sendToClient(userId, { type: "session_started", conversationId: session.pending.id });
+        sendToClient(userId, {
+          type: "session_started",
+          conversationId: session.pending.id,
+          capabilities: WS_CAPABILITIES,
+        });
         resetIdleTimer(userId, session);
         log.debug("session_started sent to client");
       } catch (err) {
@@ -845,13 +1407,19 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         }
 
         session.conversationId = msg.conversationId;
-        // Resuming a different conversation — invalidate the routing
-        // cache so the first chat-turn re-reads `active_workflow`.
+        // Resuming a different conversation — invalidate the routing,
+        // KB context, and session_id caches so the first chat-turn
+        // re-reads `active_workflow`, `context_path`, and `session_id`.
+        // The three caches share the same lifecycle invariant: invalidate
+        // together.
         session.routing = undefined;
+        session.contextPath = undefined;
+        session.sessionId = undefined;
         resetIdleTimer(userId, session);
         sendToClient(userId, {
           type: "session_started",
           conversationId: msg.conversationId,
+          capabilities: WS_CAPABILITIES,
         });
       } catch (err) {
         Sentry.captureException(err);
@@ -893,6 +1461,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         );
         session.conversationId = undefined;
         session.routing = undefined;
+        session.contextPath = undefined;
+        session.sessionId = undefined;
         void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
@@ -927,12 +1497,23 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         return;
       }
 
+      // Strip `[Image #N]` SDK-CLI placeholders from inbound text. The
+      // placeholders mean image bytes were already dropped upstream;
+      // letting them through would persist the broken artifact to
+      // `messages.content` and re-inject it into every LLM replay.
+      // Surfaces a non-blocking `image_paste_lost` error to the client.
+      const userContent = stripAndReportImagePlaceholders(msg.content, {
+        userId,
+        conversationId: session.conversationId ?? null,
+        send: (m) => sendToClient(userId, m),
+      });
+
       // User activity resets idle timer
       resetIdleTimer(userId, session);
 
       // Materialize pending conversation on first real message
       if (!session.conversationId && session.pending) {
-        const stripped = msg.content.replace(/@\w+\s*/g, "").trim();
+        const stripped = userContent.replace(/@\w+\s*/g, "").trim();
         if (!stripped) {
           sendToClient(userId, {
             type: "error",
@@ -969,6 +1550,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // Seed the routing cache so chat-case on subsequent turns
           // can skip the DB lookup (performance P1-A).
           session.routing = pendingRouting;
+          // Seed the KB context path so chat-case follow-up turns can
+          // rebuild a synthetic ConversationContext for the soleur-go
+          // path (otherwise turn 2+ loses document context).
+          session.contextPath = pendingContextPath ?? null;
 
           log.info(
             {
@@ -983,11 +1568,19 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // path entirely. The soleur-go runner owns its own Query
           // lifecycle + canUseTool + sandbox.
           if (pendingRouting && pendingRouting.kind !== "legacy") {
+            // First-message branch: conversation was just inserted by
+            // `createConversation`; persisted `session_id` is always null
+            // until the runner emits the first `result`. Pass `null`
+            // explicitly so the dispatch signature stays uniform.
+            session.sessionId = null;
             await dispatchSoleurGoForConversation(
               userId,
               session.conversationId,
-              msg.content,
+              userContent,
               pendingRouting,
+              pendingContext,
+              msg.attachments,
+              null,
             );
             break;
           }
@@ -1009,7 +1602,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           }
 
           // sendUserMessage handles saveMessage internally — do not double-save
-          await sendUserMessage(userId, session.conversationId, msg.content, pendingContext);
+          await sendUserMessage(
+            userId,
+            session.conversationId,
+            userContent,
+            pendingContext,
+            msg.attachments,
+          );
         } catch (err) {
           Sentry.captureException(err);
           log.error({ userId, err }, "chat error (deferred creation)");
@@ -1031,12 +1630,16 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // (the runner singleton is process-local).
         const convId = session.conversationId!;
         let routing: ConversationRouting;
-        if (session.routing) {
+        if (
+          session.routing &&
+          session.contextPath !== undefined &&
+          session.sessionId !== undefined
+        ) {
           routing = session.routing;
         } else {
           const { data: row, error: routeErr } = await supabase
             .from("conversations")
-            .select("active_workflow, session_id")
+            .select("active_workflow, session_id, context_path")
             .eq("id", convId)
             .single();
           if (routeErr) {
@@ -1049,25 +1652,47 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               "chat routing lookup failed (falling through to legacy)",
             );
           }
-          routing = row
+          const typedRow = row as {
+            active_workflow?: string | null;
+            session_id?: string | null;
+            context_path?: string | null;
+          } | null;
+          routing = typedRow
             ? parseConversationRouting({
-                active_workflow:
-                  (row as { active_workflow?: string | null }).active_workflow ?? null,
+                active_workflow: typedRow.active_workflow ?? null,
               })
             : { kind: "legacy" };
-          // Seed cache for subsequent turns.
+          // Seed all three caches for subsequent turns.
           session.routing = routing;
+          session.contextPath = typedRow?.context_path ?? null;
+          session.sessionId = typedRow?.session_id ?? null;
         }
 
         if (routing.kind !== "legacy") {
-          await dispatchSoleurGoForConversation(userId, convId, msg.content, routing);
+          // KB Concierge: rebuild a synthetic ConversationContext from the
+          // conversation's persisted context_path so follow-up turns keep
+          // injecting the open document. Without this, only the first
+          // turn would see the document context (chat-case path serves
+          // turn 2+).
+          const chatContext: ConversationContext | undefined = session.contextPath
+            ? { path: session.contextPath, type: "kb-viewer" }
+            : undefined;
+          await dispatchSoleurGoForConversation(
+            userId,
+            convId,
+            userContent,
+            routing,
+            chatContext,
+            msg.attachments,
+            session.sessionId ?? null,
+          );
           break;
         }
 
         await sendUserMessage(
           userId,
           session.conversationId!,
-          msg.content,
+          userContent,
           undefined, // conversationContext
           msg.attachments,
         );
@@ -1097,6 +1722,28 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // ------------------------------------------------------------------
     // review_gate_response: resolve a pending review gate in the agent
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // abort_turn: user-initiated Stop. Broadcast-aborts every leader's
+    // session for the conversation so multi-leader dispatch can't leak
+    // a hidden BYOK-burning session past the click (TR3 / G3, plan
+    // §"Reconciliation" row 1). `userId` MUST come from the
+    // authenticated socket session — NEVER from the message payload.
+    // The `WSMessage` strictObject schema in `lib/ws-zod-schemas.ts`
+    // already rejects extra fields so a forged `userId` cannot land
+    // here from a network peer (TR4 cross-user invariant).
+    // ------------------------------------------------------------------
+    case "abort_turn": {
+      // Idempotent: if no session is active for (userId, conversationId),
+      // abortSession is a silent no-op (registry prefix-lookup with no
+      // matches). The client-side `stopping` state holds until the
+      // server's `session_ended:user_aborted` arrives (emitted by the
+      // for-await abort branch in `agent-runner.ts`); a no-op here
+      // means the turn already finished, which the client tolerates
+      // by ignoring the late `stopping`-state timeout.
+      abortSession(userId, msg.conversationId, "user_requested_stop");
+      break;
+    }
+
     case "review_gate_response": {
       if (!session.conversationId) {
         sendToClient(userId, {
@@ -1179,6 +1826,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "session_ended":
     case "usage_update":
     case "fanout_truncated":
+    case "context_reset":
     case "upgrade_pending":
     case "interactive_prompt":
     case "subagent_spawn":
@@ -1356,6 +2004,10 @@ export function setupWebSocket(server: HTTPServer) {
           concurrencyOverride: userRowTyped.concurrency_override ?? null,
           stripeSubscriptionId: userRowTyped.stripe_subscription_id ?? null,
           ip: clientIp,
+          // feat-oauth-tc-consent-3205: baseline + cache slot for the
+          // mid-session TC re-check (recheckTcMidSession).
+          tcVersionAtHandshake: userRowTyped.tc_accepted_version ?? null,
+          tcRecheckCacheUntil: null,
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);

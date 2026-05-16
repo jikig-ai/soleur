@@ -113,7 +113,29 @@ export function isPathInWorkspace(
 ): boolean {
   if (!filePath) return false;
 
-  const realPath = resolveRealPath(filePath);
+  // 2026-05-06 follow-up to #3353 — Bug A2 in plan
+  // 2026-05-06-fix-sidebar-pdf-summarize-out-of-boundary-plan.md.
+  //
+  // The agent's SDK Query is configured with `cwd = users.workspace_path`,
+  // so any `Read({ file_path: "knowledge-base/foo.pdf" })` it emits is
+  // workspace-relative. Pre-fix, `resolveRealPath` called `path.resolve()`
+  // which uses the Next.js process CWD — divergent from the agent's CWD.
+  // The relative path resolved outside the workspace, this function
+  // returned false, the sandbox-hook denied with "outside workspace
+  // boundary", and the model paraphrased that to the end user (#3376
+  // reproduction).
+  //
+  // Resolve relative paths against `workspacePath` BEFORE realpath so
+  // workspace-relative reads succeed. The post-realpath containment
+  // check below remains the load-bearing guard against `..`-traversal
+  // and absolute-outside escape — a relative path like
+  // "../../../etc/passwd" resolves to a real path outside the workspace
+  // and fails containment, exactly as it did before.
+  const anchored = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(workspacePath, filePath);
+
+  const realPath = resolveRealPath(anchored);
   if (realPath === null) return false;
 
   const resolvedWorkspace = resolveWorkspacePath(workspacePath);

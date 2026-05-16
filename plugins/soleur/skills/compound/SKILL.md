@@ -159,7 +159,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - Treating a failed command as success
    - **Manual browser steps in prose output:** Scan all text output (summaries, handoffs, "next steps" lists) for browser tasks labeled as manual without a preceding Playwright MCP attempt. Phrases like "set up X in the browser", "go to the portal and configure", "manually create an account" are violations of the Playwright-first rule unless the session log shows a `mcp__plugin_playwright_playwright__browser_navigate` call for that task. This catches laziness in handoff text that hooks cannot detect.
 
-3.5. **Ingest recent hook incidents.** Read `.claude/.rule-incidents.jsonl` if present (gitignored single-file log written by `.claude/hooks/lib/incidents.sh`). Filter to events emitted since the session started (use the earliest timestamp in the session log, or the last 30 minutes if no anchor is available). Treat each recent `deny` and `bypass` as evidence for the Deviation Analyst — denies confirm a hook caught a violation; bypasses signal a rule the user actively skipped. Per plan ADR-1, this step **does NOT mutate any learning's frontmatter** — counter aggregation lives exclusively in `knowledge-base/project/rule-metrics.json` (written weekly by the aggregator). If the file is absent or empty, note "no recent incidents" and continue.
+3.5. **Ingest recent hook incidents.** Read `.claude/.rule-incidents.jsonl` if present (gitignored single-file log written by `.claude/hooks/lib/incidents.sh`). Filter to events emitted since the session started (use the earliest timestamp in the session log, or the last 30 minutes if no anchor is available). Filter to `event_type ∈ {deny, bypass}` AND ignore lines where `error` is set — the latter are telemetry-drop sentinels (issue #3509), not deviation evidence. Treat each recent `deny` and `bypass` as evidence for the Deviation Analyst — denies confirm a hook caught a violation; bypasses signal a rule the user actively skipped. Per plan ADR-1, this step **does NOT mutate any learning's frontmatter** — counter aggregation lives exclusively in `knowledge-base/project/rule-metrics.json` (written weekly by the aggregator). If the file is absent or empty, note "no recent incidents" and continue.
 
 4. **Propose enforcement.** For each detected deviation, first check if an existing PreToolUse hook already covers it by scanning `.claude/hooks/*.sh` comment headers. If a hook already enforces the rule, note "already hook-enforced" and skip the proposal. If no hook covers it, propose enforcement following the hierarchy:
    - **PreToolUse hook** (preferred) — mechanical prevention, cannot be bypassed
@@ -195,6 +195,8 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 8. **Rule budget count.** After deviation analysis, measure both rule count and byte size of always-loaded `AGENTS.md`:
 
+   **Commit-gate:** [lint-agents-rule-budget.py](../../../../scripts/lint-agents-rule-budget.py) is the authoritative pre-commit reject (warns at B_ALWAYS ≥ 20000, rejects at > 22000, rejects any rule body > 600 B); the step 8 output below is advisory-only.
+
    Emit rule-application telemetry (records that the byte-cap / why-single-line policy ran — see AGENTS.md `cq-agents-md-why-single-line`):
 
    ```bash
@@ -203,19 +205,33 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
      'AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
    ```
 
-   - Count rules: `grep -c '^- ' AGENTS.md` → A
-   - Byte size: `wc -c < AGENTS.md` → B
-   - Constitution.md count: `grep -c '^- ' knowledge-base/project/constitution.md 2>/dev/null` → C (on-demand, tracked separately)
-   - Longest rule bytes: `grep '^- ' AGENTS.md | awk '{print length}' | sort -n | tail -1` → L
+   - Per-file bytes:
+     - `B_INDEX=$(wc -c < AGENTS.md)` — index, loaded every turn via `@AGENTS.md`
+     - `B_CORE=$(wc -c < AGENTS.core.md 2>/dev/null || echo 0)` — sidecar injected on every SessionStart
+   - `B_ALWAYS=$((B_INDEX + B_CORE))` — always-loaded payload
+   - `B_TOTAL=$(cat AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>/dev/null | wc -c)` — full registry (informational)
+   - Rules: `A=$(grep -h '^- ' AGENTS*.md 2>/dev/null | wc -l)`
+   - Longest: `L=$(grep -h '^- ' AGENTS*.md 2>/dev/null | awk '{print length}' | sort -n | tail -1)`
+   - Constitution: `C=$(grep -c '^- ' knowledge-base/project/constitution.md 2>/dev/null)` (tracked separately)
 
-   Output: `"Rule budget: A rules / B bytes in AGENTS.md (longest rule: L bytes), C rules in constitution.md"`.
+   Output:
+   ```
+   Rule budget:
+     index (always-loaded):  B_INDEX bytes
+     core (always-loaded):   B_CORE bytes
+     always-loaded total:    B_ALWAYS bytes (warn > 18000 / critical > 22000)
+     registry total:         B_TOTAL bytes / A rules (longest rule: L bytes)
+     constitution.md:        C rules
+   ```
 
    Append warnings:
-   - If `B > 37000`: `"[WARNING] AGENTS.md byte budget (B/37000) exceeded — apply the placement gate (see Route Learning to Definition) and discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; already-enforced and domain-scoped insights MUST route to a skill/agent, NOT AGENTS.md; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
-   - If `B > 40000`: `"[CRITICAL] AGENTS.md exceeds Claude Code harness warn (40k chars) — harness-level performance degradation; shrink required before next rule."`
+   - If `B_ALWAYS > 18000`: `"[WARNING] always-loaded payload (B_ALWAYS/18000) exceeded — apply the placement gate (see Route Learning to Definition) and discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; already-enforced and domain-scoped insights MUST route to a skill/agent, NOT AGENTS.core.md; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
+   - If `B_ALWAYS > 22000`: `"[CRITICAL] always-loaded payload exceeds harness performance threshold (22k) — shrink required before next rule; demote wg-* class-specific rules from AGENTS.core.md to AGENTS.rest.md (per CPO sign-off PR #3496, only wg-* may be demoted — never hr-*). When trimming **Why:** lines to fit, preserve per-issue mechanism labels (text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction that downstream readers use to map a rule to its triggering incident class). Before demoting any wg-*, verify loader-class fit: `sed -n '88,115p' .claude/hooks/session-rules-loader.sh` — if the rule fires on docs-only sessions but AGENTS.rest.md does not load on docs-only, KEEP in core."`
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`
+
+   B_TOTAL is informational only — the per-turn cost is B_INDEX, the per-session-first-turn cost is B_ALWAYS; cross-class sidecars (docs / rest) add to first-turn cost when their class fires but do not load every turn.
 
    Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it in `--dry-run` mode and parse `summary.rules_unused_over_8w`. Do not fail the phase if the aggregator is missing, but do NOT silently swallow an aggregator crash — a stderr line tells the reader why the hint is absent:
 
@@ -233,11 +249,40 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 ### Empty Case
 
-If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Knowledge Base Integration.
+If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Phase 1.6.
+
+<!-- phase-1.6-start -->
+## Phase 1.6: Token-Efficiency Analysis (sequential, advisory)
+
+Run the cost-efficiency report:
+
+```bash
+bash "$(git rev-parse --show-toplevel)/plugins/soleur/skills/compound/scripts/token-efficiency-report.sh"
+```
+
+Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` on outliers (rolled up into `knowledge-base/project/rule-metrics.json` by weekly cron). Proposals route through Phase 1.5 step 7's gate.
+
+### Rubric
+
+- Floor: `wc -c AGENTS.md` × 25 turns.
+- Payload: SKILL.md bytes from `.skill-invocations.jsonl` (session_id).
+- Envelopes: `total_tokens` from `.session-tokens.jsonl` (R6 self-exclusion).
+- Lines: `git diff --shortstat`. Skip <50.
+- Triggers: subagent >100k → `te-subagent-overshoot`; payload >200k → `te-skill-payload-floor`; ratio >2k/line → `te-agents-md-turn-cost` (gated, #3497).
+- Budget: ≤1.5k tokens/fire (script bash-exec).
+
+### Sharp Edges
+
+> Advisory. Only large outliers (subagent >100k OR payload >200k) warrant follow-up. Activation lag: PostToolUse hook fires on next session restart post-merge.
+<!-- phase-1.6-end -->
 
 ## Knowledge Base Integration
 
 **If knowledge-base/ directory exists, compound saves learnings there and offers constitution promotion:**
+
+### Cross-Session Promotion Loop (Layer 2)
+
+A weekly cron (`.github/workflows/scheduled-compound-promote.yml`) consumes accumulated learnings and proposes skill or `AGENTS.core.md` edits via draft PR when N=5 learnings cluster around the same root cause. Default OFF; opt in via `knowledge-base/project/promotion-config.yml`. See `knowledge-base/engineering/ops/runbooks/compound-promote-runbook.md`. Issue: #2720.
 
 ### Save Learning to Knowledge Base
 
@@ -319,17 +364,25 @@ Routing mechanics:
    `BASENAME=$(basename "$TARGET" | tr -cd '[:alnum:]._-')` — or pass the
    message via a heredoc (`git commit -m "$(cat <<EOF\nskill: route ...\nEOF\n)"`)
    so backticks or `$(...)` in a learning-file-derived basename cannot
-   command-substitute. The edit surface is BOUNDED: a single bullet-point
-   append, a single Sharp Edges entry, or a ≤3-line instruction clarification.
-   Edits that change existing bullet semantics, span multiple files, or modify
-   AGENTS.md rule wording are OUT OF SCOPE for direct edit — file an issue
-   instead.
+   command-substitute. The edit surface is BOUNDED **per file**: each
+   affected file gets a single bullet-point append, a single Sharp Edges
+   entry, or a ≤3-line instruction clarification. Multi-file edits are
+   allowed when the insight is **convergent** — one rule with parallel
+   per-skill bullets (e.g., "when an enum-gate exists, plan must enumerate
+   AND review must verify"). Each file's surface still has to satisfy the
+   bounded-surface budget on its own. Edits that change existing bullet
+   semantics or modify AGENTS.md rule wording remain OUT OF SCOPE for
+   direct edit — file an issue instead.
 
 4. **File-issue exception:** File a GitHub issue when the edit meets one of:
-   cross-skill (touches 2+ skill/agent files), contested-design (competing
-   valid approaches), agents-md-semantic-change (modifies existing rule text),
-   tier-ambiguous (insight straddles Tier 2 and Tier 3 and a reviewer's
-   judgment is load-bearing).
+   contested-design (competing valid approaches), agents-md-semantic-change
+   (modifies existing rule text), tier-ambiguous (insight straddles Tier 2
+   and Tier 3 and a reviewer's judgment is load-bearing), **divergent
+   multi-file** (two or more unrelated edits across skills that don't share
+   a single insight — these warrant separate scrutiny), or any single file's
+   edit exceeds the bounded-surface budget (>1 bullet, >1 Sharp Edges entry,
+   or >3 instruction lines). "Cross-skill" alone is NOT a trigger — a
+   convergent insight with parallel per-skill bullets applies inline.
    Title: `compound: route-to-definition proposal for <target-basename>`.
    Body: proposed edit text + target path + source learning path + `## Scope-Out
    Justification` naming the criterion. Flags: `--label deferred-scope-out

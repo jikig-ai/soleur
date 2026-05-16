@@ -23,15 +23,15 @@ export function SettingsContent({
 }: SettingsContentProps) {
   return (
     <div className="space-y-10">
-      <h1 className="mb-8 text-2xl font-semibold text-white">Settings</h1>
+      <h1 className="mb-8 text-2xl font-semibold text-soleur-text-primary">Settings</h1>
 
       {/* Account Section */}
       <section>
-        <h2 className="mb-4 text-lg font-semibold text-white">Account</h2>
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
+        <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">Account</h2>
+        <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
           <div className="space-y-1">
-            <p className="text-sm text-neutral-400">Email</p>
-            <p className="text-sm font-medium text-white">{userEmail}</p>
+            <p className="text-sm text-soleur-text-secondary">Email</p>
+            <p className="text-sm font-medium text-soleur-text-primary">{userEmail}</p>
           </div>
         </div>
       </section>
@@ -45,27 +45,27 @@ export function SettingsContent({
 
       {/* API Key Section */}
       <section>
-        <h2 className="mb-4 text-lg font-semibold text-white">API Key</h2>
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
+        <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">API Key</h2>
+        <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
           {/* Key status */}
           <div className="mb-6">
             {hasApiKey ? (
               <div className="space-y-1">
-                <p className="text-sm text-neutral-300">
+                <p className="text-sm text-soleur-text-secondary">
                   Provider:{" "}
-                  <span className="font-medium text-white capitalize">
+                  <span className="font-medium text-soleur-text-primary capitalize">
                     {apiKeyProvider}
                   </span>
                 </p>
                 {apiKeyLastValidated && (
-                  <p className="text-sm text-neutral-400">
+                  <p className="text-sm text-soleur-text-secondary">
                     Last validated:{" "}
                     {new Date(apiKeyLastValidated).toLocaleDateString()}
                   </p>
                 )}
               </div>
             ) : (
-              <p className="text-sm text-neutral-400">No key configured</p>
+              <p className="text-sm text-soleur-text-secondary">No key configured</p>
             )}
           </div>
 
@@ -73,11 +73,30 @@ export function SettingsContent({
         </div>
       </section>
 
+      {/* Privacy Section */}
+      <section>
+        <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">
+          Privacy
+        </h2>
+        <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
+          <p className="mb-4 text-sm text-soleur-text-secondary">
+            Request a copy of your data, view your export history, or contact
+            legal@jikigai.com for manual fulfilment of GDPR rights.
+          </p>
+          <a
+            href="/dashboard/settings/privacy"
+            className="inline-block rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2"
+          >
+            Manage privacy
+          </a>
+        </div>
+      </section>
+
       {/* Danger Zone Section */}
       <section>
         <h2 className="mb-4 text-lg font-semibold text-red-400">Danger Zone</h2>
-        <div className="rounded-xl border border-red-900/30 bg-neutral-900/50 p-6">
-          <p className="mb-4 text-sm text-neutral-400">
+        <div className="rounded-xl border border-red-900/30 bg-soleur-bg-surface-1/50 p-6">
+          <p className="mb-4 text-sm text-soleur-text-secondary">
             Permanently delete your account and all associated data. This action
             is irreversible and complies with GDPR Article 17 (Right to Erasure).
           </p>

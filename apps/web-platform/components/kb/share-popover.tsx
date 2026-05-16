@@ -128,7 +128,7 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
           <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" strokeLinecap="round" strokeLinejoin="round" />
@@ -139,20 +139,20 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-lg border border-neutral-700 bg-neutral-900 p-4 shadow-xl">
+        <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-4 shadow-xl">
           {state.status === "loading" && (
-            <p className="text-sm text-neutral-400">Loading...</p>
+            <p className="text-sm text-soleur-text-secondary">Loading...</p>
           )}
 
           {state.status === "idle" && (
             <div>
-              <p className="mb-3 text-sm text-neutral-300">
+              <p className="mb-3 text-sm text-soleur-text-secondary">
                 Generate a public link to share this document with anyone.
               </p>
               <button
                 type="button"
                 onClick={generateLink}
-                className="w-full rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-amber-400"
+                className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-amber-400"
               >
                 Generate link
               </button>
@@ -161,18 +161,18 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
 
           {state.status === "active" && state.url && (
             <div>
-              <p className="mb-2 text-xs text-neutral-400">Share link</p>
+              <p className="mb-2 text-xs text-soleur-text-secondary">Share link</p>
               <div className="mb-3 flex items-center gap-2">
                 <input
                   type="text"
                   readOnly
                   value={state.url}
-                  className="flex-1 truncate rounded border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-xs text-neutral-200"
+                  className="flex-1 truncate rounded border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5 text-xs text-soleur-text-primary"
                 />
                 <button
                   type="button"
                   onClick={copyLink}
-                  className="shrink-0 rounded border border-neutral-600 px-3 py-1.5 text-xs text-neutral-300 transition-colors hover:border-neutral-400 hover:text-white"
+                  className="shrink-0 rounded border border-soleur-border-default px-3 py-1.5 text-xs text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
                 >
                   {state.copied ? "Copied!" : "Copy"}
                 </button>
@@ -194,14 +194,14 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
                     <button
                       type="button"
                       onClick={revokeLink}
-                      className="rounded bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-500"
+                      className="rounded bg-red-600 px-3 py-1 text-xs text-soleur-text-on-accent hover:bg-red-500"
                     >
                       Revoke
                     </button>
                     <button
                       type="button"
                       onClick={() => setState((s) => ({ ...s, confirmRevoke: false }))}
-                      className="rounded border border-neutral-600 px-3 py-1 text-xs text-neutral-300 hover:border-neutral-400"
+                      className="rounded border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-secondary hover:border-soleur-border-emphasized"
                     >
                       Cancel
                     </button>

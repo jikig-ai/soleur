@@ -27,10 +27,10 @@ export function FoundationSection({
 }: FoundationSectionProps) {
   return (
     <div className={className}>
-      <p className="mb-2 text-xs font-medium tracking-widest text-amber-500">
+      <p className="mb-2 text-xs font-medium tracking-widest text-soleur-accent-gold-fg">
         FOUNDATIONS
       </p>
-      <p className="mb-4 text-sm text-neutral-400">
+      <p className="mb-4 text-sm text-soleur-text-secondary">
         Complete these to brief your department leaders.
       </p>
       <FoundationCards

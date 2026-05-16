@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Soleur — Theme toggle redesign mock</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  /* Brand tokens copied from apps/web-platform/app/globals.css.
+     Two scoped roots so dark + light render side-by-side without
+     fighting :root or prefers-color-scheme. */
+  .panel-dark {
+    --bg-surface-1: #141414;
+    --bg-surface-2: #1c1c1c;
+    --border-default: #2a2a2a;
+    --border-emphasized: #c9a962;
+    --text-primary: #ffffff;
+    --text-secondary: #848484;
+    --text-muted: #6a6a6a;
+    --accent-gold: #c9a962;
+    --pill-shadow: 0 0 0 1px rgba(201, 169, 98, 0.0);
+    --pill-active-shadow: 0 0 0 1px rgba(201, 169, 98, 0.6),
+                          inset 0 0 0 1px rgba(201, 169, 98, 0.4);
+  }
+  .panel-light {
+    --bg-surface-1: #f4eedf;
+    --bg-surface-2: #ede4cc;
+    --border-default: #d8c9a6;
+    --border-emphasized: #9b8857;
+    --text-primary: #1a1612;
+    --text-secondary: #5c5043;
+    --text-muted: #6f6353;
+    --accent-gold: #9c7a2e;
+    --pill-shadow: 0 0 0 1px rgba(155, 136, 87, 0.0);
+    --pill-active-shadow: 0 0 0 1px rgba(155, 136, 87, 0.7),
+                          inset 0 0 0 1px rgba(155, 136, 87, 0.5);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    background: #0a0a0a;
+    color: #e5e5e5;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #c9a962;
+    margin-bottom: 4px;
+  }
+  .lead {
+    color: #9a9a9a;
+    font-size: 13px;
+    margin-bottom: 24px;
+    max-width: 780px;
+    line-height: 1.55;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .panel {
+    background: var(--bg-surface-1);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-radius: 0; /* Soleur uses hard rules, not rounded chrome */
+    overflow: hidden;
+  }
+  .panel-label {
+    background: var(--bg-surface-2);
+    border-bottom: 1px solid var(--border-default);
+    padding: 8px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent-gold);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .panel-label small {
+    font-weight: 400;
+    letter-spacing: 0.05em;
+    text-transform: none;
+    color: var(--text-muted);
+  }
+
+  /* === sidebar mock === */
+  .sidebars {
+    display: flex;
+    gap: 16px;
+    padding: 20px;
+    align-items: flex-start;
+  }
+  .sidebar {
+    background: var(--bg-surface-1);
+    border: 1px solid var(--border-default);
+    display: flex;
+    flex-direction: column;
+    height: 380px;
+  }
+  .sidebar.expanded { width: 224px; }   /* matches md:w-56 */
+  .sidebar.collapsed { width: 56px; }   /* matches md:w-14 */
+
+  .brand-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 16px 10px;
+  }
+  .sidebar.collapsed .brand-row {
+    padding: 18px 6px 10px;
+    justify-content: center;
+  }
+  .brand-name {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
+  .sidebar.collapsed .brand-name { display: none; }
+  .chev {
+    width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .chev:hover { background: var(--bg-surface-2); color: var(--text-primary); }
+
+  /* === the pill === */
+  .pill-wrap {
+    padding: 4px 12px 14px;
+    border-bottom: 1px solid var(--border-default);
+  }
+  .sidebar.collapsed .pill-wrap {
+    padding: 4px 8px 12px;
+    display: flex;
+    justify-content: center;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    background: var(--bg-surface-2);
+    border: 1px solid var(--border-default);
+    border-radius: 9999px;
+    padding: 3px;
+    width: 100%;
+  }
+  .pill-seg {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 26px;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 9999px;
+    cursor: pointer;
+    transition: color .15s ease, background-color .15s ease,
+                box-shadow .15s ease;
+  }
+  .pill-seg:hover { color: var(--text-secondary); }
+  .pill-seg[aria-pressed="true"] {
+    color: var(--accent-gold);
+    background: var(--bg-surface-1);
+    box-shadow: var(--pill-active-shadow);
+  }
+  .pill-seg svg { width: 14px; height: 14px; }
+  .pill-seg:focus-visible {
+    outline: 2px solid var(--accent-gold);
+    outline-offset: 2px;
+  }
+
+  /* === collapsed-state cycle button === */
+  .cycle-btn {
+    width: 36px; height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface-2);
+    color: var(--accent-gold);
+    cursor: pointer;
+    transition: box-shadow .15s ease, transform .15s ease;
+    position: relative;
+  }
+  .cycle-btn:hover {
+    box-shadow: var(--pill-active-shadow);
+  }
+  .cycle-btn:active { transform: scale(0.96); }
+  .cycle-btn svg { width: 16px; height: 16px; }
+  .cycle-btn .tip {
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--bg-surface-2);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+    padding: 4px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s ease;
+  }
+  .cycle-btn:hover .tip { opacity: 1; }
+
+  /* === sidebar nav (decorative, illustrative only) === */
+  .nav {
+    flex: 1;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .sidebar.collapsed .nav { padding: 8px 4px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    border-radius: 0;
+    cursor: pointer;
+  }
+  .sidebar.collapsed .nav-item { justify-content: center; padding: 9px 0; }
+  .sidebar.collapsed .nav-item .label { display: none; }
+  .nav-item:hover { background: var(--bg-surface-2); color: var(--text-primary); }
+  .nav-item.active {
+    color: var(--accent-gold);
+    background: var(--bg-surface-2);
+    box-shadow: inset 2px 0 0 var(--accent-gold);
+  }
+  .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+  .footer-row {
+    border-top: 1px solid var(--border-default);
+    padding: 10px 12px;
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .sidebar.collapsed .footer-row { padding: 10px 4px; text-align: center; }
+
+  .stack-label {
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    text-align: center;
+  }
+
+  .panel-foot {
+    padding: 14px 20px 18px;
+    color: var(--text-muted);
+    font-size: 11px;
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-surface-1);
+    line-height: 1.6;
+  }
+  .panel-foot code {
+    background: var(--bg-surface-2);
+    color: var(--text-secondary);
+    padding: 1px 5px;
+    border: 1px solid var(--border-default);
+    font-size: 10.5px;
+  }
+
+  .controls {
+    margin-top: 24px;
+    padding: 14px 18px;
+    background: #111;
+    border: 1px dashed #333;
+    color: #aaa;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .controls b { color: #c9a962; }
+  .controls kbd {
+    background: #1c1c1c;
+    border: 1px solid #2a2a2a;
+    padding: 1px 6px;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: #c9a962;
+  }
+</style>
+</head>
+<body>
+
+<h1>Theme Toggle — Sidebar Header Mock</h1>
+<p class="lead">
+  Mock of the proposed redesign. The toggle moves from the sidebar
+  footer to the sidebar header. <b>Expanded</b>: a 3-segment pill
+  (Dark / Light / System) sits below the brand. <b>Collapsed</b>:
+  the pill collapses to a single circular button that cycles modes
+  on click. Both panels render with real <code>--soleur-*</code>
+  tokens copied from <code>globals.css</code> so the contrast and
+  gold accent are 1:1 with production. No app code has been touched.
+</p>
+
+<div class="grid">
+  <!-- ========================= DARK PANEL ========================= -->
+  <section class="panel panel-dark">
+    <div class="panel-label">
+      Dark theme
+      <small>--soleur-bg-surface-1: #141414</small>
+    </div>
+    <div class="sidebars">
+
+      <!-- expanded -->
+      <div>
+        <div class="stack-label">Expanded (md:w-56)</div>
+        <div class="sidebar expanded">
+          <div class="brand-row">
+            <span class="brand-name">Soleur</span>
+            <span class="chev" title="Collapse">‹</span>
+          </div>
+
+          <div class="pill-wrap">
+            <div class="pill" role="group" aria-label="Theme">
+              <button class="pill-seg" data-theme="dark"   aria-pressed="true"
+                      aria-label="Dark theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.5" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M21.752 15.002A9.718 9.718 0 0 1 18 15.75c-5.385
+                       0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753
+                       9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753
+                       9.753 0 0 0 9.002-5.998Z"/>
+                </svg>
+              </button>
+              <button class="pill-seg" data-theme="light"  aria-pressed="false"
+                      aria-label="Light theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.5" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386
+                       6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591
+                       1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75
+                       3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z"/>
+                </svg>
+              </button>
+              <button class="pill-seg" data-theme="system" aria-pressed="false"
+                      aria-label="System theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.5" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3
+                       3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0
+                       1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18
+                       0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0
+                       0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25
+                       2.25H5.25A2.25 2.25 0 0 1 3 12V5.25"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M8 12h8m-8 4h5m-9 4h12a3
+                   3 0 0 0 3-3V7a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v10a3
+                   3 0 0 0 3 3Z"/></svg>
+              <span class="label">Chat</span>
+            </div>
+            <div class="nav-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M4 4h12a4 4 0 0 1 4
+                   4v12H8a4 4 0 0 1-4-4V4Z"/></svg>
+              <span class="label">Knowledge base</span>
+            </div>
+            <div class="nav-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94
+                   1.11-.94h1.094c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142
+                   1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44
+                   1.002.12 1.45l-.527.737c-.25.35-.272.806-.107
+                   1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94
+                   1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107
+                   1.204l.527.738c.32.447.27 1.06-.12 1.45l-.774.773a1.125 1.125 0
+                   0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55
+                   0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.27-1.45-.12l-.773-.774a1.125
+                   1.125 0 0 1-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125
+                   1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0
+                   1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z"/>
+                   <path stroke-linecap="round" stroke-linejoin="round"
+                   d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>
+              <span class="label">Settings</span>
+            </div>
+          </div>
+
+          <div class="footer-row">harry@soleur.ai</div>
+        </div>
+      </div>
+
+      <!-- collapsed -->
+      <div>
+        <div class="stack-label">Collapsed (md:w-14)</div>
+        <div class="sidebar collapsed">
+          <div class="brand-row">
+            <span class="chev" title="Expand">›</span>
+          </div>
+
+          <div class="pill-wrap">
+            <button class="cycle-btn" data-cycle="dark" aria-label="Theme: cycle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0
+                   0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75
+                   0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3
+                   16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z"/></svg>
+              <span class="tip">Theme: Dark — click for Light</span>
+            </button>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M8 12h8m-8 4h5m-9 4h12a3
+                   3 0 0 0 3-3V7a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v10a3
+                   3 0 0 0 3 3Z"/></svg>
+            </div>
+            <div class="nav-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M4 4h12a4 4 0 0 1 4
+                   4v12H8a4 4 0 0 1-4-4V4Z"/></svg>
+            </div>
+            <div class="nav-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><circle cx="12" cy="12" r="3"/></svg>
+            </div>
+          </div>
+
+          <div class="footer-row">HK</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-foot">
+      Pill uses <code>--bg-surface-2</code> as track,
+      <code>--accent-gold-fg</code> + <code>--border-emphasized</code>
+      ring on the active segment. Cycle button keeps the same active
+      treatment so visual identity carries from expanded → collapsed.
+    </div>
+  </section>
+
+  <!-- ========================= LIGHT PANEL ========================= -->
+  <section class="panel panel-light">
+    <div class="panel-label">
+      Light theme
+      <small>--soleur-bg-surface-1: #f4eedf</small>
+    </div>
+    <div class="sidebars">
+
+      <!-- expanded -->
+      <div>
+        <div class="stack-label">Expanded (md:w-56)</div>
+        <div class="sidebar expanded">
+          <div class="brand-row">
+            <span class="brand-name">Soleur</span>
+            <span class="chev" title="Collapse">‹</span>
+          </div>
+
+          <div class="pill-wrap">
+            <div class="pill" role="group" aria-label="Theme">
+              <button class="pill-seg" data-theme="dark"   aria-pressed="false"
+                      aria-label="Dark theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.5"><path stroke-linecap="round"
+                     stroke-linejoin="round" d="M21.752 15.002A9.718 9.718
+                     0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75
+                     0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3
+                     16.635 7.365 21 12.75 21a9.753 9.753 0
+                     0 0 9.002-5.998Z"/></svg>
+              </button>
+              <button class="pill-seg" data-theme="light"  aria-pressed="true"
+                      aria-label="Light theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.5"><path stroke-linecap="round"
+                     stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591
+                     1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12
+                     18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636
+                     5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0
+                     0 1 7.5 0Z"/></svg>
+              </button>
+              <button class="pill-seg" data-theme="system" aria-pressed="false"
+                      aria-label="System theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.5"><path stroke-linecap="round"
+                     stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 0
+                     1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15
+                     18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25
+                     2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25
+                     0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25
+                     2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3
+                     12V5.25"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M8 12h8m-8 4h5m-9 4h12a3
+                   3 0 0 0 3-3V7a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v10a3
+                   3 0 0 0 3 3Z"/></svg>
+              <span class="label">Chat</span>
+            </div>
+            <div class="nav-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M4 4h12a4 4 0 0 1 4
+                   4v12H8a4 4 0 0 1-4-4V4Z"/></svg>
+              <span class="label">Knowledge base</span>
+            </div>
+            <div class="nav-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><circle cx="12" cy="12" r="3"/></svg>
+              <span class="label">Settings</span>
+            </div>
+          </div>
+
+          <div class="footer-row">harry@soleur.ai</div>
+        </div>
+      </div>
+
+      <!-- collapsed -->
+      <div>
+        <div class="stack-label">Collapsed (md:w-14)</div>
+        <div class="sidebar collapsed">
+          <div class="brand-row">
+            <span class="chev" title="Expand">›</span>
+          </div>
+
+          <div class="pill-wrap">
+            <button class="cycle-btn" data-cycle="light" aria-label="Theme: cycle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591
+                   1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12
+                   18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636
+                   5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0
+                   1 7.5 0Z"/></svg>
+              <span class="tip">Theme: Light — click for System</span>
+            </button>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M8 12h8m-8 4h5m-9 4h12a3
+                   3 0 0 0 3-3V7a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v10a3
+                   3 0 0 0 3 3Z"/></svg>
+            </div>
+            <div class="nav-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><path stroke-linecap="round"
+                   stroke-linejoin="round" d="M4 4h12a4 4 0 0 1 4
+                   4v12H8a4 4 0 0 1-4-4V4Z"/></svg>
+            </div>
+            <div class="nav-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.5"><circle cx="12" cy="12" r="3"/></svg>
+            </div>
+          </div>
+
+          <div class="footer-row">HK</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-foot">
+      Same component, light tokens. Active gold (<code>#9c7a2e</code>) is the
+      darker light-mode gold so the active segment passes WCAG AA against
+      <code>--bg-surface-1</code>.
+    </div>
+  </section>
+</div>
+
+<div class="controls">
+  <b>Interact:</b>
+  click the pill segments to switch the active mode within a panel.
+  Click the collapsed cycle button to step <kbd>Dark → Light → System → Dark</kbd>.
+  Tooltip shows the next state.
+  <br>
+  <b>Note:</b> this is a static mock. The icon in the collapsed cycle
+  button updates to reflect the chosen mode but does NOT actually change
+  the panel's theme — both panels remain side-by-side for comparison.
+</div>
+
+<script>
+  // Pill — make segments live within their own panel
+  document.querySelectorAll('.pill').forEach((pill) => {
+    pill.addEventListener('click', (e) => {
+      const btn = e.target.closest('.pill-seg');
+      if (!btn) return;
+      pill.querySelectorAll('.pill-seg').forEach((b) =>
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'));
+    });
+  });
+
+  // Cycle button — Dark → Light → System
+  const ICONS = {
+    dark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="1.5"><path stroke-linecap="round"
+              stroke-linejoin="round" d="M21.752 15.002A9.718 9.718
+              0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75
+              0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3
+              16.635 7.365 21 12.75 21a9.753 9.753 0
+              0 0 9.002-5.998Z"/></svg>`,
+    light: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="1.5"><path stroke-linecap="round"
+              stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591
+              1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12
+              18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636
+              5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0
+              0 1 7.5 0Z"/></svg>`,
+    system: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="1.5"><path stroke-linecap="round"
+              stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 0
+              1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15
+              18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25
+              2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25
+              0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25
+              2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3
+              12V5.25"/></svg>`,
+  };
+  const ORDER = ['dark', 'light', 'system'];
+  document.querySelectorAll('.cycle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const cur = btn.getAttribute('data-cycle');
+      const next = ORDER[(ORDER.indexOf(cur) + 1) % ORDER.length];
+      const after = ORDER[(ORDER.indexOf(next) + 1) % ORDER.length];
+      btn.setAttribute('data-cycle', next);
+      btn.querySelector('svg')?.parentElement?.replaceChild(
+        Object.assign(document.createElement('span'), { innerHTML: ICONS[next] }).firstElementChild,
+        btn.querySelector('svg'),
+      );
+      const tip = btn.querySelector('.tip');
+      if (tip) {
+        const cap = (s) => s[0].toUpperCase() + s.slice(1);
+        tip.textContent = `Theme: ${cap(next)} — click for ${cap(after)}`;
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

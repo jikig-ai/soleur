@@ -31,10 +31,16 @@ __pycache__/
 .mcp.local.json
 .claude/soleur-welcomed.local
 .claude/ralph-loop.*.local.md
-.claude/.rule-incidents.jsonl
-.claude/.rule-incidents-*.jsonl.gz
-.claude/.skill-invocations.jsonl
-.claude/.skill-invocations-*.jsonl.gz
+# Telemetry sinks rotated by .claude/hooks/lib/log-rotation.sh — wildcard
+# covers `.<sink>.jsonl`, `.<sink>-YYYY-MM.jsonl`, `.<sink>-YYYY-MM.jsonl.gz`,
+# and any HHMMSSN-suffixed collision archive.
+.claude/.rule-incidents*
+.claude/.skill-invocations*
+.claude/.session-tokens*
+# F2 prod-write defer-gate sinks (.claude/hooks/prod-write-defer-gate.sh):
+# - approvals.jsonl: 1-year TTL, operator-email PII; gitignored-local-only.
+# - denied.jsonl reserved for F1 (currently roadmap; see PERMISSION-DENIED-PAYLOAD-SHAPE.md).
+.claude/logs/
 # Stray Claude Code subagent worktree markers — must never be committed (#2905)
 /.claude/worktrees/
 .playwright-mcp/
@@ -46,8 +52,6 @@ screenshot-gate-failures/
 # Local state (since-id, caches -- do not commit)
 .soleur/
 
-# Article 30 register (private -- do not commit)
-article-30-register*.md
 knowledge-base/private/
 
 # Screenshot and video artifacts (browser tests, feature demos, image generation)
@@ -60,6 +64,7 @@ tmp/
 !plugins/soleur/docs/screenshots/*.png
 !apps/web-platform/public/icons/*.png
 !knowledge-base/product/design/**/screenshots/*.png
+!knowledge-base/product/design/brand/**/*.png
 !knowledge-base/engineering/ops/runbooks/screenshots/**/*.png
 !knowledge-base/settings/team-icons/*.png
 !knowledge-base/settings/team-icons/*.svg
@@ -85,3 +90,14 @@ apps/web-platform/_plugin-vendored/
 reports/mutation/
 .stryker-tmp/
 mutants/
+/.AGENTS.md.source
+/.claude/.session-manifests/
+
+# Compound Promotion Loop (#2720). promotion-config.yml is TRACKED so the
+# cron's actions/checkout can read it; default-OFF safety comes from the
+# committed `enabled: false` line, not from the file's absence. Flipping
+# to true requires a committed PR that operators can review.
+# Defensive: the cron is stateless (week-cap derived from open
+# self-healing/auto PRs, not from state files). Reject any future
+# .github/promotion-*.json re-introduction.
+.github/promotion-*.json

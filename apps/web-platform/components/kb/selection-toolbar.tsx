@@ -220,8 +220,8 @@ export function SelectionToolbar({
       className={
         "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium shadow-lg transition-colors " +
         (disabled
-          ? "cursor-not-allowed border-neutral-700 bg-neutral-900 text-neutral-500"
-          : "border-amber-500/60 bg-neutral-900 text-amber-300 hover:border-amber-400 hover:text-amber-200")
+          ? "cursor-not-allowed border-soleur-border-default bg-soleur-bg-surface-1 text-soleur-text-muted"
+          : "border-soleur-border-emphasized bg-soleur-bg-surface-1 text-soleur-accent-gold-fg hover:border-amber-400 hover:text-soleur-accent-gold-text")
       }
     >
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -231,7 +231,7 @@ export function SelectionToolbar({
       Quote in chat
       <span
         aria-hidden="true"
-        className="ml-1 rounded border border-neutral-700 bg-neutral-800 px-1 py-0.5 text-[10px] text-neutral-400"
+        className="ml-1 rounded border border-soleur-border-default bg-soleur-bg-surface-2 px-1 py-0.5 text-[10px] text-soleur-text-secondary"
       >
         ⌘⇧L
       </span>

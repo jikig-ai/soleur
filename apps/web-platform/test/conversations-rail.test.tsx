@@ -148,7 +148,7 @@ describe("ConversationsRail", () => {
     expect(other).not.toHaveAttribute("aria-current", "page");
   });
 
-  it("renders 'View all in Command Center' footer link to /dashboard", async () => {
+  it("renders 'View all in Dashboard' footer link to /dashboard", async () => {
     setRailHook([makeConversation()]);
 
     const { ConversationsRail } = await import(
@@ -157,7 +157,7 @@ describe("ConversationsRail", () => {
     render(<ConversationsRail />);
 
     const link = screen.getByRole("link", {
-      name: /view all in command center/i,
+      name: /view all in dashboard/i,
     });
     expect(link).toHaveAttribute("href", "/dashboard");
   });

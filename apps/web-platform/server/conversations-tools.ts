@@ -119,6 +119,12 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         "(boolean — defaults to false). Default page size is 50, capped " +
         "at 50. Returns an array of { id, status, domain_leader, " +
         "last_active, created_at, archived_at }. " +
+        "Detection signal for agents: a row at status='active' whose " +
+        "last_active is older than ~3 minutes is wedged; the server " +
+        "auto-reaps it (status flips to 'failed' within ~3 min via the " +
+        "stuck-active reaper or the next acquire's ledger-divergence " +
+        "recovery). Polling for that transition is the deterministic " +
+        "way to detect a wedged conversation has been resolved. " +
         "When the user has no connected repository, returns the typed " +
         "disconnected error (see conversations_lookup description).",
       {
@@ -203,6 +209,9 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
 
         const supabase = createServiceClient();
         const nowIso = new Date().toISOString();
+        // Slot release on archive is handled by the AFTER UPDATE OF archived_at trigger in
+        // supabase/migrations/036_release_slot_on_archive.sql (fires public.release_conversation_slot).
+        // Do NOT add an explicit releaseSlot call here — it would double-release.
         // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
         const { data, error } = await supabase
           .from("conversations")

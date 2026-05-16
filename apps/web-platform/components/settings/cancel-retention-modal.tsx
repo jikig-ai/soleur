@@ -89,15 +89,15 @@ export function CancelRetentionModal({
         aria-modal="true"
         aria-labelledby="retention-heading"
         tabIndex={-1}
-        className="relative w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-8"
+        className="relative w-full max-w-md rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 p-8"
       >
         <h3
           id="retention-heading"
-          className="mb-2 text-xl font-semibold text-white"
+          className="mb-2 text-xl font-semibold text-soleur-text-primary"
         >
           Before you go...
         </h3>
-        <p className="mb-6 text-sm text-neutral-400">
+        <p className="mb-6 text-sm text-soleur-text-secondary">
           Here&apos;s what you&apos;ve built with Soleur so far:
         </p>
 
@@ -107,12 +107,12 @@ export function CancelRetentionModal({
             {stats.map((stat) => (
               <div
                 key={stat.label}
-                className="rounded-lg border border-neutral-800 bg-neutral-800/50 p-4 text-center"
+                className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 p-4 text-center"
               >
-                <p className="text-2xl font-semibold text-amber-400">
+                <p className="text-2xl font-semibold text-soleur-accent-gold-fg">
                   {stat.value}
                 </p>
-                <p className="text-xs text-neutral-400">{stat.label}</p>
+                <p className="text-xs text-soleur-text-secondary">{stat.label}</p>
               </div>
             ))}
           </div>
@@ -122,13 +122,13 @@ export function CancelRetentionModal({
         <div className="flex gap-3">
           <button
             onClick={onConfirmCancel}
-            className="flex-1 rounded-lg border border-neutral-700 px-4 py-2.5 text-sm font-medium text-neutral-300 transition-colors hover:bg-neutral-800"
+            className="flex-1 rounded-lg border border-soleur-border-default px-4 py-2.5 text-sm font-medium text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2"
           >
             Continue to cancel
           </button>
           <button
             onClick={onClose}
-            className="flex-1 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-amber-500"
+            className="flex-1 rounded-lg bg-soleur-accent-gold-fill px-4 py-2.5 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90"
           >
             Keep my account
           </button>

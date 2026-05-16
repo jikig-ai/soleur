@@ -4,7 +4,6 @@ import Link from "next/link";
 import { CheckCircleIcon } from "@/components/icons";
 import { GoldButton } from "@/components/ui/gold-button";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 import type { ProjectHealthSnapshot } from "@/server/project-scanner";
 
 interface ReadyStateProps {
@@ -43,10 +42,10 @@ export function ReadyState({
         </div>
 
         <div className="space-y-3">
-          <h1 className={`${serif.className} text-4xl font-semibold`}>
+          <h1 className="text-4xl font-semibold">
             Your AI Team Is Ready.
           </h1>
-          <p className="text-base text-neutral-400">
+          <p className="text-base text-soleur-text-secondary">
             Your AI team. Your project. Full context from the first
             conversation.
           </p>
@@ -55,13 +54,13 @@ export function ReadyState({
         <Card className="mx-auto inline-block text-left">
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-8">
-              <span className="text-sm text-neutral-500">Project</span>
-              <span className="text-sm font-medium text-neutral-100">
+              <span className="text-sm text-soleur-text-muted">Project</span>
+              <span className="text-sm font-medium text-soleur-text-primary">
                 {repoName}
               </span>
             </div>
             <div className="flex items-center justify-between gap-8">
-              <span className="text-sm text-neutral-500">Agents</span>
+              <span className="text-sm text-soleur-text-muted">Agents</span>
               <span className="text-sm font-medium text-green-400">
                 {process.env.NEXT_PUBLIC_AGENT_COUNT || "60+"} ready
               </span>
@@ -69,17 +68,17 @@ export function ReadyState({
           </div>
         </Card>
 
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-soleur-text-muted">
           You are always the decision-maker. Your AI team proposes — you
           approve.
         </p>
 
         <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-          <GoldButton onClick={onContinue}>Open Command Center</GoldButton>
+          <GoldButton onClick={onContinue}>Open Dashboard</GoldButton>
           <button
             type="button"
             onClick={onViewKb}
-            className="rounded-lg border border-neutral-700 px-6 py-3 text-sm font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-neutral-100"
+            className="rounded-lg border border-soleur-border-default px-6 py-3 text-sm font-medium text-soleur-text-secondary transition-colors hover:border-soleur-text-muted hover:text-soleur-text-primary"
           >
             Review Knowledge Base
           </button>
@@ -98,7 +97,7 @@ export function ReadyState({
       </div>
 
       <div className="space-y-3">
-        <h1 className={`${serif.className} text-3xl font-semibold`}>
+        <h1 className="text-3xl font-semibold">
           {repoName}
         </h1>
         <span
@@ -112,7 +111,7 @@ export function ReadyState({
         <div className="space-y-4">
           {/* Detected signals */}
           <div data-testid="detected-signals">
-            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500">
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-soleur-text-muted">
               Detected
             </h3>
             <div className="flex flex-wrap gap-2">
@@ -133,7 +132,7 @@ export function ReadyState({
           {/* Missing signals */}
           {healthSnapshot.signals.missing.length > 0 && (
             <div data-testid="missing-signals">
-              <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500">
+              <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-soleur-text-muted">
                 Missing
               </h3>
               <div className="flex flex-wrap gap-2">
@@ -155,7 +154,7 @@ export function ReadyState({
 
           {/* Recommendations */}
           <div>
-            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500">
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-soleur-text-muted">
               Next Steps
             </h3>
             <ol className="space-y-2">
@@ -163,9 +162,9 @@ export function ReadyState({
                 <li
                   key={i}
                   data-testid="recommendation-item"
-                  className="flex gap-2 text-xs text-neutral-300"
+                  className="flex gap-2 text-xs text-soleur-text-secondary"
                 >
-                  <span className="flex-shrink-0 font-medium text-neutral-500">
+                  <span className="flex-shrink-0 font-medium text-soleur-text-muted">
                     {i + 1}.
                   </span>
                   {rec}
@@ -178,28 +177,28 @@ export function ReadyState({
 
       {/* Deep analysis status — only shown when a sync conversation exists (#1816) */}
       {syncConversationId ? (
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-soleur-text-muted">
           Deep analysis in progress —{" "}
           <Link
             href="/dashboard"
-            className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
+            className="text-soleur-accent-gold-fg underline underline-offset-2 hover:text-soleur-accent-gold-text"
           >
-            View in Command Center
+            View in Dashboard
           </Link>
         </p>
       ) : (
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-soleur-text-muted">
           Your project is ready. Start a conversation to begin working with your AI team.
         </p>
       )}
 
       {/* CTAs */}
       <div className="flex items-center justify-center gap-3">
-        <GoldButton onClick={onContinue}>Open Command Center</GoldButton>
+        <GoldButton onClick={onContinue}>Open Dashboard</GoldButton>
         <button
           type="button"
           onClick={onViewKb}
-          className="rounded-lg border border-neutral-700 px-6 py-3 text-sm font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-neutral-100"
+          className="rounded-lg border border-soleur-border-default px-6 py-3 text-sm font-medium text-soleur-text-secondary transition-colors hover:border-soleur-text-muted hover:text-soleur-text-primary"
         >
           Review Knowledge Base
         </button>

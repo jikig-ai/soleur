@@ -85,10 +85,10 @@ export function NotificationPrompt({ visible }: NotificationPromptProps) {
       <div className="mt-3 flex w-full items-start gap-3 rounded-xl border border-blue-800/40 bg-blue-950/30 p-4">
         <BellIcon />
         <div className="flex-1">
-          <p className="text-sm font-semibold text-white">
+          <p className="text-sm font-semibold text-soleur-text-primary">
             Install Soleur for push notifications
           </p>
-          <p className="mt-1 text-sm text-neutral-400">
+          <p className="mt-1 text-sm text-soleur-text-secondary">
             Add Soleur to your home screen to receive notifications when agents
             need your input.
           </p>
@@ -114,7 +114,7 @@ export function NotificationPrompt({ visible }: NotificationPromptProps) {
       <div className="mt-3 flex w-full items-start gap-3 rounded-xl border border-blue-800/40 bg-blue-950/30 p-4">
         <BellIcon />
         <div className="flex-1">
-          <p className="text-sm text-neutral-400">
+          <p className="text-sm text-soleur-text-secondary">
             No problem — we&apos;ll email you instead when agents need your input.
           </p>
         </div>
@@ -128,24 +128,24 @@ export function NotificationPrompt({ visible }: NotificationPromptProps) {
     <div className="mt-3 flex w-full items-start gap-3 rounded-xl border border-blue-800/40 bg-blue-950/30 p-4">
       <BellIcon />
       <div className="flex-1">
-        <p className="text-sm font-semibold text-white">
+        <p className="text-sm font-semibold text-soleur-text-primary">
           Agents need you even when you&apos;re away.
         </p>
-        <p className="mt-1 text-sm text-neutral-400">
+        <p className="mt-1 text-sm text-soleur-text-secondary">
           Enable notifications so you never miss a decision that blocks progress.
         </p>
         <div className="mt-3 flex items-center gap-3">
           <button
             type="button"
             onClick={handleEnable}
-            className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-500"
+            className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-blue-500"
           >
             Enable notifications
           </button>
           <button
             type="button"
             onClick={handleDismiss}
-            className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
+            className="text-sm text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
           >
             Not now
           </button>
@@ -161,7 +161,7 @@ function DismissButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="shrink-0 rounded p-1 text-neutral-500 transition-colors hover:text-neutral-300"
+      className="shrink-0 rounded p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
       aria-label="Dismiss notification prompt"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

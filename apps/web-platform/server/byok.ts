@@ -48,7 +48,10 @@ export function encryptKey(
 } {
   const key = deriveUserKey(getEncryptionKey(), userId);
   const iv = randomBytes(IV_LENGTH);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
+  // CWE-310: pin authTagLength=16 (128-bit tag). Without it, an
+  // attacker who can substitute the auth tag could downgrade to a
+  // shorter tag (4..15 bytes) and cut forgery cost. Per #3244 review.
+  const cipher = createCipheriv(ALGORITHM, key, iv, { authTagLength: 16 });
 
   const encrypted = Buffer.concat([
     cipher.update(plaintext, "utf8"),
@@ -59,28 +62,63 @@ export function encryptKey(
   return { encrypted, iv, tag };
 }
 
+/**
+ * Decrypt a BYOK envelope and return the plaintext key as a `Buffer`.
+ *
+ * Buffer-shaped state is wipeable in place via `zeroize` — this is the
+ * load-bearing primitive for the PR-B BYOK lease (#3244 §1.4). The
+ * caller MUST eventually call `zeroize(returnedBuffer)` to wipe the
+ * plaintext from memory. The boundary where the buffer is converted to
+ * a string for the Anthropic SDK reintroduces V8 string-internment;
+ * that surface is documented as a residual in the §3.6 ADR and is NOT
+ * mitigated here.
+ *
+ * Plan: 2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md §1.2 / §1.4.
+ */
 export function decryptKey(
   encrypted: Buffer,
   iv: Buffer,
   tag: Buffer,
   userId: string,
-): string {
+): Buffer {
   const key = deriveUserKey(getEncryptionKey(), userId);
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  // CWE-310: pin authTagLength=16 to enforce 128-bit tag at verify time.
+  const decipher = createDecipheriv(ALGORITHM, key, iv, { authTagLength: 16 });
   decipher.setAuthTag(tag);
 
-  return decipher.update(encrypted) + decipher.final("utf8");
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]);
 }
 
+/**
+ * Legacy (v1, pre-HKDF) decryption path. Returns Buffer for symmetry
+ * with `decryptKey` and to keep zeroize-on-finally consistent across
+ * both decryption paths.
+ */
 export function decryptKeyLegacy(
   encrypted: Buffer,
   iv: Buffer,
   tag: Buffer,
-): string {
+): Buffer {
   const key = getEncryptionKey();
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  // CWE-310: pin authTagLength=16 to enforce 128-bit tag at verify time.
+  const decipher = createDecipheriv(ALGORITHM, key, iv, { authTagLength: 16 });
   decipher.setAuthTag(tag);
 
-  return decipher.update(encrypted) + decipher.final("utf8");
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+}
+
+/**
+ * Wipe a Buffer's contents in place. Used by the BYOK lease's `finally`
+ * block to bound the in-Soleur-heap exposure window of decrypted keys.
+ *
+ * `Buffer.fill(0)` mutates the underlying ArrayBuffer bytes — any other
+ * view (e.g., a `string` produced via `toString`) is a separate copy
+ * and is NOT affected. The lease holds the Buffer as the sole owning
+ * reference; downstream consumers receive copies through controlled
+ * APIs.
+ */
+export function zeroize(buf: Buffer): void {
+  if (buf.length === 0) return;
+  buf.fill(0);
 }
 

@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import {
+  injectFakeSupabaseSession,
+  mockSupabaseAuth,
+} from "./helpers/supabase-mocks";
 
 // E2E Phase 5a for plan 2026-04-29-feat-command-center-conversation-nav.
 //
@@ -68,70 +72,9 @@ const SEEDED_MESSAGES = [
 ];
 
 async function setupRailMocks(page: Page) {
-  // Authenticated session in localStorage so the JS client doesn't
-  // short-circuit auth.getUser() before page.route() fires.
-  await page.addInitScript(() => {
-    const fakeSession = {
-      access_token: "test-access-token",
-      token_type: "bearer",
-      expires_in: 86400,
-      expires_at: Math.floor(Date.now() / 1000) + 86400,
-      refresh_token: "test-refresh-token",
-      user: {
-        id: "test-user-id",
-        aud: "authenticated",
-        role: "authenticated",
-        email: "test@e2e.com",
-        email_confirmed_at: "2024-01-01T00:00:00Z",
-        phone: "",
-        confirmed_at: "2024-01-01T00:00:00Z",
-        app_metadata: { provider: "email", providers: ["email"] },
-        user_metadata: {},
-        identities: [],
-        created_at: "2024-01-01T00:00:00Z",
-        updated_at: "2024-01-01T00:00:00Z",
-      },
-    };
-    localStorage.setItem(
-      "sb-localhost-auth-token",
-      JSON.stringify(fakeSession),
-    );
-  });
-
-  await page.route("**/auth/v1/user", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        id: "test-user-id",
-        aud: "authenticated",
-        role: "authenticated",
-        email: "test@e2e.com",
-        email_confirmed_at: "2024-01-01T00:00:00Z",
-        phone: "",
-        confirmed_at: "2024-01-01T00:00:00Z",
-        app_metadata: { provider: "email", providers: ["email"] },
-        user_metadata: {},
-        identities: [],
-        created_at: "2024-01-01T00:00:00Z",
-        updated_at: "2024-01-01T00:00:00Z",
-      }),
-    });
-  });
-
-  await page.route("**/auth/v1/token*", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        access_token: "test-access-token",
-        token_type: "bearer",
-        expires_in: 86400,
-        expires_at: Math.floor(Date.now() / 1000) + 86400,
-        refresh_token: "test-refresh-token",
-      }),
-    });
-  });
+  // Shared auth + session + realtime stubs (see e2e/helpers/supabase-mocks.ts).
+  await injectFakeSupabaseSession(page);
+  await mockSupabaseAuth(page);
 
   // The hook reads users.repo_url to scope the conversation list.
   // All three select variants below are called via .single() / .maybeSingle()
@@ -194,14 +137,6 @@ async function setupRailMocks(page: Page) {
     });
   });
 
-  await page.route("**/realtime/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "text/plain",
-      body: "",
-    });
-  });
-
   await page.route("**/api/admin/check", async (route) => {
     await route.fulfill({
       status: 200,
@@ -251,20 +186,24 @@ test.describe("ConversationsRail e2e (Phase 5a — mock-supabase)", () => {
     const otherAria = await otherRow.first().getAttribute("aria-current");
     expect(otherAria).toBeNull();
 
-    // Footer "View all in Command Center" routes to /dashboard.
+    // Footer "View all in Dashboard" routes to /dashboard.
     await page
-      .getByRole("link", { name: /view all in command center/i })
+      .getByRole("link", { name: /view all in dashboard/i })
       .first()
       .click();
     await page.waitForURL("**/dashboard", { timeout: 10_000 });
 
-    // Sign-out smoke check: the click must complete and the app must
-    // redirect to /login. The try/finally in handleSignOut ensures
-    // signOut() runs even if removeAllChannels rejects — the user-visible
-    // contract is "click sign out → land on /login," and this assertion
-    // gates that contract. WS-teardown semantics are exercised by the
-    // Phase 5b integration test against a real Supabase WS endpoint.
+    // Sign-out smoke check: clicking sidebar "Sign out" now opens a
+    // confirmation modal (PR #3576); clicking the modal's confirm button
+    // runs the existing teardown contract and redirects to /login. The
+    // user-visible contract is "click sign out → confirm → land on /login,"
+    // and this assertion gates that contract. WS-teardown semantics are
+    // exercised by the Phase 5b integration test against a real Supabase
+    // WS endpoint.
     await page.getByRole("button", { name: /sign out/i }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.waitFor({ state: "visible", timeout: 5_000 });
+    await dialog.getByRole("button", { name: "Sign out" }).click();
     await page.waitForURL("**/login", { timeout: 10_000 });
   });
 });

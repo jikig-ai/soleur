@@ -12,7 +12,7 @@ export function KbBreadcrumb({ path }: { path: string }) {
   const segments = path.split("/");
 
   return (
-    <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-xs text-neutral-500">
+    <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-xs text-soleur-text-muted">
       {segments.map((segment, i) => {
         const isCurrent = i === segments.length - 1;
         return (
@@ -23,7 +23,7 @@ export function KbBreadcrumb({ path }: { path: string }) {
                 "data-testid": "kb-breadcrumb-current",
                 "aria-current": "page",
               })}
-              className={isCurrent ? "text-neutral-300" : ""}
+              className={isCurrent ? "text-soleur-text-secondary" : ""}
             >
               {safeDecode(segment)}
             </span>

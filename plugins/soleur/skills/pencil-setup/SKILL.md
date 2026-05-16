@@ -49,15 +49,39 @@ Proceed to Step 1.
 claude mcp list 2>&1 | grep -q "pencil" && echo "REGISTERED" || echo "NOT_REGISTERED"
 ```
 
-If REGISTERED, check the registered binary path still exists on disk. Extract the path from `claude mcp list` output, then `test -f <path>`. If the file exists (or `PREFERRED_MODE=cli`), tell the user:
+If REGISTERED, classify the existing registration mode by inspecting the binary path printed by `claude mcp list`:
 
-- **Headless CLI mode:** "Pencil MCP is already configured via headless CLI adapter. Restart Claude Code for tools to become available."
-- **CLI/Desktop mode:** "Pencil MCP is already configured. Make sure Pencil Desktop is running, then restart Claude Code."
-- **IDE mode:** "Pencil MCP is already configured. Make sure your IDE is running with Pencil active, then restart Claude Code."
+```bash
+existing=$(claude mcp list 2>&1 | grep pencil)
+case "$existing" in
+  *pencil-mcp-adapter*|*@pencil.dev/cli*|*pencil-cli*) existing_mode=headless_cli ;;
+  *visual_studio_code*|*cursor*)                       existing_mode=ide ;;
+  *--app\ pencil*|*mcp-server-*-x64*)                   existing_mode=desktop ;;
+  *)                                                   existing_mode=unknown ;;
+esac
+```
 
-Then stop.
+**Auto-upgrade rule (when `--auto` is set):** if `existing_mode` is `ide` or `desktop` AND Phase 0 set `PREFERRED_MODE=headless_cli`, the existing registration is unsuitable for agent-driven flows (no programmatic save — see Sharp Edges §"No programmatic save"). Remove and re-register as headless instead of stopping:
 
-If the path does not exist or NOT_REGISTERED, continue to Step 2.
+```bash
+if [[ "$AUTO_INSTALL" == "true" && "$existing_mode" != "headless_cli" && "$PREFERRED_MODE" == "headless_cli" ]]; then
+  echo "Upgrading Pencil MCP from $existing_mode → headless_cli (agent-driven flows require programmatic save)"
+  claude mcp remove pencil -s user 2>/dev/null || true
+  # Fall through to Step 2 to register fresh
+else
+  # Verify the registered binary path still exists on disk before declaring "ready".
+  # Extract the path from `claude mcp list` output, then `test -f <path>`.
+  case "$existing_mode" in
+    headless_cli) echo "Pencil MCP is already configured via headless CLI adapter. Restart Claude Code for tools to become available." ;;
+    desktop)      echo "Pencil MCP is already configured. Make sure Pencil Desktop is running, then restart Claude Code." ;;
+    ide)          echo "Pencil MCP is already configured. Make sure your IDE is running with Pencil active, then restart Claude Code. NOTE: IDE mode does not auto-save .pen edits — use --auto to upgrade to headless if running agent-driven flows." ;;
+    *)            echo "Pencil MCP is registered but mode could not be classified. Re-run with --auto to refresh registration." ;;
+  esac
+  # Stop here unless --auto-upgrading.
+fi
+```
+
+If the path does not exist, NOT_REGISTERED, or the auto-upgrade path was taken, continue to Step 2.
 
 ## Step 2: Register MCP Server
 

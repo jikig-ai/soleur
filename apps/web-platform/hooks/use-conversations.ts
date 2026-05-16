@@ -323,6 +323,10 @@ export function useConversations(
   }, [userId, fetchConversations]);
 
   const archiveConversation = useCallback(async (id: string) => {
+    // Slot release on archive: handled by AFTER UPDATE OF archived_at
+    // trigger in supabase/migrations/036_release_slot_on_archive.sql.
+    // Do NOT add an explicit release_conversation_slot RPC call here —
+    // it would double-release.
     const supabase = createClient();
     const { error: updateError } = await supabase
       .from("conversations")

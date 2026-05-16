@@ -84,13 +84,13 @@ export function AtMentionDropdown({
     <div
       role="listbox"
       aria-label="Leaders"
-      className="absolute bottom-full left-0 z-50 mb-2 w-full max-w-md rounded-xl border border-neutral-700 bg-neutral-900 shadow-xl"
+      className="absolute bottom-full left-0 z-50 mb-2 w-full max-w-md rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 shadow-xl"
     >
-      <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-neutral-500">
+      <div className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
         Leaders
       </div>
       {filtered.length === 0 ? (
-        <div className="px-3 py-3 text-sm text-neutral-500">
+        <div className="px-3 py-3 text-sm text-soleur-text-muted">
           {loading && query ? "Loading team..." : "No matches"}
         </div>
       ) : (
@@ -105,19 +105,19 @@ export function AtMentionDropdown({
                 onClick={() => onSelect(leader.id)}
                 onMouseEnter={() => setActiveIndex(index)}
                 className={`flex cursor-pointer items-center gap-3 px-3 py-2.5 transition-colors ${
-                  index === activeIndex ? "bg-neutral-800" : ""
+                  index === activeIndex ? "bg-soleur-bg-surface-2" : ""
                 }`}
               >
                 <LeaderAvatar leaderId={leader.id} size="md" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-white">
+                    <span className="text-sm font-semibold text-soleur-text-primary">
                       {customName
                         ? `${customName} (${leader.name})`
                         : leader.name}
                     </span>
                   </div>
-                  <p className="truncate text-xs text-neutral-400">
+                  <p className="truncate text-xs text-soleur-text-secondary">
                     {leader.title} &mdash; {leader.description.split(",").slice(0, 3).join(",")}
                   </p>
                 </div>
@@ -126,11 +126,11 @@ export function AtMentionDropdown({
           })}
         </ul>
       )}
-      <div className="flex items-center gap-3 border-t border-neutral-800 px-3 py-1.5 text-xs text-neutral-400">
+      <div className="flex items-center gap-3 border-t border-soleur-border-default px-3 py-1.5 text-xs text-soleur-text-secondary">
         <span>{filtered.length} {filtered.length === 1 ? "match" : "matches"}</span>
         <span className="ml-auto flex items-center gap-1">
-          <kbd className="rounded border border-neutral-700 px-1">↑</kbd>
-          <kbd className="rounded border border-neutral-700 px-1">↓</kbd>
+          <kbd className="rounded border border-soleur-border-default px-1">↑</kbd>
+          <kbd className="rounded border border-soleur-border-default px-1">↓</kbd>
           to navigate
         </span>
       </div>

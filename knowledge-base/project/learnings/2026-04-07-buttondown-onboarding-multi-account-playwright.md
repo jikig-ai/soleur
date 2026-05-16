@@ -16,12 +16,12 @@ tags: [buttondown, playwright, oauth, multi-account, doppler]
 
 ## Problem
 
-When automating Buttondown dashboard tasks via Playwright, Google OAuth login with `jean.deruelle@jikigai.com` landed on a personal Buttondown account (username: `deruelle`) instead of the Soleur Newsletter business account (username: `soleur`, email: `ops@jikigai.com`). The API key in Doppler was for the business account, creating a mismatch between API operations (correct account) and Playwright operations (wrong account).
+When automating Buttondown dashboard tasks via Playwright, Google OAuth login with `jean.deruelle@example.com` landed on a personal Buttondown account (username: `deruelle`) instead of the Soleur Newsletter business account (username: `soleur`, email: `ops@example.com`). The API key in Doppler was for the business account, creating a mismatch between API operations (correct account) and Playwright operations (wrong account).
 
 ## Solution
 
 1. **Verify account identity before Playwright operations:** Query the API first to confirm which account the API key belongs to: `curl -s -H "Authorization: Token $KEY" https://api.buttondown.com/v1/newsletters | jq '.results[0] | {name, username, email_address}'`
-2. **The Soleur Newsletter account uses `ops@jikigai.com`** — it was created with a different email than the founder's personal Google account
+2. **The Soleur Newsletter account uses `ops@example.com`** — it was created with a different email than the founder's personal Google account
 3. User manually logged into the correct account after the mismatch was caught
 
 ## Key Insight

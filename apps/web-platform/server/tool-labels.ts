@@ -6,8 +6,11 @@
  *
  * @see #2428 — replaces the static TOOL_LABELS map with input-aware labels
  * @see #2861 — FR1 verb-based Bash labels + FR2 canonical sandbox-path scrub
+ * @see #3235 — `buildToolUseWSMessage` shared by agent-runner + cc-dispatcher
  */
 
+import type { WSMessage } from "@/lib/types";
+import type { DomainLeaderId } from "./domain-leaders";
 import { reportSilentFallback } from "./observability";
 import {
   SANDBOX_PATH_PATTERNS as SHARED_SANDBOX_PATH_PATTERNS,
@@ -82,6 +85,14 @@ function stripWorkspacePath(text: string, workspacePath?: string): string {
 
 /**
  * Extract a relative file path from tool input, stripping workspace prefix.
+ *
+ * When `workspacePath` is undefined we cannot guarantee a literal-prefix
+ * scrub — only the canonical sandbox patterns run. An absolute path that
+ * is NEITHER a sandbox shape NOR matches the known workspace root would
+ * flow through verbatim. Defensive guard: refuse to return an absolute
+ * path in the no-workspace case so callers fall back to the safe
+ * FALLBACK_LABELS (e.g., "Reading file...") instead of echoing the path
+ * to clients. Relative paths remain unaffected. (#3235 review)
  */
 function extractRelativePath(
   input: Record<string, unknown> | undefined,
@@ -89,6 +100,7 @@ function extractRelativePath(
 ): string | undefined {
   const filePath = input?.file_path;
   if (typeof filePath !== "string") return undefined;
+  if (workspacePath === undefined && filePath.startsWith("/")) return undefined;
   return stripWorkspacePath(filePath, workspacePath);
 }
 
@@ -245,4 +257,24 @@ export function buildToolLabel(
     default:
       return FALLBACK_LABELS[toolName] ?? "Working...";
   }
+}
+
+/**
+ * Build the canonical `tool_use` WS message for both the legacy agent-runner
+ * emitter and the cc-dispatcher emitter (#3235). Centralizing the shape here
+ * means a future schema field flows through one edit instead of two parallel
+ * ones — and pins the #2138 invariant: the raw SDK tool name is intentionally
+ * NOT placed on the wire (information-disclosure mitigation, see PR #2115).
+ */
+export function buildToolUseWSMessage(args: {
+  name: string;
+  input: Record<string, unknown> | undefined;
+  workspacePath: string | undefined;
+  leaderId: DomainLeaderId;
+}): WSMessage {
+  return {
+    type: "tool_use",
+    leaderId: args.leaderId,
+    label: buildToolLabel(args.name, args.input, args.workspacePath),
+  };
 }

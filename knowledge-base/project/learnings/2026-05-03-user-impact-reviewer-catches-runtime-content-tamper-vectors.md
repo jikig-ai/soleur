@@ -11,7 +11,7 @@ tags: [review, security, single-user-incident, multi-agent-review, comment-mutab
 
 ## Problem
 
-PR #3067 added `soleur:schedule --once` for one-time scheduled agent runs. The plan was simplified by a 3-reviewer panel (DHH / Kieran / Simplicity) and explicitly named four load-bearing defenses (D1-D4) for a single-user-incident threshold:
+PR #3067 added `soleur:schedule --once` for one-time scheduled agent runs. The plan was simplified by a 3-reviewer panel (DHH / Kieran / Simplicity) and explicitly named four load-bearing defenses (D1-D4) for a single-user incident threshold:
 
 - **D1** Issue+comment ID context reference (no inline prompts)
 - **D2** Fire-time stale-context preamble (issue OPEN, repo not archived, comment matches issue)

@@ -4,7 +4,6 @@ import { XCircleIcon } from "@/components/icons";
 import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 import type { GitErrorCode } from "@/server/git-auth";
 
 interface FailedStateProps {
@@ -20,9 +19,25 @@ type ErrorCopy = {
   primaryCta: { label: string; action: "retry" | "reinstall" | "choose" };
 };
 
+// Sentinel for create-flow failures (string-keyed, not in GitErrorCode enum).
+// Surfaces the "connect an existing repo instead" escape hatch when repo
+// creation fails for an operator-side reason (template missing, App lost
+// admin:write, etc.) — without it, the user sees a generic toast and bounces.
+export const CREATE_FAILED_ERROR_CODE = "CREATE_FAILED" as const;
+
 // Partial because CLONE_UNKNOWN intentionally falls through to the
 // generic copy (same shape as legacy plain-stderr rows).
-const ERROR_COPY: Partial<Record<GitErrorCode, ErrorCopy>> = {
+const ERROR_COPY: Record<string, ErrorCopy> = {
+  [CREATE_FAILED_ERROR_CODE]: {
+    headline: "Couldn't create your project",
+    body: "GitHub couldn't create the new repository. This is usually a temporary issue on our side — you can try again, or connect an existing repo from your GitHub account instead.",
+    steps: [
+      "Click Try Again — most issues resolve on a second attempt.",
+      "Or connect an existing repository from your GitHub account.",
+      "If neither works, contact support with the time of the error.",
+    ],
+    primaryCta: { label: "Connect existing repo instead", action: "choose" },
+  },
   REPO_ACCESS_REVOKED: {
     headline: "Soleur no longer has access",
     body: "The Soleur GitHub App no longer has access to this repository. Reinstall the app and try again.",
@@ -98,10 +113,10 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
       </div>
 
       <div className="space-y-3">
-        <h1 className={`${serif.className} text-4xl font-semibold`}>
+        <h1 className="text-4xl font-semibold">
           {copy?.headline ?? "Project Setup Failed"}
         </h1>
-        <p className="text-base text-neutral-400">
+        <p className="text-base text-soleur-text-secondary">
           {copy?.body ??
             "Something went wrong while setting up your project. This is usually a temporary issue."}
         </p>
@@ -110,10 +125,10 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
       {errorMessage && (
         <Card className="text-left">
           <details>
-            <summary className="cursor-pointer text-sm font-medium text-neutral-200">
+            <summary className="cursor-pointer text-sm font-medium text-soleur-text-primary">
               Error details (for support)
             </summary>
-            <p className="mt-2 text-sm text-neutral-400 font-mono break-all">
+            <p className="mt-2 text-sm text-soleur-text-secondary font-mono break-all">
               {errorMessage}
             </p>
           </details>
@@ -121,7 +136,7 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
       )}
 
       <Card className="text-left">
-        <h3 className="mb-3 text-sm font-medium text-neutral-200">What you can do</h3>
+        <h3 className="mb-3 text-sm font-medium text-soleur-text-primary">What you can do</h3>
         <ol className="space-y-3">
           {(copy?.steps ?? [
             "Try again — most issues resolve on a second attempt.",
@@ -129,10 +144,10 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
             "If the problem persists, contact support with the time of the error.",
           ]).map((step, i) => (
             <li key={i} className="flex items-start gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-neutral-700 text-xs font-medium text-neutral-300">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-soleur-border-default text-xs font-medium text-soleur-text-secondary">
                 {i + 1}
               </span>
-              <span className="text-sm text-neutral-400">{step}</span>
+              <span className="text-sm text-soleur-text-secondary">{step}</span>
             </li>
           ))}
         </ol>

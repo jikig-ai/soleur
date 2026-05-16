@@ -34,6 +34,8 @@ function assertExhaustive(msg: ChatMessage): string {
       return msg.workflow;
     case "tool_use_chip":
       return msg.toolName;
+    case "context_reset":
+      return msg.reason;
     default: {
       const _exhaustive: never = msg;
       void _exhaustive;

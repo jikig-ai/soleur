@@ -134,6 +134,17 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # Wall-clock cap wrapper that exec's ci-deploy.sh with `timeout 900s` so a
+  # wedged deploy releases flock and the workflow polling step sees a
+  # terminal state instead of perpetual "running" (#3704, #2207). hooks.json
+  # routes /hooks/deploy through this wrapper, not ci-deploy.sh directly.
+  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf.
+  - path: /usr/local/bin/ci-deploy-wrapper.sh
+    encoding: b64
+    content: ${ci_deploy_wrapper_script_b64}
+    owner: root:root
+    permissions: '0755'
+
   # Deploy state reporter for /hooks/deploy-status (#2185).
   # Content injected from cat-deploy-state.sh via Terraform base64encode(file()).
   # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).

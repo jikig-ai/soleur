@@ -63,7 +63,15 @@ shares fits under the cap for metadata purposes). Fail closed with
   `node -e "console.log(require('<pkg>/package.json').engines)"` and compare
   against the Docker runtime. Mismatches between `node:22-slim` and local
   Node 21 produce import-time crashes that unit tests with mocked deps will
-  not catch.
+  not catch. **Promote to enforcement when the dep's engines floor is novel
+  for the repo:** mirror the dep's engines field in `apps/<app>/package.json`
+  verbatim, add `.nvmrc` at the repo root pinning the same major, and pin
+  `node-version: <X>` on every CI job that runs the dep (use the same
+  `actions/setup-node` SHA already in use). Three-layer enforcement (engines
+  + .nvmrc + CI setup-node) is what closed this loop in PR #3383 — prose-
+  only Prevention shipped here in 2026-04-18 was insufficient and the same
+  failure mode resurfaced when the test:`job in ci.yml ran against an
+  operator with non-back-ported Node 21.
 - **Parser DoS:** every new parser (pdfjs, sharp, libxml, jsdom) gets an
   input-size cap that is smaller than the source storage limit. The storage
   cap protects disk; the parser cap protects RSS.

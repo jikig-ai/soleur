@@ -41,6 +41,12 @@ const {
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
+  // Drift-guard for #3250: `realSdkQueryFactory` calls `getSessionMessages`
+  // when `args.resumeSessionId` is set. Returning `[]` keeps the guard's
+  // empty-history branch from blocking these tests and matches the
+  // behavior asserted by the prefill-guard test file's empty-history
+  // scenario.
+  getSessionMessages: vi.fn().mockResolvedValue([]),
   tool: vi.fn(),
   createSdkMcpServer: vi.fn(),
 }));
@@ -72,6 +78,12 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.
+  // These dispatcher tests do not exercise the debounce TTL, so
+  // the stub forwards every call straight through to the spy.
+  mirrorWithDebounce: mockReportSilentFallback,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 vi.mock("@supabase/supabase-js", () => ({
@@ -257,6 +269,54 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.disallowedTools).toEqual(
       expect.arrayContaining(["WebSearch", "WebFetch"]),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // T6b (#3338 + #3344): cc path HARD-BLOCKS Edit/Write via disallowedTools.
+  //
+  // Bash was originally hard-blocked alongside Edit/Write (#3338) to prevent
+  // a `find . -name "*.pdf"` / `apt-get install poppler-utils` modal cascade.
+  // Two structural mitigations (#3338 PDF Read 24 MB ceiling + #3430
+  // page-count gate) eliminated those triggers, so #3344 removed Bash from
+  // the hard-block list. Bash now routes through canUseTool + the legacy
+  // path's safe-bash allowlist (auto-approve for read-only KB-exploration
+  // verbs; review-gate fallback for everything else).
+  //
+  // The auto-approve `allowedTools` list pins read-only tools
+  // (Read/Glob/Grep/LS/NotebookRead/TodoWrite/ExitPlanMode) so they bypass
+  // canUseTool. SDK semantics per sdk.d.ts:855-892:
+  //   - allowedTools = auto-approve (NOT restriction)
+  //   - disallowedTools = hard-block (removes from model's context)
+  // Pin BOTH invariants. Bash MUST NOT appear in disallowedTools (post-#3344)
+  // so the cc-path can route Bash through safe-bash. Edit/Write MUST remain
+  // in disallowedTools so the cc-router still cannot mutate files.
+  // -------------------------------------------------------------------------
+  it("T6b: disallowedTools HARD-BLOCKS Edit/Write on the cc path; Bash routes via canUseTool (#3338 + #3344)", async () => {
+    await realSdkQueryFactory(makeArgs());
+    const opts = mockQuery.mock.calls[0][0].options;
+    expect(Array.isArray(opts.disallowedTools)).toBe(true);
+    expect(opts.disallowedTools).toEqual(
+      expect.arrayContaining(["Edit", "Write", "WebSearch", "WebFetch"]),
+    );
+    // #3344: Bash MUST NOT be in disallowedTools — the model needs to emit
+    // it so it routes through canUseTool → safe-bash auto-approve for
+    // read-only verbs. Pinning the negative-space invariant.
+    expect(opts.disallowedTools).not.toContain("Bash");
+    // Auto-approve list narrows to read-only safe tools — order-tolerant
+    // closed-set match so widening the list requires an explicit test edit.
+    expect(Array.isArray(opts.allowedTools)).toBe(true);
+    const sorted = [...opts.allowedTools].sort();
+    expect(sorted).toEqual(
+      [
+        "ExitPlanMode",
+        "Glob",
+        "Grep",
+        "LS",
+        "NotebookRead",
+        "Read",
+        "TodoWrite",
+      ],
     );
   });
 

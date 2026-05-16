@@ -74,24 +74,24 @@ function StatusBadge({
       {open && (
         <div
           role="menu"
-          className="absolute left-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-neutral-700 bg-neutral-900 py-1 shadow-lg"
+          className="absolute left-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 py-1 shadow-lg"
         >
           <button
             type="button"
             role="menuitem"
-            className="flex w-full min-h-[44px] items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800"
+            className="flex w-full min-h-[44px] items-center gap-2 px-3 py-2 text-left text-sm text-soleur-text-primary hover:bg-soleur-bg-surface-2"
             onClick={(e) => {
               e.stopPropagation();
               onAction!(action!.target);
               setOpen(false);
             }}
           >
-            <span className="flex h-4 w-4 items-center justify-center rounded-full border border-neutral-500 text-[10px] text-neutral-400">
+            <span className="flex h-4 w-4 items-center justify-center rounded-full border border-soleur-border-default text-[10px] text-soleur-text-secondary">
               &#x2298;
             </span>
             <div>
               <div>{action!.label}</div>
-              <div className="text-xs text-neutral-500">Move to completed</div>
+              <div className="text-xs text-soleur-text-muted">Move to completed</div>
             </div>
           </button>
         </div>
@@ -118,7 +118,7 @@ function ArchiveButton({
         e.stopPropagation();
         isArchived ? onUnarchive() : onArchive();
       }}
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-700 hover:text-neutral-300"
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary"
     >
       {isArchived ? (
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
@@ -161,7 +161,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
       className={`flex w-full min-h-[44px] cursor-pointer items-start gap-3 rounded-lg border p-3 text-left transition-colors md:items-center md:gap-4 md:p-4 ${
         isDecision
           ? "border-amber-500/20 bg-amber-500/[0.06] hover:bg-amber-500/[0.1]"
-          : "border-neutral-800 bg-neutral-900/50 hover:bg-neutral-800/50"
+          : "border-soleur-border-default bg-soleur-bg-surface-1/50 hover:bg-soleur-bg-surface-2/50"
       } ${isArchived ? "opacity-60" : ""}`}
     >
       {/* Mobile: vertical stack */}
@@ -175,20 +175,20 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
               </span>
             )}
             {isArchived && (
-              <span className="inline-flex items-center rounded-full bg-neutral-800 px-2 py-0.5 text-[10px] font-medium text-neutral-400">
+              <span className="inline-flex items-center rounded-full bg-soleur-bg-surface-2 px-2 py-0.5 text-[10px] font-medium text-soleur-text-secondary">
                 Archived
               </span>
             )}
           </div>
-          <span className="text-xs text-neutral-500">
+          <span className="text-xs text-soleur-text-muted">
             {relativeTime(conversation.last_active)}
           </span>
         </div>
-        <p className={`text-sm font-medium ${isCompleted || isArchived ? "text-neutral-400" : "text-white"}`}>
+        <p className={`text-sm font-medium ${isCompleted || isArchived ? "text-soleur-text-secondary" : "text-soleur-text-primary"}`}>
           {conversation.title}
         </p>
         {conversation.preview && (
-          <p className={`text-xs ${isCompleted || isArchived ? "text-neutral-600" : "text-neutral-400"}`}>
+          <p className={`text-xs ${isCompleted || isArchived ? "text-soleur-text-muted" : "text-soleur-text-secondary"}`}>
             {conversation.preview}
           </p>
         )}
@@ -217,16 +217,16 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
           </span>
         )}
         {isArchived && (
-          <span className="inline-flex items-center rounded-full bg-neutral-800 px-2 py-0.5 text-[10px] font-medium text-neutral-400">
+          <span className="inline-flex items-center rounded-full bg-soleur-bg-surface-2 px-2 py-0.5 text-[10px] font-medium text-soleur-text-secondary">
             Archived
           </span>
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <p className={`truncate text-sm font-medium ${isCompleted || isArchived ? "text-neutral-400" : "text-white"}`}>
+          <p className={`truncate text-sm font-medium ${isCompleted || isArchived ? "text-soleur-text-secondary" : "text-soleur-text-primary"}`}>
             {conversation.title}
           </p>
           {conversation.preview && (
-            <p className={`truncate text-xs ${isCompleted || isArchived ? "text-neutral-600" : "text-neutral-400"}`}>
+            <p className={`truncate text-xs ${isCompleted || isArchived ? "text-soleur-text-muted" : "text-soleur-text-secondary"}`}>
               {conversation.preview}
             </p>
           )}
@@ -234,7 +234,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
         {conversation.domain_leader && (
           <LeaderAvatar leaderId={conversation.domain_leader} size="md" customIconPath={getIconPath(conversation.domain_leader as DomainLeaderId)} />
         )}
-        <span className="w-16 shrink-0 truncate text-right text-xs tabular-nums text-neutral-500">
+        <span className="w-16 shrink-0 truncate text-right text-xs tabular-nums text-soleur-text-muted">
           {relativeTime(conversation.last_active)}
         </span>
         {(onArchive || onUnarchive) && (

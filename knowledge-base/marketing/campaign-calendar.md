@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-04
+last_updated: 2026-05-11
 ---
 
 # Campaign Calendar
@@ -21,6 +21,8 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| Soleur vs. CrewAI: AI Agent Framework vs. AI Organization | pillar | 2026-05-07 | discord, x, bluesky, linkedin-company | published |
+| Soleur vs. Tanka: Memory AI vs. Execution Intelligence | pillar | 2026-05-05 | discord, x, bluesky, linkedin-company | published |
 | Best Claude Code Plugins 2026: The Extensions Worth Installing | pillar | 2026-04-30 | discord, x, bluesky, linkedin-company | published |
 | Knowledge Compounding in AI Development: How Compound Engineering Beats Point Solutions | pillar | 2026-04-23 | discord, x, bluesky, linkedin-company | published |
 | Soleur vs. Devin: AI Software Engineer vs. AI Organization | pillar | 2026-04-21 | discord, x, bluesky, linkedin-company | published |

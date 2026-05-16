@@ -129,7 +129,10 @@ Doppler service tokens are per-config. If the `prd_scheduled` service token was
 rotated between fires, the Cloud setup script's `eval $(doppler secrets
 download ...)` silently exports an empty environment and every subsequent
 invocation fails before reaching the audit-issue step. See
-`cq-doppler-service-tokens-are-per-config`.
+`plugins/soleur/skills/ship/references/ci-workflow-authoring.md` for the full
+authoring rule (use config-specific GitHub secret names like
+`DOPPLER_TOKEN_PRD_SCHEDULED`, never bare `DOPPLER_TOKEN` — service tokens
+silently ignore the `-c` flag).
 
 **Verify:** `doppler configs tokens --project soleur --config prd_scheduled`.
 Confirm a non-revoked token exists and its value matches the Cloud task env
@@ -372,4 +375,4 @@ this contract will cause duplicate issues or missed auto-closes.
 - Prior incident learning: `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md`
 - Doppler token-scope learning: `knowledge-base/project/learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md`
 - Peer watchdog pattern: `.github/workflows/scheduled-cf-token-expiry-check.yml`
-- AGENTS.md rules: `cq-ci-steps-polling-json-endpoints-under`, `cq-workflow-pattern-duplication-bug-propagation`, `hr-in-github-actions-run-blocks-never-use`, `hr-github-actions-workflow-notifications`, `cq-gh-issue-label-verify-name`, `cq-gh-issue-create-milestone-takes-title`.
+- Authoring conventions: `plugins/soleur/skills/ship/references/ci-workflow-authoring.md` covers the GH-Actions rules that govern this runbook's workflow files (heredoc/indentation, email notifications, JSON-polling `jq -e` guards, pattern-duplication audits). The `gh issue` conventions (verify `--label` against `gh label list`; pass milestone titles, not numeric IDs) are discoverable via `gh`'s own clear errors and additionally cited in the planning skills (`plan/SKILL.md`, `deepen-plan/SKILL.md`, `/soleur:drain-labeled-backlog`).

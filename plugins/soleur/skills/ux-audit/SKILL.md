@@ -137,7 +137,7 @@ The per-route cap runs **before** `CAP_PER_RUN` so dropped anonymous-route findi
 <!-- ux-audit-hash: <64-hex> -->
 ```
 
-Then (via `env:` vars, never inline per [hr-in-github-actions-run-blocks-never-use]):
+Then (pass body and title via `env:` vars, never inline — heredocs and multi-line shell strings that drop below the YAML literal block's base indentation break the YAML parser; see `plugins/soleur/skills/ship/references/ci-workflow-authoring.md`):
 
 ```bash
 gh issue create \

@@ -57,6 +57,14 @@ accepts a placeholder ID and later resolves the real one needs effects on both.
 When extracting shared fetch logic, different merge strategies (guard-based vs dedup-based)
 should be parameterized in the caller, not duplicated in the helper.
 
+## See also
+
+- `2026-05-05-kb-chat-resume-hydration-race-strict-mode-and-prefetch-clobber.md`
+  — same surface, three follow-on race conditions hardened (strict-mode
+  `mountedRef` swap, `onMessageCountChange(0)` clobber, Sentry mirrors).
+  Collapsed the duplicated mount-time + resume effects into a single
+  `runHistoryFetch` helper.
+
 ## Tags
 
 category: ui-bugs
