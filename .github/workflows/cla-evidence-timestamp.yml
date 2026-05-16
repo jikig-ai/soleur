@@ -10,8 +10,11 @@ name: cla-evidence-timestamp
 # Plan: knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md
 # Issue: #3209
 #
-# IMPORTANT: do NOT add `[skip ci]` to any commit message this workflow
-# produces — required Check Runs deadlock per learning #12.
+# IMPORTANT: do NOT add a CI-skip directive to any commit message this
+# workflow produces — required Check Runs would deadlock per learning #12.
+# (The literal directive token is intentionally not spelled here so the
+# `lint-bot-statuses` gate, which substring-matches commit/workflow bodies,
+# does not flag this comment as a real skip token. See #3548.)
 # Direct push from github-actions[bot] is rejected by the CLA Required ruleset
 # (learning #3); persist via PR-with-auto-merge instead.
 #
@@ -208,8 +211,9 @@ jobs:
       # #3 — direct push from github-actions[bot] is rejected by the CLA
       # Required ruleset). The cla-signatures branch already exists; we
       # commit the two artifacts as a paper trail in git as well as R2.
-      # NOT [skip ci] anywhere — would deadlock the required Check Runs
-      # (learning #12).
+      # NO CI-skip directive anywhere in the produced commit message — the
+      # bracket-style skip token deadlocks the required Check Runs on the PR
+      # (learning #12). The commit body below is intentionally plain prose.
       - name: Persist via PR-with-auto-merge to cla-signatures
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
