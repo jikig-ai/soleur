@@ -123,14 +123,15 @@ None outside the triad. Operations + Marketing + Sales + Finance + Support not a
 
 - `knowledge-base/legal/article-30-register.md` — append phantom-ingest disclosure paragraph to PA8 §(d) Recipients cell at **L160** (do NOT replace existing cell content; append). Use `<pending C2 merge>` placeholder for post-swap DE-org reference.
 - `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md` — replace stale URL `de.sentry.io/settings/account/api/auth-tokens/` at **L95** with `eu.sentry.io/settings/account/api/auth-tokens/`. Add a new `## Cluster / Host Glossary` section before `## Decision` (currently no such section) covering: ingest hosts (`*.ingest.{de,us}.sentry.io`), dashboard hosts (`sentry.io`, `jikigai.sentry.io`, `eu.sentry.io`), API hosts (`{eu,us}.sentry.io/api/0/...`). Update L101 (`Provider docs do not enumerate de.sentry.io; base_url override is inferred.`) to reflect `eu.sentry.io/api/` as the canonical EU API base_url.
-- `knowledge-base/legal/compliance-posture.md` — under "Active Compliance Items" (L61-87), add a new row referencing the PIR + this plan + parent issue #3861. Pattern: copy A1 row at L96 and edit for A2 Branch C.
+- `knowledge-base/legal/compliance-posture.md` — under "Active Compliance Items" (L61-87), add a new row referencing the PIR + this plan + parent issue #3861. **Row schema:** the Active section uses 5 columns `Item | Issue | Status | Deadline | Notes` (see header at L65); do NOT copy the L96 row (that lives in "Completed Compliance Work" and uses a 4-column schema without `Status`/`Deadline`). Reuse the Sentry Monitors row at L72 as the schema template. Deadline column for PR-α: `2026-05-19` (Art 33 procedural gate); Status: `IN-PROGRESS`.
 
 ### PR-β (`feat-sentry-residency-a2-branch-c-2`, to be created)
 
-- `apps/web-platform/infra/sentry/main.tf` — L30: flip `base_url = "https://de.sentry.io/api/"` → `base_url = "https://eu.sentry.io/api/"` (DE-region API host, not ingest host).
-- `apps/web-platform/infra/sentry/variables.tf` — update `var.sentry_org` default if DE org slug collision forces `jikigai-eu`/`jikigai-de` (see TR3 mechanic below). Update `var.sentry_project` default if the new DE-org project slug differs from current.
-- `apps/web-platform/scripts/sentry-monitors-audit.sh` — three new gates between L58 (region-probe success exit) and L60 (DSN cluster check start): `audit_destination_admin_controllable` (org GET), `audit_project_scope` (project GET), `audit_write_probe` (POST + DELETE release). Extend region-probe loop at **L46** (`for candidate in de.sentry.io sentry.io`) to include `eu.sentry.io`. See TR-C5 mechanic below.
-- `apps/web-platform/sentry.client.config.ts`, `apps/web-platform/sentry.server.config.ts`, `apps/web-platform/sentry.edge.config.ts` — no code changes needed (consume `NEXT_PUBLIC_SENTRY_DSN` / `SENTRY_DSN` from env); verify post-deploy that DSN values resolve to new DE org.
+- `apps/web-platform/infra/sentry/main.tf` — L30: flip `base_url = "https://de.sentry.io/api/"` → `base_url = "https://eu.sentry.io/api/"` (DE-region API host, not ingest host). **Atomic with `variables.tf` `var.sentry_org` update below** — same commit (P0 review fix #2: avoids 3-state window where `base_url=eu` but org slug is old).
+- `apps/web-platform/infra/sentry/variables.tf` — update `var.sentry_org` default in **same commit** as `main.tf:30` flip if DE org slug collision forces `jikigai-eu`/`jikigai-de` (see TR3 mechanic below). Update `var.sentry_project` default if the new DE-org project slug differs from current.
+- `apps/web-platform/scripts/sentry-monitors-audit.sh` — three new gates between L58 (region-probe success exit) and L60 (existing DSN cluster-substring check start). **The triple-gate is ADDITIVE to (not replacing) the existing L60-103 cluster-substring residency-mismatch check** (which catches the SDK-DSN-vs-token-org-id split-state that the triple-gate alone cannot — per Architecture-Strategist F2 and `2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md`). New gates: `audit_destination_admin_controllable` (org GET), `audit_project_scope` (project GET), `audit_write_probe` (POST + DELETE release). **Plus 4th gate** `audit_dsn_org_id_matches_token_org_id` (extract `o\d+` from `NEXT_PUBLIC_SENTRY_DSN`; compare to `GET /organizations/{slug}/` `.id` from token's response — catches the split state where audit token rotated but runtime DSN didn't). Extend region-probe loop at **L46** (`for candidate in de.sentry.io sentry.io`) to include `eu.sentry.io` as the first candidate. See TR-C5 mechanic below.
+- `.github/workflows/apply-sentry-infra.yml` — add a pre-`terraform plan` step invoking `apps/web-platform/scripts/sentry-monitors-audit.sh` (fail-closed) so the operator-driven re-apply path traverses the new gates. **Without this, the `workflow_dispatch:` + `terraform apply` route is a gate-bypass surface** for any operator running `gh workflow run apply-sentry-infra.yml` against stale credentials (Architecture-Strategist F1).
+- `apps/web-platform/sentry.client.config.ts`, `apps/web-platform/sentry.server.config.ts` — no code changes needed (consume `NEXT_PUBLIC_SENTRY_DSN` / `SENTRY_DSN` from env); verify post-deploy that DSN values resolve to new DE org. (Note: `sentry.edge.config.ts` does NOT exist in this codebase — Next.js Sentry SDK supports it but Soleur has not adopted edge instrumentation. Out of scope for PR-β.)
 - `apps/web-platform/next.config.ts` — Sentry block: inject `SENTRY_URL=https://eu.sentry.io/` if absent (sentry-cli source-map upload target).
 - `apps/web-platform/Dockerfile` — build-args block: ensure `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` carry the new DE-org values via `--build-arg` at CI build. Add `SENTRY_URL=https://eu.sentry.io/` env injection for sentry-cli.
 - `apps/web-platform/.env.example` — commented templates updated to new DE-org DSN shape.
@@ -158,6 +159,13 @@ None outside the triad. Operations + Marketing + Sales + Finance + Support not a
 
 **Target merge:** 2026-05-17 or 2026-05-18 (Art 33 procedural gate buffer: T-24h to T-48h before 2026-05-19T12:50Z).
 
+**Phase -1 — Deadline-pressure abort checkpoints (P2 review fix).**
+
+The Art 33 gate is the **disclosure**, not the PR. If review changes, CI flake, signed-commits ruleset, or rebase conflicts push the PR past the deadline, the operator-CLO path branches:
+
+- **T-24h checkpoint (2026-05-18T12:50Z):** if PR-α is not in `mergeable: clean` state with all required checks green, operator initiates parallel CNIL filing draft at `knowledge-base/legal/forms/cnil-art-33-draft.md` (create if absent) — the disclosure ships with whatever PA8 wording is in the open PR diff at this moment.
+- **T-2h checkpoint (2026-05-19T10:50Z):** if PR-α still blocked, CLO files directly with the diff text in flight; PR #3904 cited as evidence-in-flight in the CNIL submission. **Do NOT** create `-2` worktree from `feat-sentry-residency-a2-branch-c-1` to circumvent the sharp-edge (the worktree must come from `origin/main`); accept that PR-β slips and re-baseline its target merge week.
+
 **Phase 0 — Pre-flight (10 min).**
 - Confirm this worktree is on branch `feat-sentry-residency-a2-branch-c-1` and PR #3904 is the draft target.
 - Read CLO-drafted PA8 §5(2) wording from brainstorm Decision #8 (operator copies verbatim into editor for FR1).
@@ -172,7 +180,7 @@ None outside the triad. Operations + Marketing + Sales + Finance + Support not a
 - Insert new `## Cluster / Host Glossary` section before the existing `## Decision` heading.
 
 **Phase 3 — compliance-posture cross-ref (FR3).**
-- Append a new row under "Active Compliance Items" at `knowledge-base/legal/compliance-posture.md` (after L86, before "Completed Compliance Work"). Pattern matches the A1 row at L96.
+- Append a new row under "Active Compliance Items" at `knowledge-base/legal/compliance-posture.md` (after L86, before "Completed Compliance Work"). **Row schema** is the 5-column Active form (`Item | Issue | Status | Deadline | Notes`) per L65 header — NOT the 4-column Completed form. Reuse the Sentry Monitors row at L72 as the template. Set Status: `IN-PROGRESS`; Deadline: `2026-05-19` (Art 33 procedural gate).
 - Cross-reference PIR + this plan + parent issue #3861 + draft PR #3904.
 
 **Phase 4 — Verification.**
@@ -220,7 +228,7 @@ The write-new-then-revoke mechanic per Decision #4 + TR1:
 6. **`apps/web-platform/next.config.ts`** Sentry block — inject `SENTRY_URL` if absent (sentry-cli upload-source-map target).
 7. **`.github/workflows/reusable-release.yml`** — audit-script env block (~L283-330) + Docker build-args block (~L513-518): add `SENTRY_URL`.
 8. **9 scheduled workflows** — verify each pulls `SENTRY_INGEST_DOMAIN` etc. from GH repo secrets (no inline literals; `grep -rE 'SENTRY_(INGEST_DOMAIN|PROJECT_ID|PUBLIC_KEY).*:.*[0-9]' .github/workflows/scheduled-*.yml` MUST return 0 — no hardcoded values).
-9. **`apps/web-platform/infra/sentry/main.tf:30`** — `base_url = "https://eu.sentry.io/api/"`.
+9. **`apps/web-platform/infra/sentry/main.tf:30`** — `base_url = "https://eu.sentry.io/api/"`. **Atomic in the same commit:** `apps/web-platform/infra/sentry/variables.tf` `var.sentry_org` default update if TR3 forced rename (was in old Phase 6 step 4 — moved here per Kieran P0-2 to avoid the 3-state window). Single commit message: `iac: flip sentry provider to eu.sentry.io + slug rename`.
 10. **Cloudflare edge cache purge** for CSP `report-uri` header (TR5 mechanic below).
 
 After write-new-everywhere: **DEPLOY** (`gh workflow run reusable-release.yml` or wait for next push to main). Vercel envs take effect on this deploy; Doppler `prd` propagates to Hetzner via existing pipeline.
@@ -228,19 +236,34 @@ After write-new-everywhere: **DEPLOY** (`gh workflow run reusable-release.yml` o
 **Phase 3 — TR1 observation window (2h).**
 - Trigger 1 synthetic Sentry event from new DE org's test project (`curl -X POST` against new DSN — minimal test event).
 - Trigger 1 real prod event (operator-driven: visit prod, click a feature that emits a Sentry breadcrumb, or wait for next organic prod error).
-- After 2h elapse: confirm both events land in new DE org dashboard at `eu.sentry.io/organizations/jikigai-{eu}/issues/`. If either is missing, **HALT** — old token cannot be revoked; investigate which surface still posts to phantom org.
+- After 2h elapse: confirm both events land in new DE org dashboard at `eu.sentry.io/organizations/jikigai-{eu}/issues/`. If either is missing, **HALT** → Phase 3.5 recovery decision tree (do NOT proceed to Phase 7 revoke).
 
-**Phase 4 — C5: Audit-gate triple-expansion.**
+**Phase 3.5 — Half-state recovery decision tree (P1 review fix #13).**
+
+If either Phase 3 event is missing, the operator is in a known-bad half-state. Decision tree:
+
+1. **Bisect surfaces (≤10 min).** Run `apps/web-platform/scripts/sentry-monitors-audit.sh` with `SENTRY_DSN_DEBUG=1` (add if absent — print resolved DSN at client / server / edge boundary) to identify which surface still points at phantom-org. Common splits: Vercel client env propagated but Hetzner-backed server env didn't (Doppler-to-Hetzner pipeline lag) or vice versa.
+2. **Time-bound: 30 min.** If the bisect identifies the lagging surface within 30 min of Phase 3 HALT, force-propagate (re-run Vercel deploy / `doppler secrets download && systemctl restart soleur-web` on Hetzner). Re-trigger one synthetic event; if it lands in new org, resume Phase 4. If not, escalate.
+3. **Escalation: 60 min.** If half-state persists >60 min, page CTO via Slack #incidents. Involve `user-impact-reviewer` decision before any subsequent retry.
+4. **Rollback (if escalation does not resolve in 30 min).** Old token is **not yet revoked** — this is a reversible state. Re-write OLD DSN/token/secrets to Doppler/Vercel/GH (revert Phase 2). Close PR-β via `gh pr close 3905` without merge. Open PR-β-prime with revised mechanic. The 2h observation window resets on the new attempt.
+5. **Forbidden until resolution:** Phase 4 (audit-gate extension), Phase 5 (CI workflow), Phase 6 (tfstate drop), Phase 7 (revoke). The audit gate must not be wired to required-check until ingest is verified end-to-end; tfstate drop with split state would leave Terraform pointing at the new org while runtime emits to old.
+
+**Phase 4 — C5: Audit-gate triple-expansion + DSN-org-id match (4 gates total).**
+
+The 4 new gates are inserted **between L58 (region-probe success exit) and L60 (existing cluster-substring residency-mismatch check at L60-103)** — they are **ADDITIVE to**, not replacing, the existing cluster-substring defense (Architecture-Strategist F2: the existing L60-103 check is what catches the SDK-DSN-vs-token-org-id split-state that admin-controllability alone cannot prove).
 
 Edit `apps/web-platform/scripts/sentry-monitors-audit.sh` between L58 and L60:
 
 ```bash
-# --- C5: Destination-controllability triple-gate (new in PR-β) ---
+# --- C5: Destination-controllability 4-gate (new in PR-β; additive to L60+ cluster-substring check) ---
 
 # Gate 1: org reachability (proves admin can read org-level config).
-http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+org_resp=$(curl -s --max-time 10 \
   -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  -w '\n%{http_code}' \
   "https://${api_host}/api/0/organizations/${SENTRY_ORG}/")
+http="${org_resp##*$'\n'}"
+org_body="${org_resp%$'\n'*}"
 if [[ "$http" != "200" ]]; then
   echo "ERROR: org reachability failed: HTTP $http on /organizations/${SENTRY_ORG}/" >&2
   exit 1
@@ -256,26 +279,56 @@ if [[ "$http" != "200" ]]; then
 fi
 
 # Gate 3: write probe — POST + DELETE release (proves project:releases scope).
+# Sentry's project-level POST release returns 201 on create. The org-level POST
+# returns 208 on duplicate version, but the project-level POST documented at
+# https://docs.sentry.io/api/releases/create-a-new-release-for-an-organization/
+# returns 201-only — probe_ver is timestamp-suffixed so duplicate-version is
+# impossible. Treat 208 as a regression signal (Kieran P1-4: drop 208 branch).
 probe_ver="audit-probe-$(date -u +%s)"
 http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST -d "{\"version\":\"${probe_ver}\"}" \
   "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/releases/")
-if [[ "$http" != "201" && "$http" != "208" ]]; then
-  echo "ERROR: write probe (POST release) failed: HTTP $http" >&2
+if [[ "$http" != "201" ]]; then
+  echo "ERROR: write probe (POST release) failed: HTTP $http (expected 201)" >&2
   exit 1
 fi
 curl -s --max-time 10 -o /dev/null \
   -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
   -X DELETE "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/releases/${probe_ver}/"
 # DELETE is best-effort; failure to clean up probe-release does not fail the gate
-# (cron at Sentry will GC orphan releases ≥30d untouched).
+# (Sentry's release-GC handles orphan probe releases ≥30d untouched).
+
+# Gate 4: DSN org-id matches token org-id (catches split state where audit token
+# rotated but runtime DSN didn't — Architecture-Strategist F2). Extract o\d+ from
+# NEXT_PUBLIC_SENTRY_DSN and compare to the org's internal id from Gate 1's body.
+dsn_org_id=$(echo "${NEXT_PUBLIC_SENTRY_DSN:-}" | grep -oE 'o[0-9]+' | head -1 | tr -d 'o')
+token_org_id=$(echo "$org_body" | grep -oE '"id"\s*:\s*"[0-9]+"' | head -1 | grep -oE '[0-9]+')
+if [[ -z "$dsn_org_id" || -z "$token_org_id" ]]; then
+  echo "ERROR: gate 4 — could not extract org-ids (dsn=$dsn_org_id token=$token_org_id)" >&2
+  exit 1
+fi
+if [[ "$dsn_org_id" != "$token_org_id" ]]; then
+  echo "ERROR: gate 4 — DSN org-id ($dsn_org_id) != token org-id ($token_org_id) — split-state detected" >&2
+  exit 1
+fi
 ```
 
 Also: extend region-probe loop at L46 from `for candidate in de.sentry.io sentry.io` → `for candidate in eu.sentry.io de.sentry.io sentry.io` (eu first, since new DE-org API host is `eu.sentry.io`).
 
-**Phase 5 — C5: CI workflow.**
+**Gate-call-graph table (Architecture-Strategist F1).** Every entry-point that mutates the Sentry runtime or IaC state MUST traverse the audit script. Inventory:
+
+| Entry-point | Invokes audit script? | Fix |
+|---|---|---|
+| `reusable-release.yml` (deploy) | Yes (existing — L320,326) | — |
+| `.github/workflows/sentry-audit-gate.yml` (this PR — pull_request) | Yes (new) | — |
+| `.github/workflows/apply-sentry-infra.yml` (operator `workflow_dispatch:`) | **No (gate-bypass surface)** | **PR-β adds pre-`terraform plan` step invoking `bash apps/web-platform/scripts/sentry-monitors-audit.sh` (fail-closed) before any tfstate mutation** |
+| Operator-local `terraform plan` / `apply` (developer machine) | No | Acceptable — developer-loop ergonomics. Pre-commit hook is out of scope. |
+
+Verification: `grep -rn "sentry-monitors-audit.sh" .github/workflows/` MUST return matches in `reusable-release.yml`, `sentry-audit-gate.yml`, AND `apply-sentry-infra.yml` after PR-β.
+
+**Phase 5 — C5: CI workflow + required-check bootstrap.**
 
 Create `.github/workflows/sentry-audit-gate.yml`:
 ```yaml
@@ -295,15 +348,32 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST || 'eu.sentry.io' }}  # Kieran P0-1: must be set or region-probe loop relies on /users/me/ scope
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify token scope (fail-loud, not continue-on-error)
+        run: |
+          http=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            "https://${SENTRY_API_HOST}/api/0/users/me/")
+          if [[ "$http" != "200" ]]; then
+            echo "::error::SENTRY_AUTH_TOKEN scope check failed (HTTP $http on /users/me/). The CI token likely lacks 'member:read' or 'org:read'. Reconcile token scope before merging Sentry-touching diffs."
+            exit 1
+          fi
       - run: bash apps/web-platform/scripts/sentry-monitors-audit.sh
 ```
 
-Required-check status: add to branch-protection ruleset via `infra/github/main.tf` ruleset extension (separate small commit on this PR).
+**Required-check bootstrap (Spec-Flow P0-1 — chicken-and-egg fix).** A required check that has never run cannot block merge of the commit that introduces it. Two-step mechanic:
+
+1. **Within PR-β**, land the workflow file AND `infra/github/main.tf` ruleset extension as **two sequential commits**:
+   - Commit A: `sentry-audit-gate.yml` + a no-op edit to `apps/web-platform/scripts/sentry-monitors-audit.sh` (comment-only, e.g., a Phase-4 banner comment) so the `paths:` filter matches → workflow runs on PR-β's HEAD.
+   - Commit B: `infra/github/main.tf` ruleset extension adding `Sentry Audit Gate` as required-check.
+2. **Verify before merge:** `gh pr checks <PR-β>` shows `Sentry Audit Gate` as `success` against PR-β's latest SHA before invoking `gh pr merge --auto`.
+
+Alternative (acceptable if Step 1 sequencing is fragile): defer the ruleset extension to a **follow-up commit on `main` after PR-β merges** (separate 5-line PR). PR-β itself ships ungated; the gate protects PR-γ onward. Choose this path if Commit-A-paths-trigger-workflow proves brittle.
 
 **Phase 6 — C4: tfstate drop + manifest + serial reimport.**
 
@@ -316,7 +386,7 @@ Per C-2 constraint (R2 backend `use_lockfile = false` — concurrent imports rac
    terraform state list > /tmp/pre-drop-state.txt
    ```
 3. Drop each: `xargs -a /tmp/pre-drop-state.txt -n1 terraform state rm` (sequential, NOT parallel). Verify `terraform state list` returns empty.
-4. Update `var.sentry_org` default in `variables.tf` if TR3 forced rename.
+4. (Moved to Phase 2 step 9 per Kieran P0-2 — `var.sentry_org` default is now updated atomic with `main.tf:30` `base_url` flip in the same commit, BEFORE Phase 6.)
 5. Re-import each resource **strictly serial**, one `terraform import` per resource:
    ```bash
    terraform import sentry_organization.x <org-id>  # if applicable
@@ -334,14 +404,22 @@ After Phase 4 (audit-gate triple-expansion runs green against new DE org), Phase
 - Old phantom-org token: revoke via `eu.sentry.io/settings/.../auth-tokens/` (or whatever surface that token came from — A1 noted A1's token was unattributable owner-side; that token is part of the phantom-org artifact and dies when the org dies in PR-γ).
 - The "old token" that actually exists in our control is the US-shadow-org token from A1's tfstate; revoke it via `sentry.io/settings/jikigai/auth-tokens/`.
 
-**Phase 8 — Verification.**
+**Phase 8 — Verification + PA8 backfill (FR12 moved from PR-γ per Arch F4 / DHH P0 reconciliation).**
 
-- AC6: `echo "$NEXT_PUBLIC_SENTRY_DSN" | grep -oE 'o[0-9]+'` returns new org-id; new org-id != `4511123328466944`.
-- AC7: CI run of `.github/workflows/sentry-audit-gate.yml` green; required-check added.
-- AC8: per-surface verification — `doppler secrets get SENTRY_DSN -p soleur -c prd --plain` matches new DSN; `gh secret list | grep SENTRY_` matches Doppler shape; `vercel env ls production | grep SENTRY_` matches; same for `.env.example`, `Dockerfile`, `next.config.ts`, `reusable-release.yml`, 9 scheduled workflows.
+Moving the PA8 backfill into PR-β closes the live-document-in-`<pending C2 merge>`-state window: as soon as PR-β is mergeable, the backfill commit can land WITH the runtime swap, so Article 30 register never sits in production with the placeholder visible (Arch F4 caught this; DHH P0's "ship runtime + disclosure together" pressure resolves here without collapsing PRs).
+
+Backfill:
+- Edit `knowledge-base/legal/article-30-register.md` PA8 §(d) cell at L160: replace `<pending C2 merge>` with `PR #<PR-β-number> merged <ISO date>` and reference the post-swap DE org slug. Land as the final commit of PR-β (timestamp-as-merge-SHA-placeholder; auto-merge resolves at squash time).
+
+Verification (AC6 rewritten per DHH P1 to test ingest, not string shape):
+
+- **AC6 — DSN org-id substring AND real ingest probe.** String-shape: `echo "$NEXT_PUBLIC_SENTRY_DSN" | grep -oE 'o[0-9]+'` returns new org-id `≠ 4511123328466944`. **Plus real ingest probe:** fire one synthetic event via `POST <DSN>/store/` with body `{"event_id":"<uuid>","message":"audit-probe-<ts>","level":"info"}`; wait ≤60s; `curl -H "Authorization: Bearer $TOKEN" "https://eu.sentry.io/api/0/projects/$ORG/$PROJECT/events/<event_id>/"` returns 200 with matching `event_id`. **This is the only AC that closes the loop the incident itself exposed** — string-shape verification is not sufficient because the phantom-org failure mode produced a string that LOOKED correct.
+- AC7: CI run of `.github/workflows/sentry-audit-gate.yml` green; required-check added per Phase 5 bootstrap mechanic.
+- **AC8 — Per-surface verification + SENTRY_API_TOKEN sweep (Arch F3).** `doppler secrets get SENTRY_DSN -p soleur -c prd --plain` matches new DSN; `gh secret list | grep SENTRY_` matches Doppler shape; `vercel env ls production | grep SENTRY_` matches; same for `.env.example`, `Dockerfile`, `next.config.ts`, `reusable-release.yml`, 9 scheduled workflows. **PLUS:** `grep -rn 'SENTRY_API_TOKEN' apps/ plugins/soleur/skills/postmerge/ knowledge-base/engineering/ops/runbooks/` — every match MUST resolve to the new DE-cluster token; the `audit-sentry-extra-text-references.sh:99-103` fallback-to-`SENTRY_AUTH_TOKEN` chain MUST be either consistent with the rotated value OR explicitly deprecated by Doppler-side aliasing in this PR.
 - AC9: old phantom token returns 401 against `https://eu.sentry.io/api/0/users/me/` (proves revocation).
 - AC10: `terraform state list | wc -l` returns 13; PR body contains pre/post manifest diff.
-- AC11: first scheduled run of each of 9 workflows post-merge: confirm cron-checkin event lands in new DE org's monitor dashboard.
+- **AC11-pre (manual surrogate, P0 fix #5):** Each of 9 scheduled workflows manually triggered via `gh workflow run <name>.yml`; the resulting check-in event ID captured in PR-β body. Any workflow lacking `workflow_dispatch:` MUST get one added in this PR's diff (no current-state spot check needed — `grep -L "workflow_dispatch:" .github/workflows/scheduled-{cf-token-expiry-check,community-monitor,content-vendor-drift,daily-triage,github-app-drift-guard,oauth-probe,realtime-probe,skill-freshness,terraform-drift}.yml` enumerates the misses).
+- **AC14-pre (moved from PR-γ):** `grep -c "<pending C2 merge>" knowledge-base/legal/article-30-register.md` returns 0 (placeholder backfilled in this PR's final commit).
 
 ### PR-γ — Cleanup + Vendor (`-3` worktree)
 
@@ -360,12 +438,11 @@ After Phase 4 (audit-gate triple-expansion runs green against new DE org), Phase
 - Ticket 2 (forensics): SEPARATE submission (do NOT thread on Ticket 1) with subject "Article 30 sub-processor audit — owner-history confirmation for org 4511…". Body per Decision #9.
 - Capture both ticket IDs in PR-γ body per AC13.
 
-**Phase 3 — PA8 §5(2) backfill (FR12).**
-- Edit `knowledge-base/legal/article-30-register.md` PA8 §(d) cell at L160: replace `<pending C2 merge>` with `PR #<PR-β-number> merged <ISO date>` and reference the post-swap DE org slug.
+**Phase 3 — (moved to PR-β Phase 8.)** PA8 §(d) backfill landed atomic with PR-β runtime swap per Arch F4 reconciliation. PR-γ no longer touches `article-30-register.md`.
 
-**Phase 4 — PIR Phase 8 flip (FR14 + TR4 institutional precedent).**
+**Phase 4 — PIR Phase 8 flip (FR14).**
 
-This is the first PIR Phase-8 closure in repo history per brainstorm capability gap #1. Over-document for institutional precedent.
+Per DHH P1 + Code-Simplicity P1: cut the institutional-precedent prose. The C5 audit-gate triple-expansion (now 4 gates per Arch F2) IS the recurrence-prevention signal; a 3-line closure citing the PR-β SHA is sufficient. If a second PIR ever benefits from the same shape, extract the template then from real n=2 precedent.
 
 Edit `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`:
 1. L8: `status: open` → `status: resolved`.
@@ -374,35 +451,25 @@ Edit `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-
 ```markdown
 ## Phase 8 — Recovery Completeness
 
-Status flipped from `open` to `resolved` on <ISO date> after the following gate criteria all held:
+Status flipped from `open` to `resolved` on <ISO date>. Three conditions all held:
 
-### Gate 1 — Phantom emission halted (C2)
-- New DSN substring matches new DE org orgInternalId.
-- Verification: `echo "$NEXT_PUBLIC_SENTRY_DSN" | grep -oE 'o[0-9]+'` returns `o<new-id>` AND `<new-id> ≠ 4511123328466944`.
-- Evidence: PR #<PR-β> merged <ISO date>, audit script green against new org.
-
-### Gate 2 — Recurrence prevention deployed (C5)
-- Audit-script triple-gate (`audit_destination_admin_controllable` + `audit_project_scope` + `audit_write_probe`) wired to CI on Sentry-touching diffs AND to `reusable-release.yml` at deploy.
-- Verification: `.github/workflows/sentry-audit-gate.yml` required-check on `main`-bound PRs.
-- Evidence: PR #<PR-β> branch-protection ruleset commit.
-
-### Gate 3 — Vendor accountability closed
-- Sentry support response on org `4511123328466944` ownership confirmation (Ticket 2) **received** OR T+14d from ticket open (<ticket-open ISO date>).
-- Verification: Sentry support thread <ID> captured in PR-γ body.
-- Evidence (if T+14d timeout reached): residual evidence ceiling documented per Decision #7 — "unknown — Sentry support response of <date>: declined / no response".
-
-### Institutional precedent
-
-This is the **first PIR Phase-8 closure** in this repo. The 3-gate criterion above (recovery-deployed + prevention-deployed + vendor-accountability-closed) becomes the template for future open-status PIRs. Future Phase-8 closures MUST cite this PIR's gate structure and adapt the 3 gates to the incident's specifics (e.g., a non-vendor PIR might replace Gate 3 with "RCA published + team retro completed").
+- **Phantom emission halted.** Runtime DSN points at new DE org (orgInternalId `o<new-id>`, ≠ `4511123328466944`). Evidence: PR #<PR-β> merged <ISO date>, audit script's 4-gate (org-reachable + project-scope + write-probe + DSN-org-id-match) green against new org.
+- **Recurrence prevention deployed.** `.github/workflows/sentry-audit-gate.yml` is a required-check on `main`-bound PRs; `apply-sentry-infra.yml` invokes the audit script pre-`terraform plan`; the existing L60-103 cluster-substring check stays load-bearing as additive defense.
+- **Vendor accountability closure** (one of the following):
+  - **3a — Authoritative confirmation third-party owner.** Sentry support confirmed org `4511123328466944` is not Jikigai. US shadow org closed per Phase 1. Ticket <ID>, <ISO date>.
+  - **3b — "This org is yours" (STOP).** Sentry support contradicts the phantom-org premise. PIR root-cause re-opened; PR-γ blocks until CLO + CTO re-assessment.
+  - **3c — Non-disclosure / compliant refusal.** Sentry support declined disclosure per <ticket-ID>, <date>. Residual evidence ceiling: "unknown — declined". PIR resolved with documented residual.
+  - **3d — T+14d timeout** (where T = Ticket 2 open ISO date `<date>`, T+14d = `<date>`). Treated as 3c with residual ceiling "no response". Each Sentry follow-up question pauses the clock until operator responds; clock resumes on next vendor message.
 ```
 
-**Phase 5 — W1/W2/W4/W5 issues filed.**
+**Phase 5 — W1/W2/W5 issues filed (W4 dropped per Code-Simplicity P2).**
 
 `gh issue create` for each:
 - W1: "Hard rule `hr-prereq-playwright-first-then-credential-handoff` — Playwright must verify host BEFORE operator types credentials." Labels: `domain/process`, `priority/p2-medium`.
 - W2: "Extend `soleur:brainstorm` Phase 1.0.5 premise check to named URL substrings (currently checks only numerical claims)." Labels: `domain/engineering`, `skill:brainstorm`, `priority/p3-low`.
-- W4: "`worktree-manager.sh feature` optionally copies `--config=playwright-headed.json` into worktree `.mcp.json` under `SOLEUR_PLAYWRIGHT_HEADED=1` env gate." Labels: `domain/engineering`, `chore`, `priority/p3-low`.
 - W5: "`/soleur:compound` fail-friendly when on main (offer to create worktree rather than hard-abort)." Labels: `domain/engineering`, `skill:compound`, `priority/p3-low`.
+
+(W4 worktree-manager `.mcp.json` config-flag injection — **dropped**: TR2 operator-handoff already solves headless durably without code; W1 hard-rule codifies the gate behaviorally and is the highest-leverage of the four. W3 absorbed into C5 — already done.)
 
 Verify each label exists via `gh label list | grep -E "^<label>\b"` before filing per `2026-05-06-plan-prescribed-labels-must-be-verified.md`. If a label is missing, substitute closest existing.
 
@@ -410,9 +477,9 @@ Verify each label exists via `gh label list | grep -E "^<label>\b"` before filin
 
 - AC12: US shadow org status documented in PR-γ body.
 - AC13: Both ticket IDs captured.
-- AC14: `grep -c "<pending C2 merge>" knowledge-base/legal/article-30-register.md` returns 0.
-- AC15: `grep -nE "^status: resolved" knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; Phase 8 section present.
-- AC16: 4 W-issues listed in PR-γ body with `gh issue view <N>` returning `state: open`.
+- AC14: **(moved to PR-β Phase 8 AC14-pre.)** No longer in PR-γ scope.
+- AC15: `grep -nE "^status: resolved" knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; Phase 8 section present (4-branch Gate 3 enumerated; 3a/3b/3c/3d resolution selected by operator with evidence).
+- AC16: **3 W-issues** (W1/W2/W5; W4 dropped) listed in PR-γ body with `gh issue view <N>` returning `state: open`.
 
 ## TR-Level Mechanics (the 5 open questions)
 
@@ -446,17 +513,11 @@ Verify each label exists via `gh label list | grep -E "^<label>\b"` before filin
 
 **Slug-rename verification:** `grep -rn 'jikigai\b' apps/web-platform/infra/sentry/ apps/web-platform/sentry.*.config.ts .github/workflows/` MUST return 0 references to bare `jikigai` post-rename (all hits MUST be `jikigai-eu` if rename was forced).
 
-### TR4 — PIR Phase 8 flip criteria (institutional precedent)
+### TR4 — PIR Phase 8 flip criteria
 
-**Problem:** Capability gap #1: no prior PIR Phase-8 precedent. Over-document.
+**Problem:** Capability gap #1: no prior PIR Phase-8 precedent. Per DHH P1 + Code-Simplicity P1 + Arch F5 (template doesn't generalize across incident classes): do NOT pre-pave an institutional template on n=1 sample. Author the closure for this specific incident; if a second PIR ever benefits from the same shape, extract the template then.
 
-**Mechanic (PR-γ Phase 4):** The 3-gate structure above (Gate 1 phantom-emission-halted + Gate 2 prevention-deployed + Gate 3 vendor-accountability-closed) becomes the institutional template. Future PIR Phase-8 closures MUST:
-1. Cite this PIR's Phase 8 section by relative path.
-2. Map their incident's specifics onto the 3 gates (replace Gate 3 if the incident has no vendor surface).
-3. Document residual evidence ceiling if any gate cannot fully resolve.
-4. Captured in the **PIR runbook itself**, not in a separate decision-record, so the precedent lives next to the incident-evidence corpus.
-
-**Why over-document:** The C5 audit-gate triple-expansion's effectiveness depends entirely on the operator trusting the Phase-8 closure as the signal that "this category of failure cannot recur silently". A skinny or unstructured Phase-8 closure undermines that signal for future incidents.
+**Mechanic (PR-γ Phase 4):** 3-bullet `## Phase 8 — Recovery Completeness` section authored inline per PR-γ Phase 4 above (phantom-emission-halted + recurrence-prevention-deployed + vendor-accountability-closed). Gate 3 enumerated as 4 operator-selectable branches (3a/3b/3c/3d) per Spec-Flow P1-4 to disambiguate Sentry response semantics. No template prose; no "future PIRs MUST" claims; no inherited prose dependency.
 
 ### TR5 — Cloudflare CSP report-uri cache-purge mechanic
 
@@ -497,17 +558,19 @@ Plan options (verified against the cloudflare-token Doppler scope):
 
 ### Pre-merge (PR-β)
 
-- AC6: New DE org provisioned. **Verify:** `echo "$NEXT_PUBLIC_SENTRY_DSN" | grep -oE 'o[0-9]+'` returns new org-id; `[[ "$NEW_ORG_ID" != "4511123328466944" ]]`.
-- AC7: Audit-script C5 triple-gate green; CI workflow added. **Verify:** `gh workflow list | grep -F "Sentry Audit Gate"`; ruleset includes the check.
-- AC8: All secret surfaces hold new DSN/token values. **Verify per-surface:** `doppler secrets get SENTRY_DSN -p soleur -c prd --plain | grep -F "$NEW_ORG_ID"` AND `gh secret list | grep -F "NEXT_PUBLIC_SENTRY_DSN"` AND `vercel env pull /tmp/.env.vercel && grep -F "$NEW_ORG_ID" /tmp/.env.vercel`.
-- AC9: Old phantom DSN not referenced in current deployment. **Verify:** `grep -rn "4511123328466944" apps/web-platform/ .github/workflows/scheduled-*.yml` returns 0 hits (after rotation).
-- AC10: tfstate has 13 resources imported against new DE org. **Verify:** `cd apps/web-platform/infra/sentry && terraform state list | wc -l` returns 13; `terraform plan` shows 0 changes; pre/post manifest diff captured in PR body.
-- AC11: 9 scheduled workflows post beacons to new DE org. **Verify:** wait for first scheduled run of each; query Sentry new-org monitors dashboard for check-in events.
+- **AC6 (DHH P1 — real ingest probe, not string-shape only):** New DE org provisioned AND ingest path closed end-to-end. **Verify (string):** `echo "$NEXT_PUBLIC_SENTRY_DSN" | grep -oE 'o[0-9]+'` returns new org-id; `[[ "$NEW_ORG_ID" != "4511123328466944" ]]`. **Verify (ingest, load-bearing):** fire synthetic event via `POST <DSN>/store/` with body `{"event_id":"<uuid>","message":"audit-probe-<ts>","level":"info"}`; wait ≤60s; `curl -H "Authorization: Bearer $TOKEN" "https://eu.sentry.io/api/0/projects/$ORG/$PROJECT/events/<event_id>/"` returns 200 with matching `event_id`. **The ingest probe is the only verification that closes the loop the incident itself exposed.**
+- **AC7:** 4-gate audit-script green (Gate 1 org-reachable + Gate 2 project-scope + Gate 3 write-probe + Gate 4 DSN-org-id-match); CI workflow added with `SENTRY_API_HOST` env (Kieran P0-1) + token-scope pre-check (fail-loud, not `continue-on-error`); required-check bootstrap per Phase 5 mechanic. **Verify:** `gh workflow list | grep -F "Sentry Audit Gate"`; `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[] | .context'` includes `Sentry Audit Gate`.
+- **AC8 (Arch F3 — extended SENTRY_API_TOKEN sweep):** All secret surfaces hold new DSN/token values. **Verify per-surface:** `doppler secrets get SENTRY_DSN -p soleur -c prd --plain | grep -F "$NEW_ORG_ID"` AND `gh secret list | grep -F "NEXT_PUBLIC_SENTRY_DSN"` AND `vercel env pull /tmp/.env.vercel && grep -F "$NEW_ORG_ID" /tmp/.env.vercel`. **PLUS namespace-divergence sweep:** `grep -rn 'SENTRY_API_TOKEN' apps/ plugins/soleur/skills/postmerge/ knowledge-base/engineering/ops/runbooks/` — every match MUST resolve to the new DE-cluster value; `audit-sentry-extra-text-references.sh:99-103` fallback-to-`SENTRY_AUTH_TOKEN` documented (and either consistent or explicitly deprecated in this PR).
+- **AC9:** Old phantom DSN not referenced in current deployment. **Verify:** `grep -rn "4511123328466944" apps/web-platform/ .github/workflows/scheduled-*.yml` returns 0 hits (after rotation).
+- **AC10:** tfstate has 13 resources imported against new DE org. **Verify:** `cd apps/web-platform/infra/sentry && terraform state list | wc -l` returns 13; `terraform plan` shows 0 changes; pre/post manifest diff captured in PR body.
+- **AC11-pre (Spec-Flow P0-2 — manual surrogate):** Each of 9 scheduled workflows manually dispatched via `gh workflow run <name>.yml`; first manual-trigger check-in event ID captured in PR-β body. Any workflow lacking `workflow_dispatch:` MUST get one added in this PR's diff.
+- **AC14-pre (Arch F4 — moved from PR-γ):** `grep -c "<pending C2 merge>" knowledge-base/legal/article-30-register.md` returns 0 (PA8 §(d) placeholder backfilled with PR-β merge SHA / merge ISO date as part of PR-β's final commit; shrinks the live-pending-state window).
+- **AC-gate-coverage (Arch F1):** `grep -l "sentry-monitors-audit.sh" .github/workflows/*.yml` returns at least `reusable-release.yml`, `sentry-audit-gate.yml`, AND `apply-sentry-infra.yml` (confirms `apply-sentry-infra.yml` gate-bypass surface is closed).
 
 ### Post-merge (operator)
 
-- AC9-post: Old token revoked. **Verify:** `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <OLD_TOKEN>" https://eu.sentry.io/api/0/users/me/` returns 401.
-- AC11-post: Each of 9 scheduled workflows' first post-merge run lands a cron-checkin in the new DE org's monitor dashboard at `eu.sentry.io/organizations/<slug>/crons/`.
+- **AC9-post:** Old token revoked. **Verify:** `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <OLD_TOKEN>" https://eu.sentry.io/api/0/users/me/` returns 401.
+- **AC11-post (Spec-Flow P0-2 — reclassified strictly post-merge):** Each of 9 scheduled workflows' first **organic** scheduled run within 7 days of merge lands a cron-checkin in the new DE org's monitor dashboard at `eu.sentry.io/organizations/<slug>/crons/`. Captured in PR-β post-merge follow-up comment OR linked from PR-γ Phase 0 pre-flight gate.
 
 ### Pre-merge (PR-γ)
 
@@ -528,7 +591,7 @@ Plan options (verified against the cloudflare-token Doppler scope):
 - C-2: R2 backend `use_lockfile = false` — `terraform import` strictly serial (TR1 + Phase 6 mechanic).
 - C-3: `@playwright/mcp@latest` headless-default regression — TR2 pre-flight required, not assumed.
 - C-4: Vendor-relationship preservation — refund posture amicable-with-receipts; aggressive forensics language confined to Ticket 2 separate routing.
-- C-5: PIR Phase 8 flip is first institutional precedent — TR4 over-documents per Capability Gap #1.
+- C-5: PIR Phase 8 closure is authored for this incident only (not as institutional template); n=1 sample doesn't justify pre-paved precedent. If a second PIR ever benefits, extract template then.
 
 ## Hypotheses
 
@@ -542,9 +605,11 @@ None active. Brainstorm closed all decision points; no SSH/network-connectivity 
 - **CSP report-uri cache-purge** is a soft-failure surface — CSP violation reports posting to old DSN during cache-warm window 401 against the revoked token (harmless). Operator runs the purge but does NOT need to block on its completion.
 - **TR3 slug collision rename** must touch ALL 9 scheduled workflows in the SAME commit as `var.sentry_org` default — a partial rename produces silent half-state where 1 workflow still posts to phantom-named org slug (which now refers to a non-existent org → 404 silent).
 - **Sentry support Ticket 2 (forensics) MUST be a separate submission**, NOT a reply to Ticket 1 (billing). Threading the two routes both to the same agent, who must weigh billing-friendly tone against forensics-aggressive language — the asymmetry brainstorm Decision #9 avoids.
-- **PIR Phase 8 closure becomes institutional precedent.** A skinny closure undermines future Phase-8 signals. Over-document the 3-gate structure per TR4.
-- **A plan whose `## User-Brand Impact` section is empty, contains only TBD/TODO/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.** This plan's section is non-empty and threshold is `single-user incident`; passes the gate.
-- **`@playwright/mcp@latest` is unpinned**; future MCP version bumps may regress the headed posture again. W4 (deferred to PR-γ follow-up) addresses the long-term `.mcp.json` config-flag mechanic.
+- **PIR Phase 8 closure is incident-specific, not a template.** Per DHH P1 / Code-Simplicity P1 / Arch F5 — author the 3-bullet closure for this incident; do NOT pre-pave an institutional template on n=1. The audit-gate's effectiveness comes from the script's exit codes, not the runbook's prose density.
+- **`@playwright/mcp@latest` is unpinned**; future MCP version bumps may regress the headed posture again. TR2 operator-handoff path is the durable mitigation; W4 (`.mcp.json` config-flag injection) was dropped per Code-Simplicity P2 — the operator-handoff is sufficient.
+- **`apply-sentry-infra.yml` is a gate-bypass surface** unless the pre-`terraform plan` audit-script invocation is wired in PR-β (Arch F1). Any future `workflow_dispatch:` entrypoint mutating Sentry IaC MUST traverse the audit gate; the gate-call-graph table in Phase 4 is the inventory.
+- **Required-check chicken-and-egg:** a newly-added required check has no completed runs on the introducing commit. Phase 5 bootstrap mechanic (2-commit sequence with a comment-only paths-trigger in commit A) is load-bearing; do NOT add to ruleset without the trigger.
+- **PR-α deadline-pressure abort path:** if the PR slips past 2026-05-19T12:50Z, Phase -1's T-24h / T-2h checkpoints route the CLO to file CNIL directly with PR #3904 as evidence-in-flight. The disclosure is the gate, not the merged commit.
 
 ## References
 
