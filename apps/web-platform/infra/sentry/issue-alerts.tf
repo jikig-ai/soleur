@@ -19,7 +19,12 @@ resource "sentry_issue_alert" "auth_exchange_code_burst" {
   name         = "auth-exchange-code-burst"
   action_match = "all"
   filter_match = "all"
-  frequency    = 60
+  # Frequency varies per resource (60/61/30/62) so Sentry's "exact duplicate
+  # of <other-rule>" dedup at POST time doesn't conflate them. After create,
+  # `lifecycle.ignore_changes` reasserts the operator-managed real value via
+  # the Sentry UI. Discovered 2026-05-17 during PR-β §11 — see learning
+  # 2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions.md.
+  frequency    = 61
 
   # Provider schema requires actions_v2 ≥ 1 at config-time even for
   # imported resources. The placeholder is overwritten by import; lifecycle
@@ -52,7 +57,7 @@ resource "sentry_issue_alert" "auth_callback_no_code_burst" {
   name         = "auth-callback-no-code-burst"
   action_match = "all"
   filter_match = "all"
-  frequency    = 60
+  frequency    = 62 # see auth_exchange_code_burst comment for dedup rationale
 
   # Provider schema requires actions_v2 ≥ 1 at config-time even for
   # imported resources. The placeholder is overwritten by import; lifecycle
