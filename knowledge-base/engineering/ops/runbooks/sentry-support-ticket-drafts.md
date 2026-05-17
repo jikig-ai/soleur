@@ -112,16 +112,17 @@ jean.deruelle@jikigai.com
 
 ## Submission state (closed — 2026-05-17)
 
-- [x] Ticket 1 (billing) submitted 2026-05-17T19:17Z via Sentry Intercom. Conversation auto-titled "Billing refund request". Routed to Sentry Foundations team. OTP `862222` verified `jean.deruelle@jikigai.com`. AI initial response: standard policy non-refund reply (cited help articles 13964791, 13965074, 13964765). Follow-up requested human review citing IaC-error context + same-day paid plan purchase on `jikigai-eu`.
+- [x] Ticket 1 (billing) submitted 2026-05-17T19:17Z via Sentry Intercom. Conversation auto-titled "Billing refund request". Routed to Sentry Foundations team. Email-OTP verified `jean.deruelle@jikigai.com` (one-time, single-session — code value not retained per `hr-never-paste-secrets-via-bang-prefix` and the "OTP digits never quoted in committed files" rule in `plugins/soleur/skills/work/SKILL.md` Phase 4). AI initial response: standard policy non-refund reply (cited help articles 13964791, 13965074, 13964765). Follow-up requested human review citing IaC-error context + same-day paid plan purchase on `jikigai-eu`.
 - [x] Ticket 2 (forensics) submitted 2026-05-17T19:19Z via Sentry Intercom (separate conversation). Routed to Sentry Foundations team. AI initial response: substantive non-disclosure-policy statement — *"we can't confirm ownership of organization ID 4511123328466944 or disclose whether it belongs to another customer vs a Sentry-internal entity if you're not a member of that org"* (cited help articles 13964423, 13964441, docs.sentry.io/api/organizations/retrieve-an-organization/). Follow-up requested human-confirmed citable policy + escalation-path inquiry.
 - [x] Submission timestamps captured in PR #3946 body (AC13) + PIR Phase 8 section.
 - [x] T+14d gate clock: **expiry 2026-05-31T19:19Z** (anchored on Ticket 2 submission).
 
 ## Human-response capture (post-async)
 
-When Sentry's Foundations team responds (via email to `jean.deruelle@jikigai.com`), update the PIR `## Phase 8 — Recovery Completeness` section in-place with:
+When Sentry's Foundations team responds (via email to `jean.deruelle@jikigai.com`), update the PIR `## Phase 8 — Recovery Completeness` section in-place with the following steps in order:
 
+0. **Inbox query (Gmail).** Search the operator inbox for the Foundations-team reply with the query: `from:(intercom-mail.com OR notifications.intercom.com OR sentry.io) to:jean.deruelle@jikigai.com after:2026/05/17 before:2026/06/01`. The Intercom email-reply-from address may render as `notifications@intercom-mail.com` or as a per-conversation alias; both should be picked up by the OR clause. If zero results show at or after 2026-05-31T19:19Z UTC, select Gate 3 branch `3d` (T+14d timeout). If results exist with a `Date:` header ≤ 2026-05-31T19:19Z UTC, select from response content per step 3 below regardless of when the operator reads it (tie-breaker per PIR Phase 8 Gate 3d note).
 1. Response date (UTC timestamp).
 2. Verbatim response text (or representative excerpt).
 3. Selected Gate 3 branch (3a authoritative third-party / 3b "this org is yours" STOP / 3c non-disclosure residual / 3d T+14d timeout if no response by 2026-05-31T19:19Z).
-4. PA8 §5(2) update note (whether the residency-drift disclosure in `knowledge-base/legal/article-30-register.md` needs revision based on the resolution branch).
+4. PA8 row (d) Recipients — Recipient-drift after-the-fact disclosure block — update note (whether the residency-drift disclosure in `knowledge-base/legal/article-30-register.md` needs revision based on the resolution branch).

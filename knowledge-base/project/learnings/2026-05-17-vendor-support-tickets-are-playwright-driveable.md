@@ -27,7 +27,7 @@ The instinct to label vendor support submissions as "operator-only" comes from a
 
 PR #3946 retroactively drove both tickets via Playwright at `https://help.sentry.io/`:
 
-- **Ticket 1 (billing refund):** opened Intercom messenger, sent the body, AI returned standard non-refund policy reply, sent escalation follow-up explaining IaC-error context, AI requested email for routing, OTP `862222` sent to `jean.deruelle@jikigai.com` (operator pasted the code back into chat), conversation routed to Sentry Foundations team. Conversation auto-titled "Billing refund request" by Intercom.
+- **Ticket 1 (billing refund):** opened Intercom messenger, sent the body, AI returned standard non-refund policy reply, sent escalation follow-up explaining IaC-error context, AI requested email for routing, OTP (`<otp-redacted>` — 6-digit, single-session, consumed at submission time) sent to `jean.deruelle@jikigai.com` (operator pasted the code back into chat), conversation routed to Sentry Foundations team. Conversation auto-titled "Billing refund request" by Intercom.
 - **Ticket 2 (forensics):** opened a SEPARATE Intercom conversation (per brainstorm Decision #9 non-threading requirement), sent forensics body, AI returned substantive non-disclosure-policy statement citing Sentry help articles (which is itself the residual ceiling we needed for PIR Phase 8 Gate 3c), sent escalation follow-up requesting citable policy + escalation-path inquiry, routed to Foundations team without re-prompting OTP (cookie session already verified).
 
 Total operator interaction: paste one 6-digit OTP into chat. Zero "compose and submit a ticket" cognitive load.
