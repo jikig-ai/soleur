@@ -17,6 +17,7 @@
 
 import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
+import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
 if (!SIGNING_KEY) {
@@ -25,6 +26,6 @@ if (!SIGNING_KEY) {
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [], // Phase 3 fills: cfoOnPaymentFailed.
+  functions: [cfoOnPaymentFailed],
   signingKey: SIGNING_KEY,
 });
