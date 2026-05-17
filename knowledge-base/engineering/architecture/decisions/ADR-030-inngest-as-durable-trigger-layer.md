@@ -1,7 +1,7 @@
 ---
 adr: 030
 title: Inngest as durable trigger layer for server-side agents
-status: proposed
+status: accepted
 date: 2026-05-17
 related: [3244, 3940, 3947, 3948]
 related_adrs: [ADR-005, ADR-023, ADR-027]
@@ -15,9 +15,9 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-**Proposed** (2026-05-17, draft PR #3940).
+**Accepted** (2026-05-17, PR #3940).
 
-Flipped to **Accepted** at merge of PR-F (#3940 / Phase 6 of `2026-05-17-feat-pr-f-inngest-trigger-layer-plan.md`).
+Flipped from `proposed` at Phase 6 of `2026-05-17-feat-pr-f-inngest-trigger-layer-plan.md` after the substrate landed green: Inngest client + serve route (Phase 2), CFO function with single-pass verify + per-step lease (Phase 3), Stripe `invoice.payment_failed` → `inngest.send` bridge gated by `SOLEUR_FR5_ENABLED` (Phase 4), `/api/dashboard/today` + page-level disclosure banner (Phase 5).
 
 ## Context
 

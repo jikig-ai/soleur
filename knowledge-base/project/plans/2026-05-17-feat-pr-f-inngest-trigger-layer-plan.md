@@ -629,8 +629,8 @@ Sentinel sweep extension runs in the standard vitest suite.
 - [x] Migration 046: `record_byok_use_and_check_cap` uses plpgsql with `FOR UPDATE`; atomicity test (10 concurrent at cap-boundary) returns exactly one `kill_tripped=true`.
 - [x] Migration 046: `messages_external_tier_status_check` rejects `tier='external_brand_critical', status='sent'`.
 - [x] Writer-sweep test catches alias-rename bypass via the new `ALIAS_IMPORT_RE` regex.
-- [ ] Article 30 register + BOTH DPD copies amended; sub-processor list UNCHANGED.
-- [ ] ADR-030 file exists; status `accepted` at merge HEAD.
+- [x] Article 30 register + BOTH DPD copies amended; sub-processor list UNCHANGED.
+- [x] ADR-030 file exists; status `accepted` at merge HEAD.
 - [ ] `SOLEUR_FR5_ENABLED=false` in Doppler `prd` at merge time.
 - [ ] Doppler `dev` AND `prd` contain `INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`, `SOLEUR_FR5_ENABLED`, `MAX_TURN_DURATION_MS`, `INNGEST_BASE_URL`. **Distinctness:** `dev.INNGEST_SIGNING_KEY ≠ prd.INNGEST_SIGNING_KEY` AND `dev.INNGEST_EVENT_KEY ≠ prd.INNGEST_EVENT_KEY` (RV15).
 
