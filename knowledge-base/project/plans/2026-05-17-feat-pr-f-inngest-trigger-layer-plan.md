@@ -623,7 +623,7 @@ Sentinel sweep extension runs in the standard vitest suite.
 - [x] `apps/web-platform/server/inngest/client.ts` throws at module load if `INNGEST_SIGNING_KEY` or `INNGEST_EVENT_KEY` missing.
 - [x] `apps/web-platform/app/api/inngest/route.ts` rejects invalid signature with 401 BEFORE dispatch.
 - [x] `cfo-on-payment-failed.ts` opens `runWithByokLease` INSIDE each SDK-calling `step.run`; schema-gate is a non-throwing step.
-- [ ] Stripe `invoice.payment_failed` branch at `route.ts:415` emits gated `inngest.send` AFTER `processed_stripe_events` dedup; minimized payload has no `@`, no `payment_method`.
+- [x] Stripe `invoice.payment_failed` branch at `route.ts:415` emits gated `inngest.send` AFTER `processed_stripe_events` dedup; minimized payload has no `@`, no `payment_method`.
 - [ ] `/api/dashboard/today` returns RLS-scoped draft messages.
 - [ ] Today banner renders disclosure via imported `RUNTIME_COST_DISCLOSURE` constant; substring `disclaims warranty for runtime cost` matches.
 - [x] Migration 046: `record_byok_use_and_check_cap` uses plpgsql with `FOR UPDATE`; atomicity test (10 concurrent at cap-boundary) returns exactly one `kill_tripped=true`.

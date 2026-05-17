@@ -422,6 +422,67 @@ export async function POST(request: Request) {
         { customerId, invoiceId: invoice.id },
         "Stripe invoice.payment_failed — logged for observability, status managed by customer.subscription.updated",
       );
+
+      // PR-F (#3244, #3940) — gated bridge to Inngest CFO function.
+      // Default OFF at merge per Phase 0 ops task (SOLEUR_FR5_ENABLED=false
+      // in Doppler prd). Post-merge operator flips to "true" after the
+      // self-hosted Inngest server health-checks. Stripe redelivery
+      // upstream covers the gap if the operator forgets — at-least-once.
+      //
+      // The `processed_stripe_events` dedup INSERT at line 116 already ran
+      // BEFORE this case body; any duplicate Stripe `event.id` short-
+      // circuited at line 126 with 200. So inngest.send fires at most
+      // once per Stripe event.id without a second guard.
+      if (process.env.SOLEUR_FR5_ENABLED === "true" && customerId) {
+        const { data: founderRow } = await supabase
+          .from("users")
+          .select("id")
+          .eq("stripe_customer_id", customerId)
+          .maybeSingle();
+        const founderId = (founderRow as { id?: string } | null)?.id;
+        if (founderId) {
+          // RV7 minimization — hash email, drop payment_method, keep four
+          // load-bearing fields. Inline (not a sibling module) per RV7.
+          const { createHash } = await import("node:crypto");
+          const customerEmailHash = invoice.customer_email
+            ? createHash("sha256").update(invoice.customer_email).digest("hex")
+            : "";
+          const failureCode =
+            (invoice as Stripe.Invoice & {
+              last_finalization_error?: { code?: string };
+            }).last_finalization_error?.code ?? "unknown";
+          const payload = {
+            founderId,
+            invoiceId: invoice.id,
+            customerEmailHash,
+            amount: invoice.amount_due ?? 0,
+            currency: invoice.currency ?? "usd",
+            failureCode,
+          };
+          try {
+            const { inngest } = await import("@/server/inngest/client");
+            await inngest.send({
+              id: `stripe-${event.id}`,
+              name: "finance.payment_failed",
+              v: "1",
+              data: {
+                founderId,
+                domain: "finance",
+                event: "finance.payment_failed",
+                payload,
+              },
+            });
+          } catch (err) {
+            reportSilentFallback(err, {
+              feature: "inngest-emit",
+              op: "finance.payment_failed",
+              message:
+                "Inngest unreachable on invoice.payment_failed — CFO draft skipped (Stripe redelivery will retry)",
+              extra: { founderId, invoiceId: invoice.id, eventId: event.id },
+            });
+          }
+        }
+      }
       break;
     }
 
