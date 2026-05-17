@@ -20,12 +20,17 @@ import { inngest } from "@/server/inngest/client";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
-if (!SIGNING_KEY) {
+// next build page-data collection loads this module without runtime env.
+// Skip the throw during build; runtime process restart on Hetzner re-fires
+// the validation against Doppler-injected env. Mirrors the bypass in
+// server/inngest/client.ts.
+const IS_BUILD_PHASE = process.env.NEXT_PHASE === "phase-production-build";
+if (!IS_BUILD_PHASE && !SIGNING_KEY) {
   throw new Error("INNGEST_SIGNING_KEY missing at /api/inngest load");
 }
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [cfoOnPaymentFailed],
-  signingKey: SIGNING_KEY,
+  signingKey: SIGNING_KEY ?? "build-phase-placeholder",
 });

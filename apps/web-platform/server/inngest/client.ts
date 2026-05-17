@@ -18,24 +18,33 @@ const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
 const EVENT_KEY = process.env.INNGEST_EVENT_KEY;
 const BASE_URL = process.env.INNGEST_BASE_URL;
 
-if (!SIGNING_KEY) {
-  throw new Error("INNGEST_SIGNING_KEY missing at startup");
-}
-if (!EVENT_KEY) {
-  throw new Error("INNGEST_EVENT_KEY missing at startup");
-}
-// Review P2-1 (security-sentinel): in cloud mode the Inngest SDK
-// validates signatures; in dev mode it short-circuits validateSignature
-// to success (per node_modules/inngest/components/InngestCommHandler.js).
-// A Doppler prd misconfiguration setting INNGEST_DEV=1 would silently
-// disable I4 — refuse to load.
-if (
-  process.env.NODE_ENV === "production" &&
-  process.env.INNGEST_DEV === "1"
-) {
-  throw new Error(
-    "INNGEST_DEV=1 in production refuses to load: signature verification would be bypassed (ADR-030 I4)",
-  );
+// Next.js sets NEXT_PHASE during `next build` page-data collection, which
+// loads route modules (including /api/inngest) without runtime env vars.
+// Skip the load-time guards during build so the bundle compiles; they
+// re-fire at first request via process-restart on Hetzner (the production
+// node process starts with the Doppler-injected env vars).
+const IS_BUILD_PHASE = process.env.NEXT_PHASE === "phase-production-build";
+
+if (!IS_BUILD_PHASE) {
+  if (!SIGNING_KEY) {
+    throw new Error("INNGEST_SIGNING_KEY missing at startup");
+  }
+  if (!EVENT_KEY) {
+    throw new Error("INNGEST_EVENT_KEY missing at startup");
+  }
+  // Review P2-1 (security-sentinel): in cloud mode the Inngest SDK
+  // validates signatures; in dev mode it short-circuits validateSignature
+  // to success (per node_modules/inngest/components/InngestCommHandler.js).
+  // A Doppler prd misconfiguration setting INNGEST_DEV=1 would silently
+  // disable I4 — refuse to load.
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.INNGEST_DEV === "1"
+  ) {
+    throw new Error(
+      "INNGEST_DEV=1 in production refuses to load: signature verification would be bypassed (ADR-030 I4)",
+    );
+  }
 }
 if (BASE_URL) {
   try {
@@ -47,6 +56,6 @@ if (BASE_URL) {
 
 export const inngest = new Inngest({
   id: "soleur-runtime",
-  eventKey: EVENT_KEY,
+  eventKey: EVENT_KEY ?? "build-phase-placeholder",
   ...(BASE_URL ? { baseUrl: BASE_URL } : {}),
 });
