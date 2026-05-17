@@ -112,8 +112,9 @@ Derived from `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-b
 
 ### 13. Phase 8 — PA8 §(d) backfill (moved from PR-γ per Arch F4)
 - 13.1. Edit `knowledge-base/legal/article-30-register.md` PA8 §(d) cell at L160: replace `<pending C2 merge>` with `PR #<PR-β-number> merged <ISO date>` and new DE org slug.
+- 13.1a. Edit `knowledge-base/legal/compliance-posture.md` Active row for #3861: replace the two `#<pending C2 merge>` slots (PR-β / PR-γ slots in the Notes column) with the actual PR-β and PR-γ numbers as those PRs are opened. (Added per PR-α review pattern-recognition P1-A — placeholder-syntax uniformity so a single repo-wide grep catches both sites.)
 - 13.2. Land as the final commit of PR-β (closes the live-document-in-pending window).
-- 13.3. AC14-pre verify: `grep -c "<pending C2 merge>" knowledge-base/legal/article-30-register.md` returns 0.
+- 13.3. AC14-pre verify: `grep -rc "<pending C2 merge>" knowledge-base/legal/article-30-register.md knowledge-base/legal/compliance-posture.md` returns 0 for both files. (Widened from article-30-register.md only per PR-α review.)
 
 ### 14. Verification (PR-β)
 - 14.1. **AC6 (real ingest probe per DHH P1)**: `POST <DSN>/store/` with synthetic event → `GET /api/0/projects/$ORG/$PROJECT/events/<event_id>/` returns 200 ≤60s. PLUS string-shape check.

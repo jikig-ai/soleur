@@ -14,7 +14,7 @@ art_33_deadline: "2026-05-19T12:50:00Z"
 classification_override:
   advisory: aggregate pattern
   chosen: none
-  reason: "no external users onboarded yet during phantom-ingest window; data captured was internal team telemetry only"
+  reason: "10 operator-adjacent accounts existed in prd auth.users during phantom-ingest window (founders + team + bot + internal-QA + 2 friends-of-team test signups, per PR-α SQL-count + operator categorization on 2026-05-17); zero arms-length external signups; data captured was internal team / operator-adjacent telemetry only"
 ---
 
 ## Actor key
@@ -77,10 +77,10 @@ TBD. Recovery is bound to A2 brainstorm Branch C (create new DE org under operat
 Per learning `2026-05-06-user-impact-section-by-role-not-surface.md` — enumerate by USER ROLE, not by surface:
 
 - **Prospect:** none — Sentry SDK only fires on app interaction; prospects on marketing pages do not generate SDK events.
-- **Authenticated app user:** zero external users were onboarded during the phantom-ingest window. No external app users affected. *(This is the load-bearing classification override — see frontmatter `classification_override`.)*
+- **Authenticated app user:** 10 operator-adjacent accounts existed in the prd `auth.users` table during the phantom-ingest window (founders on `jikig.com` / `soleur.ai`; team on `jikigai.com` / `soleur.ai`; `ux-audit-bot@jikigai.com`; internal QA / test accounts on `soleur.dev` and `example.com`; and 2 `gmail.com` test signups confirmed by the operator on 2026-05-17 as friends-of-team / Harry's pre-team-account test of the external signup flow — see committed audit at `knowledge-base/legal/audits/2026-05-17-sentry-phantom-ingest-window-auth-users-audit.md` and `knowledge-base/legal/article-30-register.md` PA8 §(d) for per-row categorization (PII redacted to domain + role)). **Zero arms-length external app users were onboarded or affected during the window.** *(This is the load-bearing classification override — see frontmatter `classification_override`. The override stands: all 10 in-window accounts are under operator instruction or contractual relationship; the operator-as-data-subject Art 34 obligation is satisfied by this PIR itself, and the team / friends-of-team accounts are directly reachable by team comms.)*
 - **Legal-document signer:** zero external signers during window; not applicable.
 - **Admin via Access:** the operator (single founder) is the only Admin during window; data captured was their own debugging telemetry. Subject is self-aware of the breach.
 - **Billing customer:** zero billing customers during window — paid plan onboarding not yet open.
 - **OAuth installation owner:** zero external GitHub App installations during window — installations limited to dogfooding orgs the operator administers. Internal team awareness applies.
 
-**Summary:** the affected population during the phantom-ingest window is the internal team (operator + any contractor / agent / Playwright session running under operator credentials). All subjects are self-aware; no external-party exposure has been positively confirmed. The §5(2) accountability concern is the *enumeration gap* (cannot list the processor that received the events), not a confirmed harm to subjects.
+**Summary:** the affected population during the phantom-ingest window is the internal team (operator + 8 operator-adjacent accounts: founders, team, bot, internal QA / test) plus 2 friends-of-team test signups under operator instruction (per PR-α SQL-count + operator categorization on 2026-05-17). All subjects are operator-adjacent (under contractual or operator-instructed relationship) and either self-aware or directly reachable by team comms. No arms-length external-party exposure has been positively confirmed. The §5(2) accountability concern is the *enumeration gap* (cannot list the processor that received the events), not a confirmed harm to subjects.

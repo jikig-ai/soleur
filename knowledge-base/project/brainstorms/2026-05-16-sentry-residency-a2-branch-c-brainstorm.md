@@ -30,7 +30,7 @@ A2's original framing ("align tfstate to existing DE org, rotate token, re-apply
 - Audit gate misconfigured: gate green but admin-controllability not actually verified, masking next residency drift identically to the original failure mode.
 - Atomic-swap data loss: prod error fires into a now-revoked DSN before propagation completes; single user hits the bug; the supporting telemetry is gone.
 
-**Threshold:** `single-user incident`. Forward-looking — the PIR's `brand_survival_threshold: none` downgrade applies only to the historical window (no external users existed 2026-03-28 → 2026-05-16). Every Branch C PR is the remediation that determines whether the **next** user to sign up hits a clean DE residency story or a half-state. All Branch C PRs carry this threshold in frontmatter and trigger user-impact-reviewer at review time.
+**Threshold:** `single-user incident`. Forward-looking — the PIR's `brand_survival_threshold: none` downgrade applies only to the historical window (10 operator-adjacent accounts existed 2026-03-28 → 2026-05-16, all under operator instruction or contractual relationship per PR-α SQL-count + operator categorization on 2026-05-17; zero arms-length external signups). Every Branch C PR is the remediation that determines whether the **next** arms-length signup hits a clean DE residency story or a half-state. All Branch C PRs carry this threshold in frontmatter and trigger user-impact-reviewer at review time.
 
 ## Lane
 

@@ -57,7 +57,7 @@ The brainstorm captures 12 key decisions and 3 capability gaps; the spec capture
 
 **If this leaks, the user's data is exposed via:** Same artifacts the PIR enumerates — error messages and stack traces that may incidentally include `user_id`, request paths, request headers. Pre-swap, these went to an unowned third-party org for 49 days (PIR-documented). Post-swap, the audit-gate triple-expansion (C5) prevents recurrence by proving admin-controllability of the new destination at every diff + deploy.
 
-**Brand-survival threshold:** `single-user incident` (forward-looking — the PIR's `none` downgrade is backward-looking only; no external users existed 2026-03-28 → 2026-05-16. Every Branch C PR determines whether the **next** signup hits a clean DE residency story or a recurrence).
+**Brand-survival threshold:** `single-user incident` (forward-looking — the PIR's `none` downgrade is backward-looking only; the prd `auth.users` table held 10 operator-adjacent accounts and **zero arms-length external signups** during the phantom-ingest window 2026-03-28 → 2026-05-16, verified by SQL count + operator categorization at PR-α merge time 2026-05-17. Every Branch C PR determines whether the **next** arms-length signup hits a clean DE residency story or a recurrence).
 
 **Required sign-offs:**
 - **CPO sign-off** (plan-time) — captured via brainstorm Domain Assessment Step 2.5 carry-forward; CPO concurred with 3-PR shape, `single-user incident` threshold, and amicable-with-receipts refund posture.
@@ -102,7 +102,7 @@ None outside the triad. Operations + Marketing + Sales + Finance + Support not a
 
 - **Art 33 (notification of breach):** Procedural disclosure path is PA8 §5(2) wording + PIR + optional CNIL filing (operator-gated on Sentry-support T-24h buffer per Decision #10). PR-α satisfies the procedural gate by 2026-05-19; remediation (PR-β) carries no Art 33 deadline.
 - **Art 30(5) sub-processor accountability:** C6 PA8 §5(2) recipient-cell append documents the recipient drift (phantom org → new DE org); placeholder mechanic prevents premature claim before C2 settles.
-- **Art 34 (communication to data subjects):** Self-controller-self-processor framing — no external subjects 2026-03-28 → 2026-05-16; operator-as-data-subject covered by the PIR itself (committed, dated, git-authored) plus one-line cross-reference in `compliance-posture.md` (FR3).
+- **Art 34 (communication to data subjects):** Self-controller-self-processor framing — 10 operator-adjacent accounts (founders, team, bot, internal QA / test, 2 friends-of-team test signups) and zero arms-length external signups during phantom-ingest window 2026-03-28 → 2026-05-16, verified by SQL count + operator per-row categorization at PR-α merge time 2026-05-17 (recorded in PR #3904 review evidence and `knowledge-base/legal/article-30-register.md` PA8 §(d)). Operator-as-data-subject covered by the PIR itself (committed, dated, git-authored) plus one-line cross-reference in `compliance-posture.md` (FR3); operator-adjacent team / friends-of-team subjects directly reachable by team comms (no formal Art 34 notification machinery needed).
 - **Art 25 (data protection by design):** C5 audit-gate triple-expansion is the design-level control that makes silent residency drift impossible to greenlight — the root-cause failure mode A1 documented.
 
 **Critical findings:** None new. The phantom-ingest window is the documented critical finding the PIR already records; Branch C is its closure.
@@ -419,7 +419,7 @@ Verification (AC6 rewritten per DHH P1 to test ingest, not string shape):
 - AC9: old phantom token returns 401 against `https://eu.sentry.io/api/0/users/me/` (proves revocation).
 - AC10: `terraform state list | wc -l` returns 13; PR body contains pre/post manifest diff.
 - **AC11-pre (manual surrogate, P0 fix #5):** Each of 9 scheduled workflows manually triggered via `gh workflow run <name>.yml`; the resulting check-in event ID captured in PR-β body. Any workflow lacking `workflow_dispatch:` MUST get one added in this PR's diff (no current-state spot check needed — `grep -L "workflow_dispatch:" .github/workflows/scheduled-{cf-token-expiry-check,community-monitor,content-vendor-drift,daily-triage,github-app-drift-guard,oauth-probe,realtime-probe,skill-freshness,terraform-drift}.yml` enumerates the misses).
-- **AC14-pre (moved from PR-γ):** `grep -c "<pending C2 merge>" knowledge-base/legal/article-30-register.md` returns 0 (placeholder backfilled in this PR's final commit).
+- **AC14-pre (moved from PR-γ; widened per PR-α review pattern-recognition P1-A):** `grep -rc "<pending C2 merge>" knowledge-base/legal/article-30-register.md knowledge-base/legal/compliance-posture.md` returns 0 for both files (placeholders backfilled in this PR's final commit — PA8 §(d) cell in `article-30-register.md` plus the two PR-β/PR-γ slots in the `#3861` Active row of `compliance-posture.md`).
 
 ### PR-γ — Cleanup + Vendor (`-3` worktree)
 
@@ -576,7 +576,7 @@ Plan options (verified against the cloudflare-token Doppler scope):
 
 - AC12: US shadow org status documented.
 - AC13: Both Sentry support ticket IDs captured.
-- AC14: `<pending C2 merge>` placeholder backfilled. **Verify:** `grep -c "<pending C2 merge>" knowledge-base/legal/article-30-register.md` returns 0.
+- AC14: `<pending C2 merge>` placeholder backfilled. **Verify:** `grep -rc "<pending C2 merge>" knowledge-base/legal/article-30-register.md knowledge-base/legal/compliance-posture.md` returns 0 for both files. (Widened per PR-α review pattern-recognition P1-A to cover the placeholder-syntax-unified compliance-posture.md row.)
 - AC15: PIR status `resolved`; Phase 8 section present. **Verify:** `grep -nE "^status: resolved" knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; `grep -c "## Phase 8 — Recovery Completeness" ...` returns 1.
 - AC16: W1/W2/W4/W5 follow-up issues filed. **Verify:** each `gh issue view <N>` returns `state: open` with title matching W-spec.
 

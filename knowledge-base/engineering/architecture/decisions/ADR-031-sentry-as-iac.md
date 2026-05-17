@@ -51,7 +51,7 @@ work in this repo MUST reference this glossary by name when choosing a host.
 |-----------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
 | **Ingest**      | `o<id>.ingest.de.sentry.io`, `o<id>.ingest.us.sentry.io` | DSN POSTs (`/api/<project_id>/store/`, `/api/<project_id>/envelope/`); cron-checkin beacons; CSP report-uri POSTs            | Settings UI; REST API; dashboard. Path-only POST sinks — no GET/PUT semantics.            |
 | **Dashboard**   | `sentry.io`, `<org-slug>.sentry.io`, `eu.sentry.io` | Web UI: org settings, project settings, alerts, monitors, issue triage. **EU-region dashboard host is `eu.sentry.io`** (NOT `de.sentry.io`). | Ingest POSTs (event upload goes to `*.ingest.*.sentry.io`).                               |
-| **API**         | `eu.sentry.io/api/0/...`, `us.sentry.io/api/0/...`  | REST API: `/organizations/{slug}/`, `/projects/{org}/{project}/`, `/releases/`, `/users/me/`. **EU-region API base_url is `eu.sentry.io/api/`.** | Event ingest (path-disjoint from `/api/<project_id>/store/`).                             |
+| **API**         | `eu.sentry.io/api/0/...`, `us.sentry.io/api/0/...`, `sentry.io/api/0/...` (legacy global) | REST API: `/organizations/{slug}/`, `/projects/{org}/{project}/`, `/releases/`, `/users/me/`. **EU-region API base_url is `eu.sentry.io/api/`.** The bare `sentry.io/api/0/...` host is the legacy global API surface still probe-looped by `apps/web-platform/scripts/sentry-monitors-audit.sh` as a fall-through after `eu.sentry.io`. | Event ingest (path-disjoint from `/api/<project_id>/store/`).                             |
 
 **Implications for Terraform + audit tooling:**
 
@@ -59,6 +59,15 @@ work in this repo MUST reference this glossary by name when choosing a host.
   region MUST be `https://eu.sentry.io/api/`. Setting it to `https://de.sentry.io/api/`
   produces silent 404s (ingest-only host has no `/api/0/...` surface) which a
   beta-provider may not surface as a Terraform error.
+  **Transition note (as of this ADR revision, 2026-05-16):**
+  `apps/web-platform/infra/sentry/main.tf:30` still resolves to
+  `https://de.sentry.io/api/` under `var.sentry_region == "de"`. The flip to
+  `https://eu.sentry.io/api/` lands in PR-β of #3861 atomic with the tfstate
+  drop + serial re-import sequence (plan
+  `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md`
+  Phase 2 step 9 + Phase 6). Do not flip it out-of-band — the atomicity
+  prevents a 3-state window where the provider points at `eu.sentry.io` but
+  the org slug still references the phantom org.
 - **Audit script `api_host`** (`apps/web-platform/scripts/sentry-monitors-audit.sh`)
   region-probe loop MUST include `eu.sentry.io` (and prefer it over `sentry.io`
   for EU-resident orgs) — `de.sentry.io` will return 404 for every API call.
