@@ -17,8 +17,12 @@ on the new required check at next firing.
 Adds a 6th synthetic check-run after the existing `cla-check` post:
 
 - `cla-evidence` — auto-success, fixed `"Bot-authored PR — no CLA-signed
-  contributions to attest."` summary. Matches the `cla-check` shape; no
-  caller input is consumed.
+  contributions to attest."` summary in this composite. Matches the
+  `cla-check` shape; no caller input is consumed. (The two inline-posting
+  workflows — `scheduled-compound-promote.yml` and
+  `scheduled-content-publisher.yml` — use a `"Bot-authored content PR — …"`
+  variant since they're both content-emitting; this composite serves
+  generic bot PRs and keeps the unqualified phrasing.)
 
 **No input contract change.** Existing v2 callers are forward-compatible —
 the new synthetic is posted unconditionally, like `cla-check`.

@@ -37,8 +37,8 @@ inputs:
   change-summary:
     description: >
       Short text used as the `output[summary]` of the test, dependency-review,
-      and e2e synthetic checks. cla-check and cla-evidence use fixed
-      allowlist summaries.
+      and e2e synthetic checks. cla-check uses a fixed allowlist summary;
+      cla-evidence uses a fixed not-applicable summary.
       Must fit the GitHub check-run summary 60KB cap.
     required: false
     default: "Bot PR, no code changes"
