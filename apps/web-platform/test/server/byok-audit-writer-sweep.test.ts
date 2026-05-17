@@ -28,6 +28,19 @@ import { sync as globSync } from "fast-glob";
 const SERVER_DIR = "server";
 const OUT_OF_SCOPE_MARKER = "byok-audit-writer-sweep: out-of-scope";
 
+// Direct call site: file invokes `runWithByokLease(...)` literally.
+const LEASE_CALL_RE = /\brunWithByokLease\s*\(/;
+
+// PR-F (#3244) RV17: alias-rename bypass detection. A file importing
+// the lease primitive under an alias (e.g.,
+// `import { runWithByokLease as openLease } from "./byok-lease"`)
+// and calling it via the alias would otherwise slip past the
+// LEASE_CALL_RE source-grep. Catch the alias import shape too —
+// any file matching this regex is sweepable regardless of whether
+// the alias-call appears literally in source. Mitigates the
+// 2026-05-15 ci-sentinel-paren-safety class for the BYOK boundary.
+const ALIAS_IMPORT_RE = /import\s*\{[^}]*\brunWithByokLease\s+as\s+\w+/;
+
 /**
  * Files matching `runWithByokLease\(` that we explicitly do NOT sweep:
  *
@@ -67,10 +80,12 @@ describe("BYOK audit writer sweep", () => {
       .replace(/\/\/.*$/gm, "");
 
   // Filter to call-sites that open a BYOK lease (excluding the definition).
+  // PR-F RV17: also flag alias-rename imports — see ALIAS_IMPORT_RE above.
   const sweepable = files.filter((path) => {
     if (SWEEP_ALLOWLIST.has(path)) return false;
     const src = readFileSync(path, "utf8");
-    return /\brunWithByokLease\s*\(/.test(stripComments(src));
+    const stripped = stripComments(src);
+    return LEASE_CALL_RE.test(stripped) || ALIAS_IMPORT_RE.test(stripped);
   });
 
   it("at least one BYOK lease call-site exists (sentinel sanity)", () => {
@@ -95,4 +110,85 @@ describe("BYOK audit writer sweep", () => {
       ).toBe(true);
     });
   }
+});
+
+// PR-F (#3244) RV17: alias-rename bypass regression-guard.
+//
+// Source-grep sentinels suffer the alias-rename failure mode: a file that
+// imports the canonical name under an alias and calls only the alias will
+// slip past a literal-name regex even though it opens an ALS-scoped
+// lease. The 2026-05-15-ci-sentinel-paren-safety class captures this
+// shape generally; this block instantiates it for the BYOK boundary.
+//
+// In-test fixture strings avoid polluting the production server/**/*.ts
+// glob (the sweep above) and the test/fixtures/ tree (Phase 2 sequencing
+// — the fixture lives where the regex lives).
+describe("BYOK audit writer sweep — alias-rename bypass detection (RV17)", () => {
+  it("LEASE_CALL_RE catches a direct call site", () => {
+    const direct = `
+      import { runWithByokLease } from "./byok-lease";
+      await runWithByokLease(userId, async (lease) => { /* ... */ });
+    `;
+    expect(LEASE_CALL_RE.test(direct)).toBe(true);
+  });
+
+  it("LEASE_CALL_RE MISSES a file that uses the aliased call only", () => {
+    // This is the failure shape RV17 closes. Without the alias detector,
+    // this file would slip past the sweep — load-bearing brand-survival
+    // gap.
+    const aliased = `
+      import { runWithByokLease as openLease } from "./byok-lease";
+      await openLease(userId, async (lease) => { /* ... */ });
+    `;
+    expect(LEASE_CALL_RE.test(aliased)).toBe(false);
+  });
+
+  it("ALIAS_IMPORT_RE catches the alias import shape", () => {
+    const aliased = `
+      import { runWithByokLease as openLease } from "./byok-lease";
+      await openLease(userId, async (lease) => { /* ... */ });
+    `;
+    expect(ALIAS_IMPORT_RE.test(aliased)).toBe(true);
+  });
+
+  it("ALIAS_IMPORT_RE catches alias imports in multi-name import lists", () => {
+    const mixed = `
+      import { ByokLease, runWithByokLease as run, type ByokLeaseError } from "./byok-lease";
+      await run(userId, async () => { /* ... */ });
+    `;
+    expect(ALIAS_IMPORT_RE.test(mixed)).toBe(true);
+  });
+
+  it("ALIAS_IMPORT_RE does NOT match a bare import (no alias)", () => {
+    // Bare import is caught by LEASE_CALL_RE on the call site; the alias
+    // detector should NOT false-positive on the import statement itself
+    // when the file then calls the canonical name (otherwise every direct
+    // caller would trigger both regexes, which is harmless but noisy).
+    const bare = `
+      import { runWithByokLease, ByokLease } from "./byok-lease";
+      await runWithByokLease(userId, async (lease) => { /* ... */ });
+    `;
+    expect(ALIAS_IMPORT_RE.test(bare)).toBe(false);
+  });
+
+  it("ALIAS_IMPORT_RE does NOT match unrelated imports that mention 'as'", () => {
+    const unrelated = `
+      import { foo as bar } from "./other";
+      import { runWithByokLease } from "./byok-lease";
+    `;
+    expect(ALIAS_IMPORT_RE.test(unrelated)).toBe(false);
+  });
+
+  it("filter sweepable selects an aliased file (combined OR-of-regexes)", () => {
+    // The production filter uses LEASE_CALL_RE OR ALIAS_IMPORT_RE. Prove
+    // the alias-only file is selected — without this OR, the file's
+    // persistTurnCost call would not be required because the file
+    // would not be classified as sweepable in the first place.
+    const aliased = `
+      import { runWithByokLease as openLease } from "./byok-lease";
+      await openLease(userId, async (lease) => { /* ... */ });
+    `;
+    const sweepable = LEASE_CALL_RE.test(aliased) || ALIAS_IMPORT_RE.test(aliased);
+    expect(sweepable).toBe(true);
+  });
 });
