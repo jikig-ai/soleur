@@ -93,6 +93,8 @@ CRITICAL: You MUST output the ## Session Summary section in EXACTLY the format a
 
 **Parse subagent output and write session-state.md:**
 
+After the subagent returns, **verify the subagent stayed in scope**: run `git diff origin/main...HEAD --name-only` and confirm only files under `knowledge-base/project/{plans,specs}/` were modified. If files outside that prefix were touched (workflow YAML, source code, CHANGELOG, etc.), the subagent exceeded its plan-only mandate — the Session Summary's "Decisions" became statements of intent rather than fact. Read each out-of-scope file from disk and reconcile against the plan's claims before trusting Step 3 onward; do NOT trust the Session Summary's reconciliation narrative ("Adopted the on-disk output text", "Already applied as uncommitted local changes") without verifying via `git diff <file>` first. **Why:** #3937 — plan-deepen subagent committed source-code edits AND its Session Summary claimed on-disk text it had not actually written (`pre-recorded` vs prescribed `not applicable`), costing two reconciliation commits. See [[2026-05-17-planning-subagent-exceeded-scope-and-summary-vs-disk-drift]].
+
 After the subagent returns, check for a `## Session Summary` heading in the output.
 
 **If present (success):**
