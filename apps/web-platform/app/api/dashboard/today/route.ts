@@ -78,7 +78,10 @@ export async function GET(_req: Request) {
       message: "Failed to load Today drafts",
       extra: { userId },
     });
-    logger.error({ err: error, userId }, "dashboard-today: select failed");
+    // userId omitted from logger.error: reportSilentFallback above already
+    // captures pseudonymised userId via observability.hashExtraUserId. Direct
+    // emit is blocked by .github/workflows/pr-quality-guards.yml#userid-bypass-lint.
+    logger.error({ err: error }, "dashboard-today: select failed");
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 
