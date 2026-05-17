@@ -46,19 +46,19 @@ CPO sign-off required: yes (`requires_cpo_signoff: true` in frontmatter). The br
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** — All 6 new positive cases (2 tools × 3 rules) fire HIGH-RISK in `bun test plugins/soleur/test/skill-security-scan.test.ts`. The test's existing assertion shape (rule-ID presence + count thresholds) is extended to `fetchPipeCount >= 5`, `fetchProcessSubCount >= 3`, `fetchCmdsubCount >= 4`.
-- [ ] **AC2** — `bash plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh` exits 0 (the self-test runs the same fixtures).
-- [ ] **AC3** — Manifest SHA in `manifest.yaml` matches `sha256sum code-exec.yaml` byte-for-byte. Verification: `sha256sum plugins/soleur/skills/skill-security-scan/references/rules/code-exec.yaml | cut -d' ' -f1` equals the value in `manifest.yaml`'s `code-exec.yaml` entry.
-- [ ] **AC3a (machine-verifiable atomicity)** — The regex edit AND the SHA edit are in the SAME commit. Verification:
+- [x] **AC1** — All 6 new positive cases (2 tools × 3 rules) fire HIGH-RISK in `bun test plugins/soleur/test/skill-security-scan.test.ts`. The test's existing assertion shape (rule-ID presence + count thresholds) is extended to `fetchPipeCount >= 5`, `fetchProcessSubCount >= 3`, `fetchCmdsubCount >= 4`.
+- [x] **AC2** — `bash plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh` exits 0 (the self-test runs the same fixtures).
+- [x] **AC3** — Manifest SHA in `manifest.yaml` matches `sha256sum code-exec.yaml` byte-for-byte. Verification: `sha256sum plugins/soleur/skills/skill-security-scan/references/rules/code-exec.yaml | cut -d' ' -f1` equals the value in `manifest.yaml`'s `code-exec.yaml` entry.
+- [x] **AC3a (machine-verifiable atomicity)** — The regex edit AND the SHA edit are in the SAME commit. Verification:
    ```bash
    yaml_commit=$(git log --oneline -- plugins/soleur/skills/skill-security-scan/references/rules/code-exec.yaml | head -1 | awk '{print $1}')
    manifest_commit=$(git log --oneline -- plugins/soleur/skills/skill-security-scan/references/rules/manifest.yaml | head -1 | awk '{print $1}')
    [ "$yaml_commit" = "$manifest_commit" ] && echo "ATOMIC" || echo "SPLIT: yaml=$yaml_commit manifest=$manifest_commit"
    ```
    Expect: `ATOMIC`. Intermediate commits with mismatched SHAs cause every scan to short-circuit to REVIEW.
-- [ ] **AC4** — Calibration re-grep: `for f in $(find plugins/soleur/skills -name SKILL.md); do bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh "$f" | grep -c HIGH-RISK; done` produces zero NEW `HIGH-RISK` lines vs the pre-widening baseline. (Baseline: zero hits — verified at plan-time grep.)
-- [ ] **AC5** — `bash scripts/test-all.sh` is green (≥35 suites; `bot-fixture.test` may skip per env policy).
-- [ ] **AC6** — `bun run --cwd apps/web-platform tsc --noEmit` is green (no TS regressions; the test file is the only TS surface touched).
+- [x] **AC4** — Calibration re-grep: `for f in $(find plugins/soleur/skills -name SKILL.md); do bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh "$f" | grep -c HIGH-RISK; done` produces zero NEW `HIGH-RISK` lines vs the pre-widening baseline. (Baseline: zero hits — verified at plan-time grep.)
+- [x] **AC5** — `bash scripts/test-all.sh` is green (≥35 suites; `bot-fixture.test` may skip per env policy).
+- [x] **AC6** — `bun run --cwd apps/web-platform tsc --noEmit` is green (no TS regressions; the test file is the only TS surface touched).
 - [ ] **AC7** — PR body references `Closes #3607`. PR body also includes a Sharp Edges note: "Class (a) split-line / indirect-invocation tracking moved to issue #<new-issue-N> per the contested-design scope-out criterion."
 
 ### Post-merge (operator)
