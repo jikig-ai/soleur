@@ -30,8 +30,8 @@ eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NA
 : "${TOOL_NAME:=}"
 
 # Bypass preflight — records (does NOT block) when a known bypass flag is used.
-# v1 scope: --no-verify, LEFTHOOK=0. Extend detect_bypass (lib/incidents.sh)
-# once data justifies broader detection.
+# Scope: --no-verify, -c core.hooksPath=…, HUSKY=0, --no-gpg-sign,
+# -c commit.gpgsign=false, LEFTHOOK=0. See detect_bypass in lib/incidents.sh.
 _bypass_rid=$(detect_bypass "$TOOL_NAME" "$COMMAND")
 if [[ -n "$_bypass_rid" ]]; then
   emit_incident "$_bypass_rid" "bypass" "${COMMAND:0:50}" "$COMMAND"

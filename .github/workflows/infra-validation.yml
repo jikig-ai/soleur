@@ -12,6 +12,7 @@ on:
   pull_request:
     paths:
       - "apps/*/infra/**"
+      - "infra/**"
       - ".github/workflows/infra-validation.yml"
   workflow_dispatch:
 
@@ -37,11 +38,20 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
         run: |
+          # Two pathspec families covered:
+          #   - apps/*/infra/...      (per-app roots: web-platform, sentry sub-root)
+          #   - infra/<name>/...      (repo-level roots: infra/github/, future siblings)
+          # sed -E anchors on ^apps/[^/]+/infra and ^infra/[^/]+ -- both shapes
+          # collapse to their single-ancestor directory. Deep-nested paths
+          # (infra/github/some-subdir/file) STILL collapse to infra/github
+          # because [^/]+ matches the first slash-bounded segment.
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            DIRS=$(find apps/*/infra -maxdepth 0 -type d 2>/dev/null | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
+                       find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
+                    | jq -R -s -c 'split("\n") | map(select(. != ""))')
           else
-            DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- 'apps/*/infra/' \
-              | sed 's|\(apps/[^/]*/infra\)/.*|\1|' \
+            DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- 'apps/*/infra/' 'infra/' \
+              | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
               | sort -u \
               | jq -R -s -c 'split("\n") | map(select(. != ""))')
           fi
@@ -84,6 +94,20 @@ jobs:
           terraform validate
         working-directory: ${{ matrix.directory }}
 
+      # Optional per-app lint hook: any infra root that ships a `main.test.sh`
+      # gets it executed after fmt/validate. Used by apps/cla-evidence/infra
+      # to assert content invariants (Governance mode, 3650-day retention,
+      # prevent_destroy, no IP-allowlist) that fmt/validate alone can't see.
+      - name: Run per-app main.test.sh (if present)
+        run: |
+          if [[ -f main.test.sh ]]; then
+            echo "→ bash main.test.sh"
+            bash main.test.sh
+          else
+            echo "No main.test.sh in this directory; skipping."
+          fi
+        working-directory: ${{ matrix.directory }}
+
   deploy-script-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -92,6 +116,9 @@ jobs:
 
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
+
+      - name: Run ci-deploy-wrapper.sh tests
+        run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
 
       - name: Run canary-bundle-claim-check.sh tests
         run: bash apps/web-platform/infra/canary-bundle-claim-check.test.sh

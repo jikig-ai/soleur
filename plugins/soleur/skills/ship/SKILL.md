@@ -474,9 +474,10 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 
 ### Deploy Pipeline Fix Drift Gate
 
-**Trigger:** PR touches any of the 5 `terraform_data.deploy_pipeline_fix` trigger files:
+**Trigger:** PR touches any of the 6 `terraform_data.deploy_pipeline_fix` trigger files:
 
 - `apps/web-platform/infra/ci-deploy.sh`
+- `apps/web-platform/infra/ci-deploy-wrapper.sh`
 - `apps/web-platform/infra/webhook.service`
 - `apps/web-platform/infra/cat-deploy-state.sh`
 - `apps/web-platform/infra/canary-bundle-claim-check.sh`
@@ -489,12 +490,13 @@ The five trigger files are enumerated as a single bash array. The regex below MU
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/ci-deploy-wrapper.sh"
   "apps/web-platform/infra/webhook.service"
   "apps/web-platform/infra/cat-deploy-state.sh"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/hooks.json.tmpl"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -503,13 +505,13 @@ If the grep matches at least one path, the gate fires. Trigger condition is "≥
 
 **If triggered:**
 
-The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply. The drift workflow (`scheduled-terraform-drift.yml`, cron `0 6,18 * * *`) will detect this on its next tick and auto-file an issue. The cleaner path is to schedule the apply to happen *with* the merge.
+The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply.
 
-**Preferred path: one-click workflow.** Run the [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow via the GitHub Actions UI (`Actions → Apply deploy-pipeline-fix → Run workflow`). The workflow runs the targeted `terraform apply` with the credentials sourced from Doppler `prd_terraform`, then verifies server-side hashes match local trigger files and `webhook` is `active`. No terminal, no local Doppler/SSH setup. The first run requires a one-time browser-only setup (paste the prod SSH private key into Doppler as `TERRAFORM_SSH_PRIVATE_KEY`) — the workflow's "Verify Terraform SSH key" step fails with explicit instructions when the secret is missing.
+**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any of the 6 trigger files change. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies server-side hashes match the merged tree, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
 
-The local-terminal flow below is preserved as a fallback for operators who cannot use the workflow (e.g., the workflow's environment-protection reviewer is unavailable, or the Doppler secret has not yet been seeded). Issue #3618 tracks the deeper refactor that eliminates this whole class of host-resident-script drift (containerized deploy-orchestrator).
+This gate's role is now purely informational: surface that the PR will trigger the auto-apply, and confirm the operator has not used the kill-switch unintentionally. Issue #3618 tracks the deeper refactor that eliminates the `terraform_data.deploy_pipeline_fix` pattern entirely (containerized deploy-orchestrator).
 
-Display this exact block to the operator (fallback path):
+The local-terminal flow below is preserved as a documented fallback for the rare case where the auto-apply fails (transient network, Hetzner outage, terraform state lock). Display this block to the operator only when the auto-apply has actually failed:
 
 ```text
 This PR edits `terraform_data.deploy_pipeline_fix` trigger files. Drift will be
@@ -556,19 +558,14 @@ plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
 
 **Interactive mode:**
 
-Ask via AskUserQuestion: "Apply now via one-click workflow (recommended), apply locally via terminal (fallback), defer to operator post-merge, or skip?"
-
-- **Apply now via workflow:** Open the [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow in the GitHub Actions UI and click "Run workflow." The reviewer-click on the `production` environment is the human authorization. Pause the ship pipeline until the workflow reports success (visible in the Actions tab).
-- **Apply locally via terminal:** Pause the ship pipeline until the operator confirms the apply ran. Do NOT execute the apply from this skill — the operator runs it in their own terminal so the Terraform `yes` prompt is in their TTY. (TTY hand-off is intentional: prod blast radius warrants a human-typed `yes` rather than `-auto-approve` plus an in-conversation confirmation menu, even though `hr-menu-option-ack-not-prod-write-auth` would technically permit the latter.)
-- **Defer:** Add a `gh pr comment` on the PR (deferred until Phase 6 has the PR number) tagged `[deploy_pipeline_fix-drift-gate]` with both remediation paths embedded so the next operator (post-merge) sees them.
-- **Skip:** Same as Defer plus a "skip rationale" sentence; the next drift cron tick will still file an issue as the safety net.
+Inform the operator: "PR touches `terraform_data.deploy_pipeline_fix` trigger file(s). The `apply-deploy-pipeline-fix.yml` workflow will auto-apply on merge — no action required. Kill switch: add `[skip-deploy-fix-apply]` to a commit message if you want to defer the apply." Proceed to Phase 6 without blocking on user input.
 
 **Headless mode:**
 
-Auto-defer. Try `gh pr comment` first. If `gh pr comment` exits non-zero (the most common cause is the workflow's `GITHUB_TOKEN` lacks `pull-requests: write`; soleur shipping workflows typically grant `contents: read` + `issues: write` only), fall back to writing the tracking message into both stderr and `$GITHUB_STEP_SUMMARY` so it appears in the workflow's Summary tab. Do NOT abort the ship pipeline — the 12h drift cron remains the eventual safety net. The tracking message names the one-click workflow first so a non-technical operator can click through without a terminal.
+Same as interactive — surface a tracking comment on the PR noting the auto-apply will fire on merge, then proceed. The comment also names the kill-switch and the fallback terminal command for the rare auto-apply failure case.
 
 ```bash
-TRACKING_MSG="[deploy_pipeline_fix-drift-gate] PR touches a trigger file. Preferred: run the 'Apply deploy-pipeline-fix' workflow in the GitHub Actions UI (Actions tab → Apply deploy-pipeline-fix → Run workflow). Fallback: doppler run -p soleur -c prd_terraform -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=true"
+TRACKING_MSG=$'[deploy_pipeline_fix-drift-gate] This PR touches a trigger file. `apply-deploy-pipeline-fix.yml` will auto-apply on merge — no action required. To skip the auto-apply, add `[skip-deploy-fix-apply]` to a commit message. If the auto-apply fails (transient outage), run the workflow manually from the Actions tab, or as a last resort: `doppler run -p soleur -c prd_terraform -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=true`.'
 if ! gh pr comment "$PR_NUMBER" --body "$TRACKING_MSG" 2>/dev/null; then
   echo "$TRACKING_MSG" >&2
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
@@ -607,6 +604,31 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 **If not triggered:** Skip silently.
 
 **Why:** In #1265, the CMO content gate was fixed to catch product features but the PWA feature itself was never assessed — the fix shipped without remediating the original gap. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
+
+## Phase 6.4: Unpushed-Commits Gate
+
+[skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]
+
+Before queueing `gh pr merge --squash --auto` (Phase 6 below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. This was the failure mode in PR #3624 → #3627 → #3630: the orchestrator went `preflight → gh pr edit → gh pr ready → gh pr merge --squash --auto` without re-pushing, and 2 of 5 commits (the actual fix + the review fix) never landed on `main`.
+
+The PreToolUse hook [`.claude/hooks/ship-unpushed-commits-gate.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.sh) enforces this gate mechanically — it intercepts every `gh pr merge` (including chained forms like `gh pr ready && gh pr merge`) and denies the tool call when `git rev-list origin/<branch>..HEAD --count` returns > 0. The deny message lists the unpushed SHAs so the operator can `git push` and re-issue.
+
+For headless or non-hooked contexts (CI workflows, direct shell invocations), run the equivalent check before `gh pr merge`:
+
+```bash
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+git fetch origin "$BRANCH" 2>/dev/null || true
+UNPUSHED=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+if [[ "$UNPUSHED" -gt 0 ]]; then
+  echo "FAIL: ${UNPUSHED} unpushed commit(s) on origin/${BRANCH}. Run 'git push'." >&2
+  git log "origin/${BRANCH}..HEAD" --oneline >&2
+  exit 1
+fi
+```
+
+**Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** — a stale tracking ref re-introduces the silent-miss class this gate exists to prevent, so the hook denies and prompts the operator to fetch manually. See rule `wg-ship-push-before-merge` in `AGENTS.core.md` for the canonical contract.
+
+**Hook ordering** matters: the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json) so any auto-sync push performed by the rebase hook has updated the upstream tracking ref before this gate counts unpushed commits. `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces the ordering invariant — keep it green if either hook moves.
 
 ## Phase 6: Push and Create PR
 
@@ -837,11 +859,19 @@ gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}
 
 ### CI Status Check
 
-After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI:
+After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI. Wrap the call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
-gh pr merge <number> --squash --auto
+bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- \
+  gh pr merge <number> --squash --auto
+rc=$?
+if [[ "$rc" -eq 99 ]]; then
+  echo "merge-main lock contended >600s — another session is queueing auto-merge. Retry: re-run /ship after that session completes."
+  exit 1
+fi
 ```
+
+The `with_lock <name> <timeout_s> -- <cmd> [args...]` wrapper acquires the lock, runs the command inline (so the lock fd stays open for the duration), and releases on exit. **The `--` separator is required** — it terminates `with_lock`'s positional arguments. Returns 99 on `>timeout_s` contention; check `$?` and surface to the operator rather than silently failing the merge.
 
 Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet, causing premature merge attempts.
 
@@ -1110,11 +1140,33 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
    sla_business_days: 5
    ```
 
-   To enable automated verification, edit the YAML block above. Supported types:
+   Per `hr-no-dashboard-eyeball-pull-data-yourself`, default to automated verification — `type: manual` should be the exception, not the rule. Before emitting `type: manual`, check whether the verification can be expressed as a query against a credentialed API.
+
+   **Types currently implemented by `scheduled-follow-through.yml`** (the daily monitor):
 
    - `http-200` — add `url: https://example.com`
    - `dns-txt` — add `domain: example.com` and `expected: verification-string`
    - `dns-a` — add `domain: example.com` and `expected: 1.2.3.4`
+
+   **Types in the prescriptive spec but not yet implemented by the daily monitor** (the monitor lacks Doppler secret access; widening that scope is a separate PR). When `/ship` Phase 7 Step 3.5 would otherwise emit `type: manual` for one of these, instead scaffold a dedicated `--once` GitHub Actions workflow via `/soleur:schedule --once` with the verdict baked in (the workflow brings its own Doppler env without widening the monitor's blast radius):
+
+   - `sql-query` — `doppler_token_secret: DOPPLER_TOKEN_PRD`, `project: soleur`, `config: prd`, `supabase_ref: <REF>`, `query: |` (multi-line SQL — read-only `SELECT` only), `verdict: |` (single jq expression returning `"PASS"` or `"FAIL: <detail>"` against the `/database/query` JSON response). Example:
+
+     ```yaml
+     type: sql-query
+     doppler_token_secret: DOPPLER_TOKEN_PRD
+     project: soleur
+     config: prd
+     supabase_ref: ifsccnjhymdmidffkzhl
+     query: |
+       SELECT SUM(reads + writes + extends + fsyncs) AS iops FROM pg_stat_io
+     verdict: |
+       if (.[0].iops | tonumber) < 1000 then "PASS" else "FAIL: iops=\(.[0].iops)" end
+     ```
+
+   - `api-curl` — `url:`, `headers_from_doppler:` (map of header → Doppler secret), `verdict:` (jq expression). For Sentry rate, Vercel deployment status, Cloudflare zone settings. HTTPS-only; host allow-list enforced at scaffold time.
+
+   When emitting `type: manual`, include a one-line `manual_because:` justification (`captcha-gated`, `oauth-consent-screen`, `subjective-design-call`, etc.). Bare `type: manual` without justification trips the review-time gate that enforces `hr-no-dashboard-eyeball-pull-data-yourself` — "the operator can read the gauge" is not a valid justification when the gauge value is API-accessible.
 
    ## Status
 
@@ -1194,3 +1246,4 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
 - **Confirm the PR title and body** with the user before creating it (skip in headless mode).
 - **CI workflow edits:** When the PR touches `.github/workflows/*.yml` or `.github/actions/**`, load [ci-workflow-authoring.md](./references/ci-workflow-authoring.md) for known-buggy idioms, heredoc/YAML indentation traps, Doppler service-token naming, `claude-code-action` pin freshness, and `jq -e` guards for JSON polling. These were migrated out of AGENTS.md — review them before pushing CI changes.
+- **Register / policy update PRs:** When the PR diff is bounded to `knowledge-base/legal/**` or `docs/legal/**` and documents controls introduced by an upstream PR (typical for follow-through register updates per Phase 7 Step 3.5), load [register-update-pr-pattern.md](./references/register-update-pr-pattern.md) before authoring the PR body. The pattern: cite by semantic identifier (function / RPC / migration anchor), not by plain-prose file path, to avoid the `Block PR body citing files not in diff` (#2905) gate firing on legitimate cross-references. Inline-backtick file references are exempt as of PR #3882's follow-up.

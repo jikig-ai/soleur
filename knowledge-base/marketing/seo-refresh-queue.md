@@ -213,3 +213,11 @@ Based on competitive intelligence scan of 2026-03-12, the following comparison p
 ---
 
 _Updated: 2026-04-01. Sources: content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), content-plan.md (2026-03-17), competitive-intelligence.md (2026-03-12). Priority 1 items completed in biweekly growth execution 2026-04-01._
+
+## Auto-Discovered Topics
+
+Topics discovered via `/soleur:growth plan` when the queue was exhausted.
+
+| Topic | Keywords | Source | Generated Date |
+|-------|----------|--------|----------------|
+| How to Run Every Business Department with AI Agents: A Solo Founder's Playbook | how to run company with AI agents, AI agents for every department, solo founder AI agents, delegate to AI agents, AI organization platform, context engineering solo founder | growth plan (auto-discovered) | 2026-05-14 |

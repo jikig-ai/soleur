@@ -13,8 +13,10 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-the-bash-tool-runs-in-a-non-interactive] → core
 - [id: hr-exhaust-all-automated-options-before] → core
 - [id: hr-never-label-any-step-as-manual-without] → core
+- [id: hr-multi-step-post-merge-bootstrap-script] → core
 - [id: hr-when-triaging-a-batch-of-issues-never] → core
 - [id: hr-all-infrastructure-provisioning-servers] → core
+- [id: hr-autonomous-loop-skill-api-budget-disclosure] → core
 - [id: hr-every-new-terraform-root-must-include-an] → core
 - [id: hr-new-skills-agents-or-user-facing] → core
 - [id: hr-before-shipping-ship-phase-5-5-runs] → core
@@ -31,6 +33,9 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-weigh-every-decision-against-target-user-impact] → core
 - [id: hr-never-paste-secrets-via-bang-prefix] → core
 - [id: hr-gdpr-gate-on-regulated-data-surfaces] → core
+- [id: hr-type-widening-cross-consumer-grep] → core
+- [id: hr-write-boundary-sentinel-sweep-all-write-sites] → core
+- [id: hr-no-dashboard-eyeball-pull-data-yourself] → core
 
 ## Workflow Gates
 
@@ -42,6 +47,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-before-every-commit-run-compound-skill] → core
 - [id: wg-never-bump-version-files-in-feature] → core
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → core
+- [id: wg-ship-push-before-merge] → rest
 - [id: wg-after-a-pr-merges-to-main-verify-all] → core
 - [id: wg-at-session-start-run-bash-plugins-soleur] → core
 - [id: wg-at-session-start-after-cleanup-merged] → core
@@ -50,9 +56,10 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-when-an-audit-identifies-pre-existing] → core
 - [id: wg-when-deferring-a-capability-create-a] → core
 - [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core
-- [id: wg-every-session-error-must-produce-either] → core
-- [id: wg-use-closes-n-in-pr-body-not-title-to] → core
-- [id: wg-after-merging-a-pr-that-adds-or-modifies] → core
+- [id: wg-every-session-error-must-produce-either] → rest
+- [id: wg-use-closes-n-in-pr-body-not-title-to] → rest
+- [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
+- [id: wg-plan-prescribed-skills-must-run-inline] → core
 
 ## Code Quality
 
@@ -67,6 +74,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: cq-union-widening-grep-three-patterns] → rest
 - [id: cq-pg-security-definer-search-path-pin-pg-temp] → core
 - [id: cq-eleventy-critical-css-screenshot-gate] → docs-only
+- [id: cq-skill-description-budget-headroom] → docs-only
 - [id: cq-test-fixtures-synthesized-only] → rest
 - [id: cq-regex-unicode-separators-escape-only] → rest
 

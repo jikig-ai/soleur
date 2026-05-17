@@ -14,6 +14,12 @@ Claude Code automatically detects and understands git context:
 - All PR comments and review threads
 - Can work with any PR by specifying the PR number, or ask it.
 
+<decision_gate>
+**API budget.** This skill spawns one `pr-comment-resolver` agent in parallel per unresolved PR comment (N comments = N agents). Each agent runs an independent task with its own context window and token cost; parallel fan-out compresses wall-clock but not aggregate token consumption. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
+Confirm the unresolved-comment count before allowing the fan-out. A PR with 40 unresolved threads spawns 40 parallel agents.
+</decision_gate>
+
 ## Workflow
 
 ### 1. Analyze

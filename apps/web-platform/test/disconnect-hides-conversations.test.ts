@@ -16,6 +16,13 @@ vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: vi.fn(() => ({ from: mockFrom })),
 }));
 
+// PR-C §2.6 / §2.9 (#3244): current-repo-url + conversations-tools +
+// lookup-conversation-for-path now use tenant client. Reuse `mockFrom`.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),

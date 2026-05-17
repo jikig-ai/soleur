@@ -20,8 +20,8 @@ synced_to: []
 
 Two separate Resend accounts existed for the project:
 
-1. **osmosis** (<jean@osmosis.team>) -- suspended, had `send.soleur.ai` domain configured, API key `re_fEbnWAeF...` stored in Doppler prd/prd_terraform
-2. **jikigai** (<ops@jikigai.com>) -- active, had `soleur.ai` domain verified, used by Supabase SMTP with key `re_MwZAqkWc...`
+1. **osmosis** (<jean@example.com>) -- suspended, had `send.soleur.ai` domain configured, API key `re_fEbnWAeF...` stored in Doppler prd/prd_terraform
+2. **jikigai** (<ops@example.com>) -- active, had `soleur.ai` domain verified, used by Supabase SMTP with key `re_MwZAqkWc...`
 
 Doppler (prd + prd_terraform) and GitHub Actions had the suspended account's key. After terraform applied disk-monitor-install, the server couldn't send emails because the key was from the suspended account.
 
@@ -31,7 +31,7 @@ Doppler (prd + prd_terraform) and GitHub Actions had the suspended account's key
 2. Test email via curl returned 401 "API key is invalid"
 3. Checked Resend API with `/api-keys` endpoint: returned 403 "This API key is suspended"
 4. Opened Resend dashboard via Playwright: account banner showed "Your account is temporarily suspended"
-5. Discovered the correct active account under <ops@jikigai.com> with verified `soleur.ai` domain
+5. Discovered the correct active account under <ops@example.com> with verified `soleur.ai` domain
 
 ## Solution
 
@@ -41,12 +41,12 @@ Doppler (prd + prd_terraform) and GitHub Actions had the suspended account's key
    - `doppler secrets set RESEND_API_KEY --project soleur --config prd_terraform`
    - `gh secret set RESEND_API_KEY`
 3. Re-ran `terraform apply -replace=terraform_data.disk_monitor_install` to push correct key to server
-4. Fixed sender domain from `noreply@send.soleur.ai` to `noreply@soleur.ai` in:
+4. Fixed sender domain from `noreply@example.com` to `noreply@example.com` in:
    - `apps/web-platform/infra/disk-monitor.sh`
    - `.github/actions/notify-ops-email/action.yml`
    - `knowledge-base/engineering/ops/runbooks/disk-monitoring.md`
 5. Re-ran terraform apply to deploy corrected disk-monitor.sh
-6. Verified with test email: HTTP 200, email delivered to <ops@jikigai.com>
+6. Verified with test email: HTTP 200, email delivered to <ops@example.com>
 
 ## Key Insight
 
@@ -56,7 +56,7 @@ When multiple Resend accounts exist, the domain verification is per-account. The
 
 1. **Wrong API key deployed to server** -- Doppler had the suspended account's key. Recovery: discovered via test email 401, traced to suspended account. **Prevention:** When provisioning API keys, verify the key works with a test API call before storing in Doppler.
 
-2. **`send.soleur.ai` domain not verified on correct account** -- Test email returned 403 after key fix. Recovery: switched sender to `noreply@soleur.ai` which was verified on the jikigai account. **Prevention:** After rotating API keys across accounts, verify the sending domain is verified on the target account before updating code.
+2. **`send.soleur.ai` domain not verified on correct account** -- Test email returned 403 after key fix. Recovery: switched sender to `noreply@example.com` which was verified on the jikigai account. **Prevention:** After rotating API keys across accounts, verify the sending domain is verified on the target account before updating code.
 
 3. **Playwright browser killed by parallel session** -- Browser backend became stale mid-task. Recovery: killed Chrome processes, retried. **Prevention:** Known issue with parallel sessions; `--isolated` flag mitigates but doesn't fully prevent.
 

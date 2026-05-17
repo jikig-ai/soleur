@@ -220,6 +220,12 @@ jobs:
       STATUS_POLL_INTERVAL_S: 5
       HEALTH_POLL_MAX_ATTEMPTS: 90
       HEALTH_POLL_INTERVAL_S: 10
+      # IN_FLIGHT_CEILING_S MUST equal the wall-clock cap in
+      # apps/web-platform/infra/ci-deploy-wrapper.sh (timeout ... 900s ...)
+      # so the server-side hard-kill fires exactly when the workflow gives
+      # up polling (#3704). Drift produces either a perpetual "running"
+      # state (workflow gives up before kill) or wasted polling cycles
+      # (kill fires before workflow times out).
       IN_FLIGHT_CEILING_S: 900
     steps:
       - name: Pre-rerun lock probe

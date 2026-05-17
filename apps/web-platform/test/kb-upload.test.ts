@@ -1,4 +1,15 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { createHmac } from "node:crypto";
+
+// Pepper must be set BEFORE observability.ts module-init reads
+// `process.env.SENTRY_USERID_PEPPER`. vi.hoisted runs above top-level imports.
+vi.hoisted(() => {
+  process.env.SENTRY_USERID_PEPPER = "test-pepper";
+});
+
+const TEST_PEPPER = "test-pepper";
+const expectedUserIdHash = (userId: string) =>
+  createHmac("sha256", TEST_PEPPER).update(userId).digest("hex");
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -41,6 +52,12 @@ vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: vi.fn(() => ({
     from: mockFrom,
   })),
+}));
+
+// PR-C §2.8 (#3244): kb-route-helpers tenant migration.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -511,10 +528,14 @@ describe("POST /api/kb/upload", () => {
         detail: expect.stringContaining("encrypted"),
         inputSize: original.length,
         durationMs: expect.any(Number),
-        userId: TEST_USER_ID,
+        userIdHash: expectedUserIdHash(TEST_USER_ID),
         path: expect.stringContaining("enc.pdf"),
       }),
       expect.stringMatching(/pdf linearization failed/i),
+    );
+    expect(loggerMod.default.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ userId: TEST_USER_ID }),
+      expect.anything(),
     );
 
     // Post-refactor: warnSilentFallback emits feature+op tags (reason moves
@@ -531,8 +552,16 @@ describe("POST /api/kb/upload", () => {
         extra: expect.objectContaining({
           reason: "non_zero_exit",
           inputSize: original.length,
-          userId: TEST_USER_ID,
+          userIdHash: expectedUserIdHash(TEST_USER_ID),
         }),
+      }),
+    );
+    // Sentry-side negative assertion — raw `userId` MUST NOT appear in the
+    // Sentry payload extra (mirror of the pino-side negative above).
+    expect(Sentry.captureMessage).not.toHaveBeenCalledWith(
+      "pdf linearization failed",
+      expect.objectContaining({
+        extra: expect.objectContaining({ userId: TEST_USER_ID }),
       }),
     );
   });

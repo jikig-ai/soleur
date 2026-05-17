@@ -78,7 +78,7 @@ The skill's own Invocation section showed `claude code --skill soleur:ux-audit -
 
 `bot-fixture.test.ts` ran `runScript("reset")` in `beforeAll` against **production Supabase** without validating that `UX_AUDIT_BOT_EMAIL` actually resolves to the synthetic bot. A mis-set env var (Doppler config mix-up, local export typo) would have deleted every conversation for whatever user the email resolved to.
 
-**Fix:** added a pre-test assertion that throws if `UX_AUDIT_BOT_EMAIL !== "ux-audit-bot@jikigai.com"`, refusing to run before any DELETE. Also added a CI-only loud-fail when creds are absent (previously silent-skipped). Principle: **tests that DELETE against shared prod must gate on an allowlist of synthetic identifiers**; unguarded resets are blast-radius violations.
+**Fix:** added a pre-test assertion that throws if `UX_AUDIT_BOT_EMAIL !== "ux-audit-bot@example.com"`, refusing to run before any DELETE. Also added a CI-only loud-fail when creds are absent (previously silent-skipped). Principle: **tests that DELETE against shared prod must gate on an allowlist of synthetic identifiers**; unguarded resets are blast-radius violations.
 
 ## Why durable workflow changes matter more than one-off learnings
 

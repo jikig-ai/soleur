@@ -45,6 +45,24 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-unpushed-commits-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prod-write-defer-gate.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
         "hooks": [
           {

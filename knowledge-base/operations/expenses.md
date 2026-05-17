@@ -28,6 +28,7 @@ last_updated: 2026-04-28
 | Anthropic API (ux-audit) | Anthropic | api | 15.00 | active | - | Event-driven + monthly cron via `.github/workflows/scheduled-ux-audit.yml`. ~$3-$12/run × ≤3 runs/month. Threshold warning at $15/run in workflow output. Budget: $15/mo estimate; COO target ≤$12/run. |
 | Claude Code Max 20x (seat 1) | Anthropic | dev-tools | 200.00 | active | 2026-05-01 | Max 20x tier ($200/mo/seat). Engineering tooling for Soleur development. Started 2026-02-01; seat 1 of 2 |
 | Claude Code Max 20x (seat 2) | Anthropic | dev-tools | 200.00 | active | 2026-05-01 | Max 20x tier ($200/mo/seat). Engineering tooling for Soleur development. Started 2026-02-01; seat 2 of 2 |
+| Cloudflare R2 (cla-evidence) | Cloudflare | storage | 0.00 | active | - | Off-site CLA signature archive, Governance object-lock, 10yr retention, region weur. Pay-per-use: $0.015/GB-mo + $0.36/M writes. Sub-cent/mo at realistic scale. See apps/cla-evidence/infra/. |
 
 ## One-Time
 

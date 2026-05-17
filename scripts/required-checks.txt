@@ -42,3 +42,4 @@ skill-security-scan PR gate
 
 # CLA Required ruleset
 cla-check
+cla-evidence

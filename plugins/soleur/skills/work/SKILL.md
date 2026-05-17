@@ -19,6 +19,12 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 
 <input_document> #$ARGUMENTS </input_document>
 
+<decision_gate>
+**API budget.** This skill executes a work plan iteratively across many phases. Tier A (Agent Teams) carries ~7x per-task token cost; Tier B (Subagent Fan-Out) is moderate; Tier C is single-agent. Total cost scales with plan length, chosen tier, and per-task RED/GREEN/REFACTOR cycles. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
+The tier offer fires inline at the right phase. Decline if running an unfamiliar plan against a tight budget.
+</decision_gate>
+
 ## Execution Workflow
 
 ### Phase 0: Load Knowledge Base Context (if exists)
@@ -49,7 +55,22 @@ Check if `knowledge-base/` directory exists. If it does:
 2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
 3. Detect feature from current branch (`feat-<name>` pattern)
 4. Read `knowledge-base/project/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
-5. Announce: "Loaded constitution and tasks for `feat-<name>`"
+4.5. Read `lane:` from spec.md if present. Guard file existence first:
+
+   ```bash
+   spec_path="knowledge-base/project/specs/feat-${branch_name}/spec.md"
+   if [[ -f "$spec_path" ]]; then
+     LANE=$(awk '/^lane:/ { gsub(/^lane:[[:space:]]*"?|"?$/, ""); print; exit }' "$spec_path")
+     case "$LANE" in
+       single-domain|cross-domain|procedural) ;;
+       "") LANE="" ;;  # legacy spec; silent skip in announce
+       *) echo "work: invalid lane value '$LANE' in spec; ignoring."; LANE="" ;;
+     esac
+   fi
+   ```
+
+   Lane is **non-binding in skill logic** — `work` code does not branch on `LANE`. Operators MAY use the announced lane as a heuristic when picking work Tier 0/A/B/C in Phase 2; binding behavior is deferred per Non-Goal #2.
+5. Announce: `"Loaded constitution and tasks for \`feat-<name>\`"` — append `" (lane=<value>)"` when `LANE` is non-empty.
 
 **If knowledge-base/ does NOT exist:**
 
@@ -104,6 +125,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Review any references or links provided in the plan
    - Before proceeding, verify the plan does not contradict conventions in AGENTS.md and constitution.md: file format (markdown tables not YAML), kebab-case naming, directory structure (agents recurse, skills flat), required frontmatter fields, shell script conventions
    - **Plan-quoted numbers are preconditions to verify, not facts.** When the plan quotes a current measurement (`bun test … reports X`, `wc -c < AGENTS.md = N`, "cumulative ~Y words; ~Z headroom", `git ls-files | wc -l`), re-run the measurement at /work start before depending on it. Plans authored hours-or-days earlier observe a moving target; parallel branches landing in `main` invalidate the measurement. PR #3501 plan claimed `~186 word headroom` against an actual `15` and required inline trim of the gate description. See `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.
+   - **Write-boundary sentinel sweep (when applicable).** If the plan introduces a sentinel/guard that asserts a property at write sites (e.g., `assertWriteScope` for cross-tenant integrity, GDPR write-boundary checks), enumerate ALL write sites where the property applies — not just diff sites. Run `git grep -nE '\.from\("<table>"\)\.insert\(' <scope>` (or the equivalent for the boundary type) at Phase 0 and verify every match is sentinel-gated, then file follow-up tasks for any uncovered sites BEFORE entering Phase 1. See `knowledge-base/project/learnings/2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`; hard rule `hr-write-boundary-sentinel-sweep-all-write-sites`. **Why:** PR-A2 #3603 — sentinel placed at assistant-row write but not user-row write at `cc-dispatcher.ts:1008`; same service-role-bypass surface.
+   - **Type-widening cross-consumer grep (when applicable).** When the PR widens a producer-side shared type whose payload crosses an `unknown`/`any`/jsonb boundary (compiler cannot enforce optionality at the consumer), `git grep -nE '<field-name-pattern>' apps/` across every consumer and verify each respects the new optionality. For `Message`-class fields the canonical grep is `git grep -nE '\bmessage\.usage\.(input_tokens|output_tokens|completed_actions)\b' apps/` (adapt per field family). See learning `2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`; hard rule `hr-type-widening-cross-consumer-grep`. **Why:** PR-A2 #3603.
    - **Interactive mode only:** If anything is unclear or ambiguous, ask clarifying questions now. Get user approval to proceed. **Do not skip this** - better to ask questions now than build the wrong thing.
    - **Pipeline mode:** Skip clarifying questions and approval. Proceed directly to step 2.
 
@@ -122,10 +145,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Create a worktree for the new feature:
 
    ```bash
-   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
+   SOLEUR_SKILL_NAME=work SOLEUR_EXPECTED_DURATION_MIN=240 \
+     bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
    ```
 
-   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation.
+   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation. The env vars wire a session lease so sibling cleanup-merged invocations refuse to reap this worktree.
+
+   **Phase Exit (release lease).** At the end of the workflow — after `/soleur:ship` returns OR if you exit without shipping — release the lease so a sibling `cleanup-merged` can reap the worktree once it's actually merged:
+
+   ```bash
+   bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+   ```
+
+   The release is a no-op if the lease was already removed by the multi-signal trap (EXIT/INT/TERM/HUP fires on abnormal exit). Stale leases get swept after 24 hours regardless.
 
    Use a meaningful name based on the work (e.g., `feat-user-authentication`, `fix-email-validation`).
 
@@ -227,6 +259,81 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      - Evaluate for incremental commit (see below)
    ```
 
+   **No mid-plan pause gates (HARD GATE).** A multi-phase plan
+   (`tasks.md` Phase 0 through Phase N) is a SINGLE execution unit.
+   Do NOT insert "Pause for review or continue?" prompts between
+   phases. Do NOT end a turn after one phase commits with "Continue
+   into Phase N+1 next turn?". The skill's Phase 4 handoff is the
+   only sanctioned stopping point — until then, chain straight
+   through every phase the plan defines, including phases the plan
+   labels "Pre-merge verification" or "Post-merge (operator)" if
+   they're automatable per the next gate. **Why:** the founder is a
+   solo operator; every "continue or pause?" is a context switch
+   that defeats the entire point of a multi-phase plan. Pipeline
+   mode (file-path arg in Phase 1) means pipeline mode for the WHOLE
+   plan, not per-phase.
+
+   **Operator-step automation gate (HARD GATE).** Before treating
+   any task in `tasks.md` as "operator-driven" (apply migration,
+   verify pg_cron, verify Storage bucket, run end-to-end smoke,
+   `gh pr ready`, `gh pr merge --auto`), check whether it is
+   automatable via a loaded MCP server or CLI:
+
+   - Supabase migrations + `cron.job` queries + Storage bucket
+     existence + RLS spot-checks → `mcp__plugin_supabase_supabase__*`
+     **with Doppler `DATABASE_URL_POOLER` fallback when MCP is
+     unavailable** — see "Supabase fallback chain" below.
+   - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close`
+     → Bash via `gh` CLI
+   - End-to-end UI flow → Playwright MCP (`mcp__playwright__*`)
+   - Cloudflare DNS / WAF / Workers → `mcp__plugin_soleur_cloudflare__*`
+   - Live Stripe state → `mcp__plugin_soleur_stripe__*`
+
+   If automatable, EXECUTE it inline as part of the work pipeline —
+   never list it back to the operator. The /ship skill already
+   handles `gh pr ready` + auto-merge + migration verification (see
+   `plugins/soleur/skills/ship/SKILL.md`); chain to `/soleur:ship`
+   at Phase 4 and let it run. For migration **apply** to dev (vs
+   verify), invoke `mcp__plugin_supabase_supabase__apply_migration`
+   inline at the phase where the migration lands, not as a
+   post-merge todo. **Why:** see ship/SKILL.md:1027 ("Every 'please
+   run this manually' is a context switch") and ship/SKILL.md:1177
+   (PR #1375 — migration verification was left as a manual
+   "post-merge todo" instead of being executed; deployed code
+   expected the new schema and broke). Same class as the
+   Playwright-first audit in Phase 4: if a tool exists, use it.
+
+   **Supabase fallback chain (when MCP OAuth fails).** The Supabase
+   MCP OAuth flow at `https://api.supabase.com/v1/oauth/authorize`
+   intermittently rejects valid URLs at the dashboard `auth_id`
+   handoff (cause: external — Supabase-side). When that happens, do
+   NOT fall back to "paste this SQL into the dashboard SQL editor"
+   handoff — that's a manual-step rationalisation that violates
+   `hr-never-label-any-step-as-manual-without`. Instead walk down the
+   `hr-exhaust-all-automated-options-before` priority chain:
+   (1) Doppler `DATABASE_URL_POOLER` — already provisioned for every
+   env; the migration apply path. (2) Verify the project ref in the
+   URL matches the plan's stated dev/prd refs — Doppler is the
+   source of truth (plan-quoted project refs are preconditions to
+   verify, never facts; the plan can drift). (3) Rewrite the URL's
+   port `:6543` → `:5432` so the pooler runs in session mode (multi-
+   statement DDL works; transaction mode rejects with SQLSTATE 42601
+   "cannot insert multiple commands into a prepared statement").
+   (4) Apply via `pg` (node-pg, bun-installed in `/tmp` if missing)
+   wrapped in `BEGIN; <migration>; COMMIT;`. The direct DB host
+   `db.<ref>.supabase.co:5432` is IPv6-only and typically
+   unreachable from operator/CI networks; the pooler is IPv4.
+   (5) Post-apply, verify schema via the same connection — RLS
+   enabled, policy_count, trigger names, RPC signatures + SECURITY
+   DEFINER flag, UNIQUE constraints. Write the verification artifact
+   to `knowledge-base/project/specs/feat-<name>/migration-checklist.md`.
+   **Why:** PR #3853 / #3205 — Supabase MCP OAuth was rejecting URLs
+   at the auth_id handoff; the agent first proposed "paste SQL into
+   dashboard" (manual-step violation), then pivoted to Playwright-
+   first audit on dashboard navigation (correct), then discovered
+   Doppler had the working `DATABASE_URL_POOLER` and applied via
+   pg directly — the path it should have taken at step 1.
+
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 
    Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):
@@ -267,6 +374,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    **Test environment setup:** If the project's test runner cannot run the type of test needed (e.g., React component tests require jsdom but vitest is configured for node), set up the test environment BEFORE starting the task. This is part of RED — the test infrastructure must exist for the test to fail properly.
 
    - When configuring bun preload scripts that register DOM globals (e.g., happy-dom), use dynamic `await import()` for all subsequent dependencies — static ES imports are hoisted before any imperative code, causing libraries like @testing-library/react to initialize without DOM globals. See `knowledge-base/project/learnings/test-failures/2026-04-03-bun-test-dom-preload-execution-order.md`.
+   - When a test file calls a SUT that lazy-imports a heavy module (`pdfjs-dist`, `sharp`, `puppeteer`, `playwright`, `@xenova/transformers`, `onnxruntime`), pre-warm the module in `beforeAll(async () => { await import("<module>"); }, 30_000)`. The cold-start cost (~5-10s on CI runners) otherwise lands on the first `it()` and blows the default 5s vitest timeout — the second test in the same file runs at warm ~9ms because subsequent calls hit the module cache. Cheapest detection: `git grep -lE '(pdfjs-dist|sharp|puppeteer|playwright|@xenova/transformers|onnxruntime)' -- '*.test.ts'` and check for sibling `beforeAll`. **Why:** PR #3681 `pdf-text-extract.test.ts` cold-start flake (7s vs 9ms, #3687).
    - When uploading files via Playwright MCP, save files to repo-accessible paths (not `/tmp/`). Playwright MCP restricts file access to the repo root. When Google Search Console offers Cloudflare auto-verification, prefer "Any DNS provider" manual flow — the popup OAuth flow opens an external tab that crashes the Playwright browser context.
    - After any `Write` whose hook output emits a warning (security, style, rule), immediately `Read` the file to verify the full content landed. PreToolUse hooks that print error output but return non-blocking status can still cause partial writes — detecting this only when tests fail wastes a debug round. See `knowledge-base/project/learnings/2026-04-15-kb-share-binary-files-lifecycle.md`.
    - When adding source-reading regex tests (`readFileSync(path)` + `expect(src).toMatch(...)`) as a negative-space regression gate after an extraction, put them in a standalone `*.test.ts` file — never add them to an existing test file that already mocks `node:fs` or `node:path`. The existing `vi.mock("node:fs", ...)` factory likely omits `readFileSync`, and the new test will fail at collection with "No `readFileSync` export is defined" before any assertion runs. Also trim the gate to only the assertion that cannot be expressed behaviorally — usually the negative "symbol-not-present" check. Positive assertions (import regex, await-call regex) duplicate coverage that mock-based behavioral tests already provide and are brittle to barrel re-exports, aliases, and whitespace. See `knowledge-base/project/learnings/best-practices/2026-04-17-regex-on-source-delegation-tests-trim-to-negative-space.md`.
@@ -293,6 +401,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    | Brand guide alignment pass completes | Alignment still in progress |
 
    - When lefthook hangs during commit in a worktree (common with `core.bare=true` repos), verify typecheck and tests pass manually, then use `LEFTHOOK=0 git commit`. Always check for stalled lefthook processes (`pgrep -fa lefthook`) before retrying.
+   - **When a commit needs a machine-readable trailer (`Allowlist-Widened-By:`, `Signed-off-by:`, `Reviewed-by:`, etc. — anything downstream parses via `git log --format='%(trailers:key=NAME,valueonly)'`), keep the FINAL paragraph as a pure contiguous block of `Token: value` lines.** Two silent-drop shapes: (a) blank line between the new trailer and `Co-Authored-By:` makes the former part of the body, not a trailer; (b) ANY non-key:value line in the final paragraph (e.g., `Closes #3877.`, `Refs #3874 (precedent).`) invalidates the WHOLE block — both legitimate trailer lines below it drop silently. Put `Closes`/`Refs`/`Fixes` in mid-body prose; GitHub auto-close still works anywhere in the body. Verify locally with `git interpret-trailers --parse < <(git log -1 --format=%B)` — empty output for a trailer that should exist is a hard fail. See `knowledge-base/project/learnings/2026-05-16-git-trailer-parser-requires-contiguous-key-value-block.md`.
 
    **Heuristic:** "Can I write a commit message that describes a complete, valuable change? If yes, commit. If the message would be 'WIP' or 'partial X', wait."
 
@@ -339,6 +448,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - **Debounce/throttle "not-yet-fired" sentinels must be `undefined` or `-Infinity`, never `0`.** Combined with `vi.useFakeTimers({ now: 0 })`, a `0` default produces `Date.now() - 0 >= threshold` = false on the first fire, starving the very path the debounce was supposed to time. Use `if (last === undefined || now - last >= THRESHOLD_MS)`. **Why:** same learning file, session error #3.
    - **When the diff touches `bun.lock` AND the bump is intended to be transitive-only (e.g., a Dependabot security bump), use the surgical-lockfile-edit pattern in [work-lockfile-bumps.md](./references/work-lockfile-bumps.md) as the first attempt.** Never `bun update <pkg>` (elevates the target to a direct dep) or bare `bun update` (bumps every direct caret-ranged dep). Validate with `bun install --frozen-lockfile`. **Why:** PR #3488 — three failed bun invocations rediscovered the constraint at task time.
    - **When a new call site needs coverage by a boundary-enforcing drift-guard whose walk array (`*_DIRS`/`*_PATHS`/`*_GLOBS`) does NOT include the new file's directory, extract the call site into the existing scope — do NOT widen the walk.** The guard encodes an architectural convention ("auth verbs live in `app/(auth)` + `components/auth/`", "CSRF coverage applies to `app/api/`", etc.). Widening the array to absorb one new call site (e.g., adding `app/(dashboard)` because a single `(dashboard)/layout.tsx` calls `signOut`) inverts the convention into "any file in this whole route group that happens to call the verb must carry the guard's tags." The shortest path leaves a worse architecture. Refactor to a hook/util living in the existing scope (`components/auth/use-sign-out.ts`) so the guard's directional rule is preserved. **Why:** PR #3576 — see `knowledge-base/project/learnings/2026-05-11-drift-guard-scoping-extract-call-site-not-widen-walk.md`.
+   - **When a migration changes a SECURITY DEFINER RPC's signature for which prod callers exist, prefer overloading (additive `CREATE OR REPLACE` with a new parameter list) over `DROP FUNCTION` + `CREATE`.** Postgres distinguishes overloads by parameter list; supabase-js sends named-arg PostgREST envelopes that route to whichever overload matches by parameter name. Overloading is rolling-deploy-safe: (a) prd-schema-without-app keeps the v1 signature alive for old pods; (b) prd-app-without-schema keeps writes succeeding because the v1 signature still exists. DROP+CREATE creates a window where one direction silently zeros the write path. Drop the v1 in a follow-up migration after the old build ages out. **Why:** PR #3626 — see `knowledge-base/project/learnings/2026-05-12-stub-handlers-as-silent-undercount-vectors.md`.
+   - **Stub event handlers ("wire in Stage N when X lands") in dispatcher/router code are silent telemetry-loss vectors.** A no-op handler that satisfies the type system, sits next to fully-wired siblings, and has no error path is invisible to skim-review and Sentry alike. Either throw `Error("handler not yet wired: <name>")` until the wiring lands, OR fan out to an instrumentation counter so a "stub still present" alert can fire. **Why:** same PR #3626 — `cc-dispatcher.ts:1202` `onResult` shipped as a no-op for 3 weeks (originally added 2026-04-24 #2858), under-counting API cost by 60-90% for every cc-soleur-go conversation while the legacy path's wiring made the surface look complete.
 
 5. **Test Continuously**
 
@@ -486,6 +597,43 @@ Scan any "next steps", "setup instructions", or "to use this" text you are about
 3. **If genuinely manual:** Drive the flow via Playwright up to the manual gate (e.g., navigate to the OAuth consent screen), then hand off only that single interaction to the user.
 
 If you catch yourself writing phrases like "set up X in the browser", "go to the portal and...", or "manually configure..." — stop and attempt Playwright first. This audit is mandatory; skipping it is a deviation.
+
+#### Phase 4 Entry-Guard
+
+Before emitting `## Work Phase Complete` (one-shot mode) or chaining into the post-implementation pipeline (direct mode), assert at least one commit exists beyond `origin/<branch>`. An empty diff hands review agents nothing to analyze and produces no signal. Run BEFORE the Invocation Mode branch so both paths are covered.
+
+**Procedure (distinct exit codes signal distinct operator actions):**
+
+1. Probe the commit count:
+
+   ```bash
+   BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   if [[ -z "$BRANCH" || "$BRANCH" == "HEAD" ]]; then
+     echo "[work-phase-4-guard] detached HEAD — checkout a feature branch before chaining to review." >&2
+     exit 1
+   fi
+   N=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+   ```
+
+2. If `N == 0`, **stop and run Phase 2 step 3** (stage logical-unit files, write conventional commit message). Do not chain through this block as a single bash invocation — the commit is an explicit action the agent must perform between probes:
+
+   ```bash
+   if [[ "$N" == "0" ]]; then
+     echo "[work-phase-4-guard] no commits beyond origin/${BRANCH} — pause and run Phase 2 step 3 incremental commit before continuing." >&2
+     exit 2  # PAUSE — orchestrator should re-enter Phase 4 after the commit lands
+   fi
+   ```
+
+3. After the incremental commit lands, re-enter the Phase 4 entry-guard. If `N == 0` on the second probe (commit failed silently or no diff exists), HALT:
+
+   ```bash
+   if [[ "$N" == "0" ]]; then
+     echo "[work-phase-4-guard] empty diff vs origin/${BRANCH} after Phase 2 step 3 — investigate before continuing." >&2
+     exit 1  # HALT — do NOT emit "## Work Phase Complete"
+   fi
+   ```
+
+**Form rationale.** `git rev-parse --abbrev-ref HEAD` matches `ship/SKILL.md:619` precedent and returns the literal `HEAD` on detached state (vs. `git branch --show-current` which returns empty), so the detached-HEAD guard catches both shapes. `git rev-list ... --count` returns a clean integer ready for `[[ "$N" == "0" ]]`; the `wc -l` shape requires a `tr -d` strip and is whitespace-padded. Precedent: `plugins/soleur/skills/ship/SKILL.md:619`, `.claude/hooks/ship-unpushed-commits-gate.sh`. **Distinct exit codes** (`2 = pause-and-commit`, `1 = halt-and-investigate`) let one-shot orchestrators distinguish the two recovery paths rather than treating both as opaque non-zero failures.
 
 #### Invocation Mode
 

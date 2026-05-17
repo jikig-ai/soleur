@@ -31,7 +31,7 @@ PR #3253 (the original `READ_TOOL_PDF_CAPABILITY_DIRECTIVE` baseline directive) 
 
 ## Root Cause (two co-confirmed failure modes)
 
-Phase 1 instrumentation (PR #3288) added a Sentry breadcrumb at the cc-soleur-go cold-Query construction site (`apps/web-platform/server/ws-handler.ts:583-613`, `emitConciergeDocumentResolutionBreadcrumb`). The first user reproduction on `web-v0.64.9` (conversationId `73a6ede4-a955-407a-9fbc-2768ea7e1385`, 2026-05-05 18:50:43–18:51:21Z) emitted 6 cold-Query breadcrumbs, all carrying the same payload shape:
+Phase 1 instrumentation (PR #3288) added a Sentry breadcrumb at the cc-soleur-go cold-Query construction site (`apps/web-platform/server/ws-handler.ts:583-613`, `emitConciergeDocumentResolutionBreadcrumb`). The first user reproduction on `web-v0.64.9` (conversationId `deadbeef-dead-beef-dead-beefdeadbeef`, 2026-05-05 18:50:43–18:51:21Z) emitted 6 cold-Query breadcrumbs, all carrying the same payload shape:
 
 ```json
 {

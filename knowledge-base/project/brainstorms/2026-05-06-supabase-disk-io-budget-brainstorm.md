@@ -19,7 +19,7 @@ A two-lever remediation for the prod Supabase project (`ifsccnjhymdmidffkzhl`, s
 
 - **Optimize-first beats upgrade-first** (CTO + CPO + COO agree). Bumping the compute add-on Micro → Small ($15/mo) only doubles the IO baseline (87 → 174 MB/s) and rents around an indexable problem; CPO flagged "billing surprise" as a worst-case in the user-impact framing.
 - **The IO is structural, not user-driven.** Live data is tiny: 58 conversations, 126 messages, 0 live concurrency slots. The IO consumers are housekeeping plumbing (cron + Realtime polling), independent of how many users are active.
-- **Cheapest defensible path** under the single-user-incident threshold: change behavior we control before paying recurring rent. Lever (a) is one migration, online, instantly reversible. Lever (b) is a scoped audit — could land as "no change, ship instrumentation" if Realtime is genuinely needed.
+- **Cheapest defensible path** under the single-user incident threshold: change behavior we control before paying recurring rent. Lever (a) is one migration, online, instantly reversible. Lever (b) is a scoped audit — could land as "no change, ship instrumentation" if Realtime is genuinely needed.
 
 ## User-Brand Impact
 
@@ -68,7 +68,7 @@ A two-lever remediation for the prod Supabase project (`ifsccnjhymdmidffkzhl`, s
 
 ### Engineering (CTO)
 
-**Summary:** Diagnose-first with a tripwire is the only defensible ordering under the single-user-incident threshold. Cheapest path is index/query work + cron-cadence change + Realtime publication audit; compute bump is a fallback, and the Supabase Terraform gap blocks any IaC-compliant tier change. Two SECURITY DEFINER functions in migrations 017 + 027 violate `cq-pg-security-definer-search-path-pin-pg-temp` — flagged as a security side-finding.
+**Summary:** Diagnose-first with a tripwire is the only defensible ordering under the single-user incident threshold. Cheapest path is index/query work + cron-cadence change + Realtime publication audit; compute bump is a fallback, and the Supabase Terraform gap blocks any IaC-compliant tier change. Two SECURITY DEFINER functions in migrations 017 + 027 violate `cq-pg-security-definer-search-path-pin-pg-temp` — flagged as a security side-finding.
 
 ### Product (CPO)
 
