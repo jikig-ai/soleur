@@ -40,9 +40,21 @@ set -euo pipefail
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
 
 # --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
+# Probe order (PR-β §10.2 widened from `de.sentry.io sentry.io` baseline):
+#   1. ${SENTRY_ORG}.sentry.io — org-subdomain is the ONLY host that works
+#      for slug-scoped paths when the org slug ends in a region code (e.g.
+#      `jikigai-eu`), per learning
+#      `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`.
+#   2. eu.sentry.io — EU regional API; works for slug-less endpoints only.
+#   3. de.sentry.io — DE ingest cluster; no `/api/0/` surface but kept as a
+#      back-compat probe for legacy personal tokens against the EU footprint.
+#   4. sentry.io — US/global legacy.
+# Region-probe target is still `/users/me/` (returns 200 for personal tokens
+# regardless of org scope); internal-integration tokens 401 on `/users/me/`
+# but the 4-gate block below catches that via the org-GET probe.
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
-  for candidate in de.sentry.io sentry.io; do
+  for candidate in "${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io; do
     http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
@@ -52,7 +64,72 @@ if [[ -z "$api_host" ]]; then
     fi
   done
   if [[ -z "$api_host" ]]; then
-    echo "ERROR: Sentry token not valid against either US or EU ingest" >&2
+    echo "ERROR: Sentry token not valid against any candidate host (${SENTRY_ORG}.sentry.io, eu.sentry.io, de.sentry.io, sentry.io). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
+    exit 1
+  fi
+fi
+
+# --- 4-gate destination-controllability check (PR-β §10 / C5) -------------
+# Recurrence-prevention controls per #3861 Branch C. Gates verify the auth
+# token can both READ and WRITE against the target org+project, and that the
+# runtime DSN's encoded org-id matches the token's org-id (catches the
+# split-state where audit token rotated but runtime DSN didn't).
+#
+# Additive to the L+30ish DSN cluster substring residency check below
+# (Architecture F2: existing check is load-bearing for the SDK-DSN-vs-token-
+# org-id split that the gates alone cannot catch — see plan §C5).
+#
+# Skipped under test mode (SENTRY_FIXTURE_MONITORS set) — the gates issue
+# real HTTP calls that fixtures cannot mock without recursive
+# fixture-of-fixtures complexity.
+if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
+  # Gate 1: audit_destination_admin_controllable (org GET returns 200)
+  gate1_body=$(curl -s --max-time 10 \
+    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/" 2>/dev/null || echo '')
+  if ! jq -e '.id' <<<"$gate1_body" >/dev/null 2>&1; then
+    echo "ERROR: Gate 1 (audit_destination_admin_controllable) failed — org ${SENTRY_ORG} not reachable at ${api_host}. Token may lack org:read scope, OR the host rewrites slugs ending in '-eu' (use the org-subdomain ${SENTRY_ORG}.sentry.io as SENTRY_API_HOST instead — see learning 2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md). Refs #3861." >&2
+    exit 1
+  fi
+
+  # Gate 2: audit_project_scope (project GET returns 200) — skipped if no project set
+  if [[ -n "$SENTRY_PROJECT" ]]; then
+    gate2_http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+      "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/" 2>/dev/null || echo 000)
+    if [[ "$gate2_http" != "200" ]]; then
+      echo "ERROR: Gate 2 (audit_project_scope) failed — project ${SENTRY_ORG}/${SENTRY_PROJECT} returned HTTP ${gate2_http}. Token may lack project:read scope. Refs #3861." >&2
+      exit 1
+    fi
+  fi
+
+  # Gate 3: audit_write_probe (POST release, expect 201 only — Kieran P1-4
+  # dropped the 208 branch). Cleans up via DELETE on best-effort.
+  probe_ver="audit-probe-$(date +%s)-$$"
+  gate3_http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    -X POST \
+    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\":\"${probe_ver}\",\"projects\":[\"${SENTRY_PROJECT:-web-platform}\"]}" \
+    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/" 2>/dev/null || echo 000)
+  if [[ "$gate3_http" != "201" ]]; then
+    echo "ERROR: Gate 3 (audit_write_probe) failed — POST release returned HTTP ${gate3_http}, expected 201 (208 branch dropped per Kieran P1-4). Token may lack project:releases scope (Admin level required). Refs #3861." >&2
+    exit 1
+  fi
+  curl -s --max-time 10 -X DELETE \
+    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
+    -o /dev/null 2>/dev/null || true
+
+  # Gate 4: audit_dsn_org_id_matches_token_org_id — extract `o<id>` from DSN
+  # (e.g. `o4523123` from `https://k@o4523123.ingest.de.sentry.io/789`) and
+  # compare to `.id` from Gate 1's org body. Catches split state where audit
+  # token rotated but runtime DSN still points at the old org (the phantom-
+  # ingest failure mode #3861 originally documented).
+  dsn_org_id=$(printf '%s' "${NEXT_PUBLIC_SENTRY_DSN:-${SENTRY_DSN:-}}" | grep -oE 'o[0-9]+' | head -1 | tr -d 'o')
+  token_org_id=$(jq -r '.id // empty' <<<"$gate1_body")
+  if [[ -n "$dsn_org_id" && -n "$token_org_id" && "$dsn_org_id" != "$token_org_id" ]]; then
+    echo "ERROR: Gate 4 (audit_dsn_org_id_matches_token_org_id) failed — DSN encodes org id ${dsn_org_id} but audit token authenticates against org id ${token_org_id}. Runtime DSN and audit token are pointing at different orgs (split-state). Refs #3861." >&2
     exit 1
   fi
 fi
@@ -82,20 +159,31 @@ dsn_cluster=$(printf '%s' "${NEXT_PUBLIC_SENTRY_DSN:-${SENTRY_DSN:-}}" \
 # `set +e` + `::warning::` branch handles the non-zero exit gracefully (no
 # `gh release upload`). Refs #3861.
 #
-# `sentry.io` is the US cluster's bare form (no region prefix). Explicit
-# case branch — parameter-expansion arithmetic on the bare host produces
-# `io`, not `us`, and would fire a false-positive mismatch in the all-US
-# pre-migration configuration.
+# Host shapes:
+#   `sentry.io`          → US legacy global (`host_region=us`)
+#   `de.sentry.io`       → DE ingest (no /api/0/, but historically probed)
+#   `eu.sentry.io`       → EU regional API (slug-less endpoints only)
+#   `us.sentry.io`       → US regional API
+#   `<org-slug>.sentry.io` → org-subdomain — region NOT encoded in host;
+#                            the slug may or may not end in a region code.
+#                            `host_region=""` and the comparison is skipped
+#                            because there's no host-region signal to
+#                            compare. The 4-gate block above already
+#                            verified org-controllability against this
+#                            host; the DSN's `ingest.<cluster>.sentry.io`
+#                            substring remains the residency signal but
+#                            the host-vs-DSN comparison is meaningless
+#                            here (PR-β §10 / 2026-05-17).
+#   Anything else        → unknown — pass through as-is.
 case "$api_host" in
   sentry.io)    host_region="us" ;;
   de.sentry.io) host_region="de" ;;
-  *.sentry.io)
-    host_region="${api_host%.sentry.io}"
-    host_region="${host_region##*.}"
-    ;;
-  *) host_region="$api_host" ;;
+  eu.sentry.io) host_region="eu" ;;
+  us.sentry.io) host_region="us" ;;
+  *.sentry.io)  host_region="" ;;  # org-subdomain — see comment block above
+  *)            host_region="$api_host" ;;
 esac
-if [[ "$host_region" != "$dsn_cluster" ]]; then
+if [[ -n "$host_region" && "$host_region" != "$dsn_cluster" ]]; then
   echo "ERROR: residency mismatch — probed=${api_host} DSN cluster=${dsn_cluster} — refusing to emit audit artifact (refs #3861)" >&2
   exit 2
 fi

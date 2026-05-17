@@ -305,7 +305,14 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST || 'de.sentry.io' }}
+          # Branch-C correction (2026-05-17): default is now the org-subdomain,
+          # NOT `de.sentry.io` (ingest-only, no `/api/0/`) or `eu.sentry.io`
+          # (silently rewrites slugs ending in `-eu` per learning
+          # `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`).
+          # Fail-loud if SENTRY_API_HOST secret is not set — the audit script
+          # MUST hit the right host for slug-scoped probes to work.
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_URL: ${{ secrets.SENTRY_URL }}
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |

@@ -18,16 +18,23 @@ terraform {
 }
 
 # Provider auth: SENTRY_AUTH_TOKEN env var (GitHub repo secret in CI; local
-# user token or internal-integration token from de.sentry.io for operator
-# imports — see ADR-031 §local-token).
+# internal-integration token from `https://${var.sentry_org}.sentry.io/settings/developer-settings/`
+# for operator imports — see ADR-031 §local-token).
 #
-# base_url override targets the EU ingest cluster. Sentry has US (sentry.io)
-# and EU (de.sentry.io) clusters; Soleur's organization is in DE per Article
-# 30 register PA8 §(e). Provider docs do not explicitly enumerate de.sentry.io;
-# Phase 0.1.5 of the plan validated DE region support against a scratch
-# project before this root landed.
+# base_url targets the org-subdomain (`https://<org-slug>.sentry.io/api/`), NOT
+# `https://eu.sentry.io/api/` — the regional EU API host silently rewrites
+# org slugs ending in `-eu` to the literal `eu` org via an activeorg-cookie
+# hijack (302 → 401 cascade), breaking every Terraform read/write. The
+# org-subdomain is the only base_url shape that works for slug-scoped paths
+# regardless of slug. See learning
+# `knowledge-base/project/learnings/2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`
+# and ADR-031 §Cluster / Host Glossary (API row).
+#
+# DSN ingest cluster remains `de.sentry.io` (DE residency) per Article 30
+# PA8 §(e) — that's a separate hostname class from the API/dashboard
+# base_url, see ADR-031 glossary.
 provider "sentry" {
-  base_url = var.sentry_region == "de" ? "https://de.sentry.io/api/" : "https://sentry.io/api/"
+  base_url = "https://${var.sentry_org}.sentry.io/api/"
 }
 
 # Cross-resource defaults — both issue alerts and cron monitors live in the

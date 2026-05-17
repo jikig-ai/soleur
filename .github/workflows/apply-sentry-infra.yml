@@ -133,6 +133,24 @@ jobs:
         # mutable on the Terraform registry by policy).
         run: terraform init -input=false -lockfile=readonly
 
+      - name: Sentry audit-gate (4-gate destination-controllability)
+        # PR-beta §10.6 / Branch-C Arch F1 gate-call-graph closure: the
+        # operator-driven `workflow_dispatch:` path was previously a
+        # gate-bypass surface for stale-credentials terraform apply.
+        # Running the audit script BEFORE `terraform plan` ensures every
+        # operator-triggered apply traverses the 4-gate check. Fail-closed
+        # — non-zero exit halts the workflow before any state mutation.
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          which jq >/dev/null 2>&1 || sudo apt-get install -y jq
+          bash apps/web-platform/scripts/sentry-monitors-audit.sh
+
       - name: Terraform plan (cron monitors only)
         id: plan
         working-directory: ${{ env.INFRA_DIR }}
