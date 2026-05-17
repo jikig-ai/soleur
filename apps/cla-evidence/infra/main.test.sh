@@ -38,12 +38,25 @@ green() { printf '\033[32m%s\033[0m\n' "$*"; }
 readonly MIN_LOCK_SECONDS=315360000
 
 LIVE_MODE=0
+STRICT_RULE_COUNT=0
 for arg in "$@"; do
   case "$arg" in
     --live) LIVE_MODE=1 ;;
+    # Opt-in stricter post-restore gate used by gdpr-override.sh: asserts the
+    # rule list is back to a single canonical rule (catches leftover narrow-
+    # prefix rules from --shape=narrow-prefix). When passed WITHOUT --live,
+    # treat as no-op so callers in non-live contexts (CI lint) can pass the
+    # flag unconditionally. Default --live semantics (rule_count >= 1) are
+    # unchanged so bootstrap.sh:200 continues to pass.
+    --strict-rule-count) STRICT_RULE_COUNT=1 ;;
     *)      red "unknown arg: $arg"; exit 64 ;;
   esac
 done
+
+if [[ "$STRICT_RULE_COUNT" -eq 1 ]] && [[ "$LIVE_MODE" -eq 0 ]]; then
+  green "OK: --strict-rule-count is a no-op without --live."
+  exit 0
+fi
 
 fail=0
 
@@ -101,6 +114,32 @@ if ! grep -qE 'com\.cloudflare\.edge\.r2\.bucket\.\$\{var\.cf_account_id\}_defau
   fail=1
 fi
 
+# Bearer-vs-HMAC separation policy gate (PR #3919 regression guard, codified after
+# PR #3939 review). Driver-style scripts in apps/cla-evidence/scripts/ that invoke
+# `aws --endpoint-url ...` MUST wrap via `doppler run -p soleur -c prd_cla --`
+# within the 3 lines preceding the aws call — passing the 53-char bearer admin
+# token where AWS expects a 32-char HMAC access-key reproduces the "Credential
+# access key has length 53, should be 32" failure that bit PR #3919's first cron.
+# (inspect-evidence.sh is exempt: its `aws_exec` helper takes the HMAC pair from
+# env, and the operator wraps with doppler at the call site.)
+driver_scripts=(../scripts/gdpr-override.sh)
+for f in "${driver_scripts[@]}"; do
+  [[ -f "$f" ]] || continue
+  violations=$(awk '
+    /aws --endpoint-url/ {
+      ok = 0
+      for (i = NR - 3; i < NR; i++) if (L[i] ~ /doppler run -p soleur -c prd_cla/) ok = 1
+      if (!ok) print FILENAME ":" NR ": " $0
+    }
+    { L[NR] = $0 }
+  ' "$f")
+  if [[ -n "$violations" ]]; then
+    red "FAIL: $f calls 'aws --endpoint-url' without wrapping via 'doppler run -p soleur -c prd_cla --' within 3 lines — bearer-vs-HMAC trap (PR #3919)."
+    red "$violations"
+    fail=1
+  fi
+done
+
 if [[ "$LIVE_MODE" -eq 1 ]]; then
   echo "→ live CF Lock Rules assertion (--live)"
   : "${CF_ADMIN_TOKEN_BOOTSTRAP:?missing — required for --live mode}"
@@ -141,6 +180,9 @@ if [[ "$LIVE_MODE" -eq 1 ]]; then
         fail=1
       elif [[ "$rule_count" -lt 1 ]]; then
         red "FAIL: bucket $bucket has zero Lock Rules; expected at least one Age rule."
+        fail=1
+      elif [[ "$STRICT_RULE_COUNT" -eq 1 ]] && [[ "$rule_count" -ne 1 ]]; then
+        red "FAIL: --strict-rule-count: bucket $bucket has $rule_count Lock Rules; expected exactly 1 (post-restore canonical)."
         fail=1
       fi
       if ! [[ "$max_age" =~ ^[0-9]+$ ]]; then

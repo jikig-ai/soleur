@@ -2,9 +2,9 @@
 
 Provisions the off-site evidence archive for the CLA signature flow:
 `soleur-cla-evidence` R2 bucket (EU region, Cloudflare R2 Lock Rules with
-a 10-year age-based retention floor — functionally equivalent to S3
-Object Lock Governance mode) plus the two scoped Cloudflare API tokens
-used by the sidecar workflow and by Terraform itself.
+a 10-year age-based retention floor providing write-once-read-many
+(WORM) semantics) plus the two scoped Cloudflare API tokens used by the
+sidecar workflow and by Terraform itself.
 
 **Owner:** deruelle / ops@jikigai.com
 **Issue:** #3209
