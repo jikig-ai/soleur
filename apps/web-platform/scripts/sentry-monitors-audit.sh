@@ -159,20 +159,31 @@ dsn_cluster=$(printf '%s' "${NEXT_PUBLIC_SENTRY_DSN:-${SENTRY_DSN:-}}" \
 # `set +e` + `::warning::` branch handles the non-zero exit gracefully (no
 # `gh release upload`). Refs #3861.
 #
-# `sentry.io` is the US cluster's bare form (no region prefix). Explicit
-# case branch — parameter-expansion arithmetic on the bare host produces
-# `io`, not `us`, and would fire a false-positive mismatch in the all-US
-# pre-migration configuration.
+# Host shapes:
+#   `sentry.io`          → US legacy global (`host_region=us`)
+#   `de.sentry.io`       → DE ingest (no /api/0/, but historically probed)
+#   `eu.sentry.io`       → EU regional API (slug-less endpoints only)
+#   `us.sentry.io`       → US regional API
+#   `<org-slug>.sentry.io` → org-subdomain — region NOT encoded in host;
+#                            the slug may or may not end in a region code.
+#                            `host_region=""` and the comparison is skipped
+#                            because there's no host-region signal to
+#                            compare. The 4-gate block above already
+#                            verified org-controllability against this
+#                            host; the DSN's `ingest.<cluster>.sentry.io`
+#                            substring remains the residency signal but
+#                            the host-vs-DSN comparison is meaningless
+#                            here (PR-β §10 / 2026-05-17).
+#   Anything else        → unknown — pass through as-is.
 case "$api_host" in
   sentry.io)    host_region="us" ;;
   de.sentry.io) host_region="de" ;;
-  *.sentry.io)
-    host_region="${api_host%.sentry.io}"
-    host_region="${host_region##*.}"
-    ;;
-  *) host_region="$api_host" ;;
+  eu.sentry.io) host_region="eu" ;;
+  us.sentry.io) host_region="us" ;;
+  *.sentry.io)  host_region="" ;;  # org-subdomain — see comment block above
+  *)            host_region="$api_host" ;;
 esac
-if [[ "$host_region" != "$dsn_cluster" ]]; then
+if [[ -n "$host_region" && "$host_region" != "$dsn_cluster" ]]; then
   echo "ERROR: residency mismatch — probed=${api_host} DSN cluster=${dsn_cluster} — refusing to emit audit artifact (refs #3861)" >&2
   exit 2
 fi
