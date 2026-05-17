@@ -54,10 +54,10 @@ Derived from `knowledge-base/project/plans/2026-05-17-feat-r2-lock-rules-gdpr-ov
 
 ## Phase 4 — Verification
 
-- [ ] **4.1** Regression-run dry-run suite.
-- [ ] **4.2** Walk AC1 → AC15 in order; tick every box.
-- [ ] **4.3** Run `bash -n` + `shellcheck` final pass.
-- [ ] **4.4** `gh pr create`: title `feat(cla-evidence): R2 Lock Rules GDPR override driver (#3924)`; body `Closes #3924` (not title); labels `domain/legal`, `domain/engineering`, `type/chore`, `priority/p2-medium`, `follow-through`.
+- [x] **4.1** Regression-run dry-run suite (all 11 cases PASS; also covered now by `scripts/test-all.sh` discovery → 61/61 suites total).
+- [x] **4.2** Walk AC1 → AC15 in order; tick every box (AC15 deferred to post-merge per Plan §AC15 — not automatable).
+- [x] **4.3** Run `bash -n` + `shellcheck` final pass (driver + test + main.test.sh — all clean).
+- [x] **4.4** PR #3939 updated in lieu of `gh pr create` (PR was pre-existing as `WIP: feat-one-shot-3924`): title set to `feat(cla-evidence): R2 Lock Rules GDPR override driver (#3924)`; body contains `Closes #3924` (not in title); 5 labels applied (`domain/legal`, `domain/engineering`, `type/chore`, `priority/p2-medium`, `follow-through`). Still in draft — mark ready when CI confirms green.
 
 ## Post-merge (operator, conditional)
 
