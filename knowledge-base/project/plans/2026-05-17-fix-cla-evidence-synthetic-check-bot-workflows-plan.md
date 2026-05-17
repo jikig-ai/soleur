@@ -1,37 +1,82 @@
 ---
 title: "fix(ci): add cla-evidence synthetic check to bot PR workflows + composite"
 issue: 3923
+related_issues: [3916, 3927]
+related_prs: [3201, 3593]
 branch: feat-one-shot-3923
 lane: single-domain
 type: bug
 classification: standard
 created: 2026-05-17
+deepened: 2026-05-17
 requires_cpo_signoff: false
 ---
 
 # fix(ci): add `cla-evidence` synthetic check to bot PR workflows + composite
 
-Closes #3923. Ref #3201 (cla-evidence introduction), #3593 (deferred composite extraction — re-evaluation trigger fires here).
+Closes #3923, #3916, #3927. Ref #3201 (cla-evidence introduction), #3593 (deferred composite extraction — re-evaluation trigger fires here).
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-17
+**Sections enhanced:** 6 (Overview, Files to Edit, Implementation Phases, Acceptance Criteria, Sharp Edges, Risks)
+**Verification done in deepen-pass:**
+
+- Confirmed live `bash scripts/lint-bot-synthetic-completeness.sh` exit=0 on the feature branch (all 6 synthetics present on both inlined workflows).
+- Confirmed actionlint exits 0 on both workflow files and the composite action.
+- Confirmed `python3 -c "import yaml; yaml.safe_load(...)"` passes on all 3 edited YAML files.
+- Resolved all cited PR/issue numbers live via `gh pr view` / `gh issue view`: #3201 MERGED, #3593 OPEN, #3916 OPEN, #3923 OPEN, #3927 OPEN, #3917 MERGED.
+- Verified commit references reachable from main: `2093948f` ✓, `b98c2177` ✓.
+- Verified all 5 issue labels exist (`priority/p2-medium`, `type/bug`, `domain/engineering`, `code-review`, `deferred-scope-out`).
+- Verified the CLA Required ruleset on GitHub (id `13304872`) currently enforces only `cla-check` (NOT `cla-evidence`) — the immediate failure mode is the lint red, not a runtime merge deadlock.
+
+### Key Improvements vs. plan v1
+
+1. **Reconciled to actual on-disk state.** The fix was already applied as uncommitted local changes when the worktree was initialized. Plan v1 prescribed Phase 2/3 edits that were already done. Plan v2 reframes those phases as "verify the existing diff," dropping speculative work.
+2. **Output text correction.** Plan v1 prescribed `output[title]=CLA evidence pre-recorded` / `output[summary]=github-actions[bot] evidence layer satisfied`. The actual on-disk diff uses `output[title]=CLA evidence not applicable` / `output[summary]=Bot-authored PR — no CLA-signed contributions to attest.` This is semantically more correct: bot-authored PRs have no human signer, so the evidence layer is not "pre-recorded" — it's not applicable. Adopt the on-disk text.
+3. **Composite-action CHANGELOG.md update added to scope.** Plan v1 missed this. The composite carries a versioned CHANGELOG (per its design); a behavior change requires a CHANGELOG bump (v2 → v2.1) per its existing convention.
+4. **Multi-issue close.** Plan v1 referenced only #3923. Three duplicate issues exist (#3916, #3923, #3927) — the fix closes all three. PR body should `Closes #3923 / Closes #3916 / Closes #3927`.
+5. **#3593 re-evaluation trigger formally fires.** Trigger #2 ("a change to the synthetic check-run set requires editing both the parent composite AND the workflow's inlined copy in the same PR") fires here. Plan v2 prescribes a post-merge update to #3593 explicitly.
 
 ## Overview
 
-PR #3201 added `cla-evidence` to `scripts/required-checks.txt` (the canonical source of truth for synthetic-check-run completeness). Two scheduled bot workflows that inline their synthetic check-run posts — `scheduled-compound-promote.yml` and `scheduled-content-publisher.yml` — were not updated. The `lint-bot-statuses` job in `.github/workflows/ci.yml` now fails on every push to `main` (verified on commit `2093948f`, run `25972384575`):
+PR #3201 added `cla-evidence` to `scripts/required-checks.txt` (the canonical source of truth for synthetic-check-run completeness). Three synthetic-posting sites were not updated:
+
+1. `.github/workflows/scheduled-compound-promote.yml` — inline post (lines 250-281).
+2. `.github/workflows/scheduled-content-publisher.yml` — inline post (lines 143-176).
+3. `.github/actions/bot-pr-with-synthetic-checks/action.yml` — shared composite consumed by 6 workflows (lines 165-181).
+
+The `lint-bot-statuses` job in `.github/workflows/ci.yml` fails on every push to `main` (verified on commit `2093948f`, run `25972384575`):
 
 ```
 FAIL: .github/workflows/scheduled-compound-promote.yml is missing synthetic check-runs for: cla-evidence
 FAIL: .github/workflows/scheduled-content-publisher.yml is missing synthetic check-runs for: cla-evidence
 ```
 
-The fix is to add one `gh api .../check-runs -f name=cla-evidence ...` block per inlined synthetic-posting site, plus extend the shared composite action's `CHECK_NAMES` array to include `cla-evidence` (the lint silently skips composite consumers, but the same logical drift exists there and #3593's re-evaluation trigger #2 fires on this exact change).
+The lint silently skips composite consumers (see `scripts/lint-bot-synthetic-completeness.sh:184-186`), so the composite's drift is invisible to the lint — but if `scripts/create-cla-required-ruleset.sh` is re-PUT (it already defines `cla-evidence` as required), all 6 composite consumers would deadlock at merge. The composite update is forward-compat hardening for that future operator action; #3593's re-evaluation trigger #2 fires here, mandating dual-edit in the same PR.
+
+### Research Insights
+
+**Best practices for synthetic-check posting:**
+
+- The `Checks API` (`/check-runs`), NOT the `Statuses API` (`/statuses`), is load-bearing for ruleset matching. Rulesets require Check Runs from `integration_id=15368` (github-actions[bot]); commit statuses do not satisfy them. The composite documents this at line 162-164. ([Source: scripts/required-checks.txt header])
+- Multi-word check names (`"skill-security-scan PR gate"`) MUST be quoted in `-f name=...` and the lint's `grep -qE "-f name=\"<escaped>\""` form matches them only when quoted. See learning `2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`.
+- The `output[title]` and `output[summary]` strings are operator-visible in the PR check-run UI. Bot-PR fixtures use `Bot PR` / `<change-summary>`; CLA-specific synthetics use `CLA pre-approved` / `github-actions[bot] is in CLA allowlist` (existing `cla-check`) and now `CLA evidence not applicable` / `Bot-authored PR — no CLA-signed contributions to attest.` (new `cla-evidence`). The semantic distinction matters: bot PRs literally have no human contributor whose CLA signature could be recorded, so "not applicable" is the load-bearing framing.
+
+**Edge cases:**
+
+- The lint script uses `grep -qE "\-f name=cla-evidence([[:space:]]|$)"` AND `grep -qE "\-f name=\"cla-evidence\""`. Either form satisfies it. The on-disk diff uses unquoted form (no spaces in `cla-evidence`).
+- YAML indentation differs by site: composite uses 8-space, content-publisher uses 10-space, compound-promote uses 12-space (inside `while` loop). The on-disk diff preserves each site's indent.
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Issue claim | Codebase reality | Plan response |
 | --- | --- | --- |
-| "2 workflows missing synthetic check-runs for `cla-evidence`" | Confirmed. `scheduled-compound-promote.yml:249-281` and `scheduled-content-publisher.yml:142-176` both post 4-5 inline synthetics, neither includes `cla-evidence`. | Add the missing block to both. |
-| "Pattern matches `scheduled-weekly-analytics.yml`" | `scheduled-weekly-analytics.yml:68` uses the composite action `bot-pr-with-synthetic-checks`, NOT inline posts. Its check-set is in `.github/actions/bot-pr-with-synthetic-checks/action.yml:165`. | The composite ALSO lacks `cla-evidence`. The lint skips composite consumers silently (covered by the action's `CHECK_NAMES` array), so this drift is invisible to `lint-bot-statuses` — but if `scripts/create-cla-required-ruleset.sh` is ever re-PUT (it defines `cla-evidence` as required), all 6 composite consumers would deadlock at merge. Fold composite update into this PR. |
-| "Fix here would conflate unrelated concerns with PR #3917" | True — #3917 was a Next.js bump. This PR is the right scope to fold both inline + composite updates together (per #3593 re-evaluation trigger #2: a check-name addition requires editing both the parent composite AND any inlined copies in the same PR). | This plan touches: 2 workflows (inline), 1 composite (shared), 0 unrelated areas. |
-| Ruleset state | The actual `CLA Required` GitHub ruleset (id `13304872`) currently enforces only `cla-check` — `cla-evidence` is in `required-checks.txt` (lint source) but not in the ruleset itself. So today's blast radius is "the lint job fails on `main` pushes," not "bot PRs deadlock at merge." | The lint failure is itself ship-blocking (it's a CI Required check). Fix it. The composite update is forward-compatible for whenever `scripts/create-cla-required-ruleset.sh` is re-PUT. |
+| "2 workflows missing synthetic check-runs for `cla-evidence`" | Confirmed at the time the three duplicate issues were filed. As of this deepen-pass, both workflows + the composite action already have the missing block applied as uncommitted local edits. | Plan v2 reframes Phase 2/3 as "commit and verify" rather than "edit and verify." |
+| "Pattern matches `scheduled-weekly-analytics.yml`" | `scheduled-weekly-analytics.yml:68` uses the composite action `bot-pr-with-synthetic-checks`, NOT inline posts. The reference pattern is therefore the composite's check-set, not weekly-analytics' explicit shell. | The composite ALSO needs the update (it lacks `cla-evidence` pre-fix). On-disk diff confirms it is added. |
+| "Fix here would conflate unrelated concerns with PR #3917" | True. This PR (feat-one-shot-3923) is the right scope — single-domain CI hygiene fix that folds three duplicate issues into one merge. | Close #3916, #3923, #3927 from this PR. |
+| Three issues for one drift | #3916 filed first (most descriptive title), #3923 second (current branch target), #3927 third (newest). All three describe the same lint failure and the same fix. | PR body uses `Closes #3923` + `Closes #3916` + `Closes #3927` to close all three at merge. |
+| Ruleset state | The actual `CLA Required` GitHub ruleset (id `13304872`) currently enforces only `cla-check` — `cla-evidence` is in `required-checks.txt` (lint source) but not in the GitHub ruleset itself. So today's blast radius is "the lint job fails on `main` pushes," not "bot PRs deadlock at merge." | The lint failure is itself ship-blocking (CI Required check). Fix it. The composite update is forward-compat for the future ruleset re-PUT. |
 
 ## User-Brand Impact
 
@@ -41,175 +86,198 @@ The fix is to add one `gh api .../check-runs -f name=cla-evidence ...` block per
 
 **Brand-survival threshold:** none — internal CI hygiene, no operator-facing data path.
 
-**Threshold-none scope-out reason (per preflight Check 6):** no sensitive path touched. The diff is `.github/workflows/scheduled-*.yml` + `.github/actions/bot-pr-with-synthetic-checks/action.yml` only. No schema, no auth, no API route, no SQL.
+**threshold: none, reason:** no sensitive path touched. The diff is `.github/workflows/scheduled-*.yml` + `.github/actions/bot-pr-with-synthetic-checks/{action.yml,CHANGELOG.md}` only. None match the canonical sensitive-path regex (no schema, no auth, no API route, no SQL, no `doppler*.yml`, no infra Terraform). Preflight Check 6 should record this scope-out unmodified.
 
 ## Files to Edit
 
-- `.github/workflows/scheduled-compound-promote.yml` — add `gh api .../check-runs -f name=cla-evidence ...` block after the existing `cla-check` posting at lines 270-277. Preserve the literal-name shape per the WHY-comment at line 244 ("scripts/lint-bot-synthetic-completeness.sh — literal grep, not bash-aware").
-- `.github/workflows/scheduled-content-publisher.yml` — add the same block after the `skill-security-scan PR gate` posting at lines 170-176, before the `gh pr merge` call at line 178.
-- `.github/actions/bot-pr-with-synthetic-checks/action.yml` — append `cla-evidence` to the explicit `gh api` enumeration. Two options inside the file's current shape:
-  - **Option A (chosen):** add a second standalone `gh api` block mirroring the existing `cla-check` block at lines 175-181, with `name=cla-evidence`, `output[title]=CLA evidence pre-recorded`, `output[summary]=github-actions[bot] evidence layer satisfied`. Keeps the bot-PR-vs-real-PR distinction clear (bot PRs have no human signer so the evidence layer is a no-op).
-  - **Option B (rejected):** add `cla-evidence` to the `CHECK_NAMES` array. Rejected because that array uses a generic `Bot PR / ${CHANGE_SUMMARY}` title-summary pair, and cla-evidence semantically belongs to the CLA cluster (different output text per #3201's design).
-- Update the `description:` block-scalar at line 1-10 if it enumerates the check names (verify: it does not, only line 40 mentions "test, dependency-review, and e2e synthetic checks. cla-check uses a fixed allowlist summary" — extend to "test, dependency-review, e2e, and skill-security-scan PR gate; cla-check and cla-evidence use fixed allowlist summaries").
+All four files have changes already applied as uncommitted local edits. The deepen-pass verifies the diff is correct and ready to commit.
+
+- **`.github/workflows/scheduled-compound-promote.yml`** — line ~282-288, 7-line block added after the `cla-check` post inside the cluster loop. Output text: `title=CLA evidence not applicable` / `summary=Bot-authored content PR — no CLA-signed contributions to attest.`
+- **`.github/workflows/scheduled-content-publisher.yml`** — line ~177-184, 7-line block added after the `skill-security-scan PR gate` post, before `gh pr merge`. Output text: `title=CLA evidence not applicable` / `summary=Bot-authored content PR — no CLA-signed contributions to attest.`
+- **`.github/actions/bot-pr-with-synthetic-checks/action.yml`** — line ~182-188, 7-line block added after the `cla-check` post in the composite. Output text: `title=CLA evidence not applicable` / `summary=Bot-authored PR — no CLA-signed contributions to attest.` Also line 40 doc-comment updated: `"and e2e synthetic checks. cla-check and cla-evidence use fixed summaries."`
+- **`.github/actions/bot-pr-with-synthetic-checks/CHANGELOG.md`** — appended a `## v2.1 (2026-05-17)` section per the action's existing changelog convention. Documents the new synthetic, references all three closed issues (#3916/#3923/#3927), and confirms no input-contract change (forward-compat with v2 callers).
+
+### Research Insights — Files to Edit
+
+**Why CHANGELOG.md was added to scope:** the composite action carries a versioned CHANGELOG.md as part of its public contract (see `.github/actions/bot-pr-with-synthetic-checks/CHANGELOG.md` — distinct from the repo-level CHANGELOG). The action's design treats CHANGELOG as load-bearing: v2 documents the boolean-input normalization, v2.1 documents the `cla-evidence` addition. Skipping it would create a drift between code and documented contract.
+
+**Why the composite's `description:` block-scalar was updated:** the doc-comment at line 40 enumerates the check-set semantic ("test, dependency-review, and e2e synthetic checks. cla-check uses a fixed allowlist summary"). Adding `cla-evidence` without updating this line would create a documentation-vs-behavior drift that a future maintainer would have to discover by reading code, not docs.
 
 ## Files to Create
 
-None. No new test fixtures, no new scripts, no new docs. Existing `scripts/lint-bot-synthetic-completeness.sh` is the verification gate.
+None. No new test fixtures, no new scripts, no new docs. The existing `scripts/lint-bot-synthetic-completeness.sh` is the verification gate.
 
 ## Open Code-Review Overlap
 
 Two open code-review issues touch these files:
 
-- **#3593** (`review: extract post-synthetic-checks child composite (deferred per ADR-027)`) — touches both `.github/actions/bot-pr-with-synthetic-checks/action.yml` and `.github/workflows/scheduled-compound-promote.yml`. Re-evaluation trigger #2 fires on this PR: "A change to the synthetic check-run set (adding/removing a Required check name) requires editing both the parent composite AND the workflow's inlined copy in the same PR." **Disposition: acknowledge.** This PR honors the re-evaluation trigger by updating both surfaces in lock-step, but does NOT extract the child composite. Extraction remains a separate YAGNI-deferred refactor; doing it inline would expand scope beyond the immediate fix. Update #3593 with a comment noting the trigger fired and the dual-edit was performed in PR #<n>; the scope-out remains open against the next trigger or the next caller.
+- **#3593** (`review: extract post-synthetic-checks child composite (deferred per ADR-027)`) — touches both `.github/actions/bot-pr-with-synthetic-checks/action.yml` and `.github/workflows/scheduled-compound-promote.yml`. Re-evaluation trigger #2 fires on this PR: "A change to the synthetic check-run set (adding/removing a Required check name) requires editing both the parent composite AND the workflow's inlined copy in the same PR." **Disposition: acknowledge.** This PR honors the re-evaluation trigger by updating both surfaces in lock-step, but does NOT extract the child composite. Extraction remains a separate YAGNI-deferred refactor; doing it inline would expand scope beyond the immediate fix. Post-merge step adds a comment to #3593 noting the trigger fired.
 - **#3595** (`review: bot-workflow enumeration — YAML-aware parser for audit/lint parity`) — touches `scripts/lint-bot-synthetic-completeness.sh`. **Disposition: defer.** This plan does not modify the lint script; #3595 is unrelated to the cla-evidence drift.
 
 ## Implementation Phases
 
-### Phase 1 — RED: extend the lint test surface
+### Phase 1 — RED state verification (historical)
 
-The lint script `scripts/lint-bot-synthetic-completeness.sh` already covers all 6 required names from `scripts/required-checks.txt` including `cla-evidence` (it loads them via `while IFS= read`). The "RED" state is already live on `main`: `bash scripts/lint-bot-synthetic-completeness.sh` exits 1 with the two FAIL lines from the issue body.
+When the three duplicate issues were filed (post-#3201 merge), `bash scripts/lint-bot-synthetic-completeness.sh` exited 1 with:
 
-Verification step (local, ~3 seconds):
+```
+FAIL: .github/workflows/scheduled-compound-promote.yml is missing synthetic check-runs for: cla-evidence
+FAIL: .github/workflows/scheduled-content-publisher.yml is missing synthetic check-runs for: cla-evidence
+
+2 of 2 workflow(s) are missing synthetic check-runs.
+```
+
+This is the RED reference state. The composite-action consumers are silently exempt by the lint and were not flagged — but the composite's drift was identified during this deepen-pass via direct grep (`grep -nE "cla-evidence" .github/actions/bot-pr-with-synthetic-checks/action.yml` → 0 matches pre-fix).
+
+### Phase 2 — GREEN state verification (current on-disk)
+
+The fix is already applied. Verify the on-disk diff:
 
 ```bash
-bash scripts/lint-bot-synthetic-completeness.sh
-# Expected: exit 1, 2 FAIL lines naming the two scheduled workflows for cla-evidence.
+git diff --stat .github/workflows/scheduled-compound-promote.yml \
+                .github/workflows/scheduled-content-publisher.yml \
+                .github/actions/bot-pr-with-synthetic-checks/action.yml \
+                .github/actions/bot-pr-with-synthetic-checks/CHANGELOG.md
+# Expected: 4 files changed, ~50 insertions(+), ~2 deletions(-)
 ```
 
-No test-file edits required — the lint script reads `required-checks.txt` directly and the loop covers every entry.
+Then verify each invariant:
 
-### Phase 2 — GREEN: inline workflow edits
+1. **Lint green:** `bash scripts/lint-bot-synthetic-completeness.sh` exits 0. Output line for each inlined file reads `ok: <file> (all 6 synthetics present)`. Verified live in deepen-pass — exit=0, both workflows green.
+2. **One match per site:** `grep -cE '\-f name=cla-evidence' <file>` returns exactly 1 for each of the three YAML edits. Verified.
+3. **Composite changelog bumped:** `head -25 .github/actions/bot-pr-with-synthetic-checks/CHANGELOG.md` shows a `## v2.1` heading dated `2026-05-17` referencing issues #3916/#3923/#3927.
+4. **YAML parse green:** `python3 -c "import yaml; yaml.safe_load(open('<file>'))"` exits 0 for all three edited YAML files. Verified.
+5. **actionlint green:** `actionlint .github/workflows/scheduled-compound-promote.yml .github/workflows/scheduled-content-publisher.yml` exits 0. Verified.
 
-**2.1 — `scheduled-content-publisher.yml`.** Append the `cla-evidence` block to the existing 5-block inline post (after `skill-security-scan PR gate`, before `gh pr merge`):
+### Phase 3 — Commit and push
 
-```yaml
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=cla-evidence \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=CLA evidence pre-recorded" \
-            -f "output[summary]=github-actions[bot] evidence layer satisfied"
+Single commit with all four files. Suggested commit message:
+
+```
+fix(ci): add cla-evidence synthetic check to bot PR workflows + composite
+
+PR #3201 added cla-evidence to scripts/required-checks.txt but missed
+three synthetic-posting sites:
+
+- .github/workflows/scheduled-compound-promote.yml (inline)
+- .github/workflows/scheduled-content-publisher.yml (inline)
+- .github/actions/bot-pr-with-synthetic-checks/action.yml (composite,
+  consumed by 6 bot workflows)
+
+Adds the missing block at each site with output text "CLA evidence not
+applicable" (bot-authored PRs have no human signer, so the evidence
+layer is semantically not-applicable, not "pre-recorded").
+
+Bumps the composite action to v2.1 per its CHANGELOG convention.
+No input-contract change.
+
+#3593 re-evaluation trigger #2 fires here (synthetic check-set change
+requires dual-edit of parent composite + inlined copy). Extraction
+remains deferred per ADR-027.
+
+Closes #3916
+Closes #3923
+Closes #3927
+Ref #3593
 ```
 
-**2.2 — `scheduled-compound-promote.yml`.** Append the same block to the inline post in the `while` loop (after `cla-check` at line 277, before the closing `git checkout main`):
+Push, mark PR ready, monitor CI.
 
-```yaml
-            gh api "repos/${REPO}/check-runs" \
-              -f name=cla-evidence \
-              -f head_sha="$COMMIT_SHA" \
-              -f status=completed \
-              -f conclusion=success \
-              -f "output[title]=CLA evidence pre-recorded" \
-              -f "output[summary]=self-healing/auto promotion — evidence layer satisfied"
-```
+### Phase 4 — Post-merge verification
 
-Note: compound-promote uses 4-space-deeper indentation inside its `while` loop; preserve exactly. Use Edit tool with full surrounding context, not heuristic insertion.
-
-**2.3 — Local re-run.** `bash scripts/lint-bot-synthetic-completeness.sh` → expect exit 0 (all 6 synthetics present on both files).
-
-### Phase 3 — Composite action update
-
-**3.1 — Add `cla-evidence` block.** Edit `.github/actions/bot-pr-with-synthetic-checks/action.yml`. Append a second standalone `gh api` block after the existing `cla-check` block at lines 175-181:
-
-```yaml
-        gh api "repos/${REPO}/check-runs" \
-          -f name=cla-evidence \
-          -f head_sha="$COMMIT_SHA" \
-          -f status=completed \
-          -f conclusion=success \
-          -f "output[title]=CLA evidence pre-recorded" \
-          -f "output[summary]=github-actions[bot] evidence layer satisfied"
-```
-
-**3.2 — Update the action's `description:` doc-comment** at line 40 (the documentation refers to the synthetic check set):
-
-Before:
-```
-      and e2e synthetic checks. cla-check uses a fixed allowlist summary.
-```
-
-After:
-```
-      and e2e synthetic checks. cla-check and cla-evidence use fixed
-      allowlist summaries.
-```
-
-**3.3 — Sanity check.** `bash scripts/lint-bot-synthetic-completeness.sh` still exits 0 (composite consumers are silently skipped; this edit is forward-compat hardening, not a lint-driven fix).
-
-### Phase 4 — Push and observe CI
-
-Push the branch. The `lint-bot-statuses` job inside `.github/workflows/ci.yml` should go green on this PR. The CodeQL / test / e2e / dependency-review / skill-security-scan PR gate checks are unchanged (workflow files only, no script changes).
+1. **Composite consumers (5 workflows).** On the next firing of each of (`scheduled-skill-freshness`, `scheduled-weekly-analytics`, `rule-metrics-aggregate`, `scheduled-content-vendor-drift`, `scheduled-rule-prune`), confirm the bot PR carries a `cla-evidence` check posted as `success` by `github-actions[bot]`. Automatable via `gh pr view <next-bot-pr> --json statusCheckRollup`; bake into the next session.
+2. **Inlined workflows (2).** On the next firing of `scheduled-compound-promote` or `scheduled-content-publisher`, same verification.
+3. **Update #3593.** Comment: "Re-evaluation trigger #2 fired on PR #<n>; inline + composite updated in lock-step per ADR-027 carry-forward. Extraction remains deferred until a second multi-PR-per-run caller motivates the refactor." Automatable via `gh issue comment 3593 --body-file <path>`.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] `bash scripts/lint-bot-synthetic-completeness.sh` exits 0 locally on the feature branch. The output line for both edited workflows reads `ok: <file> (all 6 synthetics present)`.
-- [ ] `grep -nE '\-f name=cla-evidence' .github/workflows/scheduled-compound-promote.yml` returns exactly 1 match (the new block inside the cluster loop).
-- [ ] `grep -nE '\-f name=cla-evidence' .github/workflows/scheduled-content-publisher.yml` returns exactly 1 match (the new block before `gh pr merge`).
-- [ ] `grep -nE '\-f name=cla-evidence' .github/actions/bot-pr-with-synthetic-checks/action.yml` returns exactly 1 match (the new block after `cla-check`).
+- [ ] `bash scripts/lint-bot-synthetic-completeness.sh` exits 0. Output line for both inlined workflows reads `ok: <file> (all 6 synthetics present)`.
+- [ ] `grep -cE '\-f name=cla-evidence' .github/workflows/scheduled-compound-promote.yml` returns `1`.
+- [ ] `grep -cE '\-f name=cla-evidence' .github/workflows/scheduled-content-publisher.yml` returns `1`.
+- [ ] `grep -cE '\-f name=cla-evidence' .github/actions/bot-pr-with-synthetic-checks/action.yml` returns `1`.
+- [ ] `head -25 .github/actions/bot-pr-with-synthetic-checks/CHANGELOG.md` includes `## v2.1` heading dated `2026-05-17` and references #3916/#3923/#3927.
+- [ ] `python3 -c "import yaml; yaml.safe_load(open('<file>'))"` exits 0 on all three edited YAML files.
+- [ ] `actionlint .github/workflows/scheduled-compound-promote.yml .github/workflows/scheduled-content-publisher.yml` exits 0.
 - [ ] The PR's `lint-bot-statuses` check is green in the GitHub UI.
-- [ ] The PR body uses `Closes #3923` (issue closes on merge — this is a single-merge fix, not an ops-remediation, so `Closes` is correct per `wg-use-closes-n-in-pr-body-not-title-to`).
+- [ ] PR body uses `Closes #3923` AND `Closes #3916` AND `Closes #3927` (three duplicates, single fix).
 - [ ] PR body references #3593 with the re-evaluation note: "trigger #2 fired; both inline and composite updated in lock-step; extraction remains deferred."
 - [ ] All other CI Required checks (`test`, `dependency-review`, `e2e`, `skill-security-scan PR gate`, `CodeQL`) pass.
 
 ### Post-merge (operator)
 
-- [ ] After merge, monitor the next scheduled tick of either workflow (whichever fires first; `scheduled-content-publisher.yml` runs more frequently). Confirm the auto-generated PR's `cla-evidence` check is posted as `success` by `github-actions[bot]` (visible in the PR's check-rollup).
-  - **Automation feasibility:** automatable via `gh pr view <next-bot-pr> --json statusCheckRollup`. Bake into the next session's verification rather than asking the operator to eyeball. If no bot tick fires within 7 days (cron interval), invoke the workflow manually with `gh workflow run scheduled-content-publisher.yml`.
-- [ ] Update #3593 with a comment: "Re-evaluation trigger #2 fired on PR #<n>; inline + composite updated in lock-step per ADR-027 carry-forward. Extraction remains deferred until a second multi-PR-per-run caller motivates the refactor."
-  - **Automation feasibility:** automatable via `gh issue comment 3593 --body-file <path>` from a post-merge step. Not in scope for this PR; record as a one-line manual step in the PR description's checklist.
+- [ ] On the next firing of `scheduled-content-publisher.yml` OR `scheduled-compound-promote.yml`, the bot PR's check-rollup shows `cla-evidence` posted as `success` by `github-actions[bot]`. Automatable via `gh pr view <next-bot-pr> --json statusCheckRollup`. If no bot tick fires within 7 days, invoke manually with `gh workflow run scheduled-content-publisher.yml`.
+- [ ] On the next firing of any composite consumer (`scheduled-skill-freshness`, `scheduled-weekly-analytics`, `rule-metrics-aggregate`, `scheduled-content-vendor-drift`, `scheduled-rule-prune`), same `cla-evidence=success` verification.
+- [ ] `gh issue comment 3593 --body "Re-evaluation trigger #2 fired on PR #<n>; inline + composite updated in lock-step per ADR-027 carry-forward. Extraction remains deferred until a second multi-PR-per-run caller motivates the refactor."` — fire post-merge via `gh issue comment` from the next session.
 
 ## Test Scenarios
 
 The lint script itself is the test harness. Three scenarios:
 
-1. **Negative (current `main` state):** `bash scripts/lint-bot-synthetic-completeness.sh` exits 1 with `FAIL: .github/workflows/scheduled-compound-promote.yml is missing synthetic check-runs for: cla-evidence` and the same for content-publisher. Verified locally before edits.
-2. **Positive (post-edit, feature branch):** same command exits 0 with `ok:` for both edited files.
-3. **Forward-compat (composite consumers, post-edit):** scheduled-skill-freshness / scheduled-weekly-analytics / scheduled-content-vendor-drift / scheduled-rule-prune / rule-metrics-aggregate / scheduled-compound-promote — when their next tick fires post-merge, the bot PRs they create should now post 6 synthetics including `cla-evidence`. No automated assertion in this PR; record in operator verification step.
+1. **Negative (pre-fix `main` state, historical):** `bash scripts/lint-bot-synthetic-completeness.sh` exits 1 with FAIL lines naming the two inlined workflows for `cla-evidence`. The composite drift is silently exempt by the lint (composite consumers are skipped).
+2. **Positive (post-fix, feature branch):** same command exits 0 with `ok:` for both edited files. Verified live in deepen-pass.
+3. **Forward-compat (composite consumers, post-merge):** when the 5 composite-consuming workflows fire next, their bot PRs post 6 synthetics including `cla-evidence`. No automated assertion in this PR; record in operator verification step.
 
 ## Sharp Edges
 
-- **Literal `-f name=` form is load-bearing.** The lint uses `grep -qE "\-f name=cla-evidence([[:space:]]|$)"`. Do not change to a bash loop over `CHECK_NAMES` in either workflow — the lint is content-grep, not bash-aware (per `scripts/lint-bot-synthetic-completeness.sh:191-197` and the WHY-comment at `scheduled-compound-promote.yml:244`). Two scheduled workflows already document this gotcha inline.
-- **Composite action consumers are silently skipped by the lint** (line 184-186 of `lint-bot-synthetic-completeness.sh`: "Composite-action consumers do not post synthetics inline — coverage is provided by .github/actions/bot-pr-with-synthetic-checks/action.yml. Skip silently"). Adding `cla-evidence` to the composite is therefore NOT detected by the lint — it is forward-compat hardening. The reviewer should confirm the composite edit by reading the diff, not by waiting for a red lint.
-- **YAML indentation differs by call site.** `scheduled-compound-promote.yml`'s inline post lives inside a `while IFS= read -r cluster; do ... done` loop — base indent is 12 spaces, deeper than `scheduled-content-publisher.yml`'s 10 spaces and the composite action's 8 spaces. Edit with full surrounding context (Edit tool, not sed); a mismatched indent silently breaks YAML parsing.
-- **The CLA Required ruleset (id 13304872) currently enforces only `cla-check`, not `cla-evidence`.** This means today's failure is purely "lint job red," not "bot PRs deadlock at merge." If `scripts/create-cla-required-ruleset.sh` is re-PUT in a future operation, all bot PRs created after that point would need the synthetic — this PR is the forward-compat layer for that operator action.
-- **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Filled here:** threshold `none` with explicit scope-out reason per preflight Check 6.
-- **`Closes #3923` form is correct** — this is a single-merge bug fix, not an ops-remediation; the issue closes at merge with no post-merge operator-write phase that could create a false-resolved window (per `wg-use-closes-n-in-pr-body-not-title-to`).
+- **Literal `-f name=` form is load-bearing.** The lint uses `grep -qE "\-f name=cla-evidence([[:space:]]|$)"`. Do not refactor to a bash `for` loop over `CHECK_NAMES` in either inlined workflow — the lint is content-grep, not bash-aware (per `scripts/lint-bot-synthetic-completeness.sh:191-197` and the WHY-comment at `scheduled-compound-promote.yml:243-249`).
+- **Composite action consumers are silently skipped by the lint** (`lint-bot-synthetic-completeness.sh:184-186`: "Composite-action consumers do not post synthetics inline — coverage is provided by .github/actions/bot-pr-with-synthetic-checks/action.yml. Skip silently"). Adding `cla-evidence` to the composite is therefore NOT detected by the lint — it is forward-compat hardening. The reviewer should confirm the composite edit by reading the diff, not by waiting for a red lint.
+- **YAML indentation differs by call site.** `scheduled-compound-promote.yml`'s inline post lives inside a `while IFS= read -r cluster; do ... done` loop — base indent is 12 spaces. `scheduled-content-publisher.yml` uses 10 spaces. The composite uses 8 spaces. A mismatched indent silently breaks YAML parsing — verified via `python3 yaml.safe_load` and `actionlint` in deepen-pass.
+- **Output text precision: "not applicable", not "pre-recorded".** Bot-authored PRs have no human contributor whose CLA signature could be recorded. The first-draft of plan v1 prescribed `output[title]=CLA evidence pre-recorded` which would be a future-maintainer surprise ("which previously-recorded evidence?"). On-disk text `output[title]=CLA evidence not applicable` + `output[summary]=Bot-authored PR — no CLA-signed contributions to attest.` is the semantically correct framing.
+- **The CLA Required ruleset (id 13304872) currently enforces only `cla-check`, not `cla-evidence`.** Today's failure is purely "lint job red" on main, not "bot PRs deadlock at merge." If `scripts/create-cla-required-ruleset.sh` is re-PUT in a future operation, all bot PRs would need the synthetic — this PR is the forward-compat layer for that operator action.
+- **Three duplicate issues for one fix.** #3916 / #3923 / #3927 all describe the same drift. The PR body MUST close all three with explicit `Closes #N` lines (per `wg-use-closes-n-in-pr-body-not-title-to`). Closing only the branch-target (#3923) would leave #3916 and #3927 dangling.
+- **`Closes` form is correct here** (not `Ref`) — this is a single-merge bug fix with no post-merge operator-write phase that could create a false-resolved window. The post-merge verification is observational, not corrective.
+- **#3593 re-evaluation trigger #2 fires.** The composite + inlined copy must be edited in lock-step per the trigger; this PR does so. Extraction itself remains deferred (ADR-027 carry-forward).
+- **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.** Filled here: threshold `none` with explicit scope-out reason per preflight Check 6.
 
 ## Risks
 
-- **Risk: composite action consumers fail at runtime due to indentation drift.** Mitigation: Edit tool with exact surrounding context; run a YAML lint (`actionlint` if available, otherwise `python3 -c "import yaml; yaml.safe_load(open('<file>'))"`) on all 3 edited files before push.
-- **Risk: `cla-evidence` synthetic posting fails at bot-PR runtime due to a future ruleset change that pins `integration_id` (like CodeQL does today).** Per `scripts/required-checks.txt:18-31`, this would silently regress synthetics. Mitigation: out of scope here — covered by the empirical-audit pattern documented for CodeQL (`scripts/audit-bot-codeql-coverage.sh`). File a follow-up only if the ruleset is ever pinned to a specific integration_id.
-- **Risk: extracting the composite (#3593) is the "right" long-term move, and updating both surfaces inline reinforces the duplication.** Mitigation: explicitly acknowledged in the Code-Review Overlap section. ADR-027 still applies (single multi-PR-per-run caller); deferring extraction is the correct YAGNI default.
+- **Risk: a future ruleset re-PUT pins `integration_id` (like CodeQL does today), silently breaking the synthetic posting.** Per `scripts/required-checks.txt:18-31`, this would silently regress synthetics. Mitigation: out of scope here — covered by the empirical-audit pattern documented for CodeQL (`scripts/audit-bot-codeql-coverage.sh`). File a follow-up only if the ruleset is ever pinned to a specific integration_id.
+- **Risk: extracting the composite (#3593) is the "right" long-term move, and updating both surfaces inline reinforces the duplication.** Mitigation: explicitly acknowledged in the Code-Review Overlap section. ADR-027 still applies (single multi-PR-per-run caller); deferring extraction is the correct YAGNI default. Post-merge step updates #3593 with the trigger-fired note so the next reviewer sees the receipt.
+- **Risk: indentation drift in the inline edits breaks YAML parsing at runtime, surfacing only on the next scheduled tick.** Mitigation: `python3 yaml.safe_load` + `actionlint` both pass in deepen-pass. The verification is mechanical.
+- **Risk: the on-disk diff (already-applied uncommitted changes) drifts from this plan during /work.** Mitigation: Phase 2 prescribes verifying the diff against the plan's Files-to-Edit list before commit. If any file has unexpected changes (e.g., the description doc-comment line 40 was edited differently), reconcile before push.
 
 ## Domain Review
 
 **Domains relevant:** none
 
-No cross-domain implications detected — internal CI hygiene change touching three workflow/action files. No user-facing surface, no data path, no schema, no docs site change, no skill/agent change.
+No cross-domain implications detected — internal CI hygiene change touching three workflow/action files plus one CHANGELOG. No user-facing surface, no data path, no schema, no docs-site change, no skill/agent change. The four 8 brainstorm domains (CMO/CRO/CPO/CTO/CLO/COO/CFO/CHRO) are not engaged.
 
-(GDPR / compliance gate per Phase 2.7: not triggered — none of the canonical regex surfaces (schemas, migrations, auth flows, API routes, `.sql`) are touched, and none of the (a)-(d) expansion triggers fire (no LLM-mediated processing, threshold is `none`, no cron added that reads from learnings/specs, no artifact distribution surface change).)
+(GDPR / compliance gate per Phase 2.7: not triggered — none of the canonical regex surfaces (schemas, migrations, auth flows, API routes, `.sql`) are touched, and none of the (a)-(d) expansion triggers fire: no LLM-mediated processing on operator-session data, threshold is `none`, no cron added that reads from learnings/specs, no artifact distribution surface change. Skipped silently per plan SKILL §2.7.)
 
 ## CLI-Verification Gate
 
-All shell commands prescribed in this plan reference already-installed tools (`bash`, `grep`, `gh`, `python3`, `git`) with standard flags. Two non-trivial invocations:
+All shell commands prescribed in this plan reference already-installed tools (`bash`, `grep`, `gh`, `python3`, `git`, `actionlint`) with standard flags. Two non-trivial invocations:
 
-- `gh api "repos/${REPO}/check-runs" -f name=<n> ...` — verified pattern, present in 6 existing workflows (`scheduled-weekly-analytics`, `scheduled-content-publisher`, `scheduled-compound-promote`, etc.). No new flags introduced.
-- `bash scripts/lint-bot-synthetic-completeness.sh` — local execution; the script exists at `scripts/lint-bot-synthetic-completeness.sh` (verified `ls -l`). No subcommand.
+- `gh api "repos/${REPO}/check-runs" -f name=<n> ...` — verified pattern, present in 6 existing workflows. No new flags introduced. Form documented at `.github/actions/bot-pr-with-synthetic-checks/action.yml:167-181`.
+- `bash scripts/lint-bot-synthetic-completeness.sh` — local execution; the script exists at `scripts/lint-bot-synthetic-completeness.sh` (verified `ls -l`). No subcommand. Exit-code semantics: 0 = green, 1 = at least one workflow missing a required synthetic.
 
 No CLI invocations are landing in user-facing docs; the gate is satisfied by reuse of existing precedent.
 
 ## References
 
-- Issue: #3923
+- Issues: #3923 (branch target), #3916 (first-filed duplicate), #3927 (third duplicate)
 - Origin PR (introduced `cla-evidence` in `required-checks.txt`): #3201, commit `b98c2177`
 - Failed CI run: https://github.com/jikig-ai/soleur/actions/runs/25972384575/job/76346571044
 - Runbook: `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md`
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-027-stateless-self-modifying-cron.md` (the deliberate-duplication carry-forward this PR honors)
 - Re-evaluation-triggered scope-out: #3593
 - Canonical source of truth: `scripts/required-checks.txt`
-- Canonical reference workflow (uses composite): `.github/workflows/scheduled-weekly-analytics.yml`
-- Shared composite: `.github/actions/bot-pr-with-synthetic-checks/action.yml`
+- Composite action: `.github/actions/bot-pr-with-synthetic-checks/action.yml` + `CHANGELOG.md`
 - Lint script: `scripts/lint-bot-synthetic-completeness.sh`
+- Multi-word check-name learning: `knowledge-base/project/learnings/2026-05-11-multi-word-required-check-exposes-strip-all-whitespace-bug.md`
+- Scope-out bundling learning: `knowledge-base/project/learnings/2026-05-11-scope-out-bundling-hides-cheap-inline-fixes.md`
+
+## Quality Check Receipts (deepen-pass)
+
+Per `deepen-plan/SKILL.md` quality checks, each load-bearing claim verified live:
+
+- **PR/issue state:** All cited numbers resolved via `gh pr view` / `gh issue view`. #3201 MERGED, #3593 OPEN, #3916 OPEN, #3923 OPEN, #3927 OPEN, #3917 MERGED. No unresolved citations.
+- **Commit reachability:** `git merge-base --is-ancestor <hash> main` for `2093948f` and `b98c2177` — both reachable.
+- **Label existence:** `gh label list --limit 200` confirms `priority/p2-medium`, `type/bug`, `domain/engineering`, `code-review`, `deferred-scope-out` all exist.
+- **AGENTS.md rule citations:** `wg-use-closes-n-in-pr-body-not-title-to` verified active via `grep -qE '\[id: wg-use-closes-n-in-pr-body-not-title-to\]' AGENTS.md` — present. `hr-autonomous-loop-skill-api-budget-disclosure` present. No retired/fabricated rule IDs cited.
+- **Lint green proof:** `bash scripts/lint-bot-synthetic-completeness.sh` exit=0, output line `All 2 GITHUB_TOKEN workflow(s) post complete synthetic check-runs.`
+- **YAML/actionlint proof:** all three edited YAML files pass `python3 yaml.safe_load` and `actionlint`.
+- **Loader-class fit:** N/A — no AGENTS.md rule demotion proposed.
+- **Pathspec→regex translation:** N/A — no glob/regex translation proposed.
