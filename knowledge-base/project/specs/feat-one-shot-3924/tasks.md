@@ -44,13 +44,13 @@ Derived from `knowledge-base/project/plans/2026-05-17-feat-r2-lock-rules-gdpr-ov
 
 ## Phase 3 — Runbook Rewrite
 
-- [ ] **3.1** Read full runbook; note §7.2, §7.4, §7.5, §7.6, §7.7 verbatim (preserved unchanged).
-- [ ] **3.2** Drop runbook-header stale banner (lines ~7-9).
-- [ ] **3.3** Rewrite §7.1: admin-token mint scope (Account → R2 → Edit + User → API Tokens → Edit), env-var export, driver `--help` reference, copy-pasteable invocation.
-- [ ] **3.4** Rewrite §7.3: canonical driver invocation + 5-bullet flow enumeration; drop all `<details>` historical blocks.
-- [ ] **3.5** Run cross-artifact drift gate (AC13b): `git grep -nl 'Object Lock Governance\|--bypass-governance-retention' knowledge-base/engineering/ops/runbooks/ docs/ apps/ plugins/` — assert zero hits outside learnings/plans/specs.
-- [ ] **3.6** Re-verify legal-prose parity (AC8) via awk flag-pattern diff.
-- [ ] **3.7** Commit `docs(runbook): rewrite cla-evidence §7 admin-override for R2 Lock Rules (#3924)`.
+- [x] **3.1** Read full runbook; note §7.2, §7.4, §7.5, §7.6, §7.7 verbatim (preserved unchanged).
+- [x] **3.2** Drop runbook-header stale banner (lines ~7-9).
+- [x] **3.3** Rewrite §7.1: admin-token mint scope (Account → R2 → Edit + User → API Tokens → Edit), env-var export, driver `--help` reference, copy-pasteable invocation.
+- [x] **3.4** Rewrite §7.3: canonical driver invocation + 5-bullet flow enumeration; drop all `<details>` historical blocks.
+- [x] **3.5** Run cross-artifact drift gate (AC13b): `git grep -nl 'Object Lock Governance\|--bypass-governance-retention' knowledge-base/engineering/ops/runbooks/ docs/ apps/ plugins/` — assert zero hits outside learnings/plans/specs.
+- [x] **3.6** Re-verify legal-prose parity (AC8) via awk flag-pattern diff.
+- [x] **3.7** Commit `docs(runbook): rewrite cla-evidence §7 admin-override for R2 Lock Rules (#3924)`.
 
 ## Phase 4 — Verification
 

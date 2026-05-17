@@ -6,9 +6,7 @@ date: 2026-05-16
 
 # CLA Signature Evidence Retrieval
 
-Operations runbook for the off-site CLA evidence archive (`soleur-cla-evidence` R2 bucket, region `weur`, R2 Lock Rules with 10-year age-based retention floor — functionally equivalent to S3 Object Lock Governance). Covers IP-dispute response, DMCA notice handling, GDPR Article 17 erasure requests, and contributor-revocation flows.
-
-> **§7 admin-override procedure under revision (2026-05-16).** PR #3920 replaced the underlying retention mechanism: R2 does NOT implement S3 Object Lock / `--bypass-governance-retention`. The override now requires editing the bucket Lock Rule list (PUT a modified list excluding the offending object, DELETE, PUT-restore) rather than the S3 bypass-flag path described in §7.3 below. The §7.1/§7.3 instructions are STALE and will fail if followed verbatim against the live bucket. Tracking issue: #3924. Until the rewrite lands, DO NOT execute §7.3 verbatim — coordinate with the CLO and the cla-evidence infra owner for an interim procedure.
+Operations runbook for the off-site CLA evidence archive (`soleur-cla-evidence` R2 bucket, region `weur`, R2 Lock Rules age-based retention with a 10-year floor providing write-once-read-many (WORM) semantics). Covers IP-dispute response, DMCA notice handling, GDPR Article 17 erasure requests, and contributor-revocation flows.
 
 **Cross-references:**
 - Architecture: `apps/cla-evidence/infra/` (Terraform) + `apps/cla-evidence/scripts/` (helpers) + `.github/workflows/cla-evidence.yml` (sidecar) + `.github/workflows/cla-evidence-timestamp.yml` (monthly RFC 3161).
@@ -179,26 +177,46 @@ Use this procedure ONLY when the CLO has confirmed in writing that Article 17(3)
 
 ### 7.1 Generate one-time admin token
 
-**[STALE — see banner at top of runbook; #3924 tracking issue will replace this section.]** The procedure below describes the deprecated S3 Object Lock bypass-permission path that R2 does not implement. Until the rewrite, treat §7.1–§7.3 as a historical reference for the *intent* (mint short-lived admin creds; perform the override; tombstone; revoke), not the *commands*.
+Mint a 1-hour Cloudflare admin token whose scopes let the override driver edit
+the bucket Lock Rule list AND self-revoke at the end. The token is operator-
+minted per-incident (NEVER persisted in Doppler) and lives only in the
+operator's local shell.
 
-Interim guidance: mint a one-hour CF admin token with `Account → Cloudflare R2 → Edit` scope (same as the bootstrap admin token at `apps/cla-evidence/infra/bootstrap.sh:21-26`). This token can read AND write the Lock Rule list at `PUT /accounts/{id}/r2/buckets/{name}/lock`. The override flow is: GET current rules → PUT a modified list with the rule's `enabled` flipped to `false` (or `condition.maxAgeSeconds` lowered to 1) → DELETE the offending object via the operator's HMAC creds from Doppler `prd_cla` → PUT-restore the original rules → write the tombstone (§7.4) → revoke the admin token (§7.6). The original §7.1 dashboard click-path is preserved below for historical reference.
-
-<details>
-<summary>Historical: deprecated dashboard click-path (R2 does NOT implement Bypass Governance Retention)</summary>
-
-1. **Cloudflare dashboard → R2 → Manage R2 API Tokens → Create API Token**.
+1. **Cloudflare dashboard → My Profile → API Tokens → Create Token → Create
+   Custom Token**.
 2. Configure:
-   - **Permissions:** Object Read + Object Write + **Bypass Governance Retention** (for the `soleur-cla-evidence` bucket only).
-   - **TTL:** 1 hour (do not extend).
-   - **Specify bucket:** `soleur-cla-evidence`.
-3. Export to local shell (do NOT add to Doppler):
+   - **Permissions:**
+     - `Account → Cloudflare R2 → Edit` (mutates the Lock Rule list).
+     - `User → API Tokens → Edit` (lets the driver DELETE the token itself
+       at the end — closes the residual-window risk).
+   - **Account Resources:** the jikigai account only.
+   - **TTL:** 1 hour. Do not extend.
+3. Copy the token value, then export it to the local shell alongside the
+   other required vars (see `gdpr-override.sh --help` for the full list and
+   exit-code matrix):
 
    ```bash
-   export R2_CLA_EVIDENCE_ADMIN_KEY_ID="<from dashboard>"
-   export R2_CLA_EVIDENCE_ADMIN_SECRET="<from dashboard>"
+   export CF_ADMIN_TOKEN="<paste from dashboard>"
+   export CF_ACCOUNT_ID="$(doppler secrets get CF_ACCOUNT_ID -p soleur -c prd_terraform --plain)"
+   export R2_CLA_EVIDENCE_BUCKET="soleur-cla-evidence"
+   export R2_CLA_EVIDENCE_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
+   export TARGET_KEY="signatures/<sha>.json"      # output of §7.2
+   export PRIOR_SHA="<sha>"                       # 64-char lowercase hex
+   export GDPR_REQUEST_REF="<DSAR-or-incident-id>"
+   export OVERRIDE_REASON="GDPR Article 17 erasure — Art. 17(3)(e) carveout confirmed inapplicable by CLO on <date>"
+   export ADMIN_ACTOR="$(git config user.email)"
    ```
 
-</details>
+4. Sanity-check via `bash apps/cla-evidence/scripts/gdpr-override.sh --help`
+   — the help text enumerates the exit-code semantics (0 success; 1 pre-PUT
+   abort; 2 DELETE failed; 3 PUT-restore failed AFTER DELETE; 64 usage).
+   Re-read these before invoking the override step in §7.3.
+
+The driver self-revokes the admin token at the end of a successful run; if
+the run aborts at exit code 3 (restore failed) the token is deliberately
+left active so the operator can manually restore — revoke it via the same
+dashboard page (My Profile → API Tokens → Roll/Delete) once the bucket is
+back to canonical.
 
 ### 7.2 Locate the offending object
 
@@ -210,41 +228,89 @@ bash apps/cla-evidence/scripts/inspect-evidence.sh by-contributor <login> \
 
 Capture this key and the full record body — both are needed for the tombstone.
 
-### 7.3 Delete the object via Lock Rule edit (interim procedure)
+### 7.3 Delete the object via Lock Rule edit (driver-mediated)
 
-**[STALE COMMANDS — DO NOT EXECUTE]** The `aws s3api delete-object --bypass-governance-retention` form is an S3 Object Lock primitive that R2 does NOT implement. The corrected high-level shape under R2 Lock Rules is:
-
-1. Capture the current rule list: `curl -fsS -H "Authorization: Bearer $CF_ADMIN_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/r2/buckets/$R2_CLA_EVIDENCE_BUCKET/lock"`.
-2. PUT a modified rule list with the rule's `enabled` flipped to `false` (or `condition.maxAgeSeconds` lowered) using the same endpoint.
-3. DELETE the object via the operator's HMAC creds from Doppler `prd_cla` (`aws s3api delete-object --bucket $R2_CLA_EVIDENCE_BUCKET --key signatures/<sha>.json` — NO bypass flag; the rule is currently disabled).
-4. PUT-restore the original rule list (verbatim from step 1).
-5. Verify via `bash apps/cla-evidence/infra/main.test.sh --live` that `rule_count >= 1` and `maxAgeSeconds >= 315360000` post-restore.
-
-Exact commands + a tested driver script are deferred to #3924. The procedure above is the operationally correct shape; full validation against a synthetic dispute-resolution test fixture is the missing piece.
-
-<details>
-<summary>Historical: deprecated S3 Object Lock command (R2 returns NotImplemented)</summary>
+The override is a single driver invocation. With the env vars from §7.1
+exported, run:
 
 ```bash
-AWS_ACCESS_KEY_ID="$R2_CLA_EVIDENCE_ADMIN_KEY_ID" \
-AWS_SECRET_ACCESS_KEY="$R2_CLA_EVIDENCE_ADMIN_SECRET" \
-AWS_REGION=auto \
-aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3api delete-object \
-  --bypass-governance-retention \
-  --bucket "$R2_CLA_EVIDENCE_BUCKET" \
-  --key "signatures/<sha>.json"
+doppler run -p soleur -c prd_cla -- \
+  bash apps/cla-evidence/scripts/gdpr-override.sh --shape=enabled-false
 ```
 
-The `--bypass-governance-retention` flag is the load-bearing argument. Without it, R2 returns 403 because of Object Lock. The flag is honoured because the token was provisioned with the "Bypass Governance Retention" permission.
+The `doppler run -p soleur -c prd_cla --` wrapper supplies the R2 S3-compat
+HMAC pair (the 32-char access key + 64-char SHA-256-derived secret) ONLY to
+the DELETE / tombstone steps; the 53-char Cloudflare bearer admin token
+flows separately to the curl-based lock-rule edits via `CF_ADMIN_TOKEN`.
+Crossing the wires reproduces the `Credential access key has length 53,
+should be 32` failure from PR #3919's first cron run — the driver enforces
+the separation by construction.
 
-</details>
+What the driver does (mirrors `bash gdpr-override.sh --help`):
+
+1. **Verify the admin token** via `GET /user/tokens/verify`; capture
+   `result.id` for the self-revoke at the end.
+2. **GET the current Lock Rule list** and snapshot it (byte-equal restore
+   body). Aborts if `success != true`, `rule_count < 1`, or `maxAgeSeconds
+   < 315360000` (mirrors `apps/cla-evidence/infra/main.test.sh:96-110`).
+3. **PUT a temporarily-modified list** per `--shape=`. Default
+   `--shape=enabled-false` flips `rules[0].enabled = false`. Fallbacks:
+   `--shape=age-1s` (drops `maxAgeSeconds` to 1) and `--shape=narrow-prefix`
+   (adds an override rule for `TARGET_KEY`; gated behind
+   `--I-have-verified-precedence` because R2 multi-rule precedence is not
+   yet empirically verified on the live bucket).
+4. **DELETE the object** via `aws s3api delete-object` running under the
+   `prd_cla` Doppler HMAC env. NO bypass-flag argument — the rule itself is
+   temporarily disabled. If DELETE fails, the driver best-effort PUT-restores
+   the snapshot, self-revokes the token, and exits 2 without writing a
+   tombstone.
+5. **PUT-restore the snapshot** (byte-equal), then verify via `bash
+   apps/cla-evidence/infra/main.test.sh --live --strict-rule-count` —
+   asserts the bucket is back to exactly one rule, age-floor intact. If
+   PUT-restore FAILS the driver emits a `::error::CRITICAL` annotation and
+   exits 3 WITHOUT self-revoking (operator needs the token to manually
+   restore) and WITHOUT writing a tombstone (the bucket state is degraded;
+   tombstoning would silently fold the incident into the next monthly RFC
+   3161 manifest).
+6. **Write the tombstone** per §7.4 (driver writes `{schema_version:"1.0",
+   deleted_at, admin_actor, gdpr_request_ref, prior_object_sha,
+   override_reason}` at `tombstones/<sha>.json` via the same `prd_cla` HMAC
+   env). PRIOR_SHA is validated against `^[0-9a-f]{64}$` at entry — a
+   malformed value breaks the third-consumer schema invariant at
+   `inspect-evidence.sh`.
+7. **Self-revoke** the admin token via `DELETE /user/tokens/{id}` (skipped
+   only on exit 3 per step 5).
+
+Exit codes: 0 success; 1 pre-PUT abort (token verify or GET failed; revoke
+ran); 2 DELETE failed (restore + revoke ran; no tombstone); 3 PUT-restore
+FAILED (no revoke, no tombstone — CRITICAL); 64 usage / config error.
+
+If all three shapes fail empirically against the live bucket, the operator
+can fall back to executing the underlying steps directly via curl + `aws
+s3api` — the driver source at `apps/cla-evidence/scripts/gdpr-override.sh`
+is the authoritative command sequence. Always pair a manual override with
+the tombstone in §7.4 and the revoke in §7.6; the integrity of the
+timestamp chain depends on it.
 
 ### 7.4 Tombstone protocol (mandatory)
 
-Immediately after the delete, write the tombstone. The tombstone is what keeps the timestamp chain coherent — the next monthly RFC 3161 manifest (Phase 5 step 2.b lists `tombstones/` along with `signatures/` and `allowlist/`) will include the tombstone, so auditors see "object H replaced by tombstone T at month M+1" rather than "object H vanished."
+The driver writes the tombstone automatically in step 6 of §7.3. The
+schema below is the canonical contract — also referenced by
+`inspect-evidence.sh` (the third consumer-boundary per learning
+`2026-05-04-cla-evidence-sidecar-pattern.md` §3; `schema_version: "1.0"`
+is load-bearing). The tombstone is what keeps the timestamp chain
+coherent — the next monthly RFC 3161 manifest (Phase 5 step 2.b lists
+`tombstones/` along with `signatures/` and `allowlist/`) will include
+the tombstone, so auditors see "object H replaced by tombstone T at
+month M+1" rather than "object H vanished."
+
+If the driver's step 6 fails (network blip after a successful restore in
+step 5 — the driver surfaces this as a non-fatal `::error::tombstone PUT
+failed` and continues to self-revoke), write the tombstone manually
+using the same `prd_cla` HMAC envelope:
 
 ```bash
-tombstone_key="tombstones/<sha>.deleted.json"
+tombstone_key="tombstones/<sha>.json"
 tombstone_body=$(jq -n \
   --arg schema_version "1.0" \
   --arg deleted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -254,14 +320,12 @@ tombstone_body=$(jq -n \
   --arg override_reason "GDPR Article 17 erasure -- carveout 17(3)(e) confirmed inapplicable by CLO on <date>" \
   '{schema_version: $schema_version, deleted_at: $deleted_at, admin_actor: $admin_actor, gdpr_request_ref: $gdpr_request_ref, prior_object_sha: $prior_object_sha, override_reason: $override_reason}')
 
-AWS_ACCESS_KEY_ID="$R2_CLA_EVIDENCE_ADMIN_KEY_ID" \
-AWS_SECRET_ACCESS_KEY="$R2_CLA_EVIDENCE_ADMIN_SECRET" \
-AWS_REGION=auto \
-aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3api put-object \
-  --bucket "$R2_CLA_EVIDENCE_BUCKET" \
-  --key "$tombstone_key" \
-  --body /dev/stdin \
-  --content-type application/json <<< "$tombstone_body"
+doppler run -p soleur -c prd_cla -- \
+  aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3api put-object \
+    --bucket "$R2_CLA_EVIDENCE_BUCKET" \
+    --key "$tombstone_key" \
+    --body /dev/stdin \
+    --content-type application/json <<< "$tombstone_body"
 ```
 
 Tombstones contain **no contributor PII** — only the SHA-256 of the deleted record, the timestamp, the admin actor's email (operator, not contributor), the GDPR request reference, and the override reason. This satisfies the right-to-erasure obligation without breaking the chain.
@@ -282,7 +346,12 @@ This log is for internal audit (Article 5(2) accountability). It is NOT the publ
 
 ### 7.6 Revoke the admin token
 
-Immediately delete the one-hour admin token from the Cloudflare dashboard. Do NOT wait for the TTL.
+The driver self-revokes the admin token at the end of a successful run
+(step 7 of §7.3). The only case where the operator must revoke manually is
+exit code 3 (PUT-restore failed) — the driver deliberately leaves the
+token active so the operator can manually restore the lock-rule list,
+then revoke via Cloudflare dashboard (My Profile → API Tokens → Delete).
+Do NOT wait for the 1-hour TTL.
 
 ### 7.7 Confirm in the next monthly manifest
 
@@ -360,4 +429,4 @@ The monthly cron (`cla-evidence-timestamp.yml`) files a tracking issue per faile
 - **R2 backend has no lock** (learning #8). Concurrent `terraform apply` against `apps/cla-evidence/infra/` is unsafe. Single-writer only.
 - **The runbook itself must NOT contain real signer PII.** All examples in this document use synthetic logins / PR numbers; preserve that convention per `cq-test-fixtures-synthesized-only`.
 - **`[skip ci]` deadlocks required Check Runs** (learning #12). If you author a manual commit related to this runbook, never include `[skip ci]` in the message.
-- **The admin-override is operator-only, ack-required.** Per `hr-menu-option-ack-not-prod-write-auth`, every `delete-object --bypass-governance-retention` invocation must be explicitly approved by the operator at the prompt — no "approve all destructive ops" mode.
+- **The admin-override is operator-only, ack-required.** Per `hr-menu-option-ack-not-prod-write-auth`, every `gdpr-override.sh` invocation must be explicitly approved by the operator at the prompt — no "approve all destructive ops" mode. The driver also requires `--I-have-verified-precedence` as a separate ack before `--shape=narrow-prefix` can run, because R2 multi-rule precedence semantics are not yet empirically verified on this bucket.

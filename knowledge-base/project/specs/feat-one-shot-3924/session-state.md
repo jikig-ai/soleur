@@ -17,6 +17,12 @@
   - Wired `--dry-run` to early-exit after validation with a planning summary (was parsed-but-unused → SC2034; honoring it minimally is cheaper than a disable comment and matches the help's "Plan only; no network IO" promise).
   - ERR/INT/TERM cleanup trap installed between PUT-modify and PUT-restore-success only; all error branches use explicit `if !` so trap fires solely on unexpected mid-flow interrupts.
 
+## Phase 3 — Runbook Rewrite
+- Status: complete (2026-05-17)
+- Runbook rewrites: dropped the 2026-05-16 STALE banner; rewrote §7.1 (admin-token mint scope now includes `User → API Tokens → Edit` for the driver's self-revoke step, env-var export block, `--help` ref); rewrote §7.3 (canonical driver invocation + 7-step "what the driver does" enumeration, dropped all `<details>` historical blocks); updated §7.4 manual fallback to use `doppler run -p soleur -c prd_cla --` (the deprecated `R2_CLA_EVIDENCE_ADMIN_KEY_ID` envs no longer exist post-#3924); §7.6 narrowed to fallback-only (driver self-revokes by default); Appendix A bullet on `hr-menu-option-ack-not-prod-write-auth` re-anchored to `gdpr-override.sh` + `--I-have-verified-precedence` ack.
+- AC13b cross-artifact drift gate: in addition to the runbook itself, the gate caught `apps/cla-evidence/infra/README.md` and 6 legal-doc files (3x `docs/legal/` + 3x `plugins/soleur/docs/pages/legal/` mirror). All aligned: substituted the transitional "functionally equivalent to S3 Object Lock Governance" framing with canonical "R2 Lock Rules age-based retention providing write-once-read-many (WORM) semantics" — the WORM phrasing was already in use at gdpr-policy.md §3.4 sub-bullet (1) so the rewrite preserved local vocabulary continuity. Both legal mirrors received identical edits so AC8 §3.4 parity holds (only acceptable diff is the link-format `(individual-cla.md)` vs `(/legal/individual-cla/)` Eleventy permalink). Last-Updated change-log bumped to 2026-05-17 in both gdpr-policy.md copies citing #3924 as the rationale.
+- AC8 §3.4 parity diff: 1 line differs (link-format only); the load-bearing sentences ("temporarily updating the bucket lock-rule list", "tombstone protocol") appear identically in both mirrors.
+
 ### Errors
 None.
 
