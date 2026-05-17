@@ -179,8 +179,8 @@ jobs:
             -f head_sha="$COMMIT_SHA" \
             -f status=completed \
             -f conclusion=success \
-            -f "output[title]=CLA evidence pre-recorded" \
-            -f "output[summary]=github-actions[bot] evidence layer satisfied"
+            -f "output[title]=CLA evidence not applicable" \
+            -f "output[summary]=Bot-authored content PR — no CLA-signed contributions to attest."
 
           gh pr merge "$BRANCH" --squash --auto
 
