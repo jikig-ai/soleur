@@ -39,6 +39,38 @@ The starting point is `apps/web-platform/scripts/configure-sentry-alerts.sh`
 4 auth observability issue-alert rules. The script works but cannot model the
 new monitor types and offers no drift detection for the rules it manages.
 
+## Cluster / Host Glossary
+
+Sentry's EU footprint splits across three host classes; conflating them is the
+root failure mode of the 2026-03-28 → 2026-05-16 phantom-ingest window
+(see PIR `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+and Article 30 PA8 §(d) recipient-drift disclosure). All future Sentry-touching
+work in this repo MUST reference this glossary by name when choosing a host.
+
+| Host class      | Hostname(s)                                         | Serves                                                                                                                       | Does NOT serve                                                                            |
+|-----------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
+| **Ingest**      | `o<id>.ingest.de.sentry.io`, `o<id>.ingest.us.sentry.io` | DSN POSTs (`/api/<project_id>/store/`, `/api/<project_id>/envelope/`); cron-checkin beacons; CSP report-uri POSTs            | Settings UI; REST API; dashboard. Path-only POST sinks — no GET/PUT semantics.            |
+| **Dashboard**   | `sentry.io`, `<org-slug>.sentry.io`, `eu.sentry.io` | Web UI: org settings, project settings, alerts, monitors, issue triage. **EU-region dashboard host is `eu.sentry.io`** (NOT `de.sentry.io`). | Ingest POSTs (event upload goes to `*.ingest.*.sentry.io`).                               |
+| **API**         | `eu.sentry.io/api/0/...`, `us.sentry.io/api/0/...`  | REST API: `/organizations/{slug}/`, `/projects/{org}/{project}/`, `/releases/`, `/users/me/`. **EU-region API base_url is `eu.sentry.io/api/`.** | Event ingest (path-disjoint from `/api/<project_id>/store/`).                             |
+
+**Implications for Terraform + audit tooling:**
+
+- **Provider `base_url`** in `apps/web-platform/infra/sentry/main.tf` for EU
+  region MUST be `https://eu.sentry.io/api/`. Setting it to `https://de.sentry.io/api/`
+  produces silent 404s (ingest-only host has no `/api/0/...` surface) which a
+  beta-provider may not surface as a Terraform error.
+- **Audit script `api_host`** (`apps/web-platform/scripts/sentry-monitors-audit.sh`)
+  region-probe loop MUST include `eu.sentry.io` (and prefer it over `sentry.io`
+  for EU-resident orgs) — `de.sentry.io` will return 404 for every API call.
+- **Operator-minted user tokens** are created via the dashboard host
+  (`https://eu.sentry.io/settings/account/api/auth-tokens/`), not the ingest host.
+- **DSN cluster substring** in `NEXT_PUBLIC_SENTRY_DSN` (e.g.
+  `https://<key>@o<id>.ingest.de.sentry.io/<project_id>`) is the authoritative
+  residency signal (per learning `2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md`)
+  — it identifies the **ingest** cluster, which on the EU footprint is `de`-prefixed
+  even though the controlling org's API + dashboard live at `eu.sentry.io`. This
+  asymmetry is the glossary's reason for existing.
+
 ## Decision
 
 Adopt Sentry as Infrastructure-as-Code via the `jianyuan/terraform-provider-sentry`
@@ -92,16 +124,21 @@ remain in Doppler `prd_terraform` per the existing pattern in
 
 GitHub Actions exposes secret VALUES only inside workflow steps. For local
 execution (Phase 2.1 audit, Phase 5 import), the operator uses a personal
-**Sentry user token** from `https://de.sentry.io/settings/account/api/auth-tokens/`
+**Sentry user token** from `https://eu.sentry.io/settings/account/api/auth-tokens/`
 with scope `project:read` + `monitor:read` (audit) and `project:write` (import).
 The token is never persisted to Doppler or committed.
 
 ### DE region support
 
-Provider docs do not enumerate `de.sentry.io`; base_url override is inferred.
-Phase 0.1.5 of the plan validates DE region support against a scratch project
-**before** committing the provider config. If it fails, the escape hatch
-below applies.
+The Sentry EU API + dashboard live at `eu.sentry.io`; `de.sentry.io` is an
+**ingest-only** host that does not serve API or settings UI (audit/import
+calls return 404). The canonical EU API base_url is therefore
+`https://eu.sentry.io/api/` — set on the Terraform provider config in
+`apps/web-platform/infra/sentry/main.tf` whenever `var.sentry_region = "de"`.
+See `Cluster / Host Glossary` above for the full host-class split and the
+Sentry-residency cascade learning at
+`knowledge-base/project/learnings/2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md`
+for the failure mode this prose corrects.
 
 ### Auto-apply on push-to-main (cron monitors only)
 
