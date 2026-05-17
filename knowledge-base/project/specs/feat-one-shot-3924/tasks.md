@@ -28,19 +28,19 @@ Derived from `knowledge-base/project/plans/2026-05-17-feat-r2-lock-rules-gdpr-ov
 
 ## Phase 2 — GREEN Driver
 
-- [ ] **2.1** Scaffold `apps/cla-evidence/scripts/gdpr-override.sh` (set -euo pipefail; color helpers; step counter — match `bootstrap.sh`).
-- [ ] **2.2** Implement arg parsing: `--help`, `--dry-run`, `--shape={enabled-false|age-1s|narrow-prefix}`, `--I-have-verified-precedence`, env validation.
-- [ ] **2.3** Implement admin-token verify (`curl /user/tokens/verify`), capture `result.id` for self-revoke; validate `status == "active"`.
-- [ ] **2.4** Install `trap '_cleanup_partial_override "$snapshot"' ERR` BEFORE the PUT-disable (pattern from `sentinel-pr.sh:167-192`).
-- [ ] **2.5** GET lock rules; jq-assert `success:true && rule_count >= 1 && maxAgeSeconds >= 315360000` BEFORE proceeding (mirrors `main.test.sh:96-110`). Save canonical snapshot to `$WORK/snapshot.json`.
-- [ ] **2.6** PUT modified rules per `--shape=`. Body always wrapped as `{"rules":[...]}` (bare-array → HTTP 400).
-- [ ] **2.7** DELETE object via `doppler run -p soleur -c prd_cla -- aws s3api delete-object --bucket "$R2_CLA_EVIDENCE_BUCKET" --key "$TARGET_KEY"`. Bearer token NOT present in this step's env.
-- [ ] **2.8** PUT-restore from `$WORK/snapshot.json` (byte-equal). Verify via `bash apps/cla-evidence/infra/main.test.sh --live --strict-rule-count`.
-- [ ] **2.9** Clear `trap - ERR` only after restore succeeds.
-- [ ] **2.10** Write tombstone via `doppler run -p soleur -c prd_cla -- aws s3api put-object` using §7.4 schema (`schema_version:"1.0"`). PRIOR_SHA validation enforced at entry.
-- [ ] **2.11** Self-revoke admin token (`curl -X DELETE /user/tokens/{id}`). Skip if PUT-restore failed.
-- [ ] **2.12** Extend `apps/cla-evidence/infra/main.test.sh` to recognise `--strict-rule-count` flag.
-- [ ] **2.13** Run test suite until all 11 cases PASS. Run `bash -n` + `shellcheck` (AC13). Commit `feat(cla-evidence): gdpr-override.sh driver + dry-run suite (#3924)`.
+- [x] **2.1** Scaffold `apps/cla-evidence/scripts/gdpr-override.sh` (set -euo pipefail; color helpers; step counter — match `bootstrap.sh`).
+- [x] **2.2** Implement arg parsing: `--help`, `--dry-run`, `--shape={enabled-false|age-1s|narrow-prefix}`, `--I-have-verified-precedence`, env validation.
+- [x] **2.3** Implement admin-token verify (`curl /user/tokens/verify`), capture `result.id` for self-revoke; validate `status == "active"`.
+- [x] **2.4** Install `trap '_cleanup_partial_override "$snapshot"' ERR` BEFORE the PUT-disable (pattern from `sentinel-pr.sh:167-192`).
+- [x] **2.5** GET lock rules; jq-assert `success:true && rule_count >= 1 && maxAgeSeconds >= 315360000` BEFORE proceeding (mirrors `main.test.sh:96-110`). Save canonical snapshot to `$WORK/snapshot.json`.
+- [x] **2.6** PUT modified rules per `--shape=`. Body always wrapped as `{"rules":[...]}` (bare-array → HTTP 400).
+- [x] **2.7** DELETE object via `doppler run -p soleur -c prd_cla -- aws s3api delete-object --bucket "$R2_CLA_EVIDENCE_BUCKET" --key "$TARGET_KEY"`. Bearer token NOT present in this step's env.
+- [x] **2.8** PUT-restore from `$WORK/snapshot.json` (byte-equal). Verify via `bash apps/cla-evidence/infra/main.test.sh --live --strict-rule-count`.
+- [x] **2.9** Clear `trap - ERR` only after restore succeeds.
+- [x] **2.10** Write tombstone via `doppler run -p soleur -c prd_cla -- aws s3api put-object` using §7.4 schema (`schema_version:"1.0"`). PRIOR_SHA validation enforced at entry.
+- [x] **2.11** Self-revoke admin token (`curl -X DELETE /user/tokens/{id}`). Skip if PUT-restore failed.
+- [x] **2.12** Extend `apps/cla-evidence/infra/main.test.sh` to recognise `--strict-rule-count` flag.
+- [x] **2.13** Run test suite until all 11 cases PASS. Run `bash -n` + `shellcheck` (AC13). Commit `feat(cla-evidence): gdpr-override.sh driver + dry-run suite (#3924)`.
 
 ## Phase 3 — Runbook Rewrite
 

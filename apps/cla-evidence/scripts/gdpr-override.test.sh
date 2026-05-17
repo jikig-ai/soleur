@@ -190,12 +190,11 @@ EOF
   chmod +x "$work/main.test.sh"
 }
 
-mk_shellcheck_stub() {
-  cat > "$work/shellcheck" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$work/shellcheck"
+# Indent every line of stderr from a captured run, then redirect to stderr.
+# Used in FAIL branches to surface the SUT's output without losing newlines.
+# Pure-bash equivalent of `sed 's/^/  /'` (silences shellcheck SC2001).
+indent_stderr() {
+  while IFS= read -r line; do printf '  %s\n' "$line" >&2; done
 }
 
 # Default queue priming for a happy-path Shape A run.
@@ -241,16 +240,19 @@ E
 }
 
 run_sut() {
+  # `${var-default}` (no colon): substitute ONLY when var is unset. An
+  # explicitly-empty caller value (e.g. `GDPR_REQUEST_REF=""` in TS-OVERRIDE.g)
+  # MUST pass through unchanged so the driver's missing-env check can trigger.
   PATH="$work:$PATH" \
-  CF_ADMIN_TOKEN="${CF_ADMIN_TOKEN:-bearer-secret-fingerprint-do-not-leak}" \
-  CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-stub-account-id}" \
-  R2_CLA_EVIDENCE_BUCKET="${R2_CLA_EVIDENCE_BUCKET:-soleur-cla-evidence}" \
-  R2_CLA_EVIDENCE_ENDPOINT="${R2_CLA_EVIDENCE_ENDPOINT:-https://stub.r2.example}" \
-  TARGET_KEY="${TARGET_KEY:-signatures/abc123def456abc123def456abc123def456abc123def456abc123def456abcd.json}" \
-  GDPR_REQUEST_REF="${GDPR_REQUEST_REF:-DSAR-2026-STUB-001}" \
-  PRIOR_SHA="${PRIOR_SHA:-abc123def456abc123def456abc123def456abc123def456abc123def456abcd}" \
-  OVERRIDE_REASON="${OVERRIDE_REASON:-GDPR Article 17 erasure — stub test invocation}" \
-  ADMIN_ACTOR="${ADMIN_ACTOR:-stub-operator@example.invalid}" \
+  CF_ADMIN_TOKEN="${CF_ADMIN_TOKEN-bearer-secret-fingerprint-do-not-leak}" \
+  CF_ACCOUNT_ID="${CF_ACCOUNT_ID-stub-account-id}" \
+  R2_CLA_EVIDENCE_BUCKET="${R2_CLA_EVIDENCE_BUCKET-soleur-cla-evidence}" \
+  R2_CLA_EVIDENCE_ENDPOINT="${R2_CLA_EVIDENCE_ENDPOINT-https://stub.r2.example}" \
+  TARGET_KEY="${TARGET_KEY-signatures/abc123def456abc123def456abc123def456abc123def456abc123def456abcd.json}" \
+  GDPR_REQUEST_REF="${GDPR_REQUEST_REF-DSAR-2026-STUB-001}" \
+  PRIOR_SHA="${PRIOR_SHA-abc123def456abc123def456abc123def456abc123def456abc123def456abcd}" \
+  OVERRIDE_REASON="${OVERRIDE_REASON-GDPR Article 17 erasure — stub test invocation}" \
+  ADMIN_ACTOR="${ADMIN_ACTOR-stub-operator@example.invalid}" \
   GDPR_OVERRIDE_MAIN_TEST_SH="$work/main.test.sh" \
     bash "$SUT" "$@"
 }
@@ -286,7 +288,8 @@ fi
 reset_stubs; prime_happy_a
 if run_sut --shape=age-1s >"$work/out.b" 2>&1; then
   # The 3rd curl call carries the PUT-modified body; verify maxAgeSeconds:1.
-  put_data=$(awk 'NR==3 {match($0, /data_len=([0-9]+)/, m); print m[1]}' "$work/curl.log")
+  # POSIX awk (mawk-compatible): split on the key prefix, then trim trailing fields.
+  put_data=$(awk -F'data_len=' 'NR==3 { split($2, a, " "); print a[1] }' "$work/curl.log")
   if [[ -n "$put_data" ]] && [[ "$put_data" -gt 0 ]]; then
     green "PASS: TS-OVERRIDE.b Shape B happy path"
   else
@@ -331,7 +334,7 @@ if [[ "$rc" -eq 1 ]] && [[ $(wc -l < "$work/aws.log") -eq 0 ]] && grep -qE '::er
 else
   red "FAIL: TS-OVERRIDE.d expected rc=1 + no aws calls + ::error::"
   red "  rc=$rc aws_calls=$(wc -l < "$work/aws.log")"
-  sed 's/^/  /' <<<"$out" >&2
+  indent_stderr <<<"$out"
   fail=1
 fi
 
@@ -350,7 +353,7 @@ if [[ "$rc" -eq 2 ]] \
   green "PASS: TS-OVERRIDE.e DELETE 403 → best-effort restore, no tombstone, exit 2"
 else
   red "FAIL: TS-OVERRIDE.e expected rc=2 + 1 aws call + ::error::; got rc=$rc aws=$(wc -l < "$work/aws.log")"
-  sed 's/^/  /' <<<"$out" >&2
+  indent_stderr <<<"$out"
   fail=1
 fi
 
@@ -375,7 +378,7 @@ if [[ "$rc" -eq 3 ]] \
   green "PASS: TS-OVERRIDE.f restore-fail → CRITICAL, no self-revoke, no tombstone, exit 3"
 else
   red "FAIL: TS-OVERRIDE.f expected rc=3 + CRITICAL + 4 curl + 1 aws; got rc=$rc curl=$(wc -l < "$work/curl.log") aws=$(wc -l < "$work/aws.log")"
-  sed 's/^/  /' <<<"$out" >&2
+  indent_stderr <<<"$out"
   fail=1
 fi
 
@@ -386,7 +389,7 @@ if [[ "$rc" -eq 64 ]] && grep -qE '::error::usage' <<<"$out"; then
   green "PASS: TS-OVERRIDE.g missing GDPR_REQUEST_REF → exit 64 with ::error::usage"
 else
   red "FAIL: TS-OVERRIDE.g expected exit 64 + ::error::usage; got rc=$rc"
-  sed 's/^/  /' <<<"$out" >&2
+  indent_stderr <<<"$out"
   fail=1
 fi
 
@@ -397,7 +400,7 @@ if [[ "$rc" -eq 64 ]] && grep -qE 'I-have-verified-precedence' <<<"$out"; then
   green "PASS: TS-OVERRIDE.h Shape C without ack → exit 64"
 else
   red "FAIL: TS-OVERRIDE.h expected exit 64 + ack message; got rc=$rc"
-  sed 's/^/  /' <<<"$out" >&2
+  indent_stderr <<<"$out"
   fail=1
 fi
 
@@ -418,7 +421,7 @@ if [[ "$rc" -eq 64 ]] \
   fi
 else
   red "FAIL: TS-OVERRIDE.i expected exit 64 + PRIOR_SHA message + 0 aws; got rc=$rc aws=$(wc -l < "$work/aws.log")"
-  sed 's/^/  /' <<<"$out" >&2
+  indent_stderr <<<"$out"
   fail=1
 fi
 
@@ -454,8 +457,8 @@ reset_stubs; prime_happy_a
 if run_sut --shape=enabled-false >"$work/out.k" 2>&1; then
   # PUT lock-rule curl calls (rows 3 + 4) should carry cf_admin_in_env=1.
   # aws delete-object + put-object calls should carry cf_admin_in_env=0 + hmac_in_env=1.
-  put_modify_admin=$(awk 'NR==3 {match($0,/cf_admin_in_env=([0-9])/,m); print m[1]}' "$work/curl.log")
-  put_restore_admin=$(awk 'NR==4 {match($0,/cf_admin_in_env=([0-9])/,m); print m[1]}' "$work/curl.log")
+  put_modify_admin=$(awk -F'cf_admin_in_env=' 'NR==3 { split($2, a, " "); print a[1] }' "$work/curl.log")
+  put_restore_admin=$(awk -F'cf_admin_in_env=' 'NR==4 { split($2, a, " "); print a[1] }' "$work/curl.log")
   aws_admin_any=$(awk 'BEGIN{x=0} /cf_admin_in_env=1/ {x=1} END{print x}' "$work/aws.log")
   aws_hmac_all=$(awk 'BEGIN{ok=1} {if($0 !~ /hmac_in_env=1/) ok=0} END{print ok}' "$work/aws.log")
   if [[ "$put_modify_admin" == "1" ]] && [[ "$put_restore_admin" == "1" ]] \

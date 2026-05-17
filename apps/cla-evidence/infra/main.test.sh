@@ -38,12 +38,25 @@ green() { printf '\033[32m%s\033[0m\n' "$*"; }
 readonly MIN_LOCK_SECONDS=315360000
 
 LIVE_MODE=0
+STRICT_RULE_COUNT=0
 for arg in "$@"; do
   case "$arg" in
     --live) LIVE_MODE=1 ;;
+    # Opt-in stricter post-restore gate used by gdpr-override.sh: asserts the
+    # rule list is back to a single canonical rule (catches leftover narrow-
+    # prefix rules from --shape=narrow-prefix). When passed WITHOUT --live,
+    # treat as no-op so callers in non-live contexts (CI lint) can pass the
+    # flag unconditionally. Default --live semantics (rule_count >= 1) are
+    # unchanged so bootstrap.sh:200 continues to pass.
+    --strict-rule-count) STRICT_RULE_COUNT=1 ;;
     *)      red "unknown arg: $arg"; exit 64 ;;
   esac
 done
+
+if [[ "$STRICT_RULE_COUNT" -eq 1 ]] && [[ "$LIVE_MODE" -eq 0 ]]; then
+  green "OK: --strict-rule-count is a no-op without --live."
+  exit 0
+fi
 
 fail=0
 
@@ -141,6 +154,9 @@ if [[ "$LIVE_MODE" -eq 1 ]]; then
         fail=1
       elif [[ "$rule_count" -lt 1 ]]; then
         red "FAIL: bucket $bucket has zero Lock Rules; expected at least one Age rule."
+        fail=1
+      elif [[ "$STRICT_RULE_COUNT" -eq 1 ]] && [[ "$rule_count" -ne 1 ]]; then
+        red "FAIL: --strict-rule-count: bucket $bucket has $rule_count Lock Rules; expected exactly 1 (post-restore canonical)."
         fail=1
       fi
       if ! [[ "$max_age" =~ ^[0-9]+$ ]]; then
