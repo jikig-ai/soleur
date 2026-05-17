@@ -56,6 +56,10 @@ export default withSentryConfig(nextConfig, {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
+  // sentry-cli base URL — falls back to org-subdomain for the new DE org.
+  // `eu.sentry.io` is NOT correct (rewrites slugs ending in `-eu`, per learning
+  // `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`).
+  sentryUrl: process.env.SENTRY_URL,
   // Upload source maps for all client chunks
   widenClientFileUpload: true,
   // Delete source maps after upload — don't ship to users
