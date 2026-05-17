@@ -8,7 +8,7 @@ permalink: legal/gdpr-policy/
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated May 16, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 17, 2026</p>
   </div>
 </section>
 
