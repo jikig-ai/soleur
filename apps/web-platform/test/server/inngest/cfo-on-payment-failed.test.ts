@@ -257,11 +257,32 @@ describe("cfo-on-payment-failed — structural invariants (source-grep)", () => 
     "../../../server/inngest/functions/cfo-on-payment-failed.ts",
   );
 
-  it("I3 — verify-stripe-state is NOT wrapped in step.run (single-pass invariant)", () => {
+  it("I3 — stripe.charges.retrieve is NOT wrapped in any step.run (single-pass invariant)", () => {
+    // Review P2-9 (pattern-recognition + test-design): tightened from a
+    // name-string regex (which false-positive-tripped on legitimate
+    // step names like "verify-deadletter") to a structural check against
+    // the actual SDK call. The invariant is "verify is not checkpointed";
+    // the concrete API surface that MUST stay un-checkpointed is
+    // stripe.charges.retrieve. If a future change wraps that call in
+    // step.run, Inngest's step memoization will serve a stale result on
+    // a 6h-deadlettered retry.
     const src = readFileSync(srcPath, "utf8");
-    // No step.run callback whose name string contains "verify".
-    // Cheapest matcher: a step.run literal whose first arg quotes "verify".
-    expect(src).not.toMatch(/step\.run\(\s*["'`][^"'`]*verify[^"'`]*["'`]/);
+    // Pattern: step.run(<name>, <cb>) where the callback body contains
+    // stripe.charges.retrieve. Match on the SDK token directly so step
+    // names are irrelevant.
+    const stripeIdx = src.search(/stripe\.charges\s*\.\s*retrieve\s*\(/);
+    expect(stripeIdx, "stripe.charges.retrieve must be present").toBeGreaterThan(-1);
+    // Find every step.run( opener and check none of their callback
+    // bodies contains the SDK token. Cheapest bound: between each
+    // step.run opener and its closing "});", the SDK token must not
+    // appear.
+    const stepRunBlocks = [...src.matchAll(/step\.run\(\s*["'`][^"'`]+["'`][\s\S]*?\n\s{2,4}\}\s*\)\s*;/g)];
+    for (const block of stepRunBlocks) {
+      expect(
+        block[0],
+        `step.run block must not wrap stripe.charges.retrieve (I3 single-pass): ${block[0].slice(0, 80)}…`,
+      ).not.toMatch(/stripe\.charges\s*\.\s*retrieve\s*\(/);
+    }
   });
 
   it("I1 — runWithByokLease is called from inside a step.run callback (per-step lease)", () => {

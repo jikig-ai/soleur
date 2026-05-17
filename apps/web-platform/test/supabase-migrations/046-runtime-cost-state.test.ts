@@ -161,6 +161,62 @@ describe("migration 046_runtime_cost_state", () => {
     });
   });
 
+  describe("messages external-drafts schema additions (review P1 — multi-agent finding)", () => {
+    // Caught by data-integrity-guardian + performance-oracle multi-agent
+    // review of PR #3940: the CFO function + /api/dashboard/today + Today
+    // card reference columns that did not exist on main. These assertions
+    // pin the schema additions required for the CHECK + INSERT paths to
+    // succeed at apply time.
+
+    it("adds user_id with FK to auth.users and ON DELETE CASCADE", () => {
+      expect(executable).toMatch(
+        /ALTER\s+TABLE\s+public\.messages[\s\S]*?ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+user_id\s+uuid\s+REFERENCES\s+auth\.users\(id\)\s+ON\s+DELETE\s+CASCADE/i,
+      );
+    });
+
+    it("adds tier, source, owning_domain, draft_preview, urgency, trust_tier columns", () => {
+      for (const col of ["tier", "source", "owning_domain", "draft_preview", "urgency", "trust_tier"]) {
+        expect(executable).toMatch(
+          new RegExp(`ADD\\s+COLUMN\\s+IF\\s+NOT\\s+EXISTS\\s+${col}\\s+text`, "i"),
+        );
+      }
+    });
+
+    it("widens messages_status_check to include draft + archived alongside migration-040 values", () => {
+      // Migration 040 created `status text not null default 'complete' check (status in ('complete','aborted'))`.
+      // PR-F widens via DROP + recreate to admit 'draft' + 'archived'.
+      expect(executable).toMatch(
+        /DROP\s+CONSTRAINT\s+IF\s+EXISTS\s+messages_status_check/i,
+      );
+      expect(executable).toMatch(
+        /ADD\s+CONSTRAINT\s+messages_status_check[\s\S]*?CHECK\s*\(\s*status\s+IN\s*\(\s*'complete'\s*,\s*'aborted'\s*,\s*'draft'\s*,\s*'archived'\s*\)\s*\)/i,
+      );
+    });
+
+    it("creates RLS policies for user_id-routed reads and inserts (idempotent DROP+CREATE)", () => {
+      // Read policy: gated only on user_id ownership.
+      expect(executable).toMatch(
+        /DROP\s+POLICY\s+IF\s+EXISTS\s+"Users can read own external drafts"\s+ON\s+public\.messages/i,
+      );
+      expect(executable).toMatch(
+        /CREATE\s+POLICY\s+"Users can read own external drafts"[\s\S]*?FOR\s+SELECT[\s\S]*?USING\s*\([\s\S]*?user_id\s*=\s*auth\.uid\(\)/i,
+      );
+      // Insert policy: gated on user_id ownership AND tier ∈ external_*.
+      expect(executable).toMatch(
+        /DROP\s+POLICY\s+IF\s+EXISTS\s+"Users can insert own external drafts"\s+ON\s+public\.messages/i,
+      );
+      expect(executable).toMatch(
+        /CREATE\s+POLICY\s+"Users can insert own external drafts"[\s\S]*?FOR\s+INSERT[\s\S]*?WITH\s+CHECK\s*\([\s\S]*?tier\s+IN\s*\(\s*'external_brand_critical'\s*,\s*'external_low_stakes'\s*\)/i,
+      );
+    });
+
+    it("creates messages_today_idx partial covering index for /api/dashboard/today hot path", () => {
+      expect(executable).toMatch(
+        /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+messages_today_idx\s+ON\s+public\.messages\s*\(\s*user_id\s*,\s*created_at\s+DESC\s*\)\s+WHERE\s+tier\s+IN[\s\S]*?AND\s+status\s*=\s*'draft'/i,
+      );
+    });
+  });
+
   describe("messages_external_tier_status_check (RV5 — drafts-everywhere CHECK)", () => {
     it("declares the CHECK constraint on public.messages", () => {
       expect(executable).toMatch(

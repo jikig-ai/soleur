@@ -19,13 +19,18 @@ const ORIGINAL_ENV = {
   INNGEST_SIGNING_KEY: process.env.INNGEST_SIGNING_KEY,
   INNGEST_EVENT_KEY: process.env.INNGEST_EVENT_KEY,
   INNGEST_BASE_URL: process.env.INNGEST_BASE_URL,
+  INNGEST_DEV: process.env.INNGEST_DEV,
+  NODE_ENV: process.env.NODE_ENV,
 };
 
 function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   if (ORIGINAL_ENV[key] === undefined) {
-    delete process.env[key];
+    // NODE_ENV is typed `string` (readonly); mutating via process.env at
+    // runtime is supported and is exactly what we need to restore the
+    // original test-mode value after the P2-1 production-guard test.
+    delete (process.env as Record<string, string | undefined>)[key];
   } else {
-    process.env[key] = ORIGINAL_ENV[key];
+    (process.env as Record<string, string | undefined>)[key] = ORIGINAL_ENV[key];
   }
 }
 
@@ -41,6 +46,8 @@ afterEach(() => {
   restoreEnv("INNGEST_SIGNING_KEY");
   restoreEnv("INNGEST_EVENT_KEY");
   restoreEnv("INNGEST_BASE_URL");
+  restoreEnv("INNGEST_DEV");
+  restoreEnv("NODE_ENV");
 });
 
 describe("server/inngest/client.ts — module-load env validation", () => {
@@ -88,6 +95,35 @@ describe("server/inngest/client.ts — module-load env validation", () => {
 
   it("loads successfully when INNGEST_BASE_URL is a valid URL (self-hosted shape)", async () => {
     process.env.INNGEST_BASE_URL = "http://127.0.0.1:8288";
+    const mod = await import("@/server/inngest/client");
+    expect(mod.inngest).toBeDefined();
+  });
+
+  // Review P2-1 (security-sentinel multi-agent finding): production refuses
+  // to load when INNGEST_DEV=1 — the SDK would short-circuit signature
+  // verification (ADR-030 I4 bypass).
+  it("throws at import when NODE_ENV=production and INNGEST_DEV=1 (I4 bypass guard)", async () => {
+    // @ts-expect-error NODE_ENV is typed readonly; mutation is allowed at runtime
+    // in test contexts and is exactly the misconfiguration shape we are testing.
+    process.env.NODE_ENV = "production";
+    process.env.INNGEST_DEV = "1";
+    await expect(import("@/server/inngest/client")).rejects.toThrow(
+      /INNGEST_DEV=1 in production/,
+    );
+  });
+
+  it("loads when NODE_ENV=production and INNGEST_DEV unset (cloud mode default)", async () => {
+    // @ts-expect-error see above.
+    process.env.NODE_ENV = "production";
+    delete process.env.INNGEST_DEV;
+    const mod = await import("@/server/inngest/client");
+    expect(mod.inngest).toBeDefined();
+  });
+
+  it("loads when NODE_ENV=test and INNGEST_DEV=1 (test-mode escape valid)", async () => {
+    // @ts-expect-error see above.
+    process.env.NODE_ENV = "test";
+    process.env.INNGEST_DEV = "1";
     const mod = await import("@/server/inngest/client");
     expect(mod.inngest).toBeDefined();
   });

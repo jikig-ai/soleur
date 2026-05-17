@@ -114,4 +114,25 @@ describe("app/api/inngest/route.ts — signature verification", () => {
     );
     expect(res.status).toBe(401);
   });
+
+  // Review P2-8 (test-design-reviewer): positive control via mode-switch.
+  //
+  // The four 401-asserting tests above all go through the same SDK
+  // code path (validateSignature → fail → 401). They could all pass
+  // identically if the route returned 401 unconditionally. This test
+  // discriminates by flipping the SDK into dev mode (validateSignature
+  // short-circuits to success — see node_modules/inngest/components/
+  // InngestCommHandler.js:1471). The SAME bad-signature request that
+  // returns 401 in cloud mode (above) must NOT return 401 here.
+  //
+  // Re-deriving a real cloud-mode HMAC would require duplicating
+  // Inngest's internal signing format (signing-key prefix stripping,
+  // timestamp+body concatenation, sha256 HMAC over the canonical
+  // serialization). Mode-flip is the equivalent proof at lower cost.
+  it("POST without signature is NOT 401 in dev mode (mode-flip positive control)", async () => {
+    process.env.INNGEST_DEV = "1";
+    const { POST } = await importRoute();
+    const res = await POST(makePostRequest(), undefined);
+    expect(res.status).not.toBe(401);
+  });
 });

@@ -37,6 +37,10 @@ import { getStripe } from "@/lib/stripe";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { runWithByokLease } from "@/server/byok-lease";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL,
+  MESSAGE_STATUS_DRAFT,
+} from "@/lib/messages/tiers";
 
 interface PaymentFailedPayload {
   founderId: string;
@@ -97,6 +101,20 @@ export async function cfoHandler({
 
   const founderId = event.data.founderId;
   const payload = event.data.payload;
+
+  // Review P2-4 (data-integrity-guardian): defense-in-depth parity check.
+  // Signature-verify gates the dispatch at the route layer; this guard
+  // catches the case where a signed envelope carries a mismatched
+  // payload.founderId (impossible from the Stripe webhook bridge, but
+  // possible if a future producer mis-assembles the envelope or a
+  // schema-version migration drifts the shape).
+  if (payload.founderId !== founderId) {
+    logger.warn(
+      { founderId, payloadFounderId: payload.founderId },
+      "envelope founderId mismatch — deadlettering (defense-in-depth)",
+    );
+    return { deadlettered: true, reason: "envelope-mismatch" };
+  }
 
   // I3 (RV17): single-pass verify. NOT a step.run — Inngest's step
   // memoization would otherwise serve a stale checkpoint on a 6h
@@ -180,8 +198,8 @@ export async function cfoHandler({
     const tenant = await getFreshTenantClient(founderId);
     await tenant.from("messages").insert({
       user_id: founderId,
-      tier: "external_brand_critical", // I5 + migration 046 CHECK enforces status=draft.
-      status: "draft",
+      tier: MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL, // I5 + migration 046 CHECK enforces status=draft.
+      status: MESSAGE_STATUS_DRAFT,
       source: "stripe",
       owning_domain: "cfo",
       draft_preview: "<draft text — wired in PR-G>",

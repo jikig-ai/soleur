@@ -1,6 +1,7 @@
 -- 046_runtime_cost_state.sql
 -- PR-F (#3244, this slice): per-tenant cost attribution + atomic kill-switch
--- + drafts-everywhere CHECK constraint on public.messages.
+-- + drafts-everywhere CHECK constraint on public.messages
+-- + external-drafts schema additions to public.messages.
 --
 -- Plan:      knowledge-base/project/plans/2026-05-17-feat-pr-f-inngest-trigger-layer-plan.md
 -- ADR:       knowledge-base/engineering/architecture/decisions/ADR-030-inngest-as-durable-trigger-layer.md
@@ -63,6 +64,101 @@ COMMENT ON COLUMN public.users.runtime_cost_cap_cents IS
   'Per-tenant hourly cost cap in cents. Default 2000 = $20/hr per '
   'data-integrity P2-5 (200% headroom over realistic Sonnet 4.6 burn). '
   'PR-F (#3244).';
+
+-- ============================================================================
+-- 1.5 messages: external-drafts schema additions (P1 from review).
+--
+-- Caught by multi-agent review: the CFO function + /api/dashboard/today
+-- + page-level Today card reference columns (user_id, tier, source,
+-- owning_domain, draft_preview, urgency, trust_tier) and a status value
+-- ('draft') that were absent on `main`. PR-F's substrate-write paths
+-- depend on these; without them, migration 046's CHECK constraint below
+-- + the CFO INSERT both fail at apply time.
+--
+-- Design contract:
+--   * user_id is NULLABLE so legacy conversation-bound rows (which
+--     reach RLS via conversations.user_id) remain valid.
+--   * tier-routed rows for `external_brand_critical` / `external_low_stakes`
+--     route via user_id (no conversation_id required). New RLS policies
+--     gate this path alongside the existing conversation-id policies
+--     from migration 001.
+--   * status CHECK is widened (DROP + recreate) to admit 'draft' and
+--     'archived' alongside the migration-040 values 'complete' and
+--     'aborted'.
+--   * Partial covering index supports the /api/dashboard/today hot
+--     path: WHERE user_id=? AND tier IN external_* AND status='draft'.
+-- ============================================================================
+
+ALTER TABLE public.messages
+  ADD COLUMN IF NOT EXISTS user_id        uuid REFERENCES auth.users(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS tier           text,
+  ADD COLUMN IF NOT EXISTS source         text,
+  ADD COLUMN IF NOT EXISTS owning_domain  text,
+  ADD COLUMN IF NOT EXISTS draft_preview  text,
+  ADD COLUMN IF NOT EXISTS urgency        text,
+  ADD COLUMN IF NOT EXISTS trust_tier     text;
+
+COMMENT ON COLUMN public.messages.user_id IS
+  'Direct founder ownership for tier-routed messages with no conversation '
+  'thread (e.g., external_brand_critical drafts written by the autonomous '
+  'CFO function). NULL for legacy conversation-bound rows whose ownership '
+  'is reached via conversations.user_id. PR-F (#3244).';
+
+COMMENT ON COLUMN public.messages.tier IS
+  'Routing tier. NULL for legacy conversation-bound rows. external_* '
+  'values are constrained by messages_external_tier_status_check to '
+  'status IN (draft, archived) — "drafts everywhere, sends nowhere" '
+  'invariant (ADR-030 I5). PR-F (#3244).';
+
+-- Widen status CHECK from migration 040 to include draft + archived.
+-- DROP + recreate (the constraint is non-conditional in 040).
+ALTER TABLE public.messages
+  DROP CONSTRAINT IF EXISTS messages_status_check;
+ALTER TABLE public.messages
+  ADD CONSTRAINT messages_status_check
+  CHECK (status IN ('complete', 'aborted', 'draft', 'archived'));
+
+COMMENT ON CONSTRAINT messages_status_check ON public.messages IS
+  'Status enum: complete / aborted (migration 040 originals), draft / '
+  'archived (PR-F #3244 added for autonomous-draft tier). Widening '
+  'requires explicit DROP + recreate (the constraint is unconditional).';
+
+-- RLS policies for user_id-routed rows. Coexist with the
+-- conversation-id-scoped policies from migration 001 — RLS uses OR
+-- semantics across policies of the same command, so a row is readable
+-- if EITHER policy passes.
+--
+-- DROP-then-CREATE for idempotency: re-running this migration on a DB
+-- where the policies already exist must succeed.
+DROP POLICY IF EXISTS "Users can read own external drafts" ON public.messages;
+CREATE POLICY "Users can read own external drafts"
+  ON public.messages FOR SELECT
+  USING (
+    user_id IS NOT NULL
+    AND user_id = auth.uid()
+  );
+
+DROP POLICY IF EXISTS "Users can insert own external drafts" ON public.messages;
+CREATE POLICY "Users can insert own external drafts"
+  ON public.messages FOR INSERT
+  WITH CHECK (
+    user_id IS NOT NULL
+    AND user_id = auth.uid()
+    AND tier IN ('external_brand_critical', 'external_low_stakes')
+  );
+
+-- Partial covering index for /api/dashboard/today.
+-- The query is: WHERE user_id=? AND tier=? AND status='draft' ORDER BY created_at DESC.
+-- Partial index keeps it small (only the active draft surface), and
+-- INCLUDE-style covering avoids heap fetches for the dashboard read.
+CREATE INDEX IF NOT EXISTS messages_today_idx
+  ON public.messages (user_id, created_at DESC)
+  WHERE tier IN ('external_brand_critical', 'external_low_stakes')
+    AND status = 'draft';
+
+COMMENT ON INDEX public.messages_today_idx IS
+  'Partial covering index for /api/dashboard/today hot path. Filters to '
+  'active draft surface only (external_* tier + status=draft). PR-F (#3244).';
 
 -- ============================================================================
 -- 2. record_byok_use_and_check_cap — atomic plpgsql kill-switch.
@@ -165,6 +261,10 @@ COMMENT ON FUNCTION public.record_byok_use_and_check_cap(uuid, uuid, text, int, 
 -- replacement of this constraint AND Art. 22(3) notice + DPD update.
 -- ============================================================================
 
+-- Idempotent DROP+ADD (the constraint is unconditional in this migration —
+-- re-applying must not 42710 on a DB where it already exists).
+ALTER TABLE public.messages
+  DROP CONSTRAINT IF EXISTS messages_external_tier_status_check;
 ALTER TABLE public.messages
   ADD CONSTRAINT messages_external_tier_status_check
   CHECK (

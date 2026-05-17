@@ -1,9 +1,16 @@
 // PR-F (#3244, #3940) Phase 5 — single Today card.
 //
 // Renders one draft message from /api/dashboard/today. PR-F ships the
-// read surface; Send / Edit / Discard wiring is stubbed (handlers noop)
-// until PR-G (#3947) lands the action-class flow. The buttons exist so
-// the affordance is visible and the placement is locked.
+// read surface; Send / Edit / Discard wiring is stubbed until PR-G
+// (#3947) lands the action-class flow. The buttons exist so the
+// affordance + placement are locked.
+//
+// Review P2-2 (user-impact-reviewer + code-quality + pattern-recognition):
+// the buttons render `disabled` + aria-disabled="true" with a
+// "Wires in PR-G (#3947)" title so a founder cannot silently no-op-click
+// "Send" on a payment-failed customer-reply draft. Without this guard,
+// the affordance is a single-user trust incident the moment
+// SOLEUR_FR5_ENABLED flips.
 
 interface TodayCardProps {
   id: string;
@@ -38,22 +45,34 @@ export function TodayCard({
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          className="min-h-[44px] rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-soleur-text-primary"
-          aria-label="Send draft"
+          disabled
+          aria-disabled="true"
+          data-action="send"
+          title="Wires in PR-G (#3947)"
+          className="min-h-[44px] cursor-not-allowed rounded-md bg-amber-600/40 px-3 py-2 text-sm font-medium text-soleur-text-primary"
+          aria-label="Send draft (wired in PR-G)"
         >
           Send
         </button>
         <button
           type="button"
-          className="min-h-[44px] rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm font-medium text-soleur-text-secondary"
-          aria-label="Edit draft"
+          disabled
+          aria-disabled="true"
+          data-action="edit"
+          title="Wires in PR-G (#3947)"
+          className="min-h-[44px] cursor-not-allowed rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm font-medium text-soleur-text-secondary opacity-60"
+          aria-label="Edit draft (wired in PR-G)"
         >
           Edit
         </button>
         <button
           type="button"
-          className="min-h-[44px] rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm font-medium text-soleur-text-secondary"
-          aria-label="Discard draft"
+          disabled
+          aria-disabled="true"
+          data-action="discard"
+          title="Wires in PR-G (#3947)"
+          className="min-h-[44px] cursor-not-allowed rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm font-medium text-soleur-text-secondary opacity-60"
+          aria-label="Discard draft (wired in PR-G)"
         >
           Discard
         </button>

@@ -24,6 +24,19 @@ if (!SIGNING_KEY) {
 if (!EVENT_KEY) {
   throw new Error("INNGEST_EVENT_KEY missing at startup");
 }
+// Review P2-1 (security-sentinel): in cloud mode the Inngest SDK
+// validates signatures; in dev mode it short-circuits validateSignature
+// to success (per node_modules/inngest/components/InngestCommHandler.js).
+// A Doppler prd misconfiguration setting INNGEST_DEV=1 would silently
+// disable I4 — refuse to load.
+if (
+  process.env.NODE_ENV === "production" &&
+  process.env.INNGEST_DEV === "1"
+) {
+  throw new Error(
+    "INNGEST_DEV=1 in production refuses to load: signature verification would be bypassed (ADR-030 I4)",
+  );
+}
 if (BASE_URL) {
   try {
     new URL(BASE_URL);

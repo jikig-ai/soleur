@@ -7,8 +7,9 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // the route uses createClient() (cookie-scoped authed client) rather than
 // service-role, so a malformed query CANNOT leak cross-founder rows.
 
-const { mockGetUser, mockEq, mockOrder, mockSelect, mockFrom } = vi.hoisted(() => {
-  const mockOrder = vi.fn();
+const { mockGetUser, mockEq, mockOrder, mockLimit, mockSelect, mockFrom } = vi.hoisted(() => {
+  const mockLimit = vi.fn();
+  const mockOrder = vi.fn(() => ({ limit: mockLimit }));
   const mockEq = vi.fn(() => ({ eq: mockEq, order: mockOrder }));
   const mockSelect = vi.fn(() => ({ eq: mockEq }));
   const mockFrom = vi.fn(() => ({ select: mockSelect }));
@@ -16,6 +17,7 @@ const { mockGetUser, mockEq, mockOrder, mockSelect, mockFrom } = vi.hoisted(() =
     mockGetUser: vi.fn(),
     mockEq,
     mockOrder,
+    mockLimit,
     mockSelect,
     mockFrom,
   };
@@ -36,7 +38,7 @@ function makeRequest(): Request {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockOrder.mockResolvedValue({ data: [], error: null });
+  mockLimit.mockResolvedValue({ data: [], error: null });
   mockGetUser.mockResolvedValue({
     data: { user: { id: "founder-A" } },
     error: null,
@@ -66,15 +68,25 @@ describe("/api/dashboard/today", () => {
   });
 
   test("returns { items: [] } on empty result (200)", async () => {
-    mockOrder.mockResolvedValue({ data: [], error: null });
+    mockLimit.mockResolvedValue({ data: [], error: null });
     const res = await GET(makeRequest());
     expect(res.status).toBe(200);
     const body = (await res.json()) as { items: unknown[] };
     expect(body.items).toEqual([]);
   });
 
+  // Review P2-7 (agent-native-reviewer): the legal disclosure ships in
+  // the JSON response so agent / MCP / CLI callers do not need to
+  // scrape the HTML banner.
+  test("returns the disclosure constant alongside items (agent-parity)", async () => {
+    mockLimit.mockResolvedValue({ data: [], error: null });
+    const res = await GET(makeRequest());
+    const body = (await res.json()) as { items: unknown[]; disclosure: string };
+    expect(body.disclosure).toMatch(/disclaims warranty for runtime cost/);
+  });
+
   test("returns the row set as { items: [...] } on hit", async () => {
-    mockOrder.mockResolvedValue({
+    mockLimit.mockResolvedValue({
       data: [
         {
           id: "msg-1",
@@ -94,7 +106,7 @@ describe("/api/dashboard/today", () => {
   });
 
   test("returns 500 + reports when the DB read errors", async () => {
-    mockOrder.mockResolvedValue({
+    mockLimit.mockResolvedValue({
       data: null,
       error: { message: "boom" },
     });

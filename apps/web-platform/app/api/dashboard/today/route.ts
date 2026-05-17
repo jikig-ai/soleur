@@ -18,6 +18,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
+import { RUNTIME_COST_DISCLOSURE } from "@/lib/legal/disclosures";
+import {
+  MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL,
+  MESSAGE_STATUS_DRAFT,
+} from "@/lib/messages/tiers";
 
 interface TodayRow {
   id: string;
@@ -53,13 +58,18 @@ export async function GET(_req: Request) {
   }
   const userId = auth.user.id;
 
+  // Review P2 (performance-oracle): partial covering index
+  // messages_today_idx (migration 046) supports this query; bound the
+  // result set so a long-lived founder backlog doesn't return a
+  // multi-MB JSON payload.
   const { data, error } = await supabase
     .from("messages")
     .select("id, source, owning_domain, draft_preview, urgency")
     .eq("user_id", userId)
-    .eq("tier", "external_brand_critical")
-    .eq("status", "draft")
-    .order("created_at", { ascending: false });
+    .eq("tier", MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL)
+    .eq("status", MESSAGE_STATUS_DRAFT)
+    .order("created_at", { ascending: false })
+    .limit(50);
 
   if (error) {
     reportSilentFallback(error, {
@@ -73,5 +83,9 @@ export async function GET(_req: Request) {
   }
 
   const items = (data ?? []).map((r: TodayRow) => toItem(r));
-  return NextResponse.json({ items });
+  // Review P2-7 (agent-native-reviewer): include the disclosure in the
+  // JSON response so agent / MCP / CLI callers receive the legal
+  // notice without scraping the HTML banner. The disclosure is bound
+  // to the act of *seeing drafts*, not the render layer.
+  return NextResponse.json({ items, disclosure: RUNTIME_COST_DISCLOSURE });
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getPriceTier } from "@/lib/stripe-price-tier-map";
@@ -443,7 +444,8 @@ export async function POST(request: Request) {
         if (founderId) {
           // RV7 minimization — hash email, drop payment_method, keep four
           // load-bearing fields. Inline (not a sibling module) per RV7.
-          const { createHash } = await import("node:crypto");
+          // Review P2-3: createHash hoisted to the file's static import block
+          // (node:crypto is a Node built-in — no bundle cost, no env-throw).
           const customerEmailHash = invoice.customer_email
             ? createHash("sha256").update(invoice.customer_email).digest("hex")
             : "";
