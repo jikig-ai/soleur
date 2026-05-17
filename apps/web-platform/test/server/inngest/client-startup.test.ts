@@ -21,6 +21,7 @@ const ORIGINAL_ENV = {
   INNGEST_BASE_URL: process.env.INNGEST_BASE_URL,
   INNGEST_DEV: process.env.INNGEST_DEV,
   NODE_ENV: process.env.NODE_ENV,
+  NEXT_PHASE: process.env.NEXT_PHASE,
 };
 
 function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
@@ -48,6 +49,7 @@ afterEach(() => {
   restoreEnv("INNGEST_BASE_URL");
   restoreEnv("INNGEST_DEV");
   restoreEnv("NODE_ENV");
+  restoreEnv("NEXT_PHASE");
 });
 
 describe("server/inngest/client.ts — module-load env validation", () => {
@@ -124,6 +126,19 @@ describe("server/inngest/client.ts — module-load env validation", () => {
     // @ts-expect-error see above.
     process.env.NODE_ENV = "test";
     process.env.INNGEST_DEV = "1";
+    const mod = await import("@/server/inngest/client");
+    expect(mod.inngest).toBeDefined();
+  });
+
+  // PR-F follow-up: Next.js page-data collection during `next build` loads
+  // route modules without runtime env vars. If the module throws at import
+  // when env is missing, build fails. The NEXT_PHASE=phase-production-build
+  // bypass lets the module load with placeholder env; runtime restart on
+  // Hetzner re-fires the validation with the Doppler-injected env.
+  it("does NOT throw at import during NEXT_PHASE=phase-production-build (build-phase bypass)", async () => {
+    delete process.env.INNGEST_SIGNING_KEY;
+    delete process.env.INNGEST_EVENT_KEY;
+    process.env.NEXT_PHASE = "phase-production-build";
     const mod = await import("@/server/inngest/client");
     expect(mod.inngest).toBeDefined();
   });
