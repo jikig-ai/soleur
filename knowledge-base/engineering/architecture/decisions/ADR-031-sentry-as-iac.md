@@ -51,23 +51,26 @@ work in this repo MUST reference this glossary by name when choosing a host.
 |-----------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
 | **Ingest**      | `o<id>.ingest.de.sentry.io`, `o<id>.ingest.us.sentry.io` | DSN POSTs (`/api/<project_id>/store/`, `/api/<project_id>/envelope/`); cron-checkin beacons; CSP report-uri POSTs            | Settings UI; REST API; dashboard. Path-only POST sinks — no GET/PUT semantics.            |
 | **Dashboard**   | `sentry.io`, `<org-slug>.sentry.io`, `eu.sentry.io` | Web UI: org settings, project settings, alerts, monitors, issue triage. **EU-region dashboard host is `eu.sentry.io`** (NOT `de.sentry.io`). | Ingest POSTs (event upload goes to `*.ingest.*.sentry.io`).                               |
-| **API**         | `eu.sentry.io/api/0/...`, `us.sentry.io/api/0/...`, `sentry.io/api/0/...` (legacy global) | REST API: `/organizations/{slug}/`, `/projects/{org}/{project}/`, `/releases/`, `/users/me/`. **EU-region API base_url is `eu.sentry.io/api/`.** The bare `sentry.io/api/0/...` host is the legacy global API surface still probe-looped by `apps/web-platform/scripts/sentry-monitors-audit.sh` as a fall-through after `eu.sentry.io`. | Event ingest (path-disjoint from `/api/<project_id>/store/`).                             |
+| **API**         | `<org-slug>.sentry.io/api/0/...` (org-scoped), `eu.sentry.io/api/0/...` (region-wide / slug-less only), `us.sentry.io/api/0/...`, `sentry.io/api/0/...` (legacy global) | REST API: `/organizations/{slug}/`, `/projects/{org}/{project}/`, `/releases/`, `/users/me/`. **Org-scoped paths (`/organizations/<slug>/`, `/projects/<slug>/...`) MUST use the org-subdomain `<org-slug>.sentry.io/api/`** — see learning `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`. The `eu.sentry.io/api/` regional host silently rewrites slugs ending in `-eu` to the literal `eu` org via an `activeorg`-cookie hijack (302 → 401 cascade). Use it ONLY for slug-less endpoints (`/users/me/`, `/auth/*`). The bare `sentry.io/api/0/...` host is the legacy global API surface still probe-looped by `apps/web-platform/scripts/sentry-monitors-audit.sh` as a fall-through. | Event ingest (path-disjoint from `/api/<project_id>/store/`).                             |
 
 **Implications for Terraform + audit tooling:**
 
 - **Provider `base_url`** in `apps/web-platform/infra/sentry/main.tf` for EU
-  region MUST be `https://eu.sentry.io/api/`. Setting it to `https://de.sentry.io/api/`
-  produces silent 404s (ingest-only host has no `/api/0/...` surface) which a
-  beta-provider may not surface as a Terraform error.
-  **Transition note (as of this ADR revision, 2026-05-16):**
-  `apps/web-platform/infra/sentry/main.tf:30` still resolves to
-  `https://de.sentry.io/api/` under `var.sentry_region == "de"`. The flip to
-  `https://eu.sentry.io/api/` lands in PR-β of #3861 atomic with the tfstate
-  drop + serial re-import sequence (plan
+  region MUST be `https://<org-slug>.sentry.io/api/` (the org-subdomain) — NOT
+  `https://eu.sentry.io/api/`. The regional host's slug-rewrite bug (see API
+  row above + learning `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`)
+  silently 401s every Terraform read/write for orgs whose slug ends in `-eu`.
+  Setting it to `https://de.sentry.io/api/` produces silent 404s (ingest-only
+  host has no `/api/0/...` surface). The org-subdomain is the only base_url
+  shape that works for slug-scoped operations regardless of org slug.
+  **Transition note (as of this ADR revision, 2026-05-16, updated 2026-05-17
+  for the slug-rewrite finding):** `apps/web-platform/infra/sentry/main.tf:30`
+  still resolves to `https://de.sentry.io/api/` under
+  `var.sentry_region == "de"`. The flip lands in PR-β of #3861 atomic with
+  the tfstate drop + serial re-import sequence (plan
   `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md`
-  Phase 2 step 9 + Phase 6). Do not flip it out-of-band — the atomicity
-  prevents a 3-state window where the provider points at `eu.sentry.io` but
-  the org slug still references the phantom org.
+  Phase 2 step 9 + Phase 6). Target value: `"https://${var.sentry_org}.sentry.io/api/"`
+  (org-subdomain pattern), NOT the originally-planned `"https://eu.sentry.io/api/"`.
 - **Audit script `api_host`** (`apps/web-platform/scripts/sentry-monitors-audit.sh`)
   region-probe loop MUST include `eu.sentry.io` (and prefer it over `sentry.io`
   for EU-resident orgs) — `de.sentry.io` will return 404 for every API call.
