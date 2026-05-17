@@ -17,8 +17,7 @@ predecessor_prs:
   - "#3395"  # PR-B
   - "#3854"  # PR-C
   - "#3883"  # PR-D
-  - "#3887"  # PR-E
-  - "#3922"  # PR-E follow-up
+  - "#3922"  # PR-E (issue #3887 closed by this PR; original session-start commit message was "(#3887) (#3922)")
 follow_up_issues:
   - "#3947"  # PR-G cohort onboarding
   - "#3948"  # cron migration TR9
@@ -136,7 +135,7 @@ Three drifts surfaced during plan-write v1 verification; all carried forward int
 - `knowledge-base/engineering/architecture/decisions/ADR-030-inngest-as-durable-trigger-layer.md` — status `proposed` (flipped to `accepted` at Phase 6).
 
 **Steps:**
-1. Verify all 5 predecessor PRs MERGED via `gh pr view <N> --json state` for #3240, #3395, #3854, #3883, #3887. Abort if any OPEN.
+1. Verify all 5 predecessor PRs MERGED via `gh pr view <N> --json state` for #3240, #3395, #3854, #3883, #3922. Abort if any OPEN. (Note: #3887 is the closed *issue* PR-E references; the merged PR is #3922 — caught at /work Phase 0.1 verification 2026-05-17.)
 2. Verify worktree on `feat-pr-f-inngest-trigger-layer` branch at HEAD pushed to remote.
 3. Run `/soleur:architecture create "Adopt Inngest as durable trigger layer for server-side agents"` with status `proposed`. ADR records:
    - **Chosen substrate:** self-hosted OSS Inngest server on Hetzner with SQLite persistence, bound to `127.0.0.1`.
