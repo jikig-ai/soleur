@@ -274,7 +274,7 @@ What the driver does (mirrors `bash gdpr-override.sh --help`):
    3161 manifest).
 6. **Write the tombstone** per §7.4 (driver writes `{schema_version:"1.0",
    deleted_at, admin_actor, gdpr_request_ref, prior_object_sha,
-   override_reason}` at `tombstones/<sha>.json` via the same `prd_cla` HMAC
+   override_reason}` at `tombstones/<sha>.deleted.json` via the same `prd_cla` HMAC
    env). PRIOR_SHA is validated against `^[0-9a-f]{64}$` at entry — a
    malformed value breaks the third-consumer schema invariant at
    `inspect-evidence.sh`.
@@ -310,7 +310,7 @@ failed` and continues to self-revoke), write the tombstone manually
 using the same `prd_cla` HMAC envelope:
 
 ```bash
-tombstone_key="tombstones/<sha>.json"
+tombstone_key="tombstones/<sha>.deleted.json"
 tombstone_body=$(jq -n \
   --arg schema_version "1.0" \
   --arg deleted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

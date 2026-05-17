@@ -71,7 +71,11 @@ EXIT CODES
   1   pre-PUT abort (token verify or GET failed); self-revoke ran
   2   DELETE failed; best-effort restore + self-revoke ran; no tombstone
   3   PUT-restore FAILED after successful DELETE; CRITICAL;
-      no self-revoke; no tombstone — bucket WORM may be void
+      no self-revoke; no tombstone — bucket WORM may be void;
+      sentinel + snapshot copy written to $GDPR_OVERRIDE_SENTINEL_DIR
+      (default: ~/cla-evidence-incidents) for manual restore
+  4   tombstone PUT FAILED after successful restore; self-revoke ran;
+      chain coherence at risk — write tombstone manually per runbook §7.4
   64  usage / config error
 EOF
 }
@@ -117,6 +121,18 @@ if ! [[ "$PRIOR_SHA" =~ ^[0-9a-f]{64}$ ]]; then
   usage_err "PRIOR_SHA must be 64-char lowercase hex (got ${#PRIOR_SHA} chars)"
 fi
 
+# TARGET_KEY ↔ PRIOR_SHA consistency check (defense against operator copy-paste typo).
+# Bucket keys are content-addressed at signatures/<sha>.json — the SHA in the
+# key path IS the SHA the tombstone must reference. Catching a mismatch here
+# prevents a silently-wrong tombstone keyed on a typo'd SHA, which would
+# corrupt the next monthly RFC 3161 manifest's chain coherence.
+if [[ "$TARGET_KEY" =~ ^signatures/([0-9a-f]{64})\.json$ ]]; then
+  expected_sha="${BASH_REMATCH[1]}"
+  if [[ "$PRIOR_SHA" != "$expected_sha" ]]; then
+    usage_err "PRIOR_SHA / TARGET_KEY mismatch: TARGET_KEY embeds SHA '$expected_sha' but PRIOR_SHA='$PRIOR_SHA' — copy-paste typo? (re-derive both from \`inspect-evidence.sh by-pr <N>\` output)"
+  fi
+fi
+
 # ── Dep check ────────────────────────────────────────────────────────────────
 for bin in jq curl aws doppler; do
   command -v "$bin" >/dev/null || usage_err "missing $bin on PATH"
@@ -132,7 +148,7 @@ LOCK_URL="$CF_API/accounts/$CF_ACCOUNT_ID/r2/buckets/$R2_CLA_EVIDENCE_BUCKET/loc
 MAIN_TEST_SH="${GDPR_OVERRIDE_MAIN_TEST_SH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../infra" && pwd)/main.test.sh}"
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  green "[dry-run] would: verify CF admin token; GET lock rules; PUT shape=$SHAPE; DELETE $TARGET_KEY via prd_cla HMAC; PUT-restore; verify; tombstone tombstones/$PRIOR_SHA.json; self-revoke admin token."
+  green "[dry-run] would: verify CF admin token; GET lock rules; PUT shape=$SHAPE; DELETE $TARGET_KEY via prd_cla HMAC; PUT-restore; verify; tombstone tombstones/$PRIOR_SHA.deleted.json; self-revoke admin token."
   exit 0
 fi
 
@@ -148,7 +164,7 @@ CF_ADMIN_TOKEN_ID=""
 # investigate). Explicit error paths below set their own exit codes; this
 # trap is the safety net for unexpected mid-flow failures (network blip,
 # Ctrl-C).
-# shellcheck disable=SC2317  # invoked via trap; shellcheck cannot see the indirect call.
+# shellcheck disable=SC2317  # SC2317 false-positive for trap-installed handlers (the ERR/INT/TERM trap below routes here).
 _cleanup_partial_override() {
   local rc=$?
   trap - ERR INT TERM
@@ -325,6 +341,29 @@ if ! curl --max-time 30 -fsS -X PUT \
   red "::error::CRITICAL: PUT-restore FAILED after successful DELETE; bucket WORM may be void; manual restore required immediately"
   # Per plan §Sharp Edges: do NOT self-revoke (operator needs token).
   # Do NOT write tombstone (bucket state degraded).
+  #
+  # Out-of-band escalation: write a sentinel file to the operator's home
+  # AND copy the snapshot needed for manual restore there too (the trap will
+  # rm -rf "$WORK" on exit). A red() line on stderr scrolls off-screen; a
+  # file on disk + the GH-Actions ::error:: annotation cannot be missed.
+  # Env override (GDPR_OVERRIDE_SENTINEL_DIR) lets tests redirect the sentinel
+  # write to a temp dir; production resolves to ~/cla-evidence-incidents.
+  sentinel_dir="${GDPR_OVERRIDE_SENTINEL_DIR:-${HOME:-/tmp}/cla-evidence-incidents}"
+  ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+  mkdir -p "$sentinel_dir" 2>/dev/null || sentinel_dir=/tmp
+  sentinel_file="$sentinel_dir/CRITICAL-restore-failed-$ts.json"
+  cp "$WORK/snapshot.json" "$sentinel_dir/snapshot-$ts.json" 2>/dev/null || true
+  jq -n \
+    --arg ts "$ts" \
+    --arg key "$TARGET_KEY" \
+    --arg actor "$ADMIN_ACTOR" \
+    --arg ref "$GDPR_REQUEST_REF" \
+    --arg token_id "$CF_ADMIN_TOKEN_ID" \
+    --arg snapshot "$sentinel_dir/snapshot-$ts.json" \
+    '{severity:"CRITICAL", incident:"r2-lock-rule-restore-failed", at:$ts, target_key:$key, admin_actor:$actor, gdpr_request_ref:$ref, admin_token_id:$token_id, snapshot_path:$snapshot, next_steps:["Manually re-PUT snapshot to https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/r2/buckets/$R2_CLA_EVIDENCE_BUCKET/lock", "Verify via main.test.sh --live --strict-rule-count", "Self-revoke admin token via DELETE /user/tokens/{token_id}", "Open Sev-1 incident with this sentinel file attached"]}' \
+    > "$sentinel_file" 2>/dev/null || true
+  red "::error::CRITICAL incident sentinel written: $sentinel_file"
+  red "::error::Snapshot for manual restore copied to: $sentinel_dir/snapshot-$ts.json"
   trap - ERR INT TERM
   exit 3
 fi
@@ -355,7 +394,9 @@ fi
 # learning 2026-05-04-cla-evidence-sidecar-pattern.md §3.
 # ─────────────────────────────────────────────────────────────────────────────
 step "[7/8] write tombstone via S3-compat HMAC (prd_cla env)"
-tomb_key="tombstones/${PRIOR_SHA}.json"
+# Tombstone key suffix `.deleted.json` is contract: DPD §2.3(n), privacy-policy §4.5,
+# runbook §7.5 DPA log + §7.7 manifest verify all expect this exact shape.
+tomb_key="tombstones/${PRIOR_SHA}.deleted.json"
 deleted_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 tomb_body="$WORK/tombstone.json"
 jq -n \
@@ -375,7 +416,17 @@ if ! doppler run -p soleur -c prd_cla -- \
         --key "$tomb_key" \
         --body "$tomb_body" \
         --content-type "application/json" >/dev/null 2>&1; then
-  red "::error::tombstone PUT failed; chain coherence at risk — write tombstone manually"
+  # FATAL: tombstone is what keeps the monthly RFC 3161 chain coherent.
+  # A tombstone-PUT failure after a successful DELETE + restore leaves the
+  # bucket in the exact incoherent state the protocol exists to prevent.
+  # Per cq-silent-fallback-must-mirror-to-sentry: do NOT print "tombstone
+  # written" on failure (the prior version did, lying to operators) and do
+  # NOT exit 0. Self-revoke still runs — the token has done its job and
+  # leaving it active widens the leak window. Operator writes the tombstone
+  # manually per runbook §7.4 fallback, then closes the loop.
+  red "::error::tombstone PUT failed; chain coherence at risk — write tombstone manually per runbook §7.4 fallback (target key: $tomb_key)"
+  _self_revoke
+  exit 4
 fi
 green "  tombstone written: $tomb_key"
 

@@ -66,8 +66,16 @@ status=\${line%%	*}
 body=\${line#*	}
 cf_admin_present=0
 [[ -n "\${CF_ADMIN_TOKEN:-}" ]] && cf_admin_present=1
-printf 'method=%s url=%s header_auth=%s cf_admin_in_env=%s data_len=%s\n' \
-  "\$method" "\$url" "\$header_auth" "\$cf_admin_present" "\${#data}" >> "\$log"
+# Derive a stable call tag so assertions don't have to pin row numbers.
+# data values are of shape "@/tmp/.../{snapshot,lock-put-modified,tombstone}.json".
+data_tag=""
+case "\$data" in
+  *snapshot.json)              data_tag=put-restore ;;
+  *lock-put-modified.json)     data_tag=put-modify  ;;
+  *)                           data_tag=""          ;;
+esac
+printf 'method=%s url=%s header_auth=%s cf_admin_in_env=%s data_len=%s data_tag=%s\n' \
+  "\$method" "\$url" "\$header_auth" "\$cf_admin_present" "\${#data}" "\$data_tag" >> "\$log"
 if [[ -n "\$out" ]]; then
   printf '%s' "\$body" > "\$out"
 else
@@ -164,17 +172,6 @@ EOF
   chmod +x "$work/doppler"
 }
 
-mk_gh_stub() {
-  cat > "$work/gh" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-  auth) [[ "${2:-}" == "status" ]] && exit 0 ;;
-esac
-exit 0
-EOF
-  chmod +x "$work/gh"
-}
-
 mk_maintest_stub() {
   # Stand-in for `bash apps/cla-evidence/infra/main.test.sh --live --strict-rule-count`.
   # Reads next expected exit code from $work/maintest.queue.
@@ -254,6 +251,7 @@ run_sut() {
   OVERRIDE_REASON="${OVERRIDE_REASON-GDPR Article 17 erasure — stub test invocation}" \
   ADMIN_ACTOR="${ADMIN_ACTOR-stub-operator@example.invalid}" \
   GDPR_OVERRIDE_MAIN_TEST_SH="$work/main.test.sh" \
+  GDPR_OVERRIDE_SENTINEL_DIR="$work/sentinel" \
     bash "$SUT" "$@"
 }
 
@@ -261,7 +259,6 @@ reset_stubs() {
   mk_curl_stub
   mk_aws_stub
   mk_doppler_stub
-  mk_gh_stub
   mk_maintest_stub
 }
 
@@ -287,13 +284,16 @@ fi
 # ─── TS-OVERRIDE.b ─ Shape B happy path ─────────────────────────────────────
 reset_stubs; prime_happy_a
 if run_sut --shape=age-1s >"$work/out.b" 2>&1; then
-  # The 3rd curl call carries the PUT-modified body; verify maxAgeSeconds:1.
-  # POSIX awk (mawk-compatible): split on the key prefix, then trim trailing fields.
-  put_data=$(awk -F'data_len=' 'NR==3 { split($2, a, " "); print a[1] }' "$work/curl.log")
-  if [[ -n "$put_data" ]] && [[ "$put_data" -gt 0 ]]; then
+  # Assert exactly one put-modify curl call landed with a non-empty body.
+  # Content-based selection (data_tag=put-modify, set by the stub on file-basename
+  # match) survives refactors that insert preflight curls (HEAD probes, token-verify
+  # retries) — positional NR==3 anchors silently miscount on those.
+  put_modify_count=$(grep -c 'data_tag=put-modify' "$work/curl.log" || true)
+  put_modify_len=$(awk -F'data_len=' '/data_tag=put-modify/ { split($2, a, " "); print a[1]; exit }' "$work/curl.log")
+  if [[ "$put_modify_count" == "1" ]] && [[ -n "$put_modify_len" ]] && [[ "$put_modify_len" -gt 0 ]]; then
     green "PASS: TS-OVERRIDE.b Shape B happy path"
   else
-    red "FAIL: TS-OVERRIDE.b PUT-modify body absent"
+    red "FAIL: TS-OVERRIDE.b PUT-modify body absent (count=$put_modify_count len=$put_modify_len)"
     fail=1
   fi
 else
@@ -371,13 +371,19 @@ reset_stubs; prime_happy_a
   printf '200\t\n'   # delete-object ok
 } > "$work/aws.queue"
 out=$(run_sut --shape=enabled-false 2>&1) && rc=0 || rc=$?
+# Verify the sentinel file + snapshot copy landed in $work/sentinel (out-of-band
+# escalation per architecture P1 — terminal stderr alone scrolls off-screen).
+sentinel_landed=$(find "$work/sentinel" -maxdepth 1 -name 'CRITICAL-restore-failed-*.json' 2>/dev/null | head -1)
+snapshot_landed=$(find "$work/sentinel" -maxdepth 1 -name 'snapshot-*.json' 2>/dev/null | head -1)
 if [[ "$rc" -eq 3 ]] \
    && grep -qE 'CRITICAL' <<<"$out" \
    && [[ $(wc -l < "$work/curl.log") -eq 4 ]] \
-   && [[ $(wc -l < "$work/aws.log") -eq 1 ]]; then
-  green "PASS: TS-OVERRIDE.f restore-fail → CRITICAL, no self-revoke, no tombstone, exit 3"
+   && [[ $(wc -l < "$work/aws.log") -eq 1 ]] \
+   && [[ -n "$sentinel_landed" ]] \
+   && [[ -n "$snapshot_landed" ]]; then
+  green "PASS: TS-OVERRIDE.f restore-fail → CRITICAL, sentinel + snapshot copy on disk, no self-revoke, no tombstone, exit 3"
 else
-  red "FAIL: TS-OVERRIDE.f expected rc=3 + CRITICAL + 4 curl + 1 aws; got rc=$rc curl=$(wc -l < "$work/curl.log") aws=$(wc -l < "$work/aws.log")"
+  red "FAIL: TS-OVERRIDE.f expected rc=3 + CRITICAL + 4 curl + 1 aws + sentinel + snapshot; got rc=$rc curl=$(wc -l < "$work/curl.log") aws=$(wc -l < "$work/aws.log") sentinel=$sentinel_landed snapshot=$snapshot_landed"
   indent_stderr <<<"$out"
   fail=1
 fi
@@ -441,6 +447,7 @@ R2_CLA_EVIDENCE_SECRET="$FP_HMAC" \
   OVERRIDE_REASON="stub j" \
   ADMIN_ACTOR=stub@example.invalid \
   GDPR_OVERRIDE_MAIN_TEST_SH="$work/main.test.sh" \
+  GDPR_OVERRIDE_SENTINEL_DIR="$work/sentinel" \
     bash -x "$SUT" --shape=enabled-false >"$work/out.j" 2>"$work/trace.j" || true
 if grep -F -- "$FP_BEARER" "$work/trace.j" >/dev/null \
    || grep -F -- "$FP_HMAC" "$work/trace.j" >/dev/null; then
@@ -455,23 +462,63 @@ fi
 # ─── TS-OVERRIDE.k ─ Bearer/HMAC env separation ─────────────────────────────
 reset_stubs; prime_happy_a
 if run_sut --shape=enabled-false >"$work/out.k" 2>&1; then
-  # PUT lock-rule curl calls (rows 3 + 4) should carry cf_admin_in_env=1.
-  # aws delete-object + put-object calls should carry cf_admin_in_env=0 + hmac_in_env=1.
-  put_modify_admin=$(awk -F'cf_admin_in_env=' 'NR==3 { split($2, a, " "); print a[1] }' "$work/curl.log")
-  put_restore_admin=$(awk -F'cf_admin_in_env=' 'NR==4 { split($2, a, " "); print a[1] }' "$work/curl.log")
+  # Content-based extraction (data_tag=put-modify|put-restore) — survives any
+  # refactor that reorders or inserts curl calls. Per-invariant FAIL lines so
+  # a single broken invariant points at exactly one cause (test-design "Specific"
+  # property).
+  put_modify_admin=$(awk -F'cf_admin_in_env=' '/data_tag=put-modify/  { split($2, a, " "); print a[1]; exit }' "$work/curl.log")
+  put_restore_admin=$(awk -F'cf_admin_in_env=' '/data_tag=put-restore/ { split($2, a, " "); print a[1]; exit }' "$work/curl.log")
   aws_admin_any=$(awk 'BEGIN{x=0} /cf_admin_in_env=1/ {x=1} END{print x}' "$work/aws.log")
   aws_hmac_all=$(awk 'BEGIN{ok=1} {if($0 !~ /hmac_in_env=1/) ok=0} END{print ok}' "$work/aws.log")
-  if [[ "$put_modify_admin" == "1" ]] && [[ "$put_restore_admin" == "1" ]] \
-     && [[ "$aws_admin_any" == "0" ]] && [[ "$aws_hmac_all" == "1" ]]; then
+  k_fail=0
+  if [[ "$put_modify_admin" != "1" ]]; then
+    red "FAIL: TS-OVERRIDE.k bearer absent from PUT-modify env (cf_admin_in_env=$put_modify_admin)"
+    k_fail=1
+  fi
+  if [[ "$put_restore_admin" != "1" ]]; then
+    red "FAIL: TS-OVERRIDE.k bearer absent from PUT-restore env (cf_admin_in_env=$put_restore_admin)"
+    k_fail=1
+  fi
+  if [[ "$aws_admin_any" != "0" ]]; then
+    red "FAIL: TS-OVERRIDE.k bearer leaked into aws env (cf_admin_in_env=1 observed in aws.log)"
+    k_fail=1
+  fi
+  if [[ "$aws_hmac_all" != "1" ]]; then
+    red "FAIL: TS-OVERRIDE.k HMAC missing from one or more aws calls (hmac_in_env=0)"
+    k_fail=1
+  fi
+  if [[ "$k_fail" -eq 0 ]]; then
     green "PASS: TS-OVERRIDE.k bearer present in PUT env, absent in aws env; HMAC present in aws env"
   else
-    red "FAIL: TS-OVERRIDE.k env-separation: put_modify_admin=$put_modify_admin put_restore_admin=$put_restore_admin aws_admin_any=$aws_admin_any aws_hmac_all=$aws_hmac_all"
     sed 's/^/  /' "$work/curl.log" "$work/aws.log" >&2
     fail=1
   fi
 else
   red "FAIL: TS-OVERRIDE.k expected exit 0 on happy path"
   sed 's/^/  /' "$work/out.k" >&2
+  fail=1
+fi
+
+# ─── TS-OVERRIDE.l ─ Tombstone PUT 500 → exit 4 (NOT 0, no false "tombstone written") ─
+# Added after review surfaced that the prior tombstone-PUT failure path swallowed the
+# error (printed ::error:: but exited 0 + printed "tombstone written" — a lie).
+reset_stubs; prime_happy_a
+# Curl queue stays as default happy-path 5 entries (verify + GET + PUT-modify +
+# PUT-restore + DELETE-token). Only the aws.put-object (tombstone) fails.
+{
+  printf '200\t\n'   # delete-object ok
+  printf '500\t\n'   # put-object (tombstone) FAILS
+} > "$work/aws.queue"
+out=$(run_sut --shape=enabled-false 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 4 ]] \
+   && grep -qE 'tombstone PUT failed' <<<"$out" \
+   && ! grep -qE 'tombstone written' <<<"$out" \
+   && [[ $(wc -l < "$work/aws.log") -eq 2 ]] \
+   && [[ $(wc -l < "$work/curl.log") -eq 5 ]]; then
+  green "PASS: TS-OVERRIDE.l tombstone-PUT-500 → exit 4, no false success, self-revoke ran (5 curl + 2 aws)"
+else
+  red "FAIL: TS-OVERRIDE.l expected rc=4 + 'tombstone PUT failed' + no 'tombstone written' + 5 curl + 2 aws; got rc=$rc curl=$(wc -l < "$work/curl.log") aws=$(wc -l < "$work/aws.log")"
+  indent_stderr <<<"$out"
   fail=1
 fi
 

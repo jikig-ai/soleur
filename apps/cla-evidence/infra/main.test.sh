@@ -114,6 +114,32 @@ if ! grep -qE 'com\.cloudflare\.edge\.r2\.bucket\.\$\{var\.cf_account_id\}_defau
   fail=1
 fi
 
+# Bearer-vs-HMAC separation policy gate (PR #3919 regression guard, codified after
+# PR #3939 review). Driver-style scripts in apps/cla-evidence/scripts/ that invoke
+# `aws --endpoint-url ...` MUST wrap via `doppler run -p soleur -c prd_cla --`
+# within the 3 lines preceding the aws call — passing the 53-char bearer admin
+# token where AWS expects a 32-char HMAC access-key reproduces the "Credential
+# access key has length 53, should be 32" failure that bit PR #3919's first cron.
+# (inspect-evidence.sh is exempt: its `aws_exec` helper takes the HMAC pair from
+# env, and the operator wraps with doppler at the call site.)
+driver_scripts=(../scripts/gdpr-override.sh)
+for f in "${driver_scripts[@]}"; do
+  [[ -f "$f" ]] || continue
+  violations=$(awk '
+    /aws --endpoint-url/ {
+      ok = 0
+      for (i = NR - 3; i < NR; i++) if (L[i] ~ /doppler run -p soleur -c prd_cla/) ok = 1
+      if (!ok) print FILENAME ":" NR ": " $0
+    }
+    { L[NR] = $0 }
+  ' "$f")
+  if [[ -n "$violations" ]]; then
+    red "FAIL: $f calls 'aws --endpoint-url' without wrapping via 'doppler run -p soleur -c prd_cla --' within 3 lines — bearer-vs-HMAC trap (PR #3919)."
+    red "$violations"
+    fail=1
+  fi
+done
+
 if [[ "$LIVE_MODE" -eq 1 ]]; then
   echo "→ live CF Lock Rules assertion (--live)"
   : "${CF_ADMIN_TOKEN_BOOTSTRAP:?missing — required for --live mode}"
