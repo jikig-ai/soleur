@@ -37,7 +37,8 @@ inputs:
   change-summary:
     description: >
       Short text used as the `output[summary]` of the test, dependency-review,
-      and e2e synthetic checks. cla-check uses a fixed allowlist summary.
+      and e2e synthetic checks. cla-check and cla-evidence use fixed
+      allowlist summaries.
       Must fit the GitHub check-run summary 60KB cap.
     required: false
     default: "Bot PR, no code changes"
@@ -179,6 +180,13 @@ runs:
           -f conclusion=success \
           -f "output[title]=CLA pre-approved" \
           -f "output[summary]=github-actions[bot] is in CLA allowlist"
+        gh api "repos/${REPO}/check-runs" \
+          -f name=cla-evidence \
+          -f head_sha="$COMMIT_SHA" \
+          -f status=completed \
+          -f conclusion=success \
+          -f "output[title]=CLA evidence pre-recorded" \
+          -f "output[summary]=github-actions[bot] evidence layer satisfied"
         if [[ "$SKIP_AUTO_MERGE" != "true" ]]; then
           gh pr merge "$BRANCH" --squash --auto
         fi
