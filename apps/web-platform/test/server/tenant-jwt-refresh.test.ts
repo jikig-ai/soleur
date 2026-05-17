@@ -40,12 +40,18 @@ vi.mock("@/lib/supabase/service", () => ({
   getServiceClient: () => ({
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
       mocks.rpcCalls.push({ fn, args });
+      // PR-E #3887: deny-probe RPC fires on every cache-hit and post-mint
+      // boundary. Default to "not denied" so the legacy mint+cache assertions
+      // remain semantically meaningful. Tests that need to assert deny
+      // behavior live in `tenant-jwt-deny.tenant-isolation.test.ts`.
+      if (fn === "is_jti_denied") return { data: false, error: null };
       return mocks.getRpcResult();
     }),
   }),
   createServiceClient: () => ({
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
       mocks.rpcCalls.push({ fn, args });
+      if (fn === "is_jti_denied") return { data: false, error: null };
       return mocks.getRpcResult();
     }),
   }),
@@ -82,6 +88,14 @@ import {
 
 const FOUNDER_A = "00000000-0000-0000-0000-00000000aaaa";
 const FOUNDER_B = "00000000-0000-0000-0000-00000000bbbb";
+
+/**
+ * PR-E #3887: `getFreshTenantClient` now fires `is_jti_denied` on every
+ * cache-hit and post-mint boundary. The mint-count assertions below count
+ * `precheck_jwt_mint` calls only — deny-probe behavior has its own suite.
+ */
+const mintCalls = () =>
+  mocks.rpcCalls.filter((c) => c.fn === "precheck_jwt_mint");
 
 const TEST_SECRET =
   "test-secret-for-unit-tests-must-be-long-enough-for-hmac-min-32";
@@ -227,20 +241,20 @@ describe("getFreshTenantClient — auto-remint at TTL/2", () => {
   it("first call mints a JWT and caches the client", async () => {
     const client = await getFreshTenantClient(FOUNDER_A);
     expect(client).toBeTruthy();
-    expect(mocks.rpcCalls).toHaveLength(1);
+    expect(mintCalls()).toHaveLength(1);
     expect(mocks.createdClients).toHaveLength(1);
     expect(mocks.createdClients[0].token).toMatch(/^[\w-]+\.[\w-]+\.[\w-]+$/);
   });
 
   it("second call within TTL/2 returns the cached client (no remint)", async () => {
     await getFreshTenantClient(FOUNDER_A);
-    expect(mocks.rpcCalls).toHaveLength(1);
+    expect(mintCalls()).toHaveLength(1);
 
     // Advance 100s — well below TTL/2 (300s for a 600s TTL).
     vi.advanceTimersByTime(100_000);
 
     await getFreshTenantClient(FOUNDER_A);
-    expect(mocks.rpcCalls).toHaveLength(1); // still 1, not 2
+    expect(mintCalls()).toHaveLength(1); // still 1, not 2
   });
 
   it("call after TTL/2 elapsed remints and updates the cache", async () => {
@@ -258,7 +272,7 @@ describe("getFreshTenantClient — auto-remint at TTL/2", () => {
     });
 
     await getFreshTenantClient(FOUNDER_A);
-    expect(mocks.rpcCalls).toHaveLength(1);
+    expect(mintCalls()).toHaveLength(1);
 
     // Advance past TTL/2 (300s for default 600s TTL) AND change the RPC
     // result so the fresh mint produces a distinct JWT.
@@ -276,7 +290,7 @@ describe("getFreshTenantClient — auto-remint at TTL/2", () => {
     });
 
     await getFreshTenantClient(FOUNDER_A);
-    expect(mocks.rpcCalls).toHaveLength(2);
+    expect(mintCalls()).toHaveLength(2);
     expect(mocks.createdClients).toHaveLength(2);
     expect(mocks.createdClients[1].token).not.toBe(
       mocks.createdClients[0].token,
@@ -287,8 +301,8 @@ describe("getFreshTenantClient — auto-remint at TTL/2", () => {
   it("caches per founderId — A and B do not share the cache slot", async () => {
     await getFreshTenantClient(FOUNDER_A);
     await getFreshTenantClient(FOUNDER_B);
-    expect(mocks.rpcCalls).toHaveLength(2);
-    expect(mocks.rpcCalls.map((c) => c.args.p_founder_id)).toEqual([
+    expect(mintCalls()).toHaveLength(2);
+    expect(mintCalls().map((c) => c.args.p_founder_id)).toEqual([
       FOUNDER_A,
       FOUNDER_B,
     ]);
@@ -296,7 +310,7 @@ describe("getFreshTenantClient — auto-remint at TTL/2", () => {
     // Reading A again at t<TTL/2 must NOT remint — B's mint must not bust
     // A's cache slot.
     await getFreshTenantClient(FOUNDER_A);
-    expect(mocks.rpcCalls).toHaveLength(2);
+    expect(mintCalls()).toHaveLength(2);
   });
 
   it("a query started before TTL/2 completes successfully without error (long-running query contract)", async () => {

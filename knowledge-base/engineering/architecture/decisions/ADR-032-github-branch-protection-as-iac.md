@@ -86,28 +86,69 @@ never lands in state plaintext.
 
 ### Apply discipline
 
-Apply is operator-only. The auto-apply patterns in
-`apply-deploy-pipeline-fix.yml` and `apply-sentry-infra.yml` (which run
-`terraform apply -target=…` on push-to-main) do NOT apply here because
-the ruleset mutation is a write-to-prod-policy event requiring single
-human attestation per `hr-menu-option-ack-not-prod-write-auth`.
+**Revised 2026-05-16 (PR #3903):** the original "operator-only" framing
+below is superseded. Apply now runs automatically in CI on merge to
+`main` via [`.github/workflows/apply-github-infra.yml`](../../../../.github/workflows/apply-github-infra.yml),
+matching the boundary ADR-031 drew for `apps/web-platform/infra/sentry/`.
+**The PR merge is the human attestation** per `hr-menu-option-ack-not-prod-write-auth`
+— same satisfaction the rule accepts for Sentry cron-monitor terraform.
+The original framing was a `/ship` Phase 7 misclassification
+(`manual_because: oauth-consent-screen` conflated the one-time PAT mint
+with the per-apply attestation); the systemic fix is tracked in #3910.
 
-The mandatory pre-apply gate is the `terraform show -json | jq` probe
-that asserts ALL THREE contract dimensions:
+This revision tightens the "mirrors ADR-031" framing in two ways the
+PR #3903 body must NOT overstate:
+
+1. ADR-031 scopes the Sentry auto-apply to `-target=sentry_cron_monitor.*`
+   because that root manages BOTH cron-monitors (auto-applied) AND
+   issue-alerts (import-only). `infra/github/` manages a single resource
+   (`github_repository_ruleset.ci_required`) so the apply step does not
+   need `-target` scoping — the full-root apply is the scoped apply by
+   construction. Future additions to this root require revisiting the
+   scoping decision.
+2. ADR-031's apply ran from day one. ADR-032 originally rejected
+   auto-apply, then this revision reverses that. The reversal is
+   contained to this root and does NOT loosen the boundary anywhere
+   else; `hr-menu-option-ack-not-prod-write-auth` continues to require
+   single human attestation for any production-write that lacks a
+   reviewed-PR-merge equivalent (e.g., DNS rotation, secret rotation,
+   manual server restarts).
+
+Defense-in-depth: CODEOWNERS pins `/infra/github/` and
+`/.github/workflows/apply-github-infra.yml` to `@deruelle` so a leaked
+`DOPPLER_TOKEN` alone is insufficient to push a ruleset change — the
+malicious PR must first land a CODEOWNER-approved review.
+
+The mandatory pre-apply gate (the `terraform show -json | jq` probe
+asserting ALL THREE contract dimensions: actions, before_count,
+after_count) is preserved — it now runs in CI as the destroy-guard step
+inside the apply workflow, gated by `[ack-destroy]` in the merge commit
+message for any plan with deletes. The probe shape is unchanged:
 
 ```text
 {"actions":["update"],"before_count":5,"after_count":14}
 ```
 
-with zero other property changes. The probe in `infra/github/README.md`
-Phase 2 returns this exact shape — `before_count` and `actions` are
-load-bearing because an `after_count` of 14 alone passes for any
-14-element collection, including one produced by an unexpected
-`replace` instead of `update`. Any deviation (a bypass-actor diff,
-condition tweak, integration_id phantom drift) signals that the import
-surfaced unmanaged state the Terraform config does not yet model — the
-operator reconciles by editing the config to match live state BEFORE
-applying, never by applying the unreviewed diff.
+`before_count` and `actions` are load-bearing because an `after_count`
+of 14 alone passes for any 14-element collection, including one produced
+by an unexpected `replace` instead of `update`. Any deviation (a
+bypass-actor diff, condition tweak, integration_id phantom drift)
+signals that the import surfaced unmanaged state the Terraform config
+does not yet model — the workflow fails closed and an operator
+reconciles by editing the config to match live state BEFORE applying,
+never by applying the unreviewed diff.
+
+**Kill switch:** include `[skip-github-apply]` on its own line in the
+merge commit message to bypass the auto-apply for that merge.
+
+#### Original framing (superseded — preserved for audit)
+
+> Apply is operator-only. The auto-apply patterns in
+> `apply-deploy-pipeline-fix.yml` and `apply-sentry-infra.yml` (which
+> run `terraform apply -target=…` on push-to-main) do NOT apply here
+> because the ruleset mutation is a write-to-prod-policy event
+> requiring single human attestation per
+> `hr-menu-option-ack-not-prod-write-auth`.
 
 ## Consequences
 

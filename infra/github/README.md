@@ -1,15 +1,40 @@
 # infra/github/ -- GitHub branch-protection Terraform root
 
-Mirrors `apps/web-platform/infra/sentry/` pattern. State key:
-`github/terraform.tfstate` in R2 bucket `soleur-terraform-state`.
+Companion to `apps/web-platform/infra/sentry/` — same auto-apply-on-merge
+boundary per ADR-031 (revised in ADR-032 for this root). Structured as a
+phased runbook for the one-time PAT + import bootstrap; the sibling Sentry
+README is structured as a reference doc because cron-monitors + issue-alerts
+have parallel lifecycles. State key: `github/terraform.tfstate` in R2 bucket
+`soleur-terraform-state`.
 
 Managed resource: ruleset 14145388 ("CI Required") on the `main` branch of
-`jikig-ai/soleur`. Adopted via `terraform import` (see Phase 2 below).
+`jikig-ai/soleur`. Adopted via `terraform import` (idempotent, runs in CI on
+first apply — see Phase 1 below).
 
 Per AGENTS.md `hr-all-infrastructure-provisioning-servers`, every change to
 the required-status-check set must flow through this root. UI edits will
 produce drift on the next `terraform plan` -- reconcile by editing this
 config to match live state OR re-applying to restore the configured set.
+
+## Authorization model: apply-on-merge
+
+Apply runs **automatically in CI** when a PR touching `infra/github/*.tf`
+merges to `main` -- see `.github/workflows/apply-github-infra.yml`. The PR
+merge IS the human authorization (`hr-menu-option-ack-not-prod-write-auth`),
+mirroring the ADR-031 boundary for `apps/web-platform/infra/sentry/`.
+
+CODEOWNERS (`/.github/CODEOWNERS`) pins `/infra/github/` to `@deruelle` — a
+PR cannot merge without code-owner review, so a leaked `DOPPLER_TOKEN` alone
+is insufficient to push a ruleset change to production.
+
+Kill switch: include `[skip-github-apply]` on its own line in the merge
+commit message to skip the auto-apply for that merge. Destructive plans
+(any `delete` action) additionally require `[ack-destroy]` in the merge
+commit message, or the apply fails closed.
+
+Manual escape hatch: `gh workflow run apply-github-infra.yml -f reason='...'`
+for the first apply post-Phase-0 (when no `infra/github/*.tf` files have
+changed yet) or for re-runs after a transient failure.
 
 ## Phase 0 -- Doppler setup (one-time)
 
@@ -35,80 +60,82 @@ config to match live state OR re-applying to restore the configured set.
    # Expected: 14145388
    ```
 
-## Phase 1 -- Init
+## Phase 1 -- First apply (one-time, post-Phase-0)
+
+After Phase 0 lands the PAT in Doppler, kick the first apply via the manual
+escape hatch (no `infra/github/*.tf` files have changed yet, so the path-filter
+push trigger will not fire):
+
+```bash
+gh workflow run apply-github-infra.yml \
+  -f reason='first-apply-post-PAT-mint'
+gh run watch
+```
+
+The workflow performs:
+
+1. `terraform init -lockfile=readonly`.
+2. **Idempotent import**: if the resource is not in state, runs
+   `terraform import github_repository_ruleset.ci_required soleur:14145388`.
+   On subsequent applies, this step is a no-op.
+3. `terraform plan -out=tfplan` with destroy-guard (`[ack-destroy]` required
+   in commit message for any `delete` action).
+4. `terraform apply tfplan` (auto-approved — PR merge is the human
+   authorization).
+5. **Post-apply verify**: `gh api .../rulesets/14145388` count probe,
+   recorded in the workflow run summary.
+
+If you want to reproduce the local-terminal Phase 2 plan-diff probe before
+the first apply (sanity check that the diff is exactly the 9 additions),
+the canonical sequence is:
 
 ```bash
 cd infra/github/
-
-# R2 backend creds must be RAW (NOT tf-var-transformed -- the TF_VAR_aws_*
-# shape silently fails to authenticate the S3 backend). Canonical triplet per
-# knowledge-base/project/learnings/2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md.
 export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
 export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
-
 terraform init -input=false
-```
 
-## Phase 2 -- Import + plan + apply (one-time bootstrap)
-
-Capture the import oracle FIRST so the plan-diff probe in step 3 has a
-deterministic reference. Uses ambient `gh auth` (read-only API call —
-the new PAT was already verified in Phase 0 step 3 and is not required
-for the read-side oracle capture):
-
-```bash
-gh api repos/jikig-ai/soleur/rulesets/14145388 > /tmp/ruleset-live-pre-import.json
-```
-
-Import the existing ruleset. The `github_repository_ruleset` import address
-is `<repo>:<id>` (the owner comes from the provider block):
-
-```bash
+# Skip the `terraform import` line below if the CI workflow has already
+# applied at least once — the resource is already in R2 state and
+# re-importing returns `Error: Resource already managed by Terraform`.
+# Run `terraform state list | grep github_repository_ruleset` to check.
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform import github_repository_ruleset.ci_required soleur:14145388
-```
 
-Plan and verify the diff is exactly the 9 additions. The probe asserts
-all three contract dimensions (action shape, before-count, after-count)
-so a re-ordering or property drift surfaces here rather than at apply:
-
-```bash
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-  terraform plan -out=tfplan.binary
-
-terraform show -json tfplan.binary | jq '
-  .resource_changes[]
-  | select(.address == "github_repository_ruleset.ci_required")
-  | {
-      actions:      .change.actions,
-      before_count: (.change.before.rules[0].required_status_checks[0].required_check | length),
-      after_count:  (.change.after.rules[0].required_status_checks[0].required_check  | length)
-    }
-'
-# Expected: {"actions":["update"],"before_count":5,"after_count":14}
+  terraform plan
+# Expected (first apply): 9 required_check additions, no destroys.
+# Expected (post-apply, idle): no changes.
 ```
 
-If the diff includes anything beyond the 9 `required_check` additions
-(re-ordering, condition tweaks, bypass-actor changes), **STOP** and
-reconcile this config to match live state before applying. See ADR-032
-Risks R6 / R7 for the provider rough edges that can surface here.
+(This is read-only against R2 state once import runs — apply still belongs in CI.)
 
-Apply (operator-attested per `hr-menu-option-ack-not-prod-write-auth`):
+## Phase 2 -- Subsequent applies (auto-on-merge)
 
-```bash
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-  terraform apply tfplan.binary
-```
+Open a PR that edits `infra/github/*.tf` (e.g. adding a new required check
+to `ruleset-ci-required.tf`). On merge to `main`, the `apply-github-infra`
+workflow:
 
-## Phase 3 -- Verify post-apply
+- Re-runs init + plan in CI.
+- Aborts with `[ack-destroy]` guidance if the plan removes any required check
+  without explicit acknowledgement in the commit message.
+- Applies the change (PR merge is the human authorization per ADR-031).
+- Records the post-apply ruleset count in the workflow run summary.
+
+No terminal-side `terraform apply` is required for any normal flow.
+
+## Phase 3 -- Manual verification (optional / debug)
+
+The auto-apply workflow already runs a count probe and writes it to the run
+summary. If you want to manually re-verify the live state:
 
 ```bash
 gh api repos/jikig-ai/soleur/rulesets/14145388 \
   | jq '.rules[0].parameters.required_status_checks | length'
-# Expected: 14
+# Expected: matches the current ruleset-ci-required.tf set
 ```
 
-Spot-check the 9 new contexts are present:
+Spot-check the active contexts:
 
 ```bash
 gh api repos/jikig-ai/soleur/rulesets/14145388 \

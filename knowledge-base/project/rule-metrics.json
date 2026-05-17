@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-05-10T01:29:15Z",
+  "generated_at": "2026-05-17T01:46:08Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -13,7 +13,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Challenge reasoning instead of validating. No flat"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "cm-delegate-verbose-exploration-3-file",
@@ -26,7 +26,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Delegate verbose exploration (3+ file reads, resea"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "cm-when-proposing-to-clear-context-or",
@@ -39,7 +39,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When proposing to clear context or resume from a f"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "cq-agents-md-tier-gate",
@@ -52,7 +52,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When editing AGENTS.md, apply the placement gate ["
+      "rule_text_prefix": " → docs-only"
     },
     {
       "id": "cq-agents-md-why-single-line",
@@ -65,7 +65,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "AGENTS.md rules cap at ~600 bytes; `**Why:**` is o"
+      "rule_text_prefix": " → docs-only"
     },
     {
       "id": "cq-before-pushing-package-json-changes",
@@ -78,7 +78,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Before pushing `package.json` changes, verify deps"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "cq-eleventy-critical-css-screenshot-gate",
@@ -91,7 +91,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Selectors rendered above the fold on the Eleventy "
+      "rule_text_prefix": " → docs-only"
     },
     {
       "id": "cq-nextjs-route-files-http-only-exports",
@@ -104,7 +104,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "App Router route files (`apps/*/app/**/route.{ts,t"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "cq-pg-security-definer-search-path-pin-pg-temp",
@@ -117,7 +117,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Postgres `SECURITY DEFINER` functions MUST pin `SE"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "cq-ref-removal-sweep-cleanup-closures",
@@ -130,7 +130,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Before removing a `useRef` declaration, grep the r"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "cq-regex-unicode-separators-escape-only",
@@ -143,7 +143,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Regex character classes containing U+2028/U+2029 ("
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "cq-rule-ids-are-immutable",
@@ -156,7 +156,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Rule IDs on AGENTS.md rules are immutable [hook-en"
+      "rule_text_prefix": " → docs-only"
     },
     {
       "id": "cq-silent-fallback-must-mirror-to-sentry",
@@ -169,7 +169,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a code path catches an error (or detects a de"
+      "rule_text_prefix": " → rest"
+    },
+    {
+      "id": "cq-skill-description-budget-headroom",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → docs-only"
     },
     {
       "id": "cq-test-fixtures-synthesized-only",
@@ -182,7 +195,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Test fixtures and golden files (`__goldens__/**`, "
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "cq-union-widening-grep-three-patterns",
@@ -195,7 +208,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When widening a discriminated union, grep **three*"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "cq-write-failing-tests-before",
@@ -208,7 +221,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Write failing tests BEFORE implementation code whe"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "hr-all-infrastructure-provisioning-servers",
@@ -221,7 +234,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "All infra provisioning (servers, volumes, firewall"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-always-read-a-file-before-editing-it",
@@ -234,7 +247,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Always read a file before editing it. The Edit too"
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-autonomous-loop-skill-api-budget-disclosure",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-before-asserting-github-issue-status",
@@ -247,7 +273,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Before asserting GitHub issue status, verify via `"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-before-shipping-ship-phase-5-5-runs",
@@ -260,7 +286,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Before shipping, `/ship` Phase 5.5 runs conditiona"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-dev-prd-distinct-supabase-projects",
@@ -273,7 +299,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Doppler `dev` and `prd` configs MUST resolve to di"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-every-new-terraform-root-must-include-an",
@@ -286,7 +312,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Every new Terraform root must include an R2 remote"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-exhaust-all-automated-options-before",
@@ -299,7 +325,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Exhaust all automated options before suggesting ma"
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-gdpr-gate-on-regulated-data-surfaces",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-github-api-endpoints-with-enum",
@@ -312,7 +351,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "GitHub API endpoints with enum parameters require "
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-mcp-tools-playwright-etc-resolve-paths",
@@ -325,7 +364,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "MCP tools (Playwright, etc.) resolve paths from th"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-menu-option-ack-not-prod-write-auth",
@@ -338,7 +377,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "For destructive writes against shared prod (terraf"
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-multi-step-post-merge-bootstrap-script",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-never-git-add-a-in-user-repo-agents",
@@ -351,7 +403,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "In connected-repo agent code paths (`apps/web-plat"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-never-git-stash-in-worktrees",
@@ -364,7 +416,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never `git stash` in worktrees [hook-enforced: gua"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-never-label-any-step-as-manual-without",
@@ -377,7 +429,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never label any step as \"manual\" without first att"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-never-paste-secrets-via-bang-prefix",
@@ -390,7 +442,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never paste secrets via the Claude Code `! ` shell"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-never-run-commands-with-unbounded-output",
@@ -403,7 +455,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never run commands with unbounded output in subage"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-never-write-to-claude-code-memory-claude",
@@ -416,7 +468,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never write to Claude Code memory (`~/.claude/proj"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-new-skills-agents-or-user-facing",
@@ -429,7 +481,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "New skills, agents, or user-facing capabilities mu"
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-no-dashboard-eyeball-pull-data-yourself",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-ssh-diagnosis-verify-firewall",
@@ -442,7 +507,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a plan addresses an SSH/network-connectivity "
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-the-bash-tool-runs-in-a-non-interactive",
@@ -455,7 +520,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "The Bash tool runs in a non-interactive shell with"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-the-host-terminal-is-warp",
@@ -468,7 +533,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "The host terminal is Warp. Do not attempt automate"
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-type-widening-cross-consumer-grep",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-weigh-every-decision-against-target-user-impact",
@@ -481,7 +559,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Every plan/PR touching credentials, auth, data, pa"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-when-a-command-exits-non-zero-or-prints",
@@ -494,7 +572,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a command exits non-zero or prints a warning,"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-when-a-plan-specifies-relative-paths-e-g",
@@ -507,7 +585,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a plan specifies relative paths (e.g., `sourc"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-when-a-workflow-concludes-with-an",
@@ -520,7 +598,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a workflow concludes with an actionable next "
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-when-in-a-worktree-never-read-from-bare",
@@ -533,7 +611,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When in a worktree, never read from bare repo path"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "hr-when-triaging-a-batch-of-issues-never",
@@ -546,7 +624,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When triaging issues, never defer as \"not automata"
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-write-boundary-sentinel-sweep-all-write-sites",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
     },
     {
       "id": "pdr-do-not-route-on-trivial-messages-yes",
@@ -559,7 +650,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Do not route on trivial messages (\"yes\", \"continue"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "pdr-when-a-user-message-contains-a-clear",
@@ -572,7 +663,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a user message contains a clear domain signal"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "rf-after-merging-read-files-from-the-merged",
@@ -585,7 +676,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "After merging, read files from the merged branch ("
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "rf-before-shipping-verify-1-review-comments",
@@ -598,7 +689,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Before shipping, verify: (1) review comments resol"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "rf-before-spawning-review-agents-push-the",
@@ -611,7 +702,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Before spawning review agents, push the branch to "
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "rf-never-skip-qa-review-before-merging",
@@ -624,7 +715,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never skip QA/review before merging. Full pipeline"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "rf-review-finding-default-fix-inline",
@@ -637,7 +728,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Review findings default to fix-inline on the PR br"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "rf-when-a-reviewer-or-user-says-to-keep-a",
@@ -650,7 +741,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a reviewer or user says to keep a feature/pha"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-after-a-pr-merges-to-main-verify-all",
@@ -663,7 +754,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "After a PR merges to main, verify all release/depl"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-after-marking-a-pr-ready-run-gh-pr-merge",
@@ -676,7 +767,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "After marking a PR ready, run `gh pr merge <number"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-after-merging-a-pr-that-adds-or-modifies",
@@ -689,7 +780,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "After merging a PR that adds or modifies a GitHub "
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-at-session-start-after-cleanup-merged",
@@ -702,7 +793,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "At session start (after `cleanup-merged` fetches m"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-at-session-start-run-bash-plugins-soleur",
@@ -715,7 +806,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "At session start, run `bash ./plugins/soleur/skill"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-before-every-commit-run-compound-skill",
@@ -728,7 +819,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Before every commit, run compound (`skill: soleur:"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-every-feature-listed-in-a-roadmap-phase",
@@ -741,7 +832,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Every feature in a roadmap phase table MUST have a"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-every-session-error-must-produce-either",
@@ -754,7 +845,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Every session error MUST produce a rule, skill edi"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-never-bump-version-files-in-feature",
@@ -767,7 +858,33 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never bump version files in feature branches. Vers"
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "wg-plan-prescribed-skills-must-run-inline",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "wg-ship-push-before-merge",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-use-closes-n-in-pr-body-not-title-to",
@@ -780,7 +897,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Auto-close keywords (`close|fix|resolve`[sd]? + `#"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-when-a-test-runner-crashes-segfault-oom",
@@ -793,7 +910,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a test runner crashes (segfault, OOM, abort),"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-when-a-workflow-gap-causes-a-mistake-fix",
@@ -806,7 +923,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a workflow gap causes a mistake, fix the skil"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-when-an-audit-identifies-pre-existing",
@@ -819,7 +936,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When an audit identifies pre-existing issues, crea"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-when-closing-a-phase-milestone-update",
@@ -832,7 +949,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When closing a phase milestone, update the `## Cur"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-when-deferring-a-capability-create-a",
@@ -845,7 +962,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When deferring a capability, create a GitHub issue"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-when-fixing-a-workflow-gates-detection",
@@ -858,7 +975,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When fixing a workflow gate's detection logic, ret"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-when-moving-github-issues-between",
@@ -871,7 +988,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When moving issues between milestones, deferring f"
+      "rule_text_prefix": " → core"
     },
     {
       "id": "wg-when-tests-fail-and-are-confirmed-pre",
@@ -884,7 +1001,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When tests fail and are confirmed pre-existing (sa"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-zero-agents-until-user-confirms",
@@ -897,13 +1014,15 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Zero agents until user confirms direction. Present"
+      "rule_text_prefix": " → core"
     }
   ],
   "summary": {
-    "total_rules_tagged": 69,
-    "rules_unused_over_8w": 69,
+    "total_rules_tagged": 78,
+    "rules_unused_over_8w": 78,
     "rules_bypassed_over_baseline": 0,
-    "orphan_rule_ids": []
+    "orphan_rule_ids": [],
+    "drops_jq_fail_count": 0,
+    "drops_rotation_fail_count": 0
   }
 }
