@@ -4,14 +4,19 @@ date: 2026-05-17
 incident_pr: 3946
 incident_ref: 3861
 audience: operator
-status: drafts-awaiting-paste-and-submit
+status: submitted
+ticket_1_submitted: 2026-05-17T19:17Z
+ticket_2_submitted: 2026-05-17T19:19Z
+ticket_2_t_plus_14d_expiry: 2026-05-31T19:19Z
 ---
 
 ## Purpose
 
-Two separate Sentry support tickets to submit via `https://sentry.io/support/` per `knowledge-base/project/brainstorms/2026-05-16-sentry-residency-a2-branch-c-brainstorm.md` Decision #9. Submit each via a **new** form (not threaded) — the routing logic at Sentry differs for billing vs forensics, and threading them risks one decision dragging on the other.
+Two separate Sentry support tickets submitted via Sentry's Intercom support widget at `https://help.sentry.io/` per `knowledge-base/project/brainstorms/2026-05-16-sentry-residency-a2-branch-c-brainstorm.md` Decision #9. Submitted as **separate Intercom conversations** (not threaded) — the routing logic at Sentry differs for billing vs forensics, and threading them risks one decision dragging on the other.
 
-Operator action: paste each ticket body into the Sentry support form, submit, then capture the ticket ID (e.g., `#1234567`) in PR #3946 body under `## AC13 — Sentry support ticket IDs`. T+14d countdown for PIR Phase 8 Gate 3 anchors on Ticket 2 submission timestamp.
+Sentry's Intercom channel does NOT return a numeric ticket ID — the conversation ID lives server-side and async follow-up arrives via email at `jean.deruelle@jikigai.com`. The Intercom conversation thread itself IS the canonical ticket; this file records submission timestamp + AI Support Assistant response so the post-merge gate has a verifiable baseline.
+
+Both tickets driven via Playwright MCP per `hr-exhaust-all-automated-options-before` — operator hand-off limited to the OTP gate (one-time passcode sent to operator email, paste back into chat to verify identity, then routing proceeds).
 
 ---
 
@@ -105,9 +110,18 @@ jean.deruelle@jikigai.com
 
 ---
 
-## Submission checklist
+## Submission state (closed — 2026-05-17)
 
-- [ ] Ticket 1 (billing) submitted via `sentry.io/support/`. ID: `__________`. Submitted: `____-__-__T__:__Z`.
-- [ ] Ticket 2 (forensics) submitted via `sentry.io/support/`. ID: `__________`. Submitted: `____-__-__T__:__Z`.
-- [ ] Both ticket IDs + submission timestamps captured in PR #3946 body (AC13).
-- [ ] T+14d gate clock noted in operator calendar.
+- [x] Ticket 1 (billing) submitted 2026-05-17T19:17Z via Sentry Intercom. Conversation auto-titled "Billing refund request". Routed to Sentry Foundations team. OTP `862222` verified `jean.deruelle@jikigai.com`. AI initial response: standard policy non-refund reply (cited help articles 13964791, 13965074, 13964765). Follow-up requested human review citing IaC-error context + same-day paid plan purchase on `jikigai-eu`.
+- [x] Ticket 2 (forensics) submitted 2026-05-17T19:19Z via Sentry Intercom (separate conversation). Routed to Sentry Foundations team. AI initial response: substantive non-disclosure-policy statement — *"we can't confirm ownership of organization ID 4511123328466944 or disclose whether it belongs to another customer vs a Sentry-internal entity if you're not a member of that org"* (cited help articles 13964423, 13964441, docs.sentry.io/api/organizations/retrieve-an-organization/). Follow-up requested human-confirmed citable policy + escalation-path inquiry.
+- [x] Submission timestamps captured in PR #3946 body (AC13) + PIR Phase 8 section.
+- [x] T+14d gate clock: **expiry 2026-05-31T19:19Z** (anchored on Ticket 2 submission).
+
+## Human-response capture (post-async)
+
+When Sentry's Foundations team responds (via email to `jean.deruelle@jikigai.com`), update the PIR `## Phase 8 — Recovery Completeness` section in-place with:
+
+1. Response date (UTC timestamp).
+2. Verbatim response text (or representative excerpt).
+3. Selected Gate 3 branch (3a authoritative third-party / 3b "this org is yours" STOP / 3c non-disclosure residual / 3d T+14d timeout if no response by 2026-05-31T19:19Z).
+4. PA8 §5(2) update note (whether the residency-drift disclosure in `knowledge-base/legal/article-30-register.md` needs revision based on the resolution branch).

@@ -590,13 +590,22 @@ Implementation is complete. Before handing off, run the **Playwright-first audit
 
 #### Playwright-First Audit
 
-Scan any "next steps", "setup instructions", or "to use this" text you are about to output. For each step that involves a browser action (account creation, credential generation, settings configuration, form submission, OAuth flow, portal navigation):
+Scan any "next steps", "setup instructions", or "to use this" text you are about to output. For each step that involves a browser action (account creation, credential generation, settings configuration, form submission, vendor support tickets, OAuth flow, portal navigation):
 
-1. **Classify:** Is this step automatable via Playwright MCP, or is it genuinely manual (CAPTCHA, interactive OAuth consent)?
+1. **Classify:** Is this step automatable via Playwright MCP, or is it genuinely manual (CAPTCHA, interactive OAuth consent, hardware MFA token, payment-card entry)?
 2. **If automatable:** Do not list it as a manual step. Either execute it now via Playwright MCP, or note it as "automatable via Playwright — will execute next."
 3. **If genuinely manual:** Drive the flow via Playwright up to the manual gate (e.g., navigate to the OAuth consent screen), then hand off only that single interaction to the user.
 
-If you catch yourself writing phrases like "set up X in the browser", "go to the portal and...", or "manually configure..." — stop and attempt Playwright first. This audit is mandatory; skipping it is a deviation.
+If you catch yourself writing phrases like "set up X in the browser", "go to the portal and...", "manually configure...", "paste this ticket body into the support form", or "the operator pastes + submits" — stop and attempt Playwright first. This audit is mandatory; skipping it is a deviation.
+
+**Vendor support ticket submissions are Playwright-driveable** — they are NOT operator-handoff by default. Most vendor support surfaces today are Intercom / Zendesk / HelpScout chat widgets (`help.<vendor>.io`, `support.<vendor>.com`, `<vendor>.zendesk.com`) where the AI assistant routes to a human team. The full submission flow — opening the widget, accepting cookies, starting a conversation, sending the ticket body, requesting human escalation if the AI gives a stock policy answer — runs entirely under Playwright. The only manual gates are:
+
+- **Email-OTP verification** when the vendor sends a one-time passcode to the operator's inbox before routing to a human reviewer (legitimate authentication boundary).
+- **Payment-card entry** in Stripe / similar widgets (cross-origin iframe sandbox; even if Playwright could reach in, card entry is the explicit operator decision-and-ack point).
+- **CAPTCHA / "I am not a robot"** challenges (intentional bot-detection).
+- **Hardware MFA token tap** (operator-side device).
+
+Drive the flow up to one of these gates, hand off the single interaction (e.g., "check your inbox for the OTP and tell me the code"), then resume. Never list "operator pastes + submits" as a step — that's a Playwright-first-audit violation. Vendor support tickets typically do not return a numeric ticket ID; capture (a) the submission UTC timestamp, (b) the AI-classifier auto-title (often surfaced in the messages list), and (c) any human-team routing label as the audit baseline. The conversation thread on the vendor side IS the canonical ticket; async response arrives via email to the operator. **Why:** PR #3946 PR-γ §17 Sentry refund + forensics tickets — the original plan listed them as "NOT Playwright-driveable" (operator handoff to paste-and-submit); after operator pushback, both tickets were driven via Sentry's Intercom widget at `help.sentry.io` with only the email-OTP step handed off.
 
 #### Phase 4 Entry-Guard
 
