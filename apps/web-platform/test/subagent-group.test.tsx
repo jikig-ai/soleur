@@ -100,4 +100,65 @@ describe("SubagentGroup", () => {
     );
     expect(statuses).toEqual(["success", "timeout", "success"]);
   });
+
+  // #3949 — regression: when `subagents` grows past
+  // SUBAGENT_GROUP_AUTO_EXPAND_MAX across separate renders (the realistic
+  // WS-incremental scenario), the group must re-collapse to honor the
+  // policy default. The pre-fix `useState(initialExpanded)` snapshot would
+  // keep `expanded=true` from the first render at length=1.
+  test("re-collapses when children grow past the boundary across renders (no user toggle)", () => {
+    const { container, rerender } = render(
+      <SubagentGroup
+        parentSpawnId="p-grow"
+        parentLeaderId={"cto" as DomainLeaderId}
+        subagents={[child("s-1", "cmo" as DomainLeaderId)]}
+      />,
+    );
+    const group = container.querySelector('[data-parent-spawn-id="p-grow"]');
+    expect(group?.getAttribute("data-expanded")).toBe("true"); // N=1, policy says expand
+    rerender(
+      <SubagentGroup
+        parentSpawnId="p-grow"
+        parentLeaderId={"cto" as DomainLeaderId}
+        subagents={[
+          child("s-1", "cmo" as DomainLeaderId),
+          child("s-2", "cfo" as DomainLeaderId),
+          child("s-3", "cpo" as DomainLeaderId),
+        ]}
+      />,
+    );
+    expect(group?.getAttribute("data-expanded")).toBe("false"); // N=3, policy says collapse
+  });
+
+  // #3949 — user-toggle wins over the policy default after subagents grow.
+  test("user-toggle expansion persists when children grow further", () => {
+    const { container, rerender } = render(
+      <SubagentGroup
+        parentSpawnId="p-toggle"
+        parentLeaderId={"cto" as DomainLeaderId}
+        subagents={[
+          child("s-1", "cmo" as DomainLeaderId),
+          child("s-2", "cfo" as DomainLeaderId),
+          child("s-3", "cpo" as DomainLeaderId),
+        ]}
+      />,
+    );
+    const group = container.querySelector('[data-parent-spawn-id="p-toggle"]');
+    expect(group?.getAttribute("data-expanded")).toBe("false");
+    fireEvent.click(container.querySelector('[data-testid="subagent-group-toggle"]')!);
+    expect(group?.getAttribute("data-expanded")).toBe("true");
+    rerender(
+      <SubagentGroup
+        parentSpawnId="p-toggle"
+        parentLeaderId={"cto" as DomainLeaderId}
+        subagents={[
+          child("s-1", "cmo" as DomainLeaderId),
+          child("s-2", "cfo" as DomainLeaderId),
+          child("s-3", "cpo" as DomainLeaderId),
+          child("s-4", "cco" as DomainLeaderId),
+        ]}
+      />,
+    );
+    expect(group?.getAttribute("data-expanded")).toBe("true"); // user override holds
+  });
 });
