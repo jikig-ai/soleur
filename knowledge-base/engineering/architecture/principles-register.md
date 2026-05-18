@@ -19,6 +19,7 @@ Queryable index of architectural principles. Each principle links to its canonic
 | AP-011 | ADRs for architecture decisions | constitution.md (Architecture/Always) | skill | — |
 | AP-012 | New vendor checklist | constitution.md (Architecture/Always) | skill | NFR-026, NFR-027 |
 | AP-013 | Process-local state for runner sessions | ADR-027 | skill | NFR-019 |
+| AP-014 | Platform-loop / per-founder cohabitation boundary | ADR-033 | hook | NFR-014 |
 
 ## Enforcement Tiers
 
