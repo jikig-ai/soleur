@@ -141,6 +141,15 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "Per-founder JWT-mint rate-limit counter (security telemetry). " +
     "Rolling 60/hour bucket; no user-provided content. Per spec FR8 " +
     "not enumerated as Art. 15 personal data.",
+  runtime_mint_intent:
+    "Runtime-JWT mint marker (Phase-4 hook discriminator, ADR-033 §0.7). " +
+    "≤10-second lifetime row written by tenant.ts before generateLink " +
+    "and atomically DELETEd by the Custom Access Token Hook. " +
+    "Ephemeral by design — no row survives past the mint flow. ON DELETE " +
+    "CASCADE from auth.users handles any edge-case orphan on user delete. " +
+    "No user-provided content; user_id is the only column and is already " +
+    "in the DSAR's auth.users export. Per spec FR8 not enumerated as " +
+    "Art. 15 personal data.",
   tenant_deploy_audit:
     "Multi-tenant deploy substrate orchestration-plane meta-audit log " +
     "(migration 043, ADR-030, plan #3723). v1 single-tenant scope " +

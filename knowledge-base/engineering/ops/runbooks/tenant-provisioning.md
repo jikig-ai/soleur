@@ -427,9 +427,115 @@ to NULL-out the founder_id before any auth.users deletion (per
 
 ---
 
+### Step 10 — Supabase runtime-JWT substrate (#3363 Resolution C)
+
+Required once per Soleur deployment (N=1 today; per-tenant once N>1 if
+each tenant gets its own Supabase project). Skipped if the Supabase
+project already shows ES256 in JWKS and the runtime hook registered.
+
+**10.a — Verify (or enable) JWT Signing Keys on the Supabase project.**
+
+```bash
+# Probe the JWKS endpoint. Expect alg=ES256 (or RS256) on a kid.
+curl -sS "${SUPABASE_URL}/auth/v1/.well-known/jwks.json" \
+  -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+  | jq '.keys | length as $n | {count: $n, algs: [.[].alg], kids: [.[].kid]}'
+```
+
+If `count: 0` / no asymmetric kid: enable in Supabase Dashboard →
+API → "JWT Signing Keys" → Enable. Single-click, no downtime per the
+Supabase rotation guarantee. There is no Mgmt API endpoint for this
+toggle as of 2026-05-18 — this is the one operator-acknowledged
+Dashboard click in the substrate. Re-run the probe to confirm.
+
+**10.b — Apply migrations 047 + 048 + 049 + 050** via the standard
+`apps/web-platform/scripts/apply-migrations.mjs` flow (or Doppler
+`DATABASE_URL_POOLER` with port `:5432` for session-mode multi-statement
+DDL — see `2026-05-18-vendor-token-mint-…-content-carrier-patterns.md`).
+Migrations 049 and 050 are the Phase-4 amendment from ADR-033 §0.7 —
+they add the `runtime_mint_intent` marker table and strengthen the hook
+gate to consume an intent row inside an atomic CTE. Without 049+050 the
+hook would silently rewrite dashboard OTP login JWTs with
+`aud=soleur-runtime` and `exp=600s` (10-min auto-logout for end users).
+Verify post-apply:
+
+```bash
+psql "${DATABASE_URL_POOLER/:6543/:5432}" -c "
+  SELECT proname FROM pg_proc
+  WHERE proname IN ('runtime_jwt_mint_hook','precheck_jwt_mint')
+    AND pronamespace = 'public'::regnamespace;
+  SELECT to_regclass('public.runtime_mint_intent') IS NOT NULL AS intent_table_exists;
+  SELECT pg_get_functiondef(p.oid) ~ 'v_intent_consumed' AS hook_has_intent_gate
+  FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid
+  WHERE p.proname = 'runtime_jwt_mint_hook' AND n.nspname = 'public';
+"
+```
+
+Expect all three:
+- two procs (`runtime_jwt_mint_hook` + `precheck_jwt_mint`)
+- `intent_table_exists = t`
+- `hook_has_intent_gate = t`
+
+**10.c — Register the Custom Access Token Hook via the Mgmt API.**
+Operator-acknowledged write (per `hr-menu-option-ack-not-prod-write-auth`).
+Mgmt API token MUST be plan-phase-only — do NOT bake into Node runtime.
+
+```bash
+PROJECT_REF=$(echo "${SUPABASE_URL}" | sed -E 's|https://([^.]+)\.supabase\.co.*|\1|')
+curl -sS -X PATCH "https://api.supabase.com/v1/projects/${PROJECT_REF}/config/auth" \
+  -H "Authorization: Bearer ${SUPABASE_MGMT_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"hook_custom_access_token_enabled": true, "hook_custom_access_token_uri": "pg-functions://postgres/public/runtime_jwt_mint_hook"}'
+
+# Verify (GET on same endpoint)
+curl -sS "https://api.supabase.com/v1/projects/${PROJECT_REF}/config/auth" \
+  -H "Authorization: Bearer ${SUPABASE_MGMT_API_TOKEN}" \
+  | jq '{hook_custom_access_token_enabled, hook_custom_access_token_uri}'
+```
+
+Expected response: `enabled: true`, `uri: "pg-functions://postgres/public/runtime_jwt_mint_hook"`.
+
+**10.d — Auth-config required state.** The Mgmt API exposes these in
+`config/auth`; the Terraform provider (as of v1.9.1) does NOT manage
+them, so they're documented here for drift detection rather than
+codified. Tracked in the rate-limit-empirical-probe follow-up issue.
+
+- `JWT_EXP = 3600` (Supabase default; the hook overrides exp in the
+  JWT to honor `mintFounderJwt`'s `ttlSec` — see migration 047)
+- `EXTERNAL_EMAIL_ENABLED = true` (required for `generateLink` to
+  produce a hashed_token; no email is sent because tenant.ts reads
+  `hashed_token` directly server-side)
+- `RATE_LIMIT_TOKEN_REFRESH` — Supabase default 10/IP/hour. Not
+  Terraform-managed. If founder concurrency at scale trips it, request
+  a per-project bump via Supabase support
+  (`hr-menu-option-ack-not-prod-write-auth` applies).
+- `RATE_LIMIT_EMAIL_SENT` — Supabase default 10/hour. Bypassed by our
+  `generateLink` path (no email sent).
+- `RATE_LIMIT_VERIFY` — undocumented in public docs; precheck_jwt_mint's
+  60/hour/founder is the durable canary.
+
+**10.e — Smoke-test the substrate** (one synthesized fixture):
+
+```bash
+# Pick any auth.users row (synthesized fixtures only — cq-test-fixtures-synthesized-only).
+# Run one generateLink+verifyOtp cycle; assert the JWT payload has
+# {aud: "soleur-runtime", jti: <uuid>, exp-iat: 600}.
+# See ADR-033 §0.5 for the reference probe script.
+```
+
+**Removed step (#3363 Resolution C cleanup):** prior versions of this
+runbook (pre-#3363) instructed pasting `SUPABASE_JWT_SECRET` from the
+Dashboard → Settings → API → "JWT Secret" panel into Doppler. **That
+step is now retired.** Node no longer holds a signing key; the Hook
+(10.c) owns the runtime mint. If the substrate is rolled back, restore
+`SUPABASE_JWT_SECRET` in Doppler from the password-manager-archived
+copy per the plan's Rollback Runbook.
+
+---
+
 ## Post-provisioning
 
-Once Steps 0–9 complete, the tenant's stack is operational. Set the
+Once Steps 0–10 complete, the tenant's stack is operational. Set the
 tenant's row in `knowledge-base/legal/tenant-dpa-register.md` to status
 `provisioned`. Schedule the first quarterly token-rotation review per
 the offboarding runbook's rotation cadence.
