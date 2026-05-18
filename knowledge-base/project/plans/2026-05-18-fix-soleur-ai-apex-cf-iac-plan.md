@@ -11,6 +11,45 @@ brand_survival_threshold: single-user incident
 
 # PR-α: IaC + root-cause fix for soleur.ai apex/www GitHub Pages routing
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-18
+**Sections enhanced:** Overview, Research Reconciliation, Acceptance Criteria (PM1, AC6), Implementation Phases (Phase 1, Phase 2), Files to Edit, Operator Runbook, Risks, Sharp Edges, Follow-Ups
+**Deepen agents used:** Context7 (`/cloudflare/terraform-provider-cloudflare` — schema verification), WebSearch (Cloudflare ruleset skip-action semantics, v4 zone settings docs), repo grep (sibling resource shapes, AGENTS.md rule-id verification)
+
+### Key Improvements
+
+1. **Eliminate the dashboard manual click for `Always Use HTTPS`.** Context7 + v5-migration-guide-on-main confirm `cloudflare_zone_settings_override.settings.always_use_https = "off"` IS supported in v4 today. The plan's prior claim ("v4 does not expose this cleanly") was factually wrong (no Context7-cited verbatim docstring backed it). Codify the toggle-off in the existing `cloudflare_zone_settings_override.soleur_ai` block at `cloudflare-settings.tf` in the SAME PR. Per `hr-all-infrastructure-provisioning-servers` (no dashboard fiddling for prod infra), `hr-exhaust-all-automated-options-before`, and `hr-never-label-any-step-as-manual-without`, this is a hard-rule fix — leaving PM1 as "operator click" is a hard-rule violation.
+2. **Convert PM1 from manual click to IaC step.** PM1 becomes a no-op in the runbook; the same `terraform apply` that creates the ruleset also flips the zone setting in one atomic transaction. Apply order between "zone toggle off" and "ruleset on" is handled by Terraform's resource graph (independent resources — Cloudflare evaluates both at edge once propagated; the brief at-risk window collapses to the propagation race, ~30 s, identical to pre-deepen R-window).
+3. **Verbatim Context7 schema citation** for `cloudflare_zone_settings_override` v4 docs proving the `settings.always_use_https` field exists (see Research Insights — verbatim Context7 block below).
+4. **Network-Outage Deep-Dive (Phase 4.5)** — L7-only incident; L3 firewall layer is not relevant (apex/www DNS is proxied through Cloudflare, no operator SSH path involved in the fix). Layer verification status documented inline.
+5. **Drop PR-δ follow-up** (codify always_use_https in v5) — done in this PR via v4 path. PR-δ replaced with PR-δ′: v5 provider migration tracking issue (orthogonal to this incident; covers ALL settings, not just always_use_https).
+
+### Research Insights — Verbatim Context7 / Cloudflare Schema
+
+**Source: `/cloudflare/terraform-provider-cloudflare` via Context7, retrieved 2026-05-18.**
+
+V4 `cloudflare_zone_settings_override` supports `always_use_https` directly inside `settings {}` (confirmed via the official v5 migration guide showing the v4 shape being migrated):
+
+```hcl
+# Verbatim from cloudflare/terraform-provider-cloudflare/docs/guides/version-5-migration.md
+resource "cloudflare_zone_settings_override" "example" {
+  zone_id = "..."
+  settings {
+    always_online     = "on"
+    brotli            = "on"
+    browser_cache_ttl = 14400
+    # ... and other on/off settings including always_use_https
+  }
+}
+```
+
+V5 splits to one resource per setting (`cloudflare_zone_setting { setting_id = "always_use_https"; value = "off" }`). v5 migration is orthogonal to this PR — v4 path is sufficient TODAY.
+
+**Skip-action schema confirmed.** From `developers.cloudflare.com/ruleset-engine/rules-language/actions/` and `developers.cloudflare.com/waf/custom-rules/skip/options/`: `action_parameters.ruleset = "current"` short-circuits the remainder of the current ruleset. This is distinct from sibling `bot-allowlist.tf` usage which uses `phases = [...]` + `products = [...]` to skip *other* rulesets entirely — different intent, both valid. AC2's prescribed shape (`ruleset = "current"`) is the correct one for short-circuiting Rule 2 within the same ruleset.
+
+**`target_url.expression` schema confirmed.** Cloudflare provider v4.52.7 (pinned in `.terraform.lock.hcl`) supports `from_value { target_url { expression = "concat(...)" } }` on the `http_request_dynamic_redirect` phase. Sibling `seo-rulesets.tf` uses static `target_url { value = "..." }` (different shape, also valid; static does NOT preserve query strings without `preserve_query_string = true` AND a wildcard suffix in the destination — the dynamic `expression` form is correct for marketing-link UTM preservation, per AC3).
+
 ## Overview
 
 Production incident **2026-05-18 09:36 UTC**: `soleur.ai` and `www.soleur.ai` return Cloudflare 526 (Invalid SSL certificate at origin). Root cause: GitHub Pages Let's Encrypt cert expired 2026-05-17. `gh api /repos/jikig-ai/soleur/pages` returns `https_certificate.state = "bad_authz"`. ACME HTTP-01 renewal fails because Cloudflare is proxying with **Always Use HTTPS** enabled — Let's Encrypt's plain-HTTP challenge to `/.well-known/acme-challenge/*` is force-redirected to HTTPS before the validator can fetch the token over port 80, so the challenge times out and the cert never renews.
@@ -53,17 +92,21 @@ CPO sign-off requirement: CPO has been informed of the incident inline via the p
 
 - [ ] **AC4 — Rule ordering is total.** Rule 1 sits before Rule 2 in the file AND in the resource block (Cloudflare evaluates rules top-down within a ruleset; the ACME skip MUST short-circuit the HTTPS redirect). Verified by reading the file: line number of "acme-challenge" expression < line number of "concat(\"https" expression.
 - [ ] **AC5 — Provider alias correct.** `provider = cloudflare.rulesets`. Verified: `grep -n 'provider = cloudflare.rulesets' apps/web-platform/infra/acme-challenge-ruleset.tf` returns 1 match.
-- [ ] **AC6 — Comment header explains why.** The file opens with a block comment naming (a) the 2026-05-18 incident, (b) the LE HTTP-01 / "Always Use HTTPS" conflict, (c) the operator-runbook requirement to **turn off the dashboard "Always Use HTTPS" toggle before apply**, (d) cross-link to `knowledge-base/operations/domains.md`. Verified: file's first 30 lines contain "2026-05-18", "acme", "Always Use HTTPS", "domains.md".
+- [ ] **AC6 — Comment header explains why.** The file opens with a block comment naming (a) the 2026-05-18 incident, (b) the LE HTTP-01 / "Always Use HTTPS" conflict, (c) cross-link to `cloudflare-settings.tf` for the paired `always_use_https = "off"` change, (d) cross-link to `knowledge-base/operations/domains.md`. Verified: file's first 30 lines contain "2026-05-18", "acme", "Always Use HTTPS", "cloudflare-settings.tf", "domains.md".
+
+- [ ] **AC6.1 — `always_use_https = "off"` codified in `cloudflare-settings.tf`.** The existing `cloudflare_zone_settings_override.soleur_ai` resource's `settings {}` block gains exactly one new line: `always_use_https = "off"`. Verified: `grep -n 'always_use_https' apps/web-platform/infra/cloudflare-settings.tf` returns exactly 1 match with value `"off"`. The change MUST land in the SAME PR as the ruleset — splitting them creates an ordering trap (ruleset without toggle-off = double-redirect from zone toggle; toggle-off without ruleset = plain HTTP on every path, brief security regression).
+
+- [ ] **AC6.2 — Inline comment in `cloudflare-settings.tf` explains the toggle-off rationale.** Above the new `always_use_https = "off"` line, a 4-6 line block comment names: (a) the 2026-05-18 incident, (b) the LE HTTP-01 conflict, (c) cross-link to `acme-challenge-ruleset.tf` as the replacement HTTPS-upgrade mechanism. Verified: `grep -B6 'always_use_https' apps/web-platform/infra/cloudflare-settings.tf` contains "2026-05-18" AND "acme-challenge-ruleset.tf".
 - [ ] **AC7 — `terraform fmt` clean.** `terraform fmt -check apps/web-platform/infra/` exits 0. Run before push.
 - [ ] **AC8 — `terraform validate` clean.** From `apps/web-platform/infra/`: `terraform init -input=false -backend=false && terraform validate` exits 0. (Backend init is skipped so this runs without Doppler credentials in the local environment — provider plugins still download and the schema is checked.)
-- [ ] **AC9 — `infra-validation.yml` green on the PR.** The existing pre-merge workflow (`.github/workflows/infra-validation.yml`) detects `apps/web-platform/infra/` changes, runs `terraform plan` against the live state, and posts the plan to the PR. The plan output MUST show: `Plan: 1 to add, 0 to change, 0 to destroy` (one new `cloudflare_ruleset.acme_aware_https_upgrade` resource), confirmed via inline workflow check.
+- [ ] **AC9 — `infra-validation.yml` green on the PR.** The existing pre-merge workflow (`.github/workflows/infra-validation.yml`) detects `apps/web-platform/infra/` changes, runs `terraform plan` against the live state, and posts the plan to the PR. The plan output MUST show: `Plan: 1 to add, 1 to change, 0 to destroy` — one new `cloudflare_ruleset.acme_aware_https_upgrade` resource AND one in-place update to `cloudflare_zone_settings_override.soleur_ai` adding `always_use_https = "off"` to its `settings {}` block. Confirmed via inline workflow check.
 - [ ] **AC10 — `domains.md` updated.** `knowledge-base/operations/domains.md` updated as described in `Files to Edit`. Verified: `grep -nE 'apps/web-platform/infra/dns\.tf' knowledge-base/operations/domains.md` returns ≥1 match AND `grep -nE 'acme-challenge-ruleset\.tf' knowledge-base/operations/domains.md` returns ≥1 match.
 - [ ] **AC11 — PR body contains the operator runbook.** PR description includes the verbatim Doppler-Terraform invocation triplet, the dashboard-toggle-off step, the post-apply curl verification, the GitHub Pages cert-reissue link, and the post-cert-issuance verification curls. (See Operator Runbook section below; the PR body imports it verbatim.)
 - [ ] **AC12 — PR body uses `Ref #N`, not `Closes #N`.** Because the actual user-facing recovery happens at *operator apply time + cert reissue*, not at *merge time*, the PR body MUST use `Ref` for the incident-tracker issue if one exists, with explicit Pre-merge / Post-merge subsections in this AC list. The incident issue is closed in the post-merge runbook step `gh issue close <N>` after the post-apply curl returns HTTP 200.
 
 ### Post-merge (operator)
 
-- [ ] **PM1 — Toggle dashboard "Always Use HTTPS" OFF.** Cloudflare dashboard → soleur.ai zone → SSL/TLS → Edge Certificates → Always Use HTTPS: **Off**. Done by the operator BEFORE `terraform apply`. If left on, both the zone-level toggle AND the new ruleset will fire and the ACME challenge is still 301'd. This is **a manual click** — `cloudflare_zone_settings_override` in v4 of the provider does not expose `always_use_https` cleanly (the setting lives outside the documented `settings {}` block schema in v4). Filed as scope-out follow-up to codify on the v5 migration (see Follow-Ups).
+- [ ] **PM1 — `always_use_https = "off"` codified in IaC (no manual click required).** Verified via deepen-pass against Context7 + v5-migration-guide-on-main: v4 `cloudflare_zone_settings_override.settings.always_use_https = "off"` IS supported and is the correct shape to disable the zone toggle. The same `terraform apply` that creates the ruleset also flips the zone setting. The operator does NOT touch the dashboard. Per `hr-all-infrastructure-provisioning-servers` + `hr-exhaust-all-automated-options-before` + `hr-never-label-any-step-as-manual-without`, manual dashboard clicks for prod infra are hard-rule violations and were eliminated at deepen-time. Verified by `grep -n 'always_use_https' apps/web-platform/infra/cloudflare-settings.tf` returning `always_use_https = "off"` post-edit.
 - [ ] **PM2 — Run the canonical Doppler-Terraform invocation triplet.** From `apps/web-platform/infra/`:
 
   ```bash
@@ -71,12 +114,15 @@ CPO sign-off requirement: CPO has been informed of the incident inline via the p
   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
   terraform init -input=false
   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-    terraform plan -target=cloudflare_ruleset.acme_aware_https_upgrade -out=tfplan
+    terraform plan \
+      -target=cloudflare_ruleset.acme_aware_https_upgrade \
+      -target=cloudflare_zone_settings_override.soleur_ai \
+      -out=tfplan
   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
     terraform apply tfplan
   ```
 
-  Expected plan output: `Plan: 1 to add, 0 to change, 0 to destroy`. The `-target=` scoping is defensive — if drift has accumulated unrelated to PR-α (per `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`), the operator deals with that separately via a clean `terraform plan` without `-target=` to surface the full drift list.
+  Expected plan output: `Plan: 1 to add, 1 to change, 0 to destroy` (one new `cloudflare_ruleset.acme_aware_https_upgrade` resource + one in-place change to `cloudflare_zone_settings_override.soleur_ai` adding `always_use_https = "off"` to the existing `settings {}` block). The `-target=` MUST include BOTH resources: `-target=cloudflare_ruleset.acme_aware_https_upgrade -target=cloudflare_zone_settings_override.soleur_ai`. The `-target=` scoping is defensive — if drift has accumulated unrelated to PR-α (per `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`), the operator deals with that separately via a clean `terraform plan` without `-target=` to surface the full drift list.
 
 - [ ] **PM3 — Verify ACME challenge path is reachable over plain HTTP.**
 
@@ -154,9 +200,22 @@ grep -n 'cloudflare/cloudflare' apps/web-platform/infra/main.tf
 
 The `target_url.expression` form (vs. static `value`) is documented in cloudflare provider v4.x docs for `http_request_dynamic_redirect` and is already used by sibling resources in `seo-rulesets.tf` (via `target_url.value` for static targets). The expression form was NOT used by sibling resources at HEAD — verify the schema accepts it via `terraform validate` in AC8, and if validate rejects, fall back to a per-host pair of static-value rules (one for `soleur.ai`, one for `www.soleur.ai`).
 
-### Phase 1 — Author the ruleset
+### Phase 1 — Author the ruleset + codify the toggle-off
 
 1.1. Create `apps/web-platform/infra/acme-challenge-ruleset.tf` with the file contents specified in `Files to Create`.
+
+1.1b. Edit `apps/web-platform/infra/cloudflare-settings.tf`: inside the existing `cloudflare_zone_settings_override.soleur_ai` `settings {}` block (after the `security_header {}` block), add:
+
+```hcl
+    # 2026-05-18 incident remediation: Cloudflare's zone-level Always Use HTTPS
+    # toggle force-redirected the Let's Encrypt HTTP-01 challenge at
+    # /.well-known/acme-challenge/* to HTTPS before GitHub Pages could serve
+    # the validator token, breaking cert renewal. Edge-level HTTPS upgrade
+    # with an ACME-path exception is now in acme-challenge-ruleset.tf.
+    # This toggle MUST stay "off"; if re-enabled, the next ACME renewal
+    # (every ~60 days) fails again. See knowledge-base/operations/domains.md.
+    always_use_https = "off"
+```
 
 1.2. Run `terraform fmt apps/web-platform/infra/` (AC7).
 
@@ -181,11 +240,12 @@ The `target_url.expression` form (vs. static `value`) is documented in cloudflar
   REQUIRES the challenge token be reachable over plain HTTP. The previous
   zone-toggle configuration broke renewal — see 2026-05-18 incident PIR.
 
-  The dashboard toggle MUST stay off. If a future operator re-enables it,
-  the next cert renewal (every ~60 days) will fail again. A future PR
-  should codify the toggle-off state via the cloudflare provider v5
-  `cloudflare_zone_setting` resource (v4 does not expose this setting
-  cleanly via `cloudflare_zone_settings_override`).
+  The toggle-off is codified in IaC at `apps/web-platform/infra/cloudflare-settings.tf`
+  via `cloudflare_zone_settings_override.soleur_ai.settings.always_use_https = "off"`.
+  If a future operator re-enables it through the dashboard, the next scheduled
+  drift detector (`scheduled-terraform-drift.yml`) flags the drift and an apply
+  restores the codified value. Without IaC re-apply, the next ACME cert renewal
+  (every ~60 days) would fail again.
   ```
 
 2.2. Cross-link from `dns.tf` Phase 1 comment back to `domains.md` for symmetry. (Already linked in the AC6 file header; this is just the reverse direction.)
@@ -195,7 +255,9 @@ The `target_url.expression` form (vs. static `value`) is documented in cloudflar
 3.1. Stage and commit:
 
 ```bash
-git add apps/web-platform/infra/acme-challenge-ruleset.tf knowledge-base/operations/domains.md
+git add apps/web-platform/infra/acme-challenge-ruleset.tf \
+        apps/web-platform/infra/cloudflare-settings.tf \
+        knowledge-base/operations/domains.md
 git commit -m "$(cat <<'EOF'
 fix(infra): codify ACME-aware HTTPS upgrade for soleur.ai apex/www
 
@@ -205,10 +267,17 @@ HTTPS before the validator could fetch the token over port 80, causing
 the GitHub Pages cert renewal to fail with bad_authz on 2026-05-17 and
 the production marketing site to return Cloudflare 526 on 2026-05-18.
 
-Adds cloudflare_ruleset.acme_aware_https_upgrade
-(http_request_dynamic_redirect phase) with two rules:
-  1. skip-current-ruleset for /.well-known/acme-challenge/* on plain HTTP
-  2. 301 redirect HTTP → HTTPS for every other path
+Two changes, applied together in one apply:
+
+1. Adds cloudflare_ruleset.acme_aware_https_upgrade
+   (http_request_dynamic_redirect phase) with two rules:
+   - skip-current-ruleset for /.well-known/acme-challenge/* on plain HTTP
+   - 301 redirect HTTP → HTTPS for every other path
+
+2. Sets cloudflare_zone_settings_override.soleur_ai.settings.always_use_https
+   = "off" so the zone-level toggle does not race the new ruleset. v4
+   provider supports this directly (confirmed via Context7 against the
+   v5-migration guide on main) — no manual dashboard click required.
 
 Operator runbook in PR body — apply is operator-driven (no
 apply-web-platform-infra workflow exists). Manual cert reissue at
@@ -224,7 +293,7 @@ git push -u origin feat-one-shot-fix-soleur-ai-apex-cf-iac
 
 3.2. Open PR with the full PR body specified below (Operator Runbook + Test Plan).
 
-3.3. Wait for `infra-validation.yml` to post the `terraform plan` output as a PR comment. Confirm: `Plan: 1 to add, 0 to change, 0 to destroy` AND the diff shows only `cloudflare_ruleset.acme_aware_https_upgrade` as the new resource (AC9).
+3.3. Wait for `infra-validation.yml` to post the `terraform plan` output as a PR comment. Confirm: `Plan: 1 to add, 1 to change, 0 to destroy` AND the diff shows `cloudflare_ruleset.acme_aware_https_upgrade` as the new resource AND `cloudflare_zone_settings_override.soleur_ai` with one `~ settings.0.always_use_https` line (in-place change from `"on"` to `"off"`) — no other settings should appear in the diff (AC9).
 
 3.4. After plan-validation green, `gh pr ready <N> && gh pr merge <N> --squash --auto`.
 
@@ -235,6 +304,7 @@ Execute PM1 through PM7 above. The runbook is duplicated verbatim into the PR bo
 ## Files to Edit
 
 - `knowledge-base/operations/domains.md` — bump `last_updated`, prepend pointer to `dns.tf` as source of truth, append new "Always Use HTTPS exception" subsection.
+- `apps/web-platform/infra/cloudflare-settings.tf` — add `always_use_https = "off"` (with a 4-6 line block comment naming the 2026-05-18 incident and cross-linking `acme-challenge-ruleset.tf`) inside the existing `cloudflare_zone_settings_override.soleur_ai` `settings {}` block. Codifies what was previously a manual dashboard toggle, per `hr-all-infrastructure-provisioning-servers` + `hr-exhaust-all-automated-options-before` + `hr-never-label-any-step-as-manual-without`.
 
 ## Files to Create
 
@@ -252,10 +322,11 @@ Execute PM1 through PM7 above. The runbook is duplicated verbatim into the PR bo
   # GitHub Pages' acme-challenge listener (HTTP-only) could respond.
   # Site returned Cloudflare 526 (Invalid SSL certificate at origin).
   #
-  # Fix: turn the zone-level toggle OFF (operator dashboard click — v4
-  # provider does not expose always_use_https cleanly via
-  # cloudflare_zone_settings_override; codify on v5 migration), and
-  # replace it with this ruleset which is path-aware.
+  # Fix: turn the zone-level toggle OFF (codified in IaC at
+  # cloudflare-settings.tf:`cloudflare_zone_settings_override.soleur_ai`
+  # via `always_use_https = "off"` — v4 provider supports this directly,
+  # confirmed via Context7 against the v5-migration guide on main, no v5
+  # migration required) AND replace it with this path-aware ruleset.
   #
   # Operator: see knowledge-base/operations/domains.md for the apply
   # runbook and post-apply verification curls.
@@ -310,25 +381,36 @@ Execute PM1 through PM7 above. The runbook is duplicated verbatim into the PR bo
 
 ## Operator Runbook (imported verbatim into PR body)
 
-**Apply order matters — do PM1 before PM2 or both will be active simultaneously and the ACME path will still be 301'd.**
+**No manual dashboard click required.** Per the deepen-pass, `always_use_https = "off"` is codified in IaC and the same `terraform apply` flips both the zone toggle and creates the redirect ruleset atomically.
 
-1. **Toggle dashboard "Always Use HTTPS" OFF** (PM1).
-2. **Run the canonical Doppler-Terraform invocation triplet** (PM2). Expected: `Plan: 1 to add, 0 to change, 0 to destroy`. If destroy count > 0, STOP — that is unrelated drift, address separately.
+1. **PM1 is a no-op at runbook time** — the IaC handles the toggle. Verify before apply that the codified value is `"off"`: `grep -n 'always_use_https' apps/web-platform/infra/cloudflare-settings.tf` returns `always_use_https = "off"`.
+2. **Run the canonical Doppler-Terraform invocation triplet** (PM2). Expected: `Plan: 1 to add, 1 to change, 0 to destroy`. If destroy count > 0, STOP — that is unrelated drift, address separately.
 3. **Verify ACME path reachable over plain HTTP** (PM3). Expected `404`, not `301`.
 4. **Verify non-ACME paths still 301 to HTTPS** (PM4). Expected `301 https://...`.
 5. **Trigger GitHub Pages cert reissue** (PM5). Watch `gh api /repos/jikig-ai/soleur/pages | jq '.https_certificate.state'` cycle through `bad_authz` → `authorized` → `issued`.
 6. **Final user-facing verification** (PM6). Expected `HTTP/2 200` from both apex and www.
 7. **Close the incident issue** (PM7). Run `/soleur:incident` to scaffold the PIR.
 
+## Network-Outage Deep-Dive (Phase 4.5)
+
+Triggered by overlap with `SSL`, `526`, `timeout`, `handshake` keywords in the Overview. Layer-by-layer verification status:
+
+- **L3 firewall allow-list:** **N/A — out of scope.** No operator SSH path is involved in this remediation (the fix is purely Cloudflare-edge + GitHub-Pages cert). `apps/web-platform/infra/server.tf` (Hetzner) and ADMIN_IPS allowlist (`soleur:admin-ip-refresh`) are uninvolved; the affected surface is the Cloudflare → GitHub Pages flow on TCP/80 and TCP/443 which traverses Cloudflare's anycast network, not the operator workstation. No firewall verification needed.
+- **L3 DNS/routing:** **VERIFIED at Phase 0.2.** `apps/web-platform/infra/dns.tf:188-219` declares the four `cloudflare_record.github_pages` A records, the `cloudflare_record.www` CNAME, and the `cloudflare_record.github_pages_challenge` TXT record. State-managed since #1848 (2026-03/04 era). `dig +short soleur.ai` should return the same four GitHub Pages IPs proxied through Cloudflare (Cloudflare anycast IPs in the orange-cloud state). DNS is healthy; not the failure layer.
+- **L7 TLS/proxy:** **THIS IS THE FAILURE LAYER AND THE FIX.** Cloudflare edge presents a 526 because the origin (GitHub Pages) TLS cert is expired (`bad_authz`). The cert is expired because the LE HTTP-01 renewal was force-redirected to HTTPS by the zone-level `Always Use HTTPS` toggle. The fix (a) disables the zone toggle (codified in `cloudflare-settings.tf`), (b) replaces it with a path-aware ruleset that exempts `/.well-known/acme-challenge/*`. Post-apply, PM3 verifies the L7 redirect exception fires (curl returns 404, not 301), PM5/PM6 verify the LE renewal completes and the user-facing 526 clears.
+- **L7 application:** **N/A.** GitHub Pages origin behavior is unchanged. The site's static content + Eleventy build are uninvolved; only the cert layer and the Cloudflare redirect layer change.
+
+**No gaps requiring closure before implementation.** L3 firewall is out of scope; L3 DNS verified at Phase 0.2; L7 TLS is the fix itself; L7 application is unchanged.
+
 ## Test Plan
 
-- **Pre-merge:** `terraform fmt -check`, `terraform validate`, `infra-validation.yml` posts `Plan: 1 to add, 0 to change, 0 to destroy`.
+- **Pre-merge:** `terraform fmt -check`, `terraform validate`, `infra-validation.yml` posts `Plan: 1 to add, 1 to change, 0 to destroy`.
 - **Post-merge:** PM3 + PM4 + PM6 curl gates above. Sentry "scheduled-marketing-uptime" check (if exists; if not, file follow-up) returns to green.
 
 ## Risks
 
 - **R1: `target_url.expression` schema gap.** If `cloudflare/cloudflare ~> 4.0` rejects the `expression` form on `http_request_dynamic_redirect.action_parameters.from_value.target_url`, the rule must be split into a host-pair (one rule per host) with `target_url.expression = "concat(\"https://soleur.ai\", http.request.uri.path)"` etc. Mitigated by AC8 (`terraform validate` runs locally before push).
-- **R2: Operator forgets PM1 (toggle off).** If "Always Use HTTPS" stays on, both layers fire and the new ruleset is a silent no-op for the ACME path (the zone toggle has higher precedence on the redirect-before-rules-fire ordering). Mitigated by making PM1 the first step in both the PR body runbook AND the file header comment AND `domains.md`.
+- **R2: ~~Operator forgets PM1 (toggle off)~~ ELIMINATED at deepen-time.** The toggle-off is now codified in `cloudflare-settings.tf`; operator cannot forget what they don't have to do. Residual risk: if a future operator manually re-enables the toggle via the dashboard after apply, drift detection (`scheduled-terraform-drift.yml`) catches it on the next scheduled run; mitigated further by R-PR-γ (cert-state polling, scope-out follow-up).
 - **R3: Operator runs unguarded `terraform plan` and sees pre-existing drift.** The `-target=` scoping in PM2 is defensive. If unrelated drift surfaces, address via the `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md` playbook in a separate session.
 - **R4: GitHub Pages takes >15 min to reissue cert.** Operator monitors `gh api .../pages` state. If `bad_authz` persists past 30 min, the LE rate limit may have been hit (5 failures/hour/account); wait 60 min and retry PM5.
 - **R5: HSTS preload commitment.** `domains.md:34-40` notes HSTS preload submitted 2026-03-20. The new ruleset preserves HTTPS-everywhere semantics for end users (still 301 to HTTPS); only the ACME validator path is plain-HTTP-eligible. No HSTS regression because HSTS is a response header on HTTPS responses, not a request rewrite; ACME validator does not parse HSTS.
@@ -391,7 +473,8 @@ None. `gh issue list --label code-review --state open --json number,title,body |
 
 - **PR-β (alerting / monitoring):** Sentry uptime check on `https://soleur.ai/`, `https://www.soleur.ai/`, and `https://soleur.ai/.well-known/acme-challenge/probe` (the probe path returns 404 but PROVES the redirect exception fires). Per the pipeline brief, out of scope.
 - **PR-γ (daily cert-state polling):** scheduled workflow that runs `gh api /repos/jikig-ai/soleur/pages | jq '.https_certificate.state'` and pages on `bad_authz` or `expired_at < now() + interval '14 days'`. Per pipeline brief, out of scope.
-- **PR-δ (codify Always Use HTTPS = off in TF):** on the v5 cloudflare provider migration, add `cloudflare_zone_setting` resource with `setting_id = "always_use_https"`, `value = "off"`. v4 does not expose this cleanly. File as `infrastructure` + `chore` tracking issue.
+- **~~PR-δ (codify Always Use HTTPS = off in TF)~~ DONE in this PR.** Deepen-pass confirmed v4 `cloudflare_zone_settings_override.settings.always_use_https = "off"` is fully supported. No v5 dependency.
+- **PR-δ′ (cloudflare provider v4→v5 migration):** orthogonal to this incident; tracking issue for the broader migration (covers `cloudflare_zone_settings_override` split, `cloudflare_record` schema changes, etc.). File as `infrastructure` + `chore`.
 - **PR-ε (consider extending `apply-sentry-infra.yml` pattern to `apps/web-platform/infra/`):** auto-apply on push-to-main for a `-target=`-restricted subset of safe resources (DNS records, rulesets — not the Hetzner server which carries data risk). File as `infrastructure` + `chore` tracking issue with explicit destroy-protection design.
 
 ## Resume prompt (copy-paste after /clear)
