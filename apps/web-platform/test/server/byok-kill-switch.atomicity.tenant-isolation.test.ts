@@ -64,7 +64,13 @@ function requireEnv(name: string): string {
 
 // Three constants tuned together — changing one without the others
 // breaks the expected-cumulatives table. Kept named at the top for
-// legibility per plan Sharp Edges.
+// legibility per plan Sharp Edges. The cap MUST be an exact multiple
+// of the per-call cost; otherwise the unique cap-crossing call lands
+// at a cumulative value not enumerated by `(i + 1) * COST_CENTS`, and
+// Invariant C silently misclassifies the boundary. Enforced via
+// `expect(CAP_CENTS % COST_CENTS).toBe(0)` in beforeAll so a future
+// tuner gets an immediate localized failure rather than a confused
+// Invariant-C mismatch.
 const N = 10;
 const COST_CENTS = 100; // p_token_count=10 × p_unit_cost_cents=10
 const CAP_CENTS = 500;
@@ -76,6 +82,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     const founder = { id: "", email: syntheticEmail() };
 
     beforeAll(async () => {
+      // Constants integrity check — fails fast if a future tuner
+      // breaks the CAP_CENTS-is-multiple-of-COST_CENTS invariant
+      // Invariant C depends on.
+      expect(
+        CAP_CENTS % COST_CENTS,
+        "CAP_CENTS must be an exact multiple of COST_CENTS",
+      ).toBe(0);
+
       const url = requireEnv("SUPABASE_URL");
       requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
       const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
