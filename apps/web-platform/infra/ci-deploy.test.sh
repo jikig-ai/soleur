@@ -443,6 +443,16 @@ echo "--- Happy path ---"
 assert_exit "web-platform deploy succeeds" 0 \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
+# PR-F follow-up (#3960): inngest component branch. Mock docker `default` mode
+# exits 0 for `pull` and `run`, so the inngest branch's two docker calls
+# both succeed. Exit 0 + no surface side effects verifies branch routing.
+assert_exit "inngest deploy succeeds (branch routing)" 0 \
+  "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v1.0.0"
+
+# Image mismatch: an attacker-style image suffix injection should be rejected.
+assert_exit_contains "inngest: wrong image rejected" 1 "invalid image" \
+  "deploy inngest ghcr.io/attacker/soleur-inngest-bootstrap v1.0.0"
+
 echo ""
 echo "--- Empty/missing command ---"
 assert_exit_contains "empty command rejected" 1 "no command provided" ""

@@ -294,6 +294,16 @@ Mirror for `_dev`, `inngest_event_key_*`. `inngest_heartbeat_url_prd`: same `ign
 - `data "doppler_secrets"` was in v1 of this plan but is dead code (Kieran review); v2 removes it. Preconditions reference TF variables directly.
 - AGENTS rule citations: `hr-all-infrastructure-provisioning-servers` is the load-bearing rule (satisfied); `hr-every-new-terraform-root-must-include-an` is "preserved" (plan extends existing root); `hr-dev-prd-distinct-supabase-projects` is applied "by analogy" (rule text is literally Supabase-specific; the spirit applies to Doppler dev/prd distinctness — captured inline in the precondition error message).
 
+## Plan Deviations (Phase 1)
+
+Applied during /work execution; preserved here for review traceability.
+
+1. **Inngest 4 secrets become Terraform-generated `random_id` resources** (was: operator-minted variables). Self-hosted Inngest (ADR-030) has no dashboard issuance flow for signing/event keys; operator-mint was plan-text vestigial. Variables 7 → 3.
+2. **Doppler provider uses a single workplace-scope personal token** (`TF_VAR_DOPPLER_TOKEN_TF`) instead of two per-config service tokens. Per-config token shape requires a Team-plan upgrade for Service Accounts; the Developer-plan path is a workplace personal token. CTO's two-alias typo-prevention intent met via resource naming (`_prd`/`_dev`) + explicit `config = "..."` on every `doppler_secret`.
+3. **`[ack]` block: 3 lines → 1.** Only BetterStack API token + Doppler workplace personal token are operator-minted. Both minted via Playwright in Phase 0 (revoke-and-remint dance recorded — see PR commits).
+4. **Inngest OCI image tag uses plain `vX.Y.Z` semver** (not `vinngest-vX.Y.Z`). Image-name prefix `soleur-inngest-bootstrap` already distinguishes from web-platform images. The GitHub Actions workflow tag pattern remains `vinngest-v*.*.*` (operator-distinguishable at tag-push time), but the OCI image tag emitted is `vX.Y.Z` so the existing `ci-deploy.sh` tag regex `^v[0-9]+\.[0-9]+\.[0-9]+$` accepts it unchanged.
+5. **Skipped cloud-init.yml inngest-bootstrap.sh embedding + server.tf `triggers_replace` addition** (was: Phase 1.8-1.10). The OCI image is the sole delivery path; fresh-host bootstrap requires the operator to fire `deploy inngest <image> <tag>` after cloud-init completes (documented in the runbook). Rationale: `hcloud_server.web.lifecycle.ignore_changes = [user_data]` means cloud-init NEVER replays on existing host — so the bootstrap script change-trigger flows ENTIRELY through the OCI image tag bump → webhook deploy chain. AC7 (grep ≥5 inngest-bootstrap in server.tf) is redundant; AC8 (cloud-init `${path.module}` reference for inngest) is N/A.
+
 ## References
 
 - Parent PR: #3940 (PR-F Inngest trigger layer + CFO autonomous-draft)

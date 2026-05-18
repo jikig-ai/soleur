@@ -191,6 +191,7 @@ resolve_env_file() {
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
+  [inngest]="ghcr.io/jikig-ai/soleur-inngest-bootstrap"
 )
 
 # Log truncated command to avoid persisting attacker payloads to syslog
@@ -547,6 +548,37 @@ case "$COMPONENT" in
       final_write_state 1 "$CANARY_FAIL_REASON"
       exit 1
     fi
+    ;;
+  inngest)
+    # Inngest server bootstrap (PR-F follow-up, #3960). The OCI image at
+    # $IMAGE:$TAG embeds inngest-cli + inngest-bootstrap.sh; running it
+    # with --entrypoint /inngest-bootstrap.sh installs/upgrades the server
+    # on the host (loopback 127.0.0.1:8288/8289 only). Idempotent: a second
+    # invocation against the same $TAG short-circuits via systemctl is-active +
+    # version-file match inside the script. --net=host so the script's
+    # systemctl/curl/etc. can manage the host's systemd; --privileged is
+    # NOT used (the script runs systemctl via the dbus socket bind-mount).
+    echo "Pulling Inngest bootstrap image $IMAGE:$TAG..."
+    docker pull "$IMAGE:$TAG"
+
+    echo "Running inngest-bootstrap.sh from $IMAGE:$TAG..."
+    if ! docker run --rm \
+        --net=host \
+        --pid=host \
+        -v /etc/systemd/system:/etc/systemd/system \
+        -v /usr/local/bin:/usr/local/bin \
+        -v /var/lib/inngest:/var/lib/inngest \
+        -v /var/run/dbus:/var/run/dbus \
+        -v /etc/default:/etc/default \
+        --entrypoint /inngest-bootstrap.sh \
+        "$IMAGE:$TAG"; then
+      logger -t "$LOG_TAG" "FAILED: inngest-bootstrap.sh non-zero exit"
+      final_write_state 1 "inngest_bootstrap_failed"
+      exit 1
+    fi
+
+    logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
+    final_write_state 0 "success"
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"
