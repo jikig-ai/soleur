@@ -53,7 +53,8 @@ After each file: run `actionlint <file>.yml` and confirm no new findings vs. bas
 - [ ] 3.3. `grep -lE '"\$\{RUNNER_TEMP\}/sentry-checkin-id-' .github/workflows/scheduled-*.yml` → zero hits (AC1).
 - [ ] 3.4. `grep -cE '^      - name: Sentry check-in \(final\)$' .github/workflows/scheduled-*.yml` → 8 (AC6).
 - [ ] 3.5. `grep -E '\?status=\$\{status\}.*\|\| true' .github/workflows/scheduled-*.yml` → zero hits (AC7).
-- [ ] 3.6. `grep -cE '::warning::Sentry Crons secrets not configured' .github/workflows/scheduled-*.yml` → 8 (AC8).
+- [ ] 3.6. `grep -c '::warning::Sentry Crons secrets not configured' .github/actions/sentry-heartbeat/action.yml` → 1 (AC8, post-composite-extraction: the guard now lives in the shared action; verify the action file has it exactly once).
+- [ ] 3.7. `grep -lE '^        uses: \./\.github/actions/sentry-heartbeat$' .github/workflows/scheduled-*.yml | wc -l` → 8 (AC9, plan-added: every heartbeat call-site uses the composite action).
 
 ## Phase 4 — Post-merge (operator)
 
