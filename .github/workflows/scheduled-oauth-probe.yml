@@ -1,7 +1,13 @@
 # Synthetic OAuth probe: detects sign-in regressions before users hit them.
-# Probes prod public auth surface every 15 minutes and pages ops on failure.
+# Probes prod public auth surface every hour and pages ops on failure.
 # Pattern: scheduled-cf-token-expiry-check.yml (issue file/comment dedup) +
 # scheduled-terraform-drift.yml (notify-ops-email integration).
+#
+# Cadence note: hourly cron matches observed GitHub Actions scheduling
+# reality. Sub-hourly schedules (`*/5`, `*/15`) routinely degrade to ~60 min
+# under runner-pool load; aligning the spec to actual behavior keeps the
+# Sentry monitor's expected cadence honest (see cron-monitors.tf for the
+# matching `checkin_margin_minutes`).
 #
 # Security: all untrusted values (probe outputs) flow through env: vars before
 # being interpolated into run: shells. No github.event.* inputs are consumed.
@@ -13,7 +19,7 @@ name: "Scheduled: OAuth Probe"
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -29,25 +35,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Sentry check-in (in_progress)
-        if: always()
-        continue-on-error: true
-        env:
-          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
-          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
-          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
-          MONITOR_SLUG: scheduled-oauth-probe
-        run: |
-          set -u
-          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
-            echo "::warning::Sentry Crons secrets not configured; skipping check-in."
-            exit 0
-          fi
-          resp=$(curl --max-time 10 -fSs -X POST \
-            "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/?status=in_progress" || true)
-          if [[ -n "$resp" ]]; then
-            printf '%s' "$resp" | jq -r '.id // empty' > "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" || true
-          fi
       # Required so the `Email notification (failure)` step below can resolve
       # `./.github/actions/notify-ops-email`. Without this, the runner workspace
       # is empty and the local-path action lookup fails with
@@ -540,36 +527,35 @@ jobs:
             echo "No stale tracking issue to close."
           fi
 
-      - name: Sentry check-in (ok)
-        if: success()
+      # Single end-of-job heartbeat check-in (Sentry Crons HTTP "heartbeat"
+      # shape). Posts `?status=ok` when probe is green, `?status=error` when
+      # probe recorded a failure mode. Replaces the prior two-step
+      # in_progress -> ok/error pattern whose silent-fail trap (CHECKIN_ID
+      # tmpfile parsed via `jq -r '.id // empty'`, gated `if` on the
+      # follow-up call) caused Sentry to never receive a successful
+      # check-in. The curl drops `|| true` so its exit code lands in the
+      # step log; `continue-on-error: true` preserves the property that a
+      # Sentry-side blip does not red-flag an otherwise-green probe.
+      # See: docs.sentry.io/product/crons/getting-started/http/ (Heartbeat).
+      - name: Sentry check-in (final)
+        if: always()
         continue-on-error: true
         env:
           SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
           SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
           MONITOR_SLUG: scheduled-oauth-probe
+          FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
         run: |
           set -u
-          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" ]]; then exit 0; fi
-          CHECKIN_ID=$(cat "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" 2>/dev/null || true)
-          if [[ -n "${CHECKIN_ID}" ]]; then
-            curl --max-time 10 -fSs -X PUT \
-              "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/${CHECKIN_ID}/?status=ok" || true
+          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
+            echo "::warning::Sentry Crons secrets not configured; skipping check-in."
+            exit 0
           fi
-
-      - name: Sentry check-in (error)
-        if: failure()
-        continue-on-error: true
-        env:
-          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
-          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
-          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
-          MONITOR_SLUG: scheduled-oauth-probe
-        run: |
-          set -u
-          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" ]]; then exit 0; fi
-          CHECKIN_ID=$(cat "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" 2>/dev/null || true)
-          if [[ -n "${CHECKIN_ID}" ]]; then
-            curl --max-time 10 -fSs -X PUT \
-              "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/${CHECKIN_ID}/?status=error" || true
+          if [[ -z "${FAIL_MODE:-}" ]]; then
+            status="ok"
+          else
+            status="error"
           fi
+          curl --max-time 10 -fSs -X POST \
+            "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/?status=${status}"

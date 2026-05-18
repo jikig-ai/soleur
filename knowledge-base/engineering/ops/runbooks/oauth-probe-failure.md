@@ -14,8 +14,8 @@ related_prs: [2975, 2994, 3007, 3181]
 Triage steps for `[ci/auth-broken] Synthetic OAuth probe failed` issues
 or `[Soleur Ops] OAuth probe failure: ...` emails fired by
 `.github/workflows/scheduled-oauth-probe.yml`. The probe runs every
-15 minutes from a GitHub-hosted runner against the prod public auth
-surface (`app.soleur.ai/login`, `api.soleur.ai/auth/v1/...`).
+hour from a GitHub-hosted runner against the prod public auth surface
+(`app.soleur.ai/login`, `api.soleur.ai/auth/v1/...`).
 
 ## L3-first triage gate
 
@@ -234,7 +234,7 @@ test gate prevents partial updates.
 ### `github_oauth_<label>_http`
 
 Probe returned a non-200 HTTP code (e.g., 5xx GitHub upstream error).
-Usually transient — wait one probe cycle (15 min). If it persists,
+Usually transient — wait one probe cycle (1 h). If it persists,
 check <https://www.githubstatus.com>.
 
 ### `github_oauth_<label>_network`
