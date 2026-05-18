@@ -28,7 +28,7 @@ last_updated: 2026-05-18
 | SSL Mode | Full (Strict) |
 | Always Use HTTPS | Off (zone toggle); path-aware via `cloudflare_ruleset.acme_aware_https_upgrade` — see "Always Use HTTPS exception" below |
 | Minimum TLS Version | 1.2 |
-| HSTS | max-age=31536000; includeSubDomains; preload |
+| HSTS | max-age=63072000; includeSubDomains; preload (source of truth: `apps/web-platform/infra/cloudflare-settings.tf` + `apps/web-platform/lib/security-headers.ts`) |
 | HSTS Preload | Submitted 2026-03-20 — pending inclusion in Chromium preload list |
 | DNSSEC | Enabled (pending DS propagation to .ai registry — expected active by 2026-04-12) |
 | X-Content-Type-Options | nosniff |
