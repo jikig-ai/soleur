@@ -127,3 +127,26 @@ variable "resend_api_key" {
   type        = string
   sensitive   = true
 }
+
+# --- Inngest IaC (PR-F follow-up, #3960) -------------------------------------
+# 3 new variables (down from plan's 7). Inngest signing/event keys are
+# TF-generated via random_id (see inngest.tf); no operator mint required.
+# CTO two-alias intent met via resource naming + explicit `config = "..."`.
+
+variable "doppler_token_tf" {
+  description = "Doppler workplace-scope personal token used by the doppler provider to write to both `prd` and `dev` configs. Operator-minted at dashboard.doppler.com/workplace/<ID>/tokens/personal."
+  type        = string
+  sensitive   = true
+}
+
+variable "betterstack_api_token" {
+  description = "Better Stack global API token (Read & write) for the betteruptime provider. Operator-minted at betterstack.com/settings/global-api-tokens."
+  type        = string
+  sensitive   = true
+}
+
+variable "betterstack_paid_tier" {
+  description = "When true, provision a betteruptime_policy with escalation steps. Free tier defaults to false (heartbeat + email only)."
+  type        = bool
+  default     = false
+}
