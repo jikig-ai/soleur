@@ -46,11 +46,20 @@ bucket="${R2_CLA_EVIDENCE_BUCKET:-soleur-cla-evidence}"
 endpoint="${R2_CLA_EVIDENCE_ENDPOINT:?R2_CLA_EVIDENCE_ENDPOINT must be set}"
 url="${endpoint%/}/${bucket}/${key}"
 
+# Response-body capture: R2 returns XML error bodies (<Code>…</Code>) on 4xx/5xx.
+# We pipe them to a tempfile so the failure annotation can echo the real reason
+# (e.g., InvalidRequest vs ObjectLockedRetention vs SignatureDoesNotMatch) rather
+# than the prior generic "stale token or missing perms" guess. Without this the
+# operator has to bisect blind every time R2 returns a new 4xx code.
+body_tmp=$(mktemp)
+trap 'rm -f "$body_tmp"' EXIT
+
 put_once() {
   # Stub-friendly: in tests, $(which curl) is the PATH-stub that emits a numeric
-  # HTTP code on stdout. In production, curl is invoked with full SigV4 via
-  # --aws-sigv4 (curl 7.75+) and emits the code via -w "%{http_code}".
-  curl -sS -o /dev/null -w "%{http_code}\n" --max-time 30 \
+  # HTTP code on stdout and ignores -o (so $body_tmp stays empty, which the
+  # error-emit path tolerates). In production, curl is invoked with full SigV4
+  # via --aws-sigv4 (curl 7.75+) and emits the code via -w "%{http_code}".
+  curl -sS -o "$body_tmp" -w "%{http_code}\n" --max-time 30 \
     -X PUT \
     -H "If-None-Match: *" \
     -H "Content-Type: application/json" \
@@ -58,6 +67,18 @@ put_once() {
     --user "${R2_CLA_EVIDENCE_ACCESS_KEY_ID}:${R2_CLA_EVIDENCE_SECRET}" \
     --data-binary "$payload" \
     "$url" 2>/dev/null || echo "000"
+}
+
+# Single-line body excerpt for inclusion in `::error::` annotations (GH Actions
+# annotations are one-line; multi-line XML would be truncated mid-tag). Caps at
+# 512 chars so a future malicious-bucket-redirect dumping HTML can't blow up
+# the log line.
+body_excerpt() {
+  if [[ ! -s "$body_tmp" ]]; then
+    printf '(empty body)'
+    return
+  fi
+  tr '\n' ' ' < "$body_tmp" | head -c 512
 }
 
 attempt_max=3
@@ -93,18 +114,21 @@ while [[ "$attempt" -le "$attempt_max" ]]; do
       attempt=$(( attempt + 1 ))
       continue
     fi
-    echo "::error::${label}: ${attempt_max} consecutive 5xx/429; last status=$code key=$key" >&2
+    echo "::error::${label}: ${attempt_max} consecutive 5xx/429; last status=$code key=$key body=$(body_excerpt)" >&2
     exit 2
   fi
 
   if (( code >= 400 && code < 500 )); then
     # 4xx ≠ 412 → fast-fail per Kieran F5 (e.g., 403 from stale token is a
-    # config bug, not transient).
-    echo "::error::${label}: fatal-4xx status=$code key=$key (config bug; stale token or missing perms)" >&2
+    # config bug, not transient). The R2 response body (now captured to
+    # $body_tmp) carries the actual S3 ErrorCode — surface it so the operator
+    # does not have to guess between SignatureDoesNotMatch / InvalidRequest /
+    # ObjectLockedRetention / etc.
+    echo "::error::${label}: fatal-4xx status=$code key=$key body=$(body_excerpt)" >&2
     exit 2
   fi
 
-  echo "::error::${label}: unexpected status=$code key=$key" >&2
+  echo "::error::${label}: unexpected status=$code key=$key body=$(body_excerpt)" >&2
   exit 2
 done
 
