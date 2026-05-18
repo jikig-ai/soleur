@@ -42,25 +42,6 @@ jobs:
       CAP_PER_RUN: '3'
 
     steps:
-      - name: Sentry check-in (in_progress)
-        if: always()
-        continue-on-error: true
-        env:
-          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
-          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
-          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
-          MONITOR_SLUG: scheduled-skill-freshness
-        run: |
-          set -u
-          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
-            echo "::warning::Sentry Crons secrets not configured; skipping check-in."
-            exit 0
-          fi
-          resp=$(curl --max-time 10 -fSs -X POST \
-            "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/?status=in_progress" || true)
-          if [[ -n "$resp" ]]; then
-            printf '%s' "$resp" | jq -r '.id // empty' > "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" || true
-          fi
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -159,36 +140,34 @@ jobs:
           body: '<p><strong>Skill Freshness</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
-      - name: Sentry check-in (ok)
-        if: success()
+      # Single end-of-job heartbeat check-in (Sentry Crons HTTP "heartbeat"
+      # shape). Posts ?status=ok when job succeeded, ?status=error otherwise.
+      # Replaces the prior two-step in_progress -> ok/error pattern whose
+      # silent-fail trap (CHECKIN_ID tmpfile parsed via `jq -r '.id // empty'`,
+      # gated `if` on the follow-up call) caused Sentry to never receive a
+      # successful check-in. The curl drops `|| true` so its exit code lands
+      # in the step log; `continue-on-error: true` preserves the property
+      # that a Sentry-side blip does not red-flag an otherwise-green job.
+      # See: docs.sentry.io/product/crons/getting-started/http/ (Heartbeat).
+      - name: Sentry check-in (final)
+        if: always()
         continue-on-error: true
         env:
           SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
           SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
           MONITOR_SLUG: scheduled-skill-freshness
+          JOB_STATUS: ${{ job.status }}
         run: |
           set -u
-          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" ]]; then exit 0; fi
-          CHECKIN_ID=$(cat "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" 2>/dev/null || true)
-          if [[ -n "${CHECKIN_ID}" ]]; then
-            curl --max-time 10 -fSs -X PUT \
-              "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/${CHECKIN_ID}/?status=ok" || true
+          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
+            echo "::warning::Sentry Crons secrets not configured; skipping check-in."
+            exit 0
           fi
-
-      - name: Sentry check-in (error)
-        if: failure()
-        continue-on-error: true
-        env:
-          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
-          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
-          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
-          MONITOR_SLUG: scheduled-skill-freshness
-        run: |
-          set -u
-          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" ]]; then exit 0; fi
-          CHECKIN_ID=$(cat "${RUNNER_TEMP}/sentry-checkin-id-${MONITOR_SLUG}" 2>/dev/null || true)
-          if [[ -n "${CHECKIN_ID}" ]]; then
-            curl --max-time 10 -fSs -X PUT \
-              "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/${CHECKIN_ID}/?status=error" || true
+          if [[ "${JOB_STATUS}" == "success" ]]; then
+            status="ok"
+          else
+            status="error"
           fi
+          curl --max-time 10 -fSs -X POST \
+            "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/?status=${status}"
