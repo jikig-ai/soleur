@@ -92,11 +92,17 @@ resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
 }
 
 resource "sentry_cron_monitor" "scheduled_daily_triage" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-daily-triage"
-  schedule                = { crontab = "0 4 * * *" }
-  checkin_margin_minutes  = 240
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "scheduled-daily-triage"
+  schedule     = { crontab = "0 4 * * *" }
+  # TR9 PR-1 (#3948): tightened from 240 min (GHA-era jitter tolerance) to
+  # 30 min after migration to Inngest cron (cron-daily-triage.ts). Inngest
+  # fires at most once per scheduled time with minimal jitter, vs GHA's
+  # sub-hourly runner-pool degradation of ~60 min daytime / longer overnight.
+  # Resource id, `name`, and Sentry slug UNCHANGED — historical check-in
+  # continuity preserved.
+  checkin_margin_minutes  = 30
   max_runtime_minutes     = 15
   failure_issue_threshold = 1
   recovery_threshold      = 1
