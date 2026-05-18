@@ -38,16 +38,20 @@
 Needs: `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (in Doppler), plus a real fixture email (auth.users row). Consumes 1 GoTrue generate+verify cycle, 1 audit row, 1 auth.sessions row.
 
 ### Phase 0.3 — BLOCKED
-Needs `SUPABASE_MGMT_API_TOKEN` (NOT in Doppler dev as of 2026-05-18) OR direct `DATABASE_URL` for psql. Could fall back to Supabase MCP server (`mcp__plugin_supabase_supabase__*`) — not loaded this session.
+Needs `SUPABASE_MGMT_API_TOKEN_DEV` (NOT in Doppler dev as of 2026-05-18; re-verified absent on session resume). Mint via Supabase Dashboard → Account → Access Tokens, store via Playwright MCP `browser_evaluate(filename: ...)` pattern (see `2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md`).
 
-### Phase 0.4, 0.5, 0.6 — NOT RUN
+**Session-resume Playwright wedge note (2026-05-18, second session):** Playwright MCP showed `✓ Connected` on `claude mcp list` but `/mcp` reload returned `-32000`. Diagnosis: stale `SingletonLock` symlink pointing to dead PID 2556914 in `/home/jean/.cache/playwright-mcp-profile/`. **Cleanup done this session:** killed stale `playwright-mcp` PIDs (2334365, 2334569, 2334570) + removed `SingletonLock`/`SingletonCookie`/`SingletonSocket`. Direct `npx @playwright/mcp@latest --config=.claude/playwright-mcp.config.json` spawn works cleanly (silent wait-for-client). Subsequent `/mcp` reload STILL returned -32000 — suggests Claude Code session-state caches a dead handshake; only a full CLI restart re-handshakes. **Next session should `claude mcp list` first to verify status; if -32000 reappears, exit + relaunch `claude` rather than burn time debugging.**
+
+### Phase 0.4, 0.5 — NOT RUN
 - 0.4: Probe `authentication_method='otp'` gate empirically. Needs migration 047 deployed to a test schema (or fork the migration locally).
 - 0.5: Latency baseline (10 cycles).
-- 0.6: GoTrue rate-limit probe (60 cycles — wasteful; consider whether this is load-bearing for /work or a deferred ops follow-up).
+
+### Phase 0.6 — DEFERRED (decided 2026-05-18, second session)
+Operator decision: defer 0.6 (60-cycle empirical rate-limit probe). Reason: wasteful (risks tripping per-IP limits affecting unrelated dev workflows) AND the precheck `60/hour` ceiling is the durable canary regardless. Record TOKEN_REFRESH=10/IP/hour + EMAIL_SENT=10/hour defaults in ADR-033 with Supabase docs citation. File follow-up tracking issue for empirical probe once observability surface exists to consume the data.
 
 ## What's left (for next session)
 
-1. **Phase 0.2–0.6 probes** — populate ADR-033 with concrete numbers (latency p50/p95, GoTrue rate-limit ceiling)
+1. **Phase 0.2, 0.4, 0.5 probes** — populate ADR-033 with concrete numbers (latency p50/p95). Phase 0.3 needs Mgmt API token minted first (Playwright MCP path; see Session-resume Playwright wedge note above). Phase 0.6 deferred — record default rate-limit values from Supabase docs and file follow-up issue.
 2. **Migration 047** — `apps/web-platform/supabase/migrations/047_custom_access_token_hook.sql` (~60 lines SQL)
 3. **Migration 048** — `apps/web-platform/supabase/migrations/048_precheck_jwt_mint_sqlstate.sql` (CREATE OR REPLACE on `precheck_jwt_mint` with ERRCODE 45001)
 4. **Apply migrations to dev** — via Supabase MCP or Doppler `DATABASE_URL_POOLER` fallback chain
@@ -84,4 +88,4 @@ SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
 - Worktree: `.worktrees/feat-one-shot-issue-3363-jwt-asymmetric-keys/`
 - Branch: `feat-one-shot-issue-3363-jwt-asymmetric-keys`
 - Draft PR: [#3983](https://github.com/jikigai/soleur/pull/3983)
-- Commits on branch: `503be0a8` (init), `af0707a5` (docs: plan + ADR-033)
+- Commits on branch: `503be0a8` (init), `af0707a5` (docs: plan + ADR-033), `afb9737c` (handoff snapshot), `<this commit>` (resume-2 deltas)
