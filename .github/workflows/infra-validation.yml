@@ -39,28 +39,18 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           # Two infra-root families covered:
-          #   - apps/*/infra/...      (per-app roots: web-platform, cla-evidence,
-          #                            future siblings)
-          #   - infra/<name>/...      (repo-level roots: infra/github/, future siblings)
+          #   - apps/*/infra/...      (per-app roots: web-platform, cla-evidence, ...)
+          #   - infra/<name>/...      (repo-level roots: infra/github/, ...)
           #
-          # The PR-diff branch filters via `grep -E` rather than git pathspec
-          # because git pathspec `*` does NOT cross `/` in default semantics --
-          # `'apps/*/infra/'` (single `*`, trailing slash, no `**`) silently
-          # returns empty for every file under those roots, the matrix fans
-          # out to zero jobs, and the workflow reports `success` because
-          # matrix-zero is a skipped-not-failed outcome. Mirror unit test:
+          # The PR-diff branch filters via `grep -E` rather than git pathspec:
+          # git pathspec `*` does NOT cross `/` in default semantics, so
+          # `'apps/*/infra/'` silently returned empty and the matrix fanned
+          # out to zero jobs (matrix-zero is a skipped-not-failed outcome).
+          # The brace group `{ grep -E ... || true; }` neutralizes grep's
+          # exit-1 on zero-match BEFORE it can poison the pipeline status
+          # under any future `set -o pipefail`. Downstream `sort -u | jq`
+          # collapses empty input to `[]`. Mirror unit test:
           # plugins/soleur/test/infra-validation-detect.test.sh. See #4012.
-          #
-          # `|| true` masks `grep`'s exit 1 on zero-match so the pipeline does
-          # not fail the step on docs-only PRs. Downstream `sort -u | jq` then
-          # collapses empty input to `[]`. The workflow's `run:` block does
-          # not set `pipefail`, so the `|| true` terminates a fresh subshell
-          # at the `||` operator either way.
-          #
-          # sed -E anchors on ^apps/[^/]+/infra and ^infra/[^/]+ -- both shapes
-          # collapse to their single-ancestor directory. Deep-nested paths
-          # (infra/github/some-subdir/file) STILL collapse to infra/github
-          # because [^/]+ matches the first slash-bounded segment.
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
                        find infra/* -maxdepth 0 -type d 2>/dev/null ; } \

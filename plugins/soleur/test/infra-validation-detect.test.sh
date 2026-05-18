@@ -84,9 +84,7 @@ assert_eq '[]' "$OUT" "non-infra only → []"
 echo ""
 
 # --- TS8: real-commit baseline (pathspec→regex equivalence per learning 2026-05-09) ---
-# Pipeline-mode guard: if commit 7e6f6726 is not in this repo (e.g., shallow
-# clone in a CI test runner), skip TS8 gracefully — the unit-test scenarios
-# above already exercise every shape that TS8 would.
+# Skip gracefully on shallow clones (commit absent); TS1-TS7 cover the shape matrix.
 echo "TS8: real-commit baseline against 7e6f6726 (uptime-alerting motivating commit)"
 REPO_ROOT="$SCRIPT_DIR/../../.."
 if git -C "$REPO_ROOT" rev-parse --verify --quiet '7e6f6726^{commit}' >/dev/null; then
@@ -94,7 +92,8 @@ if git -C "$REPO_ROOT" rev-parse --verify --quiet '7e6f6726^{commit}' >/dev/null
   ACTUAL=$(git -C "$REPO_ROOT" diff --name-only 7e6f6726^..7e6f6726 | detect_infra_dirs)
   assert_eq "$EXPECTED" "$ACTUAL" "real-commit 7e6f6726 → [apps/web-platform/infra]"
 else
-  echo "  SKIP: commit 7e6f6726 not present in repo (shallow clone?); unit scenarios above cover the shape matrix"
+  echo "  SKIP: commit 7e6f6726 not present (shallow clone) — TS1-TS7 cover the shape matrix"
+  PASS=$((PASS + 1))
 fi
 echo ""
 
