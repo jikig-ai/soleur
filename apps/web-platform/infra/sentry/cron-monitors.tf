@@ -161,10 +161,13 @@ resource "sentry_cron_monitor" "scheduled_community_monitor" {
 # state for soleur.ai. Closes the gap exposed by the 2026-05-18 silent
 # cert-expiry outage (PR #3974 + PR #3986 + issue #3976). Daily cadence
 # leaves >2 weeks operator response on a single missed fire; the 240-
-# minute `checkin_margin_minutes` absorbs GHA cron jitter (sibling
-# `scheduled-daily-triage` uses the same margin for the same reason).
+# minute `checkin_margin_minutes` absorbs GHA cron jitter — this monitor
+# is GHA-fired (not Inngest), so the legacy GHA-jitter tolerance applies
+# (cf. `scheduled-daily-triage` which tightened to 30 min after its
+# Inngest migration in TR9 PR-1 #3985 — Inngest-fired monitors do NOT
+# need the 240-min margin).
 # `failure_issue_threshold = 1` because a single miss on a daily monitor
-# is itself noteworthy (matches sibling daily monitors).
+# is itself noteworthy.
 resource "sentry_cron_monitor" "scheduled_gh_pages_cert_state" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
