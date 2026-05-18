@@ -14,8 +14,31 @@ related_prs: [2975, 2994, 3007, 3181]
 Triage steps for `[ci/auth-broken] Synthetic OAuth probe failed` issues
 or `[Soleur Ops] OAuth probe failure: ...` emails fired by
 `.github/workflows/scheduled-oauth-probe.yml`. The probe runs every
-15 minutes from a GitHub-hosted runner against the prod public auth
-surface (`app.soleur.ai/login`, `api.soleur.ai/auth/v1/...`).
+hour from a GitHub-hosted runner against the prod public auth surface
+(`app.soleur.ai/login`, `api.soleur.ai/auth/v1/...`).
+
+## Sentry check-in failures are silent to the workflow log
+
+The probe posts a single `?status=ok` / `?status=error` heartbeat to
+Sentry Crons at end-of-job. The step has `continue-on-error: true` so a
+Sentry-side blip never red-flags an otherwise-green probe — meaning a
+**steady-state auth failure** against Sentry (revoked `SENTRY_PUBLIC_KEY`,
+rotated DSN, ingest-domain DNS flip) presents as: workflow stays green,
+Sentry never receives a check-in, Sentry pages operators with
+"missed check-in" alerts and no signal pointing at "our auth is broken".
+
+Triage when Sentry says "Last successful check-in: Never" but the workflow
+runs themselves are green:
+
+1. Open the most recent green `Scheduled: OAuth Probe` run.
+2. Inspect the `Sentry check-in (final)` step log. A non-2xx curl line
+   (`curl: (22) The requested URL returned error: 401`) confirms a
+   Sentry-auth-side failure.
+3. Verify the three repo secrets (`SENTRY_INGEST_DOMAIN`,
+   `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY`) match the
+   `apps/web-platform/infra/sentry/cron-monitors.tf` monitor's project
+   via `gh secret list` and the Sentry monitor settings page.
+4. Re-run with `workflow_dispatch` after fixing the secret.
 
 ## L3-first triage gate
 
@@ -234,7 +257,7 @@ test gate prevents partial updates.
 ### `github_oauth_<label>_http`
 
 Probe returned a non-200 HTTP code (e.g., 5xx GitHub upstream error).
-Usually transient — wait one probe cycle (15 min). If it persists,
+Usually transient — wait one probe cycle (1 h). If it persists,
 check <https://www.githubstatus.com>.
 
 ### `github_oauth_<label>_network`

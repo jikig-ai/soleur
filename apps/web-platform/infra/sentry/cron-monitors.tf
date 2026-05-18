@@ -23,11 +23,26 @@
 #
 # `failure_issue_threshold` default is 1 (single missed check-in opens an
 # issue). The two exceptions (oauth-probe and github-app-drift-guard, set
-# to 2) fire every 15 minutes / every hour respectively, where a single
-# transient network hiccup is more likely than a real failure — requiring
-# two consecutive misses raises the noise floor without losing the signal.
-# All other monitors fire daily/weekly where a single miss is itself
-# noteworthy.
+# to 2) both fire hourly, where a single transient network hiccup is more
+# likely than a real failure — requiring two consecutive misses raises
+# the noise floor without losing the signal. All other monitors fire
+# daily/weekly where a single miss is itself noteworthy.
+#
+# `checkin_margin_minutes` is sized to observed GitHub Actions cron
+# behavior, not the workflow's `cron:` expression. Sub-hourly schedules
+# routinely degrade to ~60 min under runner-pool load; hourly schedules
+# observe ~10-30 min daytime jitter and longer overnight gaps. Margins
+# are intentionally generous enough to absorb daytime jitter while still
+# treating a deep overnight gap (paired with `failure_issue_threshold = 2`)
+# as real signal.
+#
+# `max_runtime_minutes` only matters for two-step (in_progress -> ok/error)
+# check-ins where Sentry can detect a job exceeding its declared budget.
+# Monitors paired with a single end-of-job heartbeat (oauth-probe today;
+# 7 sister workflows after follow-up rollout) get NO runtime-overrun
+# detection from this field — only missed-run detection. Retain the value
+# for schema/sibling consistency and as a future-compat default if any
+# monitor migrates back to the two-step pattern.
 
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org
@@ -45,8 +60,8 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-oauth-probe"
-  schedule                = { crontab = "*/15 * * * *" }
-  checkin_margin_minutes  = 5
+  schedule                = { crontab = "0 * * * *" }
+  checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
   failure_issue_threshold = 2
   recovery_threshold      = 1

@@ -336,16 +336,16 @@ and creates false confidence.
 
 ## Why this guard exists
 
-The user-facing OAuth probe (`scheduled-oauth-probe.yml`, every 15
-minutes) detects regressions at the request-level: callback URL drift,
+The user-facing OAuth probe (`scheduled-oauth-probe.yml`, every hour)
+detects regressions at the request-level: callback URL drift,
 provider-disabled, settings-misconfigured. It does NOT detect a silent
 swap of the App itself — if an attacker (or a misconfigured operator)
 points the GitHub App backing OAuth at a different App, every sign-in
 goes to a different consent screen, but the user-facing probe still
 sees a 302 to a valid GitHub authorize page.
 
-This guard closes that gap. It runs hourly (not 15-min like the OAuth
-probe) because App-database-level changes are rare; an hourly cadence
+This guard closes that gap. It runs hourly — matching the OAuth probe's
+cadence — because App-database-level changes are rare; an hourly cadence
 bounds the worst-case detection window at 60 minutes — well under the
 GDPR 72-hour notification clock — without burning CI budget on data
 that doesn't change.
