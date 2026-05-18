@@ -412,6 +412,36 @@ If the plan touches regulated-data surfaces (per the `hr-gdpr-gate-on-regulated-
 
 Skip silently if no regulated-data surface is touched AND none of the (a)-(d) triggers fire.
 
+### 2.8. Infrastructure-as-Code Routing Gate
+
+[skill-enforced: terraform-architect at plan Phase 2.8]
+
+If the plan introduces infrastructure that needs to live somewhere — a server, a systemd service, a cron job, a vendor account, a DNS record, a TLS cert, a secret, a firewall rule, a monitoring webhook — route the implementation through Terraform (or another IaC mechanism already in the repo) at plan time. Do NOT bake "operator runs `ssh root@host && ...`", "operator runs `doppler secrets set X=...`", or "operator clicks through the vendor dashboard" into the plan's Implementation Phases. Per `hr-all-infrastructure-provisioning-servers`, manual provisioning is not an acceptable phase output.
+
+**Detection** (case-insensitive substring scan of the plan draft + the feature description):
+
+- `ssh root@`, `ssh deploy@`, `ssh ubuntu@`, `ssh <user>@<host>`
+- `manually install`, `operator runs`, `operator installs`, `operator-driven`, `out-of-band`
+- `systemctl enable`, `systemctl start`, `systemd unit`, `/etc/systemd/system/`
+- `doppler secrets set` (vs reading via `doppler secrets get` which is read-only)
+- `terraform import` of a resource that should have been created by Terraform
+- vendor-dashboard wording: "go to the [Cloudflare|Hetzner|Stripe|Doppler|Better Stack|Sentry|R2|Supabase] dashboard and …", "in the … console click …"
+- `cron`/`crontab -e`, `at <time>`, `journalctl` (when used for state, not diagnosis)
+- new vendor account signups not already routed through `service-automator` or `ops-provisioner`
+
+**If detected, invoke `terraform-architect` with the plan draft and the detected phrases.** The agent's job is to reshape the affected Implementation Phases so the new resource lives in `apps/<app>/infra/*.tf` (extending the existing root, or creating a new one with the R2 backend per `hr-every-new-terraform-root-must-include-an`), with cloud-init/`runcmd` for first-boot config and an idempotent bootstrap script (e.g. `apps/<app>/infra/<resource>-bootstrap.sh`) for applying the change to already-running hosts without re-provisioning.
+
+**Required output: `## Infrastructure (IaC)` section in the plan.** Mirror the `## Domain Review` heading contract. Required subsections:
+
+- `### Terraform changes` — listed files (existing TF root + new resources), required providers + version pins, sensitive variable list (`TF_VAR_<name>` plus where the value comes from — Doppler service token, etc.).
+- `### Apply path` — one of: (a) cloud-init-only (acceptable when the resource has not yet been provisioned), (b) cloud-init + idempotent bootstrap script (the default for existing infra), (c) taint + `terraform apply -replace` (only when the resource cannot be patched in place). State the chosen path and the expected downtime/blast-radius.
+- `### Distinctness / drift safeguards` — `dev != prd` preconditions, `lifecycle.ignore_changes` callouts, state-storage notes (encrypted backend, secret values land in `terraform.tfstate`).
+- `### Vendor-tier reality check` — when the chosen provider has free-tier limits that affect resource creation (e.g., Better Stack free tier rejects `betteruptime_policy`), document the tier gate (`count = var.<provider>_paid_tier ? 1 : 0`) before `apply` time.
+
+**Why:** PR-F (#3940) plan baked in "operator installs inngest-cli + systemd unit via SSH" and "operator sets Doppler keys via CLI" as Phase X items. Both violate `hr-all-infrastructure-provisioning-servers`. The rule existed; no plan-time gate consulted it. The cost was a post-merge realisation that the entire operator checklist had to be redone as Terraform. See `knowledge-base/project/learnings/2026-05-18-plan-baked-in-operator-ssh-violated-iac-rule.md`.
+
+Skip silently if the plan introduces no new infrastructure (pure code change against an already-provisioned surface). A plan that only edits files under `apps/<app>/src/` or `apps/<app>/server/` typically skips. A plan that introduces a new service, a new secret, a new vendor, or a new persistent runtime process does not.
+
 ### 3. SpecFlow Analysis
 
 **If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
