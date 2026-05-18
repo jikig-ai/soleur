@@ -2,9 +2,15 @@
 # PreToolUse(Bash) hook: defers prod-write commands for explicit operator approval.
 #
 # Three inline starter regexes (telemetry-driven expansion via follow-up PRs):
-#   prod-write-defer-git-push-main         — git push origin {main,master,HEAD:main,HEAD:master}
-#   prod-write-defer-terraform-apply       — terraform / tofu apply
-#   prod-write-defer-doppler-prd-secrets   — doppler secrets set ... --config prd[_terraform]
+#   prod-write-defer-git-push-main           — git push origin {main,master,HEAD:main,HEAD:master}
+#   prod-write-defer-terraform-apply         — terraform / tofu apply
+#   prod-write-defer-doppler-secrets-stdout  — doppler secrets {set|delete} ... --config {prd|prd_terraform|prd_orchestration|dev|ci}
+#                                              (widened from the original `set`-only / `prd[_terraform]`-only shape
+#                                              after issue #4029 — `delete` renders the post-deletion surviving-secrets
+#                                              table to stdout, leaking value chunks from sibling secrets;
+#                                              `prd_orchestration` added at PR #4031 review since tenant-* runbooks
+#                                              operate against it and the same trap class applies to
+#                                              cross-tenant value chunks rendered post-deletion).
 #
 # Mode (controlled by SOLEUR_DEFER_DRYRUN, default 1):
 #   1 (dry-run, default) — emit kind=would_defer, allow (output "{}").
@@ -47,7 +53,7 @@ DEFER_VALUE="defer"
 declare -a DEFAULT_TARGETS=(
   "prod-write-defer-git-push-main|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*git[[:space:]]+push([[:space:]]+(-f|--force(-with-lease)?))?[[:space:]]+origin[[:space:]]+(main|master|HEAD:main|HEAD:master)([[:space:]]|;|\\)|&|$)"
   "prod-write-defer-terraform-apply|hr-all-infrastructure-provisioning-servers|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*(terraform|tofu)[[:space:]]+apply([[:space:]]|;|\\)|&|$)"
-  "prod-write-defer-doppler-prd-secrets|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*([A-Za-z_]+=[A-Za-z0-9_]+[[:space:]]+)*doppler[[:space:]]+secrets[[:space:]]+set([[:space:]]+[^[:space:]]+)*[[:space:]]+(--config|-c)[[:space:]]+(prd|prd_terraform)([[:space:]]|;|\\)|&|$)"
+  "prod-write-defer-doppler-secrets-stdout|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*([A-Za-z_]+=[A-Za-z0-9_]+[[:space:]]+)*doppler[[:space:]]+secrets[[:space:]]+(set|delete)([[:space:]]+[^[:space:]]+)*[[:space:]]+(--config|-c)[[:space:]]+(prd|prd_terraform|prd_orchestration|dev|ci)([[:space:]]|;|\\)|&|$)"
 )
 
 # Post-match read-only escape: a few command classes are matched by the
@@ -59,6 +65,11 @@ declare -a DEFAULT_TARGETS=(
 # command as read-only when present anywhere after the verb.
 declare -A READONLY_FLAG_PATTERNS=(
   ["prod-write-defer-terraform-apply"]='(^|[[:space:]])-(-?)(help|version|h|v)([[:space:]]|=|$)'
+  # `doppler secrets {set,delete} --help` is read-only; the verbs share `-h`/`--help`
+  # but neither has `--version`. Pattern omits `version`/`v` to avoid escaping
+  # a non-existent flag (consistent with the per-verb flag-set narrative in
+  # plan §Research Insights "Read-only escape pattern").
+  ["prod-write-defer-doppler-secrets-stdout"]='(^|[[:space:]])-(-?)(help|h)([[:space:]]|=|$)'
 )
 
 # Allow tests to inject broken regex for fail-closed verification.
