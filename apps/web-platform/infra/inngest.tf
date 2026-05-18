@@ -113,7 +113,7 @@ resource "betteruptime_heartbeat" "inngest_prd" {
   # to `false` in a follow-up commit after deploy. Runbook documents both
   # paths. See plan deviation note in inngest.tf header.
   paused     = true
-  team_name  = "Jean's team"
+  team_name  = "Your team"
   policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
   sort_index = 0
 
