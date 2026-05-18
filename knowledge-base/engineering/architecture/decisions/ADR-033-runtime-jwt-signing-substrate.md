@@ -119,10 +119,10 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 - `session_id` present; `email` present (baseline includes founder PII; the hook's `jsonb_set` is additive so these pass through — acceptable since service-role already sees `auth.users` and Soleur's existing tenant-isolation contract already gates on `sub`).
 - **REST shape note for implementers**: `admin/generate_link` returns the hashed token at the response **root** (`.hashed_token`), not under `.properties.hashed_token`. The supabase-js wrapper exposes it as `data.properties.hashed_token` — the plan's TS pseudocode (and `lib/supabase/tenant.ts` post-#3363) uses the supabase-js path; the curl-based runbook (Deploy-Order §a/c) uses the root path. Both correct for their layer.
 
-### 0.4 — `authentication_method = 'otp'` gate (CONFIRMED empirically)
+### 0.4 — `authentication_method = 'otp'` gate (CONFIRMED empirically; insufficient alone — see §0.7)
 - The baseline JWT payload includes `amr=[{method:"otp", timestamp:…}]`, confirming that the `verifyOtp` flow exposes `method="otp"` in `amr`.
 - Per Supabase's [Custom Access Token Hook input spec](https://supabase.com/docs/guides/auth/auth-hooks/custom-access-token-hook), the hook receives `event.authentication_method` as a single string (the most-recent method). On the `generateLink+verifyOtp` path, that string is `"otp"`.
-- Gate decision (pre-committed by plan-review panel, empirically validated here): `IF v_auth_method <> 'otp' THEN RETURN claims unchanged END IF` is sufficient. Dashboard logins (`password`), OAuth flows (`oauth`), refresh-token rotations (`token_refresh`) and other non-runtime paths get pass-through.
+- Gate decision recorded by plan-review panel: `IF v_auth_method <> 'otp' THEN RETURN claims unchanged END IF`. **PARTIAL — was assumed sufficient for projects using password-based dashboard auth, but Soleur's dashboard uses `signInWithOtp` + `verifyOtp({type:'email'})` for user-facing login (see `components/auth/login-form.tsx:83`, `app/(auth)/signup/page.tsx:74`).** The dashboard path is indistinguishable from the runtime path at the hook event level. See §0.7 for the empirical follow-up and the marker-table pivot that strengthens this gate.
 - Future-optimization footnote retained from plan: if a future PR needs distinct runtime aud per founder, channel (a) `auth.users.app_metadata.target_aud`, channel (b) `verifyOtp` audience param.
 
 ### 0.5 — latency baseline (DONE, 10 cycles sequential)
@@ -141,6 +141,33 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 - **Empirical sub-finding from 0.5**: 10 sequential `generateLink+verifyOtp` cycles against the SAME fixture from a SINGLE IP in <10s produced **zero 429 responses**. Suggests either (a) the per-IP TOKEN_REFRESH ceiling does not count `verifyOtp`-issued tokens, or (b) the bucket is not strict sliding-window over short bursts. Inconclusive but useful as a non-failure boundary.
 - **Hard ceiling we rely on**: `precheck_jwt_mint` ≤60/hour/founder (migration 037, ERRCODE-shifted to `45001` in migration 048). This is enforced by Soleur, not Supabase — durable regardless of upstream rate-limit drift.
 - **Follow-up tracking issue** (to be filed alongside this PR): "Empirical Supabase Auth rate-limit probe — 60-cycle generate+verify with timeline measurement once observability surface lands." Filing pattern per `wg-when-deferring-a-capability-create-a`.
+
+### 0.7 — hook-event discriminator probe + marker-table pivot (2026-05-18, Phase-4 review escalation)
+- **Trigger**: `/soleur:review` security-sentinel agent flagged P1 (single-user-incident threshold): Soleur's user-facing dashboard login uses `signInWithOtp` + `verifyOtp({type:'email'})` (see `components/auth/login-form.tsx:83`, `app/(auth)/signup/page.tsx:74`), identical to the runtime mint path's `auth.admin.generateLink` + `verifyOtp({token_hash, type:'email'})` from the GoTrue server's perspective. The §0.4 gate (`authentication_method = 'otp'`) cannot distinguish them.
+- **Empirical probe** (Phase 4, captured against dev 2026-05-18): runtime path (`verifyOtp` via `token_hash`) and dashboard path (`verifyOtp` via 6-digit `email_otp`) produce **identical** JWT structure modulo per-call randomness (jti, session_id). All discriminator candidates were exhaustively compared:
+
+  | Field                          | Runtime path        | Dashboard path      |
+  | ------------------------------ | ------------------- | ------------------- |
+  | `aud`                          | `soleur-runtime`*   | `soleur-runtime`*   |
+  | `amr[0].method`                | `otp`               | `otp`               |
+  | `app_metadata.providers`       | `["email"]`         | `["email"]`         |
+  | `aal`                          | `aal1`              | `aal1`              |
+  | `role`                         | `authenticated`     | `authenticated`     |
+  | `is_anonymous`                 | `false`             | `false`             |
+  | `iss`                          | (same project)      | (same project)      |
+  | `exp - iat`                    | `600`*              | `600`*              |
+
+  *the rewrites — both paths were getting hook-rewritten, which is the bug.
+- **Conclusion**: no field discriminates. The §0.4 gate ships with this PR but as defense-in-depth only; the load-bearing discriminator is now the marker-table pattern from §0.7 below.
+- **Pivot — marker table (migrations 049 + 050)**:
+  - Migration 049 introduces `public.runtime_mint_intent(user_id uuid PK REFERENCES auth.users(id) ON DELETE CASCADE, created_at timestamptz DEFAULT NOW())`. RLS enabled; service_role gets `INSERT, UPDATE`; supabase_auth_admin gets `SELECT, DELETE`; everyone else REVOKEd.
+  - Migration 050 CREATE OR REPLACEs `runtime_jwt_mint_hook` with a strengthened gate: pass-through unless `authentication_method = 'otp'` **AND** an intent row was atomically consumed via `WITH consumed AS (DELETE FROM public.runtime_mint_intent WHERE user_id = v_user_id AND created_at > NOW() - INTERVAL '10 seconds' RETURNING 1) SELECT EXISTS(...) INTO v_intent_consumed`. Single statement → race-safe against concurrent hook firings.
+  - `lib/supabase/tenant.ts:mintFounderJwt` UPSERTs the marker immediately before `auth.admin.generateLink` (`onConflict: 'user_id'` for idempotency under concurrent mints).
+- **Residual race window**: ~700ms between tenant.ts UPSERT and the hook's DELETE inside verifyOtp. A dashboard login firing for the same user_id within that window steals the intent. Bounded harm: dashboard user occasionally gets 10-min session, self-recovering via re-login. Probability per dashboard login: ~0.02% under steady-state founder load (24 mints/hr/founder × 700ms window / 24hr × dashboard-login rate of ~1/day). Accepted residual per single-user-incident threshold deliberation; the alternative (shadow-user architecture, ~500 LOC + backfill migration + tenant-isolation surface updates) was judged disproportionate.
+- **Empirical verification after fix**: rerun of the Phase-0.7 probe with migrations 049+050 applied and tenant.ts UPSERTing the marker:
+  - Runtime path (UPSERT performed) → `aud=soleur-runtime`, `exp-iat=600s`, precheck-injected jti ✓
+  - Dashboard path (no UPSERT) → `aud=authenticated`, `exp-iat=3600s`, no jti rewrite ✓
+- **Plan amendment**: this section is the canonical write-up; the plan file (`knowledge-base/project/plans/2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md`) is amended with a Phase-4 cross-reference back here.
 
 ## References
 

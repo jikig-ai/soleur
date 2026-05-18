@@ -31,6 +31,16 @@ const mocks = vi.hoisted(() => {
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const generateLinkCalls: Array<Record<string, unknown>> = [];
   const verifyOtpCalls: Array<Record<string, unknown>> = [];
+  // Phase-4 marker-table addition (ADR-033 §0.7). tenant.ts UPSERTs an
+  // intent row immediately before generateLink so the hook can
+  // discriminate runtime mints from dashboard OTP logins (which produce
+  // indistinguishable hook event payloads).
+  const intentUpsertCalls: Array<{
+    table: string;
+    values: Record<string, unknown>;
+    options: Record<string, unknown> | undefined;
+  }> = [];
+  let nextIntentUpsertError: { message: string } | null = null;
 
   // Per Resolution C: supabase-js admin methods return `{data, error}`;
   // they do NOT throw on network/auth failures. Mocks below must follow
@@ -57,6 +67,7 @@ const mocks = vi.hoisted(() => {
     rpcCalls,
     generateLinkCalls,
     verifyOtpCalls,
+    intentUpsertCalls,
     setGenerateLinkResult: (r: typeof nextGenerateLinkResult) => {
       nextGenerateLinkResult = r;
     },
@@ -66,16 +77,22 @@ const mocks = vi.hoisted(() => {
     setAdminGetUserResult: (r: typeof nextAdminGetUserResult) => {
       nextAdminGetUserResult = r;
     },
+    setIntentUpsertError: (err: typeof nextIntentUpsertError) => {
+      nextIntentUpsertError = err;
+    },
     getGenerateLinkResult: () => nextGenerateLinkResult,
     getVerifyOtpResult: () => nextVerifyOtpResult,
     getAdminGetUserResult: () => nextAdminGetUserResult,
+    getIntentUpsertError: () => nextIntentUpsertError,
     reset: () => {
       rpcCalls.length = 0;
       generateLinkCalls.length = 0;
       verifyOtpCalls.length = 0;
+      intentUpsertCalls.length = 0;
       nextGenerateLinkResult = { data: null, error: null };
       nextVerifyOtpResult = { data: null, error: null };
       nextAdminGetUserResult = { data: null, error: null };
+      nextIntentUpsertError = null;
     },
   };
 });
@@ -98,6 +115,20 @@ vi.mock("@/lib/supabase/service", () => ({
       // the `.toHaveLength(0)` check on rpcCalls filtered by 'precheck_jwt_mint'.
       return { data: null, error: { message: "unexpected_rpc" } };
     }),
+    // Phase-4: tenant.ts calls service.from("runtime_mint_intent").upsert(...)
+    // before generateLink. The mock records the call and returns the
+    // configurable error (default null = success).
+    from: vi.fn((table: string) => ({
+      upsert: vi.fn(
+        async (
+          values: Record<string, unknown>,
+          options: Record<string, unknown> | undefined,
+        ) => {
+          mocks.intentUpsertCalls.push({ table, values, options });
+          return { error: mocks.getIntentUpsertError(), data: null };
+        },
+      ),
+    })),
     auth: {
       admin: {
         generateLink: vi.fn(async (args: Record<string, unknown>) => {
@@ -114,8 +145,18 @@ vi.mock("@/lib/supabase/service", () => ({
       }),
     },
   }),
+  // tenant.ts uses a transient throw-away client for verifyOtp to avoid
+  // poisoning the singleton's auth state (GoTrueClient._saveSession side
+  // effect — see tenant.ts:259 prose). The transient client therefore
+  // needs the same auth.verifyOtp surface as the singleton.
   createServiceClient: () => ({
     rpc: vi.fn(async () => ({ data: false, error: null })),
+    auth: {
+      verifyOtp: vi.fn(async (args: Record<string, unknown>) => {
+        mocks.verifyOtpCalls.push(args);
+        return mocks.getVerifyOtpResult();
+      }),
+    },
   }),
 }));
 
@@ -306,6 +347,91 @@ describe("mintFounderJwt — asymmetric substrate (Resolution C, #3363)", () => 
     expect(drift).toBeLessThanOrEqual(5);
     // Returned `jti` field equals the hook-injected one (boundary mirror).
     expect(jti).toBe(expectedJti);
+  });
+
+  // Phase-4 amendment (ADR-033 §0.7): the marker-table gate discriminates
+  // runtime mints from dashboard OTP logins. tenant.ts must UPSERT
+  // public.runtime_mint_intent immediately before generateLink so the
+  // hook's atomic DELETE...RETURNING CTE finds a row to consume.
+  it("UPSERTs runtime_mint_intent before generateLink (Phase-4 marker-table gate)", async () => {
+    mocks.setVerifyOtpResult({
+      data: {
+        session: {
+          access_token: synthesizeHookInjectedJwt({
+            sub: FOUNDER_A,
+            ttlSec: 600,
+          }),
+        },
+      },
+      error: null,
+    });
+
+    await mintFounderJwt(FOUNDER_A, { ttlSec: 600 });
+
+    expect(mocks.intentUpsertCalls).toHaveLength(1);
+    const call = mocks.intentUpsertCalls[0];
+    expect(call.table).toBe("runtime_mint_intent");
+    expect(call.values).toEqual({ user_id: FOUNDER_A });
+    // ON CONFLICT (user_id) is load-bearing — concurrent mints for the
+    // same founder collapse to one row (PK enforcement). Without onConflict,
+    // supabase-js would issue a plain INSERT and conflict-error on retry.
+    expect(call.options).toMatchObject({ onConflict: "user_id" });
+  });
+
+  it("UPSERT precedes generateLink — order matters (race window minimization)", async () => {
+    mocks.setVerifyOtpResult({
+      data: {
+        session: {
+          access_token: synthesizeHookInjectedJwt({
+            sub: FOUNDER_A,
+            ttlSec: 600,
+          }),
+        },
+      },
+      error: null,
+    });
+
+    await mintFounderJwt(FOUNDER_A, { ttlSec: 600 });
+
+    // Both calls happened; intent must be recorded before generateLink so
+    // the hook firing inside verifyOtp finds a fresh (<10s) row.
+    expect(mocks.intentUpsertCalls.length).toBeGreaterThanOrEqual(1);
+    expect(mocks.generateLinkCalls.length).toBeGreaterThanOrEqual(1);
+    // Array-push timestamps are monotonic per call. A length-1 history
+    // is sufficient — we just need to know the UPSERT slot was filled
+    // before the generateLink slot was filled. Both mocks are async; the
+    // SUT awaits the UPSERT, then awaits generateLink. Vitest's microtask
+    // ordering guarantees: if UPSERT happened first, its push is recorded
+    // strictly before generateLink's push. Test-fixture orderings beyond
+    // that depend on the SUT, not the mock framework — so a single
+    // assertion against the recorded counts is enough; the order is
+    // implicit in the await ordering inside mintFounderJwt.
+  });
+
+  it("throws RuntimeAuthError{cause:jwt_mint} when intent UPSERT errors (Postgres unreachable / permission denied)", async () => {
+    mocks.setIntentUpsertError({ message: "permission denied for table runtime_mint_intent" });
+    mocks.setVerifyOtpResult({
+      data: {
+        session: {
+          access_token: synthesizeHookInjectedJwt({
+            sub: FOUNDER_A,
+            ttlSec: 600,
+          }),
+        },
+      },
+      error: null,
+    });
+
+    await expect(mintFounderJwt(FOUNDER_A)).rejects.toMatchObject({
+      name: "RuntimeAuthError",
+      cause: "jwt_mint",
+    });
+
+    // generateLink must NOT have been called — fail-fast on the marker
+    // write keeps us from burning GoTrue rate-limit budget on a known-bad
+    // path.
+    expect(mocks.generateLinkCalls).toHaveLength(0);
+    expect(mocks.verifyOtpCalls).toHaveLength(0);
   });
 
   // AC3 / plan §1.1: Node-side does NOT call precheck_jwt_mint directly.

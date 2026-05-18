@@ -448,10 +448,15 @@ Supabase rotation guarantee. There is no Mgmt API endpoint for this
 toggle as of 2026-05-18 — this is the one operator-acknowledged
 Dashboard click in the substrate. Re-run the probe to confirm.
 
-**10.b — Apply migrations 047 + 048** via the standard
+**10.b — Apply migrations 047 + 048 + 049 + 050** via the standard
 `apps/web-platform/scripts/apply-migrations.mjs` flow (or Doppler
 `DATABASE_URL_POOLER` with port `:5432` for session-mode multi-statement
 DDL — see `2026-05-18-vendor-token-mint-…-content-carrier-patterns.md`).
+Migrations 049 and 050 are the Phase-4 amendment from ADR-033 §0.7 —
+they add the `runtime_mint_intent` marker table and strengthen the hook
+gate to consume an intent row inside an atomic CTE. Without 049+050 the
+hook would silently rewrite dashboard OTP login JWTs with
+`aud=soleur-runtime` and `exp=600s` (10-min auto-logout for end users).
 Verify post-apply:
 
 ```bash
@@ -459,8 +464,17 @@ psql "${DATABASE_URL_POOLER/:6543/:5432}" -c "
   SELECT proname FROM pg_proc
   WHERE proname IN ('runtime_jwt_mint_hook','precheck_jwt_mint')
     AND pronamespace = 'public'::regnamespace;
+  SELECT to_regclass('public.runtime_mint_intent') IS NOT NULL AS intent_table_exists;
+  SELECT pg_get_functiondef(p.oid) ~ 'v_intent_consumed' AS hook_has_intent_gate
+  FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid
+  WHERE p.proname = 'runtime_jwt_mint_hook' AND n.nspname = 'public';
 "
 ```
+
+Expect all three:
+- two procs (`runtime_jwt_mint_hook` + `precheck_jwt_mint`)
+- `intent_table_exists = t`
+- `hook_has_intent_gate = t`
 
 **10.c — Register the Custom Access Token Hook via the Mgmt API.**
 Operator-acknowledged write (per `hr-menu-option-ack-not-prod-write-auth`).

@@ -47,7 +47,7 @@ import { createServiceClient, getServiceClient, serverUrl } from "./service";
 export type UserId = string;
 
 export interface MintFounderJwtOpts {
-  /** Token TTL in seconds. Default 600 (10min). The cache reminta at TTL/2. */
+  /** Token TTL in seconds. Default 600 (10min). The cache remints at TTL/4. */
   ttlSec?: number;
 }
 
@@ -224,6 +224,30 @@ export async function mintFounderJwt(
 
   const email = await resolveFounderEmail(userId);
 
+  // Mint-intent marker (Phase-4 amendment, ADR-033 §0.7). The empirical
+  // probe established that Supabase's hook event payload contains no
+  // field discriminating this runtime path from a user-facing dashboard
+  // OTP login (signInWithOtp + verifyOtp) — both produce identical
+  // aud/amr/exp/app_metadata. Without this marker the hook would
+  // silently rewrite dashboard JWTs (10-min auto-logout for end users).
+  //
+  // Atomicity: the row is UPSERTed (ON CONFLICT DO UPDATE) before the
+  // verifyOtp call that triggers the hook. The hook DELETEs the row
+  // inside a CTE; only consumption unlocks the mint path. Stale rows
+  // (>10s) are ignored by the hook. Residual race: ~700ms window where
+  // a concurrent dashboard OTP login for the same founder could steal
+  // the intent — self-recovering and bounded to <0.02% under steady
+  // state (see migration 049 prose).
+  const { error: intentError } = await service
+    .from("runtime_mint_intent")
+    .upsert({ user_id: userId }, { onConflict: "user_id" });
+  if (intentError) {
+    throw new RuntimeAuthError(
+      "jwt_mint",
+      "Authentication unavailable; retry shortly",
+    );
+  }
+
   // generateLink — produces a hashed_token. type='magiclink' here is the
   // template selector; no email is sent (we consume the hashed_token
   // server-side via verifyOtp below).
@@ -336,7 +360,7 @@ interface CacheEntry {
  * bearing dedup: concurrent cold callers (e.g., `Promise.all([lease.getApiKey(),
  * getUserServiceTokens(userId)])` at session start) await the same
  * pending mint instead of each consuming a slot from the 60/hr ceiling.
- * Entries are remminted when `now - mintedAt > ttlSec/4` (Resolution C
+ * Entries are reminted when `now - mintedAt > ttlSec/4` (Resolution C
  * boundary — TTL/2 under HS256 was halved to TTL/4 to keep cache hit-rate
  * high under the ~750ms generateLink+verifyOtp cost; ≤24 mints/hr/founder
  * stays below the precheck_jwt_mint 60/hour ceiling).
@@ -410,7 +434,7 @@ function evictIf(userId: UserId, expected: Promise<CacheEntry>): void {
  * threshold for the closed-preview alpha, the user-impact of a
  * wholesale lockout (every founder loses access until a flake clears)
  * dominates the impact of missed revocation latency (bounded by the
- * cache TTL/2 ≤ 5min). Promote to fail-closed via a circuit-breaker if
+ * cache TTL/4 ≤ 2.5min). Promote to fail-closed via a circuit-breaker if
  * the deny surface drops repeatedly under steady state — Tracked in
  * the deny-list-circuit-breaker follow-up.
  */
@@ -468,7 +492,7 @@ async function denyProbe(jti: string, userId: UserId): Promise<boolean> {
 
 /**
  * Get a tenant-scoped Supabase client for the given founder, transparently
- * reminting the underlying JWT when it crosses the TTL/2 freshness
+ * reminting the underlying JWT when it crosses the TTL/4 freshness
  * boundary.
  *
  * This is the only public boundary call sites should use for tenant-data

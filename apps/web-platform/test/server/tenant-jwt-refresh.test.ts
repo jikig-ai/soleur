@@ -136,6 +136,13 @@ vi.mock("@/server/observability", () => ({
 vi.mock("@/lib/supabase/service", () => ({
   serverUrl: () => "https://test-project.supabase.co",
   getServiceClient: () => ({
+    // Phase-4: tenant.ts UPSERTs runtime_mint_intent before generateLink
+    // (ADR-033 §0.7). Default to success — this file tests refresh / TTL
+    // boundary behavior, not the intent-write contract (covered in
+    // tenant-jwt-asymmetric.test.ts).
+    from: vi.fn((_table: string) => ({
+      upsert: vi.fn(async () => ({ error: null, data: null })),
+    })),
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
       mocks.rpcCalls.push({ fn, args });
       // PR-E #3887: deny-probe RPC fires on every cache-hit and post-mint
@@ -205,8 +212,32 @@ vi.mock("@/lib/supabase/service", () => ({
       }),
     },
   }),
+  // Transient throw-away client used by tenant.ts for verifyOtp (avoids
+  // singleton auth-state poisoning). Needs the same verifyOtp surface as
+  // the singleton; route through the same mock state so tests can assert
+  // verifyOtp calls regardless of which client made them.
   createServiceClient: () => ({
     rpc: vi.fn(async () => ({ data: false, error: null })),
+    auth: {
+      verifyOtp: vi.fn(async (args: Record<string, unknown>) => {
+        mocks.verifyOtpCalls.push(args);
+        const f = mocks._getFailure();
+        if (f.stage === "verifyOtp") {
+          return { data: null, error: f.error };
+        }
+        const cfg = mocks._getMintConfig();
+        const access_token = cfg.accessToken ?? mocks._buildJwt(cfg);
+        return {
+          data: {
+            session: {
+              access_token,
+              refresh_token: "syn-refresh-token-not-used",
+            },
+          },
+          error: null,
+        };
+      }),
+    },
   }),
 }));
 
