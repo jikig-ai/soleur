@@ -18,12 +18,7 @@
 -- call; this hook atomically DELETEs it inside a CTE. Dashboard logins
 -- never UPSERT, so the DELETE finds no row → pass-through.
 --
--- Race window: ~700ms between tenant.ts UPSERT and the hook's DELETE
--- inside verifyOtp. A dashboard login firing for the same user_id within
--- that window steals the intent → dashboard user gets runtime claims
--- (10-min session; self-recovering via re-login). Probability: ~0.02% of
--- dashboard logins under steady-state founder load. Accepted residual per
--- single-user-incident threshold deliberation.
+-- Race window + bounded-harm analysis: see migration 049 prose.
 --
 -- Plan: knowledge-base/project/plans/2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md §Phase 4 amendment
 -- ADR:  knowledge-base/engineering/architecture/decisions/ADR-033-runtime-jwt-signing-substrate.md §0.7
@@ -59,9 +54,20 @@ BEGIN
     DELETE FROM public.runtime_mint_intent
     WHERE user_id = v_user_id
       AND created_at > NOW() - INTERVAL '10 seconds'
+      AND created_at <= NOW()
     RETURNING 1
   )
   SELECT EXISTS (SELECT 1 FROM consumed) INTO v_intent_consumed;
+
+  -- Note: GoTrue's Custom Access Token Hook runs inside the JWT-issuance
+  -- transaction. If GoTrue rolls back post-hook (e.g., refresh-token write
+  -- failure), the DELETE above rolls back too — the marker survives. The
+  -- 10s TTL bounds the residual exposure; the next dashboard OTP login for
+  -- the same user within that window could consume the leftover marker
+  -- and receive runtime claims. Bounded harm matches the documented
+  -- ADR-033 §0.7 race characterization (still self-recovering via
+  -- re-login); flagged here so future operators don't miss it during
+  -- incident triage.
 
   -- Pass-through gate. BOTH conditions must hold for the mint path:
   --   (a) authentication_method = 'otp' — pre-existing gate from 047,

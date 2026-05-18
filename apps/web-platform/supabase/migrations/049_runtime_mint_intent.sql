@@ -67,7 +67,10 @@ REVOKE ALL ON TABLE public.runtime_mint_intent FROM PUBLIC, anon, authenticated;
 
 -- service_role: tenant.ts uses supabase-js .from().upsert() which compiles
 -- to INSERT ... ON CONFLICT DO UPDATE — both INSERT and UPDATE are needed.
-GRANT INSERT, UPDATE ON TABLE public.runtime_mint_intent TO service_role;
+-- Narrow UPDATE to (created_at) — user_id is the PK and must never be
+-- re-keyed; only the timestamp refreshes under ON CONFLICT.
+GRANT INSERT ON TABLE public.runtime_mint_intent TO service_role;
+GRANT UPDATE (created_at) ON TABLE public.runtime_mint_intent TO service_role;
 
 -- supabase_auth_admin: the hook runs as this role. SELECT supports
 -- diagnostic queries; DELETE is the load-bearing privilege for the

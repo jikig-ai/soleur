@@ -307,15 +307,22 @@ export async function mintFounderJwt(
 
   const jwt = verified.data.session.access_token;
 
-  // Defensive: the hook is supposed to inject jti and override exp/iat.
-  // If jti is missing the hook didn't fire (unregistered, or auth method
-  // drift), in which case our `denied_jti` revocation surface would have
-  // no anchor — throw rather than return a half-trusted client. Phase 2.8
-  // adds a parallel startup probe in service.ts so the failure surfaces
-  // at boot, not just at mint time.
+  // Defensive: the hook is supposed to inject jti (precheck-issued UUID)
+  // and override exp/iat. If jti is missing or not UUID-shaped, the hook
+  // either didn't fire (unregistered, or auth method drift), OR fired but
+  // pass-through'd (e.g., concurrent dashboard OTP stole the intent row,
+  // ADR-033 §0.7 race window). In either case our `denied_jti` revocation
+  // surface would have no anchor — throw rather than return a half-trusted
+  // client. The UUID-shape check (vs typeof-string alone) defends against
+  // a future Supabase change that adds a non-UUID natural `jti` claim to
+  // pass-through JWTs (would silently bypass denied_jti lookup space).
+  // Phase 2.8 adds a parallel startup probe in service.ts so unregistered
+  // hook failures surface at boot, not just at mint time.
   const payload = decodeJwtPayloadUnsafe(jwt);
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
     typeof payload.jti !== "string" ||
+    !UUID_RE.test(payload.jti) ||
     typeof payload.exp !== "number"
   ) {
     throw new RuntimeAuthError(

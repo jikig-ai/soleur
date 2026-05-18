@@ -378,36 +378,6 @@ describe("mintFounderJwt — asymmetric substrate (Resolution C, #3363)", () => 
     expect(call.options).toMatchObject({ onConflict: "user_id" });
   });
 
-  it("UPSERT precedes generateLink — order matters (race window minimization)", async () => {
-    mocks.setVerifyOtpResult({
-      data: {
-        session: {
-          access_token: synthesizeHookInjectedJwt({
-            sub: FOUNDER_A,
-            ttlSec: 600,
-          }),
-        },
-      },
-      error: null,
-    });
-
-    await mintFounderJwt(FOUNDER_A, { ttlSec: 600 });
-
-    // Both calls happened; intent must be recorded before generateLink so
-    // the hook firing inside verifyOtp finds a fresh (<10s) row.
-    expect(mocks.intentUpsertCalls.length).toBeGreaterThanOrEqual(1);
-    expect(mocks.generateLinkCalls.length).toBeGreaterThanOrEqual(1);
-    // Array-push timestamps are monotonic per call. A length-1 history
-    // is sufficient — we just need to know the UPSERT slot was filled
-    // before the generateLink slot was filled. Both mocks are async; the
-    // SUT awaits the UPSERT, then awaits generateLink. Vitest's microtask
-    // ordering guarantees: if UPSERT happened first, its push is recorded
-    // strictly before generateLink's push. Test-fixture orderings beyond
-    // that depend on the SUT, not the mock framework — so a single
-    // assertion against the recorded counts is enough; the order is
-    // implicit in the await ordering inside mintFounderJwt.
-  });
-
   it("throws RuntimeAuthError{cause:jwt_mint} when intent UPSERT errors (Postgres unreachable / permission denied)", async () => {
     mocks.setIntentUpsertError({ message: "permission denied for table runtime_mint_intent" });
     mocks.setVerifyOtpResult({

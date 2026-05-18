@@ -124,6 +124,13 @@ Issue body claims vs. live state at plan-write time:
 
 **If this leaks, the user's session is exposed via:** the new substrate **eliminates** a class of leak that the HS256 substrate carried — Soleur no longer holds a signing key, so a `process.env` dump, a Sentry config-block leak, or a compromised Doppler service token cannot mint arbitrary tenant JWTs. The remaining exposure surface narrows to the `SUPABASE_SERVICE_ROLE_KEY` (which can call `auth.admin.generateLink` and thus impersonate any founder) — same blast-radius class as before, no widening.
 
+**Phase-4 amendment — additional user-facing failure modes named after the marker-table pivot (ADR-033 §0.7):**
+
+- **Race-window dashboard session shortening.** Probability ~0.02% of dashboard OTP logins under steady-state founder load (24 mints/hr × ~700ms UPSERT→hook window). A losing dashboard verifyOtp consumes the runtime intent row → founder's dashboard session arrives with `aud=soleur-runtime`, `exp=600s`. PostgREST does not enforce `aud` today; the user-visible harm is a 10-minute auto-logout. **Self-recovering** via re-login. Accepted residual per single-user-incident threshold.
+- **Cascade-deletion-during-mint.** If an admin deletes a founder's `auth.users` row while a runtime mint is in flight, ON DELETE CASCADE removes the intent row before the hook fires → hook pass-through → tenant.ts's UUID-shape `jti` defensive check throws `RuntimeAuthError("Authentication unavailable; retry shortly")`. **Acceptable scope-out**: the user no longer exists post-cascade; the brief in-flight error is bounded and tied to admin action.
+- **Multi-device concurrent mint contention.** Two devices for the same founder UPSERTing within the ~700ms window: one consumes the intent (legit runtime claims), the other gets a pass-through JWT lacking precheck-issued `jti` → tenant.ts's UUID-shape `jti` check throws `RuntimeAuthError`, the losing device retries and the next UPSERT cycle succeeds. **Mitigated**: existing defensive check + retry. No `denied_jti` revocation bypass — the losing JWT is rejected at tenant.ts boundary before it enters the cache.
+- **Latency budget.** +30-50ms per mint for the extra UPSERT roundtrip (p95 mint = 753ms baseline). Within PR-B's 1s session-start SLO; cache hit-rate ≈99% post-warmup confines the cost to once-per-session.
+
 **Brand-survival threshold:** `single-user incident` — a regression on this path = "every founder loses access until rollback". CPO sign-off required at plan time before `/work` begins. CPO carry-forward from PR-B's plan applies: brand-survival framing already locked in.
 
 ## Hypotheses
