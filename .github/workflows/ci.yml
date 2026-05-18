@@ -9,6 +9,19 @@ on:
 permissions:
   contents: read
 
+# Cancel in-progress CI runs for the same PR when a newer commit lands.
+# Scoped to pull_request events only — on `main` we let prior runs finish
+# so the audit trail (post-merge monitors, release-gate evidence) stays
+# intact. Group keys off (workflow, ref) so PR runs don't compete with
+# main-branch runs of the same workflow. github.workflow / github.ref /
+# github.event_name are GitHub-controlled meta-vars, not attacker-
+# controlled — safe to interpolate directly (the security-reminder hook
+# fires for any ${{ … }} in workflow files; the run:-command injection
+# class does not apply here).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   readme-counts:
     runs-on: ubuntu-latest
