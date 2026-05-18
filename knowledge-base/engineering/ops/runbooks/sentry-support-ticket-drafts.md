@@ -105,7 +105,7 @@ jean.deruelle@jikigai.com
 **After submission:**
 
 - Capture ticket ID in PR #3946 body under `AC13 — Sentry support ticket IDs`.
-- Capture submission timestamp — this is the **anchor for T+14d countdown** on PIR Phase 8 Gate 3 (`knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`).
+- Capture submission timestamp — this is the **anchor for T+14d countdown** on PIR Phase 8 Gate 3 (`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`).
 - T+14d resolution branch (3a/3b/3c/3d) is selected at countdown expiry and recorded in-place in the PIR.
 
 ---

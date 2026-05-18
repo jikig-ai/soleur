@@ -33,7 +33,7 @@ deepened_on: 2026-04-29
 ## Overview
 
 Issue #3015 is a follow-through item filed by `/ship` Phase 7 Step 3.5 from PR
-#3014's postmortem (`knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`).
+#3014's postmortem (`knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`).
 The postmortem prescribed two phases:
 
 - **Phase 1** — Diagnose root cause of the `/dashboard` error.tsx outage (read-only,
@@ -124,7 +124,7 @@ None. (Verified via `gh issue list --label code-review --state open --json
 number,title,body --limit 200` — zero open code-review issues touch
 `.github/workflows/web-platform-release.yml`,
 `apps/web-platform/lib/supabase/client.ts`, or
-`knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`.)
+`knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`.)
 
 ## Implementation Phases
 
@@ -325,7 +325,7 @@ fixture flow, then re-snapshot `/dashboard`.
 
 #### 3.4 Update the runbook's Recovery Verification section
 
-Edit `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`
+Edit `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`
 "Recovery Verification" block (lines ~243–250). Replace each `TBD` with
 concrete evidence: release tag (e.g., `web-vX.Y.Z`), canary swap log line,
 Playwright screenshot path, claim-check pass output. Set the frontmatter
@@ -344,7 +344,7 @@ actual close happens here, after evidence is recorded.
 
 ## Files to Edit
 
-- `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`
+- `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`
   — fill in Recovery Verification section, flip frontmatter `status` to
   closed.
 
