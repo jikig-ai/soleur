@@ -118,13 +118,26 @@ resource "betteruptime_policy" "uptime" {
 #     to a noisier channel. Adding edge-error is a clean follow-up if the
 #     real-incident mix shows we are missing edge-error events.
 #
-# filters.zones is REQUIRED by the Cloudflare API for http_alert_origin_error
-# (and most http_alert_* types) even though the TF provider schema marks
-# `filters` as Optional. Discovered at apply-time when PR #4003's initial
-# attempt failed with API error 17103: "Filters selection must be provided
-# to create a policy." The expiring_service_token_alert precedent
-# (tunnel.tf:75-85) does NOT need filters because that alert type is
-# account-scoped, not zone-scoped — do not generalize from it.
+# filters.zones AND filters.slo are BOTH required by the Cloudflare API for
+# http_alert_origin_error even though the TF provider schema marks `filters`
+# as Optional and the public CF docs only call out zones as required. Source
+# of truth: cloudflare/terraform-provider-cloudflare#1406 comment from a CF
+# engineer enumerating the per-alert-type filter contracts. Valid slo values
+# for this alert: "99.7", "99.8", "99.9". We pick 99.9 (strictest — fires at
+# 0.1% origin error rate) because the post-mortem scenario this exists to
+# catch is a 526 cert outage, where error rate jumps to ~100% on the affected
+# host. A 99.7 threshold would still catch that but adds latency before the
+# alert trips on subtler degradation.
+#
+# Discovery path:
+#   1. PR #4003 declared no filters → CF API error 17103.
+#   2. PR #4015 added filters.zones → STILL got 17103 (this comment is the
+#      reason: zones alone is insufficient).
+#   3. This PR adds filters.slo → expected to apply cleanly.
+#
+# The expiring_service_token_alert precedent (tunnel.tf:75-85) does NOT need
+# filters because that alert type is account-scoped, not zone-scoped — do
+# NOT generalize from it.
 #
 # Why email_integration only (no Slack / PagerDuty):
 #   - Matches the service_token_expiry precedent. Multi-channel routing is an
@@ -139,6 +152,7 @@ resource "cloudflare_notification_policy" "soleur_ai_5xx" {
 
   filters {
     zones = [var.cf_zone_id]
+    slo   = ["99.9"]
   }
 
   email_integration {
