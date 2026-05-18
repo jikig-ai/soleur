@@ -66,54 +66,83 @@ function makePostRequest(headers: Record<string, string> = {}): NextRequest {
   }) as unknown as NextRequest;
 }
 
+// Per-test timeout extended to 15 s. `vi.resetModules()` in beforeEach forces
+// each test to rebuild the /api/inngest route's module graph from cold —
+// Next.js + Inngest SDK + Supabase + Sentry + the Inngest function registry
+// is heavy enough to land at ~4-5 s in isolation. After TR9 PR-1 wired a
+// second function into the registry, the cold-load occasionally tipped over
+// the default 5 s timeout in CI parallel-load. The test bodies themselves
+// run in <50 ms — the load cost is incidental, not what's being measured.
+const ROUTE_LOAD_TIMEOUT_MS = 15_000;
+
 describe("app/api/inngest/route.ts — signature verification", () => {
-  it("exports GET, POST, PUT handlers", async () => {
-    const route = await importRoute();
-    expect(typeof route.GET).toBe("function");
-    expect(typeof route.POST).toBe("function");
-    expect(typeof route.PUT).toBe("function");
-  });
+  it(
+    "exports GET, POST, PUT handlers",
+    async () => {
+      const route = await importRoute();
+      expect(typeof route.GET).toBe("function");
+      expect(typeof route.POST).toBe("function");
+      expect(typeof route.PUT).toBe("function");
+    },
+    ROUTE_LOAD_TIMEOUT_MS,
+  );
 
-  it("POST without x-inngest-signature header returns 401", async () => {
-    const { POST } = await importRoute();
-    const res = await POST(makePostRequest(), undefined);
-    expect(res.status).toBe(401);
-  });
+  it(
+    "POST without x-inngest-signature header returns 401",
+    async () => {
+      const { POST } = await importRoute();
+      const res = await POST(makePostRequest(), undefined);
+      expect(res.status).toBe(401);
+    },
+    ROUTE_LOAD_TIMEOUT_MS,
+  );
 
-  it("POST with malformed x-inngest-signature returns 401", async () => {
-    const { POST } = await importRoute();
-    const res = await POST(
-      makePostRequest({ "x-inngest-signature": "this-is-not-a-valid-signature" }),
-      undefined,
-    );
-    expect(res.status).toBe(401);
-  });
+  it(
+    "POST with malformed x-inngest-signature returns 401",
+    async () => {
+      const { POST } = await importRoute();
+      const res = await POST(
+        makePostRequest({ "x-inngest-signature": "this-is-not-a-valid-signature" }),
+        undefined,
+      );
+      expect(res.status).toBe(401);
+    },
+    ROUTE_LOAD_TIMEOUT_MS,
+  );
 
-  it("POST with valid-shaped but wrong-HMAC signature returns 401", async () => {
-    const { POST } = await importRoute();
-    // Right shape (t=<unix>&s=<64-hex>), wrong HMAC.
-    const t = Math.floor(Date.now() / 1000);
-    const sig = `t=${t}&s=${"0".repeat(64)}`;
-    const res = await POST(
-      makePostRequest({ "x-inngest-signature": sig }),
-      undefined,
-    );
-    expect(res.status).toBe(401);
-  });
+  it(
+    "POST with valid-shaped but wrong-HMAC signature returns 401",
+    async () => {
+      const { POST } = await importRoute();
+      // Right shape (t=<unix>&s=<64-hex>), wrong HMAC.
+      const t = Math.floor(Date.now() / 1000);
+      const sig = `t=${t}&s=${"0".repeat(64)}`;
+      const res = await POST(
+        makePostRequest({ "x-inngest-signature": sig }),
+        undefined,
+      );
+      expect(res.status).toBe(401);
+    },
+    ROUTE_LOAD_TIMEOUT_MS,
+  );
 
-  it("POST with stale-timestamp signature returns 401", async () => {
-    const { POST } = await importRoute();
-    // Timestamp 10 minutes in the past — Inngest's signature freshness window
-    // is 5 minutes (allowExpiredSignatures defaults to false). Even with a
-    // correctly-shaped HMAC field, this MUST be rejected.
-    const stale = Math.floor(Date.now() / 1000) - 600;
-    const sig = `t=${stale}&s=${"a".repeat(64)}`;
-    const res = await POST(
-      makePostRequest({ "x-inngest-signature": sig }),
-      undefined,
-    );
-    expect(res.status).toBe(401);
-  });
+  it(
+    "POST with stale-timestamp signature returns 401",
+    async () => {
+      const { POST } = await importRoute();
+      // Timestamp 10 minutes in the past — Inngest's signature freshness window
+      // is 5 minutes (allowExpiredSignatures defaults to false). Even with a
+      // correctly-shaped HMAC field, this MUST be rejected.
+      const stale = Math.floor(Date.now() / 1000) - 600;
+      const sig = `t=${stale}&s=${"a".repeat(64)}`;
+      const res = await POST(
+        makePostRequest({ "x-inngest-signature": sig }),
+        undefined,
+      );
+      expect(res.status).toBe(401);
+    },
+    ROUTE_LOAD_TIMEOUT_MS,
+  );
 
   // Review P2-8 (test-design-reviewer): positive control via mode-switch.
   //
@@ -129,10 +158,14 @@ describe("app/api/inngest/route.ts — signature verification", () => {
   // Inngest's internal signing format (signing-key prefix stripping,
   // timestamp+body concatenation, sha256 HMAC over the canonical
   // serialization). Mode-flip is the equivalent proof at lower cost.
-  it("POST without signature is NOT 401 in dev mode (mode-flip positive control)", async () => {
-    process.env.INNGEST_DEV = "1";
-    const { POST } = await importRoute();
-    const res = await POST(makePostRequest(), undefined);
-    expect(res.status).not.toBe(401);
-  });
+  it(
+    "POST without signature is NOT 401 in dev mode (mode-flip positive control)",
+    async () => {
+      process.env.INNGEST_DEV = "1";
+      const { POST } = await importRoute();
+      const res = await POST(makePostRequest(), undefined);
+      expect(res.status).not.toBe(401);
+    },
+    ROUTE_LOAD_TIMEOUT_MS,
+  );
 });

@@ -40,16 +40,23 @@ import { dirname, join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
-// Resolve the `claude` binary at module load. createRequire is the only
-// ESM-friendly resolution shape that does not depend on process.cwd() or
-// PATH. The package's `bin` entry maps "claude" → "bin/claude.exe" inside
-// the package dir; node's npm-bin layout puts it at node_modules/.bin/claude
-// (a symlink that re-runs the platform-native postinstall'd binary).
-const require_ = createRequire(import.meta.url);
-const CLAUDE_PKG_DIR = dirname(
-  require_.resolve("@anthropic-ai/claude-code/package.json"),
-);
-const CLAUDE_BIN = join(CLAUDE_PKG_DIR, "..", "..", ".bin", "claude");
+// Resolve the `claude` binary lazily inside the spawning step.run (NOT at
+// module load) so a missing/corrupt @anthropic-ai/claude-code install fails
+// at spawn time → reportSilentFallback → Sentry status=error, instead of
+// throwing at /api/inngest route registration which would silently disable
+// the entire Inngest worker with no operator-visible Sentry signal.
+// createRequire is the only ESM-friendly resolution shape that does not
+// depend on process.cwd() or PATH. The package's `bin` entry maps "claude"
+// → "bin/claude.exe" inside the package dir; node's npm-bin layout puts it
+// at node_modules/.bin/claude (a symlink that re-runs the platform-native
+// postinstall'd binary).
+function resolveClaudeBin(): string {
+  const require_ = createRequire(import.meta.url);
+  const pkgDir = dirname(
+    require_.resolve("@anthropic-ai/claude-code/package.json"),
+  );
+  return join(pkgDir, "..", "..", ".bin", "claude");
+}
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
 // 86-140, with one diff at step 3d: prompt enforces IDEMPOTENT search-before-
@@ -118,22 +125,58 @@ DOMAIN (pick one — aligned with Soleur department leaders):
 - If ${"`"}gh issue edit${"`"} fails for an issue, skip it and continue with the rest.
 `;
 
+// Narrowed --allowedTools Bash permission to the four gh-CLI verbs the
+// prompt actually needs. Closes the permissive-tools / restrictive-prompt
+// silent-agent-failure shape acknowledged in the header above: even on
+// successful prompt injection (issue body bypasses the Sharp Edges
+// directive), Bash cannot reach `curl`, `wget`, `git push`, `rm`, or
+// arbitrary shell — the agent is mechanically constrained to its triage
+// role. Syntax: `Bash(<cmd-prefix>:*)` per claude-code's per-Bash-command
+// allowlist (sibling-convention in .claude/settings.json).
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model", "claude-sonnet-4-6",
   "--max-turns", "80",
-  "--allowedTools", "Bash,Read,Glob,Grep",
+  "--allowedTools",
+  "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Read,Glob,Grep",
 ];
 
 // 60 min — matches old GHA timeout; preserves 0.75 min/turn peer ratio for
 // 80-turn budget (Architecture-strategist F2: 55 min was below the 0.75
-// floor → partial-run silent-failure shape).
-const MAX_TURN_DURATION_MS = 60 * 60 * 1000;
+// floor → partial-run silent-failure shape). Exported for test parity
+// (cron-daily-triage.test.ts imports to avoid hard-coded timing drift).
+export const MAX_TURN_DURATION_MS = 60 * 60 * 1000;
+export const KILL_ESCALATION_MS = 5_000;
 
 // Sentry slug stays "scheduled-daily-triage" for continuity (NOT renamed
 // to cron-daily-triage). The function file name follows the cron-* TR9
 // convention; the Sentry monitor slug carries forward from PR-F.
 const SENTRY_MONITOR_SLUG = "scheduled-daily-triage";
+
+// Validators for env-var-sourced URL components. A typo in Doppler
+// (e.g., SENTRY_INGEST_DOMAIN="ingest.sentry.io/x?leak=") would otherwise
+// produce a partially-attacker-controllable URL since the components are
+// interpolated raw into the heartbeat fetch.
+const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
+const SENTRY_PROJECT_RE = /^\d+$/;
+const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
+
+// Spawn-env allowlist. Passing `{ ...process.env }` to the claude
+// subprocess leaks every Doppler secret (SUPABASE_JWT_SECRET, BYOK keys,
+// INNGEST_SIGNING_KEY, GH PAT, etc.) into a process whose Bash tool can
+// `env | curl`. The allowlist below caps the blast radius of a successful
+// prompt injection to "issue-label tampering" instead of "full-tenant
+// secret exfil". GH_TOKEN/GITHUB_TOKEN are the only credential the
+// prompt's gh-CLI verbs need.
+function buildSpawnEnv(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    NODE_ENV: process.env.NODE_ENV,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    GH_TOKEN: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
+  };
+}
 
 interface SpawnResult {
   ok: boolean;
@@ -161,39 +204,46 @@ export async function cronDailyTriageHandler({
   abortedByTimeout: boolean;
 }> {
   const result = await step.run("claude-eval", async (): Promise<SpawnResult> => {
+    const claudeBin = resolveClaudeBin();
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
     const startedAt = Date.now();
     let abortedByTimeout = false;
-    ac.signal.addEventListener(
-      "abort",
-      () => {
-        abortedByTimeout = true;
-      },
-      { once: true },
-    );
+    let exited = false;
+    let escalationTimer: NodeJS.Timeout | null = null;
 
     try {
       return await new Promise<SpawnResult>((resolve) => {
         const child = spawn(
-          CLAUDE_BIN,
+          claudeBin,
           [...CLAUDE_CODE_FLAGS, DAILY_TRIAGE_PROMPT],
           {
             detached: true, // own process group so SIGTERM propagates to grandchildren
             stdio: ["ignore", "inherit", "inherit"],
-            // Inherits ANTHROPIC_API_KEY from Doppler-injected env (operator
-            // key only — I2). pino log scrubbing (PR-D #3883) already
-            // redacts the key from any logged spawn invocation.
-            env: { ...process.env },
+            env: buildSpawnEnv(),
           },
         );
 
-        // Process-group SIGTERM-then-SIGKILL escalation. ac.signal abort
-        // sends SIGTERM to the leader's process group (-pid); if the group
-        // is still alive after 5 s, escalate to SIGKILL.
+        const finish = (r: SpawnResult) => {
+          exited = true;
+          if (escalationTimer) clearTimeout(escalationTimer);
+          resolve(r);
+        };
+
+        // Single merged abort handler (was two listeners — code-simplifier
+        // collapse): flip the timeout flag AND issue SIGTERM in one block,
+        // then schedule the SIGKILL escalation. SIGKILL is gated on local
+        // `exited` (set by finish()) instead of `child.killed`: the latter
+        // only flips when `ChildProcess.prototype.kill()` is invoked on the
+        // object, NOT when external `process.kill(pid, ...)` delivers the
+        // signal OR when the child exits naturally — so the original
+        // `!child.killed` guard would have fired SIGKILL against a recycled
+        // PID 5 s after a clean exit. The exit/error paths clear the
+        // escalation timer so a clean exit cannot trail a stray SIGKILL.
         ac.signal.addEventListener(
           "abort",
           () => {
+            abortedByTimeout = true;
             if (!child.pid) return;
             const pid = child.pid;
             try {
@@ -201,19 +251,20 @@ export async function cronDailyTriageHandler({
             } catch {
               // Process group already gone — fine.
             }
-            setTimeout(() => {
+            escalationTimer = setTimeout(() => {
+              if (exited) return;
               try {
-                if (!child.killed) process.kill(-pid, "SIGKILL");
+                process.kill(-pid, "SIGKILL");
               } catch {
                 // Already exited between SIGTERM and the 5 s escalation.
               }
-            }, 5_000);
+            }, KILL_ESCALATION_MS);
           },
           { once: true },
         );
 
         child.on("exit", (exitCode, signal) => {
-          resolve({
+          finish({
             ok: exitCode === 0,
             exitCode,
             signal,
@@ -228,7 +279,7 @@ export async function cronDailyTriageHandler({
             message: "claude-code spawn failed",
             extra: { fn: "cron-daily-triage" },
           });
-          resolve({
+          finish({
             ok: false,
             exitCode: -1,
             signal: null,
@@ -255,6 +306,20 @@ export async function cronDailyTriageHandler({
       logger.info({ fn: "cron-daily-triage" }, "Sentry env unset — skipping heartbeat");
       return;
     }
+    // Validate env-derived URL components before interpolation. A typo'd
+    // SENTRY_INGEST_DOMAIN (e.g., `ingest.sentry.io/x?leak=`) would
+    // otherwise route the heartbeat to an attacker-controllable URL.
+    if (
+      !SENTRY_DOMAIN_RE.test(domain) ||
+      !SENTRY_PROJECT_RE.test(projectId) ||
+      !SENTRY_PUBLIC_KEY_RE.test(publicKey)
+    ) {
+      logger.warn(
+        { fn: "cron-daily-triage" },
+        "Sentry env malformed — skipping heartbeat",
+      );
+      return;
+    }
     const status = result.ok ? "ok" : "error";
     const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
     try {
@@ -263,11 +328,16 @@ export async function cronDailyTriageHandler({
         signal: AbortSignal.timeout(10_000),
       });
     } catch (err) {
-      reportSilentFallback(err as Error, {
+      const e = err as Error;
+      reportSilentFallback(e, {
         feature: "cron-sentry-heartbeat",
         op: "fetch",
         message: "Sentry Crons heartbeat POST failed",
-        extra: { fn: "cron-daily-triage", status },
+        extra: {
+          fn: "cron-daily-triage",
+          status,
+          aborted: e.name === "TimeoutError",
+        },
       });
     }
   });

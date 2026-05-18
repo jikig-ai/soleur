@@ -78,7 +78,8 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 200 })));
   process.env.SENTRY_INGEST_DOMAIN = "ingest.sentry.io";
   process.env.SENTRY_PROJECT_ID = "999";
-  process.env.SENTRY_PUBLIC_KEY = "abc123";
+  // 32-hex public key — production shape; matches SENTRY_PUBLIC_KEY_RE.
+  process.env.SENTRY_PUBLIC_KEY = "abc123def4567890abc123def4567890";
   process.env.INNGEST_SIGNING_KEY =
     "signkey-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   process.env.INNGEST_EVENT_KEY =
@@ -159,7 +160,13 @@ describe("cron-daily-triage — T2 spawn error (ENOENT)", () => {
 });
 
 describe("cron-daily-triage — T3 AbortSignal SIGTERM→SIGKILL escalation", () => {
-  it("at 60min: process.kill(-pid, SIGTERM); at +5s: SIGKILL", async () => {
+  it("at MAX_TURN_DURATION_MS: SIGTERM to -pid; at +KILL_ESCALATION_MS: SIGKILL", async () => {
+    // Import SUT constants so test fails for SUT-tuning reasons only when
+    // the SUT's tuning actually changes (vs hard-coded literals which
+    // would force test edits on any constant tweak).
+    const { MAX_TURN_DURATION_MS, KILL_ESCALATION_MS } = await import(
+      "@/server/inngest/functions/cron-daily-triage"
+    );
     vi.useFakeTimers();
     try {
       const killSpy = vi.spyOn(process, "kill").mockImplementation(
@@ -175,19 +182,22 @@ describe("cron-daily-triage — T3 AbortSignal SIGTERM→SIGKILL escalation", ()
       const step = makeStep();
       const promise = handler({ step, logger });
 
-      // Advance past 60min AbortSignal ceiling → SIGTERM should fire.
-      await vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 10);
+      // Advance past AbortSignal ceiling → SIGTERM should fire.
+      await vi.advanceTimersByTimeAsync(MAX_TURN_DURATION_MS + 10);
       const sigtermCalls = killSpy.mock.calls.filter(
         (c) => c[0] === -54321 && c[1] === "SIGTERM",
       );
-      expect(sigtermCalls.length).toBeGreaterThan(0);
+      // expect.soft: report BOTH signal-missing failures rather than
+      // short-circuiting on the first — caller learns which leg of the
+      // escalation regressed, not just that one of them did.
+      expect.soft(sigtermCalls.length, "SIGTERM was not issued").toBeGreaterThan(0);
 
-      // Advance another 5s → SIGKILL escalation.
-      await vi.advanceTimersByTimeAsync(5_000 + 10);
+      // Advance another KILL_ESCALATION_MS → SIGKILL escalation.
+      await vi.advanceTimersByTimeAsync(KILL_ESCALATION_MS + 10);
       const sigkillCalls = killSpy.mock.calls.filter(
         (c) => c[0] === -54321 && c[1] === "SIGKILL",
       );
-      expect(sigkillCalls.length).toBeGreaterThan(0);
+      expect.soft(sigkillCalls.length, "SIGKILL escalation did not fire").toBeGreaterThan(0);
 
       // Emit exit so the handler can resolve.
       child.emit("exit", null, "SIGKILL");
@@ -220,23 +230,32 @@ describe("cron-daily-triage — T4 Sentry env vars missing", () => {
   });
 });
 
-describe("cron-daily-triage — T5 event-trigger path equivalence", () => {
-  it("handler returns same shape regardless of invocation source", async () => {
-    const child = makeChild();
-    spawnSpy.mockImplementation(() => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return child;
-    });
-
-    const handler = await importHandler();
-
+describe("cron-daily-triage — T5 event-trigger registration", () => {
+  it("cronDailyTriage registers BOTH cron AND event triggers on the same handler", async () => {
     // The handler signature does not branch on cron-vs-event — Inngest
-    // routes both triggers to the same handler. This test pins that
-    // invariant: two sequential invocations produce identical result shapes.
-    const r1 = await handler({ step: makeStep(), logger });
-    const r2 = await handler({ step: makeStep(), logger });
-
-    expect(Object.keys(r1).sort()).toEqual(Object.keys(r2).sort());
-    expect(r1.exitCode).toBe(r2.exitCode);
+    // routes both triggers to the same handler. The load-bearing invariant
+    // is the REGISTRATION: both triggers MUST be wired so an operator can
+    // type `inngest send cron/daily-triage.manual-trigger` to retry after
+    // a missed 04:00 fire. Pin the registration shape directly (the prior
+    // shape — invoking the handler twice and comparing return shapes —
+    // was structurally guaranteed by the handler's lack of source-
+    // discriminating input).
+    const { cronDailyTriage } = await import(
+      "@/server/inngest/functions/cron-daily-triage"
+    );
+    // Inngest functions expose the configured triggers via `.opts` (private,
+    // but stable enough for a structural assertion). Fall back to scanning
+    // the public-facing shape if `.opts` is undefined.
+    const cf = cronDailyTriage as unknown as {
+      opts?: { triggers?: Array<Record<string, unknown>> };
+      triggers?: Array<Record<string, unknown>>;
+    };
+    const triggers = cf.opts?.triggers ?? cf.triggers ?? [];
+    expect(triggers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ cron: "0 4 * * *" }),
+        expect.objectContaining({ event: "cron/daily-triage.manual-trigger" }),
+      ]),
+    );
   });
 });

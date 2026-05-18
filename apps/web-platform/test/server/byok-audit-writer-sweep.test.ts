@@ -50,6 +50,12 @@ export const ALIAS_IMPORT_RE = /import\s*\{[^}]*\brunWithByokLease\s+as\s+\w+/;
 // caught the violation. Consumed by cron-no-byok-lease-sweep.test.ts.
 export const BARE_IMPORT_RE = /import\s*\{[^}]*\brunWithByokLease\b[^}]*\}/;
 
+// TR9 PR-1 (#3948) security-sentinel finding: catches the dynamic-import
+// bypass shape (`const { runWithByokLease } = await import("@/server/byok-lease")`)
+// that the static-import regexes above all miss. Consumed by
+// cron-no-byok-lease-sweep.test.ts.
+export const DYNAMIC_IMPORT_RE = /import\s*\(\s*["'`][^"'`]*byok-lease/;
+
 /**
  * Files matching `runWithByokLease\(` that we explicitly do NOT sweep:
  *

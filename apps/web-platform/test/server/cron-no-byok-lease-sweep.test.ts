@@ -8,12 +8,15 @@
  * at BYOK-write paths; this file FORBIDS it at cron-* paths. Two simple
  * source-grep files, one invariant each (Kieran P1-2 simplification).
  *
- * Three shapes asserted (each a real bypass vector):
+ * Four shapes asserted (each a real bypass vector):
  *   - LEASE_CALL_RE: direct `runWithByokLease(...)` call.
  *   - ALIAS_IMPORT_RE: `import { runWithByokLease as foo }` rename.
  *   - BARE_IMPORT_RE: bare named import + later indirect call
  *     (Architecture F6 — catches the shape that aliases through a
  *     local const without the `as` keyword).
+ *   - DYNAMIC_IMPORT_RE: dynamic `await import("@/server/byok-lease")`
+ *     bypass (security-sentinel finding — static-import regexes above
+ *     all miss this shape).
  *
  * `expect.soft` reports which shape triggered the violation per cron file.
  */
@@ -24,6 +27,7 @@ import { describe, expect, it } from "vitest";
 import {
   ALIAS_IMPORT_RE,
   BARE_IMPORT_RE,
+  DYNAMIC_IMPORT_RE,
   LEASE_CALL_RE,
 } from "./byok-audit-writer-sweep.test";
 
@@ -48,6 +52,7 @@ describe("cron-*.ts MUST NOT import or call runWithByokLease (ADR-033 I2)", () =
       expect.soft(LEASE_CALL_RE.test(src), "direct call site").toBe(false);
       expect.soft(ALIAS_IMPORT_RE.test(src), "aliased import").toBe(false);
       expect.soft(BARE_IMPORT_RE.test(src), "bare named import").toBe(false);
+      expect.soft(DYNAMIC_IMPORT_RE.test(src), "dynamic import").toBe(false);
     });
   }
 });
@@ -71,10 +76,16 @@ describe("inverse sentinel — fixture proofs", () => {
     expect(BARE_IMPORT_RE.test(violating)).toBe(true);
   });
 
+  it("catches a dynamic import bypass (DYNAMIC_IMPORT_RE)", () => {
+    const violating = `const { runWithByokLease } = await import("@/server/byok-lease");\nawait runWithByokLease(uid, async () => {});`;
+    expect(DYNAMIC_IMPORT_RE.test(violating)).toBe(true);
+  });
+
   it("passes a compliant cron-* file (operator-key only, no lease import)", () => {
     const compliant = `import { spawn } from "node:child_process";\nspawn("claude", ["--print", "..."], { env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } });`;
     expect(LEASE_CALL_RE.test(compliant)).toBe(false);
     expect(ALIAS_IMPORT_RE.test(compliant)).toBe(false);
     expect(BARE_IMPORT_RE.test(compliant)).toBe(false);
+    expect(DYNAMIC_IMPORT_RE.test(compliant)).toBe(false);
   });
 });
