@@ -41,21 +41,22 @@ CREATE POLICY scope_grants_owner_select ON public.scope_grants
 -- Art. 17 cascade).
 CREATE OR REPLACE FUNCTION public.scope_grants_no_mutate() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_anonymise_flag text;
 BEGIN
+  -- current_setting(name, missing_ok=true) returns '' (not NULL) when unset.
   v_anonymise_flag := current_setting('app.scope_grants_anonymise_in_progress', true);
-  -- Bypass gate: GUC set AND caller is service_role. `session_user` is the
-  -- original connection role (unaffected by SECURITY DEFINER context shift);
-  -- `current_user` is the effective role. Anonymise RPC is SECURITY DEFINER
-  -- (typically owner = postgres), so we need session_user OR current_user
-  -- to catch both Supabase-default and self-hosted ownership patterns.
-  -- Mirrors migration 044's pattern; if 044's role check is broken so is
-  -- this — see Sharp Edges for the latent risk note.
-  IF v_anonymise_flag <> ''
-     AND (current_user = 'service_role' OR session_user = 'service_role')
-  THEN
+  -- Bypass gate: GUC set AND current_user = service_role. Mirrors migration
+  -- 044's tc_acceptances_no_mutate exactly. PostgREST's `SET ROLE service_role`
+  -- propagates to INVOKER triggers fired inside SECURITY DEFINER functions
+  -- (the elevated `current_user = postgres` from SECURITY DEFINER does NOT
+  -- override the INVOKER trigger's caller-role context — see #3984 CI
+  -- failure analysis vs 044's production-working precedent). DO NOT add
+  -- session_user to the check; doing so would require widening to
+  -- `authenticator` and lose the role-gate semantic.
+  IF v_anonymise_flag <> '' AND current_user = 'service_role' THEN
     RETURN COALESCE(NEW, OLD);
   END IF;
 
@@ -190,10 +191,13 @@ AS $$
 DECLARE
   v_rows int;
 BEGIN
-  -- GUC set BEFORE the UPDATE so the WORM trigger's bypass gate fires
-  -- for every row touched in this transaction. SET LOCAL is scoped to
-  -- the current transaction and auto-reverts on COMMIT/ROLLBACK.
-  PERFORM set_config('app.scope_grants_anonymise_in_progress', 'on', true);
+  -- WORM-bypass: SET LOCAL scopes to the current transaction; reverts at
+  -- COMMIT/ROLLBACK. THE SINGLE SET-SITE for this GUC. Mirrors migration
+  -- 044's anonymise_tc_acceptances exactly (PERFORM set_config(..., true)
+  -- is semantically equivalent but the literal `SET LOCAL` form is the
+  -- one verified to fire the trigger bypass under PostgREST/service_role
+  -- routing — see #3984 CI failure analysis).
+  SET LOCAL app.scope_grants_anonymise_in_progress = 'on';
 
   UPDATE public.scope_grants
      SET founder_id = NULL
