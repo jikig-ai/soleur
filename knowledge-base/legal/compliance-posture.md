@@ -1,6 +1,7 @@
 ---
-last_updated: 2026-05-17
+last_updated: 2026-05-18
 ---
+<!-- 2026-05-18: PR #3988 (feat-one-shot-issue-3921-aup-art9-ccpa-spi-warning) — AUP §2 scope broadened to name app.soleur.ai + chat-attachments. New §4.7 prohibits GDPR Art. 9 (special categories) and Art. 10 (criminal convictions) submissions via prompts or attachments. New §4.8 prohibits CCPA SPI (Cal. Civ. Code §1798.140(ae)) via same surfaces. Closes #3921 and PR-D PA2 line-62 follow-up note (note itself removed in next PA2 amendment). No T&C / Privacy Policy / GDPR Policy / DPD changes; no TC_VERSION bump (AUP is incorporated by reference under T&C §9). -->
 <!-- 2026-05-17: PR #3922 (feat-pr-e-audit-byok-jti-deny) — PR-E of the Soleur server-side agentic runtime track closes the Art. 5(2) accountability gap. is_jti_denied(jti) deny-list reader wired into the JWT-mint boundary at lib/supabase/tenant.ts; CI-enforced writer-sweep over every runWithByokLease(...) call site asserts persistTurnCost coverage; audit_byok_use WORM trigger pinned by integration test. No new migration (037 primitives shipped via PR-B #3395). No Article 30 register amendment (deny-list table in PA1 auth scope; jti is random UUID, not personal data; Sentry mirror covered by PA2 from PR-D). 7 deferred-scope-out follow-ups filed (#3928–#3934) for residual surfaces (RLS-side predicate, admin revoke_jti RPC, in-flight client invalidation, etc.). Note: PR-E plan's AC18 referenced a non-existent "Art. 5(2) audit-writer gap" Active Items row (forward-looking assumption that an earlier PR had authored it); this row is added directly to Completed Compliance Work instead. #3887 was closed manually 3 min before PR-E merge. -->
 <!-- 2026-05-14: PR #3744 (feat-soleur-managed-deploy-substrate-3723) — Phase 0 legal pre-flight for the multi-tenant deploy substrate. New artifacts: ToS-research (4-provider verdict sentinels), LIA (Art. 6(1)(f) three-part test), ADR-030 (substrate architecture), gdpr-gate report (zero Critical), Article 30 register Processing Activity 10 row. Privacy-policy / DPD sub-processor disclosure for non-Soleur tenants explicitly scoped OUT of v1 — re-evaluation trigger: first non-Soleur tenant onboarding. Multi-tenant trajectory means each new non-Soleur tenant deploy triggers DPA signing + Art. 28(4) flow-down obligations. -->
 <!-- 2026-05-12: PR-A2 (#3603/#3648) — Privacy Policy §4.7 Art. 13(3) prior-disclosure refresh for messages.usage column (CC_PERSIST_USAGE=true in Doppler prd). Article 30 RoPA register created at knowledge-base/legal/article-30-register.md. Both draft — counsel review pending. -->
@@ -24,7 +25,7 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 | Article 30 Register (RoPA) | `knowledge-base/legal/article-30-register.md` | 2026-05-12 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | 2026-03-20 | Active |
 | GDPR Policy | `docs/legal/gdpr-policy.md` | 2026-05-12 | Active |
-| Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | 2026-03-20 | Active |
+| Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | 2026-05-18 | Active |
 | Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | 2026-05-12 | Active |
 | Disclaimer | `docs/legal/disclaimer.md` | 2026-03-20 | Active |
 | Individual CLA | `docs/legal/individual-cla.md` | 2026-03-20 | Active |
