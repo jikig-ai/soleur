@@ -73,7 +73,7 @@ Implementation breakdown derived from the plan. Each task has a hard checklist; 
 
 - [x] **6.1** Add `[Updated 2026-05-13: D1 direction reversed per plan Research Reconciliation]` markers to spec.md in **Problem Statement, Goals (4 occurrences), Non-Goals, FR1, AC1-AC3**.
 - [x] **6.2** Add `[Updated 2026-05-13]` marker to brainstorm doc Key-Decisions row for D1 direction.
-- [x] **6.3** Add cross-reference header note to `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md` (post-rename) pointing at `/soleur:incident` for future PIRs.
+- [x] **6.3** Add cross-reference header note to `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` (post-rename) pointing at `/soleur:incident` for future PIRs.
 - [x] **6.4** Issue #3724 body update already covered by Step 0.1.
 
 ## Step 7 — Multi-agent review

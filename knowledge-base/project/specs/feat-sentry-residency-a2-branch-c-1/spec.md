@@ -24,7 +24,7 @@ art_33_deadline: "2026-05-19T12:50:00Z"
 
 ## Problem Statement
 
-A2's original framing (align tfstate to existing DE org, rotate token, re-apply) was invalidated by a 3-premise cascade on 2026-05-16: (1) `de.sentry.io` is INGEST-ONLY; the dashboard host is `sentry.io` / `jikigai.sentry.io` / `eu.sentry.io`; (2) there is NO controllable jikigai org on EU/DE — region-router 302→401 confirms; (3) A1's audit script greenlit a phantom destination because cluster-substring check ≠ admin-controllability check. The runtime `SENTRY_DSN` POSTed user-telemetry-shaped events to an unowned org ID `4511123328466944` on `o4511...ingest.de.sentry.io` for a 49-day window (2026-03-28 → 2026-05-16) documented in `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`.
+A2's original framing (align tfstate to existing DE org, rotate token, re-apply) was invalidated by a 3-premise cascade on 2026-05-16: (1) `de.sentry.io` is INGEST-ONLY; the dashboard host is `sentry.io` / `jikigai.sentry.io` / `eu.sentry.io`; (2) there is NO controllable jikigai org on EU/DE — region-router 302→401 confirms; (3) A1's audit script greenlit a phantom destination because cluster-substring check ≠ admin-controllability check. The runtime `SENTRY_DSN` POSTed user-telemetry-shaped events to an unowned org ID `4511123328466944` on `o4511...ingest.de.sentry.io` for a 49-day window (2026-03-28 → 2026-05-16) documented in `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`.
 
 Branch C creates a new DE jikigai org from scratch on `eu.sentry.io`, atomically migrates the runtime DSN + 7+ secret surfaces, drops + re-imports tfstate, and extends the audit script with a destination-controllability gate so the failure mode cannot silently recur.
 
@@ -144,7 +144,7 @@ Triad: CPO + CLO + CTO. Brainstorm captures full leader assessments. Plan skill'
 ## References
 
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-16-sentry-residency-a2-branch-c-brainstorm.md`
-- PIR: `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+- PIR: `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 - Cascade learning: `knowledge-base/project/learnings/2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md`
 - A1 plan: `knowledge-base/project/plans/2026-05-15-feat-sentry-residency-cleanup-plan.md`
 - A1 PR: #3863
