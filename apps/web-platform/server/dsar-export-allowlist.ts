@@ -96,6 +96,14 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // accept), so 15+20 also applies. The WORM trigger + Art. 17
   // anonymise RPC handle erasure separately.
   tc_acceptances: { ownerField: "user_id", article: "15+20" },
+
+  // Per-action-class scope grants (migration 048, PR-G #3947).
+  // Art. 15+20: the user explicitly authorised each action class at a
+  // chosen tier (`auto` / `draft_one_click` / `approve_every_time`).
+  // The grant ledger is the user-provided consent record under Art. 7
+  // — they have the right to export the timestamped chain. The WORM
+  // trigger + anonymise_scope_grants RPC handle erasure separately.
+  scope_grants: { ownerField: "founder_id", article: "15+20" },
 };
 
 /**

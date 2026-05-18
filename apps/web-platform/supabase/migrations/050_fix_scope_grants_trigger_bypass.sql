@@ -27,6 +27,7 @@
 
 CREATE OR REPLACE FUNCTION public.scope_grants_no_mutate() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = public, pg_temp
 AS $$
 BEGIN
   -- DELETE: always rejected. Use anonymise_scope_grants for Art. 17 cascade.

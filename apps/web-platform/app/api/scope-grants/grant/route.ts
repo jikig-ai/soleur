@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
+import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import {
   isKnownActionClass,
   type ActionClassTier,
@@ -29,6 +30,9 @@ interface GrantBody {
 }
 
 export async function POST(req: Request) {
+  const { valid, origin } = validateOrigin(req);
+  if (!valid) return rejectCsrf("api/scope-grants/grant", origin);
+
   const supabase = await createClient();
   const {
     data: { user },

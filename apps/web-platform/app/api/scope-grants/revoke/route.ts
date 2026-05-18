@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
+import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isKnownActionClass } from "@/server/scope-grants/action-class-map";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -17,6 +18,9 @@ interface RevokeBody {
 }
 
 export async function POST(req: Request) {
+  const { valid, origin } = validateOrigin(req);
+  if (!valid) return rejectCsrf("api/scope-grants/revoke", origin);
+
   const supabase = await createClient();
   const {
     data: { user },

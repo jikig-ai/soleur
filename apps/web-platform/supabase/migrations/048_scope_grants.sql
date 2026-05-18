@@ -41,6 +41,7 @@ CREATE POLICY scope_grants_owner_select ON public.scope_grants
 -- Art. 17 cascade).
 CREATE OR REPLACE FUNCTION public.scope_grants_no_mutate() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = public, pg_temp
 AS $$
 BEGIN
   -- Two legitimate mutation shapes are allowed; everything else is rejected.
@@ -166,7 +167,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.grant_action_class(text, text)
-  FROM PUBLIC, anon;
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.grant_action_class(text, text)
   TO authenticated;
 
@@ -200,7 +201,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.revoke_action_class(text, text)
-  FROM PUBLIC, anon;
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.revoke_action_class(text, text)
   TO authenticated;
 
