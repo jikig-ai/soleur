@@ -237,7 +237,7 @@ after `ship-unpushed-commits-gate.sh`.
 |---|---|
 | `prod-write-defer-git-push-main` | `git push origin {main,master,HEAD:main,HEAD:master}` incl. `-f`, `--force-with-lease`, refspec, env-prefix, wrapped via `-- <cmd>`, chained `&&`/`;` |
 | `prod-write-defer-terraform-apply` | `terraform apply` and `tofu apply` (same anchors) |
-| `prod-write-defer-doppler-prd-secrets` | `doppler secrets set ... --config {prd,prd_terraform}` (rejects `prd-staging`, `dev`) |
+| `prod-write-defer-doppler-secrets-stdout` | `doppler secrets {set,delete} ... --config {prd,prd_terraform,dev,ci}` (rejects `prd-staging`, equals-form `--config=prd`, `--help`/`-h`); widened 2026-05-18 via #4029 — `delete` renders the post-deletion surviving-secrets table to stdout, leaking value chunks from sibling secrets |
 
 Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
 `(^|&&|\|\||;|[[:space:]]--[[:space:]])` catches wrapped invocations per
@@ -292,7 +292,11 @@ captures the secret VALUE verbatim in `resolved_command` (capped 1024B,
 unredacted) and in `.claude/.rule-incidents.jsonl` `command_snippet`. The
 gate exists to surface the call for explicit approval, NOT to scrub it —
 the originally-planned F1 redaction sibling was deferred to roadmap (see
-PERMISSION-DENIED-PAYLOAD-SHAPE.md). Until that lands, treat `doppler
+PERMISSION-DENIED-PAYLOAD-SHAPE.md). The widened rule (2026-05-18 / #4029)
+also covers `doppler secrets delete X --config prd` — `delete` does not
+take a value argv slot, but the post-deletion stdout render is the leak
+surface; the gate still fires so the operator can opt into `--silent` +
+`>/dev/null 2>&1` before approving. Until F1 lands, treat `doppler
 secrets set FOO=<value>` as a sensitive command surface; do not paste
 `approvals.jsonl` / `.rule-incidents.jsonl` contents into bug reports or
 external services. The `.gitignore` exclusion prevents accidental commit;
