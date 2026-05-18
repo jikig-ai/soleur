@@ -66,7 +66,7 @@ resource "doppler_secret" "inngest_signing_key_dev" {
   visibility = "masked"
 
   lifecycle {
-    ignore_changes = [value]
+    ignore_changes = [value] # see signing_key_prd above — rotate via `terraform taint random_id.<name>`.
   }
 }
 
@@ -78,7 +78,7 @@ resource "doppler_secret" "inngest_event_key_prd" {
   visibility = "masked"
 
   lifecycle {
-    ignore_changes = [value]
+    ignore_changes = [value] # see signing_key_prd above — rotate via `terraform taint random_id.<name>`.
   }
 }
 
@@ -90,9 +90,18 @@ resource "doppler_secret" "inngest_event_key_dev" {
   visibility = "masked"
 
   lifecycle {
-    ignore_changes = [value]
+    ignore_changes = [value] # see signing_key_prd above — rotate via `terraform taint random_id.<name>`.
   }
 }
+
+# NOTE: All `doppler_secret` resources in this file carry `ignore_changes = [value]`.
+# This means out-of-band rotation via the Doppler UI is INVISIBLE to subsequent
+# `terraform plan` runs (the provider skips the value read-back when
+# ignore_changes is set). The ONLY supported rotation path is
+# `terraform taint random_id.<name> && terraform apply` — operators MUST NOT
+# rotate via the Doppler UI or the dashboard will desync from tfstate silently.
+# Runbook (knowledge-base/engineering/ops/runbooks/inngest-server.md) documents
+# the taint procedure.
 
 # ---------------- Better Stack heartbeat ----------------
 
@@ -105,6 +114,11 @@ resource "betteruptime_heartbeat" "inngest_prd" {
   email     = true
   push      = false
   team_wait = 0
+  # "Your team" is the literal default team name in this Better Stack
+  # workplace (the only team — t520508). The TF provider does a
+  # case-sensitive name lookup against the workplace's team list; the
+  # original "Jean's team" literal was rejected at apply time and corrected.
+  # Move to a variable in a follow-up if/when a second team is created.
   # Paused until the operator confirms inngest-server is running on the host
   # (`deploy inngest <image> <tag>` succeeded). Otherwise, the gap between
   # `terraform apply` (heartbeat created → BetterStack starts expecting pings

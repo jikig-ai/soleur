@@ -550,33 +550,71 @@ case "$COMPONENT" in
     fi
     ;;
   inngest)
-    # Inngest server bootstrap (PR-F follow-up, #3960). The OCI image at
-    # $IMAGE:$TAG embeds inngest-cli + inngest-bootstrap.sh; running it
-    # with --entrypoint /inngest-bootstrap.sh installs/upgrades the server
-    # on the host (loopback 127.0.0.1:8288/8289 only). Idempotent: a second
-    # invocation against the same $TAG short-circuits via systemctl is-active +
-    # version-file match inside the script. --net=host so the script's
-    # systemctl/curl/etc. can manage the host's systemd; --privileged is
-    # NOT used (the script runs systemctl via the dbus socket bind-mount).
+    # Inngest server bootstrap (PR-F follow-up, #3960).
+    #
+    # No canary: inngest-server binds loopback only (127.0.0.1:8288/8289) so
+    # there is no external traffic to shadow. The bootstrap script's
+    # `systemctl is-active` + version-file check at /var/lib/inngest/version
+    # provides idempotency; a second deploy of the same $TAG is a ~50ms no-op.
+    #
+    # Delivery model: the OCI image is a SHA-pinned content carrier. The
+    # bootstrap script + the embedded INNGEST_CLI_VERSION / _SHA256 ENV vars
+    # are extracted from the image and the script is executed ON THE HOST
+    # (NOT inside the container). The container itself is Alpine + bash +
+    # curl + tar + coreutils — it does not have `systemctl`, so running the
+    # script inside it would fail at `systemctl daemon-reload`. The host has
+    # systemd + the deploy user + the systemd unit paths the script writes.
     echo "Pulling Inngest bootstrap image $IMAGE:$TAG..."
     docker pull "$IMAGE:$TAG"
 
-    echo "Running inngest-bootstrap.sh from $IMAGE:$TAG..."
-    if ! docker run --rm \
-        --net=host \
-        --pid=host \
-        -v /etc/systemd/system:/etc/systemd/system \
-        -v /usr/local/bin:/usr/local/bin \
-        -v /var/lib/inngest:/var/lib/inngest \
-        -v /var/run/dbus:/var/run/dbus \
-        -v /etc/default:/etc/default \
-        --entrypoint /inngest-bootstrap.sh \
-        "$IMAGE:$TAG"; then
+    # Extract the script + pinned ENV vars from the image.
+    INNGEST_EXTRACT_DIR=$(mktemp -d /tmp/inngest-extract.XXXXXX)
+    INNGEST_EXTRACT_CONTAINER="soleur-inngest-extract-$$"
+    docker rm -f "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+    if ! docker create --name "$INNGEST_EXTRACT_CONTAINER" "$IMAGE:$TAG" >/dev/null; then
+      logger -t "$LOG_TAG" "FAILED: docker create for inngest-bootstrap extract"
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_extract_create_failed"
+      exit 1
+    fi
+    if ! docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-bootstrap.sh" "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"; then
+      docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_extract_copy_failed"
+      exit 1
+    fi
+    # Read ENV vars baked into the image at build time (see
+    # .github/workflows/build-inngest-bootstrap-image.yml — ENV
+    # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...).
+    image_env=$(docker inspect "$IMAGE:$TAG" -f '{{range .Config.Env}}{{println .}}{{end}}')
+    docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-)
+    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-)
+    if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
+      logger -t "$LOG_TAG" "FAILED: image missing INNGEST_CLI_{VERSION,SHA256} ENV"
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_image_env_missing"
+      exit 1
+    fi
+    chmod +x "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"
+
+    echo "Running inngest-bootstrap.sh on host (version=$INNGEST_CLI_VERSION)..."
+    # Execute on host. The script needs root to write /etc/systemd/system,
+    # /usr/local/bin/inngest, /etc/default/inngest-server, and to invoke
+    # systemctl. ci-deploy.sh itself runs as the `deploy` user with sudo
+    # access (see webhook.service hardening). Use sudo with explicit env
+    # passthrough so the script sees the pinned version/SHA.
+    if ! sudo -E env \
+        "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" \
+        "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
+        bash "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"; then
       logger -t "$LOG_TAG" "FAILED: inngest-bootstrap.sh non-zero exit"
+      rm -rf "$INNGEST_EXTRACT_DIR"
       final_write_state 1 "inngest_bootstrap_failed"
       exit 1
     fi
 
+    rm -rf "$INNGEST_EXTRACT_DIR"
     logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
     final_write_state 0 "success"
     ;;

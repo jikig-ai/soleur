@@ -34,7 +34,24 @@ readonly VERSION_FILE="/var/lib/inngest/version"
 readonly UNIT_FILE="/etc/systemd/system/inngest-server.service"
 readonly HEARTBEAT_UNIT="/etc/systemd/system/inngest-heartbeat.service"
 readonly HEARTBEAT_TIMER="/etc/systemd/system/inngest-heartbeat.timer"
+readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
 readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_amd64.tar.gz"
+# In-place upgrade drain. Override via env at install time if event volume
+# exceeds ~10 events/sec sustained — at higher rates the SQLite fsync window
+# can leave some inbound HTTP events unacknowledged. Default is fine for
+# alpha-internal (CFO autonomous-draft from Stripe webhooks, low volume).
+DRAIN_SLEEP_SEC="${DRAIN_SLEEP_SEC:-2}"
+
+# Defense-in-depth: refuse to operate if the writable host paths are symlinks
+# (CWE-367 TOCTOU; an attacker with pre-existing host write could substitute
+# a symlink to redirect file writes). All three paths are bind-mounted from
+# the host so this guards both fresh-host AND container-extracted execution.
+for sensitive_path in /var/lib/inngest "$INSTALL_PATH" "$VERSION_FILE" /etc/default/inngest-server; do
+  if [[ -L "$sensitive_path" ]]; then
+    echo "ERROR: $sensitive_path is a symlink — refusing to operate (CWE-367)" >&2
+    exit 1
+  fi
+done
 
 log() { printf '[inngest-bootstrap] %s\n' "$*" >&2; }
 
@@ -56,9 +73,9 @@ UPGRADE_FROM=""
 if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
   UPGRADE_FROM=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
   if [[ "$UPGRADE_FROM" != "$INNGEST_CLI_VERSION" ]]; then
-    log "upgrade detected: $UPGRADE_FROM → $INNGEST_CLI_VERSION; pausing for queue drain"
+    log "upgrade detected: $UPGRADE_FROM → $INNGEST_CLI_VERSION; pausing for queue drain (${DRAIN_SLEEP_SEC}s)"
     "$INSTALL_PATH" pause >/dev/null 2>&1 || log "warn: pause command failed (continuing)"
-    sleep 2  # allow in-flight events to drain to SQLite
+    sleep "$DRAIN_SLEEP_SEC"  # allow in-flight events to drain to SQLite
   fi
 fi
 
@@ -100,6 +117,12 @@ Restart=on-failure
 RestartSec=5
 User=deploy
 Group=deploy
+# Resource guardrails: cx33 has 8GB RAM + 4 vCPU shared with web-platform.
+# Cap inngest-server so a runaway loop can't starve the app container.
+# Sized for alpha-internal (<10 events/sec). Bump MemoryMax if the SQLite
+# store grows past ~500MB or sustained throughput exceeds ~100 events/sec.
+MemoryMax=512M
+CPUQuota=100%
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
@@ -111,8 +134,20 @@ TimeoutStopSec=180
 WantedBy=multi-user.target
 UNITEOF
 
-# Heartbeat ping service + 60s timer.
-cat > "$HEARTBEAT_UNIT" <<'HEARTBEATEOF'
+# Heartbeat ping script + service + 60s timer.
+# The URL lives in $INNGEST_HEARTBEAT_URL (loaded by systemd from
+# /etc/default/inngest-server). Indirecting through a script file rather
+# than inlining the curl in ExecStart= keeps the URL out of systemd's
+# journal (which logs resolved ExecStart= lines on some configurations).
+# Defense-in-depth — the URL is also `sensitive = true` in the TF output.
+cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
+#!/bin/sh
+# Posted to Better Stack every 60s by inngest-heartbeat.timer.
+exec /usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
+HEARTBEATSCRIPTEOF
+chmod 0755 "$HEARTBEAT_SCRIPT"
+
+cat > "$HEARTBEAT_UNIT" <<HEARTBEATEOF
 [Unit]
 Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
@@ -120,7 +155,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/bin/sh -c '/usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null'
+ExecStart=${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
 
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
@@ -143,7 +178,11 @@ TIMEREOF
 if [[ -f /etc/default/inngest-server ]]; then
   log "/etc/default/inngest-server exists — preserving"
 else
-  printf 'DOPPLER_TOKEN=%s\n' "${DOPPLER_TOKEN:-}" > /etc/default/inngest-server
+  # umask-then-write to avoid a world-readable window between create and
+  # chmod 0640. 0137 inverts: u=rw,g=r,o=none. DOPPLER_TOKEN is sensitive
+  # so close that window even though it's microseconds in practice (CWE-732
+  # defense-in-depth).
+  ( umask 0137 && printf 'DOPPLER_TOKEN=%s\n' "${DOPPLER_TOKEN:-}" > /etc/default/inngest-server )
   chown root:deploy /etc/default/inngest-server
   chmod 0640 /etc/default/inngest-server
 fi

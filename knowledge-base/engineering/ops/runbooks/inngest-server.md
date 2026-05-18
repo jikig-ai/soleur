@@ -65,7 +65,9 @@ BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-se
 
 ## Key rotation
 
-Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources. Rotation procedure:
+Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources.
+
+**⚠ The ONLY supported rotation path is the `terraform taint` flow below.** Do NOT rotate via the Doppler UI — every `doppler_secret` carries `lifecycle.ignore_changes = [value]`, so out-of-band Doppler-side changes are INVISIBLE to subsequent `terraform plan` runs. The provider skips the value read-back when `ignore_changes` is set; you'd get silent dashboard ↔ tfstate divergence. If you've accidentally rotated via the UI, run `terraform apply -replace=doppler_secret.<key>` to force TF to re-converge.
 
 1. Identify which key to rotate. Replace `<KEY>` with `inngest_signing_key_prd` (or `_dev`, or `inngest_event_key_{prd,dev}`).
 2. Taint the random_id so the next apply regenerates it:
@@ -123,16 +125,44 @@ Inngest CLI version is pinned in `apps/web-platform/infra/inngest.tf` `locals` b
 
 ## Unpause heartbeat
 
-The BetterStack heartbeat is created with `paused = true` to avoid false alerts during the post-apply / pre-bootstrap gap. After [§ Fresh-host bootstrap](#fresh-host-bootstrap) succeeds and the first heartbeat ping is received:
+The BetterStack heartbeat is created with `paused = true` to avoid false alerts during the post-apply / pre-bootstrap gap. After [§ Fresh-host bootstrap](#fresh-host-bootstrap) succeeds and the first heartbeat ping is received, choose one of:
 
-1. Visit `https://uptime.betterstack.com/team/520508/heartbeats` → find `soleur-inngest-server-prd` → click → toggle pause off.
-2. The `lifecycle { ignore_changes = [paused] }` on `betteruptime_heartbeat.inngest_prd` ensures future `terraform apply` runs do NOT revert the unpause.
-3. Confirm pings are flowing:
-   ```
-   curl -s https://uptime.betterstack.com/api/v2/heartbeats/460830 \
-     -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain)" \
-     | jq '.data.attributes | {status, last_ping_at}'
-   ```
+**Option A — UI (one-off):** Visit `https://uptime.betterstack.com/team/520508/heartbeats` → find `soleur-inngest-server-prd` → toggle pause off.
+
+**Option B — API (agent-driveable):**
+```
+TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain)
+curl -X PATCH https://uptime.betterstack.com/api/v2/heartbeats/460830 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"paused": false}'
+unset TOKEN
+```
+
+The `lifecycle { ignore_changes = [paused] }` on `betteruptime_heartbeat.inngest_prd` ensures future `terraform apply` runs do NOT revert the unpause regardless of which option you used.
+
+Confirm pings are flowing:
+```
+TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain)
+curl -s https://uptime.betterstack.com/api/v2/heartbeats/460830 \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq '.data.attributes | {status, last_ping_at}'
+unset TOKEN
+```
+
+## SQLite event-store retention
+
+The Inngest SQLite store at `/var/lib/inngest/main.db` grows over time with retained events. There is no built-in rotation. At alpha-internal volume (~1k events/day × ~2KB avg), the store grows ~60MB/month — benign for ~1 year, then unbounded.
+
+**Cleanup procedure** (when `du -sh /var/lib/inngest/` exceeds ~500MB OR before the host's volume usage triggers `disk-monitor.sh` alerts):
+```
+ssh root@<host> 'systemctl stop inngest-server.service && \
+  sqlite3 /var/lib/inngest/main.db "DELETE FROM events WHERE ts < datetime(\"now\",\"-30 days\"); VACUUM;" && \
+  systemctl start inngest-server.service'
+```
+Stopping inngest-server before VACUUM is required (SQLite write lock). Downtime ~5s for typical store sizes; longer for stores >1GB.
+
+**Automation deferred:** the operator runs this manually for now. If event volume increases to where monthly manual cleanup becomes a chore, file a follow-up issue to wire a weekly systemd timer alongside `inngest-heartbeat.timer`.
 
 ## Concurrency conventions
 
