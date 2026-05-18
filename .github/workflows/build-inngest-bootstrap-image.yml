@@ -1,0 +1,125 @@
+name: Build inngest-bootstrap OCI image
+
+# Triggered on `vinngest-vX.Y.Z` tag pushes. Builds a scratch-based image
+# embedding the pinned inngest-cli binary + inngest-bootstrap.sh + a minimal
+# entrypoint shim. The deploy webhook fires:
+#   `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap vX.Y.Z`
+# and ci-deploy.sh's `case "inngest")` branch pulls + runs this image.
+#
+# Versioning: the tag's `vX.Y.Z` portion is the OCI image tag (not the
+# inngest-cli version embedded inside it — that comes from inngest.tf locals
+# and bumps separately). Each bootstrap image release is a release of THIS
+# bootstrap shape, regardless of the embedded inngest-cli version.
+
+on:
+  push:
+    tags:
+      - 'vinngest-v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Resolve image tag
+        id: tag
+        # Hardened against workflow-injection: untrusted inputs (GITHUB_REF,
+        # inputs.tag) flow through env vars, never inlined into shell.
+        env:
+          GH_EVENT: ${{ github.event_name }}
+          WD_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GH_EVENT" == "workflow_dispatch" ]]; then
+            # Validate format defensively before echoing into GITHUB_OUTPUT.
+            if [[ ! "$WD_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "ERROR: workflow_dispatch tag '$WD_TAG' is not vX.Y.Z"; exit 1
+            fi
+            printf 'tag=%s\n' "$WD_TAG" >> "$GITHUB_OUTPUT"
+          else
+            # Strip `vinngest-` prefix from refs/tags/vinngest-vX.Y.Z.
+            # The push trigger's tag filter `vinngest-v*.*.*` already
+            # constrains the shape; we re-validate to be safe.
+            stripped="${GITHUB_REF#refs/tags/vinngest-}"
+            if [[ ! "$stripped" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "ERROR: tag '$stripped' is not vX.Y.Z"; exit 1
+            fi
+            printf 'tag=%s\n' "$stripped" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read pinned inngest-cli version + SHA from inngest.tf
+        id: pin
+        run: |
+          set -euo pipefail
+          # Source of truth: apps/web-platform/infra/inngest.tf locals block.
+          version=$(grep -E '^\s*inngest_cli_version\s*=' apps/web-platform/infra/inngest.tf | sed -E 's/.*"([^"]+)".*/\1/')
+          sha=$(grep -E '^\s*inngest_cli_sha256\s*=' apps/web-platform/infra/inngest.tf | sed -E 's/.*"([^"]+)".*/\1/')
+          if [[ -z "$version" || -z "$sha" ]]; then
+            echo "ERROR: failed to extract inngest_cli_version or inngest_cli_sha256 from inngest.tf"
+            exit 1
+          fi
+          # Defense-in-depth: validate shapes before they reach the build step.
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: inngest_cli_version '$version' is not vX.Y.Z"; exit 1
+          fi
+          if [[ ! "$sha" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: inngest_cli_sha256 is not a 64-hex-char SHA256"; exit 1
+          fi
+          printf 'inngest_version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'inngest_sha256=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + verify + push
+        env:
+          IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
+          TAG: ${{ steps.tag.outputs.tag }}
+          INNGEST_VERSION: ${{ steps.pin.outputs.inngest_version }}
+          INNGEST_SHA256: ${{ steps.pin.outputs.inngest_sha256 }}
+        run: |
+          set -euo pipefail
+          BUILD_DIR=$(mktemp -d)
+
+          # SHA256-verify the inngest-cli binary at build time. If this fails,
+          # the build fails — runtime never sees a tampered binary.
+          curl -fsSL -o "$BUILD_DIR/inngest.tar.gz" \
+            "https://github.com/inngest/inngest/releases/download/${INNGEST_VERSION}/inngest_${INNGEST_VERSION#v}_linux_amd64.tar.gz"
+          actual=$(sha256sum "$BUILD_DIR/inngest.tar.gz" | awk '{print $1}')
+          if [[ "$actual" != "$INNGEST_SHA256" ]]; then
+            echo "ERROR: SHA256 mismatch at build time — expected $INNGEST_SHA256, got $actual"
+            exit 1
+          fi
+          echo "Build-time SHA256 verified: $actual"
+
+          # Stage bootstrap script with version + SHA baked in at build time.
+          cp apps/web-platform/infra/inngest-bootstrap.sh "$BUILD_DIR/inngest-bootstrap.sh"
+
+          cat > "$BUILD_DIR/Dockerfile" <<DOCKERFILE
+          FROM alpine:3.20
+          RUN apk add --no-cache bash curl tar coreutils
+          ENV INNGEST_CLI_VERSION=${INNGEST_VERSION}
+          ENV INNGEST_CLI_SHA256=${INNGEST_SHA256}
+          COPY inngest-bootstrap.sh /inngest-bootstrap.sh
+          RUN chmod +x /inngest-bootstrap.sh
+          ENTRYPOINT ["/inngest-bootstrap.sh"]
+          DOCKERFILE
+
+          docker build -t "$IMAGE:$TAG" "$BUILD_DIR"
+          docker push "$IMAGE:$TAG"
+          echo "Pushed $IMAGE:$TAG"

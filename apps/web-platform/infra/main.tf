@@ -26,8 +26,26 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.0"
     }
+    # Phase 0.3-resolved exact versions (see inngest.tf comment). Bump via
+    # `terraform init -upgrade` + commit the lockfile diff.
+    doppler = {
+      source  = "DopplerHQ/doppler"
+      version = "~> 1.21"
+    }
+    betteruptime = {
+      source  = "BetterStackHQ/better-uptime"
+      version = "~> 0.20"
+    }
   }
   required_version = ">= 1.6"
+}
+
+provider "doppler" {
+  doppler_token = var.doppler_token_tf
+}
+
+provider "betteruptime" {
+  api_token = var.betterstack_api_token
 }
 
 provider "hcloud" {
