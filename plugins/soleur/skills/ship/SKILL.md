@@ -881,10 +881,11 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
-Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes):
+Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The `BEHIND` handler auto-syncs main into the branch when the queued auto-merge is stuck because origin/main moved ahead — see "Auto-sync on BEHIND" below:
 
 ```bash
-prev=""; i=0
+prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=3
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
 while true; do
   i=$((i+1))
   s=$(gh pr view <number> --json state,mergeStateStatus \
@@ -895,6 +896,31 @@ while true; do
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
+
+  # Auto-sync on BEHIND: GitHub auto-merge will not fire while the head
+  # ref is behind base. Merge origin/main into the branch and push so the
+  # queued auto-merge can re-evaluate. Capped at MAX_BEHIND_SYNCS so a
+  # pathological merge-loop (every sync produces a fresh BEHIND) does not
+  # consume the whole poll budget — fall through to timeout instead.
+  if [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+    behind_syncs=$((behind_syncs+1))
+    echo "$(date +%H:%M:%S) [${i}/15] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
+    if ! git fetch origin main 2>&1 | tail -2; then
+      echo "fetch origin main failed — skipping this sync attempt"
+    elif ! git merge origin/main --no-edit 2>&1 | tail -5; then
+      echo "git merge origin/main produced conflicts — aborting sync, reporting:"
+      git diff --name-only --diff-filter=U
+      git merge --abort 2>/dev/null
+      echo "Manual conflict resolution required on $BRANCH. Stopping the poll."
+      break
+    elif ! git push 2>&1 | tail -2; then
+      echo "git push failed after merge — auto-sync incomplete. Stopping the poll."
+      break
+    else
+      echo "$(date +%H:%M:%S) [${i}/15] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
+    fi
+  fi
+
   if [ "$i" -ge 15 ]; then
     echo "Merge poll timed out after 15 minutes. Last state: $s"
     break
@@ -904,6 +930,20 @@ done
 ```
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
+
+**Auto-sync on BEHIND.** When the polling loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch's head since the queued auto-merge started waiting on CI. GitHub's auto-merge does not fire while the branch is behind base — it observes the BEHIND state and silently waits forever. The poll loop closes this by:
+
+1. Fetching origin/main once.
+2. Merging origin/main into the branch with `--no-edit`. If conflicts arise (`--diff-filter=U` returns paths), the loop aborts the merge and stops polling — manual resolution is required and continuing would mask the conflict.
+3. Pushing the merge commit. This bumps the PR head ref, GitHub re-evaluates the queued auto-merge, and (assuming CI passes) the merge fires.
+
+The sync is capped at `MAX_BEHIND_SYNCS=3` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 3 syncs, fall through to the heartbeat path; the timeout warning will surface that the operator needs to investigate (likely: main is moving faster than this PR's CI can keep up; merge into a quiet window).
+
+Two failure paths exit early instead of looping:
+- **Merge conflicts** — `git diff --name-only --diff-filter=U` lists conflicted paths and the operator must resolve. Looping with `--abort` only buys time on a fundamentally non-automatic resolution.
+- **Push failure** — usually means a concurrent push raced this one (force-push, branch protection, or a sibling session). Stop and surface; the operator decides whether to fetch + retry.
+
+This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) which fires on certain Bash invocations during the ship flow (commit, push, merge). The hook handles the pre-merge case (branch is behind when auto-merge is FIRST queued); this loop handles the post-merge-queue case (branch becomes behind WHILE the queued auto-merge is waiting on CI). The two surfaces don't overlap — the hook fires on operator-triggered git/gh commands; the poll loop fires on a fixed 60-second cadence regardless of operator activity.
 
 **If state becomes `CLOSED` (not `MERGED`):** Auto-merge was cancelled due to a CI failure.
 
