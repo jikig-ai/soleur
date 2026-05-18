@@ -38,11 +38,14 @@
 #
 # `max_runtime_minutes` only matters for two-step (in_progress -> ok/error)
 # check-ins where Sentry can detect a job exceeding its declared budget.
-# All 8 monitors now use a single end-of-job heartbeat (oauth-probe +
-# 7 sister workflows post-rollout), so this field is decorative — only
-# missed-run detection is in play. Retain the value for schema/sibling
-# consistency and as a future-compat default if any monitor migrates
-# back to the two-step pattern.
+# All monitors currently defined here use a single end-of-job heartbeat
+# (oauth-probe + 7 sister workflows post-rollout), so this field is
+# decorative — only missed-run detection is in play. Retain the value
+# for schema/sibling consistency and as a future-compat default if any
+# monitor migrates back to the two-step pattern. If a new monitor lands
+# in two-step shape (e.g. scheduled-cf-token-expiry-check per the gap at
+# lines 71-77), update this prose AND verify the field becomes load-
+# bearing for the new resource.
 
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org

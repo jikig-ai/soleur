@@ -476,15 +476,20 @@ jobs:
       # Single end-of-job heartbeat check-in (Sentry Crons HTTP "heartbeat"
       # shape). DUAL-SIGNAL branch: posts ?status=error if EITHER the drift
       # check recorded a failure_mode OR the leak tripwire fired. Mirrors the
-      # `notify` step's `failure_mode != '' || tripwire.outcome == 'failure'`
-      # gate at workflow:449 so a leak-only failure surfaces to Sentry instead
-      # of silently reporting ok. Replaces the prior two-step in_progress ->
-      # ok/error pattern whose silent-fail trap (CHECKIN_ID tmpfile parsed
-      # via `jq -r '.id // empty'`, gated `if` on the follow-up call) caused
-      # Sentry to never receive a successful check-in. The curl drops `|| true`
-      # so its exit code lands in the step log; `continue-on-error: true`
-      # preserves the property that a Sentry-side blip does not red-flag an
-      # otherwise-green probe.
+      # `notify` step's error-gate at workflow:430
+      # (`failure_mode != '' || tripwire.outcome == 'failure'`) so a leak-only
+      # failure surfaces to Sentry instead of silently reporting ok.
+      # The ok-branch uses `TRIPWIRE_OUTCOME != "failure"` (not `== "success"`
+      # as the auto-close-stale gate at workflow:444 does) deliberately: this
+      # heartbeat fires under `if: always()`, so a `cancelled`/`skipped`
+      # tripwire outcome (job interrupted before tripwire ran) must NOT page
+      # Sentry as an error — it's an inconclusive run, not a leak.
+      # Replaces the prior two-step in_progress -> ok/error pattern whose
+      # silent-fail trap (CHECKIN_ID tmpfile parsed via `jq -r '.id // empty'`,
+      # gated `if` on the follow-up call) caused Sentry to never receive a
+      # successful check-in. The curl drops `|| true` so its exit code lands
+      # in the step log; `continue-on-error: true` preserves the property
+      # that a Sentry-side blip does not red-flag an otherwise-green probe.
       # See: docs.sentry.io/product/crons/getting-started/http/ (Heartbeat).
       - name: Sentry check-in (final)
         if: always()

@@ -43,7 +43,7 @@ After each file: run `actionlint <file>.yml` and confirm no new findings vs. bas
   - `scheduled_content_vendor_drift`: 60 → 90
   - `scheduled_skill_freshness`: keep 60 (insufficient cadence data)
   - `scheduled_community_monitor`: keep 60 (fits observed jitter)
-- [ ] 2.2. Update header comment (lines 31-37) to note all 8 monitors are now heartbeat-shape post-rollout.
+- [ ] 2.2. Update header comment (lines 39-45) to note all 8 monitors are now heartbeat-shape post-rollout.
 - [ ] 2.3. Run `terraform -chdir=apps/web-platform/infra/sentry fmt`.
 
 ## Phase 3 — Validation gates
