@@ -97,18 +97,30 @@ resource "doppler_secret" "inngest_event_key_dev" {
 # ---------------- Better Stack heartbeat ----------------
 
 resource "betteruptime_heartbeat" "inngest_prd" {
-  name       = "soleur-inngest-server-prd"
-  period     = 60
-  grace      = 30
-  call       = false
-  sms        = false
-  email      = true
-  push       = false
-  team_wait  = 0
-  paused     = false
+  name      = "soleur-inngest-server-prd"
+  period    = 60
+  grace     = 30
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  # Paused until the operator confirms inngest-server is running on the host
+  # (`deploy inngest <image> <tag>` succeeded). Otherwise, the gap between
+  # `terraform apply` (heartbeat created → BetterStack starts expecting pings
+  # within 30s grace) and the first systemd-timer ping would trigger a false
+  # email alert. Unpause via the Better Stack UI OR by flipping this attribute
+  # to `false` in a follow-up commit after deploy. Runbook documents both
+  # paths. See plan deviation note in inngest.tf header.
+  paused     = true
   team_name  = "Jean's team"
   policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
   sort_index = 0
+
+  lifecycle {
+    # Operator unpause via UI MUST NOT be reverted by subsequent applies.
+    ignore_changes = [paused]
+  }
 }
 
 resource "betteruptime_policy" "inngest" {
