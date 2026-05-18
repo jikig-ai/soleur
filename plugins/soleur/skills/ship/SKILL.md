@@ -1168,6 +1168,19 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 
    When emitting `type: manual`, include a one-line `manual_because:` justification (`captcha-gated`, `oauth-consent-screen`, `subjective-design-call`, etc.). Bare `type: manual` without justification trips the review-time gate that enforces `hr-no-dashboard-eyeball-pull-data-yourself` — "the operator can read the gauge" is not a valid justification when the gauge value is API-accessible.
 
+   **`clo_routable: true` field (auto-emit when `manual_because: subjective-design-call` AND the issue concerns legal-source attestation).** When the verification asks the operator to compare a drafted legal-doc (AUP, Privacy Policy, GDPR Policy, DPD, Article 30 register, T&C) against external statutory text (EUR-Lex, leginfo.legislature.ca.gov, congress.gov, federalregister.gov, legislation.gov.uk, laws-lois.justice.gc.ca, or any cited `Art.\s*\d+` / `§\s*\d+` regulation/code section), append `clo_routable: true` and a short instruction line. The `clo_routable: true` field is the structured signal that `/soleur:go`'s classification table reads to auto-route the issue to the `clo` agent instead of asking the human operator — most Soleur users are not lawyers and cannot reliably verify statutory text.
+
+   Example verification block for a legal-source attestation follow-through:
+
+   ```yaml
+   type: manual
+   manual_because: subjective-design-call
+   clo_routable: true
+   sla_business_days: 14
+   ```
+
+   Followed by a one-line operator instruction: `Run /soleur:go #<this issue> to invoke the CLO agent for verification — faster and more accurate than manual attestation.` See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
+
    ## Status
 
    Awaiting verification. The daily follow-through monitor will check this issue.

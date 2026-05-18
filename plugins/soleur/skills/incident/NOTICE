@@ -7,8 +7,8 @@ Licensed under MIT.
 Clean-room derivation; no upstream code lifted verbatim. The skill
 structure (SEV classification + PIR scaffold) was learned from the
 inspiration, but every line in this directory was written
-independently against Soleur's own runbook shape
-(`knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`),
+independently against Soleur's own PIR shape
+(`knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`),
 GDPR Art. 33/34 obligations, and the `brand_survival_threshold`
 3-tier vocabulary canonical to this repo.
 

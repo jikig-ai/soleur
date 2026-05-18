@@ -92,11 +92,17 @@ resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
 }
 
 resource "sentry_cron_monitor" "scheduled_daily_triage" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-daily-triage"
-  schedule                = { crontab = "0 4 * * *" }
-  checkin_margin_minutes  = 240
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "scheduled-daily-triage"
+  schedule     = { crontab = "0 4 * * *" }
+  # TR9 PR-1 (#3948): tightened from 240 min (GHA-era jitter tolerance) to
+  # 30 min after migration to Inngest cron (cron-daily-triage.ts). Inngest
+  # fires at most once per scheduled time with minimal jitter, vs GHA's
+  # sub-hourly runner-pool degradation of ~60 min daytime / longer overnight.
+  # Resource id, `name`, and Sentry slug UNCHANGED — historical check-in
+  # continuity preserved.
+  checkin_margin_minutes  = 30
   max_runtime_minutes     = 15
   failure_issue_threshold = 1
   recovery_threshold      = 1
@@ -145,6 +151,29 @@ resource "sentry_cron_monitor" "scheduled_community_monitor" {
   name                    = "scheduled-community-monitor"
   schedule                = { crontab = "0 8 * * *" }
   checkin_margin_minutes  = 60
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# scheduled-gh-pages-cert-state: daily 03:00 UTC poll of GitHub Pages cert
+# state for soleur.ai. Closes the gap exposed by the 2026-05-18 silent
+# cert-expiry outage (PR #3974 + PR #3986 + issue #3976). Daily cadence
+# leaves >2 weeks operator response on a single missed fire; the 240-
+# minute `checkin_margin_minutes` absorbs GHA cron jitter — this monitor
+# is GHA-fired (not Inngest), so the legacy GHA-jitter tolerance applies
+# (cf. `scheduled-daily-triage` which tightened to 30 min after its
+# Inngest migration in TR9 PR-1 #3985 — Inngest-fired monitors do NOT
+# need the 240-min margin).
+# `failure_issue_threshold = 1` because a single miss on a daily monitor
+# is itself noteworthy.
+resource "sentry_cron_monitor" "scheduled_gh_pages_cert_state" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-gh-pages-cert-state"
+  schedule                = { crontab = "0 3 * * *" }
+  checkin_margin_minutes  = 240
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
