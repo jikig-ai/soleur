@@ -132,11 +132,15 @@ jobs:
           DATE_TRIPPED=0
           DAYS_REMAINING="unknown"
           if [[ "$STATE_TRIPPED" -eq 0 && -n "$EXPIRES_AT" ]]; then
-            if [[ ! "$EXPIRES_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+            # GitHub Pages API returns "string, format: date" per docs — datetime branch is defensive.
+            if [[ "$EXPIRES_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              EXPIRES_EPOCH=$(date -u -d "$EXPIRES_AT 23:59:59 UTC" +%s)
+            elif [[ "$EXPIRES_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+              EXPIRES_EPOCH=$(date -u -d "$EXPIRES_AT" +%s)
+            else
               echo "::error::Unexpected expires_at format from API: '$EXPIRES_AT'"
               exit 1
             fi
-            EXPIRES_EPOCH=$(date -d "$EXPIRES_AT" +%s)
             NOW_EPOCH=$(date +%s)
             DAYS_REMAINING=$(( (EXPIRES_EPOCH - NOW_EPOCH) / 86400 ))
             if [[ "$DAYS_REMAINING" -lt "$WARN_DAYS" ]]; then

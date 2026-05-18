@@ -113,15 +113,15 @@ None — the failure mode is fully diagnosed in the issue body and confirmed by 
 
 ### Pre-merge (PR)
 
-- [ ] `.github/workflows/scheduled-gh-pages-cert-state.yml` accepts `EXPIRES_AT="2026-08-16"` without exiting 1, and computes `EXPIRES_EPOCH=1786924799` (EOD UTC).
-- [ ] `.github/workflows/scheduled-gh-pages-cert-state.yml` continues to accept `EXPIRES_AT="2026-12-31T12:00:00Z"` (defensive — API may upgrade) and computes `EXPIRES_EPOCH=1798718400`.
-- [ ] `.github/workflows/scheduled-gh-pages-cert-state.yml` still rejects `EXPIRES_AT="not-a-date"` / `EXPIRES_AT="2026/08/16"` / `EXPIRES_AT="08-16-2026"` with `::error::Unexpected expires_at format from API: '<value>'` and `exit 1`. Error-message literal (`Unexpected expires_at format from API`) is preserved verbatim so any operator dashboard or Sentry breadcrumb keyed on it continues to fire.
-- [ ] `DAYS_REMAINING` for `EXPIRES_AT="2026-08-16"` polled on a UTC day equals `floor((EOD_UTC_2026-08-16 - now) / 86400)` — verified by stepping through with `bash -c '<extracted snippet>'` against the modified `run:` body (the canonical-form check from sharp edge `bash -c '<extracted snippet>'`, NOT `bash -n <file.yml>`).
-- [ ] `actionlint .github/workflows/scheduled-gh-pages-cert-state.yml` is clean (baseline confirmed clean pre-edit at deepen-pass).
-- [ ] `shellcheck` over the extracted `run:` block reports no new findings (baseline shellcheck warnings, if any, captured pre-edit and re-confirmed post-edit).
-- [ ] The new branch adds a one-line code comment: `# GitHub Pages API returns "string, format: date" per docs — datetime branch is defensive.` (Prevents future re-paraphrase from `scheduled-cf-token-expiry-check.yml`.)
+- [x] `.github/workflows/scheduled-gh-pages-cert-state.yml` accepts `EXPIRES_AT="2026-08-16"` without exiting 1, and computes `EXPIRES_EPOCH=1786924799` (EOD UTC).
+- [x] `.github/workflows/scheduled-gh-pages-cert-state.yml` continues to accept `EXPIRES_AT="2026-12-31T12:00:00Z"` (defensive — API may upgrade) and computes `EXPIRES_EPOCH=1798718400`.
+- [x] `.github/workflows/scheduled-gh-pages-cert-state.yml` still rejects `EXPIRES_AT="not-a-date"` / `EXPIRES_AT="2026/08/16"` / `EXPIRES_AT="08-16-2026"` with `::error::Unexpected expires_at format from API: '<value>'` and `exit 1`. Error-message literal (`Unexpected expires_at format from API`) is preserved verbatim so any operator dashboard or Sentry breadcrumb keyed on it continues to fire.
+- [x] `DAYS_REMAINING` for `EXPIRES_AT="2026-08-16"` polled on a UTC day equals `floor((EOD_UTC_2026-08-16 - now) / 86400)` — verified by stepping through with `bash -c '<extracted snippet>'` against the modified `run:` body (the canonical-form check from sharp edge `bash -c '<extracted snippet>'`, NOT `bash -n <file.yml>`).
+- [x] `actionlint .github/workflows/scheduled-gh-pages-cert-state.yml` is clean (baseline confirmed clean pre-edit at deepen-pass).
+- [x] `shellcheck` over the extracted `run:` block reports no new findings (baseline shellcheck warnings, if any, captured pre-edit and re-confirmed post-edit).
+- [x] The new branch adds a one-line code comment: `# GitHub Pages API returns "string, format: date" per docs — datetime branch is defensive.` (Prevents future re-paraphrase from `scheduled-cf-token-expiry-check.yml`.)
 - [ ] PR body uses `Closes #4016` (regular bug fix, applied at merge, not ops-remediation — the fix is in-code, no post-merge operator action required for resolution).
-- [ ] No edit to `scheduled-cf-token-expiry-check.yml` — its strict-ISO regex is correct for the Cloudflare API contract.
+- [x] No edit to `scheduled-cf-token-expiry-check.yml` — its strict-ISO regex is correct for the Cloudflare API contract.
 
 ### Post-merge (operator / automated via `/soleur:ship`)
 
