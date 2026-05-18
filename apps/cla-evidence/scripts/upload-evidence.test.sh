@@ -40,9 +40,11 @@ EOF
 
 run_sut() {
   local payload="$1"
+  # 32-char access key + 64-char secret to satisfy the r2-conditional-put.sh
+  # credential-shape preflight (catches Doppler-still-holds-bearer-token regressions).
   PATH="$work:$PATH" \
-  R2_CLA_EVIDENCE_ACCESS_KEY_ID=stub-key \
-  R2_CLA_EVIDENCE_SECRET=stub-secret \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID=00000000000000000000000000000000 \
+  R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
   R2_CLA_EVIDENCE_ENDPOINT=https://example.invalid \
     bash "$SUT" "$payload"

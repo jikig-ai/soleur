@@ -10,7 +10,10 @@
 #   - 412              → dup-label, exit 0 (idempotent first-writer-wins).
 #   - 5xx / 429        → retry up to 3 with 250ms / 500ms / 1000ms backoff.
 #   - 4xx ≠ 412        → fast-fail (Kieran F5; e.g., 403 from stale token is a
-#                        config bug, not transient).
+#                        config bug, not transient). The R2 response body is
+#                        captured and surfaced in the `::error::` annotation so
+#                        operators read the actual S3 ErrorCode instead of
+#                        bisecting blind.
 #
 # Status classification uses explicit integer comparisons rather than shell
 # globs (`5*` would match "5" or "50"; the prior `case` was ordering-coupled —
@@ -46,11 +49,41 @@ bucket="${R2_CLA_EVIDENCE_BUCKET:-soleur-cla-evidence}"
 endpoint="${R2_CLA_EVIDENCE_ENDPOINT:?R2_CLA_EVIDENCE_ENDPOINT must be set}"
 url="${endpoint%/}/${bucket}/${key}"
 
+# Credential-shape preflight. R2's S3-compat SigV4 hard-fails with
+# `<Code>InvalidArgument</Code> <Message>Credential access key has length N,
+# should be 32</Message>` when the access key id is not exactly 32 chars.
+# Catching this at the script entry — before the doomed curl — turns a
+# generic 4xx body into an operator-actionable instruction. The most common
+# cause is Doppler `prd_cla` still holding the pre-2026-05-bootstrap
+# bearer-token value (~53 chars) instead of the corrected token-id-as-HMAC
+# derivation (32 chars). Re-running bootstrap.sh with a fresh admin token
+# pushes the corrected creds. See `apps/cla-evidence/infra/bootstrap.sh`
+# header for the 32-char/64-char derivation from the TF outputs.
+access_key="${R2_CLA_EVIDENCE_ACCESS_KEY_ID:?R2_CLA_EVIDENCE_ACCESS_KEY_ID must be set}"
+if [[ "${#access_key}" -ne 32 ]]; then
+  echo "::error::${label}: R2_CLA_EVIDENCE_ACCESS_KEY_ID length=${#access_key}, expected 32. Doppler prd_cla likely holds a Cloudflare API Token (bearer value) instead of an R2 S3-compat access key id. Operator action: re-run \`bash apps/cla-evidence/infra/bootstrap.sh\` with a fresh CF_ADMIN_TOKEN_BOOTSTRAP to push the corrected 32-char access-key-id + 64-char sha256(secret) pair to Doppler." >&2
+  exit 2
+fi
+secret="${R2_CLA_EVIDENCE_SECRET:?R2_CLA_EVIDENCE_SECRET must be set}"
+if [[ "${#secret}" -ne 64 ]]; then
+  echo "::error::${label}: R2_CLA_EVIDENCE_SECRET length=${#secret}, expected 64 (sha256 hex). Same operator action as above — re-run bootstrap.sh." >&2
+  exit 2
+fi
+
+# Response-body capture: R2 returns XML error bodies (<Code>…</Code>) on 4xx/5xx.
+# We pipe them to a tempfile so the failure annotation can echo the real reason
+# (e.g., InvalidRequest vs ObjectLockedRetention vs SignatureDoesNotMatch) rather
+# than the prior generic "stale token or missing perms" guess. Without this the
+# operator has to bisect blind every time R2 returns a new 4xx code.
+body_tmp=$(mktemp)
+trap 'rm -f "$body_tmp"' EXIT
+
 put_once() {
   # Stub-friendly: in tests, $(which curl) is the PATH-stub that emits a numeric
-  # HTTP code on stdout. In production, curl is invoked with full SigV4 via
-  # --aws-sigv4 (curl 7.75+) and emits the code via -w "%{http_code}".
-  curl -sS -o /dev/null -w "%{http_code}\n" --max-time 30 \
+  # HTTP code on stdout and ignores -o (so $body_tmp stays empty, which the
+  # error-emit path tolerates). In production, curl is invoked with full SigV4
+  # via --aws-sigv4 (curl 7.75+) and emits the code via -w "%{http_code}".
+  curl -sS -o "$body_tmp" -w "%{http_code}\n" --max-time 30 \
     -X PUT \
     -H "If-None-Match: *" \
     -H "Content-Type: application/json" \
@@ -58,6 +91,18 @@ put_once() {
     --user "${R2_CLA_EVIDENCE_ACCESS_KEY_ID}:${R2_CLA_EVIDENCE_SECRET}" \
     --data-binary "$payload" \
     "$url" 2>/dev/null || echo "000"
+}
+
+# Single-line body excerpt for inclusion in `::error::` annotations (GH Actions
+# annotations are one-line; multi-line XML would be truncated mid-tag). Caps at
+# 512 chars so a future malicious-bucket-redirect dumping HTML can't blow up
+# the log line.
+body_excerpt() {
+  if [[ ! -s "$body_tmp" ]]; then
+    printf '(empty body)'
+    return
+  fi
+  tr '\n' ' ' < "$body_tmp" | head -c 512
 }
 
 attempt_max=3
@@ -93,18 +138,21 @@ while [[ "$attempt" -le "$attempt_max" ]]; do
       attempt=$(( attempt + 1 ))
       continue
     fi
-    echo "::error::${label}: ${attempt_max} consecutive 5xx/429; last status=$code key=$key" >&2
+    echo "::error::${label}: ${attempt_max} consecutive 5xx/429; last status=$code key=$key body=$(body_excerpt)" >&2
     exit 2
   fi
 
   if (( code >= 400 && code < 500 )); then
     # 4xx ≠ 412 → fast-fail per Kieran F5 (e.g., 403 from stale token is a
-    # config bug, not transient).
-    echo "::error::${label}: fatal-4xx status=$code key=$key (config bug; stale token or missing perms)" >&2
+    # config bug, not transient). The R2 response body (now captured to
+    # $body_tmp) carries the actual S3 ErrorCode — surface it so the operator
+    # does not have to guess between SignatureDoesNotMatch / InvalidRequest /
+    # ObjectLockedRetention / etc.
+    echo "::error::${label}: fatal-4xx status=$code key=$key body=$(body_excerpt)" >&2
     exit 2
   fi
 
-  echo "::error::${label}: unexpected status=$code key=$key" >&2
+  echo "::error::${label}: unexpected status=$code key=$key body=$(body_excerpt)" >&2
   exit 2
 done
 
