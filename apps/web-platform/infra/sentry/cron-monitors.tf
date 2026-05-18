@@ -150,3 +150,23 @@ resource "sentry_cron_monitor" "scheduled_community_monitor" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# scheduled-gh-pages-cert-state: daily 03:00 UTC poll of GitHub Pages cert
+# state for soleur.ai. Closes the gap exposed by the 2026-05-18 silent
+# cert-expiry outage (PR #3974 + PR #3986 + issue #3976). Daily cadence
+# leaves >2 weeks operator response on a single missed fire; the 240-
+# minute `checkin_margin_minutes` absorbs GHA cron jitter (sibling
+# `scheduled-daily-triage` uses the same margin for the same reason).
+# `failure_issue_threshold = 1` because a single miss on a daily monitor
+# is itself noteworthy (matches sibling daily monitors).
+resource "sentry_cron_monitor" "scheduled_gh_pages_cert_state" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-gh-pages-cert-state"
+  schedule                = { crontab = "0 3 * * *" }
+  checkin_margin_minutes  = 240
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
