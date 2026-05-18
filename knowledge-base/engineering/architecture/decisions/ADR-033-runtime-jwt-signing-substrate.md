@@ -104,6 +104,44 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 - `precheck_jwt_mint` + `denied_jti` paths unchanged.
 - New-project provisioning runbook unchanged.
 
+## Phase 0 probe results (live-captured 2026-05-18)
+
+### 0.1 — JWKS asymmetric enablement (DONE)
+- `GET ${SUPABASE_URL}/auth/v1/.well-known/jwks.json` returns `{"count":1, "algs":["ES256"], "kids":["3605e4cb-db60-461d-a122-969e7671f66b"]}` on the **dev** project (`mlwiodleouzwniehynfz`).
+- Dashboard "Enable JWT Signing Keys" not required on dev (already on by default).
+
+### 0.2 — generateLink + verifyOtp baseline shape (DONE)
+- One cycle against synthesized fixture `tenant-isolation-*@soleur.test`.
+- JWT header: `{alg:"ES256", kid:"3605e4cb-…", typ:"JWT"}` — assert `alg != "HS256"` holds.
+- JWT payload claim set (BEFORE hook): `aal, amr, app_metadata, aud, email, exp, iat, is_anonymous, iss, phone, role, session_id, sub, user_metadata`.
+- Default values: `iss="https://${PROJECT_REF}.supabase.co/auth/v1"`, `aud="authenticated"`, `role="authenticated"`, `aal="aal1"`, `ttl=3600` (Supabase default — NOT our `ttlSec`).
+- **Critical**: `jti` is **absent** from the baseline payload — confirms the Custom Access Token Hook is load-bearing for our `denied_jti` revocation surface. Without the hook, PostgREST would see no `jti` claim and revocation would be impossible.
+- `session_id` present; `email` present (baseline includes founder PII; the hook's `jsonb_set` is additive so these pass through — acceptable since service-role already sees `auth.users` and Soleur's existing tenant-isolation contract already gates on `sub`).
+- **REST shape note for implementers**: `admin/generate_link` returns the hashed token at the response **root** (`.hashed_token`), not under `.properties.hashed_token`. The supabase-js wrapper exposes it as `data.properties.hashed_token` — the plan's TS pseudocode (and `lib/supabase/tenant.ts` post-#3363) uses the supabase-js path; the curl-based runbook (Deploy-Order §a/c) uses the root path. Both correct for their layer.
+
+### 0.4 — `authentication_method = 'otp'` gate (CONFIRMED empirically)
+- The baseline JWT payload includes `amr=[{method:"otp", timestamp:…}]`, confirming that the `verifyOtp` flow exposes `method="otp"` in `amr`.
+- Per Supabase's [Custom Access Token Hook input spec](https://supabase.com/docs/guides/auth/auth-hooks/custom-access-token-hook), the hook receives `event.authentication_method` as a single string (the most-recent method). On the `generateLink+verifyOtp` path, that string is `"otp"`.
+- Gate decision (pre-committed by plan-review panel, empirically validated here): `IF v_auth_method <> 'otp' THEN RETURN claims unchanged END IF` is sufficient. Dashboard logins (`password`), OAuth flows (`oauth`), refresh-token rotations (`token_refresh`) and other non-runtime paths get pass-through.
+- Future-optimization footnote retained from plan: if a future PR needs distinct runtime aud per founder, channel (a) `auth.users.app_metadata.target_aud`, channel (b) `verifyOtp` audience param.
+
+### 0.5 — latency baseline (DONE, 10 cycles sequential)
+- `generateLink`: p50=328ms, p95=408ms
+- `verifyOtp`: p50=330ms, p95=376ms
+- **total p50=664ms, p95=753ms, min=627ms, max=753ms**
+- p95=753ms < 1000ms plan-gate → no WebSocket pre-mint fallback needed. PR-B's ALS lazy-fetch absorbs this on first-tenant-query-per-session (cache TTL/4 = 150s remint window per Phase 2.5 plan edit; ≤24 mints/hour/founder).
+- Cold-start UX impact: +~750ms on first tenant query per session vs. previous ~1ms HS256. Below PR-B's 1s session-start SLO.
+
+### 0.6 — rate-limit defaults (DEFERRED empirical probe; defaults recorded)
+- **Decision**: defer the 60-cycle empirical rate-limit probe per session-state (2026-05-18 second session). Rationale: wasteful (risks tripping per-IP limits affecting unrelated dev workflows); the precheck `60/hour` ceiling is the durable canary regardless.
+- **Defaults from Supabase docs** ([rate-limits guide](https://supabase.com/docs/guides/auth/rate-limits), [auth-config endpoint](https://supabase.com/docs/reference/api/v1-update-a-projects-auth-config)):
+  - `RATE_LIMIT_TOKEN_REFRESH = 10` requests / IP / hour
+  - `RATE_LIMIT_EMAIL_SENT = 10` / hour (bypassed: `generateLink` does NOT send email)
+  - `RATE_LIMIT_VERIFY` is undocumented in the current public docs (the rate-limit page is a partial; the source-of-truth is Supabase support).
+- **Empirical sub-finding from 0.5**: 10 sequential `generateLink+verifyOtp` cycles against the SAME fixture from a SINGLE IP in <10s produced **zero 429 responses**. Suggests either (a) the per-IP TOKEN_REFRESH ceiling does not count `verifyOtp`-issued tokens, or (b) the bucket is not strict sliding-window over short bursts. Inconclusive but useful as a non-failure boundary.
+- **Hard ceiling we rely on**: `precheck_jwt_mint` ≤60/hour/founder (migration 037, ERRCODE-shifted to `45001` in migration 048). This is enforced by Soleur, not Supabase — durable regardless of upstream rate-limit drift.
+- **Follow-up tracking issue** (to be filed alongside this PR): "Empirical Supabase Auth rate-limit probe — 60-cycle generate+verify with timeline measurement once observability surface lands." Filing pattern per `wg-when-deferring-a-capability-create-a`.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md`
