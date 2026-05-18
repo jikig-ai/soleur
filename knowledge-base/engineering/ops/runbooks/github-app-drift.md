@@ -82,12 +82,14 @@ hourly run.
 ### 3. Store in Doppler `prd`
 
 ```bash
-doppler secrets set GH_APP_DRIFTGUARD_APP_ID -p soleur -c prd
+doppler secrets set GH_APP_DRIFTGUARD_APP_ID --silent -p soleur -c prd >/dev/null 2>&1
 # Paste the App database ID (e.g., 1234567), then Ctrl-D.
 
 cat ./private-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 \
-  --plain -p soleur -c prd
+  --silent --plain -p soleur -c prd >/dev/null 2>&1
 ```
+
+> Doppler `secrets {set,delete}` echo guidance — see [`knowledge-base/project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md`](../../../project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md) §Leak-2 (widened 2026-05-18 via #4029).
 
 Verify Doppler holds them:
 

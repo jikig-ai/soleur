@@ -272,21 +272,21 @@ Phase H.2 reads the test-mode `STRIPE_*` values from this file. Do not skip this
 
 ### E.1 -- Write the six live secrets
 
-`doppler secrets set` has no `--silent` flag. Use shell `read -rs` (silent read) to capture each value without terminal echo, then write via a CLI arg and immediately `unset` the variable.
+`doppler secrets set` accepts the global `--silent` flag (suppresses the just-set value echo); add a trailing `>/dev/null 2>&1` as belt-and-suspenders against stderr drift. Use shell `read -rs` (silent read) to capture each value without terminal echo, then write via a CLI arg and immediately `unset` the variable. See [`knowledge-base/project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md`](../../../project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md) §Leak-2 (widened 2026-05-18 via #4029) for the trap-class context.
 
 ```bash
 # 1. Live secret key (sk_live_...) from Dashboard -> Developers -> API keys (live mode)
 echo -n "Paste STRIPE_SECRET_KEY (sk_live_...): "; read -rs SK && echo
-doppler secrets set STRIPE_SECRET_KEY="$SK" -p soleur -c prd && unset SK
+doppler secrets set STRIPE_SECRET_KEY="$SK" --silent -p soleur -c prd >/dev/null 2>&1 && unset SK
 
 # 2. Live webhook signing secret (whsec_...) from Phase D
 echo -n "Paste STRIPE_WEBHOOK_SECRET (whsec_...): "; read -rs WS && echo
-doppler secrets set STRIPE_WEBHOOK_SECRET="$WS" -p soleur -c prd && unset WS
+doppler secrets set STRIPE_WEBHOOK_SECRET="$WS" --silent -p soleur -c prd >/dev/null 2>&1 && unset WS
 
 # 3-6. The four price IDs captured in Phase C (price_...)
 for KEY in STRIPE_PRICE_ID_SOLO STRIPE_PRICE_ID_STARTUP STRIPE_PRICE_ID_SCALE STRIPE_PRICE_ID_ENTERPRISE; do
   echo -n "Paste $KEY (price_...): "; read -rs PID && echo
-  doppler secrets set "$KEY=$PID" -p soleur -c prd && unset PID
+  doppler secrets set "$KEY=$PID" --silent -p soleur -c prd >/dev/null 2>&1 && unset PID
 done
 ```
 
@@ -486,8 +486,8 @@ Then revert both secrets without echoing values to the terminal:
 SK_TEST=$(grep '^STRIPE_SECRET_KEY=' ~/soleur-pre-activation-backup.env | cut -d= -f2-)
 WS_TEST=$(grep '^STRIPE_WEBHOOK_SECRET=' ~/soleur-pre-activation-backup.env | cut -d= -f2-)
 
-doppler secrets set STRIPE_SECRET_KEY="$SK_TEST"     -p soleur -c prd
-doppler secrets set STRIPE_WEBHOOK_SECRET="$WS_TEST" -p soleur -c prd
+doppler secrets set STRIPE_SECRET_KEY="$SK_TEST"     --silent -p soleur -c prd >/dev/null 2>&1
+doppler secrets set STRIPE_WEBHOOK_SECRET="$WS_TEST" --silent -p soleur -c prd >/dev/null 2>&1
 
 unset SK_TEST WS_TEST
 ```
@@ -497,7 +497,7 @@ unset SK_TEST WS_TEST
 ```bash
 for KEY in STRIPE_PRICE_ID_SOLO STRIPE_PRICE_ID_STARTUP STRIPE_PRICE_ID_SCALE STRIPE_PRICE_ID_ENTERPRISE; do
   VAL=$(grep "^$KEY=" ~/soleur-pre-activation-backup.env | cut -d= -f2-)
-  doppler secrets set "$KEY=$VAL" -p soleur -c prd
+  doppler secrets set "$KEY=$VAL" --silent -p soleur -c prd >/dev/null 2>&1
   unset VAL
 done
 
