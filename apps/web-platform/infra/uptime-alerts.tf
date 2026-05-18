@@ -118,11 +118,13 @@ resource "betteruptime_policy" "uptime" {
 #     to a noisier channel. Adding edge-error is a clean follow-up if the
 #     real-incident mix shows we are missing edge-error events.
 #
-# Why no filters.zones:
-#   - The account only has the soleur.ai zone today (sole var.cf_zone_id
-#     reference across the root). A zones filter would be redundant AND adds
-#     churn risk if the filter shape changes on a future provider bump.
-#   - Re-evaluate when a second zone lands.
+# filters.zones is REQUIRED by the Cloudflare API for http_alert_origin_error
+# (and most http_alert_* types) even though the TF provider schema marks
+# `filters` as Optional. Discovered at apply-time when PR #4003's initial
+# attempt failed with API error 17103: "Filters selection must be provided
+# to create a policy." The expiring_service_token_alert precedent
+# (tunnel.tf:75-85) does NOT need filters because that alert type is
+# account-scoped, not zone-scoped — do not generalize from it.
 #
 # Why email_integration only (no Slack / PagerDuty):
 #   - Matches the service_token_expiry precedent. Multi-channel routing is an
@@ -134,6 +136,10 @@ resource "cloudflare_notification_policy" "soleur_ai_5xx" {
   description = "Page-level alert on origin 5xx errors for the soleur.ai zone. Catches recurrence of the 2026-05-18 cert outage class (526 / origin cert validation failures) plus other origin-side degradation. Precedent: cloudflare_notification_policy.service_token_expiry (tunnel.tf:75-85). See PR #3974, PR #3986, issue #3976."
   alert_type  = "http_alert_origin_error"
   enabled     = true
+
+  filters {
+    zones = [var.cf_zone_id]
+  }
 
   email_integration {
     id = var.cf_notification_email
