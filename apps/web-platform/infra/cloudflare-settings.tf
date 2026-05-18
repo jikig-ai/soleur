@@ -29,9 +29,14 @@ resource "cloudflare_zone_settings_override" "soleur_ai" {
     # HTTP-01 challenge at /.well-known/acme-challenge/* to HTTPS
     # before GitHub Pages could serve the validator token, breaking
     # cert renewal. Edge-level HTTPS upgrade with an ACME-path
-    # exception is now in acme-challenge-ruleset.tf. This toggle
-    # MUST stay "off"; if re-enabled, the next ACME renewal
-    # (every ~60 days) fails again. See
+    # exception is now inlined as Rule 10 of
+    # `cloudflare_ruleset.seo_page_redirects` (seo-rulesets.tf) —
+    # CF only allows one user-defined ruleset per (zone, phase) and
+    # `skip` action is not valid on http_request_dynamic_redirect
+    # (CF API error 20016), so the ACME bypass is expressed as a
+    # negative-match clause in Rule 10's expression rather than as
+    # a separate skip rule. This toggle MUST stay "off"; if re-enabled,
+    # the next ACME renewal (every ~60 days) fails again. See
     # knowledge-base/operations/domains.md.
     always_use_https = "off"
   }
