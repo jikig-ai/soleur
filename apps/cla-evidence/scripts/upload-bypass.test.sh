@@ -58,9 +58,11 @@ EOF
 run_sut() {
   local payload="$1"
   : > "$work/urls.txt"
+  # 32-char access key + 64-char secret to satisfy the r2-conditional-put.sh
+  # credential-shape preflight (catches Doppler-still-holds-bearer-token regressions).
   PATH="$work:$PATH" \
-  R2_CLA_EVIDENCE_ACCESS_KEY_ID=stub-key \
-  R2_CLA_EVIDENCE_SECRET=stub-secret \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID=00000000000000000000000000000000 \
+  R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
   R2_CLA_EVIDENCE_ENDPOINT=https://example.invalid \
     bash "$SUT" "$payload"
@@ -154,6 +156,26 @@ if [[ "$rc" -ne 0 ]] && grep -q 'ObjectLockConfigurationNotFoundError' <<<"$out"
   green "PASS: Bypass.g 400 → fast-fail annotation includes R2 response body"
 else
   red "FAIL: Bypass.g expected error annotation to include 'ObjectLockConfigurationNotFoundError'"
+  red "$out"
+  fail=1
+fi
+
+# Bypass.h: 53-char bearer-token-shaped access key → preflight fast-fail with
+# operator-actionable bootstrap.sh instruction. Reproduces the 2026-05-16
+# Doppler misconfig that caused every pull_request_target run to fail.
+prime_200
+out=$(
+  PATH="$work:$PATH" \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
+  R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
+  R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
+  R2_CLA_EVIDENCE_ENDPOINT=https://example.invalid \
+    bash "$SUT" "$payload" 2>&1
+) && rc=0 || rc=$?
+if [[ "$rc" -ne 0 ]] && grep -q 'length=53, expected 32' <<<"$out" && grep -q 'bootstrap.sh' <<<"$out"; then
+  green "PASS: Bypass.h 53-char bearer token → preflight fast-fail with bootstrap.sh instruction"
+else
+  red "FAIL: Bypass.h expected preflight error pointing at bootstrap.sh; got rc=$rc"
   red "$out"
   fail=1
 fi
