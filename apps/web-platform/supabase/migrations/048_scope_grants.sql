@@ -41,45 +41,56 @@ CREATE POLICY scope_grants_owner_select ON public.scope_grants
 -- Art. 17 cascade).
 CREATE OR REPLACE FUNCTION public.scope_grants_no_mutate() RETURNS trigger
   LANGUAGE plpgsql
-  SET search_path = public, pg_temp
 AS $$
-DECLARE
-  v_anonymise_flag text;
 BEGIN
-  -- current_setting(name, missing_ok=true) returns '' (not NULL) when unset.
-  v_anonymise_flag := current_setting('app.scope_grants_anonymise_in_progress', true);
-  -- Bypass gate: GUC set. Role-check intentionally omitted — see #3984 CI
-  -- failure analysis. Migration 044's `current_user = 'service_role'` check
-  -- does NOT fire under PostgREST routing: inside a SECURITY DEFINER
-  -- function body, current_user is the function OWNER (postgres in Supabase
-  -- migrations), NOT the caller's PostgREST-set role. INVOKER triggers
-  -- inherit that elevated context. The role check is silently always-false.
-  -- 044's pattern was authored on a now-discredited theory of what INVOKER
-  -- preserves and shipped without an integration test against PostgREST
-  -- routing — see learning 2026-05-18-worm-trigger-bypass-role-check-fails-
-  -- under-postgrest-routing.md.
+  -- Two legitimate mutation shapes are allowed; everything else is rejected.
   --
-  -- Defense in depth WITHOUT the role check: (1) anonymise_scope_grants is
-  -- the SINGLE SET-site for app.scope_grants_anonymise_in_progress in this
-  -- migration (grep-verified at write time + lint-enforced going forward);
-  -- (2) anonymise_scope_grants is SECURITY DEFINER + `REVOKE EXECUTE FROM
-  -- PUBLIC, anon, authenticated` + `GRANT EXECUTE TO service_role` only,
-  -- so only service_role-authenticated callers can ever set the GUC;
-  -- (3) the GUC is `SET LOCAL` (transaction-scoped), so it auto-reverts at
-  -- COMMIT/ROLLBACK and cannot leak across requests. The chain
-  -- "service_role caller → SECURITY DEFINER function → SET LOCAL GUC →
-  -- trigger sees GUC" is the proof of legitimate cascade; the role check
-  -- was a redundant defense-in-depth that turned out to never fire.
-  IF v_anonymise_flag <> '' THEN
-    RETURN COALESCE(NEW, OLD);
-  END IF;
+  -- DELETE: always rejected.
+  --
+  -- UPDATE shape 1 (revoke flip): granted-at row's revoked_at goes NULL →
+  --   non-NULL (optionally with revoked_reason set in the same transition).
+  --   All other columns including founder_id must be unchanged. This is the
+  --   shape produced by revoke_action_class and by grant_action_class's
+  --   "tier change re-grants the previous active row" path.
+  --
+  -- UPDATE shape 2 (Art. 17 anonymise): founder_id goes non-NULL → NULL
+  --   with every other column unchanged. This is the shape produced by
+  --   anonymise_scope_grants. Recognized by structural shape rather than
+  --   a GUC + role gate — see learning
+  --   2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-
+  --   routing.md for why the GUC/role approach (043/044's precedent)
+  --   silently always-failed.
+  --
+  -- Defense in depth: anonymise_scope_grants is SECURITY DEFINER with
+  -- `REVOKE EXECUTE FROM PUBLIC, anon, authenticated` + `GRANT EXECUTE TO
+  -- service_role`. Only service_role-authenticated callers can issue the
+  -- UPDATE that matches shape 2. There is no policy in this migration
+  -- granting INSERT/UPDATE/DELETE to non-service-role callers (only the
+  -- SECURITY DEFINER RPCs reach the table), so RLS gates the entire
+  -- write surface upstream of this trigger.
 
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'scope_grants is append-only; use anonymise_scope_grants for Art. 17 cascade' USING ERRCODE = 'P0001';
   END IF;
 
-  -- TG_OP = 'UPDATE': allow only revoked_at / revoked_reason transitions
-  -- from NULL to non-NULL.
+  -- Shape 2: Art. 17 anonymise — founder_id non-NULL → NULL, everything
+  -- else unchanged. Checked first because it is the rarest transition
+  -- (one per account deletion) and unambiguous.
+  IF OLD.founder_id IS NOT NULL
+     AND NEW.founder_id IS NULL
+     AND NOT (OLD.action_class IS DISTINCT FROM NEW.action_class)
+     AND NOT (OLD.tier IS DISTINCT FROM NEW.tier)
+     AND NOT (OLD.granted_at IS DISTINCT FROM NEW.granted_at)
+     AND NOT (OLD.created_at IS DISTINCT FROM NEW.created_at)
+     AND NOT (OLD.revoked_at IS DISTINCT FROM NEW.revoked_at)
+     AND NOT (OLD.revoked_reason IS DISTINCT FROM NEW.revoked_reason)
+  THEN
+    RETURN NEW;
+  END IF;
+
+  -- Shape 1: revoke flip — only revoked_at / revoked_reason transition
+  -- from NULL to non-NULL is permitted; all other columns must be
+  -- unchanged.
   IF OLD.founder_id IS DISTINCT FROM NEW.founder_id
      OR OLD.action_class IS DISTINCT FROM NEW.action_class
      OR OLD.tier IS DISTINCT FROM NEW.tier
@@ -205,14 +216,12 @@ AS $$
 DECLARE
   v_rows int;
 BEGIN
-  -- WORM-bypass: SET LOCAL scopes to the current transaction; reverts at
-  -- COMMIT/ROLLBACK. THE SINGLE SET-SITE for this GUC. Mirrors migration
-  -- 044's anonymise_tc_acceptances exactly (PERFORM set_config(..., true)
-  -- is semantically equivalent but the literal `SET LOCAL` form is the
-  -- one verified to fire the trigger bypass under PostgREST/service_role
-  -- routing — see #3984 CI failure analysis).
-  SET LOCAL app.scope_grants_anonymise_in_progress = 'on';
-
+  -- Single UPDATE: founder_id NOT NULL → NULL. Every other column is
+  -- unchanged, so the row matches the trigger's "Shape 2 (Art. 17
+  -- anonymise)" structural check and the bypass returns NEW without
+  -- raising. No GUC required — see learning 2026-05-18-worm-trigger-
+  -- bypass-role-check-fails-under-postgrest-routing.md for why the
+  -- GUC + role-gate approach was abandoned.
   UPDATE public.scope_grants
      SET founder_id = NULL
    WHERE founder_id = p_user_id;
