@@ -42,7 +42,7 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { mirrorWithDebounce } from "@/server/observability";
-import { getServiceClient, serverUrl } from "./service";
+import { createServiceClient, getServiceClient, serverUrl } from "./service";
 
 export type UserId = string;
 
@@ -242,7 +242,22 @@ export async function mintFounderJwt(
   // JWT. type='email' (NOT 'magiclink' — the 'magiclink' literal for
   // verifyOtp is deprecated per Razikus pattern + Supabase PKCE-fix
   // article).
-  const verified = await service.auth.verifyOtp({
+  //
+  // CRITICAL: verifyOtp mutates the client's in-memory auth state via
+  // GoTrueClient._saveSession (auth-js/main/GoTrueClient.js:1125). Even
+  // with `persistSession: false`, the resolved session is held in-memory
+  // and supabase-js's `_getAccessToken()` will subsequently prefer the
+  // saved session.access_token over `supabaseKey` for all RPC/REST calls
+  // on that client (see supabase-js/src/SupabaseClient.ts:506-513). If
+  // we used the shared `getServiceClient()` singleton here, every
+  // post-mint call (notably `denyProbe`'s `is_jti_denied` RPC) would
+  // travel under the FOUNDER's tenant JWT — which lacks EXECUTE on the
+  // service-role-only deny-probe function (migration 037) and yields
+  // `42501 permission denied for function is_jti_denied`. Use a
+  // throw-away client for the OTP exchange so the singleton's auth
+  // state stays pristine.
+  const otpClient = createServiceClient();
+  const verified = await otpClient.auth.verifyOtp({
     token_hash: link.data.properties.hashed_token,
     type: "email",
   });
