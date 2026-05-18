@@ -525,35 +525,16 @@ jobs:
             echo "No stale tracking issue to close."
           fi
 
-      # Single end-of-job heartbeat check-in (Sentry Crons HTTP "heartbeat"
-      # shape). Posts `?status=ok` when probe is green, `?status=error` when
-      # probe recorded a failure mode. Replaces the prior two-step
-      # in_progress -> ok/error pattern whose silent-fail trap (CHECKIN_ID
-      # tmpfile parsed via `jq -r '.id // empty'`, gated `if` on the
-      # follow-up call) caused Sentry to never receive a successful
-      # check-in. The curl drops `|| true` so its exit code lands in the
-      # step log; `continue-on-error: true` preserves the property that a
-      # Sentry-side blip does not red-flag an otherwise-green probe.
-      # See: docs.sentry.io/product/crons/getting-started/http/ (Heartbeat).
+      # Single end-of-job heartbeat check-in via the shared
+      # ./.github/actions/sentry-heartbeat composite action. Status branch:
+      # empty probe failure_mode (probe green) -> ok, any failure_mode -> error.
       - name: Sentry check-in (final)
         if: always()
         continue-on-error: true
-        env:
-          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
-          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
-          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
-          MONITOR_SLUG: scheduled-oauth-probe
-          FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
-        run: |
-          set -u
-          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
-            echo "::warning::Sentry Crons secrets not configured; skipping check-in."
-            exit 0
-          fi
-          if [[ -z "${FAIL_MODE:-}" ]]; then
-            status="ok"
-          else
-            status="error"
-          fi
-          curl --max-time 10 -fSs -X POST \
-            "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/?status=${status}"
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-oauth-probe
+          status: ${{ steps.probe.outputs.failure_mode == '' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

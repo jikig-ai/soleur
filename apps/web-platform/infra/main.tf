@@ -66,11 +66,14 @@ provider "cloudflare" {
 }
 
 # Separate provider for Cloudflare Rulesets APIs (cache rules, firewall
-# custom rules). The default cf_api_token lacks Cache Rules:Edit and
-# Zone WAF:Edit; this alias uses a narrow token scoped to both on
+# custom rules, dynamic redirects). The default cf_api_token lacks
+# Cache Rules:Edit, Zone WAF:Edit, Single Redirect Rules:Edit, and
+# Transform Rules:Edit; this alias uses a narrow token scoped to all on
 # soleur.ai. Current consumers:
-#   - cache.tf                 (http_request_cache_settings)  — #2542
-#   - bot-allowlist.tf         (http_request_firewall_custom) — #2662
+#   - cache.tf                    (http_request_cache_settings)  — #2542
+#   - bot-allowlist.tf            (http_request_firewall_custom) — #2662
+#   - seo-rulesets.tf             (http_request_dynamic_redirect) — #3296
+#   - acme-challenge-ruleset.tf   (http_request_dynamic_redirect) — 2026-05-18 incident
 provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets

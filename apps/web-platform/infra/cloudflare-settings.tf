@@ -23,5 +23,16 @@ resource "cloudflare_zone_settings_override" "soleur_ai" {
       preload            = true
       nosniff            = true
     }
+
+    # 2026-05-18 incident remediation: Cloudflare's zone-level
+    # Always Use HTTPS toggle force-redirected the Let's Encrypt
+    # HTTP-01 challenge at /.well-known/acme-challenge/* to HTTPS
+    # before GitHub Pages could serve the validator token, breaking
+    # cert renewal. Edge-level HTTPS upgrade with an ACME-path
+    # exception is now in acme-challenge-ruleset.tf. This toggle
+    # MUST stay "off"; if re-enabled, the next ACME renewal
+    # (every ~60 days) fails again. See
+    # knowledge-base/operations/domains.md.
+    always_use_https = "off"
   }
 }
