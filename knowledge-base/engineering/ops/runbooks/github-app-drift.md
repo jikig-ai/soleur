@@ -82,9 +82,13 @@ hourly run.
 ### 3. Store in Doppler `prd`
 
 ```bash
-doppler secrets set GH_APP_DRIFTGUARD_APP_ID --silent -p soleur -c prd >/dev/null 2>&1
+# First invocation reads from the operator's terminal (paste + Ctrl-D); `--silent`
+# suppresses Doppler's just-set echo. Do NOT add `>/dev/null 2>&1` here — it hides
+# the readline prompt and makes the command look hung.
+doppler secrets set GH_APP_DRIFTGUARD_APP_ID --silent -p soleur -c prd
 # Paste the App database ID (e.g., 1234567), then Ctrl-D.
 
+# Second invocation is pipe-fed (non-interactive) — full belt-and-suspenders applies.
 cat ./private-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 \
   --silent --plain -p soleur -c prd >/dev/null 2>&1
 ```
@@ -260,7 +264,7 @@ over `|` to avoid stdout buffers visible to ptrace on shared hosts.
 4. **Byte-count assertion** (defense against transport corruption):
    `[[ $(wc -c < new-key.pem.b64) -ge 2000 && $(wc -c < new-key.pem.b64) -le 4096 ]] && echo OK`.
    A 2048-bit RSA PEM in PKCS#8 is ~3000 chars when base64-encoded.
-5. **Update Doppler.** `cat new-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --plain -p soleur -c prd`.
+5. **Update Doppler.** `cat new-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --silent --plain -p soleur -c prd >/dev/null 2>&1`.
 6. **Sync to GitHub Actions.** `gh secret set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 < <(doppler secrets get GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 -p soleur -c prd --plain)`.
    (Process substitution avoids the intermediate pipe stdout buffer.)
 7. **Trigger the guard.** `gh workflow run scheduled-github-app-drift-guard.yml`.

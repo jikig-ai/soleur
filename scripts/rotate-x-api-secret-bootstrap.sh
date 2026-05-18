@@ -16,6 +16,15 @@
 set -euo pipefail
 
 TOKEN_FILE=".playwright-mcp/x-api-secret.txt"
+
+# EXIT trap shreds the cleartext file even on mid-chain failure (e.g., Doppler
+# write succeeds but `gh secret set` fails). Without this, a half-write leaves
+# a single-user-incident-class cleartext artifact on disk. The `|| true`
+# tolerates the file already being shredded by the success-path step (5).
+# Why: PR #4031 user-impact review FINDING 1+3 — the unguarded set -e abort
+# was the failure mode being missed.
+trap 'shred -u "$TOKEN_FILE" 2>/dev/null || true' EXIT
+
 test -f "$TOKEN_FILE" || {
   echo "Missing $TOKEN_FILE — run the Playwright extraction step first." >&2
   echo "See plan §Phase 4 + the vendor-token-mint learning for the pattern." >&2
@@ -52,11 +61,17 @@ printf '%s' "$SECRET_VALUE" | gh secret set X_API_SECRET --body -
 #     rotation failed.
 doppler run -p soleur -c prd -- bash plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials
 
+# Clear the in-memory secret as soon as the prod writes are validated;
+# the EXIT trap will still shred the on-disk file regardless of branch.
+unset SECRET_VALUE
+
 # (4) Cron pipeline smoke — workflow_dispatch trigger; the workflow no-ops
 #     cleanly if today is not a publish date.
 gh workflow run scheduled-content-publisher.yml
 
 # (5) Cleanup — shred the extraction artifact so it cannot be re-leaked.
+#     The EXIT trap above also shreds on failure paths; this success-path
+#     shred is the trap's no-op idempotency partner (`|| true` in the trap).
 shred -u "$TOKEN_FILE"
 
 echo "[rotate-x-api-secret] OK — secret rotated, both write targets confirmed."

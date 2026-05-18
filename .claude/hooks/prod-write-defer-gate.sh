@@ -4,10 +4,13 @@
 # Three inline starter regexes (telemetry-driven expansion via follow-up PRs):
 #   prod-write-defer-git-push-main           — git push origin {main,master,HEAD:main,HEAD:master}
 #   prod-write-defer-terraform-apply         — terraform / tofu apply
-#   prod-write-defer-doppler-secrets-stdout  — doppler secrets {set|delete} ... --config {prd|prd_terraform|dev|ci}
+#   prod-write-defer-doppler-secrets-stdout  — doppler secrets {set|delete} ... --config {prd|prd_terraform|prd_orchestration|dev|ci}
 #                                              (widened from the original `set`-only / `prd[_terraform]`-only shape
 #                                              after issue #4029 — `delete` renders the post-deletion surviving-secrets
-#                                              table to stdout, leaking value chunks from sibling secrets).
+#                                              table to stdout, leaking value chunks from sibling secrets;
+#                                              `prd_orchestration` added at PR #4031 review since tenant-* runbooks
+#                                              operate against it and the same trap class applies to
+#                                              cross-tenant value chunks rendered post-deletion).
 #
 # Mode (controlled by SOLEUR_DEFER_DRYRUN, default 1):
 #   1 (dry-run, default) — emit kind=would_defer, allow (output "{}").
@@ -50,7 +53,7 @@ DEFER_VALUE="defer"
 declare -a DEFAULT_TARGETS=(
   "prod-write-defer-git-push-main|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*git[[:space:]]+push([[:space:]]+(-f|--force(-with-lease)?))?[[:space:]]+origin[[:space:]]+(main|master|HEAD:main|HEAD:master)([[:space:]]|;|\\)|&|$)"
   "prod-write-defer-terraform-apply|hr-all-infrastructure-provisioning-servers|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*(terraform|tofu)[[:space:]]+apply([[:space:]]|;|\\)|&|$)"
-  "prod-write-defer-doppler-secrets-stdout|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*([A-Za-z_]+=[A-Za-z0-9_]+[[:space:]]+)*doppler[[:space:]]+secrets[[:space:]]+(set|delete)([[:space:]]+[^[:space:]]+)*[[:space:]]+(--config|-c)[[:space:]]+(prd|prd_terraform|dev|ci)([[:space:]]|;|\\)|&|$)"
+  "prod-write-defer-doppler-secrets-stdout|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*([A-Za-z_]+=[A-Za-z0-9_]+[[:space:]]+)*doppler[[:space:]]+secrets[[:space:]]+(set|delete)([[:space:]]+[^[:space:]]+)*[[:space:]]+(--config|-c)[[:space:]]+(prd|prd_terraform|prd_orchestration|dev|ci)([[:space:]]|;|\\)|&|$)"
 )
 
 # Post-match read-only escape: a few command classes are matched by the

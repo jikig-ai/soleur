@@ -373,8 +373,7 @@ doppler secrets get TENANT_<id>_INSTALLATION_ID -p soleur -c prd_orchestration -
 
 Output must be a numeric integer (the installation ID).
 
-**Teardown (Step 8)**: `doppler secrets delete TENANT_<id>_INSTALLATION_ID
--p soleur -c prd_orchestration`.
+**Teardown (Step 8)**: `doppler secrets delete TENANT_<id>_INSTALLATION_ID --silent --yes -p soleur -c prd_orchestration >/dev/null 2>&1`.
 
 ---
 

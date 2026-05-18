@@ -170,6 +170,8 @@ assert_match_dry "B20 doppler set -c ci"               "doppler secrets set X=Y 
 assert_match_dry "B21 env-prefixed delete"             "DOPPLER_CONFIG=prd doppler secrets delete X --config prd --yes" "prod-write-defer-doppler-secrets-stdout"
 assert_match_dry "B22 wrapped delete via -- separator" "bash session-state.sh with_lock secret-rotate 300 -- doppler secrets delete X -c prd --yes" "prod-write-defer-doppler-secrets-stdout"
 assert_match_dry "B23 chained && delete"               "gh issue close 1 && doppler secrets delete X -c prd --yes"    "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B24 delete -c prd_orchestration"     "doppler secrets delete TENANT_X_INSTALLATION_ID -c prd_orchestration --yes" "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B25 set -c prd_orchestration"        "doppler secrets set TENANT_X_INSTALLATION_ID=123 --config prd_orchestration" "prod-write-defer-doppler-secrets-stdout"
 
 # ============================================================
 # Tier C: adjacent non-matches (must NOT fire)
@@ -200,6 +202,7 @@ assert_nomatch "C21 doppler set --help (read-only)"      "doppler secrets set --
 assert_nomatch "C22 doppler delete -c prd-staging"       "doppler secrets delete X -c prd-staging --yes"
 assert_nomatch "C23 doppler delete --config=prd (equals-form)" "doppler secrets delete X --config=prd --yes"
 assert_nomatch "C24 echo substring of delete"            "echo 'doppler secrets delete example'"
+assert_nomatch "C25 doppler set -c stg (staging)"        "doppler secrets set FOO=bar -c stg"
 
 # ============================================================
 # Tier D: enforce-mode wrapped envelope + decision value

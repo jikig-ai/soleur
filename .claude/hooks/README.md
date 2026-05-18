@@ -237,7 +237,7 @@ after `ship-unpushed-commits-gate.sh`.
 |---|---|
 | `prod-write-defer-git-push-main` | `git push origin {main,master,HEAD:main,HEAD:master}` incl. `-f`, `--force-with-lease`, refspec, env-prefix, wrapped via `-- <cmd>`, chained `&&`/`;` |
 | `prod-write-defer-terraform-apply` | `terraform apply` and `tofu apply` (same anchors) |
-| `prod-write-defer-doppler-secrets-stdout` | `doppler secrets {set,delete} ... --config {prd,prd_terraform,dev,ci}` (rejects `prd-staging`, equals-form `--config=prd`, `--help`/`-h`); widened 2026-05-18 via #4029 — `delete` renders the post-deletion surviving-secrets table to stdout, leaking value chunks from sibling secrets |
+| `prod-write-defer-doppler-secrets-stdout` | `doppler secrets {set,delete} ... --config {prd,prd_terraform,prd_orchestration,dev,ci}` (rejects `prd-staging`, equals-form `--config=prd`, `--help`/`-h`); widened 2026-05-18 via #4029 — `delete` renders the post-deletion surviving-secrets table to stdout, leaking value chunks from sibling secrets; `prd_orchestration` added at PR review since tenant-* runbooks operate against it |
 
 Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
 `(^|&&|\|\||;|[[:space:]]--[[:space:]])` catches wrapped invocations per
