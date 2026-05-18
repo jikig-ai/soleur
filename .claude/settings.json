@@ -90,6 +90,15 @@
         ]
       },
       {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/iac-plan-write-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__pencil__open_document",
         "hooks": [
           {
