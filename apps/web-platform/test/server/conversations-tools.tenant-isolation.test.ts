@@ -29,6 +29,7 @@ import {
   mintFounderJwt,
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
+import { registerSharedMintCache } from "@/test/helpers/mint-once";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -109,6 +110,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         global: { headers: { Authorization: `Bearer ${aMint.jwt}` } },
         auth: { persistSession: false, autoRefreshToken: false },
       });
+      // Cap suite mint count to 1 — see test/helpers/mint-once.ts.
+      registerSharedMintCache([[userA.id, aMint]]);
     }, 30_000);
 
     afterAll(async () => {

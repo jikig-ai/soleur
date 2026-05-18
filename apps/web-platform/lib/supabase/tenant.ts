@@ -2,43 +2,52 @@
  * Tenant-scoped Supabase client factory for the server-side agentic runtime
  * (PR-B #3244, plan §1.1 / §1.4).
  *
- * Resolution A (#3363): Node holds SUPABASE_JWT_SECRET and signs runtime
- * JWTs locally with HS256. The DB-resident `precheck_jwt_mint` RPC supplies
- * the claim values that need atomic DB coordination — `jti` (random UUID),
- * `exp_epoch`, `iat_epoch` — and gates per-founder rate (60 mints/hour
- * rolling window). Node combines those with static claims (`sub`, `role`,
- * `aud`, `iss`) and signs.
+ * Resolution C (#3363, this PR): Supabase asymmetric signing keys (ES256).
+ * Node holds no signing material. `precheck_jwt_mint` continues to own the
+ * atomic rate-limit + jti supply; the `runtime_jwt_mint_hook` Custom Access
+ * Token Hook (migration 047) calls it from inside the auth-issuance
+ * transaction so the precheck-issued jti lands directly in the JWT's `jti`
+ * claim. PostgREST sees the same jti our `denied_jti` table indexes —
+ * no binding table required.
  *
- * The legacy HS256 substrate is a known operational footgun (see #3363 for
- * the migration to Supabase asymmetric signing keys). Acceptable for the
- * closed-preview alpha; planned removal post-PR-D.
+ * Mint flow:
+ *   1. resolveFounderEmail(userId) — service-role lookup of auth.users.email
+ *   2. service.auth.admin.generateLink({type:"magiclink", email}) — produces
+ *      a hashed_token without sending email.
+ *   3. service.auth.verifyOtp({token_hash, type:"email"}) — exchanges the
+ *      hashed token for an asymmetrically-signed JWT. The hook fires
+ *      synchronously during issuance (gated on authentication_method='otp')
+ *      and injects jti/exp/iat/aud='soleur-runtime'/role='authenticated'
+ *      into the claims.
+ *   4. decodeJwtPayloadUnsafe(jwt) — extract jti for the cache layer.
+ *      No signature verification on this side; PostgREST verifies via the
+ *      JWKS endpoint (Supabase-managed asymmetric keys, never leave Supabase).
  *
- * Hand-rolled HS256 sign rationale: jose / jsonwebtoken would each add
- * ~30-100KB of dependency surface for a single 8-line function. byok.ts
- * (the existing precedent) uses raw node:crypto for AES-256-GCM. HS256
- * is structurally simpler — header.payload.hmac with no verification
- * round-trip on this side (PostgREST verifies). No timing-attack surface
- * exists on the SIGN path; the equality-comparison failure modes that
- * motivate vetted libraries apply only to verifiers.
+ * Phase 0.4 pre-commit decision (plan-review panel, empirically validated):
+ * the hook gates on `event->>'authentication_method' = 'otp'`. The aud
+ * claim is set inside the hook (not injected from Node). The JWT_AUDIENCE
+ * constant below is retained for Node-side parity with PostgREST audience
+ * validation if it's ever turned on; the hook is the actual write site.
+ *
+ * Type asymmetry: `type:"magiclink"` for `generateLink`, `type:"email"`
+ * for `verifyOtp`. The `magiclink` literal is deprecated for `verifyOtp`
+ * (Razikus pattern + Supabase PKCE-fix article). Documented at the call
+ * sites below — DO NOT "fix" this asymmetry.
  *
  * Residuals to address in follow-ups:
  *   - aud=soleur-runtime is structurally distinct on the wire but PostgREST
  *     does not enforce aud by default. Dashboard-replay prevention requires
- *     middleware-level aud filtering. See #3363 for the eventual fix.
- *   - V8 string interning of the JWT secret + signed token. Bounded by
- *     process lifetime; mitigated by the pino+sentry redaction allowlist
- *     (apps/web-platform/server/sensitive-keys.ts).
+ *     middleware-level aud filtering. Tracked separately.
  */
 
-import { createHmac } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { mirrorWithDebounce } from "@/server/observability";
-import { getServiceClient, serverUrl } from "./service";
+import { createServiceClient, getServiceClient, serverUrl } from "./service";
 
 export type UserId = string;
 
 export interface MintFounderJwtOpts {
-  /** Token TTL in seconds. Default 600 (10min). The cache reminta at TTL/2. */
+  /** Token TTL in seconds. Default 600 (10min). The cache remints at TTL/4. */
   ttlSec?: number;
 }
 
@@ -116,28 +125,14 @@ export function mapRuntimeAuthCauseToErrorCode(
 }
 
 const DEFAULT_TTL_SEC = 600;
-const JWT_AUDIENCE = "soleur-runtime";
 
-/** base64url encoder (RFC 4648 §5) — JWT spec requires URL-safe alphabet, no padding. */
-function b64url(input: Buffer | string): string {
-  const buf = typeof input === "string" ? Buffer.from(input, "utf8") : input;
-  return buf
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-function getJwtSecret(): string {
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (!secret) {
-    throw new RuntimeAuthError(
-      "jwt_mint",
-      "Authentication unavailable; retry shortly",
-    );
-  }
-  return secret;
-}
+/**
+ * Audience claim baked into runtime JWTs by `public.runtime_jwt_mint_hook`
+ * (migration 047). Node holds this constant for parity with the hook —
+ * future PostgREST-level aud filtering (dashboard-replay defense) reads
+ * this value. The hook is the actual write site.
+ */
+export const JWT_AUDIENCE = "soleur-runtime";
 
 function getAnonKey(): string {
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -150,20 +145,75 @@ function getAnonKey(): string {
   return key;
 }
 
-/** iss claim — canonical Supabase issuer URL. Required for issuer-rotation observability. */
-function getIssuer(): string {
-  return `${serverUrl()}/auth/v1`;
+/**
+ * Decode a JWT's middle (payload) segment WITHOUT signature verification.
+ *
+ * Used only to extract claims (`jti`, `exp`) the cache layer needs. The
+ * "Unsafe" suffix is load-bearing — a reader sees immediately that this is
+ * NOT a JWT verifier. PostgREST verifies the signature on the server side
+ * via the JWKS endpoint (Supabase-managed asymmetric keys).
+ */
+function decodeJwtPayloadUnsafe(jwt: string): Record<string, unknown> {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) {
+    throw new RuntimeAuthError(
+      "jwt_mint",
+      "Authentication unavailable; retry shortly",
+    );
+  }
+  const padded =
+    parts[1].replace(/-/g, "+").replace(/_/g, "/") +
+    "=".repeat((4 - (parts[1].length % 4)) % 4);
+  try {
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+  } catch {
+    throw new RuntimeAuthError(
+      "jwt_mint",
+      "Authentication unavailable; retry shortly",
+    );
+  }
 }
 
 /**
- * Mint a fresh founder-scoped JWT.
+ * Per-process founder-email cache. Resolves `auth.users.id → email` via the
+ * Supabase Admin API (service-role only). Cached for the process lifetime;
+ * email rotation is rare and invalidation-on-process-restart is acceptable
+ * at closed-preview scale. For multi-tenant prod, add a TTL or
+ * eviction-on-error (tracked separately).
+ */
+const emailCache = new Map<UserId, string>();
+
+async function resolveFounderEmail(userId: UserId): Promise<string> {
+  const cached = emailCache.get(userId);
+  if (cached) return cached;
+  const service = getServiceClient();
+  const { data, error } = await service.auth.admin.getUserById(userId);
+  if (error || !data?.user?.email) {
+    throw new RuntimeAuthError(
+      "jwt_mint",
+      "Authentication unavailable; retry shortly",
+    );
+  }
+  emailCache.set(userId, data.user.email);
+  return data.user.email;
+}
+
+/**
+ * Mint a fresh founder-scoped JWT via Supabase asymmetric signing.
  *
- * Calls `public.precheck_jwt_mint(p_founder_id, p_ttl_sec)` for atomic
- * rate-limit + jti generation, then HS256-signs the JWT with
- * `SUPABASE_JWT_SECRET`.
+ * Goes through GoTrue's `generateLink + verifyOtp` admin path. The
+ * `runtime_jwt_mint_hook` Custom Access Token Hook (migration 047) fires
+ * synchronously during issuance, calls `precheck_jwt_mint` for atomic
+ * rate-limit + jti supply (SQLSTATE '45001' on ceiling trip, migration
+ * 048), and injects jti/exp/iat/aud/role into the JWT claims. Node side
+ * never holds a signing key.
  *
- * @throws {RuntimeAuthError} cause="rotation" on rate-limit ceiling.
- * @throws {RuntimeAuthError} cause="jwt_mint" on RPC error or malformed row.
+ * @throws {RuntimeAuthError} cause="rotation" — precheck rate-limit
+ *   ceiling tripped (the hook bubbled `mint_rate_exceeded` from
+ *   SQLSTATE 45001 raise via GoTrue).
+ * @throws {RuntimeAuthError} cause="jwt_mint" — generateLink failed,
+ *   verifyOtp failed, GoTrue rate-limit hit, JWT missing hook-injected
+ *   jti (hook unregistered defensive seam), or claim shape malformed.
  */
 export async function mintFounderJwt(
   userId: UserId,
@@ -172,32 +222,108 @@ export async function mintFounderJwt(
   const ttlSec = opts.ttlSec ?? DEFAULT_TTL_SEC;
   const service = getServiceClient();
 
-  const { data, error } = await service.rpc("precheck_jwt_mint", {
-    p_founder_id: userId,
-    p_ttl_sec: ttlSec,
-  });
+  const email = await resolveFounderEmail(userId);
 
-  if (error) {
-    if (error.message.includes("mint_rate_exceeded")) {
-      throw new RuntimeAuthError(
-        "rotation",
-        "Authentication unavailable; retry shortly",
-      );
-    }
+  // Mint-intent marker (Phase-4 amendment, ADR-033 §0.7). The empirical
+  // probe established that Supabase's hook event payload contains no
+  // field discriminating this runtime path from a user-facing dashboard
+  // OTP login (signInWithOtp + verifyOtp) — both produce identical
+  // aud/amr/exp/app_metadata. Without this marker the hook would
+  // silently rewrite dashboard JWTs (10-min auto-logout for end users).
+  //
+  // Atomicity: the row is UPSERTed (ON CONFLICT DO UPDATE) before the
+  // verifyOtp call that triggers the hook. The hook DELETEs the row
+  // inside a CTE; only consumption unlocks the mint path. Stale rows
+  // (>10s) are ignored by the hook. Residual race: ~700ms window where
+  // a concurrent dashboard OTP login for the same founder could steal
+  // the intent — self-recovering and bounded to <0.02% under steady
+  // state (see migration 049 prose).
+  const { error: intentError } = await service
+    .from("runtime_mint_intent")
+    .upsert({ user_id: userId }, { onConflict: "user_id" });
+  if (intentError) {
     throw new RuntimeAuthError(
       "jwt_mint",
       "Authentication unavailable; retry shortly",
     );
   }
 
-  // RPC returns `RETURNS TABLE(...)` — supabase-js surfaces this as an array
-  // of rows. Defensive: handle both shapes.
-  const row = Array.isArray(data) ? data[0] : data;
+  // generateLink — produces a hashed_token. type='magiclink' here is the
+  // template selector; no email is sent (we consume the hashed_token
+  // server-side via verifyOtp below).
+  const link = await service.auth.admin.generateLink({
+    type: "magiclink",
+    email,
+  });
+  if (link.error || !link.data?.properties?.hashed_token) {
+    throw new RuntimeAuthError(
+      "jwt_mint",
+      "Authentication unavailable; retry shortly",
+    );
+  }
+
+  // verifyOtp — exchanges the hashed token for an asymmetrically-signed
+  // JWT. type='email' (NOT 'magiclink' — the 'magiclink' literal for
+  // verifyOtp is deprecated per Razikus pattern + Supabase PKCE-fix
+  // article).
+  //
+  // CRITICAL: verifyOtp mutates the client's in-memory auth state via
+  // GoTrueClient._saveSession (auth-js/main/GoTrueClient.js:1125). Even
+  // with `persistSession: false`, the resolved session is held in-memory
+  // and supabase-js's `_getAccessToken()` will subsequently prefer the
+  // saved session.access_token over `supabaseKey` for all RPC/REST calls
+  // on that client (see supabase-js/src/SupabaseClient.ts:506-513). If
+  // we used the shared `getServiceClient()` singleton here, every
+  // post-mint call (notably `denyProbe`'s `is_jti_denied` RPC) would
+  // travel under the FOUNDER's tenant JWT — which lacks EXECUTE on the
+  // service-role-only deny-probe function (migration 037) and yields
+  // `42501 permission denied for function is_jti_denied`. Use a
+  // throw-away client for the OTP exchange so the singleton's auth
+  // state stays pristine.
+  const otpClient = createServiceClient();
+  const verified = await otpClient.auth.verifyOtp({
+    token_hash: link.data.properties.hashed_token,
+    type: "email",
+  });
+  if (verified.error || !verified.data?.session?.access_token) {
+    const msg = verified.error?.message ?? "";
+    // The hook bubbled the precheck ceiling raise (SQLSTATE 45001,
+    // MESSAGE 'mint_rate_exceeded') via GoTrue. Distinct cause for the
+    // catch-site mapper.
+    if (msg.includes("mint_rate_exceeded")) {
+      throw new RuntimeAuthError(
+        "rotation",
+        "Authentication unavailable; retry shortly",
+      );
+    }
+    // GoTrue rate-limit, network failure, malformed response — all
+    // collapse to jwt_mint (distinct from the precheck-ceiling rotation
+    // cause). The catch site logs via mirrorWithDebounce.
+    throw new RuntimeAuthError(
+      "jwt_mint",
+      "Authentication unavailable; retry shortly",
+    );
+  }
+
+  const jwt = verified.data.session.access_token;
+
+  // Defensive: the hook is supposed to inject jti (precheck-issued UUID)
+  // and override exp/iat. If jti is missing or not UUID-shaped, the hook
+  // either didn't fire (unregistered, or auth method drift), OR fired but
+  // pass-through'd (e.g., concurrent dashboard OTP stole the intent row,
+  // ADR-033 §0.7 race window). In either case our `denied_jti` revocation
+  // surface would have no anchor — throw rather than return a half-trusted
+  // client. The UUID-shape check (vs typeof-string alone) defends against
+  // a future Supabase change that adds a non-UUID natural `jti` claim to
+  // pass-through JWTs (would silently bypass denied_jti lookup space).
+  // Phase 2.8 adds a parallel startup probe in service.ts so unregistered
+  // hook failures surface at boot, not just at mint time.
+  const payload = decodeJwtPayloadUnsafe(jwt);
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
-    !row ||
-    typeof row.jti !== "string" ||
-    typeof row.exp_epoch !== "number" ||
-    typeof row.iat_epoch !== "number"
+    typeof payload.jti !== "string" ||
+    !UUID_RE.test(payload.jti) ||
+    typeof payload.exp !== "number"
   ) {
     throw new RuntimeAuthError(
       "jwt_mint",
@@ -205,29 +331,11 @@ export async function mintFounderJwt(
     );
   }
 
-  const payload = {
-    sub: userId,
-    role: "authenticated",
-    aud: JWT_AUDIENCE,
-    iss: getIssuer(),
-    jti: row.jti,
-    exp: row.exp_epoch,
-    iat: row.iat_epoch,
-  };
-
-  // HS256: header.payload.HMAC-SHA256(header.payload, secret).
-  const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const body = b64url(JSON.stringify(payload));
-  const signingInput = `${header}.${body}`;
-  const signature = b64url(
-    createHmac("sha256", getJwtSecret()).update(signingInput).digest(),
-  );
-
   return {
-    jwt: `${signingInput}.${signature}`,
+    jwt,
     ttlSec,
     mintedAt: Date.now(),
-    jti: row.jti,
+    jti: payload.jti,
   };
 }
 
@@ -259,8 +367,11 @@ interface CacheEntry {
  * bearing dedup: concurrent cold callers (e.g., `Promise.all([lease.getApiKey(),
  * getUserServiceTokens(userId)])` at session start) await the same
  * pending mint instead of each consuming a slot from the 60/hr ceiling.
- * Entries are remminted when `now - mintedAt > ttlSec/2` (Kieran P1.1
- * boundary). In-flight queries holding the previous client reference
+ * Entries are reminted when `now - mintedAt > ttlSec/4` (Resolution C
+ * boundary — TTL/2 under HS256 was halved to TTL/4 to keep cache hit-rate
+ * high under the ~750ms generateLink+verifyOtp cost; ≤24 mints/hr/founder
+ * stays below the precheck_jwt_mint 60/hour ceiling).
+ * In-flight queries holding the previous client reference
  * continue to completion (PostgREST's resultset is unaffected by
  * subsequent header changes).
  */
@@ -330,7 +441,7 @@ function evictIf(userId: UserId, expected: Promise<CacheEntry>): void {
  * threshold for the closed-preview alpha, the user-impact of a
  * wholesale lockout (every founder loses access until a flake clears)
  * dominates the impact of missed revocation latency (bounded by the
- * cache TTL/2 ≤ 5min). Promote to fail-closed via a circuit-breaker if
+ * cache TTL/4 ≤ 2.5min). Promote to fail-closed via a circuit-breaker if
  * the deny surface drops repeatedly under steady state — Tracked in
  * the deny-list-circuit-breaker follow-up.
  */
@@ -388,7 +499,7 @@ async function denyProbe(jti: string, userId: UserId): Promise<boolean> {
 
 /**
  * Get a tenant-scoped Supabase client for the given founder, transparently
- * reminting the underlying JWT when it crosses the TTL/2 freshness
+ * reminting the underlying JWT when it crosses the TTL/4 freshness
  * boundary.
  *
  * This is the only public boundary call sites should use for tenant-data
@@ -427,7 +538,12 @@ export async function getFreshTenantClient(
     if (await denyProbe(entry.jti, userId)) {
       evictIf(userId, inflight);
       // Fall through to the cache-miss path below.
-    } else if (now - entry.mintedAt < (entry.ttlSec * 1000) / 2) {
+    } else if (now - entry.mintedAt < (entry.ttlSec * 1000) / 4) {
+      // Resolution C (#3363): TTL/4 (was TTL/2 under HS256). The ~750ms
+      // p95 generateLink+verifyOtp cost is absorbed at session start
+      // (PR-B's ALS lazy-fetch hits cache after the first call). TTL/4
+      // = ~150s remint window at ttlSec=600 → ≤24 mints/hour/founder,
+      // below the precheck_jwt_mint 60/hour ceiling. See plan §2.5.
       return entry.client;
     }
     // Stale — fall through to remint.
