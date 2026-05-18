@@ -274,7 +274,7 @@ If the workflow does NOT have `workflow_dispatch`, the smoke is "next allowlist-
 
 ### Post-merge (operator)
 
-- [ ] **AC10** — Within 24 hours of merge, the cla-evidence workflow exits 0 on at least one allowlist-bypass PR run (either by re-triggering an existing PR or by the next allowlist-bypass PR opened). Verify via `gh run list --workflow cla-evidence.yml --limit 5 --json conclusion,headBranch,createdAt,databaseId` — at least one row has `conclusion: success` AND `createdAt` after the merge timestamp. Then `gh run view <databaseId> --log | grep -E 'worm-duplicate-quarter status=(409|403)'` returns ≥1 match in the "Record allowlist-bypass" step. Automation feasibility: a single `gh run list` + `gh run view --log` is automatable; bake into `/soleur:ship` Phase 5.5 if not already covered.
+- [ ] **AC10** — Within 24 hours of merge, the cla-evidence workflow exits 0 on at least one allowlist-bypass PR run (either by re-triggering an existing PR or by the next allowlist-bypass PR opened). Verify via `gh run list --workflow cla-evidence.yml --limit 5 --json conclusion,headBranch,createdAt,databaseId` — at least one row has `conclusion: success` AND `createdAt` after the merge timestamp. Then `gh run view <databaseId> --log | grep -E '^worm-[^ ]+ status=(409|403)'` returns ≥1 match in the "Record allowlist-bypass" step. The `^worm-[^ ]+` shape is intentional: it discriminates on the `worm-` prefix (load-bearing) rather than the specific `DUP_LABEL` suffix (caller-overridable), so a future wrapper change to `DUP_LABEL` does not break this verification command. Automation feasibility: a single `gh run list` + `gh run view --log` is automatable; bake into `/soleur:ship` Phase 5.5 if not already covered.
 
 ## Test Scenarios
 

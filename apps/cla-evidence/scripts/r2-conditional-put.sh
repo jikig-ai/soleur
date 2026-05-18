@@ -136,6 +136,12 @@ while [[ "$attempt" -le "$attempt_max" ]]; do
     exit 0
   fi
 
+  # ORDERING IS LOAD-BEARING: the WORM 409|403 arm below MUST precede the
+  # generic 4xx catch (`code >= 400 && code < 500`). Moving it after the
+  # generic catch would make this arm dead code — 409/403 would be swallowed
+  # by the fatal-4xx arm and the cla-evidence step would silently revert to
+  # spamming red checks. The Bypass.b2/b2b and TS6.f tests are the canary.
+  #
   # 409 or 403 + ObjectLockedByBucketPolicy: R2 Lock Rules (bucket-wide WORM)
   # refused an overwrite of a key that already exists within the
   # maxAgeSeconds floor. Production observed status 409 (run 26042357131);

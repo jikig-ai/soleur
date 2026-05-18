@@ -272,7 +272,7 @@ The data behavior is correct — the canonical-per-quarter audit property ("firs
 |---|---|---|
 | #3201 | Introduced the cla-evidence sidecar + `If-None-Match: *` primitive | Pre-WORM; 412 was the duplicate signal |
 | #3920 | Adopted CF Lock Rules with `maxAgeSeconds:315360000` bucket-wide | Introduced the WORM constraint that 409s under it |
-| #3924 / #3939 | GDPR Art. 17 admin-override driver | Establishes the bypass-only-via-Art-17 boundary, not the classification fix |
+| #3939 (closes issue #3924) | GDPR Art. 17 admin-override driver | Establishes the bypass-only-via-Art-17 boundary, not the classification fix |
 | #3965 | Captured R2 response body in fast-fail annotations | Surfaced the 409 + `ObjectLockedByBucketPolicy` body cleanly for the first time |
 | #3966 | Diagnose + repair allowlist-bypass R2 write | Addressed earlier-layer cred failures that masked the 409 classification gap |
 | #3967 | Trigger workflow after Doppler `prd_cla` HMAC rotation | Operational, not a fix |

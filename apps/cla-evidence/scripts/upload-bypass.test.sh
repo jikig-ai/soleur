@@ -156,6 +156,9 @@ fi
 
 # Bypass.b4: defensive fail-closed when R2 returns 409 with no body. We cannot
 # prove idempotency from an empty body; fast-fail with the standard annotation.
+# Explicit `rm -f` defends against state pollution if a future reorder inserts
+# a body-leaving case immediately before this one.
+rm -f "$work/body_fixture"
 printf "409\n" > "$work/codes.txt"
 mk_curl_stub "$work/codes.txt"
 out=$(run_sut "$payload" 2>&1) && rc=0 || rc=$?
@@ -167,7 +170,11 @@ else
   fail=1
 fi
 
-# Bypass.c: 403 → fast-fail (Kieran F5).
+# Bypass.c: 403 → fast-fail (Kieran F5). Same defensive cleanup as b4 — every
+# case that does NOT prime a body_fixture must `rm -f` first so a future reorder
+# cannot leak a WORM-matching body from a prior case and flip Bypass.c's
+# expected fast-fail into a worm-idempotent success.
+rm -f "$work/body_fixture"
 printf "403\n" > "$work/codes.txt"
 mk_curl_stub "$work/codes.txt"
 out=$(run_sut "$payload" 2>&1) && rc=0 || rc=$?
