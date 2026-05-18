@@ -26,6 +26,9 @@ trap 'rm -rf "$work"' EXIT
 # Stub curl: emit the next HTTP code from $work/codes.txt and consume it.
 # Also append the request URL to $work/urls.txt so tests can assert key
 # derivation (the URL is the only side-effect visible to the harness).
+# If $work/body_fixture exists, honor curl's `-o <file>` arg and copy the
+# fixture there so body-echo tests can assert the error annotation
+# surfaces the R2 ErrorCode.
 mk_curl_stub() {
   local codes="$1"
   cat > "$work/curl" <<EOF
@@ -33,6 +36,16 @@ mk_curl_stub() {
 codes_file="$codes"
 read -r code < "\$codes_file"
 sed -i '1d' "\$codes_file"
+# Parse \`-o <file>\` and copy the body fixture there if present.
+prev=""
+out_path=""
+for arg in "\$@"; do
+  if [[ "\$prev" == "-o" ]]; then out_path="\$arg"; fi
+  prev="\$arg"
+done
+if [[ -n "\$out_path" && -f "$work/body_fixture" ]]; then
+  cp "$work/body_fixture" "\$out_path"
+fi
 # The URL is the last positional arg.
 for arg in "\$@"; do url="\$arg"; done
 echo "\$url" >> "$work/urls.txt"
@@ -126,6 +139,22 @@ if run_sut "$payload_evil" >/dev/null 2>&1; then
   fi
 else
   red "FAIL: Bypass.e expected exit 0 on 200 with adversarial payload"
+  fail=1
+fi
+
+# Bypass.g: 4xx error surfaces the captured R2 response body in the annotation.
+# This is the diagnostic-PR contract — without it the operator has no way to
+# distinguish e.g. SignatureDoesNotMatch from ObjectLockedRetention.
+printf "400\n" > "$work/codes.txt"
+printf '<Error><Code>ObjectLockConfigurationNotFoundError</Code><Message>example</Message></Error>' > "$work/body_fixture"
+mk_curl_stub "$work/codes.txt"
+out=$(run_sut "$payload" 2>&1) && rc=0 || rc=$?
+rm -f "$work/body_fixture"
+if [[ "$rc" -ne 0 ]] && grep -q 'ObjectLockConfigurationNotFoundError' <<<"$out"; then
+  green "PASS: Bypass.g 400 → fast-fail annotation includes R2 response body"
+else
+  red "FAIL: Bypass.g expected error annotation to include 'ObjectLockConfigurationNotFoundError'"
+  red "$out"
   fail=1
 fi
 
