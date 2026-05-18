@@ -17,20 +17,30 @@
 #
 # Workflow contract codified at `hr-multi-step-post-merge-bootstrap-script`.
 #
-# Operator step (one-time):
-#   1. Open https://dash.cloudflare.com/profile/api-tokens
-#   2. Create custom token with permissions:
-#        - Account → Cloudflare R2 → Edit
-#        - User → API Tokens → Edit
-#        - Account scope: <your jikigai account>
-#      Set TTL: 1 hour.
-#   3. Copy the token value, then run:
-#        CF_ADMIN_TOKEN_BOOTSTRAP=<paste> \
+# Operator steps (one-time):
+#   1. Mint a one-hour CF admin token at https://dash.cloudflare.com/profile/api-tokens
+#      with permissions: Account → Cloudflare R2 → Edit, User → API Tokens → Edit
+#      scoped to the jikigai account.
+#   2. Create the R2 S3-compat token (separate resource type, distinct from the
+#      generic API Token in step 1) at:
+#        Storage & databases → R2 → Manage API Tokens → Create Account API token
+#        Permission: Object Read & Write
+#        Buckets: Apply to specific buckets only → soleur-cla-evidence
+#        TTL: Forever
+#      The dashboard shows the resulting Access Key ID + Secret Access Key ONCE
+#      on creation. Cloudflare R2's S3 surface only accepts credentials minted
+#      via this flow — generic cloudflare_api_token Bearer values do NOT work
+#      as SigV4 HMAC pairs (confirmed via SignatureDoesNotMatch on every run
+#      from 2026-05-16 onward; learning file 2026-05-18-cla-evidence-r2-s3-creds-not-derived.md).
+#   3. Run this script with all three values exported:
+#        CF_ADMIN_TOKEN_BOOTSTRAP=<paste from step 1> \
+#        R2_S3_ACCESS_KEY_ID=<paste from step 2, 32-char hex> \
+#        R2_S3_SECRET_ACCESS_KEY=<paste from step 2, 64-char hex> \
 #          bash apps/cla-evidence/infra/bootstrap.sh
-#   4. The script self-revokes the admin token via the CF API at the
-#      end of a successful run. If that step fails (network blip, etc.),
-#      the script warns and the operator must revoke manually in the
-#      dashboard.
+#   4. The script self-revokes the CF admin token via the CF API at the end of
+#      a successful run. If that step fails (network blip, etc.), the script
+#      warns and the operator must revoke manually in the dashboard. The R2 S3
+#      token is long-lived and is rotated only on leak signal.
 #
 # Optional opt-in (closes #3908): set SENTINEL_PR_AUTOMATION=1 to run the
 # Phase 8 sentinel-PR driver (human signer + allowlist-bypass) at the end
@@ -124,23 +134,74 @@ BUCKET_ENDPOINT=$(tf_env terraform output -raw bucket_endpoint)
 [[ -n "$STATE_WRITE_TOKEN"        ]] || { red "state_write_token_value missing";  exit 1; }
 green "  bucket=$BUCKET_NAME endpoint=$BUCKET_ENDPOINT (tokens captured, not logged)"
 
-# Derive R2 S3-compat HMAC creds from the object-write API token per
-# Cloudflare's documented contract:
-#   Access Key ID    = the API token id  (32-char hex)
-#   Secret Access Key = sha256(API token value)  (64-char hex)
-# Reference: https://developers.cloudflare.com/r2/api/tokens/
+# R2 S3-compat HMAC pair — REQUIRED from the caller, NOT derived.
 #
-# The previous bootstrap revision pushed the bearer-token value (~53 chars)
-# as both halves of the HMAC pair. R2's S3-compat API enforces a 32-char
-# access-key-id length invariant, so the first cron run failed with
-# `Credential access key has length 53, should be 32`. Length assertions
-# below surface any shape drift immediately, before any Doppler write.
-R2_ACCESS_KEY="$OBJECT_WRITE_TOKEN_ID"
-R2_SECRET=$(printf '%s' "$OBJECT_WRITE_TOKEN_VALUE" | openssl dgst -sha256 -hex | awk '{print $NF}')
+# Prior revisions of this script tried to derive the pair from the
+# `cloudflare_api_token` TF resource via:
+#   access_key_id = token.id          (32-char hex)
+#   secret_access_key = sha256(token.value)
+# That derivation is wrong: Cloudflare's S3-compat surface does not accept
+# generic-API-token-derived HMAC values. R2 issues real S3 credentials only
+# when you create an "R2 API Token" (a distinct resource type) via the
+# dashboard route /:account/r2/api-tokens/create — that flow returns a
+# 32-char accessKeyId + 64-char secretAccessKey directly, shown ONCE on
+# creation. The Terraform `cloudflare_api_token` resource here remains
+# load-bearing for the CF Lock Rules and GDPR-override REST calls below
+# (those use Bearer auth, not SigV4), but its value cannot be reused as
+# the R2 S3 secret. Confirmed empirically: pushing the derived pair to
+# Doppler produced `<Code>SignatureDoesNotMatch</Code>` on every workflow
+# run from 2026-05-16 onward.
+#
+# Operator workflow:
+#   1. Create the R2 token in the Cloudflare dashboard:
+#        Storage & databases → R2 → Manage API Tokens → Create Account API token
+#        Permission: Object Read & Write
+#        Buckets: Apply to specific buckets only → soleur-cla-evidence
+#        TTL: Forever (rotate manually if needed)
+#   2. Copy the displayed Access Key ID + Secret Access Key.
+#   3. Re-run this script with both env vars set:
+#        R2_S3_ACCESS_KEY_ID=<32-char> \
+#        R2_S3_SECRET_ACCESS_KEY=<64-char> \
+#        CF_ADMIN_TOKEN_BOOTSTRAP=<paste> \
+#          bash apps/cla-evidence/infra/bootstrap.sh
+#
+# Length assertions below surface a typo before any Doppler write.
+if [[ -z "${R2_S3_ACCESS_KEY_ID:-}" || -z "${R2_S3_SECRET_ACCESS_KEY:-}" ]]; then
+  red "R2_S3_ACCESS_KEY_ID and R2_S3_SECRET_ACCESS_KEY must be set."
+  red "Create the R2 token in the CF dashboard (see header comment above this block for the exact path), then re-run with both env vars exported."
+  exit 64
+fi
+R2_ACCESS_KEY="$R2_S3_ACCESS_KEY_ID"
+R2_SECRET="$R2_S3_SECRET_ACCESS_KEY"
 [[ ${#R2_ACCESS_KEY} -eq 32 ]] \
-  || { red "R2 access key length=${#R2_ACCESS_KEY}, expected 32 (token id from TF output)"; exit 1; }
+  || { red "R2_S3_ACCESS_KEY_ID length=${#R2_ACCESS_KEY}, expected 32 (hex)"; exit 1; }
 [[ ${#R2_SECRET} -eq 64 ]] \
-  || { red "R2 secret length=${#R2_SECRET}, expected 64 (sha256 hex of token value)"; exit 1; }
+  || { red "R2_S3_SECRET_ACCESS_KEY length=${#R2_SECRET}, expected 64 (hex)"; exit 1; }
+
+# Probe-PUT: verify the supplied creds actually sign correctly against R2
+# BEFORE writing them to Doppler. Without this, a typo or wrong-token-type
+# silently lands in prd_cla and surfaces only when the first PR's
+# cla-evidence workflow runs — the 2026-05-16 outage class. The probe key
+# is content-addressed under bootstrap-probe/ so it's idempotent across
+# re-runs and easy to identify+delete in the bucket inspector.
+probe_endpoint="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com/${BUCKET_NAME}/bootstrap-probe/$(date -u +%Y%m%dT%H%M%SZ).json"
+probe_body='{"probe":"bootstrap","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+probe_code=$(curl -sS -o /tmp/r2-probe-body -w "%{http_code}" --max-time 30 \
+  -X PUT \
+  -H "If-None-Match: *" \
+  -H "Content-Type: application/json" \
+  --aws-sigv4 "aws:amz:auto:s3" \
+  --user "${R2_ACCESS_KEY}:${R2_SECRET}" \
+  --data-binary "$probe_body" \
+  "$probe_endpoint" 2>/dev/null || echo "000")
+if [[ "$probe_code" != "200" && "$probe_code" != "201" && "$probe_code" != "412" ]]; then
+  red "R2 probe PUT failed: status=$probe_code body=$(tr '\n' ' ' < /tmp/r2-probe-body | head -c 400)"
+  red "Refusing to push known-broken creds to Doppler. Verify R2_S3_ACCESS_KEY_ID/SECRET match a freshly-minted R2 dashboard token (see header)."
+  rm -f /tmp/r2-probe-body
+  exit 1
+fi
+rm -f /tmp/r2-probe-body
+green "  R2 probe PUT ok (status=$probe_code); creds verified before Doppler push"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Step 2 — Doppler prd_cla config + secrets
