@@ -3,11 +3,9 @@
 # Pattern: scheduled-cf-token-expiry-check.yml (issue file/comment dedup) +
 # scheduled-terraform-drift.yml (notify-ops-email integration).
 #
-# Cadence note: hourly cron matches observed GitHub Actions scheduling
-# reality. Sub-hourly schedules (`*/5`, `*/15`) routinely degrade to ~60 min
-# under runner-pool load; aligning the spec to actual behavior keeps the
-# Sentry monitor's expected cadence honest (see cron-monitors.tf for the
-# matching `checkin_margin_minutes`).
+# Cadence rationale lives in apps/web-platform/infra/sentry/cron-monitors.tf
+# (the header block explains why hourly matches observed GHA cron behavior
+# and how `checkin_margin_minutes` is sized).
 #
 # Security: all untrusted values (probe outputs) flow through env: vars before
 # being interpolated into run: shells. No github.event.* inputs are consumed.

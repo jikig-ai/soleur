@@ -35,6 +35,14 @@
 # are intentionally generous enough to absorb daytime jitter while still
 # treating a deep overnight gap (paired with `failure_issue_threshold = 2`)
 # as real signal.
+#
+# `max_runtime_minutes` only matters for two-step (in_progress -> ok/error)
+# check-ins where Sentry can detect a job exceeding its declared budget.
+# Monitors paired with a single end-of-job heartbeat (oauth-probe today;
+# 7 sister workflows after follow-up rollout) get NO runtime-overrun
+# detection from this field — only missed-run detection. Retain the value
+# for schema/sibling consistency and as a future-compat default if any
+# monitor migrates back to the two-step pattern.
 
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org
@@ -49,15 +57,9 @@ resource "sentry_cron_monitor" "scheduled_terraform_drift" {
 }
 
 resource "sentry_cron_monitor" "scheduled_oauth_probe" {
-  organization = var.sentry_org
-  project      = data.sentry_project.web_platform.slug
-  name         = "scheduled-oauth-probe"
-  # Hourly cadence matches the workflow's `cron: '0 * * * *'` AND
-  # observed GHA scheduling reality. `checkin_margin_minutes = 30`
-  # covers daytime jitter; longer overnight gaps surface as real signal
-  # at `failure_issue_threshold = 2`. `max_runtime_minutes` is decorative
-  # in heartbeat mode (single end-of-job check-in detects missed runs,
-  # not overages); retained at 10 for schema/sibling-consistency.
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-oauth-probe"
   schedule                = { crontab = "0 * * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
