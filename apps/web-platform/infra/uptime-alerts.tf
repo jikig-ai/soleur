@@ -97,65 +97,32 @@ resource "betteruptime_policy" "uptime" {
   }
 }
 
-# ── Cloudflare: zone-level origin-5xx notification policy ──────────────────
+# ── Cloudflare zone-level origin-5xx notification policy: NOT shipped ──────
 #
-# Page-level alert on origin 5xx errors for the soleur.ai zone. Catches
-# recurrence of the 2026-05-18 cert outage class (Cloudflare 526 = "CF edge
-# can't validate origin cert") plus generic origin-side degradation.
+# PR #4003 originally declared a `cloudflare_notification_policy` with
+# alert_type = "http_alert_origin_error" to catch CF-526-class origin cert
+# outages at the edge. Three apply attempts produced three different errors:
+#   1. PR #4003 — no filters block → API error 17103 (filters required).
+#   2. PR #4015 — filters.zones only → 17103 again (zones alone insufficient).
+#   3. PR #4018 — filters.zones + filters.slo → API error 17200: "account is
+#      not entitled to create policies for the alert type".
 #
-# Precedent: cloudflare_notification_policy.service_token_expiry at
-# tunnel.tf:75-85. Same v4 provider syntax (`email_integration { id = ... }`
-# block, NOT v5's `mechanisms = { email = [{ id = "id" }] }` map).
-# Cloudflare provider is pinned to `~> 4.0` in main.tf:21-24.
+# Resolution: none of the http_alert_* types
+# (http_alert_origin_error / http_alert_edge_error / advanced_http_alert_error)
+# are in the account's available_alerts list. They are Enterprise-tier
+# features and the soleur account does not have them. Confirmed via:
+#   GET /accounts/{cf_account_id}/alerting/v3/available_alerts
 #
-# Why http_alert_origin_error and not http_alert_edge_error:
-#   - 526 is classified as an origin error in CF's taxonomy (the cert
-#     validation failure is on the origin side — CF was reaching out and
-#     getting a bad cert back). 526 is the EXACT shape of the 2026-05-18
-#     outage. http_alert_edge_error covers CF-internal 5xx (502/520/521 when
-#     CF itself can't route), which is rarer and mostly outside our control.
-#   - Starting narrow lets us observe the 30-day fire rate before opening up
-#     to a noisier channel. Adding edge-error is a clean follow-up if the
-#     real-incident mix shows we are missing edge-error events.
+# The post-mortem scenario this policy was meant to alert on — 526 origin
+# cert validation failures — is already covered by:
+#   - `sentry_uptime_monitor.soleur_apex` (5-min interval, 3-fail trip)
+#   - `sentry_uptime_monitor.soleur_www`
+#   - `sentry_uptime_monitor.soleur_acme_probe` (ACME-carve-out regression alarm)
+#   - `betteruptime_monitor.soleur_apex` (3-min multi-region, vendor-isolated)
+# A 526 either fails the TLS handshake or returns a 5xx — both fire the
+# uptime monitors. The CF-native policy was belt-and-suspenders, not load-bearing.
 #
-# filters.zones AND filters.slo are BOTH required by the Cloudflare API for
-# http_alert_origin_error even though the TF provider schema marks `filters`
-# as Optional and the public CF docs only call out zones as required. Source
-# of truth: cloudflare/terraform-provider-cloudflare#1406 comment from a CF
-# engineer enumerating the per-alert-type filter contracts. Valid slo values
-# for this alert: "99.7", "99.8", "99.9". We pick 99.9 (strictest — fires at
-# 0.1% origin error rate) because the post-mortem scenario this exists to
-# catch is a 526 cert outage, where error rate jumps to ~100% on the affected
-# host. A 99.7 threshold would still catch that but adds latency before the
-# alert trips on subtler degradation.
-#
-# Discovery path:
-#   1. PR #4003 declared no filters → CF API error 17103.
-#   2. PR #4015 added filters.zones → STILL got 17103 (this comment is the
-#      reason: zones alone is insufficient).
-#   3. This PR adds filters.slo → expected to apply cleanly.
-#
-# The expiring_service_token_alert precedent (tunnel.tf:75-85) does NOT need
-# filters because that alert type is account-scoped, not zone-scoped — do
-# NOT generalize from it.
-#
-# Why email_integration only (no Slack / PagerDuty):
-#   - Matches the service_token_expiry precedent. Multi-channel routing is an
-#     org-wide upgrade, not a per-policy decision. Email is the operator's
-#     existing on-call channel for CF alerts.
-resource "cloudflare_notification_policy" "soleur_ai_5xx" {
-  account_id  = var.cf_account_id
-  name        = "soleur.ai origin 5xx rate spike"
-  description = "Page-level alert on origin 5xx errors for the soleur.ai zone. Catches recurrence of the 2026-05-18 cert outage class (526 / origin cert validation failures) plus other origin-side degradation. Precedent: cloudflare_notification_policy.service_token_expiry (tunnel.tf:75-85). See PR #3974, PR #3986, issue #3976."
-  alert_type  = "http_alert_origin_error"
-  enabled     = true
-
-  filters {
-    zones = [var.cf_zone_id]
-    slo   = ["99.9"]
-  }
-
-  email_integration {
-    id = var.cf_notification_email
-  }
-}
+# Operator follow-up: if/when the CF plan is upgraded to a tier that includes
+# http_alert_origin_error, re-introduce this resource with the v4 syntax
+#   filters { zones = [var.cf_zone_id]; slo = ["99.9"] }
+# documented in PR #4018 before deletion.
