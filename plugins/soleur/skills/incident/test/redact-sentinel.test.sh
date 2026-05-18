@@ -19,7 +19,7 @@ REPO_ROOT="$(cd "${SKILL_DIR}/../../../.." && pwd)"
 
 SENTINEL="${SKILL_DIR}/scripts/redact-sentinel.sh"
 POSITIVE_CORPUS="${SCRIPT_DIR}/fixtures/positive-corpus.md"
-NEGATIVE_BASELINE="${REPO_ROOT}/knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md"
+NEGATIVE_BASELINE="${REPO_ROOT}/knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md"
 
 PASS=0
 FAIL=0
