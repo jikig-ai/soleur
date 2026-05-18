@@ -17,7 +17,9 @@ preconditions:
 
 **Inspiration:** see `NOTICE` (MIT — alirezarezvani/claude-skills, clean-room).
 
-**Purpose:** classify an incident's `brand_survival_threshold` in <60s, gate PIR drafting behind a GDPR Art. 33/34 notification-trigger evaluation, and scaffold a redaction-gated internal PIR matching the shape of `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`.
+**Purpose:** classify an incident's `brand_survival_threshold` in <60s, gate PIR drafting behind a GDPR Art. 33/34 notification-trigger evaluation, and scaffold a redaction-gated internal PIR matching the shape of `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`.
+
+**Directory convention:** PIRs (incident records) live under `knowledge-base/engineering/ops/post-mortems/`. Procedural runbooks (recovery procedures, rotation playbooks, audit checklists) live under `knowledge-base/engineering/ops/runbooks/`. The split is semantic: runbooks have `triggers:` frontmatter and are scanned by Phase 3 for routing; PIRs do not and are not scanned.
 
 **Operator-invoked only.** No Sentry/cron auto-fire substrate. Pre-write redaction sentinel ([scripts/redact-sentinel.sh](./scripts/redact-sentinel.sh)) is load-bearing — it runs BEFORE the draft is emitted inline to the conversation transcript AND before any file is written to disk. Transcripts ARE write boundaries; sentinel must precede inline-emit, not just file-commit.
 
@@ -26,7 +28,7 @@ All prod-touching steps are advisory + ack-gated per `hr-menu-option-ack-not-pro
 ## Headless / Dry-run modes
 
 - `--headless`: suppress interactive prompts. On any blocking ack, exit non-zero with a structured error message instead of waiting. Phase 8 still requires `status: resolved`.
-- `--dry-run <fixture.json>`: read fields from a synthetic JSON fixture instead of operator prompts. Used by [scripts/dry-run.sh](./scripts/dry-run.sh) to drive AC8-AC13 against fixtures under `test/fixtures/`. Dry-run never writes to `runbooks/` and never invokes `compound-capture`; it emits the would-be PIR to stdout.
+- `--dry-run <fixture.json>`: read fields from a synthetic JSON fixture instead of operator prompts. Used by [scripts/dry-run.sh](./scripts/dry-run.sh) to drive AC8-AC13 against fixtures under `test/fixtures/`. Dry-run never writes to `post-mortems/` and never invokes `compound-capture`; it emits the would-be PIR to stdout.
 
 ## Phase 0 — Capture facts
 
@@ -43,7 +45,7 @@ Collect from the operator (or from the dry-run fixture):
 Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitted blob):
 
 - `slug` — `awk` kebab-case of title, dropping non-`[a-z0-9-]`.
-- File path — derived from slug: `knowledge-base/engineering/ops/runbooks/${slug}-postmortem.md`.
+- File path — derived from slug: `knowledge-base/engineering/ops/post-mortems/${slug}-postmortem.md`.
 
 ## Phase 1 — Classification
 
@@ -154,7 +156,7 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 ## Phase 6 — Redaction sentinel (BLOCKING, pre-inline-emit)
 
-Run `bash scripts/redact-sentinel.sh <draft-tmpfile>` against the unwritten draft. The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `runbooks/`.
+Run `bash scripts/redact-sentinel.sh <draft-tmpfile>` against the unwritten draft. The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
 
 - Exit 0 → emit `sentinel: pass` and proceed to Phase 7.
 - Exit 1 → print each offset/pattern line from sentinel stdout. Prompt operator to redact. Operator iterates until sentinel exits 0. No max-iteration cap — `Ctrl-C` is the universal abort path.
@@ -178,7 +180,7 @@ Anything else (yes, y, ok, approved, looks good, etc.) is REJECTED. To abort, pr
 
 Parse the operator response with a case-sensitive literal-string equality check. Strip trailing `\r` and surrounding whitespace first so a `printf "COMMIT-PIR\r\n"` from a Windows-origin caller or an autonomous-orchestrator stdin pipe is not silently rejected (agent-user parity per `hr-weigh-every-decision-against-target-user-impact`): `response="${response%$'\r'}"; response="${response//[[:space:]]/}"`, then `[[ "${response}" == "COMMIT-PIR" ]]`.
 
-On `COMMIT-PIR`: write `<slug>-postmortem.md` to `knowledge-base/engineering/ops/runbooks/`. Do not git-add — operator commits manually per their convention.
+On `COMMIT-PIR`: write `<slug>-postmortem.md` to `knowledge-base/engineering/ops/post-mortems/`. Do not git-add — operator commits manually per their convention.
 
 There is NO literal `ABORT` token. `Ctrl-C` is universal.
 

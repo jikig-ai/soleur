@@ -1,7 +1,7 @@
 ---
 title: "Phantom-ingest window prd auth.users audit (Branch C PR-α evidence)"
 date: 2026-05-17
-incident_pir: knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md
+incident_pir: knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md
 parent_issue: "#3861"
 pr: "#3904"
 plan: knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md
@@ -85,7 +85,7 @@ comms, and no arms-length external data subject was affected.
 ## Cross-references
 
 - Article 30 register PA8 §(d) recipient-drift disclosure: `knowledge-base/legal/article-30-register.md:160`.
-- PIR "Who was affected": `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md:80,86`.
+- PIR "Who was affected": `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md:80,86`.
 - compliance-posture.md Active Compliance Items row for #3861: `knowledge-base/legal/compliance-posture.md:86`.
 - Plan Phase 2 GDPR Gate: `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md:105`.
 - Brainstorm threshold-framing: `knowledge-base/project/brainstorms/2026-05-16-sentry-residency-a2-branch-c-brainstorm.md:33`.

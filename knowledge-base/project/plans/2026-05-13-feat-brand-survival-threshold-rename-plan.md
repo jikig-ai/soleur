@@ -62,7 +62,7 @@ CPO sign-off carry-forward: covered by parent #2725 brainstorm (see `knowledge-b
 ### FR1a — `brand_threshold:` → `brand_survival_threshold:`
 
 **Files (1):**
-- `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md:7`
+- `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md:7`
 
 ### FR1b — `brand_survival:` → `brand_survival_threshold:`
 
@@ -159,7 +159,7 @@ All verified as **PROSE COMMENTS or auto-generated content**, not regex/grep/pat
 **Total: ~47 files** (42 value-form + 4 frontmatter-key FR1c + 1 FR1a + ~5 FR1b minus overlap; some files appear in both lists).
 
 Frontmatter (10 unique files):
-1. `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md` (FR1a)
+1. `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` (FR1a)
 2. `knowledge-base/engineering/ops/runbooks/github-app-drift.md` (FR1b)
 3. `knowledge-base/project/brainstorms/2026-05-05-github-app-drift-guard-brainstorm.md` (FR1b)
 4. `knowledge-base/project/plans/2026-05-05-feat-github-app-drift-guard-plan.md` (FR1b)
