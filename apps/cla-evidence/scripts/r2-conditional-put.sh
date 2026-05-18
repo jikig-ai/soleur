@@ -10,7 +10,10 @@
 #   - 412              → dup-label, exit 0 (idempotent first-writer-wins).
 #   - 5xx / 429        → retry up to 3 with 250ms / 500ms / 1000ms backoff.
 #   - 4xx ≠ 412        → fast-fail (Kieran F5; e.g., 403 from stale token is a
-#                        config bug, not transient).
+#                        config bug, not transient). The R2 response body is
+#                        captured and surfaced in the `::error::` annotation so
+#                        operators read the actual S3 ErrorCode instead of
+#                        bisecting blind.
 #
 # Status classification uses explicit integer comparisons rather than shell
 # globs (`5*` would match "5" or "50"; the prior `case` was ordering-coupled —
