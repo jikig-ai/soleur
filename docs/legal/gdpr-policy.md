@@ -192,7 +192,7 @@ Under the GDPR, data subjects in the EEA have the following rights. For data pro
 
 For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as data controller (see Section 2.1), data subjects may exercise the following rights through either of the following channels:
 
-- **Self-serve (Articles 15 and 20):** Visit `/dashboard/settings/privacy` while signed in. The Web Platform packages your account profile, conversations, messages, message attachments, knowledge-base share links, team / agent names, BYOK encrypted credentials, BYOK usage audit log, and workspace files into a ZIP archive (with a `manifest.json` describing GDPR article tag, row count, and SHA-256 for every file). The bundle is delivered as a one-time download link valid for 7 days. The technical scope of the export is the same as the email channel.
+- **Self-serve (Articles 15 and 20):** Visit `/dashboard/settings/privacy` while signed in. The Web Platform packages your account profile, conversations, messages, message attachments, knowledge-base share links, team / agent names, BYOK encrypted credentials, BYOK usage audit log, T&C consent ledger, per-action-class scope-grant ledger (PR-G #3947), and workspace files into a ZIP archive (with a `manifest.json` describing GDPR article tag, row count, and SHA-256 for every file). The bundle is delivered as a one-time download link valid for 7 days. The technical scope of the export is the same as the email channel.
 - **Email (all rights):** Contact <legal@jikigai.com>. We will fulfil the same scope manually for Articles 15 and 20, and is the canonical channel for Articles 16, 17, 18, 21, and 7 (consent withdrawal).
 
 Both channels fulfil the same legal right; the self-serve path exists for convenience.
