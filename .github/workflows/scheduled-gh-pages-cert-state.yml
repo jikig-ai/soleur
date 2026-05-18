@@ -1,0 +1,303 @@
+# Daily poll of GitHub Pages cert state for this repo (soleur.ai).
+#
+# Precedent: 2026-05-18 outage — soleur.ai's GH-Pages-managed Let's Encrypt
+# cert silently expired with ZERO advance warning. Recovered via PR #3974
+# (Terraform: ACME-aware HTTPS upgrade) + PR #3986 (inline ACME rules into
+# seo_page_redirects ruleset, dodging the CF phase rule cap). Runbook
+# landed in issue #3976. Had we polled `https_certificate.state` /
+# `https_certificate.expires_at` daily, we would have had ~21 days of
+# warning instead of zero.
+#
+# This workflow:
+#   1. GETs /repos/${{ github.repository }}/pages once daily at 03:00 UTC.
+#   2. Trips an alert on EITHER:
+#         a. state ∉ {approved, issued}
+#         b. expires_at < now() + 21 days
+#   3. Posts a Sentry Crons heartbeat (ok|error) via the existing composite
+#      action — same mechanism as 7 sister scheduled-*.yml workflows.
+#   4. On trip, files an `action-required,infra-drift` issue (idempotent
+#      via title-prefix dedup; mirrors scheduled-cf-token-expiry-check.yml)
+#      whose body inlines the PM5 cert-reissue runbook from issue #3976.
+#   5. On recovery (cert returns healthy AND >21d remaining), auto-closes
+#      any open issue matching the title prefix.
+#
+# Security: GITHUB_TOKEN is the only auth secret — used for the `gh api`
+# read on the public Pages endpoint and for `gh issue` writes. Sentry
+# heartbeat uses existing SENTRY_* repo secrets (same as 7 sister probes).
+# No new secrets. The single `workflow_dispatch` input (state_override)
+# is funneled through `env:` (never expanded directly in `run:`) and
+# echoed for log purposes only — it is never executed, never written
+# back to the repo, and cannot escape the gated `workflow_dispatch`
+# event type. This follows the GitHub Actions injection-prevention
+# guidance: https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+#
+# Companion: PR-β (separate) adds uptime + 5xx alerting via Terraform.
+# That scope is intentionally NOT here — this workflow only watches the
+# vendor-published cert lifecycle, not request-path health.
+
+name: "Scheduled: GH Pages cert state"
+
+on:
+  workflow_dispatch:
+    inputs:
+      state_override:
+        description: "Force trip the alert with a synthetic state value (manual-only smoke test). Leave blank for real poll."
+        required: false
+        default: ""
+        type: string
+  schedule:
+    - cron: '0 3 * * *'  # 03:00 UTC daily — off-peak EU.
+
+concurrency:
+  group: scheduled-gh-pages-cert-state
+  cancel-in-progress: false
+
+permissions:
+  contents: read   # actions/checkout for the local composite action
+  issues: write    # file/comment/close the auto-issue
+  # Note: /repos/{owner}/{repo}/pages requires only the default metadata
+  # read that GITHUB_TOKEN always has on its own repo — no explicit scope
+  # toggle exists for it in the workflow permissions schema.
+
+jobs:
+  poll-cert-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (needed for ./.github/actions/sentry-heartbeat)
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          persist-credentials: false
+
+      - name: Poll Pages cert state
+        id: poll
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WARN_DAYS: "21"
+          # state_override is a workflow_dispatch input — funnel through
+          # env to avoid `${{ }}` expansion inside the run: shell body.
+          STATE_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.state_override || '' }}
+          ISSUE_TITLE_PREFIX: "[cert-poll] soleur.ai cert state"
+        run: |
+          set -euo pipefail
+
+          TMPFILE=$(mktemp)
+          trap 'rm -f "$TMPFILE"' EXIT
+
+          # Fetch Pages metadata. The endpoint is public-ish (any repo
+          # collaborator with metadata read can hit it); GITHUB_TOKEN
+          # always has metadata read on its own repo.
+          HTTP_CODE=$(gh api "/repos/${GH_REPO}/pages" \
+            -H "Accept: application/vnd.github+json" \
+            > "$TMPFILE" 2>&1 && echo 200 || echo 000)
+
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::warning::Pages API call failed (output: $(head -c 200 "$TMPFILE")). Treating as alert condition."
+            {
+              echo "heartbeat_status=error"
+              echo "trip_reason=api-call-failed"
+              echo "state=unknown"
+              echo "expires_at=unknown"
+              echo "days_remaining=unknown"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract cert state. `// empty` so an absent field yields ""
+          # rather than the literal "null" string.
+          STATE=$(jq -r '.https_certificate.state // empty' "$TMPFILE")
+          EXPIRES_AT=$(jq -r '.https_certificate.expires_at // empty' "$TMPFILE")
+
+          # Manual override for smoke-testing the alert path. Gated to
+          # workflow_dispatch by the env mapping above — cron-driven
+          # fires CANNOT supply this value (STATE_OVERRIDE will be "").
+          # The override is treated as plain data: assigned to a shell
+          # variable, never executed, never passed to eval.
+          if [[ -n "${STATE_OVERRIDE:-}" ]]; then
+            echo "::notice::STATE_OVERRIDE active (manual smoke-test mode). Real state was: state='$STATE' expires_at='$EXPIRES_AT'."
+            STATE="$STATE_OVERRIDE"
+            EXPIRES_AT=""
+          fi
+
+          # Trip condition A: state not in {approved, issued}.
+          STATE_TRIPPED=0
+          if [[ "$STATE" != "approved" && "$STATE" != "issued" ]]; then
+            STATE_TRIPPED=1
+          fi
+
+          # Trip condition B: expires_at < now() + 21d.
+          # Short-circuit if state-tripped OR expires_at is empty/null
+          # (GH returns null expires_at when state is e.g. bad_authz).
+          DATE_TRIPPED=0
+          DAYS_REMAINING="unknown"
+          if [[ "$STATE_TRIPPED" -eq 0 && -n "$EXPIRES_AT" ]]; then
+            if [[ ! "$EXPIRES_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+              echo "::error::Unexpected expires_at format from API: '$EXPIRES_AT'"
+              exit 1
+            fi
+            EXPIRES_EPOCH=$(date -d "$EXPIRES_AT" +%s)
+            NOW_EPOCH=$(date +%s)
+            DAYS_REMAINING=$(( (EXPIRES_EPOCH - NOW_EPOCH) / 86400 ))
+            if [[ "$DAYS_REMAINING" -lt "$WARN_DAYS" ]]; then
+              DATE_TRIPPED=1
+            fi
+          fi
+
+          # Compose outputs for downstream steps.
+          if [[ "$STATE_TRIPPED" -eq 1 || "$DATE_TRIPPED" -eq 1 ]]; then
+            REASON=""
+            [[ "$STATE_TRIPPED" -eq 1 ]] && REASON="state=$STATE not in {approved,issued}"
+            [[ "$DATE_TRIPPED"  -eq 1 ]] && REASON="${REASON:+$REASON; }expires_at=$EXPIRES_AT (${DAYS_REMAINING}d remaining, threshold ${WARN_DAYS}d)"
+            echo "::warning::Cert state alert tripped: $REASON"
+            HEARTBEAT_STATUS="error"
+            TRIP_REASON_OUT="$REASON"
+          else
+            echo "Cert is healthy: state=$STATE, expires_at=$EXPIRES_AT, days_remaining=$DAYS_REMAINING."
+            HEARTBEAT_STATUS="ok"
+            TRIP_REASON_OUT=""
+          fi
+          {
+            echo "heartbeat_status=$HEARTBEAT_STATUS"
+            echo "trip_reason=$TRIP_REASON_OUT"
+            echo "state=$STATE"
+            echo "expires_at=$EXPIRES_AT"
+            echo "days_remaining=$DAYS_REMAINING"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: File or update issue on trip
+        if: steps.poll.outputs.heartbeat_status == 'error'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STATE: ${{ steps.poll.outputs.state }}
+          EXPIRES_AT: ${{ steps.poll.outputs.expires_at }}
+          DAYS_REMAINING: ${{ steps.poll.outputs.days_remaining }}
+          TRIP_REASON: ${{ steps.poll.outputs.trip_reason }}
+          ISSUE_TITLE_PREFIX: "[cert-poll] soleur.ai cert state"
+        run: |
+          set -euo pipefail
+
+          ISSUE_TITLE="${ISSUE_TITLE_PREFIX} = ${STATE} (expires ${EXPIRES_AT:-unknown})"
+          ISSUE_SEARCH="in:title \"${ISSUE_TITLE_PREFIX}\""
+          NOW_UTC=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          # Unquoted-LHS heredoc — $VAR expansion is intentional. All
+          # interpolated vars come from `env:` above (steps.poll.outputs
+          # values are themselves derived from `jq` on the GitHub Pages
+          # API response, not from user-controlled events).
+          BODY=$(cat <<ISSUE_BODY
+          ## GitHub Pages cert-state alert for soleur.ai
+
+          The daily cert-state poll tripped an alert.
+
+          - **Current state:** \`${STATE}\`
+          - **Expires at:** \`${EXPIRES_AT:-unknown}\`
+          - **Days remaining:** \`${DAYS_REMAINING}\`
+          - **Trip reason:** ${TRIP_REASON}
+          - **Detected at:** ${NOW_UTC}
+          - **Workflow run:** https://github.com/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}
+
+          ### Why this matters
+
+          On **2026-05-18** soleur.ai's GitHub Pages cert silently expired with zero advance warning, putting the marketing site on Cloudflare 526 until operator-driven recovery shipped via PR #3974 + PR #3986. This poll is the early-warning system that 2026-05-18 lacked — a healthy cert advances \`bad_authz → authorized → issued\` with ~21 days of \`expires_at\` runway. Either of those signals going off-script is the cue to act before users see TLS errors.
+
+          ### Recovery runbook (PM5 — lifted from #3976)
+
+          Trigger GitHub Pages cert reissue:
+
+          1. GitHub → \`${GH_REPO}\` → Settings → Pages. Uncheck-then-recheck the custom domain field to force a new ACME order. Equivalent CLI:
+             \`\`\`bash
+             gh api -X DELETE /repos/${GH_REPO}/pages/builds
+             \`\`\`
+             (Requires a PAT with \`pages: write\` — the workflow's \`GITHUB_TOKEN\` does NOT have this scope; this step is operator-driven.)
+          2. Wait 5–15 minutes.
+          3. Verify cert state progression:
+             \`\`\`bash
+             gh api /repos/${GH_REPO}/pages | jq '.https_certificate.state'
+             \`\`\`
+             Expected progression: \`bad_authz → authorized → issued\`.
+          4. Final user-facing check:
+             \`\`\`bash
+             curl -sSI https://soleur.ai/ | head -3
+             curl -sSI https://www.soleur.ai/ | head -3
+             \`\`\`
+             Expected: \`HTTP/2 200\` on both.
+
+          ### If cert state stays stuck
+
+          If state remains \`bad_authz\` after step 1, the ACME path itself is broken. Check that the apex \`always_use_https\` is OFF AND the ACME-aware redirect ruleset is in place (PR #3974 + PR #3986 baseline):
+          \`\`\`bash
+          curl -sS -o /dev/null -w "%{http_code}\n" "http://soleur.ai/.well-known/acme-challenge/test-token-does-not-exist"
+          \`\`\`
+          Expected: \`404\`. If it returns \`301\`, the ACME bypass is regressed — re-apply the Terraform baseline from \`apps/web-platform/infra/\`.
+
+          ### References
+
+          - **Incident date:** 2026-05-18
+          - **Recovery PRs:** #3974 (Terraform baseline), #3986 (ruleset inline fix)
+          - **Operator runbook (full):** #3976
+          - **This workflow:** \`.github/workflows/scheduled-gh-pages-cert-state.yml\`
+
+          This issue auto-closes when the cert returns to a healthy state (\`approved\` or \`issued\`, \`>21d\` remaining).
+          ISSUE_BODY
+          )
+
+          # Pre-create labels (idempotent — fresh forks may lack them).
+          gh label create "action-required" --repo "$GH_REPO" \
+            --description "Requires manual intervention" --color "B60205" 2>/dev/null || true
+          gh label create "infra-drift" --repo "$GH_REPO" \
+            --description "Infrastructure state diverged from IaC or vendor baseline" --color "D93F0B" 2>/dev/null || true
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+            --search "$ISSUE_SEARCH" \
+            --json number --jq '.[0].number // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Issue already exists: #$EXISTING — adding comment."
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Cert-state poll ran ${NOW_UTC} — state=\`${STATE}\`, expires_at=\`${EXPIRES_AT:-unknown}\`, days_remaining=\`${DAYS_REMAINING}\`. Trip: ${TRIP_REASON}."
+          else
+            gh issue create --repo "$GH_REPO" \
+              --title "$ISSUE_TITLE" \
+              --label "action-required,infra-drift" \
+              --body "$BODY"
+          fi
+
+      - name: Close stale issue on recovery
+        if: steps.poll.outputs.heartbeat_status == 'ok'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STATE: ${{ steps.poll.outputs.state }}
+          EXPIRES_AT: ${{ steps.poll.outputs.expires_at }}
+          DAYS_REMAINING: ${{ steps.poll.outputs.days_remaining }}
+          ISSUE_TITLE_PREFIX: "[cert-poll] soleur.ai cert state"
+        run: |
+          set -euo pipefail
+
+          ISSUE_SEARCH="in:title \"${ISSUE_TITLE_PREFIX}\""
+          NOW_UTC=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          STALE_ISSUE=$(gh issue list --repo "$GH_REPO" --state open \
+            --search "$ISSUE_SEARCH" \
+            --json number --jq '.[0].number // empty')
+
+          if [[ -n "$STALE_ISSUE" ]]; then
+            echo "Closing stale cert-poll issue #$STALE_ISSUE — cert is healthy again."
+            gh issue close "$STALE_ISSUE" --repo "$GH_REPO" \
+              --comment "Cert-state poll ran ${NOW_UTC} — state=\`${STATE}\`, expires_at=\`${EXPIRES_AT}\`, days_remaining=\`${DAYS_REMAINING}\`. Auto-closing."
+          else
+            echo "Cert healthy; no open cert-poll issue to close."
+          fi
+
+      - name: Sentry Crons heartbeat
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-gh-pages-cert-state
+          status: ${{ steps.poll.outputs.heartbeat_status || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
