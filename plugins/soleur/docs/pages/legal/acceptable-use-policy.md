@@ -148,15 +148,18 @@ declared for processing activity PA2 (Conversation Data) in our Article 30
 register.
 
 You must NOT submit, paste, upload, or attach content of the following kinds
-unless you have an independent lawful basis under GDPR Article 9(2) (e.g.,
-explicit consent under Art. 9(2)(a), or one of the other Art. 9(2)
-derogations) and have informed any third-party data subjects whose data is
-contained in the submission:
+unless both (1) you have an independent lawful basis (for items (a)–(h),
+under GDPR Article 9(2) — e.g., explicit consent under Art. 9(2)(a) or one
+of the other Art. 9(2) derogations; for item (i), under GDPR Art. 10, which
+requires processing under the control of official authority or authorisation
+by Union or Member State law providing appropriate safeguards — Art. 9(2)
+bases are NOT sufficient for Art. 10 data); and (2) you have informed any
+third-party data subjects whose data is contained in the submission:
 
-- (a) Data revealing racial or ethnic origin;
-- (b) Data revealing political opinions;
-- (c) Data revealing religious or philosophical beliefs;
-- (d) Data revealing trade-union membership;
+- (a) Personal data revealing racial or ethnic origin;
+- (b) Personal data revealing political opinions;
+- (c) Personal data revealing religious or philosophical beliefs;
+- (d) Personal data revealing trade-union membership;
 - (e) Genetic data;
 - (f) Biometric data processed for the purpose of uniquely identifying a
       natural person (e.g., fingerprint scans, facial recognition templates);
@@ -174,7 +177,7 @@ Special-Category Data as a routine or systematic input. Incidental ingress of
 Special-Category Data through prompts or attachments will be treated under the
 "regulated-data surface" handling rule in our internal compliance procedure
 and may, at our discretion, result in removal of the affected content
-under §6.2 of this Policy.
+under Section 6.2 (Consequences of Violation) of this Policy.
 
 If you require a service that processes Special-Category Data as a defined
 purpose, contact us at legal@jikigai.com before submitting such content; we
@@ -196,9 +199,19 @@ there:
 - (c) Precise geolocation (location data identifying a consumer within a
       geographic area equal to or less than 1,850 feet);
 - (d) Contents of a consumer's mail, email, or text messages, unless we are
-      the intended recipient of the communication; and
-- (e) Genetic, biometric-for-identification, and health-related categories
+      the intended recipient of the communication;
+- (e) Citizenship or immigration status; and
+- (f) Genetic, biometric-for-identification, and health-related categories
       already covered by §4.7.
+
+The list above tracks Cal. Civ. Code §1798.140(ae) as in force on the
+effective date of this Policy. Because the California legislature
+periodically amends the SPI definition, any category recognised as
+"Sensitive Personal Information" under §1798.140(ae) at the time of your
+submission is treated as in scope of this Section 4.8, whether or not it
+is enumerated above; the operative statutory text at
+[leginfo.legislature.ca.gov](https://leginfo.legislature.ca.gov/faces/codes_displaySection.xhtml?sectionNum=1798.140&lawCode=CIV)
+controls in the event of a divergence.
 
 You must not upload scans, screenshots, or text containing the items above
 through the prompt field or the `chat-attachments` upload surface unless you

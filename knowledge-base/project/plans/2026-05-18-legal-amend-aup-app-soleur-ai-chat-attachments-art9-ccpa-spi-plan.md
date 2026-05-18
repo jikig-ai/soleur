@@ -23,7 +23,7 @@ requires_cpo_signoff: false
 3. **AC1 grep executability verified:** The backtick + parenthesis sequence in the AC1 grep pattern (`chat-attachments\` upload surface (image and PDF files up to 24 MB)`) was sandboxed against a synthetic fixture: `grep -F` exit code = 0, single match, no escaping required. Per AGENTS.md `cq-regex-unicode-separators-escape-only` and the paren-safety sharp edge: the AC1 grep uses `grep -F` (fixed-string), so the `(image and PDF...)` parentheses are literal, not regex metacharacters. Safe.
 4. **Unicode characters first-introduction flag:** The current AUP has zero `§` (section-sign U+00A7) and zero `—` (em-dash U+2014) characters in either canonical or mirror. This PR introduces both for the first time. Eleventy `.njk` rendering handles UTF-8 natively; Nunjucks does not strip or transcode the section sign. **Mitigation:** new Phase 4 verification step grep-counts `§` occurrences post-edit (≥ 6 in canonical: 1 in §4.7 body cross-reference + 1 in §4.8 heading-area body + several `§1798.140(ae)` citations).
 5. **No `legal` GitHub label exists in this repo's label list.** Verified via `gh label list --limit 200 | grep -i legal` returns empty. AC12 prescribes only `Closes #3921` — no `--label` site is created in this PR (the issue is already tagged upstream). **No plan change required**; recorded for audit-trail.
-6. **PR/issue citation provenance verified live:** PR #3940 (PA2 amendment cited as the "landed 17h before this plan" precedent for PA2 line 62) — verified via `gh pr view 3940 --json state,title`. Issue #3921 — verified open. Draft PR #3988 — verified open, base `main`, head `feat-one-shot-issue-3921-aup-art9-ccpa-spi-warning`.
+6. **PR/issue citation provenance verified live:** PA2 line 62 (the Art. 9 / chat-attachments cell with the "PR-D follow-up: explicit AUP warning..." note) was landed by **PR #3883 (PR-D, `144edb12`, merged 2026-05-16 19:07 UTC)** — the same PR that surfaced issue #3921. A separate PR #3940 (merged 2026-05-17, "PR-F Inngest trigger layer + CFO autonomous-draft") DID touch `article-30-register.md` but added the PA-13 (CFO autonomous-draft) row, NOT PA2 — earlier plan drafts conflated the two. Issue #3921 — verified open. Draft PR #3988 — verified open, base `main`, head `feat-one-shot-issue-3921-aup-art9-ccpa-spi-warning`. Provenance corrected post-review per git-history-analyzer Check 1 (PR #3988 multi-agent review).
 
 ### New Considerations Discovered
 
@@ -250,7 +250,7 @@ The plan-time research reconciliation surfaced 6 verifiable discoveries that the
 - Issue: #3921
 - Draft PR: #3988
 - Article 30 register PA2 line 62 (controlling disclosure): `knowledge-base/legal/article-30-register.md`
-- Article 30 register PA2 amendment that surfaced this follow-up: PR #3940 (landed ~17h before this plan)
+- Article 30 register PA2 amendment that surfaced this follow-up: PR #3883 (PR-D itself, merged 2026-05-16; same PR that filed issue #3921 as a deferred follow-up). (Earlier plan drafts mis-cited PR #3940 — that PR added PA-13, not PA2.)
 - T&C bump policy (T&C-only scope, confirms AUP is NOT covered): `knowledge-base/legal/tc-version-bump-policy.md`
 - CI guardrail (confirms scope): `apps/web-platform/scripts/check-tc-document-sha.sh` lines 26-28
 - Compliance posture: `knowledge-base/legal/compliance-posture.md`
