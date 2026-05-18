@@ -157,17 +157,35 @@ the actual migration at
 | "Exactly K succeed, rest rejected, no insert after threshold" | RPC appends `audit_byok_use` row FIRST on every call ("accounting is sacred"); `kill_tripped` is the signal; `runtime_paused_at` flips exactly once at first crossing. The caller (`runWithByokLease`, not yet wired) is responsible for refusing further calls after seeing `runtime_paused_at IS NOT NULL`. |
 | "K = 5 out of 10 succeed" | All 10 calls insert audit rows. `kill_tripped` is true on the call where cumulative-after-INSERT exceeds cap. With cap=500, cost=100/call: calls 1-5 return `kill_tripped=false`, calls 6-10 return `kill_tripped=true`. |
 
-### Cap-crossing arithmetic (load-bearing)
+### Cap-crossing arithmetic (load-bearing) — corrected at /work time
 
-The RPC's threshold predicate is `v_total > v_cap` (STRICT greater-than)
-at `046_runtime_cost_state.sql:227`. With cap=500, cost=100/call,
-N=10 concurrent:
+**Correction applied 2026-05-18 after live-DB run surfaced the gap.**
+Original deepen-pass reading was "calls 1-5 false, calls 6-10 true."
+That misreads migration line 227. The predicate is:
 
-- Cumulative after each call (post-INSERT): 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000
-- `kill_tripped`: false, false, false, false, **false** (500 not > 500), **true** (600 > 500), true, true, true, true
-- First-trip call: call 6 (the first to observe cumulative=600)
-- Total `audit_byok_use` rows inserted: exactly 10
-- `runtime_paused_at` stamps: exactly once (idempotent UPDATE guarded by `IS NULL` at line 230)
+```sql
+IF v_paused_at IS NULL AND v_total > v_cap THEN
+  UPDATE public.users SET runtime_paused_at = now() WHERE ...;
+  v_tripped := true;
+END IF;
+```
+
+**Both clauses are load-bearing.** Once the first cap-crossing call
+stamps `runtime_paused_at`, every subsequent FOR-UPDATE-serialized
+call observes the non-null timestamp on its own row-lock acquisition
+and returns `kill_tripped=false`.
+
+With cap=500, cost=100/call, N=10 concurrent (live-verified):
+
+- Cumulative after each call (post-INSERT): 100, 200, 300, 400, 500, **600**, 700, 800, 900, 1000
+- `kill_tripped`: false, false, false, false, false, **true** (the unique cap-crossing call), false, false, false, false
+- **Exactly ONE call returns `kill_tripped=true`** — the one at cumulative = CAP_CENTS + COST_CENTS (= 600). This is the strong atomicity signal: without FOR UPDATE serialization, multiple concurrent calls could pass the `v_paused_at IS NULL` guard before any of them stamps `runtime_paused_at`, and multiple would return `kill_tripped=true`.
+- Total `audit_byok_use` rows inserted: exactly 10 (accounting is sacred — the INSERT lands first, before the cap check).
+- `runtime_paused_at` stamps: exactly once (idempotent UPDATE guarded by `IS NULL` at line 231; the same guard that gates `v_tripped := true`).
+
+This stronger invariant is what the test now pins (Invariant C). The
+deepen-pass got the count wrong (5 vs 1) but the directional reading
+(stronger atomicity than premise) is unchanged.
 
 ### Path-filter compliance
 
