@@ -38,18 +38,21 @@
 #
 # `max_runtime_minutes` only matters for two-step (in_progress -> ok/error)
 # check-ins where Sentry can detect a job exceeding its declared budget.
-# Monitors paired with a single end-of-job heartbeat (oauth-probe today;
-# 7 sister workflows after follow-up rollout) get NO runtime-overrun
-# detection from this field — only missed-run detection. Retain the value
+# All monitors currently defined here use a single end-of-job heartbeat
+# (oauth-probe + 7 sister workflows post-rollout), so this field is
+# decorative — only missed-run detection is in play. Retain the value
 # for schema/sibling consistency and as a future-compat default if any
-# monitor migrates back to the two-step pattern.
+# monitor migrates back to the two-step pattern. If a new monitor lands
+# in two-step shape (e.g. scheduled-cf-token-expiry-check per the gap at
+# lines 71-77), update this prose AND verify the field becomes load-
+# bearing for the new resource.
 
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-terraform-drift"
   schedule                = { crontab = "0 6,18 * * *" }
-  checkin_margin_minutes  = 30
+  checkin_margin_minutes  = 180
   max_runtime_minutes     = 15
   failure_issue_threshold = 1
   recovery_threshold      = 1
@@ -81,7 +84,7 @@ resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-github-app-drift-guard"
   schedule                = { crontab = "0 * * * *" }
-  checkin_margin_minutes  = 15
+  checkin_margin_minutes  = 180
   max_runtime_minutes     = 10
   failure_issue_threshold = 2
   recovery_threshold      = 1
@@ -93,7 +96,7 @@ resource "sentry_cron_monitor" "scheduled_daily_triage" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-daily-triage"
   schedule                = { crontab = "0 4 * * *" }
-  checkin_margin_minutes  = 60
+  checkin_margin_minutes  = 240
   max_runtime_minutes     = 15
   failure_issue_threshold = 1
   recovery_threshold      = 1
@@ -105,7 +108,7 @@ resource "sentry_cron_monitor" "scheduled_realtime_probe" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-realtime-probe"
   schedule                = { crontab = "0 7 * * *" }
-  checkin_margin_minutes  = 60
+  checkin_margin_minutes  = 180
   max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
@@ -129,7 +132,7 @@ resource "sentry_cron_monitor" "scheduled_content_vendor_drift" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-content-vendor-drift"
   schedule                = { crontab = "17 11 * * MON" }
-  checkin_margin_minutes  = 60
+  checkin_margin_minutes  = 90
   max_runtime_minutes     = 15
   failure_issue_threshold = 1
   recovery_threshold      = 1
