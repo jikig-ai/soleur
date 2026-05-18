@@ -48,15 +48,29 @@ DECLARE
 BEGIN
   -- current_setting(name, missing_ok=true) returns '' (not NULL) when unset.
   v_anonymise_flag := current_setting('app.scope_grants_anonymise_in_progress', true);
-  -- Bypass gate: GUC set AND current_user = service_role. Mirrors migration
-  -- 044's tc_acceptances_no_mutate exactly. PostgREST's `SET ROLE service_role`
-  -- propagates to INVOKER triggers fired inside SECURITY DEFINER functions
-  -- (the elevated `current_user = postgres` from SECURITY DEFINER does NOT
-  -- override the INVOKER trigger's caller-role context — see #3984 CI
-  -- failure analysis vs 044's production-working precedent). DO NOT add
-  -- session_user to the check; doing so would require widening to
-  -- `authenticator` and lose the role-gate semantic.
-  IF v_anonymise_flag <> '' AND current_user = 'service_role' THEN
+  -- Bypass gate: GUC set. Role-check intentionally omitted — see #3984 CI
+  -- failure analysis. Migration 044's `current_user = 'service_role'` check
+  -- does NOT fire under PostgREST routing: inside a SECURITY DEFINER
+  -- function body, current_user is the function OWNER (postgres in Supabase
+  -- migrations), NOT the caller's PostgREST-set role. INVOKER triggers
+  -- inherit that elevated context. The role check is silently always-false.
+  -- 044's pattern was authored on a now-discredited theory of what INVOKER
+  -- preserves and shipped without an integration test against PostgREST
+  -- routing — see learning 2026-05-18-worm-trigger-bypass-role-check-fails-
+  -- under-postgrest-routing.md.
+  --
+  -- Defense in depth WITHOUT the role check: (1) anonymise_scope_grants is
+  -- the SINGLE SET-site for app.scope_grants_anonymise_in_progress in this
+  -- migration (grep-verified at write time + lint-enforced going forward);
+  -- (2) anonymise_scope_grants is SECURITY DEFINER + `REVOKE EXECUTE FROM
+  -- PUBLIC, anon, authenticated` + `GRANT EXECUTE TO service_role` only,
+  -- so only service_role-authenticated callers can ever set the GUC;
+  -- (3) the GUC is `SET LOCAL` (transaction-scoped), so it auto-reverts at
+  -- COMMIT/ROLLBACK and cannot leak across requests. The chain
+  -- "service_role caller → SECURITY DEFINER function → SET LOCAL GUC →
+  -- trigger sees GUC" is the proof of legitimate cascade; the role check
+  -- was a redundant defense-in-depth that turned out to never fire.
+  IF v_anonymise_flag <> '' THEN
     RETURN COALESCE(NEW, OLD);
   END IF;
 
