@@ -18,7 +18,7 @@ On 2026-05-16, during Phase A2 brainstorm prereq verification, an attempt to rea
 On 2026-05-19, two Sentry support replies arrived and falsified the entire framing:
 
 - **Billing:** Both `jikigai` and `jikigai-eu` orgs are on EU databases (URL routing front door, not separate clusters).
-- **Forensics (Rodolfo):** Org `4511123328466944` is owned by `jean.deruelle@jikigai.com`; both orgs' audit logs show all actions by the operator's user. No third-party owner ever.
+- **Forensics (Rodolfo):** Org `4511123328466944` is owned by `jean.deruelle@jikigai.com`; both orgs' audit logs show all actions by the operator's user. No third-party owner ever. <!-- # gitleaks:allow issue:#3861 substantive operator-attribution for §5(2) accountability — required to preserve the verbatim Sentry-support claim -->
 
 The probable root cause of the original 401 was **token-scope mismatch** — the runtime `SENTRY_AUTH_TOKEN` had been minted with scope only for the `jikigai-eu` slug (the new org), not for `jikigai` (the original). The 401 was an auth-scope signal, not a "unowned org" signal. The Sentry region-router 302→401 is identical between "no admin visibility on a self-owned slug" and "the slug doesn't exist" — the HTTP response cannot distinguish them.
 
