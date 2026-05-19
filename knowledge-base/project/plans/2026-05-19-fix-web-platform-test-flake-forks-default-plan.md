@@ -371,28 +371,40 @@ Issue #4096 surfaced during PR #4092's `/ship` Phase 4 the same day, same root-c
 2. Different files, no merge-conflict risk with Fix 1–3.
 3. Both are timing-sensitive failures under local load; same brand-survival framing (`aggregate pattern` — flake masks regression signal).
 
-### Fix 4: `skill-security-scan` per-test timeout
+### Fix 4: `skill-security-scan` per-test timeouts (extended during Phase 4 verification)
 
-**File:** `plugins/soleur/test/skill-security-scan.test.ts` line 208.
+**Files:** `plugins/soleur/test/skill-security-scan.test.ts` lines 208 (#4096 named), plus 177, 186, 195, 238, 327.
 
 **Symptom (verified via #4096 body):** `run-self-test.sh exits 0 on the bundled fixtures` runs in ~9019ms; bun-test default per-test timeout is 5000ms → fail.
 
-**Root cause:** The `spawnSync("bash", [".../run-self-test.sh"])` legitimately takes ~9s — the script walks all bundled fixtures sequentially. The test has no explicit timeout override, so it inherits the 5000ms default.
+**Phase 4 extension:** Full-harness verification (`bash scripts/test-all.sh`) surfaced the same root cause on adjacent tests in the same file:
+- `malicious fixtures aggregate to HIGH-RISK` (line 177) — ~5590ms
+- `clean fixtures aggregate to LOW-RISK` (line 186) — ~5075ms
+- `aggregator output contains the mandatory advisory disclaimer footer` (line 195)
+- `rule-pack tamper short-circuits to HIGH-RISK (not REVIEW)` (line 238)
+- `emails in findings are redacted in .scan-meta.json` (line 327)
 
-**Fix:** bun-test's `test()` signature accepts a 3rd arg `timeoutMs`. Pass `30_000`:
+All call `runScanVerdict()` or directly spawn `run-scan.sh`, which runs 5 category checks sequentially per fixture. Same class as the original #4096 failure.
+
+**Root cause:** bun-test's 5000ms default is the wrong gate for spawn-based aggregator tests; the scripts are correct, the gate was too tight.
+
+**Fix:** bun-test's `test()` signature accepts a 3rd arg `timeoutMs`. Bump all 6 spawn-based tests to `30_000`:
 
 ```ts
-test("run-self-test.sh exits 0 on the bundled fixtures", () => {
-  const r = spawnSync("bash", [join(SCRIPTS, "run-self-test.sh")], {
-    encoding: "utf-8",
-  });
-  expect(r.status).toBe(0);
-}, 30_000);
+test("run-self-test.sh exits 0 on the bundled fixtures", () => { ... }, 30_000);
 ```
 
-30s gives ~3.3× headroom over the observed 9s — enough for slow CI runners without masking a real regression to 25s+. Do NOT bump the global config — surgical per-test override only.
+30s gives ~3.3× headroom over the observed 9s — enough for slow CI runners without masking a real regression to 25s+. Surgical per-test override only. Do NOT bump the global config. The calibration-corpus tests at line 281 already have 180_000ms timeouts (untouched).
 
-**Why not "speed up `run-self-test.sh`":** the script's runtime is dominated by sequential fixture spawns; parallelizing would change test semantics. The 9s is correct for what it does.
+**Why not "speed up `run-self-test.sh`" / "run-scan.sh":** the scripts' runtime is dominated by sequential fixture spawns; parallelizing would change test semantics. The 5–9s per test is correct for what they do.
+
+**Out of scope** (separate root causes, not addressed in this PR):
+- `plugins/soleur/test/marketing-content-drift.test.ts` — `beforeEach` hook timeout
+- `plugins/soleur/test/jsonld-escaping.test.ts` — `beforeEach` hook timeout
+- `plugins/soleur/test/github-stats-data.test.ts` — GitHub API fallback + 180s dangle
+- Other plugin test flakes not in the named issue bodies
+
+These are tracked separately and surfaced as recommendations for follow-up issues — not bundled into #3817/#3818/#4096's scope.
 
 ### Fix 5: `notice-frontmatter` p95 timing tests CI-only
 

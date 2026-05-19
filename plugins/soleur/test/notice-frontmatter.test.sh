@@ -145,26 +145,35 @@ echo ""
 # 50ms threshold was within process-spawn jitter of the date(1) call;
 # 100ms gives 2× headroom while still bounding the runtime overhead the
 # banner adds to every gate invocation.
-echo "TS11: p95 < 100ms over 100 invocations of days-stale"
-TIMINGS_FILE="$(mktemp)"
-for _ in $(seq 1 100); do
-  # Capture wall-clock ms via /usr/bin/time -f "%e" (seconds with 2 decimal
-  # places). Multiply by 1000, round to integer.
-  SECS=$( { /usr/bin/time -f "%e" bash "$PARSER" days-stale >/dev/null ; } 2>&1 )
-  printf '%s\n' "$SECS"
-done > "$TIMINGS_FILE"
-# Convert to integer milliseconds, sort, pick p95 (95th percentile = 95th of
-# 100 sorted ascending).
-P95_MS=$(awk '{printf "%d\n", $1*1000}' "$TIMINGS_FILE" | sort -n | awk 'NR==95')
-echo "  p95: ${P95_MS}ms (over 100 runs)"
-if (( P95_MS < 100 )); then
-  echo "  PASS: p95 < 100ms"
-  PASS=$((PASS + 1))
+#
+# CI-only gate (#4096): measured p95 includes scheduler latency outside the
+# parser's control. Under local concurrent load (IDE indexers, parallel test
+# suites) the budget fires on noise, not on a parser regression. CI runners
+# have predictable load; enforce strictly there, skip locally.
+if [[ "${CI:-}" == "true" ]]; then
+  echo "TS11: p95 < 100ms over 100 invocations of days-stale"
+  TIMINGS_FILE="$(mktemp)"
+  for _ in $(seq 1 100); do
+    # Capture wall-clock ms via /usr/bin/time -f "%e" (seconds with 2 decimal
+    # places). Multiply by 1000, round to integer.
+    SECS=$( { /usr/bin/time -f "%e" bash "$PARSER" days-stale >/dev/null ; } 2>&1 )
+    printf '%s\n' "$SECS"
+  done > "$TIMINGS_FILE"
+  # Convert to integer milliseconds, sort, pick p95 (95th percentile = 95th of
+  # 100 sorted ascending).
+  P95_MS=$(awk '{printf "%d\n", $1*1000}' "$TIMINGS_FILE" | sort -n | awk 'NR==95')
+  echo "  p95: ${P95_MS}ms (over 100 runs)"
+  if (( P95_MS < 100 )); then
+    echo "  PASS: p95 < 100ms"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: p95 >= 100ms (TR2 budget breached)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -f "$TIMINGS_FILE"
 else
-  echo "  FAIL: p95 >= 100ms (TR2 budget breached)"
-  FAIL=$((FAIL + 1))
+  echo "TS11: SKIP (timing test, CI-only — set CI=true to run locally)"
 fi
-rm -f "$TIMINGS_FILE"
 echo ""
 
 # --- TS-cron-1: cron-run-stale with no token → 999 (no-network path) ---
@@ -241,24 +250,31 @@ echo ""
 # --- TS12: timing — p95 < 100ms across 100 invocations of cron-run-stale ---
 # Budget mirrors TS11. Measure the no-token (no-network) path; the
 # token-present path inherits the GitHub API latency and is not budgeted.
-echo "TS12: p95 < 100ms over 100 invocations of cron-run-stale (no-token path)"
-TIMINGS_FILE_2="$(mktemp)"
-for _ in $(seq 1 100); do
-  SECS=$( { /usr/bin/time -f "%e" \
-    bash -c "GH_TOKEN='' GITHUB_TOKEN='' bash \"$PARSER\" cron-run-stale" \
-    >/dev/null ; } 2>&1 )
-  printf '%s\n' "$SECS"
-done > "$TIMINGS_FILE_2"
-P95_MS_2=$(awk '{printf "%d\n", $1*1000}' "$TIMINGS_FILE_2" | sort -n | awk 'NR==95')
-echo "  p95: ${P95_MS_2}ms (over 100 runs)"
-if (( P95_MS_2 < 100 )); then
-  echo "  PASS: p95 < 100ms"
-  PASS=$((PASS + 1))
+#
+# CI-only gate (#4096): same rationale as TS11 — scheduler latency under
+# local load is outside the parser's control.
+if [[ "${CI:-}" == "true" ]]; then
+  echo "TS12: p95 < 100ms over 100 invocations of cron-run-stale (no-token path)"
+  TIMINGS_FILE_2="$(mktemp)"
+  for _ in $(seq 1 100); do
+    SECS=$( { /usr/bin/time -f "%e" \
+      bash -c "GH_TOKEN='' GITHUB_TOKEN='' bash \"$PARSER\" cron-run-stale" \
+      >/dev/null ; } 2>&1 )
+    printf '%s\n' "$SECS"
+  done > "$TIMINGS_FILE_2"
+  P95_MS_2=$(awk '{printf "%d\n", $1*1000}' "$TIMINGS_FILE_2" | sort -n | awk 'NR==95')
+  echo "  p95: ${P95_MS_2}ms (over 100 runs)"
+  if (( P95_MS_2 < 100 )); then
+    echo "  PASS: p95 < 100ms"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: p95 >= 100ms (TS12 budget breached)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -f "$TIMINGS_FILE_2"
 else
-  echo "  FAIL: p95 >= 100ms (TS12 budget breached)"
-  FAIL=$((FAIL + 1))
+  echo "TS12: SKIP (timing test, CI-only — set CI=true to run locally)"
 fi
-rm -f "$TIMINGS_FILE_2"
 echo ""
 
 print_results
