@@ -8,6 +8,7 @@
  * All responses use a single test user ("test-user-id") with matching auth tokens.
  */
 import http from "node:http";
+import { TC_VERSION } from "../lib/legal/tc-version";
 
 export const MOCK_USER = {
   id: "test-user-id",
@@ -99,7 +100,13 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         const select = url.searchParams.get("select") ?? "";
 
         if (select.includes("tc_accepted_version")) {
-          sendRows([{ tc_accepted_version: "1.0.0" }]);
+          // Import the canonical constant so this stays in sync when
+          // TC_VERSION is bumped — middleware compares the user's stored
+          // tc_accepted_version against TC_VERSION and redirects to
+          // /accept-terms on mismatch, which breaks every authenticated
+          // dashboard test. PR #3984 hit this when TC_VERSION moved
+          // 1.0.0 -> 2.0.0 with the mock still hardcoded to 1.0.0.
+          sendRows([{ tc_accepted_version: TC_VERSION }]);
           return;
         }
 
@@ -119,6 +126,11 @@ export function startMockSupabase(port: number): Promise<http.Server> {
           sendRows([{
             onboarding_completed_at: "2024-01-01T00:00:00Z",
             pwa_banner_dismissed_at: "2024-01-01T00:00:00Z",
+            // PR-G (#3947): useOnboarding widened its .select() to include
+            // this column. Returning a non-null value keeps the runtime
+            // explainer banner dismissed in tests, matching the existing
+            // pwa-banner-dismissed convention above.
+            runtime_explainer_dismissed_at: "2024-01-01T00:00:00Z",
           }]);
           return;
         }
