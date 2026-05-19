@@ -172,29 +172,29 @@ Derived from finalized plan v2 (post plan-review). Six phases; commits flexible 
 
 ## Phase 6 — TodayCard variants + inline ranking + render-time redaction + legal docs + spec amendment
 
-- [ ] **6.1** Edit `apps/web-platform/components/dashboard/today-card.tsx`:
-  - [ ] 6.1.1 Source-aware variant switch: `stripe`/`cfo` unchanged; `github`/* → "let CTO handle it" with button label by `source_ref` prefix; `kb-drift`/`knowledge` → "Fix link" / "Update anchor" direct-action.
-  - [ ] 6.1.2 Render-time redaction: apply `redactGithubSourcedText(draftPreview, {source: strategy.redactSource})` BEFORE display.
-  - [ ] 6.1.3 CVE branch: for `source='github'` AND `source_ref` startsWith `cve-` or `secret-scan-`, render `<span>{cveId}</span> <SeverityBadge>{severity}</SeverityBadge>` — full `draftPreview` only on "Edit" modal click.
-- [ ] **6.2** Edit `apps/web-platform/app/api/dashboard/today/route.ts`:
-  - [ ] 6.2.1 Inline ranking (15 LoC): strict tier (`urgency='critical' > 'high' > 'normal' > 'low'`) → within tier `score = recency × severity × leader_confidence` → tie-break `created_at DESC`.
-  - [ ] 6.2.2 `slice(0, 7)` for `items`; remainder in `extras` array.
-  - [ ] 6.2.3 Add `Cache-Control: private, max-age=60` response header.
-- [ ] **6.3** Create / edit `apps/web-platform/test/components/today-card.test.tsx`:
-  - [ ] 6.3.1 Matrix test: 3 sources × N owning_domain — assert button affordance per (source, owning_domain).
-  - [ ] 6.3.2 CVE render: assert `cve-id` + `severity-badge` testIds present; assert `draft-preview-body` NOT present.
-  - [ ] 6.3.3 Render-time redaction: assert redaction helper invoked with correct `source` opt.
-- [ ] **6.4** Create / edit `apps/web-platform/test/server/today-route.test.ts`:
-  - [ ] 6.4.1 Feed 30 mock items → assert `items.length === 7` AND `extras.length === 23` (AC7).
-  - [ ] 6.4.2 Tier-strict ordering: `critical` always before `high` etc.
-  - [ ] 6.4.3 Cache-Control header on response.
-- [ ] **6.5** Edit `apps/web-platform/test/server/byok-audit-writer-sweep.test.ts` — add `audit_github_token_use` to writer-sweep inventory.
-- [ ] **6.6** Edit `knowledge-base/legal/compliance-posture.md` — Article 30 Processing Activity 14 (GitHub-sourced priority signals; Art. 6(1)(f); sub-processor GitHub Inc.).
-- [ ] **6.7** Edit `docs/legal/data-protection-disclosure.md` — GitHub Inc. as sub-processor (US-stored, SCC-reliant); "display third-party repo content as-is and do not re-process" clause.
-- [ ] **6.8** Edit `docs/legal/privacy-policy.md` — "Data we collect from third parties" section.
-- [ ] **6.9** Edit `docs/legal/acceptable-use-policy.md` — card-screenshot-redaction clause.
-- [ ] **6.10** Edit `knowledge-base/project/specs/feat-daily-priorities-multi-source/spec.md` — **TR6 amendment** (reverse to "INSERT-time + render-time belt-and-suspenders; render-time is the load-bearing Art. 14 gate"). **AC15 ship-blocker.**
-- [ ] **6.11** Commit & push Phase 6.
+- [x] **6.1** Edit `apps/web-platform/components/dashboard/today-card.tsx`:
+  - [x] 6.1.1 Source-aware variant switch: `stripe`/`cfo` unchanged; `github`/* → "let CTO handle it" with button label by `source_ref` prefix; `kb-drift`/`knowledge` → "Fix link" / "Update anchor" direct-action.
+  - [x] 6.1.2 Render-time redaction: apply `redactGithubSourcedText(draftPreview, {source: strategy.redactSource})` BEFORE display.
+  - [x] 6.1.3 CVE branch: for `source='github'` AND `source_ref` startsWith `cve-` or `secret-scan-`, render `<span>{cveId}</span> <SeverityBadge>{severity}</SeverityBadge>` — full `draftPreview` only on "Edit" modal click.
+- [x] **6.2** Edit `apps/web-platform/app/api/dashboard/today/route.ts`:
+  - [x] 6.2.1 Inline ranking (15 LoC): strict tier (`urgency='critical' > 'high' > 'normal' > 'low'`) → within tier `score = recency × severity × leader_confidence` → tie-break `created_at DESC`.
+  - [x] 6.2.2 `slice(0, 7)` for `items`; remainder in `extras` array.
+  - [x] 6.2.3 Add `Cache-Control: private, max-age=60` response header.
+- [x] **6.3** Create / edit `apps/web-platform/test/components/today-card.test.tsx`:
+  - [x] 6.3.1 Matrix test: 3 sources × N owning_domain — assert button affordance per (source, owning_domain).
+  - [x] 6.3.2 CVE render: assert `cve-id` + `severity-badge` testIds present; assert `draft-preview-body` NOT present.
+  - [x] 6.3.3 Render-time redaction: assert redaction helper invoked with correct `source` opt.
+- [x] **6.4** Create / edit `apps/web-platform/test/server/today-route.test.ts`:
+  - [x] 6.4.1 Feed 30 mock items → assert `items.length === 7` AND `extras.length === 23` (AC7).
+  - [x] 6.4.2 Tier-strict ordering: `critical` always before `high` etc.
+  - [x] 6.4.3 Cache-Control header on response.
+- [x] **6.5** Edit `apps/web-platform/test/server/byok-audit-writer-sweep.test.ts` — add `audit_github_token_use` to writer-sweep inventory.
+- [x] **6.6** Edit `knowledge-base/legal/compliance-posture.md` — Article 30 Processing Activity 14 (GitHub-sourced priority signals; Art. 6(1)(f); sub-processor GitHub Inc.).
+- [x] **6.7** Edit `docs/legal/data-protection-disclosure.md` — GitHub Inc. as sub-processor (US-stored, SCC-reliant); "display third-party repo content as-is and do not re-process" clause.
+- [x] **6.8** Edit `docs/legal/privacy-policy.md` — "Data we collect from third parties" section.
+- [x] **6.9** Edit `docs/legal/acceptable-use-policy.md` — card-screenshot-redaction clause.
+- [x] **6.10** Edit `knowledge-base/project/specs/feat-daily-priorities-multi-source/spec.md` — **TR6 amendment** (reverse to "INSERT-time + render-time belt-and-suspenders; render-time is the load-bearing Art. 14 gate"). **AC15 ship-blocker.**
+- [x] **6.11** Commit & push Phase 6.
 
 **Exit gate:** Today section renders 3 sources with source-correct affordances; CVE cards render ID + severity only; ranking caps at 7; 4 legal docs updated; spec amendment merged; AC5-AC10-AC15 satisfied.
 
