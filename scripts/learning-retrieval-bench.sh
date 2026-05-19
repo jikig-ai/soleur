@@ -330,8 +330,8 @@ anthropic_paraphrase() {
     --arg prompt "$prompt" \
     --arg gt "$ground_truth" \
     '{model: $model, max_tokens: $max_tokens, messages: [{role:"user", content: ($prompt + "\n\nPassage:\n" + $gt)}]}')
-  local try
-  for try in 1 2; do
+  local _try
+  for _try in 1 2; do
     resp=$("$CURL_BIN" -sS -w '\n__HTTP_STATUS__:%{http_code}' "$ANTHROPIC_ENDPOINT" \
       -H "x-api-key: $ANTHROPIC_API_KEY" \
       -H "anthropic-version: $ANTHROPIC_VERSION" \
@@ -1181,7 +1181,6 @@ R10_ID_KB_R="$(round4 "$R10_ID_KB")"; R10_LT_KB_R="$(round4 "$R10_LT_KB")"; R10_
 R10_ID_GR_R="$(round4 "$R10_ID_GR")"; R10_LT_GR_R="$(round4 "$R10_LT_GR")"; R10_HV_GR_R="$(round4 "$R10_HV_GR")"
 MRR_ID_KB_R="$(round4 "$MRR_ID_KB")"; MRR_LT_KB_R="$(round4 "$MRR_LT_KB")"; MRR_HV_KB_R="$(round4 "$MRR_HV_KB")"
 MRR_ID_GR_R="$(round4 "$MRR_ID_GR")"; MRR_LT_GR_R="$(round4 "$MRR_LT_GR")"; MRR_HV_GR_R="$(round4 "$MRR_HV_GR")"
-R5_HV_KB_R_TLDR="$R5_HV_KB_R"
 
 # Skill-ROI interpretation depends on sign — kb-search outperforming grep
 # (positive) is the "skill earns its keep" finding; underperforming grep
@@ -1191,13 +1190,6 @@ if awk -v g="$GAP_SKILL_ROI" 'BEGIN { exit !(g+0 > 0) }'; then
 else
   GAP_SKILL_ROI_NOTE="**negative** — bare grep outperforms kb-search at heavy paraphrase. The two-tier strategy's INDEX.md tier-1 hits displace corpus content hits from the cap-20, hurting recall on hard queries."
 fi
-
-# Worst-N (max 20) where rank_heavy_kbsearch is null
-WORST_N=$(jq -s --slurpfile corpus <(jq -s . "$CORPUS_NDJSON") '
-  map(select(.intensity == "heavy" and .retriever == "kbsearch" and .rank == null))
-  | .[0:20]
-  | map(.path)
-' < "$RANKS_NDJSON")
 
 WORST_N_WITH_CAUSE="[]"
 # Cause classification (resolution order, first match wins):
