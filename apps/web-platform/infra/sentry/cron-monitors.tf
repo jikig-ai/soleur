@@ -109,6 +109,26 @@ resource "sentry_cron_monitor" "scheduled_daily_triage" {
   timezone                = "UTC"
 }
 
+resource "sentry_cron_monitor" "scheduled_follow_through" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "scheduled-follow-through"
+  schedule     = { crontab = "0 9 * * 1-5" }
+  # TR9 PR-2 (#4063): NEW Inngest-fired monitor for cron-follow-through-monitor.ts.
+  # 30-min margin per Inngest-fired precedent (scheduled_daily_triage above + PR-γ
+  # #4006's scheduled_gh_pages_cert_state). Weekday-only DOW range (1-5) is honored
+  # by Sentry's croniter-backed missed-checkin algorithm AND the jianyuan/sentry
+  # provider passes the crontab through verbatim (verified at Phase 0.4 of the plan
+  # via gh search against the provider's internal/provider/resource_cron_monitor_impl.go
+  # — Schedule: inSchedule.Crontab.Get()). Weekend gap is expected silence, not a
+  # false missed-checkin alert.
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 resource "sentry_cron_monitor" "scheduled_realtime_probe" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
