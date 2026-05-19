@@ -23,46 +23,46 @@ Derived from the plan. Track each task by checking the box. Plan + brainstorm + 
 
 ## Phase 1 — Workflow + publisher contract change (single atomic commit)
 
-- [ ] **1.1** Edit `.github/workflows/scheduled-content-publisher.yml` — add `LINKEDIN_ORG_ACCESS_TOKEN` to env block (line ~63), with one-line comment
-- [ ] **1.2** Edit `scripts/content-publisher.sh:539` — change pre-check env var to `LINKEDIN_ORG_ACCESS_TOKEN`; update warning text; replace `return 0` with `append_to_linkedin_tracker` call + `return 0` (forward reference to Phase 2)
-- [ ] **1.3** Edit `.github/workflows/scheduled-linkedin-token-check.yml`:
-  - [ ] **1.3.1** Add `LINKEDIN_ORG_ACCESS_TOKEN` to env block (line ~30)
-  - [ ] **1.3.2** Convert introspection logic to iterate over both tokens (lines ~36-46)
-  - [ ] **1.3.3** Update alert body template to name which token expired (lines ~52-66)
-- [ ] **1.4** Commit: `feat(content-publisher): wire LINKEDIN_ORG_ACCESS_TOKEN through publisher + token monitor`
+- [x] **1.1** Edit `.github/workflows/scheduled-content-publisher.yml` — add `LINKEDIN_ORG_ACCESS_TOKEN` to env block (line ~63), with one-line comment
+- [x] **1.2** Edit `scripts/content-publisher.sh:539` — change pre-check env var to `LINKEDIN_ORG_ACCESS_TOKEN`; update warning text; replace `return 0` with `append_to_linkedin_tracker` call + `return 0` (forward reference to Phase 2)
+- [x] **1.3** Edit `.github/workflows/scheduled-linkedin-token-check.yml`:
+  - [x] **1.3.1** Add `LINKEDIN_ORG_ACCESS_TOKEN` to env block (line ~30)
+  - [x] **1.3.2** Convert introspection logic to iterate over both tokens (lines ~36-46)
+  - [x] **1.3.3** Update alert body template to name which token expired (lines ~52-66)
+- [x] **1.4** Commit: `feat(content-publisher): wire LINKEDIN_ORG_ACCESS_TOKEN through publisher + token monitor`
 
 ## Phase 2 — Rolling-tracker dedup + error-class routing
 
-- [ ] **2.1** Add script-level constant `LINKEDIN_TRACKER_REASON_MISSING_TOKEN` to `scripts/content-publisher.sh`
-- [ ] **2.2** Add `classify_linkedin_error(error_reason)` function returning `vendor-blocked` or `content-rejected` (drop the `transient` class per code-simplicity review)
-- [ ] **2.3** Add `append_to_linkedin_tracker(case_name, section, error_reason)` function (no recursion guard — log + `return 1` on failure)
-- [ ] **2.4** Modify `create_linkedin_fallback_issue` to route via `classify_linkedin_error`: vendor-blocked → `append_to_linkedin_tracker`; default → existing `create_dedup_issue`
-- [ ] **2.5** Smoke test: token unset + valid tracker → tracker grows by 1 line, second run no-op
-- [ ] **2.6** Smoke test: invalid tracker → stderr warning + return 1 (no recursion)
-- [ ] **2.7** Commit: `feat(content-publisher): rolling-tracker dedup with explicit error-class routing`
+- [x] **2.1** Add script-level constant `LINKEDIN_TRACKER_REASON_MISSING_TOKEN` to `scripts/content-publisher.sh`
+- [x] **2.2** Add `classify_linkedin_error(error_reason)` function returning `vendor-blocked` or `content-rejected` (drop the `transient` class per code-simplicity review)
+- [x] **2.3** Add `append_to_linkedin_tracker(case_name, section, error_reason)` function (no recursion guard — log + `return 1` on failure)
+- [x] **2.4** Modify `create_linkedin_fallback_issue` to route via `classify_linkedin_error`: vendor-blocked → `append_to_linkedin_tracker`; default → existing `create_dedup_issue`
+- [x] **2.5** Smoke test: token unset + valid tracker → tracker grows by 1 line, second run no-op
+- [x] **2.6** Smoke test: invalid tracker → stderr warning + return 1 (no recursion)
+- [x] **2.7** Commit: `feat(content-publisher): rolling-tracker dedup with explicit error-class routing`
 
 ## Phase 3 — Terraform jikigai.com onboarding + Article 30 register
 
-- [ ] **3.1** Edit `apps/web-platform/infra/variables.tf` — append 3 variables (`cf_zone_id_jikigai_com`, `cf_api_token_jikigai_com` sensitive, `linkedin_page_verification_txt` sensitive) with descriptions per plan
-- [ ] **3.2** Edit `apps/web-platform/infra/main.tf` — extend `terraform.required_providers.cloudflare.configuration_aliases` with `cloudflare.jikigai_com`
-- [ ] **3.3** Create `apps/web-platform/infra/jikigai-com.tf`:
-  - [ ] **3.3.1** 5th `provider "cloudflare"` block aliased as `jikigai_com`
-  - [ ] **3.3.2** `cloudflare_record "linkedin_verification"` resource (no `lifecycle.ignore_changes`)
-  - [ ] **3.3.3** `comment = "managed_by:terraform; purpose:linkedin-page-verification; issue:#4046"`
-- [ ] **3.4** Edit `knowledge-base/legal/article-30-register.md` — append PA15 entry with full Art. 30(1)(a-g) coverage including K-bis natural-person disclosure footnote
-- [ ] **3.5** Validate config-phase: `terraform init -input=false` + `doppler run … -- terraform validate` from `apps/web-platform/infra/`
-- [ ] **3.6** Commit: `feat(infra): onboard jikigai.com Cloudflare zone for LinkedIn verification + Art. 30 PA15`
+- [x] **3.1** Edit `apps/web-platform/infra/variables.tf` — append 3 variables (`cf_zone_id_jikigai_com`, `cf_api_token_jikigai_com` sensitive, `linkedin_page_verification_txt` sensitive) with descriptions per plan
+- [x] **3.2** Edit `apps/web-platform/infra/main.tf` — extend `terraform.required_providers.cloudflare.configuration_aliases` with `cloudflare.jikigai_com`
+- [x] **3.3** Create `apps/web-platform/infra/jikigai-com.tf`:
+  - [x] **3.3.1** 5th `provider "cloudflare"` block aliased as `jikigai_com`
+  - [x] **3.3.2** `cloudflare_record "linkedin_verification"` resource (no `lifecycle.ignore_changes`)
+  - [x] **3.3.3** `comment = "managed_by:terraform; purpose:linkedin-page-verification; issue:#4046"`
+- [x] **3.4** Edit `knowledge-base/legal/article-30-register.md` — append PA15 entry with full Art. 30(1)(a-g) coverage including K-bis natural-person disclosure footnote
+- [x] **3.5** Validate config-phase: `terraform init -input=false` + `doppler run … -- terraform validate` from `apps/web-platform/infra/`
+- [x] **3.6** Commit: `feat(infra): onboard jikigai.com Cloudflare zone for LinkedIn verification + Art. 30 PA15`
 
 ## Phase 4 — Backlog closure + follow-up issues
 
-- [ ] **4.1** Verify #4046 body correction present (done in brainstorm phase): `gh issue view 4046 --json body --jq .body | grep -F "Marketing Developer Platform"`
-- [ ] **4.2** Close 9 superseded backlog issues with `gh issue close … --reason "not planned"` loop
-- [ ] **4.3** Verify all 9 are CLOSED with `stateReason: NOT_PLANNED`
-- [ ] **4.4** Commit: `chore(content-publisher): close 9 LinkedIn-API fallback issues superseded by #4046`
+- [x] **4.1** Verify #4046 body correction present (done in brainstorm phase): `gh issue view 4046 --json body --jq .body | grep -F "Marketing Developer Platform"`
+- [x] **4.2** Close 9 superseded backlog issues with `gh issue close … --reason "not planned"` loop
+- [x] **4.3** Verify all 9 are CLOSED with `stateReason: NOT_PLANNED`
+- [x] **4.4** Commit: `chore(content-publisher): close 9 LinkedIn-API fallback issues superseded by #4046`
 - [x] **4.5** Filed 2 follow-up issues during plan authoring:
   - [x] **4.5.1** F1 = #4051 — Legal-track PR (LIA + Privacy Policy + DPD); blocks Phase 5.4
   - [x] **4.5.2** F6 = #4052 — jikigai.com existing-DNS terraform import
-- [ ] **4.6** Update PR #4047 body: `Ref #4046`, `Closes #3765 #3467 #3284 #3073 #2863 #2738 #2489 #1886 #1082`, links to #4051 + #4052, Post-merge checklist for Phases 5-6
+- [x] **4.6** Update PR #4047 body: `Ref #4046`, `Closes #3765 #3467 #3284 #3073 #2863 #2738 #2489 #1886 #1082`, links to #4051 + #4052, Post-merge checklist for Phases 5-6
 
 ## Phase 5 — Post-merge operator runbook (async, days; tracked in PR body)
 
