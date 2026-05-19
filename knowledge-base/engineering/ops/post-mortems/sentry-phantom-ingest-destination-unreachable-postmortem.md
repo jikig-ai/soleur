@@ -5,14 +5,16 @@ incident_pr: 1235
 incident_window: "2026-03-28T18:03:00Z → 2026-05-16T12:50:00Z"
 suspected_change: "PR #1235 introduced Sentry SDK + SENTRY_DSN to Doppler prd on 2026-03-28. DSN points to org ID 4511123328466944 on the de.sentry.io ingest cluster — the destination org is not enumerable, not controllable, and likely orphaned. Phantom-ingest window ≈ 49 days."
 brand_survival_threshold: none
-status: resolved
+status: open
 gate_3_pending: true
 gate_3_expiry: "2026-05-31T19:19Z"
 triggers:
   []
-art_33_triggered: true
+art_33_triggered: "superseded-pending-Phase-9"
 art_34_triggered: false
-art_33_deadline: "2026-05-19T12:50:00Z"
+art_33_deadline: "superseded-2026-05-19T12:50:00Z"
+correction_pending: true
+correction_evidence: "knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md"
 classification_override:
   advisory: aggregate pattern
   chosen: none
