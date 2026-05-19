@@ -35,8 +35,8 @@
 // (deleted in the same commit).
 
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -45,17 +45,37 @@ import { reportSilentFallback } from "@/server/observability";
 // at spawn time → reportSilentFallback → Sentry status=error, instead of
 // throwing at /api/inngest route registration which would silently disable
 // the entire Inngest worker with no operator-visible Sentry signal.
-// createRequire is the only ESM-friendly resolution shape that does not
-// depend on process.cwd() or PATH. The package's `bin` entry maps "claude"
-// → "bin/claude.exe" inside the package dir; node's npm-bin layout puts it
-// at node_modules/.bin/claude (a symlink that re-runs the platform-native
-// postinstall'd binary).
+//
+// The `claude` binary lives at `node_modules/.bin/claude` (npm bin shim →
+// `@anthropic-ai/claude-code/bin/claude.exe`). The original implementation
+// used `createRequire(import.meta.url) + require.resolve(...)` which works
+// in dev mode but produces `TypeError: path argument must be of type string
+// (received number 32798)` in the Next.js standalone bundle — webpack
+// statically replaces `require.resolve()` calls with module-id integers
+// (#4017 substrate audit, 2026-05-19). Switched to filesystem checks against
+// the two known install paths instead; webpack can't see these strings, so
+// they pass through verbatim. The CLAUDE_BIN env var is the override hatch
+// for fresh-host bootstraps that put the binary outside node_modules.
 function resolveClaudeBin(): string {
-  const require_ = createRequire(import.meta.url);
-  const pkgDir = dirname(
-    require_.resolve("@anthropic-ai/claude-code/package.json"),
+  const override = process.env.CLAUDE_BIN;
+  if (override && existsSync(override)) return override;
+
+  // Standalone Next.js bundle layout: /app/node_modules/.bin/claude.
+  // Dev/test layout: <repo>/apps/web-platform/node_modules/.bin/claude.
+  // The bin symlink is the canonical entry — npm regenerates it on every
+  // install, so it survives package version bumps.
+  const candidates = [
+    "/app/node_modules/.bin/claude",
+    join(process.cwd(), "node_modules/.bin/claude"),
+    join(process.cwd(), "apps/web-platform/node_modules/.bin/claude"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `claude binary not found in any known location: ${candidates.join(", ")}. ` +
+      "Set CLAUDE_BIN env var to override.",
   );
-  return join(pkgDir, "..", "..", ".bin", "claude");
 }
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
