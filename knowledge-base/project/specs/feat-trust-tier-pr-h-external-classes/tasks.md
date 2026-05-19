@@ -82,14 +82,14 @@ Derived from the plan. Each leaf task is intended to be executable by `/soleur:w
 
 ## Phase 7 — Legal artifacts
 
-- [ ] **7.1 GREEN** Invoke `legal-document-generator` agent with 9-limb CLO framing → append PA-15 to `knowledge-base/legal/article-30-register.md`.
-- [ ] **7.2 GREEN** Edit `docs/legal/data-protection-disclosure.md` — add §2.3(p) + §2.3(q); `**Last Updated:** May 19, 2026`; no PR/issue numbers in body.
-- [ ] **7.3 GREEN** Edit `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` — mirror.
-- [ ] **7.4 GREEN** Edit `docs/legal/privacy-policy.md` §8.3 — extend 3→4 tier enumeration + Art. 22(3) one-liner; Last Updated bump.
-- [ ] **7.5 GREEN** Edit `plugins/soleur/docs/pages/legal/privacy-policy.md` — mirror §8.3.
-- [ ] **7.6 GREEN** Edit `docs/legal/terms-and-conditions.md` §3a.2 L57 — surgical edit "(b) Auto tier" → "(b) `Auto` or `Auto with daily digest` tier"; Last Updated bump.
-- [ ] **7.7 GREEN** Edit `plugins/soleur/docs/pages/legal/terms-and-conditions.md` — mirror §3a.2.
-- [ ] **7.8 VERIFY** Greps from AC8 pass against both canonical + mirror; canonical + mirror agree on §2.3 letter ordering, §8.3 tier count, §3a.2 phrasing.
+- [x] **7.1 GREEN** Invoke `legal-document-generator` agent with 9-limb CLO framing → append PA-15 to `knowledge-base/legal/article-30-register.md`.
+- [x] **7.2 GREEN** Edit `docs/legal/data-protection-disclosure.md` — add §2.3(p) + §2.3(q); `**Last Updated:** May 19, 2026`; no PR/issue numbers in body.
+- [x] **7.3 GREEN** Edit `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` — mirror.
+- [x] **7.4 GREEN** Edit `docs/legal/privacy-policy.md` §8.3 — extend 3→4 tier enumeration + Art. 22(3) one-liner; Last Updated bump.
+- [x] **7.5 GREEN** Edit `plugins/soleur/docs/pages/legal/privacy-policy.md` — mirror §8.3.
+- [x] **7.6 GREEN** Edit `docs/legal/terms-and-conditions.md` §3a.2 L57 — surgical edit "(b) Auto tier" → "(b) `Auto` or `Auto with daily digest` tier"; Last Updated bump.
+- [x] **7.7 GREEN** Edit `plugins/soleur/docs/pages/legal/terms-and-conditions.md` — mirror §3a.2.
+- [x] **7.8 VERIFY** Greps from AC8 pass against both canonical + mirror; canonical + mirror agree on §2.3 letter ordering, §8.3 tier count, §3a.2 phrasing.
 
 ## Phase 8 — ADR (single merged)
 
