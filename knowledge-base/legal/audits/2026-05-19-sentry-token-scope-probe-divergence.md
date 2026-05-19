@@ -326,20 +326,36 @@ advances to the form at `/settings/developer-settings/new-internal/`.
 - Overview — optional description; leave empty or short.
 - Authorized JavaScript Origins — leave empty.
 
-**Permissions section** — 8 dropdowns, each with 4 options (`No Access` /
-`Read` / `Read & Write` / `Admin`), plus 1 standalone checkbox:
+**Permissions section** — 8 dropdowns, *most* with 4 options (`No Access` /
+`Read` / `Read & Write` / `Admin`), plus 1 standalone checkbox.
+
+**Empirical correction (2026-05-19, second mint attempt, post-MCP-reconnect).**
+The `Release` dropdown surfaces only **2 options**: `No Access` and `Admin`.
+`Read` and `Read & Write` are **not** selectable for Release. The original
+Appendix B table below claimed Release should be set to "Read" — that
+recommendation is not achievable through the UI. The IaC does not strictly
+need Release scope (cron monitors + issue alerts are project-scoped; the
+existing `web-platform-ci` integration shows `project:releases` is derived
+from `project:write` umbrella under Project=Admin). Leave Release at
+`No Access`. If a future IaC resource needs explicit Release admin, set it
+to `Admin` (the only other option).
+
+The DOM `id` for the Issue & Event dropdown is **`Event--permission`** (no
+ampersand encoded). The CI checkbox `id` is **`ContinuousIntegration--
+permission`**. These survived the form crashes and are the load-bearing
+selectors for any future automation attempt.
 
 | Category | Recommended value | Rationale |
 |---|---|---|
 | Project | **Admin** | Required for terraform apply + import; covers `project:write`, `project:read`, `project:releases`, `project:admin` scopes. |
 | Team | No Access | Not needed for IaC. |
-| Release | Read | For release-aware monitor/alert config (may overlap with Project: Admin). |
+| Release | **No Access** | Only `No Access` and `Admin` are selectable — corrected 2026-05-19. IaC does not need Release scope (project-scoped resources only); `project:releases` is derived from Project=Admin. |
 | Distribution | No Access | Not relevant. |
-| Issue & Event | Read | Provides `event:read` for the audit script's region probe. |
+| Issue & Event | Read | Provides `event:read` for the audit script's region probe. DOM id: `Event--permission`. |
 | Organization | Read | Provides `org:read` for `/users/me/` + org listing. |
 | Member | No Access | Not needed. |
 | Alerts | Read & Write | Required for `sentry_issue_alert` rules per #3849. |
-| Continuous Integration (CI) | **checked** | Enables `org:ci` scope for source-maps + release creation (compatible with CI pipeline use). |
+| Continuous Integration (CI) | **checked** | Enables `org:ci` scope for source-maps + release creation (compatible with CI pipeline use). DOM id: `ContinuousIntegration--permission`. |
 
 **Note on missing `monitor:*` scopes.** The form does NOT expose a separate
 "Cron Monitors" category. The cron-monitor capability is bundled under
