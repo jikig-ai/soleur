@@ -138,6 +138,15 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git diff --quiet || git stash
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
 _check "guardrails: git stash (|| chain)" "hr-never-git-stash-in-worktrees"
 
+# Subcommand coverage: `git stash list` (and any other stash subcommand) must
+# also fire — the regex matches `git\s+stash` followed by anything. Salvaged
+# from the parallel-suite alternative in #3941 (closed as superseded by the
+# canonical-suite extensions in #3870 + #3970); kept here to lock in that
+# read-only stash subcommands aren't an over-fire exception.
+echo '{"tool_name":"Bash","tool_input":{"command":"git stash list"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash list (subcommand)" "hr-never-git-stash-in-worktrees"
+
 # Negative: substrings that are not `git\s+stash` must not over-fire. Mirrors
 # the _check_silent companions on block-commit-on-main and block-delete-branch.
 echo '{"tool_name":"Bash","tool_input":{"command":"echo gitstash; rg stash"}}' \
