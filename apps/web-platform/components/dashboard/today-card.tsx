@@ -1,24 +1,60 @@
 "use client";
 
 // PR-F (#3244, #3940) Phase 5 — single Today card.
-// PR-H (#4077) — wires Send/Edit/Discard handlers + typed-confirm modal.
+// PR-H (#3244) — source-aware variants for `github` + `kb-drift` (render-
+//   time redaction is the load-bearing Art. 14 gate per plan TR6).
+// PR-H (#4077) — wires Send/Edit/Discard handlers + typed-confirm modal
+//   on the default (Stripe / CFO) source.
 //
-// Renders one draft message from /api/dashboard/today. Send POSTs to
-// /api/dashboard/today/[id]/send; on 409 requires_confirmation the
-// typed-confirm modal opens and the founder must type SEND (case-
-// sensitive — load-bearing TOM per TR6). A second POST with
-// confirmed_typed=true + typed_value carries the signature.
+// Each source dispatches to its own component so React rules-of-hooks
+// stay clean (no conditional hooks after early returns).
 
 import { useState, useTransition } from "react";
 
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
+import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
 
 interface TodayCardProps {
   id: string;
-  source: string;          // "stripe" | "manual" | …
-  owningDomain: string;    // "cfo" | …
+  source: string;          // "stripe" | "github" | "kb-drift" | …
+  sourceRef?: string | null;
+  owningDomain: string;    // "cfo" | "engineering" | "product" | "security" | "knowledge"
   draftPreview: string;
-  urgency: string;         // "low" | "medium" | "high"
+  urgency: string;         // "critical" | "high" | "medium" | "normal" | "low"
+}
+
+interface GithubButtonSpec {
+  label: string;
+  ariaLabel: string;
+  redactSource: RedactionSource;
+}
+
+function githubButtonSpec(sourceRef: string | null | undefined): GithubButtonSpec {
+  const ref = sourceRef ?? "";
+  if (ref.startsWith("pr-"))
+    return { label: "Spawn review agent", ariaLabel: "Let CTO spawn a PR-review agent", redactSource: "pr_title" };
+  if (ref.startsWith("ci-"))
+    return { label: "Spawn fix agent", ariaLabel: "Let CTO spawn a CI-fix agent", redactSource: "pr_title" };
+  if (ref.startsWith("issue-"))
+    return { label: "Spawn triage agent", ariaLabel: "Let CTO spawn an issue-triage agent", redactSource: "issue_body" };
+  if (ref.startsWith("cve-"))
+    return { label: "Spawn CVE bump agent", ariaLabel: "Let CTO spawn a CVE-bump agent", redactSource: "cve_description" };
+  if (ref.startsWith("secret-scan-"))
+    return { label: "Spawn secret-rotate agent", ariaLabel: "Let CTO spawn a secret-rotate agent", redactSource: "cve_description" };
+  return { label: "Let CTO handle it", ariaLabel: "Let CTO handle it", redactSource: "pr_title" };
+}
+
+function isCveOrSecretScan(sourceRef: string | null | undefined): boolean {
+  const ref = sourceRef ?? "";
+  return ref.startsWith("cve-") || ref.startsWith("secret-scan-");
+}
+
+function parseCveHeader(draftPreview: string): { id: string; severity: string } {
+  // Walker shape mirrors server/inngest/functions/github-on-event.ts
+  // extractRawPreview: `<ghsa_id> (<severity>): <summary>`.
+  const m = /^([^\s(]+)\s+\(([^)]+)\)/.exec(draftPreview);
+  if (m) return { id: m[1], severity: m[2] };
+  return { id: "<unknown id>", severity: "<unknown severity>" };
 }
 
 interface ConfirmationPayload {
@@ -38,9 +74,130 @@ interface ConfirmationPayload {
 const BASE_BUTTON =
   "min-h-[44px] rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
 
-export function TodayCard({
+export function TodayCard(props: TodayCardProps) {
+  if (props.source === "kb-drift") return <KbDriftCard {...props} />;
+  if (props.source === "github") return <GitHubCard {...props} />;
+  return <StripeCard {...props} />;
+}
+
+// KB-drift: direct-action (no leader delegation; internal-infra signal —
+// no third-party text to redact). Buttons disabled until PR-H+1 (#4098).
+function KbDriftCard({
   id,
   source,
+  sourceRef,
+  owningDomain,
+  draftPreview,
+  urgency,
+}: TodayCardProps) {
+  const label = (sourceRef ?? "").startsWith("link-") ? "Fix link" : "Update anchor";
+  return (
+    <article
+      data-message-id={id}
+      data-source={source}
+      data-source-ref={sourceRef ?? ""}
+      data-urgency={urgency}
+      className="mb-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-4"
+    >
+      <header className="mb-2 flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-soleur-text-secondary">
+        <span>
+          {owningDomain} • {source}
+        </span>
+        <span data-urgency-label={urgency}>{urgency}</span>
+      </header>
+      <p className="mb-3 whitespace-pre-line text-sm text-soleur-text-primary">{draftPreview}</p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled
+          aria-disabled="true"
+          data-action="kb-drift-fix"
+          title="Wires in PR-H+1"
+          className="min-h-[44px] cursor-not-allowed rounded-md bg-amber-600/40 px-3 py-2 text-sm font-medium text-soleur-text-primary"
+          aria-label={label}
+        >
+          {label}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+// GitHub: source_ref-driven affordance + render-time redaction. CVE /
+// secret-scan renders ID + severity only by default (AC6); the summary
+// body is already stripped server-side. Buttons disabled until PR-H+1.
+function GitHubCard({
+  id,
+  source,
+  sourceRef,
+  owningDomain,
+  draftPreview,
+  urgency,
+}: TodayCardProps) {
+  const button = githubButtonSpec(sourceRef);
+  const cve = isCveOrSecretScan(sourceRef);
+  const redactedBody = redactGithubSourcedText(draftPreview, { source: button.redactSource });
+
+  return (
+    <article
+      data-message-id={id}
+      data-source={source}
+      data-source-ref={sourceRef ?? ""}
+      data-urgency={urgency}
+      className="mb-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-4"
+    >
+      <header className="mb-2 flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-soleur-text-secondary">
+        <span>
+          {owningDomain} • {source}
+        </span>
+        <span data-urgency-label={urgency}>{urgency}</span>
+      </header>
+
+      {cve ? (
+        <div data-testid="today-card-cve" className="mb-3 flex items-center gap-2 text-sm">
+          <span data-testid="cve-id" className="font-mono text-soleur-text-primary">
+            {parseCveHeader(draftPreview).id}
+          </span>
+          <span
+            data-testid="severity-badge"
+            className="rounded-full bg-red-900/40 px-2 py-0.5 text-xs uppercase tracking-wide text-red-200"
+          >
+            {parseCveHeader(draftPreview).severity}
+          </span>
+        </div>
+      ) : (
+        <p
+          data-testid="draft-preview-body"
+          className="mb-3 whitespace-pre-line text-sm text-soleur-text-primary"
+        >
+          {redactedBody}
+        </p>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled
+          aria-disabled="true"
+          data-action="github-handle"
+          data-button-label={button.label}
+          title="Wires in PR-H+1"
+          className="min-h-[44px] cursor-not-allowed rounded-md bg-amber-600/40 px-3 py-2 text-sm font-medium text-soleur-text-primary"
+          aria-label={button.ariaLabel}
+        >
+          {button.label}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+// Stripe / CFO path — PR-H (#4077) Send/Edit/Discard flow with typed-
+// confirm modal for approve_every_time tier.
+function StripeCard({
+  id,
+  source,
+  sourceRef,
   owningDomain,
   draftPreview,
   urgency,
@@ -49,9 +206,7 @@ export function TodayCard({
   const [error, setError] = useState<string | null>(null);
   const [archived, setArchived] = useState(false);
   const [draft, setDraft] = useState(draftPreview);
-  const [confirming, setConfirming] = useState<ConfirmationPayload | null>(
-    null,
-  );
+  const [confirming, setConfirming] = useState<ConfirmationPayload | null>(null);
 
   // The server derives body_content and recipient_identifier from the
   // messages row at request time, so this client sends ONLY the typed-
@@ -102,8 +257,6 @@ export function TodayCard({
             return;
           }
           if (json.error === "already_sent") {
-            // Another tab / a re-render / a retry beat us to it. The
-            // WORM row already exists; reflect that locally.
             setArchived(true);
             return;
           }
@@ -131,13 +284,7 @@ export function TodayCard({
           return;
         }
         if (res.status === 409) {
-          // Either the draft hash drifted (concurrent edit between 409
-          // and this POST) or another tab already sent. Surface the
-          // error generically; the founder's next click will re-issue
-          // a fresh 409 if appropriate.
-          const json = (await res.json().catch(() => ({}))) as {
-            error?: string;
-          };
+          const json = (await res.json().catch(() => ({}))) as { error?: string };
           if (json.error === "already_sent") {
             setArchived(true);
             return;
@@ -157,7 +304,6 @@ export function TodayCard({
   }
 
   function onEdit() {
-    // Inline prompt for PR-H; PR-I will replace with a richer editor.
     const next = window.prompt("Edit draft", draft);
     if (next === null) return;
     if (next === draft) return;
@@ -180,7 +326,6 @@ export function TodayCard({
   }
 
   function onDiscard() {
-    // Optimistic: hide the card immediately; revert on failure.
     setArchived(true);
     setError(null);
     startTransition(async () => {
@@ -205,6 +350,8 @@ export function TodayCard({
   return (
     <article
       data-message-id={id}
+      data-source={source}
+      data-source-ref={sourceRef ?? ""}
       data-urgency={urgency}
       className="mb-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-4"
     >
@@ -214,7 +361,10 @@ export function TodayCard({
         </span>
         <span data-urgency-label={urgency}>{urgency}</span>
       </header>
-      <p className="mb-3 whitespace-pre-line text-sm text-soleur-text-primary">
+      <p
+        data-testid="draft-preview-body"
+        className="mb-3 whitespace-pre-line text-sm text-soleur-text-primary"
+      >
         {draft}
       </p>
       {error ? (

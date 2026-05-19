@@ -502,6 +502,25 @@ export async function exportSqlTable(
     });
   }
 
+  // -- audit_github_token_use (GitHub App token use audit; migration 052, PR-H #3244) --
+  {
+    const { data, error } = await service
+      .from("audit_github_token_use")
+      .select("*")
+      .eq("founder_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`audit_github_token_use read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "audit_github_token_use", {
+      ownerField: "founder_id",
+    });
+    results.push({
+      table: "audit_github_token_use",
+      spec: DSAR_TABLE_ALLOWLIST.audit_github_token_use,
+      rows,
+    });
+  }
+
   // -- action_sends (per-send WORM signature ledger; migration 051, PR-H #4077) --
   // Art. 15 right of access: the founder is entitled to a copy of every
   // signature row the platform recorded under their authorization. Body

@@ -56,6 +56,15 @@ function assertExhaustive(ac: ActionClass): ActionClassCategory {
     case "infra.dependency_bump":
     case "infra.log_rotate":
       return "infra";
+    case "engineering.pr_review_pending":
+    case "engineering.ci_failed":
+      return "engineering";
+    case "triage.p0p1_issue":
+      return "triage";
+    case "security.cve_alert":
+      return "security";
+    case "knowledge.kb_drift":
+      return "knowledge";
     default: {
       const _exhaustive: never = ac;
       void _exhaustive;
@@ -90,6 +99,6 @@ describe("action-class registry — runtime gates", () => {
     // Locking the cardinality protects against accidental drops or
     // duplicate-entry mistakes during future widens. Bump intentionally
     // when adding a new producer.
-    expect(ACTION_CLASSES.length).toBe(11);
+    expect(ACTION_CLASSES.length).toBe(16);
   });
 });

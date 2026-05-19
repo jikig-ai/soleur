@@ -190,6 +190,7 @@ export default function DashboardPage() {
   interface TodayItem {
     id: string;
     source: string;
+    sourceRef?: string | null;
     owningDomain: string;
     draftPreview: string;
     urgency: string;
@@ -608,6 +609,7 @@ export default function DashboardPage() {
             key={item.id}
             id={item.id}
             source={item.source}
+            sourceRef={item.sourceRef ?? null}
             owningDomain={item.owningDomain}
             draftPreview={item.draftPreview}
             urgency={item.urgency}
