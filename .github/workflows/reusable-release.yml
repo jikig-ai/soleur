@@ -193,7 +193,16 @@ jobs:
           BUMP_TYPE: ${{ steps.bump.outputs.type }}
           TAG_PREFIX: ${{ inputs.tag_prefix }}
         run: |
-          LATEST_TAG=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname | head -1)
+          # Glob is fnmatch-style (cheap pre-filter); anchored regex enforces
+          # strict ${TAG_PREFIX}X.Y.Z shape so collisions like `vinngest-v1.0.0`
+          # under the bare `v` prefix are rejected (#4082). `grep -m1` over
+          # `head -1` avoids SIGPIPE if the corpus ever exceeds the kernel pipe
+          # buffer; `|| true` is load-bearing under -eo pipefail so the
+          # empty-fallback below can fire on no-match (bootstrap of a new
+          # prefix). If a future TAG_PREFIX contains regex metacharacters
+          # (`.`, `+`, `*`), escape them at the call site.
+          LATEST_TAG=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname \
+            | grep -m1 -E "^${TAG_PREFIX}[0-9]+\.[0-9]+\.[0-9]+$" || true)
 
           if [ -z "$LATEST_TAG" ]; then
             CURRENT="0.0.0"
