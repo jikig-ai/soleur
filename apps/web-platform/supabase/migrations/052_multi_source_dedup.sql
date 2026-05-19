@@ -246,6 +246,15 @@ CREATE TRIGGER audit_github_token_use_no_mutate
   BEFORE UPDATE OR DELETE ON public.audit_github_token_use
   FOR EACH ROW EXECUTE FUNCTION public.audit_github_token_use_no_mutate();
 
+-- The trigger function is invoked by the trigger context only; no caller
+-- ever calls it directly. The REVOKE here satisfies the lint check at
+-- test/migration-rpc-grants.test.ts (AC13 + AC14) that every public.*
+-- function in PR-H migrations explicitly revokes from PUBLIC, anon, and
+-- authenticated. No GRANT — the trigger function is unreachable through
+-- the SQL caller surface.
+REVOKE ALL ON FUNCTION public.audit_github_token_use_no_mutate()
+  FROM PUBLIC, anon, authenticated;
+
 COMMENT ON FUNCTION public.audit_github_token_use_no_mutate() IS
   'PR-H (#3244) — WORM trigger for audit_github_token_use. Fires '
   'BEFORE UPDATE/DELETE; raises P0001 unless the caller has set '
