@@ -502,7 +502,7 @@ export async function exportSqlTable(
     });
   }
 
-  // -- audit_github_token_use (GitHub App token use audit; migration 051, PR-H #3244) --
+  // -- audit_github_token_use (GitHub App token use audit; migration 052, PR-H #3244) --
   {
     const { data, error } = await service
       .from("audit_github_token_use")
@@ -517,6 +517,33 @@ export async function exportSqlTable(
     results.push({
       table: "audit_github_token_use",
       spec: DSAR_TABLE_ALLOWLIST.audit_github_token_use,
+      rows,
+    });
+  }
+
+  // -- action_sends (per-send WORM signature ledger; migration 051, PR-H #4077) --
+  // Art. 15 right of access: the founder is entitled to a copy of every
+  // signature row the platform recorded under their authorization. Body
+  // and recipient are persisted as SHA-256 hashes only — the raw values
+  // never enter the table — but the founder still has access to the
+  // metadata (action_class, tier_at_send, clicked_at, confirmed_typed,
+  // approval_signature_sha256, grant_id). Marked Art. 15-only because
+  // the row is platform-generated evidence of the click, not founder-
+  // provided content; portability (Art. 20) does not apply.
+  {
+    const { data, error } = await service
+      .from("action_sends")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`action_sends read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "action_sends", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "action_sends",
+      spec: DSAR_TABLE_ALLOWLIST.action_sends,
       rows,
     });
   }

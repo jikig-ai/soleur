@@ -1,5 +1,5 @@
 # PR-H (#3244) — GitHub App secrets for the multi-source webhook ingress.
-# ADR-034 (apps/web-platform/infra/main.tf-referenced).
+# ADR-036 (apps/web-platform/infra/main.tf-referenced).
 #
 # Provisions:
 #   - 4 operator-supplied doppler_secret resources in `prd` for the GitHub

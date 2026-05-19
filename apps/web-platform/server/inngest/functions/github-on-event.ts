@@ -238,7 +238,7 @@ export async function githubOnEventHandler({
     });
 
     if (error) {
-      // ADR-035: the partial-unique index can fire on Inngest retry
+      // ADR-037: the partial-unique index can fire on Inngest retry
       // (same source_ref already drafted). Treat as a non-error, no
       // throw — Inngest retries would burn budget chasing a deterministic
       // conflict.

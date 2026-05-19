@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-// Migration-shape test for 051_multi_source_dedup.sql.
+// Migration-shape test for 052_multi_source_dedup.sql.
 //
 // File-parse contract test (mirrors 046 precedent), pinning the SQL
 // invariants required by PR-H Phase 1 of:
@@ -25,10 +25,10 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/051_multi_source_dedup.sql",
+  "../../supabase/migrations/052_multi_source_dedup.sql",
 );
 
-describe("migration 051_multi_source_dedup", () => {
+describe("migration 052_multi_source_dedup", () => {
   const sql = readFileSync(MIGRATION_PATH, "utf8");
   // Strip line comments before pattern checks (mirrors 046 precedent).
   const executable = sql.replace(/--[^\n]*/g, "");

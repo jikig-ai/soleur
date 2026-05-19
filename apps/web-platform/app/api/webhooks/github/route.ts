@@ -216,7 +216,7 @@ export async function POST(request: Request) {
 
   // Step 5: founderId resolution via the users.github_installation_id
   // column (migration 011) gated by the partial-UNIQUE index added in
-  // migration 051 (PR-H #3244). The UNIQUE constraint is load-bearing:
+  // migration 052 (PR-H #3244). The UNIQUE constraint is load-bearing:
   // without it, .maybeSingle() would silently route a 1:N installation
   // to one founder. Inline `as { id?: string }` cast keeps the route
   // file zero-types-dependency.

@@ -186,7 +186,7 @@ describe("github-on-event handler", () => {
     });
   });
 
-  describe("ADR-035: PG_UNIQUE_VIOLATION on persist is idempotent", () => {
+  describe("ADR-037: PG_UNIQUE_VIOLATION on persist is idempotent", () => {
     it("does NOT throw on 23505 (partial-unique conflict)", async () => {
       mockInsert.mockResolvedValueOnce({ error: { code: "23505" } });
       const res = await githubOnEventHandler(makeArgs({}) as never);

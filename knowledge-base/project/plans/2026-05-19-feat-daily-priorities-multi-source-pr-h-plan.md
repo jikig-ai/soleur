@@ -34,10 +34,10 @@ Plan v2 incorporates 13 plan-review findings (P0+P1+P2) from DHH + Kieran + code
 |---|---|---|
 | Spec TR6: "Apply redaction at INSERT time, NOT at render time. Render-time is the fallback." | Brainstorm CLO recommended **render-time + ephemeral cache** for GDPR Art. 14 minimization. Best-practices research (EDPB Guidelines 3/2025) confirms render-time + short TTL cache minimizes Art. 14 surface vs persist-redacted. Spec TR6 contradicts the brainstorm CLO mitigation. | **Reverse TR6.** Plan implements belt-and-suspenders: INSERT-time redaction (audit-trail integrity) PLUS render-time redaction (load-bearing Art. 14 gate). `Cache-Control: private, max-age=60` on the Today response. **Spec.md is amended in this PR** (see `## Files to Edit`). |
 | Spec TR3: "switch on `event.headers['x-github-event']`". | Webhook handler must `await req.text()` BEFORE `JSON.parse` (HMAC needs raw bytes). The `x-github-event` header is on the request, not the parsed body — accessible via `req.headers.get("x-github-event")`. | No change to spec; plan Phase 3 step order explicitly mirrors Stripe's verify-FIRST, dedup-SECOND order. |
-| Spec FR8: "INSERT … ON CONFLICT DO NOTHING; if zero rows affected, return 200 (duplicate)." | Kieran P0: supabase-js `.insert()` returns `data: null` (NOT empty array) on `ON CONFLICT DO NOTHING` without `.select()`. The "rows affected" check is unreliable. Stripe path at `webhooks/stripe/route.ts:117-122` uses plain `.insert()` and catches `PG_UNIQUE_VIOLATION (23505)` — the correct idiom. | **Adopt Stripe idiom.** Phase 3 INSERTs without `ON CONFLICT`, catches `23505`, returns 200 on duplicate. ADR-035 amended accordingly. |
+| Spec FR8: "INSERT … ON CONFLICT DO NOTHING; if zero rows affected, return 200 (duplicate)." | Kieran P0: supabase-js `.insert()` returns `data: null` (NOT empty array) on `ON CONFLICT DO NOTHING` without `.select()`. The "rows affected" check is unreliable. Stripe path at `webhooks/stripe/route.ts:117-122` uses plain `.insert()` and catches `PG_UNIQUE_VIOLATION (23505)` — the correct idiom. | **Adopt Stripe idiom.** Phase 3 INSERTs without `ON CONFLICT`, catches `23505`, returns 200 on duplicate. ADR-037 amended accordingly. |
 | Webhook handler error vs delivery_id row. | Kieran P0: Stripe path has `releaseDedupRow()` on 5xx (`webhooks/stripe/route.ts:144-159`) — without an equivalent, a transient `inngest.send` failure leaves the delivery_id row, GitHub redelivers, the redelivery 200s as "duplicate", event dropped. **Production data-loss risk.** | **Mirror Stripe's `releaseDedupRow()` pattern.** On any error AFTER successful INSERT and BEFORE `inngest.send` returns success, DELETE the `processed_github_events` row to allow GitHub's redelivery to be processed. Phase 3 step 124 carries the explicit ordering. |
 | Spec TR2 lists `GITHUB_APP_*` secrets in Doppler `prd`. | Terraform-architect produced a complete IaC manifest: 5 keys map to `prd` (4 operator-supplied + 1 `random_id` for the webhook secret); `KB_DRIFT_INGEST_SIGNING_KEY` lives in NEW `prd_kb_drift_walker` Doppler config for blast-radius scoping. Single manual gate: GitHub App creation in github.com/settings/apps UI. | Folded into `## Infrastructure (IaC)` below; Phase 2 covers operator preflight + IaC apply atomically. |
-| Spec FR8 references "Inngest's 24h window". | Best-practices: Inngest's 24h `event.id` dedup is FIXED (not configurable on self-hosted). DB-side `processed_github_events` retention MUST cover the gap (autovacuum + 30-day partition rotation, NOT an explicit TTL daemon). | ADR-035 documents the 24h-Inngest + Postgres-natural-cleanup pair; no TTL cron in scope. |
+| Spec FR8 references "Inngest's 24h window". | Best-practices: Inngest's 24h `event.id` dedup is FIXED (not configurable on self-hosted). DB-side `processed_github_events` retention MUST cover the gap (autovacuum + 30-day partition rotation, NOT an explicit TTL daemon). | ADR-037 documents the 24h-Inngest + Postgres-natural-cleanup pair; no TTL cron in scope. |
 | Spec TR3 implies module-scope Octokit App client. | Next.js App Router has documented module-scope singleton inconsistency (vercel/next.js#65350). Octokit's `@octokit/auth-app` v7 auto-refreshes installation tokens at `expires_at - 60s` internally — **manual 55-min cache double-caches and risks mid-request expiry**. | **Per-request factory only**; explicit "no module-scope singleton" comment in `app-client.ts`. Manual cache deleted from plan; trust the auth strategy. |
 
 ## User-Brand Impact
@@ -122,8 +122,8 @@ PR-H sized for a single merged PR (Approach A; KB-drift bundled per brainstorm P
 - `apps/web-platform/app/api/webhooks/github/route.test.ts` — covers: signature-verify positive + negative; missing-secret fail-closed; duplicate `delivery_id` returns 200 without `inngest.send`; no-grant fail-closed; `inngest.send` failure DELETEs the dedup row + propagates 500; signature-verify-failure mirrored to Sentry at `level: "error"` (per `cq-silent-fallback-must-mirror-to-sentry`).
 - `apps/web-platform/server/github/app-client.ts` — per-request factory `createGitHubAppClient(installationId): Promise<Octokit>` using `@octokit/auth-app` v7. **NO manual token caching** — auth strategy auto-refreshes at `expires_at - 60s` internally; double-caching would risk mid-request expiry. **NO module-scope singleton** (vercel/next.js#65350); per-request instantiation only.
 - `apps/web-platform/server/github/app-client.test.ts` — per-request semantics; rate-limit-aware retry; explicit "no module-scope" assertion via fresh-import-per-test.
-- `knowledge-base/engineering/architecture/decisions/ADR-034-github-app-webhook-as-second-multi-source-ingress.md` — webhook over polling; App over PAT; status `accepted`. Lands in same commit as the webhook route it describes.
-- `knowledge-base/engineering/architecture/decisions/ADR-035-messages-source-ref-composite-unique-for-multi-source-dedup.md` — partial-unique index pattern; CATCH `PG_UNIQUE_VIOLATION` (not `ON CONFLICT DO NOTHING`); release-on-error pattern; processed-events natural cleanup via autovacuum; status `accepted`.
+- `knowledge-base/engineering/architecture/decisions/ADR-036-github-app-webhook-as-second-multi-source-ingress.md` — webhook over polling; App over PAT; status `accepted`. Lands in same commit as the webhook route it describes.
+- `knowledge-base/engineering/architecture/decisions/ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md` — partial-unique index pattern; CATCH `PG_UNIQUE_VIOLATION` (not `ON CONFLICT DO NOTHING`); release-on-error pattern; processed-events natural cleanup via autovacuum; status `accepted`.
 
 **Files edited:**
 - `apps/web-platform/server/scope-grants/grant-kinds.ts` — add 5 new kinds: `engineering.pr_review_pending`, `engineering.ci_failed`, `triage.p0p1_issue`, `security.cve_alert`, `knowledge.kb_drift`.
@@ -154,7 +154,7 @@ PR-H sized for a single merged PR (Approach A; KB-drift bundled per brainstorm P
 **Files edited:**
 - `apps/web-platform/app/api/inngest/route.ts` — register the new dispatcher in the `serve()` array. **This edit lands in Phase 4** (per Kieran P1 — registration must follow the consumer it registers, not precede in Phase 3).
 
-**Exit:** dispatcher unit tests green; `inngest dev` shows 1 new function registered handling 4 event classes; mocked end-to-end event → DB INSERT works for each strategy; AC11 (ADR-034, ADR-035) already satisfied in Phase 3.
+**Exit:** dispatcher unit tests green; `inngest dev` shows 1 new function registered handling 4 event classes; mocked end-to-end event → DB INSERT works for each strategy; AC11 (ADR-036, ADR-037) already satisfied in Phase 3.
 
 ### Phase 5 — KB-drift walker + GH Actions workflow + internal ingest
 
@@ -222,8 +222,8 @@ tests/scripts/test-kb-drift-walker.sh
 apps/web-platform/infra/github-app.tf
 apps/web-platform/infra/kb-drift.tf
 apps/web-platform/infra/alerts-github-webhook.tf
-knowledge-base/engineering/architecture/decisions/ADR-034-github-app-webhook-as-second-multi-source-ingress.md
-knowledge-base/engineering/architecture/decisions/ADR-035-messages-source-ref-composite-unique-for-multi-source-dedup.md
+knowledge-base/engineering/architecture/decisions/ADR-036-github-app-webhook-as-second-multi-source-ingress.md
+knowledge-base/engineering/architecture/decisions/ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md
 knowledge-base/operations/runbooks/github-app-provisioning.md
 ```
 
@@ -319,7 +319,7 @@ Better Stack free tier rejects `betteruptime_policy` (per learning `2026-05-15`)
 - [ ] **AC8** Migration 051 shape test green: new columns, partial-unique index, `audit_github_token_use` + RPC + `processed_github_events`.
 - [ ] **AC9** RPC `record_github_token_use` uses `SECURITY DEFINER` + `SET search_path = public, pg_temp`; shape test asserts `pg_proc.proconfig` contains the search_path pin.
 - [ ] **AC10** Article 30 + DPD + Privacy + AUP updates merged in PR-H (4 file edits in `## Files to Edit`).
-- [ ] **AC11** ADR-034 + ADR-035 land at `status: accepted` in same commits as the code they describe (Phase 3).
+- [ ] **AC11** ADR-036 + ADR-037 land at `status: accepted` in same commits as the code they describe (Phase 3).
 - [ ] **AC12** `terraform plan` returns clean diff against `prd_terraform` after PR-H code lands.
 - [ ] **AC13** Webhook handler's release-on-error path verified: mocked `inngest.send` failure causes DELETE of the `processed_github_events` row; subsequent redelivery of the same `delivery_id` is processed (no false-duplicate).
 - [ ] **AC14** Octokit `app-client.ts` test asserts NO module-scope state — fresh-import-per-test, no shared cache.

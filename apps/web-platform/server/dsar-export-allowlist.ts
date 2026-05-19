@@ -105,12 +105,27 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // trigger + anonymise_scope_grants RPC handle erasure separately.
   scope_grants: { ownerField: "founder_id", article: "15+20" },
 
-  // GitHub App installation-token use audit (migration 051, PR-H #3244).
+  // GitHub App installation-token use audit (migration 052, PR-H #3244).
   // Art. 15: controller-collected, not user-provided. RLS owner-select
   // already exposes these rows to the founder via the dashboard; the
   // DSAR bundle exports them under the same Art. 15 framing as
   // audit_byok_use (note non-standard owner column name).
   audit_github_token_use: { ownerField: "founder_id", article: "15" },
+
+  // Per-send action signature ledger (migration 051, PR-H #4077).
+  // Art. 15: the user has the right to know which sends the platform
+  // recorded under their authorization. Body and recipient are stored
+  // as SHA-256 hashes only (raw values never persisted), but the user
+  // still has access to: which action_class was invoked, which tier
+  // was active at the click (`tier_at_send`), when (`clicked_at`),
+  // whether the typed-confirm gate was satisfied (`confirmed_typed`),
+  // the cryptographic signature (`approval_signature_sha256`), and
+  // which grant was active (`grant_id`). Marked 15-only because the
+  // founder did not "provide" the signature row — it is platform-
+  // generated evidence of their click, analogous to an audit row.
+  // The WORM trigger + anonymise_action_sends RPC handle erasure
+  // separately (Art. 17 cascade in server/account-delete.ts).
+  action_sends: { ownerField: "user_id", article: "15" },
 };
 
 /**

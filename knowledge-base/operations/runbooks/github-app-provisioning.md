@@ -38,7 +38,7 @@ The manual gate is tracked for future automation (per `hr-never-label-any-step-a
    - `issues`
    - `repository_advisory`
    - `secret_scanning_alert`
-8. **Where can this App be installed?** Only on this account (founder's own account/orgs only — per ADR-034 multi-org install is out-of-scope at MVP).
+8. **Where can this App be installed?** Only on this account (founder's own account/orgs only — per ADR-036 multi-org install is out-of-scope at MVP).
 9. **Click "Create GitHub App."**
 
 ## Step 2 — Capture the App identity material
@@ -113,6 +113,6 @@ Capture the resulting `installation_id` (visible in the URL of the install page:
 
 ## Cross-references
 
-- ADR-034 — GitHub App webhook as second multi-source ingress
-- ADR-035 — messages.source_ref composite-unique for multi-source dedup
+- ADR-036 — GitHub App webhook as second multi-source ingress
+- ADR-037 — messages.source_ref composite-unique for multi-source dedup
 - Migration 051 — audit_github_token_use + processed_github_events + messages.source_ref

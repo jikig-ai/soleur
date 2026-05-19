@@ -1,4 +1,4 @@
--- 051_multi_source_dedup.sql
+-- 052_multi_source_dedup.sql
 -- PR-H (#3244) — Daily Priorities multi-source. Adds:
 --   1. messages.source_ref (nullable text) for upstream-event dedup.
 --   2. Partial-unique index on (user_id, source, source_ref) WHERE
