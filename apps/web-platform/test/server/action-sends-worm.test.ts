@@ -78,12 +78,23 @@ async function seedDraftMessage(
   // PR-F (#3244) — messages with external_* tier require status IN (draft,
   // archived) per messages_external_tier_status_check. Use external_low_stakes
   // so the FK from action_sends.message_id has a valid row to point at.
+  // messages.conversation_id is NOT NULL — seed a parent conversation first.
+  const { data: conv, error: convErr } = await service
+    .from("conversations")
+    .insert({ user_id: userId })
+    .select("id")
+    .single();
+  if (convErr) {
+    throw new Error(`seedDraftMessage failed (conversation): ${convErr.message}`);
+  }
+
   const { data, error } = await service
     .from("messages")
     .insert({
       role: "assistant",
       content: "synthetic draft for action_sends WORM test",
       user_id: userId,
+      conversation_id: conv!.id,
       tier: "external_low_stakes",
       source: "test",
       owning_domain: "finance",
