@@ -22,9 +22,9 @@ On PR #4103, the first commit's message body included:
 ```
 Ref #4099. Closes #4090.
 
-Allowlist-Widened-By: jean.deruelle@jikigai.com
+Allowlist-Widened-By: you@example.com
 
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.7 (1M context) <claude@example.com>
 ```
 
 The blank line between `Allowlist-Widened-By:` and `Co-Authored-By:` split them into two trailer paragraphs. `git interpret-trailers --parse` returned only `Co-Authored-By`. CI's exact form (`git log -1 --format='%(trailers:key=Allowlist-Widened-By,valueonly)'`) returned empty — meaning `apps/web-platform/scripts/allowlist-diff.sh` would have failed the gate at CI time despite the trailer being present in the human-readable body.
@@ -38,14 +38,14 @@ The contiguous-trailer-block rule is documented in [`2026-05-16-git-trailer-pars
 ```
 Ref #4099. Closes #4090.
 
-Allowlist-Widened-By: jean.deruelle@jikigai.com
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Allowlist-Widened-By: you@example.com
+Co-Authored-By: Claude Opus 4.7 (1M context) <claude@example.com>
 ```
 
 Post-amend verification:
 ```bash
 $ git log -1 --format='%(trailers:key=Allowlist-Widened-By,valueonly)'
-jean.deruelle@jikigai.com
+you@example.com
 ```
 
 ## Key Insight
