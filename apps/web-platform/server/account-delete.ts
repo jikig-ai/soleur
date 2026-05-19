@@ -280,30 +280,28 @@ export async function deleteAccount(
   }
 
   // 3.86 Anonymise audit_github_token_use rows for this user BEFORE
-  //      auth-delete (migration 052, PR-H #3244). FK is ON DELETE RESTRICT
-  //      (matches 037_byok_use_audit precedent). Failure here is FATAL on
-  //      the same reasoning as 3.84/3.85: skipping it guarantees the
-  //      auth-delete fails too. SECURITY DEFINER RPC, idempotent
-  //      (UPDATE ... WHERE founder_id = p_user_id is a no-op on
-  //      already-anonymised rows).
+  //      auth-delete (migration 052, PR-H #3244). The FK is ON DELETE
+  //      SET NULL so the auth-delete cascade scrubs founder_id natively
+  //      — this explicit call is defense-in-depth + symmetry with the
+  //      043/044/048 anonymise RPCs above. Failure here is NON-FATAL
+  //      (the SET-NULL cascade will run anyway during auth-delete).
+  //      SECURITY DEFINER RPC, idempotent.
   try {
     const { error: anonGhErr } = await service.rpc(
       "anonymise_audit_github_token_use",
       { p_founder_id: userId },
     );
     if (anonGhErr) {
-      log.error(
+      log.warn(
         { userId, err: anonGhErr },
-        "anonymise_audit_github_token_use failed — aborting deletion to avoid FK-block",
+        "anonymise_audit_github_token_use failed — relying on ON DELETE SET NULL cascade (non-fatal)",
       );
-      return { success: false, error: "Account deletion failed. Please try again." };
     }
   } catch (err) {
-    log.error(
+    log.warn(
       { userId, err },
-      "anonymise_audit_github_token_use threw — aborting deletion to avoid FK-block",
+      "anonymise_audit_github_token_use threw — relying on ON DELETE SET NULL cascade (non-fatal)",
     );
-    return { success: false, error: "Account deletion failed. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

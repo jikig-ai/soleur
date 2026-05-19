@@ -65,7 +65,7 @@ COMMENT ON INDEX public.messages_active_draft_dedup_idx IS
 
 CREATE TABLE IF NOT EXISTS public.audit_github_token_use (
   id                uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
-  founder_id        uuid         REFERENCES public.users(id) ON DELETE RESTRICT,
+  founder_id        uuid         REFERENCES public.users(id) ON DELETE SET NULL,
   installation_id   bigint       NOT NULL,
   repo_full_name    text         NULL CHECK (repo_full_name IS NULL OR length(repo_full_name) BETWEEN 1 AND 255),
   endpoint          text         NOT NULL CHECK (length(endpoint) BETWEEN 1 AND 256),
@@ -171,11 +171,15 @@ COMMENT ON INDEX public.users_github_installation_id_unique_idx IS
 -- 6. anonymise_audit_github_token_use — Art. 17 cascade hook
 ------------------------------------------------------------------------
 --
--- audit_github_token_use.founder_id has ON DELETE RESTRICT (matches
--- 037_byok_use_audit precedent). account-delete.ts must call this RPC
--- BEFORE auth.admin.deleteUser() or the cascade aborts mid-flight. The
--- RPC NULLs founder_id (keeping the row for accountability) and zeros
--- repo_full_name (the only narrow-PII column). Idempotent.
+-- audit_github_token_use.founder_id has ON DELETE SET NULL (Art. 17
+-- cascade fires automatically when auth.admin.deleteUser tears down
+-- the public.users row). This RPC remains the explicit anonymise path
+-- for operator-initiated DSAR runs that want to scrub founder linkage
+-- WITHOUT deleting the auth user (e.g. account-suspend flows). It also
+-- zeros repo_full_name (the only narrow-PII column besides founder_id).
+-- Idempotent. account-delete.ts calls it for symmetry with the other
+-- anonymise RPCs (043, 044, 048); the SET NULL cascade is a defense-in-
+-- depth fallback if the explicit call is bypassed.
 
 CREATE OR REPLACE FUNCTION public.anonymise_audit_github_token_use(p_founder_id uuid)
   RETURNS void
@@ -197,10 +201,12 @@ GRANT EXECUTE ON FUNCTION public.anonymise_audit_github_token_use(uuid)
   TO service_role;
 
 COMMENT ON FUNCTION public.anonymise_audit_github_token_use(uuid) IS
-  'PR-H (#3244) — Art. 17 cascade for audit_github_token_use. Called by '
-  'server/account-delete.ts BEFORE auth.admin.deleteUser(); the FK is '
-  'ON DELETE RESTRICT and the auth-delete would abort without this. '
-  'Idempotent: re-running on already-anonymised rows is a no-op '
+  'PR-H (#3244) — Explicit Art. 17 anonymise path for audit_github_token_use. '
+  'The FK has ON DELETE SET NULL so auth.admin.deleteUser cascades '
+  'naturally; this RPC is the explicit path for account-suspend flows '
+  'that scrub founder linkage WITHOUT deleting auth.users. Called by '
+  'server/account-delete.ts for symmetry with 043/044/048 anonymise '
+  'RPCs. Idempotent: re-running on already-anonymised rows is a no-op '
   '(UPDATE ... WHERE founder_id = p_founder_id matches zero rows). '
   'Bypasses the audit_github_token_use_no_mutate WORM trigger via '
   'SET LOCAL session_replication_role=replica (mig 037 + 044 pattern).';
