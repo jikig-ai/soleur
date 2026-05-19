@@ -73,4 +73,4 @@ Derived from `knowledge-base/project/plans/2026-05-19-feat-tr9-pr2-migrate-sched
 
 ## Phase 8: Ship-time chores (compound)
 
-- [ ] 8.1 Write a learning at `knowledge-base/project/learnings/<topic>.md` capturing: (a) the dual SSRF defense-in-depth model for LLM Bash allowlists with `curl`/`dig`; (b) Set.has() deferral rationale (linked to #4068); (c) auto-close keyword markdown-blindness interaction with comment-writer agents. Becomes binding-precedent for any future cron-* migration that needs network verbs. (Compound capture via `/soleur:compound` after merge.)
+- [x] 8.1 Write a learning at `knowledge-base/project/learnings/<topic>.md` capturing: (a) the dual SSRF defense-in-depth model for LLM Bash allowlists with `curl`/`dig`; (b) Set.has() deferral rationale (linked to #4068); (c) auto-close keyword markdown-blindness interaction with comment-writer agents. Becomes binding-precedent for any future cron-* migration that needs network verbs. (Compound capture via `/soleur:compound` after merge.)
