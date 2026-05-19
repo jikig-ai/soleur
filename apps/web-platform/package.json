@@ -21,6 +21,8 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.85",
     "@anthropic-ai/claude-code": "2.1.142",
+    "@octokit/app": "^16.1.2",
+    "@octokit/auth-app": "^8.2.0",
     "@sentry/nextjs": "^10.46.0",
     "@supabase/ssr": "^0.6.0",
     "@supabase/supabase-js": "^2.49.0",

@@ -84,37 +84,37 @@ Derived from finalized plan v2 (post plan-review). Six phases; commits flexible 
 
 ## Phase 3 — GitHub webhook route + signature verification + dedup + scope-grant gate + ADRs
 
-- [ ] **3.1** Edit `apps/web-platform/package.json` + root `package.json`: add `@octokit/app@^15`, `@octokit/auth-app@^7`. Verify peer-deps via `npm view <pkg> peerDependencies` (per `cq-before-pushing-package-json-changes`).
-- [ ] **3.2** Edit `apps/web-platform/server/scope-grants/grant-kinds.ts`: add 5 new scope-grant kinds — `engineering.pr_review_pending`, `engineering.ci_failed`, `triage.p0p1_issue`, `security.cve_alert`, `knowledge.kb_drift`.
-- [ ] **3.3** Create `apps/web-platform/server/github/app-client.ts`:
-  - [ ] 3.3.1 Per-request factory `createGitHubAppClient(installationId): Promise<Octokit>` using `@octokit/auth-app` v7.
-  - [ ] 3.3.2 NO manual token cache (auth strategy auto-refreshes at `expires_at - 60s` per Kieran P1).
-  - [ ] 3.3.3 NO module-scope singleton (per learning `2026-05-12` + vercel/next.js#65350); per-request instantiation only.
-  - [ ] 3.3.4 Explicit comment naming the threat (cross-tenant token leak across worker boundaries).
-- [ ] **3.4** Create `apps/web-platform/server/github/app-client.test.ts`:
-  - [ ] 3.4.1 Per-request semantics (fresh App per call).
-  - [ ] 3.4.2 NO module-scope state assertion (fresh-import-per-test) — AC14.
-  - [ ] 3.4.3 Rate-limit-aware retry on 403/secondary-rate.
-- [ ] **3.5** Create `apps/web-platform/app/api/webhooks/github/route.ts` — implement 8-step order (verify-FIRST, dedup-SECOND, release-on-error):
-  - [ ] 3.5.1 Step 1: `const rawBody = await req.text()` BEFORE `JSON.parse`.
-  - [ ] 3.5.2 Step 2: `crypto.timingSafeEqual(Buffer.from(received), Buffer.from(computed))` — NEVER `===`. Fail-closed 401 on mismatch or missing secret.
-  - [ ] 3.5.3 Step 3: Plain `.insert()` into `processed_github_events(delivery_id)` (NO `ON CONFLICT`). Catch `PG_UNIQUE_VIOLATION (23505)` → return 200 (duplicate).
-  - [ ] 3.5.4 Step 4: `JSON.parse(rawBody)` + switch on `req.headers.get("x-github-event")`.
-  - [ ] 3.5.5 Step 5: Resolve `founderId` via `github_installation_id → users.id` — 404 if unknown.
-  - [ ] 3.5.6 Step 6: `isGranted(supabase, founderId, "<kind>")` — fail-closed on no-grant OR DB-error (`logger.error` + `Sentry.captureMessage(level: "error")` + return 200 without dispatch).
-  - [ ] 3.5.7 Step 7: `inngest.send({ id: "github-${deliveryId}", name, v: "1", data: {...} })`.
-  - [ ] 3.5.8 Step 8: On ANY error in steps 5-7 AFTER step 3 INSERT, DELETE the `processed_github_events` row (mirror of Stripe's `releaseDedupRow` pattern at `webhooks/stripe/route.ts:144-159`).
-- [ ] **3.6** Create `apps/web-platform/app/api/webhooks/github/route.test.ts`:
-  - [ ] 3.6.1 Signature-verify positive (good HMAC → 200).
-  - [ ] 3.6.2 Signature-verify negative (bad HMAC → 401).
-  - [ ] 3.6.3 Missing secret → fail-closed 500.
-  - [ ] 3.6.4 Duplicate `delivery_id` (replay) → 200 without `inngest.send` — AC1.
-  - [ ] 3.6.5 No-grant fail-closed → 200, `logger.error` + `Sentry.captureMessage` invoked — AC2.
-  - [ ] 3.6.6 Mocked `inngest.send` failure → DELETE of `processed_github_events` row + propagate 500 — AC13.
-  - [ ] 3.6.7 Subsequent redelivery of same `delivery_id` after release-on-error → processed (no false-duplicate).
-- [ ] **3.7** Create `knowledge-base/engineering/architecture/decisions/ADR-031-github-app-webhook-as-second-multi-source-ingress.md` — webhook over polling; App over PAT; `status: accepted`. **Same commit as 3.5 webhook route.**
-- [ ] **3.8** Create `knowledge-base/engineering/architecture/decisions/ADR-032-messages-source-ref-composite-unique-for-multi-source-dedup.md` — partial-unique index pattern; CATCH `PG_UNIQUE_VIOLATION` (not `ON CONFLICT DO NOTHING`); release-on-error; natural cleanup via autovacuum; `status: accepted`. **Same commit as 3.5 webhook route.**
-- [ ] **3.9** Commit & push Phase 3.
+- [x] **3.1** Edit `apps/web-platform/package.json` + root `package.json`: add `@octokit/app@^15`, `@octokit/auth-app@^7`. Verify peer-deps via `npm view <pkg> peerDependencies` (per `cq-before-pushing-package-json-changes`).
+- [x] **3.2** Edit `apps/web-platform/server/scope-grants/grant-kinds.ts`: add 5 new scope-grant kinds — `engineering.pr_review_pending`, `engineering.ci_failed`, `triage.p0p1_issue`, `security.cve_alert`, `knowledge.kb_drift`.
+- [x] **3.3** Create `apps/web-platform/server/github/app-client.ts`:
+  - [x] 3.3.1 Per-request factory `createGitHubAppClient(installationId): Promise<Octokit>` using `@octokit/auth-app` v7.
+  - [x] 3.3.2 NO manual token cache (auth strategy auto-refreshes at `expires_at - 60s` per Kieran P1).
+  - [x] 3.3.3 NO module-scope singleton (per learning `2026-05-12` + vercel/next.js#65350); per-request instantiation only.
+  - [x] 3.3.4 Explicit comment naming the threat (cross-tenant token leak across worker boundaries).
+- [x] **3.4** Create `apps/web-platform/server/github/app-client.test.ts`:
+  - [x] 3.4.1 Per-request semantics (fresh App per call).
+  - [x] 3.4.2 NO module-scope state assertion (fresh-import-per-test) — AC14.
+  - [x] 3.4.3 Rate-limit-aware retry on 403/secondary-rate.
+- [x] **3.5** Create `apps/web-platform/app/api/webhooks/github/route.ts` — implement 8-step order (verify-FIRST, dedup-SECOND, release-on-error):
+  - [x] 3.5.1 Step 1: `const rawBody = await req.text()` BEFORE `JSON.parse`.
+  - [x] 3.5.2 Step 2: `crypto.timingSafeEqual(Buffer.from(received), Buffer.from(computed))` — NEVER `===`. Fail-closed 401 on mismatch or missing secret.
+  - [x] 3.5.3 Step 3: Plain `.insert()` into `processed_github_events(delivery_id)` (NO `ON CONFLICT`). Catch `PG_UNIQUE_VIOLATION (23505)` → return 200 (duplicate).
+  - [x] 3.5.4 Step 4: `JSON.parse(rawBody)` + switch on `req.headers.get("x-github-event")`.
+  - [x] 3.5.5 Step 5: Resolve `founderId` via `github_installation_id → users.id` — 404 if unknown.
+  - [x] 3.5.6 Step 6: `isGranted(supabase, founderId, "<kind>")` — fail-closed on no-grant OR DB-error (`logger.error` + `Sentry.captureMessage(level: "error")` + return 200 without dispatch).
+  - [x] 3.5.7 Step 7: `inngest.send({ id: "github-${deliveryId}", name, v: "1", data: {...} })`.
+  - [x] 3.5.8 Step 8: On ANY error in steps 5-7 AFTER step 3 INSERT, DELETE the `processed_github_events` row (mirror of Stripe's `releaseDedupRow` pattern at `webhooks/stripe/route.ts:144-159`).
+- [x] **3.6** Create `apps/web-platform/app/api/webhooks/github/route.test.ts`:
+  - [x] 3.6.1 Signature-verify positive (good HMAC → 200).
+  - [x] 3.6.2 Signature-verify negative (bad HMAC → 401).
+  - [x] 3.6.3 Missing secret → fail-closed 500.
+  - [x] 3.6.4 Duplicate `delivery_id` (replay) → 200 without `inngest.send` — AC1.
+  - [x] 3.6.5 No-grant fail-closed → 200, `logger.error` + `Sentry.captureMessage` invoked — AC2.
+  - [x] 3.6.6 Mocked `inngest.send` failure → DELETE of `processed_github_events` row + propagate 500 — AC13.
+  - [x] 3.6.7 Subsequent redelivery of same `delivery_id` after release-on-error → processed (no false-duplicate).
+- [x] **3.7** Create `knowledge-base/engineering/architecture/decisions/ADR-031-github-app-webhook-as-second-multi-source-ingress.md` — webhook over polling; App over PAT; `status: accepted`. **Same commit as 3.5 webhook route.**
+- [x] **3.8** Create `knowledge-base/engineering/architecture/decisions/ADR-032-messages-source-ref-composite-unique-for-multi-source-dedup.md` — partial-unique index pattern; CATCH `PG_UNIQUE_VIOLATION` (not `ON CONFLICT DO NOTHING`); release-on-error; natural cleanup via autovacuum; `status: accepted`. **Same commit as 3.5 webhook route.**
+- [x] **3.9** Commit & push Phase 3.
 
 **Exit gate:** webhook accepts signed events, rejects unsigned, replays return 200, release-on-error verified; AC1-AC2-AC3-AC13-AC14 satisfied.
 
