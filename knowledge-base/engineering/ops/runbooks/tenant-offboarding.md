@@ -100,9 +100,11 @@ SELECT count(*) AS total, count(*) FILTER (WHERE founder_id = '<tenant-founder-u
 3. Remove the tenant's installation_id from Soleur Doppler:
 
    ```bash
-   doppler secrets delete TENANT_<id>_INSTALLATION_ID \
-     -p soleur -c prd_orchestration
+   doppler secrets delete TENANT_<id>_INSTALLATION_ID --silent --yes \
+     -p soleur -c prd_orchestration >/dev/null 2>&1
    ```
+
+   > Doppler `secrets {set,delete}` echo guidance — `delete` renders the post-deletion surviving-secrets table to stdout, leaking value chunks from sibling secrets. Always pair `--silent` with `>/dev/null 2>&1`. See [`knowledge-base/project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md`](../../../project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md) §Leak-2 (widened 2026-05-18 via #4029).
 
 **Verify** (the silent-skip risk on the ruleset sweep is real — the cheap "no output" check from earlier wording cannot distinguish "swept clean" from "operator skipped the UI step entirely", because a repo with zero rulesets also produces no output. The verification below explicitly counts rulesets first and forces an attestation if any exist):
 

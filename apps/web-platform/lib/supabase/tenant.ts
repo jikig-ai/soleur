@@ -134,6 +134,22 @@ const DEFAULT_TTL_SEC = 600;
  */
 export const JWT_AUDIENCE = "soleur-runtime";
 
+/**
+ * `verifyOtp` retry config for GoTrue's `over_request_rate_limit` 429
+ * response. Distinct from the precheck-ceiling `mint_rate_exceeded` raise
+ * (cause:rotation, no retry — the per-founder ceiling won't clear in
+ * seconds) and from generic verifyOtp errors (cause:jwt_mint, no retry —
+ * network/malformed-response symptoms don't get better with backoff).
+ *
+ * Bounded retries smooth transient bursts (concurrent CI runs, prior-hour
+ * residue against the dev project's per-instance ceiling). They do NOT
+ * fix steady-state ceiling exhaustion — see
+ * `knowledge-base/engineering/ops/runbooks/supabase-magiclink-rate-limit.md`
+ * for the operational fix.
+ */
+const DEFAULT_VERIFY_OTP_MAX_RETRIES = 3;
+const DEFAULT_VERIFY_OTP_BASE_DELAY_MS = 500;
+
 function getAnonKey(): string {
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!key) {
@@ -300,11 +316,34 @@ export async function mintFounderJwt(
   // `42501 permission denied for function is_jti_denied`. Use a
   // throw-away client for the OTP exchange so the singleton's auth
   // state stays pristine.
+  // Bounded retry on GoTrue's structured `over_request_rate_limit` 429
+  // code only. The precheck-ceiling raise (`mint_rate_exceeded` in
+  // `message`, no `code`) is NOT retried — that's a per-founder ceiling
+  // that won't clear in seconds. Generic errors (network, malformed) are
+  // NOT retried either — backoff doesn't recover them. See retry config
+  // block above + runbook for the steady-state-ceiling caveat.
   const otpClient = createServiceClient();
-  const verified = await otpClient.auth.verifyOtp({
-    token_hash: link.data.properties.hashed_token,
-    type: "email",
-  });
+  const retryConfig = getVerifyOtpRetryConfig();
+  let verified: Awaited<ReturnType<typeof otpClient.auth.verifyOtp>>;
+  for (let attempt = 0; ; attempt++) {
+    verified = await otpClient.auth.verifyOtp({
+      token_hash: link.data.properties.hashed_token,
+      type: "email",
+    });
+    const errCode = (verified.error as { code?: string } | null | undefined)
+      ?.code;
+    if (
+      errCode !== "over_request_rate_limit" ||
+      attempt >= retryConfig.maxRetries
+    ) {
+      break;
+    }
+    // Jittered exponential backoff: base * 2^attempt ± 25%. Random jitter
+    // prevents concurrent callers from re-bursting in lockstep.
+    const baseDelay = retryConfig.baseDelayMs * Math.pow(2, attempt);
+    const jitter = baseDelay * 0.25 * (Math.random() * 2 - 1);
+    await sleepMs(Math.max(0, baseDelay + jitter));
+  }
   if (verified.error || !verified.data?.session?.access_token) {
     const msg = verified.error?.message ?? "";
     // The hook bubbled the precheck ceiling raise (SQLSTATE 45001,
@@ -332,9 +371,9 @@ export async function mintFounderJwt(
       userId,
       "mint.verify_otp_error",
     );
-    // GoTrue rate-limit, network failure, malformed response — all
-    // collapse to jwt_mint (distinct from the precheck-ceiling rotation
-    // cause). The catch site logs via mirrorWithDebounce.
+    // GoTrue rate-limit (after retries exhausted), network failure,
+    // malformed response — all collapse to jwt_mint. The catch site
+    // logs via the mirror above.
     throw new RuntimeAuthError(
       "jwt_mint",
       "Authentication unavailable; retry shortly",
@@ -439,6 +478,41 @@ export function _setMintFnForTest(
     );
   }
   __mintFnForTest = fn;
+}
+
+/**
+ * Test-only seam — overrides the verifyOtp 429-retry config. Pass `null`
+ * to restore defaults. Tests use a tiny `baseDelayMs` (e.g. 1ms) so the
+ * retry path is exercised without dilating test runtime. Production
+ * callers MUST NOT use this.
+ */
+interface VerifyOtpRetryConfig {
+  maxRetries: number;
+  baseDelayMs: number;
+}
+let __verifyOtpRetryConfigForTest: VerifyOtpRetryConfig | null = null;
+export function _setVerifyOtpRetryConfigForTest(
+  config: VerifyOtpRetryConfig | null,
+): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "_setVerifyOtpRetryConfigForTest is a test-only seam and must not be called in production",
+    );
+  }
+  __verifyOtpRetryConfigForTest = config;
+}
+
+function getVerifyOtpRetryConfig(): VerifyOtpRetryConfig {
+  return (
+    __verifyOtpRetryConfigForTest ?? {
+      maxRetries: DEFAULT_VERIFY_OTP_MAX_RETRIES,
+      baseDelayMs: DEFAULT_VERIFY_OTP_BASE_DELAY_MS,
+    }
+  );
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function callMint(userId: UserId): Promise<MintedJwt> {

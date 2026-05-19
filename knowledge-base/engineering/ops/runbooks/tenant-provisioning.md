@@ -355,9 +355,10 @@ Store the installation ID as a **Doppler secret** in Soleur's own
 `prd_orchestration` config:
 
 ```bash
-doppler secrets set TENANT_<id>_INSTALLATION_ID=<numeric-installation-id> \
-  -p soleur -c prd_orchestration
+doppler secrets set TENANT_<id>_INSTALLATION_ID=<numeric-installation-id> --silent --no-interactive -p soleur -c prd_orchestration >/dev/null 2>&1
 ```
+
+> Doppler `secrets {set,delete}` echo guidance — `--silent` + `>/dev/null 2>&1` is the canonical no-leak pattern. See [`knowledge-base/project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md`](../../../project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md) §Leak-2 (widened 2026-05-18 via #4029).
 
 v1 stores this in Doppler (not a Supabase registry table). At N=1 there
 is one row to track; a registry table is premature per plan revision-2
@@ -372,8 +373,7 @@ doppler secrets get TENANT_<id>_INSTALLATION_ID -p soleur -c prd_orchestration -
 
 Output must be a numeric integer (the installation ID).
 
-**Teardown (Step 8)**: `doppler secrets delete TENANT_<id>_INSTALLATION_ID
--p soleur -c prd_orchestration`.
+**Teardown (Step 8)**: `doppler secrets delete TENANT_<id>_INSTALLATION_ID --silent --yes -p soleur -c prd_orchestration >/dev/null 2>&1`.
 
 ---
 
