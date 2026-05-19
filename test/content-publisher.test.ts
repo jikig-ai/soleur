@@ -790,12 +790,26 @@ describe("post_linkedin_company", () => {
     expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
   });
 
+  test("skips gracefully when LINKEDIN_ORG_ACCESS_TOKEN is unset", () => {
+    const result = runFunction(
+      `post_linkedin_company "${SAMPLE_CONTENT}"`,
+      {
+        LINKEDIN_ACCESS_TOKEN: "test-token",
+        LINKEDIN_ORG_ID: "12345",
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("LINKEDIN_ORG_ACCESS_TOKEN not set");
+    expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
+  });
+
   test("skips gracefully when LINKEDIN_ALLOW_POST is not true", () => {
     const result = runFunction(
       `post_linkedin_company "${SAMPLE_CONTENT}"`,
       {
         LINKEDIN_ACCESS_TOKEN: "test-token",
         LINKEDIN_ORG_ID: "12345",
+        LINKEDIN_ORG_ACCESS_TOKEN: "test-org-token",
       }
     );
     expect(result.exitCode).toBe(0);
@@ -828,6 +842,7 @@ MOCK
         LINKEDIN_ACCESS_TOKEN: "test-token",
         LINKEDIN_PERSON_URN: "urn:li:person:test",
         LINKEDIN_ORG_ID: "12345",
+        LINKEDIN_ORG_ACCESS_TOKEN: "test-org-token",
         LINKEDIN_ALLOW_POST: "true",
       },
     });
