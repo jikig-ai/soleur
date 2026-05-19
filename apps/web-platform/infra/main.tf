@@ -19,8 +19,9 @@ terraform {
       version = "~> 1.49"
     }
     cloudflare = {
-      source  = "cloudflare/cloudflare"
-      version = "~> 4.0"
+      source                = "cloudflare/cloudflare"
+      version               = "~> 4.0"
+      configuration_aliases = [cloudflare.jikigai_com]
     }
     random = {
       source  = "hashicorp/random"
