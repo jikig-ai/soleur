@@ -9,9 +9,15 @@
 #   - On version bump, pauses the running server (drains in-flight events),
 #     restarts, resumes.
 #
-# Self-hosted Inngest binds loopback only (127.0.0.1:8288 events / 8289 API)
-# per ADR-030. Signing/event keys + heartbeat URL come from Doppler `prd` via
-# `doppler run --project soleur --config prd --` wrapping ExecStart.
+# Self-hosted Inngest binds 0.0.0.0:8288 (events) + 8289 (connect-gateway).
+# ADR-030's "loopback only" intent — keep Inngest unreachable from the public
+# internet — is preserved via the host firewall (`apps/web-platform/infra/
+# firewall.tf`), which only allows 22 (admin IPs), 80, and 443 (Cloudflare
+# IPs) inbound. Port 8288 is implicitly closed externally. The 0.0.0.0 bind
+# is REQUIRED so the bridge-networked `soleur-web-platform` Docker container
+# can reach Inngest via `host.docker.internal` (= docker bridge gateway). The
+# original 127.0.0.1 bind worked for systemd unit-local consumers but blocked
+# the container's SDK from registering — surfaced 2026-05-19 via #4017.
 #
 # Embedded into OCI artifact `ghcr.io/jikig-ai/soleur-inngest-bootstrap:vX.Y.Z`
 # AND base64-embedded into cloud-init for fresh-host provisioning. Single
@@ -80,7 +86,13 @@ if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
 fi
 
 # Download + SHA256 verify the pinned binary.
+# /var/lib/inngest is SQLite's writable dir; the unit runs as `deploy` so the
+# directory MUST be owned by deploy:deploy or SQLite returns CANTOPEN(14).
+# Surfaced 2026-05-19 via #4017 substrate audit (PR-1 cron-daily-triage missed
+# all scheduled fires — root cause one of five).
 mkdir -p /var/lib/inngest
+chown deploy:deploy /var/lib/inngest
+chmod 0750 /var/lib/inngest
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 TARBALL="$TMPDIR/inngest.tar.gz"
@@ -103,6 +115,16 @@ install -m 0755 "$TMPDIR/inngest" "$INSTALL_PATH"
 # `doppler run` wrapper materializes INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY /
 # INNGEST_HEARTBEAT_URL at process start; Doppler CLI uses
 # /etc/default/inngest-server for its own token.
+#
+# Signing-key prefix strip: Terraform sets INNGEST_SIGNING_KEY to the SDK-
+# format `signkey-prod-<64hex>`, but `inngest start --signing-key` requires
+# the bare 64-hex (the CLI literally errors `signing-key must be hex string
+# with even number of chars` on the prefixed form). Strip in-place via bash
+# `${VAR#prefix}`. The SDK consumer (apps/web-platform container) still uses
+# the full prefixed value — that's what the SDK helper expects per
+# `node_modules/inngest/helpers/strings.js`. Both sides resolve to the same
+# 32-byte HMAC seed; the prefix is purely a SDK-side string marker.
+# Surfaced 2026-05-19 via #4017 substrate audit.
 cat > "$UNIT_FILE" <<'UNITEOF'
 [Unit]
 Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
@@ -112,7 +134,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/inngest start --host 127.0.0.1 --port 8288 --sqlite-dir /var/lib/inngest
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}"'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -171,18 +193,42 @@ Persistent=true
 WantedBy=timers.target
 TIMEREOF
 
-# Materialize Doppler token env file (read-only, mode 0600, owned by deploy).
-# DOPPLER_TOKEN itself is already present in /etc/environment from the existing
-# cloud-init secrets-bootstrap path; we re-export here so the unit's
-# EnvironmentFile= sees it without exposing /etc/environment.
-if [[ -f /etc/default/inngest-server ]]; then
-  log "/etc/default/inngest-server exists — preserving"
+# Materialize Doppler token + CLI config dir env file. The unit's `User=deploy`
+# combined with `ProtectHome=read-only` blocks Doppler CLI's default fallback
+# dir (/home/deploy/.doppler/fallback) — must redirect via DOPPLER_CONFIG_DIR
+# to a PrivateTmp-writable location.
+#
+# Token source-of-truth: reuse /etc/default/webhook-deploy's DOPPLER_TOKEN
+# (provisioned at cloud-init for the webhook-deploy service). Originally this
+# script assumed the env-injection path would have DOPPLER_TOKEN set in the
+# caller env; in the GHA→webhook deploy path that's NOT the case, leaving the
+# token empty and inngest in a crash loop with "Doppler Error: you must
+# provide a token". Reading from webhook-deploy's env file collapses one
+# more substrate gap. Surfaced 2026-05-19 via #4017.
+if [[ -f /etc/default/inngest-server ]] && grep -q '^DOPPLER_TOKEN=dp\.' /etc/default/inngest-server; then
+  log "/etc/default/inngest-server exists with valid token — preserving"
 else
+  # Pull token from the sibling webhook-deploy env file (same Doppler scope
+  # — both run as `deploy` user against the `prd` config).
+  if [[ ! -f /etc/default/webhook-deploy ]]; then
+    log "ERROR: /etc/default/webhook-deploy not found — cannot source DOPPLER_TOKEN"
+    exit 1
+  fi
+  TOKEN=$(grep -oP '(?<=^DOPPLER_TOKEN=)dp\.\S+' /etc/default/webhook-deploy | head -n1)
+  if [[ -z "$TOKEN" ]]; then
+    log "ERROR: webhook-deploy env file has no DOPPLER_TOKEN — aborting"
+    exit 1
+  fi
   # umask-then-write to avoid a world-readable window between create and
   # chmod 0640. 0137 inverts: u=rw,g=r,o=none. DOPPLER_TOKEN is sensitive
   # so close that window even though it's microseconds in practice (CWE-732
   # defense-in-depth).
-  ( umask 0137 && printf 'DOPPLER_TOKEN=%s\n' "${DOPPLER_TOKEN:-}" > /etc/default/inngest-server )
+  ( umask 0137 && cat > /etc/default/inngest-server <<DOPPLEREOF
+DOPPLER_TOKEN=$TOKEN
+DOPPLER_CONFIG_DIR=/tmp/.doppler
+DOPPLER_ENABLE_VERSION_CHECK=false
+DOPPLEREOF
+  )
   chown root:deploy /etc/default/inngest-server
   chmod 0640 /etc/default/inngest-server
 fi

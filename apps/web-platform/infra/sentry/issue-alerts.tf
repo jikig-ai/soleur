@@ -24,7 +24,7 @@ resource "sentry_issue_alert" "auth_exchange_code_burst" {
   # `lifecycle.ignore_changes` reasserts the operator-managed real value via
   # the Sentry UI. Discovered 2026-05-17 during PR-β §11 — see learning
   # 2026-05-17-sentry-issue-alert-create-dedup-on-action-match-not-conditions.md.
-  frequency    = 61
+  frequency = 61
 
   # Provider schema requires actions_v2 ≥ 1 at config-time even for
   # imported resources. The placeholder is overwritten by import; lifecycle

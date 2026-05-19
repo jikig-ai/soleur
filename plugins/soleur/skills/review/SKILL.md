@@ -229,6 +229,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - PR modifies source code files (*.py,*.js, *.ts,*.rb, *.go,*.java, *.rs,*.swift, *.kt, etc.)
 - Not needed for documentation-only or config-only changes
+- **Bash-only PRs (all `.sh`/`.bash`/`.zsh`, no other source extensions):** OSS semgrep's tree-sitter bash parser cannot analyze bash files end-to-end (parses ~100% of lines but matches 0 rules — vacuous "0 findings"). Skip semgrep-sast and substitute `shellcheck` as the deterministic gate. See `knowledge-base/project/learnings/2026-05-19-cache-llm-outputs-flag-for-rerunnable-benches.md` for the bench-pattern session that surfaced this. **Why:** PR #4045 — semgrep-sast on a 1336-line bash diagnostic returned vacuous output that could mislead future readers; shellcheck is the bash-native equivalent.
 
 **Bootstrap (mandatory before spawning the agent):** Run [ensure-semgrep.sh](./scripts/ensure-semgrep.sh) from the repo root. The script checks PATH first, then auto-installs via brew → pipx → `pip --user` in that order. Exits 0 when semgrep is reachable. Exit 1 means an install was attempted and failed; exit 2 means no install path was available (no brew, pipx, or python3 with pip). On non-zero exit, print the script's stderr to the user and abort the review. Do NOT silently skip — the deterministic SAST pass is what catches CodeQL-equivalent patterns like `js/file-system-race` before push.
 
