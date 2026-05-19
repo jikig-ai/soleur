@@ -93,8 +93,8 @@ Derived from the plan. Each leaf task is intended to be executable by `/soleur:w
 
 ## Phase 8 — ADR (single merged)
 
-- [ ] **8.1 GREEN** Create `knowledge-base/engineering/architecture/decisions/ADR-034-action-class-registry-static-literals-and-enum-absence.md`. Status: `accepted`. Three sections per plan Phase 8.1.
-- [ ] **8.2 VERIFY** `find knowledge-base/engineering/architecture/decisions/ -name 'ADR-034*'` returns 1; YAML frontmatter `status: accepted`.
+- [x] **8.1 GREEN** Create `knowledge-base/engineering/architecture/decisions/ADR-034-action-class-registry-static-literals-and-enum-absence.md`. Status: `accepted`. Three sections per plan Phase 8.1.
+- [x] **8.2 VERIFY** `find knowledge-base/engineering/architecture/decisions/ -name 'ADR-034*'` returns 1; YAML frontmatter `status: accepted`.
 
 ## Phase 9 — Verification + multi-agent review
 
