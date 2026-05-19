@@ -51,9 +51,9 @@ Derived from the plan. Each leaf task is intended to be executable by `/soleur:w
 
 ## Phase 3 — Producer extension
 
-- [ ] **3.1 GREEN** Edit `apps/web-platform/server/inngest/functions/cfo-on-payment-failed.ts` — extend `PaymentFailedPayload` to require `action_class`; add to L214-227 INSERT.
-- [ ] **3.2 GREEN** Edit `apps/web-platform/app/api/webhooks/stripe/route.ts:491` — `inngest.send` data carries `action_class: "finance.payment_failed"`.
-- [ ] **3.3 VERIFY** Existing CFO tests pass; Phase 1 lint test passes.
+- [x] **3.1 GREEN** Edit `apps/web-platform/server/inngest/functions/cfo-on-payment-failed.ts` — extend `PaymentFailedPayload` to require `action_class`; add to L214-227 INSERT.
+- [x] **3.2 GREEN** Edit `apps/web-platform/app/api/webhooks/stripe/route.ts:491` — `inngest.send` data carries `action_class: "finance.payment_failed"`.
+- [x] **3.3 VERIFY** Existing CFO tests pass; Phase 1 lint test passes.
 
 ## Phase 4 — Routes + write-action-send helper + Art-17 cascade
 
