@@ -10,6 +10,7 @@
 // to last known good state.
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   TRUST_TIER_COPY,
   type TrustTier,
@@ -47,6 +48,7 @@ export function ScopeGrantRow({
   const [acked, setAcked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const router = useRouter();
 
   const isDirty = selectedTier !== committedTier;
   const isAutoSelected = selectedTier === "auto";
@@ -85,6 +87,7 @@ export function ScopeGrantRow({
         }
         setCommittedTier(selectedTier);
         setAcked(false);
+        router.refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Network error");
         setSelectedTier(committedTier);
@@ -111,6 +114,7 @@ export function ScopeGrantRow({
         setCommittedTier(null);
         setSelectedTier(null);
         setAcked(false);
+        router.refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Network error");
       }
