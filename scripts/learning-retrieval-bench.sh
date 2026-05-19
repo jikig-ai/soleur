@@ -45,7 +45,35 @@ MAX_TOKENS=512
 
 # ─── arg parsing ────────────────────────────────────────────────────────────
 print_help() {
-  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'HELP'
+learning-retrieval-bench.sh — one-shot retrieval diagnostic for knowledge-base/project/learnings/
+
+Plan:       knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-bench-plan.md
+Spec:       knowledge-base/project/specs/feat-learnings-retrieval-bench/spec.md
+Brainstorm: knowledge-base/project/brainstorms/2026-05-19-learnings-retrieval-bench-brainstorm.md
+Precedent:  scripts/compound-promote.sh:124-200 (Anthropic curl + jq pattern, ADR-021)
+
+Usage:
+  bash scripts/learning-retrieval-bench.sh                       # informational; prints cost estimate + exits 0
+  bash scripts/learning-retrieval-bench.sh --confirm             # full run (~50 min, ~$3.07)
+  bash scripts/learning-retrieval-bench.sh --self-test           # inline synthesized-fixture tests
+
+Flags:
+  --confirm                       Required to actually execute the full bench (cost-gated).
+  --self-test                     Run the inline self-test suite; no Anthropic calls.
+  --corpus-count-override <N>     Test-only: short-circuit corpus walk to value N.
+  --cache-paraphrases <path>      Write/read paraphrases NDJSON at <path>. Survives EXIT-trap rm.
+                                  Cache-hit rerun (full corpus coverage in <path>) skips Phase 2
+                                  entirely — no Anthropic key required and no spend.
+  --help, -h                      This text.
+
+Closes #4043 once committed alongside output learning + sibling JSON.
+
+Env-var hooks (self-test fixture overrides only — cq-test-fixtures-synthesized-only):
+  LEARNINGS_ROOT, INDEX_PATH, OUTPUT_DIR     redirect script reads/writes
+  CURL_BIN                                   inject mock curl for API tests
+  LIVE_API=1                                 opt in to live calls in self-test
+HELP
 }
 
 while (( $# > 0 )); do
@@ -151,11 +179,15 @@ has_frontmatter() {
 
 extract_problem_section() {
   local f="$1"
-  # sed range `/^## Problem$/,/^## /` includes both bounds; we strip them.
-  sed -n '/^## Problem$/,/^## /p' "$f" \
-    | sed '1d;$d' \
-    | sed '/^[[:space:]]*$/d' \
-    | head -c 2000
+  # awk extracts everything between `## Problem` and the next `## ` heading
+  # (exclusive on both bounds). Unlike `sed '/^## Problem$/,/^## /p | sed
+  # 1d;$d`, this does NOT drop the section's last line when `## Problem` is
+  # the file's terminal heading (no following `## ` to bound the range).
+  awk '
+    /^## Problem$/ { in_section = 1; next }
+    in_section && /^## / { exit }
+    in_section && NF { print }
+  ' "$f" | head -c 2000
 }
 
 has_problem_section() {
@@ -510,9 +542,24 @@ rank_metrics() {
 }
 
 classify_unfindable_cause() {
-  local fm="$1" ps="$2"
+  # Cause categories for a learning unfindable at heavy paraphrase via
+  # kb-search emulator. Inputs:
+  #   $1 fm:        "yes" if file has YAML frontmatter
+  #   $2 ps:        "yes" if file has a ## Problem section
+  #   $3 grep_rank: rank under bare grep retriever (number or empty)
+  # Resolution order (first match wins):
+  #   missing-frontmatter — no frontmatter → description fallback chain
+  #     starts at ## Problem / # Title / first-500
+  #   content-shape       — has frontmatter but no ## Problem section
+  #   retriever-miss      — has both, AND bare grep found it (so file is
+  #     well-shaped and the bug is the kb-search emulator's two-tier strategy
+  #     pushing tier-1 INDEX.md hits over content matches)
+  #   unknown             — has both AND bare grep also missed (paraphrase
+  #     drifted too far from any shared tokens)
+  local fm="$1" ps="$2" grep_rank="${3:-}"
   if [[ "$fm" != "yes" ]]; then echo "missing-frontmatter"; return; fi
   if [[ "$ps" != "yes" ]]; then echo "content-shape"; return; fi
+  if [[ -n "$grep_rank" ]]; then echo "retriever-miss"; return; fi
   echo "unknown"
 }
 
@@ -623,6 +670,24 @@ self_test() {
   st_assert_contains "AC2-b: ground-truth falls through to problem body" "Problem body of B." "$got"
   got="$(classify_extraction "$TMP_ROOT/b.md")"
   st_assert "AC2-b: classifier reports problem_section" "problem_section" "$got"
+
+  # ── AC2-b': ## Problem is the file's TERMINAL section → last line preserved ──
+  # Pre-fix regression: `sed '/^## Problem$/,/^## /p | sed 1d;$d'` dropped the
+  # body's last line when no following `## ` heading existed. See
+  # pattern-recognition review of PR #4045 (P1-3).
+  st_write "$TMP_ROOT/b-terminal.md" \
+    '---' \
+    'title: foo' \
+    'description:' \
+    '---' \
+    '' \
+    '## Problem' \
+    '' \
+    'First line of problem body.' \
+    'Last line of problem body (terminal section).'
+  got="$(extract_problem_section "$TMP_ROOT/b-terminal.md")"
+  st_assert_contains "AC2-b': terminal ## Problem preserves first line" "First line of problem body." "$got"
+  st_assert_contains "AC2-b': terminal ## Problem preserves last line"  "Last line of problem body (terminal section)." "$got"
 
   # ── AC2-c: ## Problem absent → falls through to # Title paragraph ─────────
   st_write "$TMP_ROOT/c.md" \
@@ -766,9 +831,10 @@ self_test() {
   st_assert "rank_metrics: rank=''" "0 0 0"        "$(rank_metrics "")"
 
   # ── classify_unfindable_cause ─────────────────────────────────────────────
-  st_assert "cause: no-fm → missing-frontmatter"  "missing-frontmatter" "$(classify_unfindable_cause "" "")"
-  st_assert "cause: fm+no-ps → content-shape"     "content-shape"        "$(classify_unfindable_cause "yes" "")"
-  st_assert "cause: fm+ps → unknown"              "unknown"              "$(classify_unfindable_cause "yes" "yes")"
+  st_assert "cause: no-fm → missing-frontmatter"     "missing-frontmatter" "$(classify_unfindable_cause "" "")"
+  st_assert "cause: fm+no-ps → content-shape"        "content-shape"        "$(classify_unfindable_cause "yes" "")"
+  st_assert "cause: fm+ps+grep-miss → unknown"       "unknown"              "$(classify_unfindable_cause "yes" "yes" "")"
+  st_assert "cause: fm+ps+grep-found → retriever-miss" "retriever-miss"     "$(classify_unfindable_cause "yes" "yes" "3")"
 
   # ── build_close_comment_line embeds bucket + verbatim gh issue close ─────
   got="$(build_close_comment_line vindicate 0.83 knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md)"
@@ -927,7 +993,20 @@ if (( CONFIRM == 0 )); then
   exit 0
 fi
 
-require_api_key
+# API-key check is deferred until we know Phase 2 will actually run. A
+# cache-hit rerun (--cache-paraphrases <path> covering the full corpus)
+# does NOT need ANTHROPIC_API_KEY because Phase 2 short-circuits before
+# any curl. Without this deferral, a workstation that rotated its API
+# key out of env crashes mid-run on a cache-hit invocation that would
+# have completed without spending a cent. See pattern-recognition review
+# of PR #4045 (P1-1).
+WILL_NEED_API_KEY=1
+if [[ -n "$CACHE_PARAPHRASES" && -s "$CACHE_PARAPHRASES" ]]; then
+  WILL_NEED_API_KEY=0
+fi
+if (( WILL_NEED_API_KEY == 1 )); then
+  require_api_key
+fi
 
 # ─── Phase 1: corpus indexing ──────────────────────────────────────────────
 CORPUS_NDJSON=$(mktemp)
@@ -1121,8 +1200,26 @@ WORST_N=$(jq -s --slurpfile corpus <(jq -s . "$CORPUS_NDJSON") '
 ' < "$RANKS_NDJSON")
 
 WORST_N_WITH_CAUSE="[]"
-WORST_N_WITH_CAUSE=$(jq -s --slurpfile corpus <(jq -s . "$CORPUS_NDJSON") '
+# Cause classification (resolution order, first match wins):
+#   missing-frontmatter → no YAML frontmatter; description fallback chain
+#     starts at ## Problem / # Title / first-500
+#   content-shape       → has frontmatter but no ## Problem section
+#   retriever-miss      → has both, AND bare grep found it (kb-search-strategy
+#     fails on a well-shaped learning; bench is exposing the two-tier strategy
+#     not the learning's content)
+#   unknown             → has both AND bare grep also missed (paraphrase
+#     drifted too far from any shared tokens — methodology limit, not
+#     learning-shape problem)
+# See pattern P2 in code-quality + data-integrity review of PR #4045 — the
+# previous build collapsed every fm+ps row to "unknown" which read as
+# "diagnostic failure" instead of "kb-search-strategy lost to grep on these
+# queries", masking the bench's most actionable signal.
+WORST_N_WITH_CAUSE=$(jq -s \
+  --slurpfile corpus <(jq -s . "$CORPUS_NDJSON") \
+  --slurpfile ranks <(jq -s . "$RANKS_NDJSON") '
   ($corpus[0] | map({(.path): {fm: .has_frontmatter, ps: .has_problem_section}}) | add) as $idx
+  | ($ranks[0] | map(select(.intensity == "heavy" and .retriever == "grep"))
+                 | map({(.path): .rank}) | add) as $grep_idx
   | map(select(.intensity == "heavy" and .retriever == "kbsearch" and .rank == null))
   | .[0:20]
   | map(
@@ -1130,9 +1227,11 @@ WORST_N_WITH_CAUSE=$(jq -s --slurpfile corpus <(jq -s . "$CORPUS_NDJSON") '
       | {
           path: $p,
           rank_heavy_kbsearch: null,
+          rank_heavy_grep: ($grep_idx[$p] // null),
           cause: (
             if ($idx[$p].fm // "no") != "yes" then "missing-frontmatter"
             elif ($idx[$p].ps // "no") != "yes" then "content-shape"
+            elif ($grep_idx[$p] // null) != null then "retriever-miss"
             else "unknown"
             end
           )
@@ -1258,6 +1357,7 @@ Per the plan (\`knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval
 - **Two retrievers** exercised per intensity: a bash emulator of kb-search's two-tier strategy (INDEX.md title-line token-overlap as tier-1 → KB-wide content token-overlap as tier-2, combined unique cap-20), and a learnings-only baseline (single-tier token-overlap against \`knowledge-base/project/learnings/\`).
 - **min-rank synced_to semantics:** if a learning declares \`synced_to:\`, the source's rank is the BEST (lowest) position across {source_path, synced_to[…]} in the retriever's combined output. This biases R@5 upward vs. the strict "source-only" definition and is documented here so a future reader does NOT conflate the two.
 - **kb-search is a strategy, not a skill call.** The bench replicates the two-tier strategy in bash because (a) the skill is a Markdown prompt agents interpret, not a CLI, and (b) the strategy is the stable interface — its grep flags survive Markdown wording changes.
+- **Headline numbers are a proxy, not a direct measurement.** Token-overlap retrieval is an upper-bound proxy of true \`kb-search\` skill recall. The skill itself takes a single \`\$KEYWORD\` argument; the bench's top-3-token-overlap shape is more permissive than a single-keyword call would be. Read R@5 as "the skill's recall ceiling under a charitable keyword-extraction assumption", not as "the skill's recall when used in practice."
 
 ## Results
 
@@ -1328,9 +1428,9 @@ echo "  wrote $LEARNING_PATH"
 
 echo
 echo "================================================================"
-echo "BUCKET:  $BUCKET"
-echo "R5(heavy, kb-search): $R5_HV_KB_R"
-echo
-echo "Run this verbatim before marking PR ready:"
-echo "  $CLOSE_LINE"
+echo "BUCKET: $BUCKET"
+echo "R5_HEAVY_KBSEARCH: $R5_HV_KB_R"
+echo "CLOSE_CMD: $CLOSE_LINE"
 echo "================================================================"
+echo
+echo "Run the CLOSE_CMD verbatim before marking PR ready."

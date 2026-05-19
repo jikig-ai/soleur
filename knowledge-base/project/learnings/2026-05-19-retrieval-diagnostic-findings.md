@@ -27,6 +27,7 @@ Per the plan (`knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-
 - **Two retrievers** exercised per intensity: a bash emulator of kb-search's two-tier strategy (INDEX.md title-line token-overlap as tier-1 → KB-wide content token-overlap as tier-2, combined unique cap-20), and a learnings-only baseline (single-tier token-overlap against `knowledge-base/project/learnings/`).
 - **min-rank synced_to semantics:** if a learning declares `synced_to:`, the source's rank is the BEST (lowest) position across {source_path, synced_to[…]} in the retriever's combined output. This biases R@5 upward vs. the strict "source-only" definition and is documented here so a future reader does NOT conflate the two.
 - **kb-search is a strategy, not a skill call.** The bench replicates the two-tier strategy in bash because (a) the skill is a Markdown prompt agents interpret, not a CLI, and (b) the strategy is the stable interface — its grep flags survive Markdown wording changes.
+- **Headline numbers are a proxy, not a direct measurement.** Token-overlap retrieval is an upper-bound proxy of true `kb-search` skill recall. The skill itself takes a single `$KEYWORD` argument; the bench's top-3-token-overlap shape is more permissive than a single-keyword call would be. Read R@5 as "the skill's recall ceiling under a charitable keyword-extraction assumption", not as "the skill's recall when used in practice."
 
 ## Results
 
@@ -67,7 +68,7 @@ If all 7 are findable (rank ≤ 5) the methodology may be too easy; if all 7 are
 - `knowledge-base/project/learnings/2026-02-06-spec-workflow-implementation.md` — cause: **content-shape**
 - `knowledge-base/project/learnings/2026-02-09-parallel-subagent-fan-out-in-work-command.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-09-plugin-staleness-audit-patterns.md` — cause: **unknown**
-- `knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md` — cause: **unknown**
+- `knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md` — cause: **retriever-miss**
 - `knowledge-base/project/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-12-command-vs-skill-selection-criteria.md` — cause: **unknown**
@@ -81,8 +82,8 @@ If all 7 are findable (rank ≤ 5) the methodology may be too easy; if all 7 are
 - `knowledge-base/project/learnings/2026-02-14-google-fonts-variable-font-deduplication.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md` — cause: **unknown**
-- `knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md` — cause: **unknown**
-- `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md` — cause: **unknown**
+- `knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md` — cause: **retriever-miss**
+- `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md` — cause: **retriever-miss**
 
 ## Recommended Action
 

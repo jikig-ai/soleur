@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-05-19T17:48:55Z",
+  "generated_at": "2026-05-19T18:13:17Z",
   "corpus_count": 1117,
   "model_id": "claude-haiku-4-5-20251001",
   "prompts": {
@@ -90,102 +90,122 @@
     {
       "path": "knowledge-base/project/learnings/2026-02-06-parallel-plan-review-catches-overengineering.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-06-spec-workflow-implementation.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "content-shape"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-09-parallel-subagent-fan-out-in-work-command.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-09-plugin-staleness-audit-patterns.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md",
       "rank_heavy_kbsearch": null,
-      "cause": "unknown"
+      "rank_heavy_grep": 13,
+      "cause": "retriever-miss"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-12-command-vs-skill-selection-criteria.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-12-review-compound-before-commit-workflow.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-12-ship-integration-pattern-for-post-merge-steps.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-13-agent-prompt-sharp-edges-only.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-13-base-href-breaks-local-dev-server.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-13-static-docs-site-from-brand-guide.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-13-terraform-best-practices-research.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "content-shape"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-14-google-fonts-variable-font-deduplication.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md",
       "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md",
       "rank_heavy_kbsearch": null,
-      "cause": "unknown"
+      "rank_heavy_grep": 10,
+      "cause": "retriever-miss"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md",
       "rank_heavy_kbsearch": null,
-      "cause": "unknown"
+      "rank_heavy_grep": 15,
+      "cause": "retriever-miss"
     }
   ],
   "bucket": "reopen-rag"
