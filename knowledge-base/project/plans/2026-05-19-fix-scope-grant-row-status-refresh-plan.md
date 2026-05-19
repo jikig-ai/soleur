@@ -10,6 +10,26 @@ requires_cpo_signoff: false
 
 # fix: scope-grant row status text refresh after Authorize/Revoke (#4048)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-19
+**Sections enhanced:** Overview, Proposed Solution, Test Scenarios, Risks
+**Research surfaces:** installed-version probe (Next 15.5.18, vitest 3.1.0, @testing-library/react 16.3.2, happy-dom via component project), codebase precedent grep, AGENTS-rule-citation verify, vitest project-routing audit
+
+### Key Improvements
+
+1. **Canonical test precedent located.** `apps/web-platform/test/api-usage-retry-button.test.tsx` is the exact-shape precedent for asserting `router.refresh()` is called from a click handler — uses `vi.hoisted(() => ({ mockRefresh: vi.fn() }))` to share the mock between module mock-factory and `expect`. Adopt this pattern verbatim instead of the looser `settings-page.test.tsx` shape (whose `refresh: vi.fn()` is recreated per call and not directly assertable).
+2. **Vitest project routing verified.** `apps/web-platform/vitest.config.ts:44` routes `test/**/*.test.tsx` to the `component` project (happy-dom + `test/setup-dom.ts`). The new `apps/web-platform/test/scope-grant-row.test.tsx` lands in the component project automatically — no `testMatch` extension needed, no config edit. Sibling `tool-use-chip.test.tsx` is the precedent.
+3. **`startTransition` + `router.refresh` interaction is beneficial, not problematic.** The existing `onGrant` / `onRevoke` wrap the mutation in `startTransition(async () => { ... })`. Calling `router.refresh()` inside the transition extends `isPending` until the refreshed server data is ready (Next 15 App Router contract). The Authorize/Update/Revoke button stays disabled across the round-trip until the new server-rendered status string is visible. This is a UX improvement, not a regression — surface it in the Risks section so reviewers don't flag it as accidental.
+4. **`router.refresh()` after success only, never after failure.** The pessimistic-UI invariant requires that a failed mutation NOT trigger a server re-render (otherwise a transient 500 would clobber the local `committedTier` revert with stale-but-still-correct server state — confusing UX with no benefit). Place `router.refresh()` inside the success branch, AFTER `setCommittedTier(...)`, BEFORE the `try` block exits. FR4 is the test that pins this invariant.
+5. **AGENTS rule-ID audit.** All three cited IDs (`wg-before-every-commit-run-compound-skill`, `wg-use-closes-n-in-pr-body-not-title-to`, `hr-weigh-every-decision-against-target-user-impact`) verified as active in `AGENTS.core.md`/`AGENTS.rest.md`. No fabrications.
+
+### New Considerations Discovered
+
+- **`fireEvent.click` is sufficient; `userEvent` not required.** `api-usage-retry-button.test.tsx` uses `fireEvent.click` for the simplest possible click assertion. For our row, the user flow is "select radio → click button," which `fireEvent.click` handles equally well as `userEvent.click` — no `act()` warnings expected because state updates are wrapped in `startTransition` which RTL handles natively.
+- **`fetch` mock placement matters under happy-dom + `setup-dom.ts`.** `test/setup-dom.ts:47-58` restores `globalThis.fetch` in `afterAll`. Per-test `global.fetch = vi.fn(...)` assignments are intra-file stable (no cleanup leakage between tests because `vi.restoreAllMocks()` does not undo raw property writes — but the afterAll restoration handles the file boundary). For inter-test isolation within the file, prefer `vi.stubGlobal("fetch", vi.fn())` + `vi.unstubAllGlobals()` in `beforeEach`, or just re-assign per test as `settings-page.test.tsx` does.
+- **No XHR involved.** The mutation uses `fetch` only; no need to mock `XMLHttpRequest`.
+
 ## Overview
 
 Closes #4048. On `/dashboard/settings/scope-grants`, the row's headline status paragraph ("Not authorized — Soleur will not act on this class." vs. "Active at <tier> since <date>") does not refresh after a successful Authorize click. The action button + radio bindings flip correctly via local state, but the status string is derived from a combination of `committedTier` (local) AND `grantedAt` (server prop). After Authorize, `committedTier` becomes truthy but `grantedAt` is still `null` (stale prop), so the conditional falls through to the "Not authorized" else branch. Only a full page reload re-renders the server component with the new `grantedAt`, fixing the display.
@@ -52,12 +72,20 @@ Add `useRouter` import and call `router.refresh()` after both grant and revoke s
 
 ### Files to Create
 
-- `apps/web-platform/test/scope-grant-row.test.tsx` — vitest + RTL test file. Mocks `next/navigation` with `useRouter: () => ({ refresh })` and `global.fetch`. Three tests:
-  1. After successful Authorize on unauthorized class: status text reads "Active at <label> since <date>" and `router.refresh` was called once.
-  2. After successful Revoke on authorized class: status text reads "Not authorized — Soleur will not act on this class." and `router.refresh` was called once.
-  3. After Authorize that returns non-2xx: status text stays "Not authorized", error appears, `router.refresh` NOT called (pessimistic-UI invariant preserved).
+- `apps/web-platform/test/scope-grant-row.test.tsx` — vitest + RTL + happy-dom test file. Routes to the `component` project automatically via `vitest.config.ts:44` (`test/**/*.test.tsx`). Five tests (FR1–FR4 + FR5 regression). The canonical test shape is `apps/web-platform/test/api-usage-retry-button.test.tsx` (uses `vi.hoisted` to share the `mockRefresh` reference between the module-mock factory and the `expect` site — strictly required because vitest hoists `vi.mock` calls above all imports).
 
-  Sibling test convention: `apps/web-platform/test/tool-use-chip.test.tsx` + `apps/web-platform/test/settings-page.test.tsx` for `next/navigation` mock shape.
+  **Mock shape (verbatim from `api-usage-retry-button.test.tsx:4-8`):**
+
+  ```tsx
+  const { mockRefresh } = vi.hoisted(() => ({ mockRefresh: vi.fn() }));
+  vi.mock("next/navigation", () => ({
+    useRouter: () => ({ refresh: mockRefresh, push: vi.fn() }),
+  }));
+  ```
+
+  Do NOT use the looser `useRouter: () => ({ refresh: vi.fn() })` form from `settings-page.test.tsx:10` — that re-creates the mock per call site and cannot be asserted against.
+
+  **`global.fetch` mock per test:** `(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ... }) })`. `setup-dom.ts:47-58` restores the original `fetch` in `afterAll`; intra-file safety is handled by `vi.clearAllMocks()` in `beforeEach`.
 
 ### Files NOT to Edit
 
@@ -85,10 +113,20 @@ Add `useRouter` import and call `router.refresh()` after both grant and revoke s
 
 ### Functional Requirements
 
-- [ ] **FR1** — After clicking Authorize on a previously-unauthorized action class, within ~200ms the row's status paragraph reads "Active at <tier-label> since <today's-date>" without requiring a full page reload. (Issue acceptance.)
-- [ ] **FR2** — After clicking Revoke on a previously-authorized action class, the row's status paragraph reads "Not authorized — Soleur will not act on this class." without requiring a full page reload. (Symmetric to FR1; also already passing pre-fix via committedTier short-circuit — but the post-fix test must still pass, and `router.refresh()` must still be called once.)
-- [ ] **FR3** — After clicking Update on an already-authorized action class with a new tier, the row's status paragraph reads "Active at <new-tier-label> since <today's-date>" without requiring a full page reload. (Closes the tier-update-stale-date silent failure noted in Research Reconciliation.)
-- [ ] **FR4** — If Authorize fails (non-2xx response or network error), the status paragraph remains "Not authorized — Soleur will not act on this class.", the inline error renders, and `router.refresh()` is NOT called. (Pessimistic-UI invariant preserved per existing PR-G design.)
+Each FR has TWO acceptance layers: a **unit-testable trigger assertion** (vitest + RTL, mocks `next/navigation`) and a **QA-testable rendered-string assertion** (Playwright against the real Next 15 runtime, where `router.refresh()` actually re-executes the server component). The split is necessary because mocked `router.refresh` is a no-op `vi.fn()` and cannot drive a server re-render in jsdom.
+
+- [ ] **FR1 (Authorize)** — After clicking Authorize on a previously-unauthorized action class:
+  - **Unit:** `mockRefresh` called exactly once after the POST resolves with `ok: true`. (vitest)
+  - **QA:** Within ~200ms (no manual reload), the row's status paragraph reads "Active at <tier-label> since <today's-date>". (Playwright)
+- [ ] **FR2 (Revoke)** — After clicking Revoke on a previously-authorized action class:
+  - **Unit:** `mockRefresh` called exactly once after the POST resolves with `ok: true`.
+  - **QA:** Within ~200ms, the row's status paragraph reads "Not authorized — Soleur will not act on this class." (Symmetric to FR1; the pre-fix code already short-circuits the paragraph via `committedTier=null` → "Not authorized" branch, but `router.refresh()` is still load-bearing for the prop sync that protects subsequent re-Authorize from re-triggering the bug.)
+- [ ] **FR3 (Update)** — After clicking Update on an already-authorized action class with a new tier:
+  - **Unit:** `mockRefresh` called exactly once after the POST resolves with `ok: true`.
+  - **QA:** Within ~200ms, the row's status paragraph reads "Active at <new-tier-label> since <today's-date>". (Closes the tier-update-stale-date silent failure noted in Research Reconciliation.)
+- [ ] **FR4 (failure)** — If Authorize/Revoke fails (non-2xx response or network error):
+  - **Unit:** `mockRefresh` NOT called; the inline error region renders with the failure message; pessimistic revert restores prior state.
+  - **QA:** N/A (forcing a 500 in prod is not part of the standard QA path).
 
 ### Quality Gates
 
@@ -158,41 +196,89 @@ setAcked(false);
 router.refresh(); // ← new
 ```
 
-### scope-grant-row.test.tsx skeleton
+### scope-grant-row.test.tsx skeleton (verbatim hoist pattern from api-usage-retry-button.test.tsx)
 
 ```tsx
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-const refresh = vi.fn();
+// vi.hoisted is REQUIRED — vi.mock is hoisted above imports, so a bare
+// top-level `const refresh = vi.fn()` would be undefined inside the mock
+// factory. Source precedent: api-usage-retry-button.test.tsx:4
+const { mockRefresh } = vi.hoisted(() => ({ mockRefresh: vi.fn() }));
+
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh }),
+  useRouter: () => ({ refresh: mockRefresh, push: vi.fn() }),
 }));
 
-describe("ScopeGrantRow router.refresh on success", () => {
+import { ScopeGrantRow } from "@/components/scope-grants/scope-grant-row";
+
+describe("ScopeGrantRow — router.refresh after Authorize/Revoke (#4048)", () => {
   beforeEach(() => {
-    refresh.mockClear();
+    vi.clearAllMocks();
     global.fetch = vi.fn();
   });
 
-  it("FR1: calls router.refresh and updates status after Authorize", async () => {
+  test("FR1: Authorize success → status updates AND refresh called once", async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ id: "abc", action_class: "finance.payment_failed", tier: "draft_one_click" }),
+      ok: true, status: 200,
+      json: async () => ({ id: "g1", action_class: "finance.payment_failed", tier: "draft_one_click" }),
     });
-    const { ScopeGrantRow } = await import("@/components/scope-grants/scope-grant-row");
     render(<ScopeGrantRow actionClass="finance.payment_failed" currentTier={null} grantedAt={null} />);
-    // select tier, click authorize, await waitFor → assert status text + refresh called once
+    fireEvent.click(screen.getByRole("radio", { name: /draft, one click/i }));
+    fireEvent.click(screen.getByRole("button", { name: /authorize/i }));
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
+    // Note: the status text in the headline only flips after the server
+    // re-renders. In tests, router.refresh is mocked → the server prop
+    // grantedAt remains null → the headline still shows "Not authorized".
+    // FR1 asserts the *trigger* (refresh called), NOT the post-refresh
+    // server render — that lives in the QA Playwright check (Phase 6 task).
   });
-  // FR2, FR3, FR4, regression E …
+
+  test("FR2: Revoke success → refresh called once", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: true, status: 200 });
+    render(<ScopeGrantRow actionClass="finance.payment_failed" currentTier="draft_one_click" grantedAt="2026-05-19T00:00:00Z" />);
+    fireEvent.click(screen.getByRole("button", { name: /revoke/i }));
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
+  });
+
+  test("FR3: Update tier success → refresh called once", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true, status: 200,
+      json: async () => ({ id: "g2", action_class: "finance.payment_failed", tier: "approve_every_time" }),
+    });
+    render(<ScopeGrantRow actionClass="finance.payment_failed" currentTier="draft_one_click" grantedAt="2026-05-19T00:00:00Z" />);
+    fireEvent.click(screen.getByRole("radio", { name: /approve every time/i }));
+    fireEvent.click(screen.getByRole("button", { name: /update/i }));
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
+  });
+
+  test("FR4: Authorize failure → refresh NOT called (pessimistic-UI invariant)", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 500 });
+    render(<ScopeGrantRow actionClass="finance.payment_failed" currentTier={null} grantedAt={null} />);
+    fireEvent.click(screen.getByRole("radio", { name: /draft, one click/i }));
+    fireEvent.click(screen.getByRole("button", { name: /authorize/i }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/Failed to save \(500\)/));
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  test("FR5 (regression): auto-tier without ack keeps button disabled", () => {
+    render(<ScopeGrantRow actionClass="finance.payment_failed" currentTier={null} grantedAt={null} />);
+    fireEvent.click(screen.getByRole("radio", { name: /auto/i }));
+    expect(screen.getByRole("button", { name: /authorize/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(screen.getByRole("button", { name: /authorize/i })).toBeEnabled();
+  });
 });
 ```
+
+**Why the FR1 test asserts only `mockRefresh` was called, NOT the post-refresh status string:** In production, `router.refresh()` triggers a server-component re-render that hands a new `grantedAt` prop back to `ScopeGrantRow`. In tests, `next/navigation` is mocked — `router.refresh()` is a no-op `vi.fn()`. The server re-render never happens, so the headline status string cannot flip in jsdom/happy-dom. Asserting the trigger (refresh called once) is the testable invariant; asserting the rendered-string outcome lives in the Playwright/QA layer where the real Next runtime executes the refresh. This separation matches `api-usage-retry-button.test.tsx` (asserts `mockRefresh` called, not the page-state delta).
 
 ## Risks & Sharp Edges
 
 - **Risk: double-render on `force-dynamic`.** Calling `router.refresh()` re-executes the server component. Since the page is `export const dynamic = "force-dynamic"` (`page.tsx:17`), there is no cache to bust — the cost is one extra round-trip per Authorize/Revoke. Acceptable: settings actions are low-frequency.
-- **Risk: future test-runner project assignment.** New file lives at `apps/web-platform/test/scope-grant-row.test.tsx`. The `vitest.config.ts` (or `vite.config.ts`) `test.include` glob in `apps/web-platform/` covers `test/**/*.test.{ts,tsx}` (verified via sibling `tool-use-chip.test.tsx` running). No new glob needed — sanity-confirm at /work Phase 0 by running `bun run --filter=web-platform test:ci -- scope-grant-row` and checking the file is picked up.
+- **Risk: future test-runner project assignment — VERIFIED safe.** New file lives at `apps/web-platform/test/scope-grant-row.test.tsx`. `apps/web-platform/vitest.config.ts:44` routes `test/**/*.test.tsx` to the `component` project (`environment: "happy-dom"`, `setupFiles: ["test/setup-dom.ts"]`, `isolate: true`). The `unit` project at `:28` includes only `test/**/*.test.ts` (no `x`) and would NOT pick up the new file — but that's correct behavior: RTL needs the DOM. No config edit needed. Sibling `apps/web-platform/test/api-usage-retry-button.test.tsx` is the matching shape and runs green today.
+- **Risk: `router.refresh()` inside `startTransition` — INTENTIONAL, not a regression.** The existing handler wraps the mutation in `startTransition(async () => { ... })`. Calling `router.refresh()` inside the transition causes `isPending` to remain true until the App Router finishes refetching server data (Next 15 contract). UX effect: the Authorize/Update/Revoke button stays disabled across the round-trip, then snaps back to its new label when the new server prop arrives. Reviewers may flag this as "the button feels slow after click" — it is the correct behavior, not a regression. Document in PR body so review-time concerns are pre-empted.
 - **Risk: `useRouter` is a client hook.** The file already starts with `"use client";` (line 1) — no boundary change needed. Adding `useRouter` will not introduce a server/client violation.
 - **Risk: `router.refresh` mock leakage between tests.** The `vi.mock("next/navigation", ...)` block uses a module-scoped `refresh` mock that must be cleared in `beforeEach` (per sibling `settings-page.test.tsx` pattern). The test skeleton already encodes `refresh.mockClear()`.
 - **Sharp edge: empty `## User-Brand Impact` would fail deepen-plan Phase 4.6 and preflight Check 6.** This plan's section is populated with concrete artifacts and a scope-out override paragraph for the `threshold: none` + sensitive-path case. Do not remove during /work.
@@ -206,7 +292,10 @@ describe("ScopeGrantRow router.refresh on success", () => {
 - Pattern precedent: `apps/web-platform/components/settings/key-rotation-form.tsx:11` (`const router = useRouter()`), `:49` (`router.refresh()` after success)
 - Server component (no edits): `apps/web-platform/app/(dashboard)/dashboard/settings/scope-grants/page.tsx`
 - API routes (no edits): `apps/web-platform/app/api/scope-grants/grant/route.ts`, `apps/web-platform/app/api/scope-grants/revoke/route.ts`
-- Test convention precedent: `apps/web-platform/test/settings-page.test.tsx:9-12` (next/navigation mock with `refresh: vi.fn()`), `apps/web-platform/test/tool-use-chip.test.tsx` (vitest + RTL + dynamic-import pattern for client components)
+- Test convention precedent — CANONICAL: `apps/web-platform/test/api-usage-retry-button.test.tsx:4-26` (vi.hoisted mockRefresh + asserting `toHaveBeenCalledTimes(1)`). Use this shape verbatim.
+- Test convention precedent — secondary: `apps/web-platform/test/tool-use-chip.test.tsx` (vitest + RTL pattern for `<Component>` rendering), `apps/web-platform/test/settings-page.test.tsx:9-12` (next/navigation mock without assertion). The latter is NOT directly assertable — do not adopt.
+- Vitest routing: `apps/web-platform/vitest.config.ts:44` (component project `include: ["test/**/*.test.tsx"]`, happy-dom + setup-dom.ts).
+- Refresh-after-mutation pattern precedent: `apps/web-platform/components/settings/dsar-export-job-list.tsx:22-24` (canonical comment block: "We don't keep client-side mutable state for it — router.refresh() re-renders the server component when an active job's status changes."), `apps/web-platform/components/settings/key-rotation-form.tsx:49`, `apps/web-platform/components/settings/api-usage-retry-button.tsx`.
 
 ### Related Work
 
