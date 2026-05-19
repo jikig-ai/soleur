@@ -28,3 +28,13 @@ output "inngest_heartbeat_url" {
   value       = betteruptime_heartbeat.inngest_prd.url
   sensitive   = true
 }
+
+output "github_app_webhook_url" {
+  description = "Webhook URL that the operator pastes into the GitHub App configuration AFTER first apply (closes the manual loop). Static — no DNS change required."
+  value       = "https://${var.app_domain}/api/webhooks/github"
+}
+
+output "github_app_webhook_secret_rotate_command" {
+  description = "Command to rotate the GitHub App webhook secret. After rotating, paste the new value into the GitHub App config in the UI."
+  value       = "terraform apply -replace=random_id.github_webhook_secret"
+}

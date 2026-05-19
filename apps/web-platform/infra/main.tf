@@ -36,6 +36,13 @@ terraform {
       source  = "BetterStackHQ/better-uptime"
       version = "~> 0.20"
     }
+    # PR-H (#3244) — github_actions_secret resource for the kb-drift cron
+    # workflow's DOPPLER_TOKEN_KB_DRIFT publish. Provider write surface is
+    # limited to that one resource type in this root.
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.0"
+    }
   }
   required_version = ">= 1.6"
 }
@@ -46,6 +53,12 @@ provider "doppler" {
 
 provider "betteruptime" {
   api_token = var.betterstack_api_token
+}
+
+# PR-H (#3244) — GitHub provider for Actions-secret publishing (kb-drift).
+provider "github" {
+  token = var.github_actions_token
+  owner = "jikig-ai"
 }
 
 provider "hcloud" {

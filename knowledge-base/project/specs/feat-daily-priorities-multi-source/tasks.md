@@ -43,42 +43,42 @@ Derived from finalized plan v2 (post plan-review). Six phases; commits flexible 
 
 ## Phase 2 — Operator preflight + IaC apply
 
-- [ ] **2.1** File the deferred-automation issue:
-  - [ ] 2.1.1 `gh issue create --title "chore: track GitHub App creation Terraform provider availability" --label deferred-scope-out --milestone "Post-MVP / Later"`. Body: "Single manual gate per `hr-never-label-any-step-as-manual-without`. Revisit when `integrations/github` Terraform provider supports App creation."
-- [ ] **2.2** Operator creates GitHub App `Soleur-Concierge` at github.com/settings/apps/new per `knowledge-base/operations/runbooks/github-app-provisioning.md`:
-  - [ ] 2.2.1 Permissions: `pull_requests:read`, `issues:read`, `metadata:read`, `actions:read`, `repository_advisories:read`, `secret_scanning_alerts:read`.
-  - [ ] 2.2.2 Events: `pull_request`, `workflow_run`, `issues`, `repository_advisory`, `secret_scanning_alert`.
-  - [ ] 2.2.3 Webhook URL: `https://soleur.ai/api/webhooks/github`.
-  - [ ] 2.2.4 Installable: founder's own account/orgs only.
-  - [ ] 2.2.5 Capture App ID + PEM (one-shot download) + Client ID + Client Secret.
-- [ ] **2.3** Create `knowledge-base/operations/runbooks/github-app-provisioning.md` — canonical operator runbook for the manual gate; references the deferred-automation issue from 2.1.
-- [ ] **2.4** Create `apps/web-platform/infra/github-app.tf`:
-  - [ ] 2.4.1 5 `doppler_secret` resources in `prd` (App ID, PEM, Client ID, Client Secret, webhook secret).
-  - [ ] 2.4.2 1 `random_id` resource for webhook secret (Soleur-generated).
-  - [ ] 2.4.3 `lifecycle.ignore_changes = [value]` on the 4 operator-supplied; NO ignore on the `random_id`-derived.
-  - [ ] 2.4.4 `lifecycle.precondition` blocks asserting these secrets are NOT also in `dev` config.
-- [ ] **2.5** Create `apps/web-platform/infra/kb-drift.tf`:
-  - [ ] 2.5.1 `doppler_secret` `KB_DRIFT_INGEST_SIGNING_KEY` in NEW `prd_kb_drift_walker` config.
-  - [ ] 2.5.2 `random_id` for the signing key.
-  - [ ] 2.5.3 `github_actions_secret` publishing the Doppler service-token as repo Actions secret `DOPPLER_TOKEN_KB_DRIFT`.
-- [ ] **2.6** Create `apps/web-platform/infra/alerts-github-webhook.tf`:
-  - [ ] 2.6.1 3 `betteruptime_*` resources for webhook 4xx/5xx, signature-failure pager, GitHub API 429 sustained.
-  - [ ] 2.6.2 All gated `count = var.betterstack_paid_tier ? 1 : 0`.
-- [ ] **2.7** Edit `apps/web-platform/infra/main.tf` — add `github = { source = "integrations/github", version = "~> 6.0" }` to `required_providers`.
-- [ ] **2.8** Edit `apps/web-platform/infra/variables.tf` — append 4 `sensitive=true` GitHub App vars + `github_actions_token`.
-- [ ] **2.9** Edit `apps/web-platform/infra/outputs.tf` — surface `github_app_webhook_url`.
-- [ ] **2.10** Pre-apply gate: confirm `var.betterstack_paid_tier` current value in `prd_terraform`.
-- [ ] **2.11** Run canonical Terraform apply triplet (per learning `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan`):
-  - [ ] 2.11.1 `export AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` via `doppler secrets get -p soleur -c prd_terraform --plain`.
-  - [ ] 2.11.2 `terraform init -input=false`.
-  - [ ] 2.11.3 `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -out=plan.tfplan` + review.
-  - [ ] 2.11.4 `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply plan.tfplan`.
-- [ ] **2.12** Operator copies the `random_id` webhook-secret output INTO the GitHub App configuration (closes the loop).
-- [ ] **2.13** Verify Phase 2 deliverables:
-  - [ ] 2.13.1 6 Doppler keys present in `prd` + `prd_kb_drift_walker`.
-  - [ ] 2.13.2 `gh secret list --repo jikig-ai/soleur | grep DOPPLER_TOKEN_KB_DRIFT` returns 1 row.
-  - [ ] 2.13.3 `terraform plan` returns clean diff.
-- [ ] **2.14** Commit & push Phase 2.
+- [x] **2.1** File the deferred-automation issue:
+  - [x] 2.1.1 `gh issue create --title "chore: track GitHub App creation Terraform provider availability" --label deferred-scope-out --milestone "Post-MVP / Later"`. Body: "Single manual gate per `hr-never-label-any-step-as-manual-without`. Revisit when `integrations/github` Terraform provider supports App creation."
+- [x] **2.2** Operator creates GitHub App `Soleur-Concierge` at github.com/settings/apps/new per `knowledge-base/operations/runbooks/github-app-provisioning.md`:
+  - [x] 2.2.1 Permissions: `pull_requests:read`, `issues:read`, `metadata:read`, `actions:read`, `repository_advisories:read`, `secret_scanning_alerts:read`.
+  - [x] 2.2.2 Events: `pull_request`, `workflow_run`, `issues`, `repository_advisory`, `secret_scanning_alert`.
+  - [x] 2.2.3 Webhook URL: `https://soleur.ai/api/webhooks/github`.
+  - [x] 2.2.4 Installable: founder's own account/orgs only.
+  - [x] 2.2.5 Capture App ID + PEM (one-shot download) + Client ID + Client Secret.
+- [x] **2.3** Create `knowledge-base/operations/runbooks/github-app-provisioning.md` — canonical operator runbook for the manual gate; references the deferred-automation issue from 2.1.
+- [x] **2.4** Create `apps/web-platform/infra/github-app.tf`:
+  - [x] 2.4.1 5 `doppler_secret` resources in `prd` (App ID, PEM, Client ID, Client Secret, webhook secret).
+  - [x] 2.4.2 1 `random_id` resource for webhook secret (Soleur-generated).
+  - [x] 2.4.3 `lifecycle.ignore_changes = [value]` on the 4 operator-supplied; NO ignore on the `random_id`-derived.
+  - [x] 2.4.4 `lifecycle.precondition` blocks asserting these secrets are NOT also in `dev` config.
+- [x] **2.5** Create `apps/web-platform/infra/kb-drift.tf`:
+  - [x] 2.5.1 `doppler_secret` `KB_DRIFT_INGEST_SIGNING_KEY` in NEW `prd_kb_drift_walker` config.
+  - [x] 2.5.2 `random_id` for the signing key.
+  - [x] 2.5.3 `github_actions_secret` publishing the Doppler service-token as repo Actions secret `DOPPLER_TOKEN_KB_DRIFT`.
+- [x] **2.6** Create `apps/web-platform/infra/alerts-github-webhook.tf`:
+  - [x] 2.6.1 3 `betteruptime_*` resources for webhook 4xx/5xx, signature-failure pager, GitHub API 429 sustained.
+  - [x] 2.6.2 All gated `count = var.betterstack_paid_tier ? 1 : 0`.
+- [x] **2.7** Edit `apps/web-platform/infra/main.tf` — add `github = { source = "integrations/github", version = "~> 6.0" }` to `required_providers`.
+- [x] **2.8** Edit `apps/web-platform/infra/variables.tf` — append 4 `sensitive=true` GitHub App vars + `github_actions_token`.
+- [x] **2.9** Edit `apps/web-platform/infra/outputs.tf` — surface `github_app_webhook_url`.
+- [x] **2.10** Pre-apply gate: confirm `var.betterstack_paid_tier` current value in `prd_terraform`.
+- [x] **2.11** Run canonical Terraform apply triplet (per learning `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan`):
+  - [x] 2.11.1 `export AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` via `doppler secrets get -p soleur -c prd_terraform --plain`.
+  - [x] 2.11.2 `terraform init -input=false`.
+  - [x] 2.11.3 `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -out=plan.tfplan` + review.
+  - [x] 2.11.4 `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply plan.tfplan`.
+- [x] **2.12** Operator copies the `random_id` webhook-secret output INTO the GitHub App configuration (closes the loop).
+- [x] **2.13** Verify Phase 2 deliverables:
+  - [x] 2.13.1 6 Doppler keys present in `prd` + `prd_kb_drift_walker`.
+  - [x] 2.13.2 `gh secret list --repo jikig-ai/soleur | grep DOPPLER_TOKEN_KB_DRIFT` returns 1 row.
+  - [x] 2.13.3 `terraform plan` returns clean diff.
+- [x] **2.14** Commit & push Phase 2.
 
 **Exit gate:** all Doppler keys + GitHub Actions secret + Terraform resources in place; clean `terraform plan`.
 
