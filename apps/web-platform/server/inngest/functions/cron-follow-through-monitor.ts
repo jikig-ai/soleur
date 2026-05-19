@@ -69,8 +69,8 @@
 // See ADR-033 [Refined 2026-05-19 post PR-2 plan review] for details.
 
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -79,12 +79,28 @@ import { reportSilentFallback } from "@/server/observability";
 // at spawn time → reportSilentFallback → Sentry status=error, instead of
 // throwing at /api/inngest route registration which would silently disable
 // the entire Inngest worker with no operator-visible Sentry signal.
+//
+// IMPLEMENTATION NOTE (#4017): the original `createRequire(import.meta.url)
+// + require.resolve(...)` shape works in dev but produces `TypeError: path
+// argument must be of type string (received number 32798)` in the Next.js
+// standalone bundle — webpack rewrites `require.resolve()` to module-id
+// integers. Use filesystem `existsSync` checks against known paths instead.
 function resolveClaudeBin(): string {
-  const require_ = createRequire(import.meta.url);
-  const pkgDir = dirname(
-    require_.resolve("@anthropic-ai/claude-code/package.json"),
+  const override = process.env.CLAUDE_BIN;
+  if (override && existsSync(override)) return override;
+
+  const candidates = [
+    "/app/node_modules/.bin/claude",
+    join(process.cwd(), "node_modules/.bin/claude"),
+    join(process.cwd(), "apps/web-platform/node_modules/.bin/claude"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `claude binary not found in any known location: ${candidates.join(", ")}. ` +
+      "Set CLAUDE_BIN env var to override.",
   );
-  return join(pkgDir, "..", "..", ".bin", "claude");
 }
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
