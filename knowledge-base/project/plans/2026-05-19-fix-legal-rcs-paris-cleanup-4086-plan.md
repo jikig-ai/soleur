@@ -10,6 +10,38 @@ requires_cpo_signoff: false
 
 **Closes #4086.**
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-19
+**Sections enhanced:** Research Reconciliation, CI Smoke Check assertion behavior, Risks, Sharp Edges
+**Live verifications performed (deepen pass):**
+
+1. **User-Brand Impact gate (Phase 4.6):** PASS — section present, threshold `aggregate pattern` is a valid 3-value enum member, body contains concrete user-experience and exposure-vector descriptions (no placeholders).
+2. **Cited issue numbers:** `gh issue view 4086` → `state: OPEN, title: "legal: verify and correct RCS jurisdiction…"` (matches plan body); `gh issue view 4081` → `state: MERGED, title: "legal: #4051 LIA + Privacy Policy + DPD updates for LinkedIn Company Page publication"` (matches "introduced 6 of 7 sites" claim); `gh issue view 4047` → `state: MERGED, title: "feat: re-apply LinkedIn Community Management API as Jikigai + publisher hardening…"` (matches "originated PA15 entry" claim).
+3. **Canonical anchor regex live verification:** `grep -nE "incorporated in France" docs/legal/privacy-policy.md docs/legal/data-protection-disclosure.md` returns 4 matches (PP line 21, PP line 430, PP line 432, DPD line 22). The two anchors the CI assertion will check (PP §2 line 21, DPD §1 line 22) are both present verbatim.
+4. **RCS-shape regex behavior:** simulated `\bRCS\s+([A-Z][A-Za-zÀ-ÿ-]+)/g` against four representative strings — current bug-state (`RCS Luxembourg registration number` → captures `Luxembourg`), post-edit user-facing (`French commerce-registry number (RCS Paris 927 585 729)` → captures `Paris`), post-edit Art. 30 (`RCS Paris 927 585 729` → captures `Paris`), and a hypothetical future French move (`RCS Lyon 123 456 789` → captures `Lyon`). Set behavior confirmed: post-fix Set size = 1 (`{Paris}`), mixed (any unfixed site) Set size = 2 (`{Luxembourg, Paris}`) — exactly the desired drift detector.
+5. **Set-bloat risk (collateral RCS mentions):** `git grep -nE '\bRCS\s+[A-Z]' -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/article-30-register.md` returns exactly the 7 enumerated sites — no collateral RCS-shape mentions elsewhere in the corpus to inflate the Set. `git grep -nE '\bRCS\b' knowledge-base/legal/article-30-register.md` returns only line 273 — the Art. 30 register has exactly one RCS mention, and it is the site we are editing.
+6. **`RCS Paris` pre-existing mentions:** `git grep -nE '\bRCS\s+Paris' -- docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/article-30-register.md` returns zero hits — the 7 post-edit matches are all introduced by this PR. The Phase 3 verification grep (expecting exactly 7 hits post-edit) will measure precisely the 7 edits.
+7. **Plan-file scope isolation:** the plan body + tasks.md contain `RCS Luxembourg` / `RCS Paris` mentions in the substitution prose; these files live under `knowledge-base/project/plans/` and `knowledge-base/project/specs/`, NOT under the assertion's load scope (`docs/legal/`, `plugins/soleur/docs/pages/legal/`, `knowledge-base/legal/article-30-register.md`). No assertion-scope contamination.
+8. **Test framework verification:** `apps/web-platform/package.json` declares `"test": "vitest"`, `"test:ci": "vitest run"`, `"vitest": "^3.1.0"` — the new `test()` block uses only the existing harness's primitives (`test`, `expect`, `readFileSync`, `resolve`); no new imports, no new framework. The 3 existing tests in `legal-doc-consistency.test.ts` remain untouched.
+9. **Code-review overlap:** `gh issue list --label code-review --state open` returns zero matches against any of the 7 doc paths or the test file (queried via 2-stage `gh --json` + `jq --arg`).
+10. **Infrastructure gate:** plan touches no servers, no systemd units, no Doppler secrets writes, no DNS, no TLS, no vendor accounts. IaC gate skipped per the "pure-prose docs-only" exclusion.
+
+### Key Improvements (from deepen pass)
+
+1. **Confirmed regex shape is structural, not value-specific.** Captures `(City)` via group, normalizes both `RCS Paris` and `RCS Paris 927 585 729` to the same Set element — survives the user-facing/Art. 30 wording asymmetry the CLO attestation prescribed.
+2. **Confirmed no pre-existing `RCS Paris` collateral mentions.** The Phase 3 expected-7-hits grep is a clean post-condition check.
+3. **Confirmed Art. 30 register has exactly one RCS mention.** No risk of accidentally editing the wrong row or leaving a stale duplicate.
+4. **Confirmed anchors are verbatim.** `incorporated in France` is the literal substring at PP line 21 + DPD line 22 (no paraphrase risk).
+5. **Confirmed no code-review backlog overlap.** Plan can ship without folding in any pre-existing scope-outs.
+
+### New Considerations Discovered
+
+- **R5 (added by deepen):** the user-facing 6 sites use the wording `French commerce-registry number (RCS Paris 927 585 729)`. The literal `K-bis` token appears earlier in each affected paragraph (e.g., "K-bis extract contents (gérant full legal name, Jikigai SARL registered address, RCS Luxembourg registration number, …)"). After edit, the paragraph reads "K-bis extract contents (gérant full legal name, Jikigai SARL registered address, French commerce-registry number (RCS Paris 927 585 729), …)". The nested parentheses are slightly stylistically heavy but unambiguous and machine-grep-friendly. No edit needed; the CLO attestation specified this exact wording. Document for /work-time inspection: confirm each post-edit paragraph reads naturally end-to-end (one-line eyeball test per site, ~30 seconds total).
+- **R6 (added by deepen):** the plan does NOT bump the "Last Updated" date on PP / DPD. This is per CLO direction ("No paragraph regeneration needed") and is consistent with the existing `Last Updated date is identical between source and mirror` test invariant (which only enforces source↔mirror parity, not date freshness). If review surfaces a request to bump (e.g., for transparency-notice currency), the bump is a one-character edit on 4 lines (PP source hero + body, PP mirror hero + body, plus DPD source hero + body if DPD has hero — verify at edit time). Defer to review.
+
+
+
 ## Overview
 
 Seven legal-doc sites assert `RCS Luxembourg registration number` describing the Jikigai SARL K-bis extract category. The CLO has confirmed via operator K-bis read that **Jikigai SARL is registered at RCS Paris under number `927 585 729 R.C.S. Paris`** (registered office: 25 rue de Ponthieu, 75008 Paris, France). The existing prose in the rest of the corpus already aligns with France incorporation (Privacy Policy §2 + §13, DPD §1 — all canonical) — only the seven enumerated category-of-data sites are wrong.
