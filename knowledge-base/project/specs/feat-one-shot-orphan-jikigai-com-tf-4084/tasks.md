@@ -9,14 +9,14 @@ lane: single-domain
 
 ## Phase 1 — Delete orphan IaC (atomic single commit)
 
-- 1.1. `git rm apps/web-platform/infra/jikigai-com.tf`
-- 1.2. Edit `apps/web-platform/infra/variables.tf` — remove the `# --- jikigai.com (LinkedIn Page Verifications, #4046) ---` section comment (lines ~154-159) AND the three variable blocks `cf_zone_id_jikigai_com` (lines ~161-164), `cf_api_token_jikigai_com` (lines ~166-170), `linkedin_page_verification_txt` (lines ~172-176)
-- 1.3. Edit `apps/web-platform/infra/main.tf` — remove line 20: `configuration_aliases = [cloudflare.jikigai_com]`. Keep the surrounding `cloudflare = { source = "cloudflare/cloudflare", version = "~> 4.0" }` block
-- 1.4. From `apps/web-platform/infra/`, run `terraform fmt -check` — exit 0
-- 1.5. From `apps/web-platform/infra/`, run `terraform validate` — exit 0 (this is the catch for the `main.tf:20` removal pairing)
-- 1.6. Run `git grep -nE 'jikigai-com\.tf|cf_(api_token|zone_id)_jikigai_com|linkedin_page_verification_txt|cloudflare\.jikigai_com|jikigai_com_redirects|linkedin_verification' apps/web-platform/infra/` — zero matches
-- 1.7. Commit: `infra(cleanup): remove orphan jikigai-com.tf (#4084)` with body `Closes #4084` / `Ref #4081` / post-merge note about #4052
-- 1.8. Push to feat-one-shot-orphan-jikigai-com-tf-4084 (PR #4088 already open as draft)
+- [x] 1.1. `git rm apps/web-platform/infra/jikigai-com.tf`
+- [x] 1.2. Edit `apps/web-platform/infra/variables.tf` — remove the `# --- jikigai.com (LinkedIn Page Verifications, #4046) ---` section comment (lines ~154-159) AND the three variable blocks `cf_zone_id_jikigai_com` (lines ~161-164), `cf_api_token_jikigai_com` (lines ~166-170), `linkedin_page_verification_txt` (lines ~172-176)
+- [x] 1.3. Edit `apps/web-platform/infra/main.tf` — remove line 20: `configuration_aliases = [cloudflare.jikigai_com]`. Keep the surrounding `cloudflare = { source = "cloudflare/cloudflare", version = "~> 4.0" }` block
+- [x] 1.4. From `apps/web-platform/infra/`, run `terraform fmt -check` — exit 0
+- [x] 1.5. From `apps/web-platform/infra/`, run `terraform validate` — exit 0 (this is the catch for the `main.tf:20` removal pairing)
+- [x] 1.6. Run `git grep -nE 'jikigai-com\.tf|cf_(api_token|zone_id)_jikigai_com|linkedin_page_verification_txt|cloudflare\.jikigai_com|jikigai_com_redirects|linkedin_verification' apps/web-platform/infra/` — zero matches
+- [x] 1.7. Commit: `infra(cleanup): remove orphan jikigai-com.tf (#4084)` with body `Closes #4084` / `Ref #4081` / post-merge note about #4052
+- [ ] 1.8. Push to feat-one-shot-orphan-jikigai-com-tf-4084 (PR #4088 already open as draft)
 
 ## Phase 2 — PR review + ready
 
