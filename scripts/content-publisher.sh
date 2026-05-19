@@ -14,9 +14,15 @@
 #   X_API_SECRET           - X API secret
 #   X_ACCESS_TOKEN         - X access token
 #   X_ACCESS_TOKEN_SECRET  - X access token secret
-#   LINKEDIN_ACCESS_TOKEN   - LinkedIn OAuth 2.0 token (optional; skips if unset)
-#   LINKEDIN_PERSON_URN    - LinkedIn person URN for posting
-#   LINKEDIN_ORG_ID        - LinkedIn organization ID for company page (optional; skips if unset)
+#   LINKEDIN_ACCESS_TOKEN     - Personal LinkedIn OAuth 2.0 token (optional; skips if unset)
+#   LINKEDIN_PERSON_URN       - LinkedIn person URN for posting
+#   LINKEDIN_ORG_ID           - LinkedIn organization ID for company page (optional; skips if unset)
+#   LINKEDIN_ORG_ACCESS_TOKEN - Org OAuth 2.0 token with w_organization_social
+#                               (post-Community-Management-API approval; #4046).
+#                               Unset → post_linkedin_company routes to the rolling
+#                               tracker (default #4046) via append_to_linkedin_tracker.
+#   LINKEDIN_TRACKER_ISSUE    - Override the rolling-tracker issue number (default
+#                               #4046); used by smoke-tests to target a throwaway issue.
 #   BSKY_HANDLE            - Bluesky handle (optional; skips if unset)
 #   BSKY_APP_PASSWORD      - Bluesky app password
 #   BSKY_ALLOW_POST        - Set to "true" to enable posting
@@ -500,10 +506,12 @@ post_x_thread() {
 # swallowing them would mask outages. The cron retries next day.
 classify_linkedin_error() {
   local err="$1"
+  # HTTP-code branch uses a non-digit / end-of-string boundary so an error
+  # payload like "HTTP 4012ab" is NOT misclassified as 401 (overmatch guard).
   if [[ "$err" == *"LINKEDIN_ORG_ACCESS_TOKEN is required"* ]] || \
      [[ "$err" == *"LINKEDIN_ORG_ACCESS_TOKEN unset"* ]] || \
      [[ "$err" == *"w_organization_social"* ]] || \
-     [[ "$err" =~ HTTP\ (401|403) ]]; then
+     [[ "$err" =~ HTTP\ (401|403)([^0-9]|$) ]]; then
     echo "vendor-blocked"
     return
   fi
@@ -518,7 +526,9 @@ append_to_linkedin_tracker() {
   local case_name="$1"
   local section="$2"
   local error_reason="$3"
-  local tracker="${LINKEDIN_TRACKER_ISSUE:-4046}"
+  # LINKEDIN_TRACKER_ISSUE is defaulted at script top; no `:-4046` here so the
+  # one source of truth is the top-level constant.
+  local tracker="$LINKEDIN_TRACKER_ISSUE"
   local marker="- [ ] Re-publish: ${case_name} (${section})"
   local current_body
   current_body=$(gh issue view "$tracker" --json body --jq .body 2>/dev/null) || {
@@ -549,9 +559,14 @@ create_linkedin_fallback_issue() {
   # one fallback issue per post (the 56-day 9-issue accretion that motivated
   # #4046). Append them to the rolling tracker instead. Content-rejected falls
   # through to the per-post issue creation below.
+  #
+  # The rolling tracker (#4046) is scoped to Community Management API approval
+  # for the Company Page; only "LinkedIn Company Page" section failures route
+  # there. Personal-channel failures (LinkedIn Personal) keep the per-post
+  # fallback behaviour so they don't pollute the org tracker.
   local error_class
   error_class=$(classify_linkedin_error "$error_reason")
-  if [[ "$error_class" == "vendor-blocked" ]]; then
+  if [[ "$error_class" == "vendor-blocked" && "$section" == "LinkedIn Company Page" ]]; then
     append_to_linkedin_tracker "$CASE_NAME" "$section" "$error_reason"
     return $?
   fi

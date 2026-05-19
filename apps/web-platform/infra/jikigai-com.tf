@@ -14,6 +14,9 @@
 # confirm `No changes` on soleur.ai resources (per AC24 / terraform-architect P1-4).
 
 provider "cloudflare" {
+  # Blank line between alias and api_token keeps `terraform fmt` from
+  # column-aligning the `=` signs, which would break plan AC8b's literal
+  # `grep -q 'alias = "jikigai_com"'` check (single-space form, #4046).
   alias = "jikigai_com"
 
   api_token = var.cf_api_token_jikigai_com
