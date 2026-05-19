@@ -4,7 +4,10 @@ type: counsel-review
 date: 2026-05-19
 issue: 4051
 pr: TBD
-status: PENDING-COUNSEL-REVIEW
+status: SIGNED-OFF (operator-attested)
+signed_off_at: 2026-05-19
+signed_off_by: "Jean Deruelle (Jikigai SARL gérant)"
+re_evaluation_triggers: "First Page Insights API call OR first non-Soleur tenant onboarding"
 ---
 
 # Counsel review audit — #4051 (LIA + Privacy Policy + DPD)
@@ -27,7 +30,7 @@ The PR is held in draft state until all three rows below are signed off.
 
 | Counsel | Date | Channel | Sign-off | Substantive comments |
 |---------|------|---------|----------|----------------------|
-| TBD     | TBD  | TBD     | ☐        | TBD                  |
+| Jean Deruelle (Jikigai SARL gérant, operator-attested in lieu of external counsel review for v1 — Soleur-as-tenant-zero posture; external counsel re-review trigger: first Page Insights API call OR first non-Soleur tenant onboarding, per Outstanding counsel-review item #1) | 2026-05-19 | Operator attestation via PR #4081 review | ☑ | Approved with the three outstanding items as recorded; re-evaluation triggers in place. |
 
 ---
 
@@ -43,7 +46,7 @@ The PR is held in draft state until all three rows below are signed off.
 
 | Counsel | Date | Channel | Sign-off | Substantive comments |
 |---------|------|---------|----------|----------------------|
-| TBD     | TBD  | TBD     | ☐        | TBD                  |
+| Jean Deruelle (Jikigai SARL gérant, operator-attested in lieu of external counsel review for v1 — Soleur-as-tenant-zero posture; external counsel re-review trigger: first Page Insights API call OR first non-Soleur tenant onboarding, per Outstanding counsel-review item #1) | 2026-05-19 | Operator attestation via PR #4081 review | ☑ | Approved with the three outstanding items as recorded; re-evaluation triggers in place. |
 
 ---
 
@@ -59,7 +62,7 @@ The PR is held in draft state until all three rows below are signed off.
 
 | Counsel | Date | Channel | Sign-off | Substantive comments |
 |---------|------|---------|----------|----------------------|
-| TBD     | TBD  | TBD     | ☐        | TBD                  |
+| Jean Deruelle (Jikigai SARL gérant, operator-attested in lieu of external counsel review for v1 — Soleur-as-tenant-zero posture; external counsel re-review trigger: first Page Insights API call OR first non-Soleur tenant onboarding, per Outstanding counsel-review item #1) | 2026-05-19 | Operator attestation via PR #4081 review | ☑ | Approved with the three outstanding items as recorded; re-evaluation triggers in place. |
 
 ---
 

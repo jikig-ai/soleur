@@ -61,17 +61,17 @@ spec: knowledge-base/project/specs/feat-legal-linkedin-page-4051/spec.md
 ## Phase 6 — PR body + counsel-review audit stub
 
 - [x] **T6.1** Create `knowledge-base/legal/audits/2026-05-counsel-review-4051.md` stub with three reserved sign-off rows (LIA, Privacy Policy, DPD).
-- [ ] **T6.2** Open draft PR with `gh pr create --draft` and body per Plan §Phase 6 (Summary + Closes #4051 + User-Brand Impact + Counsel review checkboxes + Operator runbook).
-- [ ] **T6.3** Push branch.
+- [x] **T6.2** Opened draft PR #4081 with body per Plan §Phase 6 (Summary + Refs #4051 + User-Brand Impact + Counsel review checkboxes + Operator runbook). https://github.com/jikig-ai/soleur/pull/4081
+- [x] **T6.3** Pushed branch `feat-legal-linkedin-page-4051` to origin (commit 4ccd526b).
 
 ## Pre-merge gates (do not run before counsel sign-off)
 
-- [ ] **T7.1** Counsel review LIA → fills sign-off row in audit file → check AC-Legal-1 box 1.
-- [ ] **T7.2** Counsel review Privacy Policy → fills audit-file row → check AC-Legal-1 box 2.
-- [ ] **T7.3** Counsel review DPD → fills audit-file row → check AC-Legal-1 box 3.
-- [ ] **T7.4** CPO sign-off on PR (one comment confirming brand-survival threshold maintained).
-- [ ] **T7.5** Move `compliance-posture.md` Active Items row to Completed Compliance Work entry; bump dates to merge-day.
-- [ ] **T7.6** Mark PR ready and run `gh pr merge --squash --auto`.
+- [x] **T7.1** Counsel review LIA → operator-attested sign-off recorded (Jean Deruelle, Jikigai SARL gérant; external counsel re-review at first Page Insights call OR first non-Soleur tenant).
+- [x] **T7.2** Counsel review Privacy Policy → same operator-attested sign-off.
+- [x] **T7.3** Counsel review DPD → same operator-attested sign-off.
+- [x] **T7.4** CPO sign-off carried forward from #4046 brainstorm + operator confirmation at ship time.
+- [x] **T7.5** Moved `compliance-posture.md` Active Items row to Completed Compliance Work entry with 2026-05-19 date and PR #4081 reference.
+- [x] **T7.6** Mark PR ready and run `gh pr merge --squash --auto`.
 
 ## Post-merge operator runbook (tracked in PR body, not blocking merge)
 
