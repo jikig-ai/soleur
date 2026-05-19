@@ -390,3 +390,7 @@ To exercise your data subject rights under GDPR, send a written request to <lega
 ---
 
 > **Related documents:** This Privacy Policy should be read alongside the companion [Cookie Policy](cookie-policy.md) for detailed information about cookies used by the Docs Site (GitHub Pages), the [GDPR Policy](gdpr-policy.md) for detailed GDPR-specific disclosures, and the [Individual Contributor License Agreement](individual-cla.md) for details on contributor data processing.
+
+---
+
+<!-- PR-H (#3244) #4066 — 2026-05-19: Web Platform agent runtime ingests GitHub repository activity (PR titles/bodies, issue titles/bodies, CI run names+URLs, CVE / secret-scanning metadata) via a GitHub App webhook installed on the founder's own account/orgs. Surfaced display-only as draft cards in /dashboard Today section. Render-time `redactGithubSourcedText` is the load-bearing Art. 14 minimization gate (per plan TR6 amendment). Cache-Control: private, max-age=60 on the Today endpoint. Authoritative shape: knowledge-base/legal/article-30-register.md Processing Activity 15. Operator may revoke any GitHub action class at /dashboard/settings/scope-grants (PR-G). -->

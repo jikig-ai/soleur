@@ -373,3 +373,7 @@ For questions, concerns, or requests related to this DPD:
 ---
 
 > **Related documents:** This Data Protection Disclosure references data practices and privacy obligations. Please review the companion [Privacy Policy](privacy-policy.md), [GDPR Policy](gdpr-policy.md), [Terms and Conditions](terms-and-conditions.md), and [Individual Contributor License Agreement](individual-cla.md) documents to ensure consistency.
+
+---
+
+<!-- PR-H (#3244) #4066 — 2026-05-19: GitHub Inc. (Microsoft Corporation) reaffirmed as US sub-processor for the new GitHub App webhook ingress (Web Platform multi-source priority signals). SCCs Module 2 + DPF cover the data egress from GitHub to Soleur. The flow is bilaterally per-founder (the App is installable on the founder's own account/orgs only); Soleur displays third-party repo content as-is and does not re-process it for LLM training, profile-building, or any downstream automated decision-making. Authoritative shape: knowledge-base/legal/article-30-register.md Processing Activity 15. -->
