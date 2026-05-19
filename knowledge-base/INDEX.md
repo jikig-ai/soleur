@@ -54,7 +54,7 @@
 - [cloudflare service token rotation](engineering/ops/runbooks/cloudflare-service-token-rotation.md)
 - [CodeQL coverage on bot PRs](engineering/ops/runbooks/codeql-bot-coverage.md)
 - [Compound Promotion Loop — operator runbook](engineering/ops/runbooks/compound-promote-runbook.md)
-- [Postmortem: app.soleur.ai/dashboard error.tsx outage](engineering/ops/runbooks/dashboard-error-postmortem.md)
+- [Postmortem: app.soleur.ai/dashboard error.tsx outage](engineering/ops/post-mortems/dashboard-error-postmortem.md)
 - [Disk Space Monitoring Runbook](engineering/ops/runbooks/disk-monitoring.md)
 - [dsar export failed job](engineering/ops/runbooks/dsar-export-failed-job.md)
 - [dsar export oversize](engineering/ops/runbooks/dsar-export-oversize.md)

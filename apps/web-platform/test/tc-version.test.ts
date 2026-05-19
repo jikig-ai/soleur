@@ -35,6 +35,6 @@ describe("T&C version check logic", () => {
   });
 
   test("user with future version is redirected (version must match exactly)", () => {
-    expect(shouldRedirectToAcceptTerms("2.0.0")).toBe(true);
+    expect(shouldRedirectToAcceptTerms("3.0.0")).toBe(true);
   });
 });

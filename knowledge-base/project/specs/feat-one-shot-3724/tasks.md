@@ -14,7 +14,7 @@ Derived from `knowledge-base/project/plans/2026-05-13-feat-brand-survival-thresh
 
 ### 1.1 FR1a — `brand_threshold:` → `brand_survival_threshold:`
 
-- [ ] **1.1.1** Edit `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md:7` — change `brand_threshold:` to `brand_survival_threshold:`.
+- [ ] **1.1.1** Edit `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md:7` — change `brand_threshold:` to `brand_survival_threshold:`.
 
 ### 1.2 FR1b — `brand_survival:` → `brand_survival_threshold:`
 

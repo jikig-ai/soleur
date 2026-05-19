@@ -102,7 +102,79 @@ else
   fail=1
 fi
 
-# Bypass.c: 403 → fast-fail (Kieran F5).
+# Bypass.b2: WORM-bucket-policy duplicate at HTTP 409 (production-observed envelope
+# from run 26042357131) → exit 0 idempotent. R2 Lock Rules enforce the same
+# audit property as 412 in non-WORM buckets ("first-PR-of-quarter wins"); the
+# CI must classify it the same way.
+printf "409\n" > "$work/codes.txt"
+printf '<Error><Code>ObjectLockedByBucketPolicy</Code><Message>The object is locked by the bucket policy.</Message></Error>' > "$work/body_fixture"
+mk_curl_stub "$work/codes.txt"
+out=$(run_sut "$payload" 2>&1) && rc=0 || rc=$?
+rm -f "$work/body_fixture"
+if [[ "$rc" -eq 0 ]] && grep -qE 'worm-duplicate-quarter status=409' <<<"$out" && ! grep -q '::error::' <<<"$out"; then
+  green "PASS: Bypass.b2 WORM-bucket-policy 409 + ObjectLockedByBucketPolicy → exit 0 (worm-idempotent)"
+else
+  red "FAIL: Bypass.b2 expected exit 0 + 'worm-duplicate-quarter status=409' (no ::error::); got rc=$rc"
+  red "$out"
+  fail=1
+fi
+
+# Bypass.b2b: WORM-bucket-policy duplicate at HTTP 403 (CF-documented envelope
+# for error code 10069). The status disjunction (409 || 403) must cover both
+# envelopes so a future CF behavior shift to the documented 403 does not
+# silently regress this fix. Body code is the stable identifier.
+printf "403\n" > "$work/codes.txt"
+printf '<Error><Code>ObjectLockedByBucketPolicy</Code><Message>The object is locked by the bucket policy.</Message></Error>' > "$work/body_fixture"
+mk_curl_stub "$work/codes.txt"
+out=$(run_sut "$payload" 2>&1) && rc=0 || rc=$?
+rm -f "$work/body_fixture"
+if [[ "$rc" -eq 0 ]] && grep -qE 'worm-duplicate-quarter status=403' <<<"$out" && ! grep -q '::error::' <<<"$out"; then
+  green "PASS: Bypass.b2b WORM-bucket-policy 403 + ObjectLockedByBucketPolicy → exit 0 (worm-idempotent)"
+else
+  red "FAIL: Bypass.b2b expected exit 0 + 'worm-duplicate-quarter status=403' (no ::error::); got rc=$rc"
+  red "$out"
+  fail=1
+fi
+
+# Bypass.b3: specificity guard — a real R2 4xx code (SignatureDoesNotMatch) is
+# NOT a WORM-bucket-policy duplicate. The body match MUST be specific to
+# <Code>ObjectLockedByBucketPolicy</Code> so any other 4xx body still
+# fast-fails and surfaces in the operator annotation (no silent regressions
+# if R2 later adds object-key-lock codes).
+printf "409\n" > "$work/codes.txt"
+printf '<Error><Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match the signature you provided.</Message></Error>' > "$work/body_fixture"
+mk_curl_stub "$work/codes.txt"
+out=$(run_sut "$payload" 2>&1) && rc=0 || rc=$?
+rm -f "$work/body_fixture"
+if [[ "$rc" -ne 0 ]] && grep -qE 'fatal-4xx status=409' <<<"$out" && grep -q 'SignatureDoesNotMatch' <<<"$out"; then
+  green "PASS: Bypass.b3 409 + non-WORM body (SignatureDoesNotMatch) → fast-fail with body excerpt"
+else
+  red "FAIL: Bypass.b3 expected non-zero exit + fatal-4xx annotation with SignatureDoesNotMatch; got rc=$rc"
+  red "$out"
+  fail=1
+fi
+
+# Bypass.b4: defensive fail-closed when R2 returns 409 with no body. We cannot
+# prove idempotency from an empty body; fast-fail with the standard annotation.
+# Explicit `rm -f` defends against state pollution if a future reorder inserts
+# a body-leaving case immediately before this one.
+rm -f "$work/body_fixture"
+printf "409\n" > "$work/codes.txt"
+mk_curl_stub "$work/codes.txt"
+out=$(run_sut "$payload" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -ne 0 ]] && grep -qE 'fatal-4xx status=409' <<<"$out" && grep -q '(empty body)' <<<"$out"; then
+  green "PASS: Bypass.b4 409 + empty body → fast-fail (cannot prove idempotency)"
+else
+  red "FAIL: Bypass.b4 expected non-zero exit + fatal-4xx annotation with (empty body); got rc=$rc"
+  red "$out"
+  fail=1
+fi
+
+# Bypass.c: 403 → fast-fail (Kieran F5). Same defensive cleanup as b4 — every
+# case that does NOT prime a body_fixture must `rm -f` first so a future reorder
+# cannot leak a WORM-matching body from a prior case and flip Bypass.c's
+# expected fast-fail into a worm-idempotent success.
+rm -f "$work/body_fixture"
 printf "403\n" > "$work/codes.txt"
 mk_curl_stub "$work/codes.txt"
 out=$(run_sut "$payload" 2>&1) && rc=0 || rc=$?

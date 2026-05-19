@@ -20,6 +20,7 @@ import { FoundationSection } from "@/components/dashboard/foundation-section";
 import type { FoundationCard } from "@/components/dashboard/foundation-cards";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { TodayBanner } from "@/components/dashboard/today-banner";
+import { RuntimeExplainerBanner } from "@/components/dashboard/runtime-explainer-banner";
 import { TodayCard } from "@/components/dashboard/today-card";
 
 // ---------------------------------------------------------------------------
@@ -99,7 +100,12 @@ const DOMAIN_OPTIONS: { value: string; label: string }[] = [
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { completeOnboarding } = useOnboarding();
+  const {
+    completeOnboarding,
+    runtimeExplainerDismissed,
+    dismissRuntimeExplainer,
+    onboardingLoaded,
+  } = useOnboarding();
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | null>(null);
   const [domainFilter, setDomainFilter] = useState<DomainLeaderId | "general" | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>("active");
@@ -593,6 +599,9 @@ export default function DashboardPage() {
           §Phase 5. The banner mounts unconditionally so the legal
           disclosure is present even when there are no drafts yet. */}
       <section aria-label="Today" className="mb-6">
+        {onboardingLoaded && !runtimeExplainerDismissed ? (
+          <RuntimeExplainerBanner onDismiss={dismissRuntimeExplainer} />
+        ) : null}
         <TodayBanner />
         {todayItems.map((item) => (
           <TodayCard

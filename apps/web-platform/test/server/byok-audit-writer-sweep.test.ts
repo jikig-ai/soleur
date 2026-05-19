@@ -29,7 +29,8 @@ const SERVER_DIR = "server";
 const OUT_OF_SCOPE_MARKER = "byok-audit-writer-sweep: out-of-scope";
 
 // Direct call site: file invokes `runWithByokLease(...)` literally.
-const LEASE_CALL_RE = /\brunWithByokLease\s*\(/;
+// Exported for re-use by cron-no-byok-lease-sweep.test.ts (TR9 PR-1, Architecture F6).
+export const LEASE_CALL_RE = /\brunWithByokLease\s*\(/;
 
 // PR-F (#3244) RV17: alias-rename bypass detection. A file importing
 // the lease primitive under an alias (e.g.,
@@ -39,7 +40,21 @@ const LEASE_CALL_RE = /\brunWithByokLease\s*\(/;
 // any file matching this regex is sweepable regardless of whether
 // the alias-call appears literally in source. Mitigates the
 // 2026-05-15 ci-sentinel-paren-safety class for the BYOK boundary.
-const ALIAS_IMPORT_RE = /import\s*\{[^}]*\brunWithByokLease\s+as\s+\w+/;
+export const ALIAS_IMPORT_RE = /import\s*\{[^}]*\brunWithByokLease\s+as\s+\w+/;
+
+// TR9 PR-1 (#3948) Architecture F6: bare named import without immediate call.
+// Catches the shape `import { runWithByokLease } from "..."; const fn = runWithByokLease; fn(...);`
+// where neither LEASE_CALL_RE (literal call site is on the alias `fn`) nor
+// ALIAS_IMPORT_RE (no `as` keyword) would fire. Subsumes ALIAS_IMPORT_RE
+// structurally; kept separate so failure messages distinguish the shape that
+// caught the violation. Consumed by cron-no-byok-lease-sweep.test.ts.
+export const BARE_IMPORT_RE = /import\s*\{[^}]*\brunWithByokLease\b[^}]*\}/;
+
+// TR9 PR-1 (#3948) security-sentinel finding: catches the dynamic-import
+// bypass shape (`const { runWithByokLease } = await import("@/server/byok-lease")`)
+// that the static-import regexes above all miss. Consumed by
+// cron-no-byok-lease-sweep.test.ts.
+export const DYNAMIC_IMPORT_RE = /import\s*\(\s*["'`][^"'`]*byok-lease/;
 
 /**
  * Files matching `runWithByokLease\(` that we explicitly do NOT sweep:

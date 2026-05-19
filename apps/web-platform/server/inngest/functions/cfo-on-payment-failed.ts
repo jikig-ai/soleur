@@ -41,6 +41,10 @@ import {
   MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL,
   MESSAGE_STATUS_DRAFT,
 } from "@/lib/messages/tiers";
+import {
+  ACTION_CLASS_DEFAULTS,
+  type ActionClassTier,
+} from "@/server/scope-grants/action-class-map";
 
 interface PaymentFailedPayload {
   founderId: string;
@@ -51,7 +55,13 @@ interface PaymentFailedPayload {
   failureCode: string;
 }
 
-const TIER = "draft_one_click" as const;
+// PR-G (#3947) — RV4 cleanup: replaces inlined `const TIER = "draft_one_click"`.
+// Webhook predicate passes `tier: grant.tier` in inngest.send data; CFO falls
+// back to ACTION_CLASS_DEFAULTS only for events with no tier (test fixtures,
+// pre-PR-G replays). Per Stripe webhook predicate at app/api/webhooks/stripe/
+// route.ts:437 — grant existence is the load-bearing primitive; default is
+// "approve_every_time" (most restrictive) so a missing-tier event still
+// renders as the safest draft.
 const SUPPORTED_V = "1";
 
 const MAX_TURN_DURATION_MS = parseInt(
@@ -64,7 +74,14 @@ const VERIFY_TIMEOUT_MS = 2000;
 interface HandlerArgs {
   event: {
     v?: string;
-    data: { founderId: string; payload: PaymentFailedPayload };
+    // PR-G (#3947): `tier` is optional on the envelope — webhook predicate
+    // sets it from grant.tier; pre-PR-G replays / test fixtures omit it
+    // and fall back to ACTION_CLASS_DEFAULTS at the draft-write boundary.
+    data: {
+      founderId: string;
+      tier?: ActionClassTier;
+      payload: PaymentFailedPayload;
+    };
   };
   step: {
     run<T>(name: string, cb: () => Promise<T>): Promise<T>;
@@ -204,7 +221,8 @@ export async function cfoHandler({
       owning_domain: "cfo",
       draft_preview: "<draft text — wired in PR-G>",
       urgency: "medium",
-      trust_tier: TIER,
+      trust_tier:
+        event.data.tier ?? ACTION_CLASS_DEFAULTS["finance.payment_failed"],
     });
   });
 

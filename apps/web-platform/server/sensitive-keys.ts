@@ -48,12 +48,13 @@ export const SENSITIVE_KEY_NAMES = [
   "client_secret",
   "private_key",
   "secret",
-  // JWT-mint signing secret (PR-B §1.4 — Resolution A: Node-side mint).
-  // Added because exact-name match on `secret` does not cover
-  // `SUPABASE_JWT_SECRET` / `jwt_secret` field-name shapes that crop up
-  // in env-block dumps and config-snapshot logs.
-  "jwt_secret",
-  "supabase_jwt_secret",
+  // Note (#3363 Resolution C): The PR-B-era allowlist entries
+  // `jwt_secret` + `supabase_jwt_secret` were removed when the HS256
+  // substrate was retired — Node no longer holds a signing key. The
+  // exact-name `secret` match above still covers any residual leak
+  // shape (e.g., `service_role_secret`). Supabase's asymmetric private
+  // keys never leave Supabase, so no replacement allowlist entry is
+  // needed for the signing material itself.
   // Dev-only sign-in passwords (R3 / feat-dev-signin-bypass). Exact-name
   // match on `password` does NOT cover the per-slot env-var key names
   // that may appear in error reports or config-snapshot dumps. These

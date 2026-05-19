@@ -38,19 +38,26 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
         run: |
-          # Two pathspec families covered:
-          #   - apps/*/infra/...      (per-app roots: web-platform, sentry sub-root)
-          #   - infra/<name>/...      (repo-level roots: infra/github/, future siblings)
-          # sed -E anchors on ^apps/[^/]+/infra and ^infra/[^/]+ -- both shapes
-          # collapse to their single-ancestor directory. Deep-nested paths
-          # (infra/github/some-subdir/file) STILL collapse to infra/github
-          # because [^/]+ matches the first slash-bounded segment.
+          # Two infra-root families covered:
+          #   - apps/*/infra/...      (per-app roots: web-platform, cla-evidence, ...)
+          #   - infra/<name>/...      (repo-level roots: infra/github/, ...)
+          #
+          # The PR-diff branch filters via `grep -E` rather than git pathspec:
+          # git pathspec `*` does NOT cross `/` in default semantics, so
+          # `'apps/*/infra/'` silently returned empty and the matrix fanned
+          # out to zero jobs (matrix-zero is a skipped-not-failed outcome).
+          # The brace group `{ grep -E ... || true; }` neutralizes grep's
+          # exit-1 on zero-match BEFORE it can poison the pipeline status
+          # under any future `set -o pipefail`. Downstream `sort -u | jq`
+          # collapses empty input to `[]`. Mirror unit test:
+          # plugins/soleur/test/infra-validation-detect.test.sh. See #4012.
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
                        find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
                     | jq -R -s -c 'split("\n") | map(select(. != ""))')
           else
-            DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- 'apps/*/infra/' 'infra/' \
+            DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" \
+              | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
               | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
               | sort -u \
               | jq -R -s -c 'split("\n") | map(select(. != ""))')

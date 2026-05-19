@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** May 16, 2026 (extended Section 4.5 with the off-site Cloudflare R2 evidence archive for CLA signatures and added Section 5.11 Cloudflare R2 sub-processor entry per #3209; previous: May 15, 2026 extended Section 5.10 Sentry with explicit monitor-class enumeration and "Sentry log ingestion NOT enabled" carve-out following the 2026 Sentry Monitors/Alerts split)
+**Last Updated:** May 18, 2026 (added Section 8.3 "Automated decision-making and Article 22 rights" disclosing the Web Platform's agent-runtime scope grants and human-review affordance; scoped the Buttondown-newsletter "does not involve profiling or automated decision-making" line to that processor only; previous: May 16, 2026 extended Section 4.5 with the off-site Cloudflare R2 evidence archive for CLA signatures and added Section 5.11 Cloudflare R2 sub-processor entry per #3209)
 
 ## 1. Introduction
 
@@ -88,7 +88,7 @@ If you subscribe to the Soleur newsletter via the signup form on the Docs Site, 
 - **Data collected:** Email address (actively provided by you); IP address, referrer URL, subscription timestamp, and browser/device metadata (automatically collected by Buttondown during the subscription request).
 - **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content.
 - **Lawful basis (email address):** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
-- **Lawful basis (technical metadata):** Legitimate interest (Article 6(1)(f) GDPR) -- Buttondown automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata as part of standard service operation. This data is necessary for service delivery, abuse prevention, and maintaining the security of the newsletter infrastructure. The processing is minimal, within the reasonable expectations of a newsletter subscriber, and does not involve profiling or automated decision-making. You may object to this processing under Article 21 by contacting us at <legal@jikigai.com>.
+- **Lawful basis (technical metadata):** Legitimate interest (Article 6(1)(f) GDPR) -- Buttondown automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata as part of standard service operation. This data is necessary for service delivery, abuse prevention, and maintaining the security of the newsletter infrastructure. The processing is minimal, within the reasonable expectations of a newsletter subscriber, and Buttondown's processing of this technical metadata does not itself involve profiling or automated decision-making concerning you. (For Web Platform agent-runtime automated decisions, see Section 8.3.) You may object to this processing under Article 21 by contacting us at <legal@jikigai.com>.
 - **Double opt-in:** After submitting your email, Buttondown sends a confirmation email. Your subscription is only activated after you click the confirmation link. This ensures informed, verified consent.
 - **Retention (email address):** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
 - **Retention (technical metadata):** Governed by Buttondown's data retention practices. See [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy) for details.
@@ -301,6 +301,22 @@ To exercise rights related to GitHub-collected data, contact GitHub directly thr
 ### 8.2 Rights Under US Privacy Laws
 
 Users in the United States may have additional rights under state privacy laws (such as the California Consumer Privacy Act). For the Plugin, these rights are primarily relevant to any data collected by GitHub as the hosting provider. For the Web Platform, you may exercise these rights by contacting <legal@jikigai.com>.
+
+### 8.3 Automated decision-making and Article 22 rights
+
+The Web Platform includes agent-runtime features that can produce decisions on your behalf in response to external events (for example, a Stripe `invoice.payment_failed` webhook). These features are governed by Section 3a ("Agent Command Authority") of the Terms & Conditions and, on the data-protection side, by this section and by Section 2.3(o) of the Data Protection Disclosure.
+
+**Opt-in by class and tier.** The Web Platform performs no automated action on your behalf for an action class (for example, `finance.payment_failed`) unless you have explicitly granted authorization for that class via the `/dashboard/settings/scope-grants` interface, at one of three tiers: `Approve every time` (you authorize each instance), `Draft, one click` (the agent prepares a draft you approve), or `Auto` (the agent executes without per-instance approval, after a second-click acknowledgement at grant time). The absence of a grant is a denial; the `/dashboard/audit` viewer renders every automated action with the action class, tier active at the moment of the event, timestamp, and BYOK token + cost data.
+
+**Article 22 rights.** Where automated processing produces a decision concerning you (in particular, any action under the `Auto` tier), you have the right under Article 22(3) GDPR to:
+
+- **Obtain human intervention** -- request that a human review the decision;
+- **Express your point of view** -- submit your perspective on the decision; and
+- **Contest the decision** -- challenge its accuracy or appropriateness.
+
+You may exercise these rights through the "Request human review" affordance inlined on every row of `/dashboard/audit`, or by emailing <legal@jikigai.com>. We will provide a substantive response within the timeframes required by applicable law.
+
+**Profiling.** Soleur does not profile users for advertising or third-party data brokerage. Within the Web Platform, automated decision-making is bounded to the explicit action classes you grant; no inferred profile is built from the resulting activity beyond the audit ledger required to make the decisions reviewable. Sub-processors are enumerated in Section 5 of this Policy and in Section 2.3(o) of the Data Protection Disclosure.
 
 ## 9. Children's Privacy
 

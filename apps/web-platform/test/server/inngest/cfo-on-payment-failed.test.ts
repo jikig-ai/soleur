@@ -92,6 +92,11 @@ function makeEvent(v: string, founderId = "founder-123") {
     v,
     data: {
       founderId,
+      // PR-G (#3947): webhook predicate passes grant.tier on the envelope so
+      // the CFO function pins consent-at-time-of-event. Fixture matches the
+      // production shape; missing-tier replay paths fall back to
+      // ACTION_CLASS_DEFAULTS["finance.payment_failed"] = "approve_every_time".
+      tier: "draft_one_click" as const,
       payload: {
         founderId,
         invoiceId: "in_test_001",

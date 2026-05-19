@@ -60,11 +60,11 @@ R2 supports the S3 `If-None-Match: *` header for conditional PUT — first write
 
 The pattern also covers content-addressed evidence writes (`signatures/<sha256>.json`): if a sign-then-edit-then-resign sequence produces identical bytes (idempotent), 412 is the expected outcome and signals success, not failure.
 
-Classification matters — see Section 5 below.
+Classification matters — see Section 5 below. [Updated 2026-05-18 — see §13]
 
 ---
 
-## 5. R2 4xx classification: 412 ≠ other 4xx (Kieran F5)
+## 5. R2 4xx classification: 412 ≠ other 4xx (Kieran F5) [Updated 2026-05-18 — see §13]
 
 Every conditional-PUT helper (`upload-evidence.sh`, `upload-bypass.sh`) classifies the response code into three exit paths:
 
@@ -243,6 +243,45 @@ Sentinel patterns enforced by `apps/web-platform/test/legal-doc-consistency.test
 ### (f) Phase 8 sentinel-PR automation
 
 Issue #3908 was originally labeled `type: manual` (`manual_because: end-to-end smoke requires opening real PRs against main`). Per `hr-exhaust-all-automated-options-before` + `hr-never-label-any-step-as-manual-without`, the automation path is `apps/cla-evidence/scripts/sentinel-pr.sh` with modes `human` / `bypass` / `both`. Each opens a docs-only sentinel PR, polls `inspect-evidence.sh by-pr <N>` for up to 5 minutes, asserts the record landed in R2, then `gh pr close --delete-branch` to avoid history pollution. Wired into `bootstrap.sh` Step 6 as opt-in (`SENTINEL_PR_AUTOMATION=1`); only the operator's per-command ack remains (`hr-menu-option-ack-not-prod-write-auth`).
+
+---
+
+## 13. R2 Lock Rules block duplicate canonical writes via ObjectLockedByBucketPolicy — the WORM-bucket idempotent-duplicate signal (not 412)
+
+The §4 design comment ("two concurrent workflow runs may both detect the same bypass event, but only one can win the write, and the loser exits cleanly without an error") was written against the pre-WORM build (PR #3201). After PR #3920 introduced bucket-wide Lock Rules (`maxAgeSeconds:315360000`, `prefix:""`), the Lock Rules layer evaluates **before** the `If-None-Match: *` conditional-PUT precondition. The loser of a duplicate write therefore receives `<Code>ObjectLockedByBucketPolicy</Code>` (HTTP 409 in production today; HTTP 403 per Cloudflare docs at error code 10069), **not** 412 PreconditionFailed.
+
+The data behavior is correct — the canonical-per-quarter audit property ("first-PR-of-quarter wins, byte-content sealed for 10 years") is exactly what Lock Rules enforce. The bug was in the CI primitive treating the 4xx as a config error and exiting 2, which spammed failed-check notifications across all open PRs from a quarter's second-onward bypass event.
+
+**Updated §5 classification table:**
+
+| Code | Body | Meaning | Action |
+|---|---|---|---|
+| 200 / 201 | (any) | First write succeeded | exit 0 — log as `ok status=$code` |
+| 412 | (any) | PreconditionFailed (pre-WORM duplicate idempotent write) | exit 0 — log as `${dup_label} status=412` |
+| 409 or 403 | `<Code>ObjectLockedByBucketPolicy</Code>` | WORM-bucket duplicate (Lock-Rules first-writer-wins) | exit 0 — log as `worm-${dup_label} status=$code` |
+| 5xx / 429 | (any) | Transient | retry up to 3 with exponential backoff |
+| 4xx ≠ 412 and not WORM-bucket-policy duplicate | (any) | Config bug (stale token, missing perms, schema drift) | fast-fail with `::error::`, exit 2 |
+
+**Specificity caveat.** As of 2026-05-18, only `ObjectLockedByBucketPolicy` (CF error code 10069) is documented in R2's S3-API error table. Object-key-level lock codes from standard S3 vocabulary (`ObjectLockedRetention`, `ObjectLockedLegalHold`) are **not** documented for R2. The match string MUST stay exactly `<Code>ObjectLockedByBucketPolicy</Code>` so that any future addition of object-key lock codes is NOT silently swallowed at the idempotent-duplicate arm — those would fall through to fatal-4xx with the body visible in the operator annotation, surfacing them for explicit triage rather than being misclassified as duplicates.
+
+**Status-envelope discrepancy.** Production run 26042357131 (2026-05-18T15:13:04Z, branch `feat-pr-g-cohort-onboarding`) emitted HTTP 409. Cloudflare's [R2 Error Codes](https://developers.cloudflare.com/r2/api/error-codes/) page documents error code 10069 at HTTP 403. The disjunction `(code == 409 || code == 403)` handles both — the body code is the stable identifier; the 4xx envelope may shift between R2 implementation paths. If CF later moves to a different 4xx code (e.g., 423 Locked, the standard WebDAV/HTTP code for this semantic), the new envelope falls through to fatal-4xx with the body visible — operator-actionable, no silent regression.
+
+**Chain of prior PRs that exposed this gap.** The 409 classification gap was not visible until R2 auth started working end-to-end:
+
+| PR | What it did | Why it didn't fix the spam |
+|---|---|---|
+| #3201 | Introduced the cla-evidence sidecar + `If-None-Match: *` primitive | Pre-WORM; 412 was the duplicate signal |
+| #3920 | Adopted CF Lock Rules with `maxAgeSeconds:315360000` bucket-wide | Introduced the WORM constraint that 409s under it |
+| #3939 (closes issue #3924) | GDPR Art. 17 admin-override driver | Establishes the bypass-only-via-Art-17 boundary, not the classification fix |
+| #3965 | Captured R2 response body in fast-fail annotations | Surfaced the 409 + `ObjectLockedByBucketPolicy` body cleanly for the first time |
+| #3966 | Diagnose + repair allowlist-bypass R2 write | Addressed earlier-layer cred failures that masked the 409 classification gap |
+| #3967 | Trigger workflow after Doppler `prd_cla` HMAC rotation | Operational, not a fix |
+| #3969 | bootstrap.sh requires real R2 S3 creds + probe-PUT before Doppler | Made auth succeed for the first time — exposed the 409 classification gap as the now-dominant failure mode |
+| **THIS** | Map 409/403 + ObjectLockedByBucketPolicy to `worm-${dup_label}` exit 0 | Final classification arm; closes the spam |
+
+The chain ordering — bad creds → wrong-shape secret → auth succeeds → first PUT lands → second PUT trips Lock Rules → 409 misclassified as config bug — is the pattern: each prior PR closed a layer's gap, and the now-uncovered next-layer gap surfaced. The pattern to watch for in future cla-evidence work: every time a foundational layer (auth, infra, body capture) is fixed, re-classify the resulting 4xx behavior against the canonical-per-quarter design property.
+
+**GDPR §3.4 balancing test preserved.** The 10-year WORM retention floor is unchanged. The canonical record's byte content is still sealed by R2 Lock Rules from first-write through the 10-year window; this fix only changes the CI workflow's interpretation of the duplicate-overwrite-attempt status code, not the underlying object's protection. No legal-doc edit needed.
 
 ---
 

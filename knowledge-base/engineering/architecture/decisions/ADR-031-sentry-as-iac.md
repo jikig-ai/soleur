@@ -43,7 +43,7 @@ new monitor types and offers no drift detection for the rules it manages.
 
 Sentry's EU footprint splits across three host classes; conflating them is the
 root failure mode of the 2026-03-28 → 2026-05-16 phantom-ingest window
-(see PIR `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+(see PIR `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 and Article 30 PA8 §(d) recipient-drift disclosure). All future Sentry-touching
 work in this repo MUST reference this glossary by name when choosing a host.
 

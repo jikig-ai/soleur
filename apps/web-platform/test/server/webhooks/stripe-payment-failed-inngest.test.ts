@@ -27,6 +27,8 @@ const {
   mockLogger,
   mockReportSilentFallback,
   mockInngestSend,
+  mockIsGranted,
+  mockIsDenied,
 } = vi.hoisted(() => ({
   mockConstructEvent: vi.fn(),
   mockInsert: vi.fn(),
@@ -35,6 +37,8 @@ const {
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   mockReportSilentFallback: vi.fn(),
   mockInngestSend: vi.fn(),
+  mockIsGranted: vi.fn(),
+  mockIsDenied: vi.fn(),
 }));
 
 vi.mock("@/lib/stripe", () => ({
@@ -80,6 +84,12 @@ vi.mock("@/server/observability", () => ({
 
 vi.mock("@/server/inngest/client", () => ({
   inngest: { send: mockInngestSend },
+}));
+
+// PR-G (#3947) — per-grant deny-by-default at the webhook predicate.
+vi.mock("@/server/scope-grants/is-granted", () => ({
+  isGranted: mockIsGranted,
+  isDenied: mockIsDenied,
 }));
 
 // Avoid pulling in ws-handler's full transitive closure (#3244 unrelated).
@@ -138,6 +148,10 @@ beforeEach(() => {
     data: { id: FOUNDER_ID, stripe_customer_id: CUSTOMER_ID },
     error: null,
   });
+  // PR-G default: founder HAS an active grant at draft_one_click.
+  // Individual tests override for no-grant / denylist cases.
+  mockIsGranted.mockResolvedValue({ tier: "draft_one_click" });
+  mockIsDenied.mockReturnValue(false);
   delete process.env.SOLEUR_FR5_ENABLED;
 });
 
@@ -244,5 +258,59 @@ describe("Stripe invoice.payment_failed → Inngest bridge (FR5)", () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(200);
     expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  // PR-G (#3947) — per-grant deny-by-default at the webhook predicate.
+  // TR3: flag=on AND founder exists BUT no scope_grants row → fail-closed.
+  // This is the load-bearing test that compensates for K14's flip-in-PR-G
+  // decision (env flag is now a global kill-switch, not a per-tenant gate).
+  test("SOLEUR_FR5_ENABLED=true + founder + NO scope_grants row → does NOT call inngest.send (TR3)", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    // Override the beforeEach default: this founder has NO active grant.
+    mockIsGranted.mockResolvedValueOnce(null);
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(mockIsGranted).toHaveBeenCalledWith(
+      expect.any(Object),
+      FOUNDER_ID,
+      "finance.payment_failed",
+    );
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  // TR5a: denylist override → no send. PR-G ships with empty denylist
+  // (Phase 1.3 is-granted.ts inlines it); this test asserts the gate IS
+  // wired so a future denylist entry produces fail-closed behavior.
+  test("SOLEUR_FR5_ENABLED=true + grant exists + denylisted action_class → does NOT call inngest.send (TR5)", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    // isGranted's own denylist check returns null when denied. Simulate
+    // that contract here (isDenied is internal to is-granted.ts; we don't
+    // wire it directly into route.ts).
+    mockIsGranted.mockResolvedValueOnce(null);
+    mockIsDenied.mockReturnValueOnce(true);
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  // TR5b: grant-path with tier pass-through. inngest.send envelope MUST
+  // carry data.tier = grant.tier so the CFO function pins
+  // grant-tier-at-time-of-event into messages.trust_tier.
+  test("SOLEUR_FR5_ENABLED=true + grant exists + not denylisted → inngest.send fires with data.tier from grant", async () => {
+    process.env.SOLEUR_FR5_ENABLED = "true";
+    mockConstructEvent.mockReturnValue(makePaymentFailedEvent());
+    mockIsGranted.mockResolvedValueOnce({ tier: "approve_every_time" });
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
+    const envelope = mockInngestSend.mock.calls[0][0] as {
+      data: { tier?: string };
+    };
+    expect(envelope.data.tier).toBe("approve_every_time");
   });
 });

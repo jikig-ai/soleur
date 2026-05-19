@@ -197,6 +197,33 @@ export async function deleteAccount(
     );
   }
 
+  // 3.84 Anonymise scope_grants rows for this user BEFORE the tc_acceptances
+  //      cascade (migration 048, PR-G #3947). FK is ON DELETE RESTRICT — the
+  //      auth.admin.deleteUser call would abort without this. Runs BEFORE
+  //      anonymise_tc_acceptances so the cascade sequence matches FK order;
+  //      both target public.users(id). Failure here is FATAL on the same
+  //      reasoning as 3.85. SECURITY DEFINER RPC, idempotent (UPDATE …
+  //      WHERE founder_id = p_user_id is a no-op on already-anonymised rows).
+  try {
+    const { error: anonSgErr } = await service.rpc(
+      "anonymise_scope_grants",
+      { p_user_id: userId },
+    );
+    if (anonSgErr) {
+      log.error(
+        { userId, err: anonSgErr },
+        "anonymise_scope_grants failed — aborting deletion to avoid FK-block",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_scope_grants threw — aborting deletion to avoid FK-block",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
   // 3.85 Anonymise tc_acceptances rows for this user BEFORE auth-delete
   //      (migration 044). FK is ON DELETE RESTRICT — the cascade from
   //      auth.users → public.users would abort without this. Failure here

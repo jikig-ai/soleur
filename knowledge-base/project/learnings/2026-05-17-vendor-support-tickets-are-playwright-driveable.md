@@ -55,5 +55,5 @@ All four are wrong by default. Each should trigger a Playwright-first attempt at
 
 - PR #3946 PR-γ scope: `knowledge-base/project/specs/feat-sentry-residency-a2-branch-c-1/tasks.md` §17
 - Ticket drafts file (updated to reflect submitted state): `knowledge-base/engineering/ops/runbooks/sentry-support-ticket-drafts.md`
-- PIR Phase 8 Gate 3 anchor: `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+- PIR Phase 8 Gate 3 anchor: `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 - Related hard rules: `hr-exhaust-all-automated-options-before`, `hr-never-label-any-step-as-manual-without`, `hr-mcp-tools-playwright-etc-resolve-paths`.

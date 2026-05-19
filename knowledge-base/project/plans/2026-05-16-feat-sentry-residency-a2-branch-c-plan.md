@@ -113,7 +113,7 @@ None outside the triad. Operations + Marketing + Sales + Finance + Support not a
 
 ## Open Code-Review Overlap
 
-`gh issue list --label code-review --state open --json number,title,body --limit 200 → 75 open issues`. Searched bodies for each of the 5 PR-α target files (`apps/web-platform/scripts/sentry-monitors-audit.sh`, `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md`, `knowledge-base/legal/article-30-register.md`, `knowledge-base/legal/compliance-posture.md`, `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`) and the 5 PR-β audit-script + Terraform-root paths.
+`gh issue list --label code-review --state open --json number,title,body --limit 200 → 75 open issues`. Searched bodies for each of the 5 PR-α target files (`apps/web-platform/scripts/sentry-monitors-audit.sh`, `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md`, `knowledge-base/legal/article-30-register.md`, `knowledge-base/legal/compliance-posture.md`, `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`) and the 5 PR-β audit-script + Terraform-root paths.
 
 **Result:** None. No open code-review issue references any Branch C target file. No fold-in / acknowledge / defer decision needed.
 
@@ -141,7 +141,7 @@ None outside the triad. Operations + Marketing + Sales + Finance + Support not a
 
 ### PR-γ (`feat-sentry-residency-a2-branch-c-3`, to be created)
 
-- `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md` — flip `status: open` → `status: resolved` at L8. Append `## Phase 8 — Recovery Completeness` section before `## Who was affected (by role)` at L75. See TR4 institutional-precedent mechanic below.
+- `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` — flip `status: open` → `status: resolved` at L8. Append `## Phase 8 — Recovery Completeness` section before `## Who was affected (by role)` at L75. See TR4 institutional-precedent mechanic below.
 - `knowledge-base/legal/article-30-register.md` — backfill `<pending C2 merge>` placeholder in PA8 §(d) with PR-β merge SHA / commit ref.
 - 4 new GH issues filed: W1 (hard rule `hr-prereq-playwright-first-then-credential-handoff`), W2 (extend `soleur:brainstorm` Phase 1.0.5 to named URL substrings), W4 (worktree-manager `.mcp.json` config-flag injection under `SOLEUR_PLAYWRIGHT_HEADED=1`), W5 (`/soleur:compound` fail-friendly on main). W3 absorbed into PR-β C5 — no separate issue.
 - US shadow org teardown — operator-driven (admin UI at `sentry.io/settings/jikigai`); document the state transitions (Team trial → free plan → eventual close) in PR-γ body.
@@ -444,7 +444,7 @@ Verification (AC6 rewritten per DHH P1 to test ingest, not string shape):
 
 Per DHH P1 + Code-Simplicity P1: cut the institutional-precedent prose. The C5 audit-gate triple-expansion (now 4 gates per Arch F2) IS the recurrence-prevention signal; a 3-line closure citing the PR-β SHA is sufficient. If a second PIR ever benefits from the same shape, extract the template then from real n=2 precedent.
 
-Edit `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`:
+Edit `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`:
 1. L8: `status: open` → `status: resolved`.
 2. Append new section `## Phase 8 — Recovery Completeness` before `## Who was affected (by role)` at L75:
 
@@ -478,7 +478,7 @@ Verify each label exists via `gh label list | grep -E "^<label>\b"` before filin
 - AC12: US shadow org status documented in PR-γ body.
 - AC13: Both ticket IDs captured.
 - AC14: **(moved to PR-β Phase 8 AC14-pre.)** No longer in PR-γ scope.
-- AC15: `grep -nE "^status: resolved" knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; Phase 8 section present (4-branch Gate 3 enumerated; 3a/3b/3c/3d resolution selected by operator with evidence).
+- AC15: `grep -nE "^status: resolved" knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; Phase 8 section present (4-branch Gate 3 enumerated; 3a/3b/3c/3d resolution selected by operator with evidence).
 - AC16: **3 W-issues** (W1/W2/W5; W4 dropped) listed in PR-γ body with `gh issue view <N>` returning `state: open`.
 
 ## TR-Level Mechanics (the 5 open questions)
@@ -577,7 +577,7 @@ Plan options (verified against the cloudflare-token Doppler scope):
 - AC12: US shadow org status documented.
 - AC13: Both Sentry support ticket IDs captured.
 - AC14: `<pending C2 merge>` placeholder backfilled. **Verify:** `grep -rc "<pending C2 merge>" knowledge-base/legal/article-30-register.md knowledge-base/legal/compliance-posture.md` returns 0 for both files. (Widened per PR-α review pattern-recognition P1-A to cover the placeholder-syntax-unified compliance-posture.md row.)
-- AC15: PIR status `resolved`; Phase 8 section present. **Verify:** `grep -nE "^status: resolved" knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; `grep -c "## Phase 8 — Recovery Completeness" ...` returns 1.
+- AC15: PIR status `resolved`; Phase 8 section present. **Verify:** `grep -nE "^status: resolved" knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` returns L8; `grep -c "## Phase 8 — Recovery Completeness" ...` returns 1.
 - AC16: W1/W2/W4/W5 follow-up issues filed. **Verify:** each `gh issue view <N>` returns `state: open` with title matching W-spec.
 
 ### Post-merge (operator) — PR-γ
@@ -615,7 +615,7 @@ None active. Brainstorm closed all decision points; no SSH/network-connectivity 
 
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-16-sentry-residency-a2-branch-c-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-sentry-residency-a2-branch-c-1/spec.md`
-- PIR: `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+- PIR: `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 - A1 plan: `knowledge-base/project/plans/2026-05-15-feat-sentry-residency-cleanup-plan.md`
 - A1 PR: #3863 (merged 2026-05-15)
 - Umbrella issue: #3861

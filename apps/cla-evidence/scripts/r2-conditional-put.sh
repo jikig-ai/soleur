@@ -8,8 +8,13 @@
 #   - PUT <bucket>/<key> with `If-None-Match: *`.
 #   - 200 / 201        → ok-label, exit 0.
 #   - 412              → dup-label, exit 0 (idempotent first-writer-wins).
+#   - 409 / 403 + body <Code>ObjectLockedByBucketPolicy</Code>
+#                      → worm-${dup_label}, exit 0 (Lock-Rules-enforced first-
+#                        writer-wins; same audit property as 412 in non-WORM
+#                        buckets — see learning 2026-05-04 §13).
 #   - 5xx / 429        → retry up to 3 with 250ms / 500ms / 1000ms backoff.
-#   - 4xx ≠ 412        → fast-fail (Kieran F5; e.g., 403 from stale token is a
+#   - 4xx ≠ 412 and not WORM-bucket-policy duplicate
+#                      → fast-fail (Kieran F5; e.g., 403 from stale token is a
 #                        config bug, not transient). The R2 response body is
 #                        captured and surfaced in the `::error::` annotation so
 #                        operators read the actual S3 ErrorCode instead of
@@ -128,6 +133,30 @@ while [[ "$attempt" -le "$attempt_max" ]]; do
 
   if (( code == 412 )); then
     echo "${dup_label} status=412 key=$key attempt=$attempt (idempotent)"
+    exit 0
+  fi
+
+  # ORDERING IS LOAD-BEARING: the WORM 409|403 arm below MUST precede the
+  # generic 4xx catch (`code >= 400 && code < 500`). Moving it after the
+  # generic catch would make this arm dead code — 409/403 would be swallowed
+  # by the fatal-4xx arm and the cla-evidence step would silently revert to
+  # spamming red checks. The Bypass.b2/b2b and TS6.f tests are the canary.
+  #
+  # 409 or 403 + ObjectLockedByBucketPolicy: R2 Lock Rules (bucket-wide WORM)
+  # refused an overwrite of a key that already exists within the
+  # maxAgeSeconds floor. Production observed status 409 (run 26042357131);
+  # Cloudflare docs document error code 10069 at status 403. Both are
+  # handled here — the body code is the stable identifier; the 4xx envelope
+  # may shift between R2 implementation paths.
+  #
+  # Semantically equivalent to 412 PreconditionFailed in a non-WORM bucket —
+  # the canonical record exists and is sealed by first-writer-wins. The body
+  # match is intentionally specific to ObjectLockedByBucketPolicy: any other
+  # 4xx body (e.g., SignatureDoesNotMatch, AccessDenied, or a future
+  # object-key-lock code) falls through to the existing fatal-4xx arm and
+  # surfaces in the operator annotation.
+  if (( code == 409 || code == 403 )) && body_excerpt | grep -q -F '<Code>ObjectLockedByBucketPolicy</Code>'; then
+    echo "worm-${dup_label} status=$code key=$key attempt=$attempt (worm-idempotent)"
     exit 0
   fi
 

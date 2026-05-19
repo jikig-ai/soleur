@@ -140,7 +140,7 @@ assert_nomatch() {
 echo "--- Tier A: canonical matches (dry-run) ---"
 assert_match_dry "A1 git push origin main"            "git push origin main"                                         "prod-write-defer-git-push-main"
 assert_match_dry "A2 terraform apply"                 "terraform apply"                                              "prod-write-defer-terraform-apply"
-assert_match_dry "A3 doppler -c prd_terraform set"    "doppler secrets set FOO=bar --config prd_terraform"           "prod-write-defer-doppler-prd-secrets"
+assert_match_dry "A3 doppler -c prd_terraform set"    "doppler secrets set FOO=bar --config prd_terraform"           "prod-write-defer-doppler-secrets-stdout"
 
 # ============================================================
 # Tier B: form variations (the wrapped-invocation class)
@@ -152,14 +152,26 @@ assert_match_dry "B3 refspec HEAD:main"               "git push origin HEAD:main
 assert_match_dry "B4 wrapped via -- separator"        "bash session-state.sh with_lock -- git push origin main"      "prod-write-defer-git-push-main"
 assert_match_dry "B5 chained &&"                      "git fetch && git push origin main"                            "prod-write-defer-git-push-main"
 assert_match_dry "B6 chained ;"                       "echo go; terraform apply"                                     "prod-write-defer-terraform-apply"
-assert_match_dry "B7 env-prefixed doppler prd"        "DOPPLER_CONFIG=prd_terraform doppler secrets set X=Y --config prd_terraform" "prod-write-defer-doppler-prd-secrets"
-assert_match_dry "B8 short-flag doppler -c prd"       "doppler secrets set FOO=bar -c prd"                           "prod-write-defer-doppler-prd-secrets"
+assert_match_dry "B7 env-prefixed doppler prd"        "DOPPLER_CONFIG=prd_terraform doppler secrets set X=Y --config prd_terraform" "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B8 short-flag doppler -c prd"       "doppler secrets set FOO=bar -c prd"                           "prod-write-defer-doppler-secrets-stdout"
 assert_match_dry "B9 tofu apply"                      "tofu apply"                                                   "prod-write-defer-terraform-apply"
 assert_match_dry "B10 push master alias"               "git push origin master"                                       "prod-write-defer-git-push-main"
 assert_match_dry "B11 trailing semicolon"              "git push origin main;"                                        "prod-write-defer-git-push-main"
 assert_match_dry "B12 wrapped in subshell parens"      "(git push origin main)"                                       "prod-write-defer-git-push-main"
 assert_match_dry "B13 trailing chained sequence"       "git push origin main; echo done"                              "prod-write-defer-git-push-main"
 assert_match_dry "B14 backgrounded"                    "git push origin main &"                                       "prod-write-defer-git-push-main"
+# Widened rule: doppler-stdout-echo trap covers `delete` and configs {dev,ci} (issue #4029).
+assert_match_dry "B15 doppler delete -c prd"           "doppler secrets delete X -p soleur -c prd --yes"              "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B16 doppler delete -c dev"           "doppler secrets delete X -p soleur -c dev --yes"              "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B17 doppler delete -c prd_terraform" "doppler secrets delete X -c prd_terraform --yes"              "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B18 doppler delete -c ci"            "doppler secrets delete X -c ci --yes"                         "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B19 doppler set -c dev"              "doppler secrets set X=Y -c dev"                               "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B20 doppler set -c ci"               "doppler secrets set X=Y -c ci"                                "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B21 env-prefixed delete"             "DOPPLER_CONFIG=prd doppler secrets delete X --config prd --yes" "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B22 wrapped delete via -- separator" "bash session-state.sh with_lock secret-rotate 300 -- doppler secrets delete X -c prd --yes" "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B23 chained && delete"               "gh issue close 1 && doppler secrets delete X -c prd --yes"    "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B24 delete -c prd_orchestration"     "doppler secrets delete TENANT_X_INSTALLATION_ID -c prd_orchestration --yes" "prod-write-defer-doppler-secrets-stdout"
+assert_match_dry "B25 set -c prd_orchestration"        "doppler secrets set TENANT_X_INSTALLATION_ID=123 --config prd_orchestration" "prod-write-defer-doppler-secrets-stdout"
 
 # ============================================================
 # Tier C: adjacent non-matches (must NOT fire)
@@ -170,7 +182,7 @@ assert_nomatch "C2 push feat-main-update (substring)"    "git push origin feat-m
 assert_nomatch "C3 terraform plan (not apply)"           "terraform plan"
 assert_nomatch "C4 terraform apply substring in echo"    "echo 'hint: try terraform apply later'"
 assert_nomatch "C5 doppler --config prd-staging"         "doppler secrets set FOO=bar --config prd-staging"
-assert_nomatch "C6 doppler --config dev"                 "doppler secrets set FOO=bar --config dev"
+assert_nomatch "C6 doppler --config preview"             "doppler secrets set FOO=bar --config preview"
 assert_nomatch "C7 git pull origin main"                 "git pull origin main"
 assert_nomatch "C8 echo gh pr merge example"             "echo 'gh pr merge example'"
 assert_nomatch "C9 terraform apply -help (read-only)"    "terraform apply -help"
@@ -181,6 +193,16 @@ assert_nomatch "C13 push to branch with main-fixup"      "git push origin main-f
 assert_nomatch "C14 push to slash-separated feat/main"   "git push origin feat/dashboard-main"
 assert_nomatch "C15 doppler secrets get (read-only)"     "doppler secrets get --config prd_terraform"
 assert_nomatch "C16 doppler --config=prd (equals-form)"  "doppler secrets set FOO=bar --config=prd_terraform"
+# Widened-rule adjacent non-matches: delete reads + delete --help + adjacent verbs.
+assert_nomatch "C17 doppler secrets list --config prd"   "doppler secrets list --config prd"
+assert_nomatch "C18 doppler secrets download --config prd" "doppler secrets download --config prd"
+assert_nomatch "C19 doppler delete --help (read-only)"   "doppler secrets delete --help"
+assert_nomatch "C20 doppler delete -h (short read-only)" "doppler secrets delete -h"
+assert_nomatch "C21 doppler set --help (read-only)"      "doppler secrets set --help"
+assert_nomatch "C22 doppler delete -c prd-staging"       "doppler secrets delete X -c prd-staging --yes"
+assert_nomatch "C23 doppler delete --config=prd (equals-form)" "doppler secrets delete X --config=prd --yes"
+assert_nomatch "C24 echo substring of delete"            "echo 'doppler secrets delete example'"
+assert_nomatch "C25 doppler set -c stg (staging)"        "doppler secrets set FOO=bar -c stg"
 
 # ============================================================
 # Tier D: enforce-mode wrapped envelope + decision value
@@ -188,7 +210,7 @@ assert_nomatch "C16 doppler --config=prd (equals-form)"  "doppler secrets set FO
 echo "--- Tier D: enforce mode (wrapped defer envelope) ---"
 assert_match_enforce "D1 enforce push main"            "git push origin main"                                         "prod-write-defer-git-push-main"
 assert_match_enforce "D2 enforce terraform apply"      "terraform apply -auto-approve"                                "prod-write-defer-terraform-apply"
-assert_match_enforce "D3 enforce doppler prd"          "doppler secrets set FOO=bar --config prd_terraform"           "prod-write-defer-doppler-prd-secrets"
+assert_match_enforce "D3 enforce doppler prd"          "doppler secrets set FOO=bar --config prd_terraform"           "prod-write-defer-doppler-secrets-stdout"
 
 # ============================================================
 # Tier E: bypass (TTY + env reason+operator) → kind=bypass, allow

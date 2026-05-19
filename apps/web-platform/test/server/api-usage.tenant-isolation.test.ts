@@ -26,6 +26,7 @@ import {
   mintFounderJwt,
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
+import { registerSharedMintCache } from "@/test/helpers/mint-once";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -97,6 +98,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       _resetTenantCache();
       const aMint = await mintFounderJwt(userA.id);
       const bMint = await mintFounderJwt(userB.id);
+      // Cap suite mint count to 2 — see test/helpers/mint-once.ts.
+      registerSharedMintCache([
+        [userA.id, aMint],
+        [userB.id, bMint],
+      ]);
 
       aClient = createClient(url, anonKey, {
         global: { headers: { Authorization: `Bearer ${aMint.jwt}` } },

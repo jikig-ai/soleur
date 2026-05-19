@@ -25,7 +25,8 @@ import {
 } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { mintFounderJwt } from "@/lib/supabase/tenant";
+import { type MintedJwt, type UserId } from "@/lib/supabase/tenant";
+import { installSharedMintCache } from "@/test/helpers/mint-once";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -58,6 +59,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     const userA = { id: "", email: syntheticEmail() };
     const userB = { id: "", email: syntheticEmail() };
     let seedRowId = "";
+    let mintCache: Map<UserId, MintedJwt>;
 
     beforeAll(async () => {
       const url = requireEnv("SUPABASE_URL");
@@ -103,6 +105,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(selError, "select seed row").toBeNull();
       expect(rows?.length).toBe(1);
       seedRowId = rows![0].id;
+
+      // Cap suite mint count to 2 — the RLS-scope test reads JWTs from
+      // this map instead of calling `mintFounderJwt` per-test. See
+      // test/helpers/mint-once.ts.
+      mintCache = await installSharedMintCache([userA.id, userB.id]);
     });
 
     afterAll(async () => {
@@ -151,16 +158,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const url = requireEnv("SUPABASE_URL");
       const anonKey = requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
-      const tenantClient = async (userId: string) => {
-        const { jwt } = await mintFounderJwt(userId, { ttlSec: 600 });
+      const tenantClient = (userId: string) => {
+        const cached = mintCache.get(userId);
+        if (!cached) throw new Error(`no cached JWT for ${userId}`);
         return createClient(url, anonKey, {
-          global: { headers: { Authorization: `Bearer ${jwt}` } },
+          global: { headers: { Authorization: `Bearer ${cached.jwt}` } },
           auth: { persistSession: false, autoRefreshToken: false },
         });
       };
 
-      const aClient = await tenantClient(userA.id);
-      const bClient = await tenantClient(userB.id);
+      const aClient = tenantClient(userA.id);
+      const bClient = tenantClient(userB.id);
 
       const { data: aRows, error: aError } = await aClient
         .from("audit_byok_use")

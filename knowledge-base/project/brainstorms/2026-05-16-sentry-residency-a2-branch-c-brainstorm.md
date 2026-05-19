@@ -123,7 +123,7 @@ To be filed as 4 atomic GH issues in PR-γ:
 
 ## References
 
-- **PIR:** `knowledge-base/engineering/ops/runbooks/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+- **PIR:** `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
 - **Today's cascade learning (load-bearing):** `knowledge-base/project/learnings/2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md`
 - **A1 plan:** `knowledge-base/project/plans/2026-05-15-feat-sentry-residency-cleanup-plan.md`
 - **A1 PR:** #3863 (merged v3.94.8 / web-v0.87.9 on 2026-05-15)

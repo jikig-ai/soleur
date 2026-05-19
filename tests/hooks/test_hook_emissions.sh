@@ -71,6 +71,27 @@ _check_silent() {
   : > "$FILE"
 }
 
+# Deny-payload check: assert hook stdout carries permissionDecision=deny.
+# Distinct from _check (which verifies incident JSONL emission) — this tests
+# the stdout response claude-code-action reads to make its block decision.
+# Catches silent breakage where emit_incident fires but the deny jq block is
+# missing or malformed. See issue #3135.
+_check_deny_payload() {
+  local label="$1" command="$2"
+  local input payload
+  input=$(jq -nc --arg cmd "$command" '{"tool_name":"Bash","tool_input":{"command":$cmd}}')
+  payload=$(echo "$input" | bash "$WORK/.claude/hooks/guardrails.sh" 2>/dev/null || true)
+  if echo "$payload" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1; then
+    pass=$((pass + 1))
+    echo "[ok] $label → permissionDecision=deny"
+  else
+    fail=$((fail + 1))
+    echo "[FAIL] $label — stdout missing permissionDecision=deny" >&2
+    echo "  stdout: $payload" >&2
+  fi
+  : > "$FILE"
+}
+
 # Build a fake git repo we can point commands at via .cwd. Committed on
 # branch `main` so commit-on-main cases fire. All commits inside $WORK.
 _build_fake_main_repo() {
@@ -85,8 +106,9 @@ _build_fake_main_repo() {
 # The guard blocks git stash regardless of working directory. The .cwd field
 # below is a no-op for this check; it is kept only for payload completeness.
 # Cases enumerate every alternation branch in the regex
-# `(^|&&|\|\||;)\s*git\s+stash` plus the cleanup sub-command and a negative
-# case that proves the guard does not over-fire on substrings.
+# `(^|&&|\|\||;)\s*git\s+stash` plus the cleanup sub-command, a dedicated
+# ;-primary case (proved independently, not masked by ^ firing first in the
+# &&-chain case), the exact issue #3135 repro, and a negative case.
 mkdir -p "$WORK/.worktrees/fake/inner"
 echo '{"tool_name":"Bash","tool_input":{"command":"git stash"},"cwd":"'"$WORK/.worktrees/fake/inner"'"}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
@@ -100,6 +122,18 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git stash && bun test plugins
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
 _check "guardrails: git stash (&& chain — PR #2683 pattern)" "hr-never-git-stash-in-worktrees"
 
+# ; as primary trigger — test 3 above hides whether ; works because ^ fires
+# first. This command has no leading git stash, so only ; can match.
+echo '{"tool_name":"Bash","tool_input":{"command":"true; git stash pop"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash (; primary — not masked by ^)" "hr-never-git-stash-in-worktrees"
+
+# Issue #3135 repro: && chain followed by piped grep with | inside the pattern.
+# Verifies the hook fires when the command string contains many unrelated | chars.
+echo '{"tool_name":"Bash","tool_input":{"command":"git stash && bash plugins/soleur/test/schedule-skill-once.test.sh 2>&1 | grep -E \"FAIL|Passed|Failed\" | tail -5; echo \"---restoring---\"; git stash pop"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash (&& + piped grep — issue #3135 repro)" "hr-never-git-stash-in-worktrees"
+
 echo '{"tool_name":"Bash","tool_input":{"command":"git diff --quiet || git stash"}}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
 _check "guardrails: git stash (|| chain)" "hr-never-git-stash-in-worktrees"
@@ -109,6 +143,13 @@ _check "guardrails: git stash (|| chain)" "hr-never-git-stash-in-worktrees"
 echo '{"tool_name":"Bash","tool_input":{"command":"echo gitstash; rg stash"}}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
 _check_silent "guardrails: stash substrings (no over-fire)" "hr-never-git-stash-in-worktrees"
+
+# Deny-payload smoke test (issue #3135): verify the hook stdout returns the
+# deny payload that claude-code-action reads to block the tool call. The
+# existing cases above only verify incident JSONL emission; this case confirms
+# the jq deny block is also present in stdout — catching silent bypass where
+# telemetry fires but Claude Code never receives the block signal.
+_check_deny_payload "guardrails: git stash deny-payload (issue #3135)" "git stash"
 
 # --- guardrails: bypass preflight (--no-verify should emit without blocking)
 echo '{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m foo"}}' \

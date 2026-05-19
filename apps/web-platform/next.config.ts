@@ -23,7 +23,25 @@ const nextConfig: NextConfig = {
   // from the Next.js Route Handler path (`app/api/kb/share/route.ts` →
   // `kb-share.ts` → `readPdfMetadata`), revisit with a different
   // mechanism (`transpilePackages`, restructure the worker URL, etc.).
-  serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws"],
+  //
+  // `pino` + `pino-pretty` MUST stay external: `server/logger.ts` enables
+  // pino-pretty transport whenever `NODE_ENV !== "production"` (i.e. dev,
+  // test, and CI's e2e job). The transport spawns a worker_thread that
+  // loads `pino/lib/worker.js` + the `pino-pretty` entry by resolving from
+  // `node_modules`. If Next.js bundles them into `.next/server/vendor-
+  // chunks/`, the runtime `new Worker(workerUrl)` call hits
+  // `MODULE_NOT_FOUND: /.next/server/vendor-chunks/lib/worker.js` and the
+  // worker thread exits, cascading uncaught exceptions through every
+  // server route that calls `logger.error` (e.g. `app/(auth)/callback/
+  // route.ts` → `reportSilentFallback`). All pino consumers are
+  // server-only (`server/**`), so externalizing has no client-bundle
+  // cost.
+  serverExternalPackages: [
+    "@anthropic-ai/claude-agent-sdk",
+    "ws",
+    "pino",
+    "pino-pretty",
+  ],
   experimental: {
     // SECURITY: restrict Server Action origins for defense-in-depth
     serverActions: {

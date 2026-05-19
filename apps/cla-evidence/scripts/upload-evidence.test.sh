@@ -24,6 +24,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # Stub curl: echo the next response code from $work/codes.txt and consume it.
+# If $work/body_fixture exists, honor curl's `-o <file>` arg and copy the
+# fixture there so body-echo tests can assert the error annotation surfaces
+# the R2 ErrorCode. (Mirrors upload-bypass.test.sh's stub form.)
 mk_curl_stub() {
   local codes="$1"
   cat > "$work/curl" <<EOF
@@ -31,6 +34,16 @@ mk_curl_stub() {
 codes_file="$codes"
 read -r code < "\$codes_file"
 sed -i '1d' "\$codes_file"
+# Parse \`-o <file>\` and copy the body fixture there if present.
+prev=""
+out_path=""
+for arg in "\$@"; do
+  if [[ "\$prev" == "-o" ]]; then out_path="\$arg"; fi
+  prev="\$arg"
+done
+if [[ -n "\$out_path" && -f "$work/body_fixture" ]]; then
+  cp "$work/body_fixture" "\$out_path"
+fi
 # Accept a -w "%{http_code}" pattern: emit just the code on stdout, nothing on stderr.
 echo "\$code"
 exit 0
@@ -100,6 +113,26 @@ if run_sut '{"schema_version":"1.0","x":1}' >/dev/null 2>&1; then
   fail=1
 else
   green "PASS: TS6.e 5xx exhausted → hard-fail"
+fi
+
+# TS6.f: WORM-bucket-policy duplicate at HTTP 409 (R2 Lock Rules block a
+# byte-identical re-write of the same content-addressed evidence key). This
+# is the dormant evidence path the shared-primitive fix unblocks for free: a
+# contributor edits their sign-comment to byte-identical text → identical
+# sha → same key → R2 Lock Rules refuse the duplicate write with
+# <Code>ObjectLockedByBucketPolicy</Code>. Idempotent-success, not a config
+# error.
+printf "409\n" > "$work/codes.txt"
+printf '<Error><Code>ObjectLockedByBucketPolicy</Code><Message>The object is locked by the bucket policy.</Message></Error>' > "$work/body_fixture"
+mk_curl_stub "$work/codes.txt"
+out=$(run_sut '{"schema_version":"1.0","x":1}' 2>&1) && rc=0 || rc=$?
+rm -f "$work/body_fixture"
+if [[ "$rc" -eq 0 ]] && grep -qE 'worm-duplicate status=409' <<<"$out" && ! grep -q '::error::' <<<"$out"; then
+  green "PASS: TS6.f WORM-bucket-policy 409 + ObjectLockedByBucketPolicy → exit 0 (worm-idempotent)"
+else
+  red "FAIL: TS6.f expected exit 0 + 'worm-duplicate status=409' (no ::error::); got rc=$rc"
+  red "$out"
+  fail=1
 fi
 
 if [[ "$fail" -eq 0 ]]; then

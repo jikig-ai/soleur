@@ -16,7 +16,7 @@ Issue #2993 reported a wrong `gh secret set --body -` invocation in one specific
 That scope was too narrow. The same fabricated-flag bug class lived in three additional operator-facing surfaces the AC grep didn't cover:
 
 1. `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md:131` — `gh secret set ... --body-file -` (the same fabricated flag the deepen-plan caught at plan-time).
-2. `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md:206` — `gh secret set ... < /dev/stdin` (no-op stdin redirect; operator-trap).
+2. `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md:206` — `gh secret set ... < /dev/stdin` (no-op stdin redirect; operator-trap).
 3. `.github/workflows/scheduled-linkedin-token-check.yml:63` — issue-body template documenting `echo "<token>" | gh secret set` (`echo`'s trailing `\n` corrupts the JWT).
 
 The PR would have shipped with the issue closed and three same-class operator runbooks still broken if multi-agent review hadn't widened the scope.

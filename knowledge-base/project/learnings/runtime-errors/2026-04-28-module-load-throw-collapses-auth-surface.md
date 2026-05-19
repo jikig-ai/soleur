@@ -160,7 +160,7 @@ deferred to in-scope.
 
 ## See also
 
-- `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md` — the operator-facing diagnosis + hot-fix runbook
+- `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` — the operator-facing diagnosis + hot-fix runbook
 - `knowledge-base/engineering/ops/runbooks/canary-probe-set.md` — the canary contract
 - `apps/web-platform/lib/supabase/client.ts` — wrapped validator call site
 - `apps/web-platform/app/error.tsx`, `apps/web-platform/app/(dashboard)/error.tsx` — observability-migrated error boundaries
