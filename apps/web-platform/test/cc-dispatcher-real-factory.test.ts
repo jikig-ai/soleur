@@ -78,11 +78,47 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.
+  // These dispatcher tests do not exercise the debounce TTL, so
+  // the stub forwards every call straight through to the spy.
+  mirrorWithDebounce: mockReportSilentFallback,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockSupabaseFrom })),
 }));
+
+// PR-C §2.4 / §2.10 / §2.11 (#3244): tenant migration of conversation-
+// writer + agent-runner + cc-dispatcher (BYOK lease wrap). Mock so the
+// test does not pull `mintFounderJwt` or the lease's `fetchAndDecrypt`
+// chain.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockSupabaseFrom })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
+vi.mock("@/server/byok-lease", async () => {
+  const actual = await vi.importActual<typeof import("@/server/byok-lease")>(
+    "@/server/byok-lease",
+  );
+  return {
+    ...actual,
+    // Bridge legacy `mockGetUserApiKey` setups (which used to mock the
+    // direct `getUserApiKey()` call in cc-dispatcher pre-PR-C) to the
+    // new `lease.getApiKey()` surface. Tests that
+    // `mockResolvedValue("sk-test")` / `mockRejectedValueOnce(KeyInvalidError)`
+    // continue to drive the same code path.
+    runWithByokLease: vi.fn(
+      async <T>(
+        _userId: string,
+        body: (lease: { getApiKey: () => string | Promise<string> }) => Promise<T>,
+      ) => body({ getApiKey: () => mockGetUserApiKey() }),
+    ),
+  };
+});
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
@@ -267,23 +303,36 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
-  // T6b (#3338): cc path HARD-BLOCKS Bash/Edit/Write via disallowedTools so
-  // the model cannot emit them — no review_gate WS event reaches the
-  // user-facing Concierge surface. The auto-approve `allowedTools` list pins
-  // read-only tools (Read/Glob/Grep/LS/NotebookRead/TodoWrite/ExitPlanMode)
-  // so they bypass canUseTool. SDK semantics per sdk.d.ts:855-892:
+  // T6b (#3338 + #3344): cc path HARD-BLOCKS Edit/Write via disallowedTools.
+  //
+  // Bash was originally hard-blocked alongside Edit/Write (#3338) to prevent
+  // a `find . -name "*.pdf"` / `apt-get install poppler-utils` modal cascade.
+  // Two structural mitigations (#3338 PDF Read 24 MB ceiling + #3430
+  // page-count gate) eliminated those triggers, so #3344 removed Bash from
+  // the hard-block list. Bash now routes through canUseTool + the legacy
+  // path's safe-bash allowlist (auto-approve for read-only KB-exploration
+  // verbs; review-gate fallback for everything else).
+  //
+  // The auto-approve `allowedTools` list pins read-only tools
+  // (Read/Glob/Grep/LS/NotebookRead/TodoWrite/ExitPlanMode) so they bypass
+  // canUseTool. SDK semantics per sdk.d.ts:855-892:
   //   - allowedTools = auto-approve (NOT restriction)
   //   - disallowedTools = hard-block (removes from model's context)
-  // Pin BOTH invariants so a future regression that flips one cannot silently
-  // re-introduce the apt-get/find Bash modal cascade.
+  // Pin BOTH invariants. Bash MUST NOT appear in disallowedTools (post-#3344)
+  // so the cc-path can route Bash through safe-bash. Edit/Write MUST remain
+  // in disallowedTools so the cc-router still cannot mutate files.
   // -------------------------------------------------------------------------
-  it("T6b: disallowedTools HARD-BLOCKS Bash/Edit/Write on the cc path (#3338)", async () => {
+  it("T6b: disallowedTools HARD-BLOCKS Edit/Write on the cc path; Bash routes via canUseTool (#3338 + #3344)", async () => {
     await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(Array.isArray(opts.disallowedTools)).toBe(true);
     expect(opts.disallowedTools).toEqual(
-      expect.arrayContaining(["Bash", "Edit", "Write", "WebSearch", "WebFetch"]),
+      expect.arrayContaining(["Edit", "Write", "WebSearch", "WebFetch"]),
     );
+    // #3344: Bash MUST NOT be in disallowedTools — the model needs to emit
+    // it so it routes through canUseTool → safe-bash auto-approve for
+    // read-only verbs. Pinning the negative-space invariant.
+    expect(opts.disallowedTools).not.toContain("Bash");
     // Auto-approve list narrows to read-only safe tools — order-tolerant
     // closed-set match so widening the list requires an explicit test edit.
     expect(Array.isArray(opts.allowedTools)).toBe(true);

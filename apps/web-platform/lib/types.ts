@@ -9,9 +9,13 @@ export type { WorkflowName } from "@/server/conversation-routing";
 export type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
 
 /**
- * Terminal states a `/soleur:go` workflow run can end in (#2885 Stage 3).
- * The tuple is the single source of truth — both the TS union below and the
- * Zod schema in `lib/ws-zod-schemas.ts` derive from it.
+ * Terminal states a `/soleur:go` workflow run can end in. The runner's
+ * `WorkflowEnd["status"]` union in `server/soleur-go-runner.ts` is the
+ * canonical source; this tuple mirrors it (enforced by
+ * `_AssertWorkflowEndStatusMatches` in `soleur-go-runner.ts` — adding to
+ * either side without the other is a TS error there). Both the Zod
+ * schema in `lib/ws-zod-schemas.ts` and the TS union below derive from
+ * this tuple. #3827 + ADR-031 amendment 2026-05-15.
  */
 export const WORKFLOW_END_STATUSES = [
   "completed",
@@ -19,8 +23,6 @@ export const WORKFLOW_END_STATUSES = [
   "cost_ceiling",
   "idle_timeout",
   "plugin_load_failure",
-  "sandbox_denial",
-  "runner_crash",
   "runner_runaway",
   "internal_error",
 ] as const;
@@ -266,7 +268,21 @@ export type WSMessage =
       reason: ContextResetReason;
       conversationId: string;
     }
-  | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
+  | {
+      type: "usage_update";
+      conversationId: string;
+      totalCostUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      // Cache tokens — `0` when prompt caching is not engaged. Widened
+      // 2026-05-12 to close the dashboard cross-check gap vs the
+      // Anthropic Console for cached prompts (plan §Risks R8).
+      // Optional for one release cycle so rolling prd deploys don't
+      // drop frames between mismatched server/client shapes; coerce
+      // `?? 0` at every consumer. Tighten in a follow-up.
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
   // Stage 3 (#2885) — Command Center soleur-go router protocol with
@@ -411,14 +427,38 @@ export interface Message {
    *  fixtures/snapshots don't churn; runtime persistence always sets
    *  it (DB default is `'complete'`). */
   status?: "complete" | "aborted";
-  /** Aborted-turn snapshot: token cost + completed-actions chip-list.
-   *  Set only when `status === 'aborted'`. Shape documented in
-   *  migration 040 and `UsageSnapshot` in agent-runner.ts. */
+  /** #3640 F6 — discriminates the `usage` shape. **The discriminator
+   *  lives on the nested `usage` object, NOT at the Message top level**
+   *  (review #3670 — the top-level field was declared but unread; readers
+   *  uniformly consult `usage?.variant`). The reader-side types
+   *  (`AbortMarkerUsage` in `message-bubble.tsx`, `ChatTextMessage.usage`
+   *  in `chat-state-machine.ts`) each carry their own `variant?` field;
+   *  the hydration site in `lib/ws-client.ts:1010-1024` derives it from
+   *  `leader_id === CC_ROUTER_LEADER_ID`. There is no `variant` column on
+   *  the `messages` table — this is a TypeScript-only widening.
+   *
+   *  - **Legacy `agent-runner` path** (default — nested `variant` absent
+   *    or `"legacy"`, `leader_id` ∈ domain leaders): full `UsageSnapshot`
+   *    on `status === 'aborted'` turns — `{ input_tokens, output_tokens,
+   *    cost_usd?, completed_actions[] }`. Shape documented in
+   *    `UsageSnapshot` in `agent-runner.ts` and migration 040.
+   *
+   *  - **cc-router path** (nested `variant === "cc"`, `leader_id ===
+   *    'cc_router'`, PR #3603 W4): cc-narrowed `{ cost_usd: number }`
+   *    only — Art. 5(1)(c) data minimization. Persisted on `'complete'`
+   *    turns when `CC_PERSIST_USAGE === "true"` (default off until PR-C
+   *    Privacy Policy refresh ships); also attached to `'aborted'` rows
+   *    when captured by `onResult` before the abort fired.
+   *
+   *  Optional in the type so existing fixtures don't churn. Readers
+   *  should branch on `usage?.variant` (post-#3640 F6) rather than on
+   *  field presence — see `renderAbortedAssistant` in `message-bubble.tsx`.
+   */
   usage?: {
-    input_tokens: number;
-    output_tokens: number;
+    input_tokens?: number;
+    output_tokens?: number;
     cost_usd?: number | null;
-    completed_actions: Array<{
+    completed_actions?: Array<{
       tool_name: string;
       input_summary: string;
       result_summary: string;

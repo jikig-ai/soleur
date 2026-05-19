@@ -116,6 +116,8 @@ describe("ChatPage — existing conversation (resume_session)", () => {
       totalCostUsd: 0.0042,
       inputTokens: 1200,
       outputTokens: 300,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
     };
 
     const { container } = await renderChatPage();

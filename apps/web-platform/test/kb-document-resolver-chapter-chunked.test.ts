@@ -33,8 +33,10 @@ const {
   reportSilentFallbackSpy: vi.fn(),
 }));
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({
+// PR-C §2.7 (#3244): kb-document-resolver now reads users.workspace_path
+// via `@/lib/supabase/tenant` instead of `@/lib/supabase/service`.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: async () => ({
     from: () => ({
       select: () => ({
         eq: () => ({
@@ -43,11 +45,19 @@ vi.mock("@/lib/supabase/service", () => ({
       }),
     }),
   }),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.ts.
+  // kb-document-resolver routes extractPdfText failure mirrors
+  // through it; forward straight through so the existing spy
+  // assertions keep working.
+  mirrorWithDebounce: reportSilentFallbackSpy,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 vi.mock("@/server/pdf-text-extract", async () => {

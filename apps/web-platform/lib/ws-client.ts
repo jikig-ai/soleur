@@ -24,6 +24,7 @@ import { parseWSMessage } from "@/lib/ws-zod-schemas";
 import { reportSilentFallback } from "@/lib/client-observability";
 import * as Sentry from "@sentry/nextjs";
 import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
+import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 
@@ -62,6 +63,11 @@ export interface UsageData {
   totalCostUsd: number;
   inputTokens: number;
   outputTokens: number;
+  // Cache tokens — `0` when prompt caching is not engaged. Widened
+  // 2026-05-12 so the chat-surface cost badge can render the same
+  // total-input semantics the dashboard's API Usage section does.
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
 }
 
 export interface StartSessionOptions {
@@ -111,6 +117,12 @@ interface UseWebSocketReturn {
    *  into `workflowEnded` so input stays disabled across reloads even when
    *  the in-memory lifecycle slice is `idle` post-mount. */
   workflowEndedAt: string | null;
+  /** PR-B (#3603) — conversation row's `created_at`, hydrated by the
+   *  history fetch. The chat surface uses it to gate the
+   *  cohort-missing-reply marker on the row-absence cohort window
+   *  (2026-05-05..2026-05-12 UTC). `null` before hydration completes;
+   *  the marker treats `null` as "do not render". */
+  conversationCreatedAt: string | null;
   /** True while a `/api/conversations/:id/messages` fetch is in flight.
    *  Surfaces from the resume-history and mount-time history-fetch effects.
    *  ChatSurface uses this to gate the "Send a message to get started"
@@ -379,6 +391,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   // Stage 4 review F3: persisted `workflow_ended_at` from history fetch.
   const [workflowEndedAt, setWorkflowEndedAt] = useState<string | null>(null);
+  // PR-B (#3603) — conversation start time hydrated from history fetch.
+  const [conversationCreatedAt, setConversationCreatedAt] = useState<string | null>(null);
   // True while either history-fetch effect (mount-time or resume-by-ID) has
   // an in-flight fetch. ChatSurface gates its empty-state placeholder on
   // `!historyLoading` so the placeholder cannot render during the round-trip,
@@ -779,6 +793,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             totalCostUsd: (prev?.totalCostUsd ?? 0) + msg.totalCostUsd,
             inputTokens: (prev?.inputTokens ?? 0) + msg.inputTokens,
             outputTokens: (prev?.outputTokens ?? 0) + msg.outputTokens,
+            // `?? 0` coerces frames from old-shape servers (cache fields
+            // absent) during a rolling deploy. Tighten to required when
+            // the Zod schema flips back to non-optional.
+            cacheReadInputTokens:
+              (prev?.cacheReadInputTokens ?? 0) + (msg.cacheReadInputTokens ?? 0),
+            cacheCreationInputTokens:
+              (prev?.cacheCreationInputTokens ?? 0) +
+              (msg.cacheCreationInputTokens ?? 0),
           }));
           break;
         }
@@ -883,6 +905,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     messages: ChatMessage[];
     costData: UsageData | null;
     workflowEndedAt: string | null;
+    createdAt: string | null;
   } | null> {
     // Validate targetId is a safe path segment to satisfy CodeQL's
     // request-forgery check. Allows UUIDs and alphanumeric IDs only.
@@ -977,26 +1000,64 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // bubble on every parent render, regressing the 10-50 Hz token-stream
       // memo guarantee on long threads).
       status: m.status ?? undefined,
+      // #3640 F6 — derive nested `usage.variant` from `leader_id` per the
+      // `AbortMarkerUsage` doc-comment in `components/chat/message-bubble.tsx`
+      // and the `Message.usage` doc-comment in `lib/types.ts`. The cc-router path
+      // (`leader_id === CC_ROUTER_LEADER_ID`) persists the cc-narrowed
+      // `{ cost_usd }` shape; the legacy agent-runner path persists the
+      // full `UsageSnapshot`. Downstream readers (`renderAbortedAssistant`
+      // in `message-bubble.tsx`) switch on `usage.variant` instead of the
+      // pre-#3640 `typeof === "number"` field-presence checks.
       usage:
         m.status === "aborted" && m.usage
-          ? {
-              input_tokens: m.usage.input_tokens,
-              output_tokens: m.usage.output_tokens,
-              cost_usd: m.usage.cost_usd ?? null,
-              completed_actions: m.usage.completed_actions ?? [],
-            }
+          ? m.leader_id === CC_ROUTER_LEADER_ID
+            ? {
+                variant: "cc" as const,
+                cost_usd: m.usage.cost_usd ?? null,
+              }
+            : {
+                variant: "legacy" as const,
+                input_tokens: m.usage.input_tokens,
+                output_tokens: m.usage.output_tokens,
+                cost_usd: m.usage.cost_usd ?? null,
+                completed_actions: m.usage.completed_actions,
+              }
           : null,
     }));
 
     const costData: UsageData | null =
       json.totalCostUsd > 0
-        ? { totalCostUsd: json.totalCostUsd, inputTokens: json.inputTokens, outputTokens: json.outputTokens }
+        ? {
+            totalCostUsd: json.totalCostUsd,
+            inputTokens: json.inputTokens,
+            outputTokens: json.outputTokens,
+            // History responses pre-2026-05-12 omit cache token fields;
+            // default to 0 so the resume path can hydrate without
+            // throwing on missing fields. Forward-going responses
+            // populate these from `api-messages.ts`.
+            cacheReadInputTokens:
+              typeof json.cacheReadInputTokens === "number"
+                ? json.cacheReadInputTokens
+                : 0,
+            cacheCreationInputTokens:
+              typeof json.cacheCreationInputTokens === "number"
+                ? json.cacheCreationInputTokens
+                : 0,
+          }
         : null;
 
     const workflowEndedAtFromServer: string | null =
       typeof json.workflowEndedAt === "string" ? json.workflowEndedAt : null;
 
-    return { messages: mapped, costData, workflowEndedAt: workflowEndedAtFromServer };
+    const createdAtFromServer: string | null =
+      typeof json.createdAt === "string" ? json.createdAt : null;
+
+    return {
+      messages: mapped,
+      costData,
+      workflowEndedAt: workflowEndedAtFromServer,
+      createdAt: createdAtFromServer,
+    };
   }
 
   /** Seed usageData from fetched cost data. Uses functional updater so a
@@ -1044,6 +1105,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       dispatch({ type: "filter_prepend", messages: result.messages });
       seedCostData(result.costData);
       seedWorkflowEndedAt(result.workflowEndedAt);
+      // PR-B (#3603): write the resolved row's createdAt. Unlike
+      // seedCostData/seedWorkflowEndedAt (which guard against racing WS
+      // events that could clobber a fresher in-memory value), `created_at`
+      // is a write-once row attribute with no WS-side update path — the
+      // history fetch is the only writer. The sidebar variant reuses one
+      // useWebSocket hook across conversation switches (resumeByContextPath
+      // resolves a new realConversationId while keeping the hook alive);
+      // a `prev ?? value` seed would silently render conversation A's date
+      // while the user is reading conversation B. See review #3653.
+      setConversationCreatedAt(result.createdAt);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       reportSilentFallback(err, {
@@ -1242,6 +1313,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     resumedFrom,
     workflow: chatState.workflow,
     workflowEndedAt,
+    conversationCreatedAt,
     historyLoading,
     streamState: chatState.streamState,
     abort,

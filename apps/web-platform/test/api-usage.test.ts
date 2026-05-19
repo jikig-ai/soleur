@@ -1,14 +1,38 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockQueryChain, mockRpcResult } from "./helpers/mock-supabase";
 
-const { mockFrom, mockRpc } = vi.hoisted(() => ({
-  mockFrom: vi.fn(),
-  mockRpc: vi.fn(),
-}));
+const { mockFrom, mockRpc, mockTenantFrom, FakeRuntimeAuthError } = vi.hoisted(
+  () => ({
+    mockFrom: vi.fn(),
+    mockRpc: vi.fn(),
+    mockTenantFrom: vi.fn(),
+    FakeRuntimeAuthError: class FakeRuntimeAuthError extends Error {},
+  }),
+);
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
 }));
+
+// PR-C §2.3 (#3244): tenant client handles the auth probe + conversations
+// SELECT. Route by table name in mockTenantFrom — the probe call always
+// resolves OK by default; tests override only the conversations chain.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockTenantFrom })),
+  RuntimeAuthError: FakeRuntimeAuthError,
+}));
+
+// Default chain shape for the `from("users")` auth probe. Resolves to
+// `{ data: { id }, error: null }` via `.maybeSingle()`.
+function probeOk() {
+  return {
+    select: () => ({
+      eq: () => ({
+        maybeSingle: () => Promise.resolve({ data: { id: "ok" }, error: null }),
+      }),
+    }),
+  };
+}
 
 // Silence expected `reportSilentFallback` output in error-path tests. The
 // helper writes to pino + Sentry; we only care that the loader returns null.
@@ -32,6 +56,11 @@ describe("loadApiUsageForUser", () => {
     vi.useFakeTimers();
     // Fixed anchor avoids the month-rollover flake documented in the plan.
     vi.setSystemTime(new Date("2026-04-17T12:00:00Z"));
+    // PR-C §2.3 (#3244): default tenant.from impl — probe(users) always
+    // OK; conversations defaults to empty (tests override per-test).
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : mockQueryChain([], null),
+    );
   });
 
   afterEach(() => {
@@ -40,7 +69,9 @@ describe("loadApiUsageForUser", () => {
 
   test("returns empty rows + 0 MTD when user has no conversations", async () => {
     const listChain = mockQueryChain([], null);
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     // Production RPC shape for zero-match: the aggregate has no GROUP BY,
     // so Postgres emits one row and COALESCE folds NULL to "0".
     mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
@@ -58,7 +89,9 @@ describe("loadApiUsageForUser", () => {
     // zero-row RETURNS TABLE RPC, the loader still surfaces 0/0 via
     // the `?? 0` fallback rather than crashing on undefined.
     const listChain = mockQueryChain([], null);
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(mockRpcResult([]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
@@ -94,7 +127,9 @@ describe("loadApiUsageForUser", () => {
       ],
       null,
     );
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     // Postgres SUM(0.004200, 0.012500) = 0.016700 exact.
     mockRpc.mockReturnValueOnce(
       mockRpcResult([{ total: "0.016700", n: 2 }]),
@@ -126,7 +161,9 @@ describe("loadApiUsageForUser", () => {
       ],
       null,
     );
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
@@ -139,7 +176,9 @@ describe("loadApiUsageForUser", () => {
 
   test("month query uses RPC with UTC boundary", async () => {
     const listChain = mockQueryChain([], null);
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
 
     await loadApiUsageForUser(VALID_UUID);
@@ -156,7 +195,9 @@ describe("loadApiUsageForUser", () => {
 
   test("list query enforces order, limit, and cost > 0 filter (AC3 regression guard)", async () => {
     const listChain = mockQueryChain([], null);
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
 
     await loadApiUsageForUser(VALID_UUID);
@@ -171,14 +212,21 @@ describe("loadApiUsageForUser", () => {
 
   test("MTD sum uses RPC — no client-side reduce, no second .from() call", async () => {
     const listChain = mockQueryChain([], null);
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "1.234567", n: 3 }]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
-    // Exactly one .from() call (list query); month scope is an RPC.
-    expect(mockFrom).toHaveBeenCalledTimes(1);
-    expect(mockFrom).toHaveBeenCalledWith("conversations");
+    // PR-C §2.3 (#3244): list query is now on the tenant client. Service
+    // `.from()` should NOT be called for conversations any more — `.rpc()`
+    // is the only service-role surface. Tenant `.from()` is called twice:
+    // once for the auth probe (`users`), once for the list (`conversations`).
+    expect(mockFrom).not.toHaveBeenCalled();
+    expect(mockTenantFrom).toHaveBeenCalledTimes(2);
+    expect(mockTenantFrom).toHaveBeenNthCalledWith(1, "users");
+    expect(mockTenantFrom).toHaveBeenNthCalledWith(2, "conversations");
     expect(mockRpc).toHaveBeenCalledTimes(1);
     // Total is read directly from the single NUMERIC string in the RPC
     // body, not summed in JS.
@@ -196,7 +244,9 @@ describe("loadApiUsageForUser", () => {
       ],
       null,
     );
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0.003000", n: 3 }]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
@@ -209,7 +259,9 @@ describe("loadApiUsageForUser", () => {
 
   test("returns null when list query errors", async () => {
     const listChain = mockQueryChain(null, { message: "boom" });
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(mockRpcResult([]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
@@ -218,7 +270,9 @@ describe("loadApiUsageForUser", () => {
 
   test("returns null when month RPC errors", async () => {
     const listChain = mockQueryChain([], null);
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(
       mockRpcResult(null, { code: "XX000", message: "boom" }),
     );
@@ -229,7 +283,9 @@ describe("loadApiUsageForUser", () => {
 
   test("returns null when both queries error", async () => {
     const listChain = mockQueryChain(null, { message: "boom" });
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(
       mockRpcResult(null, { code: "XX000", message: "boom" }),
     );
@@ -253,7 +309,9 @@ describe("loadApiUsageForUser", () => {
       ],
       null,
     );
-    mockFrom.mockImplementationOnce(() => listChain);
+    mockTenantFrom.mockImplementation((table: string) =>
+      table === "users" ? probeOk() : listChain,
+    );
     mockRpc.mockReturnValueOnce(
       mockRpcResult([{ total: "0.123456", n: 1 }]),
     );
@@ -272,11 +330,13 @@ describe("loadApiUsageForUser", () => {
   test("throws on non-UUID input before hitting Supabase", async () => {
     await expect(loadApiUsageForUser("not-a-uuid")).rejects.toThrow();
     expect(mockFrom).not.toHaveBeenCalled();
+    expect(mockTenantFrom).not.toHaveBeenCalled();
   });
 
   test("throws on empty string input", async () => {
     await expect(loadApiUsageForUser("")).rejects.toThrow();
     expect(mockFrom).not.toHaveBeenCalled();
+    expect(mockTenantFrom).not.toHaveBeenCalled();
   });
 });
 

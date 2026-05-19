@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-04
+last_updated: 2026-05-18
 ---
 
 # Campaign Calendar
@@ -14,6 +14,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | AI Agents for Solo Founders: The Definitive Guide | pillar | | discord, x, bluesky, linkedin-company | draft |
 | From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-03-24 | discord, x, bluesky, linkedin-company | draft |
 | Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 2026-04-24 | | draft |
+| Skill Libraries vs. Workflow Plugins: Two Shapes of Claude Code Extension | pillar | 2026-05-15 | discord, x, bluesky, linkedin-company | draft |
 | Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | | discord, x, bluesky, linkedin-company | draft |
 | The One-Person Billion-Dollar Company: Why It's an Engineering Problem | pillar | 2026-04-21 | discord, x, bluesky, linkedin-company | stale |
 
@@ -21,6 +22,9 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| How to Run Every Business Department with AI Agents: A Solo Founder's Playbook | pillar | 2026-05-14 | discord, x, bluesky, linkedin-company | published |
+| Soleur vs. CrewAI: AI Agent Framework vs. AI Organization | pillar | 2026-05-07 | discord, x, bluesky, linkedin-company | published |
+| Soleur vs. Tanka: Memory AI vs. Execution Intelligence | pillar | 2026-05-05 | discord, x, bluesky, linkedin-company | published |
 | Best Claude Code Plugins 2026: The Extensions Worth Installing | pillar | 2026-04-30 | discord, x, bluesky, linkedin-company | published |
 | Knowledge Compounding in AI Development: How Compound Engineering Beats Point Solutions | pillar | 2026-04-23 | discord, x, bluesky, linkedin-company | published |
 | Soleur vs. Devin: AI Software Engineer vs. AI Organization | pillar | 2026-04-21 | discord, x, bluesky, linkedin-company | published |

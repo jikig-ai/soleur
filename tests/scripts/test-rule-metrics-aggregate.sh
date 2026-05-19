@@ -63,10 +63,10 @@ t_empty() {
 t_counts() {
   local root; root=$(_setup)
   for i in 1 2 3; do
-    jq -nc --arg i "$i" '{timestamp:("2026-04-0" + $i + "T00:00:00Z"), rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"Rule A text", command_snippet:""}' \
+    jq -nc --arg i "$i" '{schema:1, timestamp:("2026-04-0" + $i + "T00:00:00Z"), rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"Rule A text", command_snippet:""}' \
       >> "$root/.claude/.rule-incidents.jsonl"
   done
-  jq -nc '{timestamp:"2026-04-04T00:00:00Z", rule_id:"hr-rule-b", event_type:"bypass", rule_text_prefix:"Rule B text", command_snippet:""}' \
+  jq -nc '{schema:1, timestamp:"2026-04-04T00:00:00Z", rule_id:"hr-rule-b", event_type:"bypass", rule_text_prefix:"Rule B text", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
 
   INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1 || {
@@ -127,10 +127,10 @@ t_dry_run() {
 t_malformed_tolerance() {
   local root; root=$(_setup)
   # Write one valid line, one malformed line, one more valid line
-  jq -nc '{timestamp:"2026-04-10T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+  jq -nc '{schema:1, timestamp:"2026-04-10T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
   echo "this is not JSON" >> "$root/.claude/.rule-incidents.jsonl"
-  jq -nc '{timestamp:"2026-04-11T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+  jq -nc '{schema:1, timestamp:"2026-04-11T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
 
   local err; err="$root/err.log"
@@ -173,7 +173,7 @@ t_malformed_first_seen() {
   # bypass, applied, warn) excludes the rule from the unused bucket. So
   # hr-rule-a is NOT unused (one bypass → fire_count=1); hr-rule-b and
   # cm-rule-c remain unused (null first_seen + fire_count=0).
-  printf '{"timestamp":"not-a-date","rule_id":"hr-rule-a","event_type":"bypass","rule_text_prefix":"","command_snippet":""}\n' \
+  printf '{"schema":1,"timestamp":"not-a-date","rule_id":"hr-rule-a","event_type":"bypass","rule_text_prefix":"","command_snippet":""}\n' \
     >> "$root/.claude/.rule-incidents.jsonl"
   local err="$root/err.log"
   INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" 2> "$err" >/dev/null \
@@ -191,7 +191,7 @@ t_malformed_first_seen() {
 # written before exit so operators have forensic context.
 t_orphan_ids_surfaced() {
   local root; root=$(_setup)
-  jq -nc '{timestamp:"2026-04-10T00:00:00Z", rule_id:"ghost-id-not-in-agents-md", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+  jq -nc '{schema:1, timestamp:"2026-04-10T00:00:00Z", rule_id:"ghost-id-not-in-agents-md", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
   local exit_code=0
   INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1 || exit_code=$?
@@ -209,13 +209,13 @@ t_orphan_ids_surfaced() {
 t_rotate_twice_same_month() {
   local root; root=$(_setup)
   # First run: one event, rotate.
-  jq -nc '{timestamp:"2026-04-10T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+  jq -nc '{schema:1, timestamp:"2026-04-10T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
   INCIDENTS_REPO_ROOT="$root" AGGREGATOR_ROTATE=1 bash "$SCRIPT" >/dev/null 2>&1
   # Second run: different event, rotate again within the same month.
   # RULE_METRICS_ROTATE_SUFFIX pins the uniquify suffix so this test does
   # not depend on wall-clock granularity (second- or nano-level races).
-  jq -nc '{timestamp:"2026-04-11T00:00:00Z", rule_id:"hr-rule-b", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+  jq -nc '{schema:1, timestamp:"2026-04-11T00:00:00Z", rule_id:"hr-rule-b", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
   INCIDENTS_REPO_ROOT="$root" AGGREGATOR_ROTATE=1 RULE_METRICS_ROTATE_SUFFIX=testrun \
     bash "$SCRIPT" >/dev/null 2>&1

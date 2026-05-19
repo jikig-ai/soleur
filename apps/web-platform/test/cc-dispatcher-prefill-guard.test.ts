@@ -74,11 +74,45 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #3369: mirrorWithDebounce extracted to observability.
+  // These dispatcher tests do not exercise the debounce TTL, so
+  // the stub forwards every call straight through to the spy.
+  mirrorWithDebounce: mockReportSilentFallback,
+  __resetMirrorDebounceForTests: vi.fn(),
+  MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockSupabaseFrom })),
 }));
+
+// PR-C §2.4 / §2.10 / §2.11 (#3244): conversation-writer + agent-runner
+// + cc-dispatcher (BYOK lease wrap) now import from
+// `@/lib/supabase/tenant`. Mock so the test does not pull the real
+// `mintFounderJwt` chain.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockSupabaseFrom })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
+// PR-C §2.11 (#3244): cc-dispatcher.ts now wraps `realSdkQueryFactory`
+// body in `runWithByokLease(args.userId, body)`. Short-circuit the lease
+// so the test does not pull the real `fetchAndDecryptIntoSlot` chain
+// (which would need a fully-shaped `api_keys.select.eq.eq.eq.limit.single`
+// terminal); `body` is invoked with a fake `lease.getApiKey() = "fake-key"`.
+vi.mock("@/server/byok-lease", async () => {
+  const actual = await vi.importActual<typeof import("@/server/byok-lease")>(
+    "@/server/byok-lease",
+  );
+  return {
+    ...actual,
+    runWithByokLease: vi.fn(
+      async <T>(_userId: string, body: (lease: { getApiKey: () => string }) => Promise<T>) =>
+        body({ getApiKey: () => "fake-byok-key" }),
+    ),
+  };
+});
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 

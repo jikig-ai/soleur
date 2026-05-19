@@ -21,7 +21,7 @@ const SYNTH_EMAIL_RE =
 
 Security review flagged this as too wide. The synthetic emails are always
 `mu1-integration-<v4-uuid>@soleur-test.invalid`, but `[0-9a-f-]+` accepts
-`mu1-integration-a@soleur-test.invalid` — any hex-ish blob of any length.
+`mu1-integration-a@example.com` — any hex-ish blob of any length.
 
 The risk was theoretical for the test file alone (it constructs emails
 with `randomUUID()`), but the same regex was copy-pasted into the

@@ -232,7 +232,7 @@ Playwright MCP).
 - `apps/web-platform/test/infra/ci-deploy-canary-probe-set.test.sh` —
   extends `ci-deploy.test.sh` with cases asserting BOTH `/health` AND
   `/dashboard` are probed and BOTH must pass for canary swap.
-- `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md` —
+- `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` —
   postmortem doc capturing the timeline, the canary gap, the Sentry gap,
   and the four-layer remediation.
 - `knowledge-base/project/learnings/runtime-errors/2026-04-28-module-load-throw-collapses-auth-surface.md` —
@@ -315,7 +315,7 @@ broken client bundle.
    masking — confirmed pre-deepen: error.tsx returns 200, CF cannot see
    this class. Document as out-of-scope for this PR.
 8. **Decision gate.** Write a one-page diagnostic into
-   `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`
+   `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`
    with the confirmed root cause. The diagnostic MUST cite specific
    artifact paths (Sentry event ID, browser-console transcript file,
    bundle chunk URL with grep output) — not "I think it's H1." If the

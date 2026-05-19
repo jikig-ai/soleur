@@ -19,6 +19,12 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 
 <input_document> #$ARGUMENTS </input_document>
 
+<decision_gate>
+**API budget.** This skill executes a work plan iteratively across many phases. Tier A (Agent Teams) carries ~7x per-task token cost; Tier B (Subagent Fan-Out) is moderate; Tier C is single-agent. Total cost scales with plan length, chosen tier, and per-task RED/GREEN/REFACTOR cycles. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
+The tier offer fires inline at the right phase. Decline if running an unfamiliar plan against a tight budget.
+</decision_gate>
+
 ## Execution Workflow
 
 ### Phase 0: Load Knowledge Base Context (if exists)
@@ -49,7 +55,22 @@ Check if `knowledge-base/` directory exists. If it does:
 2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
 3. Detect feature from current branch (`feat-<name>` pattern)
 4. Read `knowledge-base/project/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
-5. Announce: "Loaded constitution and tasks for `feat-<name>`"
+4.5. Read `lane:` from spec.md if present. Guard file existence first:
+
+   ```bash
+   spec_path="knowledge-base/project/specs/feat-${branch_name}/spec.md"
+   if [[ -f "$spec_path" ]]; then
+     LANE=$(awk '/^lane:/ { gsub(/^lane:[[:space:]]*"?|"?$/, ""); print; exit }' "$spec_path")
+     case "$LANE" in
+       single-domain|cross-domain|procedural) ;;
+       "") LANE="" ;;  # legacy spec; silent skip in announce
+       *) echo "work: invalid lane value '$LANE' in spec; ignoring."; LANE="" ;;
+     esac
+   fi
+   ```
+
+   Lane is **non-binding in skill logic** — `work` code does not branch on `LANE`. Operators MAY use the announced lane as a heuristic when picking work Tier 0/A/B/C in Phase 2; binding behavior is deferred per Non-Goal #2.
+5. Announce: `"Loaded constitution and tasks for \`feat-<name>\`"` — append `" (lane=<value>)"` when `LANE` is non-empty.
 
 **If knowledge-base/ does NOT exist:**
 
@@ -103,6 +124,10 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Read the work document completely
    - Review any references or links provided in the plan
    - Before proceeding, verify the plan does not contradict conventions in AGENTS.md and constitution.md: file format (markdown tables not YAML), kebab-case naming, directory structure (agents recurse, skills flat), required frontmatter fields, shell script conventions
+   - **Plan-quoted numbers are preconditions to verify, not facts.** When the plan quotes a current measurement (`bun test … reports X`, `wc -c < AGENTS.md = N`, "cumulative ~Y words; ~Z headroom", `git ls-files | wc -l`), re-run the measurement at /work start before depending on it. Plans authored hours-or-days earlier observe a moving target; parallel branches landing in `main` invalidate the measurement. PR #3501 plan claimed `~186 word headroom` against an actual `15` and required inline trim of the gate description. See `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.
+   - **Write-boundary sentinel sweep (when applicable).** If the plan introduces a sentinel/guard that asserts a property at write sites (e.g., `assertWriteScope` for cross-tenant integrity, GDPR write-boundary checks), enumerate ALL write sites where the property applies — not just diff sites. Run `git grep -nE '\.from\("<table>"\)\.insert\(' <scope>` (or the equivalent for the boundary type) at Phase 0 and verify every match is sentinel-gated, then file follow-up tasks for any uncovered sites BEFORE entering Phase 1. See `knowledge-base/project/learnings/2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`; hard rule `hr-write-boundary-sentinel-sweep-all-write-sites`. **Why:** PR-A2 #3603 — sentinel placed at assistant-row write but not user-row write at `cc-dispatcher.ts:1008`; same service-role-bypass surface.
+   - **Type-widening cross-consumer grep (when applicable).** When the PR widens a producer-side shared type whose payload crosses an `unknown`/`any`/jsonb boundary (compiler cannot enforce optionality at the consumer), `git grep -nE '<field-name-pattern>' apps/` across every consumer and verify each respects the new optionality. For `Message`-class fields the canonical grep is `git grep -nE '\bmessage\.usage\.(input_tokens|output_tokens|completed_actions)\b' apps/` (adapt per field family). See learning `2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md`; hard rule `hr-type-widening-cross-consumer-grep`. **Why:** PR-A2 #3603.
+   - **Sweep-class fixes use grep-enumerated work-lists, not intuited ones.** When a plan declares a multi-file sweep with a verification grep (e.g., AC5-style `git grep -nE '<pattern>' <scope> | grep -vE '<safe-form>' | wc -l = 0`), run the grep ONCE at Phase 0 to enumerate the authoritative work-list (write the hits to `/tmp/sweep-targets.txt`), fix each line, then re-run the grep after each batch. The plan's narrative enumeration of "files X, Y, Z" is a starting hypothesis; the grep result is the work-list. Same applies to regex widenings: enumerate the configs/verbs/paths invoked by the IN-SCOPE runbooks, not the configs the incident occurred against — the incident is one data point; the trap-class config-set is the full union of every config the runbooks touch. **Why:** PR #4031 — initial sweep handled 9 named runbook hits but missed 2 buried in deeper sections of the same files; widened regex covered `(prd|prd_terraform|dev|ci)` per the plan's leak-footprint enumeration but missed `prd_orchestration` which 2 in-scope runbooks operate against. Pattern-recognition + security-sentinel caught both at multi-agent review. See `knowledge-base/project/learnings/best-practices/2026-05-18-sweep-class-fixes-grep-enumerated-not-intuited.md`.
    - **Interactive mode only:** If anything is unclear or ambiguous, ask clarifying questions now. Get user approval to proceed. **Do not skip this** - better to ask questions now than build the wrong thing.
    - **Pipeline mode:** Skip clarifying questions and approval. Proceed directly to step 2.
 
@@ -121,10 +146,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Create a worktree for the new feature:
 
    ```bash
-   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
+   SOLEUR_SKILL_NAME=work SOLEUR_EXPECTED_DURATION_MIN=240 \
+     bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
    ```
 
-   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation.
+   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation. The env vars wire a session lease so sibling cleanup-merged invocations refuse to reap this worktree.
+
+   **Phase Exit (release lease).** At the end of the workflow — after `/soleur:ship` returns OR if you exit without shipping — release the lease so a sibling `cleanup-merged` can reap the worktree once it's actually merged:
+
+   ```bash
+   bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+   ```
+
+   The release is a no-op if the lease was already removed by the multi-signal trap (EXIT/INT/TERM/HUP fires on abnormal exit). Stale leases get swept after 24 hours regardless.
 
    Use a meaningful name based on the work (e.g., `feat-user-authentication`, `fix-email-validation`).
 
@@ -226,6 +260,81 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      - Evaluate for incremental commit (see below)
    ```
 
+   **No mid-plan pause gates (HARD GATE).** A multi-phase plan
+   (`tasks.md` Phase 0 through Phase N) is a SINGLE execution unit.
+   Do NOT insert "Pause for review or continue?" prompts between
+   phases. Do NOT end a turn after one phase commits with "Continue
+   into Phase N+1 next turn?". The skill's Phase 4 handoff is the
+   only sanctioned stopping point — until then, chain straight
+   through every phase the plan defines, including phases the plan
+   labels "Pre-merge verification" or "Post-merge (operator)" if
+   they're automatable per the next gate. **Why:** the founder is a
+   solo operator; every "continue or pause?" is a context switch
+   that defeats the entire point of a multi-phase plan. Pipeline
+   mode (file-path arg in Phase 1) means pipeline mode for the WHOLE
+   plan, not per-phase.
+
+   **Operator-step automation gate (HARD GATE).** Before treating
+   any task in `tasks.md` as "operator-driven" (apply migration,
+   verify pg_cron, verify Storage bucket, run end-to-end smoke,
+   `gh pr ready`, `gh pr merge --auto`), check whether it is
+   automatable via a loaded MCP server or CLI:
+
+   - Supabase migrations + `cron.job` queries + Storage bucket
+     existence + RLS spot-checks → `mcp__plugin_supabase_supabase__*`
+     **with Doppler `DATABASE_URL_POOLER` fallback when MCP is
+     unavailable** — see "Supabase fallback chain" below.
+   - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close`
+     → Bash via `gh` CLI
+   - End-to-end UI flow → Playwright MCP (`mcp__playwright__*`)
+   - Cloudflare DNS / WAF / Workers → `mcp__plugin_soleur_cloudflare__*`
+   - Live Stripe state → `mcp__plugin_soleur_stripe__*`
+
+   If automatable, EXECUTE it inline as part of the work pipeline —
+   never list it back to the operator. The /ship skill already
+   handles `gh pr ready` + auto-merge + migration verification (see
+   `plugins/soleur/skills/ship/SKILL.md`); chain to `/soleur:ship`
+   at Phase 4 and let it run. For migration **apply** to dev (vs
+   verify), invoke `mcp__plugin_supabase_supabase__apply_migration`
+   inline at the phase where the migration lands, not as a
+   post-merge todo. **Why:** see ship/SKILL.md:1027 ("Every 'please
+   run this manually' is a context switch") and ship/SKILL.md:1177
+   (PR #1375 — migration verification was left as a manual
+   "post-merge todo" instead of being executed; deployed code
+   expected the new schema and broke). Same class as the
+   Playwright-first audit in Phase 4: if a tool exists, use it.
+
+   **Supabase fallback chain (when MCP OAuth fails).** The Supabase
+   MCP OAuth flow at `https://api.supabase.com/v1/oauth/authorize`
+   intermittently rejects valid URLs at the dashboard `auth_id`
+   handoff (cause: external — Supabase-side). When that happens, do
+   NOT fall back to "paste this SQL into the dashboard SQL editor"
+   handoff — that's a manual-step rationalisation that violates
+   `hr-never-label-any-step-as-manual-without`. Instead walk down the
+   `hr-exhaust-all-automated-options-before` priority chain:
+   (1) Doppler `DATABASE_URL_POOLER` — already provisioned for every
+   env; the migration apply path. (2) Verify the project ref in the
+   URL matches the plan's stated dev/prd refs — Doppler is the
+   source of truth (plan-quoted project refs are preconditions to
+   verify, never facts; the plan can drift). (3) Rewrite the URL's
+   port `:6543` → `:5432` so the pooler runs in session mode (multi-
+   statement DDL works; transaction mode rejects with SQLSTATE 42601
+   "cannot insert multiple commands into a prepared statement").
+   (4) Apply via `pg` (node-pg, bun-installed in `/tmp` if missing)
+   wrapped in `BEGIN; <migration>; COMMIT;`. The direct DB host
+   `db.<ref>.supabase.co:5432` is IPv6-only and typically
+   unreachable from operator/CI networks; the pooler is IPv4.
+   (5) Post-apply, verify schema via the same connection — RLS
+   enabled, policy_count, trigger names, RPC signatures + SECURITY
+   DEFINER flag, UNIQUE constraints. Write the verification artifact
+   to `knowledge-base/project/specs/feat-<name>/migration-checklist.md`.
+   **Why:** PR #3853 / #3205 — Supabase MCP OAuth was rejecting URLs
+   at the auth_id handoff; the agent first proposed "paste SQL into
+   dashboard" (manual-step violation), then pivoted to Playwright-
+   first audit on dashboard navigation (correct), then discovered
+   Doppler had the working `DATABASE_URL_POOLER` and applied via
+   pg directly — the path it should have taken at step 1.
+
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 
    Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):
@@ -242,7 +351,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
       - Import the component/function/module that will be created (the import will fail — that is correct)
       - Assert the specific behavior from the acceptance criteria
       - Be runnable via the project's test command (even if it fails due to missing implementation)
-   4. **Verify RED:** Run the test. It must fail (missing module, assertion failure, etc.). If it passes, the test is not testing new behavior — rewrite it. **For gating/sequencing primitives (semaphores, locks, queues, ordering guarantees), the test must distinguish gate-absent from gate-present: add an intermediate-state assertion that would fail without the primitive (e.g., `count === 2` while two slots are held) in addition to the final-state assertion. A test that passes identically with and without the primitive isn't testing the primitive.** See `knowledge-base/project/learnings/test-failures/2026-04-18-red-verification-must-distinguish-gated-from-ungated.md`. **Test-environment fidelity:** if the SUT's buggy code lives behind a guard (`if [[ -d "$X" ]]`, `if (cache.has(key))`, etc.), the harness MUST seed the precondition the guard requires — otherwise both buggy and fixed paths short-circuit identically and any negative-space assertion passes vacuously. See `knowledge-base/project/learnings/test-failures/2026-04-22-red-test-must-simulate-suts-preconditions.md`. **Early-exit shadowing:** if the SUT has a guarded fast path (substring strip like `replaceAll(arg, "")`, cache-hit, env-flag short-circuit) that handles a superset of inputs the slow path under test handles, RED inputs MUST choose identities ONLY the slow path can produce. Sharing a fixture across the fast/slow boundary lets the fast path scrub first and the regex/branch under test never fires — the assertion passes without testing the fix. Add an invariant guard test asserting the fast/slow fixtures do not collide. See `knowledge-base/project/learnings/2026-05-04-vacuous-red-via-shared-fixture-and-toolchain-pinning.md`.
+   4. **Verify RED:** Run the test. It must fail (missing module, assertion failure, etc.). If it passes, the test is not testing new behavior — rewrite it. **For gating/sequencing primitives (semaphores, locks, queues, ordering guarantees), the test must distinguish gate-absent from gate-present: add an intermediate-state assertion that would fail without the primitive (e.g., `count === 2` while two slots are held) in addition to the final-state assertion. A test that passes identically with and without the primitive isn't testing the primitive.** See `knowledge-base/project/learnings/test-failures/2026-04-18-red-verification-must-distinguish-gated-from-ungated.md`. **Test-environment fidelity:** if the SUT's buggy code lives behind a guard (`if [[ -d "$X" ]]`, `if (cache.has(key))`, etc.), the harness MUST seed the precondition the guard requires — otherwise both buggy and fixed paths short-circuit identically and any negative-space assertion passes vacuously. See `knowledge-base/project/learnings/test-failures/2026-04-22-red-test-must-simulate-suts-preconditions.md`. **Early-exit shadowing:** if the SUT has a guarded fast path (substring strip like `replaceAll(arg, "")`, cache-hit, env-flag short-circuit) that handles a superset of inputs the slow path under test handles, RED inputs MUST choose identities ONLY the slow path can produce. Sharing a fixture across the fast/slow boundary lets the fast path scrub first and the regex/branch under test never fires — the assertion passes without testing the fix. Add an invariant guard test asserting the fast/slow fixtures do not collide. See `knowledge-base/project/learnings/2026-05-04-vacuous-red-via-shared-fixture-and-toolchain-pinning.md`. **In-component state machines (RTL):** when the gate-under-test is component-local state (`useState`/`useRef`/`useReducer`), drive the SUT through state transitions with `result.rerender(<C />)` — never `unmount()` + fresh `render()`. Remount resets the in-component bookkeeping that IS the gate, producing vacuous green. See `knowledge-base/project/learnings/test-failures/2026-05-11-rerender-not-remount-for-in-component-state-machine-tests.md`.
    5. **Only then:** Write the minimum implementation to make the test pass (GREEN).
    6. **Refactor:** Improve code while keeping tests green.
 
@@ -266,7 +375,9 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    **Test environment setup:** If the project's test runner cannot run the type of test needed (e.g., React component tests require jsdom but vitest is configured for node), set up the test environment BEFORE starting the task. This is part of RED — the test infrastructure must exist for the test to fail properly.
 
    - When configuring bun preload scripts that register DOM globals (e.g., happy-dom), use dynamic `await import()` for all subsequent dependencies — static ES imports are hoisted before any imperative code, causing libraries like @testing-library/react to initialize without DOM globals. See `knowledge-base/project/learnings/test-failures/2026-04-03-bun-test-dom-preload-execution-order.md`.
+   - When a test file calls a SUT that lazy-imports a heavy module (`pdfjs-dist`, `sharp`, `puppeteer`, `playwright`, `@xenova/transformers`, `onnxruntime`), pre-warm the module in `beforeAll(async () => { await import("<module>"); }, 30_000)`. The cold-start cost (~5-10s on CI runners) otherwise lands on the first `it()` and blows the default 5s vitest timeout — the second test in the same file runs at warm ~9ms because subsequent calls hit the module cache. Cheapest detection: `git grep -lE '(pdfjs-dist|sharp|puppeteer|playwright|@xenova/transformers|onnxruntime)' -- '*.test.ts'` and check for sibling `beforeAll`. **Why:** PR #3681 `pdf-text-extract.test.ts` cold-start flake (7s vs 9ms, #3687).
    - When uploading files via Playwright MCP, save files to repo-accessible paths (not `/tmp/`). Playwright MCP restricts file access to the repo root. When Google Search Console offers Cloudflare auto-verification, prefer "Any DNS provider" manual flow — the popup OAuth flow opens an external tab that crashes the Playwright browser context.
+   - **Vendor-token extraction via Playwright MUST use `browser_evaluate(filename: ...)` from the FIRST attempt** — the return value otherwise enters the conversation transcript and the token is leaked even after revocation. AND the `filename` parameter JSON-encodes the result (surrounding quotes), so the canonical pipe is `python3 -c "import sys,json; sys.stdout.write(json.loads(open('<path>').read()))" | doppler secrets set <KEY> --no-interactive`. Validate via the vendor's API (HTTP 200 + length check) before shredding the file — some vendors silently tolerate quoted tokens via `Authorization: Bearer "abc"`, but Terraform's HCL parser does not. For `●●●`-masked UI tokens (Doppler personal tokens), click the in-page copy button via `browser_evaluate`, then `xclip -selection clipboard -o > <path>`; clear with `xclip -i </dev/null`. **Doppler TF var storage convention:** drop the `TF_VAR_` prefix from the secret name — `--name-transformer tf-var` ADDS the prefix at injection time (`DOPPLER_TOKEN_TF` → `TF_VAR_doppler_token_tf`; storing the already-prefixed `TF_VAR_DOPPLER_TOKEN_TF` produces `TF_VAR_tf_var_doppler_token_tf`). See [`2026-03-21-doppler-tf-var-naming-alignment.md`](../../../../knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md). **Why:** PR #3973 (#3960) — full pattern + recovery flow at [`2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md`](../../../../knowledge-base/project/learnings/2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md).
    - After any `Write` whose hook output emits a warning (security, style, rule), immediately `Read` the file to verify the full content landed. PreToolUse hooks that print error output but return non-blocking status can still cause partial writes — detecting this only when tests fail wastes a debug round. See `knowledge-base/project/learnings/2026-04-15-kb-share-binary-files-lifecycle.md`.
    - When adding source-reading regex tests (`readFileSync(path)` + `expect(src).toMatch(...)`) as a negative-space regression gate after an extraction, put them in a standalone `*.test.ts` file — never add them to an existing test file that already mocks `node:fs` or `node:path`. The existing `vi.mock("node:fs", ...)` factory likely omits `readFileSync`, and the new test will fail at collection with "No `readFileSync` export is defined" before any assertion runs. Also trim the gate to only the assertion that cannot be expressed behaviorally — usually the negative "symbol-not-present" check. Positive assertions (import regex, await-call regex) duplicate coverage that mock-based behavioral tests already provide and are brittle to barrel re-exports, aliases, and whitespace. See `knowledge-base/project/learnings/best-practices/2026-04-17-regex-on-source-delegation-tests-trim-to-negative-space.md`.
    - When a bun-test file mutates `process.env.*` or `globalThis.*`, capture originals at module top-level (before any `describe`) and restore in `afterEach` using `delete` when the original was `undefined` — `bun test` runs every file in a single OS process, so mutations leak to sibling files and to any `spawnSync` subprocess launched after the mutation. Vitest isolates files in workers by default; bun does not, and has no built-in `stubEnv`/`unstubAllEnvs` equivalent. **Why:** PR #2579 — `bot-fixture-helpers.test.ts` stubbed `SUPABASE_URL` in `beforeEach` with no restore, causing 4 integration tests in `bot-fixture.test.ts` (same run) to ConnectionRefused against the stub host. See `knowledge-base/project/learnings/test-failures/2026-04-18-bun-test-env-var-leak-across-files-single-process.md`.
@@ -292,6 +403,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    | Brand guide alignment pass completes | Alignment still in progress |
 
    - When lefthook hangs during commit in a worktree (common with `core.bare=true` repos), verify typecheck and tests pass manually, then use `LEFTHOOK=0 git commit`. Always check for stalled lefthook processes (`pgrep -fa lefthook`) before retrying.
+   - **When a commit needs a machine-readable trailer (`Allowlist-Widened-By:`, `Signed-off-by:`, `Reviewed-by:`, etc. — anything downstream parses via `git log --format='%(trailers:key=NAME,valueonly)'`), keep the FINAL paragraph as a pure contiguous block of `Token: value` lines.** Two silent-drop shapes: (a) blank line between the new trailer and `Co-Authored-By:` makes the former part of the body, not a trailer; (b) ANY non-key:value line in the final paragraph (e.g., `Closes #3877.`, `Refs #3874 (precedent).`) invalidates the WHOLE block — both legitimate trailer lines below it drop silently. Put `Closes`/`Refs`/`Fixes` in mid-body prose; GitHub auto-close still works anywhere in the body. Verify locally with `git interpret-trailers --parse < <(git log -1 --format=%B)` — empty output for a trailer that should exist is a hard fail. See `knowledge-base/project/learnings/2026-05-16-git-trailer-parser-requires-contiguous-key-value-block.md`.
 
    **Heuristic:** "Can I write a commit message that describes a complete, valuable change? If yes, commit. If the message would be 'WIP' or 'partial X', wait."
 
@@ -336,6 +448,10 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - **When editing a `"use client"` component or a `lib/` module reachable from client code, never import from `@/server/observability` or any `@/server/*` module that transitively pulls `pino`.** `next.config.ts` `serverExternalPackages` only externalizes for the server chunk; pino will bundle into the browser. Use `@/lib/client-observability` (a thin `@sentry/nextjs`-only shim) or add a new shim with the same signature. Verify with `grep -rn "@/server" <new-or-edited-file>`. **Why:** PR #2860 — see `knowledge-base/project/learnings/2026-04-23-render-time-scrub-sentinels-and-client-bundle-boundaries.md`.
    - **Any textual tokenize-scrub-restore pipeline (stash regex matches under placeholders, scrub the remainder, restore from an index) must use a per-call random sentinel (≥24 bits of entropy) and THROW on out-of-range restore indices.** Human-readable placeholders (` PRESERVED_N `, `__TOKEN_N__`) are a substitution oracle — assistant-controlled prose containing the literal splices in stashed content, and `?? ""` fallback silently deletes the literal. Pattern: `SOLEUR_PRES_${8hexchars}_${i}`. **Why:** PR #2860 — same learning file.
    - **Debounce/throttle "not-yet-fired" sentinels must be `undefined` or `-Infinity`, never `0`.** Combined with `vi.useFakeTimers({ now: 0 })`, a `0` default produces `Date.now() - 0 >= threshold` = false on the first fire, starving the very path the debounce was supposed to time. Use `if (last === undefined || now - last >= THRESHOLD_MS)`. **Why:** same learning file, session error #3.
+   - **When the diff touches `bun.lock` AND the bump is intended to be transitive-only (e.g., a Dependabot security bump), use the surgical-lockfile-edit pattern in [work-lockfile-bumps.md](./references/work-lockfile-bumps.md) as the first attempt.** Never `bun update <pkg>` (elevates the target to a direct dep) or bare `bun update` (bumps every direct caret-ranged dep). Validate with `bun install --frozen-lockfile`. **Why:** PR #3488 — three failed bun invocations rediscovered the constraint at task time.
+   - **When a new call site needs coverage by a boundary-enforcing drift-guard whose walk array (`*_DIRS`/`*_PATHS`/`*_GLOBS`) does NOT include the new file's directory, extract the call site into the existing scope — do NOT widen the walk.** The guard encodes an architectural convention ("auth verbs live in `app/(auth)` + `components/auth/`", "CSRF coverage applies to `app/api/`", etc.). Widening the array to absorb one new call site (e.g., adding `app/(dashboard)` because a single `(dashboard)/layout.tsx` calls `signOut`) inverts the convention into "any file in this whole route group that happens to call the verb must carry the guard's tags." The shortest path leaves a worse architecture. Refactor to a hook/util living in the existing scope (`components/auth/use-sign-out.ts`) so the guard's directional rule is preserved. **Why:** PR #3576 — see `knowledge-base/project/learnings/2026-05-11-drift-guard-scoping-extract-call-site-not-widen-walk.md`.
+   - **When a migration changes a SECURITY DEFINER RPC's signature for which prod callers exist, prefer overloading (additive `CREATE OR REPLACE` with a new parameter list) over `DROP FUNCTION` + `CREATE`.** Postgres distinguishes overloads by parameter list; supabase-js sends named-arg PostgREST envelopes that route to whichever overload matches by parameter name. Overloading is rolling-deploy-safe: (a) prd-schema-without-app keeps the v1 signature alive for old pods; (b) prd-app-without-schema keeps writes succeeding because the v1 signature still exists. DROP+CREATE creates a window where one direction silently zeros the write path. Drop the v1 in a follow-up migration after the old build ages out. **Why:** PR #3626 — see `knowledge-base/project/learnings/2026-05-12-stub-handlers-as-silent-undercount-vectors.md`.
+   - **Stub event handlers ("wire in Stage N when X lands") in dispatcher/router code are silent telemetry-loss vectors.** A no-op handler that satisfies the type system, sits next to fully-wired siblings, and has no error path is invisible to skim-review and Sentry alike. Either throw `Error("handler not yet wired: <name>")` until the wiring lands, OR fan out to an instrumentation counter so a "stub still present" alert can fire. **Why:** same PR #3626 — `cc-dispatcher.ts:1202` `onResult` shipped as a no-op for 3 weeks (originally added 2026-04-24 #2858), under-counting API cost by 60-90% for every cc-soleur-go conversation while the legacy path's wiring made the surface look complete.
 
 5. **Test Continuously**
 
@@ -343,6 +459,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - **GREEN**: Write the minimum code to make the test pass
    - **REFACTOR**: Improve code while keeping tests green
    - Run the full test suite after each RED/GREEN/REFACTOR cycle. When running test suites via Bash, always capture both failure details AND summary in a single run — use `grep -E "(FAIL|ERROR|Test Files|Tests )"` or `| tail -30`, never `| tail -10` which discards failure names and forces a wasteful second run. **Why:** In PR #2430, `| tail -10` discarded failing test names, requiring a full re-run just to identify which 2 of 1580 tests failed.
+   - The agent harness's `bash -c` does NOT inherit `set -o pipefail`, so `bash <test-script> 2>&1 | tail -N` reports `tail`'s exit (always 0) and silently swallows the test runner's non-zero exit. For aggregate test scripts whose pass/fail signal is load-bearing ([scripts/test-all.sh](../../../../scripts/test-all.sh), `bun test`, `pytest`, `go test ./...`), prefer `bash <script> > /tmp/<script>.log 2>&1; rc=$?; echo "EXIT=$rc"` and inspect `rc` explicitly; only then `tail` or `grep` the log for context. **Why:** PR #4011 — a `bash test-all.sh 2>&1 | tail -40` invocation reported exit 0 while the runner exited 1 (3 pre-existing failed suites); the false-pass nearly chained through to ship. See `knowledge-base/project/learnings/2026-05-18-test-all-tail-masking-and-monitor-exit-condition-tightness.md` §1.
    - When running test/lint/budget commands from inside a worktree pipeline, chain `cd <worktree-abs-path> && <cmd>` in a single Bash call. The Bash tool does NOT persist CWD across calls; a prior `cd /tmp/... && git clone ...` leaves subsequent commands running against the bare repo root (where tracked files exist as stale synced copies), producing wrong pass/fail counts that look like real regressions. **Why:** PR #2683 `bun test` reported 1005/1 (baseline-state result) from bare root after a drifted CWD; worktree re-run was 1006/0. See `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md` session errors.
    - When the project pins a test runner via `devDependencies` (e.g., `vitest@3.2.4`), invoke `./node_modules/.bin/<tool>` — never `npx <tool>`. `npx` resolves to its own cache and silently major-version-jumps (e.g., installing vitest 4.x against a vitest 3.2.4 config), producing `Could not resolve 'vitest/config'` and `Unexpected JSX expression` parse errors that look like real regressions. **Why:** PR #3186 — `npx vitest` installed 4.x and rolldown rejected the project's JSX config; switching to `./node_modules/.bin/vitest` (3.2.4) restored a passing run. See `knowledge-base/project/learnings/2026-05-04-plan-precedent-search-must-include-lib-helpers.md` session errors.
    - Fix failures immediately -- never move to the next task with failing tests
@@ -372,6 +489,20 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Note any blockers or unexpected discoveries
    - Create new tasks if scope expands
    - Keep user informed of major milestones
+
+8. **GDPR / Compliance Gate (single pass, end of Phase 2)**
+
+   [skill-enforced: gdpr-gate at work Phase 2 exit]
+
+   After the per-task RED/GREEN/REFACTOR loop completes and before Phase 2.5, run `/soleur:gdpr-gate` once against the cumulative diff `git diff main...HEAD`. Same advisory-only output and Critical-finding escalation as plan Phase 2.7. **Never per-task** — token budget is ≤4k per invocation, single pass per phase per ADR-026 TR3.
+
+   Skip silently if the cumulative diff does not match the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex.
+
+9. **Full-Suite Exit Gate (single pass, end of Phase 2)**
+
+   [skill-enforced: work Phase 2 exit]
+
+   Before entering Phase 3, run `bash scripts/test-all.sh` once. Touched-file tests are the inner loop; `test-all.sh` is the exit gate — it discovers orphan test suites (sibling files covering the same script — e.g., an untouched `tests/scripts/test-rule-metrics-aggregate.sh` alongside the touched `rule-metrics-aggregate.test.sh`) that the touched-file set never sees. Symmetric to the ship Phase 5.5 Review-Findings Exit Gate; catches the gap that PR #3512 surfaced post-merge-queue when an untouched orphan suite's fixture broke under a tightened predicate. **Why:** see issue #3533.
 
 ### Phase 2.5: Research Validation Loop (knowledge-base deliverables only)
 
@@ -462,13 +593,65 @@ Implementation is complete. Before handing off, run the **Playwright-first audit
 
 #### Playwright-First Audit
 
-Scan any "next steps", "setup instructions", or "to use this" text you are about to output. For each step that involves a browser action (account creation, credential generation, settings configuration, form submission, OAuth flow, portal navigation):
+Scan any "next steps", "setup instructions", or "to use this" text you are about to output. For each step that involves a browser action (account creation, credential generation, settings configuration, form submission, vendor support tickets, OAuth flow, portal navigation):
 
-1. **Classify:** Is this step automatable via Playwright MCP, or is it genuinely manual (CAPTCHA, interactive OAuth consent)?
+1. **Classify:** Is this step automatable via Playwright MCP, or is it genuinely manual (CAPTCHA, interactive OAuth consent, hardware MFA token, payment-card entry)?
 2. **If automatable:** Do not list it as a manual step. Either execute it now via Playwright MCP, or note it as "automatable via Playwright — will execute next."
 3. **If genuinely manual:** Drive the flow via Playwright up to the manual gate (e.g., navigate to the OAuth consent screen), then hand off only that single interaction to the user.
 
-If you catch yourself writing phrases like "set up X in the browser", "go to the portal and...", or "manually configure..." — stop and attempt Playwright first. This audit is mandatory; skipping it is a deviation.
+If you catch yourself writing phrases like "set up X in the browser", "go to the portal and...", "manually configure...", "paste this ticket body into the support form", or "the operator pastes + submits" — stop and attempt Playwright first. This audit is mandatory; skipping it is a deviation.
+
+**Vendor support ticket submissions are Playwright-driveable** — they are NOT operator-handoff by default. Most vendor support surfaces today are Intercom / Zendesk / HelpScout chat widgets (`help.<vendor>.io`, `support.<vendor>.com`, `<vendor>.zendesk.com`) where the AI assistant routes to a human team. The full submission flow — opening the widget, accepting cookies, starting a conversation, sending the ticket body, requesting human escalation if the AI gives a stock policy answer — runs entirely under Playwright. The only legitimate manual gates are:
+
+- **Email-OTP verification** when the vendor sends a one-time passcode to the operator's inbox before routing to a human reviewer.
+- **SMS-OTP** — same shape as email-OTP but delivered to the operator's phone (e.g., banks, telcos, account-recovery flows). Same handoff: "check your messages for the code, tell me the digits."
+- **Authenticator-app TOTP** — operator reads a rolling 6-digit code from Authy / 1Password / Google Authenticator / Microsoft Authenticator. Playwright cannot reach the authenticator source.
+- **WebAuthn / passkey / U2F browser prompts** — the OS or browser surfaces a native dialog (passkey selection, Touch ID, Windows Hello) that Playwright cannot synthesize. Distinct from hardware MFA: passkeys are software-resident and increasingly the default on Google / GitHub / Stripe / Apple.
+- **Push-based MFA** (Duo Push, Okta Verify, Authy Push, Microsoft Authenticator notification) — operator approves on a separate device; no DOM interaction available to Playwright.
+- **Payment-card entry** in Stripe / similar widgets (cross-origin iframe sandbox; even if Playwright could reach in, card entry is the explicit operator decision-and-ack point).
+- **CAPTCHA / "I am not a robot"** challenges (intentional bot-detection).
+- **Hardware MFA token tap** — physical YubiKey / Titan / Solokey touch (operator-side device).
+
+Never quote OTP digits, TOTP codes, or any other ephemeral authentication value in a committed file — capture only the fact-of-verification + UTC timestamp. The specific code is dead immediately, but quoting it normalizes "paste secrets into the runbook" as a pattern and the next vendor's code may NOT be single-session (some flows reuse codes within a TTL window).
+
+Drive the flow up to one of these gates, hand off the single interaction (e.g., "check your inbox for the OTP and tell me the code"), then resume. Never list "operator pastes + submits" as a step — that's a Playwright-first-audit violation. Vendor support tickets typically do not return a numeric ticket ID; capture (a) the submission UTC timestamp, (b) the AI-classifier auto-title (often surfaced in the messages list), and (c) any human-team routing label as the audit baseline. The conversation thread on the vendor side IS the canonical ticket; async response arrives via email to the operator. **Why:** PR #3946 PR-γ §17 Sentry refund + forensics tickets — the original plan listed them as "NOT Playwright-driveable" (operator handoff to paste-and-submit); after operator pushback, both tickets were driven via Sentry's Intercom widget at `help.sentry.io` with only the email-OTP step handed off. See learning `knowledge-base/project/learnings/2026-05-17-vendor-support-tickets-are-playwright-driveable.md`.
+
+#### Phase 4 Entry-Guard
+
+Before emitting `## Work Phase Complete` (one-shot mode) or chaining into the post-implementation pipeline (direct mode), assert at least one commit exists beyond `origin/<branch>`. An empty diff hands review agents nothing to analyze and produces no signal. Run BEFORE the Invocation Mode branch so both paths are covered.
+
+**Procedure (distinct exit codes signal distinct operator actions):**
+
+1. Probe the commit count:
+
+   ```bash
+   BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   if [[ -z "$BRANCH" || "$BRANCH" == "HEAD" ]]; then
+     echo "[work-phase-4-guard] detached HEAD — checkout a feature branch before chaining to review." >&2
+     exit 1
+   fi
+   N=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+   ```
+
+2. If `N == 0`, **stop and run Phase 2 step 3** (stage logical-unit files, write conventional commit message). Do not chain through this block as a single bash invocation — the commit is an explicit action the agent must perform between probes:
+
+   ```bash
+   if [[ "$N" == "0" ]]; then
+     echo "[work-phase-4-guard] no commits beyond origin/${BRANCH} — pause and run Phase 2 step 3 incremental commit before continuing." >&2
+     exit 2  # PAUSE — orchestrator should re-enter Phase 4 after the commit lands
+   fi
+   ```
+
+3. After the incremental commit lands, re-enter the Phase 4 entry-guard. If `N == 0` on the second probe (commit failed silently or no diff exists), HALT:
+
+   ```bash
+   if [[ "$N" == "0" ]]; then
+     echo "[work-phase-4-guard] empty diff vs origin/${BRANCH} after Phase 2 step 3 — investigate before continuing." >&2
+     exit 1  # HALT — do NOT emit "## Work Phase Complete"
+   fi
+   ```
+
+**Form rationale.** `git rev-parse --abbrev-ref HEAD` matches `ship/SKILL.md:619` precedent and returns the literal `HEAD` on detached state (vs. `git branch --show-current` which returns empty), so the detached-HEAD guard catches both shapes. `git rev-list ... --count` returns a clean integer ready for `[[ "$N" == "0" ]]`; the `wc -l` shape requires a `tr -d` strip and is whitespace-padded. Precedent: `plugins/soleur/skills/ship/SKILL.md:619`, `.claude/hooks/ship-unpushed-commits-gate.sh`. **Distinct exit codes** (`2 = pause-and-commit`, `1 = halt-and-investigate`) let one-shot orchestrators distinguish the two recovery paths rather than treating both as opaque non-zero failures.
 
 #### Invocation Mode
 
@@ -572,3 +755,4 @@ For most features: tests + linting + following patterns is sufficient.
 - **Incomplete replace_all** - After any `replace_all` Edit operation, grep the file to verify zero remaining matches before proceeding to the next task. `replace_all` can miss occurrences with different surrounding context (whitespace, indentation).
 - **Encoded-blob value sweep** - When removing a value from a file that contains base64, hex, JSON-string-escape, or URL-encoded forms (JWT fixtures, encoded config snapshots, request payloads), source-form `grep` is insufficient. After substitution, decode each blob and grep the **decoded** form for the removed value. **Why:** PR #3054 — `replace_all "ifsccnjhymdmidffkzhl"` returned 0 source hits but `JWT_LOG_INJECT_U2028`'s base64 payload still encoded the dev Supabase ref; the secret scanner would have re-fired. See `knowledge-base/project/learnings/security-issues/2026-04-29-jwt-fixture-reminting-decode-verify.md`.
 - **Local verification without Doppler** - For env-var-reading apps, use a single Bash call: `cd <abs-path> && doppler run -p soleur -c dev -- npm run <script>` (for `apps/web-platform`, `cd apps/web-platform && doppler run -p soleur -c dev -- npm run dev`). Prevents: (a) skipping `doppler run` (missing secrets), (b) invoking transitive binaries under `doppler run` (not on PATH), (c) relying on prior CWD (shell state doesn't persist). If port 3000 is already bound by another dev server (the user may have one running), start on an alternate port via `PORT=3099 doppler run ... npm run dev` rather than killing the existing process. (ex-`cq-for-local-verification-of-apps-doppler`; #2350 hit all three failure modes in sequence; PR #3199 added the alt-port fall-through after the stale `./scripts/dev.sh` reference broke startup)
+- **Closes-after-apply deferral missed in commit messages** - When a plan's `## Risks` (or `## Sharp Edges`) section names an explicit Closes-after-apply deferral (issue stays open until a post-merge PM step proves green — workflow first-run, terraform apply, deploy probe, etc.), commit messages AND PR body MUST default to `Ref #N`, not `Closes #N`, regardless of whether the commit body's `Closes` placement is technically `wg-use-closes-n-in-pr-body-not-title-to`-legal. Auto-close fires at merge time, decoupled from whether the proof artifact actually lands green. Detection: grep the plan for `Closes-after-apply`, `manual close after`, `Ref #N` + `close manually`, `type: ops-remediation`, or any explicit per-PM closure-link instruction. On match, emit `Ref #N` + 1-line WARN. The author manually `gh issue close N --comment "<run URL>"` post-PM. **Why:** PR #3551 — initial commit message used `Closes #3060` against plan §R6's `Ref #3060 + manual close after PM1 confirms first green run` directive; caught pre-push via self-audit, amended. See `knowledge-base/project/learnings/2026-05-11-plan-r6-closes-after-apply-deferral-pattern.md`.

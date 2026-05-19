@@ -40,6 +40,8 @@ Run `git status --porcelain`. If output is non-empty, STOP and tell the user to 
 ### Pre-flight Confirmation
 
 <decision_gate>
+**API budget.** Each iteration of this loop consumes one main-model turn (parse failures → cluster → fix → re-run) against the Anthropic API key in your Claude Code session. The `max iterations` cap (default 5, configurable via `$ARGUMENTS`) is the only cost ceiling — a runaway against a perpetually-flaky test command or an infinite-regression chain runs up to the cap before terminating. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
 Show the user: detected test command, max iterations, current branch.
 Get one confirmation before starting the loop. This is the only approval gate --
 no per-iteration approval.

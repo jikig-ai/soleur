@@ -1,10 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { TC_VERSION } from "@/lib/legal/tc-version";
+import { TC_VERSION, TC_DOCUMENT_SHA } from "@/lib/legal/tc-version";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
+import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 async function getRedirectDestination(
   supabase: SupabaseClient,
@@ -34,54 +35,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Always delegate to the public.accept_terms RPC. Idempotency lives in
+  // SQL: the UPDATE on public.users is a no-op when tc_accepted_version
+  // already matches, and the INSERT into public.tc_acceptances uses
+  // ON CONFLICT (user_id, version) DO NOTHING. No client-side
+  // early-return — re-acceptance of the same version is still a meaningful
+  // heartbeat for tc_accepted_at.
   const serviceClient = createServiceClient();
-
-  // Idempotency: skip write if user already accepted the current version
-  const { data: existing } = await serviceClient
-    .from("users")
-    .select("tc_accepted_version")
-    .eq("id", user.id)
-    .single();
-
-  if (existing?.tc_accepted_version === TC_VERSION) {
-    const redirect = await getRedirectDestination(supabase, user.id);
-    return NextResponse.json({ ok: true, redirect });
-  }
-
-  const { data, error } = await serviceClient
-    .from("users")
-    .update({
-      tc_accepted_at: new Date().toISOString(),
-      tc_accepted_version: TC_VERSION,
-    })
-    .eq("id", user.id)
-    .select("id");
+  const { error } = await serviceClient.rpc("accept_terms", {
+    p_user_id: user.id,
+    p_version: TC_VERSION,
+    p_doc_sha: TC_DOCUMENT_SHA,
+  });
 
   if (error) {
-    logger.error({ err: error }, "Failed to record acceptance");
-    Sentry.captureException(error, {
-      tags: { feature: "accept-terms", op: "record" },
-      extra: { userId: user.id },
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(error, {
+        feature: "accept-terms",
+        op: "record",
+        message: "Failed to record acceptance",
+        extra: { userId: user.id },
+      });
     });
     return NextResponse.json(
       { error: "Failed to record acceptance" },
       { status: 500 },
-    );
-  }
-
-  if (!data || data.length === 0) {
-    logger.error({ userId: user.id }, "User row not found");
-    // Data inconsistency — authenticated user has no row in `users`. No Error
-    // object to capture; use captureMessage so the condition is still
-    // observable in Sentry.
-    Sentry.captureMessage("User row not found", {
-      level: "error",
-      tags: { feature: "accept-terms", op: "record" },
-      extra: { userId: user.id },
-    });
-    return NextResponse.json(
-      { error: "User profile not found. Please try again shortly." },
-      { status: 404 },
     );
   }
 

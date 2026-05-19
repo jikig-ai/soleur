@@ -26,8 +26,26 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.0"
     }
+    # Phase 0.3-resolved exact versions (see inngest.tf comment). Bump via
+    # `terraform init -upgrade` + commit the lockfile diff.
+    doppler = {
+      source  = "DopplerHQ/doppler"
+      version = "~> 1.21"
+    }
+    betteruptime = {
+      source  = "BetterStackHQ/better-uptime"
+      version = "~> 0.20"
+    }
   }
   required_version = ">= 1.6"
+}
+
+provider "doppler" {
+  doppler_token = var.doppler_token_tf
+}
+
+provider "betteruptime" {
+  api_token = var.betterstack_api_token
 }
 
 provider "hcloud" {
@@ -48,11 +66,14 @@ provider "cloudflare" {
 }
 
 # Separate provider for Cloudflare Rulesets APIs (cache rules, firewall
-# custom rules). The default cf_api_token lacks Cache Rules:Edit and
-# Zone WAF:Edit; this alias uses a narrow token scoped to both on
+# custom rules, dynamic redirects). The default cf_api_token lacks
+# Cache Rules:Edit, Zone WAF:Edit, Single Redirect Rules:Edit, and
+# Transform Rules:Edit; this alias uses a narrow token scoped to all on
 # soleur.ai. Current consumers:
-#   - cache.tf                 (http_request_cache_settings)  — #2542
-#   - bot-allowlist.tf         (http_request_firewall_custom) — #2662
+#   - cache.tf                    (http_request_cache_settings)  — #2542
+#   - bot-allowlist.tf            (http_request_firewall_custom) — #2662
+#   - seo-rulesets.tf             (http_request_dynamic_redirect) — #3296
+#   - acme-challenge-ruleset.tf   (http_request_dynamic_redirect) — 2026-05-18 incident
 provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets

@@ -1,0 +1,216 @@
+name: cla-evidence
+
+# Sidecar evidence layer alongside the upstream contributor-assistant/github-action
+# in cla.yml. Captures sign-time artifacts (doc-hash, verbatim comment body,
+# PR-of-record, allowlist-bypass provenance) and writes them to the off-site
+# Cloudflare R2 archive (governance object-lock, EU region) so a future BSL →
+# Apache 2.0 relicensing event is defensible in EU/France jurisdiction.
+#
+# Plan: knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md
+# Issue: #3209
+#
+# SECURITY ENVELOPE: This workflow uses pull_request_target which runs with
+# write access to the base branch. Do NOT add steps that checkout or build PR
+# code. The actions/checkout step explicitly checks out the BASE ref only.
+# All PR-derived strings (comment body, login, etc.) are passed via env: and
+# referenced as $VAR in run: blocks per workflow-injection best practices.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    # `edited` and `deleted` resolve spec-flow gap #1: a contributor edits
+    # then deletes their sign comment after the action has already accepted
+    # the signature. The sidecar appends to the existing tombstone in both
+    # cases; the canonical evidence record is content-addressed and
+    # immutable per Object Lock.
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+# Per-PR serialization. issue_comment events fire concurrently with
+# synchronize on noisy PRs; this group coalesces them.
+concurrency:
+  group: cla-evidence-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  cla-evidence:
+    if: |
+      (github.event_name == 'pull_request_target') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    env:
+      REPO_FULL: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      # Base ref only — never check out PR head under pull_request_target.
+      - name: Checkout base ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          fetch-depth: 0 # need history for `git show <baseSha>:docs/legal/individual-cla.md`
+
+      - name: Setup Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      # Load R2 evidence credentials from Doppler `prd_cla` config. Service
+      # tokens are config-pinned at creation (learning #9): DOPPLER_TOKEN_CLA
+      # works only against `prd_cla`, never `prd` or `prd_terraform`.
+      # Doppler-fetched secrets are NOT auto-masked — explicit ::add-mask::
+      # below per learning #6.
+      - name: Load Doppler secrets
+        id: doppler
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_CLA }}
+        run: |
+          set -euo pipefail
+          access_key=$(doppler secrets get R2_CLA_EVIDENCE_ACCESS_KEY_ID --plain)
+          secret=$(doppler secrets get R2_CLA_EVIDENCE_SECRET --plain)
+          endpoint=$(doppler secrets get R2_CLA_EVIDENCE_ENDPOINT --plain)
+          bucket=$(doppler secrets get R2_CLA_EVIDENCE_BUCKET --plain)
+          echo "::add-mask::$access_key"
+          echo "::add-mask::$secret"
+          echo "access_key=$access_key" >> "$GITHUB_OUTPUT"
+          echo "secret=$secret" >> "$GITHUB_OUTPUT"
+          echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
+          echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies (zod for schema validation)
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
+
+      # Plan Phase 2 step 5/6 — folded gate. Poll the upstream action's
+      # `license/cla` Status API check up to 30s. If green, run sidecar; if
+      # red/pending, mark cla-evidence Check Run as pending (matching state).
+      - name: Wait for upstream cla-check (folded gate)
+        id: wait_cla
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PR_HEAD_SHA:-}" ]]; then
+            PR_HEAD_SHA=$(gh api "repos/$REPO_FULL/pulls/$ISSUE_NUMBER" --jq .head.sha)
+          fi
+          deadline=$(( $(date +%s) + 30 ))
+          state=""
+          while [[ "$(date +%s)" -lt "$deadline" ]]; do
+            state=$(gh api "repos/$REPO_FULL/commits/$PR_HEAD_SHA/statuses" \
+              --jq '.[] | select(.context == "license/cla") | .state' | head -1 || true)
+            if [[ "$state" == "success" ]]; then
+              echo "cla_state=success" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "cla_state=${state:-pending}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute CLA doc hash at PR base SHA
+        id: doc_hash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          base_sha="${BASE_SHA:-HEAD}"
+          content_sha=$(git show "${base_sha}:docs/legal/individual-cla.md" | sha256sum | awk '{print $1}')
+          echo "doc_git_sha=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "doc_content_sha256=${content_sha}" >> "$GITHUB_OUTPUT"
+
+      # On issue_comment events, fetch the comment body and write the evidence
+      # record. PR-derived strings (login, body) are kept inside env: blocks
+      # and never substituted into shell directly per workflow-injection
+      # best practices.
+      - name: Build and write evidence record
+        if: |
+          github.event_name == 'issue_comment' &&
+          steps.wait_cla.outputs.cla_state == 'success' &&
+          (github.event.action == 'created' || github.event.action == 'edited' || github.event.action == 'deleted')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R2_CLA_EVIDENCE_ACCESS_KEY_ID: ${{ steps.doppler.outputs.access_key }}
+          R2_CLA_EVIDENCE_SECRET: ${{ steps.doppler.outputs.secret }}
+          R2_CLA_EVIDENCE_ENDPOINT: ${{ steps.doppler.outputs.endpoint }}
+          R2_CLA_EVIDENCE_BUCKET: ${{ steps.doppler.outputs.bucket }}
+          DOC_GIT_SHA: ${{ steps.doc_hash.outputs.doc_git_sha }}
+          DOC_CONTENT_SHA256: ${{ steps.doc_hash.outputs.doc_content_sha256 }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_ACTION: ${{ github.event.action }}
+          # signed_at must be content-stable (per learning #18 idempotency rule):
+          # use comment.updated_at when present (edit), otherwise created_at.
+          # Workflow retries with new `new Date()` would otherwise produce a
+          # different content-addressed sha per attempt -> duplicate R2 records.
+          COMMENT_TIMESTAMP: ${{ github.event.comment.updated_at || github.event.comment.created_at }}
+          ACTOR_LOGIN: ${{ github.event.comment.user.login }}
+          ACTOR_ID: ${{ github.event.comment.user.id }}
+          ACTOR_TYPE: ${{ github.event.comment.user.type }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-record.ts) \
+            || { echo "::error::evidence-record build failed"; exit 2; }
+          bash apps/cla-evidence/scripts/upload-evidence.sh "$payload"
+
+      # Allowlist-bypass branch (Phase 4): pull_request_target events whose
+      # actor is on the allowlist (and is NOT github-actions[bot] DB-id 41898282)
+      # produce a per-quarter canonical record via R2 conditional-PUT.
+      - name: Record allowlist-bypass (per-quarter canonical)
+        if: github.event_name == 'pull_request_target'
+        env:
+          R2_CLA_EVIDENCE_ACCESS_KEY_ID: ${{ steps.doppler.outputs.access_key }}
+          R2_CLA_EVIDENCE_SECRET: ${{ steps.doppler.outputs.secret }}
+          R2_CLA_EVIDENCE_ENDPOINT: ${{ steps.doppler.outputs.endpoint }}
+          R2_CLA_EVIDENCE_BUCKET: ${{ steps.doppler.outputs.bucket }}
+          ACTOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          ACTOR_ID: ${{ github.event.pull_request.user.id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # build-bypass.ts contract: exits 0 with empty stdout when not a
+          # bypass; exits 0 with a JSON payload when it IS a bypass; exits 1
+          # only on a real error (missing env var, unparseable allowlist).
+          # Do NOT swallow non-zero with `|| exit 0` — that would silently
+          # erase audit records on parse failures (cq-silent-fallback-must-
+          # mirror-to-sentry).
+          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-bypass.ts)
+          if [[ -z "$payload" ]]; then
+            echo "Not an allowlist-bypass; skipping."
+            exit 0
+          fi
+          bash apps/cla-evidence/scripts/upload-bypass.sh "$payload"
+
+      # Receipt comment — soft-fail final step (Code-Simplicity F4 + plan
+      # Phase 2 step 3i). Failure here does NOT block the merge gate; the
+      # canonical evidence is the R2 object.
+      - name: Post receipt comment
+        if: |
+          github.event_name == 'issue_comment' &&
+          steps.wait_cla.outputs.cla_state == 'success' &&
+          github.event.action == 'created'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOC_GIT_SHA: ${{ steps.doc_hash.outputs.doc_git_sha }}
+          DOC_CONTENT_SHA256: ${{ steps.doc_hash.outputs.doc_content_sha256 }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # Receipt content references only fields the contributor can verify
+          # independently: the doc git-sha + content-sha (verifiable via
+          # `git show`) and the lookup command (`inspect-evidence.sh by-pr`).
+          # The R2 record itself is content-addressed at signatures/<sha>.json,
+          # but the sha is not predictable from the contributor's view (depends
+          # on workflow_run_id), so we don't promise a specific bucket key.
+          body="Recorded: signed against \`docs/legal/individual-cla.md\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:docs/legal/individual-cla.md | sha256sum\`. The evidence record is archived off-site under R2 Object Lock (Governance, 10yr) and retrievable via \`bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr $PR_NUMBER\` (operator-only, see retrieval runbook)."
+          gh api "repos/$REPO_FULL/issues/$PR_NUMBER/comments" -X POST -f body="$body"

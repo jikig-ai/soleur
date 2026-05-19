@@ -8,7 +8,7 @@ permalink: legal/acceptable-use-policy/
 <section class="page-hero">
   <div class="container">
     <h1>Acceptable Use Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 18, 2026</p>
   </div>
 </section>
 
@@ -20,7 +20,7 @@ permalink: legal/acceptable-use-policy/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 29, 2026
+**Last Updated:** May 18, 2026 -- added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
 
 ---
 
@@ -47,6 +47,7 @@ This Policy applies to all use of the Soleur platform, including but not limited
 - Account creation and workspace management on app.soleur.ai;
 - Subscription and payment processing through the Web Platform; and
 - Any output, artifact, or action produced by or through the Platform.
+- The hosted Web Platform at `app.soleur.ai`, including conversational prompt input, the `chat-attachments` upload surface (image and PDF files up to 24 MB), and any artifacts persisted to user-scoped storage.
 
 The Plugin operates locally on your machine; the Web Platform operates on cloud infrastructure managed by Jikigai. You retain full control over Plugin agent actions and bear responsibility for all activities performed through the Platform -- whether locally via the Plugin or remotely via the Web Platform -- under your account or on your systems.
 
@@ -137,6 +138,94 @@ You are solely responsible for reviewing document content before sharing. Jikiga
 
 <!-- End: KB sharing -->
 
+### 4.7 Special-Category and Sensitive Personal Data — Hosted Chat Surface
+
+When you use the hosted Web Platform at `app.soleur.ai`, both the conversational
+prompt field and the `chat-attachments` upload surface (image and PDF files up
+to 24 MB) accept content that you, the user, choose to supply. We do not
+inspect this content, and our processing of it is governed by the lawful bases
+declared for processing activity PA2 (Conversation Data) in our Article 30
+register.
+
+You must NOT submit, paste, upload, or attach content of the following kinds
+unless both (1) you have an independent lawful basis (for items (a)–(h),
+under GDPR Article 9(2) — e.g., explicit consent under Art. 9(2)(a) or one
+of the other Art. 9(2) derogations; for item (i), under GDPR Art. 10, which
+requires processing under the control of official authority or authorisation
+by Union or Member State law providing appropriate safeguards — Art. 9(2)
+bases are NOT sufficient for Art. 10 data); and (2) you have informed any
+third-party data subjects whose data is contained in the submission:
+
+- (a) Personal data revealing racial or ethnic origin;
+- (b) Personal data revealing political opinions;
+- (c) Personal data revealing religious or philosophical beliefs;
+- (d) Personal data revealing trade-union membership;
+- (e) Genetic data;
+- (f) Biometric data processed for the purpose of uniquely identifying a
+      natural person (e.g., fingerprint scans, facial recognition templates);
+- (g) Data concerning health (including medical records, prescriptions,
+      diagnostic imaging, and insurance claims);
+- (h) Data concerning a natural person's sex life or sexual orientation; or
+- (i) Personal data relating to criminal convictions and offences or related
+      security measures (GDPR Art. 10).
+
+These categories are referred to collectively in this Policy as
+**"Special-Category Data."**
+
+Soleur is not configured, contracted, or technically equipped to process
+Special-Category Data as a routine or systematic input. Incidental ingress of
+Special-Category Data through prompts or attachments will be treated under the
+"regulated-data surface" handling rule in our internal compliance procedure
+and may, at our discretion, result in removal of the affected content
+under Section 6.2 (Consequences of Violation) of this Policy.
+
+If you require a service that processes Special-Category Data as a defined
+purpose, contact us at legal@jikigai.com before submitting such content; we
+will assess whether a separate data-processing arrangement is feasible.
+
+### 4.8 California Sensitive Personal Information
+
+If you are a California resident, or if your submissions contain personal
+information of California residents, the following categories of **Sensitive
+Personal Information** as defined in Cal. Civ. Code §1798.140(ae) are subject
+to the same prohibition as §4.7, in addition to the Art. 9 categories listed
+there:
+
+- (a) Social Security number, driver's license, state identification card, or
+      passport number;
+- (b) Account log-in, financial account, debit card, or credit card number in
+      combination with any required security or access code, password, or
+      credentials allowing access to an account;
+- (c) Precise geolocation (location data identifying a consumer within a
+      geographic area equal to or less than 1,850 feet);
+- (d) Contents of a consumer's mail, email, or text messages, unless we are
+      the intended recipient of the communication;
+- (e) Citizenship or immigration status;
+- (f) Genetic, biometric-for-identification, and health-related categories
+      already covered by §4.7;
+- (g) Neural data (information generated by measuring the activity of a
+      consumer's central or peripheral nervous system), as defined in
+      Cal. Civ. Code §1798.140(ae)(1)(G); and
+- (h) Racial or ethnic origin, religious or philosophical beliefs, and
+      union membership (also enumerated under GDPR Art. 9 categories at
+      §4.7(a), (c), and (d), respectively).
+
+The list above tracks Cal. Civ. Code §1798.140(ae) as in force on the
+effective date of this Policy. Because the California legislature
+periodically amends the SPI definition, any category recognised as
+"Sensitive Personal Information" under §1798.140(ae) at the time of your
+submission is treated as in scope of this Section 4.8, whether or not it
+is enumerated above; the operative statutory text at
+[leginfo.legislature.ca.gov](https://leginfo.legislature.ca.gov/faces/codes_displaySection.xhtml?sectionNum=1798.140&lawCode=CIV)
+controls in the event of a divergence.
+
+You must not upload scans, screenshots, or text containing the items above
+through the prompt field or the `chat-attachments` upload surface unless you
+have independently established a lawful basis and have informed any third
+parties whose information is included. The Soleur processing record does not
+declare these categories as inputs, and incidental ingress will be treated
+under §4.7.
+
 ---
 
 ## 5. User Responsibilities
@@ -176,6 +265,24 @@ When using Soleur in a manner that involves personal data:
 - You must have a lawful basis for processing any personal data that Soleur agents may access or generate;
 - You must not direct Soleur agents to collect, scrape, or process personal data in violation of applicable law; and
 - You are the data controller for any personal data processed through your use of the Platform.
+
+### 5.4 Automated agent actions taken on your behalf
+
+The Web Platform includes agent-runtime features that can act on your behalf in response to external events (for example, a Stripe `invoice.payment_failed` webhook). The scope and tier of every such action is governed by Section 3a of the Terms & Conditions ("Agent Command Authority"); this AUP section enumerates your responsibilities as the operator who controls those grants.
+
+**You remain responsible for sends derived from drafts.** Soleur's binding invariant is "drafts everywhere, sends nowhere": at the `Approve every time` and `Draft, one click` tiers, an agent prepares a draft but no external effect is produced until you approve the draft through the Web Platform user interface. When you approve a draft, the resulting send is your action, performed through Soleur as your instrument. You are responsible for reviewing each draft -- recipient, tone, factual accuracy, applicable law -- before authorization.
+
+**`Auto` tier acknowledgement.** The `Auto` tier permits Soleur to execute a specific action class without per-instance approval. Selecting the `Auto` tier requires an explicit second-click acknowledgement on the `/dashboard/settings/scope-grants` page. By selecting `Auto`, you authorize Soleur to act in your name for that action class until you revoke the grant. You remain responsible for actions taken on your behalf under an active `Auto` grant.
+
+**Circumventing the human-in-the-loop boundary violates this AUP.** The `draft / Send / Edit / Discard` flow and the per-action-class scope grants ledger are the substrate by which Soleur ensures every external effect is consented to. You shall not:
+
+- Modify, bypass, or disable the scope grants gating layer (whether through API misuse, debugger attachment, or browser-side manipulation);
+- Send messages or trigger external effects outside the surfaces that record consent in the audit ledger;
+- Share account credentials with software or services intended to programmatically click "Send" on drafts without human review.
+
+Attempts to bypass these guardrails are a material breach of Section 4 ("Prohibited Conduct") and may result in suspension or termination of your Web Platform account.
+
+**Audit and contestation.** Every automated action taken on your behalf is recorded in the `/dashboard/audit` viewer with the action class, tier active at the moment of the event, timestamp, and (for BYOK calls) token + cost data. You may contest any automated action through the inlined "Request human review" affordance on each audit row, or by contacting <legal@jikigai.com>.
 
 ---
 

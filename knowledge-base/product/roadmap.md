@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-05-04
-last_reviewed: 2026-05-04
+last_updated: 2026-05-18
+last_reviewed: 2026-05-18
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -67,15 +67,15 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-04-23)
+## Current State (2026-05-09)
 
 | Dimension | Status |
 |-----------|--------|
 | Financial posture | Product COGS ~$81/mo, break-even 2 users at $49/mo. All-in burn ~$491/mo (includes ~$410/mo R&D: Claude Code Max seats + GitHub Copilot), break-even ~11 users. Gross margin at 50 users: ~97% vs COGS, ~80% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). See [finance/cost-model.md](../finance/cost-model.md). |
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
-| Phase 3 (Make it Sticky) | Near-complete. 1 open, 168 closed (milestone). All features shipped. Only remaining: QA gate (#2108). Previously "Not started" items (#1944, #2341, #2342, #2344, #2550, #2662) confirmed closed. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
-| Phase 4 (Validate + Scale) | In progress. 28 open, 68 closed (milestone). Marketing Gate substantially complete (21 of 40 items closed). Multi-User Readiness Gate complete (MU1-MU3 all closed). Remaining open: M3 (#1051 marketing strategy), M4 (#1445 recruitment templates), and Phase 4 core validation issues. |
+| Phase 3 (Make it Sticky) | Near-complete. 3 open, 169 closed (milestone). All features shipped. Only remaining: QA gate (#2108). Previously "Not started" items (#1944, #2341, #2342, #2344, #2550, #2662) confirmed closed. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
+| Phase 4 (Validate + Scale) | In progress. 55 open, 76 closed (milestone). Marketing Gate substantially complete (21 of 40 items closed). Multi-User Readiness Gate complete (MU1-MU3 all closed). Remaining open: M3 (#1051 marketing strategy), M4 (#1445 recruitment templates), Phase 4 core validation issues, plus internal engineering-tooling work (e.g. #3493 AGENTS.md change-class loader, un-deferred 2026-05-09). Internal-tooling issues live in Phase 4 milestone for sequencing but are not customer-facing roadmap rows. |
 | Phase 5 (Desktop Native App) | Defined. 6 open, 0 closed. Trigger-gated on user demand. Note: #2625 (A/B test Solo cap) is in this milestone but not yet in roadmap table. |
 | Post-MVP / Later | 326 open, 600 closed. |
 | Beta users | 0 |
@@ -286,8 +286,12 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M51 | Pillar /company-as-a-service/ — own the category (positioning URL real estate) | 8 hours | Not started — [#3175](https://github.com/jikig-ai/soleur/issues/3175) |
 | M52 | Pillar /ai-agents-for-solo-founders/ — head-term capture (highest-volume acquisition keyword) | 8 hours | Not started — [#3176](https://github.com/jikig-ai/soleur/issues/3176) |
 | M53 | Cluster /blog/claude-code-plugin-vs-skill-vs-mcp/ (matches install-path acquisition channel) | 4 hours | Not started — [#3177](https://github.com/jikig-ai/soleur/issues/3177) |
+| M54 | Rewrite /vision/ to remove internal codenames ("vessel", "Global Brain", "Decision Ledger") — brand-voice + AEO citation hygiene | 2 hours | Not started — [#3993](https://github.com/jikig-ai/soleur/issues/3993) |
+| M55 | Add `last_updated` metadata + stat-led summary paragraphs across evergreen pages (clears AEO Presence ≥55% gate from #2615) | 2 hours | Not started — [#3994](https://github.com/jikig-ai/soleur/issues/3994) |
+| M56 | Inline-define "concurrent conversations" on /pricing/ (Authority + Entity-Clarity dimensions; tracks alongside M42) | 30 min | Not started — [#3995](https://github.com/jikig-ai/soleur/issues/3995) |
+| M57 | Promote Cursor/Copilot comparison out of collapsed `<details>` on homepage (commercial-investigation AEO extractability) | 1 hour | Not started — [#3996](https://github.com/jikig-ai/soleur/issues/3996) |
 
-**Gate:** No recruitment outreach until M1-M4, M12-M17, and M18-M53 complete.
+**Gate:** No recruitment outreach until M1-M4, M12-M17, and M18-M57 complete.
 
 ---
 
@@ -322,6 +326,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | 4.8 | Resource monitoring (host CPU/RAM + concurrent session count; per-workspace cgroup accounting deferred to 4.6 container work) | P2 | Before beta invites | [#1052](https://github.com/jikig-ai/soleur/issues/1052), [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.9 | Monitoring + error tracking | P2 | 10+ users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | [#1444](https://github.com/jikig-ai/soleur/issues/1444) Not started |
+| 4.11 | Skill security scan (LOW-RISK\|REVIEW\|HIGH-RISK advisory gate for skill-creator + agent-finder; brand-survival precondition for external skill-install UX) | P1 | Before guided onboarding (4.3) exposes third-party skill-install surface | [#2719](https://github.com/jikig-ai/soleur/issues/2719) Brainstormed |
 
 **Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, X/Twitter solopreneur network, direct network.
 
@@ -456,4 +461,4 @@ Next review: 2026-05-11.
 
 ---
 
-_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Growth audit intake: 2026-04-22 (6 issues: 3 to Marketing Gate M38-M40 for P1 inline fixes, 3 to Post-MVP L21-L23 for P2/P3 hygiene; 3 pillar issues #2559/#2561/#2712 already in Phase 4; 4 Post-MVP items #2556/#2558/#2669/#2670 already in L7-L14). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill. Finance cost model reconciled 2026-04-23 (#2835) — CFO burn figure corrected from stale EUR 35-44 (~10× underestimate) to R&D/COGS split (~$81/mo product COGS, ~$491/mo all-in). CPO weekly review 2026-05-04: bidirectional gate audit — 30 stale statuses corrected (Phase 3 features 3.22-3.28, Marketing Gate M5/M12-M16/M26-M40, Multi-User Readiness MU1-MU3); milestone counts synced; #2625 added to Phase 5 table; 35 no-milestone issues flagged (see #3161). Growth audit intake: 2026-05-04 (15 issues: 13 P1 to Marketing Gate M41-M53 — 4 content fixes #3165-#3168, 3 AEO #3169-#3171, 3 SEO #3172-#3174, 3 pillars/cluster #3175-#3177; 2 P2 to Post-MVP L24-L25 — twitter meta cleanup #3178, citation monitoring #3179)._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Growth audit intake: 2026-04-22 (6 issues: 3 to Marketing Gate M38-M40 for P1 inline fixes, 3 to Post-MVP L21-L23 for P2/P3 hygiene; 3 pillar issues #2559/#2561/#2712 already in Phase 4; 4 Post-MVP items #2556/#2558/#2669/#2670 already in L7-L14). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill. Finance cost model reconciled 2026-04-23 (#2835) — CFO burn figure corrected from stale EUR 35-44 (~10× underestimate) to R&D/COGS split (~$81/mo product COGS, ~$491/mo all-in). CPO weekly review 2026-05-04: bidirectional gate audit — 30 stale statuses corrected (Phase 3 features 3.22-3.28, Marketing Gate M5/M12-M16/M26-M40, Multi-User Readiness MU1-MU3); milestone counts synced; #2625 added to Phase 5 table; 35 no-milestone issues flagged (see #3161). Growth audit intake: 2026-05-04 (15 issues: 13 P1 to Marketing Gate M41-M53 — 4 content fixes #3165-#3168, 3 AEO #3169-#3171, 3 SEO #3172-#3174, 3 pillars/cluster #3175-#3177; 2 P2 to Post-MVP L24-L25 — twitter meta cleanup #3178, citation monitoring #3179). Growth audit intake: 2026-05-18 (4 issues all to Marketing Gate M54-M57: 3 P1 #3993/#3994/#3995 content + AEO Presence fixes, 1 P2 #3996 homepage `<details>` promotion — provisional Phase 4 assignment validated, all four are pre-recruitment positioning blockers)._

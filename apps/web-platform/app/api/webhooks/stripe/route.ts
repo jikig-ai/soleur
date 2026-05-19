@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getPriceTier } from "@/lib/stripe-price-tier-map";
@@ -13,6 +14,8 @@ import { PG_UNIQUE_VIOLATION } from "@/lib/postgres-errors";
 import type Stripe from "stripe";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
+import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // Map Stripe subscription statuses to the CHECK constraint values.
 // Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
@@ -177,10 +180,17 @@ export async function POST(request: Request) {
           .select("id");
 
         if (error) {
-          logger.error({ error, userId }, "Webhook: failed to update user on checkout.session.completed");
-          Sentry.captureException(error, {
-            tags: { feature: "stripe-webhook", op: "checkout.session.completed" },
-            extra: { userId },
+          // userId here comes from session.metadata?.supabase_user_id (Stripe
+          // checkout session metadata), not from a Supabase session — guarded
+          // by `if (userId)` above. Inline setUser uses the same source.
+          Sentry.withIsolationScope(() => {
+            Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
+            reportSilentFallback(error, {
+              feature: "stripe-webhook",
+              op: "checkout.session.completed",
+              message: "Webhook: failed to update user on checkout.session.completed",
+              extra: { userId },
+            });
           });
           await releaseDedupRow();
           return NextResponse.json({ error: "DB update failed" }, { status: 500 });
@@ -413,6 +423,98 @@ export async function POST(request: Request) {
         { customerId, invoiceId: invoice.id },
         "Stripe invoice.payment_failed — logged for observability, status managed by customer.subscription.updated",
       );
+
+      // PR-F (#3244, #3940) — gated bridge to Inngest CFO function.
+      // Default OFF at merge per Phase 0 ops task (SOLEUR_FR5_ENABLED=false
+      // in Doppler prd). Post-merge operator flips to "true" after the
+      // self-hosted Inngest server health-checks. Stripe redelivery
+      // upstream covers the gap if the operator forgets — at-least-once.
+      //
+      // The `processed_stripe_events` dedup INSERT at line 116 already ran
+      // BEFORE this case body; any duplicate Stripe `event.id` short-
+      // circuited at line 126 with 200. So inngest.send fires at most
+      // once per Stripe event.id without a second guard.
+      if (process.env.SOLEUR_FR5_ENABLED === "true" && customerId) {
+        const { data: founderRow } = await supabase
+          .from("users")
+          .select("id")
+          .eq("stripe_customer_id", customerId)
+          .maybeSingle();
+        const founderId = (founderRow as { id?: string } | null)?.id;
+        if (founderId) {
+          // PR-G (#3947) — per-grant deny-by-default. ALL of (flag=on,
+          // grant exists, not denylisted) must hold. This is the
+          // load-bearing safety primitive at the single-user-incident
+          // threshold (brainstorm K4) — the env flag alone is NOT a
+          // tenant-level gate. `supabase` is the service-role client;
+          // isGranted's .eq("founder_id", founderId) IS the tenant filter,
+          // not belt-and-suspenders. A typo would leak across tenants
+          // (AC3 covers founderId-typo regression).
+          const { isGranted } = await import(
+            "@/server/scope-grants/is-granted"
+          );
+          const grant = await isGranted(
+            supabase,
+            founderId,
+            "finance.payment_failed",
+          );
+          if (!grant) {
+            // No active grant OR denylisted OR DB error — fail-closed.
+            // DB errors are mirrored to Sentry inside isGranted (TR9).
+            logger.info(
+              { founderId, eventId: event.id },
+              "Webhook: no active scope_grant for finance.payment_failed — skip inngest.send",
+            );
+            break;
+          }
+          // RV7 minimization — hash email, drop payment_method, keep four
+          // load-bearing fields. Inline (not a sibling module) per RV7.
+          // Review P2-3: createHash hoisted to the file's static import block
+          // (node:crypto is a Node built-in — no bundle cost, no env-throw).
+          const customerEmailHash = invoice.customer_email
+            ? createHash("sha256").update(invoice.customer_email).digest("hex")
+            : "";
+          const failureCode =
+            (invoice as Stripe.Invoice & {
+              last_finalization_error?: { code?: string };
+            }).last_finalization_error?.code ?? "unknown";
+          const payload = {
+            founderId,
+            invoiceId: invoice.id,
+            customerEmailHash,
+            amount: invoice.amount_due ?? 0,
+            currency: invoice.currency ?? "usd",
+            failureCode,
+          };
+          try {
+            const { inngest } = await import("@/server/inngest/client");
+            await inngest.send({
+              id: `stripe-${event.id}`,
+              name: "finance.payment_failed",
+              v: "1",
+              data: {
+                founderId,
+                domain: "finance",
+                event: "finance.payment_failed",
+                // PR-G: pin grant-tier-at-time-of-event so the CFO function
+                // writes messages.trust_tier from the grant active at the
+                // moment the webhook fired (a revoke or re-grant racing
+                // the event MUST NOT change the recorded tier).
+                tier: grant.tier,
+                payload,
+              },
+            });
+          } catch (err) {
+            reportSilentFallback(err, {
+              feature: "inngest-emit",
+              op: "finance.payment_failed",
+              message:
+                "Inngest unreachable on invoice.payment_failed — CFO draft skipped (Stripe redelivery will retry)",
+              extra: { founderId, invoiceId: invoice.id, eventId: event.id },
+            });
+          }
+        }
+      }
       break;
     }
 

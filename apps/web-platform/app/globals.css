@@ -137,10 +137,29 @@
   --color-soleur-accent-gradient-end: var(--soleur-accent-gradient-end);
 }
 
+/*
+ * Tailwind v4: alias --font-sans (the theme-token role name) to the
+ * next/font Inter variable (--font-inter). The next/font className is
+ * applied on <html> in app/layout.tsx, which scopes --font-inter to the
+ * entire document. @theme inline resolves at compile time so the
+ * font-sans utility class emits the full fallback stack.
+ *
+ * INVARIANT: the --font-inter token below MUST equal the `variable:`
+ * field on the Inter() call in app/fonts.ts. Renaming one without the
+ * other silently falls through to system fonts (no build error, no
+ * runtime warning). Kept separate from the colors @theme block above
+ * because that block MUST stay non-inline so data-theme swap remains
+ * dynamic at runtime; merging the two would freeze colors at compile time.
+ */
+@theme inline {
+  --font-sans: var(--font-inter), system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
 @layer base {
   body {
     background-color: var(--soleur-bg-base);
     color: var(--soleur-text-primary);
+    font-family: var(--font-sans);
   }
   :where(a, button, input, select, textarea, [tabindex]:not([tabindex="-1"])):focus-visible {
     outline: none;

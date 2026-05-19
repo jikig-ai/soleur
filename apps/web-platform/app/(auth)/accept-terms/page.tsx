@@ -1,13 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export default function AcceptTermsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [accepted, setAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Middleware redirects here with `?error=db_unavailable` when the
+  // T&C-version SELECT fails open-DB-side (fail-closed redirect). Surface
+  // the outage so the user has a non-form explanation; the form remains
+  // usable in case the outage cleared between redirect and render.
+  const middlewareError = searchParams?.get("error");
+  const outageBanner =
+    middlewareError === "db_unavailable"
+      ? "We're having trouble verifying your account. Please try again in a moment — if the problem persists, we've been alerted."
+      : "";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -41,6 +52,16 @@ export default function AcceptTermsPage() {
             To continue using Soleur, please review and accept our terms.
           </p>
         </div>
+
+        {outageBanner && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200"
+          >
+            {outageBanner}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <label className="flex items-start gap-3 text-sm text-soleur-text-secondary">

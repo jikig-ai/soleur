@@ -472,3 +472,26 @@ jobs:
           rm -f "$RUNNER_TEMP"/app.pem.* \
                 "$RUNNER_TEMP"/app-response.* \
                 "$RUNNER_TEMP/mint-stderr.log" 2>/dev/null || true
+
+      # Single end-of-job heartbeat check-in via the shared
+      # ./.github/actions/sentry-heartbeat composite action.
+      # DUAL-SIGNAL status branch: posts ?status=error if EITHER the drift
+      # check recorded a failure_mode OR the leak tripwire fired. Mirrors the
+      # `notify` step's error-gate at workflow:430
+      # (`failure_mode != '' || tripwire.outcome == 'failure'`) so a leak-only
+      # failure surfaces to Sentry instead of silently reporting ok.
+      # The ok-branch uses `tripwire.outcome != 'failure'` (not `== 'success'`
+      # as the auto-close-stale gate at workflow:444 does) deliberately: this
+      # heartbeat fires under `if: always()`, so a `cancelled`/`skipped`
+      # tripwire outcome (job interrupted before tripwire ran) must NOT page
+      # Sentry as an error — it's an inconclusive run, not a leak.
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-github-app-drift-guard
+          status: ${{ steps.check.outputs.failure_mode == '' && steps.tripwire.outcome != 'failure' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

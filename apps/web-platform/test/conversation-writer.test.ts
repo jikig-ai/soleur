@@ -3,18 +3,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 
-const { mockReportSilentFallback, mockSupabaseFrom } = vi.hoisted(() => ({
-  mockReportSilentFallback: vi.fn(),
-  mockSupabaseFrom: vi.fn(),
-}));
+const { mockReportSilentFallback, mockSupabaseFrom, FakeRuntimeAuthError } =
+  vi.hoisted(() => ({
+    mockReportSilentFallback: vi.fn(),
+    mockSupabaseFrom: vi.fn(),
+    FakeRuntimeAuthError: class FakeRuntimeAuthError extends Error {},
+  }));
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
 }));
 
-vi.mock("@supabase/supabase-js", () => ({
-  createClient: vi.fn(() => ({ from: mockSupabaseFrom })),
+// PR-C §2.4 (#3244): conversation-writer.ts now imports from
+// `@/lib/supabase/tenant` instead of using `@supabase/supabase-js`
+// + `createServiceClient`. Mock the tenant module directly.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockSupabaseFrom })),
+  RuntimeAuthError: FakeRuntimeAuthError,
 }));
 
 vi.mock("@/server/logger", () => ({

@@ -18,7 +18,7 @@ Two infra-drift issues (#987, #988) were auto-created by the scheduled drift wor
 
 ### web-platform: Provision secret and apply
 
-- Added `CF_NOTIFICATION_EMAIL=ops@jikigai.com` to Doppler `prd_terraform` config
+- Added `CF_NOTIFICATION_EMAIL=ops@example.com` to Doppler `prd_terraform` config
 - Ran `terraform apply` — firewall SSH restriction applied (0.0.0.0/0 → 82.67.29.121/32)
 - Filed #992 for the CF API token permission gap (notification policy still pending)
 

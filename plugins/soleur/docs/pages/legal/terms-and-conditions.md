@@ -20,7 +20,7 @@ permalink: legal/terms-and-conditions/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 -- added Web Platform service terms, scoped local-only statements to Plugin, updated data practices and GDPR rights sections for Web Platform; added subscription cancellation, refund, and EU withdrawal policy (Section 5); added Article 12(3) two-month extension provision to response timeline.
+**Last Updated:** May 18, 2026 -- added Section 3a "Agent Command Authority" governing per-action-class scope grants and per-grant deny-by-default authorization for automated Web Platform actions; tightened Section 9 cross-reference (previous: April 10, 2026 -- added Section 8.1c Shared Content terms).
 
 ---
 
@@ -48,6 +48,40 @@ These Terms apply to all Users globally, with specific provisions for Users in t
 You must be at least 18 years of age (or the age of majority in your jurisdiction) to use the Plugin or the Web Platform. By using Soleur, you represent and warrant that you meet this requirement.
 
 If you are using the Plugin or the Web Platform on behalf of an organization, you represent and warrant that you have the authority to bind that organization to these Terms.
+
+## 3a. Agent Command Authority
+
+The Web Platform includes agent-runtime features that can act on your behalf in response to external events (for example, a Stripe `invoice.payment_failed` webhook) without your live presence at the moment the event fires. This section governs the scope, limits, and revocation of that authority.
+
+### 3a.1 Per-action-class scope grants
+
+The Web Platform performs no automated action on your behalf for an action class (for example, `finance.payment_failed`) unless you have explicitly granted authorization for that class via the `/dashboard/settings/scope-grants` interface. Authorization is opt-in per action class; the absence of a grant is a denial. The Web Platform's per-tenant scope grants ledger is the source of truth for this authorization, recorded as an append-only WORM record at the moment of grant and at the moment of revocation.
+
+### 3a.2 Default tier and "drafts everywhere, sends nowhere"
+
+Each grant carries one of three tiers:
+
+- **Approve every time** -- the agent proposes; you authorize each instance before any external effect is produced. This is the safest tier and the default for any new action class.
+- **Draft, one click** -- the agent prepares a draft; you approve with one click before any external effect is produced.
+- **Auto** -- the agent executes the action without a per-instance approval step. This tier is consequential; selecting it requires an explicit second-click acknowledgement on the grant page.
+
+Regardless of tier, the Web Platform's binding invariant is "drafts everywhere, sends nowhere": no external message, payment instruction, or third-party transmission is produced unless either (a) you authorize that specific draft through the Web Platform user interface, or (b) you have granted the `Auto` tier for the specific action class triggering the event. Any send produced from a draft you authorize is your action, performed through Soleur as your instrument.
+
+### 3a.3 Revocation
+
+You may revoke a scope grant at any time via the same `/dashboard/settings/scope-grants` interface. Revocation takes effect for the next trigger of the action class; runs already in flight when the revocation is recorded may complete according to the tier active at the moment the trigger fired. The grant ledger records both the original grant and the revocation, with the tier that was active at the moment of each recorded event preserved for audit purposes (the `/dashboard/audit` viewer renders this history).
+
+### 3a.4 Soleur is not an agent-in-fact for third parties
+
+Soleur executes the actions you authorize within the Web Platform's user interface and the action classes you grant. Soleur is not your legal agent, attorney-in-fact, or authorized representative for any third party. No grant made via the Web Platform creates an agency relationship between Jikigai and any third party. Any obligation owed to a third party that results from an action you authorize through Soleur remains your obligation.
+
+### 3a.5 BYOK cost ceiling
+
+Where the Web Platform performs automated actions on your behalf, those actions consume API credits on your Anthropic API key (Bring-Your-Own-Key, "BYOK"). The Web Platform records the per-call token count and unit cost in the audit ledger; you control the spending cap on your own key directly with Anthropic. Jikigai does not bill, proxy, or guarantee any cost incurred against your BYOK key. The Web Platform does not include a Jikigai-provided cost ceiling beyond the cap you set on your own key.
+
+### 3a.6 Right to human review (GDPR Article 22(3))
+
+Where the Web Platform produces a decision concerning you through automated processing (including any action under the `Auto` tier), you have the right to obtain human intervention, to express your point of view, and to contest the decision. The `/dashboard/audit` viewer surfaces a "Request human review" affordance on each automated run; you may also contact us at <legal@jikigai.com> at any time to request human review of any automated action.
 
 ## 4. Description of the Service
 
@@ -188,8 +222,8 @@ The Web Platform allows you to share individual knowledge base documents via pub
 
 - **Your responsibility:** You are solely responsible for the content you choose to share. You must ensure that shared documents do not contain confidential third-party information, personally identifiable information of others without their consent, or material that infringes third-party intellectual property rights. See the [Acceptable Use Policy](/legal/acceptable-use-policy/) for detailed rules.
 - **Jikigai's role:** Jikigai acts as a processor making the document content available at the shared URL on your instruction. Jikigai does not review, moderate, or approve shared content prior to publication.
-- **Revocation:** You may revoke a share link at any time from the Web Platform. Revocation takes immediate effect. However, Jikigai cannot guarantee that recipients have not copied, downloaded, or redistributed the content prior to revocation.
-- **No warranty of recipient conduct:** Jikigai makes no representation regarding how recipients will use shared content and accepts no liability for any downstream use by recipients.
+- **Revocation:** You may revoke a share link at any time from the Web Platform. Revocation takes immediate effect -- the shared URL will no longer serve the document content. However, Jikigai cannot guarantee that recipients have not copied, downloaded, or redistributed the content prior to revocation. You acknowledge that once content is shared via a public link, Jikigai has no ability to enforce deletion by recipients.
+- **No warranty of recipient conduct:** Jikigai makes no representation regarding how recipients will use shared content and accepts no liability for any downstream use by recipients after they access the shared document.
 
 <!-- End: KB sharing -->
 
@@ -222,6 +256,7 @@ You agree to use the Plugin and the Web Platform only for lawful purposes and in
 - Introduce malware, viruses, or other harmful code
 - Circumvent, disable, or interfere with security features of the Plugin or connected services
 - Use the Plugin for automated decision-making that produces legal effects on individuals without appropriate human oversight, as required under GDPR Article 22
+- Circumvent, disable, or interfere with the human-in-the-loop boundary established by the `draft / Send / Edit / Discard` flow or the per-action-class scope grants ledger described in Section 3a (Agent Command Authority); attempting to send messages or trigger external effects without a grant or without an authorized draft is a material breach of these Terms
 
 ## 10. Disclaimer of Warranties
 

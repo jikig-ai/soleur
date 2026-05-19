@@ -270,6 +270,81 @@ jobs:
           printf 'released=%s\n' "true" >> "$GITHUB_OUTPUT"
           echo "Created release $TAG"
 
+      # Sentry Monitors/Alerts migration audit (Phase 2.2 of #3814).
+      # Re-runs the audit after each release and uploads the dated Markdown
+      # report as a release asset. Provides an evergreen Article 30 §5(2)
+      # accountability evidence trail co-located with release notes.
+      #
+      # NON-BLOCKING: this step is telemetry and MUST NOT fail the release
+      # pipeline. `continue-on-error: true` + an inner non-set-e shell with
+      # explicit exit-0 conversion ensures a Sentry-side transient (token
+      # scope mismatch, region-probe failure, API outage) cannot block the
+      # Docker build/push that follows. Initial #3811 ship hit this failure
+      # mode: the CI SENTRY_AUTH_TOKEN lacked the `/users/me/` scope the
+      # region probe requires, the audit script exited 1, and BOTH the
+      # plugin release AND the web-platform release skipped Docker push
+      # while the GitHub Release tags landed — production stayed stale.
+      #
+      # SENTRY_API_HOST bypasses the audit script's `/users/me/` region
+      # probe (which requires `member:read` scope — a scope that personal
+      # tokens minted for CI commonly lack even after the post-#3849 token
+      # rotation). Mirrors the escape hatch added to
+      # `configure-sentry-alerts.sh` in #3858. Falls back to `sentry.io`
+      # (US ingest — the empirically-verified host the operator's
+      # 2026-05-15 baseline audit ran against per the committed artifact
+      # at `knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md`).
+      # Override via the `SENTRY_API_HOST` repo secret if Sentry residency
+      # changes (e.g., migration to `de.sentry.io`).
+      #
+      # Skips silently when SENTRY_AUTH_TOKEN is unavailable (e.g. component
+      # release where the secret isn't required).
+      - name: Sentry Monitors/Alerts migration audit
+        if: steps.create_release.outputs.released == 'true'
+        continue-on-error: true
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          # Branch-C correction (2026-05-17): default is now the org-subdomain,
+          # NOT `de.sentry.io` (ingest-only, no `/api/0/`) or `eu.sentry.io`
+          # (silently rewrites slugs ending in `-eu` per learning
+          # `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`).
+          # Fail-loud if SENTRY_API_HOST secret is not set — the audit script
+          # MUST hit the right host for slug-scoped probes to work.
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_URL: ${{ secrets.SENTRY_URL }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # No `set -e` — every audit failure path must exit 0 so the
+          # release pipeline continues. The `continue-on-error: true`
+          # marker above is belt; this is suspenders.
+          set -uo pipefail
+          if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
+            echo "::notice::SENTRY_AUTH_TOKEN unavailable; skipping migration audit (no Article 30 evidence uploaded for this release)."
+            exit 0
+          fi
+          if [[ ! -x apps/web-platform/scripts/sentry-monitors-audit.sh ]]; then
+            echo "::notice::Audit script not present in this checkout; skipping."
+            exit 0
+          fi
+          set +e
+          AUDIT_OUT_DIR="${RUNNER_TEMP}/sentry-audit" \
+            bash apps/web-platform/scripts/sentry-monitors-audit.sh
+          script_rc=$?
+          set -e
+          if [[ "$script_rc" -ne 0 ]]; then
+            echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. If the script output reads 'Sentry token not valid against either US or EU ingest', verify SENTRY_API_HOST is reaching the script (defaults to 'de.sentry.io'; override via repo secret if residency changed). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
+            exit 0
+          fi
+          report=$(ls "${RUNNER_TEMP}/sentry-audit"/sentry-migration-audit-*.md 2>/dev/null | head -1 || true)
+          if [[ -z "$report" ]]; then
+            echo "::warning::Audit produced no report file."
+            exit 0
+          fi
+          gh release upload "$TAG" "$report" --clobber
+          echo "Uploaded $(basename "$report") to release $TAG."
+
       - name: Count plugin components
         id: plugin_stats
         if: steps.version.outputs.next != '' && inputs.docker_image != ''

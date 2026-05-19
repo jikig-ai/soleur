@@ -120,4 +120,19 @@ describe("KB sidebar collapse", () => {
     expect(aside).toBeInTheDocument();
     expect(aside!.className).toContain("hidden");
   });
+
+  it("KB header row uses py-5 + min-h-7 to match main sidebar brand row height", async () => {
+    render(<KbLayout><div>content</div></KbLayout>);
+    await screen.findByTestId("file-tree");
+    const collapseBtn = screen.getByLabelText("Collapse file tree");
+    const headerRow = collapseBtn.closest("header");
+    expect(headerRow).not.toBeNull();
+    expect(headerRow?.className).toMatch(/\bpy-5\b/);
+    expect(headerRow?.className).toMatch(/\bmin-h-7\b/);
+    expect(headerRow?.className).toMatch(/\bflex\b/);
+    expect(headerRow?.className).toMatch(/\bitems-center\b/);
+    expect(headerRow?.className).toMatch(/\bjustify-between\b/);
+    expect(headerRow?.className).not.toMatch(/\bpt-4\b/);
+    expect(headerRow?.className).not.toMatch(/\bpb-3\b/);
+  });
 });

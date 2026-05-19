@@ -1,0 +1,306 @@
+name: "Scheduled: Compound Promotion Loop"
+
+# Layer 2 of the self-healing-workflow design (Issue: #2720; parent: #2718;
+# supersedes #421). Weekly cron: cluster knowledge-base/project/learnings/
+# via Anthropic, open up to 2 draft PRs proposing skill or AGENTS.core.md
+# edits. Default OFF — opt in via `knowledge-base/project/promotion-config.yml`.
+# Operator merges or closes via normal PR review; the loop NEVER auto-merges.
+#
+# Injection note: this workflow accesses only github.token, github.repository,
+# github.sha, github.run_id, github.server_url — none of which carry attacker-
+# controlled content. No github.event.* inputs are used in `run:` blocks.
+
+on:
+  schedule:
+    # Sunday 00:00 UTC — aligns with rule-metrics-aggregate so consecutive
+    # weekly housekeeping crons share the same review window.
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-compound-promote
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  issues: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - id: check
+        uses: ./.github/actions/anthropic-preflight
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  promote:
+    needs: preflight
+    if: needs.preflight.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    # 15 min is generous for one Anthropic call + <=2 PR opens. If it
+    # ever exceeds this, the loop is misbehaving and should fail loud.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Ensure self-healing/auto label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Idempotent: `gh label create` exits non-zero if the label already
+          # exists; suppress with `|| true` so first-run creation + subsequent
+          # no-op runs both succeed. AC14.
+          gh label create "self-healing/auto" \
+            --description "Auto-opened by compound-promotion-loop; manual review required" \
+            --color "FBCA04" 2>/dev/null || true
+
+      - name: "Driver: opt-in + week-cap + GDPR pre-pass + retired pre-pass + Anthropic"
+        id: driver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          out=$(bash scripts/compound-promote.sh)
+          printf '%s\n' "$out"
+          STATUS=$(printf '%s\n' "$out" | sed -n 's/^::compound-promote-status:://p' | head -n 1)
+          if [[ "$STATUS" != "enabled" ]]; then
+            # no-config / disabled / week-cap-reached / empty-corpus — no work.
+            {
+              echo "skipped=true"
+              echo "clusters_b64="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CLUSTERS_B64=$(printf '%s\n' "$out" | sed -n 's/^::compound-promote-clusters-json:://p' | head -n 1)
+          if [[ -z "$CLUSTERS_B64" ]]; then
+            {
+              echo "skipped=true"
+              echo "clusters_b64="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CLUSTERS_JSON=$(printf '%s' "$CLUSTERS_B64" | base64 -d)
+          COUNT=$(printf '%s' "$CLUSTERS_JSON" | jq 'length')
+          if (( COUNT == 0 )); then
+            {
+              echo "skipped=true"
+              echo "clusters_b64="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "skipped=false"
+            echo "clusters_b64=$CLUSTERS_B64"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open draft PR per cluster (bounded by WEEK_REMAINING)
+        if: steps.driver.outputs.skipped == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLUSTERS_B64: ${{ steps.driver.outputs.clusters_b64 }}
+          REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          CLUSTERS_JSON=$(printf '%s' "$CLUSTERS_B64" | base64 -d)
+          DATE_SUFFIX="$(date -u +%Y-%m-%d)"
+
+          # PR creation is inlined (NOT calling bot-pr-with-synthetic-checks)
+          # because the composite derives the branch name from
+          # ${BRANCH_PREFIX}<date>, which collides with our cluster-hash branch
+          # naming when the loop opens >1 PR per run. Phase 1 still extends
+          # the composite so single-PR future callers can use the new inputs.
+          #
+          # Allowlist for paths the LLM is allowed to propose edits to. AGENTS.core.md
+          # is the always-loaded cross-cutting registry; skill SKILL.md files are the
+          # domain-scoped target. Any other path (workflows, scripts, package.json,
+          # .gitignore, etc.) is REFUSED before `git apply` runs.
+          TARGET_ALLOW_RE='^(AGENTS\.core\.md|plugins/soleur/skills/[A-Za-z0-9_-]+/SKILL\.md)$'
+          MAX_DIFF_BYTES=16384
+          # Always-loaded payload size targets (cq-agents-md-why-single-line on
+          # AGENTS.docs.md): 18000 warn, 22000 critical. Post-apply size MUST
+          # stay <= warn; otherwise reject the cluster.
+          MAX_ALWAYS_LOADED_BYTES=18000
+
+          printf '%s' "$CLUSTERS_JSON" | jq -c '.[]' | while IFS= read -r cluster; do
+            # Re-derive cluster_hash IN THIS WORKFLOW from the source_learnings
+            # list. We do NOT trust the LLM-supplied hash — the prompt instructs
+            # the LLM to compute it but the workflow's hash is the load-bearing
+            # value (used for branch names, audit log, and commit trailer).
+            # Algorithm: sha256(sort(source_learnings) joined by '\n', with the
+            # trailing newline that `jq -r` adds). Documented in promotion-log.md.
+            CLUSTER_HASH=$(printf '%s' "$cluster" | jq -r '.source_learnings | sort | join("\n")' | sha256sum | awk '{print $1}')
+            TIER=$(printf '%s' "$cluster" | jq -r '.tier')
+            TARGET=$(printf '%s' "$cluster" | jq -r '.target_path')
+            DIFF=$(printf '%s' "$cluster" | jq -r '.proposed_diff_unified')
+            SOURCES_CSV=$(printf '%s' "$cluster" | jq -r '.source_learnings | join(",")')
+            SOURCES_SPC=$(printf '%s' "$cluster" | jq -r '.source_learnings | join(" ")')
+            COUNT=$(printf '%s' "$cluster" | jq -r '.source_learnings | length')
+
+            # Target-path allowlist (security: blocks LLM-proposed writes to
+            # workflow files, scripts, package.json, CODEOWNERS, etc.).
+            if [[ ! "$TARGET" =~ $TARGET_ALLOW_RE ]]; then
+              echo "::error::target_path not in allowlist: $TARGET — refusing cluster"
+              continue
+            fi
+
+            # Diff size cap (defense against giant LLM-emitted diffs that smuggle
+            # in many small allowlisted edits per cluster).
+            if (( ${#DIFF} > MAX_DIFF_BYTES )); then
+              echo "::error::diff exceeds ${MAX_DIFF_BYTES}-byte cap (${#DIFF}) — refusing cluster"
+              continue
+            fi
+
+            # Diff-path allowlist: every `+++ b/<path>` MUST also match the
+            # allowlist. Catches the bypass where target_path is benign but the
+            # unified diff touches additional files. Use the same regex; refuse
+            # the cluster on any mismatch.
+            BAD_PATH=""
+            while IFS= read -r p; do
+              [[ -z "$p" ]] && continue
+              if [[ ! "$p" =~ $TARGET_ALLOW_RE ]]; then
+                BAD_PATH="$p"
+                break
+              fi
+            done < <(printf '%s' "$DIFF" | grep -E '^\+\+\+ b/' | sed 's|^+++ b/||' || true)
+            if [[ -n "$BAD_PATH" ]]; then
+              echo "::error::diff touches disallowed path: $BAD_PATH — refusing cluster"
+              continue
+            fi
+
+            # Branch-name shape assertion (defense-in-depth against future hash-
+            # derivation changes that could produce shell-metachar values).
+            BRANCH="self-healing/auto-${CLUSTER_HASH}-${DATE_SUFFIX}"
+            if [[ ! "$BRANCH" =~ ^self-healing/auto-[0-9a-f]{64}-[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "::error::branch name failed shape assertion: $BRANCH"
+              continue
+            fi
+
+            # Dry-run the diff before staging; bail this cluster on apply
+            # failure so a malformed diff doesn't break the per-week loop.
+            if ! printf '%s' "$DIFF" | git apply --check 2>/dev/null; then
+              echo "::error::diff failed git apply --check for cluster $CLUSTER_HASH — skipping"
+              continue
+            fi
+            printf '%s' "$DIFF" | git apply
+
+            # Post-apply byte-budget check on always-loaded AGENTS payload. The
+            # driver prompt instructs the LLM to refuse oversize proposals; the
+            # workflow ENFORCES it after the diff lands. Revert on overflow.
+            ALWAYS_LOADED_BYTES=$(( $(wc -c < AGENTS.md) + $(wc -c < AGENTS.core.md) ))
+            if (( ALWAYS_LOADED_BYTES > MAX_ALWAYS_LOADED_BYTES )); then
+              echo "::error::post-apply AGENTS payload ${ALWAYS_LOADED_BYTES} > ${MAX_ALWAYS_LOADED_BYTES} cap — reverting cluster"
+              git checkout -- AGENTS.md AGENTS.core.md 2>/dev/null || true
+              # Restore any other allowlisted file the diff might have touched.
+              while IFS= read -r p; do
+                [[ -z "$p" ]] && continue
+                git checkout -- "$p" 2>/dev/null || true
+              done < <(printf '%s' "$DIFF" | grep -E '^\+\+\+ b/' | sed 's|^+++ b/||' || true)
+              continue
+            fi
+
+            # Append `pending` row to the audit log. Row stays `pending` /
+            # `(PR pending)`; live state is derived at read-time from the
+            # linked PR via gh pr view (see promotion-log.md schema notes).
+            printf '\n| %s | %s | %s | %d | pending | %s | (PR pending) |\n' \
+              "$DATE_SUFFIX" "$CLUSTER_HASH" "$TARGET" "$COUNT" "$TIER" \
+              >> knowledge-base/project/learnings/promotion-log.md
+            git add "$TARGET" knowledge-base/project/learnings/promotion-log.md
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -b "$BRANCH"
+            # Provenance trailer per AC18: Bot-Author + Source-Learnings +
+            # Cluster-Hash + Tier (no `Promoted-By:` per SpecFlow NG-8).
+            # Build via printf so the heredoc body doesn't break YAML block-scalar
+            # indentation. The commit-message paragraphs are joined with blank lines.
+            TITLE_LINE="chore(self-healing): promote cluster ${CLUSTER_HASH} to ${TARGET}"
+            TRAILER=$(printf 'Bot-Author: compound-promotion-loop@%s\nSource-Learnings: %s\nThreshold-Hit: %d/5\nCluster-Hash: %s\nTier: %s\n' \
+              "$RUN_SHA" "$SOURCES_CSV" "$COUNT" "$CLUSTER_HASH" "$TIER")
+            git commit -m "$TITLE_LINE" -m "$TRAILER"
+            git push -u origin "$BRANCH"
+
+            BODY="Promoted by compound-promotion-loop. Source learnings: ${SOURCES_SPC}. Tier: ${TIER}. Cluster-Hash: ${CLUSTER_HASH}. Reviewer: verify the diff respects cq-agents-md-tier-gate and cq-agents-md-why-single-line; merge to apply, close to reject."
+            gh pr create \
+              --title "self-healing(auto): promote cluster ${CLUSTER_HASH} ${DATE_SUFFIX}" \
+              --body "$BODY" \
+              --base main \
+              --head "$BRANCH" \
+              --draft
+            gh pr edit "$BRANCH" --add-label "self-healing/auto"
+
+            # Synthetic checks — inlined so the draft PR can be marked ready
+            # without waiting for CI on bot-authored content. Mirrors the
+            # bot-pr-with-synthetic-checks composite's check set.
+            # NOTE: each `-f name=<literal>` is enumerated explicitly so
+            # scripts/lint-bot-synthetic-completeness.sh (literal grep, not
+            # bash-aware) can match each required-check name. A shell-loop
+            # over a list would post the same synthetics at runtime but the
+            # linter would FAIL. Mirrors scripts/required-checks.txt.
+            COMMIT_SHA=$(git rev-parse HEAD)
+            gh api "repos/${REPO}/check-runs" \
+              -f name=test \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=Bot PR" \
+              -f "output[summary]=self-healing/auto promotion — operator review required"
+            gh api "repos/${REPO}/check-runs" \
+              -f name=dependency-review \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=Bot PR" \
+              -f "output[summary]=self-healing/auto promotion — operator review required"
+            gh api "repos/${REPO}/check-runs" \
+              -f name=e2e \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=Bot PR" \
+              -f "output[summary]=self-healing/auto promotion — operator review required"
+            gh api "repos/${REPO}/check-runs" \
+              -f name="skill-security-scan PR gate" \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=Bot PR" \
+              -f "output[summary]=self-healing/auto promotion — operator review required"
+            gh api "repos/${REPO}/check-runs" \
+              -f name=cla-check \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=CLA pre-approved" \
+              -f "output[summary]=github-actions[bot] is in CLA allowlist"
+            gh api "repos/${REPO}/check-runs" \
+              -f name=cla-evidence \
+              -f head_sha="$COMMIT_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=CLA evidence not applicable" \
+              -f "output[summary]=Bot-authored content PR — no CLA-signed contributions to attest."
+
+            # Return to main for the next iteration of the cluster loop.
+            git checkout main
+          done
+
+  email-on-failure:
+    needs: [preflight, promote]
+    if: always() && (needs.preflight.result == 'failure' || needs.promote.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: Compound Promotion Loop failed'
+          body: '<p><strong>Scheduled: Compound Promotion Loop</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}

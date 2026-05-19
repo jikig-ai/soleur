@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
+import { PII_KEY_RE } from "@/lib/client-observability";
 
 // Strip JWT-shaped substrings from any string field on the event before
 // transport. Validator throws (`lib/supabase/validate-anon-key.ts`) embed a
@@ -24,11 +25,66 @@ export function scrubJwtFromEvent<T extends Sentry.ErrorEvent>(event: T): T {
   return event;
 }
 
+// Strip PII keys (`userId`, `user_id`, `email`) from any structured field
+// on the event before transport. Layer-3 backstop for the helper-boundary
+// strip in `lib/client-observability.ts` — covers direct `Sentry.captureException`
+// callers that bypass the helper (`lib/upload-attachments.ts`,
+// `components/concurrency/upgrade-at-capacity-modal.tsx`,
+// `components/chat/chat-surface.tsx`, `app/global-error.tsx`).
+// `PII_KEY_RE` is imported from `lib/client-observability` so the helper
+// boundary and this backstop cannot drift on which keys count as PII.
+
+function stripPiiFromRecord(
+  rec: Record<string, unknown> | undefined,
+): void {
+  if (!rec) return;
+  for (const k of Object.keys(rec)) {
+    if (PII_KEY_RE.test(k)) {
+      delete rec[k];
+    }
+  }
+}
+
+export function stripUserContextFromEvent<T extends Sentry.ErrorEvent>(
+  event: T,
+): T {
+  if (event.user) {
+    // `delete` (vs assigning `undefined`) is defensible against future
+    // SDK serializer changes that might stringify undefined as "undefined"
+    // or coerce it to null; symmetric with `stripPiiFromRecord` below.
+    delete event.user.id;
+    delete event.user.email;
+    delete event.user.username;
+    delete event.user.ip_address;
+  }
+  if (event.extra) {
+    stripPiiFromRecord(event.extra as Record<string, unknown>);
+  }
+  if (event.contexts) {
+    for (const ctxKey of Object.keys(event.contexts)) {
+      const ctx = event.contexts[ctxKey] as
+        | Record<string, unknown>
+        | undefined;
+      if (ctx) stripPiiFromRecord(ctx);
+    }
+  }
+  if (event.breadcrumbs) {
+    for (const bc of event.breadcrumbs) {
+      stripPiiFromRecord(bc.data as Record<string, unknown> | undefined);
+    }
+  }
+  return event;
+}
+
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
   environment: process.env.NODE_ENV,
   tracesSampleRate: 0,
   beforeSend(event) {
-    return scrubJwtFromEvent(event);
+    // Sentry's `beforeSend` permits returning `null` to drop the event.
+    // `scrubJwtFromEvent` never returns null today, but guarding here keeps
+    // the chain composable if either step gains a drop-the-event branch.
+    const scrubbed = scrubJwtFromEvent(event);
+    return scrubbed ? stripUserContextFromEvent(scrubbed) : null;
   },
 });

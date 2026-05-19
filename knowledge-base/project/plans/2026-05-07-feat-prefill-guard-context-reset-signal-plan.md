@@ -216,7 +216,7 @@ Any if-ladder hit not covered by an exhaustive switch must be widened in the sam
 
 6.3. Repeat 6.2 with a tool_use-trailing fixture; verify the tool-aware copy renders and model refuses any "yes do that" follow-up.
 
-6.4. Update PR #3419 from draft to ready. `Closes #3269` in PR body. CPO sign-off + `user-impact-reviewer` per single-user-incident threshold.
+6.4. Update PR #3419 from draft to ready. `Closes #3269` in PR body. CPO sign-off + `user-impact-reviewer` per single-user incident threshold.
 
 ## Acceptance Criteria
 
@@ -266,7 +266,7 @@ No fold-ins. All 7 remain open and their PRs proceed independently.
 ### Product (CPO)
 
 **Status:** reviewed (carry-forward)
-**Assessment:** (a) alone insufficient at single-user-incident threshold; asymmetric notification fails the brand contract. Recommend (a) tool-aware + (b), defer (c) behind Sentry signal as the issue specifies. Threshold push-back-resistant: paid-trust product, hallucinated continuation = single-user incident even when no data leaks. **CPO sign-off required at PR time per `requires_cpo_signoff: true`.**
+**Assessment:** (a) alone insufficient at single-user incident threshold; asymmetric notification fails the brand contract. Recommend (a) tool-aware + (b), defer (c) behind Sentry signal as the issue specifies. Threshold push-back-resistant: paid-trust product, hallucinated continuation = single-user incident even when no data leaks. **CPO sign-off required at PR time per `requires_cpo_signoff: true`.**
 
 ### Engineering (CTO)
 
@@ -311,7 +311,7 @@ Copywriter delivered final copy (verbatim in Files to Edit). Both `reason` varia
 
 | Option | Why not |
 |---|---|
-| (a) system-prompt notice only | CPO + CLO + CTO converged: asymmetric notification (model knows, user doesn't) fails single-user-incident threshold for an autonomous-agent product. (a) alone leaves the user-side discoverability gap. |
+| (a) system-prompt notice only | CPO + CLO + CTO converged: asymmetric notification (model knows, user doesn't) fails single-user incident threshold for an autonomous-agent product. (a) alone leaves the user-side discoverability gap. |
 | (a)+(b)+(c) full stack | (c) is greenfield — no native MCP server in `apps/web-platform/server/mcp/`. 1-week+ effort. Issue #3269's >10/7d Sentry trigger is the right gate for (c). Building it preemptively conflates two roadmap initiatives. |
 | (a)+(b)+CLO re-confirmation modal | Touches tool-approval flow surface — larger scope than the brainstorm decision. CLO floor honored by (a)+(b)+inline notice; modal hardening tracked in #3417 for re-evaluation when guard-fire frequency justifies. |
 | (a)+(b)+privacy-policy update | Cross-domain (engineering + legal-document). Separate ship cadence. Tracked in #3418 — to land in same release window per CLO recommendation. |

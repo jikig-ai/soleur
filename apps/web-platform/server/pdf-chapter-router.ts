@@ -61,6 +61,18 @@ export interface SelectChapterArgs {
   question: string;
   outline: ChapterIndex[];
   conversationCostState: { totalCostUsd: number; perConvCap: number };
+  /**
+   * KD-6 — when the active KB context has >1 chapter-chunkable PDF, the
+   * caller passes the candidate titles so the router can return
+   * `ambiguous-which-document` if the question text does not name one.
+   *
+   * Reachability today: `cc-dispatcher.ts` passes a single
+   * `documentExtractMeta` per turn, so the dispatch layer never populates
+   * this field. The discriminator is wired now as a forward-looking guard
+   * so a future multi-PDF resolver upgrade lands with the dispatch
+   * disambiguation already in place (and tests pinned).
+   */
+  candidateDocumentTitles?: string[];
 }
 
 export type SelectChapterResult =
@@ -72,13 +84,54 @@ export type SelectChapterResult =
       routingCostUsd: number;
     }
   | { kind: "ambiguous"; routingCostUsd: number }
+  /**
+   * KD-6 — multi-PDF active context AND the question text does not name
+   * exactly one candidate document title. Caller surfaces a synthetic
+   * assistant turn listing the candidates and asking the user to choose.
+   *
+   * Currently unreachable from production dispatch (single
+   * `documentExtractMeta` per turn). Discriminator + exhaustiveness
+   * coverage are wired now so the multi-PDF upgrade lands without a
+   * silent-drop on the cross-document path.
+   */
+  | {
+      kind: "ambiguous-which-document";
+      candidateTitles: string[];
+      routingCostUsd: number;
+    }
   | { kind: "cost-cap-hit"; cap: number; totalCostUsd: number }
   | { kind: "router-error"; reason: string; routingCostUsd: number };
 
 export async function selectChapter(
   args: SelectChapterArgs,
 ): Promise<SelectChapterResult> {
-  const { question, outline, conversationCostState } = args;
+  const { question, outline, conversationCostState, candidateDocumentTitles } =
+    args;
+
+  // KD-6 (forward-looking guard) — multi-PDF active context. Decide
+  // up-front (before paying for a routing turn) whether the question
+  // text unambiguously names one of the candidate document titles. Two
+  // or more title hits, or zero hits → ambiguous-which-document. The
+  // routing turn is skipped entirely on this branch (routingCostUsd =
+  // 0); the caller surfaces a synthetic disambiguation turn against
+  // `conversationCostState` cap.
+  if (
+    candidateDocumentTitles !== undefined &&
+    candidateDocumentTitles.length > 1
+  ) {
+    const normalizedQ = sanitizePromptIdentifier(question).toLowerCase();
+    const matchedTitles = candidateDocumentTitles.filter((t) => {
+      const norm = sanitizePromptIdentifier(t).toLowerCase().trim();
+      return norm.length > 0 && normalizedQ.includes(norm);
+    });
+    if (matchedTitles.length !== 1) {
+      return {
+        kind: "ambiguous-which-document",
+        candidateTitles: candidateDocumentTitles.slice(),
+        routingCostUsd: 0,
+      };
+    }
+  }
 
   const systemPrompt = buildRouterSystemPrompt(outline);
   const userMessage = buildRouterUserMessage(question);
@@ -91,6 +144,13 @@ export async function selectChapter(
   // (network, key invalid, rate-limit, abort) and are mirrored to Sentry
   // per `cq-silent-fallback-must-mirror-to-sentry` — pino stdout alone
   // is not enough on a code path that can decide a user answer turn.
+  // byok-audit-writer-sweep: out-of-scope — cost rolls up via
+  // routingCostUsd into the parent persistTurnCost at
+  // agent-runner.ts:1876. This `query(...)` call executes INSIDE the
+  // `runWithByokLease(userId, ...)` scope opened at agent-runner.ts:863
+  // (closed at :1991) via the selectChapter call-graph at
+  // agent-runner.ts:1402. No BYOK lease is opened here; no separate
+  // audit row is written. Plan rev-2026-05-16 §Files to Edit row 5.
   try {
     const q = query({
       prompt: routerUserStream(userMessage),

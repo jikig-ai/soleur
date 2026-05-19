@@ -4,7 +4,6 @@ import { CheckCircleIcon, SpinnerIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { GOLD_GRADIENT } from "@/components/ui/constants";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 import type { SetupStep } from "./types";
 
 interface SettingUpStateProps {
@@ -16,7 +15,7 @@ export function SettingUpState({ steps }: SettingUpStateProps) {
     <div className="mx-auto max-w-lg space-y-8">
       <div className="space-y-4 text-center">
         <Badge>SETTING UP</Badge>
-        <h1 className={`${serif.className} text-4xl font-semibold`}>
+        <h1 className="text-4xl font-semibold">
           Setting up your AI team...
         </h1>
         <p className="text-base text-soleur-text-secondary">

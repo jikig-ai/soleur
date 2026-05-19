@@ -9,6 +9,7 @@ const SETTINGS_TABS = [
   { href: "/dashboard/settings", label: "General" },
   { href: "/dashboard/settings/team", label: "Team" },
   { href: "/dashboard/settings/services", label: "Integrations" },
+  { href: "/dashboard/settings/scope-grants", label: "Scope Grants" },
   { href: "/dashboard/settings/billing", label: "Billing" },
 ] as const;
 
@@ -35,47 +36,49 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       {/* Settings sidebar — hidden on mobile, shown on md+ */}
       <nav
         inert={settingsCollapsed || undefined}
-        className={`hidden shrink-0 border-r border-soleur-border-default md:block
+        className={`hidden shrink-0 border-r border-soleur-border-default md:block md:overflow-hidden
         md:transition-[width] md:duration-200 md:ease-out
-        ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48 px-4 py-5"}`}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
-            Settings
-          </h2>
-          <button
-            onClick={toggleSettingsCollapsed}
-            aria-label="Collapse settings nav"
-            title="Collapse settings nav (⌘B)"
-            className="flex h-6 w-6 items-center justify-center rounded text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
-            </svg>
-          </button>
-        </div>
-        <ul className="space-y-1">
-          {SETTINGS_TABS.map((tab) => {
-            const active =
-              tab.href === "/dashboard/settings"
-                ? pathname === "/dashboard/settings"
-                : pathname.startsWith(tab.href);
+        ${settingsCollapsed ? "md:w-0 md:border-r-0" : "w-48"}`}>
+        <div className="w-48 px-4 py-5">
+          <div className="mb-4 flex min-h-7 items-center justify-between">
+            <h2 className="text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
+              Settings
+            </h2>
+            <button
+              onClick={toggleSettingsCollapsed}
+              aria-label="Collapse settings nav"
+              title="Collapse settings nav (⌘B)"
+              className="flex h-6 w-6 items-center justify-center rounded text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+              </svg>
+            </button>
+          </div>
+          <ul className="space-y-1">
+            {SETTINGS_TABS.map((tab) => {
+              const active =
+                tab.href === "/dashboard/settings"
+                  ? pathname === "/dashboard/settings"
+                  : pathname.startsWith(tab.href);
 
-            return (
-              <li key={tab.href}>
-                <Link
-                  href={tab.href}
-                  className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
-                    active
-                      ? "bg-soleur-bg-surface-2 text-soleur-text-primary font-medium"
-                      : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
-                  }`}
-                >
-                  {tab.label}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+              return (
+                <li key={tab.href}>
+                  <Link
+                    href={tab.href}
+                    className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
+                      active
+                        ? "bg-soleur-bg-surface-2 text-soleur-text-primary font-medium"
+                        : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
+                    }`}
+                  >
+                    {tab.label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       </nav>
 
       {/* Mobile tab bar */}
@@ -101,7 +104,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Content area */}
-      <div className="relative flex-1 px-4 py-10 pb-20 md:px-10 md:pb-10">
+      <div className={`relative flex-1 px-4 py-10 pb-20 md:pb-10 md:transition-[padding] md:duration-200 md:ease-out ${settingsCollapsed ? "md:pl-[14.5rem] md:pr-10" : "md:px-10"}`}>
         {settingsCollapsed && (
           <button
             onClick={toggleSettingsCollapsed}

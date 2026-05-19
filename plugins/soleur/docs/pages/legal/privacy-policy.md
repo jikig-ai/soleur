@@ -8,7 +8,7 @@ permalink: legal/privacy-policy/
 <section class="page-hero">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 18, 2026</p>
   </div>
 </section>
 
@@ -17,7 +17,7 @@ permalink: legal/privacy-policy/
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 29, 2026 (added conversation data as PII category in Section 4.7, updated purpose and retention for conversation history, added conversation data retention to Section 7, added conversation data export right to Section 8, added Web Platform cookies cross-reference to Section 12)
+**Last Updated:** May 18, 2026 (added Section 8.3 "Automated decision-making and Article 22 rights" disclosing the Web Platform's agent-runtime scope grants and human-review affordance; scoped the Buttondown-newsletter "does not involve profiling or automated decision-making" line to that processor only; previous: May 16, 2026 extended Section 4.5 with the off-site Cloudflare R2 evidence archive for CLA signatures and added Section 5.11 Cloudflare R2 sub-processor entry per #3209)
 
 ## 1. Introduction
 
@@ -86,9 +86,9 @@ If you contribute code to the Soleur project via pull requests, you are asked to
 - **Timestamp** of signature
 - **Pull request reference** associated with the signing event
 
-This data is stored in the Soleur GitHub repository on a dedicated branch (`cla-signatures`) and is publicly visible. The legal basis for this processing is **legitimate interest** (Article 6(1)(f) GDPR) -- specifically, the legitimate interest of Jikigai in maintaining an enforceable record of contributor IP license grants to protect the integrity of the Soleur project's licensing framework.
+This data is stored in the Soleur GitHub repository on a dedicated branch (`cla-signatures`) and is publicly visible. In addition, an off-site **CLA evidence archive** is maintained at a Cloudflare R2 bucket (`soleur-cla-evidence`, region `weur` -- Western Europe) with R2 Lock Rules age-based retention and a ten (10) year floor providing write-once-read-many (WORM) semantics; the bucket contains a content-addressed record per signature (doc-hash, verbatim sign-comment body, PR-of-record, signed_at, capture_method) plus a monthly RFC 3161 timestamp of the bucket manifest (FreeTSA) to provide tamper-evidence over time. The legal basis for this processing is **legitimate interest** (Article 6(1)(f) GDPR) -- specifically, the legitimate interest of Jikigai in maintaining an enforceable record of contributor IP license grants to protect the integrity of the Soleur project's licensing framework, including for the establishment, exercise, and defense of legal claims under Article 17(3)(e).
 
-**Retention:** CLA signature data is retained indefinitely because the license grants in the CLA are irrevocable and survive any withdrawal of the signature record. If you exercise your right to erasure under GDPR Article 17, your signature record may be deleted, but the license grants made under the CLA continue in full effect for all contributions made prior to deletion, as stated in the CLA itself.
+**Retention:** CLA signature data is retained for ten (10) years on the off-site archive (R2 Lock Rules age-based retention, EU region), balancing GDPR proportionality against the German and UK statutory limitation periods for copyright disputes. The public `cla-signatures` branch is retained indefinitely as a contributor-facing receipt. The license grants in the CLA are irrevocable and survive any withdrawal of the signature record. If you exercise your right to erasure under GDPR Article 17, your signature record on the public branch may be deleted, and the off-site archive object may be removed via an administrator override that writes a permanent tombstone (`tombstones/<sha>.deleted.json`) included in the next monthly RFC 3161 manifest -- preserving the integrity of the timestamp chain. The license grants made under the CLA continue in full effect for all contributions made prior to deletion, as stated in the CLA itself.
 
 ### 4.6 Newsletter Subscription Data
 
@@ -97,7 +97,7 @@ If you subscribe to the Soleur newsletter via the signup form on the Docs Site, 
 - **Data collected:** Email address (actively provided by you); IP address, referrer URL, subscription timestamp, and browser/device metadata (automatically collected by Buttondown during the subscription request).
 - **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content.
 - **Lawful basis (email address):** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
-- **Lawful basis (technical metadata):** Legitimate interest (Article 6(1)(f) GDPR) -- Buttondown automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata as part of standard service operation. This data is necessary for service delivery, abuse prevention, and maintaining the security of the newsletter infrastructure. The processing is minimal, within the reasonable expectations of a newsletter subscriber, and does not involve profiling or automated decision-making. You may object to this processing under Article 21 by contacting us at <legal@jikigai.com>.
+- **Lawful basis (technical metadata):** Legitimate interest (Article 6(1)(f) GDPR) -- Buttondown automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata as part of standard service operation. This data is necessary for service delivery, abuse prevention, and maintaining the security of the newsletter infrastructure. The processing is minimal, within the reasonable expectations of a newsletter subscriber, and Buttondown's processing of this technical metadata does not itself involve profiling or automated decision-making concerning you. (For Web Platform agent-runtime automated decisions, see Section 8.3.) You may object to this processing under Article 21 by contacting us at <legal@jikigai.com>.
 - **Double opt-in:** After submitting your email, Buttondown sends a confirmation email. Your subscription is only activated after you click the confirmation link. This ensures informed, verified consent.
 - **Retention (email address):** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
 - **Retention (technical metadata):** Governed by Buttondown's data retention practices. See [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy) for details.
@@ -110,8 +110,11 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 - **Account data:** Email address (registration), authentication tokens, and session cookies. If you sign in via an OAuth provider (Google, Apple, GitHub, or Microsoft), we also receive your provider user ID, display name, and profile picture URL from the provider. Accounts with matching verified email addresses are automatically linked.
 - **Workspace data:** User workspaces and encrypted API keys (BYOK -- bring your own key). API keys are encrypted using AES-256-GCM before storage.
 - **Subscription data:** Subscription status and billing metadata (managed by Stripe). Card data is handled exclusively by Stripe via Stripe Checkout and never reaches Jikigai servers (PCI SAQ-A).
-- **Conversation data:** Conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata) stored in the Supabase database. Conversations are associated with the user's account via user_id. **Partial assistant outputs from aborted turns** -- assistant text generated before a user-initiated Stop or an involuntary client disconnect -- are preserved in the same conversation history with an "aborted" status marker, the token cost of the partial turn, and the list of completed actions. The purpose is to give you a faithful record of what the Service produced (and billed against your usage) on your behalf. Partial-turn rows are retained for the same period as the parent conversation (see the retention paragraph immediately below this list, and Section 7 for the overall retention policy) unless you exercise your erasure right under Section 8.1. See Section 5.5 of the [Terms & Conditions](/legal/terms-and-conditions/) for the consumption terms that govern partial-turn billing and side effects; your erasure rights (GDPR Article 17) under Section 8.1 below apply equally to partial-turn rows.
+- **Conversation data:** Conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata) stored in the Supabase database. Conversations are associated with the user's account via user_id. **Partial assistant outputs from aborted turns** -- assistant text generated before a user-initiated Stop or an involuntary client disconnect -- are preserved in the same conversation history with an "aborted" status marker, the token cost of the partial turn, and the list of completed actions. The purpose is to give you a faithful record of what the Service produced (and billed against your usage) on your behalf. Partial-turn rows are retained for the same period as the parent conversation (see the retention paragraph immediately below this list, and Section 7 for the overall retention policy) unless you exercise your erasure right under Section 8.1. See Section 5.5 of the [Terms & Conditions](/legal/terms-and-conditions/) for the consumption terms that govern partial-turn billing and side effects; your erasure rights (GDPR Article 17) under Section 8.1 below apply equally to partial-turn rows. In rare cases of unexpected service interruption (e.g., kernel-level process termination or container restart) after generation but before persistence completes, a small portion of an in-progress reply may not be retained in the conversation record.
+- **Per-turn cost telemetry (Concierge surface):** On conversations handled by the Concierge code path (the `/soleur:go` surface), each completed assistant turn is annotated with a small `usage` record attached to the message row. On this surface the record is **deliberately narrowed to a single numeric field -- the turn's cost in US dollars** (`{ cost_usd: <number> }`); token counts are not persisted on completed Concierge turns, in line with the data-minimisation principle (Article 5(1)(c) GDPR). The legacy single-leader chat surface continues to persist the wider snapshot already described in the preceding bullet (input tokens, output tokens, cost, and completed-action list) on aborted turns only. The purposes of the cost field are: (i) subscription cost accounting; (ii) per-user usage observability via the in-product `/api/usage` aggregator; and (iii) operator-side resolution of cost-cap-related billing inquiries. The legal basis, recipients, hosting region, technical and organisational measures, and retention period are the same as the parent conversation row: Article 6(1)(b) GDPR (contract performance); processed by Supabase (eu-west-1, Ireland) on Hetzner-hosted infrastructure (hel1, Finland); no new third-party recipients; protected by Supabase Row-Level Security gated on `conversation_id` ownership and a service-role write boundary enforced by the cc-dispatcher `assertWriteScope` sentinel; cascade-deleted on account deletion via foreign key (`ON DELETE CASCADE`).
 - **Technical data:** IP addresses and request headers processed by Cloudflare CDN/proxy.
+
+<!-- 2026-05-12: Article 13(3) prior-disclosure refresh for messages.usage column (PR #3603 / PR-A2 #3648). CC_PERSIST_USAGE=true active in prd. -->
 
 **Purpose:** Providing the Web Platform service, including account management, workspace provisioning, subscription billing, and conversational AI interactions with domain-specific agents.
 
@@ -132,6 +135,20 @@ The Web Platform allows authenticated users to share individual knowledge base d
 - **Revocation:** The document owner can revoke a share link at any time, which takes immediate effect. After revocation, the shared URL returns an error. However, Jikigai cannot guarantee that recipients have not copied or redistributed the content prior to revocation.
 
 <!-- End: KB sharing -->
+
+<!-- Added 2026-04-13: Push notifications -->
+
+### 4.9 Push Notification Subscriptions
+
+When you enable push notifications on the Web Platform, we store your push subscription data:
+
+- **Data collected:** Push subscription endpoint URL, encryption keys (p256dh, auth), and timestamps (created, last used). This data is associated with your user account.
+- **Purpose:** Delivering browser push notifications when an AI agent requires your input (review gate events) and you are not actively connected to the Web Platform.
+- **Legal basis:** Consent (Article 6(1)(a) GDPR) -- push subscriptions are created only after you explicitly grant notification permission via the browser's permission prompt.
+- **Retention:** Push subscription data is retained while your account is active. Expired or invalid subscriptions (HTTP 410 Gone) are deleted automatically. All subscription data is deleted upon account deletion (cascade delete via foreign key).
+- **Withdrawal:** You can revoke notification permission at any time through your browser's settings, which prevents new notifications. You can also remove stored subscriptions by disabling notifications in your browser.
+
+<!-- End: Push notifications -->
 
 ## 5. Third-Party Services
 
@@ -201,6 +218,43 @@ The Web Platform at `app.soleur.ai` uses **Cloudflare** ([cloudflare.com](https:
 - **DPA:** [Cloudflare Customer Data Processing Agreement](https://www.cloudflare.com/cloudflare-customer-dpa/).
 - Cloudflare uses the EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification for international data transfers.
 
+### 5.9 Resend (Web Platform Transactional Email)
+
+We use **Resend** ([resend.com](https://resend.com)) to send transactional email notifications from the Web Platform. Resend Inc acts as a data processor on our behalf.
+
+- **Data processed:** Recipient email address, email subject, and email body content (review gate notification summaries).
+- **Purpose:** Sending email notifications when an AI agent requires user input and the user has no active push notification subscriptions.
+- **DPA:** [Resend Data Processing Agreement](https://resend.com/legal/dpa) (incorporated into the Terms of Service, Section 7: Data Processing, automatically applicable).
+- Resend is a US-based service. International data transfers are covered by the EU-US Data Privacy Framework (DPF) and Standard Contractual Clauses (SCCs).
+- **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR) -- transactional notifications are necessary to inform users of pending decisions that block AI agent progress, which is core to the service functionality.
+
+### 5.10 Sentry (Web Platform Error Monitoring and Breach Detection)
+
+We use **Sentry** ([sentry.io](https://sentry.io)) for Web Platform error monitoring and breach detection. Functional Software GmbH acts as a data processor on our behalf.
+
+- **Data processed:** Error messages, stack traces, request metadata (URL paths, HTTP headers, navigation breadcrumbs), and a pseudonymous user identifier (`userIdHash`). The Sentry SDK on the server and client emits this data when an unexpected error or noteworthy breadcrumb event occurs.
+- **Pseudonymisation:** User identifiers are pseudonymised at the emission boundary by replacing the raw `userId` with a keyed cryptographic hash (`userIdHash`) using a server-resident secret pepper. Under GDPR Recital 26, the controller cannot re-identify a data subject from the hash alone without the pepper.
+- **Purpose:** Detecting, diagnosing, and responding to service errors and security incidents; meeting the Article 33 breach-notification timeline. The processing surface is the Soleur Web Platform (app.soleur.ai) only.
+- **DPA:** [Sentry Sub-processors](https://sentry.io/legal/dpa/) (Sentry's standard EU-region terms; SCCs incorporated).
+- Sentry processes data in the DE region (Frankfurt, Germany). **Intra-EU processing -- no third-country transfer.** SCCs apply as belt-and-braces against any future routing change.
+- **Retention:** Sentry events retained for 90 days (rolling). Operational logs on the Web Platform infrastructure (pino stdout) are retained in a fixed-capacity Hetzner-local rolling buffer with no off-host copies (see DPD §2.3(m)).
+- **Legal basis:** Dual basis. **Legitimate interest** (Article 6(1)(f) GDPR) for service reliability, security, and abuse prevention, balanced against the pseudonymisation safeguard; together with **legal obligation** (Article 6(1)(c) GDPR) for compliance with the Article 33 breach-notification timeline.
+- **Right to erasure (Article 17):** Hashed identifiers age out per the rolling retention windows; the controller cannot perform processor-side targeted erasure of a pseudonym whose subject cannot be re-identified, consistent with Recital 26.
+- **Sentry monitor classes processed:** issue alerts and cron monitor check-ins (vendor-hosted heartbeat for scheduled GitHub Actions jobs). Both carry no application log content -- only structural metadata (job slug, status, timestamp, pseudonymous identifier where applicable). **Sentry log ingestion (Logs product) is NOT enabled and no application log content is forwarded to Sentry.** A future change introducing a Sentry log channel requires re-disclosure here and an extension of the scrub boundary at `apps/web-platform/server/sentry-scrub.ts`.
+
+### 5.11 Cloudflare R2 (CLA Evidence Archive)
+
+We use **Cloudflare R2** ([cloudflare.com/products/r2](https://www.cloudflare.com/products/r2/)) to operate the off-site CLA evidence archive described in Section 4.5. Cloudflare, Inc. acts as a data processor on our behalf for this distinct processing surface, separate from the Section 5.8 Cloudflare CDN/proxy role.
+
+- **Data processed:** Per-signature evidence records (GitHub username, signature timestamp, signing-comment body, pull request reference, doc-hash, and capture method) plus monthly RFC 3161 timestamp responses derived from the bucket manifest. Bypass records for allowlisted bot accounts (`dependabot[bot]`, `renovate[bot]`, `claude[bot]`) are also recorded; the upstream CLA action filters `github-actions[bot]` (DB-id 41898282) before any record is written.
+- **Purpose:** Tamper-evident off-site archive supporting the legitimate-interest basis in Section 4.5 -- defense of legal claims regarding contributor IP grants under Article 17(3)(e).
+- **Storage location:** Cloudflare R2 bucket `soleur-cla-evidence`, region `weur` (Western Europe). Intra-EU processing -- no third-country transfer for archive contents at rest.
+- **Object Lock:** Governance mode with a ten (10) year retention floor. Administrator override is permitted only via the GDPR Article 17 admin-override procedure documented in the operations runbook; every override writes a permanent tombstone (`tombstones/<sha>.deleted.json`) that is included in the next monthly RFC 3161 manifest, so the timestamp chain reflects deletions transparently.
+- **Tamper-evidence:** A monthly cron submits the bucket-state manifest hash to **FreeTSA** ([freetsa.org](https://freetsa.org)), an RFC 3161 timestamp authority. FreeTSA receives only the SHA-256 of the manifest (no signer data, no comment bodies, no PR references); it returns a binary `.tsr` signed by the FreeTSA Time Stamp Authority. The `.tsr` and the source manifest are committed to R2 and to the `cla-signatures` branch of the GitHub repository.
+- **DPA:** [Cloudflare Customer Data Processing Agreement](https://www.cloudflare.com/cloudflare-customer-dpa/) (same instrument as Section 5.8).
+- **Retention:** Ten (10) years on the bucket; monthly RFC 3161 timestamps retained indefinitely as part of the chain.
+- **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR), with the balancing test documented in the GDPR Policy §3.4.
+
 ## 6. Legal Basis for Processing (GDPR -- EU Users)
 
 For users in the European Union or European Economic Area:
@@ -239,11 +293,27 @@ If you are located in the EU or EEA, you have the following rights with respect 
 - **Right to object** (Article 21) -- the right to object to processing based on legitimate interests.
 - **Right to lodge a complaint** -- the right to file a complaint with your local Data Protection Authority.
 
-For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, conversation data, and subscription data by contacting <legal@jikigai.com>. You may request export of your conversation history (messages and metadata) in a structured, machine-readable format under the right to data portability (Article 20). To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
+For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, conversation data, and subscription data by contacting <legal@jikigai.com>. You may request export of your conversation history (messages and metadata) in a structured, machine-readable format under the right to data portability (Article 20). Conversation-history exports reflect the persistence limitation described in Section 4.7. To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
 
 ### 8.2 Rights Under US Privacy Laws
 
 Users in the United States may have additional rights under state privacy laws (such as the California Consumer Privacy Act). For the Plugin, these rights are primarily relevant to any data collected by GitHub as the hosting provider. For the Web Platform, you may exercise these rights by contacting <legal@jikigai.com>.
+
+### 8.3 Automated decision-making and Article 22 rights
+
+The Web Platform includes agent-runtime features that can produce decisions on your behalf in response to external events (for example, a Stripe `invoice.payment_failed` webhook). These features are governed by Section 3a ("Agent Command Authority") of the Terms & Conditions and, on the data-protection side, by this section and by Section 2.3(o) of the Data Protection Disclosure.
+
+**Opt-in by class and tier.** The Web Platform performs no automated action on your behalf for an action class (for example, `finance.payment_failed`) unless you have explicitly granted authorization for that class via the `/dashboard/settings/scope-grants` interface, at one of three tiers: `Approve every time` (you authorize each instance), `Draft, one click` (the agent prepares a draft you approve), or `Auto` (the agent executes without per-instance approval, after a second-click acknowledgement at grant time). The absence of a grant is a denial; the `/dashboard/audit` viewer renders every automated action with the action class, tier active at the moment of the event, timestamp, and BYOK token + cost data.
+
+**Article 22 rights.** Where automated processing produces a decision concerning you (in particular, any action under the `Auto` tier), you have the right under Article 22(3) GDPR to:
+
+- **Obtain human intervention** -- request that a human review the decision;
+- **Express your point of view** -- submit your perspective on the decision; and
+- **Contest the decision** -- challenge its accuracy or appropriateness.
+
+You may exercise these rights through the "Request human review" affordance inlined on every row of `/dashboard/audit`, or by emailing <legal@jikigai.com>. We will provide a substantive response within the timeframes required by applicable law.
+
+**Profiling.** Soleur does not profile users for advertising or third-party data brokerage. Within the Web Platform, automated decision-making is bounded to the explicit action classes you grant; no inferred profile is built from the resulting activity beyond the audit ledger required to make the decisions reviewable. Sub-processors are enumerated in Section 5 of this Policy and in Section 2.3(o) of the Data Protection Disclosure.
 
 ## 9. Children's Privacy
 

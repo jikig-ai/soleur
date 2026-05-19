@@ -17,7 +17,7 @@ tags: [docker, dns, supabase, custom-domain, cname, env-var]
 
 ## Problem
 
-Production Docker container's server-side Supabase service client calls fail silently because Docker's DNS resolver cannot follow the CNAME chain for the custom domain (`api.soleur.ai` -> `ifsccnjhymdmidffkzhl.supabase.co`). Client-side auth works because the browser resolves DNS directly.
+Production Docker container's server-side Supabase service client calls fail silently because Docker's DNS resolver cannot follow the CNAME chain for the custom domain (`api.soleur.ai` -> `<PRD_REF>.supabase.co`). Client-side auth works because the browser resolves DNS directly.
 
 ## Environment
 
@@ -76,7 +76,7 @@ export function serverUrl(): string {
 
 export function createServiceClient() {
   return createSupabaseClient(
-    serverUrl(),  // https://ifsccnjhymdmidffkzhl.supabase.co in production
+    serverUrl(),  // https://<PRD_REF>.supabase.co in production
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
 }
@@ -87,14 +87,14 @@ Additionally consolidated 4 duplicate inline `createClient()` calls in `ws-handl
 **Environment change:**
 
 ```bash
-doppler secrets set SUPABASE_URL "https://ifsccnjhymdmidffkzhl.supabase.co" -p soleur -c prd
+doppler secrets set SUPABASE_URL "https://<PRD_REF>.supabase.co" -p soleur -c prd
 ```
 
 ## Why This Works
 
-1. **Root cause:** Docker's default DNS resolver on the Hetzner server cannot follow the CNAME chain from `api.soleur.ai` to `ifsccnjhymdmidffkzhl.supabase.co`. The exact failure mode is a timeout, not a resolution error, suggesting the resolver may be hitting a firewall or rate limit on CNAME resolution.
+1. **Root cause:** Docker's default DNS resolver on the Hetzner server cannot follow the CNAME chain from `api.soleur.ai` to `<PRD_REF>.supabase.co`. The exact failure mode is a timeout, not a resolution error, suggesting the resolver may be hitting a firewall or rate limit on CNAME resolution.
 
-2. **Why the fix works:** The direct Supabase project URL (`ifsccnjhymdmidffkzhl.supabase.co`) resolves to an A record, which Docker's DNS handles without issue. Server-side code doesn't need the branded custom domain — only client-facing code benefits from it.
+2. **Why the fix works:** The direct Supabase project URL (`<PRD_REF>.supabase.co`) resolves to an A record, which Docker's DNS handles without issue. Server-side code doesn't need the branded custom domain — only client-facing code benefits from it.
 
 3. **Why the cookie-based client is untouched:** Supabase auth cookies are scoped to the custom domain. The `createClient()` function (used by Next.js API routes for user-authenticated requests) must continue using `NEXT_PUBLIC_SUPABASE_URL` to match the cookie domain. The service client authenticates via the service role key in the Authorization header, so cookie domain doesn't matter.
 

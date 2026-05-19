@@ -17,6 +17,7 @@ last_updated: 2026-04-28
 | Plausible Analytics | Plausible | saas | 9.00 | active | 2027-03-28 | Growth plan, 10K pageviews, EUR 9/mo. Annual renewal |
 | X API | X Corp | api | 0.00 | active | - | Free tier, pay-per-use; @soleur_ai account |
 | X API Basic (DEFERRED) | X Corp | api | 100.00 | deferred | - | DEFERRED: $100/mo Basic tier for fetch-mentions/timeline. Trigger: first paying customer or $500 MRR. See #497 |
+| Better Stack Responder (DEFERRED) | Better Stack | observability | 29.00 | deferred | - | DEFERRED: $29/user/mo Responder tier for on-call escalation policy (Slack/SMS/phone routing of the inngest-server heartbeat alert). Free tier is heartbeat + email-only. Trigger: first paying customer or first incident with user-visible latency from email-only routing. See #3960 |
 | Sentry | Sentry | observability | 0.00 | free-tier | - | Error tracking + CSP report-uri for web platform. Org: jikigai, project: soleur-web-platform. Free tier: 5K errors/mo. Upgrade triggers: error volume |
 | Better Stack | Better Stack | observability | 0.00 | free-tier | - | Uptime monitoring for app.soleur.ai/health (3-min interval) + status page at soleur-ai.betteruptime.com. Free tier: 10 monitors, 1 status page, email alerts. Upgrade trigger: first paying customer (custom domain, white-label, custom CSS) |
 | Buttondown | Buttondown | saas | 0.00 | free-tier | - | Newsletter platform. Free tier: 100 subscribers, custom sending domain, API access. Upgrade trigger: >100 subscribers ($9/mo Basic) |
@@ -28,6 +29,7 @@ last_updated: 2026-04-28
 | Anthropic API (ux-audit) | Anthropic | api | 15.00 | active | - | Event-driven + monthly cron via `.github/workflows/scheduled-ux-audit.yml`. ~$3-$12/run × ≤3 runs/month. Threshold warning at $15/run in workflow output. Budget: $15/mo estimate; COO target ≤$12/run. |
 | Claude Code Max 20x (seat 1) | Anthropic | dev-tools | 200.00 | active | 2026-05-01 | Max 20x tier ($200/mo/seat). Engineering tooling for Soleur development. Started 2026-02-01; seat 1 of 2 |
 | Claude Code Max 20x (seat 2) | Anthropic | dev-tools | 200.00 | active | 2026-05-01 | Max 20x tier ($200/mo/seat). Engineering tooling for Soleur development. Started 2026-02-01; seat 2 of 2 |
+| Cloudflare R2 (cla-evidence) | Cloudflare | storage | 0.00 | active | - | Off-site CLA signature archive, Governance object-lock, 10yr retention, region weur. Pay-per-use: $0.015/GB-mo + $0.36/M writes. Sub-cent/mo at realistic scale. See apps/cla-evidence/infra/. |
 
 ## One-Time
 

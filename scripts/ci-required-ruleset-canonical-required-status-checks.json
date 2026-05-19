@@ -1,0 +1,22 @@
+[
+  {
+    "context": "test",
+    "integration_id": 15368
+  },
+  {
+    "context": "dependency-review",
+    "integration_id": 15368
+  },
+  {
+    "context": "e2e",
+    "integration_id": 15368
+  },
+  {
+    "context": "CodeQL",
+    "integration_id": 57789
+  },
+  {
+    "context": "skill-security-scan PR gate",
+    "integration_id": 15368
+  }
+]

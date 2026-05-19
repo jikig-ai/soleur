@@ -11,7 +11,7 @@ related_upstream: [supabase/supabase-js#1559]
 
 ## Symptom
 
-Calling `supabase.channel("…").subscribe()` from a local Node shell against either dev (`mlwiodleouzwniehynfz.supabase.co`) or prd (`api.soleur.ai`) returns:
+Calling `supabase.channel("…").subscribe()` from a local Node shell against either dev (`<DEV_REF>.supabase.co`) or prd (`api.soleur.ai`) returns:
 
 ```text
 [probe 10003ms] TIMED_OUT
@@ -134,6 +134,7 @@ The polyfill helper lives under `test/helpers/`. It MUST NOT be imported from `l
 - Issue #3060 — follow-up: nightly or pre-merge realtime determinism gate in CI
 - PR #3021 — the original Command Center conversation rail; integration test added there
 - Upstream `supabase/supabase-js#1559` — closed 2025-12-15; the documented workaround was applied here
+- `.github/workflows/scheduled-realtime-probe.yml` — nightly CI determinism gate (issue #3060). Runs `apps/web-platform/scripts/realtime-probe.mjs` 5x against dev at 07:00 UTC daily; files a `ci/realtime-broken` tracking issue on any non-SUBSCRIBED. The first nightly failure with `failure_mode=realtime_join_timeout` after a supabase-js bump means re-check whether the polyfill is still load-bearing (or if it can be retired).
 
 ## Session Errors
 

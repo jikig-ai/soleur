@@ -128,9 +128,9 @@ Integration coverage: `apps/web-platform/test/cc-dispatcher-prefill-guard.test.t
 - Issue #3250 — primary cc-path bug report (closed by #3263 once cc wiring lands; legacy fold-in covers production exposure today)
 - Issue #3266 — narrowed to cc-path `conversations.session_id` reader+writer wiring (Approach C, scope-out: architectural-pivot)
 - Issue #3269 — context-reset signal to model + user (scope-out: contested-design, second-reviewer co-signed)
-- Issue #3270 — separate cleanup: remove `FLAG_CC_SOLEUR_GO` (always-on)
+- Issue #3270 — separate cleanup: remove `FLAG_CC_SOLEUR_GO` (always-on) — landed in #3560
 - Plan: `knowledge-base/project/plans/2026-05-05-fix-cc-concierge-prefill-on-resume-plan.md` §"Phase 3" updated post-review
 - Helper: `apps/web-platform/server/agent-prefill-guard.ts`
 - Related learning: `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` — this session is another instance of the multi-agent review pattern catching a class of bug that unit tests cannot reach (production-effective dormancy of a guard whose tests pass)
 - AGENTS.md `cq-silent-fallback-must-mirror-to-sentry` — observability contract this guard satisfies
-- AGENTS.md `hr-weigh-every-decision-against-target-user-impact` — single-user-incident threshold satisfied by the legacy fold-in
+- AGENTS.md `hr-weigh-every-decision-against-target-user-impact` — single-user incident threshold satisfied by the legacy fold-in

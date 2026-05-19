@@ -8,6 +8,10 @@ import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Co
 import type { ConversationContext } from "@/lib/types";
 import { validateConversationContext } from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
 import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
@@ -22,7 +26,7 @@ import {
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
-import { reportSilentFallback } from "./observability";
+import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { createChildLogger } from "./logger";
@@ -45,7 +49,6 @@ import {
 } from "./concurrency";
 import {
   parseConversationRouting,
-  resolveInitialRouting,
   serializeConversationRouting,
   type ConversationRouting,
   type WorkflowName,
@@ -60,7 +63,6 @@ import {
 } from "./cc-dispatcher";
 import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { stripAndReportImagePlaceholders } from "./image-paste-strip";
-import { getFlag } from "@/lib/feature-flags/server";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 const log = createChildLogger("ws");
@@ -76,6 +78,13 @@ const log = createChildLogger("ws");
 // ---------------------------------------------------------------------------
 type ServiceClient = ReturnType<typeof createServiceClient>;
 let _supabase: ServiceClient | null = null;
+// PR-C §2.10 (#3244): the module-level `supabase` Proxy is RETAINED —
+// it's PERMANENT, used only for the `supabase.auth.getUser(token)` HTTP
+// Bearer validation at the WS handshake (around `:1812`, after Phase 2.10).
+// That call must run BEFORE userId exists (auth-domain bootstrap,
+// structurally pre-tenant-JWT). The 13 tenant data sites in this file
+// migrate to per-call `getFreshTenantClient(userId)` via the
+// `tenantFor(userId)` helper below.
 const supabase = new Proxy({} as ServiceClient, {
   get(_target, prop) {
     _supabase ??= createServiceClient();
@@ -83,6 +92,40 @@ const supabase = new Proxy({} as ServiceClient, {
     return typeof value === "function" ? value.bind(_supabase) : value;
   },
 });
+
+/**
+ * Mint a tenant-scoped Supabase client. Returns `null` on
+ * `RuntimeAuthError` (mirrored to Sentry) — callers early-return on
+ * `null` to preserve ws-handler's fail-open behavior.
+ *
+ * Auth probe is IMPLICIT in `getFreshTenantClient`: the
+ * `precheck_jwt_mint` RPC throws `RuntimeAuthError` on rate-limit,
+ * RPC error, or missing secret. Per `agent-runner.ts:188` precedent
+ * ("the auth probe is implicit in getFreshTenantClient — the throw at
+ * mint time is the load-bearing distinction") we do NOT layer an
+ * additional `SELECT id FROM users` probe on top: every subsequent
+ * tenant data read on this client is already RLS-filtered to
+ * `auth.uid()`, so a JWT that successfully minted but cannot read its
+ * own row is structurally impossible.
+ */
+async function tenantFor(
+  userId: string,
+  op: string,
+): Promise<ServiceClient | null> {
+  try {
+    return await getFreshTenantClient(userId);
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      reportSilentFallback(err, {
+        feature: "ws-handler",
+        op: `tenant-mint.${op}`,
+        extra: { userId },
+      });
+      return null;
+    }
+    throw err;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Session tracking
@@ -97,9 +140,10 @@ export interface PendingConversation {
   context?: ConversationContext;
   /** KB document path that will become conversations.context_path at materialization. */
   contextPath?: string;
-  /** Stage 2 (#2853): soleur-go routing decided at start_session time
-   *  (flag is read once per conversation — never again) and persisted
-   *  alongside the conversations row on first materialization. */
+  /** soleur-go routing decided at start_session time and persisted
+   *  alongside the conversations row on first materialization. Always
+   *  `{ kind: "soleur_go_pending" }` since #3270 retired FLAG_CC_SOLEUR_GO;
+   *  read-path stickiness is enforced by `parseConversationRouting`. */
   routing?: ConversationRouting;
 }
 
@@ -112,6 +156,19 @@ export interface ClientSession {
   disconnectTimer?: ReturnType<typeof setTimeout>;
   /** Timestamp of last user activity (auth or chat message). */
   lastActivity: number;
+  /**
+   * tc_accepted_version observed at handshake. Used as a baseline so a
+   * mid-session TC_VERSION bump triggers the next gated message to close
+   * the socket with TC_NOT_ACCEPTED. See `recheckTcMidSession`.
+   */
+  tcVersionAtHandshake?: string | null;
+  /**
+   * Cache expiry (ms epoch) for the mid-session TC re-check. Bounded at
+   * 30 s — see `TC_RECHECK_CACHE_MS`. Up to 30 s of stale-consent agent
+   * traffic may pass between a TC_VERSION bump and enforcement; the
+   * trade-off is explicit in plan AC6.
+   */
+  tcRecheckCacheUntil?: number | null;
   /** Timer that closes the connection after WS_IDLE_TIMEOUT_MS of inactivity. */
   idleTimer?: ReturnType<typeof setTimeout>;
   /** Cached subscription status — set at auth, refreshed by billing check timer. */
@@ -145,6 +202,14 @@ export interface ClientSession {
    *  per-turn DB fetch. `null` means "no scoped artifact"; `undefined`
    *  means "cache cold". */
   contextPath?: string | null;
+  /** #3266 — cached `conversations.session_id` for the active
+   *  conversation. Seeded on chat-case cache miss from the SELECT (and
+   *  written back by the runner via `onSessionIdCaptured`). Threaded into
+   *  `dispatchSoleurGo({ sessionId })` so cold-Query construction after
+   *  reap/restart resumes the SDK session and activates the prefill
+   *  guard. `null` means "no persisted session_id"; `undefined` means
+   *  "cache cold". */
+  sessionId?: string | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -203,6 +268,8 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   session.routing = undefined;
   // Same invalidation contract for the KB context cache.
   session.contextPath = undefined;
+  // Same for the session_id cache (#3266).
+  session.sessionId = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // The wrapper enforces the R8 composite-key invariant; errors mirror to
@@ -249,10 +316,17 @@ export async function tryLedgerDivergenceRecovery(
   userId: string,
 ): Promise<{ didRecover: boolean }> {
   try {
+    // PR-C §2.10 (#3244): per-handler tenant client + RLS-baseline
+    // probe. RuntimeAuthError → no recovery (fail open). RLS on
+    // `conversations` and `user_concurrency_slots` (slots_owner_read
+    // policy, migration 029:91) enforce auth.uid() ownership.
+    const tenant = await tenantFor(userId, "tryLedgerDivergenceRecovery");
+    if (!tenant) return { didRecover: false };
+
     // Visible active conversations — what the user perceives as "in
     // flight". Mirrors the ledger denominator the cap was checked
     // against.
-    const visibleResp = await supabase
+    const visibleResp = await tenant
       .from("conversations")
       .select("id")
       .eq("user_id", userId)
@@ -270,7 +344,7 @@ export async function tryLedgerDivergenceRecovery(
       ((visibleResp.data ?? []) as Array<{ id: string }>).map((r) => r.id),
     );
 
-    const slotsResp = await supabase
+    const slotsResp = await tenant
       .from("user_concurrency_slots")
       .select("conversation_id")
       .eq("user_id", userId);
@@ -313,7 +387,7 @@ export async function tryLedgerDivergenceRecovery(
     const staleCutoff = new Date(
       Date.now() - STALE_HEARTBEAT_THRESHOLD_SECONDS * 1_000,
     ).toISOString();
-    const staleResp = await supabase
+    const staleResp = await tenant
       .from("user_concurrency_slots")
       .select("conversation_id")
       .eq("user_id", userId)
@@ -493,7 +567,15 @@ export async function refreshSubscriptionStatus(
   session: ClientSession,
 ): Promise<void> {
   try {
-    const { data, error } = await supabase
+    // PR-C §2.10 (#3244): tenant-scoped users SELECT + concurrency-slot
+    // count. RLS on `users` (auth.uid() = id) + slots_owner_read
+    // (migration 029:91). Per-handler probe via `tenantFor` — on
+    // auth-probe failure, return early (fail-open per the function's
+    // documented best-effort contract; keep prior cached values).
+    const tenant = await tenantFor(userId, "refreshSubscriptionStatus");
+    if (!tenant) return;
+
+    const { data, error } = await tenant
       .from("users")
       .select("subscription_status, plan_tier, concurrency_override")
       .eq("id", userId)
@@ -528,7 +610,7 @@ export async function refreshSubscriptionStatus(
     // Non-deterministic which over-cap session gets closed — all of them
     // will on their next refresh tick, converging within one interval.
     const newCap = effectiveCap(session.planTier, session.concurrencyOverride);
-    const { count, error: countErr } = await supabase
+    const { count, error: countErr } = await tenant
       .from("user_concurrency_slots")
       .select("*", { count: "exact", head: true })
       .eq("user_id", userId);
@@ -632,7 +714,20 @@ async function createConversation(
     );
   }
 
-  const { error } = await supabase.from("conversations").insert({
+  // PR-C §2.10 (#3244): tenant client. `getCurrentRepoUrl` above
+  // already ran a tenant-scoped users read (Phase 2.6), so a failure
+  // there would have returned null — repo_url check serves as a
+  // de-facto auth probe. The explicit probe via `tenantFor` adds a
+  // second JWT-mint check before the conversation INSERT to catch a
+  // mid-handler jti revocation race.
+  const tenant = await tenantFor(userId, "createConversation");
+  if (!tenant) {
+    throw new Error(
+      "Tenant auth-probe failed — conversation insert aborted.",
+    );
+  }
+
+  const { error } = await tenant.from("conversations").insert({
     id,
     user_id: userId,
     repo_url: repoUrl,
@@ -651,7 +746,7 @@ async function createConversation(
     // (e.g., conversations_pkey id collision) does NOT fall through into the
     // context_path lookup. See review #2390.
     if (contextPath && isContextPathUniqueViolation(error)) {
-      const { data: existing, error: lookupErr } = await supabase
+      const { data: existing, error: lookupErr } = await tenant
         .from("conversations")
         .select("id, active_workflow, context_path")
         .eq("user_id", userId)
@@ -681,10 +776,13 @@ async function createConversation(
       const existingWorkflow = existingRow.active_workflow ?? null;
       const intendedWorkflow = activeWorkflow ?? null;
       if (activeWorkflow !== undefined && existingWorkflow !== intendedWorkflow) {
-        Sentry.captureMessage(
-          "createConversation 23505 fallback: activeWorkflow diverged — first-writer-wins",
+        warnSilentFallback(
+          new Error(
+            "createConversation 23505 fallback: activeWorkflow diverged — first-writer-wins",
+          ),
           {
-            level: "warning",
+            feature: "create-conversation",
+            op: "23505-fallback-active-workflow",
             extra: {
               conversationId: existingRow.id,
               existingWorkflow,
@@ -707,10 +805,13 @@ async function createConversation(
       // do (cq-silent-fallback-must-mirror-to-sentry).
       const existingContextPath = existingRow.context_path ?? null;
       if (existingContextPath !== (contextPath ?? null)) {
-        Sentry.captureMessage(
-          "createConversation 23505 fallback: context_path diverged — invariant assumed unreachable today",
+        warnSilentFallback(
+          new Error(
+            "createConversation 23505 fallback: context_path diverged — invariant assumed unreachable today",
+          ),
           {
-            level: "warning",
+            feature: "create-conversation",
+            op: "23505-fallback-context-path",
             extra: {
               conversationId: existingRow.id,
               existingContextPath,
@@ -818,13 +919,14 @@ export function emitConciergeDocumentResolutionBreadcrumb(args: {
   }
 }
 
-async function dispatchSoleurGoForConversation(
+export async function dispatchSoleurGoForConversation(
   userId: string,
   conversationId: string,
   userMessage: string,
   routing: ConversationRouting,
   context?: ConversationContext,
   attachments?: import("@/lib/types").AttachmentRef[],
+  sessionId?: string | null,
 ): Promise<void> {
   const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
     // data-integrity P1-A: never regress a soleur-go conversation back
@@ -940,8 +1042,130 @@ async function dispatchSoleurGoForConversation(
     persistActiveWorkflow,
     attachments,
     workspacePath,
+    sessionId,
+    // #3266 — refresh the in-process `ClientSession.sessionId` cache
+    // alongside the DB write/clear so a subsequent chat-case warm-cache
+    // turn forwards the just-persisted value. Without this, runner-reap-
+    // while-WS-alive uses the stale seeded `null` on the next cold-Query
+    // construction and the prefill guard's history-probe branch never
+    // activates. Guards on `liveSession.conversationId === conversationId`
+    // to avoid clobbering a value bound to a different conversation that
+    // the user switched to mid-dispatch.
+    onSessionIdPersisted: (nextSessionId) => {
+      const liveSession = sessions.get(userId);
+      if (liveSession && liveSession.conversationId === conversationId) {
+        liveSession.sessionId = nextSessionId;
+      }
+    },
     ...documentArgs,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Mid-session T&C re-check (AC6/AC11, feat-oauth-tc-consent-3205)
+// ---------------------------------------------------------------------------
+
+/**
+ * Inbound message types that must re-validate users.tc_accepted_version
+ * mid-session. After a TC_VERSION bump (operator-initiated), the next
+ * gated message on each live socket closes with 4004 TC_NOT_ACCEPTED.
+ *
+ * EXEMPT inbound types: `abort_turn`, `close_conversation`. RC8: a user
+ * must always be able to stop a stream / close a conversation even with
+ * stale consent — refusing those would worsen UX without changing GDPR
+ * demonstrability.
+ *
+ * Server→client types (stream, tool_use, etc.) are rejected on inbound
+ * by the ws-zod-schemas guard before reaching this point, so they need
+ * no explicit listing.
+ */
+const TC_RECHECK_MESSAGE_TYPES = new Set([
+  "start_session",
+  "resume_session",
+  "chat",
+  "interactive_prompt_response",
+  "review_gate_response",
+]);
+
+/**
+ * Per-session cache window for the mid-session TC re-check. Bounds DB
+ * load: at most one users.tc_accepted_version SELECT per gated message
+ * per 30 s per user. Trade-off: up to 30 s of stale-consent traffic
+ * after a TC_VERSION bump (plan AC6, accepted).
+ */
+export const TC_RECHECK_CACHE_MS = 30_000;
+
+/**
+ * Re-validate the user's tc_accepted_version against the current
+ * `TC_VERSION` constant. Returns true if the socket was closed (caller
+ * must return early). On stale consent, mismatch, or DB error: closes
+ * with WS_CLOSE_CODES.TC_NOT_ACCEPTED (fail-closed — Art. 7(1)
+ * demonstrability).
+ *
+ * Exported for test isolation; handleMessage invokes this above the
+ * switch.
+ */
+export async function recheckTcMidSession(
+  userId: string,
+  session: ClientSession,
+  msgType: WSMessage["type"],
+): Promise<boolean> {
+  if (!TC_RECHECK_MESSAGE_TYPES.has(msgType)) return false;
+
+  // Fast-path: if the handshake baseline already disagrees with the current
+  // TC_VERSION constant, close immediately — no DB round-trip needed. The
+  // baseline is captured once at handshake (line ~1978) and reads the same
+  // column the SELECT below would read; the only way they diverge is if
+  // TC_VERSION was bumped mid-session, in which case the cached baseline is
+  // authoritatively stale and we must close.
+  if (
+    session.tcVersionAtHandshake !== undefined &&
+    session.tcVersionAtHandshake !== TC_VERSION
+  ) {
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.close(
+        WS_CLOSE_CODES.TC_NOT_ACCEPTED,
+        "T&C not accepted (mid-session)",
+      );
+    }
+    return true;
+  }
+
+  const cacheUntil = session.tcRecheckCacheUntil ?? 0;
+  if (cacheUntil && Date.now() < cacheUntil) return false;
+
+  const { data: row, error } = await supabase
+    .from("users")
+    .select("tc_accepted_version")
+    .eq("id", userId)
+    .single();
+
+  const rowTyped = row as { tc_accepted_version?: string | null } | null;
+
+  if (error || rowTyped?.tc_accepted_version !== TC_VERSION) {
+    // Sentry mirror on the DB-error branch so a Supabase outage during a
+    // live WS session is observable (cq-silent-fallback-must-mirror-to-sentry).
+    // The TC_VERSION-mismatch branch is expected and not an error — only
+    // the `error` arm pages operations.
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "ws-handler",
+        op: "tc_recheck_query_failed",
+        message: "users.tc_accepted_version SELECT failed mid-session",
+        extra: { userId, msgType },
+      });
+    }
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.close(
+        WS_CLOSE_CODES.TC_NOT_ACCEPTED,
+        "T&C not accepted (mid-session)",
+      );
+    }
+    return true;
+  }
+
+  session.tcRecheckCacheUntil = Date.now() + TC_RECHECK_CACHE_MS;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -966,6 +1190,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
   log.debug({ userId, msgType: msg.type }, "Message received");
 
+  // Mid-session T&C re-check. Closes the socket on stale consent or DB
+  // error for gated types only (see TC_RECHECK_MESSAGE_TYPES). Exempt
+  // types (abort_turn, close_conversation) pass through unchanged.
+  if (await recheckTcMidSession(userId, session, msg.type)) {
+    return;
+  }
+
   switch (msg.type) {
     // ------------------------------------------------------------------
     // start_session: create conversation, boot agent, reply with ID
@@ -984,38 +1215,36 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         return;
       }
 
-      // Stage 2.13 — soleur-go path gets an additional per-user + per-IP
+      // soleur-go path applies an additional per-user + per-IP
       // sliding-window limiter (10/user/hour, 30/IP/hour) on top of the
-      // legacy `sessionThrottle` above. Fail-closed at either cap.
-      // Flag is read ONCE here — the routing decision is sticky.
-      const ccFlagEnabled = getFlag("command-center-soleur-go");
-      if (ccFlagEnabled) {
-        // security P2: use userId as the per-IP fallback when no IP
-        // was captured. Falling back to a literal string like
-        // `"unknown"` collides every IP-missing user into one 30/hr
-        // bucket — a trivial DoS pivot if a proxy misconfiguration
-        // ever strips headers. Using userId preserves per-user
-        // isolation; the per-user cap still applies above it.
-        const rateLimitIp = session.ip && session.ip.length > 0 ? session.ip : userId;
-        const rate = getCcStartSessionRateLimiter().check({
-          userId,
-          ip: rateLimitIp,
+      // legacy `sessionThrottle` above. Fail-closed at either cap. As
+      // of #3270 (FLAG_CC_SOLEUR_GO retired) this runs unconditionally
+      // for every `start_session` — cc-soleur-go is the only path.
+      // security P2: use userId as the per-IP fallback when no IP was
+      // captured. Falling back to a literal string like `"unknown"`
+      // collides every IP-missing user into one 30/hr bucket — a
+      // trivial DoS pivot if a proxy misconfiguration ever strips
+      // headers. Using userId preserves per-user isolation; the
+      // per-user cap still applies above it.
+      const rateLimitIp = session.ip && session.ip.length > 0 ? session.ip : userId;
+      const rate = getCcStartSessionRateLimiter().check({
+        userId,
+        ip: rateLimitIp,
+      });
+      if (!rate.allowed) {
+        logRateLimitRejection(`cc-${rate.reason}`, userId, {
+          ip: session.ip,
+          ipFallback: session.ip === rateLimitIp ? undefined : "userId",
+          retryAfterMs: rate.retryAfterMs,
         });
-        if (!rate.allowed) {
-          logRateLimitRejection(`cc-${rate.reason}`, userId, {
-            ip: session.ip,
-            ipFallback: session.ip === rateLimitIp ? undefined : "userId",
-            retryAfterMs: rate.retryAfterMs,
-          });
-          sendToClient(userId, {
-            type: "error",
-            message: "Rate limited: too many conversations this hour.",
-            errorCode: "rate_limited",
-          });
-          return;
-        }
+        sendToClient(userId, {
+          type: "error",
+          message: "Rate limited: too many conversations this hour.",
+          errorCode: "rate_limited",
+        });
+        return;
       }
-      const initialRouting: ConversationRouting = resolveInitialRouting(ccFlagEnabled);
+      const initialRouting: ConversationRouting = { kind: "soleur_go_pending" };
 
       try {
         // Validate context payload before any side effects
@@ -1068,7 +1297,20 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
         const currentRepoUrl = await getCurrentRepoUrl(userId);
         if (validResumePath && currentRepoUrl) {
-          const { data: existing, error: lookupErr } = await supabase
+          // PR-C §2.10 (#3244): tenant-scoped resume-by-context-path
+          // lookup. RLS on `conversations` + FK-RLS on `messages`.
+          const tenantResume = await tenantFor(
+            userId,
+            "handleMessage.start_session.resume",
+          );
+          if (!tenantResume) {
+            sendToClient(userId, {
+              type: "error",
+              message: "Auth probe failed — please retry.",
+            });
+            return;
+          }
+          const { data: existing, error: lookupErr } = await tenantResume
             .from("conversations")
             .select("id, last_active, context_path")
             .eq("user_id", userId)
@@ -1081,7 +1323,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
           if (!lookupErr && existing) {
             const row = existing as { id: string; last_active: string };
-            const { count: messageCount, error: countErr } = await supabase
+            const { count: messageCount, error: countErr } = await tenantResume
               .from("messages")
               .select("id", { count: "exact", head: true })
               .eq("conversation_id", row.id);
@@ -1126,11 +1368,20 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             const live = await retrieveSubscriptionTier(userId, session.stripeSubscriptionId);
             // Re-read override from DB so session state matches what the
             // cap calculation assumes.
-            const { data: userRow } = await supabase
-              .from("users")
-              .select("concurrency_override")
-              .eq("id", userId)
-              .maybeSingle();
+            // PR-C §2.10 (#3244): tenant-scoped re-read of override.
+            // Webhook-lag fallback path — fail-open if probe fails
+            // (rare; user just hits the original cap_hit branch).
+            const tenantCapDrift = await tenantFor(
+              userId,
+              "handleMessage.cap-drift-fallback",
+            );
+            const { data: userRow } = tenantCapDrift
+              ? await tenantCapDrift
+                  .from("users")
+                  .select("concurrency_override")
+                  .eq("id", userId)
+                  .maybeSingle()
+              : { data: null };
             const freshOverride = (userRow as { concurrency_override?: number | null } | null)?.concurrency_override ?? null;
             const liveCap = effectiveCap(live.tier, freshOverride);
             if (liveCap > cap) {
@@ -1229,7 +1480,21 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // surface it, and this path is the last remaining backdoor. See
         // plan 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
         const currentRepoUrl = await getCurrentRepoUrl(userId);
-        const convQuery = supabase
+        // PR-C §2.10 (#3244): tenant-scoped conversation ownership
+        // check. RLS on `conversations` is the primary control; the
+        // explicit `.eq("user_id", userId)` filter is belt-and-suspenders.
+        const tenantResumeConv = await tenantFor(
+          userId,
+          "handleMessage.resume-by-id",
+        );
+        if (!tenantResumeConv) {
+          sendToClient(userId, {
+            type: "error",
+            message: "Auth probe failed — please retry.",
+          });
+          return;
+        }
+        const convQuery = tenantResumeConv
           .from("conversations")
           .select("id, status, repo_url")
           .eq("id", msg.conversationId)
@@ -1251,12 +1516,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         }
 
         session.conversationId = msg.conversationId;
-        // Resuming a different conversation — invalidate both the
-        // routing cache and the KB context cache so the first chat-turn
-        // re-reads `active_workflow` and `context_path`. The two caches
-        // share the same lifecycle invariant: invalidate together.
+        // Resuming a different conversation — invalidate the routing,
+        // KB context, and session_id caches so the first chat-turn
+        // re-reads `active_workflow`, `context_path`, and `session_id`.
+        // The three caches share the same lifecycle invariant: invalidate
+        // together.
         session.routing = undefined;
         session.contextPath = undefined;
+        session.sessionId = undefined;
         resetIdleTimer(userId, session);
         sendToClient(userId, {
           type: "session_started",
@@ -1304,6 +1571,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         session.conversationId = undefined;
         session.routing = undefined;
         session.contextPath = undefined;
+        session.sessionId = undefined;
         void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
@@ -1409,6 +1677,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // path entirely. The soleur-go runner owns its own Query
           // lifecycle + canUseTool + sandbox.
           if (pendingRouting && pendingRouting.kind !== "legacy") {
+            // First-message branch: conversation was just inserted by
+            // `createConversation`; persisted `session_id` is always null
+            // until the runner emits the first `result`. Pass `null`
+            // explicitly so the dispatch signature stays uniform.
+            session.sessionId = null;
             await dispatchSoleurGoForConversation(
               userId,
               session.conversationId,
@@ -1416,6 +1689,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               pendingRouting,
               pendingContext,
               msg.attachments,
+              null,
             );
             break;
           }
@@ -1465,10 +1739,31 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // (the runner singleton is process-local).
         const convId = session.conversationId!;
         let routing: ConversationRouting;
-        if (session.routing && session.contextPath !== undefined) {
+        if (
+          session.routing &&
+          session.contextPath !== undefined &&
+          session.sessionId !== undefined
+        ) {
           routing = session.routing;
         } else {
-          const { data: row, error: routeErr } = await supabase
+          // PR-C §2.10 (#3244): tenant-scoped routing lookup. RLS
+          // ensures `conv.user_id = auth.uid()` — the convId comes
+          // from session-state populated by an earlier authenticated
+          // flow, so RLS denial here would be a corrupted-state path.
+          // On auth-probe failure, surface as `routeErr` so the
+          // existing Sentry+log+legacy-fallback path handles it.
+          const tenantRoute = await tenantFor(
+            userId,
+            "handleMessage.chat.routing-lookup",
+          );
+          if (!tenantRoute) {
+            sendToClient(userId, {
+              type: "error",
+              message: "Auth probe failed — please retry.",
+            });
+            return;
+          }
+          const { data: row, error: routeErr } = await tenantRoute
             .from("conversations")
             .select("active_workflow, session_id, context_path")
             .eq("id", convId)
@@ -1493,9 +1788,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
                 active_workflow: typedRow.active_workflow ?? null,
               })
             : { kind: "legacy" };
-          // Seed both caches for subsequent turns.
+          // Seed all three caches for subsequent turns.
           session.routing = routing;
           session.contextPath = typedRow?.context_path ?? null;
+          session.sessionId = typedRow?.session_id ?? null;
         }
 
         if (routing.kind !== "legacy") {
@@ -1514,6 +1810,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             routing,
             chatContext,
             msg.attachments,
+            session.sessionId ?? null,
           );
           break;
         }
@@ -1785,8 +2082,22 @@ export function setupWebSocket(server: HTTPServer) {
         userId = user.id;
         pendingConnections.remove(clientIp);
 
+        // PR-C §2.10 (#3244): tenant-scoped post-auth bootstrap. The
+        // `supabase.auth.getUser(token)` above resolved `user.id`; this
+        // SELECT now goes through the tenant client. `auth.getUser`
+        // remains PERMANENT service-role (auth-domain bootstrap, runs
+        // BEFORE userId exists). Auth-probe failure here = close socket
+        // with INTERNAL_ERROR — same disclosure shape as the original
+        // `tcError` branch.
+        const tenantBootstrap = await tenantFor(user.id, "setupWebSocket.auth-bootstrap");
+        if (!tenantBootstrap) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.close(WS_CLOSE_CODES.INTERNAL_ERROR, "Internal error");
+          }
+          return;
+        }
         // Enforce T&C acceptance (version-aware) and cache subscription status
-        const { data: userRow, error: tcError } = await supabase
+        const { data: userRow, error: tcError } = await tenantBootstrap
           .from("users")
           .select("tc_accepted_version, subscription_status, plan_tier, concurrency_override, stripe_subscription_id")
           .eq("id", user.id)
@@ -1833,6 +2144,10 @@ export function setupWebSocket(server: HTTPServer) {
           concurrencyOverride: userRowTyped.concurrency_override ?? null,
           stripeSubscriptionId: userRowTyped.stripe_subscription_id ?? null,
           ip: clientIp,
+          // feat-oauth-tc-consent-3205: baseline + cache slot for the
+          // mid-session TC re-check (recheckTcMidSession).
+          tcVersionAtHandshake: userRowTyped.tc_accepted_version ?? null,
+          tcRecheckCacheUntil: null,
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);

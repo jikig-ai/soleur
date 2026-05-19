@@ -15,6 +15,12 @@ Drain a labeled-issue backlog by batching issues that touch the same code area i
 
 Use `/soleur:review` to file new scope-outs. Use this skill to close existing labeled issues.
 
+<decision_gate>
+**API budget.** This skill delegates each selected cluster to `/soleur:one-shot`, which runs a full plan→work→review→ship pipeline (30–90 min wall-clock per cluster; non-trivial Anthropic credit per run scaling with plan complexity and review-cycle count). With `--top-n N`, the cost multiplies by N. The `--dry-run` flag previews scope without delegating. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
+Confirm cluster scope (size, `--top-n`, milestone) before allowing the skill to fan out.
+</decision_gate>
+
 ## Prerequisites
 
 - `gh` authenticated, `jq` and `python3` available.
@@ -27,8 +33,8 @@ Use `/soleur:review` to file new scope-outs. Use this skill to close existing la
 
 Optional flags (any subset):
 
-- `--label <name>` — which GitHub label drives the backlog query. Default: `deferred-scope-out`. Pass `code-review` to drain unresolved review findings; pass any other label for a custom drain. Validated against `gh label list` before querying (rule `cq-gh-issue-label-verify-name`).
-- `--milestone "<title>"` — which milestone to drain. Default: `Post-MVP / Later` (where 15+ of the open scope-outs live at plan time). Takes the milestone **title**, never a numeric ID (rule `cq-gh-issue-create-milestone-takes-title`).
+- `--label <name>` — which GitHub label drives the backlog query. Default: `deferred-scope-out`. Pass `code-review` to drain unresolved review findings; pass any other label for a custom drain. Validated against `gh label list` before querying so an invalid name fails fast with a readable error rather than a silent empty cluster.
+- `--milestone "<title>"` — which milestone to drain. Default: `Post-MVP / Later` (where 15+ of the open scope-outs live at plan time). Takes the milestone **title**, never a numeric ID — `gh issue create` rejects numeric milestone IDs with a clear error.
 - `--top-n N` — how many clusters to consider. Default: `1`.
 - `--min-cluster-size M` — minimum issues in a cluster before the skill will pick it. Default: `3`.
 - `--dry-run` — print the selected cluster and the one-shot scope argument that would be built, without delegating.
@@ -37,7 +43,7 @@ Optional flags (any subset):
 
 ### 1. Prerequisites check
 
-Verify `gh`, `jq`, `python3` are on PATH. If any is missing, abort with installation guidance. Verify the current directory is a git repository with `git -C . rev-parse --git-dir >/dev/null 2>&1` (rule `hr-before-running-git-commands-on-a`).
+Verify `gh`, `jq`, `python3` are on PATH. If any is missing, abort with installation guidance. Verify the current directory is a git repository with `git -C . rev-parse --git-dir >/dev/null 2>&1` — `git` errors clearly on non-repo paths (`fatal: not a git repository`), so a fail-fast precheck beats a confusing downstream error.
 
 ### 2. Resolve milestone
 
@@ -61,7 +67,7 @@ bash plugins/soleur/skills/drain-labeled-backlog/scripts/group-by-area.sh \
 
 The helper:
 
-- Validates the label exists via `gh label list` (rule `cq-gh-issue-label-verify-name`) and the milestone title exists via `gh api ...milestones` + `grep -Fxq` before querying.
+- Validates the label exists via `gh label list` and the milestone title exists via `gh api ...milestones` + `grep -Fxq` before querying. Both checks fail fast on invalid input rather than producing a silent empty cluster.
 - Uses two-stage piping (`gh --json ... | jq`), never `gh --jq` with `--arg` (learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`).
 - Parses each issue body for file paths matching `(ts|tsx|js|jsx|py|rb|go|md|sh|yml|yaml|sql|tf|njk)` extensions via a non-capturing regex.
 - Assigns each issue to an **area** = top two path segments (e.g., `apps/web-platform`, `plugins/soleur`) of its most-referenced file path.
@@ -136,7 +142,7 @@ Follows the same pattern as `plan`, `review`, and `ship` skills.
 
 - The helper skips issues whose bodies name zero file paths. That is intentional — area grouping requires at least one path. If an issue has no paths but belongs to a cluster thematically, add a `Location:` line to its body and re-run.
 - Sub-grouping by second-level directory is NOT implemented (YAGNI). Current backlogs never exceed 10 issues in a single top-level area. If that changes, track as a follow-up issue before adding the branch; don't build for cases that don't exist.
-- `--milestone` takes the title literally (quote it). A numeric ID fails with `milestone 'N' not found` (rule `cq-gh-issue-create-milestone-takes-title`).
+- `--milestone` takes the title literally (quote it). A numeric ID fails with `milestone 'N' not found` — `gh issue create` rejects numeric milestone IDs with a clear error, so the failure is loud rather than silent.
 - Rule `rf-review-finding-default-fix-inline` governs the opposite direction (new findings default to fix-inline); this skill drains existing scope-outs. The two rules are complementary.
 - When writing a data-reshape shell script that fetches JSON and groups it, default to a single pure-jq pipeline before reaching for python/awk. Multi-language serialization round-trips add dependencies, silent-fallback error paths, and ~2x the LOC without reshape capability jq already provides.
 - `jq scan(...)` returns the **captured group** when the regex contains a capture, otherwise the full match. Alternations inside `scan` MUST be non-capturing: `(?:ts|tsx|js)` not `(ts|tsx|js)`. Otherwise `scan("[A-Za-z_./\\-]+\\.(?:ts|js)\\b")` returns full paths, whereas the capturing form would return just the extension.

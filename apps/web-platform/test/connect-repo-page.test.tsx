@@ -17,11 +17,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("next/font/google", () => ({
-  Cormorant_Garamond: () => ({
-    className: "mock-serif",
-    variable: "--font-serif",
-  }),
-  Inter: () => ({ className: "mock-sans", variable: "--font-sans" }),
+  Inter: () => ({ className: "mock-sans", variable: "--font-inter" }),
 }));
 
 vi.mock("@/lib/supabase/client", () => ({

@@ -1,0 +1,12 @@
+{
+  "total_count": 1,
+  "check_runs": [
+    {
+      "id": 1,
+      "name": "CodeQL",
+      "status": "in_progress",
+      "conclusion": null,
+      "app": {"id": 57789, "slug": "github-advanced-security"}
+    }
+  ]
+}

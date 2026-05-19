@@ -29,6 +29,7 @@ resource "hcloud_server" "web" {
   user_data = templatefile("${path.module}/cloud-init.yml", {
     image_name                           = var.image_name
     ci_deploy_script_b64                 = base64encode(file("${path.module}/ci-deploy.sh"))
+    ci_deploy_wrapper_script_b64         = base64encode(file("${path.module}/ci-deploy-wrapper.sh"))
     cat_deploy_state_script_b64          = base64encode(file("${path.module}/cat-deploy-state.sh"))
     canary_bundle_claim_check_script_b64 = base64encode(file("${path.module}/canary-bundle-claim-check.sh"))
     disk_monitor_script_b64              = base64encode(file("${path.module}/disk-monitor.sh"))
@@ -218,6 +219,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
   # hooks.json updates to production (#2185, #3033).
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
+    file("${path.module}/ci-deploy-wrapper.sh"),
     file("${path.module}/webhook.service"),
     file("${path.module}/cat-deploy-state.sh"),
     file("${path.module}/canary-bundle-claim-check.sh"),
@@ -234,6 +236,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
   provisioner "file" {
     source      = "${path.module}/ci-deploy.sh"
     destination = "/usr/local/bin/ci-deploy.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/ci-deploy-wrapper.sh"
+    destination = "/usr/local/bin/ci-deploy-wrapper.sh"
   }
 
   provisioner "file" {
@@ -259,6 +266,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
   provisioner "remote-exec" {
     inline = [
       "chmod +x /usr/local/bin/ci-deploy.sh",
+      "chmod +x /usr/local/bin/ci-deploy-wrapper.sh",
       "chmod +x /usr/local/bin/cat-deploy-state.sh",
       "chmod +x /usr/local/bin/canary-bundle-claim-check.sh",
       # hooks.json must be readable by the webhook (deploy group) but not world-readable --
