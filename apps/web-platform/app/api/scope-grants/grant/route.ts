@@ -18,10 +18,13 @@ import { reportSilentFallback } from "@/server/observability";
 
 export const dynamic = "force-dynamic";
 
+// PR-H (#4077): admits the 4th tier value alongside the original 3.
+// grant_action_class RPC in mig 051 also accepts auto_with_digest.
 const VALID_TIERS: ReadonlySet<ActionClassTier> = new Set([
   "auto",
   "draft_one_click",
   "approve_every_time",
+  "auto_with_digest",
 ]);
 
 interface GrantBody {
