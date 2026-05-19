@@ -43,11 +43,11 @@ Derived from the plan. Each leaf task is intended to be executable by `/soleur:w
 
 ## Phase 2 — Migration 051
 
-- [ ] **2.1 RED** Create `apps/web-platform/test/server/action-sends-worm.test.ts` (gated `TENANT_INTEGRATION_TEST=1`) covering 9 cases: INSERT happy, UPDATE/DELETE rejection, NULL shape rejection, tier widening accept/reject, enum-absence DB CHECK rejection (`payment.refund`), Art-17 anonymise round-trip, cross-tenant denial.
-- [ ] **2.2 GREEN** Create `apps/web-platform/supabase/migrations/051_action_class_widening_and_action_sends.sql` — NO outer `BEGIN/COMMIT`; includes scope_grants.tier widening, scope_grants.action_class DB CHECK regex, `messages.action_class` add + bounded backfill, `action_sends` table with pure-reject trigger + RLS + index + `anonymise_action_sends(uuid)` SECURITY DEFINER RPC.
-- [ ] **2.3 GREEN** Create `apps/web-platform/supabase/verify/051_action_sends_worm.sql` — sentinel for `verify-migrations` CI.
-- [ ] **2.4 GREEN** Create `apps/web-platform/supabase/migrations/051_action_class_widening_and_action_sends.down.sql` — reverse.
-- [ ] **2.5 VERIFY** Apply locally to dev Supabase per `hr-dev-prd-distinct-supabase-projects`; run `TENANT_INTEGRATION_TEST=1 bun test` against integration suite.
+- [x] **2.1 RED** Create `apps/web-platform/test/server/action-sends-worm.test.ts` (gated `TENANT_INTEGRATION_TEST=1`) covering 9 cases: INSERT happy, UPDATE/DELETE rejection, NULL shape rejection, tier widening accept/reject, enum-absence DB CHECK rejection (`payment.refund`), Art-17 anonymise round-trip, cross-tenant denial.
+- [x] **2.2 GREEN** Create `apps/web-platform/supabase/migrations/051_action_class_widening_and_action_sends.sql` — NO outer `BEGIN/COMMIT`; includes scope_grants.tier widening, scope_grants.action_class DB CHECK regex, `messages.action_class` add + bounded backfill, `action_sends` table with pure-reject trigger + RLS + index + `anonymise_action_sends(uuid)` SECURITY DEFINER RPC.
+- [x] **2.3 GREEN** Create `apps/web-platform/supabase/verify/051_action_sends_worm.sql` — sentinel for `verify-migrations` CI.
+- [x] **2.4 GREEN** Create `apps/web-platform/supabase/migrations/051_action_class_widening_and_action_sends.down.sql` — reverse.
+- [x] **2.5 VERIFY** Apply locally to dev Supabase per `hr-dev-prd-distinct-supabase-projects`; run `TENANT_INTEGRATION_TEST=1 bun test` against integration suite.
 
 ## Phase 3 — Producer extension
 
