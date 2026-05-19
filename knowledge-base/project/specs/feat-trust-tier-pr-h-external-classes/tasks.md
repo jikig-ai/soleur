@@ -57,12 +57,12 @@ Derived from the plan. Each leaf task is intended to be executable by `/soleur:w
 
 ## Phase 4 — Routes + write-action-send helper + Art-17 cascade
 
-- [ ] **4.1 GREEN** Create `apps/web-platform/server/action-sends/write-action-send.ts` — single write boundary; canonical JSON serialization for `approval_signature_sha256`.
-- [ ] **4.2 RED** Create `apps/web-platform/test/api/dashboard/today/send-route.test.ts` — 8 cases per plan.
-- [ ] **4.3 GREEN** Create `apps/web-platform/app/api/dashboard/today/[id]/send/route.ts`. **Cookie-scoped `supabase` client passed to `isGranted` (not service-role).** Branches on tier; calls `writeActionSend`. Returns 409 / 400 / 403 / 422 per plan.
-- [ ] **4.4 GREEN** Create `apps/web-platform/app/api/dashboard/today/[id]/edit/route.ts` and `discard/route.ts`.
-- [ ] **4.5 GREEN** Edit `apps/web-platform/server/account-delete.ts` — extend Art-17 cascade to call `supabase.rpc("anonymise_action_sends", { p_user_id })` BEFORE `auth.admin.deleteUser`. Sibling pattern from `anonymise_scope_grants` + `anonymise_tc_acceptances`.
-- [ ] **4.6 VERIFY** `bun test apps/web-platform/test/api/dashboard/`.
+- [x] **4.1 GREEN** Create `apps/web-platform/server/action-sends/write-action-send.ts` — single write boundary; canonical JSON serialization for `approval_signature_sha256`.
+- [x] **4.2 RED** Create `apps/web-platform/test/api/dashboard/today/send-route.test.ts` — 8 cases per plan.
+- [x] **4.3 GREEN** Create `apps/web-platform/app/api/dashboard/today/[id]/send/route.ts`. **Cookie-scoped `supabase` client passed to `isGranted` (not service-role).** Branches on tier; calls `writeActionSend`. Returns 409 / 400 / 403 / 422 per plan.
+- [x] **4.4 GREEN** Create `apps/web-platform/app/api/dashboard/today/[id]/edit/route.ts` and `discard/route.ts`.
+- [x] **4.5 GREEN** Edit `apps/web-platform/server/account-delete.ts` — extend Art-17 cascade to call `supabase.rpc("anonymise_action_sends", { p_user_id })` BEFORE `auth.admin.deleteUser`. Sibling pattern from `anonymise_scope_grants` + `anonymise_tc_acceptances`.
+- [x] **4.6 VERIFY** `bun test apps/web-platform/test/api/dashboard/`.
 
 ## Phase 5 — today-card.tsx wiring + typed-confirm-modal (under components/ui/)
 
