@@ -187,6 +187,15 @@ export async function githubOnEventHandler({
   // is a stub today (mirrors cfo-on-payment-failed Phase 3 stub) — the
   // Anthropic SDK call wires in alongside cohort onboarding. The lease
   // is held open so the structural test surface stays accurate.
+  //
+  // byok-audit-writer-sweep: out-of-scope — PR-H Phase 4 stub holds the
+  // lease open for the structural test surface (R1 / I1: lease MUST open
+  // inside each SDK-calling step). The actual Anthropic SDK call +
+  // per-turn recordByokUseAndCheckCap + persistTurnCost wire in PR-H+1
+  // alongside the "spawn agent" action wiring. Until then there is no
+  // real token cost to record; the stub returns tokenCount=0 /
+  // unitCostCents=0 deterministically. Mirrors the marker at
+  // cfo-on-payment-failed.ts.
   const _draft = await step.run("draft-github-card", async () => {
     return runWithByokLease(founderId, async () => {
       // STUB: leader prompt loop wires later. Return raw preview now
