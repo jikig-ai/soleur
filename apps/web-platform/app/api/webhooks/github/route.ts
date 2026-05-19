@@ -199,11 +199,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ received: true });
   }
 
-  // Step 5: founderId resolution via github_installation_id mapping.
-  // The mapping table is created in PR-G's #3947 follow-up; until it
-  // ships in this repo, the lookup falls through to "no founder" and
-  // we drop the event. Inline `as { id?: string }` cast keeps the
-  // route file zero-types-dependency.
+  // Step 5: founderId resolution via the users.github_installation_id
+  // column (migration 011) gated by the partial-UNIQUE index added in
+  // migration 051 (PR-H #3244). The UNIQUE constraint is load-bearing:
+  // without it, .maybeSingle() would silently route a 1:N installation
+  // to one founder. Inline `as { id?: string }` cast keeps the route
+  // file zero-types-dependency.
   const { data: founderRow, error: founderErr } = await supabase
     .from("users")
     .select("id")
@@ -265,9 +266,18 @@ export async function POST(request: Request) {
   // exactly-once dispatch up to GitHub's redelivery limit.
   try {
     const { inngest } = await import("@/server/inngest/client");
+    // Redact rawBody before forwarding — the Inngest event store retains
+    // payloads for 24h and is a third PII surface beyond the messages row
+    // and the audit ledger. redactGithubSourcedText regexes are
+    // JSON-syntax-safe (they match PII shapes inside string values; quote
+    // and brace characters are not in any pattern). Belt-and-suspenders
+    // with the INSERT-time redaction in github-on-event.ts.
+    const { redactGithubSourcedText } = await import("@/lib/safety/redaction-allowlist");
+    const redactedRawBody = redactGithubSourcedText(rawBody);
     await inngest.send({
       id: `github-${deliveryId}`,
       name: actionClass,
+      v: "1",
       data: {
         founderId,
         installationId,
@@ -275,10 +285,7 @@ export async function POST(request: Request) {
         githubEvent,
         action: body.action ?? null,
         tier: grant.tier,
-        // Raw body is forwarded so the Inngest function can re-derive
-        // per-event fields without re-fetching. Redaction happens
-        // INSERT-time inside the function (Phase 4), not here.
-        rawBody,
+        rawBody: redactedRawBody,
       },
     });
   } catch (err) {

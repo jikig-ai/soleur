@@ -110,12 +110,12 @@ describe("github-on-event handler", () => {
   });
 
   describe("source_ref derivation", () => {
-    it("pr_review_pending → pr-<repo>-<number>", async () => {
+    it("pr_review_pending → pr-<org>:<repo>:<number>", async () => {
       await githubOnEventHandler(makeArgs({}) as never);
       expect(mockInsert).toHaveBeenCalledWith(
         expect.objectContaining({
           source: "github",
-          source_ref: "pr-jikig-ai-soleur-4066",
+          source_ref: "pr-jikig-ai:soleur:4066",
           urgency: "normal",
           owning_domain: "engineering",
         }),
@@ -154,7 +154,7 @@ describe("github-on-event handler", () => {
       expect(mockInsert).toHaveBeenCalledWith(
         expect.objectContaining({
           owning_domain: "product",
-          source_ref: "issue-jikig-ai-soleur-999",
+          source_ref: "issue-jikig-ai:soleur:999",
           urgency: "critical",
         }),
       );

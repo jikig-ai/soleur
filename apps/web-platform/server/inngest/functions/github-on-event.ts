@@ -71,14 +71,18 @@ function deriveSourceRef(
   body: Record<string, unknown>,
 ): string | null {
   const prefix = GITHUB_EVENT_STRATEGIES[actionClass].sourceRefPrefix;
+  // Keep org/repo separator as ':' (invalid in GitHub repo names per
+  // https://docs.github.com/en/repositories) so 'org/repo-1' and
+  // 'org/repo' with number 1 cannot collide. Mirror separator between
+  // repo and number so the structure is parseable.
   const repoFullName =
-    (body.repository as { full_name?: string } | undefined)?.full_name?.replace("/", "-") ?? null;
+    (body.repository as { full_name?: string } | undefined)?.full_name?.replace("/", ":") ?? null;
 
   switch (actionClass) {
     case "engineering.pr_review_pending": {
       const pr = body.pull_request as { number?: number } | undefined;
       if (!repoFullName || typeof pr?.number !== "number") return null;
-      return `${prefix}${repoFullName}-${pr.number}`;
+      return `${prefix}${repoFullName}:${pr.number}`;
     }
     case "engineering.ci_failed": {
       const run = body.workflow_run as { id?: number } | undefined;
@@ -88,13 +92,17 @@ function deriveSourceRef(
     case "triage.p0p1_issue": {
       const issue = body.issue as { number?: number } | undefined;
       if (!repoFullName || typeof issue?.number !== "number") return null;
-      return `${prefix}${repoFullName}-${issue.number}`;
+      return `${prefix}${repoFullName}:${issue.number}`;
     }
     case "security.cve_alert": {
       const adv = body.repository_advisory as { ghsa_id?: string } | undefined;
       const alert = body.alert as { number?: number } | undefined;
       if (adv?.ghsa_id) return `${prefix}${adv.ghsa_id}`;
-      if (typeof alert?.number === "number") return `secret-scan-${alert.number}`;
+      // Include repo prefix so secret-scan alert numbers are dedup-safe
+      // across multiple installations (alert.number is per-repo, not global).
+      if (typeof alert?.number === "number" && repoFullName) {
+        return `secret-scan-${repoFullName}:${alert.number}`;
+      }
       return null;
     }
   }

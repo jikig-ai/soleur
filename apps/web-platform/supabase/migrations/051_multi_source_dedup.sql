@@ -31,9 +31,11 @@ ALTER TABLE public.messages
 
 COMMENT ON COLUMN public.messages.source_ref IS
   'Upstream-event reference for multi-source dedup (PR-H #3244). '
-  'Examples: GitHub pr-<repo>-<number>, ci-<workflow_run_id>, '
-  'issue-<repo>-<number>, cve-<advisory_id>; KB-drift '
-  'link-<sha256[:16]> / anchor-<sha256[:16]>. NULL for legacy and '
+  'Examples: GitHub pr-<org>:<repo>:<number>, ci-<workflow_run_id>, '
+  'issue-<org>:<repo>:<number>, cve-<advisory_id>, '
+  'secret-scan-<org>:<repo>:<alert_number>; KB-drift '
+  'link-<sha256[:16]> / anchor-<sha256[:16]>. The ":" separator is '
+  'invalid in GitHub repo names so cannot collide. NULL for legacy and '
   'Stripe-sourced rows. The (user_id, source, source_ref) partial-'
   'unique index gates webhook replay at the DB level.';
 
@@ -142,3 +144,61 @@ COMMENT ON TABLE public.processed_github_events IS
   'INSERT succeeds, DELETE the row (releaseDedupRow pattern) so the '
   'GitHub redelivery can re-process. Retention: Postgres autovacuum '
   '+ 30-day partition rotation (natural cleanup; no TTL daemon).';
+
+------------------------------------------------------------------------
+-- 5. Partial-UNIQUE on users.github_installation_id (cross-tenant guard)
+------------------------------------------------------------------------
+--
+-- Migration 011 added users.github_installation_id without a uniqueness
+-- constraint. The webhook resolves founder at route.ts via .maybeSingle()
+-- which silently returns ONE of N matching rows on collision — a 1:N
+-- mapping would cause cross-tenant attribution (founder A's PRs land on
+-- founder B's dashboard). Partial-unique (WHERE NOT NULL) keeps multi-
+-- founder onboarding viable (most rows are NULL pre-install).
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_github_installation_id_unique_idx
+  ON public.users (github_installation_id)
+  WHERE github_installation_id IS NOT NULL;
+
+COMMENT ON INDEX public.users_github_installation_id_unique_idx IS
+  'PR-H (#3244) — Cross-tenant attribution guard. The GitHub webhook '
+  'resolves founder via .maybeSingle() on github_installation_id; '
+  'without this index a 1:N mapping (two founders, same installation) '
+  'would silently route to one of them. WHERE NOT NULL keeps the '
+  'constraint compatible with pre-install rows.';
+
+------------------------------------------------------------------------
+-- 6. anonymise_audit_github_token_use — Art. 17 cascade hook
+------------------------------------------------------------------------
+--
+-- audit_github_token_use.founder_id has ON DELETE RESTRICT (matches
+-- 037_byok_use_audit precedent). account-delete.ts must call this RPC
+-- BEFORE auth.admin.deleteUser() or the cascade aborts mid-flight. The
+-- RPC NULLs founder_id (keeping the row for accountability) and zeros
+-- repo_full_name (the only narrow-PII column). Idempotent.
+
+CREATE OR REPLACE FUNCTION public.anonymise_audit_github_token_use(p_founder_id uuid)
+  RETURNS void
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+BEGIN
+  UPDATE public.audit_github_token_use
+     SET founder_id = NULL,
+         repo_full_name = NULL
+   WHERE founder_id = p_founder_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.anonymise_audit_github_token_use(uuid)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.anonymise_audit_github_token_use(uuid)
+  TO service_role;
+
+COMMENT ON FUNCTION public.anonymise_audit_github_token_use(uuid) IS
+  'PR-H (#3244) — Art. 17 cascade for audit_github_token_use. Called by '
+  'server/account-delete.ts BEFORE auth.admin.deleteUser(); the FK is '
+  'ON DELETE RESTRICT and the auth-delete would abort without this. '
+  'Idempotent: re-running on already-anonymised rows is a no-op '
+  '(UPDATE ... WHERE founder_id = p_founder_id matches zero rows).';
