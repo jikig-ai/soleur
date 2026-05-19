@@ -59,7 +59,7 @@ jobs:
           # Secrets that one or more verification scripts may declare via
           # the `secrets=` directive clause. Add new ones here when a new
           # follow-through ships needing them.
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           bash scripts/sweep-followthroughs.sh
