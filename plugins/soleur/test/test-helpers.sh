@@ -6,6 +6,7 @@ set -euo pipefail
 
 PASS=0
 FAIL=0
+SKIPPED=0
 
 assert_eq() {
   local expected="$1"
@@ -103,11 +104,20 @@ print_results() {
   echo "=== Results ==="
   echo "Passed: $PASS"
   echo "Failed: $FAIL"
+  if (( SKIPPED > 0 )); then
+    echo "Skipped: $SKIPPED"
+  fi
   echo ""
 
   if [[ $FAIL -gt 0 ]]; then
     echo "SOME TESTS FAILED"
     exit 1
+  elif (( SKIPPED > 0 )); then
+    # Honest summary: not "ALL TESTS PASSED" when timing invariants weren't
+    # actually enforced. Reviewer P2 — closes silent-green-on-skipped-tests
+    # footgun on PRs that conditionally gate timing tests behind CI=true.
+    echo "ALL EXECUTED TESTS PASSED ($SKIPPED skipped)"
+    exit 0
   else
     echo "ALL TESTS PASSED"
     exit 0
