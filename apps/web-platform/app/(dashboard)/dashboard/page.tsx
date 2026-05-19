@@ -19,6 +19,9 @@ import { LeaderAvatar } from "@/components/leader-avatar";
 import { FoundationSection } from "@/components/dashboard/foundation-section";
 import type { FoundationCard } from "@/components/dashboard/foundation-cards";
 import { useTeamNames } from "@/hooks/use-team-names";
+import { TodayBanner } from "@/components/dashboard/today-banner";
+import { RuntimeExplainerBanner } from "@/components/dashboard/runtime-explainer-banner";
+import { TodayCard } from "@/components/dashboard/today-card";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -97,7 +100,12 @@ const DOMAIN_OPTIONS: { value: string; label: string }[] = [
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { completeOnboarding } = useOnboarding();
+  const {
+    completeOnboarding,
+    runtimeExplainerDismissed,
+    dismissRuntimeExplainer,
+    onboardingLoaded,
+  } = useOnboarding();
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | null>(null);
   const [domainFilter, setDomainFilter] = useState<DomainLeaderId | "general" | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>("active");
@@ -175,6 +183,35 @@ export default function DashboardPage() {
   // Product/UX Gate findings.
   const [orphanedCount, setOrphanedCount] = useState<number>(0);
   const [repoDisconnected, setRepoDisconnected] = useState<boolean>(false);
+
+  // PR-F (#3244, #3940) Phase 5 — Today section: drafts from
+  // /api/dashboard/today. Fetched on mount; mounted ABOVE the foundation
+  // + inbox sections per plan §Phase 5. Empty array means "no drafts yet".
+  interface TodayItem {
+    id: string;
+    source: string;
+    owningDomain: string;
+    draftPreview: string;
+    urgency: string;
+  }
+  const [todayItems, setTodayItems] = useState<TodayItem[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/dashboard/today");
+        if (!res.ok) return; // 401/500 → silent; the banner still mounts.
+        const body = (await res.json()) as { items: TodayItem[] };
+        if (!cancelled) setTodayItems(body.items ?? []);
+      } catch {
+        // Network drop: leave empty; the banner still mounts.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -556,6 +593,27 @@ export default function DashboardPage() {
           Dashboard
         </h1>
       </div>
+
+      {/* PR-F (#3244, #3940) Today section — page-level disclosure banner
+          (RV14) + per-draft cards. Mounted ABOVE foundation/inbox per plan
+          §Phase 5. The banner mounts unconditionally so the legal
+          disclosure is present even when there are no drafts yet. */}
+      <section aria-label="Today" className="mb-6">
+        {onboardingLoaded && !runtimeExplainerDismissed ? (
+          <RuntimeExplainerBanner onDismiss={dismissRuntimeExplainer} />
+        ) : null}
+        <TodayBanner />
+        {todayItems.map((item) => (
+          <TodayCard
+            key={item.id}
+            id={item.id}
+            source={item.source}
+            owningDomain={item.owningDomain}
+            draftPreview={item.draftPreview}
+            urgency={item.urgency}
+          />
+        ))}
+      </section>
 
       {/* Foundation + operational cards (hidden when all complete) */}
       {visionExists && !allTasksComplete && (

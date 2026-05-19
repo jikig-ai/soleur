@@ -13,6 +13,14 @@
 # Fire-and-forget: never blocks the hook (all jq invocations on external input
 # wrapped in `2>/dev/null || true`, per learning 2026-03-18).
 
+# headless_or_stderr is provided by lib/session-state.sh; route warns to a
+# log file under `claude --bg`. Fall back to stderr for legacy worktrees.
+# shellcheck source=session-state.sh
+source "$(dirname "${BASH_SOURCE[0]}")/session-state.sh" 2>/dev/null || true
+if ! declare -f headless_or_stderr >/dev/null; then
+  headless_or_stderr() { echo "[$1] $2" >&2; }
+fi
+
 # --- Repo-root resolution --------------------------------------------------
 # BASH_SOURCE[0] is the path to THIS file regardless of how it was sourced.
 # From .claude/hooks/lib/incidents.sh, the repo root is three dirs up.
@@ -145,12 +153,21 @@ _emit_drop_sentinel() {
   return 0
 }
 
-# --- emit_incident <rule_id> <event_type> <prefix> [command_snippet] -------
+# --- emit_incident <rule_id> <event_type> <prefix> [command_snippet] [hook_event] [kind] -------
 # See `_emit_drop_sentinel` above for the sentinel-line discriminator and
 # aggregator-filter contract. emit_incident itself emits a sentinel via the
 # helper on `jq_fail` (line-build failure) and `rotation_fail` (rotator
 # returned non-zero); the existing per-`$$` rate-limited stderr warn for
 # write failures is preserved for operator visibility.
+#
+# kind (slot 6) — additive-optional discriminator added 2026-05-15 for F2
+# prod-write-defer-gate.sh (would_defer, defer_requested, bypass,
+# hook_self_fault). Defaults to "rule_event" so existing 3-5-arg callers
+# stay shape-compatible. NOT a SCHEMA_VERSION bump — v1 readers ignore
+# unknown fields; aggregators using `(.kind // "rule_event")` see legacy
+# rows correctly. The Python sibling
+# (security_reminder_hook.py) emits no kind field; consumers must treat
+# null-kind as "rule_event".
 # event_type ∈ {deny, bypass, applied, warn}
 #   deny    — PreToolUse hook blocked an operation (prevents a violation).
 #   bypass  — user bypassed the rule with a known escape hatch (LEFTHOOK=0, etc.).
@@ -179,7 +196,7 @@ _emit_drop_sentinel() {
 #         rule_id as the primary join key — but keeps forensic context if
 #         AGENTS.md is ever rebased with new ids).
 emit_incident() {
-  local rule_id="${1:-}" event="${2:-}" prefix="${3:-}" cmd="${4:-}" hook_event="${5:-PreToolUse}"
+  local rule_id="${1:-}" event="${2:-}" prefix="${3:-}" cmd="${4:-}" hook_event="${5:-PreToolUse}" kind="${6:-rule_event}"
   [[ -z "$rule_id" || -z "$event" ]] && return 0
 
   # Cap cmd length so a single JSONL line stays well under a 4KB kernel
@@ -215,8 +232,9 @@ emit_incident() {
     --arg e "$event" \
     --arg p "$prefix" \
     --arg c "$cmd" \
+    --arg k "$kind" \
     --argjson s "$SCHEMA_VERSION" \
-    '{schema:$s, timestamp:$ts, rule_id:$r, event_type:$e, rule_text_prefix:$p, command_snippet:$c}' \
+    '{schema:$s, timestamp:$ts, rule_id:$r, event_type:$e, rule_text_prefix:$p, command_snippet:$c, kind:$k}' \
     2>/dev/null) || {
       _emit_drop_sentinel "$file" "$hook_event" "jq_fail"
       return 0
@@ -233,31 +251,57 @@ emit_incident() {
     # we want one warn per hook fork, not once globally.
     local marker="/tmp/rule-incidents-warned-$$"
     if [[ ! -f "$marker" ]]; then
-      echo "[rule-incidents] warning: failed to write $file (permissions? disk?)" >&2
+      SOLEUR_HOOK_NAME="rule-incidents" headless_or_stderr warn "failed to write $file (permissions? disk?)"
       : > "$marker" 2>/dev/null || true
     fi
   fi
 }
 
 # --- detect_bypass <tool> <command> ---------------------------------------
-# Echoes the rule_id of the bypassed rule when the command uses a v1 bypass
+# Echoes the rule_id of the bypassed rule when the command uses a bypass
 # flag. Empty output means no bypass detected.
 #
-# v1 scope is deliberately minimal to avoid false positives (see
-# plan ADR-2 and R3):
-#   --no-verify   → cq-never-skip-hooks
-#   LEFTHOOK=0    → cq-lefthook-worktree-hang
-# Deferred to v2: --force on main, --no-gpg-sign, --amend after a prior deny.
+# Scope (telemetry-only, not block — anchored on bash-adjacent context to
+# skip substrings embedded in echoed strings, heredoc bodies, PR body text):
+#   --no-verify              → cq-never-skip-hooks  (skip pre-commit/commit-msg)
+#   -c core.hooksPath=…      → cq-never-skip-hooks  (redirect hooks dir to /dev/null etc.)
+#   HUSKY=0                  → cq-never-skip-hooks  (disable Husky)
+#   --no-gpg-sign            → cq-never-skip-hooks  (bypass commit signing)
+#   -c commit.gpgsign=false  → cq-never-skip-hooks  (bypass signing via inline config)
+#   LEFTHOOK=0               → cq-when-lefthook-hangs-in-a-worktree-60s
+# Deferred: --force on main, --amend after a prior deny.
 #
-# Patterns anchor on bash-adjacent context ("git ", "git\t", LEFTHOOK=0 at
-# command start or after a chain operator) to skip substrings embedded in
-# echoed strings, heredoc bodies, PR body text, etc.
+# core.hooksPath / HUSKY / --no-gpg-sign / commit.gpgsign added 2026-05-12
+# after a session-state anticipatory bypass was self-corrected; see
+# 2026-05-12-anticipatory-hook-bypass-and-leader-substrate-cross-check.md.
 detect_bypass() {
   local cmd="${2:-}"
   # --no-verify: only recognize when it's a flag to a git invocation in the
   # command. Matches "git ... --no-verify" and "git -C foo commit --no-verify"
   # but not 'echo "avoid --no-verify"' or 'gh pr create --body "don\'t --no-verify"'.
   if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*--no-verify ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # -c core.hooksPath=…: redirects hook directory (commonly to /dev/null).
+  # Recognize only as a flag to git, not in echoed text. Any value matched.
+  if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*-c[[:space:]]+core\.hooksPath= ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # -c commit.gpgsign=false: disables signing for this invocation.
+  if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*-c[[:space:]]+commit\.gpgsign=false ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # --no-gpg-sign: git flag to bypass commit signing.
+  if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*--no-gpg-sign ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # HUSKY=0: disable Husky pre-commit hooks. Recognize as env-assign-before-
+  # command position (standard form) or after a chain operator. Not in echoed text.
+  if [[ "$cmd" =~ (^|\&\&|\|\||\;)[[:space:]]*HUSKY=0[[:space:]] ]]; then
     echo "cq-never-skip-hooks"
     return
   fi

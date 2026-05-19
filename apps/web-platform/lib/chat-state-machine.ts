@@ -57,12 +57,20 @@ interface ChatTextMessage extends ChatMessageBase {
   status?: "complete" | "aborted";
   /** #3448 PR2: aborted-turn snapshot. Present only for rows whose
    *  `status === "aborted"`. Shape mirrors the `usage` jsonb column
-   *  documented in migration 040. */
+   *  documented in migration 040.
+   *
+   *  #3640 F6 — `variant` discriminates the legacy `agent-runner`
+   *  `UsageSnapshot` (full fields) from the cc-router `{ cost_usd }`
+   *  narrow shape. `input_tokens` + `output_tokens` widened to optional
+   *  so cc-narrowed rows don't fabricate zeros at hydration. Readers
+   *  switch on `variant`; `undefined` defaults to `"legacy"` for the
+   *  fixture-stable backward-compat path. */
   usage?: {
-    input_tokens: number;
-    output_tokens: number;
+    variant?: "legacy" | "cc";
+    input_tokens?: number;
+    output_tokens?: number;
     cost_usd?: number | null;
-    completed_actions: Array<{
+    completed_actions?: Array<{
       tool_name: string;
       input_summary: string;
       result_summary: string;
@@ -233,7 +241,7 @@ export interface StreamEventResult {
  * `interactive_prompt_response` is intentionally excluded — it's a
  * client→server event and never reaches the reducer.
  */
-type StreamEvent = Extract<
+export type StreamEvent = Extract<
   WSMessage,
   | { type: "stream_start" }
   | { type: "stream" }
@@ -586,6 +594,20 @@ export function applyStreamEvent(
     // -----------------------------------------------------------------
 
     case "subagent_spawn": {
+      // #3775 — idempotent on `spawnId`. The wire protocol guarantees spawnId
+      // uniqueness server-side, but a WS reconnect / supabase realtime retry
+      // / regressed runner could re-emit. Duplicate-key state would corrupt
+      // `spawnIndex` (the second insert overwrites the first, breaking the
+      // subsequent `subagent_complete` lookup at line 668). Mirror the
+      // `interactive_prompt` arm's dedup shape (line 751-770).
+      if (priorSpawnIndex.has(event.spawnId)) {
+        return {
+          messages: prev,
+          activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+        };
+      }
       // Find an existing subagent_group in `prev` matching `parentId`.
       let groupIdx = -1;
       for (let i = prev.length - 1; i >= 0; i--) {

@@ -1,0 +1,161 @@
+# .github/workflows/tenant-integration.yml
+#
+# Runs apps/web-platform/test/server/*.tenant-isolation.test.ts under
+# TENANT_INTEGRATION_TEST=1 with dev-Supabase secrets resolved via Doppler.
+# Closes the silent-skip trap that lets vitest report green for tenant-
+# isolation tests when the gate env var is unset (the default in ci.yml's
+# test-webplat job). Unblocks PR-D #3883 which adds new Storage deny
+# tests under the same describe.skipIf gate.
+#
+# Security: DOPPLER_TOKEN_DEV_SCHEDULED is scoped to the dev_scheduled
+# Doppler config. A runtime assertion confirms the config resolves to
+# environment=dev before any Supabase secret is touched, per
+# hr-dev-prd-distinct-supabase-projects. No untrusted github.event.*
+# inputs are interpolated in any run: block; only secrets.*, runner.os,
+# github.ref (concurrency group only), and hashFiles() are referenced.
+#
+# Triggers (path-filtered): push to main + PRs touching the tenant-
+# isolation tests, server/, or supabase/migrations/. Manual re-runs
+# available via workflow_dispatch (post-merge only — feature-branch
+# dispatch requires the workflow to exist on the default branch first).
+# The path filter is load-bearing — without it the job would run on
+# every PR (~95% of which don't touch the tested surfaces) and burn
+# dev-Supabase rate budget.
+#
+# Refs: #3869 item 6, #3244 (umbrella), #3883 (PR-D).
+
+name: Tenant integration (dev-Supabase)
+
+# NOTE: `push` and `pull_request` paths are duplicated by design —
+# GitHub Actions does not support YAML anchors inside `on:`. Keep
+# the two lists in lock-step when editing.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web-platform/test/server/**.tenant-isolation.test.ts'
+      - 'apps/web-platform/server/**'
+      - 'apps/web-platform/supabase/migrations/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/web-platform/test/server/**.tenant-isolation.test.ts'
+      - 'apps/web-platform/server/**'
+      - 'apps/web-platform/supabase/migrations/**'
+  workflow_dispatch: {}
+
+concurrency:
+  group: tenant-integration-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tenant-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache bun install (apps/web-platform)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            apps/web-platform/node_modules
+          key: bun-webplat-${{ runner.os }}-${{ hashFiles('apps/web-platform/bun.lock') }}
+          restore-keys: |
+            bun-webplat-${{ runner.os }}-
+
+      - name: Install web-platform dependencies
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify DOPPLER_TOKEN_DEV_SCHEDULED is provisioned
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${DOPPLER_TOKEN_CHECK:-}" ]]; then
+            echo "::error::DOPPLER_TOKEN_DEV_SCHEDULED is not set. Provision a dev-scoped Doppler service token and 'gh secret set DOPPLER_TOKEN_DEV_SCHEDULED'. Aborting -- do NOT silent-skip (would re-create the gate trap this workflow closes)."
+            exit 1
+          fi
+
+      - name: Assert Doppler config resolves to environment=dev
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          env_name=$(doppler configs get dev_scheduled -p soleur --json 2>/dev/null \
+            | jq -r '.environment // empty') || env_name=""
+          if [[ -z "$env_name" ]]; then
+            echo "::error::doppler configs get dev_scheduled -p soleur returned empty. Config does not exist or token lacks read access."
+            exit 1
+          fi
+          if [[ "$env_name" != "dev" ]]; then
+            # Strip CR/LF + ASCII control bytes via tr, then multi-byte
+            # UTF-8 separators (U+2028, U+2029, U+200B, U+FEFF) via sed —
+            # bash `tr` is byte-oriented and cannot match multi-byte
+            # sequences. Mirrors scheduled-realtime-probe.yml's
+            # strip_log_injection function (tr + sed two-stage).
+            env_safe=$(printf '%s' "$env_name" | tr -d '\r\n\f\v\x7f\x85' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g')
+            echo "::error::dev_scheduled config resolves to environment=${env_safe} (expected: dev). Token rotated to wrong scope; reset before running tenant-integration."
+            exit 1
+          fi
+          echo "Doppler config dev_scheduled -> environment=dev (verified)."
+
+      # Apply migrations to dev before running tests. Without this step,
+      # tenant-integration tests run against whatever schema dev happens to
+      # have, which can lag behind the PR's migration files — producing
+      # ambiguous "RLS deny" failures whose root cause is "migration never
+      # applied" rather than "policy logic incorrect." See PR #3911
+      # diagnosis: the same 42501 error fires whether the migration is
+      # absent (default RLS deny) or present-but-broken (policy returns
+      # false), which makes CI useless for distinguishing the two cases
+      # until the apply gap is closed.
+      #
+      # SAFETY: dev only. Per `hr-menu-option-ack-not-prod-write-auth`,
+      # prd migration apply MUST remain operator-gated. This step uses
+      # the dev_scheduled Doppler config (asserted as environment=dev
+      # by the preceding step), and `run-migrations.sh` uses
+      # `DATABASE_URL_POOLER` which is the dev-pooler endpoint.
+      #
+      # `psql` is pre-installed on github-hosted ubuntu runners, so no
+      # explicit setup step is needed. The script tracks applied
+      # migrations in `public._schema_migrations` and is idempotent on
+      # re-runs (skips already-applied filenames). `--bootstrap=skip`
+      # is correct for dev (which has a populated tracking table;
+      # bootstrap-auto's 001-010 sentinel-row seed is meant for the
+      # legacy prd-first apply path, not dev).
+      - name: Apply migrations to dev
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/run-migrations.sh --bootstrap=skip
+
+      - name: Run tenant-isolation tests
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          # NOTE: invoke via `npm run test:ci` (not `bun x vitest`) for
+          # byte-parity with .github/workflows/ci.yml `test-webplat` job,
+          # which calls `npm run test:ci` from the `webplat` branch of
+          # scripts/test-all.sh. `--` separates npm-run args from vitest's.
+          doppler run -p soleur -c dev_scheduled -- \
+            env TENANT_INTEGRATION_TEST=1 \
+            npm run test:ci -- test/server/ --project unit --reporter=verbose

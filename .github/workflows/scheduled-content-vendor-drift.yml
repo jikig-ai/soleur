@@ -475,3 +475,19 @@ jobs:
             --title "$TITLE" \
             --body "$BODY" \
             --label "vendor/cron-failure"
+
+      # Single end-of-job heartbeat check-in via the shared
+      # ./.github/actions/sentry-heartbeat composite action. Status branch:
+      # job succeeded -> ok, anything else -> error. continue-on-error
+      # preserves the property that a Sentry-side blip does not red-flag
+      # an otherwise-green job.
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-content-vendor-drift
+          status: ${{ job.status == 'success' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

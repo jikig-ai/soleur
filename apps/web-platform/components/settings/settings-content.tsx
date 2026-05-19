@@ -73,6 +73,25 @@ export function SettingsContent({
         </div>
       </section>
 
+      {/* Privacy Section */}
+      <section>
+        <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">
+          Privacy
+        </h2>
+        <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
+          <p className="mb-4 text-sm text-soleur-text-secondary">
+            Request a copy of your data, view your export history, or contact
+            legal@jikigai.com for manual fulfilment of GDPR rights.
+          </p>
+          <a
+            href="/dashboard/settings/privacy"
+            className="inline-block rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2 text-sm font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2"
+          >
+            Manage privacy
+          </a>
+        </div>
+      </section>
+
       {/* Danger Zone Section */}
       <section>
         <h2 className="mb-4 text-lg font-semibold text-red-400">Danger Zone</h2>

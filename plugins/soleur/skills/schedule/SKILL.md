@@ -271,7 +271,7 @@ Result is a 5-field cron with explicit single-day + single-month + `*` year (e.g
 - **D2 — stale-context preamble.** Pre-flight verifies issue OPEN, repo not archived, comment matches issue. Prevents wrong action against drifted state.
 - **D3 — in-prompt date guard (PRIMARY).** `[[ $(date -u +%F) == $FIRE_DATE ]]` aborts cross-year re-fires. Cannot fail silently.
 - **D4 — in-prompt self-neutralization (SECONDARY).** The agent's last prompt instruction edits the generated workflow YAML to strip the `schedule:` trigger and pushes (direct or via PR + auto-merge). MUST live inside the prompt — `claude-code-action` revokes its App token after this step, so a post-step would silently fail. Replaces the previous `gh workflow disable` mechanism, which fails at runtime because `claude-code-action`'s App installation token does not honor the workflow's `actions: write` declaration (#3153). `contents: write` + `pull-requests: write` are the load-bearing permissions.
-- **D5 — comment-author + immutability pin.** `EXPECTED_AUTHOR` and `EXPECTED_CREATED_AT` env vars are captured at create time (Step 0c) and re-checked in pre-flight. Prevents "attacker edits the comment between create and fire to swap the task" — the brand-survival single-user-incident vector that D1-D4 alone do not cover.
+- **D5 — comment-author + immutability pin.** `EXPECTED_AUTHOR` and `EXPECTED_CREATED_AT` env vars are captured at create time (Step 0c) and re-checked in pre-flight. Prevents "attacker edits the comment between create and fire to swap the task" — the brand-survival single-user incident vector that D1-D4 alone do not cover.
 
 Create `.github/workflows/scheduled-<NAME>.yml` with this content, replacing all `<PLACEHOLDER>` values. The HTML markers `<!-- once-template-begin -->` / `<!-- once-template-end -->` below frame the canonical template; the test suite extracts between them, so do NOT add new fences inside the markers and do NOT remove them.
 
@@ -420,8 +420,14 @@ jobs:
                  `chore/neutralize-$WORKFLOW_NAME-$(date -u +%Y%m%d%H%M%S)`,
                  push it, then open a PR via
                  `gh pr create --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" --title "chore(schedule): neutralize $WORKFLOW_NAME" --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER. Removes the schedule: trigger from the generated --once workflow file. See plugins/soleur/skills/schedule/SKILL.md (D4 defense)."`.
-                 Then attempt auto-merge:
-                 `gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+                 Then attempt auto-merge under the merge-main lock so
+                 parallel CC sessions don't queue concurrent auto-merges
+                 (the `--` separator terminates `with_lock`'s positional
+                 args; required):
+                 `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+                 If the wrapper returns rc=99 (`>600s` contention), the
+                 merge was NOT queued — surface to the operator and retry
+                 rather than treating the auto-merge as successful.
                  If `merge.err` contains `auto-merge is not allowed`, the user
                  repo has `allow_auto_merge: false` — the PR is open and
                  waiting on a human reviewer; that is still a successful

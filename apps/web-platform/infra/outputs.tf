@@ -22,3 +22,9 @@ output "server_status" {
   description = "Current server status"
   value       = hcloud_server.web.status
 }
+
+output "inngest_heartbeat_url" {
+  description = "Better Stack heartbeat URL — sourced from Doppler prd at runtime by the inngest-heartbeat.timer systemd unit. Sensitive because URL is the secret."
+  value       = betteruptime_heartbeat.inngest_prd.url
+  sensitive   = true
+}

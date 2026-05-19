@@ -110,6 +110,91 @@ fi
 rm -rf "$ROOT"
 
 # ------------------------------------------------------------------------
+# Test 4: 3-arg call defaults kind to "rule_event"
+# ------------------------------------------------------------------------
+# Why kind: F2 prod-write-defer-gate.sh writes discriminator values
+# ("would_defer", "defer_requested", "bypass", "hook_self_fault") into the
+# same JSONL sink alongside existing event_type ("deny", "warn", "applied",
+# "bypass"). kind disambiguates F2-source rows from existing deny/warn rows
+# so the aggregator can include/exclude defer telemetry independently of
+# event_type. Additive-optional: v1 readers and the Python sibling
+# (security_reminder_hook.py, no kind field) keep working — see Test 6 for
+# the null-kind fall-through invariant.
+echo "Test 4: 3-arg call defaults kind to rule_event"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+ACTIVE="$ROOT/.claude/.rule-incidents.jsonl"
+(
+  # shellcheck source=/dev/null
+  source "$LIB"
+  INCIDENTS_REPO_ROOT="$ROOT" \
+    emit_incident "hr-test-kind-default" "deny" "Test prefix"
+)
+if ! jq -e 'select(.rule_id == "hr-test-kind-default") | .kind == "rule_event"' "$ACTIVE" >/dev/null 2>&1; then
+  fail "3-arg call did not emit kind=rule_event (line: $(jq -c 'select(.rule_id == "hr-test-kind-default")' "$ACTIVE"))"
+else
+  pass "3-arg call → kind=rule_event"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 5: 5-arg call preserves hook_event slot 5; kind defaults to rule_event
+# ------------------------------------------------------------------------
+# Slot 5 was hook_event (default "PreToolUse"). No production caller ever
+# passed it explicitly (audit 2026-05-15, 22 sites), but the slot is part
+# of the function's documented signature so a future caller might. The
+# kind extension must not shift slot 5's semantics.
+echo "Test 5: 5-arg call preserves hook_event slot 5; kind defaults"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+ACTIVE="$ROOT/.claude/.rule-incidents.jsonl"
+(
+  # shellcheck source=/dev/null
+  source "$LIB"
+  INCIDENTS_REPO_ROOT="$ROOT" \
+    emit_incident "hr-test-5arg" "deny" "prefix" "cmd-snippet" "UserPromptSubmit"
+)
+# 5-arg call: hook_event="UserPromptSubmit" reaches sentinel paths if they
+# fire, but the canonical line itself doesn't carry hook_event (kept that
+# way to preserve the v1 schema). Confirm: kind defaults and command_snippet
+# slot 4 still works.
+if ! jq -e 'select(.rule_id == "hr-test-5arg") | .kind == "rule_event" and .command_snippet == "cmd-snippet"' "$ACTIVE" >/dev/null 2>&1; then
+  fail "5-arg call did not preserve slot semantics (line: $(jq -c 'select(.rule_id == "hr-test-5arg")' "$ACTIVE"))"
+else
+  pass "5-arg call → kind defaults + cmd slot preserved"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
+# Test 6: 6-arg call emits kind explicitly + null-kind predicate falls through
+# ------------------------------------------------------------------------
+echo "Test 6: 6-arg call emits kind; null-kind predicate falls through"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+ACTIVE="$ROOT/.claude/.rule-incidents.jsonl"
+# Seed one v1-shape row (no kind field) to verify aggregators treating
+# null kind as fall-through still see this row.
+printf '{"schema":1,"timestamp":"2026-01-01T00:00:00Z","rule_id":"hr-v1-legacy","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' >> "$ACTIVE"
+(
+  # shellcheck source=/dev/null
+  source "$LIB"
+  INCIDENTS_REPO_ROOT="$ROOT" \
+    emit_incident "hr-test-6arg" "applied" "prefix" "cmd" "PreToolUse" "would_defer"
+)
+if ! jq -e 'select(.rule_id == "hr-test-6arg") | .kind == "would_defer"' "$ACTIVE" >/dev/null 2>&1; then
+  fail "6-arg call did not emit kind=would_defer (line: $(jq -c 'select(.rule_id == "hr-test-6arg")' "$ACTIVE"))"
+else
+  pass "6-arg call → kind=would_defer"
+fi
+# Null-kind predicate: aggregators using `select((.kind // "rule_event") == "rule_event")`
+# must see both the v1-legacy row (no kind field) AND any future row emitted
+# with kind="rule_event". This is the additive-optional contract.
+COUNT=$(jq -c 'select((.kind // "rule_event") == "rule_event") | .rule_id' "$ACTIVE" | wc -l)
+if [[ "$COUNT" -ne 1 ]]; then
+  fail "null-kind fall-through: expected 1 row (the v1-legacy seed), got $COUNT"
+else
+  pass "null-kind predicate falls through (legacy row visible under rule_event filter)"
+fi
+rm -rf "$ROOT"
+
+# ------------------------------------------------------------------------
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

@@ -42,7 +42,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 66 |
 | Commands | 3 |
-| Skills | 69 |
+| Skills | 73 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -230,6 +230,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `agent-native-audit` | Run comprehensive agent-native architecture review |
 | `andrew-kane-gem-writer` | Write Ruby gems following Andrew Kane's patterns |
 | `atdd-developer` | Acceptance Test Driven Development with RED/GREEN/REFACTOR permission gates |
+| `code-to-prd` | Reverse-engineer a Next.js codebase into a redacted PRD for buyer/investor handoff |
 | `dhh-rails-style` | Write Ruby/Rails code in DHH's 37signals style |
 | `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
 | `frontend-design` | Create production-grade frontend interfaces |

@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Job control (#3704). Isolates backgrounded jobs (the canary probe loop's
+# parallel curl `&` + wait $!) into their own process groups so a stray
+# PGID-targeted signal — e.g., a future operator running
+# `kill -TERM -<bash_pid>` to clean up — does not also propagate into bash's
+# own PGID (which it inherits from webhook.service: webhook fork-execs this
+# script without setpgid). NOT load-bearing for the TERM trap below: the
+# trap uses `pkill -TERM -P $$` (PPID-based), which is independent of job
+# control. set -m is defense-in-depth, not the kill primitive.
+set -m
 
 # Deploy script invoked by the webhook listener (adnanh/webhook).
 # The webhook sets SSH_ORIGINAL_COMMAND from the JSON payload's "command" field.
@@ -101,6 +110,40 @@ rm -f "${STATE_FILE}.final"
 # shellcheck disable=SC2064
 trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
 
+# Wall-clock-induced kill (#3704). When ci-deploy-wrapper.sh hits its 900s
+# timeout, it sends SIGTERM to this script. Without a TERM trap, bash dies on
+# the default action and leaves the state file at "running" — the workflow
+# polls -1 (running) until its own 900s ceiling and exits 1 with no terminal
+# reason. With this trap:
+#   1. `trap - TERM INT` clears the trap FIRST so a second SIGTERM (e.g.,
+#      from the wrapper's --kill-after grace if the body races slow disk)
+#      cannot re-enter the handler mid-write.
+#   2. final_write_state touches the .final sentinel + writes terminal state
+#      so the EXIT trap's "unhandled" branch is skipped, AND the workflow
+#      sees exit_code=124 reason=timeout in the very next poll. The EXIT
+#      trap WILL still fire after `exit 124` below; the .final sentinel is
+#      what keeps it from overwriting reason=timeout with reason=unhandled.
+#   3. `pkill -TERM -P $$` sends TERM to every direct child of this bash by
+#      PPID (docker pull, docker exec, canary-bundle-claim-check.sh). We
+#      use -P (PPID-based) instead of `kill -TERM 0` (PGID-based) because
+#      ci-deploy.sh inherits its parent's PGID (webhook.service does not
+#      setpgid before fork-exec), so kill 0 would also TERM the webhook
+#      listener and cascade restart noise. Empirically verified via
+#      parent.sh/child.sh repro before shipping.
+#   4. `exit 124` matches GNU timeout(1)'s exit code on SIGTERM-by-timeout,
+#      so the workflow's `*)` case statement parses an actionable failure
+#      rather than the symptom-only `unhandled`.
+#
+# CAVEAT: bash defers TERM trap delivery while a foreground command is
+# running (e.g., `docker pull` blocked on a network syscall). For the
+# hung-foreground case, the wrapper's --kill-after=20s SIGKILL is the
+# load-bearing fallback — bash dies, no trap fires, state stays "running",
+# and the workflow's Pre-rerun lock probe degrades-permissive past it via
+# the elapsed>900s branch. This trap covers the subset of hangs where bash
+# IS able to dispatch the trap (between commands, in `wait`, in shell logic).
+# shellcheck disable=SC2064
+trap 'trap - TERM INT; final_write_state 124 "timeout"; pkill -TERM -P $$ 2>/dev/null || true; exit 124' TERM INT
+
 # Structured error output: on failure, emit the failing line number and exit code.
 # In async mode (include-command-output-in-response: false), stderr goes to syslog
 # via journalctl -u webhook, not the HTTP response.
@@ -148,6 +191,7 @@ resolve_env_file() {
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
+  [inngest]="ghcr.io/jikig-ai/soleur-inngest-bootstrap"
 )
 
 # Log truncated command to avoid persisting attacker payloads to syslog
@@ -504,6 +548,75 @@ case "$COMPONENT" in
       final_write_state 1 "$CANARY_FAIL_REASON"
       exit 1
     fi
+    ;;
+  inngest)
+    # Inngest server bootstrap (PR-F follow-up, #3960).
+    #
+    # No canary: inngest-server binds loopback only (127.0.0.1:8288/8289) so
+    # there is no external traffic to shadow. The bootstrap script's
+    # `systemctl is-active` + version-file check at /var/lib/inngest/version
+    # provides idempotency; a second deploy of the same $TAG is a ~50ms no-op.
+    #
+    # Delivery model: the OCI image is a SHA-pinned content carrier. The
+    # bootstrap script + the embedded INNGEST_CLI_VERSION / _SHA256 ENV vars
+    # are extracted from the image and the script is executed ON THE HOST
+    # (NOT inside the container). The container itself is Alpine + bash +
+    # curl + tar + coreutils — it does not have `systemctl`, so running the
+    # script inside it would fail at `systemctl daemon-reload`. The host has
+    # systemd + the deploy user + the systemd unit paths the script writes.
+    echo "Pulling Inngest bootstrap image $IMAGE:$TAG..."
+    docker pull "$IMAGE:$TAG"
+
+    # Extract the script + pinned ENV vars from the image.
+    INNGEST_EXTRACT_DIR=$(mktemp -d /tmp/inngest-extract.XXXXXX)
+    INNGEST_EXTRACT_CONTAINER="soleur-inngest-extract-$$"
+    docker rm -f "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+    if ! docker create --name "$INNGEST_EXTRACT_CONTAINER" "$IMAGE:$TAG" >/dev/null; then
+      logger -t "$LOG_TAG" "FAILED: docker create for inngest-bootstrap extract"
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_extract_create_failed"
+      exit 1
+    fi
+    if ! docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-bootstrap.sh" "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"; then
+      docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_extract_copy_failed"
+      exit 1
+    fi
+    # Read ENV vars baked into the image at build time (see
+    # .github/workflows/build-inngest-bootstrap-image.yml — ENV
+    # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...).
+    image_env=$(docker inspect "$IMAGE:$TAG" -f '{{range .Config.Env}}{{println .}}{{end}}')
+    docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-)
+    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-)
+    if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
+      logger -t "$LOG_TAG" "FAILED: image missing INNGEST_CLI_{VERSION,SHA256} ENV"
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_image_env_missing"
+      exit 1
+    fi
+    chmod +x "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"
+
+    echo "Running inngest-bootstrap.sh on host (version=$INNGEST_CLI_VERSION)..."
+    # Execute on host. The script needs root to write /etc/systemd/system,
+    # /usr/local/bin/inngest, /etc/default/inngest-server, and to invoke
+    # systemctl. ci-deploy.sh itself runs as the `deploy` user with sudo
+    # access (see webhook.service hardening). Use sudo with explicit env
+    # passthrough so the script sees the pinned version/SHA.
+    if ! sudo -E env \
+        "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" \
+        "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
+        bash "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"; then
+      logger -t "$LOG_TAG" "FAILED: inngest-bootstrap.sh non-zero exit"
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_bootstrap_failed"
+      exit 1
+    fi
+
+    rm -rf "$INNGEST_EXTRACT_DIR"
+    logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
+    final_write_state 0 "success"
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"

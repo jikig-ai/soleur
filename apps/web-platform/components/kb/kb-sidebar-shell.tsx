@@ -14,7 +14,7 @@ interface KbSidebarShellProps {
 export function KbSidebarShell({ onCollapse }: KbSidebarShellProps) {
   return (
     <div className="flex h-full flex-col">
-      <header className="flex shrink-0 items-center justify-between px-4 pb-3 pt-4">
+      <header className="flex min-h-7 shrink-0 items-center justify-between px-4 py-5">
         <h1 className="text-lg font-medium tracking-tight text-soleur-text-primary">
           Knowledge Base
         </h1>

@@ -1,0 +1,84 @@
+# Sentry Audit Gate — required-check for PRs touching Sentry config / IaC.
+#
+# Runs the 4-gate destination-controllability audit (PR-β §10 / Branch-C C5)
+# against the prod Sentry org on every PR that diffs:
+#   - sentry.*.config.ts (client/server Sentry SDK init)
+#   - next.config.ts (Sentry block — sentry-cli source-map upload config)
+#   - infra/sentry/**/*.tf (Terraform provider, monitors, alerts)
+#   - sentry-monitors-audit.sh (the audit script itself)
+#   - .github/workflows/*sentry* (any Sentry-touching workflow)
+#
+# The audit script exits non-zero on:
+#   Gate 1 — org GET returns non-200 (org not admin-controllable)
+#   Gate 2 — project GET returns non-200 (token lacks project:read)
+#   Gate 3 — POST release returns non-201 (token lacks project:releases)
+#   Gate 4 — DSN org-id doesn't match token org-id (split state)
+# Plus the existing DSN cluster substring residency-mismatch check.
+#
+# This workflow is REQUIRED-CHECK on `main`-bound PRs per infra/github/main.tf
+# ruleset extension (lands in commit B of the §10.5 2-commit sequence).
+#
+# Refs: plan knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md
+#       (Phase 5 block), parent issue #3861, PR-beta.
+
+name: Sentry Audit Gate
+
+on:
+  pull_request:
+    paths:
+      - 'apps/web-platform/sentry.*.config.ts'
+      - 'apps/web-platform/next.config.ts'
+      - 'apps/web-platform/infra/sentry/**/*.tf'
+      - 'apps/web-platform/scripts/sentry-monitors-audit.sh'
+      - '.github/workflows/*sentry*'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      # Kieran P0-1 fail-loud: require SENTRY_API_HOST to be set explicitly.
+      # No fallback default — `eu.sentry.io` would silently 401 for slugs
+      # ending in `-eu` per the slug-rewrite finding (learning
+      # 2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md),
+      # and `de.sentry.io` is ingest-only (no /api/0/ surface).
+      SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+      NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail-loud secret presence check
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -z "${SENTRY_AUTH_TOKEN:-}" ]] && missing+=("SENTRY_AUTH_TOKEN")
+          [[ -z "${SENTRY_API_HOST:-}" ]]   && missing+=("SENTRY_API_HOST")
+          [[ -z "${SENTRY_ORG:-}" ]]        && missing+=("SENTRY_ORG")
+          [[ -z "${SENTRY_PROJECT:-}" ]]    && missing+=("SENTRY_PROJECT")
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Sentry audit gate prerequisites missing: ${missing[*]}. Set these as repository secrets before merging Sentry-touching diffs. SENTRY_API_HOST must be the org-subdomain (e.g. jikigai-eu.sentry.io) — not eu.sentry.io (slug-rewrite bug)."
+            exit 1
+          fi
+      - name: Verify token scope against org endpoint (fail-loud)
+        # Uses /organizations/{org}/ rather than /users/me/ so internal-
+        # integration tokens (which 401 on /users/me/) pass the scope check.
+        # The audit script's region-probe loop still uses /users/me/ as a
+        # secondary discovery path for personal tokens (legacy).
+        run: |
+          set -euo pipefail
+          http=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/")
+          if [[ "$http" != "200" ]]; then
+            echo "::error::SENTRY_AUTH_TOKEN scope check failed (HTTP $http on /api/0/organizations/${SENTRY_ORG}/ at ${SENTRY_API_HOST}). Token may lack org:read scope, OR SENTRY_API_HOST rewrites slugs ending in '-eu' (set to the org-subdomain ${SENTRY_ORG}.sentry.io instead). Reconcile before merging."
+            exit 1
+          fi
+      - name: Install jq (audit script dependency)
+        run: |
+          which jq >/dev/null 2>&1 || sudo apt-get install -y jq
+      - name: Run 4-gate destination-controllability audit
+        run: bash apps/web-platform/scripts/sentry-monitors-audit.sh

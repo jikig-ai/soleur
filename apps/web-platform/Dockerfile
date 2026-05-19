@@ -22,6 +22,11 @@ ARG NEXT_PUBLIC_VAPID_PUBLIC_KEY
 ARG SENTRY_AUTH_TOKEN
 ARG SENTRY_ORG
 ARG SENTRY_PROJECT
+# SENTRY_URL targets the org-subdomain so sentry-cli source-map upload
+# hits the new DE org (Branch C). `eu.sentry.io` is NOT correct here —
+# its slug-parser rewrites org slugs ending in `-eu` per learning
+# `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`.
+ENV SENTRY_URL=https://jikigai-eu.sentry.io/
 
 RUN npm run build
 # R3 (feat-dev-signin-bypass): post-build tripwire that fails the prd

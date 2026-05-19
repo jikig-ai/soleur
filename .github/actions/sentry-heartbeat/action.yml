@@ -1,0 +1,71 @@
+# Sentry Crons HTTP heartbeat check-in.
+#
+# Posts ?status=ok or ?status=error to the configured monitor and exits.
+# Designed to be called as the final step in any scheduled-*.yml workflow
+# under `if: always()` so that BOTH success and failure paths land in
+# Sentry. The caller computes the appropriate `status` value for its own
+# success-criteria semantics (job.status, a probe step's failure_mode
+# output, an exit_code, dual-signal AND, etc.).
+#
+# Replaces the prior two-step in_progress -> ok/error pattern whose
+# silent-fail trap (CHECKIN_ID tmpfile parsed via `jq -r '.id // empty'`,
+# gated `if` on the follow-up call) caused Sentry to never receive a
+# successful check-in (Sentry alert WEB-PLATFORM-4 for drift-guard).
+#
+# Three properties intentionally retained from the inline pattern that
+# this action replaces:
+#   1. Secret-presence guard with `::warning::` + clean `exit 0`: a Sentry
+#      DSN secret outage MUST NOT red-flag an otherwise-green probe; the
+#      operator-visible warning is the recovery signal.
+#   2. No `|| true` on the curl: the curl's exit code lands in the step
+#      log so operators can see Sentry rejecting auth (steady-state
+#      silent-auth-failure trap) instead of guessing why "Last successful
+#      check-in: Never". Caller is expected to pair this action with
+#      `continue-on-error: true` at the step level to retain property
+#      (1)'s "Sentry blip does not red-flag the probe" behavior.
+#   3. `set -u` for unset-variable safety on the secret-guard branch.
+#
+# Reference precedent: PR #3964 (commit c04ffd33) introduced the inline
+# heartbeat shape for scheduled-oauth-probe; PR #3971 extracted to this
+# composite action when rolling out to 7 sister workflows (Closes #3968).
+#
+# See: docs.sentry.io/product/crons/getting-started/http/ (Heartbeat).
+
+name: 'Sentry Crons heartbeat'
+description: 'POST a single Sentry Crons heartbeat (ok|error) for the configured monitor.'
+
+inputs:
+  monitor-slug:
+    description: 'Sentry monitor slug (matches MONITOR_SLUG in cron-monitors.tf).'
+    required: true
+  status:
+    description: 'Heartbeat status: literal "ok" or "error" (caller computes).'
+    required: true
+  sentry-ingest-domain:
+    description: 'Sentry ingest domain (caller forwards from secrets.SENTRY_INGEST_DOMAIN).'
+    required: true
+  sentry-project-id:
+    description: 'Sentry project ID (caller forwards from secrets.SENTRY_PROJECT_ID).'
+    required: true
+  sentry-public-key:
+    description: 'Sentry public key (caller forwards from secrets.SENTRY_PUBLIC_KEY).'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SENTRY_INGEST_DOMAIN: ${{ inputs.sentry-ingest-domain }}
+        SENTRY_PROJECT_ID: ${{ inputs.sentry-project-id }}
+        SENTRY_PUBLIC_KEY: ${{ inputs.sentry-public-key }}
+        MONITOR_SLUG: ${{ inputs.monitor-slug }}
+        STATUS: ${{ inputs.status }}
+      run: |
+        set -u
+        if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
+          echo "::warning::Sentry Crons secrets not configured; skipping check-in."
+          exit 0
+        fi
+        curl --max-time 10 -fSs -X POST \
+          "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/cron/${MONITOR_SLUG}/${SENTRY_PUBLIC_KEY}/?status=${STATUS}"

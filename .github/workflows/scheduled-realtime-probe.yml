@@ -263,3 +263,17 @@ jobs:
           else
             echo "No stale tracking issue to close."
           fi
+
+      # Single end-of-job heartbeat check-in via the shared
+      # ./.github/actions/sentry-heartbeat composite action. Status branch:
+      # empty probe failure_mode (probe green) -> ok, any failure_mode -> error.
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-realtime-probe
+          status: ${{ steps.probe.outputs.failure_mode == '' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

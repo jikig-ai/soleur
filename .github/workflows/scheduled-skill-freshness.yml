@@ -139,3 +139,19 @@ jobs:
           subject: '[FAIL] Scheduled: Skill Freshness workflow failed'
           body: '<p><strong>Skill Freshness</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      # Single end-of-job heartbeat check-in via the shared
+      # ./.github/actions/sentry-heartbeat composite action. Status branch:
+      # job succeeded -> ok, anything else -> error. continue-on-error
+      # preserves the property that a Sentry-side blip does not red-flag
+      # an otherwise-green job.
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-skill-freshness
+          status: ${{ job.status == 'success' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

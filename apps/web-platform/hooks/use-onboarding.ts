@@ -15,6 +15,11 @@ export function useOnboarding() {
   const [onboardingLoaded, setOnboardingLoaded] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [pwaDismissed, setPwaDismissed] = useState(true); // default hidden until fetch
+  // PR-G (#3947): runtime explainer banner state. Default `true` (hidden)
+  // until the fetch confirms `runtime_explainer_dismissed_at IS NULL`,
+  // mirroring the pwa-banner pattern above.
+  const [runtimeExplainerDismissed, setRuntimeExplainerDismissed] =
+    useState(true);
   const userIdRef = useRef<string | null>(null);
 
   /** Fire-and-forget update of a single field on the users table. */
@@ -45,7 +50,9 @@ export function useOnboarding() {
       userIdRef.current = user.id;
       supabase
         .from("users")
-        .select("onboarding_completed_at, pwa_banner_dismissed_at")
+        .select(
+          "onboarding_completed_at, pwa_banner_dismissed_at, runtime_explainer_dismissed_at",
+        )
         .eq("id", user.id)
         .single()
         .then(({ data, error }) => {
@@ -54,6 +61,9 @@ export function useOnboarding() {
           } else if (data) {
             if (!data.onboarding_completed_at) setShowOnboarding(true);
             setPwaDismissed(!!data.pwa_banner_dismissed_at);
+            setRuntimeExplainerDismissed(
+              !!data.runtime_explainer_dismissed_at,
+            );
           }
           setOnboardingLoaded(true);
         });
@@ -74,11 +84,23 @@ export function useOnboarding() {
     console.debug("[onboarding]", "pwa_banner_dismissed");
   }, [updateUserField]);
 
+  /** Dismiss the runtime explainer banner (fire-and-forget). PR-G (#3947). */
+  const dismissRuntimeExplainer = useCallback(() => {
+    setRuntimeExplainerDismissed(true);
+    updateUserField(
+      "runtime_explainer_dismissed_at",
+      new Date().toISOString(),
+    );
+    console.debug("[onboarding]", "runtime_explainer_dismissed");
+  }, [updateUserField]);
+
   return {
     onboardingLoaded,
     showOnboarding,
     pwaDismissed,
+    runtimeExplainerDismissed,
     completeOnboarding,
     dismissPwaBanner,
+    dismissRuntimeExplainer,
   };
 }

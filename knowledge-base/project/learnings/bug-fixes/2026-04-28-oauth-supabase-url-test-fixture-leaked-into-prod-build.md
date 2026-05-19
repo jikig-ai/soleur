@@ -16,8 +16,8 @@ Forensics:
 
 - `curl https://app.soleur.ai/login` → resolved login chunk `/_next/static/chunks/app/(auth)/login/page-1145cd8d8475e73c.js` → `grep -oE 'https?://[a-z0-9.-]*supabase\.co'` returned `https://test.supabase.co`. The literal placeholder string was inlined into the client bundle.
 - `gh secret list --json name,updatedAt` showed `NEXT_PUBLIC_SUPABASE_URL.updatedAt = 2026-04-27T10:50:45Z` — matched the user-visible outage window.
-- Doppler `prd.NEXT_PUBLIC_SUPABASE_URL = https://api.soleur.ai` (correct). Doppler `dev.NEXT_PUBLIC_SUPABASE_URL = https://mlwiodleouzwniehynfz.supabase.co` (correct, distinct).
-- `dig +short CNAME api.soleur.ai` → `ifsccnjhymdmidffkzhl.supabase.co.` (CNAME healthy).
+- Doppler `prd.NEXT_PUBLIC_SUPABASE_URL = https://api.soleur.ai` (correct). Doppler `dev.NEXT_PUBLIC_SUPABASE_URL = https://<DEV_REF>.supabase.co` (correct, distinct).
+- `dig +short CNAME api.soleur.ai` → `<PRD_REF>.supabase.co.` (CNAME healthy).
 - JWT `ref` claim on `prd.NEXT_PUBLIC_SUPABASE_ANON_KEY` decoded to `ifsccnjhymdmidffkzhl` (matches CNAME target — anon key was not the broken thing).
 
 The bug was therefore not "wrong Doppler value" but **dual-source-of-truth divergence**: Doppler held the right value while the prod Docker build read from `secrets.NEXT_PUBLIC_SUPABASE_URL` (a separate GitHub repo secret) — and only the latter had drifted.

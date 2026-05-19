@@ -109,3 +109,12 @@ The agent should only stop for user input when there's a genuine decision to mak
 - `knowledge-base/project/learnings/2026-02-13-base-href-breaks-local-dev-server.md` -- base href local testing workaround
 - `knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md` -- security agent output constraints
 - `knowledge-base/project/learnings/2026-02-13-static-docs-site-from-brand-guide.md` -- docs site build workflow
+
+## See Also (Cert-Renewal-Time Failure Modes — added 2026-05-18 post-incident)
+
+The initial wiring blockers above are first-provisioning issues. The 2026-05-18 soleur.ai SSL outage surfaced a second class: cert-RENEWAL-time failure modes on the same wiring. See:
+
+- [Cloudflare Proxy Hides Origin IPs from GH Pages Domain Check](./2026-05-18-cloudflare-proxy-hides-origin-ip-from-gh-pages-domain-check.md) -- proxied-vs-unproxied flip required at every cert provisioning, not just initial setup
+- [Cloudflare Dynamic-Redirect Skip Action Invalid](./2026-05-18-cloudflare-dynamic-redirect-skip-action-invalid.md) -- ACME exemption must be a negative-match clause, not a sibling skip rule
+- [Cloudflare One User-Defined Ruleset per Zone+Phase](./2026-05-18-cloudflare-one-user-defined-ruleset-per-zone-phase.md) -- inline rules into the existing phase-owning ruleset rather than creating a sibling
+- Source incident PIR: `knowledge-base/engineering/ops/post-mortems/soleur-ai-marketing-site-cloudflare-526-ssl-outage-2026-05-18-postmortem.md`

@@ -52,7 +52,7 @@ The fix is verification at merge time: query the production database via REST AP
 
 ## Session Errors
 
-1. **SSH used for production log inspection** — Attempted `ssh root@app.soleur.ai "docker logs..."` twice before user corrected. **Recovery:** Switched to Sentry API queries. **Prevention:** AGENTS.md rule added: use observability tools (Sentry, Better Stack), not SSH for logs.
+1. **SSH used for production log inspection** — Attempted `ssh root@example.com "docker logs..."` twice before user corrected. **Recovery:** Switched to Sentry API queries. **Prevention:** AGENTS.md rule added: use observability tools (Sentry, Better Stack), not SSH for logs.
 
 2. **Playwright used directly for SQL execution** — Navigated to Supabase SQL editor via Playwright MCP to run the migration SQL directly in the browser, instead of generating an access token first and using the CLI/API. User flagged the priority chain violation. **Recovery:** Closed Playwright, generated access token via Playwright (bootstrapping), stored in Doppler, then used Supabase Management API. **Prevention:** AGENTS.md rule updated: Playwright is a bootstrapping tool for credentials, not the primary execution path.
 

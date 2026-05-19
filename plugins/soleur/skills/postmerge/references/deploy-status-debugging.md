@@ -63,6 +63,7 @@ The `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contract au
 | `production_start_failed` | 1 | Production container didn't start post-swap | Check docker state; consider manual rollback |
 | `no_handler` | 1 | Component has no case handler in ci-deploy.sh | Add handler (code change) |
 | `unhandled` | 1 | EXIT trap fired; specific reason not instrumented | Check journalctl; consider adding explicit final_write_state call |
+| `timeout` | 124 | Wall-clock cap (`ci-deploy-wrapper.sh` 900s) sent SIGTERM and `ci-deploy.sh`'s TERM trap fired before bash exited (#3704) | SSH and run `journalctl -u webhook -t ci-deploy --since '-15m'` for the last successful step before silence; likely culprit is hung `docker pull`, `docker exec bwrap`, or canary probe. |
 | `corrupt_state` | -3 | State file is unparseable JSON | Server-side disk issue; SSH to investigate |
 
 ## When NOT to SSH

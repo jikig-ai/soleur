@@ -93,7 +93,7 @@ The same learning also flagged **a parallel "permission asymmetry between recurr
 
 **If this leaks, the user's data/workflow/money is exposed via:** N/A. This is a cleanup-hygiene fix on the cleanup path, not the action path. No new attack surface.
 
-**Brand-survival threshold:** `aggregate-pattern`. A single missed disable is hygiene noise; the pattern of every `--once` user seeing the failure comment erodes trust in `--once`'s contract. This is below the `single-user-incident` bar that triggers CPO sign-off (D3 still protects the brand-survival vector — wrong action against drifted state — and D3 is unchanged by this plan). Inherited from the brainstorm User-Brand Impact framing for `feat-schedule-one-time-runs` which set `single-user-incident` for the act-on-repo path; this fix lives strictly on the cleanup path post-action and does not widen blast radius.
+**Brand-survival threshold:** `aggregate-pattern`. A single missed disable is hygiene noise; the pattern of every `--once` user seeing the failure comment erodes trust in `--once`'s contract. This is below the `single-user incident` bar that triggers CPO sign-off (D3 still protects the brand-survival vector — wrong action against drifted state — and D3 is unchanged by this plan). Inherited from the brainstorm User-Brand Impact framing for `feat-schedule-one-time-runs` which set `single-user incident` for the act-on-repo path; this fix lives strictly on the cleanup path post-action and does not widen blast radius.
 
 ## Acceptance Criteria
 
