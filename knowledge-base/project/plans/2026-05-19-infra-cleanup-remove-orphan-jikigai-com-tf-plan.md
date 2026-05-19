@@ -12,6 +12,30 @@ requires_cpo_signoff: false
 
 # infra(cleanup): remove orphan `jikigai-com.tf` — jikigai.com DNS is on Google Cloud, not Cloudflare
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-19
+**Sections enhanced:** 3 (Research Reconciliation, Implementation Phases, Acceptance Criteria)
+**Verification surface:**
+
+- Rule IDs cited: `hr-menu-option-ack-not-prod-write-auth`, `hr-weigh-every-decision-against-target-user-impact` — both verified active in AGENTS sidecars.
+- Labels cited: `domain/engineering`, `chore` — both verified via `gh label list`.
+- Related issues/PRs cited: `#4046` (OPEN), `#4047` (MERGED), `#4051` (OPEN), `#4081` (MERGED), `#4052` (OPEN, will be closed post-merge), `#4084` (OPEN, target of this PR), `#4088` (OPEN, the draft PR).
+- DNS authority claim re-verified: `dig +short +time=3 +tries=1 NS jikigai.com` → `ns-cloud-c[1-4].googledomains.com.` (Google Cloud DNS, not Cloudflare).
+- File-list completeness audit: `git grep -lE 'jikigai-com\.tf|cf_(api_token|zone_id)_jikigai_com|linkedin_page_verification_txt|cloudflare\.jikigai_com|jikigai_com_redirects|linkedin_verification' -- ':!knowledge-base' ':!*.lock*'` returns exactly the three files named in `## Files to Edit` (`jikigai-com.tf`, `main.tf`, `variables.tf`). Zero workflows, hooks, scripts, or app-code consumers — confirms the cleanup is structurally orphan and merge has no runtime fan-out.
+- `terraform fmt -check` already passes at HEAD; the Phase 1 edits introduce no formatting drift.
+
+### Key Improvements
+
+1. **Caught the fourth orphan surface (`main.tf:20`) at plan time, not /work time.** The issue body enumerated 3 surfaces (the file + 3 variables); the plan's Research Reconciliation table extends the file list to include `main.tf`'s `configuration_aliases = [cloudflare.jikigai_com]` declaration. Without this, `terraform validate` would fail post-edit because the alias is declared in `required_providers` but its `provider "cloudflare" { alias = "jikigai_com" ... }` block has been deleted. Pre-merge AC1 (`terraform validate`) is now the canonical mechanical catch.
+2. **Bounded the post-merge blast radius.** Sharp Edges entry pre-empts the common over-eager `terraform apply` mistake — `terraform plan` returning `No changes` is the verdict; any unrelated drift surfacing during plan goes to a separate issue per `hr-menu-option-ack-not-prod-write-auth`, not into this PR.
+3. **Defended the legal/compliance posture.** The Compliance Gate section establishes that removing the TXT verification stub and `/legal/privacy-policy` redirect does NOT invalidate the #4081 LIA — the load-bearing Art. 13 controller-identity disclosure lives in the Privacy Policy content (§2 + §4.10), not in the URL domain alignment cue that was the motivation for the orphan code. The substantive compliance disclosure is unchanged.
+
+### New Considerations Discovered
+
+- **Historical KB doc references stay intact (out of scope).** `knowledge-base/legal/article-30-register.md`, `compliance-posture.md`, the 2026-05-19 LIA, the brainstorm, and the two parent plans all reference `jikigai-com.tf`. Out-of-scope rationale is explicit: these are historical audit-trail records of the #4046 → #4051 → #4081 → #4084 decision chain. Rewriting them would erase context the auditor needs.
+- **The closure semantic for #4084 vs #4052 is deliberate.** This PR uses `Closes #4084` (the cleanup completes at merge — code change is the whole fix) but `gh issue close 4052 --reason "not planned"` as a post-merge step rather than `Closes #4052` in the PR body. Different reasons: #4084 is fixed by the merge; #4052 is being declined as not-pursuing-this-direction, which is semantically different from "this PR resolved it" and benefits from a manually-authored closure comment that explains the underlying premise reversal.
+
 ## Overview
 
 `apps/web-platform/infra/jikigai-com.tf` and three supporting variables were added in #4046 / #4051 on the premise that jikigai.com would be migrated to Cloudflare. That premise is wrong: `dig +short NS jikigai.com` returns Google Cloud DNS nameservers (`ns-cloud-c[1-4].googledomains.com`). The orphan resources reference a zone that does not exist on Cloudflare, the supporting Doppler variables (`TF_VAR_cf_api_token_jikigai_com`, `TF_VAR_cf_zone_id_jikigai_com`, `TF_VAR_linkedin_page_verification_txt`) were never populated, and a `terraform plan` in `prd_terraform` would currently fail with `no value for required variable`.
@@ -47,6 +71,33 @@ None.
 ## Open Code-Review Overlap
 
 None. No open `code-review`-labeled issues touch `apps/web-platform/infra/jikigai-com.tf`, `apps/web-platform/infra/variables.tf`, or `apps/web-platform/infra/main.tf` (verified at plan time via `gh issue list --label code-review --state open` cross-referenced against the file list above).
+
+## Research Insights
+
+**Terraform aliased-provider lifecycle.** When a child module / aliased provider block is removed, three layers must be aligned in the same commit or `terraform validate` fails:
+
+1. The aliased `provider "cloudflare" { alias = "jikigai_com" ... }` block (lives in `jikigai-com.tf`, deleted by file removal).
+2. The consumer resources that pin `provider = cloudflare.jikigai_com` (also in `jikigai-com.tf`, deleted by file removal).
+3. The root-module declaration `configuration_aliases = [cloudflare.jikigai_com]` inside `required_providers { cloudflare {} }` (lives in `main.tf:20`, removed by the targeted line edit).
+
+This is the most common cause of "I deleted the .tf file but `terraform validate` still fails" — the `configuration_aliases` list survives the file deletion and produces `Provider configuration not present` errors at the next validate. The plan's Pre-merge AC1 (`terraform validate`) is the canonical mechanical catch.
+
+**Why state poisoning is not a concern here.** Neither `cloudflare_record.linkedin_verification` nor `cloudflare_ruleset.jikigai_com_redirects` ever made it into `terraform.tfstate` — apply was never run successfully because `TF_VAR_cf_zone_id_jikigai_com` / `TF_VAR_cf_api_token_jikigai_com` / `TF_VAR_linkedin_page_verification_txt` were never populated in Doppler `prd_terraform`, so every `apply` attempt would fail at the variable-resolution step before any provider call. Removing the resources from code therefore needs no corresponding `terraform state rm` / `removed { ... }` block. (If state had ever contained these resources, the canonical safe-deletion pattern would be either (a) Terraform 1.7+ `removed { from = ..., lifecycle { destroy = false } }` blocks in the same PR, or (b) a paired `terraform state rm` step in a post-merge runbook. Neither is needed here.)
+
+**Why this PR doesn't need a feature flag or kill-switch.** The orphan code has no production traffic, no dashboard reads, no operator workflows depending on it. Deletion is structurally reversible by `git revert` if some unforeseen consumer surfaces — but the plan-time grep sweep across `apps/`, `.github/`, `scripts/`, `.claude/hooks/` returned exactly the three files in the Files-to-Edit list and nothing else, so no unforeseen consumer is expected.
+
+**Institutional learnings applied:**
+
+- `hr-menu-option-ack-not-prod-write-auth` — informs the Sharp Edges entry that post-merge `terraform plan` is the verdict, NOT `terraform apply`; any unrelated drift surfaces during plan goes to a separate issue rather than expanding this PR's scope.
+- `hr-weigh-every-decision-against-target-user-impact` — informs the `## User-Brand Impact` section's `threshold: none` plus explicit reason; the scope-out is well-formed even though the diff touches the sensitive-path canonical regex (`apps/[^/]+/infra/`).
+- `cq-rule-ids-are-immutable` / retired-rule registry — informs the verification step in the Enhancement Summary that both cited rule IDs are active (not retired, not fabricated).
+- AGENTS.md hard rule on `Closes #N` semantics for ops-remediation classes — does NOT apply here. This is a code-change cleanup, not an ops-only-prod-write remediation. The closure happens at merge (the code change IS the fix); `Closes #4084` in PR body is correct. The contrast: #4052 is being declined as a not-pursuing decision, which uses `gh issue close 4052 --reason "not planned"` post-merge, not `Closes #4052` in the PR body.
+
+**References:**
+
+- Terraform docs on `configuration_aliases` requirement when removing aliased providers: <https://developer.hashicorp.com/terraform/language/modules/develop/providers#provider-aliases-within-modules>
+- AGENTS.md rule registry (live grep): `AGENTS.md`, `AGENTS.core.md`, `AGENTS.docs.md`, `AGENTS.rest.md`
+- Canonical Doppler-Terraform invocation triplet for `prd_terraform`: documented in `knowledge-base/project/learnings/2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md` (cited verbatim in Phase 3 tasks).
 
 ## Implementation Phases
 
