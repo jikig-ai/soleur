@@ -153,12 +153,21 @@ DOMAIN (pick one — aligned with Soleur department leaders):
 // arbitrary shell — the agent is mechanically constrained to its triage
 // role. Syntax: `Bash(<cmd-prefix>:*)` per claude-code's per-Bash-command
 // allowlist (sibling-convention in .claude/settings.json).
+// The trailing `--` is load-bearing: claude 2.x's CLI declares
+// `--allowedTools <tools...>` as VARIADIC, so without an explicit end-of-
+// options marker it consumes ALL subsequent positional args as additional
+// tool names — including the prompt. Result: `Error: Input must be
+// provided either through stdin or as a prompt argument when using
+// --print` and exitCode=1 in ~1.5s. Surfaced 2026-05-19 via #4017
+// substrate audit (bug 8/8). The `--` MUST be the last flag-array entry;
+// the spawn argv is `[...CLAUDE_CODE_FLAGS, DAILY_TRIAGE_PROMPT]`.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model", "claude-sonnet-4-6",
   "--max-turns", "80",
   "--allowedTools",
   "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Read,Glob,Grep",
+  "--",
 ];
 
 // 60 min — matches old GHA timeout; preserves 0.75 min/turn peer ratio for

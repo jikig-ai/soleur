@@ -239,12 +239,16 @@ predicates and SLA status.
 // constrained to its monitor role. Network verbs (`curl`, `dig`) widen
 // the surface vs PR-1; the in-prompt HTTPS-and-non-RFC1918 guard at step
 // 3c above is the load-bearing SSRF mitigation (Layer 1 of dual defense).
+// The trailing `--` is load-bearing — see cron-daily-triage.ts:CLAUDE_CODE_FLAGS
+// for the explanation. claude 2.x's --allowedTools is variadic and consumes
+// the prompt as a tool name without the end-of-options marker. #4017 bug 8/8.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model", "claude-sonnet-4-6",
   "--max-turns", "30",
   "--allowedTools",
   "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh label create:*),Bash(curl:*),Bash(dig:*),Read,Glob,Grep",
+  "--",
 ];
 
 // 15 min — see file-header MAX_TURN_DURATION_MS rationale. Exported for
