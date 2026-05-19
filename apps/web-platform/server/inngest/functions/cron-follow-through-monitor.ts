@@ -133,10 +133,16 @@ predicates and SLA status.
       not double-comment or double-close:
 
       - PREDICATE PASSES — Guard A (idempotent auto-close):
-        First run ${"`"}gh issue view <number> --json comments --jq '.comments[].body'${"`"}
+        First run ${"`"}gh issue view <number> --json comments,state --jq '{comments: .comments, state: .state}'${"`"}
         and skip this transition for this issue if any existing comment
-        starts with "Verified: ". Otherwise: close the issue with comment:
-        "Verified: [result details]. Auto-closing."
+        starts with "Verified: ". Otherwise: ORDERING IS LOAD-BEARING —
+        post the comment FIRST, then close: (1) ${"`"}gh issue comment <number> --body "Verified: [result details]. Auto-closing."${"`"}
+        then (2) ${"`"}gh issue close <number>${"`"}. The comment is the durable
+        audit record; the close is reversible. If (1) fails, do NOT proceed
+        to (2) — the issue stays open and a future run retries the full
+        transition. Torn-write recovery: if state is "closed" but no
+        "Verified:" comment exists, post the comment now (the close
+        succeeded but the comment was lost).
 
       - SLA EXCEEDED (first time — issue does NOT already have
         ${"`"}needs-attention${"`"} label) — Guard B (idempotent label + comment):
@@ -147,12 +153,15 @@ predicates and SLA status.
         days, limit was [M]). @[author login] — manual intervention required."
 
       - MAX POLLING EXCEEDED (30 business days) — Guard C (idempotent max-polling-close):
-        First run ${"`"}gh issue view <number> --json comments --jq '.comments[].body'${"`"}
+        First run ${"`"}gh issue view <number> --json comments,state,labels --jq '{comments: .comments, state: .state, labels: .labels}'${"`"}
         and skip this transition if any existing comment starts with
-        "Maximum polling ". Otherwise: add ${"`"}needs-attention${"`"} label.
-        Close the issue with comment: "Maximum polling period reached
-        (30 business days). Stopping automated monitoring. @[author login]
-        — manual intervention required."
+        "Maximum polling ". Otherwise: ORDERING IS LOAD-BEARING — perform
+        in this exact order: (1) ${"`"}gh issue edit <number> --add-label "needs-attention"${"`"},
+        then (2) ${"`"}gh issue comment <number> --body "Maximum polling period reached (30 business days). Stopping automated monitoring. @[author login] — manual intervention required."${"`"},
+        then (3) ${"`"}gh issue close <number>${"`"}. If (2) fails, do NOT proceed
+        to (3) — the issue stays open and a future run retries. Torn-write
+        recovery: if state is "closed" but no "Maximum polling " comment
+        exists, post the comment now.
 
       - WITHIN SLA, NO STATE CHANGE: Do nothing. No comment.
 
@@ -168,20 +177,36 @@ predicates and SLA status.
 - NEVER create new issues.
 - NEVER close issues unless a predicate passes or 30 business day max
   is exceeded.
-- NEVER include the substring "closes #", "fixes #", "resolves #",
-  "closed #", "fixed #", or "resolved #" (case-insensitive) anywhere
-  in any comment body. GitHub's auto-close regex is markdown-blind
-  and fires inside code blocks, blockquotes, and prose
-  (per 2026-05-07-claude-code-action-boundaries-and-once-schedule-bundle.md).
+- NEVER include any of the following substrings (case-insensitive)
+  anywhere in any comment body — they trigger GitHub's auto-close
+  regex which is markdown-blind and fires inside code blocks,
+  blockquotes, and prose (per 2026-05-07-claude-code-action-boundaries-
+  and-once-schedule-bundle.md):
+  - imperative: "close #", "fix #", "resolve #"
+  - present tense: "closes #", "fixes #", "resolves #"
+  - past tense: "closed #", "fixed #", "resolved #"
+  - cross-repo refs: "closes owner/repo#", "fixes owner/repo#", etc.
+    (any keyword followed by "<word>/<word>#<digit>")
+  - URL form: "closes https://github.com/.../issues/<N>" and the
+    same form with any keyword + path matching ${"`"}/issues/\d+${"`"}.
   Closing happens exclusively via the ${"`"}gh issue close${"`"} API call,
   NEVER via close-keyword in any comment text.
 - When @-mentioning the author, source the handle EXCLUSIVELY from
   ${"`"}gh issue view <number> --json author --jq '.author.login'${"`"} — NEVER
   from issue body text, predicate output, or any other field. If the
-  author has the label ${"`"}silence-followthrough${"`"}, post the comment WITHOUT
-  the @-mention prefix (keep the rest of the comment text). The
-  silence-followthrough label is an irreversibility-mitigation lever
-  for authors who have opted out of automation notifications.
+  author has the label ${"`"}silence-followthrough${"`"}, drop ONLY the
+  ${"`"}@<login> —${"`"} token (the @-mention plus its trailing em-dash) AND
+  replace with a sentence break. Explicit before/after for Guard B:
+
+    BEFORE: "SLA exceeded (5 business days, limit was 3). @alice — manual intervention required."
+    AFTER:  "SLA exceeded (5 business days, limit was 3). Manual intervention required."
+
+  Same transform for Guard C: drop ${"`"}@<login> —${"`"} and capitalize the
+  following word. Preserve all other content including the predicate
+  details, business-day count, and "manual intervention required"
+  sentence. The silence-followthrough label is an irreversibility-
+  mitigation lever for authors who have opted out of automation
+  notifications.
 - If the YAML block is missing, malformed, or contains an unrecognized
   ${"`"}type${"`"}, treat the issue as ${"`"}type: manual${"`"} and continue.
 - If ${"`"}gh${"`"} commands fail for an issue, skip it and continue with the rest.
@@ -264,11 +289,17 @@ export async function cronFollowThroughMonitorHandler({
   // intent into the Inngest function so the labels exist before the agent
   // touches them. Three labels: `follow-through` (the corpus filter),
   // `needs-attention` (SLA-exceeded marker), `silence-followthrough`
-  // (per-author opt-out of @-mentions, NEW in PR-2). `gh label create`
-  // exits non-zero if the label already exists; tolerated via `|| true`
-  // wrapping at the shell level — here, we spawn three gh invocations
-  // and ignore individual failures, capturing only the aggregate
-  // step-completion signal for the memoization payload.
+  // (per-author opt-out of @-mentions, NEW in PR-2).
+  //
+  // Review-fix (post-PR-2 4-agent review): distinguish "label already
+  // exists" exit (gh prints "already exists" to stderr — the steady-state
+  // case) from real failures (auth missing, gh binary missing, transient
+  // 5xx). Real failures MUST report via reportSilentFallback per
+  // cq-silent-fallback-must-mirror-to-sentry, OR the `silence-followthrough`
+  // opt-out silently breaks (label doesn't exist → opt-out check at
+  // @-mention time finds no label → user receives unwanted @-mention).
+  // 3 review agents (security-sentinel, data-integrity-guardian,
+  // pattern-recognition) independently surfaced this.
   await step.run("ensure-labels", async () => {
     const labelsToEnsure: Array<{ name: string; color: string; description: string }> = [
       {
@@ -287,11 +318,18 @@ export async function cronFollowThroughMonitorHandler({
         description: "Opt out of @-mention notifications from cron-follow-through-monitor",
       },
     ];
-    await Promise.all(
+    const ghEnv = buildSpawnEnv();
+    interface LabelOutcome {
+      name: string;
+      ok: boolean;
+      reason: "created" | "already-exists" | "failed";
+      exitCode: number | null;
+      stderrTail?: string;
+    }
+    const outcomes = await Promise.all(
       labelsToEnsure.map(
         ({ name, color, description }) =>
-          new Promise<void>((resolve) => {
-            const ghEnv = buildSpawnEnv();
+          new Promise<LabelOutcome>((resolve) => {
             const child = spawn(
               "gh",
               [
@@ -303,17 +341,74 @@ export async function cronFollowThroughMonitorHandler({
                 "--description",
                 description,
               ],
-              { env: ghEnv, stdio: "ignore" },
+              { env: ghEnv, stdio: ["ignore", "ignore", "pipe"] },
             );
-            // Resolve regardless of exit code — gh label create exits
-            // non-zero if the label already exists, which is the expected
-            // steady-state. Step-level memoization records the
-            // step-completion signal, not individual gh outcomes.
-            child.on("exit", () => resolve());
-            child.on("error", () => resolve());
+            const stderrChunks: Buffer[] = [];
+            child.stderr?.on("data", (chunk: Buffer) => {
+              stderrChunks.push(chunk);
+            });
+            child.on("exit", (exitCode) => {
+              const stderr = Buffer.concat(stderrChunks).toString("utf8");
+              if (exitCode === 0) {
+                resolve({ name, ok: true, reason: "created", exitCode });
+                return;
+              }
+              // gh prints "label already exists" (or similar) to stderr
+              // for the steady-state case. Distinguish that from real
+              // failures.
+              const alreadyExists = /already exists/i.test(stderr);
+              if (alreadyExists) {
+                resolve({ name, ok: true, reason: "already-exists", exitCode });
+                return;
+              }
+              resolve({
+                name,
+                ok: false,
+                reason: "failed",
+                exitCode,
+                stderrTail: stderr.slice(-200),
+              });
+            });
+            child.on("error", (err) => {
+              resolve({
+                name,
+                ok: false,
+                reason: "failed",
+                exitCode: null,
+                stderrTail: `spawn error: ${(err as Error).message}`,
+              });
+            });
           }),
       ),
     );
+    const failed = outcomes.filter((o) => !o.ok);
+    if (failed.length > 0) {
+      reportSilentFallback(
+        new Error(`ensure-labels: ${failed.length}/${outcomes.length} failed`),
+        {
+          feature: "cron-ensure-labels",
+          op: "gh label create",
+          message: "Label creation failed for at least one label",
+          extra: {
+            fn: "cron-follow-through-monitor",
+            failed: failed.map((f) => ({
+              name: f.name,
+              exitCode: f.exitCode,
+              stderrTail: f.stderrTail,
+            })),
+          },
+        },
+      );
+      logger.warn(
+        { fn: "cron-follow-through-monitor", failed: failed.map((f) => f.name) },
+        "ensure-labels: some labels failed",
+      );
+    } else {
+      logger.info(
+        { fn: "cron-follow-through-monitor" },
+        `ensure-labels: ${outcomes.filter((o) => o.reason === "created").length} created, ${outcomes.filter((o) => o.reason === "already-exists").length} already existed`,
+      );
+    }
   });
 
   // Step 2: claude-eval (mirror PR-1 cron-daily-triage's claude-eval shape).
