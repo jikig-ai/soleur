@@ -14,8 +14,21 @@ Group=deploy
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/mnt/data /var/lock
-ReadOnlyPaths=/etc/webhook /usr/local/bin /etc/default/webhook-deploy
+# Bootstrap path needs to install systemd units + binaries + env files under
+# `sudo` (inngest-bootstrap.sh + any future `deploy <component>` handler).
+# ProtectSystem=strict makes /etc/ /usr/ read-only at the mount-namespace
+# level — sudo elevates UID but does NOT escape the namespace. Without these
+# paths in ReadWritePaths, `cat > /etc/systemd/system/...` and
+# `chown root:deploy /etc/default/...` fail with `Read-only file system` or
+# silently mangled error messages (`invalid group: 'root:deploy'` because the
+# initial `printf >` redirect actually failed but chown still ran).
+# Surfaced 2026-05-19 via #4017 — PR-F's inngest substrate was never installed
+# in production because the webhook deploy of the bootstrap image failed at
+# the chown step inside this sandbox. The /var/lib/inngest entry is required
+# because mkdir+chown for SQLite's data dir runs ahead of the systemd unit's
+# own ReadWritePaths.
+ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /var/lib/inngest /usr/local/bin
+ReadOnlyPaths=/etc/webhook /etc/default/webhook-deploy
 TimeoutStopSec=180
 
 [Install]

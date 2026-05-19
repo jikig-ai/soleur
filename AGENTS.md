@@ -14,6 +14,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-exhaust-all-automated-options-before] → core
 - [id: hr-never-label-any-step-as-manual-without] → core
 - [id: hr-multi-step-post-merge-bootstrap-script] → core
+- [id: hr-tagged-build-workflow-needs-initial-tag-push] → core
 - [id: hr-when-triaging-a-batch-of-issues-never] → core
 - [id: hr-all-infrastructure-provisioning-servers] → core
 - [id: hr-autonomous-loop-skill-api-budget-disclosure] → core

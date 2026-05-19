@@ -7,6 +7,13 @@ export const PUBLIC_PATHS = [
   "/signup",
   "/callback",
   "/api/webhooks",
+  // /api/inngest: SDK route served by `inngest/next.serve` with HMAC signature
+  // verification on every POST (signingKey from INNGEST_SIGNING_KEY). Supabase
+  // middleware would redirect to /login, breaking server↔SDK sync. ADR-030 I4
+  // invariant: Inngest's own gate is load-bearing. Surfaced 2026-05-19 — PR-1
+  // cron-daily-triage missed all scheduled fires post-merge (#4017) because
+  // the Inngest server could not reach /api/inngest to register functions.
+  "/api/inngest",
   "/ws",
   "/manifest.webmanifest",
   "/shared",
