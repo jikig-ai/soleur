@@ -122,15 +122,15 @@ inngest.createFunction(
 );
 ```
 
-### TR5: `cron_run_ledger` row name = `cron-follow-through-monitor`
+### TR5: [RETRACTED post-plan-review carry-forward] `cron_run_ledger` jitter-guard
 
-First step of the function MUST read `cron_run_ledger` for row `cron-follow-through-monitor` and early-return if <80% of the cron interval has elapsed since `last_run_at`. Cron interval here is "weekdays at 09:00" — effective spacing is ~24h on weekdays, ~72h Friday→Monday. Plan-time decision: jitter-guard interval calculation MUST handle weekday-only schedules without false-positive replay-skips on Monday morning.
+**[Revised 2026-05-19 — see plan]** PR-1's 5-agent plan-review CUT the `cron_run_ledger` primitive entirely (4-of-5 panel converge: Inngest's native cron + `concurrency:[{scope:"fn",limit:1}]` + `step.run` memoization are the load-bearing primitive; the ledger duplicated it at lower fidelity, blocked legitimate operator manual-retry for 24h, AND its plpgsql cast chain would throw at runtime). PR-2 inherits PR-1's no-ledger architecture. No ledger row, no jitter-guard, no migration. The brainstorm's reference to `cron_run_ledger` was authored before PR-1's plan-v2 reconciliation was fully internalized; treat this TR as historical context only.
 
 ### TR6: Tests
 
-- **New:** `apps/web-platform/test/server/inngest/cron-follow-through-monitor.test.ts` — mirror `cron-daily-triage.test.ts` structure (handler invocation, abort path, sentry heartbeat success/failure, env-malformed skip).
-- **Extend:** `apps/web-platform/test/server/cron-no-byok-lease-sweep.test.ts` — add `cron-follow-through-monitor.ts` to the cron-* file enumeration.
-- **Extend:** `apps/web-platform/test/server/byok-audit-writer-sweep.test.ts` — same file enumeration extension (carry-forward).
+- **New:** `apps/web-platform/test/server/inngest/cron-follow-through-monitor.test.ts` — mirror `cron-daily-triage.test.ts` structure (handler invocation, abort path, sentry heartbeat success/failure, env-malformed skip, manual-trigger event path).
+- **No edit required:** `apps/web-platform/test/server/cron-no-byok-lease-sweep.test.ts` uses `globSync("server/inngest/functions/cron-*.ts")` (file already on disk at lines 39-41) — the new `cron-follow-through-monitor.ts` is picked up automatically. Verification AC: the sentinel sweep iterates over both `cron-daily-triage.ts` AND `cron-follow-through-monitor.ts` after PR-2 lands.
+- **No edit required:** `apps/web-platform/test/server/byok-audit-writer-sweep.test.ts` — the 4 regex constants (`LEASE_CALL_RE`, `ALIAS_IMPORT_RE`, `BARE_IMPORT_RE`, `DYNAMIC_IMPORT_RE`) are already exported from PR-1; no further changes needed for PR-2.
 - **No prompt-level integration test** required (PR-1 didn't ship one; the claude-eval step is opaque to unit tests by design per ADR-033).
 
 ### TR7: Inngest registration
@@ -139,7 +139,7 @@ First step of the function MUST read `cron_run_ledger` for row `cron-follow-thro
 
 ### TR8: Sentry monitor IaC
 
-`apps/web-platform/infra/sentry/cron-monitors.tf` MUST be checked at plan time: if a monitor with slug `scheduled-follow-through` exists, leave the Terraform resource untouched; if not, add one with the new slug. Cron schedule on the Terraform side MUST mirror `0 9 * * 1-5`.
+`apps/web-platform/infra/sentry/cron-monitors.tf` currently has NO resource for `scheduled-follow-through` (line 94 is `scheduled_daily_triage` only). PR-2 MUST ADD a new `sentry_cron_monitor.scheduled_follow_through` resource mirroring the daily-triage shape with: `name = "scheduled-follow-through"`, `schedule = "0 9 * * 1-5"`, `time_zone = "UTC"`, `checkin_margin_minutes = 30`, `max_runtime_minutes = 20` (15-min AbortSignal + 5-min margin). `apply-sentry-infra.yml` auto-applies the new resource on merge — no manual operator step.
 
 ### TR9: Umbrella checkbox update
 
