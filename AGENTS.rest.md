@@ -19,6 +19,7 @@
 - After merging a PR that adds or modifies a GitHub Actions workflow, trigger a manual run (`gh workflow run <file>.yml`), poll until complete (`gh run view <id> --json status,conclusion`), and investigate failures before moving on [id: wg-after-merging-a-pr-that-adds-or-modifies]. New workflows must be verified working, not just syntactically valid.
 - When a test runner crashes (segfault, OOM, abort), never dismiss it as "known" or "unrelated" [id: wg-when-a-test-runner-crashes-segfault-oom]. Either fix the root cause, file a GitHub issue to track it, or document a concrete workaround. A crash without a tracking issue is a workflow violation.
 - When tests fail and are confirmed pre-existing (same on main), create a GitHub issue to track them before proceeding [id: wg-when-tests-fail-and-are-confirmed-pre]. Pre-existing failures without tracking issues normalize a red suite.
+- Never bump version files in feature branches [id: wg-never-bump-version-files-in-feature]. Version is derived from git tags — CI creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels. Set labels with `/ship`. Do NOT edit `plugin.json` version (frozen sentinel) or `marketplace.json` version.
 
 ## Review & Feedback
 
