@@ -150,3 +150,27 @@ variable "betterstack_paid_tier" {
   type        = bool
   default     = false
 }
+
+# --- jikigai.com (LinkedIn Page Verifications, #4046) ------------------------
+# jikigai.com is onboarded narrowly for the LinkedIn Company Page TXT
+# verification record only. The existing MX/SPF/DKIM/etc. for ops@jikigai.com
+# remain dashboard-managed; a separate follow-up (#4052) imports them into TF
+# state. The aliased provider (cloudflare.jikigai_com in jikigai-com.tf) and
+# the narrow API token below contain blast radius to this zone.
+
+variable "cf_zone_id_jikigai_com" {
+  description = "Cloudflare zone ID for jikigai.com"
+  type        = string
+}
+
+variable "cf_api_token_jikigai_com" {
+  description = "Cloudflare API token narrowed to Zone:DNS:Edit on jikigai.com (cloudflare_record resources; see jikigai-com.tf). Current consumers: jikigai-com.tf (LinkedIn Page Verifications TXT)."
+  type        = string
+  sensitive   = true
+}
+
+variable "linkedin_page_verification_txt" {
+  description = "TXT record value supplied by LinkedIn at Page Verifications time. Single-purpose: becomes public TXT post-verification (low residual sensitivity). Persisted in terraform.tfstate (R2 backend, AES-256 at rest)."
+  type        = string
+  sensitive   = true
+}
