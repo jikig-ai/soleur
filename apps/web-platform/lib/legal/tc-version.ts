@@ -11,7 +11,7 @@
  * Bump-policy rubric (material / clarifying / cosmetic) lives at
  * knowledge-base/legal/tc-version-bump-policy.md (CLO-signed).
  */
-export const TC_VERSION = "2.0.0";
+export const TC_VERSION = "2.1.0";
 
 /**
  * SHA-256 of `docs/legal/terms-and-conditions.md` at the time of the
@@ -32,4 +32,4 @@ export const TC_VERSION = "2.0.0";
  *      `TC_VERSION` was also bumped.
  */
 export const TC_DOCUMENT_SHA =
-  "445cba5f4f8a9afa418a8d4515d328d87fb97e043ef217a81291224eb5a8bf58";
+  "4d71100f0f663a933b955b898081257c6fe2ed0fe61db03e261e05ae5a072447";
