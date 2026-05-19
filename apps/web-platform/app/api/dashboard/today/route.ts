@@ -51,13 +51,33 @@ interface TodayItem {
   createdAt: string;
 }
 
+// CVE advisory bodies (`${ghsa_id} (${severity}): ${summary}`) carry
+// free-text summaries whose copy can include secret-shape strings the
+// redaction allowlist won't catch (proprietary cloud account IDs etc).
+// The card renders ID + severity by default (AC6) and reveals the body
+// only on explicit Edit-modal click. On the wire we drop the summary
+// (everything after the first `:`) so devtools / Network tab cannot
+// surface what the DOM intentionally hides. The Edit modal fetches the
+// full body via a separate, audited endpoint (PR-H+1).
+//
+// Secret-scan rows (`Secret scan alert #<n>: <secret_type>`) are NOT
+// stripped — `secret_type` is GitHub's public classification enum
+// (`aws_access_key_id`, `slack_bot_token`, etc.), not the secret value
+// itself, so it is safe to include on the wire.
+function maskBodyForCveSecretScan(row: TodayRow): string {
+  if (row.source !== "github" || row.source_ref === null) return row.draft_preview;
+  if (!row.source_ref.startsWith("cve-")) return row.draft_preview;
+  const colonIdx = row.draft_preview.indexOf(":");
+  return colonIdx === -1 ? row.draft_preview : row.draft_preview.slice(0, colonIdx);
+}
+
 function toItem(row: TodayRow): TodayItem {
   return {
     id: row.id,
     source: row.source,
     sourceRef: row.source_ref,
     owningDomain: row.owning_domain,
-    draftPreview: row.draft_preview,
+    draftPreview: maskBodyForCveSecretScan(row),
     urgency: row.urgency,
     createdAt: row.created_at,
   };

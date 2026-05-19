@@ -149,6 +149,64 @@ describe("migration 051_multi_source_dedup", () => {
     });
   });
 
+  describe("users_github_installation_id_unique_idx (review F1: cross-tenant guard)", () => {
+    it("is a partial UNIQUE INDEX on (github_installation_id) WHERE NOT NULL", () => {
+      expect(executable).toMatch(
+        /CREATE\s+UNIQUE\s+INDEX\s+(IF\s+NOT\s+EXISTS\s+)?users_github_installation_id_unique_idx[\s\S]*?ON\s+public\.users\s*\(\s*github_installation_id\s*\)[\s\S]*?WHERE\s+github_installation_id\s+IS\s+NOT\s+NULL/i,
+      );
+    });
+  });
+
+  describe("anonymise_audit_github_token_use RPC (review F6: Art. 17 cascade)", () => {
+    it("declares SECURITY DEFINER + LANGUAGE plpgsql", () => {
+      expect(executable).toMatch(
+        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.anonymise_audit_github_token_use[\s\S]*?LANGUAGE\s+plpgsql[\s\S]*?SECURITY\s+DEFINER/i,
+      );
+    });
+
+    it("pins search_path = public, pg_temp", () => {
+      expect(executable).toMatch(
+        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.anonymise_audit_github_token_use[\s\S]*?SET\s+search_path\s*=\s*public,\s*pg_temp/i,
+      );
+    });
+
+    it("REVOKEs from PUBLIC/anon/authenticated and GRANTs only to service_role", () => {
+      expect(executable).toMatch(
+        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.anonymise_audit_github_token_use[\s\S]*?FROM\s+PUBLIC,\s*anon,\s*authenticated/i,
+      );
+      expect(executable).toMatch(
+        /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.anonymise_audit_github_token_use[\s\S]*?TO\s+service_role/i,
+      );
+    });
+
+    it("nulls founder_id + repo_full_name under SET LOCAL session_replication_role=replica", () => {
+      // The SET LOCAL must appear inside the function body before the UPDATE so
+      // the WORM trigger short-circuits on the anonymise path only.
+      const finalDef = executable.match(
+        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.anonymise_audit_github_token_use[\s\S]*?\$\$;/gi,
+      );
+      expect(finalDef).not.toBeNull();
+      const lastDef = finalDef![finalDef!.length - 1];
+      expect(lastDef).toMatch(/SET\s+LOCAL\s+session_replication_role\s*=\s*'replica'/i);
+      expect(lastDef).toMatch(/founder_id\s*=\s*NULL/i);
+      expect(lastDef).toMatch(/repo_full_name\s*=\s*NULL/i);
+    });
+  });
+
+  describe("audit_github_token_use_no_mutate WORM trigger (review P2)", () => {
+    it("creates the trigger function with P0001 reject + replica-mode bypass", () => {
+      expect(executable).toMatch(
+        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.audit_github_token_use_no_mutate[\s\S]*?session_replication_role[\s\S]*?RAISE\s+EXCEPTION[\s\S]*?ERRCODE\s*=\s*'P0001'/i,
+      );
+    });
+
+    it("attaches the trigger BEFORE UPDATE OR DELETE", () => {
+      expect(executable).toMatch(
+        /CREATE\s+TRIGGER\s+audit_github_token_use_no_mutate[\s\S]*?BEFORE\s+UPDATE\s+OR\s+DELETE\s+ON\s+public\.audit_github_token_use/i,
+      );
+    });
+  });
+
   describe("cq-supabase-migration-no-concurrently", () => {
     // Supabase wraps each migration in a transaction; CONCURRENTLY is
     // illegal there. The CHECK is structural, not regex-trivia.

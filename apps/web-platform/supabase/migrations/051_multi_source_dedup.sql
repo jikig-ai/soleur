@@ -201,4 +201,66 @@ COMMENT ON FUNCTION public.anonymise_audit_github_token_use(uuid) IS
   'server/account-delete.ts BEFORE auth.admin.deleteUser(); the FK is '
   'ON DELETE RESTRICT and the auth-delete would abort without this. '
   'Idempotent: re-running on already-anonymised rows is a no-op '
-  '(UPDATE ... WHERE founder_id = p_founder_id matches zero rows).';
+  '(UPDATE ... WHERE founder_id = p_founder_id matches zero rows). '
+  'Bypasses the audit_github_token_use_no_mutate WORM trigger via '
+  'SET LOCAL session_replication_role=replica (mig 037 + 044 pattern).';
+
+------------------------------------------------------------------------
+-- 7. WORM trigger on audit_github_token_use (defensive)
+------------------------------------------------------------------------
+--
+-- Pure-reject trigger on UPDATE/DELETE. No role-check bypass (per
+-- learning 2026-05-18-pure-reject-worm-no-role-bypass). The only path
+-- that mutates rows is anonymise_audit_github_token_use, which sets
+-- session_replication_role = 'replica' for the duration of the call so
+-- the trigger fires under the replica role and short-circuits to
+-- NULL-return (the standard "ignore replica" idiom is to skip the
+-- trigger body entirely when triggered as replica).
+
+CREATE OR REPLACE FUNCTION public.audit_github_token_use_no_mutate()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = public, pg_temp
+AS $$
+BEGIN
+  -- Reject every UPDATE/DELETE on the audit ledger; the SECURITY DEFINER
+  -- anonymise RPC sets session_replication_role='replica' so the trigger
+  -- short-circuits there (Postgres skips triggers fired as 'replica' by
+  -- default, but we add an explicit check for clarity in PRJ-PG-DBA
+  -- forensics — same idiom as 044_consent_log_no_mutate).
+  IF current_setting('session_replication_role') = 'replica' THEN
+    RETURN NULL;
+  END IF;
+  RAISE EXCEPTION 'audit_github_token_use is append-only (PR-H #3244)'
+    USING ERRCODE = 'P0001';
+END;
+$$;
+
+CREATE TRIGGER audit_github_token_use_no_mutate
+  BEFORE UPDATE OR DELETE ON public.audit_github_token_use
+  FOR EACH ROW EXECUTE FUNCTION public.audit_github_token_use_no_mutate();
+
+COMMENT ON FUNCTION public.audit_github_token_use_no_mutate() IS
+  'PR-H (#3244) — WORM trigger for audit_github_token_use. Fires '
+  'BEFORE UPDATE/DELETE; raises P0001 unless the caller has set '
+  'session_replication_role=replica (the documented bypass for the '
+  'anonymise_audit_github_token_use RPC). Mirrors mig 037 + 044 '
+  'pattern; no role-check bypass (learning 2026-05-18).';
+
+-- The anonymise RPC needs the replica-mode bypass; patch it to set the
+-- GUC for the duration of its body. Per learning, SET LOCAL keeps the
+-- bypass scoped to this transaction.
+CREATE OR REPLACE FUNCTION public.anonymise_audit_github_token_use(p_founder_id uuid)
+  RETURNS void
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+BEGIN
+  SET LOCAL session_replication_role = 'replica';
+  UPDATE public.audit_github_token_use
+     SET founder_id = NULL,
+         repo_full_name = NULL
+   WHERE founder_id = p_founder_id;
+END;
+$$;

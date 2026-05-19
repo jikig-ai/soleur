@@ -53,6 +53,15 @@ function readWebhookSecret(): string | null {
   return v && v.length > 0 ? v : null;
 }
 
+// GitHub's webhook payload limit is 25 MiB per docs.github.com (Webhooks
+// reference). We cap at 1 MiB — realistic PR / issue / advisory bodies fit
+// comfortably under 256 KiB; the cap is a DoS guard rail, not a feature
+// limit. Larger payloads return 413 BEFORE signature verification — the
+// signature is HMAC over the bytes, so we cannot verify a body we refused
+// to read in full. Operator-facing: if a legitimate payload trips this,
+// raise the cap explicitly rather than silently truncating.
+const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
+
 // Constant-time signature check. GitHub sends `X-Hub-Signature-256:
 // sha256=<hex>`. Returns true ONLY when both buffers are equal length
 // and equal bytes; mismatches and length-mismatches both fail closed.
@@ -74,9 +83,15 @@ function verifySignature(
 }
 
 export async function POST(request: Request) {
-  // Step 1: raw body BEFORE JSON.parse. HMAC needs the exact bytes
-  // GitHub signed; any whitespace/escape normalization breaks signing.
+  // Step 0: bounded read. Content-Length is advisory (GitHub sets it but
+  // an attacker would not need to) — guard the actual byte length AFTER
+  // .text() resolves. Reject 413 before allocating regex state for HMAC.
   const rawBody = await request.text();
+  if (rawBody.length > MAX_WEBHOOK_BODY_BYTES) {
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  }
+  // Step 1: HMAC needs the exact bytes GitHub signed; any whitespace/
+  // escape normalization breaks signing — do not parse before step 2.
   const signatureHeader = request.headers.get("x-hub-signature-256");
   const githubEvent = request.headers.get("x-github-event");
   const deliveryId = request.headers.get("x-github-delivery");

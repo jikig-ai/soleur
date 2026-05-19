@@ -48,9 +48,15 @@ jobs:
         run: |
           set -euo pipefail
           FINDINGS_JSON="$(bash scripts/kb-drift-walker.sh)"
-          SIGNING_KEY="$(doppler secrets get KB_DRIFT_INGEST_SIGNING_KEY -p soleur -c prd_kb_drift_walker --plain)"
+          export KB_DRIFT_INGEST_SIGNING_KEY="$(doppler secrets get KB_DRIFT_INGEST_SIGNING_KEY -p soleur -c prd_kb_drift_walker --plain)"
           INGEST_URL="$(doppler secrets get KB_DRIFT_INGEST_URL -p soleur -c prd_kb_drift_walker --plain)"
-          SIG="sha256=$(printf '%s' "$FINDINGS_JSON" | openssl dgst -sha256 -hmac "$SIGNING_KEY" -hex | awk '{print $2}')"
+          # Stream the HMAC key via env, not argv. `openssl dgst -hmac "$KEY"`
+          # exposes the key through /proc/<pid>/cmdline for the lifetime of the
+          # openssl process — visible to any other process on the runner with
+          # /proc access. Python's hmac reads the key from the env-resident
+          # variable only; no key bytes ever land in argv.
+          SIG_HEX="$(printf '%s' "$FINDINGS_JSON" | python3 -c 'import os,sys,hmac,hashlib;print(hmac.new(os.environ["KB_DRIFT_INGEST_SIGNING_KEY"].encode("utf-8"), sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')"
+          SIG="sha256=${SIG_HEX}"
           HTTP_CODE="$(curl -sS -o /tmp/ingest.out -w '%{http_code}' \
             -X POST "$INGEST_URL" \
             -H "Content-Type: application/json" \

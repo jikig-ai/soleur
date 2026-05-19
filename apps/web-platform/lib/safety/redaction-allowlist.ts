@@ -51,14 +51,39 @@ const PHONE_RE = /(?<![\d])\+?\d{1,3}[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(
 const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b/g;
 
 // API-key-shaped: long base64-url-safe runs prefixed by a known sentinel.
-// GitHub PAT (ghp_, gho_, ghu_, ghs_, ghr_), Stripe (sk_live_, pk_live_,
-// rk_live_), Anthropic (sk-ant-), OpenAI (sk-), AWS access key (AKIA…).
+// Covered:
+//   GitHub classic PAT  ghp_/gho_/ghu_/ghs_/ghr_<20+ base64url>
+//   GitHub fine-grained github_pat_<22 alnum>_<59 alnum>
+//   Stripe live/test    sk_live_/pk_live_/rk_live_/sk_test_/pk_test_/rk_test_
+//   Anthropic           sk-ant-<20+>
+//   OpenAI              sk-<32+>
+//   AWS access key id   AKIA<16 upper-alnum>
+//   AWS secret access   40-char base64url (matched only after AWS sentinel
+//                       words to avoid mass false-positives on long b64 blobs)
+//   Slack tokens        xoxb-/xoxa-/xoxp-/xoxr-/xoxs- followed by digits + dash
 const API_KEY_RE =
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,}\b|\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bsk-ant-[A-Za-z0-9_-]{20,}\b|\bsk-[A-Za-z0-9]{32,}\b|\bAKIA[0-9A-Z]{16}\b/g;
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,}\b|\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59,}\b|\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bsk-ant-[A-Za-z0-9_-]{20,}\b|\bsk-[A-Za-z0-9]{32,}\b|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[0-9]+-[0-9]+-[A-Za-z0-9-]+\b/g;
+
+// AWS_SECRET_ACCESS_KEY shape — the 40-char base64url is too generic to
+// match standalone (collides with arbitrary hashes). We anchor on the
+// canonical "AWS_SECRET_ACCESS_KEY=..." or "aws_secret_access_key = ..."
+// assignment shapes that show up in pasted env / config snippets. The
+// replacement preserves the assignment key so downstream tooling can
+// still parse the line.
+const AWS_SECRET_ASSIGN_RE =
+  /\b(aws[_-]?secret[_-]?access[_-]?key)\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}['"]?/gi;
 
 // AWS / IPv4 — keep CVE descriptions usable when they reference public
 // service IPs (rendered as "[ip]"); avoids accidental MAC-address strip.
 const IPV4_RE = /\b(?:25[0-5]|2[0-4]\d|[01]?\d{1,2})(?:\.(?:25[0-5]|2[0-4]\d|[01]?\d{1,2})){3}\b/g;
+
+// IPv6 — strict 8-group hex form OR the "::" compressed form with at
+// least one hex group on either side. Conservative: rejects single "::"
+// alone (would match too many MAC-address chunks) and rejects ambiguous
+// fragments like ":::". Matches global unicast and ULA shapes; link-local
+// fe80::/10 also matches under the same regex.
+const IPV6_RE =
+  /\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}\b/g;
 
 // JWT — three base64url segments. Coarse; matches any "header.payload.sig"
 // shape with realistic minimum lengths.
@@ -97,11 +122,17 @@ export function redactGithubSourcedText(
   // 3+3+4 grouping when un-separated. EMAIL early — the local-part
   // can contain dots and digits that overlap nothing else here.
   const out = head
+    // AWS secret assignment first — its replacement keeps the key= prefix
+    // so the subsequent generic redactors don't double-process the value.
+    .replace(AWS_SECRET_ASSIGN_RE, "$1=[redacted-key]")
     .replace(API_KEY_RE, "[redacted-key]")
     .replace(JWT_RE, "[redacted-jwt]")
     .replace(EMAIL_RE, "[redacted-email]")
     .replace(UUID_RE, "[redacted-uuid]")
     .replace(PHONE_RE, "[redacted-phone]")
+    // IPv6 BEFORE IPv4 so "::ffff:192.0.2.1" maps to a single [redacted-ip]
+    // instead of leaving "::ffff:[redacted-ip]" behind.
+    .replace(IPV6_RE, "[redacted-ip]")
     .replace(IPV4_RE, "[redacted-ip]");
 
   return truncated ? `${out}${TRUNCATION_MARKER}` : out;

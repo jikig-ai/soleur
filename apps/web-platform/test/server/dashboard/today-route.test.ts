@@ -136,6 +136,69 @@ describe("/api/dashboard/today (PR-H)", () => {
     expect(res.status).toBe(500);
   });
 
+  test("masks CVE draft_preview body server-side (keeps `<id> (<sev>)` header only)", async () => {
+    mockLimit.mockResolvedValue({
+      data: [
+        {
+          ...fixtureRow({
+            id: "msg-cve-1",
+            source: "github",
+            sourceRef: "cve-GHSA-aaaa-bbbb-cccc",
+            urgency: "high",
+          }),
+          draft_preview: "GHSA-aaaa-bbbb-cccc (high): malicious payload details — proprietary-internal-account-12345",
+        },
+      ],
+      error: null,
+    });
+    const res = await GET(makeRequest());
+    const body = (await res.json()) as { items: { draftPreview: string }[] };
+    // Header retained (ID + severity render path) but summary stripped from the wire.
+    expect(body.items[0].draftPreview).toBe("GHSA-aaaa-bbbb-cccc (high)");
+    expect(body.items[0].draftPreview).not.toContain("malicious payload");
+    expect(body.items[0].draftPreview).not.toContain("proprietary-internal-account");
+  });
+
+  test("does NOT mask secret-scan draft_preview (secret_type is a public enum)", async () => {
+    mockLimit.mockResolvedValue({
+      data: [
+        {
+          ...fixtureRow({
+            id: "msg-scan-1",
+            source: "github",
+            sourceRef: "secret-scan-jikig-ai:soleur:42",
+            urgency: "high",
+          }),
+          draft_preview: "Secret scan alert #42: aws_access_key_id",
+        },
+      ],
+      error: null,
+    });
+    const res = await GET(makeRequest());
+    const body = (await res.json()) as { items: { draftPreview: string }[] };
+    expect(body.items[0].draftPreview).toBe("Secret scan alert #42: aws_access_key_id");
+  });
+
+  test("does NOT mask non-CVE github rows (PR/CI/issue keep full body)", async () => {
+    mockLimit.mockResolvedValue({
+      data: [
+        {
+          ...fixtureRow({
+            id: "msg-pr-2",
+            source: "github",
+            sourceRef: "pr-jikig-ai:soleur:4066",
+            urgency: "normal",
+          }),
+          draft_preview: "feat(pr-h): inline review fixes (https://github.com/jikig-ai/soleur/pull/4066)",
+        },
+      ],
+      error: null,
+    });
+    const res = await GET(makeRequest());
+    const body = (await res.json()) as { items: { draftPreview: string }[] };
+    expect(body.items[0].draftPreview).toContain("feat(pr-h)");
+  });
+
   test("widens response item to include sourceRef (camelCase)", async () => {
     mockLimit.mockResolvedValue({
       data: [

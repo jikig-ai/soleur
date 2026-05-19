@@ -39,6 +39,13 @@ interface KBPayload {
 
 const SIGNATURE_HEADER = "x-soleur-kb-drift-signature";
 
+// Walker output bounded by repo size; current KB has ~2k markdown files
+// and the walker emits one JSON object per finding. Even an unrealistic
+// catastrophic-drift run (every link broken) tops out around 256 KiB. Cap
+// at 1 MiB so an attacker who learned the signing key still cannot use
+// this route as a memory-amp DoS primitive against the Next.js worker.
+const MAX_INGEST_BODY_BYTES = 1_048_576;
+
 function readSigningKey(): string | null {
   const v = process.env.KB_DRIFT_INGEST_SIGNING_KEY;
   return v && v.length > 0 ? v : null;
@@ -73,6 +80,9 @@ function validatePayload(parsed: unknown): KBPayload | null {
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
+  if (rawBody.length > MAX_INGEST_BODY_BYTES) {
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  }
   const secret = readSigningKey();
   if (!secret) {
     logger.error({ feature: "kb-drift-ingest" }, "KB_DRIFT_INGEST_SIGNING_KEY unset");
