@@ -72,12 +72,19 @@ async function setupDashboardMocks(page: Page, kbFiles: string[]) {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
 
-  // Supabase REST: users table (useOnboarding hook queries onboarding_completed_at)
+  // Supabase REST: users table (useOnboarding hook queries onboarding_completed_at).
+  // The `runtime_explainer_dismissed_at` field was added by PR-G (#3947) when
+  // useOnboarding's .select() was widened — mirror the mock-supabase.ts
+  // response shape so the banner stays dismissed across both mock paths.
   await page.route("**/rest/v1/users*", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify([{ onboarding_completed_at: "2024-01-01T00:00:00Z", pwa_banner_dismissed_at: "2024-01-01T00:00:00Z" }]),
+      body: JSON.stringify([{
+        onboarding_completed_at: "2024-01-01T00:00:00Z",
+        pwa_banner_dismissed_at: "2024-01-01T00:00:00Z",
+        runtime_explainer_dismissed_at: "2024-01-01T00:00:00Z",
+      }]),
     });
   });
 }

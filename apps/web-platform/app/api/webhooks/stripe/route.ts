@@ -442,6 +442,31 @@ export async function POST(request: Request) {
           .maybeSingle();
         const founderId = (founderRow as { id?: string } | null)?.id;
         if (founderId) {
+          // PR-G (#3947) — per-grant deny-by-default. ALL of (flag=on,
+          // grant exists, not denylisted) must hold. This is the
+          // load-bearing safety primitive at the single-user-incident
+          // threshold (brainstorm K4) — the env flag alone is NOT a
+          // tenant-level gate. `supabase` is the service-role client;
+          // isGranted's .eq("founder_id", founderId) IS the tenant filter,
+          // not belt-and-suspenders. A typo would leak across tenants
+          // (AC3 covers founderId-typo regression).
+          const { isGranted } = await import(
+            "@/server/scope-grants/is-granted"
+          );
+          const grant = await isGranted(
+            supabase,
+            founderId,
+            "finance.payment_failed",
+          );
+          if (!grant) {
+            // No active grant OR denylisted OR DB error — fail-closed.
+            // DB errors are mirrored to Sentry inside isGranted (TR9).
+            logger.info(
+              { founderId, eventId: event.id },
+              "Webhook: no active scope_grant for finance.payment_failed — skip inngest.send",
+            );
+            break;
+          }
           // RV7 minimization — hash email, drop payment_method, keep four
           // load-bearing fields. Inline (not a sibling module) per RV7.
           // Review P2-3: createHash hoisted to the file's static import block
@@ -471,6 +496,11 @@ export async function POST(request: Request) {
                 founderId,
                 domain: "finance",
                 event: "finance.payment_failed",
+                // PR-G: pin grant-tier-at-time-of-event so the CFO function
+                // writes messages.trust_tier from the grant active at the
+                // moment the webhook fired (a revoke or re-grant racing
+                // the event MUST NOT change the recorded tier).
+                tier: grant.tier,
                 payload,
               },
             });

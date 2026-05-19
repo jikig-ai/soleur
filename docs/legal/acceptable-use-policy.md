@@ -12,7 +12,7 @@ last-updated: 2026-05-18
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 18, 2026
+**Last Updated:** May 18, 2026 -- added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: April 10, 2026)
 
 ---
 
@@ -257,6 +257,24 @@ When using Soleur in a manner that involves personal data:
 - You must have a lawful basis for processing any personal data that Soleur agents may access or generate;
 - You must not direct Soleur agents to collect, scrape, or process personal data in violation of applicable law; and
 - You are the data controller for any personal data processed through your use of the Platform.
+
+### 5.4 Automated agent actions taken on your behalf
+
+The Web Platform includes agent-runtime features that can act on your behalf in response to external events (for example, a Stripe `invoice.payment_failed` webhook). The scope and tier of every such action is governed by Section 3a of the Terms & Conditions ("Agent Command Authority"); this AUP section enumerates your responsibilities as the operator who controls those grants.
+
+**You remain responsible for sends derived from drafts.** Soleur's binding invariant is "drafts everywhere, sends nowhere": at the `Approve every time` and `Draft, one click` tiers, an agent prepares a draft but no external effect is produced until you approve the draft through the Web Platform user interface. When you approve a draft, the resulting send is your action, performed through Soleur as your instrument. You are responsible for reviewing each draft -- recipient, tone, factual accuracy, applicable law -- before authorization.
+
+**`Auto` tier acknowledgement.** The `Auto` tier permits Soleur to execute a specific action class without per-instance approval. Selecting the `Auto` tier requires an explicit second-click acknowledgement on the `/dashboard/settings/scope-grants` page. By selecting `Auto`, you authorize Soleur to act in your name for that action class until you revoke the grant. You remain responsible for actions taken on your behalf under an active `Auto` grant.
+
+**Circumventing the human-in-the-loop boundary violates this AUP.** The `draft / Send / Edit / Discard` flow and the per-action-class scope grants ledger are the substrate by which Soleur ensures every external effect is consented to. You shall not:
+
+- Modify, bypass, or disable the scope grants gating layer (whether through API misuse, debugger attachment, or browser-side manipulation);
+- Send messages or trigger external effects outside the surfaces that record consent in the audit ledger;
+- Share account credentials with software or services intended to programmatically click "Send" on drafts without human review.
+
+Attempts to bypass these guardrails are a material breach of Section 4 ("Prohibited Conduct") and may result in suspension or termination of your Web Platform account.
+
+**Audit and contestation.** Every automated action taken on your behalf is recorded in the `/dashboard/audit` viewer with the action class, tier active at the moment of the event, timestamp, and (for BYOK calls) token + cost data. You may contest any automated action through the inlined "Request human review" affordance on each audit row, or by contacting <legal@jikigai.com>.
 
 ---
 

@@ -14,9 +14,11 @@
 #   X_API_SECRET           - X API secret
 #   X_ACCESS_TOKEN         - X access token
 #   X_ACCESS_TOKEN_SECRET  - X access token secret
-#   LINKEDIN_ACCESS_TOKEN   - LinkedIn OAuth 2.0 token (optional; skips if unset)
-#   LINKEDIN_PERSON_URN    - LinkedIn person URN for posting
-#   LINKEDIN_ORG_ID        - LinkedIn organization ID for company page (optional; skips if unset)
+#   LINKEDIN_ACCESS_TOKEN      - LinkedIn OAuth 2.0 token for personal posts (optional; skips if unset)
+#   LINKEDIN_PERSON_URN        - LinkedIn person URN for posting
+#   LINKEDIN_ORG_ID            - LinkedIn organization ID for company page (optional; skips if unset)
+#   LINKEDIN_ORG_ACCESS_TOKEN  - LinkedIn OAuth token with w_organization_social scope (required for
+#                                linkedin-company channel; skips company page posting if unset)
 #   BSKY_HANDLE            - Bluesky handle (optional; skips if unset)
 #   BSKY_APP_PASSWORD      - Bluesky app password
 #   BSKY_ALLOW_POST        - Set to "true" to enable posting
@@ -543,6 +545,11 @@ post_linkedin_company() {
 
   if [[ -z "${LINKEDIN_ORG_ID:-}" ]]; then
     echo "Warning: LINKEDIN_ORG_ID not set. Skipping LinkedIn Company Page posting." >&2
+    return 0
+  fi
+
+  if [[ -z "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then
+    echo "Warning: LINKEDIN_ORG_ACCESS_TOKEN not set. Skipping LinkedIn Company Page posting." >&2
     return 0
   fi
 

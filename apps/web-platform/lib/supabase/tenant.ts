@@ -258,6 +258,16 @@ export async function mintFounderJwt(
     .from("runtime_mint_intent")
     .upsert({ user_id: userId }, { onConflict: "user_id" });
   if (intentError) {
+    mirrorWithDebounce(
+      intentError,
+      {
+        feature: "tenant-jwt",
+        op: "mint.intent_upsert_error",
+        extra: { userId },
+      },
+      userId,
+      "mint.intent_upsert_error",
+    );
     throw new RuntimeAuthError(
       "jwt_mint",
       "Authentication unavailable; retry shortly",
@@ -272,6 +282,16 @@ export async function mintFounderJwt(
     email,
   });
   if (link.error || !link.data?.properties?.hashed_token) {
+    mirrorWithDebounce(
+      link.error ?? new Error("generateLink returned no hashed_token"),
+      {
+        feature: "tenant-jwt",
+        op: "mint.generate_link_error",
+        extra: { userId, msg: link.error?.message },
+      },
+      userId,
+      "mint.generate_link_error",
+    );
     throw new RuntimeAuthError(
       "jwt_mint",
       "Authentication unavailable; retry shortly",
@@ -335,9 +355,25 @@ export async function mintFounderJwt(
         "Authentication unavailable; retry shortly",
       );
     }
+    // Mirror underlying GoTrue error to Sentry/Pino before collapsing
+    // to the wrapper. Per cq-silent-fallback-must-mirror-to-sentry: the
+    // wrapper hides the underlying SDK error (rate-limit, network,
+    // malformed response, "User not found", etc.) — without this mirror,
+    // tenant-integration failures surface as a generic
+    // `RuntimeAuthError: Authentication unavailable` with no root cause.
+    mirrorWithDebounce(
+      verified.error ?? new Error("verifyOtp returned no session"),
+      {
+        feature: "tenant-jwt",
+        op: "mint.verify_otp_error",
+        extra: { userId, msg },
+      },
+      userId,
+      "mint.verify_otp_error",
+    );
     // GoTrue rate-limit (after retries exhausted), network failure,
-    // malformed response — all collapse to jwt_mint. The catch site logs
-    // via mirrorWithDebounce.
+    // malformed response — all collapse to jwt_mint. The catch site
+    // logs via the mirror above.
     throw new RuntimeAuthError(
       "jwt_mint",
       "Authentication unavailable; retry shortly",
