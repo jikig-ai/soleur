@@ -39,6 +39,12 @@ LINKEDIN_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/linkedin-com
 BSKY_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/bsky-community.sh"
 AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png"
 
+# Rolling-tracker target issue for vendor-blocked LinkedIn Company Page posts.
+# Defaults to #4046 (Community Management API re-application tracker); overridable
+# for local smoke-testing.
+LINKEDIN_TRACKER_ISSUE="${LINKEDIN_TRACKER_ISSUE:-4046}"
+LINKEDIN_TRACKER_REASON_MISSING_TOKEN="LINKEDIN_ORG_ACCESS_TOKEN unset — vendor approval pending (#4046)"
+
 # Global set per-file in the scan loop, used by fallback issue creators
 CASE_NAME=""
 # Holds the last Discord error for passing to fallback issue creators
@@ -482,10 +488,74 @@ post_x_thread() {
 
 # --- LinkedIn Posting ---
 
+# classify_linkedin_error -- Map a stderr blob from the LinkedIn API path into
+# one of two routing classes:
+#   vendor-blocked   -- structural denial (missing token, expired/revoked token,
+#                       missing scope). Same root cause across N posts, so route
+#                       to the rolling tracker (no per-post issue noise).
+#   content-rejected -- per-post denial (4xx not matching vendor-blocked). Route
+#                       to per-post create_dedup_issue so the operator can
+#                       inspect and resubmit each post individually.
+# Transient (5xx, 429) intentionally falls through to content-rejected; silently
+# swallowing them would mask outages. The cron retries next day.
+classify_linkedin_error() {
+  local err="$1"
+  if [[ "$err" == *"LINKEDIN_ORG_ACCESS_TOKEN is required"* ]] || \
+     [[ "$err" == *"LINKEDIN_ORG_ACCESS_TOKEN unset"* ]] || \
+     [[ "$err" == *"w_organization_social"* ]] || \
+     [[ "$err" =~ HTTP\ (401|403) ]]; then
+    echo "vendor-blocked"
+    return
+  fi
+  echo "content-rejected"
+}
+
+# append_to_linkedin_tracker -- Append a "- [ ] Re-publish: ..." line to the
+# rolling tracker issue (default #4046). Idempotent: skips if the same line
+# already exists. Failure modes (gh down, tracker issue missing) log to stderr
+# and return 1; the daily cron retries tomorrow.
+append_to_linkedin_tracker() {
+  local case_name="$1"
+  local section="$2"
+  local error_reason="$3"
+  local tracker="${LINKEDIN_TRACKER_ISSUE:-4046}"
+  local marker="- [ ] Re-publish: ${case_name} (${section})"
+  local current_body
+  current_body=$(gh issue view "$tracker" --json body --jq .body 2>/dev/null) || {
+    echo "Warning: failed to fetch tracker #${tracker} body (reason: ${error_reason}). Will retry next cron." >&2
+    return 1
+  }
+  if printf '%s' "$current_body" | grep -qF -- "$marker"; then
+    echo "[info] Tracker #${tracker} already lists \"${case_name} (${section})\" — skip append."
+    return 0
+  fi
+  local updated_body
+  updated_body=$(printf '%s\n%s\n' "$current_body" "$marker")
+  if printf '%s' "$updated_body" | gh issue edit "$tracker" --body-file - >/dev/null; then
+    echo "[ok] Appended \"${case_name} (${section})\" to tracker #${tracker}"
+  else
+    echo "Warning: failed to update tracker #${tracker} (reason: ${error_reason}). Will retry next cron." >&2
+    return 1
+  fi
+}
+
 create_linkedin_fallback_issue() {
   local file="$1"
   local section="${2:-LinkedIn Personal}"
   local error_reason="${3:-}"
+
+  # Route via the error-class matrix: vendor-blocked failures (missing token,
+  # 401/403, missing scope) all share a root cause and would otherwise produce
+  # one fallback issue per post (the 56-day 9-issue accretion that motivated
+  # #4046). Append them to the rolling tracker instead. Content-rejected falls
+  # through to the per-post issue creation below.
+  local error_class
+  error_class=$(classify_linkedin_error "$error_reason")
+  if [[ "$error_class" == "vendor-blocked" ]]; then
+    append_to_linkedin_tracker "$CASE_NAME" "$section" "$error_reason"
+    return $?
+  fi
+
   local linkedin_content
   linkedin_content=$(extract_section "$file" "$section")
 
