@@ -31,6 +31,7 @@ const NEXT_HEADING = "### Retroactive Gate Application";
 // drift between server.tf and this fixture (#3068).
 const TRIGGER_FILES = [
   "apps/web-platform/infra/ci-deploy.sh",
+  "apps/web-platform/infra/ci-deploy-wrapper.sh",
   "apps/web-platform/infra/webhook.service",
   "apps/web-platform/infra/cat-deploy-state.sh",
   "apps/web-platform/infra/canary-bundle-claim-check.sh",

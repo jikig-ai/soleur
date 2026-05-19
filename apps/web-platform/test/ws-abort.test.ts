@@ -33,9 +33,9 @@ describe("abortActiveSession", () => {
     if (!abortActiveSession) return; // SDK not available in CI
     const session: ClientSession = { ws: mockWs, conversationId: "conv-A", lastActivity: Date.now() };
 
-    abortActiveSession("user-1", session);
+    abortActiveSession("00000000-0000-0000-0000-000000000001", session);
 
-    expect(agentRunnerModule.abortSession).toHaveBeenCalledWith("user-1", "conv-A", "superseded");
+    expect(agentRunnerModule.abortSession).toHaveBeenCalledWith("00000000-0000-0000-0000-000000000001", "conv-A", "superseded");
     expect(session.conversationId).toBeUndefined();
   });
 
@@ -43,7 +43,7 @@ describe("abortActiveSession", () => {
     if (!abortActiveSession) return;
     const session: ClientSession = { ws: mockWs, lastActivity: Date.now() };
 
-    abortActiveSession("user-1", session);
+    abortActiveSession("00000000-0000-0000-0000-000000000001", session);
 
     expect(agentRunnerModule.abortSession).not.toHaveBeenCalled();
     expect(session.conversationId).toBeUndefined();
@@ -53,8 +53,8 @@ describe("abortActiveSession", () => {
     if (!abortActiveSession) return;
     const session: ClientSession = { ws: mockWs, conversationId: "conv-C", lastActivity: Date.now() };
 
-    abortActiveSession("user-1", session);
-    abortActiveSession("user-1", session);
+    abortActiveSession("00000000-0000-0000-0000-000000000001", session);
+    abortActiveSession("00000000-0000-0000-0000-000000000001", session);
 
     expect(agentRunnerModule.abortSession).toHaveBeenCalledTimes(1);
   });

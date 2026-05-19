@@ -8,7 +8,7 @@ export function WorkspaceNotReady() {
             <circle cx="12" cy="12" r="10" />
           </svg>
         </div>
-        <h1 className="mb-2 font-serif text-lg font-medium text-soleur-text-primary">
+        <h1 className="mb-2 text-lg font-medium text-soleur-text-primary">
           Setting Up Your Workspace
         </h1>
         <p className="text-sm text-soleur-text-secondary">

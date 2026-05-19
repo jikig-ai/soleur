@@ -4,7 +4,7 @@ date: 2026-04-03
 problem_type: integration_issue
 component: authentication
 symptoms:
-  - "GitHub OAuth consent screen shows raw Supabase URL (ifsccnjhymdmidffkzhl.supabase.co) as redirect destination"
+  - "GitHub OAuth consent screen shows raw Supabase URL (<PRD_REF>.supabase.co) as redirect destination"
   - "Exposes internal infrastructure URL to users during sign-in"
 root_cause: config_error
 resolution_type: config_change
@@ -16,13 +16,13 @@ tags: [supabase, custom-domain, oauth, github, google, dns, terraform, branding]
 
 ## Problem
 
-The GitHub OAuth consent screen displayed `https://ifsccnjhymdmidffkzhl.supabase.co` as the redirect URL, exposing internal infrastructure to users and eroding trust during sign-in. The same issue affected Google OAuth.
+The GitHub OAuth consent screen displayed `https://<PRD_REF>.supabase.co` as the redirect URL, exposing internal infrastructure to users and eroding trust during sign-in. The same issue affected Google OAuth.
 
 ## Solution
 
 1. **Upgraded Supabase to Pro plan** ($25/mo) and enabled the Custom Domain add-on ($10/mo)
 2. **Added DNS records in Terraform** (`apps/web-platform/infra/dns.tf`):
-   - CNAME: `api.soleur.ai` -> `ifsccnjhymdmidffkzhl.supabase.co` (NOT proxied -- Supabase needs direct DNS for SSL)
+   - CNAME: `api.soleur.ai` -> `<PRD_REF>.supabase.co` (NOT proxied -- Supabase needs direct DNS for SSL)
    - TXT: `_acme-challenge.api.soleur.ai` with value from `supabase domains create` output
 3. **Created and verified custom domain** via Supabase CLI (`supabase domains create`, `reverify`, `activate`)
 4. **Updated OAuth provider callback URLs** BEFORE activating the custom domain (critical ordering)

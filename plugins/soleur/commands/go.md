@@ -16,6 +16,20 @@ Unified entry point for all Soleur workflows. Classify the user's intent and rou
 
 Do not proceed until there is input from the user.
 
+## Step 0: Session-Start Preamble
+
+Before any other work, run the session-start gates from AGENTS.md (`wg-at-session-start-run-bash-plugins-soleur` + `wg-at-session-start-after-cleanup-merged`):
+
+```bash
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && \
+  git worktree list && \
+  git show main:.mcp.json > .mcp.json 2>/dev/null || true
+```
+
+The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree (file gets overwritten on next session-start from the new CWD). Skip silently on first error — do not block routing on session-start hygiene.
+
+See `knowledge-base/project/learnings/2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record.md` Session Errors #1-#2 for the gap this closes.
+
 ## Step 1: Worktree Context
 
 Run `pwd`. If the path contains `.worktrees/`, extract the feature name and mention it:
@@ -32,11 +46,21 @@ Analyze the user input and classify intent using semantic assessment:
 |--------|----------------|-----------|
 | fix | The user describes broken behavior, errors, regressions, or something that needs fixing | `soleur:one-shot` |
 | drain | "fix all issues labeled X", "drain the Y backlog", "close all label:Z", "clean up the X backlog" | `soleur:drain-labeled-backlog` |
-| review | "review PR", "check this code", PR number reference | `soleur:review` |
+| clo-attestation | The user input is `#N` (or a bare number) AND `gh issue view N` returns a body containing `clo_routable: true` OR matches ALL of: `type:\s*manual`, `manual_because:\s*subjective-design-call`, AND at least one external legal-source signal (`eur-lex\.europa\.eu`, `leginfo\.legislature\.ca\.gov`, `congress\.gov`, `federalregister\.gov`, `legislation\.gov\.uk`, `laws-lois\.justice\.gc\.ca`, OR a `Art\.\s*[0-9]+` / `§\s*[0-9]+` statute citation in the body). Must fire BEFORE the `review` row. | `clo` agent (Task spawn; the agent's prompt receives the full issue body + the verification question(s) extracted from the body) |
+| review | "review PR", "check this code", PR number reference (when `#N` resolves via `gh pr view N` — confirm PR-vs-issue type before routing) | `soleur:review` |
+| legal-threshold | The user input mentions an inbound vendor MSA, DSAR (data subject access request) / right-to-be-forgotten / data deletion request / account deletion request / data export request / "what data do you have on me", AI vendor terms / vendor AI review, OSS license question (GPL/AGPL/SSPL/copyleft), OR a personal-data exposure / unauthorized access / PII leak that crosses a statutory clock (GDPR Art. 33 72h) — events that exceed founder-grade compliance helping and warrant a downstream specialist | `clo` agent (Task spawn; the Assess phase emits the threshold catalog from `knowledge-base/legal/recommended-tools.md`) |
+| incident | The user describes a live or recent production incident (outage, customer-impact, Sentry alert) needing classification + PIR. NOTE: pure data breaches without an operational outage route to `legal-threshold` above (statutory clock takes precedence); use `incident` for ops-postmortem scope (uptime, latency, error-rate). | `soleur:incident` |
 | default | Everything else — features, exploration, questions, generation, vague scope | `soleur:brainstorm` |
 
-If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step.
+If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step. **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill use the **Task tool** to spawn the agent — the agent's prompt receives the original user input as the task description. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
 
-When routing to `soleur:drain-labeled-backlog`, extract the label value from the user's message. If the user used a bare name (e.g., "security"), resolve it to the namespaced form by running `gh label list --limit 100 | grep -i <name>` before invoking (rule `cq-gh-issue-label-verify-name`). Pass the resolved label via `--label <resolved>` in the skill arguments.
+**PR-vs-issue type resolution (when `#N` or a bare number is the input):** Before evaluating the `clo-attestation` and `review` rows, run `gh issue view N --json body,title,state 2>/dev/null` to determine whether `N` is an issue. If `gh issue view` succeeds AND the body satisfies the `clo-attestation` predicate, route to clo. If `gh issue view` succeeds but no `clo-attestation` match, route to `soleur:review` only after confirming `gh pr view N` ALSO succeeds (otherwise the input is a non-attestation issue — route to default/brainstorm with the issue body as context). This ordering closes the gap that caused `/soleur:go #3998` to mis-route an issue to PR review. See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
+
+When routing to `soleur:drain-labeled-backlog`, extract the label value from the user's message. If the user used a bare name (e.g., "security"), resolve it to the namespaced form by running `gh label list --limit 100 | grep -i <name>` before invoking — `gh` rejects an invalid `--label` with a clear error, so verify against the live label set. Pass the resolved label via `--label <resolved>` in the skill arguments.
 
 If intent is truly ambiguous, use the **AskUserQuestion tool** with 4 options: Brainstorm (Recommended), Fix (one-shot), Drain (labeled backlog), Review.
+
+## Sharp Edges
+
+- **NAME-relative worktree detection (Linear-ID-keyed entry).** Step 1 only checks whether `pwd` is currently inside a worktree (CWD-relative). If the user input contains a Linear ID (`SOL-\d+`) and `git worktree list` shows a sibling worktree named after that ID (e.g., `.worktrees/feat-one-shot-sol-39-*` or `.worktrees/feat-fix-sol-39-*`), surface that state BEFORE routing to one-shot — routing fresh would collide with the existing branch and orphan any open draft PR. Present a 4-option `AskUserQuestion` (continue / review existing PR / restart fresh / brief). If "restart fresh" is chosen, follow up with a SECOND `AskUserQuestion` enumerating cleanup scope (full nuke / soft nuke / cancel) so destructive actions get explicit per-step approval. See `knowledge-base/project/learnings/2026-05-12-soleur-go-restart-fresh-from-existing-wip.md`.
+- **Worktree-recovery PR-merge probe.** When the user asks to resume/recover a stale worktree (e.g., after a laptop crash, branch switched away, phantom staged files), run `gh pr list --head <branch> --state all --json number,state` BEFORE proposing "reset to remote branch". A remote feature branch existing is NOT proof the work is open — squash merges leave the source branch intact. If `state == MERGED`, the recovery path is clean-and-remove (`git reset --hard HEAD` → `git worktree remove` → `git push origin --delete <branch>`), not reset-to-remote (which would silently re-introduce pre-merge state). See `knowledge-base/project/learnings/workflow-patterns/2026-05-19-worktree-recovery-check-pr-merge-status-first.md`.

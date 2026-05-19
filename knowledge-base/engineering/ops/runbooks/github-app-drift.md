@@ -7,7 +7,7 @@ applies_to:
   - apps/web-platform/scripts/verify-required-secrets.sh
 related_issues: [3187, 3181, 2997]
 related_prs: [3224]
-brand_survival: single-user-incident
+brand_survival_threshold: single-user incident
 ---
 
 # GitHub App drift-guard runbook
@@ -82,12 +82,18 @@ hourly run.
 ### 3. Store in Doppler `prd`
 
 ```bash
-doppler secrets set GH_APP_DRIFTGUARD_APP_ID -p soleur -c prd
+# First invocation reads from the operator's terminal (paste + Ctrl-D); `--silent`
+# suppresses Doppler's just-set echo. Do NOT add `>/dev/null 2>&1` here — it hides
+# the readline prompt and makes the command look hung.
+doppler secrets set GH_APP_DRIFTGUARD_APP_ID --silent -p soleur -c prd
 # Paste the App database ID (e.g., 1234567), then Ctrl-D.
 
+# Second invocation is pipe-fed (non-interactive) — full belt-and-suspenders applies.
 cat ./private-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 \
-  --plain -p soleur -c prd
+  --silent --plain -p soleur -c prd >/dev/null 2>&1
 ```
+
+> Doppler `secrets {set,delete}` echo guidance — see [`knowledge-base/project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md`](../../../project/learnings/2026-05-18-supabase-custom-access-token-hook-discriminator.md) §Leak-2 (widened 2026-05-18 via #4029).
 
 Verify Doppler holds them:
 
@@ -258,7 +264,7 @@ over `|` to avoid stdout buffers visible to ptrace on shared hosts.
 4. **Byte-count assertion** (defense against transport corruption):
    `[[ $(wc -c < new-key.pem.b64) -ge 2000 && $(wc -c < new-key.pem.b64) -le 4096 ]] && echo OK`.
    A 2048-bit RSA PEM in PKCS#8 is ~3000 chars when base64-encoded.
-5. **Update Doppler.** `cat new-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --plain -p soleur -c prd`.
+5. **Update Doppler.** `cat new-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --silent --plain -p soleur -c prd >/dev/null 2>&1`.
 6. **Sync to GitHub Actions.** `gh secret set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 < <(doppler secrets get GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 -p soleur -c prd --plain)`.
    (Process substitution avoids the intermediate pipe stdout buffer.)
 7. **Trigger the guard.** `gh workflow run scheduled-github-app-drift-guard.yml`.
@@ -336,16 +342,16 @@ and creates false confidence.
 
 ## Why this guard exists
 
-The user-facing OAuth probe (`scheduled-oauth-probe.yml`, every 15
-minutes) detects regressions at the request-level: callback URL drift,
+The user-facing OAuth probe (`scheduled-oauth-probe.yml`, every hour)
+detects regressions at the request-level: callback URL drift,
 provider-disabled, settings-misconfigured. It does NOT detect a silent
 swap of the App itself — if an attacker (or a misconfigured operator)
 points the GitHub App backing OAuth at a different App, every sign-in
 goes to a different consent screen, but the user-facing probe still
 sees a 302 to a valid GitHub authorize page.
 
-This guard closes that gap. It runs hourly (not 15-min like the OAuth
-probe) because App-database-level changes are rare; an hourly cadence
+This guard closes that gap. It runs hourly — matching the OAuth probe's
+cadence — because App-database-level changes are rare; an hourly cadence
 bounds the worst-case detection window at 60 minutes — well under the
 GDPR 72-hour notification clock — without burning CI budget on data
 that doesn't change.

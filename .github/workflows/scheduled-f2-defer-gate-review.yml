@@ -1,0 +1,196 @@
+name: "Scheduled (once): F2 defer-gate telemetry review (#3800)"
+
+on:
+  schedule:
+    - cron: '0 9 29 5 *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: schedule-once-f2-defer-gate-review
+  cancel-in-progress: false
+
+env:
+  ISSUE_NUMBER: "3800"
+  COMMENT_ID: "4461749150"
+  FIRE_DATE: "2026-05-29"
+  WORKFLOW_NAME: "scheduled-f2-defer-gate-review.yml"
+  EXPECTED_AUTHOR: "deruelle"
+  EXPECTED_CREATED_AT: "2026-05-15T17:09:01Z"
+
+jobs:
+  run-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: One-time fire (with self-neutralization)
+        uses: anthropics/claude-code-action@51ea8ea73a139f2a74ff649e3092c25a904aed7e # v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: true
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: >-
+            --max-turns 25
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep
+          prompt: |
+            ## Neutralization primitive (referenced by D3 abort, preflight-failure abort, and the Final step)
+
+            To **neutralize** the workflow (prevent any future cron fires), do
+            the following IN ORDER. The previous mechanism `gh workflow disable
+            "$WORKFLOW_NAME"` was removed in #3153 — `claude-code-action`'s App
+            installation token does not honor `actions: write`.
+
+            1. **Idempotency precheck.** Read `.github/workflows/$WORKFLOW_NAME`.
+               If the `on:` block has already had `schedule:` removed (or only
+               contains `workflow_dispatch:`), skip to step 6 (success, no-op).
+            2. **Edit YAML.** Use the Read+Edit tools (NOT shell `sed`/`awk`)
+               to remove the `schedule:` key and its child list under `on:`.
+               Leave any other triggers (`workflow_dispatch:`, etc.) intact.
+               If `schedule:` is the ONLY trigger, replace the entire `on:`
+               block with `on:\n  workflow_dispatch:` so the file remains a
+               valid GHA workflow.
+            3. **Stage and guard against no-op commit.**
+               `git add .github/workflows/$WORKFLOW_NAME` then
+               `git diff --cached --quiet`. If the diff is empty (exit 0),
+               skip to step 6.
+            4. **Configure git identity, then commit.**
+               ```bash
+               git config user.name "github-actions[bot]"
+               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+               git commit -m "chore(schedule): neutralize one-time workflow $WORKFLOW_NAME (post-fire cleanup, #$ISSUE_NUMBER)"
+               ```
+            5. **Push — direct first, PR fallback.**
+               - **5a.** Try direct push:
+                 `git push origin HEAD:${{ github.event.repository.default_branch }}`.
+                 If exit 0, go to step 6.
+               - **5b.** If direct push fails: first check whether a stale
+                 neutralization PR already exists:
+                 `EXISTING=$(gh pr list --search "head:chore/neutralize-$WORKFLOW_NAME" --state open --json url --jq '.[0].url // empty')`.
+                 If non-empty, treat as a successful handoff — go to step 6.
+                 Otherwise create an ephemeral branch
+                 `chore/neutralize-$WORKFLOW_NAME-$(date -u +%Y%m%d%H%M%S)`,
+                 push it, then open a PR via
+                 `gh pr create --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" --title "chore(schedule): neutralize $WORKFLOW_NAME" --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER."`.
+                 Then attempt auto-merge under the merge-main lock:
+                 `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+                 If wrapper returns rc=99 (>600s contention), surface to
+                 operator and retry. If `merge.err` contains
+                 `auto-merge is not allowed`, that is still a successful
+                 neutralization handoff (D3 catches any re-fire before the
+                 PR lands).
+            6. **Success.** No fallback comment posted; the task-result
+               comment from the main work suffices.
+            7. **Both legs failed.** Post the fallback comment to issue
+               #$ISSUE_NUMBER with body:
+               "Workflow ran but auto-cleanup failed (direct push: <err>; PR
+               create: <err>). Operator action required: edit
+               `.github/workflows/$WORKFLOW_NAME` to remove the `schedule:`
+               trigger."
+
+            ## Pre-flight (abort with observation comment if any check fails)
+
+            1. **Date guard (PRIMARY cross-year defense, D3):**
+               First, refuse to run if `$FIRE_DATE` is empty or malformed:
+               `[[ "$FIRE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "FIRE_DATE empty or malformed"; <invoke neutralization>; exit 0; }`
+               Then assert: `[[ "$(date -u +%F)" == "$FIRE_DATE" ]]` must be
+               true. If false, invoke Neutralization primitive and exit 0.
+            2. **Idempotency:** if `on:` block no longer contains `schedule:`,
+               exit 0 immediately.
+            3. **Repo not archived:**
+               `[[ "$(gh repo view --json isArchived --jq .isArchived)" == "false" ]]`.
+            4. **Issue OPEN + same repo:**
+               `gh issue view "$ISSUE_NUMBER" --json state,repository_url`.
+               State must be OPEN, `repository_url` must end in `${{ github.repository }}`.
+            5. **Comment exists + matches issue:**
+               `gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .issue_url`
+               must end in `/issues/$ISSUE_NUMBER`.
+            6. **Comment-author pin (D5, FIRST half):**
+               `actual_author=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .user.login)`
+               then `[[ "$actual_author" == "$EXPECTED_AUTHOR" ]]`.
+            7. **Comment-immutability pin (D5, SECOND half):**
+               `meta=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq '"\(.created_at)\t\(.updated_at)"')`
+               verify `created_at == EXPECTED_CREATED_AT` AND `created_at == updated_at`.
+
+            If ANY pre-flight check fails: post a single observation comment
+            to issue #$ISSUE_NUMBER naming which check failed, then invoke
+            the Neutralization primitive and exit 0.
+
+            ## Task
+
+            Fetch the documented task spec from the referenced comment:
+
+            `body=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .body)`
+
+            If `$body` is empty (`[[ -z "$body" ]]`), treat as a pre-flight
+            failure: post observation comment "comment body is empty",
+            invoke Neutralization, exit 0.
+
+            Otherwise execute the documented work as instructed by `$body`.
+            When complete, post results as a follow-up comment on issue
+            #$ISSUE_NUMBER (re-verify `gh issue view "$ISSUE_NUMBER" --json
+            repository_url` matches `${{ github.repository }}` immediately
+            before posting).
+
+            ## Final step (mandatory, last)
+
+            Invoke the Neutralization primitive above. This is D4.
+
+            Do NOT add any agent-driven post-step — `claude-code-action`
+            revokes its App-installation token after this step.
+
+            ## Post-fire verification (in-prompt observation) — #3403
+
+            After Neutralization completes, also read the workflow file back
+            from the default branch via the contents API:
+
+            ```bash
+            CONTENT=$(gh api "repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_NAME" --jq .content | base64 -d)
+            STILL_HAS_SCHEDULE=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*schedule:' || true)
+            HAS_DISPATCH=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*workflow_dispatch:' || true)
+            ```
+
+            Expected: `STILL_HAS_SCHEDULE == 0` AND `HAS_DISPATCH >= 1`.
+            If verification FAILS, post a follow-up comment to issue
+            #$ISSUE_NUMBER:
+
+            "Workflow neutralization claimed success but post-fire
+            verification shows `schedule:` still present (or
+            `workflow_dispatch:` removed) on the default branch. Manual
+            intervention required."
+
+      # Post-step verification — runs in GHA shell so exit code propagates
+      # to the workflow conclusion.
+      - name: Post-fire verification (#3403)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          STILL_HAS_SCHEDULE=99
+          HAS_DISPATCH=0
+          for attempt in 1 2 3; do
+            CONTENT=$(gh api "repos/$REPO/contents/.github/workflows/$WORKFLOW_NAME" --jq .content 2>/dev/null | base64 -d || true)
+            STILL_HAS_SCHEDULE=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*schedule:' || true)
+            HAS_DISPATCH=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*workflow_dispatch:' || true)
+            if [[ "$STILL_HAS_SCHEDULE" == "0" && "$HAS_DISPATCH" -ge "1" ]]; then
+              echo "::notice::Post-fire verification passed (attempt $attempt)."
+              exit 0
+            fi
+            echo "Attempt $attempt: schedule=$STILL_HAS_SCHEDULE dispatch=$HAS_DISPATCH — retrying after replication lag."
+            sleep 10
+          done
+          echo "::error::Post-fire verification failed: schedule=$STILL_HAS_SCHEDULE dispatch=$HAS_DISPATCH"
+          exit 1

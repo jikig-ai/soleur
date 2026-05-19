@@ -4,7 +4,6 @@ import Link from "next/link";
 import { CheckCircleIcon } from "@/components/icons";
 import { GoldButton } from "@/components/ui/gold-button";
 import { Card } from "@/components/ui/card";
-import { serif } from "./fonts";
 import type { ProjectHealthSnapshot } from "@/server/project-scanner";
 
 interface ReadyStateProps {
@@ -43,7 +42,7 @@ export function ReadyState({
         </div>
 
         <div className="space-y-3">
-          <h1 className={`${serif.className} text-4xl font-semibold`}>
+          <h1 className="text-4xl font-semibold">
             Your AI Team Is Ready.
           </h1>
           <p className="text-base text-soleur-text-secondary">
@@ -98,7 +97,7 @@ export function ReadyState({
       </div>
 
       <div className="space-y-3">
-        <h1 className={`${serif.className} text-3xl font-semibold`}>
+        <h1 className="text-3xl font-semibold">
           {repoName}
         </h1>
         <span

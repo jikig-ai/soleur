@@ -11,11 +11,25 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({ query: vi.fn() }));
 const conversationUpdateEq = vi.fn().mockReturnValue({ error: null });
 const conversationUpdate = vi.fn().mockReturnValue({ eq: conversationUpdateEq });
 
-vi.mock("@supabase/supabase-js", () => ({
-  createClient: vi.fn(() => ({
+function makeSupabaseLike() {
+  return {
     from: vi.fn((table: string) => {
       if (table === "conversations") {
         return { update: conversationUpdate };
+      }
+      if (table === "users") {
+        // PR-C §2.4/§2.10 (#3244): auth probe ends in .maybeSingle()
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              maybeSingle: vi.fn(() => ({
+                data: { id: "user-1" },
+                error: null,
+              })),
+              single: vi.fn(() => ({ data: null, error: null })),
+            })),
+          })),
+        };
       }
       return {
         select: vi.fn(() => ({
@@ -34,7 +48,21 @@ vi.mock("@supabase/supabase-js", () => ({
         update: vi.fn(() => ({ eq: vi.fn(() => ({ error: null })) })),
       };
     }),
-  })),
+  };
+}
+
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: vi.fn(() => makeSupabaseLike()),
+}));
+
+// PR-C §2.4/§2.10 (#3244): conversation-writer + agent-runner now mint
+// tenant clients via `getFreshTenantClient`. Route through the same
+// shape so `conversationUpdate` mock continues to fire for the
+// reaper's `updateConversationFor` calls.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => makeSupabaseLike()),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: vi.fn() }));

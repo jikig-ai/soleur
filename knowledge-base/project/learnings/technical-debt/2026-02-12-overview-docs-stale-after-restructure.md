@@ -5,6 +5,7 @@ problem_type: best_practice
 component: documentation
 tags: [documentation, overview, component-counts, restructure]
 severity: high
+status: open
 ---
 
 # Overview Documentation Becomes Stale After Major Restructures

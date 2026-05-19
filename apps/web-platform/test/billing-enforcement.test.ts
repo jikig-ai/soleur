@@ -58,18 +58,22 @@ function setupSupabaseClient(userData: Record<string, unknown> | null, userError
 }
 
 function makeNextRequest(pathname: string, method = "GET"): {
-  nextUrl: { pathname: string; clone(): { pathname: string } };
+  nextUrl: URL & { clone(): URL };
   method: string;
   headers: Headers;
   cookies: { getAll: () => never[]; set: () => void };
 } {
-  return {
-    nextUrl: {
-      pathname,
-      clone() {
-        return { pathname };
-      },
+  // Real URL object so NextResponse.redirect(url) can stringify cleanly.
+  // The clone() helper mirrors NextRequest's contract: returns a fresh
+  // URL the middleware can mutate (.pathname, .search) without aliasing.
+  const base = new URL(`https://app.soleur.ai${pathname}`);
+  const nextUrl = Object.assign(base, {
+    clone() {
+      return new URL(base.href);
     },
+  }) as URL & { clone(): URL };
+  return {
+    nextUrl,
     method,
     headers: new Headers({
       host: "app.soleur.ai",
@@ -153,12 +157,21 @@ describe("Middleware billing enforcement", () => {
     expect(res.status).not.toBe(403);
   });
 
-  test("query error fails open (does not block)", async () => {
+  test("query error fails CLOSED — redirects to /accept-terms?error=db_unavailable (AC5)", async () => {
     setupSupabaseClient(null, { message: "connection error" });
 
     const res = await middleware(makeNextRequest("/api/conversations", "POST") as never);
 
-    // Fail-open: should NOT return 403
-    expect(res.status).not.toBe(403);
+    // Fail-closed per feat-oauth-tc-consent-3205 AC5. Returning 403
+    // would now be wrong; redirecting to /accept-terms is the new
+    // contract. Critically, NOT NextResponse.next() (which is what
+    // the old fail-open did) — that would silently admit users
+    // during a DB incident, an Art. 7(1) demonstrability breach.
+    expect([307, 308]).toContain(res.status);
+    const loc = res.headers.get("location");
+    expect(loc).not.toBeNull();
+    const url = new URL(loc!);
+    expect(url.pathname).toBe("/accept-terms");
+    expect(url.searchParams.get("error")).toBe("db_unavailable");
   });
 });

@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import {
+  injectFakeSupabaseSession,
+  mockSupabaseAuth,
+} from "./helpers/supabase-mocks";
 
 // ---------------------------------------------------------------------------
 // Mock KB tree data builders
@@ -43,87 +47,18 @@ function kbTree(...files: string[]): { tree: TreeNode } {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Mock user for Supabase auth responses (matches mock-supabase.ts MOCK_USER). */
-const MOCK_AUTH_USER = {
-  id: "test-user-id",
-  aud: "authenticated",
-  role: "authenticated",
-  email: "test@e2e.com",
-  email_confirmed_at: "2024-01-01T00:00:00Z",
-  phone: "",
-  confirmed_at: "2024-01-01T00:00:00Z",
-  app_metadata: { provider: "email", providers: ["email"] },
-  user_metadata: {},
-  identities: [],
-  created_at: "2024-01-01T00:00:00Z",
-  updated_at: "2024-01-01T00:00:00Z",
-};
-
 /** Intercept /api/kb/tree and all Supabase client-side calls before navigating. */
 async function setupDashboardMocks(page: Page, kbFiles: string[]) {
-  // Inject fake Supabase session into localStorage so the JS client
-  // doesn't short-circuit auth.getUser() before the HTTP mock triggers.
-  // Without this, the client sees no stored session and returns an auth
-  // error locally — the page.route() mock for /auth/v1/user never fires.
-  await page.addInitScript(() => {
-    const fakeSession = {
-      access_token: "test-access-token",
-      token_type: "bearer",
-      expires_in: 86400,
-      expires_at: Math.floor(Date.now() / 1000) + 86400,
-      refresh_token: "test-refresh-token",
-      user: {
-        id: "test-user-id",
-        aud: "authenticated",
-        role: "authenticated",
-        email: "test@e2e.com",
-        email_confirmed_at: "2024-01-01T00:00:00Z",
-        phone: "",
-        confirmed_at: "2024-01-01T00:00:00Z",
-        app_metadata: { provider: "email", providers: ["email"] },
-        user_metadata: {},
-        identities: [],
-        created_at: "2024-01-01T00:00:00Z",
-        updated_at: "2024-01-01T00:00:00Z",
-      },
-    };
-    localStorage.setItem(
-      "sb-localhost-auth-token",
-      JSON.stringify(fakeSession),
-    );
-  });
+  // Shared auth + session + realtime stubs (see e2e/helpers/supabase-mocks.ts).
+  await injectFakeSupabaseSession(page);
+  await mockSupabaseAuth(page);
 
-  // KB tree API (dashboard useEffect)
+  // KB tree API (dashboard useEffect) — onboarding-specific surface.
   await page.route("**/api/kb/tree", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(kbTree(...kbFiles)),
-    });
-  });
-
-  // Supabase Auth: getUser (useConversations hook calls supabase.auth.getUser())
-  await page.route("**/auth/v1/user", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(MOCK_AUTH_USER),
-    });
-  });
-
-  // Supabase Auth: token refresh (prevent delays from session refresh attempts)
-  await page.route("**/auth/v1/token*", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        access_token: "test-access-token",
-        token_type: "bearer",
-        expires_in: 86400,
-        expires_at: Math.floor(Date.now() / 1000) + 86400,
-        refresh_token: "test-refresh-token",
-        user: MOCK_AUTH_USER,
-      }),
     });
   });
 
@@ -137,18 +72,20 @@ async function setupDashboardMocks(page: Page, kbFiles: string[]) {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
 
-  // Supabase REST: users table (useOnboarding hook queries onboarding_completed_at)
+  // Supabase REST: users table (useOnboarding hook queries onboarding_completed_at).
+  // The `runtime_explainer_dismissed_at` field was added by PR-G (#3947) when
+  // useOnboarding's .select() was widened — mirror the mock-supabase.ts
+  // response shape so the banner stays dismissed across both mock paths.
   await page.route("**/rest/v1/users*", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify([{ onboarding_completed_at: "2024-01-01T00:00:00Z", pwa_banner_dismissed_at: "2024-01-01T00:00:00Z" }]),
+      body: JSON.stringify([{
+        onboarding_completed_at: "2024-01-01T00:00:00Z",
+        pwa_banner_dismissed_at: "2024-01-01T00:00:00Z",
+        runtime_explainer_dismissed_at: "2024-01-01T00:00:00Z",
+      }]),
     });
-  });
-
-  // Supabase Realtime: return empty response to prevent WebSocket retry loops
-  await page.route("**/realtime/**", async (route) => {
-    await route.fulfill({ status: 200, contentType: "text/plain", body: "" });
   });
 }
 

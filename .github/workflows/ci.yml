@@ -9,6 +9,19 @@ on:
 permissions:
   contents: read
 
+# Cancel in-progress CI runs for the same PR when a newer commit lands.
+# Scoped to pull_request events only — on `main` we let prior runs finish
+# so the audit trail (post-merge monitors, release-gate evidence) stays
+# intact. Group keys off (workflow, ref) so PR runs don't compete with
+# main-branch runs of the same workflow. github.workflow / github.ref /
+# github.event_name are GitHub-controlled meta-vars, not attacker-
+# controlled — safe to interpolate directly (the security-reminder hook
+# fires for any ${{ … }} in workflow files; the run:-command injection
+# class does not apply here).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   readme-counts:
     runs-on: ubuntu-latest
@@ -16,6 +29,44 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Verify README component counts match filesystem
         run: bash scripts/sync-readme-counts.sh --check
+
+  # detect-changes: drives the if:-gate on critical-css-gate. Mirrors the
+  # infra-validation.yml pattern (single boolean output instead of matrix).
+  # Cheap (one checkout + one git diff). See #3624.
+  # BASE_REF is only set on pull_request events; we short-circuit on other
+  # events (push / workflow_dispatch) before referencing it. It is passed
+  # via env: + quoted "$BASE_REF" per workflow-injection guidance — see
+  # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions.
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            # push to main / workflow_dispatch: always run (main is source of truth).
+            printf 'docs=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Path anchors mirror .github/workflows/deploy-docs.yml's on.push.paths
+          # (docs/skills/agents/commands/eleventy.config.js). The ci|deploy-docs
+          # workflow self-trigger is an intentional addition NOT in deploy-docs:
+          # edits to the gate workflow itself must run the gate to prevent
+          # silent gate-bypass on gate-logic changes. Keep this list in sync
+          # with deploy-docs.yml's paths: when adding new docs source trees.
+          CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          if printf '%s\n' "$CHANGED" | grep -qE '^(plugins/soleur/(docs|skills|agents|commands)/|eleventy\.config\.js$|\.github/workflows/(ci|deploy-docs)\.yml$)'; then
+            printf 'docs=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'docs=false\n' >> "$GITHUB_OUTPUT"
+          fi
 
   lint-bot-statuses:
     runs-on: ubuntu-latest
@@ -46,6 +97,22 @@ jobs:
         run: bash apps/web-platform/scripts/service-role-allowlist-gate.sh
       - name: Service-role allowlist gate self-test
         run: bash apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
+
+  # T&C document SHA + mirror drift guardrail (feat-oauth-tc-consent-3205).
+  # Asserts (a) canonical doc and plugin docs-site mirror have identical
+  # normalised prose bodies and (b) TC_DOCUMENT_SHA literal in
+  # apps/web-platform/lib/legal/tc-version.ts matches sha256(canonical)
+  # unless the same PR also bumped TC_VERSION. See plan AC7 + Phase 6.
+  tc-document-sha-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Verify T&C document SHA pinned in tc-version.ts
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: bash apps/web-platform/scripts/check-tc-document-sha.sh
 
   rule-metrics-shape:
     runs-on: ubuntu-latest
@@ -112,9 +179,34 @@ jobs:
         working-directory: apps/web-platform
         run: npm run build
 
-  test:
+  # --- Test matrix: 3 shards + synthetic aggregator ---
+  #
+  # The single `test` job was split into three parallel shards
+  # (test-webplat / test-bun / test-scripts) so install + typecheck +
+  # vitest + bun-test workloads run concurrently. The synthetic `test`
+  # aggregator (below) is the required status check on branch-protection
+  # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
+  # every merge. Each shard invokes scripts/test-all.sh with the
+  # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`).
+  # See plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
+  #
+  # NOTE for future maintainers: keep `actions/checkout`, `oven-sh/setup-bun`,
+  # `actions/setup-node`, and `actions/cache` SHA pins in lockstep across
+  # test-webplat / test-bun / test-scripts. When bumping any action, edit
+  # all three job blocks in the same commit; this YAML has no include or
+  # anchor mechanism so the duplication is structural.
+  # 2-way vitest --shard matrix. Vitest natively supports `--shard=K/N`;
+  # `test:ci` forwards `--shard=$VITEST_SHARD` when VITEST_SHARD is set.
+  # `tsc --noEmit` is independent of shard and runs only on shard 1 to
+  # avoid duplicated ~18s of type-check work. The synthetic `test`
+  # aggregator (below) reads `needs.test-webplat.result` which rolls up
+  # the matrix outcome — failure on any shard fails the whole job.
+  test-webplat:
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -128,25 +220,41 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      # First actions/cache usage in this repo. SHA pinned per the standing
+      # vendor-pin discipline (every other action above is also SHA-pinned).
+      # Cache key uses `apps/web-platform/bun.lock` (text format — `bun.lockb`
+      # does not exist in this repo; hashFiles() would silently hash zero bytes).
+      - name: Cache bun install (apps/web-platform)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            apps/web-platform/node_modules
+          key: bun-webplat-${{ runner.os }}-${{ hashFiles('apps/web-platform/bun.lock') }}
+          restore-keys: |
+            bun-webplat-${{ runner.os }}-
 
       - name: Install web-platform dependencies
         run: bun install --frozen-lockfile
         working-directory: apps/web-platform
 
       - name: Type-check web-platform
+        # Gated to the first matrix run so we type-check once even though
+        # vitest runs are sharded. `strategy.job-index == 0` is matrix-
+        # resize-safe (survives 2→N changes); a literal `'1/2'` would
+        # silently stop running tsc if the matrix is renumbered.
+        if: strategy.job-index == 0
         run: npx tsc --noEmit
         working-directory: apps/web-platform
 
-      - name: Run tests
-        run: bash scripts/test-all.sh
+      - name: Run webplat tests (vitest --shard)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITEST_SHARD: ${{ matrix.shard }}
+        run: bash scripts/test-all.sh webplat
 
-  e2e:
+  test-bun:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -155,33 +263,169 @@ jobs:
         with:
           bun-version-file: ".bun-version"
 
+      # setup-node is required for `npx --yes @11ty/eleventy` inside
+      # scripts/validate-blog-links.sh (one of the bun-group suites).
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+
+      - name: Cache bun install (root)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: bun-root-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-root-${{ runner.os }}-
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run bun-side tests
+        run: bash scripts/test-all.sh bun
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-scripts:
+    runs-on: ubuntu-latest
+    # No setup-bun, no setup-node, no install — bash + python3 ship on
+    # ubuntu-latest by default and the scripts group needs neither runtime.
+    # Verified at plan time: `grep -l '^bun ' plugins/soleur/test/*.test.sh`
+    # returned zero matches. If a future .test.sh adds a `bun` invocation,
+    # add `setup-bun` here (still no install needed).
+    #
+    # gitleaks is installed because plugins/soleur/skills/code-to-prd/test/
+    # (#2726) preflights `command -v gitleaks` and aborts exit 2 if absent.
+    # Version + SHA pinned identically to .github/workflows/secret-scan.yml —
+    # to upgrade, bump both files together. Variables are workflow-internal
+    # literals; no untrusted input is interpolated into the run: block.
+    env:
+      GITLEAKS_VERSION: "8.24.2"
+      GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install gitleaks (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run scripts-side tests (bash + python3)
+        run: bash scripts/test-all.sh scripts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Synthetic aggregator.
+  #
+  # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
+  # branch-protection ruleset 14145388's `test` required check. It carries
+  # three distinct values: (a) cross-layer truing — converts three shard
+  # `conclusion`s into the single required-context conclusion the ruleset
+  # already expects by name; (b) drift-resilience — survives a future
+  # ruleset edit that changes the required-context list, as long as the
+  # `test` name still gates merge; (c) observability — single PR-status
+  # row to inspect, not three. Removing this job orphans the ruleset's
+  # `test` required check and breaks every PR merge.
+  #
+  # The name `test` MUST match the required-context name on ruleset
+  # 14145388 exactly. Drift = merge gate orphaned for the whole team.
+  #
+  # `if: always()` + per-shard `result` inspection is the documented
+  # fail-closed pattern (precedent: scheduled-compound-promote.yml). Without
+  # `if: always()`, the default `needs:` semantics produce `skipped` when
+  # any dependency fails — and some branch-protection configs treat
+  # `skipped` as success (fail-open). No `|| true`, no `continue-on-error`.
+  # Per-shard `result` is read via env: + quoted "$VAR" per workflow-injection
+  # guidance (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/).
+  test:
+    needs: [test-webplat, test-bun, test-scripts]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate shard results
+        env:
+          WEBPLAT_RESULT: ${{ needs.test-webplat.result }}
+          BUN_RESULT: ${{ needs.test-bun.result }}
+          SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
+        run: |
+          fail=0
+          # Single colon-delimited iteration collapses the prior parallel
+          # for-list + case-arms. Adding a 4th shard now requires editing
+          # one line (plus needs: + env:); previously also required
+          # editing a separate case arm.
+          for entry in "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT"; do
+            shard="${entry%%:*}"
+            result="${entry#*:}"
+            if [[ "$result" != "success" ]]; then
+              echo "$shard: $result" >&2
+              fail=1
+            fi
+          done
+          if [[ $fail -ne 0 ]]; then
+            exit 1
+          fi
+          echo "All three shards green."
+
+  # E2E job runs inside the official Playwright container so Chromium + OS deps
+  # are pre-installed at the matching Playwright version. Container tag, digest,
+  # and the playwright pin in apps/web-platform/package-lock.json (1.58.2) MUST
+  # stay in lockstep — Playwright's browser-binary lookup is exact-revision (see
+  # learning 2026-03-20-playwright-shared-cache-version-coupling.md). When
+  # bumping playwright in apps/web-platform, bump BOTH the tag and the digest
+  # below in the same PR. NOTE: distinct from critical-css-gate's container
+  # (which uses v1.60.0 against the root install) — the two jobs use different
+  # lockfiles and are independent. DO NOT unify these versions without first
+  # bumping the corresponding lockfile pin (apps/web-platform/package-lock.json
+  # for this job, root for critical-css-gate); the two jobs are deliberately
+  # decoupled and a "tidying" unification will break browser-binary lookup.
+  e2e:
+    runs-on: ubuntu-latest
+    container:
+      # Pinned by both tag (greppable version) AND multi-arch manifest-list
+      # digest (vendor-pin discipline, per AGENTS.md
+      # hr-mcp-tools-playwright-etc-resolve-paths). The Playwright image runs
+      # as root by default — that is the supported path for actions/checkout
+      # (see https://github.com/actions/checkout/issues/956). Do NOT add
+      # `options: --user 1001` — it triggers UID-mismatch permission errors
+      # against /__w/_temp. Image ships Node 24 (no actions/setup-node needed).
+      image: mcr.microsoft.com/playwright:v1.58.2-jammy@sha256:4698a73749c5848d3f5fcd42a2174d172fcad2b2283e087843b115424303a565
+    defaults:
+      run:
+        # GitHub Actions container `run:` steps default to /bin/sh (dash on
+        # Jammy). Explicit bash avoids dash-vs-bash drift on any future step.
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install unzip (required by setup-bun)
+        # The Playwright Jammy image does not include unzip, which oven-sh/setup-bun
+        # shells out to during install. Without it the action fails with
+        # "error: unzip is required to install bun" (see oven-sh/setup-bun#55).
+        # critical-css-gate did not hit this because that job uses npm, not bun.
+        # Chained with `&&` so a flaky `apt-get update` (mirror outage) fails the
+        # step instead of falling through to a stale-cache install.
+        # `--no-install-recommends` keeps the install footprint minimal (no docs,
+        # no suggested-package pulls).
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
       - name: Install web-platform dependencies
         run: bun install --frozen-lockfile
-        working-directory: apps/web-platform
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ hashFiles('apps/web-platform/bun.lock') }}
-
-      - name: Install Playwright Chromium
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-        working-directory: apps/web-platform
-
-      - name: Install Playwright system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
         working-directory: apps/web-platform
 
       - name: Run E2E tests
@@ -198,16 +442,35 @@ jobs:
 
   # Pre-merge variant of the deploy-docs critical-CSS gate. Catches FOUC-class
   # regressions before merge, not after — see AGENTS.md cq-eleventy-critical-css-screenshot-gate.
+  # Scoped to docs-touching PRs via detect-changes (see #3624).
+  # Runs inside the official Playwright container so Chromium + OS deps are
+  # pre-installed at the matching Playwright version. Container tag, digest,
+  # and the playwright@X.Y.Z npm pin below MUST stay in lockstep with
+  # deploy-docs.yml's `deploy` job — both gates assert the same FOUC contract
+  # via the same screenshot-gate.mjs script.
   critical-css-gate:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
+    container:
+      # Pinned by both tag (greppable version) AND digest (vendor-pin discipline,
+      # per AGENTS.md hr-mcp-tools-playwright-etc-resolve-paths). The Playwright
+      # image runs as root by default — that is the supported path for
+      # actions/checkout (see https://github.com/actions/checkout/issues/956).
+      # Do NOT add `options: --user 1001` — it triggers UID-mismatch permission
+      # errors against /__w/_temp. Image ships Node 24 (no actions/setup-node
+      # needed). Future Playwright bumps: update tag, digest, AND the
+      # `playwright@<X.Y.Z>` npm pin below, in BOTH this workflow and
+      # deploy-docs.yml — see Sharp Edges in the plan.
+      image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc
+    defaults:
+      run:
+        # GitHub Actions container `run:` steps default to /bin/sh (dash on
+        # Jammy). Explicit bash avoids dash-vs-bash drift on any future step
+        # that uses `[[ ]]`, arrays, `read -r`, etc.
+        shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 20
-          cache: npm
 
       - name: Install root dependencies
         run: npm ci
@@ -226,24 +489,17 @@ jobs:
       - name: Static critical-CSS coverage check
         run: node plugins/soleur/docs/scripts/check-critical-css-coverage.mjs
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-critical-css-gate-${{ hashFiles('plugins/soleur/docs/scripts/screenshot-gate.mjs') }}
-
-      - name: Install Playwright + http-server (cache miss)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: |
-          npm install --no-save playwright@1 http-server@14
-          npx playwright install --with-deps chromium
-
-      - name: Install Playwright + http-server (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: |
-          npm install --no-save playwright@1 http-server@14
-          npx playwright install-deps chromium
+      - name: Install Playwright + http-server
+        # Container provides the Chromium binary + OS deps; the npm package
+        # (used by `import { chromium } from "playwright"` in screenshot-gate.mjs)
+        # must match the container's Playwright version EXACTLY — browser-binary
+        # lookup is exact-revision (see learning
+        # 2026-03-20-playwright-shared-cache-version-coupling.md). Use exact
+        # `X.Y.Z` — no `^`, no `~`, no `playwright@1` floating tag — or the
+        # npm package drifts off the container's Chromium revision. Keep this
+        # pin in sync with the container image tag above and with
+        # deploy-docs.yml's matching step.
+        run: npm install --no-save playwright@1.60.0 http-server@14
 
       - name: Screenshot + stylesheet-swap gates
         run: |

@@ -32,6 +32,7 @@ import {
   mintFounderJwt,
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
+import { registerSharedMintCache } from "@/test/helpers/mint-once";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -139,7 +140,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         const { error: nameError } = await service.from("team_names").insert({
           user_id: user.id,
           leader_id: "cpo",
-          custom_name: `Synthetic-${user.id.slice(0, 8)}`,
+          custom_name: `Synthetic ${user.id.slice(0, 8)}`,
         });
         expect(nameError, `seed team_names for ${user.email}`).toBeNull();
       }
@@ -148,6 +149,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       _resetTenantCache();
       const aMint = await mintFounderJwt(userA.id);
       const bMint = await mintFounderJwt(userB.id);
+      // Cap suite mint count to 2 (one per founder) — any subsequent
+      // `callMint` in `getFreshTenantClient` returns the cached JWT
+      // instead of burning GoTrue rate-limit budget. See
+      // `test/helpers/mint-once.ts` for the cascade rationale.
+      registerSharedMintCache([
+        [userA.id, aMint],
+        [userB.id, bMint],
+      ]);
 
       // 4. Build raw clients per-JWT (bypassing the cache so each test is
       // unambiguous about which JWT it's exercising). The cache layer is

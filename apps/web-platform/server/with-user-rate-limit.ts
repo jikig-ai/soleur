@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import type { User } from "@supabase/supabase-js";
+import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import {
   SlidingWindowCounter,
   startPruneInterval,
   logRateLimitRejection,
 } from "@/server/rate-limiter";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // Per-user rate limit wrapper for authenticated GET handlers.
 //
@@ -67,14 +69,27 @@ export function withUserRateLimit(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (!counter.isAllowed(user.id)) {
-      logRateLimitRejection(opts.feature, user.id);
-      return NextResponse.json(
-        { error: "Too many requests" },
-        { status: 429, headers: { "Retry-After": "60" } },
-      );
-    }
+    // Sentry symmetric userId pseudonymisation — #3710 PR-B deliverable 1.
+    //
+    // Forks the current Sentry scope so `setUser({id: hashUserIdValue(user.id)})`
+    // applies only to the inner handler's request lifecycle. The custom
+    // `http.createServer` boot path in `server/index.ts:51` bypasses
+    // `@sentry/nextjs`'s auto-installed per-request wrapper, so without this
+    // explicit isolation a setUser from request A could leak into a Sentry
+    // event captured during request B. ADR-029 (rename-at-boundary). F3 gate
+    // verified by `test/sentry-scope-isolation.test.ts`.
+    return Sentry.withIsolationScope(async () => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
 
-    return handler(req, user);
+      if (!counter.isAllowed(user.id)) {
+        logRateLimitRejection(opts.feature, user.id);
+        return NextResponse.json(
+          { error: "Too many requests" },
+          { status: 429, headers: { "Retry-After": "60" } },
+        );
+      }
+
+      return handler(req, user);
+    });
   };
 }

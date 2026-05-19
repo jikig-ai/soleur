@@ -1,7 +1,11 @@
 # Synthetic OAuth probe: detects sign-in regressions before users hit them.
-# Probes prod public auth surface every 15 minutes and pages ops on failure.
+# Probes prod public auth surface every hour and pages ops on failure.
 # Pattern: scheduled-cf-token-expiry-check.yml (issue file/comment dedup) +
 # scheduled-terraform-drift.yml (notify-ops-email integration).
+#
+# Cadence rationale lives in apps/web-platform/infra/sentry/cron-monitors.tf
+# (the header block explains why hourly matches observed GHA cron behavior
+# and how `checkin_margin_minutes` is sized).
 #
 # Security: all untrusted values (probe outputs) flow through env: vars before
 # being interpolated into run: shells. No github.event.* inputs are consumed.
@@ -13,7 +17,7 @@ name: "Scheduled: OAuth Probe"
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -520,3 +524,17 @@ jobs:
           else
             echo "No stale tracking issue to close."
           fi
+
+      # Single end-of-job heartbeat check-in via the shared
+      # ./.github/actions/sentry-heartbeat composite action. Status branch:
+      # empty probe failure_mode (probe green) -> ok, any failure_mode -> error.
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-oauth-probe
+          status: ${{ steps.probe.outputs.failure_mode == '' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

@@ -5,6 +5,7 @@ category: technical-debt
 tags: [pencil, macos, dependency-detection]
 severity: low
 synced_to: [pencil-setup]
+status: open
 ---
 
 # Unverified Pencil Desktop Bundle ID

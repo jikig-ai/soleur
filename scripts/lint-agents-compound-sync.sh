@@ -13,12 +13,15 @@
 # Source rule: AGENTS.md `cq-agents-md-why-single-line` (PR #2754, issue #2686).
 set -euo pipefail
 
-AGENTS_THRESHOLD=$(grep -oE 'rule-threshold: [0-9]+' AGENTS.md | head -1 | grep -oE '[0-9]+')
+# Post-#3493 sidecar split: cq-agents-md-why-single-line's body (and the
+# rule-threshold sentinel) lives in AGENTS.docs.md, not AGENTS.md. Search
+# the whole AGENTS*.md registry so this hook is location-tolerant.
+AGENTS_THRESHOLD=$(grep -hoE 'rule-threshold: [0-9]+' AGENTS*.md | head -1 | grep -oE '[0-9]+')
 COMPOUND_THRESHOLD=$(grep -oE 'rule-threshold: [0-9]+' plugins/soleur/skills/compound/SKILL.md | head -1 | grep -oE '[0-9]+')
 
 if [[ -z "$AGENTS_THRESHOLD" || -z "$COMPOUND_THRESHOLD" ]]; then
   echo "lint-agents-compound-sync: could not extract threshold from one or both files" >&2
-  echo "  AGENTS.md: '$AGENTS_THRESHOLD'" >&2
+  echo "  AGENTS*.md: '$AGENTS_THRESHOLD'" >&2
   echo "  plugins/soleur/skills/compound/SKILL.md: '$COMPOUND_THRESHOLD'" >&2
   exit 1
 fi

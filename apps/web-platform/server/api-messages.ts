@@ -1,8 +1,18 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import * as Sentry from "@sentry/nextjs";
 import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
 import { reportSilentFallback } from "@/server/observability";
 
+// PR-C §2.2 (#3244): module-level service-role client is PERMANENT —
+// used only for `supabase.auth.getUser(token)` at the route entry point
+// to validate the HTTP Bearer token BEFORE userId exists. The 2 tenant
+// `.from("conversations")` and `.from("messages")` sites below migrate
+// to `getFreshTenantClient(user.id)`. See `.service-role-allowlist`
+// entry rationale (PERMANENT — HTTP auth.getUser bootstrap).
 const supabase = createServiceClient();
 
 /**
@@ -46,14 +56,57 @@ export async function handleConversationMessages(
     return;
   }
 
+  // PR-C §2.2 (#3244): tenant-scoped client for the remaining reads.
+  // Per-handler RLS-baseline probe per plan §0.4: catches mid-session
+  // jti revocation or RLS policy churn that a cached JWT inside the
+  // TTL window would otherwise mask. On probe failure, surface 500
+  // (auth-domain dependency failed); the caller retries.
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(user.id);
+    const { error: probeErr } = await tenant
+      .from("users")
+      .select("id")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (probeErr) {
+      reportSilentFallback(probeErr, {
+        feature: "kb-chat",
+        op: "history-fetch-auth-probe",
+        extra: { conversationId, userId: user.id },
+      });
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Auth probe failed" }));
+      return;
+    }
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      reportSilentFallback(err, {
+        feature: "kb-chat",
+        op: "history-fetch-auth-probe",
+        extra: { conversationId, userId: user.id },
+      });
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Auth probe failed" }));
+      return;
+    }
+    throw err;
+  }
+
   // Verify conversation ownership
   // Stage 4 review F3 (#2886): also fetch `workflow_ended_at` so the chat
   // surface can hydrate its `workflowEnded` flag on reload of an already-
   // ended conversation. Without this, the in-memory lifecycle slice
   // initializes to `idle` and the input renders enabled.
-  const { data: conv, error: convErr } = await supabase
+  // PR-C §2.2 (#3244): tenant-scoped read. Explicit `.eq("user_id",
+  // user.id)` filter retained as belt-and-suspenders — RLS already
+  // enforces ownership, but the filter narrows the scan and documents
+  // the ownership invariant at the call site.
+  const { data: conv, error: convErr } = await tenant
     .from("conversations")
-    .select("id, total_cost_usd, input_tokens, output_tokens, workflow_ended_at")
+    .select(
+      "id, total_cost_usd, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, workflow_ended_at, created_at",
+    )
     .eq("id", conversationId)
     .eq("user_id", user.id)
     .single();
@@ -73,7 +126,10 @@ export async function handleConversationMessages(
   // can rehydrate attachment chips on reload (#3254). The relation is
   // FK'd via `message_attachments.message_id`; an empty array is the
   // expected shape for messages without attachments.
-  const { data: messages, error: msgErr } = await supabase
+  // PR-C §2.2 (#3244): tenant-scoped. RLS on `messages` FK-joins through
+  // `conversations.user_id`; the ownership-checked `conv.id` above
+  // already gates this read, so no explicit user filter needed here.
+  const { data: messages, error: msgErr } = await tenant
     .from("messages")
     .select(
       // `status` and `usage` (added in migration 040) carry the
@@ -121,6 +177,19 @@ export async function handleConversationMessages(
     totalCostUsd: Number(conv.total_cost_usd ?? 0),
     inputTokens: conv.input_tokens ?? 0,
     outputTokens: conv.output_tokens ?? 0,
+    // Migration 041 — cache tokens persisted per-conversation. Surface
+    // them in the resume response so the chat-surface cost badge can
+    // render `(input + cache_read + cache_creation)` instead of
+    // showing the uncached-input subset only (plan §Risks R8).
+    cacheReadInputTokens:
+      (conv as { cache_read_input_tokens?: number | null })
+        .cache_read_input_tokens ?? 0,
+    cacheCreationInputTokens:
+      (conv as { cache_creation_input_tokens?: number | null })
+        .cache_creation_input_tokens ?? 0,
     workflowEndedAt: conv.workflow_ended_at ?? null,
+    // PR-B (#3603) — surface conversation start time so the chat surface can
+    // gate the cohort-missing-reply marker on the row-absence cohort window.
+    createdAt: conv.created_at ?? null,
   }));
 }

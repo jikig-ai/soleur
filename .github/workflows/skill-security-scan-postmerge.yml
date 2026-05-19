@@ -1,0 +1,81 @@
+name: skill-security-scan / post-merge audit
+
+# Layer D of the defense-in-depth gate (#2719).
+#
+# Runs on every push to `main`. Re-validates trailer + artifact pairing on the
+# merged commit. If the pre-merge gate was bypassed (admin merge, force-push,
+# merge-queue rewrite), auto-files a `compliance/critical` issue with the
+# merge commit SHA.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    name: skill-security-scan post-merge audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Detect merged HIGH-RISK skills without override
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+          CI: 'true'
+        run: |
+          set -euo pipefail
+          parent=$(git rev-parse HEAD^1 2>/dev/null || git rev-parse HEAD)
+          added=$(git diff --name-only --diff-filter=A "$parent"...HEAD | \
+            grep -E '^(plugins/soleur/skills/[^/]+/SKILL\.md|plugins/soleur/agents/.+\.md|\.claude/skills/.+/SKILL\.md|\.claude/agents/.+\.md)$' || true)
+          if [ -z "$added" ]; then
+            echo "No SKILL/agent files added in this push; nothing to audit."
+            exit 0
+          fi
+          # Per-skill override binding (security review P1). See pr-trailer.yml.
+          matched_skills="$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$parent" --head HEAD 2>/dev/null | jq -r '.matched[].skill // empty' | sort -u)"
+          path_to_slug() {
+            local p="$1"
+            case "$p" in
+              plugins/soleur/skills/*/SKILL.md) p="${p#plugins/soleur/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/skills/*/SKILL.md)      p="${p#.claude/skills/}"; echo "${p%/SKILL.md}" ;;
+              .claude/agents/*.md|plugins/soleur/agents/*.md|plugins/soleur/agents/*/*.md|plugins/soleur/agents/*/*/*.md)
+                echo "$(basename "$p" .md)" ;;
+              *) echo "" ;;
+            esac
+          }
+          violations=""
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            [ ! -f "$path" ] && continue
+            verdict=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')
+            if [ "$verdict" = "HIGH-RISK" ]; then
+              slug=$(path_to_slug "$path")
+              if [ -z "$slug" ] || ! echo "$matched_skills" | grep -qFx -- "$slug"; then
+                violations="$violations $path"
+              fi
+            fi
+          done <<< "$added"
+          if [ -n "$violations" ]; then
+            body=$(printf '**Bypass detected.** Merge commit `%s` introduced HIGH-RISK skill(s) WITHOUT a corresponding override artifact under `knowledge-base/security/skill-overrides/`.\n\nViolating files:\n' "$MERGE_SHA")
+            for v in $violations; do
+              body="${body}- $v"$'\n'
+            done
+            body="${body}"$'\n'"This indicates the pre-merge gate (\`skill-security-scan-pr-trailer\`) was bypassed via admin merge or force-push. See plan #2719, R15 mitigation."
+            gh issue create \
+              --title "compliance/critical: skill-security-scan bypass on merge $MERGE_SHA" \
+              --label "compliance/critical" \
+              --body "$body" || true
+            echo "::error::Bypass detected; compliance/critical issue filed."
+            exit 1
+          fi
+          echo "Post-merge audit OK."

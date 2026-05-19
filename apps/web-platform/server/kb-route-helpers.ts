@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs } from "node:fs";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
+import { reportSilentFallback } from "@/server/observability";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import type { Logger } from "pino";
@@ -63,9 +68,25 @@ export async function authenticateAndResolveKbPath(
   } = await supabase.auth.getUser();
   if (!user) return err(401, "Unauthorized");
 
-  // Workspace
-  const serviceClient = createServiceClient();
-  const { data: userData } = await serviceClient
+  // PR-C §2.8 (#3244): tenant-scoped workspace read. RLS on `users`
+  // enforces `auth.uid() = id`. The `.single()` SELECT IS the auth
+  // probe (the route flow reads only the caller's own row before any
+  // cross-row work).
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(user.id);
+  } catch (mintErr) {
+    if (mintErr instanceof RuntimeAuthError) {
+      reportSilentFallback(mintErr, {
+        feature: "kb-route-helpers",
+        op: "authenticateAndResolveKbPath.tenant-mint",
+        extra: { userId: user.id },
+      });
+      return err(503, "Workspace not ready");
+    }
+    throw mintErr;
+  }
+  const { data: userData } = await tenant
     .from("users")
     .select(
       "workspace_path, workspace_status, repo_url, github_installation_id",
@@ -175,7 +196,6 @@ export type ResolveUserKbRootResult<E extends ResolveUserKbRootExtras = never> =
 export async function resolveUserKbRoot<
   E extends ResolveUserKbRootExtras = never,
 >(
-  serviceClient: ReturnType<typeof createServiceClient>,
   userId: string,
   opts?: { extras?: readonly E[] },
 ): Promise<ResolveUserKbRootResult<E>> {
@@ -184,7 +204,30 @@ export async function resolveUserKbRoot<
       ? `workspace_path, workspace_status, ${opts.extras.join(", ")}`
       : "workspace_path, workspace_status";
 
-  const { data: userData } = await serviceClient
+  // PR-C §2.8 (#3244): tenant-scoped. Single-row SELECT IS the auth
+  // probe. RuntimeAuthError → same "Workspace not ready" response so
+  // callers don't have to discriminate.
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(userId);
+  } catch (mintErr) {
+    if (mintErr instanceof RuntimeAuthError) {
+      reportSilentFallback(mintErr, {
+        feature: "kb-route-helpers",
+        op: "resolveUserKbRoot.tenant-mint",
+        extra: { userId },
+      });
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "Workspace not ready" },
+          { status: 503 },
+        ),
+      };
+    }
+    throw mintErr;
+  }
+  const { data: userData } = await tenant
     .from("users")
     .select(selectCols)
     .eq("id", userId)

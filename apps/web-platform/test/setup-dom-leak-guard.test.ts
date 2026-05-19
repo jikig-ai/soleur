@@ -25,4 +25,18 @@ describe("setup-dom.ts cleanup surfaces", () => {
   ])("retains %s", (_label, token) => {
     expect(source).toContain(token);
   });
+
+  // #3818 recurrence prevention: scrub MUST live in afterAll, not afterEach.
+  // See learning 2026-04-22-vitest-cross-file-leaks-and-module-scope-stubs.md Error 1.
+  it("scrubs inside afterAll (not afterEach)", () => {
+    const afterAllBlock =
+      source.match(/afterAll\s*\([\s\S]*?\n\}\);/)?.[0] ?? "";
+    expect(afterAllBlock).toContain("vi.restoreAllMocks()");
+    // Negative-space: an afterEach hook calling vi.restoreAllMocks() would
+    // defeat intra-file `vi.stubGlobal(...)` survival across tests — the
+    // exact regression #2594/#2505 fixed.
+    const afterEachBlock =
+      source.match(/afterEach\s*\([\s\S]*?\n\}\);/)?.[0] ?? "";
+    expect(afterEachBlock).not.toContain("vi.restoreAllMocks()");
+  });
 });

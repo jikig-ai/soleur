@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { safeReturnTo } from "@/lib/safe-return-to";
-import { serif, sans } from "@/components/connect-repo/fonts";
 import type { Repo, SetupStep } from "@/components/connect-repo/types";
 import type { ProjectHealthSnapshot } from "@/server/project-scanner";
 import { ChooseState } from "@/components/connect-repo/choose-state";
@@ -608,10 +607,7 @@ export default function ConnectRepoPage() {
   // Render
   // ---------------------------------------------------------------------------
   return (
-    <main
-      className={`${serif.variable} ${sans.variable} flex min-h-screen items-center justify-center p-4`}
-      style={{ fontFamily: "var(--font-sans), system-ui, sans-serif" }}
-    >
+    <main className="flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-3xl">
         {state === "choose" && (
           <>

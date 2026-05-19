@@ -10,9 +10,9 @@ date: 2026-04-07
 
 ## Problem
 
-The Doppler workspace was created under <jean@osmosis.team> (osmosis.team domain).
+The Doppler workspace was created under <jean@example.com> (osmosis.team domain).
 To fully decouple from the osmosis.team domain, ownership needed to transfer to
-<ops@jikigai.com> with zero downtime -- no service token rotation, no CI disruption,
+<ops@example.com> with zero downtime -- no service token rotation, no CI disruption,
 no production impact.
 
 ## Investigation
@@ -34,7 +34,7 @@ Checked the following before starting the migration:
 
 Invite-and-transfer approach (no parallel workspace needed):
 
-1. **Invited <ops@jikigai.com> as Owner** via Doppler dashboard Settings > Access >
+1. **Invited <ops@example.com> as Owner** via Doppler dashboard Settings > Access >
    Invite Member. API does not support invites (`POST /v3/workplace/invites`
    returns "Invalid API endpoint").
 2. **Updated billing_email and security_email** via API:
@@ -42,8 +42,8 @@ Invite-and-transfer approach (no parallel workspace needed):
    returns `success: true` with old values -- the change triggers a verification
    email and only takes effect after the recipient clicks the verification link.
 3. **User accepted invite** and verified both email changes via the verification
-   links sent to <ops@jikigai.com>.
-4. **Removed <jean@osmosis.team>** via dashboard Settings > Access > Remove button
+   links sent to <ops@example.com>.
+4. **Removed <jean@example.com>** via dashboard Settings > Access > Remove button
    next to the user. API does not support user removal (`DELETE /v3/workplace/users`
    returns "Invalid API endpoint").
 5. **Re-authenticated local CLI** with `doppler login --scope /`. The `--scope /`

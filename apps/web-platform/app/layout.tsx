@@ -4,6 +4,7 @@ import { SwRegister } from "./sw-register";
 import { NoFoucScript } from "@/components/theme/no-fouc-script";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { DynamicThemeColor } from "@/components/theme/dynamic-theme-color";
+import { sans } from "./fonts";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -47,7 +48,7 @@ export default async function RootLayout({
     // hydration check would otherwise warn about the mismatch on every page
     // load. Suppression is scoped to <html> only — child trees still get
     // normal hydration validation.
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={sans.variable} suppressHydrationWarning>
       <head>
         {/* Sync theme bootstrap — runs before paint to prevent FOUC.
             INVARIANT: this <script> MUST stay in <head> and MUST render

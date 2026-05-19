@@ -1,6 +1,6 @@
 ---
 name: dhh-rails-style
-description: "This skill should be used when writing Ruby and Rails code in DHH's 37signals style -- REST purity, fat models, thin controllers, Current attributes, and Hotwire patterns. Applies during Ruby/Rails generation, refactoring, or review."
+description: "This skill should be used when writing Ruby and Rails code in DHH's 37signals style: REST purity, fat models, thin controllers, Current attributes, Hotwire patterns."
 ---
 
 <objective>
