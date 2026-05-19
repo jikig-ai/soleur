@@ -1,0 +1,192 @@
+{
+  "schema": 1,
+  "generated_at": "2026-05-19T17:48:55Z",
+  "corpus_count": 1117,
+  "model_id": "claude-haiku-4-5-20251001",
+  "prompts": {
+    "light": "You are a paraphrase generator. Given a learning-summary passage from a software engineering knowledge base, produce a SHORT (1-2 sentence) paraphrase that preserves the technical terms verbatim but substitutes synonyms for surrounding verbs and connectors. Output ONLY the paraphrase as a single line of plain text — no preamble, no quotes, no markdown.",
+    "heavy": "You are a paraphrase generator. Given a learning-summary passage from a software engineering knowledge base, produce a SHORT (1-2 sentence) reformulation in a DIFFERENT framing: change sentence shape, swap nouns for verbs where natural, and avoid reusing the same technical terms unless the term IS the canonical name (e.g., \"Postgres\", \"RLS\", a file path). Output ONLY the reformulation as a single line of plain text — no preamble, no quotes, no markdown."
+  },
+  "extraction_stats": {
+    "has_frontmatter_pct": 0.7144,
+    "has_problem_section_pct": 0.9266,
+    "fallback_distribution": {
+      "description": 48,
+      "problem_section": 990,
+      "title_paragraph": 78,
+      "first_500": 1
+    }
+  },
+  "api_stats": {
+    "calls_made": 0,
+    "retries": 0,
+    "errors": 0
+  },
+  "cost_estimate_usd": 3.0718,
+  "r5": {
+    "identity_kbsearch": 0.49463327370304117,
+    "light_kbsearch": 0.40429338103756707,
+    "heavy_kbsearch": 0.1449016100178891,
+    "identity_grep": 0.9508050089445438,
+    "light_grep": 0.761180679785331,
+    "heavy_grep": 0.31305903398926654
+  },
+  "r10": {
+    "identity_kbsearch": 0.6288014311270125,
+    "light_kbsearch": 0.5143112701252236,
+    "heavy_kbsearch": 0.19499105545617174,
+    "identity_grep": 0.9615384615384616,
+    "light_grep": 0.7987477638640429,
+    "heavy_grep": 0.3622540250447227
+  },
+  "mrr": {
+    "identity_kbsearch": 0.3354172131043145,
+    "light_kbsearch": 0.2758920988072654,
+    "heavy_kbsearch": 0.0895809546426111,
+    "identity_grep": 0.9095969276201835,
+    "light_grep": 0.6802194072995335,
+    "heavy_grep": 0.25483794420968675
+  },
+  "gap_honesty": 0.3497,
+  "gap_skill_roi": -0.1682,
+  "fixture_seeds": [
+    {
+      "path": "knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": 5
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md",
+      "rank_heavy_kbsearch": 15,
+      "rank_heavy_grep": 12
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md",
+      "rank_heavy_kbsearch": 1,
+      "rank_heavy_grep": 3
+    }
+  ],
+  "worst_n": [
+    {
+      "path": "knowledge-base/project/learnings/2026-02-06-parallel-plan-review-catches-overengineering.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-06-spec-workflow-implementation.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "content-shape"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-09-parallel-subagent-fan-out-in-work-command.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-09-plugin-staleness-audit-patterns.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-12-command-vs-skill-selection-criteria.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-12-review-compound-before-commit-workflow.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-12-ship-integration-pattern-for-post-merge-steps.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-13-agent-prompt-sharp-edges-only.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-13-base-href-breaks-local-dev-server.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-13-static-docs-site-from-brand-guide.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-13-terraform-best-practices-research.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "content-shape"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-14-google-fonts-variable-font-deduplication.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md",
+      "rank_heavy_kbsearch": null,
+      "cause": "unknown"
+    }
+  ],
+  "bucket": "reopen-rag"
+}

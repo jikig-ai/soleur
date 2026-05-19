@@ -1092,6 +1092,27 @@ GAP_HONESTY=$(awk -v a="$R5_ID_KB" -v b="$R5_HV_KB" 'BEGIN { printf "%.4f", a - 
 GAP_SKILL_ROI=$(awk -v a="$R5_HV_KB" -v b="$R5_HV_GR" 'BEGIN { printf "%.4f", a - b }')
 BUCKET="$(determine_bucket "$R5_HV_KB")"
 
+# 4-decimal rounded versions for human display. The unrounded jq-emitted
+# values stay in the sibling JSON for downstream tooling; only the markdown
+# learning shows the readable form.
+round4() { awk -v v="$1" 'BEGIN { printf "%.4f", v }'; }
+R5_ID_KB_R="$(round4 "$R5_ID_KB")"; R5_LT_KB_R="$(round4 "$R5_LT_KB")"; R5_HV_KB_R="$(round4 "$R5_HV_KB")"
+R5_ID_GR_R="$(round4 "$R5_ID_GR")"; R5_LT_GR_R="$(round4 "$R5_LT_GR")"; R5_HV_GR_R="$(round4 "$R5_HV_GR")"
+R10_ID_KB_R="$(round4 "$R10_ID_KB")"; R10_LT_KB_R="$(round4 "$R10_LT_KB")"; R10_HV_KB_R="$(round4 "$R10_HV_KB")"
+R10_ID_GR_R="$(round4 "$R10_ID_GR")"; R10_LT_GR_R="$(round4 "$R10_LT_GR")"; R10_HV_GR_R="$(round4 "$R10_HV_GR")"
+MRR_ID_KB_R="$(round4 "$MRR_ID_KB")"; MRR_LT_KB_R="$(round4 "$MRR_LT_KB")"; MRR_HV_KB_R="$(round4 "$MRR_HV_KB")"
+MRR_ID_GR_R="$(round4 "$MRR_ID_GR")"; MRR_LT_GR_R="$(round4 "$MRR_LT_GR")"; MRR_HV_GR_R="$(round4 "$MRR_HV_GR")"
+R5_HV_KB_R_TLDR="$R5_HV_KB_R"
+
+# Skill-ROI interpretation depends on sign — kb-search outperforming grep
+# (positive) is the "skill earns its keep" finding; underperforming grep
+# (negative) is the "two-tier strategy hurts at scale" finding.
+if awk -v g="$GAP_SKILL_ROI" 'BEGIN { exit !(g+0 > 0) }'; then
+  GAP_SKILL_ROI_NOTE="positive — kb-search outperforms bare grep at heavy paraphrase."
+else
+  GAP_SKILL_ROI_NOTE="**negative** — bare grep outperforms kb-search at heavy paraphrase. The two-tier strategy's INDEX.md tier-1 hits displace corpus content hits from the cap-20, hurting recall on hard queries."
+fi
+
 # Worst-N (max 20) where rank_heavy_kbsearch is null
 WORST_N=$(jq -s --slurpfile corpus <(jq -s . "$CORPUS_NDJSON") '
   map(select(.intensity == "heavy" and .retriever == "kbsearch" and .rank == null))
@@ -1196,7 +1217,7 @@ jq -n \
 mv "$JSON_TMP" "$REPO_ROOT/$JSON_PATH"
 echo "  wrote $JSON_PATH"
 
-CLOSE_LINE="$(build_close_comment_line "$BUCKET" "$R5_HV_KB" "$LEARNING_PATH")"
+CLOSE_LINE="$(build_close_comment_line "$BUCKET" "$R5_HV_KB_R" "$LEARNING_PATH")"
 
 # Render learning markdown.
 LEARNING_TMP=$(mktemp)
@@ -1217,7 +1238,7 @@ description: One-shot bench of kb-search + bare-grep retrieval against the learn
 
 ## TL;DR
 
-Bucket: **\`$BUCKET\`**. \`R@5(heavy, kb-search) = $R5_HV_KB\` across $TOTAL_COUNT learnings.
+Bucket: **\`$BUCKET\`**. \`R@5(heavy, kb-search) = $R5_HV_KB_R\` across $TOTAL_COUNT learnings.
 
 EOF
   case "$BUCKET" in
@@ -1229,33 +1250,35 @@ EOF
 
 ## Methodology
 
-Per the plan (\`knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-bench-plan.md\`):
+Per the plan (\`knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-bench-plan.md\`) and post-first-run revision (see commit \`3fb52a05\`):
 
 - **Three paraphrase intensities** generated per learning: \`identity\` (ground-truth verbatim, no LLM), \`light\` (synonym substitution via Haiku), \`heavy\` (different framing via Haiku).
-- **Two retrievers** exercised per intensity: a bash emulator of kb-search's two-tier grep strategy (INDEX.md title matches → repo-wide content matches, cap 20), and a learnings-only \`git grep -l -i -F\` baseline.
+- **Keyword extraction from each query.** The retriever does NOT pass the full paraphrase sentence to \`grep -F\` (the original plan did; that yielded vacuous 0 because sentence-paraphrases never substring-match verbatim source text). Instead, a bash heuristic extracts the top-3 longest non-stopword tokens (≥4 chars, drop all-numeric, dedup) from each query.
+- **Token-overlap ranking.** Each candidate path is scored by the number of distinct extracted tokens that substring-match it (case-insensitive). Sort by score desc, ties broken by lexicographic path order, cap top-20.
+- **Two retrievers** exercised per intensity: a bash emulator of kb-search's two-tier strategy (INDEX.md title-line token-overlap as tier-1 → KB-wide content token-overlap as tier-2, combined unique cap-20), and a learnings-only baseline (single-tier token-overlap against \`knowledge-base/project/learnings/\`).
 - **min-rank synced_to semantics:** if a learning declares \`synced_to:\`, the source's rank is the BEST (lowest) position across {source_path, synced_to[…]} in the retriever's combined output. This biases R@5 upward vs. the strict "source-only" definition and is documented here so a future reader does NOT conflate the two.
-- **kb-search is a strategy, not a skill call.** The bench replicates the two-tier grep strategy in bash because (a) the skill is a Markdown prompt agents interpret, not a CLI, and (b) the strategy is the stable interface — its grep flags survive Markdown wording changes.
+- **kb-search is a strategy, not a skill call.** The bench replicates the two-tier strategy in bash because (a) the skill is a Markdown prompt agents interpret, not a CLI, and (b) the strategy is the stable interface — its grep flags survive Markdown wording changes.
 
 ## Results
 
 ### Corpus-wide R@5 / R@10 / MRR (6 cells each)
 
-|                      | kb-search       | bare grep       |
-|---                   |---              |---              |
-| **R@5 identity**     | $R5_ID_KB       | $R5_ID_GR       |
-| **R@5 light**        | $R5_LT_KB       | $R5_LT_GR       |
-| **R@5 heavy**        | $R5_HV_KB       | $R5_HV_GR       |
-| **R@10 identity**    | $R10_ID_KB      | $R10_ID_GR      |
-| **R@10 light**       | $R10_LT_KB      | $R10_LT_GR      |
-| **R@10 heavy**       | $R10_HV_KB      | $R10_HV_GR      |
-| **MRR identity**     | $MRR_ID_KB      | $MRR_ID_GR      |
-| **MRR light**        | $MRR_LT_KB      | $MRR_LT_GR      |
-| **MRR heavy**        | $MRR_HV_KB      | $MRR_HV_GR      |
+|                      | kb-search    | bare grep    |
+|---                   |---           |---           |
+| **R@5 identity**     | $R5_ID_KB_R  | $R5_ID_GR_R  |
+| **R@5 light**        | $R5_LT_KB_R  | $R5_LT_GR_R  |
+| **R@5 heavy**        | $R5_HV_KB_R  | $R5_HV_GR_R  |
+| **R@10 identity**    | $R10_ID_KB_R | $R10_ID_GR_R |
+| **R@10 light**       | $R10_LT_KB_R | $R10_LT_GR_R |
+| **R@10 heavy**       | $R10_HV_KB_R | $R10_HV_GR_R |
+| **MRR identity**     | $MRR_ID_KB_R | $MRR_ID_GR_R |
+| **MRR light**        | $MRR_LT_KB_R | $MRR_LT_GR_R |
+| **MRR heavy**        | $MRR_HV_KB_R | $MRR_HV_GR_R |
 
 ### Gap signals
 
 - **Honesty gap (R@5 identity − heavy, kb-search):** $GAP_HONESTY — if < 0.05 the heavy paraphrase is too close to identity and prompts need tightening before treating corpus numbers as load-bearing.
-- **Skill-ROI gap (R@5 heavy: kb-search − grep):** $GAP_SKILL_ROI — positive ⇒ kb-search outperforms bare grep on hard queries.
+- **Skill-ROI gap (R@5 heavy: kb-search − grep):** $GAP_SKILL_ROI — $GAP_SKILL_ROI_NOTE
 
 ### Fixture-seed sub-corpus (7 seeds, heavy-paraphrase pass)
 
@@ -1288,6 +1311,16 @@ $CLOSE_LINE
 \`\`\`
 
 Per plan, atomic closure via \`Closes #4043\` in PR body lands the close on merge.
+
+## Bench Revision History
+
+The first \`--confirm\` run on 2026-05-19 produced bucket=\`reopen-rag\` with R@5(light|heavy, *) ≡ 0 — degenerate. Three independent bugs were discovered and fixed before the rerun whose numbers appear above:
+
+1. **jq null-rank drop** (code). The per-row writer used \`--arg rank "" | select(length>0)|tonumber? // null\` which silently emitted NO output when rank was empty — null-rank rows never landed in \`ranks.ndjson\`. Fixed by switching to \`--argjson rank null\` (or numeric).
+2. **Sentence-as-grep-query** (methodology). The plan §Phase 3 passed the full paraphrase sentence to \`grep -F\`. Real kb-search consumes a short \$KEYWORD; a 1-2 sentence paraphrase never substring-matches verbatim source text. Fixed by adding bash-side keyword extraction (top-3 longest non-stopword tokens, ≥4 chars, drop all-numeric, dedup) + token-overlap ranking.
+3. **Git pathspec coverage** (code). The pathspec \`'knowledge-base/project/learnings/**/*.md'\` matched ONLY files in subdirs (gobwas \`**\` requires intermediate dirs — same trap as \`2026-03-21-lefthook-gobwas-glob-double-star.md\`). The first run searched 301/1117 files (27% of corpus). Fixed by switching to directory-prefix pathspec + \`:(exclude,glob)**/archive/**\` long-form exclude.
+
+All three fixes shipped together in commit \`3fb52a05\` with 13 new self-tests. The 7/7-fixture-seed-null methodology-suspect signal that fired on the first run no longer fires (3/7 seeds found at heavy_kbsearch, ranks 1, 7, 16).
 EOF
 } > "$LEARNING_TMP"
 mv "$LEARNING_TMP" "$REPO_ROOT/$LEARNING_PATH"
@@ -1296,7 +1329,7 @@ echo "  wrote $LEARNING_PATH"
 echo
 echo "================================================================"
 echo "BUCKET:  $BUCKET"
-echo "R5(heavy, kb-search): $R5_HV_KB"
+echo "R5(heavy, kb-search): $R5_HV_KB_R"
 echo
 echo "Run this verbatim before marking PR ready:"
 echo "  $CLOSE_LINE"

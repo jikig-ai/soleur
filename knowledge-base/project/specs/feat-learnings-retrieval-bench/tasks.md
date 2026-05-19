@@ -89,16 +89,16 @@ lane: cross-domain
 
 ## Phase 8: Pre-merge Bench Run + PR Closure
 
-- [ ] 8.1 Operator: ensure `ANTHROPIC_API_KEY` is in env.
-- [ ] 8.2 Operator: `bash scripts/learning-retrieval-bench.sh` (no `--confirm`) → verify cost estimate prints.
-- [ ] 8.3 Operator: `bash scripts/learning-retrieval-bench.sh --confirm` → ~50 min wall clock, ~$2.68 spend.
-- [ ] 8.4 Verify run produced both output files; jq-validate the JSON schema per AC5.
-- [ ] 8.5 Read the output learning; verify bucket recommendation aligns with `r5.heavy_kbsearch` and locked thresholds.
-- [ ] 8.6 Commit both output files: `git add knowledge-base/project/learnings/*-retrieval-diagnostic-findings.md knowledge-base/project/learning-retrieval-metrics-*.json && git commit -m "docs: retrieval diagnostic findings for #4043"`.
-- [ ] 8.7 If bucket = `surface-rewrites` or `reopen-rag`: operator authors the appropriate `gh issue create` follow-up (the bench prints the bucket name, not template text — issue title/body is operator judgment).
-- [ ] 8.8 Update PR body to include `Closes #4043` + paste the output learning's TL;DR.
-- [ ] 8.9 Run `gh pr ready 4045` → trigger CI → auto-merge per `wg-after-marking-a-pr-ready-run-gh-pr-merge`.
+- [x] 8.1 Operator: ensure `ANTHROPIC_API_KEY` is in env.
+- [x] 8.2 Operator: `bash scripts/learning-retrieval-bench.sh` (no `--confirm`) → verify cost estimate prints.
+- [x] 8.3 Operator: `bash scripts/learning-retrieval-bench.sh --confirm` → ~50 min wall clock, ~$2.68 spend.
+- [x] 8.4 Verify run produced both output files; jq-validate the JSON schema per AC5.
+- [x] 8.5 Read the output learning; verify bucket recommendation aligns with `r5.heavy_kbsearch` and locked thresholds.
+- [x] 8.6 Commit both output files: `git add knowledge-base/project/learnings/*-retrieval-diagnostic-findings.md knowledge-base/project/learning-retrieval-metrics-*.json && git commit -m "docs: retrieval diagnostic findings for #4043"`.
+- [x] 8.7 If bucket = `surface-rewrites` or `reopen-rag`: operator authors the appropriate `gh issue create` follow-up (the bench prints the bucket name, not template text — issue title/body is operator judgment).
+- [x] 8.8 Update PR body to include `Closes #4043` + paste the output learning's TL;DR.
+- [x] 8.9 Run `gh pr ready 4045` → trigger CI → auto-merge per `wg-after-marking-a-pr-ready-run-gh-pr-merge`.
 
 ## Phase 9: Spec Amendment (one-shot)
 
-- [ ] 9.1 If the operator accepted the sync-vs-Batch plan deviation: amend spec.md TR2 to reflect "sync API, one-shot, ~$2.68 actual cost (vs ~$1.34 Batch theoretical)" and commit alongside the bench artifacts.
+- [x] 9.1 If the operator accepted the sync-vs-Batch plan deviation: amend spec.md TR2 to reflect "sync API, one-shot, ~$2.68 actual cost (vs ~$1.34 Batch theoretical)" and commit alongside the bench artifacts.

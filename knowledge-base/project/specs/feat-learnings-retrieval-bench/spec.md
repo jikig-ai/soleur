@@ -101,7 +101,7 @@ Implement as `scripts/learning-retrieval-bench.sh` (bash). Reuse the curl+jq Ant
 
 ### TR2: Model + cost ceiling
 
-Use Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) via direct Anthropic API, leveraging the Batch API for 50% discount (24h SLA acceptable for one-shot). Cost target: ≤ $5 (841 files × 2 LLM calls per file (light + heavy; identity is free) × ~$0.001 × 0.5 = ~$0.84; budget includes retries).
+Use Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) via direct Anthropic API (**sync, not Batch** — per plan §Plan Deviation Candidates the operator accepted the sync deviation; Batch would have been ~50% cheaper but added ~150 LoC of JSONL marshaling + polling for a one-shot diagnostic). Cost ceiling: $5. Actual at 1117 files: ~$3.07 (1117 files × 2 LLM calls × Haiku rate at $0.0010 light + $0.0015 heavy + 10% headroom).
 
 ### TR3: Frontmatter / content extraction fallbacks
 
