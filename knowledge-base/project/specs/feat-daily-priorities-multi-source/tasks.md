@@ -143,30 +143,30 @@ Derived from finalized plan v2 (post plan-review). Six phases; commits flexible 
 
 ## Phase 5 — KB-drift walker + GH Actions workflow + internal ingest
 
-- [ ] **5.1** Create `scripts/kb-drift-walker.sh`:
-  - [ ] 5.1.1 Broken-link check: walk `knowledge-base/`, extract markdown link targets, `test -e` each.
-  - [ ] 5.1.2 Code-anchor check: parse `AGENTS.md` `[id: ...]` rule bodies + `knowledge-base/project/learnings/**/*.md` for `path/to/file.ext:line` anchors; existence-only check.
-  - [ ] 5.1.3 Skip `archive/` and `.git/`.
-  - [ ] 5.1.4 Emit findings as JSON to stdout.
-- [ ] **5.2** Create `tests/scripts/test-kb-drift-walker.sh`:
-  - [ ] 5.2.1 Golden fixture: 3 broken-link + 2 broken-anchor + 5 healthy controls.
-  - [ ] 5.2.2 Assert EXACTLY 3 broken-link + EXACTLY 2 broken-anchor in output (per AC4 plan-review fix).
-  - [ ] 5.2.3 Assert ingest-payload JSON shape.
-- [ ] **5.3** Create `.github/workflows/kb-drift-walker.yml`:
-  - [ ] 5.3.1 Cron `0 3 * * *` UTC.
-  - [ ] 5.3.2 Read `secrets.DOPPLER_TOKEN_KB_DRIFT`.
-  - [ ] 5.3.3 Run `doppler run -p soleur -c prd_kb_drift_walker -- scripts/kb-drift-walker.sh > findings.json`.
-  - [ ] 5.3.4 POST to `/api/internal/kb-drift-ingest` with HMAC-SHA256 header (signed by `KB_DRIFT_INGEST_SIGNING_KEY`).
-- [ ] **5.4** Create `apps/web-platform/app/api/internal/kb-drift-ingest/route.ts`:
-  - [ ] 5.4.1 HMAC-SHA256 verify against `KB_DRIFT_INGEST_SIGNING_KEY` (timingSafeEqual).
-  - [ ] 5.4.2 For each finding, INSERT `messages` row with `source='kb-drift'`, `source_ref='link-<sha256[:16]>'` or `'anchor-<sha256[:16]>'`, `tier='external_low_stakes'`, `status='draft'`, `owning_domain='knowledge'`, `urgency='low'`, `trust_tier='internal_infra_auto'`.
-  - [ ] 5.4.3 Idempotency via Phase 1 partial-unique index (`messages_active_draft_dedup_idx`).
-- [ ] **5.5** Create `apps/web-platform/app/api/internal/kb-drift-ingest/route.test.ts`:
-  - [ ] 5.5.1 HMAC positive/negative.
-  - [ ] 5.5.2 Payload shape validation.
-  - [ ] 5.5.3 Dedup behavior (same `source_ref` doesn't double-insert).
-- [ ] **5.6** Run walker against seeded fixture; verify 3 broken-link + 2 code-anchor cards in `messages` table.
-- [ ] **5.7** Commit & push Phase 5.
+- [x] **5.1** Create `scripts/kb-drift-walker.sh`:
+  - [x] 5.1.1 Broken-link check: walk `knowledge-base/`, extract markdown link targets, `test -e` each.
+  - [x] 5.1.2 Code-anchor check: parse `AGENTS.md` `[id: ...]` rule bodies + `knowledge-base/project/learnings/**/*.md` for `path/to/file.ext:line` anchors; existence-only check.
+  - [x] 5.1.3 Skip `archive/` and `.git/`.
+  - [x] 5.1.4 Emit findings as JSON to stdout.
+- [x] **5.2** Create `tests/scripts/test-kb-drift-walker.sh`:
+  - [x] 5.2.1 Golden fixture: 3 broken-link + 2 broken-anchor + 5 healthy controls.
+  - [x] 5.2.2 Assert EXACTLY 3 broken-link + EXACTLY 2 broken-anchor in output (per AC4 plan-review fix).
+  - [x] 5.2.3 Assert ingest-payload JSON shape.
+- [x] **5.3** Create `.github/workflows/kb-drift-walker.yml`:
+  - [x] 5.3.1 Cron `0 3 * * *` UTC.
+  - [x] 5.3.2 Read `secrets.DOPPLER_TOKEN_KB_DRIFT`.
+  - [x] 5.3.3 Run `doppler run -p soleur -c prd_kb_drift_walker -- scripts/kb-drift-walker.sh > findings.json`.
+  - [x] 5.3.4 POST to `/api/internal/kb-drift-ingest` with HMAC-SHA256 header (signed by `KB_DRIFT_INGEST_SIGNING_KEY`).
+- [x] **5.4** Create `apps/web-platform/app/api/internal/kb-drift-ingest/route.ts`:
+  - [x] 5.4.1 HMAC-SHA256 verify against `KB_DRIFT_INGEST_SIGNING_KEY` (timingSafeEqual).
+  - [x] 5.4.2 For each finding, INSERT `messages` row with `source='kb-drift'`, `source_ref='link-<sha256[:16]>'` or `'anchor-<sha256[:16]>'`, `tier='external_low_stakes'`, `status='draft'`, `owning_domain='knowledge'`, `urgency='low'`, `trust_tier='internal_infra_auto'`.
+  - [x] 5.4.3 Idempotency via Phase 1 partial-unique index (`messages_active_draft_dedup_idx`).
+- [x] **5.5** Create `apps/web-platform/app/api/internal/kb-drift-ingest/route.test.ts`:
+  - [x] 5.5.1 HMAC positive/negative.
+  - [x] 5.5.2 Payload shape validation.
+  - [x] 5.5.3 Dedup behavior (same `source_ref` doesn't double-insert).
+- [x] **5.6** Run walker against seeded fixture; verify 3 broken-link + 2 code-anchor cards in `messages` table.
+- [x] **5.7** Commit & push Phase 5.
 
 **Exit gate:** seeded fixture run produces exactly 3+2 cards; nightly schedule active; AC4 satisfied.
 
