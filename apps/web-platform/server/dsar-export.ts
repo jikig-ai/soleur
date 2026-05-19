@@ -483,6 +483,25 @@ export async function exportSqlTable(
     });
   }
 
+  // -- scope_grants (per-action-class consent ledger; migration 048, PR-G #3947) --
+  {
+    const { data, error } = await service
+      .from("scope_grants")
+      .select("*")
+      .eq("founder_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`scope_grants read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "scope_grants", {
+      ownerField: "founder_id",
+    });
+    results.push({
+      table: "scope_grants",
+      spec: DSAR_TABLE_ALLOWLIST.scope_grants,
+      rows,
+    });
+  }
+
   return results;
 }
 

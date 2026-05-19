@@ -178,9 +178,102 @@ See the `## Plan Deviations (Phase 1)` section of the plan for full context. Sum
 4. OCI image tag is plain `vX.Y.Z` (not `vinngest-vX.Y.Z`).
 5. cloud-init.yml embedding + `server.tf triggers_replace` for `inngest-bootstrap.sh` skipped — OCI image is the sole delivery path.
 
+## PR-G post-merge: Flipping `SOLEUR_FR5_ENABLED` to `true`
+
+Per ADR-033 (per-tenant scope grants), the env flag `SOLEUR_FR5_ENABLED` is no longer a tenant-level gate — it is a global kill-switch. The per-grant deny-by-default predicate at `apps/web-platform/app/api/webhooks/stripe/route.ts:437` is the actual tenant-level authorization gate. **Even with the flag at `true`, no Inngest event fires for a tenant who has not granted the action class via `/dashboard/settings/scope-grants`.** This decoupling is what makes the flip operator-routable in PR-G (#3947).
+
+### Prerequisites (all must be true before flip)
+
+1. **PR-G merged to `main`**; Vercel auto-deploy green; Hetzner web-platform unit has restarted with the new image (or per the deploy substrate's restart policy).
+2. **Migrations 048 + 049 applied to prd Supabase.** Verify via `psql` (or Supabase MCP):
+   ```bash
+   doppler run -p soleur -c prd -- psql "$DATABASE_URL_POOLER" -c '\d+ public.scope_grants'
+   doppler run -p soleur -c prd -- psql "$DATABASE_URL_POOLER" -c '\d public.users' | grep runtime_explainer_dismissed_at
+   ```
+   Expected shape: 7 columns on `scope_grants`, RLS enabled, 2 WORM triggers (`scope_grants_no_update`, `scope_grants_no_delete`), 1 partial index (`scope_grants_active_idx`), 3 RPCs (`grant_action_class`, `revoke_action_class`, `anonymise_scope_grants`) with explicit `REVOKE EXECUTE FROM PUBLIC, anon` and the correct `GRANT EXECUTE TO` for each role.
+3. **T&C version 2.0.0 deployed.** Middleware redirect to `/accept-terms` on next request will fire for the operator + first dogfood founder. Coordinate dogfood timing accordingly.
+4. **BetterStack on-call live** (per PR-F flip-prerequisite list at the top of this runbook).
+5. **Synthetic Stripe smoke against prd webhook passed** (see § "Synthetic smoke" below) — the smoke runs against a **preview env** with the flag temporarily on, NOT against prd before the prd flip.
+6. **CPO sign-off captured** in `knowledge-base/legal/compliance-posture.md` Active Items (PR-G brand-survival threshold: single-user incident).
+7. **First dogfood founder selected** and onboarding-ready. Their `scope_grants` row will be granted by them via `/dashboard/settings/scope-grants` after PR merges (no backfill per brainstorm K16).
+
+### Flip command
+
+```bash
+doppler secrets set SOLEUR_FR5_ENABLED=true -p soleur -c prd
+```
+
+Verify:
+```bash
+doppler secrets get SOLEUR_FR5_ENABLED -p soleur -c prd --plain
+# → true
+```
+
+### Roll-back command (if first invocation surfaces a regression)
+
+```bash
+doppler secrets set SOLEUR_FR5_ENABLED=false -p soleur -c prd
+```
+
+Stripe redelivery (up to 3 days) preserves at-least-once if the flip+rollback cycle drops events in flight.
+
+### Synthetic smoke procedure (one-off, no separate script)
+
+Run from a Vercel preview env (NOT prd) before the prd flip. Replace `<founder-uuid>` with a seeded grant's `founder_id`:
+
+```bash
+# 1. Seed the grant in the preview env's Supabase (one-time, founder-id-bound).
+#    Sign in to /dashboard/settings/scope-grants as the operator's preview account;
+#    select finance.payment_failed at draft_one_click; submit. The row lands in
+#    public.scope_grants.
+
+# 2. Compose a synthetic Stripe payload.
+STRIPE_PAYLOAD=$(jq -nc --arg fid "<founder-uuid>" '{
+  type: "invoice.payment_failed",
+  data: { object: { customer: "cus_smoke_test", id: "in_smoke_test",
+                    customer_email: "smoke@soleur.test",
+                    amount_due: 4200, currency: "usd",
+                    last_finalization_error: { code: "card_declined" } } }
+}')
+
+# 3. Sign with the preview env's webhook secret.
+TS=$(date +%s)
+PAYLOAD_TO_SIGN="${TS}.${STRIPE_PAYLOAD}"
+SIG_HEX=$(printf '%s' "$PAYLOAD_TO_SIGN" \
+  | openssl dgst -sha256 -hmac "$STRIPE_WEBHOOK_SECRET" -hex \
+  | awk '{print $2}')
+SIG_HEADER="t=${TS},v1=${SIG_HEX}"
+
+# 4. POST to the preview webhook endpoint.
+curl -sS -X POST "https://<preview-domain>/api/webhooks/stripe" \
+  -H "Stripe-Signature: $SIG_HEADER" \
+  -H "Content-Type: application/json" \
+  -d "$STRIPE_PAYLOAD"
+# Expected: HTTP 200; webhook returns {"received": true}.
+
+# 5. Wait ~5s, then query Inngest via the loopback API.
+doppler run -p soleur -c <preview-config> -- bash -c '
+  curl -sS -H "Authorization: Bearer $INNGEST_SIGNING_KEY" \
+    "$INNGEST_BASE_URL/v1/events?name=finance.payment_failed&cel=event.data.founderId=='\''<founder-uuid>'\''&limit=1"
+'
+# Expected: { "data": [ { id: "...", data: { founderId: "<founder-uuid>", tier: "draft_one_click", ... } } ], ... }
+
+# 6. Confirm the founder's /dashboard/audit page renders the new run with the
+#    redacted summary, action class, tier-at-time, and the Request-human-review
+#    affordance. Confirm the CFO function wrote a messages row with
+#    trust_tier='draft_one_click', status='draft' (DB CHECK enforces).
+
+# 7. Revert the preview-env flag and clean up the synthetic grant.
+```
+
+After the preview smoke passes, flip prd per the command above; within 1h fire a single prd synthetic smoke against the operator's own seeded grant; assert Inngest dashboard shows the run AND `/dashboard/audit` renders it; close #3947 with `gh issue close 3947 --reason completed`; run `/soleur:postmerge`.
+
 ## Related
 
 - ADR-030 (Inngest as durable trigger layer)
+- ADR-033 (per-tenant scope grants substrate)
 - PR-F (#3940) — Inngest trigger layer + CFO autonomous-draft
-- PR-A (this PR, #3960 close) — IaC for inngest-server
+- PR-G (#3947, PR #3984) — cohort-exposure surface + per-grant deny-by-default
+- PR-A (#3960 close) — IaC for inngest-server
 - `apps/web-platform/server/inngest/client.ts` — fail-closed startup guards (ADR-030 I4)
+- `apps/web-platform/server/scope-grants/is-granted.ts` — webhook predicate's grant probe (ADR-033)

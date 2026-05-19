@@ -104,12 +104,16 @@ async function setupRailMocks(page: Page) {
       return;
     }
     if (select.includes("onboarding_completed_at")) {
+      // PR-G (#3947) widened useOnboarding's .select() with
+      // runtime_explainer_dismissed_at — mirror the mock-supabase.ts
+      // shape so the banner stays dismissed in tests.
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           onboarding_completed_at: "2024-01-01T00:00:00Z",
           pwa_banner_dismissed_at: "2024-01-01T00:00:00Z",
+          runtime_explainer_dismissed_at: "2024-01-01T00:00:00Z",
         }),
       });
       return;
