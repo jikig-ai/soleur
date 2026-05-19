@@ -9,9 +9,15 @@
 #   - On version bump, pauses the running server (drains in-flight events),
 #     restarts, resumes.
 #
-# Self-hosted Inngest binds loopback only (127.0.0.1:8288 events / 8289 API)
-# per ADR-030. Signing/event keys + heartbeat URL come from Doppler `prd` via
-# `doppler run --project soleur --config prd --` wrapping ExecStart.
+# Self-hosted Inngest binds 0.0.0.0:8288 (events) + 8289 (connect-gateway).
+# ADR-030's "loopback only" intent — keep Inngest unreachable from the public
+# internet — is preserved via the host firewall (`apps/web-platform/infra/
+# firewall.tf`), which only allows 22 (admin IPs), 80, and 443 (Cloudflare
+# IPs) inbound. Port 8288 is implicitly closed externally. The 0.0.0.0 bind
+# is REQUIRED so the bridge-networked `soleur-web-platform` Docker container
+# can reach Inngest via `host.docker.internal` (= docker bridge gateway). The
+# original 127.0.0.1 bind worked for systemd unit-local consumers but blocked
+# the container's SDK from registering — surfaced 2026-05-19 via #4017.
 #
 # Embedded into OCI artifact `ghcr.io/jikig-ai/soleur-inngest-bootstrap:vX.Y.Z`
 # AND base64-embedded into cloud-init for fresh-host provisioning. Single
@@ -128,7 +134,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 127.0.0.1 --port 8288 --sqlite-dir /var/lib/inngest --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}"'
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}"'
 Restart=on-failure
 RestartSec=5
 User=deploy
