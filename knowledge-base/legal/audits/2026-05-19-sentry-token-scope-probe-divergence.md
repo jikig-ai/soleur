@@ -280,6 +280,125 @@ intersects with #3849's IaC-token least-privilege decision.
    recommendation, before this T3 confirmation). Path (b) best matches the
    least-privilege principle for IaC; the operator's call.
 
+## Appendix B — Org Auth Token path falsification + Internal Integration form structure (2026-05-19, added during #3849 unblock attempt)
+
+After authoring the revised plan, the operator chose Path (c) (Org Auth
+Token) for the #3849 IaC token mint, following CTO's first-pass
+recommendation. Playwright-driven attempt to open the Org Auth Token
+creation form on `https://jikigai-eu.sentry.io/settings/auth-tokens/new-token/`
+surfaced a **load-bearing falsification of Path (c):**
+
+### Path (c) is dead — Sentry Org Auth Tokens are `org:ci`-only
+
+The Org Auth Token creation form displays exactly one available scope:
+
+| Scope | Description |
+|---|---|
+| `org:ci` | Source Map Upload, Release Creation, Code Mappings |
+
+There are no other scope options. Sentry has narrowed Org Auth Tokens to a
+single CI-tooling use case. This rules out Path (c) for IaC needs (which
+require `project:read`, `project:write`, `monitor:read`, `monitor:write`,
+`alerts:read`, `alerts:write` per #3849). The CTO's first-pass recommendation
+in the triad re-spawn (which said "Org Auth Tokens DO log to the Organization
+Audit Log — free §5(2) trail") was directionally correct on the audit-log
+point but the Org Auth Token's capability set has been narrowed beyond IaC
+viability. ADR-031's "Internal Integration recommended for CI" reading is
+strengthened — and now load-bearing.
+
+### Discovered Sentry Internal Integration form structure (for the operator-recipe)
+
+Navigating Path (b) — new `iac-terraform-prd` Internal Integration on
+`jikigai-eu` — surfaced the precise form structure under
+`https://jikigai-eu.sentry.io/settings/developer-settings/`:
+
+**Entry point.** Click "Create New Integration" → modal "Choose Integration
+Type" with Internal/Public radios (Internal selected by default) → "Next"
+advances to the form at `/settings/developer-settings/new-internal/`.
+
+**Form fields (top section "Internal Integration Details"):**
+
+- Name (required) — textbox with placeholder `e.g. My Integration`. Set to
+  `iac-terraform-prd`.
+- Webhook URL — leave empty for write-only IaC integration.
+- Alert Rule Action — disabled until Webhook URL is set; leave alone.
+- Schema — leave empty.
+- Overview — optional description; leave empty or short.
+- Authorized JavaScript Origins — leave empty.
+
+**Permissions section** — 8 dropdowns, each with 4 options (`No Access` /
+`Read` / `Read & Write` / `Admin`), plus 1 standalone checkbox:
+
+| Category | Recommended value | Rationale |
+|---|---|---|
+| Project | **Admin** | Required for terraform apply + import; covers `project:write`, `project:read`, `project:releases`, `project:admin` scopes. |
+| Team | No Access | Not needed for IaC. |
+| Release | Read | For release-aware monitor/alert config (may overlap with Project: Admin). |
+| Distribution | No Access | Not relevant. |
+| Issue & Event | Read | Provides `event:read` for the audit script's region probe. |
+| Organization | Read | Provides `org:read` for `/users/me/` + org listing. |
+| Member | No Access | Not needed. |
+| Alerts | Read & Write | Required for `sentry_issue_alert` rules per #3849. |
+| Continuous Integration (CI) | **checked** | Enables `org:ci` scope for source-maps + release creation (compatible with CI pipeline use). |
+
+**Note on missing `monitor:*` scopes.** The form does NOT expose a separate
+"Cron Monitors" category. The cron-monitor capability is bundled under
+`project:write` / `project:admin` scope (verified via Sentry's terraform-
+provider source). Setting Project → Admin should yield `monitor:*` derivation
+via the project-write umbrella. Verify post-mint via the same
+`https://sentry.io/api/0/` probe — the resulting `auth.scopes` array should
+include `project:admin` + `project:write` + likely a derived `monitor` scope.
+
+**Webhooks section** — five event categories (`issue`, `error`, `comment`,
+`seer`, `preprod_artifact`), all disabled until Webhook URL is set. Skip.
+
+**Submit button label:** `Save Changes`.
+
+**Post-mint UI behavior.** After Save Changes, Sentry navigates to the
+integration's detail page. The newly-minted auth token displays exactly once
+in a textbox-like element. Per the AGENTS rule + the learning shipped at
+PR #4064: capture via `browser_evaluate(filename: ...)` (NOT via
+`browser_snapshot`, which leaks the value into the conversation transcript
+via the accessibility tree). For manual operator flow: use the in-page
+"copy-to-clipboard" button next to the token, then immediately pipe to
+Doppler via `xclip -selection clipboard -o | doppler secrets set
+SENTRY_IAC_AUTH_TOKEN --no-interactive`.
+
+### Why the Playwright-MCP path could not complete autonomously
+
+Attempted Path (b) flow under Playwright MCP control:
+
+1. Navigate to `/settings/developer-settings/` — works.
+2. Click "Create New Integration" — opens modal.
+3. Click "Next" on modal — advances to form at `/new-internal/`.
+4. Fill Name field — works.
+5. Click first permission dropdown (Project) — works.
+6. Click `Admin` option from the dropdown menu — **browser context dies
+   between this step and any followup**.
+
+The MCP Playwright session times out / drops between agent-message turns.
+Within a single agent message, 2-3 tool calls can chain successfully; beyond
+that, the browser context is gone. The full integration form requires ~12
+sequential interactions (name + 5+ permission dropdowns + CI checkbox + Save
++ token-capture), which exceeds the MCP session window. This is a tooling
+constraint, not a Sentry-side issue.
+
+Falling back to operator handoff with the form-structure recipe above (per
+`hr-exhaust-all-automated-options-before` — automated options were exhausted
+via 4+ attempts before falling back to manual).
+
+### References specific to Appendix B
+
+- Org Auth Token form inspection: `2026-05-19T14:04:19Z` (UI confirmed
+  `org:ci` is the only available scope).
+- Internal Integration form structure: discovered during Path (b) attempt
+  `2026-05-19T14:14:30Z`.
+- Existing `web-platform-ci` Internal Integration on `jikigai-eu` visible at
+  `/settings/developer-settings/web-platform-ci-26eeaf/` (confirms T3's name-
+  prefix inference).
+- No new tokens minted in this Appendix-B work. No prod-write completed.
+  The integration creation is operator-handoff per the recipe above.
+
 ### References specific to this appendix
 
 - T3 probe run UTC: `2026-05-19T13:28:41Z`.
