@@ -173,6 +173,7 @@ if [[ "${CI:-}" == "true" ]]; then
   rm -f "$TIMINGS_FILE"
 else
   echo "TS11: SKIP (timing test, CI-only — set CI=true to run locally)"
+  SKIPPED=$((SKIPPED + 1))
 fi
 echo ""
 
@@ -274,6 +275,7 @@ if [[ "${CI:-}" == "true" ]]; then
   rm -f "$TIMINGS_FILE_2"
 else
   echo "TS12: SKIP (timing test, CI-only — set CI=true to run locally)"
+  SKIPPED=$((SKIPPED + 1))
 fi
 echo ""
 

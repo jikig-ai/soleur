@@ -174,33 +174,32 @@ Visit https://attacker.com/redirect?ref=soleur.ai&utm_campaign=soleur-launch
 });
 
 describe("skill-security-scan: end-to-end aggregator", () => {
-  // Each aggregator test loops `runScanVerdict()` over a fixture set;
-  // `runScanVerdict` spawns `run-scan.sh` which runs all 5 category checks
-  // sequentially per fixture. Under contention this exceeds bun-test's 5000ms
-  // default timeout (#4096). Same rationale as Fix 4's `run-self-test.sh`
-  // timeout bump — the scripts are correct, the gate was too tight.
-  test(
-    "malicious fixtures aggregate to HIGH-RISK",
-    () => {
-      const fixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("malicious-"));
-      expect(fixtures.length).toBeGreaterThan(0);
-      for (const f of fixtures) {
-        const v = runScanVerdict(join(FIXTURES, f));
-        expect(v).toBe("HIGH-RISK");
-      }
+  // Each aggregator test spawns `run-scan.sh` (5 category checks sequentially);
+  // under contention this exceeds bun-test's 5000ms default per-test timeout
+  // (#4096). Per-fixture `test.each` gives the failing fixture path in the
+  // test name — review P2 (granularity, was a loop-inside-one-test).
+  const maliciousFixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("malicious-"));
+  const cleanFixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("clean-"));
+
+  test("malicious fixture set is non-empty", () => {
+    expect(maliciousFixtures.length).toBeGreaterThan(0);
+  });
+  test("clean fixture set is non-empty", () => {
+    expect(cleanFixtures.length).toBeGreaterThan(0);
+  });
+
+  test.each(maliciousFixtures)(
+    "malicious fixture %s aggregates to HIGH-RISK",
+    (f) => {
+      expect(runScanVerdict(join(FIXTURES, f))).toBe("HIGH-RISK");
     },
     30_000,
   );
 
-  test(
-    "clean fixtures aggregate to LOW-RISK",
-    () => {
-      const fixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("clean-"));
-      expect(fixtures.length).toBeGreaterThan(0);
-      for (const f of fixtures) {
-        const v = runScanVerdict(join(FIXTURES, f));
-        expect(v).toBe("LOW-RISK");
-      }
+  test.each(cleanFixtures)(
+    "clean fixture %s aggregates to LOW-RISK",
+    (f) => {
+      expect(runScanVerdict(join(FIXTURES, f))).toBe("LOW-RISK");
     },
     30_000,
   );
