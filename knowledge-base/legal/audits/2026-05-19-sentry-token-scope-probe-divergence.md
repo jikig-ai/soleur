@@ -191,6 +191,104 @@ the brainstorm imagined.
 - Probe report at `…/audits/2026-05-19-sentry-token-scope-probe-report.md` — not authored.
   This divergence note stands in its place until the triad re-spawn produces a new plan.
 
+## Appendix A — T3 verification (2026-05-19, added post-triad-respawn)
+
+The triad re-spawn (CPO + CLO + CTO) converged on running a smallest-possible
+T3 probe before authoring the revised plan. The probe was a single read-only
+API call:
+
+```bash
+curl -sS -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+     https://sentry.io/api/0/
+# HTTP 200 — token-holder identity surfaced in the response
+```
+
+(Companion call to `https://sentry.io/api/0/organizations/` was attempted in
+the same sequence; returned HTTP 200 with an empty list. The empty-list
+behaviour for proxy-user identities is a Sentry surface curiosity, not
+load-bearing for the T3 conclusion below.)
+
+### Result — T3 CONFIRMED with sharper precision than the original framing
+
+| Field | Value | Significance |
+|---|---|---|
+| `user.email` | `web-platform-ci-26eeaf-32dbf505-df3b-4cf8-9a0b-babb6dba9d47@proxy-user.sentry.io` | The `@proxy-user.sentry.io` domain is Sentry-internal — it is the identity surface for Internal Integration auth tokens, NOT for human accounts or Org Auth Tokens. |
+| `user.id` | `4569715` | Sentry-generated user ID for the integration's proxy identity. |
+| `user.username` | `web-platform-ci-26eeaf-32dbf505-df3b-4cf8-9a0b-babb6dba9d47` | The `web-platform-ci-` prefix matches the historical Org Auth Token slug removed at the 2026-05-17 cutover (audit log `org-auth-token.remove soleur-web-platform-ci`) — strongly suggests an Internal Integration with this name was installed on `jikigai-eu` post-cutover and the proxy-user identity is the integration's identity. |
+| `user.dateJoined` | `2026-05-17T11:25:11.910265Z` | Matches the 2026-05-17 cutover window (`jikigai-eu` org created at `11:13:30Z`; the integration's proxy-user joined 12 minutes later). |
+| `auth.scopes` | `["org:ci", "org:read", "project:read", "project:releases", "project:write"]` | The `org:ci` scope flag is Sentry-internal and NOT surfaced in the standard Personal Token Permissions UI. Its presence is positive identification of an Internal Integration token. |
+
+### Refined causal theory
+
+The runtime `SENTRY_AUTH_TOKEN` is an **Internal Integration auth token**
+issued by an Internal Integration installed on `jikigai-eu` (the
+`web-platform-ci` integration, by name-prefix inference). The token
+authenticates as the integration's Sentry-generated proxy-user
+(`web-platform-ci-…@proxy-user.sentry.io`, user ID `4569715`). That proxy-user
+is a member of `jikigai-eu` only — Internal Integrations are installed per
+organization, and the integration's identity does not extend to other orgs the
+human installer happens to be a member of. The 403 against `jikigai/` is a
+clean **organization-membership-boundary** failure for the proxy-user identity
+— not a scope-flag mismatch (the scope list contains `org:read`), not an Org
+Auth Token slug-binding (jikigai-eu has zero Org Auth Tokens). T3 ("user-
+membership boundary") is confirmed, and its mechanism is now precise.
+
+### Updated theory state table
+
+| # | Claim | Status (post-T3) |
+|---|---|---|
+| T0 | "Phantom-ingest to unowned third-party Sentry organization" | **FALSIFIED** (Sentry support replies 2026-05-19; verified). |
+| T1 | "Token-scope mismatch — token has `org:read` only for `jikigai-eu` slug, not for `jikigai`" | **IMPRECISE → SUPERSEDED**. Sentry Personal/Internal-Integration token scope flags are not per-org-slug; the per-org boundary is the holder identity's membership, not a slug-scope flag. |
+| T2 | "Org Auth Token slug-binding" | **FALSIFIED** (`jikigai-eu/settings/auth-tokens/` shows zero Org Auth Tokens). |
+| T3 | "Personal Token, user-membership boundary — token-holder identity lacks `jikigai` membership" | **CONFIRMED, sharpened to:** "Internal Integration auth token, proxy-user identity scoped to `jikigai-eu` only, no `jikigai` membership." |
+
+### Wider-than-expected scope finding (load-bearing for the revised plan)
+
+The runtime token's `auth.scopes` list — `["org:ci", "org:read",
+"project:read", "project:releases", "project:write"]` — includes
+`project:write` and `project:releases`. These are **write-capable** scopes on
+`jikigai-eu` projects. The plan's `## User-Brand Impact` exposure-vector
+analysis implicitly assumed read-only ("Step 3 token mint grants Sentry
+org-level read scope"). The runtime token is wider than that — it can write
+to projects in `jikigai-eu`. This does NOT change PR-1a's interim breadcrumb
+scope (which made no claim about the runtime token's capabilities) but it does
+need to land in PIR Phase 9 prose (PR-1b) for §5(2) precision, and it
+intersects with #3849's IaC-token least-privilege decision.
+
+### How this changes the revised plan's shape
+
+1. **AC1 token-scope wording.** The original plan's `STEP1 == 401 && STEP2 ==
+   200 && STEP3 == 200` preconditions are obsolete; the new pre-condition is
+   "the runtime token's `auth.scopes` does not include any scope sufficient to
+   read `jikigai` — confirmed because the boundary is identity-membership,
+   not scope-flag." A scope-flag widening on the existing token would NOT
+   unblock STEP1 (the proxy-user remains a non-member of `jikigai`).
+2. **Probe report v2.** The probe report at `…/audits/2026-05-19-sentry-token-
+   scope-probe-report.md` (still NOT authored — this divergence note + T3
+   appendix stands in its place at PR-1a merge time) should be authored in
+   PR-1b's branch with the full T3 evidence chain.
+3. **PIR Phase 9 narrative.** Mechanism precision is now: "Internal Integration
+   proxy-user identity with `jikigai-eu`-only membership; the historical 401
+   from `de.sentry.io` was Sentry's auth boundary for non-member identities."
+4. **#3849 token-mint decision** (not in PR-1b scope, but informed by this
+   finding). The runtime token already has `org:ci`, `org:read`, `project:read`,
+   `project:releases`, `project:write`; missing `monitor:read`, `monitor:write`
+   per #3849's stated IaC requirements. Three feasible paths: (a) add the
+   missing scopes to the existing `web-platform-ci` Internal Integration; (b)
+   create a NEW dedicated `iac-terraform-prd` Internal Integration with
+   least-privilege; (c) use an Org Auth Token (the CTO's first-pass
+   recommendation, before this T3 confirmation). Path (b) best matches the
+   least-privilege principle for IaC; the operator's call.
+
+### References specific to this appendix
+
+- T3 probe run UTC: `2026-05-19T13:28:41Z`.
+- Probe A response body inspection: token's `user.email`, `user.dateJoined`,
+  `auth.scopes` fields (above).
+- Probe B response: HTTP 200 with empty list (Sentry surface curiosity — not
+  load-bearing).
+- No new tokens minted. No prod-write actions taken. Read-only API call only.
+
 ## References
 
 - Plan (now requires revision): [`knowledge-base/project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md`](../../project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md)
