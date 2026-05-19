@@ -771,19 +771,41 @@ MOCK
 // ---------------------------------------------------------------------------
 
 describe("post_linkedin_company", () => {
-  test("skips gracefully when LINKEDIN_ACCESS_TOKEN is unset", () => {
-    const result = runFunction(
-      `post_linkedin_company "${SAMPLE_CONTENT}"`
-    );
+  test("skips gracefully when LINKEDIN_ORG_ACCESS_TOKEN is unset (routes to rolling tracker)", () => {
+    // With the rolling-tracker dedup (#4046), an unset org token routes to
+    // append_to_linkedin_tracker rather than emitting a "Skipping ..." line.
+    // Stub `gh` so the tracker call is a no-op and we can assert on the warning
+    // line alone without hitting GitHub.
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      tmpbin=$(mktemp -d)
+      cat > "$tmpbin/gh" << 'GHMOCK'
+#!/usr/bin/env bash
+# Stub: pretend the tracker issue is empty + edits succeed
+if [[ "$1" == "issue" && "$2" == "view" ]]; then
+  echo ""
+  exit 0
+fi
+if [[ "$1" == "issue" && "$2" == "edit" ]]; then
+  cat >/dev/null  # drain --body-file -
+  exit 0
+fi
+exit 0
+GHMOCK
+      chmod +x "$tmpbin/gh"
+      export PATH="$tmpbin:$PATH"
+      source '${SCRIPT_PATH}'
+      post_linkedin_company "${SAMPLE_CONTENT}"
+    `], { env: { ...BASE_ENV } });
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain("LINKEDIN_ACCESS_TOKEN not set");
-    expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
+    expect(decode(result.stderr)).toContain("LINKEDIN_ORG_ACCESS_TOKEN not set");
+    expect(decode(result.stderr)).toContain("Routing to rolling tracker");
   });
 
   test("skips gracefully when LINKEDIN_ORG_ID is unset", () => {
     const result = runFunction(
       `post_linkedin_company "${SAMPLE_CONTENT}"`,
-      { LINKEDIN_ACCESS_TOKEN: "test-token" }
+      { LINKEDIN_ORG_ACCESS_TOKEN: "test-token" }
     );
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain("LINKEDIN_ORG_ID not set");
@@ -794,7 +816,7 @@ describe("post_linkedin_company", () => {
     const result = runFunction(
       `post_linkedin_company "${SAMPLE_CONTENT}"`,
       {
-        LINKEDIN_ACCESS_TOKEN: "test-token",
+        LINKEDIN_ORG_ACCESS_TOKEN: "test-token",
         LINKEDIN_ORG_ID: "12345",
       }
     );
@@ -825,7 +847,7 @@ MOCK
     `], {
       env: {
         ...BASE_ENV,
-        LINKEDIN_ACCESS_TOKEN: "test-token",
+        LINKEDIN_ORG_ACCESS_TOKEN: "test-token",
         LINKEDIN_PERSON_URN: "urn:li:person:test",
         LINKEDIN_ORG_ID: "12345",
         LINKEDIN_ALLOW_POST: "true",
