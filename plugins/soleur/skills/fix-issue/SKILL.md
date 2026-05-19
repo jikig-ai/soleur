@@ -130,7 +130,7 @@ Create a worktree for the fix. Do NOT use `git checkout -b` -- it fails on bare 
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-<ISSUE_NUMBER>-<SLUG>
 ```
 
-Then `cd` into the worktree path printed by the script.
+If `worktree-manager.sh` exits non-zero (e.g., exit 128 "fatal: this operation must be run in a work tree" on bare repos where the script's internal `git fetch` fails), fall back to: `git worktree add .worktrees/bot-fix-<ISSUE_NUMBER>-<SLUG> -b bot-fix/<ISSUE_NUMBER>-<SLUG> origin/main`. Then `cd` into the worktree path printed by the script (or the fallback `.worktrees/` path).
 
 Derive `<SLUG>` from the issue title: lowercase, spaces to hyphens, strip non-alphanumeric characters, truncate to 40 characters.
 

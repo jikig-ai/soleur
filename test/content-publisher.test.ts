@@ -850,6 +850,7 @@ MOCK
         LINKEDIN_ORG_ACCESS_TOKEN: "test-token",
         LINKEDIN_PERSON_URN: "urn:li:person:test",
         LINKEDIN_ORG_ID: "12345",
+        LINKEDIN_ORG_ACCESS_TOKEN: "test-org-token",
         LINKEDIN_ALLOW_POST: "true",
       },
     });

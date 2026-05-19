@@ -14,15 +14,15 @@
 #   X_API_SECRET           - X API secret
 #   X_ACCESS_TOKEN         - X access token
 #   X_ACCESS_TOKEN_SECRET  - X access token secret
-#   LINKEDIN_ACCESS_TOKEN     - Personal LinkedIn OAuth 2.0 token (optional; skips if unset)
-#   LINKEDIN_PERSON_URN       - LinkedIn person URN for posting
-#   LINKEDIN_ORG_ID           - LinkedIn organization ID for company page (optional; skips if unset)
-#   LINKEDIN_ORG_ACCESS_TOKEN - Org OAuth 2.0 token with w_organization_social
-#                               (post-Community-Management-API approval; #4046).
-#                               Unset → post_linkedin_company routes to the rolling
-#                               tracker (default #4046) via append_to_linkedin_tracker.
-#   LINKEDIN_TRACKER_ISSUE    - Override the rolling-tracker issue number (default
-#                               #4046); used by smoke-tests to target a throwaway issue.
+#   LINKEDIN_ACCESS_TOKEN      - LinkedIn OAuth 2.0 token for personal posts (optional; skips if unset)
+#   LINKEDIN_PERSON_URN        - LinkedIn person URN for posting
+#   LINKEDIN_ORG_ID            - LinkedIn organization ID for company page (optional; skips if unset)
+#   LINKEDIN_ORG_ACCESS_TOKEN  - LinkedIn OAuth token with w_organization_social scope (post-
+#                                Community-Management-API approval; #4046). Unset →
+#                                post_linkedin_company routes to the rolling tracker (default
+#                                #4046) via append_to_linkedin_tracker.
+#   LINKEDIN_TRACKER_ISSUE     - Override the rolling-tracker issue number (default #4046); used
+#                                by smoke-tests to target a throwaway issue.
 #   BSKY_HANDLE            - Bluesky handle (optional; skips if unset)
 #   BSKY_APP_PASSWORD      - Bluesky app password
 #   BSKY_ALLOW_POST        - Set to "true" to enable posting
