@@ -15,31 +15,31 @@ draft_pr: "#4066"
 
 Derived from finalized plan v2 (post plan-review). Six phases; commits flexible within phase; merge atomic. Pre-merge ACs (15) + post-merge operator ACs (5) in the plan.
 
-## Phase 1 — Migration 047 + redaction extension
+## Phase 1 — Migration 051 + redaction extension
 
-- [ ] **1.1** Create `apps/web-platform/supabase/migrations/047_multi_source_dedup.sql`:
-  - [ ] 1.1.1 ALTER `messages` ADD `source_ref text` (nullable).
-  - [ ] 1.1.2 CREATE UNIQUE INDEX `messages_active_draft_dedup_idx ON messages (user_id, source, source_ref) WHERE status='draft' AND source_ref IS NOT NULL`.
-  - [ ] 1.1.3 CREATE TABLE `audit_github_token_use(founder_id, installation_id, repo_full_name, endpoint, ts, response_status)` with RLS policies.
-  - [ ] 1.1.4 CREATE FUNCTION `record_github_token_use(...)` `SECURITY DEFINER` with `SET search_path = public, pg_temp` (per `cq-pg-security-definer-search-path-pin-pg-temp`).
-  - [ ] 1.1.5 CREATE TABLE `processed_github_events(delivery_id text PRIMARY KEY, received_at timestamptz DEFAULT now())`.
-- [ ] **1.2** Write `apps/web-platform/supabase/migrations/047_multi_source_dedup.test.ts`:
-  - [ ] 1.2.1 Assert new columns + partial-unique index.
-  - [ ] 1.2.2 Assert audit table + RLS policies.
-  - [ ] 1.2.3 Assert RPC `pg_proc.proconfig` contains `search_path=public, pg_temp`.
-  - [ ] 1.2.4 Assert `processed_github_events` table + primary key.
-- [ ] **1.3** Edit `apps/web-platform/lib/safety/redaction-allowlist.ts`:
-  - [ ] 1.3.1 Add NEW export `redactGithubSourcedText(s: string, opts?: { source?: 'pr_title'|'issue_body'|'cve_description' }): string`.
-  - [ ] 1.3.2 NO changes to existing exports (Stripe/CFO paths unchanged — R2 mitigation).
-- [ ] **1.4** Edit `apps/web-platform/lib/safety/redaction-allowlist.test.ts`:
-  - [ ] 1.4.1 Golden fixtures per `source` variant.
-  - [ ] 1.4.2 Three invariants (max-input bound, alphabet-aware UUID match, no `/g`+`.test()` gate per learning `2026-04-17-pii-regex-scrubber-three-invariants`).
-  - [ ] 1.4.3 Existing Stripe/CFO tests still pass unmodified.
-- [ ] **1.5** Edit `apps/web-platform/lib/messages/tiers.ts`:
-  - [ ] 1.5.1 Add `MESSAGE_SOURCE_GITHUB = 'github'`, `MESSAGE_SOURCE_KB_DRIFT = 'kb-drift'`, `MESSAGE_OWNING_DOMAIN_KNOWLEDGE = 'knowledge'`.
+- [x] **1.1** Create `apps/web-platform/supabase/migrations/051_multi_source_dedup.sql`:
+  - [x] 1.1.1 ALTER `messages` ADD `source_ref text` (nullable).
+  - [x] 1.1.2 CREATE UNIQUE INDEX `messages_active_draft_dedup_idx ON messages (user_id, source, source_ref) WHERE status='draft' AND source_ref IS NOT NULL`.
+  - [x] 1.1.3 CREATE TABLE `audit_github_token_use(founder_id, installation_id, repo_full_name, endpoint, ts, response_status)` with RLS policies.
+  - [x] 1.1.4 CREATE FUNCTION `record_github_token_use(...)` `SECURITY DEFINER` with `SET search_path = public, pg_temp` (per `cq-pg-security-definer-search-path-pin-pg-temp`).
+  - [x] 1.1.5 CREATE TABLE `processed_github_events(delivery_id text PRIMARY KEY, received_at timestamptz DEFAULT now())`.
+- [x] **1.2** Write `apps/web-platform/supabase/migrations/051_multi_source_dedup.test.ts`:
+  - [x] 1.2.1 Assert new columns + partial-unique index.
+  - [x] 1.2.2 Assert audit table + RLS policies.
+  - [x] 1.2.3 Assert RPC `pg_proc.proconfig` contains `search_path=public, pg_temp`.
+  - [x] 1.2.4 Assert `processed_github_events` table + primary key.
+- [x] **1.3** Edit `apps/web-platform/lib/safety/redaction-allowlist.ts`:
+  - [x] 1.3.1 Add NEW export `redactGithubSourcedText(s: string, opts?: { source?: 'pr_title'|'issue_body'|'cve_description' }): string`.
+  - [x] 1.3.2 NO changes to existing exports (Stripe/CFO paths unchanged — R2 mitigation).
+- [x] **1.4** Edit `apps/web-platform/lib/safety/redaction-allowlist.test.ts`:
+  - [x] 1.4.1 Golden fixtures per `source` variant.
+  - [x] 1.4.2 Three invariants (max-input bound, alphabet-aware UUID match, no `/g`+`.test()` gate per learning `2026-04-17-pii-regex-scrubber-three-invariants`).
+  - [x] 1.4.3 Existing Stripe/CFO tests still pass unmodified.
+- [x] **1.5** Edit `apps/web-platform/lib/messages/tiers.ts`:
+  - [x] 1.5.1 Add `MESSAGE_SOURCE_GITHUB = 'github'`, `MESSAGE_SOURCE_KB_DRIFT = 'kb-drift'`, `MESSAGE_OWNING_DOMAIN_KNOWLEDGE = 'knowledge'`.
 - [ ] **1.6** Commit & push Phase 1.
 
-**Exit gate:** `bun test apps/web-platform/test/server/migration-047*` + `bun test apps/web-platform/lib/safety/redaction-allowlist.test.ts` green.
+**Exit gate:** `bun test apps/web-platform/test/server/migration-051*` + `bun test apps/web-platform/lib/safety/redaction-allowlist.test.ts` green.
 
 ## Phase 2 — Operator preflight + IaC apply
 

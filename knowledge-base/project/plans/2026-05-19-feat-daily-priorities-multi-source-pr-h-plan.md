@@ -24,7 +24,7 @@ plan_review_dissent: "Split KB-drift into PR-H + PR-H2 (DHH P0) — brainstorm P
 
 PR-H closes umbrella **#3244**'s outstanding acceptance criterion ("≥3 signal sources + 'let [leader] handle it' one-click delegation") by extending the Today section beyond Stripe-only (PR-F #3940 merged 2026-05-17) with **GitHub** (4 event classes) and **KB-drift** (2 signal classes, direct-action only).
 
-Approach **A** locked in brainstorm: single PR, fully hardened, all CLO blockers inline. Migration 047 inline (`source_ref` + partial-unique dedup index + `audit_github_token_use`). CVE / security-advisory cards render ID + severity only. Hybrid ranking (strict tier → score within tier, cap surface at 7). GitHub App + short-lived install tokens — PAT off-table.
+Approach **A** locked in brainstorm: single PR, fully hardened, all CLO blockers inline. Migration 051 inline (`source_ref` + partial-unique dedup index + `audit_github_token_use`). CVE / security-advisory cards render ID + severity only. Hybrid ranking (strict tier → score within tier, cap surface at 7). GitHub App + short-lived install tokens — PAT off-table.
 
 Plan v2 incorporates 13 plan-review findings (P0+P1+P2) from DHH + Kieran + code-simplicity. Single dissent: KB-drift remains bundled in PR-H (brainstorm Phase 2 informed-decision; `rf-when-a-reviewer-or-user-says-to-keep-a`).
 
@@ -50,26 +50,26 @@ Carry-forward from brainstorm `## User-Brand Impact` (operator re-affirmed 2026-
 
 **Brand-survival threshold:** `single-user incident` (inherited).
 
-**Sign-off:** CPO sign-off carried from brainstorm Phase 0.5. `user-impact-reviewer` invoked at PR review-time per `plugins/soleur/skills/review/SKILL.md` conditional-agent block. Preflight Check 6 fires on `apps/web-platform/app/api/webhooks/github/**` + `apps/web-platform/server/inngest/functions/github-on-event*` + migration 047.
+**Sign-off:** CPO sign-off carried from brainstorm Phase 0.5. `user-impact-reviewer` invoked at PR review-time per `plugins/soleur/skills/review/SKILL.md` conditional-agent block. Preflight Check 6 fires on `apps/web-platform/app/api/webhooks/github/**` + `apps/web-platform/server/inngest/functions/github-on-event*` + migration 051.
 
 ## Implementation Phases (6)
 
 PR-H sized for a single merged PR (Approach A; KB-drift bundled per brainstorm Phase 2 decision). Phases run sequentially; commits within phases are flexible; the merge is atomic.
 
-### Phase 1 — Migration 047 + redaction extension
+### Phase 1 — Migration 051 + redaction extension
 
 **Goal:** schema groundwork + GDPR-blocker artifacts.
 
 **Files created:**
-- `apps/web-platform/supabase/migrations/047_multi_source_dedup.sql` — ALTER `messages` ADD `source_ref text` (nullable for backfill safety); partial-unique index `messages_active_draft_dedup_idx ON messages (user_id, source, source_ref) WHERE status='draft' AND source_ref IS NOT NULL`; new table `audit_github_token_use(founder_id, installation_id, repo_full_name, endpoint, ts, response_status)` with RLS + RPC `record_github_token_use(...)` (`SECURITY DEFINER` + `SET search_path=public, pg_temp`); new table `processed_github_events(delivery_id text PRIMARY KEY, received_at timestamptz DEFAULT now())` — retention via Postgres autovacuum + 30-day partition rotation (no explicit TTL daemon).
-- `apps/web-platform/supabase/migrations/047_multi_source_dedup.test.ts` — shape test asserting new columns + RLS policies + index + audit table + RPC search_path pinning + processed-events table.
+- `apps/web-platform/supabase/migrations/051_multi_source_dedup.sql` — ALTER `messages` ADD `source_ref text` (nullable for backfill safety); partial-unique index `messages_active_draft_dedup_idx ON messages (user_id, source, source_ref) WHERE status='draft' AND source_ref IS NOT NULL`; new table `audit_github_token_use(founder_id, installation_id, repo_full_name, endpoint, ts, response_status)` with RLS + RPC `record_github_token_use(...)` (`SECURITY DEFINER` + `SET search_path=public, pg_temp`); new table `processed_github_events(delivery_id text PRIMARY KEY, received_at timestamptz DEFAULT now())` — retention via Postgres autovacuum + 30-day partition rotation (no explicit TTL daemon).
+- `apps/web-platform/supabase/migrations/051_multi_source_dedup.test.ts` — shape test asserting new columns + RLS policies + index + audit table + RPC search_path pinning + processed-events table.
 
 **Files edited:**
 - `apps/web-platform/lib/safety/redaction-allowlist.ts` — add NEW export `redactGithubSourcedText(s: string, opts?: { source?: 'pr_title'|'issue_body'|'cve_description' }): string`. Co-located with PR-A's existing exports (single module, two threat models: LLM-output-scoped vs third-party-ingested-scoped). Stripe/CFO paths unchanged (different export, no signature change to existing functions).
 - `apps/web-platform/lib/safety/redaction-allowlist.test.ts` — golden fixtures per `source` variant; PII shapes per learning `2026-04-17-pii-regex-scrubber-three-invariants` (max-input bound, alphabet-aware UUID match, no `/g`+`.test()` gate).
 - `apps/web-platform/lib/messages/tiers.ts` — add `MESSAGE_SOURCE_GITHUB = 'github'`, `MESSAGE_SOURCE_KB_DRIFT = 'kb-drift'`, `MESSAGE_OWNING_DOMAIN_KNOWLEDGE = 'knowledge'`.
 
-**Exit:** migration 047 shape tests green; redaction allowlist tests green (existing + new variants).
+**Exit:** migration 051 shape tests green; redaction allowlist tests green (existing + new variants).
 
 ### Phase 2 — Operator preflight + IaC apply
 
@@ -204,8 +204,8 @@ PR-H sized for a single merged PR (Approach A; KB-drift bundled per brainstorm P
 ## Files to Create (21)
 
 ```
-apps/web-platform/supabase/migrations/047_multi_source_dedup.sql
-apps/web-platform/supabase/migrations/047_multi_source_dedup.test.ts
+apps/web-platform/supabase/migrations/051_multi_source_dedup.sql
+apps/web-platform/supabase/migrations/051_multi_source_dedup.test.ts
 apps/web-platform/app/api/webhooks/github/route.ts
 apps/web-platform/app/api/webhooks/github/route.test.ts
 apps/web-platform/app/api/internal/kb-drift-ingest/route.ts
@@ -293,7 +293,7 @@ Root: `apps/web-platform/infra/` (existing R2 backend `main.tf:2-14`, providers 
 
 ### Apply path
 
-Canonical Doppler+Terraform invocation (per learning `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan`); migration 047 applies via existing CI `migrate` job in `web-platform-release.yml`. `.github/workflows/kb-drift-walker.yml` reads `secrets.DOPPLER_TOKEN_KB_DRIFT` (published by Phase 2 IaC).
+Canonical Doppler+Terraform invocation (per learning `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan`); migration 051 applies via existing CI `migrate` job in `web-platform-release.yml`. `.github/workflows/kb-drift-walker.yml` reads `secrets.DOPPLER_TOKEN_KB_DRIFT` (published by Phase 2 IaC).
 
 ### Distinctness / drift safeguards
 
@@ -316,7 +316,7 @@ Better Stack free tier rejects `betteruptime_policy` (per learning `2026-05-15`)
 - [ ] **AC5** `TodayCard` renders 3 sources × N owning_domain matrix; tests pass for every (source, owning_domain) combination.
 - [ ] **AC6** CVE / secret-scanning cards render CVE ID + severity only; `await screen.findByTestId("today-card-cve")` shows `cve-id` + `severity-badge` but NOT `draft-preview-body`.
 - [ ] **AC7** `today/route.ts` returns ≤ 7 items per call (inline ranking + slice); items 8+ in `extras` field. Test: 30 mock items → `result.items.length === 7` AND `result.extras.length === 23`.
-- [ ] **AC8** Migration 047 shape test green: new columns, partial-unique index, `audit_github_token_use` + RPC + `processed_github_events`.
+- [ ] **AC8** Migration 051 shape test green: new columns, partial-unique index, `audit_github_token_use` + RPC + `processed_github_events`.
 - [ ] **AC9** RPC `record_github_token_use` uses `SECURITY DEFINER` + `SET search_path = public, pg_temp`; shape test asserts `pg_proc.proconfig` contains the search_path pin.
 - [ ] **AC10** Article 30 + DPD + Privacy + AUP updates merged in PR-H (4 file edits in `## Files to Edit`).
 - [ ] **AC11** ADR-031 + ADR-032 land at `status: accepted` in same commits as the code they describe (Phase 3).
@@ -366,7 +366,7 @@ Test framework: `bun test` for TS; `bash` (`.test.sh`) for shell. No new framewo
 - If operator wants wireframe-level fidelity on Phase 6 button affordances, run `ux-design-lead` BEFORE Phase 6.
 - Single manual gate (GitHub App creation in UI) — tracked for future automation via deferred-automation issue filed at Phase 2.
 - INSERT-time + render-time redaction is belt-and-suspenders. If you must drop one, drop INSERT-time. **NEVER drop render-time** — it is the load-bearing Art. 14 gate.
-- Migration 047 `processed_github_events` retention is natural (autovacuum + 30-day partition rotation). No explicit TTL daemon. Self-hosted Inngest's 24h `event.id` dedup window is fixed — the DB-side dedup is the load-bearing replay defense beyond Inngest's window.
+- Migration 051 `processed_github_events` retention is natural (autovacuum + 30-day partition rotation). No explicit TTL daemon. Self-hosted Inngest's 24h `event.id` dedup window is fixed — the DB-side dedup is the load-bearing replay defense beyond Inngest's window.
 - Per-request Octokit App factory only. Module-scope singletons break across Next.js App Router worker boundaries (vercel/next.js#65350) AND `@octokit/auth-app` v7 already auto-refreshes tokens internally — DO NOT add a manual token cache.
 - `KB_DRIFT_INGEST_SIGNING_KEY` lives in `prd_kb_drift_walker` Doppler config (NEW), NOT `prd` or `prd_terraform`. Blast-radius scope.
 - **Release-on-error pattern is load-bearing** for the webhook idempotency story. The `processed_github_events` INSERT happens BEFORE `inngest.send`; if `inngest.send` fails, the row MUST be DELETEd so GitHub's redelivery can be processed. Without this, transient failures silently drop events.
