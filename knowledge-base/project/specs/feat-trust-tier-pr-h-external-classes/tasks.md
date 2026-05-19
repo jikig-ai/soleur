@@ -66,15 +66,15 @@ Derived from the plan. Each leaf task is intended to be executable by `/soleur:w
 
 ## Phase 5 — today-card.tsx wiring + typed-confirm-modal (under components/ui/)
 
-- [ ] **5.1 RED** Create `apps/web-platform/test/components/ui/typed-confirm-modal.test.tsx` — RTL + Playwright a11y (keyboard, ARIA, tap-target, ZWS rejection, no `.trim()`/`.normalize()`).
-- [ ] **5.2 GREEN** Create `apps/web-platform/components/ui/typed-confirm-modal.tsx` — operation-bounded primitive; reusable by future PR-I template-authorization.
-- [ ] **5.3 GREEN** Edit `apps/web-platform/components/dashboard/today-card.tsx`:
+- [x] **5.1 RED** Create `apps/web-platform/test/components/ui/typed-confirm-modal.test.tsx` — RTL + Playwright a11y (keyboard, ARIA, tap-target, ZWS rejection, no `.trim()`/`.normalize()`).
+- [x] **5.2 GREEN** Create `apps/web-platform/components/ui/typed-confirm-modal.tsx` — operation-bounded primitive; reusable by future PR-I template-authorization.
+- [x] **5.3 GREEN** Edit `apps/web-platform/components/dashboard/today-card.tsx`:
   - Remove `disabled` + `aria-disabled` + `title="Wires in PR-G (#3947)"` from 3 buttons.
   - Wire `onClick` handlers calling `/api/dashboard/today/[id]/send|edit|discard`.
   - On Send 409 response: open `<TypedConfirmModal>` with payload from 409 body.
   - On modal submit: second POST with `confirmed_typed=true` + `typed_value`.
   - Optimistic UI for discard.
-- [ ] **5.4 VERIFY** Component tests pass; manual smoke in `bun run dev`.
+- [x] **5.4 VERIFY** Component tests pass; manual smoke in `bun run dev`.
 
 ## Phase 6 — DEFERRED to PR-I
 
