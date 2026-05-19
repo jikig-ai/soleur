@@ -133,4 +133,58 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
       expect(mirrorHeroDate![1]).toBe(sourceDate[1]);
     }
   });
+
+  test("RCS jurisdiction is internally consistent across legal corpus", () => {
+    // Per #4086: the four documents loaded below describe the same K-bis
+    // extract category (Jikigai SARL's RCS jurisdiction). All sites must
+    // name the same registry, and that registry must be in the country
+    // PP §2 + DPD §1 name as the incorporation country (currently France).
+    // We deliberately do NOT pin a specific city, so a legitimate future
+    // move within France (Paris -> Lyon, etc.) does not require a test edit.
+    const sites: Array<{ label: string; load: () => string }> = [
+      { label: "privacy-policy source", load: () => loadSource("privacy-policy") },
+      { label: "data-protection-disclosure source", load: () => loadSource("data-protection-disclosure") },
+      { label: "privacy-policy mirror", load: () => loadMirror("privacy-policy") },
+      {
+        label: "article-30-register PA15(c)",
+        load: () =>
+          readFileSync(
+            resolve(REPO_ROOT, "knowledge-base/legal/article-30-register.md"),
+            "utf-8",
+          ),
+      },
+    ];
+
+    // Extract every "RCS <City>" token across all sites. Match the
+    // structural shape (RCS followed by a capitalized word), not a
+    // specific city, so the assertion survives any future French move.
+    const rcsTokenRe = /\bRCS\s+([A-Z][A-Za-zÀ-ÿ-]+)/g;
+    const tokens = new Set<string>();
+    for (const site of sites) {
+      const body = site.load();
+      for (const m of body.matchAll(rcsTokenRe)) {
+        tokens.add(m[1]);
+      }
+    }
+
+    expect(
+      tokens.size,
+      `RCS jurisdiction tokens across loaded documents: ${[...tokens].join(", ")}`,
+    ).toBe(1);
+
+    const pp = loadSource("privacy-policy");
+    const dpd = loadSource("data-protection-disclosure");
+
+    expect(pp, "PP §2 must declare France incorporation").toMatch(/incorporated in France/);
+    expect(dpd, "DPD §1 must declare France incorporation").toMatch(/incorporated in France/);
+    expect(pp, "PP must not declare Luxembourg incorporation").not.toMatch(/incorporated in Luxembourg/);
+    expect(dpd, "DPD must not declare Luxembourg incorporation").not.toMatch(/incorporated in Luxembourg/);
+
+    for (const site of sites) {
+      expect(
+        site.load(),
+        `${site.label} must not contain "RCS Luxembourg" (bug class closed by #4086)`,
+      ).not.toMatch(/RCS Luxembourg/);
+    }
+  });
 });

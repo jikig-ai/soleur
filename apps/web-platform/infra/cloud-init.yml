@@ -198,8 +198,14 @@ write_files:
       ProtectSystem=strict
       ProtectHome=read-only
       PrivateTmp=true
-      ReadWritePaths=/mnt/data /var/lock
-      ReadOnlyPaths=/etc/webhook /usr/local/bin /etc/default/webhook-deploy
+      # Bootstrap path (inngest-bootstrap.sh + future deploy <component>
+      # handlers) installs systemd units + binaries + env files via sudo.
+      # ProtectSystem=strict is namespace-scoped — sudo elevates UID but does
+      # NOT escape the mount namespace, so without these explicit
+      # ReadWritePaths the inngest bootstrap fails with cryptic chown error
+      # messages. See #4017 substrate audit (2026-05-19).
+      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /var/lib/inngest /usr/local/bin
+      ReadOnlyPaths=/etc/webhook /etc/default/webhook-deploy
       TimeoutStopSec=180
 
       [Install]
@@ -414,6 +420,8 @@ runcmd:
       --restart unless-stopped \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
+      --add-host host.docker.internal:host-gateway \
+      -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:80:3000 \
