@@ -93,12 +93,53 @@ describe("redactGithubSourcedText", () => {
       expect(out).toContain("[redacted-key]");
       expect(out).not.toContain(`${"AKI"+"A"}IOSFODNN7EXAMPLE`);
     });
+
+    it("redacts an AWS secret access key in assignment shape", () => {
+      const out = redactGithubSourcedText(
+        `AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY in env`,
+      );
+      expect(out).toContain("[redacted-key]");
+      expect(out).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+    });
+
+    it("redacts a fine-grained GitHub PAT (github_pat_)", () => {
+      const out = redactGithubSourcedText(
+        `token: ${"github"+"_pat_"}11AAAAAAAAAAAAAAAAAAA1_${"a".repeat(59)} suffix`,
+      );
+      expect(out).toContain("[redacted-key]");
+      expect(out).not.toContain(`${"github"+"_pat_"}11`);
+    });
+
+    it("redacts a Slack bot token (xoxb-)", () => {
+      const out = redactGithubSourcedText(
+        `slack: ${"xox"+"b"}-123456789012-1234567890123-abcdefghijklmnopqrstuvwx`,
+      );
+      expect(out).toContain("[redacted-key]");
+    });
+  });
+
+  describe("IPv6 redaction", () => {
+    it("redacts a full-form IPv6", () => {
+      const out = redactGithubSourcedText(
+        "beacon to 2001:0db8:85a3:0000:0000:8a2e:0370:7334 over TLS",
+      );
+      expect(out).toContain("[redacted-ip]");
+      expect(out).not.toContain("2001:0db8:85a3");
+    });
+
+    it("redacts a compressed-form IPv6", () => {
+      const out = redactGithubSourcedText(
+        "blocked fe80::1ff:fe23:4567:890a at edge",
+      );
+      expect(out).toContain("[redacted-ip]");
+      expect(out).not.toContain("fe80::1ff");
+    });
   });
 
   describe("JWT redaction", () => {
     it("redacts a JWT-shaped triple", () => {
       const jwt =
-        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"; // gitleaks:allow issue:#4090 canonical jwt.io test fixture (sub=123456), signed with published demo secret "your-256-bit-secret"
       const out = redactGithubSourcedText(`token=${jwt} sent`);
       expect(out).toContain("[redacted-jwt]");
       expect(out).not.toContain("eyJ");
