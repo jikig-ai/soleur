@@ -106,8 +106,9 @@ _build_fake_main_repo() {
 # The guard blocks git stash regardless of working directory. The .cwd field
 # below is a no-op for this check; it is kept only for payload completeness.
 # Cases enumerate every alternation branch in the regex
-# `(^|&&|\|\||;)\s*git\s+stash` plus the cleanup sub-command and a negative
-# case that proves the guard does not over-fire on substrings.
+# `(^|&&|\|\||;)\s*git\s+stash` plus the cleanup sub-command, a dedicated
+# ;-primary case (proved independently, not masked by ^ firing first in the
+# &&-chain case), the exact issue #3135 repro, and a negative case.
 mkdir -p "$WORK/.worktrees/fake/inner"
 echo '{"tool_name":"Bash","tool_input":{"command":"git stash"},"cwd":"'"$WORK/.worktrees/fake/inner"'"}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
@@ -120,6 +121,18 @@ _check "guardrails: git stash pop" "hr-never-git-stash-in-worktrees"
 echo '{"tool_name":"Bash","tool_input":{"command":"git stash && bun test plugins/soleur/test/components.test.ts 2>&1 | head -n 20 ; git stash pop"}}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
 _check "guardrails: git stash (&& chain — PR #2683 pattern)" "hr-never-git-stash-in-worktrees"
+
+# ; as primary trigger — test 3 above hides whether ; works because ^ fires
+# first. This command has no leading git stash, so only ; can match.
+echo '{"tool_name":"Bash","tool_input":{"command":"true; git stash pop"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash (; primary — not masked by ^)" "hr-never-git-stash-in-worktrees"
+
+# Issue #3135 repro: && chain followed by piped grep with | inside the pattern.
+# Verifies the hook fires when the command string contains many unrelated | chars.
+echo '{"tool_name":"Bash","tool_input":{"command":"git stash && bash plugins/soleur/test/schedule-skill-once.test.sh 2>&1 | grep -E \"FAIL|Passed|Failed\" | tail -5; echo \"---restoring---\"; git stash pop"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash (&& + piped grep — issue #3135 repro)" "hr-never-git-stash-in-worktrees"
 
 echo '{"tool_name":"Bash","tool_input":{"command":"git diff --quiet || git stash"}}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
