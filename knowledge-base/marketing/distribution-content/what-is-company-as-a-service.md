@@ -3,7 +3,7 @@ title: "What Is Company-as-a-Service?"
 type: pillar
 publish_date: "2026-05-12"
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: stale
 ---
 
 ## Discord
