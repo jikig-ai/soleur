@@ -13,6 +13,16 @@
  * caps total mint count at ≤2 per suite (one per founder), keeping the
  * cumulative budget below the GoTrue ceiling.
  *
+ * Per-suite capping is necessary but not sufficient: with ~18 tenant-iso
+ * suites each minting ≤2 founders, a single CI run still issues 20-40
+ * magiclinks against the dev project, which defaults to a 30/hour
+ * ceiling. If you see `AuthApiError: Request rate limit reached` /
+ * `code: over_request_rate_limit` mirrored from `mint.verify_otp_error`
+ * (see `lib/supabase/tenant.ts`), follow the operational runbook at
+ * `knowledge-base/engineering/ops/runbooks/supabase-magiclink-rate-limit.md`
+ * to bump the dev project's magiclink rate limit. The dashboard setting
+ * is not yet Terraform-managed; the runbook is the durable record.
+ *
  * The cached JWTs are REAL Supabase-issued tokens (PostgREST verifies via
  * JWKS = required for RLS testing). Only the mint *call frequency* is
  * reduced; signature/jti/aud/role claims are all real-substrate.
