@@ -17,29 +17,29 @@ Derived from the plan. Each leaf task is intended to be executable by `/soleur:w
 
 ## Phase 0 — Preconditions
 
-- [ ] **0.1** Confirm mig 051 is next free: `ls apps/web-platform/supabase/migrations/ | grep -E '^0[5-9][0-9]_' | head -5`.
-- [ ] **0.2** Re-read `apps/web-platform/supabase/migrations/046_*.sql` L266-285 to confirm compound CHECK shape on `messages.tier`.
-- [ ] **0.3** Re-verify Doppler hot-reload learning land status; if on `main`, cite file; else cite PR-G body.
-- [ ] **0.4** Confirm ADR-034 number free: `ls knowledge-base/engineering/architecture/decisions/ | grep -E '^ADR-034'` returns empty.
-- [ ] **0.5** Type-widening cross-consumer grep enumerates ALL 6 sites:
+- [x] **0.1** Confirm mig 051 is next free: `ls apps/web-platform/supabase/migrations/ | grep -E '^0[5-9][0-9]_' | head -5`.
+- [x] **0.2** Re-read `apps/web-platform/supabase/migrations/046_*.sql` L266-285 to confirm compound CHECK shape on `messages.tier`.
+- [x] **0.3** Re-verify Doppler hot-reload learning land status; if on `main`, cite file; else cite PR-G body.
+- [x] **0.4** Confirm ADR-034 number free: `ls knowledge-base/engineering/architecture/decisions/ | grep -E '^ADR-034'` returns empty.
+- [x] **0.5** Type-widening cross-consumer grep enumerates ALL 6 sites:
   - `apps/web-platform/server/scope-grants/is-granted.ts:15, 17, 25-29, 30`
   - `apps/web-platform/app/api/webhooks/stripe/route.ts:456`
   - `apps/web-platform/test/server/scope-grants/cross-tenant-read-denied.test.ts:225, 230`
   - `apps/web-platform/test/server/webhooks/stripe-payment-failed-inngest.test.ts:92`
-- [ ] **0.6** Verify every rule ID cited in plan against `AGENTS.{md,core.md,docs.md,rest.md}` + `scripts/retired-rule-ids.txt`.
+- [x] **0.6** Verify every rule ID cited in plan against `AGENTS.{md,core.md,docs.md,rest.md}` + `scripts/retired-rule-ids.txt`.
 
 ## Phase 1 — Registry + types
 
-- [ ] **1.1 RED** Create `apps/web-platform/test/server/scope-grants/action-class-exhaustive.test.ts` — combined parity + exhaustiveness + enum-absence regex.
-- [ ] **1.2 RED** Create `apps/web-platform/test/lint/action-class-typed-literals.test.ts` — rg-based; accepts narrowed-union expressions, rejects raw `string`/`any`; fixture pass/fail cases.
-- [ ] **1.3 GREEN** Edit `apps/web-platform/server/scope-grants/action-class-map.ts`:
+- [x] **1.1 RED** Create `apps/web-platform/test/server/scope-grants/action-class-exhaustive.test.ts` — combined parity + exhaustiveness + enum-absence regex.
+- [x] **1.2 RED** Create `apps/web-platform/test/lint/action-class-typed-literals.test.ts` — rg-based; accepts narrowed-union expressions, rejects raw `string`/`any`; fixture pass/fail cases.
+- [x] **1.3 GREEN** Edit `apps/web-platform/server/scope-grants/action-class-map.ts`:
   - Widen `ACTION_CLASSES` to 11 entries (per plan FR1 final list).
   - Widen `ActionClassTier` to 4 values including `auto_with_digest`.
   - Extend `ACTION_CLASS_DEFAULTS` per category.
   - Add `ACTION_CLASS_CATEGORY: Record<ActionClass, "finance" | "external_low_stakes" | "external_brand_critical" | "infra">`.
-- [ ] **1.4 GREEN** Sweep type-widening across 6 sites enumerated at 0.5: tighten `isGranted`, `isDenied`, `ACTION_CLASS_DENYLIST`; update both test files.
-- [ ] **1.5 GREEN** `bun run tsc --noEmit` clean — close every `TS2322 ... not assignable to never` rail.
-- [ ] **1.6 VERIFY** `bun test apps/web-platform/test/server/scope-grants/` + `bun test apps/web-platform/test/lint/` pass.
+- [x] **1.4 GREEN** Sweep type-widening across 6 sites enumerated at 0.5: tighten `isGranted`, `isDenied`, `ACTION_CLASS_DENYLIST`; update both test files.
+- [x] **1.5 GREEN** `bun run tsc --noEmit` clean — close every `TS2322 ... not assignable to never` rail.
+- [x] **1.6 VERIFY** `bun test apps/web-platform/test/server/scope-grants/` + `bun test apps/web-platform/test/lint/` pass.
 
 ## Phase 2 — Migration 051
 
