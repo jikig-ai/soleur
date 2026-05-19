@@ -33,6 +33,7 @@ CURL_BIN="${CURL_BIN:-curl}"
 CONFIRM=0
 SELF_TEST=0
 CORPUS_COUNT_OVERRIDE=""
+CACHE_PARAPHRASES=""
 MODEL_ID="claude-haiku-4-5-20251001"
 ANTHROPIC_VERSION="2023-06-01"
 ANTHROPIC_ENDPOINT="https://api.anthropic.com/v1/messages"
@@ -52,6 +53,7 @@ while (( $# > 0 )); do
     --confirm)                    CONFIRM=1 ;;
     --self-test)                  SELF_TEST=1 ;;
     --corpus-count-override)      CORPUS_COUNT_OVERRIDE="$2"; shift ;;
+    --cache-paraphrases)          CACHE_PARAPHRASES="$2"; shift ;;
     --help|-h)                    print_help; exit 0 ;;
     *)
       echo "error: unknown arg: $1" >&2
@@ -324,75 +326,163 @@ anthropic_paraphrase() {
 }
 
 # ─── Phase 3: dual-retriever lookup ─────────────────────────────────────────
-# Three layers of grep -F safety:
-#   1. double-quote "$query"  → shell never expands $(...) / backticks / globs
-#   2. -F                     → grep treats query as fixed string (no regex)
+#
+# **Methodology (revised post-first-run).** The original plan §Phase 3
+# passed the full paraphrase sentence as the `grep -F` query. Real
+# kb-search consumes a short $KEYWORD; an agent doesn't paste a paragraph.
+# A sentence-paraphrase never substring-matches verbatim source text →
+# the previous run produced R@5(light|heavy) ≡ 0 across the corpus
+# (methodology floor, not a retrieval finding).
+#
+# This revision extracts keywords from each (identity|light|heavy) query
+# via a bash heuristic — lowercase, tokenize on non-alphanumerics, drop
+# stopwords + tokens < 4 chars, dedup, take top-K longest. Retrieval is
+# now token-overlap ranking: score each candidate path by the number of
+# distinct extracted tokens that substring-match the file/INDEX line.
+# Applied uniformly to identity/light/heavy so the honesty gap signal
+# stays apples-to-apples.
+#
+# Three layers of `grep -F` safety preserved (per-token now, not per-query):
+#   1. double-quote "$token"  → shell never expands $(...) / backticks / globs
+#   2. -F                     → grep treats token as fixed string (no regex)
 #   3. --                     → grep refuses to interpret leading `-` as a flag
-# kbsearch_rank: returns rank (1-based) of source/synced_to paths in combined
-# tier1+tier2 list (capped at 20), or empty string if none match in top-20.
+
+# Common English stopwords + bench-noise terms. Comma-separated for awk.
+STOPWORDS="about,above,after,again,against,also,although,always,among,because,before,being,below,between,both,call,calls,came,case,cases,cause,caused,causes,check,checks,common,could,does,doing,done,each,either,enough,even,every,ever,first,from,gets,give,gives,goes,have,having,here,however,important,into,issue,just,keep,kind,know,less,like,liked,line,lines,long,made,make,makes,many,more,most,much,must,name,need,needs,never,next,none,only,onto,other,others,over,plus,real,return,same,seem,seems,seen,sent,show,shows,side,since,some,sort,sorts,still,such,sure,take,takes,than,that,thanks,them,then,there,these,they,this,those,thus,time,times,tool,tools,turn,turns,until,upon,used,uses,using,very,want,wants,were,what,whatever,when,where,which,while,with,within,without,work,works,would,your"
+
+# extract_keywords: stdin/$1 text → newline-separated top-K longest non-stopword tokens (≥4 chars).
+extract_keywords() {
+  local text="$1" k="${2:-3}"
+  if [[ -z "$text" ]]; then return; fi
+  printf '%s' "$text" \
+    | tr '[:upper:]' '[:lower:]' \
+    | tr -cs 'a-z0-9_-' '\n' \
+    | awk -v stop="$STOPWORDS" -v k="$k" '
+        BEGIN {
+          n = split(stop, arr, ","); for (i=1; i<=n; i++) S[arr[i]] = 1
+        }
+        # Skip empty, short, all-numeric, and stopword tokens.
+        length($0) >= 4 && !($0 in S) && !match($0, /^[0-9_-]+$/) {
+          if (seen[$0]++) next
+          # Emit "length<TAB>token" so we can sort by length desc.
+          print length($0) "\t" $0
+        }
+      ' \
+    | sort -rn -k1,1 \
+    | awk -v k="$k" '{ print $2; if (++c >= k) exit }'
+}
+
+# rank_paths_by_token_overlap: given (tokens, candidate-grep-fn), return up
+# to 20 paths sorted by # of distinct tokens matched (desc). Caller passes
+# the corpus-scoping git-grep invocation as the second arg via shell function.
+#
+# Output: one path per line, sorted by token-overlap score desc (ties broken
+# by lexicographic path order).
+rank_paths_by_token_overlap_corpus() {
+  local tokens="$1"   # newline-separated
+  local scope="$2"    # "kb-wide" or "learnings-only"
+  if [[ -z "$tokens" ]]; then return; fi
+  local tmp
+  tmp=$(mktemp)
+  local token
+  while IFS= read -r token; do
+    [[ -z "$token" ]] && continue
+    # Pathspec choice: directory prefix (no glob) covers BOTH top-level AND
+    # subdir files. The original `'knowledge-base/**/*.md'` shape matched
+    # only subdir files (git pathspec `**` requires intermediate dirs —
+    # same gobwas trap as lefthook globs; see
+    # `2026-03-21-lefthook-gobwas-glob-double-star.md`). For learnings/ at
+    # this scale (~822 top-level, ~301 subdir) that meant the first bench
+    # run searched only ~27% of the corpus.
+    case "$scope" in
+      kb-wide)
+        git -C "$REPO_ROOT" grep -l -i -F -- "$token" -- 'knowledge-base/' \
+          ':(exclude)knowledge-base/INDEX.md' ':(exclude,glob)**/archive/**' 2>/dev/null
+        ;;
+      learnings-only)
+        git -C "$REPO_ROOT" grep -l -i -F -- "$token" -- 'knowledge-base/project/learnings/' \
+          ':(exclude,glob)**/archive/**' 2>/dev/null
+        ;;
+    esac >> "$tmp"
+  done <<< "$tokens"
+  # Each match counts once. uniq -c gives "score path". Sort by score desc.
+  sort "$tmp" | uniq -c | sort -rn -k1,1 -k2,2 | awk '{ $1=""; sub(/^ +/, ""); print }' | head -20
+  rm -f "$tmp"
+}
+
+# rank_indexmd_by_token_overlap: tier-1 — score INDEX.md LINES (one per
+# learning entry) by token-overlap, return their path targets (prefixed
+# with `knowledge-base/` since INDEX.md uses domain-relative paths).
+rank_indexmd_by_token_overlap() {
+  local tokens="$1"
+  if [[ -z "$tokens" ]] || [[ ! -f "$INDEX_PATH" ]]; then return; fi
+  local tmp
+  tmp=$(mktemp)
+  local token
+  while IFS= read -r token; do
+    [[ -z "$token" ]] && continue
+    # Match lines containing this token; extract the markdown link target.
+    grep -i -F -- "$token" "$INDEX_PATH" 2>/dev/null \
+      | sed -nE 's/.*\]\(([^)]+)\).*/\1/p' \
+      | sed 's|^|knowledge-base/|' >> "$tmp"
+  done <<< "$tokens"
+  sort "$tmp" | uniq -c | sort -rn -k1,1 -k2,2 | awk '{ $1=""; sub(/^ +/, ""); print }' | head -20
+  rm -f "$tmp"
+}
+
+# rank_paths_min_rank: combined ranked list + candidate paths → 1-based min
+# rank or "" if none of the candidates appear in top-20.
+rank_paths_min_rank() {
+  local combined="$1" source_path="$2" synced_paths_json="$3"
+  local candidates=("$source_path")
+  if [[ -n "$synced_paths_json" && "$synced_paths_json" != "[]" ]]; then
+    while IFS= read -r p; do
+      [[ -n "$p" ]] && candidates+=("$p")
+    done < <(printf '%s' "$synced_paths_json" | jq -r '.[]?' 2>/dev/null || true)
+  fi
+  local i=0 min_rank=""
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    i=$((i+1))
+    for cand in "${candidates[@]}"; do
+      if [[ "$line" == "$cand" ]]; then
+        if [[ -z "$min_rank" || "$i" -lt "$min_rank" ]]; then
+          min_rank="$i"
+        fi
+      fi
+    done
+  done <<< "$combined"
+  echo "${min_rank:-}"
+}
+
+# kbsearch_rank: two-tier (INDEX.md title-match + corpus content-match) with
+# token-overlap scoring. Cap top-20 combined.
 kbsearch_rank() {
   local query="$1" source_path="$2" synced_paths_json="$3"
-  local tier1 tier2 combined min_rank=""
   if [[ -z "$query" ]]; then echo ""; return; fi
-  tier1=$(grep -in -F -- "$query" "$INDEX_PATH" 2>/dev/null \
-    | head -20 \
-    | sed -nE 's/.*\]\(([^)]+)\).*/\1/p' || true)
-  tier2=$(git -C "$REPO_ROOT" grep -l -i -F -- "$query" -- 'knowledge-base/**/*.md' \
-    ':!knowledge-base/INDEX.md' ':!**/archive/**' 2>/dev/null | head -20 || true)
-  # Combine: tier1 first (in order), then tier2 (excluding any already in tier1), cap 20.
+  local tokens tier1 tier2 combined
+  tokens=$(extract_keywords "$query" 3)
+  if [[ -z "$tokens" ]]; then echo ""; return; fi
+  tier1=$(rank_indexmd_by_token_overlap "$tokens")
+  tier2=$(rank_paths_by_token_overlap_corpus "$tokens" kb-wide)
   combined=$(
     {
       printf '%s\n' "$tier1"
       printf '%s\n' "$tier2"
     } | awk 'NF && !seen[$0]++' | head -20
   )
-  # Build candidates: source_path + synced_to[]
-  local candidates=("$source_path")
-  if [[ -n "$synced_paths_json" && "$synced_paths_json" != "[]" ]]; then
-    while IFS= read -r p; do
-      [[ -n "$p" ]] && candidates+=("$p")
-    done < <(printf '%s' "$synced_paths_json" | jq -r '.[]?' 2>/dev/null || true)
-  fi
-  # min-rank semantics: best (lowest) position across candidates.
-  local i=0 line
-  while IFS= read -r line; do
-    i=$((i+1))
-    for cand in "${candidates[@]}"; do
-      if [[ "$line" == "$cand" ]] || [[ "$line" == *"$cand"* ]]; then
-        if [[ -z "$min_rank" || "$i" -lt "$min_rank" ]]; then
-          min_rank="$i"
-        fi
-      fi
-    done
-  done < <(printf '%s\n' "$combined")
-  echo "${min_rank:-}"
+  rank_paths_min_rank "$combined" "$source_path" "$synced_paths_json"
 }
 
-# grep_rank: learnings-only naive retriever.
+# grep_rank: learnings-only token-overlap retriever (no tier-1 INDEX.md).
 grep_rank() {
   local query="$1" source_path="$2" synced_paths_json="$3"
-  local results min_rank=""
   if [[ -z "$query" ]]; then echo ""; return; fi
-  results=$(git -C "$REPO_ROOT" grep -l -i -F -- "$query" -- 'knowledge-base/project/learnings/**/*.md' \
-    ':!**/archive/**' 2>/dev/null | head -20 || true)
-  local candidates=("$source_path")
-  if [[ -n "$synced_paths_json" && "$synced_paths_json" != "[]" ]]; then
-    while IFS= read -r p; do
-      [[ -n "$p" ]] && candidates+=("$p")
-    done < <(printf '%s' "$synced_paths_json" | jq -r '.[]?' 2>/dev/null || true)
-  fi
-  local i=0 line
-  while IFS= read -r line; do
-    i=$((i+1))
-    for cand in "${candidates[@]}"; do
-      if [[ "$line" == "$cand" ]] || [[ "$line" == *"$cand"* ]]; then
-        if [[ -z "$min_rank" || "$i" -lt "$min_rank" ]]; then
-          min_rank="$i"
-        fi
-      fi
-    done
-  done < <(printf '%s\n' "$results")
-  echo "${min_rank:-}"
+  local tokens results
+  tokens=$(extract_keywords "$query" 3)
+  if [[ -z "$tokens" ]]; then echo ""; return; fi
+  results=$(rank_paths_by_token_overlap_corpus "$tokens" learnings-only)
+  rank_paths_min_rank "$results" "$source_path" "$synced_paths_json"
 }
 
 # Hardcoded fixture-seed paths (Plan §3, fixture self-check).
@@ -685,6 +775,111 @@ self_test() {
   st_assert_contains "close-line: vindicate format" "gh issue close 4043 --comment" "$got"
   st_assert_contains "close-line: vindicate cites learning path" "2026-05-19-retrieval-diagnostic-findings.md" "$got"
 
+  # ── extract_keywords: deterministic top-K longest non-stopword tokens ─────
+  got="$(extract_keywords "The quick brown fox jumps over the lazy dog using react-resizable-panels" 3 | tr '\n' ',' | sed 's/,$//')"
+  # Longest non-stopword tokens ≥4 chars: "react-resizable-panels"(22), "quick"(5), "brown"(5), "jumps"(5), "lazy"(4)
+  # Top-3 longest: react-resizable-panels, quick|brown|jumps (tie at 5; awk sort -rn is stable on tie → first-seen wins)
+  st_assert_contains "extract_keywords: longest token wins"  "react-resizable-panels" "$got"
+  st_assert_contains "extract_keywords: returns 3 tokens"    "," "$got"  # at least 2 commas → 3 tokens
+  # Stopword exclusion ("the", "over") + short-token exclusion ("fox", "dog" both <4)
+  got="$(extract_keywords "the the the and and a" 3)"
+  st_assert "extract_keywords: pure-stopword input → empty" "" "$got"
+  # Numeric-only tokens dropped
+  got="$(extract_keywords "1234 5678 schema migration backfill" 3 | tr '\n' ',' | sed 's/,$//')"
+  st_assert_contains "extract_keywords: numeric-only tokens dropped" "migration" "$got"
+  st_assert_contains "extract_keywords: keeps schema" "schema" "$got"
+  case ",$got," in *",1234,"*) SELF_TEST_FAIL=$((SELF_TEST_FAIL+1)); SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1)); echo "  FAIL: numeric 1234 leaked into tokens";;
+                   *) SELF_TEST_PASS=$((SELF_TEST_PASS+1)); SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1)); echo "  PASS: numeric-only tokens NOT in output";;
+  esac
+
+  # ── Token-overlap retriever: end-to-end with synthesized mini-corpus ──────
+  local KB_ROOT="$TMP_ROOT/kb"
+  mkdir -p "$KB_ROOT/knowledge-base/project/learnings"
+  st_write "$KB_ROOT/knowledge-base/project/learnings/alpha.md" \
+    '---' \
+    'description: pinned migration causes drift in production' \
+    '---' \
+    '# Alpha Migration' \
+    'When you apply a pinned migration the downstream schema drifts.'
+  st_write "$KB_ROOT/knowledge-base/project/learnings/beta.md" \
+    '---' \
+    'description: stopword stuffing in a beta retrieval test' \
+    '---' \
+    '# Beta Lookup' \
+    'beta covers retrieval lookups across the corpus.'
+  st_write "$KB_ROOT/knowledge-base/project/learnings/gamma.md" \
+    '---' \
+    'description: workflow gate enforces compounding learning capture' \
+    '---' \
+    '# Gamma Compounding' \
+    'workflow gate ensures every solution compounds into a learning file.'
+  # gitify the kb so `git grep` works
+  (cd "$KB_ROOT" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -q -m "fixture")
+  st_write "$KB_ROOT/knowledge-base/INDEX.md" \
+    '# Knowledge Base Index' \
+    '' \
+    '- [Alpha Migration](project/learnings/alpha.md)' \
+    '- [Beta Lookup](project/learnings/beta.md)' \
+    '- [Gamma Compounding](project/learnings/gamma.md)'
+
+  # Run our retrievers against the mini-corpus by re-exporting paths.
+  local prev_repo="$REPO_ROOT" prev_idx="$INDEX_PATH"
+  REPO_ROOT="$KB_ROOT"; INDEX_PATH="$KB_ROOT/knowledge-base/INDEX.md"
+  (cd "$KB_ROOT" && git add -A && git -c user.email=t@t -c user.name=t commit -q --amend --no-edit)
+
+  # Query "pinned migration drift" — should match alpha first via token overlap
+  local rk
+  rk="$(kbsearch_rank "pinned migration drift" "knowledge-base/project/learnings/alpha.md" "[]")"
+  st_assert "token-overlap: alpha findable at rank 1 via kbsearch" "1" "$rk"
+
+  # Query "retrieval lookups corpus" — should match beta
+  rk="$(kbsearch_rank "retrieval lookups corpus" "knowledge-base/project/learnings/beta.md" "[]")"
+  st_assert "token-overlap: beta findable via kbsearch" "1" "$rk"
+
+  # Paraphrase-style query (light) — synonym substitution should still find alpha
+  rk="$(grep_rank "applying a pinned migration triggers drift" "knowledge-base/project/learnings/alpha.md" "[]")"
+  if [[ -n "$rk" && "$rk" -le 5 ]]; then
+    SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1)); SELF_TEST_PASS=$((SELF_TEST_PASS+1))
+    echo "  PASS: grep_rank: synonym-substituted query finds alpha (rank=$rk)"
+  else
+    SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1)); SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
+    echo "  FAIL: grep_rank: synonym-substituted query missed alpha (rank=$rk)"
+  fi
+
+  # Empty / pure-stopword query → null rank (not crash)
+  rk="$(kbsearch_rank "the and a" "knowledge-base/project/learnings/alpha.md" "[]")"
+  st_assert "token-overlap: pure-stopword query → null rank" "" "$rk"
+
+  # min-rank semantics with synced_to: synthesize a second file containing alpha's tokens
+  st_write "$KB_ROOT/knowledge-base/project/learnings/alpha-mirror.md" \
+    '---' \
+    'description: pinned migration drift mirror filing' \
+    '---' \
+    '# Alpha Mirror' \
+    'a sibling filing about pinned migration drift.'
+  (cd "$KB_ROOT" && git add -A && git -c user.email=t@t -c user.name=t commit -q -m "mirror")
+  rk="$(kbsearch_rank "pinned migration drift" "knowledge-base/project/learnings/alpha.md" '["knowledge-base/project/learnings/alpha-mirror.md"]')"
+  if [[ -n "$rk" && "$rk" -le 5 ]]; then
+    SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1)); SELF_TEST_PASS=$((SELF_TEST_PASS+1))
+    echo "  PASS: min-rank synced_to: best position across both filings (rank=$rk)"
+  else
+    SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1)); SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
+    echo "  FAIL: min-rank synced_to (rank=$rk)"
+  fi
+
+  REPO_ROOT="$prev_repo"; INDEX_PATH="$prev_idx"
+
+  # ── Bug-1 regression: jq null-rank construction emits a row ───────────────
+  # The pre-fix shape silently dropped null-rank rows from ranks.ndjson. The
+  # post-fix shape uses --argjson rank null and ALWAYS emits exactly one row.
+  local row_null row_num
+  row_null=$(jq -nc --arg path "x" --arg intensity "heavy" --arg retriever "kbsearch" --argjson rank null \
+    '{path:$path,intensity:$intensity,retriever:$retriever,rank:$rank}')
+  row_num=$(jq -nc --arg path "x" --arg intensity "heavy" --arg retriever "kbsearch" --argjson rank 7 \
+    '{path:$path,intensity:$intensity,retriever:$retriever,rank:$rank}')
+  st_assert "bug-1 fix: null-rank row emitted" '{"path":"x","intensity":"heavy","retriever":"kbsearch","rank":null}' "$row_null"
+  st_assert "bug-1 fix: numeric-rank row emitted" '{"path":"x","intensity":"heavy","retriever":"kbsearch","rank":7}' "$row_num"
+
   # ── Cost-gate integration: --corpus-count-override 5000 --confirm exits ≠0 ─
   local rc=0
   bash "$0" --confirm --corpus-count-override 5000 2>"$TMP_ROOT/err.log" >"$TMP_ROOT/out.log" || rc=$?
@@ -736,9 +931,20 @@ require_api_key
 
 # ─── Phase 1: corpus indexing ──────────────────────────────────────────────
 CORPUS_NDJSON=$(mktemp)
-PARAPHRASES_NDJSON=$(mktemp)
+# Paraphrases land in the cache path if supplied (durable across reruns —
+# avoids re-spending Anthropic budget on Phase 3 iterations); otherwise a
+# tempfile that EXIT-trap-rms.
+if [[ -n "$CACHE_PARAPHRASES" ]]; then
+  PARAPHRASES_NDJSON="$CACHE_PARAPHRASES"
+else
+  PARAPHRASES_NDJSON=$(mktemp)
+fi
 RANKS_NDJSON=$(mktemp)
-trap 'rm -f "$CORPUS_NDJSON" "$PARAPHRASES_NDJSON" "$RANKS_NDJSON"' EXIT
+if [[ -n "$CACHE_PARAPHRASES" ]]; then
+  trap 'rm -f "$CORPUS_NDJSON" "$RANKS_NDJSON"' EXIT
+else
+  trap 'rm -f "$CORPUS_NDJSON" "$PARAPHRASES_NDJSON" "$RANKS_NDJSON"' EXIT
+fi
 
 echo "Phase 1: indexing corpus → $CORPUS_NDJSON"
 build_corpus_index "$CORPUS_NDJSON"
@@ -763,9 +969,30 @@ while IFS= read -r rel; do
 done < <(jq -r '.path' < "$CORPUS_NDJSON")
 
 # ─── Phase 2: paraphrase generation ────────────────────────────────────────
-echo "Phase 2: paraphrase generation (sync, ~50 min for full corpus)"
 API_CALLS=0; API_RETRIES=0; API_ERRORS=0
 i=0
+
+# Cache-hit shortcut: if the cache file exists and covers every corpus path,
+# skip the (~$3, ~50 min) Phase 2 regeneration entirely. Defensive coverage
+# check: paths in cache must be a superset of paths in corpus; cache lines
+# must have non-empty light + heavy strings (excludes prior aborted runs).
+PARAPHRASE_CACHE_HIT=0
+if [[ -n "$CACHE_PARAPHRASES" && -s "$PARAPHRASES_NDJSON" ]]; then
+  CACHE_COVERAGE=$(jq -s --slurpfile c <(jq -s . "$CORPUS_NDJSON") '
+    ($c[0] | map(.path)) as $corpus_paths
+    | (map(select(.light != "" and .heavy != "")) | map(.path)) as $cache_paths
+    | ($corpus_paths - $cache_paths) | length
+  ' < "$PARAPHRASES_NDJSON" 2>/dev/null || echo "999999")
+  if [[ "$CACHE_COVERAGE" == "0" ]]; then
+    echo "Phase 2: paraphrase cache HIT ($PARAPHRASES_NDJSON covers all $TOTAL_COUNT files) — skipping Anthropic calls."
+    PARAPHRASE_CACHE_HIT=1
+  else
+    echo "Phase 2: paraphrase cache PARTIAL ($CACHE_COVERAGE files missing) — regenerating from scratch."
+  fi
+fi
+
+if (( PARAPHRASE_CACHE_HIT == 0 )); then
+echo "Phase 2: paraphrase generation (sync, ~50 min for full corpus)"
 : > "$PARAPHRASES_NDJSON"
 while IFS= read -r line; do
   i=$((i+1))
@@ -793,6 +1020,7 @@ while IFS= read -r line; do
     echo "  progress: $i/$TOTAL_COUNT"
   fi
 done < "$CORPUS_NDJSON"
+fi  # PARAPHRASE_CACHE_HIT == 0
 
 # ─── Phase 3: dual-retriever lookup ────────────────────────────────────────
 echo "Phase 3: dual-retriever lookup (6 × $TOTAL_COUNT = $((6*TOTAL_COUNT)) lookups)"
@@ -814,8 +1042,16 @@ while IFS= read -r line; do
     if [[ "$query" == "(API_ERROR)" ]]; then query=""; fi
     rk_kb="$(kbsearch_rank "$query" "$rel" "$st_json")"
     rk_grep="$(grep_rank "$query" "$rel" "$st_json")"
-    jq -nc --arg path "$rel" --arg intensity "$intensity" --arg retriever "kbsearch" --arg rank "$rk_kb"   '{path:$path,intensity:$intensity,retriever:$retriever,rank:($rank|select(length>0)|tonumber? // null)}' >> "$RANKS_NDJSON"
-    jq -nc --arg path "$rel" --arg intensity "$intensity" --arg retriever "grep"     --arg rank "$rk_grep" '{path:$path,intensity:$intensity,retriever:$retriever,rank:($rank|select(length>0)|tonumber? // null)}' >> "$RANKS_NDJSON"
+    # Bug-fix: pass rank as --argjson (null or number). The previous shape
+    # `--arg rank "$rk" | ($rank|select(length>0)|tonumber? // null)` silently
+    # produced NO output when $rk was "", so null-rank rows never landed in
+    # ranks.ndjson — collapsing R@5(light|heavy) to 0 for the wrong reason.
+    rk_kb_arg="${rk_kb:-null}"
+    rk_grep_arg="${rk_grep:-null}"
+    jq -nc --arg path "$rel" --arg intensity "$intensity" --arg retriever "kbsearch" --argjson rank "$rk_kb_arg" \
+      '{path:$path,intensity:$intensity,retriever:$retriever,rank:$rank}' >> "$RANKS_NDJSON"
+    jq -nc --arg path "$rel" --arg intensity "$intensity" --arg retriever "grep"     --argjson rank "$rk_grep_arg" \
+      '{path:$path,intensity:$intensity,retriever:$retriever,rank:$rank}' >> "$RANKS_NDJSON"
   done
   if (( i % 50 == 0 )); then
     echo "  lookup progress: $i/$TOTAL_COUNT"
