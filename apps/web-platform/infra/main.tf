@@ -14,14 +14,14 @@ terraform {
   }
 
   required_providers {
-    hcloud = {
-      source  = "hetznercloud/hcloud"
-      version = "~> 1.49"
-    }
     cloudflare = {
       source                = "cloudflare/cloudflare"
       version               = "~> 4.0"
       configuration_aliases = [cloudflare.jikigai_com]
+    }
+    hcloud = {
+      source  = "hetznercloud/hcloud"
+      version = "~> 1.49"
     }
     random = {
       source  = "hashicorp/random"

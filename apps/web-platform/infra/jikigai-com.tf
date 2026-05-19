@@ -14,7 +14,8 @@
 # confirm `No changes` on soleur.ai resources (per AC24 / terraform-architect P1-4).
 
 provider "cloudflare" {
-  alias     = "jikigai_com"
+  alias = "jikigai_com"
+
   api_token = var.cf_api_token_jikigai_com
 }
 
@@ -24,9 +25,9 @@ provider "cloudflare" {
 # `_linkedin-challenge.<sub>.<domain>` style hosts; the value is supplied as
 # `<host>=<token>` and split here at apply time.
 #
-# No `lifecycle.ignore_changes` (terraform-architect P1-3): LinkedIn
-# verification tokens are stable post-verification, and ignoring drift would
-# silently absorb any dashboard-side change.
+# No drift-suppression block (terraform-architect P1-3): LinkedIn
+# verification tokens are stable post-verification, and absorbing dashboard-side
+# drift would mask any operator-side change to the record.
 resource "cloudflare_record" "linkedin_verification" {
   provider = cloudflare.jikigai_com
   zone_id  = var.cf_zone_id_jikigai_com
