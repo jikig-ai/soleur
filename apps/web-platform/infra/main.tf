@@ -15,9 +15,8 @@ terraform {
 
   required_providers {
     cloudflare = {
-      source                = "cloudflare/cloudflare"
-      version               = "~> 4.0"
-      configuration_aliases = [cloudflare.jikigai_com]
+      source  = "cloudflare/cloudflare"
+      version = "~> 4.0"
     }
     hcloud = {
       source  = "hetznercloud/hcloud"
