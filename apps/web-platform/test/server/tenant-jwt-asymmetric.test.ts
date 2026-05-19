@@ -55,7 +55,7 @@ const mocks = vi.hoisted(() => {
 
   let nextVerifyOtpResult: {
     data: unknown;
-    error: { message: string } | null;
+    error: { message: string; code?: string } | null;
   } = { data: null, error: null };
 
   let nextAdminGetUserResult: {
@@ -180,6 +180,7 @@ import {
   JWT_AUDIENCE,
   RuntimeAuthError,
   _resetTenantCache,
+  _setVerifyOtpRetryConfigForTest,
 } from "@/lib/supabase/tenant";
 
 const FOUNDER_A = "00000000-0000-0000-0000-00000000aaaa";
@@ -270,6 +271,9 @@ function synthesizeHookInjectedJwt(opts: {
 beforeEach(() => {
   mocks.reset();
   _resetTenantCache();
+  // Reset the verifyOtp retry config so individual tests can override
+  // without leaking state across `it` blocks.
+  _setVerifyOtpRetryConfigForTest(null);
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
   // Set adminGetUser default so the mint path can look up the founder email.
   mocks.setAdminGetUserResult({
@@ -472,6 +476,63 @@ describe("mintFounderJwt — asymmetric substrate (Resolution C, #3363)", () => 
       name: "RuntimeAuthError",
       cause: "jwt_mint",
     });
+  });
+
+  // 429 retry — structured `over_request_rate_limit` code triggers
+  // bounded retry-with-backoff. Distinguished from the AC6 message-only
+  // mock above (no `code`) which still throws immediately. See
+  // `lib/supabase/tenant.ts` retry-config block + runbook
+  // `supabase-magiclink-rate-limit.md`.
+  it("retries verifyOtp on error.code='over_request_rate_limit' and exhausts to jwt_mint after maxRetries+1 attempts", async () => {
+    _setVerifyOtpRetryConfigForTest({ maxRetries: 3, baseDelayMs: 1 });
+    mocks.setVerifyOtpResult({
+      data: null,
+      error: {
+        message: "Request rate limit reached",
+        code: "over_request_rate_limit",
+      },
+    });
+
+    await expect(mintFounderJwt(FOUNDER_A)).rejects.toMatchObject({
+      name: "RuntimeAuthError",
+      cause: "jwt_mint",
+    });
+
+    // Initial call + 3 retries = 4 verifyOtp invocations.
+    expect(mocks.verifyOtpCalls).toHaveLength(4);
+  });
+
+  it("does NOT retry verifyOtp when error has no over_request_rate_limit code (network/malformed/etc.)", async () => {
+    _setVerifyOtpRetryConfigForTest({ maxRetries: 3, baseDelayMs: 1 });
+    mocks.setVerifyOtpResult({
+      data: null,
+      error: { message: "network unreachable" },
+    });
+
+    await expect(mintFounderJwt(FOUNDER_A)).rejects.toMatchObject({
+      name: "RuntimeAuthError",
+      cause: "jwt_mint",
+    });
+
+    // No code → no retry → single call.
+    expect(mocks.verifyOtpCalls).toHaveLength(1);
+  });
+
+  it("does NOT retry verifyOtp on precheck-ceiling raise (mint_rate_exceeded in message, no code)", async () => {
+    _setVerifyOtpRetryConfigForTest({ maxRetries: 3, baseDelayMs: 1 });
+    mocks.setVerifyOtpResult({
+      data: null,
+      error: { message: "mint_rate_exceeded" },
+    });
+
+    await expect(mintFounderJwt(FOUNDER_A)).rejects.toMatchObject({
+      name: "RuntimeAuthError",
+      cause: "rotation",
+    });
+
+    // Precheck-ceiling raise resolves immediately to cause:rotation —
+    // no retry budget is spent on the per-founder ceiling.
+    expect(mocks.verifyOtpCalls).toHaveLength(1);
   });
 
   // AC7 / plan §1.1: jti coupling — denied_jti indexes the same value.
