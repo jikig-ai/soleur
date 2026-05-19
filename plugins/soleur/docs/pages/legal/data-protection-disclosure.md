@@ -8,7 +8,7 @@ permalink: legal/data-protection-disclosure/
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated May 18, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 19, 2026</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: legal/data-protection-disclosure/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 18, 2026 (extended Section 2.3(o) to disclose the per-tenant `scope_grants` ledger, the `/dashboard/audit` viewer, and the Article 22(3) human-review affordance shipped in PR-G #3947; re-confirmed Inngest remains self-hosted and no new sub-processor is engaged; previous: May 16, 2026 extended Section 2.3(d) and added Section 2.3(n) for the off-site CLA evidence archive)
+**Last Updated:** May 19, 2026 (added Section 2.3(p) "LinkedIn Company Page publication" activity row disclosing Page operation + aggregate Page Insights consumption + one-time K-bis transfer; extended Section 4.2 Web Platform Processors table with LinkedIn Ireland Unlimited Company and Microsoft Ireland Operations Ltd rows; extended Section 6.4 international-transfers with LinkedIn EU + Microsoft EUDB rows; extended Section 10.3 with a "LinkedIn-published content carve-out" paragraph for the Article 17 cascade limitation per EDPB Guidelines 5/2019; landed by #4051 alongside the standalone LIA at `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md`; previous: May 18, 2026 extended Section 2.3(o) to disclose the per-tenant `scope_grants` ledger, the `/dashboard/audit` viewer, and the Article 22(3) human-review affordance shipped in PR-G #3947; re-confirmed Inngest remains self-hosted and no new sub-processor is engaged; May 16, 2026 extended Section 2.3(d) and added Section 2.3(n) for the off-site CLA evidence archive)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
