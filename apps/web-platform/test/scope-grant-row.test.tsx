@@ -114,6 +114,47 @@ describe("ScopeGrantRow — router.refresh after Authorize/Revoke (#4048)", () =
     expect(mockRefresh).not.toHaveBeenCalled();
   });
 
+  test("FR6: Authorize network error (catch branch) → mockRefresh NOT called, pessimistic revert", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("network down"),
+    );
+    render(
+      <ScopeGrantRow
+        actionClass="finance.payment_failed"
+        currentTier={null}
+        grantedAt={null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /draft, one click/i }));
+    fireEvent.click(screen.getByRole("button", { name: /authorize/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(/network down/),
+    );
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  test("FR7: Revoke failure (non-2xx) → mockRefresh NOT called", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    });
+    render(
+      <ScopeGrantRow
+        actionClass="finance.payment_failed"
+        currentTier="draft_one_click"
+        grantedAt="2026-05-19T00:00:00Z"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /revoke/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        /Failed to revoke \(500\)/,
+      ),
+    );
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
   test("FR5 (regression): auto-tier without ack keeps Authorize disabled; ack enables it", () => {
     render(
       <ScopeGrantRow
