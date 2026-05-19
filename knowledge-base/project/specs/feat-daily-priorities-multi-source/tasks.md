@@ -120,24 +120,24 @@ Derived from finalized plan v2 (post plan-review). Six phases; commits flexible 
 
 ## Phase 4 — Single GitHub Inngest dispatcher
 
-- [ ] **4.1** Create `apps/web-platform/server/inngest/functions/github-event-strategies.ts`:
-  - [ ] 4.1.1 `GITHUB_EVENT_STRATEGIES` record keyed by event name (4 entries: `engineering.pr_review_pending`, `engineering.ci_failed`, `triage.p0p1_issue`, `security.cve_alert`).
-  - [ ] 4.1.2 Each entry: `{ verifyState, draftPrompt, owningDomain, sourceRefPrefix, urgency, redactSource }`.
-  - [ ] 4.1.3 `owningDomain` for `triage.p0p1_issue` is a function of label (`type/feature` → `product`; default `engineering`).
-- [ ] **4.2** Create `apps/web-platform/server/inngest/functions/github-event-strategies.test.ts`:
-  - [ ] 4.2.1 Pure-function tests for owningDomain label routing.
-  - [ ] 4.2.2 Pure-function tests for redactSource correctness per event.
-- [ ] **4.3** Create `apps/web-platform/server/inngest/functions/github-on-event.ts`:
-  - [ ] 4.3.1 `inngest.createFunction(...)` with `concurrency: [{scope:"fn", key:"event.data.founderId + ':' + event.name", limit:1}, {scope:"account", limit:50}], retries:1`. Per-(founder, event-class) CEL key preserves parallel processing across event classes for the same founder.
-  - [ ] 4.3.2 `event` parameter is the array `["engineering.pr_review_pending", "engineering.ci_failed", "triage.p0p1_issue", "security.cve_alert"]`.
-  - [ ] 4.3.3 Handler steps: schema-gate (non-throwing `step.run`) → verify-state outside `step.run` (ADR-030 I3) → BYOK lease wrapped SDK call (ADR-030 I1) → redact INSERT-time via `redactGithubSourcedText(draft, {source: strategy.redactSource})` → persist-draft via `getFreshTenantClient(founderId)` (ADR-030 I2) — INSERT messages row with strategy-derived `owning_domain`, `sourceRefPrefix + gh-id`, `urgency`.
-- [ ] **4.4** Create `apps/web-platform/server/inngest/functions/github-on-event.test.ts`:
-  - [ ] 4.4.1 4 × N matrix (event class × state-verify outcome × grant-tier × persist-draft success).
-  - [ ] 4.4.2 BYOK lease wraps SDK call (no escape into step boundaries).
-  - [ ] 4.4.3 Redaction is applied BEFORE persist (INSERT-time gate).
-  - [ ] 4.4.4 `messages.trust_tier` pinned at webhook-fire time (grant tier carried through event payload).
-- [ ] **4.5** Edit `apps/web-platform/app/api/inngest/route.ts`: register `githubOnEvent` in `serve()` array. **This edit lands in Phase 4 (NOT Phase 3) per Kieran P1 — registration follows consumer.**
-- [ ] **4.6** Commit & push Phase 4.
+- [x] **4.1** Create `apps/web-platform/server/inngest/functions/github-event-strategies.ts`:
+  - [x] 4.1.1 `GITHUB_EVENT_STRATEGIES` record keyed by event name (4 entries: `engineering.pr_review_pending`, `engineering.ci_failed`, `triage.p0p1_issue`, `security.cve_alert`).
+  - [x] 4.1.2 Each entry: `{ verifyState, draftPrompt, owningDomain, sourceRefPrefix, urgency, redactSource }`.
+  - [x] 4.1.3 `owningDomain` for `triage.p0p1_issue` is a function of label (`type/feature` → `product`; default `engineering`).
+- [x] **4.2** Create `apps/web-platform/server/inngest/functions/github-event-strategies.test.ts`:
+  - [x] 4.2.1 Pure-function tests for owningDomain label routing.
+  - [x] 4.2.2 Pure-function tests for redactSource correctness per event.
+- [x] **4.3** Create `apps/web-platform/server/inngest/functions/github-on-event.ts`:
+  - [x] 4.3.1 `inngest.createFunction(...)` with `concurrency: [{scope:"fn", key:"event.data.founderId + ':' + event.name", limit:1}, {scope:"account", limit:50}], retries:1`. Per-(founder, event-class) CEL key preserves parallel processing across event classes for the same founder.
+  - [x] 4.3.2 `event` parameter is the array `["engineering.pr_review_pending", "engineering.ci_failed", "triage.p0p1_issue", "security.cve_alert"]`.
+  - [x] 4.3.3 Handler steps: schema-gate (non-throwing `step.run`) → verify-state outside `step.run` (ADR-030 I3) → BYOK lease wrapped SDK call (ADR-030 I1) → redact INSERT-time via `redactGithubSourcedText(draft, {source: strategy.redactSource})` → persist-draft via `getFreshTenantClient(founderId)` (ADR-030 I2) — INSERT messages row with strategy-derived `owning_domain`, `sourceRefPrefix + gh-id`, `urgency`.
+- [x] **4.4** Create `apps/web-platform/server/inngest/functions/github-on-event.test.ts`:
+  - [x] 4.4.1 4 × N matrix (event class × state-verify outcome × grant-tier × persist-draft success).
+  - [x] 4.4.2 BYOK lease wraps SDK call (no escape into step boundaries).
+  - [x] 4.4.3 Redaction is applied BEFORE persist (INSERT-time gate).
+  - [x] 4.4.4 `messages.trust_tier` pinned at webhook-fire time (grant tier carried through event payload).
+- [x] **4.5** Edit `apps/web-platform/app/api/inngest/route.ts`: register `githubOnEvent` in `serve()` array. **This edit lands in Phase 4 (NOT Phase 3) per Kieran P1 — registration follows consumer.**
+- [x] **4.6** Commit & push Phase 4.
 
 **Exit gate:** dispatcher unit tests green; `inngest dev` shows 1 new function registered; AC11 satisfied (ADRs already landed in Phase 3).
 

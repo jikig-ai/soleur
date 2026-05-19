@@ -19,6 +19,7 @@ import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
+import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
 // next build page-data collection loads this module without runtime env.
@@ -32,6 +33,6 @@ if (!IS_BUILD_PHASE && !SIGNING_KEY) {
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [cfoOnPaymentFailed, cronDailyTriage],
+  functions: [cfoOnPaymentFailed, cronDailyTriage, githubOnEvent],
   signingKey: SIGNING_KEY ?? "build-phase-placeholder",
 });
