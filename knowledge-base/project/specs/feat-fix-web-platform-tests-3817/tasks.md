@@ -1,12 +1,12 @@
 ---
-title: "Tasks — fix web-platform test flake (forks-default + signature-verify split + pdfjs pre-warm)"
+title: "Tasks — fix web-platform test flake + plugin timing-sensitive tests"
 date: 2026-05-19
 type: fix
 status: planning
 lane: single-domain
 branch: feat-fix-web-platform-tests-3817
 worktree: .worktrees/feat-fix-web-platform-tests-3817/
-issue: 3817
+issues: [3817, 4096]
 pr: 4097
 plan: knowledge-base/project/plans/2026-05-19-fix-web-platform-test-flake-forks-default-plan.md
 ---
@@ -71,15 +71,30 @@ Derived from `knowledge-base/project/plans/2026-05-19-fix-web-platform-test-flak
   - 3.4.1 — `cd apps/web-platform && bun test test/kb-document-resolver-pdf-page-gate.test.ts` passes; first-test cold-load is amortized.
   - 3.4.2 — `cd apps/web-platform && bun test test/leader-document-resolver.test.ts` passes.
 
-## Phase 4: Full-harness verification
+## Phase 4: Web-platform full-harness verification
 
 - [ ] 4.1 — `cd apps/web-platform && bun run test:ci` passes green twice in a row from a clean checkout. AC1.
 - [ ] 4.2 — `cd apps/web-platform && WEBPLAT_TEST_USE_THREADS=1 bun run test:ci` runs to completion (opt-out path works; flake-class failures may surface but the wiring is verified). AC2.
 - [ ] 4.3 — `cd .. && bash scripts/test-all.sh` (from worktree root) reports zero failures in the `apps/web-platform` suite, twice in a row. AC3.
 
+## Phase 4.5: Fix 4 + Fix 5 — Plugin timing-sensitive tests (#4096)
+
+- [ ] 4.5.1 — Edit `plugins/soleur/test/skill-security-scan.test.ts` line 208: append `, 30_000` as the 3rd arg to `test("run-self-test.sh exits 0 on the bundled fixtures", () => { ... })`. The 3rd-arg form is the bun-test per-test timeout override (ms).
+- [ ] 4.5.2 — Verify: `grep -A4 'run-self-test.sh exits 0' plugins/soleur/test/skill-security-scan.test.ts | grep -F '30_000'` returns ≥1 match.
+- [ ] 4.5.3 — RED→GREEN: `bun test plugins/soleur/test/skill-security-scan.test.ts` completes without the previous 5000ms-timeout failure. AC11.
+- [ ] 4.5.4 — Edit `plugins/soleur/test/notice-frontmatter.test.sh` TS11 (lines ~142–169): wrap the timing measurement block in `if [[ "${CI:-}" == "true" ]]; then ... else echo "TS11: SKIP (timing test, CI-only — set CI=true to run locally)"; fi`. Preserve PASS/FAIL counter writes inside the CI branch only; do NOT bump PASS or FAIL in the else branch.
+- [ ] 4.5.5 — Edit `plugins/soleur/test/notice-frontmatter.test.sh` TS12 (lines ~241–270): same shape.
+- [ ] 4.5.6 — Verify wrapping:
+  - `grep -cE 'if \[\[ "\$\{CI:-\}" == "true" \]\]' plugins/soleur/test/notice-frontmatter.test.sh` returns exactly 2.
+  - `grep -cF 'TS11: SKIP' plugins/soleur/test/notice-frontmatter.test.sh` returns 1.
+  - `grep -cF 'TS12: SKIP' plugins/soleur/test/notice-frontmatter.test.sh` returns 1.
+- [ ] 4.5.7 — RED→GREEN (local mode, CI unset): `bash plugins/soleur/test/notice-frontmatter.test.sh` exits 0 with TS11+TS12 reported as SKIP, NOT FAIL. AC12.
+- [ ] 4.5.8 — RED→GREEN (CI mode): `CI=true bash plugins/soleur/test/notice-frontmatter.test.sh` runs the timing tests. AC13.
+- [ ] 4.5.9 — Full harness re-run: `bash scripts/test-all.sh` from worktree root reports zero failures across both `apps/web-platform` AND `plugins/soleur/test`, twice in a row. AC14.
+
 ## Phase 5: PR finalization
 
-- [ ] 5.1 — Update PR #4097 body: replace the WIP stub with the canonical PR body, containing `Closes #3817` and `Closes #3818` on separate lines. AC10.
+- [ ] 5.1 — Update PR #4097 body: replace the WIP stub with the canonical PR body, containing `Closes #3817`, `Closes #3818`, and `Closes #4096` on separate lines. AC10.
 - [ ] 5.2 — Run `/soleur:compound` skill to capture any new session learnings (e.g., the module-init env-capture finding documented in plan's Enhancement Summary).
 - [ ] 5.3 — Run plan-review pass (`/soleur:plan-review` or 3-agent parallel) if not already done.
 - [ ] 5.4 — Convert PR from draft to ready: `gh pr ready 4097`.
@@ -87,8 +102,8 @@ Derived from `knowledge-base/project/plans/2026-05-19-fix-web-platform-test-flak
 
 ## Phase 6: Post-merge verification
 
-- [ ] 6.1 — After merge, `gh issue close 3818` (the strict subset is closed by `Closes #3818`; this is a no-op confirmation).
-- [ ] 6.2 — After merge, `gh issue close 3817` (same — auto-closed by `Closes #3817`).
+- [ ] 6.1 — After merge, confirm `gh issue view 3817 --json state` returns `CLOSED` (auto-closed by `Closes #3817`).
+- [ ] 6.2 — Same for #3818 and #4096.
 - [ ] 6.3 — Run the next `bash scripts/test-all.sh` on `main` post-merge; confirm the 51-failure pattern is gone (record outcome in the PR's post-merge comment).
 
 ## Out of Scope

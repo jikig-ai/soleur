@@ -1,12 +1,12 @@
 ---
-title: "fix: web-platform test flake — forks-by-default + signature-verify resetModules + heavy-import prewarm"
+title: "fix: web-platform test flake + plugin timing-sensitive tests (forks-default, signature-verify split, pdfjs prewarm, skill-security-scan timeout, notice-frontmatter p95 CI-gate)"
 date: 2026-05-19
 type: fix
 status: planning
 lane: single-domain
 branch: feat-fix-web-platform-tests-3817
 worktree: .worktrees/feat-fix-web-platform-tests-3817/
-issue: 3817
+issues: [3817, 4096]
 supersedes: 3818
 pr: 4097
 brand_threshold: aggregate-pattern
@@ -363,18 +363,108 @@ Skipped — canonical regex check returns no match (no `.sql`, no migration, no 
 - PR #3985 (merged 2026-05-18) — bumped `signature-verify.test.ts` per-test timeout to 15s. This PR reverts that bump as the root-cause fix lands.
 - #3817 status comment 2026-05-18 — original 51-failure / 35-file enumeration + three-fix proposal.
 
+## Addendum 2026-05-19: Fix 4 + Fix 5 — Plugin Timing-Sensitive Tests (#4096)
+
+Issue #4096 surfaced during PR #4092's `/ship` Phase 4 the same day, same root-cause class (pre-existing test failures bypassed during ship). Bundled into this PR because:
+
+1. Same intent — close the "/ship Phase 4 keeps flagging the same surfaces and we keep bypassing them" loop.
+2. Different files, no merge-conflict risk with Fix 1–3.
+3. Both are timing-sensitive failures under local load; same brand-survival framing (`aggregate pattern` — flake masks regression signal).
+
+### Fix 4: `skill-security-scan` per-test timeout
+
+**File:** `plugins/soleur/test/skill-security-scan.test.ts` line 208.
+
+**Symptom (verified via #4096 body):** `run-self-test.sh exits 0 on the bundled fixtures` runs in ~9019ms; bun-test default per-test timeout is 5000ms → fail.
+
+**Root cause:** The `spawnSync("bash", [".../run-self-test.sh"])` legitimately takes ~9s — the script walks all bundled fixtures sequentially. The test has no explicit timeout override, so it inherits the 5000ms default.
+
+**Fix:** bun-test's `test()` signature accepts a 3rd arg `timeoutMs`. Pass `30_000`:
+
+```ts
+test("run-self-test.sh exits 0 on the bundled fixtures", () => {
+  const r = spawnSync("bash", [join(SCRIPTS, "run-self-test.sh")], {
+    encoding: "utf-8",
+  });
+  expect(r.status).toBe(0);
+}, 30_000);
+```
+
+30s gives ~3.3× headroom over the observed 9s — enough for slow CI runners without masking a real regression to 25s+. Do NOT bump the global config — surgical per-test override only.
+
+**Why not "speed up `run-self-test.sh`":** the script's runtime is dominated by sequential fixture spawns; parallelizing would change test semantics. The 9s is correct for what it does.
+
+### Fix 5: `notice-frontmatter` p95 timing tests CI-only
+
+**File:** `plugins/soleur/test/notice-frontmatter.test.sh` lines 142–169 (TS11) and lines 241–270 (TS12).
+
+**Symptom (verified via #4096 body):** `FAIL: p95 >= 100ms (TR2 budget breached)` under local load.
+
+**Root cause:** TS11/TS12 measure p95 wall-clock latency over 100 invocations of `days-stale` / `cron-run-stale`. Under local-machine concurrent load (background processes, IDE indexers, parallel test suites), measured p95 includes scheduler latency the script itself cannot control. The 100ms budget was meaningful when bumped from 50ms in #3521 against CI-grade load, but is fragile on dev machines.
+
+**Fix:** Gate TS11 + TS12 behind `${CI:-}` so they skip locally with a stderr note but enforce strictly in CI. CI runners have predictable load; the budget there is signal, not noise.
+
+**Edit:** Wrap each test block in:
+
+```bash
+if [[ "${CI:-}" == "true" ]]; then
+  echo "TS11: p95 < 100ms over 100 invocations of days-stale"
+  # ... existing timing measurement ...
+else
+  echo "TS11: SKIP (timing test, CI-only — set CI=true to run locally)"
+  SKIP=$((SKIP + 1))  # if a SKIP counter exists; otherwise omit
+fi
+```
+
+If `notice-frontmatter.test.sh` does not already track a `SKIP` counter, just print the skip notice and do NOT bump `FAIL`/`PASS` — the test summary should reflect the skip honestly.
+
+**Why not "widen the budget":** the comment at line 144 already notes one prior bump (50ms → 100ms after #3521). Compounding bumps erodes the regression signal entirely. The cleanest separation is dev-skip / CI-strict.
+
+**Why not "remove the tests":** TR2 is a real load-bearing budget on a script that fires on every gate invocation. CI enforcement preserves the contract; local skip preserves operator sanity.
+
+### Files-to-Edit (Fix 4 + Fix 5)
+
+| File | Lines | Change |
+|---|---|---|
+| `plugins/soleur/test/skill-security-scan.test.ts` | 208 | Append `, 30_000` to the `test(...)` signature's 3rd arg |
+| `plugins/soleur/test/notice-frontmatter.test.sh` | ~142–169, ~241–270 | Wrap TS11 + TS12 in `if [[ "${CI:-}" == "true" ]]; then ... else <skip-print> fi` |
+
+No new files.
+
+### Acceptance Criteria (Fix 4 + Fix 5)
+
+- **AC11:** `bun test plugins/soleur/test/skill-security-scan.test.ts` passes, including `run-self-test.sh exits 0 on the bundled fixtures` completing in <30s.
+- **AC12:** `bash plugins/soleur/test/notice-frontmatter.test.sh` (no `CI` env var) reports TS11 + TS12 as `SKIP`, NOT `FAIL`, and overall script exits 0.
+- **AC13:** `CI=true bash plugins/soleur/test/notice-frontmatter.test.sh` runs TS11 + TS12 as before. (May still fail on a contended local machine — that's expected and acceptable; CI's actual runner is what matters.)
+- **AC14:** `bash scripts/test-all.sh` from worktree root reports zero failures across both `apps/web-platform/` AND `plugins/soleur/test/`, twice in a row, with `CI` unset.
+
+### Non-Goals (Fix 4 + Fix 5)
+
+- Do NOT introduce a separate "perf budget" CI workflow — TR2 enforcement stays inside the bash test as before; the change is gating only.
+- Do NOT parallelize `run-self-test.sh` — see "Why not speed up" above.
+- Do NOT bump the 100ms budget — see "Why not widen" above.
+- Do NOT touch the `field`/`days-stale`/`cron-run-stale` parser itself — these are TEST changes only.
+
+### Risks (Fix 4 + Fix 5)
+
+| Risk | Impact | Likelihood | Mitigation |
+|---|---|---|---|
+| 30s timeout masks a future genuine regression in `run-self-test.sh` (e.g., infinite-loop bug pushing runtime to 25s+) | Medium | Low | A 25s runtime would still trip the new 30s ceiling on slow CI runners; a real loop would push past 30s and re-surface. The headroom is bounded. |
+| CI env var is set but tests run on a contended self-hosted runner → p95 fails in CI | Low | Low | Self-hosted contention is the user's runner-tuning problem, not the test's. The CI-only gate is the correct shape regardless. |
+| Future dev runs `CI=true` locally for unrelated reasons and is surprised by p95 failures | Low | Low | Stderr skip message explains the gate. CI=true is rarely set locally by accident. |
+
 ## Plan Approval Checklist
 
 - [x] Branch: `feat-fix-web-platform-tests-3817` (not main/master)
 - [x] Worktree path verified
-- [x] Issue link decided: PR body uses `Closes #3817\nCloses #3818`
+- [x] Issue link decided: PR body uses `Closes #3817\nCloses #3818\nCloses #4096`
 - [x] Lane set: `single-domain` (test infra, no cross-domain surface)
 - [x] User-Brand threshold set: `aggregate pattern` → no CPO sign-off required
 - [x] GDPR gate skipped (no regulated-data surface; expanded triggers also miss)
 - [x] IaC gate skipped (no new infrastructure)
 - [x] Product/UX gate: NONE (no UI changes; mechanical escalation passes)
 - [x] Domain review: Engineering only (CTO carry-forward)
-- [x] Files-to-edit inventory complete (4 files)
-- [x] Files-to-create inventory complete (0 files)
+- [x] Files-to-edit inventory complete (4 web-platform + 2 plugin tests = 6 files)
+- [x] Files-to-create inventory complete (1 file: `signature-verify-dev-mode.test.ts`)
 - [x] Acceptance criteria load-bearing post-conditions (no LARP / ceremony ACs)
 - [x] Verification commands runnable from worktree root
