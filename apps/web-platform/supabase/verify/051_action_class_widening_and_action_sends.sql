@@ -125,4 +125,60 @@ SELECT 'grant_action_class_admits_auto_with_digest',
        CASE WHEN p.prosrc ~ 'auto_with_digest' THEN 0 ELSE 1 END::int
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public' AND p.proname = 'grant_action_class'
+UNION ALL
+-- (13) messages.action_class enum-absence CHECK present.
+SELECT 'messages_action_class_not_locked_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_constraint c
+  JOIN pg_class t ON t.oid = c.conrelid
+ WHERE t.relname = 'messages'
+   AND c.conname = 'messages_action_class_not_locked'
+UNION ALL
+-- (14) scope_grants partial UNIQUE on (founder_id, action_class) WHERE
+--      revoked_at IS NULL — enforces the "one active grant per pair"
+--      invariant against concurrent-POST race in grant_action_class.
+SELECT 'scope_grants_active_unique_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_indexes
+ WHERE schemaname = 'public' AND indexname = 'scope_grants_active_unique'
+UNION ALL
+-- (15) action_sends(message_id) UNIQUE — prevents double-send via founder
+--      double-click or archive-after-write split-brain.
+SELECT 'action_sends_message_unique_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_indexes
+ WHERE schemaname = 'public' AND indexname = 'action_sends_message_unique'
+UNION ALL
+-- (16) action_sends_no_mutate trigger fn pins search_path = public, pg_temp
+--      per cq-pg-security-definer-search-path-pin-pg-temp. Post-deploy
+--      assertion that a future regression dropping the pin trips CI verify.
+SELECT 'action_sends_no_mutate_search_path_pinned',
+       CASE WHEN p.proconfig @> ARRAY['search_path=public, pg_temp']
+            THEN 0 ELSE 1 END::int
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public' AND p.proname = 'action_sends_no_mutate'
+UNION ALL
+-- (17) action_sends_no_mutate is SECURITY DEFINER (prosecdef = true).
+SELECT 'action_sends_no_mutate_security_definer',
+       CASE WHEN p.prosecdef THEN 0 ELSE 1 END::int
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public' AND p.proname = 'action_sends_no_mutate'
+UNION ALL
+-- (18) anonymise_action_sends search_path pinned.
+SELECT 'anonymise_action_sends_search_path_pinned',
+       CASE WHEN p.proconfig @> ARRAY['search_path=public, pg_temp']
+            THEN 0 ELSE 1 END::int
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public' AND p.proname = 'anonymise_action_sends'
+UNION ALL
+-- (19) grant_action_class search_path pinned.
+SELECT 'grant_action_class_search_path_pinned',
+       CASE WHEN p.proconfig @> ARRAY['search_path=public, pg_temp']
+            THEN 0 ELSE 1 END::int
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
  WHERE n.nspname = 'public' AND p.proname = 'grant_action_class';

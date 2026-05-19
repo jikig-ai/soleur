@@ -19,6 +19,7 @@ export function isDenied(actionClass: ActionClass): boolean {
 }
 
 export interface ActiveGrant {
+  id: string;
   tier: ActionClassTier;
 }
 
@@ -27,6 +28,11 @@ export interface ActiveGrant {
 // 1st argument is the client to query through — RLS lets cookie-scoped
 // founders self-read; service-role-scoped webhook calls bypass RLS and
 // rely on `.eq("founder_id", founderId)` as the tenant gate.
+//
+// Returns `id` alongside `tier` so callers writing action_sends rows
+// (which carry grant_id) don't need to re-SELECT — collapsing the two
+// queries also closes the revoke race window between the tier-check and
+// the grant_id lookup.
 export async function isGranted(
   client: SupabaseClient,
   founderId: string,
@@ -36,7 +42,7 @@ export async function isGranted(
 
   const { data, error } = await client
     .from("scope_grants")
-    .select("tier")
+    .select("id, tier")
     .eq("founder_id", founderId)
     .eq("action_class", actionClass)
     .is("revoked_at", null)
@@ -55,5 +61,5 @@ export async function isGranted(
     return null;
   }
   if (!data) return null;
-  return { tier: data.tier as ActionClassTier };
+  return { id: data.id as string, tier: data.tier as ActionClassTier };
 }

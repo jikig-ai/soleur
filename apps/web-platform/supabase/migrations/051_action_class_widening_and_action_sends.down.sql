@@ -45,6 +45,7 @@ $$;
 DROP FUNCTION IF EXISTS public.anonymise_action_sends(uuid);
 
 -- (d-g) Drop action_sends table + dependents.
+DROP INDEX IF EXISTS public.action_sends_message_unique;
 DROP TRIGGER IF EXISTS action_sends_no_update ON public.action_sends;
 DROP TRIGGER IF EXISTS action_sends_no_delete ON public.action_sends;
 DROP FUNCTION IF EXISTS public.action_sends_no_mutate();
@@ -53,11 +54,14 @@ DROP POLICY IF EXISTS action_sends_owner_select ON public.action_sends;
 DROP POLICY IF EXISTS action_sends_owner_insert ON public.action_sends;
 DROP TABLE IF EXISTS public.action_sends;
 
--- (c) Drop messages.action_class column.
+-- (c) Drop messages.action_class column + CHECK constraint.
+ALTER TABLE public.messages
+  DROP CONSTRAINT IF EXISTS messages_action_class_not_locked;
 ALTER TABLE public.messages
   DROP COLUMN IF EXISTS action_class;
 
--- (b) Drop scope_grants enum-absence CHECK.
+-- (b) Drop scope_grants enum-absence CHECK + active-grant partial UNIQUE.
+DROP INDEX IF EXISTS public.scope_grants_active_unique;
 ALTER TABLE public.scope_grants
   DROP CONSTRAINT IF EXISTS scope_grants_action_class_not_locked;
 

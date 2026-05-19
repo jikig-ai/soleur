@@ -27,7 +27,7 @@ export interface WriteActionSendArgs {
     action_class: ActionClass;
     draft_preview: string | null;
   };
-  grant: { id: string } & ActiveGrant;
+  grant: ActiveGrant;
   tier: ActionClassTier;
   // approve_every_time tier requires the typed-confirm signature.
   confirmedTyped?: boolean;
@@ -59,11 +59,24 @@ function sha256(s: string): string {
 // naive string concatenation (Sharp Edges §"Approval signature ||
 // ambiguity"). Keys are sorted to remove ordering ambiguity from the
 // signed surface.
+//
+// GDPR Art. 5(2) accountability: the signature binds founder+message+
+// what-was-sent (body hash, recipient hash, template hash, tier) +
+// what-was-typed. A founder later disputing "I never approved THIS
+// body to THIS recipient" can be answered by re-running the same
+// canonical-JSON hash against the stored action_sends columns —
+// mismatch proves the row was tampered with, match proves the signed
+// surface matches the persisted row. `ts` is intentionally omitted so
+// the signature is reproducible from the stored row (clicked_at gives
+// the wall-clock anchor separately).
 function approvalSignature(args: {
   founderId: string;
   messageId: string;
   typedValue: string;
-  ts: number;
+  perSendBodyHash: string;
+  recipientHash: string;
+  templateHash: string;
+  tier: ActionClassTier;
 }): string {
   const ordered: Record<string, unknown> = {};
   for (const key of Object.keys(args).sort()) {
@@ -119,7 +132,10 @@ export async function writeActionSend(
       founderId,
       messageId: message.id,
       typedValue,
-      ts: Date.now(),
+      perSendBodyHash,
+      recipientHash,
+      templateHash,
+      tier,
     });
   }
 

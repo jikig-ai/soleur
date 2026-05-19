@@ -25,6 +25,13 @@ interface ConfirmationPayload {
   actionClass: string;
   tier: string;
   recipientExcerpt: string;
+  // Content excerpt as the SERVER saw draft_preview at 409-issue time —
+  // NOT the local `draft` state. Binding the modal's content preview to
+  // the server payload closes the Send→Edit→Send race where a sibling
+  // tab edits between the 409 and the confirm POST. The server returns
+  // the new hash on each 409; the second POST must echo it.
+  contentExcerpt: string;
+  expectedDraftPreviewHash: string;
   messageId: string;
 }
 
@@ -46,18 +53,20 @@ export function TodayCard({
     null,
   );
 
+  // The server derives body_content and recipient_identifier from the
+  // messages row at request time, so this client sends ONLY the typed-
+  // confirm signature surface. Sending body/recipient from here would
+  // let a compromised page bind the approval signature to content the
+  // founder never saw (GDPR Art. 5(2) accountability — DPD §2.3(q)).
   async function postSend(extra?: {
     confirmed_typed: true;
     typed_value: string;
+    expected_draft_preview_hash: string;
   }) {
     const res = await fetch(`/api/dashboard/today/${id}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient_identifier: `message:${id}`,
-        body_content: draft,
-        ...(extra ?? {}),
-      }),
+      body: JSON.stringify(extra ?? {}),
     });
     return res;
   }
@@ -77,6 +86,8 @@ export function TodayCard({
             action_class?: string;
             tier?: string;
             recipient_excerpt?: string;
+            content_excerpt?: string;
+            expected_draft_preview_hash?: string;
             message_id?: string;
           };
           if (json.error === "requires_confirmation") {
@@ -84,8 +95,16 @@ export function TodayCard({
               actionClass: json.action_class ?? "",
               tier: json.tier ?? "",
               recipientExcerpt: json.recipient_excerpt ?? "",
+              contentExcerpt: json.content_excerpt ?? "",
+              expectedDraftPreviewHash: json.expected_draft_preview_hash ?? "",
               messageId: json.message_id ?? id,
             });
+            return;
+          }
+          if (json.error === "already_sent") {
+            // Another tab / a re-render / a retry beat us to it. The
+            // WORM row already exists; reflect that locally.
+            setArchived(true);
             return;
           }
         }
@@ -97,16 +116,33 @@ export function TodayCard({
   }
 
   function onConfirmTyped(confirmedTyped: boolean, typedValue: string) {
+    const pendingHash = confirming?.expectedDraftPreviewHash ?? "";
     setConfirming(null);
     startTransition(async () => {
       try {
         const res = await postSend({
           confirmed_typed: true,
           typed_value: typedValue,
+          expected_draft_preview_hash: pendingHash,
         });
         void confirmedTyped;
         if (res.status === 200) {
           setArchived(true);
+          return;
+        }
+        if (res.status === 409) {
+          // Either the draft hash drifted (concurrent edit between 409
+          // and this POST) or another tab already sent. Surface the
+          // error generically; the founder's next click will re-issue
+          // a fresh 409 if appropriate.
+          const json = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          if (json.error === "already_sent") {
+            setArchived(true);
+            return;
+          }
+          setError("Draft changed since you confirmed — please re-send.");
           return;
         }
         setError(`Send failed (${res.status})`);
@@ -221,7 +257,7 @@ export function TodayCard({
       <TypedConfirmModal
         open={confirming !== null}
         recipientExcerpt={confirming?.recipientExcerpt ?? ""}
-        contentExcerpt={draft}
+        contentExcerpt={confirming?.contentExcerpt ?? ""}
         actionClassLabel={confirming?.actionClass ?? ""}
         tierLabel={confirming?.tier ?? ""}
         onCancel={onCancelConfirm}

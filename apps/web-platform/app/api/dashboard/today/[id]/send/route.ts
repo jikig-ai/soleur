@@ -6,8 +6,22 @@
 //
 //   - draft_one_click       → straight through; write action_sends + archive
 //   - approve_every_time    → require confirmed_typed=true && typed_value="SEND"
-//                              in the request body; else 409 requires_confirmation
+//                              AND expected_draft_preview_hash echoing the
+//                              hash returned in the prior 409; else
+//                              409 requires_confirmation with a fresh hash
 //   - auto / auto_with_digest → 400 (these are not founder-initiated paths)
+//
+// Trust model. The typed-confirm modal is the FIRST line of defense (UX
+// TOM that gives the founder a beat-and-confirm moment). The SECOND line
+// is server-side re-validation of (typed_value === "SEND" && hash echo).
+// Both lines presume a non-compromised browser session — at the layer
+// below, the supabase cookie + RLS owner-scope is the load-bearing tenant
+// gate. An attacker holding the cookie can fully impersonate the founder
+// regardless of UX gates; that broader concern is out-of-scope for the
+// send endpoint and is mitigated at the session layer (httpOnly cookie,
+// short-lived JWT, MFA on /login). PR-I will reconsider whether a server-
+// issued single-use nonce should be added on top of the hash echo if the
+// programmatic-agent attack surface becomes a first-class concern.
 //
 // Per cq-nextjs-route-files-http-only-exports: only HTTP exports + dynamic.
 // reportSilentFallback wraps 4 distinct error surfaces; will migrate to
@@ -32,8 +46,25 @@ export const dynamic = "force-dynamic";
 interface SendBody {
   confirmed_typed?: unknown;
   typed_value?: unknown;
-  recipient_identifier?: unknown;
-  body_content?: unknown;
+  // Hash of message.draft_preview at the time the server issued 409
+  // requires_confirmation. The second POST MUST echo it; the server
+  // re-reads draft_preview and recomputes the hash. Mismatch (e.g., a
+  // concurrent Edit between the 409 and the confirm POST) returns 409
+  // again with a fresh hash — closes the Send→Edit→Send race where the
+  // founder confirms content A but a sibling tab edits to content B
+  // before the second POST lands.
+  expected_draft_preview_hash?: unknown;
+}
+
+function sha256Hex(s: string): string {
+  return createHash("sha256").update(s).digest("hex");
+}
+
+function assertNeverTier(tier: never): never {
+  // Compile-time exhaustiveness gate. Adding a 5th tier to
+  // ActionClassTier without extending this switch trips tsc here
+  // before reaching CI.
+  throw new Error(`unhandled tier: ${String(tier)}`);
 }
 
 function templateHashFor(message: {
@@ -123,89 +154,77 @@ export async function POST(
     );
   }
 
-  // Reject autonomous tiers — Send is not the founder-initiated path for
-  // these. (auto runs at producer-time; auto_with_digest runs at producer-
-  // time and emerges in the daily digest UI — PR-I.)
-  if (grant.tier === "auto" || grant.tier === "auto_with_digest") {
-    return NextResponse.json(
-      {
-        error: "send_not_applicable_for_tier",
-        tier: grant.tier,
-        action_class: actionClass,
-      },
-      { status: 400 },
-    );
+  // Exhaustive tier dispatch (assertNeverTier in default arm forces a
+  // tsc error if a 5th ActionClassTier is added without updating this
+  // switch). Reject autonomous tiers — Send is not the founder-
+  // initiated path for these. (auto runs at producer-time;
+  // auto_with_digest runs at producer-time and emerges in the daily
+  // digest UI — PR-I.)
+  switch (grant.tier) {
+    case "auto":
+    case "auto_with_digest":
+      return NextResponse.json(
+        {
+          error: "send_not_applicable_for_tier",
+          tier: grant.tier,
+          action_class: actionClass,
+        },
+        { status: 400 },
+      );
+    case "draft_one_click":
+    case "approve_every_time":
+      break;
+    default:
+      assertNeverTier(grant.tier);
   }
 
   const confirmedTyped = body.confirmed_typed === true;
   const typedValue =
     typeof body.typed_value === "string" ? body.typed_value : undefined;
+  const clientExpectedHash =
+    typeof body.expected_draft_preview_hash === "string"
+      ? body.expected_draft_preview_hash
+      : undefined;
+
+  // Server-derived send payload. PR-H stubs outbound: there is no
+  // recipient column on messages yet (PR-I producers wire real adapters),
+  // so recipientIdentifier is a stable per-message placeholder. The body
+  // is the founder's current draft preview as the server sees it — NOT
+  // a client-supplied field, which would let a malicious or compromised
+  // client bind the approval signature to a body the founder never saw
+  // (GDPR Art. 5(2) accountability — see DPD §2.3(q)).
+  const draftPreview = (message.draft_preview as string | null) ?? "";
+  const recipientIdentifier = `__pending__:${message.id}`;
+  const bodyContent = draftPreview;
+  const draftPreviewHash = sha256Hex(draftPreview);
 
   // approve_every_time gate. Server-side re-validation per TR6 (load-
   // bearing TOM). No .trim() / .normalize() per Kieran P2-7 — case-
-  // sensitive exact match.
+  // sensitive exact match. Additionally binds the confirm payload to
+  // the draft_preview hash returned in the prior 409 — a concurrent
+  // Edit between the two POSTs trips this and forces re-confirmation
+  // against the updated content.
   if (grant.tier === "approve_every_time") {
-    if (!confirmedTyped || typedValue !== "SEND") {
-      // Look up grant_id for the founder/action_class so the route's
-      // 409 payload doesn't have to roundtrip again. RLS owner-select
-      // is the gate; no service-role.
-      const { data: grantRow } = await supabase
-        .from("scope_grants")
-        .select("id")
-        .eq("founder_id", user.id)
-        .eq("action_class", actionClass)
-        .is("revoked_at", null)
-        .order("granted_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
+    const needsConfirmation =
+      !confirmedTyped ||
+      typedValue !== "SEND" ||
+      clientExpectedHash !== draftPreviewHash;
+    if (needsConfirmation) {
       return NextResponse.json(
         {
           error: "requires_confirmation",
           action_class: actionClass,
           tier: grant.tier,
-          recipient_excerpt: (message.draft_preview ?? "").slice(0, 200),
+          recipient_excerpt: recipientIdentifier,
+          content_excerpt: draftPreview.slice(0, 2000),
+          expected_draft_preview_hash: draftPreviewHash,
           message_id: message.id,
-          grant_id: grantRow?.id ?? null,
+          grant_id: grant.id,
         },
         { status: 409 },
       );
     }
   }
-
-  // grant_id lookup for write-action-send.
-  const { data: grantRow, error: grantSelErr } = await supabase
-    .from("scope_grants")
-    .select("id")
-    .eq("founder_id", user.id)
-    .eq("action_class", actionClass)
-    .is("revoked_at", null)
-    .order("granted_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (grantSelErr || !grantRow) {
-    reportSilentFallback(grantSelErr ?? new Error("grant_row_missing"), {
-      feature: "dashboard-send",
-      op: "grant-id-select",
-      message: "Failed to resolve grant_id for action_sends row",
-      extra: { userId: user.id, actionClass },
-    });
-    return NextResponse.json({ error: "internal_error" }, { status: 500 });
-  }
-
-  // recipient + body content: PR-I producers will wire real outbound
-  // adapters. PR-H accepts what the founder provides via the click body
-  // (typed-confirm modal echoes the body content so the signature is
-  // bound to exactly what they confirmed seeing). Fallbacks keep the
-  // hash inputs deterministic in the no-body case.
-  const recipientIdentifier =
-    typeof body.recipient_identifier === "string"
-      ? body.recipient_identifier
-      : `__pending__:${message.id}`;
-  const bodyContent =
-    typeof body.body_content === "string"
-      ? body.body_content
-      : (message.draft_preview ?? "");
 
   try {
     const written = await writeActionSend({
@@ -214,9 +233,9 @@ export async function POST(
       message: {
         id: message.id as string,
         action_class: actionClass,
-        draft_preview: (message.draft_preview as string | null) ?? null,
+        draft_preview: draftPreview,
       },
-      grant: { id: grantRow.id as string, tier: grant.tier },
+      grant,
       tier: grant.tier,
       confirmedTyped,
       typedValue,
@@ -261,7 +280,23 @@ export async function POST(
       action_class: actionClass,
       tier: grant.tier,
     });
-  } catch {
+  } catch (err) {
+    // 23505 unique_violation on action_sends(message_id) → another row
+    // for this draft already exists (founder double-click, archive-
+    // after-write split-brain producing a re-render of the card). The
+    // immutable WORM table means we cannot rectify by overwrite — the
+    // correct user-facing response is 409 "already_sent" so the UI can
+    // refresh state instead of reporting a generic failure.
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? (err as { code?: unknown }).code
+        : undefined;
+    if (code === "23505") {
+      return NextResponse.json(
+        { error: "already_sent", message_id: messageId },
+        { status: 409 },
+      );
+    }
     // writeActionSend already mirrors via reportSilentFallback.
     return NextResponse.json({ error: "send_failed" }, { status: 500 });
   }

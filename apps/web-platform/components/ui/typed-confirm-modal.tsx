@@ -12,12 +12,18 @@
 //
 // A11y contract (per Phase 5.1 / FR7):
 //   - role="dialog" + aria-modal="true" + aria-labelledby
-//   - Tab focus trap within the dialog
 //   - Esc closes WITHOUT triggering discard
 //   - Enter submits when input value === "SEND" exact (case-sensitive)
 //   - Submit disabled until value === "SEND" exact
 //   - 44×44px minimum tap targets
 //   - No hover-only affordances
+//
+// NOTE: Tab focus trap is intentionally NOT implemented here. The dialog
+// is mounted via React render-tree (not portal) and the page behind it
+// is visually obscured by the backdrop; Tab can escape to the page
+// below. A full focus trap (cycle on Tab/Shift+Tab against first/last
+// focusable, aria-hidden on the rest of the DOM) lands with PR-I's
+// dialog harmonization.
 
 import { useEffect, useId, useRef, useState } from "react";
 

@@ -69,6 +69,29 @@ UPDATE public.messages
    AND source = 'stripe'
    AND created_at < '2026-05-19 23:59:59+00'::timestamptz;
 
+-- Defense-in-depth: messages.action_class carries the same enum-absence
+-- regex as scope_grants and action_sends. Producers (CFO handler, Stripe
+-- webhook, future digest emitter) write this column; the CHECK closes the
+-- gap that ADR-034 §2 calls out — TS literal-union narrowing only catches
+-- direct call sites, not indirect routes (RPC payloads, future config
+-- imports). Pre-existing rows are admitted via NULL.
+ALTER TABLE public.messages
+  DROP CONSTRAINT IF EXISTS messages_action_class_not_locked;
+ALTER TABLE public.messages
+  ADD CONSTRAINT messages_action_class_not_locked
+  CHECK (action_class IS NULL OR action_class !~ '^(payment|legal|auth)\.');
+
+-- One active grant per (founder, action_class). Prevents the concurrent-
+-- POST race in grant_action_class where two requests can both pass the
+-- "no active grant" SELECT and both INSERT — leaving two revoked_at IS NULL
+-- rows for the same founder/class with isGranted picking one arbitrarily.
+-- Partial UNIQUE is the canonical Postgres expression of "one active X
+-- per Y" (sibling of mig 048's non-unique scope_grants_active_idx, which
+-- exists for read-path acceleration; this one enforces the invariant).
+CREATE UNIQUE INDEX IF NOT EXISTS scope_grants_active_unique
+  ON public.scope_grants (founder_id, action_class)
+  WHERE revoked_at IS NULL;
+
 -- ============================================================================
 -- (d/e/f/g) action_sends WORM table + trigger + RLS + index
 -- ============================================================================
@@ -149,6 +172,16 @@ CREATE POLICY action_sends_owner_insert ON public.action_sends
 -- the last 24h" lookups.
 CREATE INDEX IF NOT EXISTS action_sends_user_clicked_idx
   ON public.action_sends (user_id, clicked_at DESC);
+
+-- One action_sends row per message. WORM table cannot rectify duplicates,
+-- so the only safe path on double-submit (founder double-click, automated
+-- retry, archive-after-write split-brain) is fail-closed at INSERT time
+-- with 23505 unique_violation. PR-I retries that legitimately re-send
+-- (e.g., delivery-failure recovery) MUST extend this to UNIQUE(message_id,
+-- client_idempotency_key) — the absence of an idempotency key forces a
+-- design decision rather than a silent duplicate.
+CREATE UNIQUE INDEX IF NOT EXISTS action_sends_message_unique
+  ON public.action_sends (message_id);
 
 -- ============================================================================
 -- (h) Art-17 anonymise RPC — called by server/account-delete.ts BEFORE

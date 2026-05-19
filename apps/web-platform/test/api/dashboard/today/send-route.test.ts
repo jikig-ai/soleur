@@ -14,6 +14,7 @@
  */
 
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { createHash } from "node:crypto";
 
 const {
   mockGetUser,
@@ -69,6 +70,8 @@ const FOUNDER_A = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
 const MSG_ID = "11111111-1111-4111-aaaa-111111111111";
 const GRANT_ID = "22222222-2222-4222-aaaa-222222222222";
 const ACTION_CLASS = "finance.payment_failed";
+const DRAFT_PREVIEW = "test draft preview";
+const DRAFT_HASH = createHash("sha256").update(DRAFT_PREVIEW).digest("hex");
 
 function makeRequest(body?: unknown): Request {
   return new Request(
@@ -102,7 +105,7 @@ function setupMessageRow(
     user_id: FOUNDER_A,
     action_class: ACTION_CLASS,
     status: "draft",
-    draft_preview: "test draft preview",
+    draft_preview: DRAFT_PREVIEW,
     owning_domain: "cfo",
     ...overrides,
   };
@@ -186,15 +189,12 @@ describe("POST /api/dashboard/today/[id]/send", () => {
 
   test("(1) 200 happy — draft_one_click writes action_sends + archives draft", async () => {
     setupMessageRow();
-    mockIsGranted.mockResolvedValue({ tier: "draft_one_click" });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
 
-    const res = await POST(
-      makeRequest({
-        recipient_identifier: "recipient@example.com",
-        body_content: "the actual outbound body",
-      }),
-      ctx(),
-    );
+    // Server derives body_content + recipient from messages row; client
+    // body fields are ignored (compromised-page mitigation). Empty body
+    // is the canonical draft_one_click client shape.
+    const res = await POST(makeRequest({}), ctx());
     expect(res.status).toBe(200);
 
     const json = (await res.json()) as { id: string; tier: string };
@@ -223,7 +223,7 @@ describe("POST /api/dashboard/today/[id]/send", () => {
 
   test("(5a) 400 auto tier — Send not applicable", async () => {
     setupMessageRow();
-    mockIsGranted.mockResolvedValue({ tier: "auto" });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "auto" });
     const res = await POST(makeRequest(), ctx());
     expect(res.status).toBe(400);
     expect(mockWriteActionSend).not.toHaveBeenCalled();
@@ -231,7 +231,7 @@ describe("POST /api/dashboard/today/[id]/send", () => {
 
   test("(5b) 400 auto_with_digest tier — Send not applicable", async () => {
     setupMessageRow();
-    mockIsGranted.mockResolvedValue({ tier: "auto_with_digest" });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "auto_with_digest" });
     const res = await POST(makeRequest(), ctx());
     expect(res.status).toBe(400);
     expect(mockWriteActionSend).not.toHaveBeenCalled();
@@ -239,17 +239,24 @@ describe("POST /api/dashboard/today/[id]/send", () => {
 
   test("(2) 409 requires_confirmation (approve_every_time, no typed body)", async () => {
     setupMessageRow();
-    mockIsGranted.mockResolvedValue({ tier: "approve_every_time" });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "approve_every_time" });
     const res = await POST(makeRequest(), ctx());
     expect(res.status).toBe(409);
     const json = (await res.json()) as {
       error: string;
       action_class: string;
       tier: string;
+      content_excerpt: string;
+      expected_draft_preview_hash: string;
     };
     expect(json.error).toBe("requires_confirmation");
     expect(json.action_class).toBe(ACTION_CLASS);
     expect(json.tier).toBe("approve_every_time");
+    // 409 must carry the server-derived content excerpt + draft hash so
+    // the client can render the SERVER's view of the draft (not local
+    // state) and echo the hash on the confirm POST.
+    expect(json.content_excerpt).toBe(DRAFT_PREVIEW);
+    expect(json.expected_draft_preview_hash).toBe(DRAFT_HASH);
     expect(mockWriteActionSend).not.toHaveBeenCalled();
   });
 
@@ -257,7 +264,7 @@ describe("POST /api/dashboard/today/[id]/send", () => {
     // Per Kieran P2-7 — no .trim() / .normalize(). Lowercase fails the
     // exact-match gate; server returns 409 same as no-typed-value.
     setupMessageRow();
-    mockIsGranted.mockResolvedValue({ tier: "approve_every_time" });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "approve_every_time" });
     const res = await POST(
       makeRequest({ confirmed_typed: true, typed_value: "send" }),
       ctx(),
@@ -266,15 +273,14 @@ describe("POST /api/dashboard/today/[id]/send", () => {
     expect(mockWriteActionSend).not.toHaveBeenCalled();
   });
 
-  test("(8) 200 approve_every_time with confirmed_typed + typed_value=SEND", async () => {
+  test("(8) 200 approve_every_time with confirmed_typed + typed_value=SEND + draft_hash echo", async () => {
     setupMessageRow();
-    mockIsGranted.mockResolvedValue({ tier: "approve_every_time" });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "approve_every_time" });
     const res = await POST(
       makeRequest({
         confirmed_typed: true,
         typed_value: "SEND",
-        recipient_identifier: "recipient@example.com",
-        body_content: "the body the founder typed-confirmed",
+        expected_draft_preview_hash: DRAFT_HASH,
       }),
       ctx(),
     );
@@ -287,6 +293,45 @@ describe("POST /api/dashboard/today/[id]/send", () => {
     expect(writeCallArgs.tier).toBe("approve_every_time");
     expect(writeCallArgs.confirmedTyped).toBe(true);
     expect(writeCallArgs.typedValue).toBe("SEND");
+    // Server-derived body — must equal message.draft_preview, NOT
+    // whatever the client posted.
+    expect(writeCallArgs.bodyContent).toBe(DRAFT_PREVIEW);
+    // Server-derived recipient — stable per-message placeholder until
+    // PR-I wires real outbound adapters.
+    expect(writeCallArgs.recipientIdentifier).toBe(`__pending__:${MSG_ID}`);
+  });
+
+  test("(9) 409 if expected_draft_preview_hash drifted (Send→Edit→Send race)", async () => {
+    setupMessageRow();
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "approve_every_time" });
+    const res = await POST(
+      makeRequest({
+        confirmed_typed: true,
+        typed_value: "SEND",
+        expected_draft_preview_hash: "deadbeef".repeat(8), // stale hash
+      }),
+      ctx(),
+    );
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as {
+      error: string;
+      expected_draft_preview_hash: string;
+    };
+    expect(json.error).toBe("requires_confirmation");
+    expect(json.expected_draft_preview_hash).toBe(DRAFT_HASH);
+    expect(mockWriteActionSend).not.toHaveBeenCalled();
+  });
+
+  test("(10) 409 already_sent on 23505 unique_violation (double-click)", async () => {
+    setupMessageRow();
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockWriteActionSend.mockRejectedValueOnce(
+      Object.assign(new Error("duplicate key"), { code: "23505" }),
+    );
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(409);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toBe("already_sent");
   });
 
   test("422 unknown_action_class (defensive — should be rare after backfill)", async () => {
