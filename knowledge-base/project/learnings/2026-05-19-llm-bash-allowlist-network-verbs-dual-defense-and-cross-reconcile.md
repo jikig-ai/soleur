@@ -26,7 +26,7 @@ When an Inngest cron-*.ts function (or any LLM-driven agent) needs to invoke net
 - IPv4 RFC1918: `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`
 - IPv6 unaddressed today (gap surfaced in PR-2 review; deferred to #4068): `::1`, `fe80::/10`, `fc00::/7`, `::ffff:127.0.0.1`
 - Cloud metadata hostname form (gap deferred): `metadata.google.internal`
-- URL userinfo bypass: `https://internal@evil.example.com`, `https://evil.example.com@internal` (gap deferred)
+- URL userinfo bypass: `https://internal@attacker.test`, `https://attacker.test@internal` (gap deferred)
 - DNS rebinding: no prompt-level mitigation possible (gap deferred to Layer 3)
 - URL parser inconsistencies: percent-encoded, numeric IP forms (gap deferred)
 
