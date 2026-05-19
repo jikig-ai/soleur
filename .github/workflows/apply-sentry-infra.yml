@@ -15,7 +15,13 @@
 # transient failure or for ad-hoc applies (still scoped to cron monitors).
 #
 # Authentication divergence from apps/web-platform/infra/ root:
-#   - SENTRY_AUTH_TOKEN comes from a GitHub repo secret (NOT Doppler) per
+#   - SENTRY_IAC_AUTH_TOKEN (the GitHub repo secret) is dedicated to this
+#     IaC pipeline. It maps to the Internal Integration `iac-terraform-prd`
+#     on `jikigai-eu` (see ADR-031 §Authentication). The env var passed to
+#     terraform/audit scripts is still named `SENTRY_AUTH_TOKEN` because that
+#     is the canonical env var the Sentry terraform provider and audit
+#     tooling expect.
+#   - SENTRY_IAC_AUTH_TOKEN comes from a GitHub repo secret (NOT Doppler) per
 #     ADR-031 secret-store-divergence.
 #   - R2 backend creds (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) come from
 #     Doppler `prd_terraform` via `doppler secrets get --plain`.
@@ -98,11 +104,11 @@ jobs:
 
       - name: Verify required secrets present
         env:
-          SENTRY_TOKEN_CHECK: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_TOKEN_CHECK: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           if [[ -z "$SENTRY_TOKEN_CHECK" ]]; then
-            echo "::error::SENTRY_AUTH_TOKEN secret is not configured."
+            echo "::error::SENTRY_IAC_AUTH_TOKEN secret is not configured."
             exit 1
           fi
           if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
@@ -141,7 +147,7 @@ jobs:
         # operator-triggered apply traverses the 4-gate check. Fail-closed
         # — non-zero exit halts the workflow before any state mutation.
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
@@ -155,7 +161,7 @@ jobs:
         id: plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
           set -uo pipefail
@@ -201,7 +207,7 @@ jobs:
       - name: Terraform apply (cron monitors only)
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           terraform apply -auto-approve -input=false tfplan
