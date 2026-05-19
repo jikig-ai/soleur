@@ -193,16 +193,23 @@ jobs:
           BUMP_TYPE: ${{ steps.bump.outputs.type }}
           TAG_PREFIX: ${{ inputs.tag_prefix }}
         run: |
+          # Escape regex metacharacters in the caller-supplied prefix so the
+          # anchored post-filter below stays correct if a future caller passes
+          # a prefix containing `.`, `+`, `*`, `(`, etc. Today's callers pass
+          # `v`, `web-v`, `telegram-v` (metachar-free); the escape is defense
+          # in depth.
+          TAG_PREFIX_RE=$(printf '%s' "$TAG_PREFIX" | sed 's/[][\\.^$*+?(){}|/]/\\&/g')
+
           # Glob is fnmatch-style (cheap pre-filter); anchored regex enforces
           # strict ${TAG_PREFIX}X.Y.Z shape so collisions like `vinngest-v1.0.0`
           # under the bare `v` prefix are rejected (#4082). `grep -m1` over
           # `head -1` avoids SIGPIPE if the corpus ever exceeds the kernel pipe
-          # buffer; `|| true` is load-bearing under -eo pipefail so the
-          # empty-fallback below can fire on no-match (bootstrap of a new
-          # prefix). If a future TAG_PREFIX contains regex metacharacters
-          # (`.`, `+`, `*`), escape them at the call site.
+          # buffer. `|| [ $? -eq 1 ]` lets the existing empty-fallback below
+          # fire on no-match (grep exit 1, bootstrap of a new prefix) WITHOUT
+          # masking grep exit 2 (regex syntax error — would surface a latent
+          # escaping bug instead of silently falling back to 0.0.0).
           LATEST_TAG=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname \
-            | grep -m1 -E "^${TAG_PREFIX}[0-9]+\.[0-9]+\.[0-9]+$" || true)
+            | { grep -m1 -E "^${TAG_PREFIX_RE}[0-9]+\.[0-9]+\.[0-9]+$" || [ $? -eq 1 ]; })
 
           if [ -z "$LATEST_TAG" ]; then
             CURRENT="0.0.0"
