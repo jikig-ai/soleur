@@ -548,6 +548,11 @@ post_linkedin_company() {
     return 0
   fi
 
+  if [[ -z "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then
+    echo "Warning: LINKEDIN_ORG_ACCESS_TOKEN not set. Skipping LinkedIn Company Page posting." >&2
+    return 0
+  fi
+
   if [[ "${LINKEDIN_ALLOW_POST:-}" != "true" ]]; then
     echo "Warning: LINKEDIN_ALLOW_POST is not set to 'true'. Skipping LinkedIn Company Page posting." >&2
     return 0
@@ -566,10 +571,6 @@ post_linkedin_company() {
     local error_reason
     error_reason=$(head -c 1000 "$stderr_file")
     rm -f "$stderr_file"
-    if [[ -z "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then
-      echo "Warning: LINKEDIN_ORG_ACCESS_TOKEN not set. Skipping LinkedIn Company Page posting." >&2
-      return 0
-    fi
     echo "Error: LinkedIn Company Page posting failed. Creating fallback issue." >&2
     create_linkedin_fallback_issue "$file" "LinkedIn Company Page" "$error_reason"
     return 1
