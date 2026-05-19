@@ -4,7 +4,9 @@
 # To test manually: gh workflow run scheduled-linkedin-token-check.yml
 #
 # Security: This workflow does NOT use untrusted event inputs in run: commands.
-# The only secret used is LINKEDIN_ACCESS_TOKEN for the API introspection call.
+# Secrets used: LINKEDIN_ACCESS_TOKEN (personal) and LINKEDIN_ORG_ACCESS_TOKEN
+# (Community Management API; post-approval-mint, #4046) for the API introspection
+# calls. Unset tokens are skipped (covers the pre-approval period for the org token).
 
 name: "Scheduled: LinkedIn Token Check"
 
@@ -28,91 +30,115 @@ jobs:
       - name: Check token expiry
         env:
           LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+          LINKEDIN_ORG_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ORG_ACCESS_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${LINKEDIN_ACCESS_TOKEN:-}" ]]; then
-            echo "::warning::LINKEDIN_ACCESS_TOKEN secret is not set. Skipping check."
-            exit 0
-          fi
+          # Iterate over both tokens. Unset tokens are skipped (covers pre-approval
+          # period for the org token; #4046). For each set token, introspect against
+          # the LinkedIn userinfo endpoint and file/close a per-token renewal issue.
+          check_token() {
+            local token_name="$1"
+            local token_value="$2"
 
-          # Call LinkedIn introspection endpoint
-          HTTP_CODE=$(curl -s -o /tmp/li-response.json -w "%{http_code}" \
-            -H "Authorization: Bearer ${LINKEDIN_ACCESS_TOKEN}" \
-            "https://api.linkedin.com/v2/userinfo")
+            if [[ -z "$token_value" ]]; then
+              echo "::notice::${token_name} secret is not set. Skipping check (expected pre-approval for LINKEDIN_ORG_ACCESS_TOKEN)."
+              return 0
+            fi
 
-          if [[ "$HTTP_CODE" == "401" ]]; then
-            echo "::error::LinkedIn token is expired or invalid (HTTP 401)."
-            TITLE="[Action Required] LinkedIn OAuth token has expired"
-            BODY=$(cat <<'ISSUE_BODY'
-          ## LinkedIn Token Expired
+            local response_file
+            response_file=$(mktemp /tmp/li-response-XXXXXX.json)
+            local http_code
+            http_code=$(curl -s -o "$response_file" -w "%{http_code}" \
+              -H "Authorization: Bearer ${token_value}" \
+              "https://api.linkedin.com/v2/userinfo")
 
-          The scheduled token check detected that `LINKEDIN_ACCESS_TOKEN` is **expired or invalid** (API returned HTTP 401).
+            local issue_title="[Action Required] LinkedIn OAuth token has expired (${token_name})"
 
-          Content publisher LinkedIn posting is currently **non-functional**.
+            if [[ "$http_code" == "401" ]]; then
+              echo "::error::${token_name} is expired or invalid (HTTP 401)."
+              local body
+              body=$(cat <<ISSUE_BODY
+          ## LinkedIn Token Expired (${token_name})
+
+          The scheduled token check detected that \`${token_name}\` is **expired or invalid** (API returned HTTP 401).
+
+          Content publisher LinkedIn posting via this token is currently **non-functional**.
 
           ### Renewal steps
 
           1. Go to https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=78wtm2wu15iikn
-          2. Select scopes: openid, profile, w_member_social, email
+          2. Select scopes appropriate to the token:
+             - \`LINKEDIN_ACCESS_TOKEN\` (personal): openid, profile, w_member_social, email
+             - \`LINKEDIN_ORG_ACCESS_TOKEN\` (org / Community Management API, #4046): openid, profile, w_member_social, w_organization_social
           3. Accept redirect URL confirmation -> Request access token -> Sign in -> Allow
-          4. Copy the new token and run (printf, not echo — `echo` appends `\n` which `gh secret set` would persist, breaking the JWT):
-             ```bash
-             printf '%s' '<new-token>' | gh secret set LINKEDIN_ACCESS_TOKEN
-             ```
+          4. Copy the new token and run (printf, not echo — \`echo\` appends \`\n\` which \`gh secret set\` would persist, breaking the JWT):
+             \`\`\`bash
+             printf '%s' '<new-token>' | gh secret set ${token_name}
+             \`\`\`
+          5. Also persist to Doppler: \`doppler secrets set ${token_name}=<new-token> -p soleur -c prd\`
 
-          **Person URN** (`LINKEDIN_PERSON_URN`) does not expire and does not need renewal.
+          **Person URN** (\`LINKEDIN_PERSON_URN\`) does not expire and does not need renewal.
           ISSUE_BODY
           )
 
-            # Dedup: check for existing open issue
-            EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
-              --search "in:title \"[Action Required] LinkedIn OAuth token\"" \
+              local existing
+              existing=$(gh issue list --repo "$GH_REPO" --state open \
+                --search "in:title \"${issue_title}\"" \
+                --json number --jq '.[0].number // empty')
+
+              if [[ -n "$existing" ]]; then
+                echo "Issue already exists: #$existing -- adding comment."
+                gh issue comment "$existing" --repo "$GH_REPO" \
+                  --body "Token check ran $(date -u '+%Y-%m-%d %H:%M UTC') -- ${token_name} is still expired."
+              else
+                gh issue create --repo "$GH_REPO" \
+                  --title "$issue_title" \
+                  --label "action-required" \
+                  --milestone "Post-MVP / Later" \
+                  --body "$body"
+              fi
+              rm -f "$response_file"
+              return 0
+            fi
+
+            if [[ ! "$http_code" =~ ^2 ]]; then
+              echo "::warning::Unexpected HTTP $http_code from LinkedIn API for ${token_name}. Token status unknown."
+              rm -f "$response_file"
+              return 0
+            fi
+
+            # Validate body is JSON before any jq -r call or downstream "token is valid"
+            # side effects (closing stale renewal issues). LinkedIn can return HTML under
+            # edge incidents (rate limit, maintenance, Cloudflare fronting). jq under the
+            # default strict shell (bash --noprofile --norc -eo pipefail) would crash the
+            # step, and without this guard the crash would follow the "token is valid"
+            # code path -- auto-closing any open renewal issue on unvalidated data.
+            # See AGENTS.md cq-ci-steps-polling-json-endpoints-under (#2214, #2236).
+            if ! jq -e . "$response_file" >/dev/null 2>&1; then
+              echo "::warning::LinkedIn API returned non-JSON body on HTTP $http_code for ${token_name}. Skipping this check -- will retry next cron."
+              rm -f "$response_file"
+              return 0
+            fi
+
+            echo "${token_name} is valid (HTTP $http_code). Token holder: $(jq -r '.name // "unknown"' "$response_file")"
+
+            # Close any stale renewal issues since the token is now valid
+            local stale
+            stale=$(gh issue list --repo "$GH_REPO" --state open \
+              --search "in:title \"${issue_title}\"" \
               --json number --jq '.[0].number // empty')
 
-            if [[ -n "$EXISTING" ]]; then
-              echo "Issue already exists: #$EXISTING -- adding comment."
-              gh issue comment "$EXISTING" --repo "$GH_REPO" \
-                --body "Token check ran $(date -u '+%Y-%m-%d %H:%M UTC') -- token is still expired."
-            else
-              gh issue create --repo "$GH_REPO" \
-                --title "$TITLE" \
-                --label "action-required" \
-                --milestone "Post-MVP / Later" \
-                --body "$BODY"
+            if [[ -n "$stale" ]]; then
+              echo "Closing stale renewal issue #$stale -- ${token_name} is valid."
+              gh issue close "$stale" --repo "$GH_REPO" \
+                --comment "Token check ran $(date -u '+%Y-%m-%d %H:%M UTC') -- ${token_name} is valid. Auto-closing."
             fi
-            exit 0
-          fi
 
-          if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
-            echo "::warning::Unexpected HTTP $HTTP_CODE from LinkedIn API. Token status unknown."
-            exit 0
-          fi
+            rm -f "$response_file"
+          }
 
-          # Validate body is JSON before any jq -r call or downstream "token is valid"
-          # side effects (closing stale renewal issues). LinkedIn can return HTML under
-          # edge incidents (rate limit, maintenance, Cloudflare fronting). jq under the
-          # default strict shell (bash --noprofile --norc -eo pipefail) would crash the
-          # step, and without this guard the crash would follow the "token is valid"
-          # code path -- auto-closing any open renewal issue on unvalidated data.
-          # See AGENTS.md cq-ci-steps-polling-json-endpoints-under (#2214, #2236).
-          if ! jq -e . /tmp/li-response.json >/dev/null 2>&1; then
-            echo "::warning::LinkedIn API returned non-JSON body on HTTP $HTTP_CODE. Skipping this check -- will retry next cron."
-            exit 0
-          fi
-
-          echo "LinkedIn token is valid (HTTP $HTTP_CODE)."
-          echo "Token holder: $(jq -r '.name // "unknown"' /tmp/li-response.json)"
-
-          # Close any stale renewal issues since the token is now valid
-          STALE=$(gh issue list --repo "$GH_REPO" --state open \
-            --search "in:title \"[Action Required] LinkedIn OAuth token\"" \
-            --json number --jq '.[0].number // empty')
-
-          if [[ -n "$STALE" ]]; then
-            echo "Closing stale renewal issue #$STALE -- token is valid."
-            gh issue close "$STALE" --repo "$GH_REPO" \
-              --comment "Token check ran $(date -u '+%Y-%m-%d %H:%M UTC') -- token is valid. Auto-closing."
-          fi
+          check_token "LINKEDIN_ACCESS_TOKEN" "${LINKEDIN_ACCESS_TOKEN:-}"
+          check_token "LINKEDIN_ORG_ACCESS_TOKEN" "${LINKEDIN_ORG_ACCESS_TOKEN:-}"

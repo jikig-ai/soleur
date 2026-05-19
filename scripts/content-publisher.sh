@@ -536,8 +536,9 @@ post_linkedin() {
 post_linkedin_company() {
   local file="$1"
 
-  if [[ -z "${LINKEDIN_ACCESS_TOKEN:-}" ]]; then
-    echo "Warning: LINKEDIN_ACCESS_TOKEN not set. Skipping LinkedIn Company Page posting." >&2
+  if [[ -z "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then
+    echo "Warning: LINKEDIN_ORG_ACCESS_TOKEN not set. LinkedIn Company Page posting blocked on Community Management API approval (#4046). Routing to rolling tracker." >&2
+    append_to_linkedin_tracker "$CASE_NAME" "LinkedIn Company Page" "$LINKEDIN_TRACKER_REASON_MISSING_TOKEN"
     return 0
   fi
 
