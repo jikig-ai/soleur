@@ -39,7 +39,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     env:
-      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
       # Kieran P0-1 fail-loud: require SENTRY_API_HOST to be set explicitly.
       # No fallback default — `eu.sentry.io` would silently 401 for slugs
       # ending in `-eu` per the slug-rewrite finding (learning
