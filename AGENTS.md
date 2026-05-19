@@ -45,7 +45,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-when-fixing-a-workflow-gates-detection] → core
 - [id: wg-zero-agents-until-user-confirms] → core
 - [id: wg-before-every-commit-run-compound-skill] → core
-- [id: wg-never-bump-version-files-in-feature] → core
+- [id: wg-never-bump-version-files-in-feature] → rest
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → core
 - [id: wg-ship-push-before-merge] → rest
 - [id: wg-after-a-pr-merges-to-main-verify-all] → core
