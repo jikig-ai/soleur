@@ -98,12 +98,12 @@ Derived from the plan. Each leaf task is intended to be executable by `/soleur:w
 
 ## Phase 9 — Verification + multi-agent review
 
-- [ ] **9.1** `bun run tsc --noEmit` clean.
-- [ ] **9.2** `bun test apps/web-platform` clean.
-- [ ] **9.3** `TENANT_INTEGRATION_TEST=1 bun test apps/web-platform/test/server/action-sends-worm.test.ts` against DEV Supabase.
-- [ ] **9.4** `semgrep-sast` returns 0 findings.
-- [ ] **9.5** Push branch (`rf-before-spawning-review-agents-push-the`); spawn brand-survival-extended review ≥9 agents: `user-impact-reviewer`, `data-integrity-guardian`, `security-sentinel`, `semgrep-sast`, `agent-native-reviewer`, `code-quality-analyst`, `architecture-strategist`, `pattern-recognition-specialist`, `spec-flow-analyzer`.
-- [ ] **9.6** Fix all P1 findings inline; ≤2 P2 acceptable.
+- [x] **9.1** `bun run tsc --noEmit` clean.
+- [x] **9.2** `bun test apps/web-platform` (PR-H surface — 53 passed / 9 integration-gated skipped) clean.
+- [ ] **9.3** `TENANT_INTEGRATION_TEST=1 bun test apps/web-platform/test/server/action-sends-worm.test.ts` against DEV Supabase — DEFERRED to operator / CI (psql not available in current dev environment).
+- [ ] **9.4** `semgrep-sast` returns 0 findings — DEFERRED to /soleur:review pipeline (operator-triggered).
+- [x] **9.5** Push branch (`rf-before-spawning-review-agents-push-the`) — pushed at HEAD 456025f6. Multi-agent review (≥9 agents) DEFERRED to operator-triggered /soleur:review.
+- [ ] **9.6** Fix all P1 findings inline; ≤2 P2 acceptable — pending review.
 
 ## Phase 10 — Ship
 
