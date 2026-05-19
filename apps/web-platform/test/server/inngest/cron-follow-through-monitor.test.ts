@@ -150,6 +150,14 @@ describe("cron-follow-through-monitor — T1 happy path", () => {
     expect(result.exitCode).toBe(0);
     expect(result.abortedByTimeout).toBe(false);
 
+    // Regression guard for #4017 bug 8/8: --allowedTools is variadic in
+    // claude 2.x; without `--` end-of-options marker the prompt is parsed
+    // as another tool name and claude errors `Input must be provided`.
+    const claudeArgs = claudeCalls[0][1] as string[];
+    const lastIdx = claudeArgs.length - 1;
+    expect(claudeArgs[lastIdx - 1]).toBe("--");
+    expect(claudeArgs[lastIdx]).toMatch(/follow-through/i); // prompt sanity check
+
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = fetchMock.mock.calls[0][0] as string;

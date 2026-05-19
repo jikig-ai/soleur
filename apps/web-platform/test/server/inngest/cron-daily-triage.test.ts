@@ -118,6 +118,15 @@ describe("cron-daily-triage — T1 happy path", () => {
     expect(result.exitCode).toBe(0);
     expect(result.abortedByTimeout).toBe(false);
 
+    // Regression guard for #4017 bug 8/8: --allowedTools is variadic in
+    // claude 2.x and consumes the prompt as a tool name without the `--`
+    // end-of-options marker. The spawn argv MUST contain `--` IMMEDIATELY
+    // BEFORE the prompt (the last argument).
+    const spawnArgs = spawnSpy.mock.calls[0][1] as string[];
+    const lastIdx = spawnArgs.length - 1;
+    expect(spawnArgs[lastIdx - 1]).toBe("--");
+    expect(spawnArgs[lastIdx]).toMatch(/triage/i); // prompt body sanity check
+
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = fetchMock.mock.calls[0][0] as string;
