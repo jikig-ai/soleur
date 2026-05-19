@@ -403,6 +403,90 @@ Falling back to operator handoff with the form-structure recipe above (per
 `hr-exhaust-all-automated-options-before` — automated options were exhausted
 via 4+ attempts before falling back to manual).
 
+### Second mint attempt (2026-05-19T19, post-MCP-reconnect) — successful
+
+After the user reconnected the Playwright MCP server, the autonomous mint
+was retried with the corrected Appendix B and an API-bypass strategy. The
+form-fill phase completed (Name + 4 dropdowns + CI via a tight single-shot
+`browser_evaluate` using `role="menuitemradio"` selectors — corrected from
+the earlier mistaken `role="option"` selector), the integration was saved
+at slug `iac-terraform-prd-814bdd`, and the auth token was minted via API
+rather than via UI:
+
+```js
+// session-cookie API mint pattern (works because the agent inherits the
+// user's logged-in session via Playwright's browser context)
+const csrf = document.cookie.match(/sentry-sc=([^;]+)/)[1];
+const r = await fetch('/api/0/sentry-apps/iac-terraform-prd-814bdd/api-tokens/', {
+  method: 'POST', credentials: 'same-origin',
+  headers: {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
+    'X-CSRFToken': decodeURIComponent(csrf),
+    'Referer': location.href,
+  },
+  body: '{}',
+});
+return (await r.json()).token;  // -> filename: .playwright-mcp/sentry-iac-token-v4.raw
+```
+
+CSRF cookie name surfaced at `window.csrfCookieName` (Sentry-EU value:
+`sentry-sc`). Token piped to Doppler via:
+
+```bash
+python3 -c "import json,sys; sys.stdout.write(json.load(open('.../sentry-iac-token-v4.raw')))" \
+  | doppler secrets set SENTRY_IAC_AUTH_TOKEN --no-interactive --type string \
+      -p soleur -c prd >/dev/null
+shred -u .../sentry-iac-token-v4.raw
+```
+
+Verified via `GET /api/0/`:
+
+| Field | Value |
+|---|---|
+| HTTP | 200 |
+| `user.email` | `iac-terraform-prd-814bdd-73af874e-...@proxy-user.sentry.io` |
+| `user.dateJoined` | `2026-05-19T19:08:06.794364Z` |
+| `auth.scopes` | `alerts:read, alerts:write, event:read, org:read, project:admin, project:read, project:write` |
+| `/api/0/organizations/jikigai-eu/` | 200 |
+
+All 7 IaC-required scopes present. `monitor:*` is bundled under
+`project:write` (no separate cron-monitor scope on Internal Integrations,
+confirming Appendix B's earlier inference).
+
+### Incident during the second attempt — one token leaked, immediately rotated
+
+During the path where the agent tried to mint via the UI (before pivoting
+to API), `browser_click` on "New Token" auto-snapshotted the page state
+as a side-effect of the tool call. That auto-snapshot file
+(`.playwright-mcp/page-2026-05-19T19-32-09-930Z.yml`) contained the
+generated token's cleartext in a `textbox "Generated token"` element.
+The agent caught the leak within ~30s on inspection, shredded the
+snapshot file, revoked the token via the UI, and proceeded via the API
+bypass above. Detailed pattern + the corrected click-inside-evaluate
+recipe documented at
+`knowledge-base/project/learnings/2026-05-19-playwright-click-navigate-auto-snapshot-leaks-modal-tokens.md`.
+This is a follow-up to the original PR #4064 learning, which only
+covered explicit `browser_snapshot` calls.
+
+Token rotation chain on the integration:
+- `last4=0226` — minted via UI, leaked via auto-snapshot, revoked at 2026-05-19T19:30:58 UTC
+- `last4=6144` — minted via UI, MCP context died before extraction, API-deleted at 2026-05-19T19:35:40 UTC
+- `last4=c468` — minted via API, captured to file via `evaluate(filename:)`, piped to Doppler `soleur/prd SENTRY_IAC_AUTH_TOKEN`, currently active
+
+### Outstanding follow-ups (operator)
+
+1. Confirm `sentry-app.add iac-terraform-prd` entry in
+   `https://jikigai-eu.sentry.io/settings/audit-log/?event=sentry-app.add`
+   for §5(2) evidence (token lacks audit-log read scope by design —
+   least-privilege; verify via session-cookie UI instead).
+2. Update `.github/workflows/apply-sentry-infra.yml` to read
+   `SENTRY_IAC_AUTH_TOKEN` (was `SENTRY_AUTH_TOKEN`) — separate PR from
+   PR-1b since it lives outside the residency-reframe scope.
+3. Update ADR-031 to note the Org Auth Token `org:ci`-only narrowing +
+   the new dedicated IaC integration `iac-terraform-prd`.
+
 ### References specific to Appendix B
 
 - Org Auth Token form inspection: `2026-05-19T14:04:19Z` (UI confirmed
@@ -412,8 +496,10 @@ via 4+ attempts before falling back to manual).
 - Existing `web-platform-ci` Internal Integration on `jikigai-eu` visible at
   `/settings/developer-settings/web-platform-ci-26eeaf/` (confirms T3's name-
   prefix inference).
-- No new tokens minted in this Appendix-B work. No prod-write completed.
-  The integration creation is operator-handoff per the recipe above.
+- New `iac-terraform-prd-814bdd` Internal Integration on `jikigai-eu`
+  created `2026-05-19T19:08:06Z` (per minted-token `user.dateJoined`).
+- Active auth token `last4=c468` in Doppler `soleur/prd` as
+  `SENTRY_IAC_AUTH_TOKEN`, verified `2026-05-19T~19:38Z`.
 
 ### References specific to this appendix
 
