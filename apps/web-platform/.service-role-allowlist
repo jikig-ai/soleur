@@ -107,3 +107,13 @@ apps/web-platform/server/cost-writer.ts
 # invariant on every result set (AC12) + cross-tenant golden fixture
 # integration test (AC15). Two-layer defense.
 apps/web-platform/server/dsar-export.ts
+
+# PERMANENT — GitHub installation-token audit writer (PR-H+1 #4098).
+# `record_github_token_use` is REVOKE FROM PUBLIC, anon, authenticated;
+# GRANT TO service_role (migration 052). Cookie-scoped callers return
+# 403, so the per-Octokit-call audit writer must use service-role. The
+# RPC enforces founder_id at the row level (the only writer is the
+# factory hook with a per-call founderId closure); audit_github_token_use
+# RLS still owner-gates the read path (cookie-scoped query at
+# /dashboard/audit/github).
+apps/web-platform/server/github/audit-writer.ts
