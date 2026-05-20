@@ -35,7 +35,7 @@ fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 # is honored (log a warning).
 parse_directive() {
   awk '
-    /<!-- *soleur:followthrough/, /-->/ {
+    /^<!-- *soleur:followthrough/, /-->/ {
       gsub(/^<!-- *soleur:followthrough/, "")
       gsub(/-->/, "")
       for (i = 1; i <= NF; i++) {
