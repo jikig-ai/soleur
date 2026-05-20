@@ -90,21 +90,29 @@ SNIPPET_FILE=$(mktemp /tmp/inngest-runcmd-XXXXXX.sh)
 trap 'rm -f "$SNIPPET_FILE"' EXIT
 
 # Extract the runcmd block following the Inngest bootstrap comment.
-# The block is everything from the `set -e` line up to (but not including)
-# the next blank line.
+# The block ends at the next YAML sibling key (line starting with `  - |`
+# at the same indent or any drop in indent below the 4-space body indent).
+# Blank-line termination is too fragile — a future maintainer adding a blank
+# line inside the block would truncate the snippet and bash -n would
+# trivially pass on the prefix.
 awk '
   /Bootstrap Inngest server on first boot/ { found = 1; next }
-  found && /^[[:space:]]+- \|/ { in_block = 1; next }
-  in_block && /^$/ { exit }
+  found && /^[[:space:]]+- \|/ && !in_block { in_block = 1; next }
+  in_block && /^[[:space:]]+- \|/ { exit }
+  in_block && /^[^[:space:]]/ { exit }
   in_block { sub(/^    /, ""); print }
 ' "$CLOUD_INIT" > "$SNIPPET_FILE"
 
 # Prepend shebang so the syntax-check tools have a clean target.
 { echo "#!/bin/sh"; cat "$SNIPPET_FILE"; } > "$SNIPPET_FILE.tmp" && mv "$SNIPPET_FILE.tmp" "$SNIPPET_FILE"
 
-assert "extracted snippet is non-empty"             "[[ -s '$SNIPPET_FILE' ]]"
-assert "snippet passes bash -n"                     "bash -n '$SNIPPET_FILE'"
-assert "snippet passes dash -n (POSIX portability)" "command -v dash >/dev/null && dash -n '$SNIPPET_FILE' || true"
+assert "extracted snippet is non-empty" "[[ -s '$SNIPPET_FILE' ]]"
+assert "snippet passes bash -n"         "bash -n '$SNIPPET_FILE'"
+if command -v dash >/dev/null 2>&1; then
+  assert "snippet passes dash -n (POSIX portability)" "dash -n '$SNIPPET_FILE'"
+else
+  echo "  SKIP: dash not installed (POSIX portability check skipped — CI will exercise it)"
+fi
 
 # --- AC3: YAML round-trip ---
 echo ""

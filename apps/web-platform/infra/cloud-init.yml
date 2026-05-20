@@ -406,20 +406,16 @@ runcmd:
     set -e
     docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0
     EXTRACT_DIR=$(mktemp -d)
-    docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     trap cleanup EXIT
     docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0
     docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
     image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0 -f '{{range .Config.Env}}{{println .}}{{end}}')
-    docker rm soleur-inngest-bootstrap-extract
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
-    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-)
-    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-)
+    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
+    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | head -1 | cut -d= -f2-)
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
       bash "$EXTRACT_DIR/inngest-bootstrap.sh"
-    trap - EXIT
-    cleanup
 
   - |
     set -e
