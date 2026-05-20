@@ -670,6 +670,95 @@ self_test_flooding_pathology() {
   REPO_ROOT="$prev_repo"; INDEX_PATH="$prev_idx"
 }
 
+# self_test_paraphrase_prepass: synthesized fixture for Stage 2 (#4176).
+# Target learning uses canonical engineering vocabulary; query uses zero
+# lexical overlap. Baseline kbsearch_rank MUST return null (negative
+# control). Stage 2's union-of-paraphrases rank MUST recover the target
+# at rank ≤ 8. Until PROMPT_QUERY_PARAPHRASE + union logic ship, assertion
+# 2 fails by design (this is the RED state). cq-test-fixtures-synthesized-only.
+self_test_paraphrase_prepass() {
+  local KB_ROOT="$TMP_ROOT/kb-paraphrase"
+  mkdir -p "$KB_ROOT/knowledge-base/project/learnings"
+  st_write "$KB_ROOT/knowledge-base/project/learnings/orm-target.md" \
+    '---' 'category: performance-issues' 'tags: [n+1]' '---' \
+    '' '# ORM N+1 query under burst load' '' \
+    'database connection pool exhaustion under burst load occurs when transaction allocation rate exceeds the configured maximum, producing TimeoutError on subsequent queries.'
+  {
+    echo '# Knowledge Base Index'; echo
+    echo '- [ORM N+1 query under burst load](project/learnings/orm-target.md)'
+  } > "$KB_ROOT/knowledge-base/INDEX.md"
+  (cd "$KB_ROOT" && git init -q && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -q -m fixture)
+  local prev_repo="$REPO_ROOT" prev_idx="$INDEX_PATH"
+  REPO_ROOT="$KB_ROOT"; INDEX_PATH="$KB_ROOT/knowledge-base/INDEX.md"
+
+  # Query has zero lexical overlap with content tokens. extract_keywords
+  # drops <4-char tokens and stopwords; remaining tokens (saturating, workers)
+  # do NOT appear in the corpus content (which uses "pool", "connection",
+  # "exhaustion", "burst", "load", "transaction", "allocation"). Stage 2
+  # paraphrase variants are required to bridge.
+  local query="ORM saturating workers"
+  local target="knowledge-base/project/learnings/orm-target.md"
+
+  # Assertion 1 (negative control): kbsearch_rank with paraphrase explicitly
+  # disabled via NO_PARAPHRASE=1 MUST return rank=null on this zero-overlap
+  # query. At Phase 1 (no Stage 2 logic) this trivially passes because the
+  # function has no paraphrase path. At Phase 2 GREEN, NO_PARAPHRASE=1 must
+  # short-circuit Stage 2 and preserve the null baseline. This anchors the
+  # `--no-paraphrase` opt-out behavior in CI.
+  local rk_base
+  rk_base=$(NO_PARAPHRASE=1 kbsearch_rank "$query" "$target" "[]")
+  SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1))
+  if [[ -z "$rk_base" ]]; then
+    SELF_TEST_PASS=$((SELF_TEST_PASS+1))
+    echo "  PASS: paraphrase-prepass: NO_PARAPHRASE=1 baseline returns null on zero-overlap query (negative control)"
+  else
+    SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
+    echo "  FAIL: paraphrase-prepass: NO_PARAPHRASE=1 baseline unexpectedly hit (rank=$rk_base); fixture is not zero-overlap"
+  fi
+
+  # Assertion 2: Stage 2 union-of-paraphrases MUST recover the target at
+  # rank ≤ 8. At Phase 1 (no Stage 2 logic) this fails by design — the
+  # function returns null. At Phase 2 GREEN, the < 5 baseline-hits trigger
+  # fires, 3 paraphrase variants are generated via PROMPT_QUERY_PARAPHRASE,
+  # and the union-by-path rank recovers the target.
+  #
+  # CURL_BIN is overridden by a stub that returns a canonical paraphrase
+  # ("database connection pool exhaustion") on each call, so this assertion
+  # self-verifies without external API access. ANTHROPIC_API_KEY is not
+  # required — the stub does not consult it. cq-test-fixtures-synthesized-only.
+  local stub_curl="$KB_ROOT/stub-curl.sh"
+  cat > "$stub_curl" <<'STUB'
+#!/usr/bin/env bash
+# Returns a canonical paraphrase that lexically overlaps the orm-target.md
+# corpus content. The bench's anthropic_paraphrase strips newlines + writes
+# the __HTTP_STATUS__ trailer; we mimic the response shape it expects.
+cat <<JSON
+{"content":[{"text":"database connection pool exhaustion under burst load"}],"stop_reason":"end_turn"}
+JSON
+printf '__HTTP_STATUS__:200\n'
+STUB
+  chmod +x "$stub_curl"
+
+  local rk_stage2 prev_curl_bin="$CURL_BIN" prev_api_key="${ANTHROPIC_API_KEY:-}"
+  CURL_BIN="$stub_curl"
+  export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-stub-key-self-test}"
+  rk_stage2=$(kbsearch_rank "$query" "$target" "[]")
+  CURL_BIN="$prev_curl_bin"
+  if [[ -z "$prev_api_key" ]]; then unset ANTHROPIC_API_KEY; else export ANTHROPIC_API_KEY="$prev_api_key"; fi
+
+  SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1))
+  if [[ -n "$rk_stage2" && "$rk_stage2" -le 8 ]]; then
+    SELF_TEST_PASS=$((SELF_TEST_PASS+1))
+    echo "  PASS: paraphrase-prepass: Stage 2 union-of-paraphrases recovers target (rank=$rk_stage2)"
+  else
+    SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
+    echo "  FAIL: paraphrase-prepass: Stage 2 union-of-paraphrases lost target (rank=${rk_stage2:-null})"
+  fi
+
+  REPO_ROOT="$prev_repo"; INDEX_PATH="$prev_idx"
+}
+
 self_test() {
   TMP_ROOT="$(mktemp -d)"
   trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -1003,6 +1092,9 @@ self_test() {
 
   # ── Flooding-pathology regression (#4119): cap-20 displacement under noise ──
   self_test_flooding_pathology
+
+  # ── Paraphrase pre-pass (#4176 Stage 2): union-of-paraphrases recovers zero-overlap target ──
+  self_test_paraphrase_prepass
 
   echo
   echo "== summary: PASS=$SELF_TEST_PASS  FAIL=$SELF_TEST_FAIL  TOTAL=$SELF_TEST_TOTAL =="
