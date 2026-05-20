@@ -41,12 +41,10 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 
 ## Workflow Gates
 
-- [id: wg-when-moving-github-issues-between] → core
 - [id: wg-every-feature-listed-in-a-roadmap-phase] → core
 - [id: wg-when-closing-a-phase-milestone-update] → core
 - [id: wg-when-fixing-a-workflow-gates-detection] → rest
 - [id: wg-zero-agents-until-user-confirms] → core
-- [id: wg-before-every-commit-run-compound-skill] → core
 - [id: wg-never-bump-version-files-in-feature] → rest
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → core
 - [id: wg-ship-push-before-merge] → rest
@@ -63,6 +61,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
 - [id: wg-plan-prescribed-skills-must-run-inline] → rest
 - [id: wg-end-of-work-emit-resume-prompt] → rest
+- [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
 
 ## Code Quality
 
