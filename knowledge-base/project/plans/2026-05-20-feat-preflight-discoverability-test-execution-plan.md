@@ -600,7 +600,8 @@ working `discoverability_test.command`).
 - [ ] **AC13.** This PR's OWN plan file has a `## Observability` block whose
   `discoverability_test.command` is `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` (a non-network
   probe is acceptable since the change is a skill+test, not infra). Expected
-  output: `8 pass`.
+  output: `0 fail` (substring-stable across test additions; the suite reports
+  `<N> pass\n 0 fail` and Check 10's matcher substring-matches).
 - [ ] **AC14.** `python3 scripts/lint-agents-rule-budget.py` exits 0 (no
   AGENTS budget regression — this PR adds zero AGENTS-rule bytes).
 - [ ] **AC15.** `bun test plugins/soleur/test/components.test.ts` exits 0 (no
@@ -730,10 +731,11 @@ cover the (low) trust-in-plan-file risk.
     ```bash
     bun test plugins/soleur/test/preflight-discoverability-test.test.ts
     ```
-  - **expected_output:** `8 pass`
+  - **expected_output:** `0 fail`
     (Non-network probe — the change is skill/test code, not infra. The check
     proves the parser + classifier behave as documented across all 8
-    decision states.)
+    decision states + the post-review hardening tests. `0 fail` substring is
+    stable across test additions; `bun test` reports `<N> pass\n 0 fail`.)
 
 ## Sharp Edges
 
