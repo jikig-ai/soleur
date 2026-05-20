@@ -45,9 +45,9 @@ resource "doppler_secret" "kb_drift_ingest_url" {
   }
 }
 
-# GH Actions secret for the cron workflow. Requires `var.github_actions_token`
-# with `repo` scope on jikig-ai/soleur. Operator mints the token once and
-# stores it in `prd_terraform` Doppler config under TF_VAR_github_actions_token.
+# GH Actions secret for the cron workflow. Auth handled by the integrations/github
+# provider in main.tf — it uses GitHub App auth (App ID + installation_id + PEM)
+# per AGENTS.core.md hr-github-app-auth-not-pat (#4144). No PAT required.
 resource "github_actions_secret" "doppler_token_kb_drift" {
   repository  = "soleur"
   secret_name = "DOPPLER_TOKEN_KB_DRIFT"

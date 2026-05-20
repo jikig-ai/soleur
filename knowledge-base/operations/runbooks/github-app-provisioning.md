@@ -61,7 +61,7 @@ In your terminal (one shell session for the apply):
 
 For the GitHub Actions secret publishing path, also mint:
 
-- A fine-grained GitHub PAT scoped to jikig-ai/soleur with `Secrets: Read & Write` permission. Save as `TF_VAR_github_actions_token`.
+- The soleur-ai GitHub App's installation ID — run `doppler run -p soleur -c prd -- bash apps/web-platform/infra/scripts/get-app-installation-id.sh` once and save as `TF_VAR_github_app_installation_id`. App-auth (App ID + installation_id + PEM) replaces the prior PAT path per #4144 — no per-operator mint or rotation.
 - A Doppler service token scoped to the `prd_kb_drift_walker` config (Dashboard → Project → soleur → prd_kb_drift_walker → Access → Service Tokens → Generate). Save as `TF_VAR_doppler_token_kb_drift`.
 
 NOTE: the `prd_kb_drift_walker` Doppler config must exist BEFORE first apply. Create it once via the Doppler dashboard (Project → soleur → New config under `prd` environment, name = `prd_kb_drift_walker`). Future Terraform automation tracked separately.
@@ -107,7 +107,7 @@ Capture the resulting `installation_id` (visible in the URL of the install page:
 
 ## Failure modes
 
-- **Apply fails on the `github` provider auth:** verify `TF_VAR_github_actions_token` has `Secrets: Read & Write` on jikig-ai/soleur. PAT must be fine-grained, not classic.
+- **Apply fails on the `github` provider auth:** verify the soleur-ai GitHub App installation grants `Repository permissions → Secrets: Read and write` on jikig-ai/soleur. Probe with `gh api /app/installations/$TF_VAR_github_app_installation_id | jq -r .permissions.secrets` (expect `"write"`). If `read` or missing, visit `https://github.com/organizations/jikig-ai/settings/installations/<id>/permissions/update` to grant. The prior PAT path was eliminated in #4144.
 - **Apply fails on `prd_kb_drift_walker` config not found:** the Doppler config must exist before first apply. Create it in the Doppler dashboard.
 - **Webhook 401 in production:** signature verification failing. Confirm Step 5 (you pasted the new secret into the App). The route fails closed and Sentry mirrors the event at `level: error`.
 

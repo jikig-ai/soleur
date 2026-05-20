@@ -39,6 +39,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-write-boundary-sentinel-sweep-all-write-sites] → core
 - [id: hr-no-dashboard-eyeball-pull-data-yourself] → core
 - [id: hr-observability-as-plan-quality-gate] → core
+- [id: hr-github-app-auth-not-pat] → core
 
 ## Workflow Gates
 

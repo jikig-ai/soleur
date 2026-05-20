@@ -414,6 +414,47 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 **Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours because the substrate (introduced in #4085) declared no observability surface and the operator never had a non-SSH way to verify the heartbeat. Combined with plan Phase 2.9 (template-time gate), this phase is the load-bearing pre-implementation gate. The empty-key reject was added per the PR #4123 review — the most common drift mode is `liveness_signal:` with no children, which earlier regex-only forms allowed through.
 
+### 4.8. PAT-Shaped Variable Halt (Always)
+
+Per AGENTS.md `hr-github-app-auth-not-pat`, plans that introduce or reference a PAT-shaped TF variable, env var, or literal-format token for infra-time GitHub writes MUST be halted at deepen-plan time. App auth (App ID + installation_id + PEM) supersedes PAT across the board — Apps don't expire, don't require per-operator minting, and survive operator handoff.
+
+**Step 1 — Trigger.** Always runs. The detection only fires on match; no opt-out.
+
+**Step 2 — Grep the plan.** Run the following regex sweep against the plan file:
+
+```bash
+PLAN="<plan-file>"
+HITS=$(grep -nE '\bvar\.github_actions_token\b|\bTF_VAR_GITHUB_(TOKEN|PAT)\b|\bvar\.[a-z_]*_pat\b|\bghp_[A-Za-z0-9]{36,}\b' "$PLAN" || true)
+```
+
+The four patterns target distinct PAT shapes:
+
+- `\bvar\.github_actions_token\b` — the specific Terraform variable name eliminated in #4144.
+- `\bTF_VAR_GITHUB_(TOKEN|PAT)\b` — the env-var form Doppler `--name-transformer tf-var` would produce for any `var.github_token` / `var.github_pat` reintroduction.
+- `\bvar\.[a-z_]*_pat\b` — any plan variable suffixed `_pat` (catches `var.gh_pat`, `var.org_pat`, etc.).
+- `\bghp_[A-Za-z0-9]{36,}\b` — a literal fine-grained PAT token in the plan prose (per the synthetic-token learning, this catches accidental pastes; the placeholder-shape `ghp_XXX...` placeholder form is allowed and only the literal token shape rejects).
+
+**Step 3 — HALT on match.** If `HITS` is non-empty, emit:
+
+> Error: Plan references PAT-shaped variable or literal. Use GitHub App auth (App ID + installation_id + pem_file via the `integrations/github` provider's `app_auth` block) per AGENTS.md `hr-github-app-auth-not-pat`. The `soleur-ai` GitHub App (App ID `3261325`) is provisioned and the discovery script is at `apps/web-platform/infra/scripts/get-app-installation-id.sh`. Apps don't expire, don't require per-operator minting, and survive operator handoff.
+>
+> Matches:
+> $HITS
+
+Halt deepen-plan; do NOT proceed to Phase 5.
+
+**Step 4 — Emit telemetry.** When the halt fires, emit:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-github-app-auth-not-pat applied \
+  "Infra/CI GitHub writes auth via GitHub App, never PAT"
+```
+
+**Step 5 — Pass-through.** If no PAT-shaped patterns match, deepen-plan proceeds normally. No telemetry on pass.
+
+**Why:** #4144 — PR-H #4066 added `var.github_actions_token` as a required TF variable, then never populated it in Doppler. Every `Apply deploy-pipeline-fix.yml` run since 2026-05-19T21:41Z failed before `terraform plan` could evaluate, blocking the entire deploy pipeline for ~14h (sudoers entry never refreshed → deploy webhook errored at `sudo: deploy : command not allowed` → Inngest heartbeat went silently red). The first defense is at plan-write time: catch PAT-shaped variables before they reach a workflow YAML.
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>

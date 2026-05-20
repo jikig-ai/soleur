@@ -36,6 +36,18 @@ write_files:
     owner: root:root
     permissions: '0440'
 
+  # #4144 — permits ci-deploy.sh to invoke inngest-bootstrap.sh as root
+  # from the fixed path /tmp/inngest-extract/ (no wildcards, sudo-rs safe).
+  # env_keep preserves INNGEST_CLI_VERSION + SHA across the sudo boundary.
+  # Mirrored in apps/web-platform/infra/deploy-inngest-bootstrap.sudoers
+  # so terraform_data.deploy_pipeline_fix can refresh existing hosts.
+  - path: /etc/sudoers.d/deploy-inngest-bootstrap
+    content: |
+      Defaults env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256"
+      deploy ALL=(root) NOPASSWD: /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
+    owner: root:root
+    permissions: '0440'
+
   # Disk space monitoring script -- alerts via email (Resend) at 80%/95% thresholds (#1409).
   # Content injected from disk-monitor.sh via Terraform base64encode(file()).
   - path: /usr/local/bin/disk-monitor.sh

@@ -1,0 +1,16 @@
+# /etc/sudoers.d/deploy-inngest-bootstrap — permits the `deploy` user to run
+# inngest-bootstrap.sh as root from a fixed extract path (/tmp/inngest-extract/).
+#
+# Why no wildcards: Ubuntu 24.04's sudo-rs rejects wildcards in command
+# arguments (it parses them as literal `*`). ci-deploy.sh was updated in #4144
+# to use a fixed path (rm -rf + mkdir + extract) so the sudoers form below
+# pins the exact command. Concurrent deploys collide on the path but webhook
+# serializes them.
+#
+# env_keep is the modern alternative to `sudo -E env K=V ...`: the two
+# version pins are preserved across the sudo boundary by name.
+#
+# Provisioned via cloud-init (fresh hosts) and terraform_data.deploy_pipeline_fix
+# (already-running hosts). See #4144 / #4118.
+Defaults env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256"
+deploy ALL=(root) NOPASSWD: /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh

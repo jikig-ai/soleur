@@ -177,8 +177,8 @@ variable "github_app_client_secret" {
   sensitive   = true
 }
 
-variable "github_actions_token" {
-  description = "GitHub PAT (fine-grained, repo scope on jikig-ai/soleur, Secrets: Read & Write) used by the integrations/github provider to publish the DOPPLER_TOKEN_KB_DRIFT Actions secret. Mint at github.com/settings/personal-access-tokens/new."
+variable "github_app_installation_id" {
+  description = "Installation ID of the soleur-ai GitHub App on jikig-ai org. Discoverable via apps/web-platform/infra/scripts/get-app-installation-id.sh; stable thereafter. Per AGENTS.core.md hr-github-app-auth-not-pat: GitHub App auth supersedes PAT for infra-time writes (#4144)."
   type        = string
   sensitive   = true
 }

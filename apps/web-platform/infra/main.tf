@@ -56,9 +56,16 @@ provider "betteruptime" {
 }
 
 # PR-H (#3244) — GitHub provider for Actions-secret publishing (kb-drift).
+# #4144 — migrated from PAT to GitHub App auth (no operator mint/rotation).
+# App ID + installation_id are non-sensitive identifiers; the PEM lives in
+# Doppler prd.GITHUB_APP_PRIVATE_KEY. See AGENTS.core.md hr-github-app-auth-not-pat.
 provider "github" {
-  token = var.github_actions_token
   owner = "jikig-ai"
+  app_auth {
+    id              = var.github_app_id
+    installation_id = var.github_app_installation_id
+    pem_file        = var.github_app_private_key
+  }
 }
 
 provider "hcloud" {
