@@ -1,3 +1,10 @@
+---
+title: DPA vendor response verification lifecycle
+date: 2026-03-19
+category: engineering
+tags: [integration-issues, legal-docs]
+---
+
 # Learning: DPA vendor response verification lifecycle
 
 ## Problem

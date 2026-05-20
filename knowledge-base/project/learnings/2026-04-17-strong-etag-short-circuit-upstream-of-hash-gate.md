@@ -1,12 +1,16 @@
 ---
-name: Strong-ETag 304 short-circuit belongs upstream of the hash gate
-description: When the strong ETag is available from a cheap source (DB row) before filesystem work, short-circuit on If-None-Match there — not in the response builder
-category: performance-issues
-module: kb-binary-response
+title: Strong-ETag 304 short-circuit belongs upstream of the hash gate
 date: 2026-04-17
-pr: 2515
-issues: [2324, 2311, 2303]
+category: performance-issues
 tags: [http-caching, etag, if-none-match, toctou, verdict-cache, tagged-union, test-patterns]
+module: kb-binary-response
+description: When the strong ETag is available from a cheap source (DB row) before filesystem work, short-circuit on If-None-Match there — not in the response builder
+issues:
+  - 2324
+  - 2311
+  - 2303
+name: Strong-ETag 304 short-circuit belongs upstream of the hash gate
+pr: 2515
 ---
 
 # Learning: Strong-ETag 304 short-circuit belongs upstream of the hash gate

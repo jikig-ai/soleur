@@ -1,9 +1,10 @@
 ---
+title: Cloudflare zone-settings via narrow provider alias + tfstate recovery from partial apply
 date: 2026-04-18
 category: integration-issues
-module: terraform-cloudflare
 tags: [cloudflare, terraform, doppler, hsts, tfstate, provider-alias]
-issues: ["#2527", "#2528"]
+module: terraform-cloudflare
+issues: [#2527, #2528]
 ---
 
 # Cloudflare zone-settings via narrow provider alias + tfstate recovery from partial apply

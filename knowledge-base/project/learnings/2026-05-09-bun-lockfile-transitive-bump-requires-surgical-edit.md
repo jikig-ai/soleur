@@ -1,10 +1,11 @@
 ---
+title: 'bun.lock transitive bumps require surgical lockfile edits when "no package.json edits" is required'
 date: 2026-05-09
 category: best-practices
-module: dependency-management
 tags: [dependabot, bun, npm, lockfile, security-hygiene]
-related-pr: 3488
+module: dependency-management
 related-issues: [dependabot-alerts-batch-2026-05]
+related-pr: 3488
 ---
 
 # Learning: bun.lock transitive bumps require surgical lockfile edits when "no package.json edits" is required

@@ -1,3 +1,10 @@
+---
+title: God component extraction refactoring patterns
+date: 2026-04-05
+category: engineering
+tags: [refactoring, web-platform/connect-repo]
+---
+
 # Learning: God component extraction refactoring patterns
 
 ## Problem

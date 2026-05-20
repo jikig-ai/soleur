@@ -1,11 +1,12 @@
 ---
+title: '`claude-code-action`''s `claude_args` ≠ the direct `claude` CLI shape'
 date: 2026-05-18
 category: integration-issues
 tags: [claude-code, inngest, cli, child_process.spawn, plan-vs-reality, npm-packaged-binary]
 component: apps/web-platform/server/inngest/functions/cron-daily-triage.ts
-issue: "#3948"
-pr: "#3985"
-parent_adr: "ADR-033"
+issue: '#3948'
+parent_adr: ADR-033
+pr: '#3985'
 ---
 
 # `claude-code-action`'s `claude_args` ≠ the direct `claude` CLI shape

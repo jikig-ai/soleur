@@ -1,3 +1,10 @@
+---
+title: Agent tool in SAFE_TOOLS -- implicit trust without auditability
+date: 2026-03-20
+category: agent-design
+tags: [security-issues, web-platform/agent-runner]
+---
+
 # Learning: Agent tool in SAFE_TOOLS -- implicit trust without auditability
 
 ## Problem

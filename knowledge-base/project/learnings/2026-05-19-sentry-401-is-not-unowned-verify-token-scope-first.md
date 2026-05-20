@@ -1,3 +1,10 @@
+---
+title: 'a 401 from `/api/0/organizations/<slug>/` is NOT evidence of "unowned org" — verify token scope first'
+date: 2026-05-19
+category: engineering
+tags: [workflow-patterns, brainstorm / premise-validation / sentry]
+---
+
 # Learning: a 401 from `/api/0/organizations/<slug>/` is NOT evidence of "unowned org" — verify token scope first
 
 **Date:** 2026-05-19

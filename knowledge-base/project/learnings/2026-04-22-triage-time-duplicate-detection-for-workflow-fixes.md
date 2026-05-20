@@ -1,3 +1,10 @@
+---
+title: Triage-time duplicate detection for workflow-fix issues
+date: 2026-04-22
+category: engineering
+tags: [triage, time, duplicate, detection, workflow, fixes]
+---
+
 # Triage-time duplicate detection for workflow-fix issues
 
 **Date:** 2026-04-22

@@ -1,3 +1,10 @@
+---
+title: Playwright MCP --isolated mode for parallel Claude Code sessions
+date: 2026-04-02
+category: infrastructure
+tags: [integration-issues, playwright-mcp, playwright, mcp, parallel-sessions, browser-isolation, configuration]
+---
+
 # Learning: Playwright MCP --isolated mode for parallel Claude Code sessions
 
 ## Problem

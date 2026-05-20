@@ -1,3 +1,10 @@
+---
+title: Terraform base64encode(file()) for cloud-init write_files deduplication
+date: 2026-03-20
+category: infrastructure
+tags: [integration-issues, apps/web-platform/infra, apps/telegram-bridge/infra]
+---
+
 # Learning: Terraform base64encode(file()) for cloud-init write_files deduplication
 
 ## Problem

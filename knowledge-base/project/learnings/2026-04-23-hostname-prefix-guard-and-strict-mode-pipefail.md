@@ -1,9 +1,10 @@
 ---
+title: 'Hostname-Prefix Guards Accept Subdomain Bypass; Command-Substitution Pipes Under `set -euo pipefail` Abort the Outer Script'
+date: 2026-04-23
 category: security-issues
 tags: [url-validation, bash, strict-mode, pipefail, guards]
-date: 2026-04-23
-pr: "#2840"
-issues: ["#2839", "#2837"]
+issues: [#2839, #2837]
+pr: '#2840'
 ---
 
 # Learning: Hostname-Prefix Guards Accept Subdomain Bypass; Command-Substitution Pipes Under `set -euo pipefail` Abort the Outer Script

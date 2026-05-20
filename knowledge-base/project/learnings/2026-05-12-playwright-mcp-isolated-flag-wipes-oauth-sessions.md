@@ -1,3 +1,12 @@
+---
+title: Playwright MCP `--isolated` flag wipes OAuth sessions on every browser respawn
+date: 2026-05-12
+category: infrastructure
+tags:
+- infrastructure
+- fix-target-project-level-mcpjson
+---
+
 # Playwright MCP `--isolated` flag wipes OAuth sessions on every browser respawn
 
 **Date:** 2026-05-12

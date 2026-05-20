@@ -1,3 +1,10 @@
+---
+title: Codex Portability Scan Methodology
+date: 2026-03-10
+category: engineering
+tags: [implementation-patterns, plugin-architecture]
+---
+
 # Learning: Codex Portability Scan Methodology
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: 'Brainstorm skill''s main-branch abort conflicts with worktree creation'
+date: 2026-03-10
+category: workflow-patterns
+tags: [logic-errors, brainstorm-skill]
+---
+
 # Learning: Brainstorm skill's main-branch abort conflicts with worktree creation
 
 ## Problem

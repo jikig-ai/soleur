@@ -1,3 +1,10 @@
+---
+title: Legal Cross-Document Audit-Review Cycle
+date: 2026-03-18
+category: legal
+tags: [integration-issues, legal-documents]
+---
+
 # Learning: Legal Cross-Document Audit-Review Cycle
 
 ## Problem

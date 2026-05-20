@@ -1,3 +1,10 @@
+---
+title: PostgREST bytea column returns hex, not base64
+date: 2026-03-17
+category: engineering
+tags: [database-issues, apps/web-platform]
+---
+
 # Learning: PostgREST bytea column returns hex, not base64
 
 ## Problem

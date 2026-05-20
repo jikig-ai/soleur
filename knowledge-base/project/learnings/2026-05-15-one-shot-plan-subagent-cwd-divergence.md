@@ -1,3 +1,10 @@
+---
+title: one-shot Plan+Deepen subagent writes to bare-root, not the worktree
+date: 2026-05-15
+category: agent-design
+tags: [integration-issues, one-shot, plan, deepen-plan, subagent-protocol]
+---
+
 # Learning: one-shot Plan+Deepen subagent writes to bare-root, not the worktree
 
 ## Problem

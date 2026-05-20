@@ -1,10 +1,11 @@
 ---
+title: Plan precondition drift + 3-value enum gate slip — PR-B cohort marker
 date: 2026-05-12
 category: workflow-patterns
-module: chat
-issue: "#3603"
-pr: "#3653"
 tags: [plan-verification, react-state-machine, multi-agent-review, predicate-placement]
+module: chat
+issue: '#3603'
+pr: '#3653'
 ---
 
 # Plan precondition drift + 3-value enum gate slip — PR-B cohort marker

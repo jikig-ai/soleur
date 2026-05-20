@@ -1,16 +1,14 @@
 ---
-name: vendor-cron-heartbeat-silent-fail-pattern
-description: Two-step vendor cron check-ins (in_progress → ok/error) with `|| true` on the first call and a gated follow-up create a silent-fail trap that makes monitors report "Last successful check-in: Never" while workflow runs themselves stay green. Heartbeat (single end-of-job POST) eliminates the trap.
-metadata:
-  type: best-practice
-  category: integration-issues
-  module: ci-observability
+title: vendor cron heartbeat silent-fail pattern
 date: 2026-05-18
+category: engineering
+tags: [vendor, cron, heartbeat, silent, fail, pattern]
+description: 'Two-step vendor cron check-ins (in_progress → ok/error) with `|| true` on the first call and a gated follow-up create a silent-fail trap that makes monitors report "Last successful check-in: Never" while workflow runs themselves stay green. Heartbeat (single end-of-job POST) eliminates the trap.'
+metadata: 
+name: vendor-cron-heartbeat-silent-fail-pattern
+related_iac: 
 related_issues: [3236, 3964, 3968]
-related_workflows:
-  - .github/workflows/scheduled-oauth-probe.yml
-related_iac:
-  - apps/web-platform/infra/sentry/cron-monitors.tf
+related_workflows: 
 ---
 
 # Learning: vendor cron heartbeat silent-fail pattern

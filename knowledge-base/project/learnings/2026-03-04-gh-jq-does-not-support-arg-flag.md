@@ -1,4 +1,8 @@
 ---
+title: gh --jq does not support jq flags like --arg
+date: 2026-03-04
+category: shell-scripting
+tags: [workflow-patterns, scheduled-bug-fixer, gh-cli-limitations]
 synced_to: [schedule]
 ---
 

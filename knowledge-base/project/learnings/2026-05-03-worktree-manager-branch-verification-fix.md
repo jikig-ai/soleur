@@ -1,3 +1,10 @@
+---
+title: worktree-manager silent-fail — branch not created despite exit 0
+date: 2026-05-03
+category: workflow-patterns
+tags: [integration-issues, git-worktree]
+---
+
 # Learning: worktree-manager silent-fail — branch not created despite exit 0
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: AGENTS.md change-class loader — measured savings vs Phase 1 estimate
+date: 2026-05-11
+category: agent-design
+tags: [agents-md, sidecar, session-start-hook, token-efficiency, prompt-cache, compliance-tier, migration, idempotency, linter, bash-test-pattern]
+---
+
 # Learning: AGENTS.md change-class loader — measured savings vs Phase 1 estimate
 
 **PR:** #3496 · **Issue:** #3493 · **Date:** 2026-05-11

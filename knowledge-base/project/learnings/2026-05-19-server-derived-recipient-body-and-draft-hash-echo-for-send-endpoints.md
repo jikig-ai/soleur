@@ -1,8 +1,11 @@
 ---
-name: server-derived-recipient-body-and-draft-hash-echo-for-send-endpoints
+title: Server-derived recipient/body + draft-hash echo for send-class endpoints
+date: 2026-05-19
+category: engineering
+tags: [server, derived, recipient, body, draft, hash, echo, send, endpoints]
 description: Send-class endpoints must derive bodyContent + recipient server-side from the source row, and confirm payloads must echo a server-issued draft_preview hash; approval_signature must bind the full content surface (body, recipient, template, tier), not just the typed value. Defeats client-controlled-signature, Send→Edit→Send race, and double-send via WORM UNIQUE.
-metadata:
-  type: feedback
+metadata: {'type': 'feedback'}
+name: server-derived-recipient-body-and-draft-hash-echo-for-send-endpoints
 ---
 
 # Server-derived recipient/body + draft-hash echo for send-class endpoints

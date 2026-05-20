@@ -1,11 +1,11 @@
 ---
+title: 'Sentry-IaC: billing gating and provider quirks'
+date: 2026-05-15
+category: engineering
+tags: [sentry, iac, billing, quirks]
+description: Sentry-IaC gotchas surfaced during the 2026-05-15
+metadata: {'type': 'project', 'date': datetime.date(2026, 5, 15), 'triggering_issue': '#3849', 'area': 'apps/web-platform/infra/sentry'}
 name: sentry-iac-billing-and-quirks
-description: Sentry-IaC gotchas surfaced during the 2026-05-15 #3849 token rotation session — terraform sentry_project default mismatch, jianyuan/sentry provider .enabled drift, and Sentry's per-seat billing gate on cron monitor activation
-metadata:
-  type: project
-  date: 2026-05-15
-  triggering_issue: "#3849"
-  area: apps/web-platform/infra/sentry
 ---
 
 # Sentry-IaC: billing gating and provider quirks

@@ -1,3 +1,10 @@
+---
+title: Stale cross-references after knowledge-base restructuring
+date: 2026-03-13
+category: engineering
+tags: [integration-issues, knowledge-base]
+---
+
 # Learning: Stale cross-references after knowledge-base restructuring
 
 ## Problem

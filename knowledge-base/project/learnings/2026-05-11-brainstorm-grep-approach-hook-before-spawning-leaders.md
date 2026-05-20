@@ -1,3 +1,13 @@
+---
+title: Grep main for the approach hook before brainstorm leader spawn
+date: 2026-05-11
+category: shell-scripting
+tags:
+- shell-scripting
+- superseded-by-3286
+- now-tracking-3603
+---
+
 # Learning: Grep main for the approach hook before brainstorm leader spawn
 
 ## Problem

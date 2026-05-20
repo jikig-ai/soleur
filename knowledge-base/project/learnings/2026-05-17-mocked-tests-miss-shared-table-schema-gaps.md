@@ -1,3 +1,10 @@
+---
+title: Mocked unit tests miss shared-table schema gaps; multi-agent review catches them
+date: 2026-05-17
+category: engineering
+tags: [integration-issues, apps/web-platform/supabase + apps/web-platform/server + apps/web-platform/app/api, mocked-test-false-pass-against-absent-schema, multi-agent-review-after-mocked-unit-tests-passed, /work-phase-1-real-db-cross-reference]
+---
+
 # Mocked unit tests miss shared-table schema gaps; multi-agent review catches them
 
 **Captured:** 2026-05-17

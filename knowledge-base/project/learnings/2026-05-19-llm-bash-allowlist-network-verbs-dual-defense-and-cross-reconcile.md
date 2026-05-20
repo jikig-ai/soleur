@@ -1,18 +1,13 @@
 ---
+title: 'LLM Bash allowlist with network verbs: dual defense-in-depth + cross-reconcile gate'
 date: 2026-05-19
 category: best-practices
+tags: [llm, bash, allowlist, network, verbs, dual, defense, cross, reconcile]
+related_issues: [#4068 (deferred-scope-out: Set.has() SSRF allowlist hardening), #3948 (umbrella: TR9 group-(c) agent-loop crons → Inngest)]
+related_learnings: [2026-05-07-claude-code-action-boundaries-and-once-schedule-bundle.md (auto-close keyword markdown-blindness), 2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md, 2026-03-20-open-redirect-allowlist-validation.md (Set.has() exact-match)]
+related_prs: [#3985 (PR-1: scheduled-daily-triage → Inngest cron, the substrate template)]
 topic: LLM Bash allowlist with network verbs (curl/dig); cross-reconcile single-agent HIGH
-trigger_prs:
-  - "#4062 (PR-2: scheduled-follow-through → Inngest cron)"
-related_prs:
-  - "#3985 (PR-1: scheduled-daily-triage → Inngest cron, the substrate template)"
-related_issues:
-  - "#4068 (deferred-scope-out: Set.has() SSRF allowlist hardening)"
-  - "#3948 (umbrella: TR9 group-(c) agent-loop crons → Inngest)"
-related_learnings:
-  - "2026-05-07-claude-code-action-boundaries-and-once-schedule-bundle.md (auto-close keyword markdown-blindness)"
-  - "2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md"
-  - "2026-03-20-open-redirect-allowlist-validation.md (Set.has() exact-match)"
+trigger_prs: [#4062 (PR-2: scheduled-follow-through → Inngest cron)]
 ---
 
 # LLM Bash allowlist with network verbs: dual defense-in-depth + cross-reconcile gate

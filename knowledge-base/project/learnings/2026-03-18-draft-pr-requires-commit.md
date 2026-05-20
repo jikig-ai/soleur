@@ -1,3 +1,10 @@
+---
+title: draft PR creation requires at least one commit
+date: 2026-03-18
+category: workflow-patterns
+tags: [integration-issues, git-worktree]
+---
+
 # Learning: draft PR creation requires at least one commit
 
 ## Problem

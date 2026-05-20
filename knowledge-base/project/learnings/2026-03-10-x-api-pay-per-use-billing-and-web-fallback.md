@@ -1,3 +1,10 @@
+---
+title: X API pay-per-use billing and web UI fallback
+date: 2026-03-10
+category: engineering
+tags: [integration-issues, community]
+---
+
 # Learning: X API pay-per-use billing and web UI fallback
 
 ## Problem

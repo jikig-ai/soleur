@@ -1,3 +1,10 @@
+---
+title: Middleware DB queries must handle errors explicitly — fail-open vs fail-closed
+date: 2026-03-20
+category: shell-scripting
+tags: [runtime-errors, web-platform/middleware]
+---
+
 # Learning: Middleware DB queries must handle errors explicitly — fail-open vs fail-closed
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Ralph Loop State File Persists After Crash
+date: 2026-03-09
+category: engineering
+tags: [workflow, ralph-loop]
+---
+
 # Learning: Ralph Loop State File Persists After Crash
 
 ## Problem

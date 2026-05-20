@@ -1,3 +1,10 @@
+---
+title: GIT_CEILING_DIRECTORIES prevents test isolation failures in worktrees
+date: 2026-03-24
+category: workflow-patterns
+tags: [test-failures, test-infrastructure]
+---
+
 # Learning: GIT_CEILING_DIRECTORIES prevents test isolation failures in worktrees
 
 ## Problem

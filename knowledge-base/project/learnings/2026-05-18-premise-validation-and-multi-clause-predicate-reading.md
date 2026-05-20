@@ -1,10 +1,10 @@
 ---
+title: Premise validation at routing time AND multi-clause SQL predicate reading at deepen time
 date: 2026-05-18
-session: feat-one-shot-3981-byok-killswitch-atomicity (PR #3987)
+category: engineering
 tags: [workflow, premise-validation, deepen-plan, sql-predicate, brainstorm, multi-clause-and]
-related:
-  - "[[2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record]]"
-  - "[[2026-05-12-plan-precondition-and-3-value-enum-gate-drift]]"
+related: [[[2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record]], [[2026-05-12-plan-precondition-and-3-value-enum-gate-drift]]]
+session: feat-one-shot-3981-byok-killswitch-atomicity (PR
 ---
 
 # Premise validation at routing time AND multi-clause SQL predicate reading at deepen time

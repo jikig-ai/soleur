@@ -1,3 +1,10 @@
+---
+title: Verify env var consumption at code level before documenting requirements
+date: 2026-03-20
+category: engineering
+tags: [documentation-accuracy, apps/telegram-bridge, apps/web-platform]
+---
+
 # Learning: Verify env var consumption at code level before documenting requirements
 
 ## Problem

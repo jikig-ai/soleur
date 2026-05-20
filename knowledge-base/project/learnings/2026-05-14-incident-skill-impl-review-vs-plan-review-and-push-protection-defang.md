@@ -1,11 +1,14 @@
 ---
+title: post-impl multi-agent review catches regex-breadth gaps that plan-review misses; Push Protection vs synthesized fixtures requires defang-from-first-commit
 date: 2026-05-14
-tags: [multi-agent-review, security, regex-sentinels, push-protection, test-fixtures, skill-budget, plan-review-vs-impl-review, brand-survival-threshold]
-severity: medium
 category: best-practices
-related_pr: 3721
-related_issues: [2725, 2718]
+tags: [multi-agent-review, security, regex-sentinels, push-protection, test-fixtures, skill-budget, plan-review-vs-impl-review, brand-survival-threshold]
 brand_survival_threshold: single-user incident
+related_issues:
+  - 2725
+  - 2718
+related_pr: 3721
+severity: medium
 ---
 
 # Learning: post-impl multi-agent review catches regex-breadth gaps that plan-review misses; Push Protection vs synthesized fixtures requires defang-from-first-commit

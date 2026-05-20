@@ -1,3 +1,10 @@
+---
+title: Brainstorm carry-forward leader-set + issue-body PR-shape conditionality
+date: 2026-05-15
+category: workflow-patterns
+tags: [brainstorm-mechanics, plugins/soleur/skills/brainstorm, 3819, 3809, knowledge-base/project/plans/2026-05-15-feat-goal-primitive-operator-escape-hatch-plan.md]
+---
+
 # Learning: Brainstorm carry-forward leader-set + issue-body PR-shape conditionality
 
 ## Problem

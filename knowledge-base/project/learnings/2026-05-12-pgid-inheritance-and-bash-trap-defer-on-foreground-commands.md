@@ -1,8 +1,11 @@
 ---
+title: PGID inheritance and bash TERM-trap defer on foreground commands
 date: 2026-05-12
+category: shell-scripting
+tags: [pgid, inheritance, bash, trap, defer, foreground, commands]
 class: session-error
 component: web-platform/infra
-related_pr: "#3704"
+related_pr: '#3704'
 ---
 
 # PGID inheritance and bash TERM-trap defer on foreground commands

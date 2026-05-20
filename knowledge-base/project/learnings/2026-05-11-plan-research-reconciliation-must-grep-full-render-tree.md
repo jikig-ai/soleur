@@ -1,18 +1,16 @@
 ---
-module: plan
+title: Plan Research Reconciliation must grep the full render tree, not just the layout file
 date: 2026-05-11
-problem_type: integration_issue
+category: shell-scripting
+tags: [planning, research-reconciliation, render-tree, multi-agent-review, false-negative]
+symptoms: [Plan's Research Reconciliation asserts 'mitigation X does not apply because we don't have Y', Claim is based on reading the layout/shell file only, The actual artifact Y lives in a sibling file (route page, child component) the plan didn't grep, Pattern-recognition reviewer catches it pre-merge by reading the FULL render tree]
+module: plan
+synced_to: [plan]
 component: plan_skill
-symptoms:
-  - "Plan's Research Reconciliation asserts 'mitigation X does not apply because we don't have Y'"
-  - "Claim is based on reading the layout/shell file only"
-  - "The actual artifact Y lives in a sibling file (route page, child component) the plan didn't grep"
-  - "Pattern-recognition reviewer catches it pre-merge by reading the FULL render tree"
+problem_type: integration_issue
+related_pr: 3587
 root_cause: scope_too_narrow_in_research_reconciliation
 severity: medium
-tags: [planning, research-reconciliation, render-tree, multi-agent-review, false-negative]
-synced_to: [plan]
-related_pr: 3587
 ---
 
 # Learning: Plan Research Reconciliation must grep the full render tree, not just the layout file

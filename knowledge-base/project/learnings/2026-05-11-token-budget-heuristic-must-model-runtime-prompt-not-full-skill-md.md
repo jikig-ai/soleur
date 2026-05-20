@@ -1,11 +1,12 @@
 ---
+title: Token-budget heuristics must model the runtime prompt, not full SKILL.md
 date: 2026-05-11
 category: best-practices
 tags: [skill-budget, token-budget, heuristic-design, test-design, gdpr-gate]
-problem_type: test-heuristic-drift
 component: plugins/soleur/skills/gdpr-gate
-pr: 3522
 issue: 3518
+pr: 3522
+problem_type: test-heuristic-drift
 ---
 
 # Token-budget heuristics must model the runtime prompt, not full SKILL.md

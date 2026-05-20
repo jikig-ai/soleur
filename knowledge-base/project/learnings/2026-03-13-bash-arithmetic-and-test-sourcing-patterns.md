@@ -1,3 +1,10 @@
+---
+title: Bash Arithmetic Underscore Separators and Test-Sourcing via BASH_SOURCE Guard
+date: 2026-03-13
+category: shell-scripting
+tags: [prevention, scripts/weekly-analytics]
+---
+
 # Learning: Bash Arithmetic Underscore Separators and Test-Sourcing via BASH_SOURCE Guard
 
 ## Problem 1: Bash arithmetic rejects underscore digit separators

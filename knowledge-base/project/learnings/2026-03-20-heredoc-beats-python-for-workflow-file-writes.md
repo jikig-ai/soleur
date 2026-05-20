@@ -1,3 +1,10 @@
+---
+title: Use heredoc (not Python) to write GitHub Actions workflow files
+date: 2026-03-20
+category: engineering
+tags: [build-errors, ci]
+---
+
 # Learning: Use heredoc (not Python) to write GitHub Actions workflow files
 
 ## Problem

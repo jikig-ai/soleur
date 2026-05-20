@@ -1,3 +1,10 @@
+---
+title: Split legal basis requires cross-section consistency in all legal docs
+date: 2026-03-18
+category: legal
+tags: [legal-compliance, legal-docs]
+---
+
 # Learning: Split legal basis requires cross-section consistency in all legal docs
 
 ## Problem

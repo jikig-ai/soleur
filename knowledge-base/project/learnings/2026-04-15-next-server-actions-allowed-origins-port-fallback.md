@@ -1,9 +1,12 @@
 ---
-name: next-server-actions-allowed-origins-port-fallback
-description: Hardcoding localhost:3000 in Next Server Actions allowedOrigins breaks dev when the server falls back to 3001; derive port from the same PORT env var the server binds to.
-type: bug-fix
+title: 'Next.js Server Actions allowedOrigins must track the dev server''s bound port'
+date: 2026-04-15
 category: runtime-errors
+tags: [next, server, actions, allowed, origins, port, fallback]
 module: apps/web-platform
+description: 'Hardcoding localhost:3000 in Next Server Actions allowedOrigins breaks dev when the server falls back to 3001; derive port from the same PORT env var the server binds to.'
+name: next-server-actions-allowed-origins-port-fallback
+type: bug-fix
 ---
 
 # Learning: Next.js Server Actions allowedOrigins must track the dev server's bound port

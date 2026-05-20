@@ -1,11 +1,12 @@
 ---
+title: '`/soleur:ship` Phase 7 poll loop sat on `OPEN BEHIND` indefinitely'
 date: 2026-05-18
-related: [3947, 3984]
-related_rules:
-  - hr-when-a-workflow-concludes-with-an
-  - hr-exhaust-all-automated-options-before
-  - wg-ship-push-before-merge
 category: workflow-adherence
+tags: [ship, phase, poll, loop, silent, behind, state]
+related:
+  - 3947
+  - 3984
+related_rules: [hr-when-a-workflow-concludes-with-an, hr-exhaust-all-automated-options-before, wg-ship-push-before-merge]
 ---
 
 # `/soleur:ship` Phase 7 poll loop sat on `OPEN BEHIND` indefinitely

@@ -1,3 +1,10 @@
+---
+title: Truncate API error responses in bash scripts
+date: 2026-03-26
+category: shell-scripting
+tags: [security-issues, community/github-community.sh]
+---
+
 # Learning: Truncate API error responses in bash scripts
 
 ## Problem

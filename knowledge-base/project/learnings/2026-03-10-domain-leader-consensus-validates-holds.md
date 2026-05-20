@@ -1,3 +1,10 @@
+---
+title: Domain Leader Consensus Can Validate Strategic Holds
+date: 2026-03-10
+category: agent-design
+tags: [workflow, brainstorm, domain-leaders]
+---
+
 # Learning: Domain Leader Consensus Can Validate Strategic Holds
 
 ## Problem

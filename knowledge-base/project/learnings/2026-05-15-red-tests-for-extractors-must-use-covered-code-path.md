@@ -1,3 +1,12 @@
+---
+title: RED tests for regex-based extractors must inject the indicator on a covered code path
+date: 2026-05-15
+category: engineering
+tags:
+- engineering
+- issue-2726
+---
+
 # Learning: RED tests for regex-based extractors must inject the indicator on a covered code path
 
 ## Problem

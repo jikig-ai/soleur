@@ -1,3 +1,10 @@
+---
+title: skill description budget prevents context compaction loss
+date: 2026-03-15
+category: plugin-architecture
+tags: [performance-issues, plugin-loader]
+---
+
 # Learning: skill description budget prevents context compaction loss
 
 ## Problem

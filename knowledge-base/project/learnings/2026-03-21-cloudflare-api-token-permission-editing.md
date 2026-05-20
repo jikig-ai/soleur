@@ -1,7 +1,8 @@
 ---
+title: Cloudflare API Token Permission Editing via Playwright
+date: 2026-03-21
 category: integration-issues
 tags: [cloudflare, api-token, playwright, terraform, permissions]
-date: 2026-03-21
 module: apps/web-platform/infra
 problem_type: authentication-error
 ---

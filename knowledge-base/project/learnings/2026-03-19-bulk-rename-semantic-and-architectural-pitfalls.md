@@ -1,3 +1,10 @@
+---
+title: Bulk Rename Semantic and Architectural Pitfalls
+date: 2026-03-19
+category: engineering
+tags: [process-errors, documentation, legal-documents, agents]
+---
+
 # Learning: Bulk Rename Semantic and Architectural Pitfalls
 
 ## Problem

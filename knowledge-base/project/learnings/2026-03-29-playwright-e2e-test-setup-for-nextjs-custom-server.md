@@ -1,3 +1,10 @@
+---
+title: Playwright E2E Test Setup for Next.js Custom Server
+date: 2026-03-29
+category: engineering
+tags: [test-infrastructure, apps/web-platform]
+---
+
 # Learning: Playwright E2E Test Setup for Next.js Custom Server
 
 ## Problem

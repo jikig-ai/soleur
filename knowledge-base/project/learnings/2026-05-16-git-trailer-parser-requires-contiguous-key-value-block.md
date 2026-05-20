@@ -1,21 +1,17 @@
 ---
-module: System
+title: 'Git trailer parser requires a contiguous `Token: value` block at the end of the commit message'
 date: 2026-05-16
-problem_type: best_practice
-component: development_workflow
-symptoms:
-  - "`Allowlist-Widened-By:` trailer present in commit body but `git interpret-trailers --parse` returns empty"
-  - "`apps/web-platform/scripts/allowlist-diff.sh` ack mechanism reads `git log --format='%(trailers:key=Allowlist-Widened-By,valueonly)'` and sees nothing despite the line being in the commit message"
-  - "Co-Authored-By renders correctly but a sibling trailer added above it silently drops"
-root_cause: inadequate_documentation
-resolution_type: workflow_improvement
-severity: low
+category: workflow-patterns
 tags: [git, trailers, commit-message, allowlist-diff, ci-gate]
+symptoms: [`Allowlist-Widened-By:` trailer present in commit body but `git interpret-trailers --parse` returns empty, `apps/web-platform/scripts/allowlist-diff.sh` ack mechanism reads `git log --format='%(trailers:key=Allowlist-Widened-By,valueonly)'` and sees nothing despite the line being in the commit message, Co-Authored-By renders correctly but a sibling trailer added above it silently drops]
+module: System
 synced_to: [work]
-related:
-  - https://github.com/jikig-ai/soleur/pull/3886
-  - https://github.com/jikig-ai/soleur/issues/3877
-  - https://github.com/jikig-ai/soleur/pull/3875
+component: development_workflow
+problem_type: best_practice
+related: [https://github.com/jikig-ai/soleur/pull/3886, https://github.com/jikig-ai/soleur/issues/3877, https://github.com/jikig-ai/soleur/pull/3875]
+resolution_type: workflow_improvement
+root_cause: inadequate_documentation
+severity: low
 ---
 
 # Git trailer parser requires a contiguous `Token: value` block at the end of the commit message

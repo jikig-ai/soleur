@@ -1,10 +1,11 @@
 ---
+title: Retirement-cleanup plans must verify the full retired/fabricated class in edited files, not just the named target ID
 date: 2026-05-09
 category: best-practices
 tags: [plan-skill, deepen-plan-skill, agents-md, rule-ids, multi-agent-review, verification-grep-scope]
-issue: "#3489"
-pr: "#3491"
 synced_to: [plan]
+issue: '#3489'
+pr: '#3491'
 ---
 
 # Learning: Retirement-cleanup plans must verify the full retired/fabricated class in edited files, not just the named target ID

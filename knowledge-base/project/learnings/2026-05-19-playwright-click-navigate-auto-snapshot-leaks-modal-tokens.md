@@ -1,3 +1,10 @@
+---
+title: '2026-05-19 — `browser_click`/`browser_navigate` auto-snapshot leaks modal-displayed vendor tokens'
+date: 2026-05-19
+category: security
+tags: [playwright, click, navigate, auto, snapshot, leaks, modal, tokens]
+---
+
 # 2026-05-19 — `browser_click`/`browser_navigate` auto-snapshot leaks modal-displayed vendor tokens
 
 **Reach:** All Playwright-MCP-driven vendor token mints where the credential

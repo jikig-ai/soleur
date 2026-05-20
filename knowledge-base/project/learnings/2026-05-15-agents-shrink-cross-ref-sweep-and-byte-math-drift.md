@@ -1,9 +1,10 @@
 ---
+title: 'AGENTS.md rule retirement requires `/work`-time cross-reference sweep (not just plan-time)'
 date: 2026-05-15
 category: best-practices
-issue: "#3833"
-pr: "#3837"
 tags: [agents-md, rule-retirement, cross-reference-sweep, byte-budget, workflow]
+issue: '#3833'
+pr: '#3837'
 ---
 
 # Learning: AGENTS.md rule retirement requires `/work`-time cross-reference sweep (not just plan-time)

@@ -1,17 +1,31 @@
 ---
-module: cc-soleur-go (Concierge router)
+title: cc-concierge PDF summary cascade — durable structural fix
 date: 2026-05-06
-problem_type: integration_issue
+category: engineering
+tags: [pdf, sdk-tooling, prompt-engineering, agent-native, prompt-injection]
+symptoms: [Concierge replies 'environment is missing poppler-utils' on KB PDF chat, Approve/Deny modal pops with `find . -name "*.pdf"` for end users, Five prior prompt-only fixes (#3253, #3263, #3278, #3287/#3288, #3294) reduced but never eliminated the cascade]
+module: cc-soleur-go (Concierge router)
 component: server-prompt-builder + sdk-toolset-config
-symptoms:
-  - "Concierge replies 'environment is missing poppler-utils' on KB PDF chat"
-  - "Approve/Deny modal pops with `find . -name \"*.pdf\"` for end users"
-  - "Five prior prompt-only fixes (#3253, #3263, #3278, #3287/#3288, #3294) reduced but never eliminated the cascade"
+problem_type: integration_issue
+related_issues:
+  - 3346
+  - 3342
+  - 3343
+  - 3344
+  - 3345
+  - 3332
+  - 3243
+related_prs:
+  - 3253
+  - 3263
+  - 3278
+  - 3287
+  - 3288
+  - 3294
+  - 3326
+  - 3338
 root_cause: prompt_only_mitigation_plateau + sdk_semantics_misread
 severity: critical
-tags: [pdf, sdk-tooling, prompt-engineering, agent-native, prompt-injection]
-related_prs: [3253, 3263, 3278, 3287, 3288, 3294, 3326, 3338]
-related_issues: [3346, 3342, 3343, 3344, 3345, 3332, 3243]
 ---
 
 # Learning: cc-concierge PDF summary cascade — durable structural fix

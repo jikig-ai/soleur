@@ -1,10 +1,12 @@
 ---
+title: Replacing a zone-wide Cloudflare toggle with a path-aware ruleset must cover every host the toggle previously covered
 date: 2026-05-18
-problem_type: security_issue
-component: cloudflare_ruleset
-severity: high
+category: engineering
 tags: [cloudflare, ruleset, https-upgrade, hsts, subdomain-coverage, multi-agent-review, infra]
 synced_to: []
+component: cloudflare_ruleset
+problem_type: security_issue
+severity: high
 ---
 
 # Replacing a zone-wide Cloudflare toggle with a path-aware ruleset must cover every host the toggle previously covered

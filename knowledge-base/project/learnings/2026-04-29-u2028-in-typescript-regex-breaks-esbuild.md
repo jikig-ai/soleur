@@ -1,8 +1,9 @@
 ---
+title: U+2028/U+2029 literal characters in TypeScript source break esbuild
 date: 2026-04-29
 category: build-errors
-module: apps/web-platform
 tags: [esbuild, typescript, unicode, regex, vitest]
+module: apps/web-platform
 related_pr: 3020
 ---
 

@@ -1,3 +1,10 @@
+---
+title: worktree-manager.sh require_working_tree() false-positive in bare repo worktrees
+date: 2026-03-18
+category: workflow-patterns
+tags: [runtime-errors, worktree-manager]
+---
+
 # Learning: worktree-manager.sh require_working_tree() false-positive in bare repo worktrees
 
 ## Problem

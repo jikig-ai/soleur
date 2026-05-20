@@ -1,16 +1,16 @@
 ---
-module: web-platform/ws-handler
+title: WebSocket session race condition on concurrent start_session
 date: 2026-03-27
-problem_type: runtime_error
-component: authentication
-symptoms:
-  - "Messages from old conversation interleave with new conversation in client UI"
-  - "Two agent sessions run concurrently for the same user after rapid start_session"
-root_cause: async_timing
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [race-condition, websocket, abort-controller, session-management, fire-and-forget]
+symptoms: [Messages from old conversation interleave with new conversation in client UI, Two agent sessions run concurrently for the same user after rapid start_session]
+module: web-platform/ws-handler
 synced_to: []
+component: authentication
+problem_type: runtime_error
+resolution_type: code_fix
+root_cause: async_timing
+severity: high
 ---
 
 # Troubleshooting: WebSocket session race condition on concurrent start_session

@@ -1,11 +1,11 @@
 ---
-title: AskUserQuestion caps `options` at 4 and auto-appends "Other"
+title: 'AskUserQuestion caps `options` at 4 and auto-appends "Other"'
 date: 2026-05-04
 category: integration-issues
+tags: [askuserquestion, option, cap]
 component: brainstorm-skill
-related_skills:
-  - plugins/soleur/skills/brainstorm/SKILL.md
 related_session: feat-harness-eval-stale-rules
+related_skills: [plugins/soleur/skills/brainstorm/SKILL.md]
 ---
 
 # AskUserQuestion caps `options` at 4 and auto-appends "Other"

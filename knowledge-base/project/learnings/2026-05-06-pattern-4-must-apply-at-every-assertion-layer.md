@@ -1,3 +1,10 @@
+---
+title: Pattern 4 (data-testid scoping) must apply at every assertion layer, not just the outermost
+date: 2026-05-06
+category: engineering
+tags: [best-practices, testing, 2026-04-18-test-mock-factory-drift-guard-and-jsdom-layout-traps.md pattern 4 origin, multi-agent review test-design-reviewer, 3339]
+---
+
 # Learning: Pattern 4 (data-testid scoping) must apply at every assertion layer, not just the outermost
 
 ## Problem

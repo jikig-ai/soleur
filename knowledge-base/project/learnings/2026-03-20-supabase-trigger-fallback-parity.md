@@ -1,3 +1,10 @@
+---
+title: Supabase trigger and application fallback must use identical conditional logic
+date: 2026-03-20
+category: engineering
+tags: [logic-errors, web-platform/auth, trigger-fallback-parity, high, supabase, database-trigger, fallback-insert, tc-acceptance, gdpr, upsert, race-condition, conditional-parity]
+---
+
 # Learning: Supabase trigger and application fallback must use identical conditional logic
 
 ## Problem

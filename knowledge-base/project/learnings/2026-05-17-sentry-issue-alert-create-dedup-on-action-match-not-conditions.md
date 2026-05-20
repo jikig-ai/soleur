@@ -1,16 +1,10 @@
 ---
+title: Sentry POST /rules/ dedup keys on action-shape + filter_match + action_match, not on conditions_v2
 date: 2026-05-17
+category: engineering
+tags: [sentry, terraform, branch-c, dedup-quirk]
 classification: bug-fixes
-sources:
-  - "PR-β #3945 §11 partial-apply on 2026-05-17"
-  - "ADR-031 §Per-app root"
-  - "apps/web-platform/infra/sentry/issue-alerts.tf"
-tags:
-  - sentry
-  - terraform
-  - branch-c
-  - dedup-quirk
-title: "Sentry POST /rules/ dedup keys on action-shape + filter_match + action_match, not on conditions_v2"
+sources: [PR-β #3945 §11 partial-apply on 2026-05-17, ADR-031 §Per-app root, apps/web-platform/infra/sentry/issue-alerts.tf]
 ---
 
 # Sentry POST `/api/0/projects/{org}/{project}/rules/` dedup keys on action-shape, not on conditions_v2

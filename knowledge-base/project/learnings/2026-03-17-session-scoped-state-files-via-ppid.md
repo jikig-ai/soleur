@@ -1,3 +1,10 @@
+---
+title: Session-scoped state files via PPID for parallel session isolation
+date: 2026-03-17
+category: engineering
+tags: [runtime-errors, ralph-loop, 650]
+---
+
 # Learning: Session-scoped state files via PPID for parallel session isolation
 
 ## Problem

@@ -1,12 +1,14 @@
 ---
-name: Vacuous RED via shared-fixture-across-early-exit, security-hook substring traps, toolchain pinning
-description: Three independent traps from the same session — RED tests that share fixture identity across an early-exit boundary pass without the SUT firing; PreToolUse security hooks substring-match an `e x e c (` token regardless of whether it is the Node child-process API or the RegExp instance method; `bunx <pkg>` (no version pin) drifts past the project-pinned version
-type: best-practices
+title: Vacuous RED via shared-fixture, security-hook substring traps, toolchain pinning
 date: 2026-05-04
-related_pr: 3127
-related_issue: null
-related_sentry: 1e549c800f33479c9c6330cf6e91bce7
+category: engineering
 tags: [tdd, red-verification, security-hooks, toolchain-pinning, vitest, bunx]
+description: 'Three independent traps from the same session — RED tests that share fixture identity across an early-exit boundary pass without the SUT firing; PreToolUse security hooks substring-match an `e x e c (` token regardless of whether it is the Node child-process API or the RegExp instance method; `bunx <pkg>` (no version pin) drifts past the project-pinned version'
+name: Vacuous RED via shared-fixture-across-early-exit, security-hook substring traps, toolchain pinning
+related_issue: None
+related_pr: 3127
+related_sentry: 1e549c800f33479c9c6330cf6e91bce7
+type: best-practices
 ---
 
 # Vacuous RED via shared-fixture, security-hook substring traps, toolchain pinning

@@ -1,9 +1,10 @@
 ---
+title: Content cadence gap from campaign expiry and Cloud task migration
+date: 2026-04-03
 category: workflow-issues
+tags: [content-publishing, cadence, cloud-migration, campaign-calendar, scheduled-tasks, content-strategy]
 module: marketing-content-pipeline
 severity: medium
-tags: [content-publishing, cadence, cloud-migration, campaign-calendar, scheduled-tasks, content-strategy]
-date: 2026-04-03
 ---
 
 # Learning: Content cadence gap from campaign expiry and Cloud task migration

@@ -1,3 +1,10 @@
+---
+title: Checksum verification and version pinning for binary downloads
+date: 2026-03-20
+category: engineering
+tags: [security, feature-video]
+---
+
 # Learning: Checksum verification and version pinning for binary downloads
 
 ## Problem

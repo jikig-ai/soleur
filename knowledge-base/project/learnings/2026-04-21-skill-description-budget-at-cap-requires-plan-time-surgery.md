@@ -1,12 +1,9 @@
 ---
-category: best-practices
-module: plan-skill
+title: Skill description budget at 1800/1800 means new-skill plans need surgery built-in
 date: 2026-04-21
-tags:
-  - token-budget
-  - skill-descriptions
-  - plan-acceptance-criteria
-  - soleur-plugin
+category: best-practices
+tags: [token-budget, skill-descriptions, plan-acceptance-criteria, soleur-plugin]
+module: plan-skill
 ---
 
 # Learning: Skill description budget at 1800/1800 means new-skill plans need surgery built-in

@@ -1,3 +1,10 @@
+---
+title: /proc sandbox deny list fix
+date: 2026-03-29
+category: engineering
+tags: [security-issues, web-platform/agent-runner]
+---
+
 # Learning: /proc sandbox deny list fix
 
 ## Problem

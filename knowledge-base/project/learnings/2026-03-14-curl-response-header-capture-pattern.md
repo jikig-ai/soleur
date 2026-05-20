@@ -1,3 +1,10 @@
+---
+title: curl response header capture for APIs returning data in headers
+date: 2026-03-14
+category: engineering
+tags: [integration-issues, community/scripts]
+---
+
 # Learning: curl response header capture for APIs returning data in headers
 
 ## Problem

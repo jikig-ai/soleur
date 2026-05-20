@@ -1,3 +1,10 @@
+---
+title: Bare repo sync must use full-tree extraction, not a hardcoded whitelist
+date: 2026-03-20
+category: plugin-architecture
+tags: [integration-issues, git-worktree]
+---
+
 # Learning: Bare repo sync must use full-tree extraction, not a hardcoded whitelist
 
 ## Problem

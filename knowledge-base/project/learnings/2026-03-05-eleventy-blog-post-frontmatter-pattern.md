@@ -1,3 +1,10 @@
+---
+title: Eleventy blog post frontmatter and JSON-LD pattern
+date: 2026-03-05
+category: engineering
+tags: [build-errors, docs-site]
+---
+
 # Learning: Eleventy blog post frontmatter and JSON-LD pattern
 
 ## Problem

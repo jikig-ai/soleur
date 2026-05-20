@@ -1,3 +1,10 @@
+---
+title: Post-Merge Release Workflow Verification
+date: 2026-03-29
+category: ci-cd
+tags: [workflow-patterns, plugins/soleur/skills/ship]
+---
+
 # Learning: Post-Merge Release Workflow Verification
 
 ## Problem

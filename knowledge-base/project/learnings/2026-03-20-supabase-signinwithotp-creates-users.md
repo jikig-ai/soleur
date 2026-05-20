@@ -1,3 +1,10 @@
+---
+title: 'Supabase `signInWithOtp` creates new users by default, even on the login page'
+date: 2026-03-20
+category: engineering
+tags: [logic-errors, web-platform/auth]
+---
+
 # Learning: Supabase `signInWithOtp` creates new users by default, even on the login page
 
 ## Problem

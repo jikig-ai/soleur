@@ -1,3 +1,10 @@
+---
+title: pre-load prospect facts into domain-leader prompts in prospect-anchored brainstorms
+date: 2026-04-27
+category: engineering
+tags: [best-practices, brainstorm-skill, brainstorm phase 0.5, domain-leader prompts, prospect-anchored features]
+---
+
 # Learning: pre-load prospect facts into domain-leader prompts in prospect-anchored brainstorms
 
 ## Problem

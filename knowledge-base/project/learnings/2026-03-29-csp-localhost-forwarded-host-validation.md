@@ -1,3 +1,10 @@
+---
+title: CSP appHost resolution and x-forwarded-host validation in Next.js middleware
+date: 2026-03-29
+category: engineering
+tags: [security-issue, web-platform, csp, x-forwarded-host, reverse-proxy, sentry, defense-in-depth, next-js-middleware]
+---
+
 # Learning: CSP appHost resolution and x-forwarded-host validation in Next.js middleware
 
 ## Problem

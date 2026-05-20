@@ -1,3 +1,10 @@
+---
+title: Bare repo helper extraction and shell script path arithmetic
+date: 2026-03-14
+category: engineering
+tags: [shell-scripts, bare-repo-detection]
+---
+
 # Learning: Bare repo helper extraction and shell script path arithmetic
 
 ## Problem

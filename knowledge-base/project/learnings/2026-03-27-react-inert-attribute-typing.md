@@ -1,3 +1,10 @@
+---
+title: React inert attribute requires boolean, not string
+date: 2026-03-27
+category: engineering
+tags: [ui-bugs, web-platform]
+---
+
 # Learning: React inert attribute requires boolean, not string
 
 ## Problem

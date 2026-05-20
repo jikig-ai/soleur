@@ -488,21 +488,23 @@ rank_paths_min_rank() {
 }
 
 # kbsearch_rank: two-tier (INDEX.md title-match + corpus content-match) with
-# token-overlap scoring. Cap top-20 combined.
+# token-overlap scoring. Tier-1 scoped to /learnings/ paths and capped at 8;
+# tier-2 scoped to learnings-only and capped at 12. Total bounded by tier
+# caps (8+12); no outer head -20 needed. See #4119 brainstorm/spec/plan.
 kbsearch_rank() {
   local query="$1" source_path="$2" synced_paths_json="$3"
   if [[ -z "$query" ]]; then echo ""; return; fi
   local tokens tier1 tier2 combined
   tokens=$(extract_keywords "$query" 3)
   if [[ -z "$tokens" ]]; then echo ""; return; fi
-  tier1=$(rank_indexmd_by_token_overlap "$tokens")
-  tier2=$(rank_paths_by_token_overlap_corpus "$tokens" kb-wide)
-  combined=$(
-    {
-      printf '%s\n' "$tier1"
-      printf '%s\n' "$tier2"
-    } | awk 'NF && !seen[$0]++' | head -20
-  )
+  # Tier 1: INDEX.md hits anchored to knowledge-base/project/learnings/ so a
+  # future path like `sessions/learnings-retrospective/` cannot leak through.
+  tier1=$(rank_indexmd_by_token_overlap "$tokens" \
+    | awk '$0 ~ "(^|/)knowledge-base/project/learnings/"' \
+    | head -8)
+  tier2=$(rank_paths_by_token_overlap_corpus "$tokens" learnings-only | head -12)
+  combined=$({ printf '%s\n' "$tier1"; printf '%s\n' "$tier2"; } \
+    | awk 'NF && !seen[$0]++')
   rank_paths_min_rank "$combined" "$source_path" "$synced_paths_json"
 }
 
@@ -624,6 +626,48 @@ st_write() {
   local path="$1"; shift
   mkdir -p "$(dirname "$path")"
   printf '%s\n' "$@" > "$path"
+}
+
+# self_test_flooding_pathology: synthesized regression test for the cap-20
+# displacement bug that motivated #4119. 30 non-learning "session state"
+# entries flood INDEX.md tier-1 for the keyword "schema drift". Under the
+# pre-fix kbsearch_rank these displace the single matching learning out of
+# the cap-20. Under the fix (cap-split 8/12 + tier-1 learnings scope) the
+# target is recovered. cq-test-fixtures-synthesized-only.
+self_test_flooding_pathology() {
+  local KB_ROOT="$TMP_ROOT/kb-flood"
+  mkdir -p "$KB_ROOT/knowledge-base/project/learnings" \
+           "$KB_ROOT/knowledge-base/project/sessions"
+  st_write "$KB_ROOT/knowledge-base/project/learnings/target.md" \
+    '---' 'category: migrations' '---' '# Schema Drift Reasoning' \
+    'discussing schema drift across pinned migrations.'
+  local i
+  for i in $(seq 1 30); do
+    st_write "$KB_ROOT/knowledge-base/project/sessions/session-state-${i}.md" \
+      "# Session State Schema Drift Notes ${i}" "Session $i unrelated content."
+  done
+  {
+    echo '# Knowledge Base Index'; echo
+    for i in $(seq 1 30); do
+      echo "- [Session State Schema Drift Notes ${i}](project/sessions/session-state-${i}.md)"
+    done
+    echo '- [Schema Drift Reasoning](project/learnings/target.md)'
+  } > "$KB_ROOT/knowledge-base/INDEX.md"
+  (cd "$KB_ROOT" && git init -q && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -q -m fixture)
+  local prev_repo="$REPO_ROOT" prev_idx="$INDEX_PATH"
+  REPO_ROOT="$KB_ROOT"; INDEX_PATH="$KB_ROOT/knowledge-base/INDEX.md"
+  local rk
+  rk=$(kbsearch_rank "schema drift" "knowledge-base/project/learnings/target.md" "[]")
+  SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1))
+  if [[ -n "$rk" && "$rk" -le 8 ]]; then
+    SELF_TEST_PASS=$((SELF_TEST_PASS+1))
+    echo "  PASS: flood-pathology: kbsearch_rank finds target despite 30 noise titles (rank=$rk)"
+  else
+    SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
+    echo "  FAIL: flood-pathology: kbsearch_rank lost target (rank=${rk:-null})"
+  fi
+  REPO_ROOT="$prev_repo"; INDEX_PATH="$prev_idx"
 }
 
 self_test() {
@@ -956,6 +1000,9 @@ self_test() {
     SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1)); SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
     echo "  FAIL: cost-gate integration (rc=$rc, stderr=$(cat "$TMP_ROOT/err.log"))"
   fi
+
+  # ── Flooding-pathology regression (#4119): cap-20 displacement under noise ──
+  self_test_flooding_pathology
 
   echo
   echo "== summary: PASS=$SELF_TEST_PASS  FAIL=$SELF_TEST_FAIL  TOTAL=$SELF_TEST_TOTAL =="

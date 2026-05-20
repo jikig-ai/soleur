@@ -1,10 +1,13 @@
 ---
+title: 'Drift-guard scoping — extract the call site, don''t widen the walk'
 date: 2026-05-11
 category: best-practices
-module: testing-drift-guards
 tags: [drift-guard, sentry-tag-coverage, scoping, refactor, multi-agent-review]
-related-prs: [3576]
-related-issues: [3039]
+module: testing-drift-guards
+related-issues:
+  - 3039
+related-prs:
+  - 3576
 ---
 
 # Learning: Drift-guard scoping — extract the call site, don't widen the walk

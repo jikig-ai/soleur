@@ -1,12 +1,12 @@
 ---
+title: Classifier prose-table row ordering matters semantically when rows share keywords
 date: 2026-05-15
 category: best-practices
-module: commands, classifiers, plan-skill, brainstorm-domain-config
 tags: [classifier-prose-table, row-ordering, semantic-routing, brand-survival, single-user-incident, user-impact-reviewer-catch]
-related-pr: "#3780"
-related-issues: ["#3785"]
-related-learnings:
-  - knowledge-base/project/learnings/2026-05-15-five-agent-plan-review-revision-pass-brand-survival-plan.md
+module: commands, classifiers, plan-skill, brainstorm-domain-config
+related-issues: [#3785]
+related-learnings: [knowledge-base/project/learnings/2026-05-15-five-agent-plan-review-revision-pass-brand-survival-plan.md]
+related-pr: '#3780'
 ---
 
 # Learning: Classifier prose-table row ordering matters semantically when rows share keywords

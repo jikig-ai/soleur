@@ -1,21 +1,20 @@
 ---
-module: Supabase Migrations
+title: WORM trigger silently blocks pg_cron retention sweep when bypass is role-gated
 date: 2026-05-15
-problem_type: security_issue
-component: rails_model
-symptoms:
-  - "pg_cron retention sweep DELETE silently rejected with P0001 on every fire"
-  - "Audit-trail rows accumulate past their documented retention envelope"
-  - "Art. 5(1)(e) storage-limitation non-compliance with no visible failure signal"
-root_cause: missing_validation
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [worm-trigger, pg-cron, retention, security-definer, gdpr, art-5, supabase, defense-in-depth]
-related_issues: [3744, 3777]
-related_files:
-  - "apps/web-platform/supabase/migrations/043_tenant_deploy_audit.sql"
-  - "apps/web-platform/supabase/migrations/041_dsar_export_jobs.sql"
+symptoms: [pg_cron retention sweep DELETE silently rejected with P0001 on every fire, Audit-trail rows accumulate past their documented retention envelope, Art. 5(1)(e) storage-limitation non-compliance with no visible failure signal]
+module: Supabase Migrations
 synced_to: []
+component: rails_model
+problem_type: security_issue
+related_files: [apps/web-platform/supabase/migrations/043_tenant_deploy_audit.sql, apps/web-platform/supabase/migrations/041_dsar_export_jobs.sql]
+related_issues:
+  - 3744
+  - 3777
+resolution_type: code_fix
+root_cause: missing_validation
+severity: high
 ---
 
 # WORM trigger silently blocks pg_cron retention sweep when bypass is role-gated

@@ -1,9 +1,12 @@
 ---
+title: '`! ` prefix leaks secrets into Claude Code conversation context'
 date: 2026-05-06
-session: PR-B agent-runtime-platform — JWT secret onboarding
+category: security
+tags: [bang, prefix, leaks, secrets, into, conversation, context]
 class: security-issue
-severity: high
 related-rule: hr-never-paste-secrets-via-bang-prefix
+session: PR-B agent-runtime-platform — JWT secret onboarding
+severity: high
 ---
 
 # `! ` prefix leaks secrets into Claude Code conversation context

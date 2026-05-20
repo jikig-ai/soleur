@@ -1,3 +1,10 @@
+---
+title: 'Parallel subagents and CSS @layer placement'
+date: 2026-03-26
+category: ui-css
+tags: [integration-issues, docs-site]
+---
+
 # Learning: Parallel subagents and CSS @layer placement
 
 ## Problem

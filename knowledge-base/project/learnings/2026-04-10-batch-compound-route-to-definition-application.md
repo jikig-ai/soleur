@@ -1,3 +1,10 @@
+---
+title: Batch Compound Route-to-Definition Application
+date: 2026-04-10
+category: engineering
+tags: [integration-issues, compound, route-to-definition]
+---
+
 # Learning: Batch Compound Route-to-Definition Application
 
 ## Problem

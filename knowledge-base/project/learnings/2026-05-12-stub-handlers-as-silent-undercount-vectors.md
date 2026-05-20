@@ -1,3 +1,10 @@
+---
+title: 'Stub event handlers ("wire in later") are silent telemetry-loss vectors'
+date: 2026-05-12
+category: engineering
+tags: [integration-issues, apps/web-platform/server/cc-dispatcher.ts, apps/web-platform/server/cost-writer.ts, apps/web-platform/supabase/migrations/041-conversation-cache-tokens.sql, apps/web-platform/supabase/migrations/042-increment-conversation-cost-v2.sql, 3392 audit-byok-use writer deferral, 3243 cc-dispatcher decomposition, 3629 phase 5 admin api reconciliation, deferred, plan 2026-05-12-fix-api-usage-tracking-undercount-plan.md]
+---
+
 # Learning: Stub event handlers ("wire in later") are silent telemetry-loss vectors
 
 ## Problem

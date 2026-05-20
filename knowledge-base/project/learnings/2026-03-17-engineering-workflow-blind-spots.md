@@ -1,3 +1,10 @@
+---
+title: Engineering workflows silently skip cross-domain gates
+date: 2026-03-17
+category: engineering
+tags: [logic-errors, workflow]
+---
+
 # Learning: Engineering workflows silently skip cross-domain gates
 
 ## Problem

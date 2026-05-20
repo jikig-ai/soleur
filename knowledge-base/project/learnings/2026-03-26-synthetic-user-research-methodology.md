@@ -1,3 +1,10 @@
+---
+title: Synthetic User Research Methodology for Pre-Validation Hypothesis Sharpening
+date: 2026-03-26
+category: engineering
+tags: [workflow-patterns, knowledge-base, product-research, brainstorm, plan, work]
+---
+
 # Learning: Synthetic User Research Methodology for Pre-Validation Hypothesis Sharpening
 
 ## Problem

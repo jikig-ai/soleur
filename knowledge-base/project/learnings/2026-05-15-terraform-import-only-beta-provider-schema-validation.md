@@ -1,20 +1,12 @@
 ---
+title: 'Beta Terraform providers validate `actions_v2 ≥ 1` at config-time even when `lifecycle.ignore_changes` would mask drift'
 date: 2026-05-15
 category: integration-issues
+tags: [terraform, sentry, jianyuan-sentry-provider, beta-provider, import-only-resources, lifecycle-ignore-changes, plan-vs-reality-drift]
 module: terraform-iac
-tags:
-  - terraform
-  - sentry
-  - jianyuan-sentry-provider
-  - beta-provider
-  - import-only-resources
-  - lifecycle-ignore-changes
-  - plan-vs-reality-drift
-related_pr: 3811
+related_learnings: [2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md, 2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md]
 related_plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
-related_learnings:
-  - 2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md
-  - 2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md
+related_pr: 3811
 ---
 
 # Beta Terraform providers validate `actions_v2 ≥ 1` at config-time even when `lifecycle.ignore_changes` would mask drift

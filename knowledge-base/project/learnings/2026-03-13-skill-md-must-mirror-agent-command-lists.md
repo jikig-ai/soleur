@@ -1,3 +1,10 @@
+---
+title: SKILL.md must mirror agent command lists
+date: 2026-03-13
+category: agent-design
+tags: [agent-prompts, community-manager]
+---
+
 # Learning: SKILL.md must mirror agent command lists
 
 ## Problem

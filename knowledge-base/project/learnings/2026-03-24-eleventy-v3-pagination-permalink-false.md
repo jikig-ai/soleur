@@ -1,3 +1,10 @@
+---
+title: 'Eleventy v3 pagination does not support `permalink: false` per item'
+date: 2026-03-24
+category: engineering
+tags: [build-errors, blog, eleventy]
+---
+
 # Learning: Eleventy v3 pagination does not support `permalink: false` per item
 
 ## Problem
