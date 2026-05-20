@@ -73,6 +73,29 @@ is strictly worse than no declaration because they generate false confidence.
 (Not applicable — this is a code-change feature with a known root cause, not a
 debugging task. No network-outage trigger pattern fires.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** 8 (citation-verification, bash-prescription validation, regex correctness, fixture grounding, AC sharpening, sharp-edge expansion, line-number verification, plan-fixture vs live-DNS sanity)
+
+### Key Improvements
+
+1. **Every cited PR/issue verified live via `gh` CLI** (#4148 MERGED, #4118 CLOSED, #4159 OPEN, #4116 CLOSED, #4117 CLOSED, #4066 MERGED, #4123 MERGED, #2887/#2903 verified, #4085 MERGED, #3488/#3010 verified — see Research Insights table).
+2. **SSOT regex byte-equality empirically confirmed** between `preflight/SKILL.md:398` and `deepen-plan/SKILL.md:348` — the only difference is leading whitespace from the markdown context. AC2's grep pattern (`grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform"`) tolerates both contexts.
+3. **Prescribed bash patterns validated empirically** — `DT_OUT=$(timeout 15s bash -c "$CMD"; printf 'RC:%d' "$?")` correctly captures rc=0/6/124 and multi-line stdout. Trailing-newline trap identified and folded into Sharp Edges.
+4. **Reject-regex pair validated empirically** — `(^|[[:space:]]|/)ssh([[:space:]]|$)` correctly rejects `ssh user@host` and `/usr/bin/ssh foo`, lets `ssh-free.md` and `xssh` through; substitution-token reject `(\$\(|\`|\<\(|\>\()` correctly catches `$(...)`, backticks, process subs.
+5. **Hostname canon confirmed** — `apps/web-platform/infra/variables.tf:88 default = "app.soleur.ai"`. `dig +short web-platform.soleur.ai` returns empty; `dig +short app.soleur.ai` returns `172.67.188.7`/`104.21.7.210`. The #4148 typo is mechanically detectable.
+6. **PR #4148 plan-as-merged available at `f2b2f959` on `main`** — fixture `04-dns-fail.md` can snapshot the Observability block directly via `git show f2b2f959:knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md`.
+7. **AC12 grep corrected** — `\b` is a word-boundary, not a space-anchor; original AC12 would have missed trailing-space `ssh ` tokens in prose. Replaced with the canonical `(^|[[:space:]])ssh([[:space:]]|$)` form mirroring Check 10's reject regex.
+8. **Phase 1 "six checks" sentence drift confirmed live** — line 61 of `preflight/SKILL.md` reads "Run these six checks ..." but the file has 9 checks today. Count-free rewrite is the cheapest fix; flagged in Files-to-Edit.
+
+### New Considerations Discovered
+
+- **Stdout always carries a trailing newline** from `bash -c`. The matcher MUST normalize before substring comparison or `expected_output: 200` will fail when stdout is `200\n`.
+- **AC2 currently returns 1 hit** on `main` (Check 6 only); after the work phase adds Check 10 it must return ≥2. This is the regression-test contract for the SSOT mirror.
+- **`grep -cF` on the SSOT pattern tolerates the 2-space indentation difference** between `preflight/SKILL.md` (top-level) and `deepen-plan/SKILL.md` (inside a markdown bullet). Verified empirically.
+- **Form B parsing reality** — confirmed PR #4148 uses prose `Expected output:` at line 179 of the merged plan; the canonical schema (template line 62) uses YAML key `expected_output:`. Both must be accepted.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec claim | Codebase reality | Plan response |
@@ -336,6 +359,12 @@ DT_STDOUT="${DT_OUT%RC:*}"
 # Log-injection guard before any echo (re-use Check 5's sanitize() pattern).
 sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
 DT_STDOUT_SAFE=$(sanitize "$DT_STDOUT")
+
+# Trailing-newline normalization. `bash -c "echo 200"` returns "200\n"; the
+# matcher must compare without the trailing newline or "200" never matches.
+# (Sanitize() above STRIPS C0 controls 0x00-0x1f INCLUDING \n, so DT_STDOUT_SAFE
+# is already newline-free — but document the dependency explicitly so a future
+# sanitize() refactor that preserves \n does not silently break matching.)
 ```
 
 The 15-second cap is a hard ceiling. Plans typically prescribe `curl --max-time
@@ -561,8 +590,13 @@ working `discoverability_test.command`).
   exists, exports the four pure functions named in Phase 3 ("Mocking
   strategy"), and is referenced from the Check 10 body as the canonical
   reference implementation.
-- [ ] **AC12.** No new `ssh ` token is present in any plan file in this PR
-  (sanity grep): `grep -rE '\bssh \b' knowledge-base/project/plans/2026-05-20-feat-preflight-discoverability-test-execution-plan.md` returns 0 matches outside fenced code blocks or this AC line.
+- [ ] **AC12.** No new `ssh ` token is present in this PR's own plan file's
+  `## Observability` block (sanity grep, mirroring Check 10's reject regex
+  exactly): `awk '/^## Observability/{flag=1; next} /^## /{flag=0} flag'
+  knowledge-base/project/plans/2026-05-20-feat-preflight-discoverability-test-execution-plan.md
+  | grep -E '(^|[[:space:]])ssh([[:space:]]|$)'` returns 0 matches. (Note:
+  `\bssh \b` is wrong — `\b` is a word-boundary, not space-anchor; the form
+  above mirrors the canonical Check 10 reject regex byte-for-byte.)
 - [ ] **AC13.** This PR's OWN plan file has a `## Observability` block whose
   `discoverability_test.command` is `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` (a non-network
   probe is acceptable since the change is a skill+test, not infra). Expected
@@ -747,3 +781,24 @@ cover the (low) trust-in-plan-file risk.
   This is acceptable — Check 10's purpose is to catch typos and dead
   endpoints, not to be a runtime SLO. Don't expand scope to "block merge
   if endpoint is intermittent."
+- **`bash -c "$CMD"` stdout always ends in `\n`.** Empirically verified:
+  `bash -c "echo 200"` returns `200\n`, not `200`. The `expected_output`
+  matcher MUST normalize trailing newlines before substring comparison,
+  or `expected_output: 200` fails when production correctly emits `200\n`.
+  Step 10.6 substring-match must be implemented as `${DT_STDOUT_SAFE%$'\n'}`
+  (or stricter trim) before the contains-check, NOT raw `$DT_STDOUT`.
+- **`grep -cF` on the SSOT pattern tolerates indentation drift** — Check 6's
+  SSOT lives at top-level (`SENSITIVE_PATH_RE='...`), Check 10's will also be
+  top-level, and the deepen-plan mirror at `deepen-plan/SKILL.md:348` is
+  indented 2 spaces (inside a markdown bullet). AC2's prescribed grep
+  pattern (`grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform"`) matches all
+  three contexts because `grep -cF` is substring-based and ignores leading
+  whitespace. Anchoring the AC's grep with `^` would break this — keep it
+  un-anchored.
+- **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches
+  `ssh ` only when whitespace is on BOTH sides AND a word-boundary fires;
+  trailing-EOF or trailing-newline `ssh ` does NOT match. Always use
+  `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject
+  form — when checking for the `ssh ` token in operator-facing prose.
+  AC12 was initially miswritten with `\b`; corrected to the canonical form
+  during deepen-pass.
