@@ -230,13 +230,13 @@ Write `knowledge-base/project/learnings/2026-05-20-doppler-write-token-bootstrap
 
 - [ ] AC6 — Bootstrap-cycle precondition guard present at the sync step.
 
-  Verify (anchored to the new step name):
+  Verify (anchored to the new step name; `-A8` catches the step body regardless of where `id:` is placed within the step mapping):
 
   ```bash
-  grep -A6 'Verify DOPPLER_TOKEN_WRITE present' .github/workflows/apply-web-platform-infra.yml | grep -E 'DOPPLER_TOKEN_WRITE_CHECK|skip_sync=true|warning'
+  grep -A8 'Verify DOPPLER_TOKEN_WRITE present' .github/workflows/apply-web-platform-infra.yml | grep -E 'DOPPLER_TOKEN_WRITE_CHECK|skip_sync=true|warning'
   ```
 
-  Expected: 3 lines (env-check variable, output assignment, warning message). And the sync step `if:` includes `steps.doppler_write_check.outputs.skip_sync != 'true'`.
+  Expected: ≥3 line matches across the three patterns (env-check variable, output assignment, warning message). And the sync step `if:` includes `steps.doppler_write_check.outputs.skip_sync != 'true'`.
 
 - [ ] AC7 — `>/dev/null 2>&1` redirect removed from the two `doppler secrets set` lines in the sync step.
 

@@ -140,6 +140,24 @@ jobs:
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
           printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
 
+      # TWO-TOKEN MODEL (post-#4195). This workflow consumes two distinct
+      # Doppler service tokens via separate GH Actions secrets:
+      #
+      #   - `secrets.DOPPLER_TOKEN`        — `prd_terraform` READ-only.
+      #                                       Used by every step that only
+      #                                       READS Doppler secrets (init,
+      #                                       plan, apply).
+      #   - `secrets.DOPPLER_TOKEN_WRITE`  — `prd_terraform` READ/WRITE.
+      #                                       Used by the post-apply sync
+      #                                       step that WRITES the
+      #                                       CI_SSH_ACCESS_TOKEN_*
+      #                                       outputs back into Doppler.
+      #
+      # New steps that need write access MUST use `DOPPLER_TOKEN_WRITE`;
+      # do NOT copy the `secrets.DOPPLER_TOKEN` line below without
+      # confirming the step only reads. The `--silent` + `add-mask`
+      # discipline in the sync step (~line 367-368) is the leak-defense
+      # for the write-scoped token.
       - name: Verify required secrets present
         env:
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
@@ -318,7 +336,20 @@ jobs:
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
+      # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
+      # `github_actions_secret.doppler_token_write`, the runner started
+      # before the secret existed — interpolation returns empty for
+      # that one run because GH Actions resolves secrets at job-start,
+      # not step-start. The warning is non-fatal; the operator re-fires
+      # the workflow once after first merge via `gh workflow run
+      # apply-web-platform-infra.yml --ref main -F reason='bootstrap'`.
+      # The local-fallback script
+      # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
+      # remains available as backup. Operator follow-through obligation
+      # is tracked separately as a `follow-through` GH issue per
+      # `wg-block-pr-ready-on-undeferred-operator-steps`.
       - name: Verify DOPPLER_TOKEN_WRITE present
+        id: doppler_write_check
         env:
           DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
         run: |
@@ -329,17 +360,6 @@ jobs:
           else
             echo "skip_sync=false" >> "$GITHUB_OUTPUT"
           fi
-        id: doppler_write_check
-        # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
-        # `github_actions_secret.doppler_token_write`, the runner started
-        # before the secret existed — interpolation returns empty for
-        # that one run because GH Actions resolves secrets at job-start,
-        # not step-start. The warning is non-fatal; the operator re-fires
-        # the workflow once after first merge via `gh workflow run
-        # apply-web-platform-infra.yml --ref main -F reason='bootstrap'`.
-        # The local-fallback script
-        # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
-        # remains available as backup.
 
       - name: Sync CF Access CI-SSH service token to Doppler
         # Reads the new sensitive outputs produced by the
