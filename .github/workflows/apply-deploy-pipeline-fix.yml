@@ -338,6 +338,11 @@ jobs:
           echo "Server-side state:"
           echo "$REMOTE_OUT"
 
+          # Basename mapping note: `deploy-inngest-bootstrap.sudoers` (source
+          # filename in apps/web-platform/infra/) installs to
+          # `/etc/sudoers.d/deploy-inngest-bootstrap` (no extension, per
+          # sudoers.d convention). Strip the `.sudoers` suffix on the local
+          # side so the basename key matches the remote install path.
           declare -A REMOTE
           while read -r hash path; do
             base=$(basename "$path")
@@ -347,6 +352,7 @@ jobs:
           MISMATCH=0
           while read -r hash path; do
             base=$(basename "$path")
+            base="${base%.sudoers}"
             r="${REMOTE[$base]:-}"
             if [[ -z "$r" ]]; then
               echo "::error::No remote hash recorded for $base"
