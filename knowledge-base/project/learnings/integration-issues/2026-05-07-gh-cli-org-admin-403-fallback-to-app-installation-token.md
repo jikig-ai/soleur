@@ -1,15 +1,15 @@
 ---
-module: github-app
+title: 'When `gh` CLI returns 403 admin-required on a Soleur-owned org, fall back to the App installation token (not manual handoff)'
 date: 2026-05-07
-problem_type: integration_issue
+category: engineering
+tags: [github-app, doppler, ops, credentials, fallback-path]
+symptoms: [gh repo create <org>/<name> returns HTTP 403: You need admin access to the organization, User PAT lacks org admin rights for an org Soleur owns or is installed on]
+module: github-app
+synced_to: []
 component: ops_runbook
-symptoms:
-  - "gh repo create <org>/<name> returns HTTP 403: You need admin access to the organization"
-  - "User PAT lacks org admin rights for an org Soleur owns or is installed on"
+problem_type: integration_issue
 root_cause: wrong_credential_class_for_org_operation
 severity: low
-tags: [github-app, doppler, ops, credentials, fallback-path]
-synced_to: []
 ---
 
 # Learning: When `gh` CLI returns 403 admin-required on a Soleur-owned org, fall back to the App installation token (not manual handoff)

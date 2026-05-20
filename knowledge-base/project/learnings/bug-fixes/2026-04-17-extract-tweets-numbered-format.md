@@ -1,10 +1,12 @@
 ---
+title: extract_tweets silently collapsed a 5-tweet thread to 1 tweet (2026-04-17)
 date: 2026-04-17
 category: bug-fixes
+tags: [extract, tweets, numbered, format]
 module: content-publisher
+pr_reference: '#2496'
 problem_type: authoring_parser_contract
 severity: P2
-pr_reference: "#2496"
 ---
 
 # extract_tweets silently collapsed a 5-tweet thread to 1 tweet (2026-04-17)

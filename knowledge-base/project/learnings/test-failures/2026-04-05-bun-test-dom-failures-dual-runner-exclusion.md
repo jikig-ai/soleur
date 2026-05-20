@@ -1,17 +1,15 @@
 ---
-module: System
+title: bun test DOM failures from cross-runner test discovery
 date: 2026-04-05
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "document is not defined at render() in @testing-library/react"
-  - "bun test from repo root: 110 failures across web-platform test files"
-  - "happy-dom GlobalRegistrator silently drops Request/Headers in native APIs"
-  - "vi.resetModules unavailable in bun vitest compat layer"
-root_cause: config_error
-resolution_type: config_change
-severity: high
+category: engineering
 tags: [bun-test, vitest, happy-dom, dual-runner, pathIgnorePatterns, test-isolation]
+symptoms: [document is not defined at render() in @testing-library/react, bun test from repo root: 110 failures across web-platform test files, happy-dom GlobalRegistrator silently drops Request/Headers in native APIs, vi.resetModules unavailable in bun vitest compat layer]
+module: System
+component: testing_framework
+problem_type: test_failure
+resolution_type: config_change
+root_cause: config_error
+severity: high
 ---
 
 # Troubleshooting: bun test DOM failures from cross-runner test discovery

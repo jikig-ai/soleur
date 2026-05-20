@@ -1,16 +1,10 @@
 ---
+title: admin-IP drift misdiagnosed as fail2ban lockout (layer-ordering failure in hypothesis generation)
 date: 2026-04-19
 category: bug-fixes
-module: ops-ssh-firewall
 tags: [ssh, firewall, hetzner, fail2ban, misdiagnosis, layer-ordering, admin-ip, workflow-gate]
-related:
-  - knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md
-  - knowledge-base/engineering/ops/runbooks/admin-ip-drift.md
-  - knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
-  - AGENTS.md#hr-ssh-diagnosis-verify-firewall
-  - PR #2655
-  - issue #2654
-  - issue #2681
+module: ops-ssh-firewall
+related: [knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md, knowledge-base/engineering/ops/runbooks/admin-ip-drift.md, knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md, AGENTS.md#hr-ssh-diagnosis-verify-firewall, PR, issue, issue]
 ---
 
 # Learning: admin-IP drift misdiagnosed as fail2ban lockout (layer-ordering failure in hypothesis generation)

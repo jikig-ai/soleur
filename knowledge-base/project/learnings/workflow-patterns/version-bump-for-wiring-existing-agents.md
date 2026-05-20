@@ -1,3 +1,10 @@
+---
+title: Version bump classification when wiring existing agents
+date: unknown
+category: ci-cd
+tags: [workflow-patterns, plugin-versioning, version-bump-uncertainty]
+---
+
 # Learning: Version bump classification when wiring existing agents
 
 ## Problem

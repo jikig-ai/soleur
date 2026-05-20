@@ -1,17 +1,15 @@
 ---
-module: System
+title: Deploy Webhook Fails Due to Docker Image Accumulation Filling Disk
 date: 2026-04-02
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Deploy webhook returns HTTP 202 but container does not restart"
-  - "Health endpoint reports old version with high uptime (container never restarted)"
-  - "Root disk 100% full: /dev/sda1 75G 75G 0 100%"
-  - "Docker layer extraction fails: no space left on device"
-root_cause: config_error
-resolution_type: code_fix
-severity: critical
+category: engineering
 tags: [docker, disk-space, deploy, webhook, prune, ci-deploy]
+symptoms: [Deploy webhook returns HTTP 202 but container does not restart, Health endpoint reports old version with high uptime (container never restarted), Root disk 100% full: /dev/sda1 75G 75G 0 100%, Docker layer extraction fails: no space left on device]
+module: System
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: config_error
+severity: critical
 ---
 
 # Troubleshooting: Deploy Webhook Fails Due to Docker Image Accumulation Filling Disk

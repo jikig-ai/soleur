@@ -1,3 +1,10 @@
+---
+title: 'GitHub App installation tokens cannot call `POST /user/repos`'
+date: 2026-05-07
+category: engineering
+tags: [github, app, user, installation, cannot, post, user, repos]
+---
+
 # Learning: GitHub App installation tokens cannot call `POST /user/repos`
 
 **Date:** 2026-05-07

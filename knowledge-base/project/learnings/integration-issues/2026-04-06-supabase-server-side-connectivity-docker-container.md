@@ -1,17 +1,15 @@
 ---
-module: Web Platform
+title: Production Supabase service client fails from Docker container
 date: 2026-04-06
-problem_type: integration_issue
-component: authentication
-symptoms:
-  - "/api/repo/install returns 403 No GitHub identity linked despite user having GitHub identity"
-  - "/api/repo/create returns 400 GitHub App not installed despite installation_id being set"
-  - "/health endpoint reports supabase: error"
-  - "auth.admin.getUserById() fails silently on server despite working from CLI"
-root_cause: config_error
-resolution_type: environment_setup
-severity: critical
+category: engineering
 tags: [supabase, docker, service-client, getUserById, custom-domain, dns, connect-repo]
+symptoms: [/api/repo/install returns 403 No GitHub identity linked despite user having GitHub identity, /api/repo/create returns 400 GitHub App not installed despite installation_id being set, /health endpoint reports supabase: error, auth.admin.getUserById() fails silently on server despite working from CLI]
+module: Web Platform
+component: authentication
+problem_type: integration_issue
+resolution_type: environment_setup
+root_cause: config_error
+severity: critical
 ---
 
 # Troubleshooting: Production Supabase service client fails from Docker container

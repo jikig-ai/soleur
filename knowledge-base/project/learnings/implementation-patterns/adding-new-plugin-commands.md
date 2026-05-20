@@ -1,13 +1,11 @@
 ---
-module: soleur
+title: Adding New Plugin Commands
 date: 2026-02-06
-problem_type: best_practice
+category: plugin-architecture
+tags: [plugin-development, command-creation, knowledge-base, versioning]
+module: soleur
 component: commands
-tags:
-  - plugin-development
-  - command-creation
-  - knowledge-base
-  - versioning
+problem_type: best_practice
 ---
 
 # Adding New Plugin Commands

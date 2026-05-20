@@ -1,15 +1,15 @@
 ---
-module: System
+title: Google OAuth Consent Screen Branding Requires Multi-Step Verification
 date: 2026-04-02
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "Google OAuth consent screen shows raw Supabase URL instead of app name"
-  - "Brand verification fails with domain not registered and missing privacy link"
-root_cause: incomplete_setup
-resolution_type: workflow_improvement
-severity: medium
+category: documentation
 tags: [oauth, google-cloud, consent-screen, dns, terraform, playwright]
+symptoms: [Google OAuth consent screen shows raw Supabase URL instead of app name, Brand verification fails with domain not registered and missing privacy link]
+module: System
+component: tooling
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: incomplete_setup
+severity: medium
 ---
 
 # Google OAuth Consent Screen Branding Requires Multi-Step Verification

@@ -1,3 +1,10 @@
+---
+title: Retry-once with early-return masks first-attempt failures
+date: 2026-04-19
+category: engineering
+tags: [test-failures, apps/web-platform/test, vitest, llm integration tests, retry-flake patterns]
+---
+
 # Retry-once with early-return masks first-attempt failures
 
 **Date:** 2026-04-19

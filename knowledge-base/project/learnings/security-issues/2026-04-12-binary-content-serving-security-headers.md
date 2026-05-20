@@ -1,17 +1,16 @@
 ---
-module: KB Content Serving
+title: Binary Content Serving Security Headers
 date: 2026-04-12
-problem_type: security_issue
-component: service_object
-symptoms:
-  - "Content-Disposition header injection via unsanitized filename from URL path"
-  - "Missing X-Content-Type-Options: nosniff allows MIME sniffing XSS"
-  - "Synchronous fs.readFileSync blocks Node.js event loop during binary serving"
-root_cause: missing_validation
-resolution_type: code_fix
-severity: high
+category: security
 tags: [content-disposition, header-injection, nosniff, xss, async-io, binary-serving]
+symptoms: [Content-Disposition header injection via unsanitized filename from URL path, Missing X-Content-Type-Options: nosniff allows MIME sniffing XSS, Synchronous fs.readFileSync blocks Node.js event loop during binary serving]
+module: KB Content Serving
 synced_to: []
+component: service_object
+problem_type: security_issue
+resolution_type: code_fix
+root_cause: missing_validation
+severity: high
 ---
 
 # Troubleshooting: Binary Content Serving Security Headers

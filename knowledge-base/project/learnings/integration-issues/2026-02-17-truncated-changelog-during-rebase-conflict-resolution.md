@@ -1,11 +1,8 @@
 ---
-title: "Truncated CHANGELOG during rebase conflict resolution"
+title: Truncated CHANGELOG during rebase conflict resolution
+date: 2026-02-17
 category: integration-issues
-tags:
-  - git-rebase
-  - merge-conflicts
-  - changelog
-  - file-truncation
+tags: [git-rebase, merge-conflicts, changelog, file-truncation]
 module: git-workflow
 created: 2026-02-17
 severity: high

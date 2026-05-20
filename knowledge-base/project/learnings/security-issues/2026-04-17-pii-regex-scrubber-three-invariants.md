@@ -1,19 +1,16 @@
 ---
-module: analytics-track
+title: PII regex scrubbers — three invariants that must hold
 date: 2026-04-17
-problem_type: security_issue
-component: api_route
-severity: high
-symptoms:
-  - "Allowlisted path prop leaks PII (email, UUID v1 MAC+timestamp, customer ID) to Plausible"
-  - "Regex on user-controlled string has unbounded input (ReDoS surface)"
-  - "/g regex + .test() pattern is latent footgun (silent PII leak on future edit)"
-root_cause: pii_scrubber_design_invariants
+category: engineering
 tags: [pii-scrubbing, regex, redos, uuid, security, plausible]
-related:
-  - 2026-04-15-multi-agent-review-catches-bugs-tests-miss
-  - 2026-04-15-negative-space-tests-must-follow-extracted-logic
+symptoms: [Allowlisted path prop leaks PII (email, UUID v1 MAC+timestamp, customer ID) to Plausible, Regex on user-controlled string has unbounded input (ReDoS surface), /g regex + .test() pattern is latent footgun (silent PII leak on future edit)]
+module: analytics-track
 synced_to: [plan]
+component: api_route
+problem_type: security_issue
+related: [2026-04-15-multi-agent-review-catches-bugs-tests-miss, 2026-04-15-negative-space-tests-must-follow-extracted-logic]
+root_cause: pii_scrubber_design_invariants
+severity: high
 ---
 
 # Learning: PII regex scrubbers — three invariants that must hold

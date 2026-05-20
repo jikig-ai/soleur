@@ -1,10 +1,11 @@
 ---
+title: 'Sentry payloads must drop `error.message`; client mirrors via `lib/client-observability` shim'
 date: 2026-04-28
 category: best-practices
-module: apps/web-platform/auth
 tags: [sentry, observability, pii, client-server-split, oauth, auth]
-related_pr: 2994
+module: apps/web-platform/auth
 related_issue: 2979
+related_pr: 2994
 ---
 
 # Sentry payloads must drop `error.message`; client mirrors via `lib/client-observability` shim

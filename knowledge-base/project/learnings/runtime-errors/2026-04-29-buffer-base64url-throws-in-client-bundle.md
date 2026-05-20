@@ -1,11 +1,10 @@
 ---
-title: Buffer.from(_, "base64url") throws in client-bundle webpack polyfill
+title: 'Buffer.from(_, "base64url") throws in client-bundle webpack polyfill'
 date: 2026-04-29
 category: runtime-errors
+tags: [buffer, base64url, throws, client, bundle]
+related_commits: [7d556531, b2fed080]
 related_pr: TBD
-related_commits:
-  - 7d556531  # PR #3007 — JWT-claims guardrails (introduced the bug)
-  - b2fed080  # PR #3014 — observability/canary fix (added Sentry mirror but not the source-level gate)
 ---
 
 # `Buffer.from(_, "base64url")` is Node-only and throws in browser bundles

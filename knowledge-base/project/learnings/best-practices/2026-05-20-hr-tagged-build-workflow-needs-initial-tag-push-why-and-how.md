@@ -1,10 +1,13 @@
 ---
+title: 'Tagged-Build Workflows Need an Initial Tag Push (companion to `hr-tagged-build-workflow-needs-initial-tag-push`)'
 date: 2026-05-20
-type: best-practice
-companion_rule: hr-tagged-build-workflow-needs-initial-tag-push
-trigger_pr: 3973
-related: [hr-all-infrastructure-provisioning-servers, hr-fresh-host-provisioning-reachable-from-terraform-apply]
+category: engineering
+tags: [hr, tagged, build, workflow, needs, initial, tag, push, why, how]
 back_link: knowledge-base/project/learnings/2026-05-18-plan-baked-in-operator-ssh-violated-iac-rule.md
+companion_rule: hr-tagged-build-workflow-needs-initial-tag-push
+related: [hr-all-infrastructure-provisioning-servers, hr-fresh-host-provisioning-reachable-from-terraform-apply]
+trigger_pr: 3973
+type: best-practice
 ---
 
 # Tagged-Build Workflows Need an Initial Tag Push (companion to `hr-tagged-build-workflow-needs-initial-tag-push`)

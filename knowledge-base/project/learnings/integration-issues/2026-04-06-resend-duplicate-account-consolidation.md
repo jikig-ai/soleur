@@ -1,17 +1,16 @@
 ---
-module: System
+title: Resend duplicate account consolidation and API key rotation
 date: 2026-04-06
-problem_type: integration_issue
-component: email_processing
-symptoms:
-  - "Resend API returns 403: This API key is suspended"
-  - "Resend API returns 403: The send.soleur.ai domain is not verified"
-  - "Disk monitor emails not delivered after terraform apply"
-root_cause: config_error
-resolution_type: config_change
-severity: high
+category: engineering
 tags: [resend, api-key, doppler, terraform, email, account-consolidation]
+symptoms: [Resend API returns 403: This API key is suspended, Resend API returns 403: The send.soleur.ai domain is not verified, Disk monitor emails not delivered after terraform apply]
+module: System
 synced_to: []
+component: email_processing
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: high
 ---
 
 # Learning: Resend duplicate account consolidation and API key rotation

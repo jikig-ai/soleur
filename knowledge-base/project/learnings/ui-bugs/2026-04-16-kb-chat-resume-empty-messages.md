@@ -1,17 +1,15 @@
 ---
-module: KB Chat
+title: useEffect dependency on prop vs state causes missed history fetch on resume
 date: 2026-04-16
-problem_type: ui_bug
-component: frontend_stimulus
-symptoms:
-  - "Resumed KB Chat sidebar shows 'Continuing from' header but chat area is empty"
-  - "'Send a message to get started' placeholder contradicts 'Continuing from' banner"
-  - "Banner dismisses immediately when history loads instead of persisting"
-  - "Resume banner date lacks time component for same-day disambiguation"
-root_cause: async_timing
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [useeffect, react-hooks, prop-vs-state, history-fetch, deduplication, kb-chat]
+symptoms: [Resumed KB Chat sidebar shows 'Continuing from' header but chat area is empty, 'Send a message to get started' placeholder contradicts 'Continuing from' banner, Banner dismisses immediately when history loads instead of persisting, Resume banner date lacks time component for same-day disambiguation]
+module: KB Chat
+component: frontend_stimulus
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: async_timing
+severity: high
 ---
 
 # Learning: useEffect dependency on prop vs state causes missed history fetch on resume

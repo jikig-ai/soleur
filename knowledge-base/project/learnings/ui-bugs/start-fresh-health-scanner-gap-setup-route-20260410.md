@@ -1,15 +1,15 @@
 ---
-module: Web Platform
+title: 'Start Fresh projects show misleading "Gaps Found" health snapshot'
 date: 2026-04-10
-problem_type: ui_bug
-component: service_object
-symptoms:
-  - "Start Fresh projects show Gaps Found screen with 6 MISSING items"
-  - "ReadyState renders health snapshot instead of simple ready screen"
-root_cause: logic_error
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [health-scanner, start-fresh, onboarding, ready-state]
+symptoms: [Start Fresh projects show Gaps Found screen with 6 MISSING items, ReadyState renders health snapshot instead of simple ready screen]
+module: Web Platform
+component: service_object
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: logic_error
+severity: medium
 ---
 
 # Troubleshooting: Start Fresh projects show misleading "Gaps Found" health snapshot

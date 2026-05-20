@@ -1,18 +1,18 @@
 ---
+title: Branded TypeScript IDs belong at internal API boundaries, not wire-protocol types
 date: 2026-04-27
+category: documentation
+tags: [typescript, branded-types, wire-protocol, zod, websocket]
+symptoms: [51 TS errors after adding branded IDs to WSMessage discriminated union, string literals like 'p-1' fail assignment to PromptId / ConversationId / SpawnId, Producer code (soleur-go-runner.ts) and test fixtures hit cross-confusion friction]
 module: apps/web-platform
-problem_type: design_decision
+synced_to: []
 component: typescript_types
-symptoms:
-  - "51 TS errors after adding branded IDs to WSMessage discriminated union"
-  - "string literals like 'p-1' fail assignment to PromptId / ConversationId / SpawnId"
-  - "Producer code (soleur-go-runner.ts) and test fixtures hit cross-confusion friction"
+problem_type: design_decision
+related_issues:
+  - 2885
+related_pr: 2902
 root_cause: brand_at_wrong_boundary
 severity: high
-tags: [typescript, branded-types, wire-protocol, zod, websocket]
-synced_to: []
-related_pr: 2902
-related_issues: [2885]
 ---
 
 # Branded TypeScript IDs belong at internal API boundaries, not wire-protocol types

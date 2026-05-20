@@ -1,9 +1,14 @@
 ---
+title: Vitest cross-file leaks and module-scope stubs
+date: 2026-04-22
 category: test-failures
-module: apps/web-platform
 tags: [vitest, happy-dom, test-isolation, parallel-tests, setup-files]
-related_prs: [2819]
-closes_issues: [2594, 2505]
+module: apps/web-platform
+closes_issues:
+  - 2594
+  - 2505
+related_prs:
+  - 2819
 ---
 
 # Vitest cross-file leaks and module-scope stubs

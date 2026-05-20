@@ -1,16 +1,15 @@
 ---
-module: Release Workflow
+title: 'vinngest-v* bootstrap tag silently blocks every plugin release'
 date: 2026-05-19
-problem_type: build_error
-component: tooling
-symptoms:
-  - "Every plugin release silently blocked; no `vX.Y.Z+1` tag minted on merge to main"
-  - "CI log: `Latest tag: vinngest-v1.0.0 (version: inngest-v1.0.0)` followed by `##[error]Invalid version components: MAJOR=inngest-v1 MINOR=0 PATCH=0 (from inngest-v1.0.0)`"
-  - "`git tag --list 'v*' --sort=-version:refname | head -1` returns `vinngest-v1.0.0` instead of the plugin's `v3.101.5`"
-root_cause: config_error
-resolution_type: workflow_improvement
-severity: high
+category: ci-cd
 tags: [ci, github-actions, semver, tag-filter, regex, release-pipeline, namespace-collision]
+symptoms: [Every plugin release silently blocked; no `vX.Y.Z+1` tag minted on merge to main, CI log: `Latest tag: vinngest-v1.0.0 (version: inngest-v1.0.0)` followed by `##[error]Invalid version components: MAJOR=inngest-v1 MINOR=0 PATCH=0 (from inngest-v1.0.0)`, `git tag --list 'v*' --sort=-version:refname | head -1` returns `vinngest-v1.0.0` instead of the plugin's `v3.101.5`]
+module: Release Workflow
+component: tooling
+problem_type: build_error
+resolution_type: workflow_improvement
+root_cause: config_error
+severity: high
 ---
 
 # vinngest-v* bootstrap tag silently blocks every plugin release

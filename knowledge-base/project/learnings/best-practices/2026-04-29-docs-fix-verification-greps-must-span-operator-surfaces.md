@@ -1,10 +1,12 @@
 ---
+title: 'docs-fix verification greps must span all operator-facing surfaces, not just the named file''s directory'
 date: 2026-04-29
+category: shell-scripting
 tags: [docs-fix, verification-grep, plan-acs, multi-agent-review, gh-secret-set]
-status: solved
 issue: 2993
 pr: 3059
 predecessor: 2975
+status: solved
 ---
 
 # docs-fix verification greps must span all operator-facing surfaces, not just the named file's directory

@@ -1,3 +1,10 @@
+---
+title: '2026-05-15 — kb-chat-sidebar + chat-page flake recurrence (#3818)'
+date: 2026-05-15
+category: engineering
+tags: [kb, chat, sidebar, chat, page, flake, recurrence]
+---
+
 # 2026-05-15 — kb-chat-sidebar + chat-page flake recurrence (#3818)
 
 ## Problem

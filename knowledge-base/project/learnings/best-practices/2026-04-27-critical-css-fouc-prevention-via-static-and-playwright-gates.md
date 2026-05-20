@@ -1,23 +1,15 @@
 ---
-module: docs-site
+title: Critical-CSS FOUC prevention via static + Playwright gates
 date: 2026-04-27
-problem_type: integration_issue
+category: ui-css
+tags: [critical-css, fouc, eleventy, playwright, workflow-gate, prevention-infrastructure]
+symptoms: [Production /pricing/ rendered a visible white honeypot rectangle next to the gold Join the Waitlist button, .page-hero h1 'Every department.' / 'One price.' collapsed without margin during the async stylesheet swap window, /blog/ index H1 hidden behind the fixed .site-header (no .page-hero margin-top: var(--header-h)), Symptom class shipped twice within 8 hours of PR #2904 — first iteration fixed only the multi-agent reviewer's surface findings (.nav-cta-slot), missed the underlying gap]
+module: docs-site
+synced_to: []
 component: eleventy_critical_css
-symptoms:
-  - "Production /pricing/ rendered a visible white honeypot rectangle next to the gold Join the Waitlist button"
-  - ".page-hero h1 'Every department.' / 'One price.' collapsed without margin during the async stylesheet swap window"
-  - "/blog/ index H1 hidden behind the fixed .site-header (no .page-hero margin-top: var(--header-h))"
-  - "Symptom class shipped twice within 8 hours of PR #2904 — first iteration fixed only the multi-agent reviewer's surface findings (.nav-cta-slot), missed the underlying gap"
+problem_type: integration_issue
 root_cause: hand_extracted_critical_css_subset_only_covered_homepage_and_blog_post_selectors
 severity: critical
-tags:
-  - critical-css
-  - fouc
-  - eleventy
-  - playwright
-  - workflow-gate
-  - prevention-infrastructure
-synced_to: []
 ---
 
 # Critical-CSS FOUC prevention via static + Playwright gates

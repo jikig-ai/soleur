@@ -1,15 +1,15 @@
 ---
-module: Plugin Hooks
+title: Plugin welcome hook creates files in every project
 date: 2026-04-02
-problem_type: developer_experience
-component: tooling
-symptoms:
-  - ".claude/soleur-welcomed.local created in every project"
-  - ".claude/ directory pollutes non-Soleur repositories"
-root_cause: scope_issue
-resolution_type: code_fix
-severity: medium
+category: plugin-architecture
 tags: [plugin-hooks, scope-guard, welcome-hook, session-start]
+symptoms: [.claude/soleur-welcomed.local created in every project, .claude/ directory pollutes non-Soleur repositories]
+module: Plugin Hooks
+component: tooling
+problem_type: developer_experience
+resolution_type: code_fix
+root_cause: scope_issue
+severity: medium
 ---
 
 # Troubleshooting: Plugin welcome hook creates files in every project

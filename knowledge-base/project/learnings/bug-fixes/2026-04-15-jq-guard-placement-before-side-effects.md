@@ -1,13 +1,10 @@
 ---
+title: jq -e guard placement must precede side effects, not just jq -r
 date: 2026-04-15
 category: bug-fixes
-module: ci-workflows
 tags: [github-actions, jq, bash, workflow-safety, retroactive-sweep]
-related:
-  - knowledge-base/project/learnings/bug-fixes/2026-04-15-signed-get-verify-step-tolerate-non-json-bodies.md
-  - AGENTS.md#cq-ci-steps-polling-json-endpoints-under
-  - PR #2283
-  - issue #2236
+module: ci-workflows
+related: [knowledge-base/project/learnings/bug-fixes/2026-04-15-signed-get-verify-step-tolerate-non-json-bodies.md, AGENTS.md#cq-ci-steps-polling-json-endpoints-under, PR, issue]
 ---
 
 # Learning: jq -e guard placement must precede side effects, not just jq -r

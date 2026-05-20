@@ -1,15 +1,15 @@
 ---
-module: System
+title: 'Lift duplicated shell wrappers into route-group `layout.tsx`'
 date: 2026-04-15
-problem_type: best_practice
-component: rails_view
-symptoms:
-  - "One sibling page missing shared shell wrapper that others had"
-  - "Implicit layout contract violated via duplicated wrapper classes causing double-wrap regression"
-root_cause: missing_workflow_step
-resolution_type: code_fix
-severity: low
+category: shell-scripting
 tags: [nextjs, app-router, layout, route-group, settings-shell, ui-pattern]
+symptoms: [One sibling page missing shared shell wrapper that others had, Implicit layout contract violated via duplicated wrapper classes causing double-wrap regression]
+module: System
+component: rails_view
+problem_type: best_practice
+resolution_type: code_fix
+root_cause: missing_workflow_step
+severity: low
 ---
 
 # Lift duplicated shell wrappers into route-group `layout.tsx`

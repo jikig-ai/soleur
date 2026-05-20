@@ -1,15 +1,15 @@
 ---
-module: Web Platform
+title: Lazy Regex Quantifiers Match Prematurely at TypeScript Type Annotation Semicolons
 date: 2026-04-02
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "Structural test with lazy regex passed when it should have failed (RED phase)"
-  - "Regex /const githubLogin[\\s\\S]*?;/ matched at semicolons inside TypeScript type annotations instead of the assignment terminator"
-root_cause: logic_error
-resolution_type: test_fix
-severity: medium
+category: engineering
 tags: [regex, structural-test, typescript, tdd, lazy-quantifier]
+symptoms: [Structural test with lazy regex passed when it should have failed (RED phase), Regex /const githubLogin[\s\S]*?;/ matched at semicolons inside TypeScript type annotations instead of the assignment terminator]
+module: Web Platform
+component: testing_framework
+problem_type: test_failure
+resolution_type: test_fix
+root_cause: logic_error
+severity: medium
 ---
 
 # Troubleshooting: Lazy Regex Quantifiers Match Prematurely at TypeScript Type Annotation Semicolons

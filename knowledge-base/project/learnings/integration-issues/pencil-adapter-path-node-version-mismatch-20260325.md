@@ -1,16 +1,15 @@
 ---
-module: pencil-setup
+title: Pencil MCP Adapter Spawns Pencil with Wrong Node Version
 date: 2026-03-25
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Pencil MCP tools time out with 'Timed out waiting for prompt after 30000ms'"
-  - "pencil CLI crashes with ERR_REQUIRE_ESM when spawned by adapter"
-  - "Adapter shows Connected in claude mcp list but all tool calls fail"
-root_cause: config_error
-resolution_type: code_fix
-severity: high
+category: infrastructure
 tags: [pencil, mcp-adapter, node-version, path, env, child-process]
+symptoms: [Pencil MCP tools time out with 'Timed out waiting for prompt after 30000ms', pencil CLI crashes with ERR_REQUIRE_ESM when spawned by adapter, Adapter shows Connected in claude mcp list but all tool calls fail]
+module: pencil-setup
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: config_error
+severity: high
 ---
 
 # Troubleshooting: Pencil MCP Adapter Spawns Pencil with Wrong Node Version

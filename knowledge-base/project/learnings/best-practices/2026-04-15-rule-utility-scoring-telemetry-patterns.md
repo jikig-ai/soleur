@@ -1,17 +1,16 @@
 ---
-module: System
+title: Rule Utility Scoring — Telemetry Patterns
 date: 2026-04-15
-problem_type: best_practice
-component: tooling
-symptoms:
-  - "AGENTS.md rules grew without signal about which earn their keep"
-  - "Raw rule counts alone desensitize users to prune decisions"
-  - "Hook denies were invisible — no way to count which guardrails actually fire"
-root_cause: missing_tooling
-resolution_type: tooling_addition
-severity: medium
+category: engineering
 tags: [rule-utility, telemetry, flock, jsonl, aggregator, hooks, compound, agents-md]
+symptoms: [AGENTS.md rules grew without signal about which earn their keep, Raw rule counts alone desensitize users to prune decisions, Hook denies were invisible — no way to count which guardrails actually fire]
+module: System
 synced_to: [plan, issue#2266]
+component: tooling
+problem_type: best_practice
+resolution_type: tooling_addition
+root_cause: missing_tooling
+severity: medium
 ---
 
 # Rule Utility Scoring — Telemetry Patterns

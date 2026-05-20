@@ -1,15 +1,15 @@
 ---
-module: System
+title: Supabase Custom Domain Setup for Branded OAuth Callbacks
 date: 2026-04-03
-problem_type: integration_issue
-component: authentication
-symptoms:
-  - "GitHub OAuth consent screen shows raw Supabase URL (<PRD_REF>.supabase.co) as redirect destination"
-  - "Exposes internal infrastructure URL to users during sign-in"
-root_cause: config_error
-resolution_type: config_change
-severity: medium
+category: documentation
 tags: [supabase, custom-domain, oauth, github, google, dns, terraform, branding]
+symptoms: [GitHub OAuth consent screen shows raw Supabase URL (<PRD_REF>.supabase.co) as redirect destination, Exposes internal infrastructure URL to users during sign-in]
+module: System
+component: authentication
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: medium
 ---
 
 # Learning: Supabase Custom Domain Setup for Branded OAuth Callbacks

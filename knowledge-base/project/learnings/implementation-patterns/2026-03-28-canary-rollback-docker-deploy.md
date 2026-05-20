@@ -1,14 +1,14 @@
 ---
-module: web-platform/infra
+title: Canary Rollback for Docker Deploys Without Kubernetes
 date: 2026-03-28
-problem_type: deployment_issue
+category: engineering
+tags: [canary, rollback, docker, deploy, zero-downtime]
+symptoms: [Failed deploys cause downtime because old container is killed before new one is verified, 40% deploy failure rate (8/20 runs)]
+module: web-platform/infra
 component: ci_deploy
-symptoms:
-  - "Failed deploys cause downtime because old container is killed before new one is verified"
-  - "40% deploy failure rate (8/20 runs)"
+problem_type: deployment_issue
 root_cause: hard_stop_gap
 severity: high
-tags: [canary, rollback, docker, deploy, zero-downtime]
 ---
 
 # Learning: Canary Rollback for Docker Deploys Without Kubernetes

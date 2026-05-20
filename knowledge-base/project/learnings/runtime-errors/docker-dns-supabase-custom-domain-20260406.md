@@ -1,16 +1,15 @@
 ---
-module: Web Platform
+title: Docker container cannot resolve Supabase custom domain CNAME
 date: 2026-04-06
-problem_type: runtime_error
-component: authentication
-symptoms:
-  - "/health returns supabase: error with 2s timeout"
-  - "/api/repo/install returns 403 — getUserById returns no GitHub identity"
-  - "/api/repo/create returns 400 — service client cannot read users table"
-root_cause: config_error
-resolution_type: config_change
-severity: critical
+category: engineering
 tags: [docker, dns, supabase, custom-domain, cname, env-var]
+symptoms: [/health returns supabase: error with 2s timeout, /api/repo/install returns 403 — getUserById returns no GitHub identity, /api/repo/create returns 400 — service client cannot read users table]
+module: Web Platform
+component: authentication
+problem_type: runtime_error
+resolution_type: config_change
+root_cause: config_error
+severity: critical
 ---
 
 # Troubleshooting: Docker container cannot resolve Supabase custom domain CNAME
