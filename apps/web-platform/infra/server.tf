@@ -40,6 +40,10 @@ resource "hcloud_server" "web" {
     webhook_deploy_secret                = var.webhook_deploy_secret
     doppler_token                        = var.doppler_token
     resend_api_key                       = var.resend_api_key
+    # Fresh-host parity for the CI SSH keypair generated in
+    # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
+    # block in ci-ssh-key.tf for the rationale.
+    ci_ssh_public_key_openssh = local.ci_ssh_pubkey
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,
