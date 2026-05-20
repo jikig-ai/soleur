@@ -13,7 +13,7 @@
 # Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
 #   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
 #      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
-#   2. `-target=`-scoped apply (67 explicit targets). server.tf SSH-provisioned
+#   2. `-target=`-scoped apply (66 explicit targets). server.tf SSH-provisioned
 #      `terraform_data.*` resources are EXCLUDED — the GitHub runner egress IP is
 #      not in `var.admin_ips`, so any SSH connection from the runner fails with
 #      `ssh: handshake failed: connection reset by peer`. Those 7 resources land
@@ -201,8 +201,6 @@ jobs:
               -target=cloudflare_ruleset.cache_shared_binaries \
               -target=doppler_secret.github_app_id \
               -target=doppler_secret.github_app_private_key \
-              -target=doppler_secret.github_app_client_id \
-              -target=doppler_secret.github_app_client_secret \
               -target=random_id.github_webhook_secret \
               -target=doppler_secret.github_app_webhook_secret \
               -target=cloudflare_bot_management.soleur_ai \
@@ -245,6 +243,7 @@ jobs:
               -target=random_id.kb_drift_ingest_signing_key \
               -target=doppler_secret.kb_drift_ingest_signing_key \
               -target=doppler_secret.kb_drift_ingest_url \
+              -target=doppler_service_token.kb_drift \
               -target=github_actions_secret.doppler_token_kb_drift \
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
