@@ -3,7 +3,8 @@
 #
 # Operator-only. CI uses the inline JWT-mint in
 # `.github/workflows/scheduled-github-app-drift-guard.yml` (mirror at lines
-# 119-150) instead of shelling out to this script — keeping CI free of any
+# 127-158, shifted from 119-150 by the #4115 manifest-diff insertion)
+# instead of shelling out to this script — keeping CI free of any
 # external script reduces the runner's bash surface area. This script exists
 # so future re-snapshots (when GitHub adds a permission, when permissions
 # change) don't depend on operator memory of the JWT-mint dance.

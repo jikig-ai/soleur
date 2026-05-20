@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 // Smoke-renders /internal/github-app-init/page.tsx to static markup and
@@ -14,20 +14,55 @@ import { renderToStaticMarkup } from "react-dom/server";
 //
 // Ref #4115.
 
-const APP_DOMAIN = "app.test.example";
+// APP_DOMAIN must be in the page's allowlist (app.soleur.ai or
+// app.dev.soleur.ai). Using app.dev.soleur.ai for tests; the page throws
+// otherwise as defense-in-depth against a Doppler config swap.
+const APP_DOMAIN = "app.dev.soleur.ai";
+const ADMIN_USER_ID = "test-admin-uuid";
 
-let savedEnv: string | undefined;
+// Mock next/navigation.redirect (server-only API). The mock throws a
+// labeled Error so tests can assert WHICH redirect fired.
+vi.mock("next/navigation", () => ({
+  redirect: (target: string) => {
+    throw new Error(`REDIRECT:${target}`);
+  },
+}));
+
+// Mock the supabase server client used by the operator gate. Tests can
+// override the returned user via `setMockUser` below.
+let mockUser: { id: string } | null = { id: ADMIN_USER_ID };
+function setMockUser(u: { id: string } | null): void {
+  mockUser = u;
+}
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    auth: {
+      getUser: async () => ({ data: { user: mockUser } }),
+    },
+  }),
+}));
+
+let savedAppDomain: string | undefined;
+let savedAdminIds: string | undefined;
 
 beforeEach(() => {
-  savedEnv = process.env.APP_DOMAIN;
+  savedAppDomain = process.env.APP_DOMAIN;
+  savedAdminIds = process.env.ADMIN_USER_IDS;
   process.env.APP_DOMAIN = APP_DOMAIN;
+  process.env.ADMIN_USER_IDS = ADMIN_USER_ID;
+  setMockUser({ id: ADMIN_USER_ID });
 });
 
 afterEach(() => {
-  if (savedEnv === undefined) {
+  if (savedAppDomain === undefined) {
     delete process.env.APP_DOMAIN;
   } else {
-    process.env.APP_DOMAIN = savedEnv;
+    process.env.APP_DOMAIN = savedAppDomain;
+  }
+  if (savedAdminIds === undefined) {
+    delete process.env.ADMIN_USER_IDS;
+  } else {
+    process.env.ADMIN_USER_IDS = savedAdminIds;
   }
 });
 
@@ -76,5 +111,29 @@ describe("/internal/github-app-init page", () => {
     await expect(
       Page({ searchParams: Promise.resolve({}) }),
     ).rejects.toThrow(/APP_DOMAIN/);
+  });
+
+  test("APP_DOMAIN outside allowlist throws", async () => {
+    process.env.APP_DOMAIN = "app.evil.example";
+    const Page = await loadPage();
+    await expect(
+      Page({ searchParams: Promise.resolve({}) }),
+    ).rejects.toThrow(/allowlist/);
+  });
+
+  test("unauthenticated visitor redirects to /login", async () => {
+    setMockUser(null);
+    const Page = await loadPage();
+    await expect(
+      Page({ searchParams: Promise.resolve({}) }),
+    ).rejects.toThrow("REDIRECT:/login");
+  });
+
+  test("non-admin authenticated visitor redirects to /dashboard", async () => {
+    setMockUser({ id: "not-an-admin-uuid" });
+    const Page = await loadPage();
+    await expect(
+      Page({ searchParams: Promise.resolve({}) }),
+    ).rejects.toThrow("REDIRECT:/dashboard");
   });
 });

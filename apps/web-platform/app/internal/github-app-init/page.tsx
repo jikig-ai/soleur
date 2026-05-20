@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 import manifestRaw from "@/infra/github-app-manifest.json";
 
 // Internal-operator-only page that pre-fills GitHub's App-create form via
@@ -25,6 +27,16 @@ export const metadata = {
 
 const PLACEHOLDER = "${app_domain}";
 
+// Allowlist of host values APP_DOMAIN may take. Bounds the rogue-App vector
+// where a Doppler config swap (or env-var typo at deploy) mis-binds the
+// manifest's redirect_url/hook_attributes.url/setup_url to the wrong
+// environment. Submitting that manifest to GitHub's App-create form would
+// create a prd App pointing at dev (or vice-versa).
+const APP_DOMAIN_ALLOWLIST = new Set([
+  "app.soleur.ai",
+  "app.dev.soleur.ai",
+]);
+
 type SearchParams = Promise<{
   code?: string;
   installation_id?: string;
@@ -34,14 +46,19 @@ type SearchParams = Promise<{
 function resolveAppDomain(): string {
   // APP_DOMAIN is Doppler-sourced per env (dev/prd). Required at render time
   // because the manifest template references it for redirect_url,
-  // hook_attributes.url, and setup_url. The page itself runs inside the
-  // already-authenticated dashboard surface (middleware redirects unauth
-  // visitors to /login before this page renders).
+  // hook_attributes.url, and setup_url.
   const value = process.env.APP_DOMAIN;
   if (!value || value.length === 0) {
     throw new Error(
       "APP_DOMAIN env var is required to render /internal/github-app-init. " +
         "Set via Doppler (prd: app.soleur.ai) and redeploy.",
+    );
+  }
+  if (!APP_DOMAIN_ALLOWLIST.has(value)) {
+    throw new Error(
+      `APP_DOMAIN value '${value}' is not in the allowlist. ` +
+        "Submitting the manifest with this value would create a GitHub App " +
+        "with incorrect redirect/webhook URLs.",
     );
   }
   return value;
@@ -69,11 +86,34 @@ function buildManifestPayload(appDomain: string): string {
   return JSON.stringify(raw);
 }
 
+async function requireOperator(): Promise<void> {
+  // Defense-in-depth on top of middleware auth. Middleware redirects
+  // unauthenticated users; this gate further restricts to ADMIN_USER_IDS,
+  // bounding the rogue-App-impersonation vector (any authenticated tenant
+  // user otherwise reaches this page, learns the manifest structure, and
+  // could click-through to create a clone App under their own GitHub
+  // account). Mirrors the inline pattern at
+  // apps/web-platform/app/(dashboard)/dashboard/admin/analytics/page.tsx.
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/login");
+  }
+  const isAdmin =
+    process.env.ADMIN_USER_IDS?.split(",").includes(user.id) ?? false;
+  if (!isAdmin) {
+    redirect("/dashboard");
+  }
+}
+
 export default async function GitHubAppInitPage({
   searchParams,
 }: {
   searchParams: SearchParams;
 }) {
+  await requireOperator();
   const params = await searchParams;
   const cameFromGitHubCallback =
     typeof params.code === "string" ||

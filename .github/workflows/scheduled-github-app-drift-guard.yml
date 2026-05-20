@@ -305,12 +305,19 @@ jobs:
             if [[ -f "$SUPPRESS_FILE" ]]; then
               suppress_until=$(tr -d ' \t\r\n' < "$SUPPRESS_FILE" || true)
               if [[ -n "$suppress_until" ]]; then
-                # date -d on GNU coreutils accepts ISO-8601 UTC. Any
-                # malformed value fails parsing -> we treat as
-                # "no suppression" rather than silently passing.
-                if suppress_epoch=$(date -d "$suppress_until" -u +%s 2>/dev/null); then
+                # Strict ISO-8601 UTC. `date -d` would otherwise accept
+                # natural-language strings ("100 years", "next decade"),
+                # silently suppressing drift detection indefinitely on a
+                # PR-committed file. Defense-in-depth against the
+                # operator-typo / compromised-PR vector.
+                if ! [[ "$suppress_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+                  echo "::warning::MANIFEST_DRIFT_SUPPRESS_UNTIL must be strict ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ); got '${suppress_until}'. Ignoring suppression."
+                elif suppress_epoch=$(date -d "$suppress_until" -u +%s 2>/dev/null); then
                   now_epoch=$(date -u +%s)
-                  if (( now_epoch < suppress_epoch )); then
+                  max_window_s=$((30 * 24 * 3600))
+                  if (( suppress_epoch - now_epoch > max_window_s )); then
+                    echo "::warning::MANIFEST_DRIFT_SUPPRESS_UNTIL exceeds 30-day cap (until ${suppress_until}); ignoring suppression to prevent indefinite silence."
+                  elif (( now_epoch < suppress_epoch )); then
                     suppress_active=1
                     echo "::warning::Manifest drift detected but suppressed until ${suppress_until} (MANIFEST_DRIFT_SUPPRESS_UNTIL). Delete the file once the live App is reconciled."
                   fi

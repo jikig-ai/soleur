@@ -118,33 +118,51 @@ Paste into GitHub: App settings → Webhook → Secret. Save.
 
 **Option B — Automated via App-JWT** (preferred for re-provisioning loops):
 
+The JWT mint logic is duplicated between `bin/snapshot-github-app.sh` (which
+prints `GET /app` JSON) and the CI workflow (which calls the same endpoint).
+Until a `bin/mint-app-jwt.sh` helper lands (deferred), the simplest path is
+inline JWT mint:
+
 ```bash
 # 1. Fetch the PEM and App ID:
 doppler secrets get GITHUB_APP_PRIVATE_KEY --plain -p soleur -c prd \
   | base64 -d > /tmp/app.pem
 chmod 600 /tmp/app.pem
 APP_ID=$(doppler secrets get GITHUB_APP_ID --plain -p soleur -c prd)
-export APP_ID
 
-# 2. Mint a 10-min App-JWT via the shared helper (mirrors drift-guard
-#    workflow lines 127-158):
-JWT=$(bash bin/snapshot-github-app.sh > /dev/null; \
-  # The script's first action is mint_jwt; capture via a small wrapper
-  # if needed. For one-off PATCHing, mint inline instead — see Option C.)
+# 2. Mint a 10-min App-JWT inline (mirrors
+#    `.github/workflows/scheduled-github-app-drift-guard.yml:127-158`):
+b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
+now=$(date +%s)
+header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+payload=$(jq -nc \
+  --argjson iss "$APP_ID" \
+  --argjson iat "$((now - 60))" \
+  --argjson exp "$((now + 540))" \
+  '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+unsigned="${header}.${payload}"
+signature=$(printf '%s' "$unsigned" | \
+  openssl dgst -sha256 -sign /tmp/app.pem -binary | b64url)
+JWT="${unsigned}.${signature}"
 
-# 3. PATCH the App's webhook secret:
+# 3. PATCH the App's webhook secret. Use process-substitution for the
+#    Authorization header so the JWT never appears in `curl` argv:
 webhook_secret=$(doppler secrets get GITHUB_APP_WEBHOOK_SECRET --plain \
   -p soleur -c prd)
-gh api -X PATCH /app/hook/config \
-  -f secret="$webhook_secret" \
-  -H "Authorization: Bearer $JWT" \
-  -H "Accept: application/vnd.github+json"
+curl -sS --fail \
+  -X PATCH https://api.github.com/app/hook/config \
+  --header @<(printf 'Authorization: Bearer %s' "$JWT") \
+  -H 'Accept: application/vnd.github+json' \
+  -d "$(jq -nc --arg secret "$webhook_secret" '{secret: $secret}')"
 
 shred -u /tmp/app.pem
+unset JWT webhook_secret
 ```
 
 After the PATCH, Step 4 is complete without ever opening GitHub's UI a
-second time.
+second time. Note: `gh api -X PATCH /app/hook/config` would be simpler, but
+the `gh` CLI sends `Authorization: token`, not `Bearer`, so it cannot
+authenticate as an App. The inline curl is the load-bearing form.
 
 ### Step 5 — `terraform apply` against `apps/web-platform/infra/`
 

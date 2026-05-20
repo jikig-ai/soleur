@@ -39,6 +39,22 @@ const EXPECTED_TF_SECRETS = [
   "GITHUB_APP_WEBHOOK_SECRET",
 ];
 
+// Exact set of permissions in the committed manifest. Locked to the live App
+// snapshot taken at #4115 plan time; the drift-guard cron is the runtime
+// signal for divergence, this test catches an in-band manifest mutation
+// that adds an unexpected permission via a malicious or sloppy PR.
+const EXPECTED_PERMISSION_KEYS = [
+  "actions",
+  "administration",
+  "checks",
+  "contents",
+  "members",
+  "metadata",
+  "pull_requests",
+];
+
+const APP_DOMAIN_PLACEHOLDER = "${app_domain}";
+
 interface Manifest {
   name: string;
   url: string;
@@ -109,5 +125,24 @@ describe("github-app-manifest.json symbol parity", () => {
     expect(m.setup_url.length).toBeGreaterThan(0);
     expect(typeof m.hook_attributes?.url).toBe("string");
     expect(typeof m.redirect_url).toBe("string");
+  });
+
+  test("templated URLs reference the ${app_domain} placeholder", () => {
+    // Locks the substitution contract the init page depends on. A direct
+    // hard-coded prod-domain commit would break per-env templating.
+    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
+    expect(m.redirect_url).toContain(APP_DOMAIN_PLACEHOLDER);
+    expect(m.setup_url).toContain(APP_DOMAIN_PLACEHOLDER);
+    expect(m.hook_attributes.url).toContain(APP_DOMAIN_PLACEHOLDER);
+  });
+
+  test("default_permissions keys EXACTLY match the expected set", () => {
+    // Stored-injection guard: a malicious PR that adds an undeclared
+    // permission key (e.g., `admin: "write"`, `secrets: "write"`) would
+    // ride the manifest into GitHub's App-create form on the next operator
+    // click. Lock the key set in addition to checking individual scopes.
+    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
+    const actual = Object.keys(m.default_permissions).sort();
+    expect(actual).toEqual([...EXPECTED_PERMISSION_KEYS].sort());
   });
 });
