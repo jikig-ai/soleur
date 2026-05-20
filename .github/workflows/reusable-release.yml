@@ -272,19 +272,27 @@ jobs:
 
           echo "$CHANGELOG" > "$RELEASE_NOTES_FILE"
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (as draft)
         if: steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
         id: create_release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+        # `--draft` is load-bearing: GitHub now creates published releases as
+        # IMMUTABLE by default, which causes `gh release upload` to fail with
+        # HTTP 422 ("Cannot upload assets to an immutable release"). Drafts
+        # remain mutable, so we create as draft, let the audit step upload its
+        # asset, then `gh release edit --draft=false` flips it to a published
+        # (and now-immutable) release in the finalise-release step below.
+        # Refs #3849 AC16 / run 26156985840 (web-v0.99.1 upload failure).
         run: |
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes-file "$RELEASE_NOTES_FILE"
+            --notes-file "$RELEASE_NOTES_FILE" \
+            --draft
           printf 'released=%s\n' "true" >> "$GITHUB_OUTPUT"
-          echo "Created release $TAG"
+          echo "Created draft release $TAG"
 
       # Sentry Monitors/Alerts migration audit (Phase 2.2 of #3814).
       # Re-runs the audit after each release and uploads the dated Markdown
@@ -555,6 +563,26 @@ jobs:
         id: docker_pushed
         if: steps.docker_build.outcome == 'success'
         run: printf 'pushed=%s\n' "true" >> "$GITHUB_OUTPUT"
+
+      # Publish the draft release once Docker has pushed AND the audit
+      # asset has uploaded. GitHub now publishes releases as IMMUTABLE —
+      # once a release is out of draft state, `gh release upload` returns
+      # HTTP 422. So the `create_release` step creates as `--draft`; this
+      # step flips it live after all post-creation uploads complete.
+      # Failure semantics preserved: if Docker push fails, this step
+      # doesn't run and the release stays a draft (invisible to ops) —
+      # operator manually publishes once Docker is recovered. Email/
+      # Discord notify steps below fire after this, so they always link
+      # to a visible release URL. Refs #3849 AC16 / run 26156985840
+      # (web-v0.99.1 upload-to-immutable HTTP 422).
+      - name: Finalise release (publish draft)
+        if: steps.create_release.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release edit "$TAG" --draft=false
+          echo "Published release $TAG"
 
       - name: Email notification (release)
         if: steps.create_release.outputs.released == 'true'
