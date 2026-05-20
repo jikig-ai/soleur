@@ -20,3 +20,25 @@ export const EXTERNAL_TIERS = [
 
 export const MESSAGE_STATUS_DRAFT = "draft" as const;
 export const MESSAGE_STATUS_ARCHIVED = "archived" as const;
+
+// PR-H (#3244) — multi-source dedup constants. Used by the GitHub
+// webhook + Inngest dispatcher (Phase 3-4) and the KB-drift ingest
+// route (Phase 5). The `source` column in messages is a free-form
+// text today; constraining via these constants keeps every TS
+// consumer aligned without DB-level enum churn.
+export const MESSAGE_SOURCE_STRIPE = "stripe" as const;
+export const MESSAGE_SOURCE_GITHUB = "github" as const;
+export const MESSAGE_SOURCE_KB_DRIFT = "kb-drift" as const;
+
+export const MESSAGE_SOURCES = [
+  MESSAGE_SOURCE_STRIPE,
+  MESSAGE_SOURCE_GITHUB,
+  MESSAGE_SOURCE_KB_DRIFT,
+] as const;
+
+export type MessageSource = (typeof MESSAGE_SOURCES)[number];
+
+// PR-H — owning_domain widened to admit the KB-drift "direct-action"
+// surface. The existing values ('finance', 'engineering', 'product',
+// 'triage', 'security') are unchanged at the consumer level.
+export const MESSAGE_OWNING_DOMAIN_KNOWLEDGE = "knowledge" as const;

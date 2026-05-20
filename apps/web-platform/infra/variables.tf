@@ -151,26 +151,40 @@ variable "betterstack_paid_tier" {
   default     = false
 }
 
-# --- jikigai.com (LinkedIn Page Verifications, #4046) ------------------------
-# jikigai.com is onboarded narrowly for the LinkedIn Company Page TXT
-# verification record only. The existing MX/SPF/DKIM/etc. for ops@jikigai.com
-# remain dashboard-managed; a separate follow-up (#4052) imports them into TF
-# state. The aliased provider (cloudflare.jikigai_com in jikigai-com.tf) and
-# the narrow API token below contain blast radius to this zone.
+# --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
 
-variable "cf_zone_id_jikigai_com" {
-  description = "Cloudflare zone ID for jikigai.com"
-  type        = string
-}
-
-variable "cf_api_token_jikigai_com" {
-  description = "Cloudflare API token narrowed to Zone:DNS:Edit on jikigai.com (cloudflare_record resources; see jikigai-com.tf). Current consumers: jikigai-com.tf (LinkedIn Page Verifications TXT)."
+variable "github_app_id" {
+  description = "GitHub App ID for Soleur-Concierge (operator-supplied; created at https://github.com/settings/apps/new during PR-H Phase 2 manual gate)."
   type        = string
   sensitive   = true
 }
 
-variable "linkedin_page_verification_txt" {
-  description = "TXT record value supplied by LinkedIn at Page Verifications time. Single-purpose: becomes public TXT post-verification (low residual sensitivity). Persisted in terraform.tfstate (R2 backend, AES-256 at rest)."
+variable "github_app_private_key" {
+  description = "PEM-encoded RSA private key for the GitHub App. One-shot download from the App settings page at App creation; cannot be re-downloaded."
+  type        = string
+  sensitive   = true
+}
+
+variable "github_app_client_id" {
+  description = "GitHub App OAuth Client ID."
+  type        = string
+  sensitive   = true
+}
+
+variable "github_app_client_secret" {
+  description = "GitHub App OAuth Client Secret."
+  type        = string
+  sensitive   = true
+}
+
+variable "github_actions_token" {
+  description = "GitHub PAT (fine-grained, repo scope on jikig-ai/soleur, Secrets: Read & Write) used by the integrations/github provider to publish the DOPPLER_TOKEN_KB_DRIFT Actions secret. Mint at github.com/settings/personal-access-tokens/new."
+  type        = string
+  sensitive   = true
+}
+
+variable "doppler_token_kb_drift" {
+  description = "Doppler service token scoped to the `prd_kb_drift_walker` config. Published to the repo as Actions secret DOPPLER_TOKEN_KB_DRIFT for the kb-drift cron workflow."
   type        = string
   sensitive   = true
 }

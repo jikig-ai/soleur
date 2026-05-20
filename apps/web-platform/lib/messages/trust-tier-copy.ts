@@ -26,6 +26,19 @@ export const TRUST_TIER_COPY = {
       "Soleur proposes; you authorize each time. Highest oversight.",
     confirmText: null,
   },
+  // PR-H (#4077) — 4th tier; infra.* default. The daily digest emitter
+  // itself defers to PR-I (#4078); PR-H ships the tier value + label so
+  // the Scope Grants UI can surface the choice and producer writes can
+  // record `tier_at_send='auto_with_digest'`. Per Privacy §8.3 Art. 22(3),
+  // the next-business-day digest review window IS the human-review path.
+  auto_with_digest: {
+    label: "Auto with daily digest",
+    badge: "Bundled",
+    description:
+      "Soleur executes infrastructure actions without per-action review; a daily digest summarizes what shipped. Designed for infra.* classes where per-action oversight is uneconomic.",
+    confirmText:
+      "Confirm: Soleur will execute these actions and email you a daily digest. You can revoke or re-classify at any time; revoking will not stop runs already in progress.",
+  },
 } as const;
 
 export type TrustTier = keyof typeof TRUST_TIER_COPY;

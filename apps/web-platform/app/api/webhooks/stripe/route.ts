@@ -485,6 +485,11 @@ export async function POST(request: Request) {
             amount: invoice.amount_due ?? 0,
             currency: invoice.currency ?? "usd",
             failureCode,
+            // PR-H (#4077): producer-declared action_class literal. The CFO
+            // function reads payload.action_class first and falls back to
+            // ACTION_CLASS_DEFAULTS["finance.payment_failed"] for pre-PR-H
+            // envelopes (test fixtures, replays).
+            action_class: "finance.payment_failed" as const,
           };
           try {
             const { inngest } = await import("@/server/inngest/client");
