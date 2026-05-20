@@ -52,8 +52,7 @@ Bundled: 1-line docstring correction in `bin/snapshot-github-app.sh` line 17 (dr
 
 **If this leaks, the user's data is exposed via:** N/A — manifest authoring touches no user data, no credentials, no PII. The `secrets: write` permission is already granted on the live App; this PR only documents it in the committed source.
 
-**Brand-survival threshold:** none
-
+- **Brand-survival threshold:** none
 - `threshold: none, reason: manifest JSON + ISO-8601 suppress text + ops docstring carry no credentials, no PII, no auth-flow code paths; the live GitHub App already has secrets:write granted, this PR only brings the committed source into parity with reality (no new privilege is requested or granted).`
 
 ## Research Reconciliation — Spec vs. Codebase
