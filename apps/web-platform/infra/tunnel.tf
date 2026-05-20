@@ -1,7 +1,7 @@
-# Cloudflare Tunnel for webhook-based deploys.
-# Eliminates the need for SSH from GitHub Actions runners (see #749).
-# Only the deploy webhook routes through the tunnel; app traffic and
-# admin SSH stay on their existing paths (A record + admin_ips firewall).
+# Cloudflare Tunnel for webhook-based deploys + CI-runner SSH ingress.
+# Routes the deploy webhook (#749) and the CI-runner SSH path (#4177)
+# through the tunnel so runner egress doesn't need IP allowlisting.
+# Operator/admin SSH still uses the direct A record + admin_ips firewall.
 
 resource "random_id" "tunnel_secret" {
   byte_length = 32
@@ -84,11 +84,16 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
 # where the host-side cloudflared daemon delivers to localhost:22 (sshd).
 
 resource "cloudflare_zero_trust_access_application" "ssh" {
-  zone_id          = var.cf_zone_id
-  name             = "SSH (CI runner) - soleur-web-platform"
-  domain           = "ssh.${var.app_domain_base}"
-  type             = "self_hosted"
-  session_duration = "1h"
+  zone_id = var.cf_zone_id
+  name    = "SSH (CI runner) - soleur-web-platform"
+  domain  = "ssh.${var.app_domain_base}"
+  type    = "self_hosted"
+  # 15m is CF's documented minimum; tighter than the deploy app's 24h
+  # because SSH grants host shell access (higher blast radius). A typical
+  # apply-deploy-pipeline-fix run is ~3-5 min, so 15m leaves headroom
+  # without prolonged token reuse if the cloudflared sidecar's in-memory
+  # session token is exfiltrated mid-run.
+  session_duration = "15m"
 }
 
 resource "cloudflare_zero_trust_access_service_token" "ci_ssh" {
@@ -108,14 +113,16 @@ resource "cloudflare_zero_trust_access_policy" "ci_ssh_service_token" {
   }
 }
 
-# Alert one week before the deploy service token expires.
+# Alert one week before any CF Access service token expires.
 # Cloudflare sends expiring_service_token_alert 7 days pre-expiry.
 # Note: this alert fires for ALL service tokens in the account (no per-token
-# filtering). Currently only one token exists (github-actions-deploy).
+# filtering). Two tokens exist: `github-actions-deploy` (webhook) and
+# `github-actions-ci-ssh` (CI runner SSH bridge, #4177); the alert body
+# names the specific token.
 resource "cloudflare_notification_policy" "service_token_expiry" {
   account_id  = var.cf_account_id
-  name        = "Deploy service token expiring"
-  description = "Alert when github-actions-deploy service token approaches expiry"
+  name        = "CF Access service token expiring"
+  description = "Alert when any CF Access service token (github-actions-deploy or github-actions-ci-ssh) approaches expiry"
   alert_type  = "expiring_service_token_alert"
   enabled     = true
 

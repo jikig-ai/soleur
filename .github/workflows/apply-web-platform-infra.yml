@@ -316,6 +316,33 @@ jobs:
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
+      - name: Sync CF Access CI-SSH service token to Doppler
+        # Reads the new sensitive outputs produced by the
+        # `cloudflare_zero_trust_access_service_token.ci_ssh` resource
+        # and writes them into Doppler prd_terraform so the sibling
+        # `apply-deploy-pipeline-fix.yml` workflow can pull them at run
+        # time without an operator handoff step (closes #4177 P1).
+        # Idempotent — doppler-secrets-set overwrites in place.
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          CLIENT_ID=$(terraform output -raw ci_ssh_access_service_token_client_id 2>/dev/null || true)
+          CLIENT_SECRET=$(terraform output -raw ci_ssh_access_service_token_client_secret 2>/dev/null || true)
+          if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" ]]; then
+            echo "::warning::ci_ssh_access_service_token outputs missing or empty — likely a -target= run that skipped the SSH-access resources. Falling back to operator sync."
+            exit 0
+          fi
+          printf '::add-mask::%s\n' "$CLIENT_ID"
+          printf '::add-mask::%s\n' "$CLIENT_SECRET"
+          printf '%s' "$CLIENT_ID" \
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          printf '%s' "$CLIENT_SECRET" \
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          unset CLIENT_ID CLIENT_SECRET
+          echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
+
       - name: Post-apply summary
         if: always()
         env:
