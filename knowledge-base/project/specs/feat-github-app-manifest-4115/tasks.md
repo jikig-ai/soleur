@@ -55,21 +55,21 @@ Plan: `knowledge-base/project/plans/2026-05-20-feat-github-app-manifest-plan.md`
 
 ## Phase 2: Static init page
 
-- [ ] 2.1 Create `apps/web-platform/app/internal/github-app-init/page.tsx`
-  - [ ] 2.1.1 `export const dynamic = "force-dynamic"` (Kieran P1-2)
-  - [ ] 2.1.2 `export const metadata = { robots: { index: false } }` (defense-in-depth)
-  - [ ] 2.1.3 Static `import manifest from "@/infra/github-app-manifest.json"`
-  - [ ] 2.1.4 Page function: `async function Page({ searchParams }: { searchParams: Promise<{ code?: string; installation_id?: string; setup_action?: string }> })` then `const params = await searchParams` (Kieran P0-1 — Next.js 15 Promise contract)
-  - [ ] 2.1.5 Substitute `${app_domain}` from `process.env.APP_DOMAIN` over the manifest's `redirect_url`, `hook_attributes.url`, and `setup_url` before form serialization
-- [ ] 2.2 Render branching:
-  - [ ] 2.2.1 If `params.code || params.installation_id || params.setup_action`: render informational view (NOT default form). View shows: "This URL was reached via GitHub callback; any temporary `code` is discarded unused. If you intended to install the App, visit `/dashboard/repos`. To populate Doppler, copy the 5 values from the App's settings page on GitHub." DOES NOT POST `code` anywhere (SpecFlow §3)
-  - [ ] 2.2.2 Else: render the manifest-POST form with heading + narrative + `<form method="POST" action="https://github.com/settings/apps/new">` + `<input type="text" name="manifest" value="<JSON.stringify(manifest)>">` + submit button
-- [ ] 2.3 Smoke-test locally:
-  - [ ] 2.3.1 `bun --cwd apps/web-platform run dev`
-  - [ ] 2.3.2 `curl -s http://localhost:3000/internal/github-app-init | grep -F 'name="manifest"'` (form HTML)
-  - [ ] 2.3.3 `curl -s 'http://localhost:3000/internal/github-app-init?code=test-discard'` → informational view
-  - [ ] 2.3.4 `curl -s 'http://localhost:3000/internal/github-app-init?installation_id=42&setup_action=install'` → informational view (proves the param-set widening)
-- [ ] 2.4 Run `bun --cwd apps/web-platform run typecheck` — no TS errors
+- [x] 2.1 Create `apps/web-platform/app/internal/github-app-init/page.tsx`
+  - [x] 2.1.1 `export const dynamic = "force-dynamic"` (Kieran P1-2)
+  - [x] 2.1.2 `export const metadata = { robots: { index: false } }` (defense-in-depth)
+  - [x] 2.1.3 Static `import manifest from "@/infra/github-app-manifest.json"`
+  - [x] 2.1.4 Page function: `async function Page({ searchParams }: { searchParams: Promise<{ code?: string; installation_id?: string; setup_action?: string }> })` then `const params = await searchParams` (Kieran P0-1 — Next.js 15 Promise contract)
+  - [x] 2.1.5 Substitute `${app_domain}` from `process.env.APP_DOMAIN` over the manifest's `redirect_url`, `hook_attributes.url`, and `setup_url` before form serialization
+- [x] 2.2 Render branching:
+  - [x] 2.2.1 If `params.code || params.installation_id || params.setup_action`: render informational view (NOT default form). View shows: "This URL was reached via GitHub callback; any temporary `code` is discarded unused. If you intended to install the App, visit `/dashboard/repos`. To populate Doppler, copy the 5 values from the App's settings page on GitHub." DOES NOT POST `code` anywhere (SpecFlow §3)
+  - [x] 2.2.2 Else: render the manifest-POST form with heading + narrative + `<form method="POST" action="https://github.com/settings/apps/new">` + `<input type="text" name="manifest" value="<JSON.stringify(manifest)>">` + submit button
+- [x] 2.3 Smoke-test locally:
+  - [x] 2.3.1 `bun --cwd apps/web-platform run dev`
+  - [x] 2.3.2 `curl -s http://localhost:3000/internal/github-app-init | grep -F 'name="manifest"'` (form HTML)
+  - [x] 2.3.3 `curl -s 'http://localhost:3000/internal/github-app-init?code=test-discard'` → informational view
+  - [x] 2.3.4 `curl -s 'http://localhost:3000/internal/github-app-init?installation_id=42&setup_action=install'` → informational view (proves the param-set widening)
+- [x] 2.4 Run `bun --cwd apps/web-platform run typecheck` — no TS errors
 
 ## Phase 3: Drift-guard extension (shared script + workflow + test)
 
