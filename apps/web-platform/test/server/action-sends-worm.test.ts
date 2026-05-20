@@ -398,16 +398,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .select("user_id, recipient_id_hash")
         .eq("message_id", msg.id);
       expect(afterRows?.length).toBe(1);
-      expect(afterRows![0].user_id).toBeNull();
-      expect(afterRows![0].recipient_id_hash).toBe("__anonymised__");
+      expect(afterRows![0].user_id, "user_id zeroed").toBeNull();
+      expect(afterRows![0].recipient_id_hash, "recipient_id_hash overwritten").toBe("__anonymised__");
 
       // Best-effort cleanup of the throwaway user — independent of the
-      // assertion under test. anonymise_action_sends already ran above;
-      // scope_grants.founder_id is ON DELETE RESTRICT (mig 048:16) so
-      // anonymise_scope_grants must precede auth.admin.deleteUser.
-      // Cascade-ordering contract is owned by
-      // account-delete-scope-grants-cascade.test.ts; coupling cleanup to
-      // assertion success here would duplicate that signal.
+      // assertion under test. Cascade-ordering owned by
+      // account-delete-scope-grants-cascade.test.ts.
       try {
         await service.rpc("anonymise_scope_grants", { p_user_id: u.id });
       } catch { /* tolerate teardown failure */ }
