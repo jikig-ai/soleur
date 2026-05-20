@@ -4,10 +4,12 @@
 // explicit `.eq("founder_id", user.id)` is belt-and-suspenders against
 // any future RLS loosening (precedent: app/(dashboard)/dashboard/audit/page.tsx).
 //
-// PR-H ships the table + RPC + Art. 17 cascade (mig 051) but does NOT
-// populate rows — the per-Octokit-call writer wires in PR-H+1 (#4098)
-// alongside the spawn-agent action loop. Until then this page shows the
-// empty-state copy noting where rows will come from.
+// PR-H ships the table + RPC + Art. 17 cascade (mig 051). PR-H+1
+// (#4098) wires the per-Octokit-call audit writer at the
+// `server/github/app-client.ts` factory — every Octokit response now
+// writes one audit_github_token_use row via recordGithubApiCall. The
+// ledger populates as Soleur uses the GitHub App installation token on
+// behalf of the founder.
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
@@ -68,10 +70,9 @@ export default async function GitHubAuditPage() {
             className="px-5 py-6 text-sm text-soleur-text-secondary"
             data-testid="gh-audit-empty"
           >
-            No GitHub token uses yet. The ledger populates when Soleur
-            spawns an agent action against your repository — PR-H ships
-            the read surface; the spawn-agent writer wires in the next
-            release (tracking #4098).
+            No GitHub token uses yet. The ledger populates as Soleur
+            uses your GitHub App installation token on your behalf —
+            every API call appends one row here.
           </p>
         ) : (
           <table className="w-full text-sm">
