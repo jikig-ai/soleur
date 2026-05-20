@@ -44,6 +44,9 @@ const EXPECTED_TF_SECRETS = [
 // snapshot taken at #4115 plan time; the drift-guard cron is the runtime
 // signal for divergence, this test catches an in-band manifest mutation
 // that adds an unexpected permission via a malicious or sloppy PR.
+// #4173: `secrets` added so the integrations/github provider can publish
+// `github_actions_secret.doppler_token_kb_drift` without 403-ing on the
+// `actions/secrets/public-key` endpoint at terraform apply time.
 const EXPECTED_PERMISSION_KEYS = [
   "actions",
   "administration",
@@ -52,6 +55,7 @@ const EXPECTED_PERMISSION_KEYS = [
   "members",
   "metadata",
   "pull_requests",
+  "secrets",
 ];
 
 const APP_DOMAIN_PLACEHOLDER = "${app_domain}";

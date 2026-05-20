@@ -58,10 +58,16 @@ provider "betteruptime" {
 # PR-H (#3244) — GitHub provider for Actions-secret publishing (kb-drift).
 # Post-#4150: switched from PAT auth (var.github_actions_token, deleted) to
 # App-installation auth. The soleur-ai App (id 3261325, org-wide installation
-# 122213433 on jikig-ai) declares `secrets:write` in its permissions
-# (verified via `gh api apps/soleur-ai`); the integrations/github provider
-# exchanges App-credentials for a short-lived installation token at each
-# `terraform plan/apply`. Net narrowing vs. long-lived PAT.
+# 122213433 on jikig-ai) declares 8 permissions including `secrets:write`
+# (verified via `gh api apps/soleur-ai`); installation 122213433 grants all
+# 8 (verified via `gh api /orgs/jikig-ai/installations` post-#4173 — the
+# `secrets:write` declaration was added at the App level but not granted at
+# the installation level, causing a 403 on `actions/secrets/public-key` at
+# `terraform apply` time; resolved by the founder re-accepting the
+# installation's new permissions via the GitHub UI). The
+# integrations/github provider exchanges App-credentials for a short-lived
+# installation token at each `terraform plan/apply`. Net narrowing vs.
+# long-lived PAT.
 # autonomy-considered: reuse-applied (App credentials already in prd_terraform).
 provider "github" {
   owner = "jikig-ai"

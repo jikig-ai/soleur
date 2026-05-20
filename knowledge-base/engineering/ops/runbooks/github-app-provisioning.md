@@ -48,13 +48,51 @@ The manifest pre-fills:
 - Name: `Soleur AI`
 - Homepage: `https://soleur.ai`
 - Description: as committed in the manifest
-- Permissions: 7 keys per the manifest's `default_permissions`
+- Permissions: 8 keys per the manifest's `default_permissions`
+  (`actions:write`, `administration:write`, `checks:read`, `contents:write`,
+   `members:read`, `metadata:read`, `pull_requests:write`, `secrets:write`)
 - Callback URLs: 3 entries (Flow A Supabase + custom domain + Flow B App-direct)
 - Setup URL: `https://app.soleur.ai/dashboard/repos`
 - Webhook URL: `https://app.soleur.ai/api/webhooks/github`
 - `public: false`, `setup_on_update: true`
 - Webhook secret: **NOT** pre-filled (Soleur-managed via `random_id` in
   `apps/web-platform/infra/github-app.tf` — see Step 4).
+
+### Step 2a — Re-accept App installation when permissions widen
+
+If a Soleur PR adds a new key to `default_permissions` in
+`apps/web-platform/infra/github-app-manifest.json`, the founder MUST
+re-accept the App installation. GitHub has no API for this — it is a
+one-time UI click per installation per permission widening (operator-only
+carve-out per `2026-05-15-operator-only-step-canonical-list.md` case-b).
+
+Symptom of a missing re-acceptance: `terraform apply` against
+`apps/web-platform/infra/` fails with `403 Resource not accessible by
+integration` on any endpoint the new permission gates (e.g.,
+`actions/secrets/public-key` when `secrets:write` is the missing grant).
+
+Procedure:
+
+1. Navigate to `https://github.com/organizations/jikig-ai/settings/installations/122213433`
+2. GitHub renders a "Soleur AI is requesting an update to its permissions"
+   banner with a "Review request" link when any declared permission exceeds
+   the installation's current grants. Click **Review request** then
+   **Accept new permissions**.
+3. Verify the installation now grants the new key:
+
+   ```bash
+   gh api /orgs/jikig-ai/installations \
+     --jq '.installations[] | select(.app_slug=="soleur-ai") | .permissions'
+   ```
+
+   Expected: the new key is present at the listed level (e.g.,
+   `"secrets": "write"`).
+
+PR #4173 is the canonical example: `secrets:write` was added to the
+manifest's `default_permissions` (and to the App-level declaration); the
+installation needed re-acceptance before the `integrations/github`
+Terraform provider could publish the `github_actions_secret.doppler_token_kb_drift`
+resource without 403-ing on the public-key endpoint.
 
 ### Step 3 — Paste 3 identity credentials into Doppler `prd`
 
