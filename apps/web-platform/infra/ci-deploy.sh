@@ -572,7 +572,27 @@ case "$COMPONENT" in
     docker pull "$IMAGE:$TAG"
 
     # Extract the script + pinned ENV vars from the image.
-    INNGEST_EXTRACT_DIR=$(mktemp -d /tmp/inngest-extract.XXXXXX)
+    # Fixed path (not mktemp) so the sudoers entry in
+    # /etc/sudoers.d/deploy-inngest-bootstrap can pin the exact path —
+    # Ubuntu 24.04's sudo-rs rejects wildcards in command arguments.
+    # Webhook serializes deploys; concurrent collisions not possible. (#4144)
+    INNGEST_EXTRACT_DIR=/tmp/inngest-extract
+    # Symlink precondition: refuse to rm -rf a symlink (would follow the
+    # link and clobber unrelated paths); refuse to operate if a hostile
+    # local user pre-created the dir with non-deploy ownership. Defensive
+    # against TOCTOU races on world-writable /tmp.
+    if [[ -L "$INNGEST_EXTRACT_DIR" ]]; then
+      logger -t "$LOG_TAG" "FAILED: $INNGEST_EXTRACT_DIR is a symlink — refusing to extract"
+      final_write_state 1 "inngest_extract_symlink_refused"
+      exit 1
+    fi
+    if [[ -e "$INNGEST_EXTRACT_DIR" && "$(stat -c %U "$INNGEST_EXTRACT_DIR" 2>/dev/null)" != "$(id -un)" ]]; then
+      logger -t "$LOG_TAG" "FAILED: $INNGEST_EXTRACT_DIR owned by unexpected user — refusing to extract"
+      final_write_state 1 "inngest_extract_owner_mismatch"
+      exit 1
+    fi
+    rm -rf "$INNGEST_EXTRACT_DIR"
+    mkdir -m 0700 -p "$INNGEST_EXTRACT_DIR"
     INNGEST_EXTRACT_CONTAINER="soleur-inngest-extract-$$"
     docker rm -f "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
     if ! docker create --name "$INNGEST_EXTRACT_CONTAINER" "$IMAGE:$TAG" >/dev/null; then
@@ -606,12 +626,12 @@ case "$COMPONENT" in
     # Execute on host. The script needs root to write /etc/systemd/system,
     # /usr/local/bin/inngest, /etc/default/inngest-server, and to invoke
     # systemctl. ci-deploy.sh itself runs as the `deploy` user with sudo
-    # access (see webhook.service hardening). Use sudo with explicit env
-    # passthrough so the script sees the pinned version/SHA.
-    if ! sudo -E env \
-        "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" \
-        "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
-        bash "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"; then
+    # access (see webhook.service hardening). The sudoers entry at
+    # /etc/sudoers.d/deploy-inngest-bootstrap (provisioned by Terraform)
+    # pins the exact command and env_keep's the two version vars (#4144).
+    export INNGEST_CLI_VERSION INNGEST_CLI_SHA256
+    if ! sudo --preserve-env=INNGEST_CLI_VERSION,INNGEST_CLI_SHA256 \
+        /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh; then
       logger -t "$LOG_TAG" "FAILED: inngest-bootstrap.sh non-zero exit"
       rm -rf "$INNGEST_EXTRACT_DIR"
       final_write_state 1 "inngest_bootstrap_failed"

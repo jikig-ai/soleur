@@ -414,6 +414,47 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 **Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours because the substrate (introduced in #4085) declared no observability surface and the operator never had a non-SSH way to verify the heartbeat. Combined with plan Phase 2.9 (template-time gate), this phase is the load-bearing pre-implementation gate. The empty-key reject was added per the PR #4123 review — the most common drift mode is `liveness_signal:` with no children, which earlier regex-only forms allowed through.
 
+### 4.8. PAT-Shaped Variable Halt (Always)
+
+Per AGENTS.md `hr-github-app-auth-not-pat`, plans that introduce or reference a PAT-shaped TF variable, env var, or literal-format token for infra-time GitHub writes MUST be halted at deepen-plan time. App auth (App ID + installation_id + PEM) supersedes PAT across the board — Apps don't expire, don't require per-operator minting, and survive operator handoff.
+
+**Step 1 — Trigger.** Always runs. The detection only fires on match; no opt-out.
+
+**Step 2 — Grep the plan.** Run the following regex sweep against the plan file (case-insensitive):
+
+```bash
+PLAN="<plan-file>"
+HITS=$(grep -niE '\bvar\.(github_actions_token|github_token|gh_token|gh_pat|github_pat|actions_token|installation_token|repo_token)\b|\bTF_VAR_(GITHUB|GH)_(TOKEN|PAT|AUTH)\b|\bvar\.[a-z_]*_(pat|token)\b|\b(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82,})\b' "$PLAN" || true)
+```
+
+The four patterns target distinct PAT shapes:
+
+- Named `var.*_token`/`var.*_pat` Terraform variables — covers the specific name eliminated in #4144 plus common rename shapes (`github_token`, `gh_pat`, `installation_token`, etc.).
+- `TF_VAR_(GITHUB|GH)_(TOKEN|PAT|AUTH)` (case-insensitive) — the env-var form Doppler `--name-transformer tf-var` produces.
+- `var.*_(pat|token)` — any plan variable suffixed `_pat` or `_token` (catches `var.gh_pat`, `var.org_token`, etc.).
+- Literal token shapes — classic 40-char `ghp_<40>` and fine-grained `github_pat_<82+>`. The placeholder form `ghp_XXX...` is allowed; only literal-shape tokens reject.
+
+**Step 3 — HALT on match.** If `HITS` is non-empty, emit:
+
+> Error: Plan references PAT-shaped variable or literal. Use GitHub App auth (App ID + installation_id + pem_file via the `integrations/github` provider's `app_auth` block) per AGENTS.md `hr-github-app-auth-not-pat`. The `soleur-ai` GitHub App (App ID `3261325`) is provisioned and the discovery script is at `apps/web-platform/infra/scripts/get-app-installation-id.sh`. Apps don't expire, don't require per-operator minting, and survive operator handoff.
+>
+> Matches:
+> $HITS
+
+Halt deepen-plan; do NOT proceed to Phase 5.
+
+**Step 4 — Emit telemetry.** When the halt fires, emit:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-github-app-auth-not-pat applied \
+  "Infra/CI GitHub writes auth via GitHub App, never PAT"
+```
+
+**Step 5 — Pass-through.** If no PAT-shaped patterns match, deepen-plan proceeds normally. No telemetry on pass.
+
+**Why:** #4144 — PR-H #4066 added `var.github_actions_token` as a required TF variable, then never populated it in Doppler. Every `Apply deploy-pipeline-fix.yml` run since 2026-05-19T21:41Z failed before `terraform plan` could evaluate, blocking the entire deploy pipeline for ~14h (sudoers entry never refreshed → deploy webhook errored at `sudo: deploy : command not allowed` → Inngest heartbeat went silently red). The first defense is at plan-write time: catch PAT-shaped variables before they reach a workflow YAML.
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>
@@ -617,6 +658,7 @@ Before finalizing:
 - [ ] When a plan migrates a CI job to a vendor-supplied container image (`mcr.microsoft.com/playwright:*`, `cypress/included:*`, language-specific images, etc.), enumerate every existing step's `uses:` action AND every `run:` shell-out dependency, then `docker run <image> which <tool>` each one empirically. Vendor base images are scoped to their primary tool (Playwright Jammy = Node + Chromium; Cypress = Node + Cypress browsers); generic CLI tooling (`unzip`, `git`, `jq`, `make`, `gcc`, `tar`, `gzip`, `xz-utils`) may be absent. Failure mode is the action failing fast at setup — e.g., `oven-sh/setup-bun` shelling out to `unzip` and emitting `error: unzip is required to install bun` (open issue oven-sh/setup-bun#55). Plan-time mitigation: add a one-line `apt-get update -qq && apt-get install -y -qq --no-install-recommends <pkgs>` step BEFORE the dependent action, AND document why in the workflow comment. **Why:** PR #3664 — `setup-bun` inside `mcr.microsoft.com/playwright:v1.58.2-jammy` failed because unzip is absent; deepen-plan caught it empirically pre-push. See `knowledge-base/project/learnings/best-practices/2026-05-12-ci-playwright-container-replaces-cache-and-install-deps.md` "Follow-up: when the consumer uses bun instead of npm".
 - [ ] When a plan binds an Acceptance Criterion to a specific shell primitive whose behavior depends on **process-group / session / signal-defer semantics** (`kill 0` / `kill -- -$$` / `set -m` / `setsid` / signal traps + foreground commands), write a 10-line `parent.sh`/`child.sh` repro and run it before committing the AC to text. Man-page and "verified in tooling" lookups frequently miss the runtime context that matters: e.g., `set -m` puts CHILDREN in new PGIDs but does NOT move bash itself out of its parent's PGID, so `kill -TERM 0` from a fork-exec'd child reaches the parent. Plan v1 of #3704 prescribed `kill -TERM 0` on this incorrect assumption; the repro at /work confirmed the bug pre-merge. Same class for `wait` vs foreground-defer: bash dispatches TERM traps only between commands or in `wait $!`, never during a hung `docker pull`. **Why:** PR #3704 — see `knowledge-base/project/learnings/2026-05-12-pgid-inheritance-and-bash-trap-defer-on-foreground-commands.md`.
 - [ ] When a plan verifies a multi-clause SQL predicate (`IF A AND B THEN ... flag := true; END IF`, `CASE WHEN A AND B`, `OR ... AND ...` n-ary, idempotent-update guards) by citing line numbers, the plan body MUST literally restate EVERY operand of the predicate alongside the line citation — never paraphrase a predicate by its most-discussed clause alone. A predicate of shape `IF v_paused_at IS NULL AND v_total > v_cap THEN v_flag := true` requires restating both `v_paused_at IS NULL` (when true, when false, when it flips) AND `v_total > v_cap` AND the conjunction (`v_flag` true iff BOTH clauses fire, not either alone). Same rule for migration triggers, plpgsql functions, and any boolean predicate with ≥2 operands. **Why:** PR #3987 — deepen-pass on migration `046_runtime_cost_state.sql:227` extracted `v_total > v_cap` but missed the `v_paused_at IS NULL` co-condition; plan documented "calls 6-10 return kill_tripped=true" while the actual invariant (stronger atomicity: exactly one call wins the flip) was discovered only at /work time when live-DB test failed. Same defect class as `2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md` (TS union enumeration) extended to SQL boolean predicates. See `knowledge-base/project/learnings/2026-05-18-premise-validation-and-multi-clause-predicate-reading.md`.
+- [ ] Every grep-based Acceptance Criterion whose scope contains the plan or its paired `tasks.md` includes `--exclude-dir=<spec-dir>` and `--exclude=<plan-basename>.md` flags. Plans that quote the search pattern in prose ("rename `X` to `Y`", "no remaining `X` references") cause whole-scope greps to match the plan itself post-edit. AND: every backticked identifier the plan cites with a file:line attribution (Terraform variable, function, schema column, env-var, RPC name) is re-read from the declaration line — not copied from the issue body — and the plan quotes the declaration form (e.g., `variable "app_domain" { ... }`), not the default value alone. Treat upstream identifiers (issue prose, sibling PR text) as hypotheses, not facts. **Why:** PR #4160 — plan AC1 claimed `grep -rE 'web-platform.soleur.ai' knowledge-base/` returns 0 lines but the plan + tasks.md retained the literal string in prose; same plan cited the Terraform variable as `app_subdomain` 4x (actual: `app_domain` at `variables.tf:85-89`). Both caught at work + review. See `knowledge-base/project/learnings/best-practices/2026-05-20-plan-acs-self-grep-scope-and-identifier-source-verification.md`.
 - [ ] Enhancement summary accurately reflects changes
 
 ## Post-Enhancement Options
