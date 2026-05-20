@@ -41,7 +41,7 @@ lane: cross-domain
 
 ## Phase 4 — Extend apply allow-list
 
-- 4.1 Edit `.github/workflows/apply-web-platform-infra.yml`: add `-target=tls_private_key.ci_ssh`, `-target=doppler_secret.deploy_ssh_private_key`, `-target=terraform_data.root_authorized_keys` to BOTH the plan and apply steps (per saved-plan workflow shape — `-var=` on plan only, `-target=` on both).
+- 4.1 Edit `.github/workflows/apply-web-platform-infra.yml`: add ONLY `-target=tls_private_key.ci_ssh` and `-target=doppler_secret.deploy_ssh_private_key` to BOTH the plan and apply steps (per saved-plan workflow shape — `-var=` on plan only, `-target=` on both). DO NOT add `-target=terraform_data.root_authorized_keys` — that resource requires SSH to root@host, and `apply-web-platform-infra.yml` does NOT set up the CF Tunnel SSH bridge (only `apply-deploy-pipeline-fix.yml` does). Per the plan's Bootstrap Path Correction (plan §line-78), `terraform_data.root_authorized_keys` is applied operator-locally on the first bootstrap and re-fires only on key rotation (operator-explicit).
 - 4.2 Update header allow-list count comment in the same file.
 
 ## Phase 5 — Pre-merge validation
@@ -50,7 +50,7 @@ lane: cross-domain
 - 5.2 `terraform fmt -check apps/web-platform/infra/` exits 0.
 - 5.3 `actionlint .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-web-platform-infra.yml` exits 0.
 - 5.4 `! grep -q 'variable "deploy_ssh_public_key"' apps/web-platform/infra/variables.tf` (AC6).
-- 5.5 `grep -c "tls_private_key.ci_ssh\|doppler_secret.deploy_ssh_private_key\|terraform_data.root_authorized_keys" .github/workflows/apply-web-platform-infra.yml` returns ≥ 6 (3 -target each on plan + apply).
+- 5.5 `grep -c "tls_private_key.ci_ssh\|doppler_secret.deploy_ssh_private_key" .github/workflows/apply-web-platform-infra.yml` returns ≥ 4 (2 -target each on plan + apply). Also verify `terraform_data.root_authorized_keys` does NOT appear in this workflow file.
 - 5.6 Commit + push + open PR with `Ref #4177` (not `Closes`).
 
 ## Phase 6 — Post-merge apply (operator)
