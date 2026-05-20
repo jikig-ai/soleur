@@ -99,6 +99,16 @@ doppler configs tokens --project soleur --config prd_terraform --json \
 
 If a row matches, revoke the orphan first.
 
+## Session Errors
+
+Three independent AC failures during work, all instances of the same underlying class — **AC literal-grep coupling against artifact prose and YAML field order**.
+
+1. **AC4 (`grep -c 'secrets.DOPPLER_TOKEN_WRITE'`) inflated by an inline doc comment** that mentioned the literal `secrets.DOPPLER_TOKEN_WRITE`. Count was 2 instead of the expected 1 (env-var assignment). **Recovery:** trimmed the comment. **Prevention:** when an AC pins a literal grep count, write artifact prose so comments don't trip the grep — OR scope the grep with `awk` to env-block only.
+2. **AC6 (`grep -A6 'Verify DOPPLER_TOKEN_WRITE present' | grep -E 'warning|skip_sync'`) failed twice**, both times because a YAML structure change pushed the `warning` line outside the `-A6` window. First fail: bootstrap-cycle comment block at top of step. Second fail: `id:` moved to top of step mapping per file convention (pattern-recognition P2). **Recovery:** relaxed the plan AC to `-A8` for robustness. **Prevention:** **AC verification commands that use line-window greps (`-A<N>`) are brittle against legal YAML reordering (mapping fields are semantically unordered).** Prefer (a) awk-range anchors that span the full step body, (b) wider windows when targeting step bodies, or (c) behavioral invariants (e.g., `terraform validate` passes) over incidental layout.
+3. **AC8 (`grep -c 'Use this script only for local reprovisioning'`) failed** because my edit lowered the first word ("use this script"). **Recovery:** capitalize. **Prevention:** when modifying a string covered by literal-match AC, preserve sentence case on the leading word.
+
+All three are the same class. The mechanical fix is **prefer behavioral ACs (CLI exit codes, parsed semantic values) over literal-string ACs whenever possible.** Where literal ACs are unavoidable, scope them with `awk` ranges anchored to step/section boundaries — never to line offsets.
+
 ## References
 
 - Doppler provider source: <https://github.com/DopplerHQ/terraform-provider-doppler/blob/master/doppler/resource_service_token.go>
@@ -106,3 +116,4 @@ If a row matches, revoke the orphan first.
 - AGENTS.md rule: `hr-tf-variable-no-operator-mint-default`
 - Precedent file: `apps/web-platform/infra/kb-drift.tf`
 - Sibling learning: `knowledge-base/project/learnings/best-practices/2026-05-20-tf-operator-mint-variables-are-design-smell.md`
+- Related learning (precedent for plan-quoted preconditions): `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`
