@@ -19,6 +19,18 @@
 # config once via the Doppler dashboard (Project → soleur → New config
 # under `prd` environment, name = "prd_kb_drift_walker"); deferred-
 # automation issue tracks lifting this to TF.
+#
+# Rotation policy (post-#4150):
+#   - `random_id.kb_drift_ingest_signing_key`: rotate via
+#     `terraform apply -replace=random_id.kb_drift_ingest_signing_key`.
+#     Re-roll cascades to `doppler_secret.kb_drift_ingest_signing_key`.
+#   - `doppler_service_token.kb_drift`: rotate via
+#     `terraform apply -replace=doppler_service_token.kb_drift`. The new
+#     `key` value MUST propagate to `github_actions_secret.doppler_token_kb_drift.plaintext_value` —
+#     this file deliberately omits `lifecycle.ignore_changes = [plaintext_value]`
+#     on that resource so rotation reaches the consumer in the same apply.
+#     Mirrors the discipline in inngest.tf:97-104 but with inverse polarity
+#     (rotation MUST propagate, not be suppressed).
 
 resource "random_id" "kb_drift_ingest_signing_key" {
   byte_length = 32
