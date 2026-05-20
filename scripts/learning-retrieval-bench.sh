@@ -6,6 +6,13 @@
 # Brainstorm: knowledge-base/project/brainstorms/2026-05-19-learnings-retrieval-bench-brainstorm.md
 # Precedent:  scripts/compound-promote.sh:124-200 (Anthropic curl + jq pattern, ADR-021)
 #
+# Schema versions for knowledge-base/project/learning-retrieval-metrics-<date>.json:
+#   schema: 1 — initial (#4043).
+#   schema: 2 — Stage 2 (#4176): adds top-level r5_identity / r5_light /
+#               r5_heavy for the kbsearch retriever (split from the
+#               combined r5 object) so ladder triage can read R@5 per
+#               bucket without re-aggregating.
+#
 # Closes #4043 once committed alongside output learning + sibling JSON.
 #
 # Usage:
@@ -34,6 +41,7 @@ CONFIRM=0
 SELF_TEST=0
 CORPUS_COUNT_OVERRIDE=""
 CACHE_PARAPHRASES=""
+NO_PARAPHRASE="${NO_PARAPHRASE:-0}"
 MODEL_ID="claude-haiku-4-5-20251001"
 ANTHROPIC_VERSION="2023-06-01"
 ANTHROPIC_ENDPOINT="https://api.anthropic.com/v1/messages"
@@ -65,6 +73,9 @@ Flags:
   --cache-paraphrases <path>      Write/read paraphrases NDJSON at <path>. Survives EXIT-trap rm.
                                   Cache-hit rerun (full corpus coverage in <path>) skips Phase 2
                                   entirely — no Anthropic key required and no spend.
+  --no-paraphrase                 Skip Stage 2 query-paraphrase union (#4176). Equivalent to
+                                  exporting NO_PARAPHRASE=1. Forces every kbsearch_rank invocation
+                                  to use only the baseline two-tier grep.
   --help, -h                      This text.
 
 Closes #4043 once committed alongside output learning + sibling JSON.
@@ -82,6 +93,7 @@ while (( $# > 0 )); do
     --self-test)                  SELF_TEST=1 ;;
     --corpus-count-override)      CORPUS_COUNT_OVERRIDE="$2"; shift ;;
     --cache-paraphrases)          CACHE_PARAPHRASES="$2"; shift ;;
+    --no-paraphrase)              NO_PARAPHRASE=1 ;;
     --help|-h)                    print_help; exit 0 ;;
     *)
       echo "error: unknown arg: $1" >&2
@@ -319,6 +331,11 @@ build_corpus_index() {
 # ─── Phase 2: paraphrase generation (light + heavy) ─────────────────────────
 PROMPT_LIGHT='You are a paraphrase generator. Given a learning-summary passage from a software engineering knowledge base, produce a SHORT (1-2 sentence) paraphrase that preserves the technical terms verbatim but substitutes synonyms for surrounding verbs and connectors. Output ONLY the paraphrase as a single line of plain text — no preamble, no quotes, no markdown.'
 PROMPT_HEAVY='You are a paraphrase generator. Given a learning-summary passage from a software engineering knowledge base, produce a SHORT (1-2 sentence) reformulation in a DIFFERENT framing: change sentence shape, swap nouns for verbs where natural, and avoid reusing the same technical terms unless the term IS the canonical name (e.g., "Postgres", "RLS", a file path). Output ONLY the reformulation as a single line of plain text — no preamble, no quotes, no markdown.'
+# stage-2-paraphrase-union-v1 (#4176): query-side paraphrase pre-pass.
+# Mirrored verbatim in plugins/soleur/skills/kb-search/SKILL.md; the
+# plugins/soleur/test/kb-search-lockstep.test.sh CI assertion fails when
+# the token appears in only one of the two files (TR2 lockstep contract).
+PROMPT_QUERY_PARAPHRASE='You are a query paraphrase generator. Given a search query against a software engineering knowledge base, produce a SHORT (1 sentence or less) reformulation in a DIFFERENT vocabulary: swap verbs for nouns where natural, substitute domain-canonical synonyms (e.g., "saturating workers" → "connection pool exhaustion"), and keep the query terse. Output ONLY the reformulation as a single line of plain text — no preamble, no quotes, no markdown.'
 
 # Returns: paraphrase text (newlines stripped). On API failure twice in a row,
 # returns the literal string "(API_ERROR)" so downstream lookup yields 0 hits.
@@ -487,10 +504,32 @@ rank_paths_min_rank() {
   echo "${min_rank:-}"
 }
 
+# Sensitive-query regex (#4176). Value-shape-anchored — refuses paraphrase
+# forward when the query carries a credential-looking literal (assignment-
+# operator + base64 blob, OpenAI-style sk- key, postgres dsn= prefix). Bare
+# topic-keyword queries like "JWT token refresh" or "keypress event" do NOT
+# match. Mirrors plugins/soleur/skills/kb-search/SKILL.md §Phase 2.5 guard.
+SENSITIVE_QUERY_REGEX='((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-[a-zA-Z0-9]{20,}|dsn=)'
+
+# query_is_sensitive: returns 0 (match) when the query carries a credential-
+# shaped literal, 1 otherwise. Case-insensitive.
+query_is_sensitive() {
+  local q="$1"
+  printf '%s' "$q" | grep -iEq "$SENSITIVE_QUERY_REGEX"
+}
+
 # kbsearch_rank: two-tier (INDEX.md title-match + corpus content-match) with
 # token-overlap scoring. Tier-1 scoped to /learnings/ paths and capped at 8;
 # tier-2 scoped to learnings-only and capped at 12. Total bounded by tier
 # caps (8+12); no outer head -20 needed. See #4119 brainstorm/spec/plan.
+#
+# Stage 2 (#4176): when the combined tier-1+tier-2 unique-path count is < 5
+# AND NO_PARAPHRASE != 1 AND the query is not sensitive-value-shaped, fan
+# out 3 paraphrase variants via PROMPT_QUERY_PARAPHRASE and union-rank by
+# the count of paraphrase-variants that hit each path. The 4 strings
+# (original + 3 variants) each run the baseline two-tier path; results are
+# merged, deduped, ranked by union-hit-count descending, then the original
+# 8+12 cap-split is reapplied to the merged list.
 kbsearch_rank() {
   local query="$1" source_path="$2" synced_paths_json="$3"
   if [[ -z "$query" ]]; then echo ""; return; fi
@@ -505,6 +544,55 @@ kbsearch_rank() {
   tier2=$(rank_paths_by_token_overlap_corpus "$tokens" learnings-only | head -12)
   combined=$({ printf '%s\n' "$tier1"; printf '%s\n' "$tier2"; } \
     | awk 'NF && !seen[$0]++')
+
+  # stage-2-paraphrase-union-v1: adaptive paraphrase pre-pass.
+  local baseline_count
+  baseline_count=$(printf '%s\n' "$combined" | awk 'NF' | wc -l | tr -d ' ')
+  if (( baseline_count < 5 )) \
+    && [[ "${NO_PARAPHRASE:-0}" != "1" ]] \
+    && [[ -n "${ANTHROPIC_API_KEY:-}" ]] \
+    && ! query_is_sensitive "$query"; then
+    local variants v vtokens vtier1 vtier2 vcomb merged_paths
+    variants=()
+    local i
+    for i in 1 2 3; do
+      v=$(anthropic_paraphrase "$PROMPT_QUERY_PARAPHRASE" "$query")
+      if [[ -n "$v" && "$v" != "(API_ERROR)" ]]; then
+        # Dedupe variants by exact-string-match.
+        local seen_var=0 existing
+        for existing in "${variants[@]}"; do
+          [[ "$existing" == "$v" ]] && { seen_var=1; break; }
+        done
+        (( seen_var == 0 )) && variants+=("$v")
+      fi
+    done
+    if (( ${#variants[@]} == 0 )); then
+      echo "kb-search: WARN — paraphrase generation failed: all 3 variants returned (API_ERROR) — falling back to baseline grep" >&2
+    else
+      merged_paths=$(mktemp)
+      # Original query's combined hits + each variant's combined hits, one
+      # path per line. uniq -c gives hit-count per path; sort -rn ranks.
+      printf '%s\n' "$combined" | awk 'NF' >> "$merged_paths"
+      for v in "${variants[@]}"; do
+        vtokens=$(extract_keywords "$v" 3)
+        [[ -z "$vtokens" ]] && continue
+        vtier1=$(rank_indexmd_by_token_overlap "$vtokens" \
+          | awk '$0 ~ "(^|/)knowledge-base/project/learnings/"' \
+          | head -8)
+        vtier2=$(rank_paths_by_token_overlap_corpus "$vtokens" learnings-only | head -12)
+        vcomb=$({ printf '%s\n' "$vtier1"; printf '%s\n' "$vtier2"; } \
+          | awk 'NF && !seen[$0]++')
+        printf '%s\n' "$vcomb" | awk 'NF' >> "$merged_paths"
+      done
+      # Re-rank: count hits per path across original + variants, sort by
+      # hit-count desc then lexicographic. Reapply cap-split (8+12) by
+      # truncating to 20 total.
+      combined=$(sort "$merged_paths" | uniq -c | sort -rn -k1,1 -k2,2 \
+        | awk '{ $1=""; sub(/^ +/, ""); print }' | head -20)
+      rm -f "$merged_paths"
+    fi
+  fi
+
   rank_paths_min_rank "$combined" "$source_path" "$synced_paths_json"
 }
 
@@ -1414,7 +1502,7 @@ jq -n \
   --argjson worst_n "$WORST_N_WITH_CAUSE" \
   --arg bucket "$BUCKET" \
   '{
-    schema: 1,
+    schema: 2,
     generated_at: $generated_at,
     corpus_count: $corpus_count,
     model_id: $model_id,
@@ -1442,7 +1530,10 @@ jq -n \
     gap_skill_roi:  ($gap_s | tonumber),
     fixture_seeds:  $fixture_seeds,
     worst_n:        $worst_n,
-    bucket:         $bucket
+    bucket:         $bucket,
+    r5_identity:    $r5_ikb,
+    r5_light:       $r5_lkb,
+    r5_heavy:       $r5_hkb
   }' > "$JSON_TMP"
 mv "$JSON_TMP" "$REPO_ROOT/$JSON_PATH"
 echo "  wrote $JSON_PATH"
