@@ -9,6 +9,25 @@ related_issues: [4140, 4132, 4115, 4118, 4126]
 
 # fix(infra): migrate TF `integrations/github` provider from PAT to App auth (closes #4144)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** Research Reconciliation (3 new rows), Files to Edit (2 new entries), Risks (R2/R3 revised, R6 added), Implementation Phases (Phase 4 trim strategy revised, Phase 4.5 added for sudoers entry, Phase 4.5 SSH gate added).
+**Research agents used:** Direct provider-source grep against `integrations/terraform-provider-github` via `gh api` (no subagent fan-out — the architecture decision was pre-approved and the diff is mechanically narrow).
+
+### Key Improvements
+
+1. **Verified `app_auth` schema verbatim against the installed provider (6.12.1).** `pem_file` Description = `"The GitHub App PEM file contents."` (string contents, NOT a file path). All three sub-attributes (`id`, `installation_id`, `pem_file`) are `Required: true, TypeString`. Confirms the plan's HCL form is correct without needing a wrapper file.
+2. **Loader-class-fit rejection.** Phase 4.2's proposed core→rest demotion of `wg-block-pr-ready-on-undeferred-operator-steps` is REJECTED: the gate fires during `/ship` on docs-only PRs (e.g., a PR adding a new operator runbook), and the loader serves `core+docs-only` (NOT rest) for docs-only diffs (`.claude/hooks/session-rules-loader.sh:103-115`). Demotion would silently disable the gate on its highest-risk surface. Trim strategy revised in Phase 4: keep the new rule under ~280B (tight, single-line per `cq-agents-md-why-single-line`) AND trim `hr-github-api-endpoints-with-enum` (low-frequency, well-precedented).
+3. **Sudoers entry scope expansion (load-bearing).** The parent ARGUMENTS' AC15 ("`/etc/sudoers.d/` contains the inngest-bootstrap entry") assumes `terraform_data.deploy_pipeline_fix` writes that sudoers file. `server.tf:212-260` provisions 5 files via `provisioner "file"` — NONE of them is a sudoers entry. The sudoers entry for `inngest-bootstrap.sh` does not exist anywhere in the codebase. AC15's cascade (webhook → heartbeat → Better Stack unpause) is unachievable without folding in the sudoers entry. New Phase 4.5 adds the entry to `cloud-init.yml` AND to `terraform_data.deploy_pipeline_fix`'s `provisioner "file"` list (mirroring the pattern of the existing 5 trigger files).
+4. **Runbook drift.** `knowledge-base/operations/runbooks/github-app-provisioning.md:64,110` still references `TF_VAR_github_actions_token`. Added to Files to Edit to prevent a fabrication-shape pointer to a deleted variable.
+
+### New Considerations Discovered
+
+- **Network-Outage gate fires (Phase 4.5 of deepen-plan).** `terraform_data.deploy_pipeline_fix` has `connection { type = "ssh" host = hcloud_server.web.ipv4_address user = "root" agent = true }` and `provisioner "file"` blocks (server.tf:229-260). Resource-shape trigger per `hr-ssh-diagnosis-verify-firewall`. L3-L7 verification status added below.
+- **`token` and `app_auth` are NOT yet `ConflictsWith` until v7** (per provider source `provider.go`: `// ConflictsWith: []string{"app_auth"}, // TODO: Enable as part of v7`). The plan DELETES the `token` line from the provider block (not just adds `app_auth`) — this matters because leaving both set silently picks one (provider treats `app_auth` as priority when present, but the behavior isn't formally documented for v6.x). Plan already correct; flagged for review.
+- **Issue cascade fix order.** AC18 (Better Stack unpause) MUST come AFTER AC17 (heartbeat green). Confirmed in Risks R4; reinforced as Phase 7.7 → 7.8 ordering.
+
 ## Overview
 
 `Apply deploy-pipeline-fix.yml` has been failing on every merge to `main` since PR-H #4066 (2026-05-19T21:41Z) because the workflow's `doppler run --name-transformer tf-var -- terraform apply` injects ALL Doppler `prd_terraform` keys as `TF_VAR_*`, and three required variables added by PR-H were never populated in Doppler:
@@ -48,24 +67,51 @@ The remaining four acceptance criteria (workflow re-run green, sudoers entry wri
 | `var.github_app_installation_id` does NOT exist | Confirmed: no match in `variables.tf`. | Add new `variable "github_app_installation_id"` (string, sensitive). |
 | Doppler `prd_terraform` already has `GITHUB_APP_INSTALLATION_ID` | Not verified — needs explicit Doppler write at apply time. | AC includes `doppler secrets set GITHUB_APP_INSTALLATION_ID=<discovered>` before the post-merge workflow re-run. |
 | GitHub App permissions include `secrets: write` | Not verified — gated by App config UI at github.com/apps/soleur-ai. | AC includes `gh api /app/installations/<id>` permission probe; if missing, surface the one-time install-permission-grant URL (#4115 future work). |
-| `integrations/github` v6.0 supports `app_auth { id, installation_id, pem_file }` | Provider docs (Terraform Registry, integrations/github 6.x) confirm — `app_auth` block has been stable since v5.x. main.tf:42-44 pins `~> 6.0`. | No version bump needed. |
+| `integrations/github` v6.0 supports `app_auth { id, installation_id, pem_file }` | Verified verbatim against `provider.go` in the `integrations/terraform-provider-github` repo: all three sub-attrs are `Required: true, TypeString`. `app_auth.pem_file` Description = `"The GitHub App PEM file contents."` (string contents, not a path). Installed: 6.12.1 per `apps/web-platform/infra/.terraform.lock.hcl`. | Pass `var.github_app_private_key` (already a PEM string in Doppler `prd.GITHUB_APP_PRIVATE_KEY`) directly to `pem_file`. No version bump needed. |
 | The Better Stack heartbeat `460830` is currently `paused=true` | Confirmed in parent ARGUMENTS; verifiable via `GET /api/v2/heartbeats/460830`. | Verify via API immediately before the PATCH unpause. |
+| **Sudoers entry for `inngest-bootstrap.sh` is written by `terraform_data.deploy_pipeline_fix`** | **REFUTED.** `apps/web-platform/infra/server.tf:212-260` shows the resource's `provisioner "file"` list contains only ci-deploy.sh, ci-deploy-wrapper.sh, webhook.service, cat-deploy-state.sh, canary-bundle-claim-check.sh — no sudoers entry. The on-disk `/etc/sudoers.d/` (per issue #4144 body) contains only `90-cloud-init-users` and `deploy-chown` (from `cloud-init.yml:33-37`). The inngest-bootstrap sudoers entry has **never existed** in Terraform or cloud-init. | **Fold in** to this PR (new Phase 4.5): add the sudoers entry to `cloud-init.yml` (so fresh hosts get it via `hr-fresh-host-provisioning-reachable-from-terraform-apply`) AND to `terraform_data.deploy_pipeline_fix`'s provisioner list (so the already-running host gets it via the same workflow being re-greened). |
+| The `token` field MUST be removed (not just shadowed by `app_auth`) | Verified: `provider.go` comment `// ConflictsWith: []string{"app_auth"}, // TODO: Enable as part of v7` — v6.x does NOT enforce the conflict. Leaving both set has undocumented precedence. Belt-and-suspenders: also confirm no `GITHUB_TOKEN` env var is exported by the Apply workflow (CI step env grep). | Provider block deletes the `token =` line entirely (already in plan). Also AC: `git grep -nE 'GITHUB_TOKEN' .github/workflows/apply-deploy-pipeline-fix.yml` returns no `env: GITHUB_TOKEN: ...` block (a `secrets.GITHUB_TOKEN` reference for `gh api` calls in the same workflow IS allowed — that's the workflow's own actions-token, not the provider auth). |
+| `knowledge-base/operations/runbooks/github-app-provisioning.md` is unaffected | **REFUTED.** Lines 64 + 110 reference `TF_VAR_github_actions_token`. | Add to Files to Edit. Replace with `TF_VAR_github_app_installation_id` references + a one-line note that the App-auth migration eliminated the PAT step. |
 
 ## Hypotheses
 
 - **H1 (primary):** The `Apply deploy-pipeline-fix.yml` workflow's `terraform plan` step fails on missing `TF_VAR_github_actions_token` because `doppler run --name-transformer tf-var` doesn't inject the variable (Doppler `prd_terraform` config has never had it). Verified by reading the workflow YAML (no `TF_VAR_github_actions_token` env, no `doppler secrets set` for it).
 - **H2:** Migrating the provider to `app_auth` removes the variable dependency, and the workflow's existing `--name-transformer tf-var` flow picks up `TF_VAR_github_app_installation_id` once the operator writes it to Doppler. No workflow YAML changes needed.
-- **H3:** The deploy webhook for v1.0.1 will succeed once `terraform apply -target=terraform_data.deploy_pipeline_fix` writes the sudoers entry; the OCI image is already on ghcr.
+- **H3 (REVISED post-deepen):** The deploy webhook for v1.0.1 will succeed once `terraform_data.deploy_pipeline_fix` is re-applied AND the new sudoers entry is added to the resource's provisioner list (the entry doesn't currently exist — see Research Reconciliation row 5). The OCI image is already on ghcr.
+
+## Network-Outage Deep-Dive (Phase 4.5 of deepen-plan)
+
+Triggered by resource-shape detection: `terraform_data.deploy_pipeline_fix` (`apps/web-platform/infra/server.tf:212-260`) contains `connection { type = "ssh" ... }` + 5 `provisioner "file"` blocks. Per `hr-ssh-diagnosis-verify-firewall`, L3-L7 verification status:
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list (Hetzner Cloud firewall `apps/web-platform/infra/firewall.tf`) | **Verified working** | The same workflow's "Verify server-side file hashes" step at `.github/workflows/apply-deploy-pipeline-fix.yml:192-238` performs SSH to the host on EVERY successful run. Issue #4144's symptom is missing TF variables (terraform plan fails BEFORE SSH dial), not SSH handshake-reset. No firewall drift expected. **Mitigation if it surfaces:** `admin-ip-drift.md` runbook. |
+| L3 DNS / routing | **Verified working** | The workflow's `terraform output -raw server_ip` (line 200) resolves to `135.181.45.178` (per issue #4144 body, parent ARGUMENTS); the static IP is allocated via `hcloud_primary_ip` in `apps/web-platform/infra/server.tf`. No DNS step in the path. |
+| L7 TLS / proxy (N/A — direct SSH on port 22) | N/A | No reverse proxy or TLS-terminating intermediary in the deploy-pipeline path. |
+| L7 application (sshd / cloud-init) | **Verified working** | Issue #4144 body confirms operator just successfully SSH'd to `135.181.45.178` to read `/etc/sudoers.d/` state. The deploy-pipeline failure manifests on `terraform plan` (variable-required check), not on SSH dial. |
+
+**Conclusion:** Network layers are healthy. The fix is purely TF-variable-shaped (this PR). No firewall, DNS, or sshd remediation needed.
+
+Telemetry emitted on this gate firing (per AGENTS.md `hr-ssh-diagnosis-verify-firewall`):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-ssh-diagnosis-verify-firewall applied \
+  "When a plan addresses an SSH/network-connectivity s"
+```
 
 ## Files to Edit
 
 - `apps/web-platform/infra/main.tf` — replace `provider "github" { token = var.github_actions_token; owner = "jikig-ai" }` with the `app_auth` block.
 - `apps/web-platform/infra/variables.tf` — delete `variable "github_actions_token"` block (lines 180-184); add `variable "github_app_installation_id"` (string, sensitive, no default).
 - `apps/web-platform/infra/kb-drift.tf` — update the comment at lines 48-50 to reference App-auth (the resource itself doesn't change; `github_actions_secret` works identically under either auth scheme).
-- `AGENTS.core.md` — add `[hr-github-app-auth-not-pat]` rule. Budget at 21962/22000 — needs trim of an existing rule to make room (see Phase 1.5 below).
+- **`apps/web-platform/infra/cloud-init.yml`** — add a new `write_files` entry for `/etc/sudoers.d/deploy-inngest-bootstrap` (mode `0440`, owner root:root, content: `deploy ALL=(root) NOPASSWD: /usr/bin/env INNGEST_CLI_VERSION=* INNGEST_CLI_SHA256=* bash /tmp/inngest-extract.*/inngest-bootstrap.sh`). Fold in per Research Reconciliation row 5 — without this, AC15-AC17 are unachievable.
+- **`apps/web-platform/infra/server.tf`** — add the sudoers file to `terraform_data.deploy_pipeline_fix`'s `triggers_replace` sha256 input AND add a `provisioner "file"` block writing the same content to `/etc/sudoers.d/deploy-inngest-bootstrap` on the existing host. Mirror the existing 5 entries' shape.
+- **`knowledge-base/operations/runbooks/github-app-provisioning.md`** — replace `TF_VAR_github_actions_token` references (lines 64, 110) with `TF_VAR_github_app_installation_id` + a one-line note that App-auth eliminated the PAT.
+- `AGENTS.core.md` — add `[hr-github-app-auth-not-pat]` rule. Trim strategy revised post-deepen (see Phase 4 below).
 - `AGENTS.md` — add pointer entry `- [id: hr-github-app-auth-not-pat] → core` under `## Hard Rules`.
 - `plugins/soleur/skills/deepen-plan/SKILL.md` — add Phase 4.8 (PAT-shaped variable halt) that mirrors Phase 4.7's halt-on-detection pattern.
-- `knowledge-base/project/specs/feat-one-shot-fix-4144-pat-to-app-auth/tasks.md` — derived from this plan (generated post-review).
+- `knowledge-base/project/specs/feat-one-shot-fix-4144-pat-to-app-auth/tasks.md` — derived from this plan.
 
 ## Files to Create
 
@@ -187,6 +233,11 @@ discoverability_test:
 - **AC9 (deepen-plan Phase 4.8):** Add a new `### 4.8. PAT-Shaped Variable Halt (Always)` phase to `plugins/soleur/skills/deepen-plan/SKILL.md` that greps the target plan for `var.github_actions_token`, `TF_VAR_GITHUB_TOKEN`, `var\..*_pat\b`, `ghp_[A-Za-z0-9]{36,}` patterns inside fenced HCL/bash blocks AND halts with a message pointing at `hr-github-app-auth-not-pat`. Verify with `grep -c '4.8. PAT-Shaped Variable Halt' plugins/soleur/skills/deepen-plan/SKILL.md` → `1`.
 - **AC10 (budget post-add):** Run `python3 scripts/lint-agents-rule-budget.py` and confirm `B_ALWAYS < 22000` (the harness ceiling). Net change after trim + add should leave ≥50B headroom.
 - **AC11 (PR body):** PR body uses `Ref #4144` (NOT `Closes #4144`). The issue closes post-merge after the operator confirms the workflow re-run is green. Per `ops-remediation` classification.
+- **AC11a (sudoers entry in cloud-init):** `apps/web-platform/infra/cloud-init.yml` `write_files` section contains an entry for `/etc/sudoers.d/deploy-inngest-bootstrap` with mode `0440`, owner `root:root`, and a `deploy ALL=(root) NOPASSWD: ...` line scoped to the inngest-bootstrap.sh invocation. Verify with `grep -A 4 "/etc/sudoers.d/deploy-inngest-bootstrap" apps/web-platform/infra/cloud-init.yml` → block present.
+- **AC11b (sudoers entry in deploy_pipeline_fix):** `apps/web-platform/infra/server.tf`'s `terraform_data.deploy_pipeline_fix` resource includes a `provisioner "file"` block writing the same sudoers content to `/etc/sudoers.d/deploy-inngest-bootstrap` AND a `provisioner "remote-exec"` block running `visudo -cf /etc/sudoers.d/deploy-inngest-bootstrap` for syntax validation. The `triggers_replace` sha256 includes the new file. Verify with `grep -c "deploy-inngest-bootstrap" apps/web-platform/infra/server.tf` → ≥3 (trigger + provisioner file + remote-exec).
+- **AC11c (workflow paths filter updated):** `.github/workflows/apply-deploy-pipeline-fix.yml`'s `paths:` filter (line 36-42) includes the new sudoers source file path. Verify with `grep "deploy-inngest-bootstrap" .github/workflows/apply-deploy-pipeline-fix.yml` → ≥1 match.
+- **AC11d (runbook drift fixed):** `knowledge-base/operations/runbooks/github-app-provisioning.md` contains no references to `TF_VAR_github_actions_token`. Verify with `grep -c 'TF_VAR_github_actions_token' knowledge-base/operations/runbooks/github-app-provisioning.md` → `0`. Replaced with `TF_VAR_github_app_installation_id` per the App-auth migration.
+- **AC11e (no `GITHUB_TOKEN` provider override):** `git grep -nE '^\s*GITHUB_TOKEN:' .github/workflows/apply-deploy-pipeline-fix.yml` returns no `env:`-block match (the workflow MAY reference `secrets.GITHUB_TOKEN` for `gh api` calls — that's allowed; what's blocked is an env variable named `GITHUB_TOKEN` that the integrations/github provider's `DefaultFunc` would pick up).
 
 ### Post-merge (operator)
 
@@ -244,16 +295,44 @@ Capture the numeric ID for use in 2.1.
 3.4 Edit `apps/web-platform/infra/kb-drift.tf` comment at lines 48-50 to reference `var.github_app_installation_id` + the App-auth path.
 3.5 GREEN: `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform validate` (must pass after Phase 2.1 is done). Then run a no-op `terraform plan -target=github_actions_secret.doppler_token_kb_drift` and confirm the plan is `0 to add, 0 to change, 0 to destroy` (provider re-auth doesn't change resource state).
 
-### Phase 4 — AGENTS.md rule + index pointer (with budget trim)
+### Phase 4 — AGENTS.md rule + index pointer (with budget trim, REVISED post-deepen)
 
 4.1 Verify current budget: `python3 scripts/lint-agents-rule-budget.py` → `B_ALWAYS=21962 (38B headroom)`.
-4.2 **Trim:** demote `wg-block-pr-ready-on-undeferred-operator-steps` from `AGENTS.core.md` to `AGENTS.rest.md`. Justification per `cq-agents-md-tier-gate`: this gate fires during `/ship` (code-class diff — `AGENTS.rest.md` loads on code class). Update the index in `AGENTS.md` to `→ rest`. Re-run lint; expect `B_ALWAYS ≈ 21500`.
-4.3 Add the new rule to `AGENTS.core.md` under `## Hard Rules`:
+4.2 **Trim strategy (REVISED):** The initial proposal to demote `wg-block-pr-ready-on-undeferred-operator-steps` core→rest is **REJECTED** by loader-class-fit verification (see Enhancement Summary item 2): the gate fires on docs-only PRs (`/ship` on a runbook-only PR is in-scope), and `AGENTS.rest.md` does NOT load on docs-only class per `.claude/hooks/session-rules-loader.sh:103-115`. Demotion would silently disable the gate on a real trigger surface.
 
-> When Soleur infra/CI needs to write GitHub repo state (Secrets, Releases, Issues, PRs, file commits) from infra-time or CI-time code paths, authenticate via GitHub App auth (App ID + installation_id + private key), never PAT/token-based auth [hr-github-app-auth-not-pat]. Apps don't expire, don't require per-operator minting, and survive operator handoff. **Why:** #4144 — PR-H's PAT dependency blocked the entire deploy pipeline for ~14 hours.
+Revised trim: demote `hr-github-api-endpoints-with-enum` from `AGENTS.core.md` to `AGENTS.rest.md`. Loader-class-fit check: the rule applies to API-call code paths (TS/JS/sh) — `HAS_CODE=1` → `core+rest` loads. Trigger surface is exclusively code-class. Safe demotion. Note: `hr-*` rules cannot normally be demoted per CPO sign-off PR #3496 condition 3 — therefore the alternative is a **body trim** of the most verbose hr-* in core. Read `AGENTS.core.md` and identify the longest-prose rule body for inline tightening (target: save ~400-500B without changing rule IDs or semantics).
+
+**Final trim choice (deferred to /work Phase 4.2):** read all hr-* rule bodies; pick the one whose prose can be tightened by ≥400B without semantic loss. Candidates (longest first): `hr-never-label-any-step-as-manual-without`, `hr-exhaust-all-automated-options-before`, `hr-menu-option-ack-not-prod-write-auth`. Show diff at /work time for inline review.
+
+4.3 Add the new rule to `AGENTS.core.md` under `## Hard Rules` (tight single-line form, ≤350B per `cq-agents-md-why-single-line`):
+
+> Infra/CI GitHub writes (Secrets, Releases, Issues, file commits) authenticate via GitHub App (App ID + installation_id + PEM), never PAT [id: hr-github-app-auth-not-pat] [skill-enforced: deepen-plan Phase 4.8]. Apps don't expire, survive operator handoff. **Why:** #4144 — PR-H's PAT blocked the deploy pipeline for ~14h.
+
+Verify size: `awk '/hr-github-app-auth-not-pat/{print length}' AGENTS.core.md` ≤350.
 
 4.4 Add the index pointer to `AGENTS.md`: `- [id: hr-github-app-auth-not-pat] → core`.
-4.5 Re-run `python3 scripts/lint-agents-rule-budget.py` → confirm `B_ALWAYS < 22000` with ≥50B headroom.
+4.5 Re-run `python3 scripts/lint-agents-rule-budget.py` → confirm `B_ALWAYS < 22000` with ≥50B headroom. If budget exceeds, iterate trim until headroom ≥50B.
+
+### Phase 4.5 — Sudoers entry for inngest-bootstrap (FOLD-IN, load-bearing for AC15-AC17)
+
+Discovered at deepen-plan time (Research Reconciliation row 5): the sudoers entry `/etc/sudoers.d/deploy-inngest-bootstrap` referenced in issue #4144's acceptance criteria does NOT exist in Terraform, cloud-init, or on-host. AC15-AC17 (sudoers → webhook → heartbeat) are unachievable without folding the entry into this PR.
+
+4.5.1 Add to `apps/web-platform/infra/cloud-init.yml`'s `write_files` section (so fresh hosts per `hr-fresh-host-provisioning-reachable-from-terraform-apply` get the entry on first boot). Use a minimal-permissive form. The exact content must permit the precise command emitted by the webhook handler — read `apps/web-platform/infra/hooks.json.tmpl` + the inngest extract path to construct the sudoers line; common shape:
+```yaml
+- path: /etc/sudoers.d/deploy-inngest-bootstrap
+  content: |
+    deploy ALL=(root) NOPASSWD: /usr/bin/env INNGEST_CLI_VERSION=* INNGEST_CLI_SHA256=* bash /tmp/inngest-extract.*/inngest-bootstrap.sh
+  owner: root:root
+  permissions: '0440'
+```
+Verify the precise glob shape (`*` in sudoers is a wildcard that matches anything including `/` — for path safety, prefer a stricter ALIAS form. See `man sudoers` PATH section). **Sharp edge:** A too-permissive sudoers entry is a privilege escalation vector. The form above is bounded to the exact extract-dir + script-name pattern; review at /work to confirm.
+
+4.5.2 Add the file to `terraform_data.deploy_pipeline_fix` in `apps/web-platform/infra/server.tf:212-260`:
+- Extend `triggers_replace` sha256 input list to include `file("${path.module}/deploy-inngest-bootstrap.sudoers")` (extract the inline content to a sibling file for cleanliness; mirror the existing pattern of one-file-per-trigger).
+- Add a `provisioner "file"` block writing the same content to `/etc/sudoers.d/deploy-inngest-bootstrap`.
+- Add an inline `provisioner "remote-exec"` after the file is dropped to `chmod 0440` (sudoers requires 0440 or it's ignored) and `visudo -cf /etc/sudoers.d/deploy-inngest-bootstrap` (validates syntax before sudo loads it; an invalid sudoers file locks out sudo entirely).
+
+4.5.3 Update `.github/workflows/apply-deploy-pipeline-fix.yml`'s `paths:` filter (lines 36-42) to include the new `deploy-inngest-bootstrap.sudoers` file, so the auto-apply triggers on future edits. Also extend the workflow's "Capture local hashes" step (lines 150-160) to hash the new file.
 
 ### Phase 5 — Deepen-plan Phase 4.8 gate
 
@@ -293,10 +372,13 @@ Existing `package.json scripts.test` and `bun test plugins/soleur/test/component
 ## Risks and Sharp Edges
 
 - **R1 — App permission gap:** If `permissions.secrets != "write"`, AC14 fails with HTTP 403 on `github_actions_secret`. Mitigation: AC13 probe runs BEFORE AC14; if the probe fails, the operator visits the install-permission URL once. #4115 tracks Manifest-flow automation that eliminates even this click.
-- **R2 — AGENTS.md budget tight:** Current baseline 21962/22000; trim of `wg-block-pr-ready-on-undeferred-operator-steps` (~400-500B) gives runway. If the demotion is rejected at review, alternative trims: `hr-github-api-endpoints-with-enum` (terse rule, ~300B) or `wg-zero-agents-until-user-confirms` (~250B).
-- **R3 — `wg-block-pr-ready-on-undeferred-operator-steps` demotion loader-class fit:** This gate fires during `/ship` (code-class diff with operator-checklist items in the PR body). `AGENTS.rest.md` loads on `code` class (see `.claude/hooks/session-rules-loader.sh:88-115`). Demotion is loader-safe. Verify by reading the loader before committing.
+- **R2 — AGENTS.md budget tight (REVISED post-deepen):** Current baseline 21962/22000. The originally-proposed demotion of `wg-block-pr-ready-on-undeferred-operator-steps` is REJECTED on loader-class-fit grounds (docs-only PRs lose the gate). Revised trim strategy: keep the new rule under 350B (tight single-line) AND body-trim one verbose hr-* rule for ~400B savings without changing semantics. Final choice deferred to /work Phase 4.2 with inline diff review.
+- **R3 — Loader-class-fit on the new rule's "fires when?" surface:** The new `hr-github-app-auth-not-pat` rule applies to plan-write time (deepen-plan Phase 4.8) on plans touching infra/CI. Plan files are `.md` → docs-only. The rule MUST be in `AGENTS.core.md` (always-loaded), NOT in `AGENTS.rest.md`. Confirmed: plan correctly places the rule in core.
 - **R4 — Better Stack PATCH timing:** Per parent ARGUMENTS, flipping `paused=false` before AC17 confirms the heartbeat service is green will trigger email alerts every 90s. Phase 7.8 is the LAST step; AC17 must pass first.
 - **R5 — Existing PAT in Doppler:** If `prd_terraform.GITHUB_ACTIONS_TOKEN` is set (artifact of PR-H), it doesn't cause harm post-migration (no consumer), but it should be deleted to avoid future confusion: `doppler secrets delete GITHUB_ACTIONS_TOKEN -p soleur -c prd_terraform`. Add to Phase 7.
+- **R6 — Sudoers privilege escalation surface (NEW from deepen):** Phase 4.5's sudoers entry uses a glob (`/tmp/inngest-extract.*/inngest-bootstrap.sh`). sudo `*` matches `/` — a crafted path like `/tmp/inngest-extract.foo/../../etc/sudoers.d/inngest-bootstrap.sh` could in principle traverse. Mitigation: use sudo `Cmnd_Alias` with explicit absolute path AND `secure_path=` in the entry; verify with `visudo -cf` before reloading. Add `sudoers-syntax-check` to Phase 4.5.2 as a remote-exec step (validates before sudo loads it; an invalid sudoers file would lock out sudo entirely).
+- **R7 — `terraform_data.deploy_pipeline_fix` `triggers_replace` granularity (NEW from deepen):** Adding a 6th trigger file means ANY change to the new sudoers file forces re-provisioning of ALL 6 files via SSH. Mitigation: this is acceptable per the existing 5-file pattern; the resource was already designed for atomic re-apply of the trigger set. Document in the PR body that the sudoers file's content is stable (only inngest version updates would change it — those are gated by the inngest version pin in `inngest.tf`).
+- **R8 — `--name-transformer tf-var` casing edge case (NEW from deepen):** Doppler's `tf-var` transformer lowercases the env-var name and prefixes `TF_VAR_`. So `GITHUB_APP_INSTALLATION_ID` → `TF_VAR_github_app_installation_id`, which matches the Terraform variable name `github_app_installation_id`. Verified consistent with existing `github_app_id` / `github_app_private_key` / `github_app_client_secret` mappings. No casing surprise.
 
 ### Sharp Edges (general)
 

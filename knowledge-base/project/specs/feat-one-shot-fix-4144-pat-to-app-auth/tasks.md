@@ -33,13 +33,23 @@ plan: knowledge-base/project/plans/2026-05-20-fix-4144-tf-github-provider-pat-to
 - [ ] 3.4 Edit `apps/web-platform/infra/kb-drift.tf` comment to reference App-auth path
 - [ ] 3.5 GREEN: `doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform validate` passes; `terraform plan -target=github_actions_secret.doppler_token_kb_drift` is no-op
 
-## Phase 4 — AGENTS.md rule + index pointer (with budget trim)
+## Phase 4 — AGENTS.md rule + index pointer (REVISED post-deepen)
 
 - [ ] 4.1 Confirm baseline budget (38B headroom)
-- [ ] 4.2 Trim: demote `wg-block-pr-ready-on-undeferred-operator-steps` from `AGENTS.core.md` → `AGENTS.rest.md`; update `AGENTS.md` index
-- [ ] 4.3 Add `[hr-github-app-auth-not-pat]` rule body to `AGENTS.core.md` under "## Hard Rules"
+- [ ] 4.2 Trim (revised): body-trim one verbose hr-* rule in `AGENTS.core.md` for ≥400B savings (NOT the originally-proposed core→rest demotion of `wg-block-pr-ready-on-undeferred-operator-steps` — rejected on loader-class-fit grounds for docs-only `/ship` PRs)
+- [ ] 4.3 Add `[hr-github-app-auth-not-pat]` rule body to `AGENTS.core.md` under "## Hard Rules" — tight single-line form ≤350B
 - [ ] 4.4 Add `[id: hr-github-app-auth-not-pat] → core` pointer to `AGENTS.md`
-- [ ] 4.5 Re-run `python3 scripts/lint-agents-rule-budget.py` → `B_ALWAYS < 22000` (≥50B headroom)
+- [ ] 4.5 Re-run `python3 scripts/lint-agents-rule-budget.py` → `B_ALWAYS < 22000` (≥50B headroom); iterate trim if budget exceeds
+
+## Phase 4.5 — Sudoers entry for inngest-bootstrap (FOLD-IN)
+
+- [ ] 4.5.1 Add `/etc/sudoers.d/deploy-inngest-bootstrap` write_files entry to `apps/web-platform/infra/cloud-init.yml` (`0440 root:root`, command-scoped NOPASSWD)
+- [ ] 4.5.2 Add `provisioner "file"` + `provisioner "remote-exec"` (visudo -cf) blocks to `terraform_data.deploy_pipeline_fix` in `apps/web-platform/infra/server.tf`; extend `triggers_replace`
+- [ ] 4.5.3 Add the new sudoers source file to `.github/workflows/apply-deploy-pipeline-fix.yml` `paths:` filter and `Capture local hashes` step
+
+## Phase 4.6 — Runbook drift fix
+
+- [ ] 4.6.1 Replace `TF_VAR_github_actions_token` references at `knowledge-base/operations/runbooks/github-app-provisioning.md:64,110` with `TF_VAR_github_app_installation_id` + a one-line note that App-auth eliminated the PAT step
 
 ## Phase 5 — Deepen-plan Phase 4.8 gate
 
