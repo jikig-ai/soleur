@@ -12,6 +12,24 @@ requires_cpo_signoff: false
 
 Closes #4195. Operator preference: Option 1 (separate write-capable service token published as `DOPPLER_TOKEN_WRITE` GH repo secret, used only by the sync step). The remaining 12 callsites of `secrets.DOPPLER_TOKEN` keep the existing read-only token — smallest blast-radius change.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** Research Reconciliation (+1 row), Sharp Edges (+3 entries), Acceptance Criteria (+2 ACs), Implementation Phases (Phase 0 expanded with 2 preconditions).
+
+### Key Improvements
+
+1. **Doppler provider source-verified** (not docs-paraphrased) — confirmed `access` enum is `{"read","read/write"}`; confirmed `name` is `ForceNew`; confirmed `key` is `Computed + Sensitive` and CANNOT be re-read after creation (state-loss = unrecoverable, must `-replace`).
+2. **In-band-mint precedent fully grounded** — this PR is the third invocation of the canonical pattern (`kb-drift.tf` was the first; the recent #4150 cleanup added a second + retired 4 operator-mint variables). The pattern is now load-bearing, and AGENTS.md rule `hr-tf-variable-no-operator-mint-default` explicitly endorses it. Plan inherits the same discipline: zero operator-mint, zero new vendor accounts.
+3. **Bootstrap-cycle is genuine** — verified by reading the GH Actions runtime contract: `${{ secrets.X }}` is interpolated at job-start, NOT step-start. A secret created mid-workflow by `github_actions_secret.X` is invisible to the same workflow run. Mitigation (precondition guard + warning + operator re-fire) is the only correct shape; alternatives (manual `gh secret set` pre-seed, two-job workflow with `needs:`) all defeat the in-band-mint discipline or add structural complexity for a one-time bootstrap event.
+4. **Stderr-redirect removal is load-bearing for #4195** — the original failure was masked precisely because of `>/dev/null 2>&1`. Keeping the redirect would silently re-create the same observability gap on the next failure class (e.g., quota exhaustion, network partition during the API call).
+
+### New Considerations Discovered
+
+- **State-storage sharp edge:** `doppler_service_token.write.key` lands in `terraform.tfstate` in R2. R2 backend uses encrypted bucket; same blast-radius posture as the existing `doppler_service_token.kb_drift.key`. Document in the new HCL header.
+- **Service-token name collision:** if a Doppler service token named `"ci-tf-write"` already exists in `prd_terraform` (e.g., from an aborted prior attempt or a manual test), the Doppler API `POST /v3/configs/config/tokens` returns the NEW token (Doppler API allows duplicate names; uses opaque slug for uniqueness). The TF resource owns the new slug; the old token becomes orphaned and must be cleaned up manually. Phase 0 must check.
+- **App-permission alignment:** the `integrations/github` App-auth at `main.tf:65-72` already has `secrets:write` (added during the #4150 cleanup per learning `2026-05-20-tf-operator-mint-variables-are-design-smell.md` session-error #1). No new App permission needed for this PR. Documented explicitly so the next reader does not re-investigate.
+
 ## Overview
 
 PR #4181 added a post-apply step in `apply-web-platform-infra.yml` that writes the freshly-rotated `cloudflare_zero_trust_access_service_token.ci_ssh` outputs back into Doppler `prd_terraform` as `CI_SSH_ACCESS_TOKEN_ID` / `CI_SSH_ACCESS_TOKEN_SECRET`. The step failed at first execution (run #26176906538, 2026-05-20) because the workflow's `secrets.DOPPLER_TOKEN` is a `prd_terraform`-scoped service token with `read` access — `doppler secrets set` requires `read/write`. The operator recovered manually via `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh` using a personal write-capable token.
@@ -27,6 +45,8 @@ The fix is in-band (provider-mint, no operator-mint) per `hr-tf-variable-no-oper
 **If this leaks, the user's [data / workflow / money] is exposed via:** A leaked `DOPPLER_TOKEN_WRITE` grants write to `prd_terraform` (Cloudflare, Hetzner, GitHub-App, Inngest, Resend credentials, plus `var.admin_ips`). A malicious overwrite of `admin_ips` would broaden SSH allowlist; a malicious overwrite of `CI_SSH_ACCESS_TOKEN_*` would not be exploitable without the corresponding CF Access service-token issuance (the actual rotation is in Cloudflare's hands). Net incremental write surface vs. the existing `DOPPLER_TOKEN_TF` workplace token already in `prd_terraform`: zero — `DOPPLER_TOKEN_TF` (the provider-auth token consumed by the `doppler` provider) already has full write to `prd_terraform`. The new token narrows blast radius (config-scoped, not workplace-scope) and lives only in `secrets.DOPPLER_TOKEN_WRITE`.
 
 **Brand-survival threshold:** none — infrastructure plumbing, operator-only observability, no first-party user data on the path.
+
+- `threshold: none, reason:` diff matches the canonical sensitive-path regex (touches `.github/workflows/apply-web-platform-infra.yml` and `apps/web-platform/infra/`), but the net incremental write surface vs. the existing `DOPPLER_TOKEN_TF` workplace-scope provider-auth token is zero or negative — the new `DOPPLER_TOKEN_WRITE` is config-scoped to `prd_terraform` only and lives in a single repo secret, while the existing `DOPPLER_TOKEN_TF` already has full write to every config including `prd_terraform`. No user data, no first-party PII path, no payment surface; failure mode is operator-observable workflow failure with the local-fallback script as immediate recovery.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -54,14 +74,27 @@ The fix is in-band (provider-mint, no operator-mint) per `hr-tf-variable-no-oper
 ### Phase 0 — Preconditions and grounding
 
 - Verify `var.doppler_token_tf` (workplace-scope personal token in `prd_terraform`) is currently usable to mint a new config-scoped service token. Read `variables.tf:137` confirms it's the workplace personal token. No new var needed.
-- Verify Doppler provider 1.21.2 supports `access = "read/write"` (confirmed: provider source at `doppler/resource_service_token.go` — `validation.StringInSlice([]string{"read", "read/write"}, false)`).
-- Verify `github_actions_secret` is already a working resource in this root (`kb-drift.tf:82-86` proves it). The App-installation auth at `main.tf:65-72` covers secret publishing.
+- Verify Doppler provider 1.21.2 supports `access = "read/write"` (confirmed: provider source at `doppler/resource_service_token.go` — `Schema["access"].ValidateFunc = validation.StringInSlice([]string{"read", "read/write"}, false)`; default is `"read"`).
+- Verify `github_actions_secret` is already a working resource in this root (`kb-drift.tf:82-86` proves it). The App-installation auth at `main.tf:65-72` covers secret publishing AND already has `secrets:write` (added during #4150 cleanup; see learning `2026-05-20-tf-operator-mint-variables-are-design-smell.md` session error #1). **No new App permission required for this PR.**
 - Verify `DOPPLER_TOKEN_WRITE` is NOT currently set as a GH repo secret (must be created in-band, not pre-seeded):
 
   ```bash
   gh api repos/jikig-ai/soleur/actions/secrets/DOPPLER_TOKEN_WRITE --jq '.name' 2>&1 | head -3
-  # Expected: HTTP 404 (secret does not exist yet)
+  # Expected: HTTP 404 (secret does not exist yet) — if it exists, delete it before merge:
+  #   gh secret delete DOPPLER_TOKEN_WRITE --repo jikig-ai/soleur
+  # so the in-band mint owns the value end-to-end (avoids state-vs-secret drift).
   ```
+
+- Verify no Doppler service token named `ci-tf-write` already exists in `prd_terraform` (the Doppler API allows duplicates by name; the new TF-managed token would orphan the old one):
+
+  ```bash
+  doppler configs tokens --project soleur --config prd_terraform --json \
+    | jq -r '.[] | select(.name == "ci-tf-write") | "EXISTS:\(.slug)"'
+  # Expected: no output. If a row matches, delete the orphan first:
+  #   doppler configs tokens revoke --project soleur --config prd_terraform --slug <slug>
+  ```
+
+- Verify the `integrations/github` App-installation (id `122213433` per `main.tf:69`) has `secrets:write` (`gh api apps/soleur-ai --jq '.permissions.secrets'` should return `"write"`). If `"read"` or absent, the in-band `github_actions_secret` resource will fail with `403 Resource not accessible by integration` — out-of-scope to widen here; defer with a tracking issue (would re-open the #4150 App-permission-mutation workflow).
 
 ### Phase 1 — Author HCL (`doppler-write-token.tf`)
 
@@ -262,6 +295,57 @@ Write `knowledge-base/project/learnings/2026-05-20-doppler-write-token-bootstrap
 
 - [ ] AC14 — Close issue: `gh issue close 4195 --comment "Resolved via PR #<N>. <run-url> shows the second apply's sync step succeeded."`
 
+- [ ] AC15 — Phase 0 orphan-token check completed: PR body includes a one-line preamble like `Phase 0: no orphan ci-tf-write token in prd_terraform (doppler configs tokens --json | jq …); no pre-existing DOPPLER_TOKEN_WRITE GH secret (gh api 404).` This is evidence-of-check, not a re-run gate.
+
+- [ ] AC16 — `secrets:write` App permission audit: PR body includes `gh api apps/soleur-ai --jq '.permissions.secrets'` output (`"write"`) confirming the App-installation auth can publish `github_actions_secret`. Cited evidence — no re-run at AC time.
+
+## Research Insights
+
+**Doppler provider semantics (source-verified, not docs-paraphrased):**
+
+```go
+// DopplerHQ/terraform-provider-doppler doppler/resource_service_token.go
+"access": {
+    Description:  "The access level (read or read/write)",
+    Type:         schema.TypeString,
+    Optional:     true,
+    Default:      "read",
+    ValidateFunc: validation.StringInSlice([]string{"read", "read/write"}, false),
+    ForceNew:     true,
+},
+"key": {
+    Description: "The key for the Doppler service token",
+    Type:        schema.TypeString,
+    Computed:    true,
+    Sensitive:   true,
+},
+// Read() comment: "`key` cannot be read after initial creation"
+```
+
+Implications: `access`, `project`, `config`, `name` are all `ForceNew` — any edit triggers destroy-then-create (state-tracked rotation). `key` is `Sensitive` (never logged) but persists in `terraform.tfstate` forever; state-loss is unrecoverable without `-replace`.
+
+**Doppler API duplicate-name behavior:**
+
+The Doppler API `POST /v3/configs/config/tokens` does NOT enforce name uniqueness within a project+config — duplicates are allowed, identified by opaque slug. Terraform tracks the slug in its resource ID (`<project>.<config>.<slug>`). A pre-existing manual-mint token with the same name will not block a TF apply; the new resource will mint a new token and orphan the old one. The Phase 0 pre-check is the only guard.
+
+**GitHub Actions secret-interpolation timing:**
+
+Per <https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions#using-secrets-in-a-workflow>, secrets are resolved at job-start (when the runner is provisioned + receives its environment). A secret created mid-run by `github_actions_secret` (Terraform or `gh secret set`) is invisible to the same job. The bootstrap-cycle warning + operator re-fire is the correct mitigation for one-time first-apply.
+
+**Precedent file inventory** (canonical in-band Doppler+GH-secret pattern):
+
+- `apps/web-platform/infra/kb-drift.tf:65-86` — original pattern (PR-H #3244 / #4150)
+- `apps/web-platform/infra/inngest.tf` — sibling pattern (random_id-based credentials)
+- `apps/web-platform/infra/main.tf:65-72` — App-installation auth for the `integrations/github` provider
+- AGENTS.md rule `hr-tf-variable-no-operator-mint-default` — enforces this pattern by default
+
+**References:**
+
+- Doppler provider source: <https://github.com/DopplerHQ/terraform-provider-doppler/blob/master/doppler/resource_service_token.go>
+- GitHub Actions secrets timing: <https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions>
+- `integrations/github` App-auth: <https://registry.terraform.io/providers/integrations/github/6.12.1/docs#authenticating-via-github-app-installation>
+- Canonical autonomy-hierarchy learning: `knowledge-base/project/learnings/best-practices/2026-05-20-tf-operator-mint-variables-are-design-smell.md`
+
 ## Test Strategy
 
 No new unit tests — this is infrastructure config. Verification is via:
@@ -348,6 +432,10 @@ discoverability_test:
 - **Stderr-surfacing change:** removing `>/dev/null 2>&1` from the two `doppler secrets set` lines surfaces success-path stdout too (the just-set value). The `--silent` flag suppresses Doppler CLI's own value-echo, so stdout is still empty on success. If a future Doppler CLI version changes `--silent`'s semantic, the GH Actions log could leak a token value. Mitigation: `printf '::add-mask::%s\n' "$CLIENT_ID"` is already in place at lines 333-334. The `add-mask` directive protects against this regression class.
 - **Net incremental write surface analysis:** the existing `var.doppler_token_tf` (workplace-scope personal token) ALREADY has full write to `prd_terraform`. The new `DOPPLER_TOKEN_WRITE` is a strict narrowing (config-scoped). The reverse claim "this adds new write surface" is false — at most, this adds a SECOND token with the same surface as the existing one. Net is zero or negative.
 - **`Closes #4195` placement:** this is single-domain infra (NOT `ops-only-prod-write`-class — the fix lives in code, not in a post-merge runbook). The fix manifests on the next merge auto-apply, which IS pre-merge from the human's perspective (the merge IS the trigger). Use `Closes #4195` per `wg-use-closes-n-in-pr-body-not-title-to`; the issue auto-closes on merge, and the apply confirms the fix.
+- **`key` is `Computed + Sensitive` and CANNOT be re-read** — Doppler provider source for `resourceServiceTokenRead` explicitly notes `// "key" cannot be read after initial creation`. The `key` value lands in `terraform.tfstate` on create and is never re-fetched from the Doppler API. Implication: if the state file is lost or the resource is removed from state via `terraform state rm doppler_service_token.write`, the only recovery is `terraform apply -replace=doppler_service_token.write`, which mints a NEW token and orphans the old one (still valid; must be revoked manually via `doppler configs tokens revoke`). Document this in the new HCL header.
+- **Service-token name is not a uniqueness constraint** — the Doppler API allows multiple tokens with the same `name` in the same project+config (uniqueness is the opaque slug). Phase 0's `doppler configs tokens --json` pre-check is the correct guard; if skipped, the in-band create will silently mint a duplicate and orphan the prior token. Doppler dashboard cleanup is manual (no auto-GC of orphaned tokens).
+- **GH Actions secrets are job-scoped, not step-scoped** — `${{ secrets.DOPPLER_TOKEN_WRITE }}` is interpolated at job-start (when the runner is provisioned), not step-start. A secret created by an earlier step in the same job is invisible to later steps in the same job. The two-job alternative (`needs:` chaining the publish + consume into separate jobs) would technically work but adds structural complexity for a one-time bootstrap event — the warning + operator re-fire is the simplest correct shape. The behavior is documented at <https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions>.
+- **`hr-tf-variable-no-operator-mint-default` compliance** — this PR introduces zero new TF variables. The `doppler_service_token.write` resource is minted from the existing `var.doppler_token_tf` workplace token (which already authorizes minting in `prd_terraform`). The `github_actions_secret.doppler_token_write` resource is published via the existing App-installation auth (no new var, no new App permission, no new PAT). Per the canonical autonomy hierarchy in learning `2026-05-20-tf-operator-mint-variables-are-design-smell.md`, this is the lowest-cost lifecycle shape.
 
 ## Open Code-Review Overlap
 
