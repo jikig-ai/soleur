@@ -35,7 +35,7 @@ Derived from [the plan](../../plans/2026-05-20-fix-apply-web-platform-infra-ssh-
 - [ ] 3.1 Commit: `fix(infra): add ephemeral SSH key step to apply-web-platform-infra workflow (#4166)`. PR body MUST include `Closes #4166`.
 - [ ] 3.2 Mark PR ready, request CODEOWNERS review on `.github/workflows/`.
 - [ ] 3.3 After merge, the apply workflow auto-triggers on `main`. Operator approves the `web-platform-infra-apply` environment gate.
-- [ ] 3.4 Verify the run reaches the `Terraform apply` step (past the previously-failing plan step). Use `gh run view <run-id> --log-failed 2>&1 | grep -c "Invalid function argument"` → 0.
+- [ ] 3.4 Verify the run reaches the `Terraform apply` step (past the previously-failing plan step). Use `gh run view <run-id> --log-failed 2>&1 | grep -cE "Invalid function argument|no file exists at"` → 0 (matches both AC8 grep tokens).
 - [ ] 3.5 If apply succeeds end-to-end, close #4166 with the run-link.
 - [ ] 3.6 If apply fails for a NEW unrelated reason (next gate in the cascade), file a follow-through issue per the `#4147 → #4150 → #4166 → ?` pattern.
 

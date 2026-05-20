@@ -135,7 +135,7 @@ jobs:
         # HCL evaluates file() at plan-time regardless of -target= filtering.
         # hcloud_ssh_key.default is NOT in the apply allow-list (header lines
         # 21-23), so this dummy public key is never consumed -- it just
-        # satisfies HCL parsing. Mirrors scheduled-terraform-drift.yml:50-52.
+        # satisfies HCL parsing. Mirrors scheduled-terraform-drift.yml:49-52.
         run: |
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
           printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
