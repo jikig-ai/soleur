@@ -415,9 +415,9 @@ Phase 4.5 of deepen-plan fires because the plan drives `terraform apply` on a ro
 
 ## Status
 
-- [ ] Phase 0 preconditions verified
-- [ ] Phase 1: empty workflow scaffolded, actionlint passes
-- [ ] Phase 2: full workflow filled in
-- [ ] Phase 3: comment + CODEOWNERS sweep
+- [x] Phase 0 preconditions verified
+- [x] Phase 1: empty workflow scaffolded, actionlint passes
+- [x] Phase 2: full workflow filled in
+- [x] Phase 3: comment + CODEOWNERS sweep
 - [ ] PR opened, AC1–AC10 verified
 - [ ] PR merged, AC11–AC14 verified
