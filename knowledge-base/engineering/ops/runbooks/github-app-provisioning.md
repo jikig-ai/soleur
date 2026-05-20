@@ -8,7 +8,7 @@ related: ["#4115", "#3187", "#4066"]
 # GitHub App provisioning runbook
 
 Provision the Soleur GitHub App from a committed manifest, then paste the
-5 identity credentials into Doppler. The manifest pre-fills GitHub's 12-field
+3 identity credentials into Doppler. The manifest pre-fills GitHub's 12-field
 App-create form so the operator clicks one button instead of typing 12 values.
 
 **Operator-only.** Single manual gate: the click on GitHub's App-create form
@@ -56,7 +56,7 @@ The manifest pre-fills:
 - Webhook secret: **NOT** pre-filled (Soleur-managed via `random_id` in
   `apps/web-platform/infra/github-app.tf` — see Step 4).
 
-### Step 3 — Paste 5 identity credentials into Doppler `prd`
+### Step 3 — Paste 3 identity credentials into Doppler `prd`
 
 From the App's settings page, copy each value into Doppler. **Prefer the
 CLI form** below (no leak via clipboard / no Doppler-UI surviving-secrets
@@ -78,10 +78,13 @@ table.
 | GitHub field | Doppler key (project: `soleur`, config: `prd`) |
 |---|---|
 | App ID | `GITHUB_APP_ID` |
-| Client ID | `GITHUB_APP_CLIENT_ID` |
-| Client Secret (generate via *Generate a new client secret*) | `GITHUB_APP_CLIENT_SECRET` |
 | Private Key (download `.pem`; base64-encode — see below) | `GITHUB_APP_PRIVATE_KEY` |
 | Webhook Secret (Soleur-managed — see Step 4) | `GITHUB_APP_WEBHOOK_SECRET` |
+
+Note: GitHub's App settings page also surfaces `Client ID` and `Client Secret`,
+but the codebase no longer reads them (PR #4150 deleted both as dead plumbing
+with zero TS consumers). Skip them when copying — they're authoritative on
+GitHub's side but unused in Soleur.
 
 #### PEM base64 encode — cross-platform one-liner
 

@@ -31,11 +31,12 @@ const TF_PATH = path.join(
   "apps/web-platform/infra/github-app.tf",
 );
 
+// PR #4150 deleted `github_app_client_id` + `github_app_client_secret` as dead
+// plumbing (zero TS consumers). Post-#4150, github-app.tf declares only 3
+// doppler_secret resources for the App identity material.
 const EXPECTED_TF_SECRETS = [
   "GITHUB_APP_ID",
   "GITHUB_APP_PRIVATE_KEY",
-  "GITHUB_APP_CLIENT_ID",
-  "GITHUB_APP_CLIENT_SECRET",
   "GITHUB_APP_WEBHOOK_SECRET",
 ];
 
