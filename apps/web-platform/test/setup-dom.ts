@@ -50,9 +50,10 @@ function resetBrowserLikeGlobals() {
 //
 // Strategy: install loud stubs in `beforeEach` ONLY when the current global is
 // still the pristine happy-dom reference (or the blockade itself, for idempotent
-// re-install). If a test file already swapped in a mock — module-init
-// `vi.stubGlobal("fetch", mockFetch)`, file-level `globalThis.WebSocket =
-// MockWebSocket`, or a vi.spyOn wrapper — leave it alone. This preserves
+// re-install). If a test file already swapped in a mock at any earlier point —
+// module-init `vi.stubGlobal("fetch", mockFetch)` (load-bearing for 5+ existing
+// `.test.tsx` files), file-level `globalThis.WebSocket = MockWebSocket`, or a
+// `vi.spyOn(globalThis, "fetch")` wrapper — leave it alone. This preserves
 // pre-blockade test patterns and keeps file-level beforeEach overrides
 // (which run AFTER this hook in vitest's composition chain) free to win.
 class BlockedWebSocket {
