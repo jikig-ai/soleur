@@ -13,7 +13,7 @@ description: One-shot bench of kb-search + bare-grep retrieval against the learn
 
 ## TL;DR
 
-Bucket: **`reopen-rag`**. `R@5(heavy, kb-search) = 0.1449` across 1117 learnings.
+Bucket: **`reopen-rag`**. `R@5(heavy, kb-search) = 0.1331` across 1127 learnings.
 
 **Recommended action:** `Closes #4043`. File ONE follow-up issue to reopen the 2026-04-07 RAG/embeddings decision.
 
@@ -35,30 +35,30 @@ Per the plan (`knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-
 
 |                      | kb-search    | bare grep    |
 |---                   |---           |---           |
-| **R@5 identity**     | 0.4946  | 0.9508  |
-| **R@5 light**        | 0.4043  | 0.7612  |
-| **R@5 heavy**        | 0.1449  | 0.3131  |
-| **R@10 identity**    | 0.6288 | 0.9615 |
-| **R@10 light**       | 0.5143 | 0.7987 |
-| **R@10 heavy**       | 0.1950 | 0.3623 |
-| **MRR identity**     | 0.3354 | 0.9096 |
-| **MRR light**        | 0.2759 | 0.6802 |
-| **MRR heavy**        | 0.0896 | 0.2548 |
+| **R@5 identity**     | 0.4969  | 0.9521  |
+| **R@5 light**        | 0.4037  | 0.7471  |
+| **R@5 heavy**        | 0.1331  | 0.3061  |
+| **R@10 identity**    | 0.6300 | 0.9627 |
+| **R@10 light**       | 0.5093 | 0.7950 |
+| **R@10 heavy**       | 0.1908 | 0.3727 |
+| **MRR identity**     | 0.3386 | 0.9112 |
+| **MRR light**        | 0.2668 | 0.6714 |
+| **MRR heavy**        | 0.0910 | 0.2389 |
 
 ### Gap signals
 
-- **Honesty gap (R@5 identity − heavy, kb-search):** 0.3497 — if < 0.05 the heavy paraphrase is too close to identity and prompts need tightening before treating corpus numbers as load-bearing.
-- **Skill-ROI gap (R@5 heavy: kb-search − grep):** -0.1682 — **negative** — bare grep outperforms kb-search at heavy paraphrase. The two-tier strategy's INDEX.md tier-1 hits displace corpus content hits from the cap-20, hurting recall on hard queries.
+- **Honesty gap (R@5 identity − heavy, kb-search):** 0.3638 — if < 0.05 the heavy paraphrase is too close to identity and prompts need tightening before treating corpus numbers as load-bearing.
+- **Skill-ROI gap (R@5 heavy: kb-search − grep):** -0.1730 — **negative** — bare grep outperforms kb-search at heavy paraphrase. The two-tier strategy's INDEX.md tier-1 hits displace corpus content hits from the cap-20, hurting recall on hard queries.
 
 ### Fixture-seed sub-corpus (7 seeds, heavy-paraphrase pass)
 
-- `knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md` — kb-search rank: null, grep rank: 5
+- `knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md` — kb-search rank: null, grep rank: null
 - `knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md` — kb-search rank: null, grep rank: null
 - `knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md` — kb-search rank: null, grep rank: null
 - `knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md` — kb-search rank: null, grep rank: null
 - `knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md` — kb-search rank: null, grep rank: null
-- `knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md` — kb-search rank: 15, grep rank: 12
-- `knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md` — kb-search rank: 1, grep rank: 3
+- `knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md` — kb-search rank: null, grep rank: null
+- `knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md` — kb-search rank: null, grep rank: null
 
 If all 7 are findable (rank ≤ 5) the methodology may be too easy; if all 7 are unfindable the diagnostic is detecting the right shapes.
 
@@ -68,22 +68,22 @@ If all 7 are findable (rank ≤ 5) the methodology may be too easy; if all 7 are
 - `knowledge-base/project/learnings/2026-02-06-spec-workflow-implementation.md` — cause: **content-shape**
 - `knowledge-base/project/learnings/2026-02-09-parallel-subagent-fan-out-in-work-command.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-09-plugin-staleness-audit-patterns.md` — cause: **unknown**
-- `knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md` — cause: **retriever-miss**
+- `knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md` — cause: **unknown**
-- `knowledge-base/project/learnings/2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md` — cause: **unknown**
+- `knowledge-base/project/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-12-command-vs-skill-selection-criteria.md` — cause: **unknown**
+- `knowledge-base/project/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-12-review-compound-before-commit-workflow.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-12-ship-integration-pattern-for-post-merge-steps.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-13-agent-prompt-sharp-edges-only.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-13-base-href-breaks-local-dev-server.md` — cause: **unknown**
-- `knowledge-base/project/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-13-static-docs-site-from-brand-guide.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-13-terraform-best-practices-research.md` — cause: **content-shape**
-- `knowledge-base/project/learnings/2026-02-14-google-fonts-variable-font-deduplication.md` — cause: **unknown**
+- `knowledge-base/project/learnings/2026-02-14-google-fonts-variable-font-deduplication.md` — cause: **retriever-miss**
 - `knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md` — cause: **unknown**
 - `knowledge-base/project/learnings/2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md` — cause: **unknown**
-- `knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md` — cause: **retriever-miss**
-- `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md` — cause: **retriever-miss**
+- `knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md` — cause: **unknown**
+- `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md` — cause: **unknown**
 
 ## Recommended Action
 
@@ -92,7 +92,7 @@ If all 7 are findable (rank ≤ 5) the methodology may be too easy; if all 7 are
 Run this verbatim before marking PR #4045 ready:
 
 ```bash
-gh issue close 4043 --comment "R@5(heavy, kb-search)=0.1449 < 0.4. Reopening the 2026-04-07 RAG/embeddings decision. See knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md."
+gh issue close 4043 --comment "R@5(heavy, kb-search)=0.1331 < 0.4. Reopening the 2026-04-07 RAG/embeddings decision. See knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md."
 ```
 
 Per plan, atomic closure via `Closes #4043` in PR body lands the close on merge.

@@ -50,7 +50,7 @@ This spec reshapes #4042 as a **pre-committed conditional action ladder**: when 
 
 - **FR3 — Branch B: `worst_n.length ∈ [6, 20]`.** Build `scripts/learning-archive-candidates.sh` per TR1–TR6 below. Script emits a markdown report; operator triages from report, authors archive PR. Closes #4042 atomically via the archive PR.
 
-- **FR4 — Branch C: `worst_n.length == 20` (cap hit) AND `extraction_stats` suggests truncation.** Do not act on a truncated list. File a follow-up issue to extend `scripts/learning-retrieval-bench.sh` with `r5_zero_count` (total) reported alongside `worst_n`. Leave #4042 open with a pointer comment to the follow-up issue.
+- **FR4 — Branch C: `worst_n.length == 20` (cap hit) AND `extraction_stats` suggests truncation.** Do not act on a truncated list. **FIRED 2026-05-19** by first bench run (see Bench Run Results in the brainstorm doc). The deeper blocker dominates: `gap_skill_roi = −0.173` means `kb-search` performs worse than bare `grep` at heavy paraphrase, so "low R@K = archive candidate" cannot distinguish stale content from broken retrieval. Action: leave #4042 open and block on **#4119** (reopen 2026-04-07 RAG/embeddings decision). Re-enter the ladder after #4119's outcome ships a working retriever AND the bench is re-run with R@5(heavy, kb-search) ≥ 0.4. The `r5_zero_count` bench AC extension is a sibling minor improvement, not the load-bearing next step.
 
 - **FR5 — Cause filter (Branch B only).** Drop `worst_n` entries whose `cause` ∈ {`missing-frontmatter`, `slug-mismatch`} from the archive candidate list. Those route to the sibling's `surface-rewrites` bucket. Archive considers only `cause` ∈ {`content-shape`, `cross-category-dup`, `unknown`}.
 
@@ -86,7 +86,7 @@ This spec reshapes #4042 as a **pre-committed conditional action ladder**: when 
 
 - **AC3 — Branch B AC (when script is built).** Script self-test passes. Running against the actual bench JSON produces a markdown report at the expected path. Report's `recommendation` column for any candidate with `grep_rank == 1` is `keep`. Report's `recommendation` for any `cause ∈ {missing-frontmatter, slug-mismatch}` is `review` (route to rewrites bucket) — explicitly not `archive`.
 
-- **AC4 — Branch C AC.** When `worst_n.length == 20`, the action is: file follow-up issue against `scripts/learning-retrieval-bench.sh` to extend its AC5 schema with `r5_zero_count` (corpus-wide). Comment on #4042 linking the follow-up. Do not author any archival action until the bench is extended and re-run.
+- **AC4 — Branch C AC.** When `worst_n.length == 20` AND the bench shows `gap_skill_roi < 0` (broken retriever): block #4042 on the reopen-rag follow-up (#4119). When `worst_n.length == 20` AND `gap_skill_roi ≥ 0` (cap hit but retriever sound): file follow-up against `scripts/learning-retrieval-bench.sh` to extend its AC5 schema with `r5_zero_count` (corpus-wide). In either case, do not author any archival action. The 2026-05-19 run fired the first branch.
 
 - **AC5 — Opt-out enforcement.** If a learning has `archive: never` frontmatter, the script (Branch B) and the operator (Branch A) must not include it in the archive recommendation. AC verified via TR4 self-test case (d).
 

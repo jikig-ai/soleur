@@ -85,3 +85,54 @@ Lane override: none. Inferred=single-domain (Engineering), chosen=single-domain 
 ## Productize Candidate
 
 None. The proposed work is itself conditional and one-shot; it is not a recurring pattern that would benefit from a Soleur skill.
+
+## Bench Run Results (2026-05-19)
+
+The retrieval bench (`scripts/learning-retrieval-bench.sh`) ran for the first time on 2026-05-19 against 1127 learnings. Cost: $3.10. Wall time: ~50 min.
+
+### Headline numbers
+
+| | kb-search | bare grep |
+|---|---|---|
+| R@5 identity | 0.497 | 0.952 |
+| R@5 light    | 0.404 | 0.747 |
+| **R@5 heavy** | **0.133** | **0.306** |
+| MRR heavy    | 0.091 | 0.239 |
+
+**Gap signals:**
+
+- `gap_honesty = 0.3638` (identity − heavy, kb-search) — well above the 0.05 methodology floor; the heavy-paraphrase numbers are honest.
+- `gap_skill_roi = −0.1730` (heavy: kb-search − grep) — **NEGATIVE**. Bare grep outperforms kb-search on hard queries. The two-tier strategy's INDEX.md tier-1 hits displace corpus content hits from the cap-20.
+
+### Sibling bench bucket
+
+Bucket fired: **`reopen-rag`** (per the sibling brainstorm's pre-committed ladder, `R@5(heavy, kb-search) < 0.4` triggers RAG reopen). Follow-up filed: **#4119** — "reopen 2026-04-07 KB retrieval decision."
+
+### This brainstorm's ladder
+
+**Branch C fires:** `worst_n.length = 20` (cap hit). But the spec's literal Branch C action ("extend bench with `r5_zero_count`") is no longer the load-bearing next step. The bench's `gap_skill_roi = −0.173` shows the retriever itself is broken, which means `worst_n` cannot distinguish stale content from broken retrieval — the entire archive-by-R@K mechanism is premised on a working retriever.
+
+Spec FR4 and AC4 updated to reflect: #4042 blocks on #4119's outcome (a working retriever + R@5(heavy, kb-search) ≥ 0.4 on a re-run bench).
+
+### Worst-N cause distribution (truncated at 20)
+
+- `unknown`: 17
+- `content-shape`: 2
+- `retriever-miss`: 1 (NEW cause, not in spec's original 5-cause enum — the bench added it after the first run's bug-fix cycle, see findings file's Bench Revision History)
+- `missing-frontmatter`: 0
+- `slug-mismatch`: 0
+- `cross-category-dup`: 0
+
+The all-`unknown`-dominant distribution is itself evidence the cause-classifier is unable to attribute most retrieval failures to the spec's named buckets — likely because the broken-retriever floor masks per-file causes. Re-classification after #4119 ships will produce a more useful distribution.
+
+### Methodology validation
+
+All 7 fixture seeds (pre-known retrieval-failure shapes named in the bench plan) returned null rank in both retrievers — the diagnostic is detecting the right shapes. The first bench run had three bugs (jq null-rank drop, sentence-as-grep-query, gobwas glob coverage) caught and fixed before the run whose numbers appear above.
+
+### What we are NOT doing now (despite the data)
+
+- NOT archiving any learning from `worst_n`. The retriever is broken; the candidate list is noise plus signal, indistinguishable.
+- NOT building `scripts/learning-archive-candidates.sh`. Same reason — the input substrate is unsound.
+- NOT closing #4042. It remains open with a pointer to #4119; re-enter the ladder after #4119 ships.
+
+Pre-committing the ladder before the bench was the right call — without it, the operator would have negotiated with the data. The ladder said "if Branch C fires, do not archive"; the bench fired Branch C; we are not archiving.
