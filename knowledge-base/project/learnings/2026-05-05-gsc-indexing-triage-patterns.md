@@ -1,3 +1,10 @@
+---
+title: GSC critical-indexing triage patterns
+date: 2026-05-05
+category: engineering
+tags: [integration-issues, docs-site, seo, cloudflare, observability]
+---
+
 # Learning: GSC critical-indexing triage patterns
 
 ## Problem

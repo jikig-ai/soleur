@@ -1,3 +1,10 @@
+---
+title: brainstorm capability-gap claims must grep the repo before declaring
+date: 2026-05-05
+category: shell-scripting
+tags: [best-practices, brainstorm, plan, plan-review, terraform]
+---
+
 # Learning: brainstorm capability-gap claims must grep the repo before declaring
 
 ## Problem

@@ -1,16 +1,13 @@
 ---
+title: Stale Budget Framing in Issue Body Triggers Scope-Pivot Churn
 date: 2026-05-20
-type: workflow-pattern
+category: engineering
+tags: [stale, budget, framing, issue, body, triggers, scope, pivot, churn]
 domain: planning
+related: [cq-write-failing-tests-before, wg-when-an-audit-identifies-pre-existing]
 trigger_pr: 4118
-trigger_session_artifacts:
-  - knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md
-  - https://github.com/jikig-ai/soleur/pull/4127 (closed — first attempt, framing was correct at file time)
-  - https://github.com/jikig-ai/soleur/pull/4143 (closed — second attempt, framing collapsed mid-planning)
-  - https://github.com/jikig-ai/soleur/issues/4142 (closed — PR-1 split that became unnecessary)
-related:
-  - cq-write-failing-tests-before  # plan-quoted numbers are preconditions, not facts
-  - wg-when-an-audit-identifies-pre-existing
+trigger_session_artifacts: [knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md, https://github.com/jikig-ai/soleur/pull/4127 (closed — first attempt, framing was correct at file time), https://github.com/jikig-ai/soleur/pull/4143 (closed — second attempt, framing collapsed mid-planning), https://github.com/jikig-ai/soleur/issues/4142 (closed — PR-1 split that became unnecessary)]
+type: workflow-pattern
 ---
 
 # Stale Budget Framing in Issue Body Triggers Scope-Pivot Churn

@@ -1,3 +1,10 @@
+---
+title: Reddit API Automation Risk Assessment
+date: 2026-03-12
+category: engineering
+tags: [integration-issues, distribution-strategy]
+---
+
 # Learning: Reddit API Automation Risk Assessment
 
 ## Problem

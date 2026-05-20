@@ -1,3 +1,10 @@
+---
+title: awk scoping for YAML frontmatter parsing in shell scripts
+date: 2026-03-05
+category: shell-scripting
+tags: [logic-errors, ralph-loop]
+---
+
 # Learning: awk scoping for YAML frontmatter parsing in shell scripts
 
 ## Problem

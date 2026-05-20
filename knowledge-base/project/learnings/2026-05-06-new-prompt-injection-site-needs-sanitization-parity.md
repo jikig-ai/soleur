@@ -1,10 +1,22 @@
 ---
+title: when adding a new path-injection site to a system prompt, audit sanitization parity with existing sites
+date: 2026-05-06
 category: security-issues
-module: cc-concierge / system-prompt builders
 tags: [prompt-injection, sanitization-parity, sdk-read-tool, workspace-paths]
+module: cc-concierge / system-prompt builders
+prior-iterations:
+  - 3253
+  - 3263
+  - 3278
+  - 3287
+  - 3288
+  - 3294
+  - 3338
+  - 3353
+related-issues:
+  - 3376
+  - 3383
 related-pr: 3384
-related-issues: [3376, 3383]
-prior-iterations: [3253, 3263, 3278, 3287, 3288, 3294, 3338, 3353]
 ---
 
 # Learning: when adding a new path-injection site to a system prompt, audit sanitization parity with existing sites

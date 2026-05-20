@@ -1,3 +1,10 @@
+---
+title: git worktree rev-parse verification is insufficient for bare repo creation
+date: 2026-04-10
+category: workflow-patterns
+tags: [integration-issues, worktree-manager]
+---
+
 # Learning: git worktree rev-parse verification is insufficient for bare repo creation
 
 ## Problem

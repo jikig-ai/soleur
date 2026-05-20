@@ -1,13 +1,13 @@
 ---
-title: "Edit tool silently rewrites U+2028/U+2029 in old_string, breaking matches against regex escape forms"
+title: Edit tool silently rewrites U+2028/U+2029 in old_string, breaking matches against regex escape forms
 date: 2026-05-07
-problem_type: tooling_quirk
-severity: medium
-component: claude-code-edit-tool
+category: engineering
 tags: [edit-tool, unicode, regex, sanitization, prompt-injection-mitigation]
-related_rules:
-  - cq-regex-unicode-separators-escape-only
 synced_to: []
+component: claude-code-edit-tool
+problem_type: tooling_quirk
+related_rules: [cq-regex-unicode-separators-escape-only]
+severity: medium
 ---
 
 # Edit tool silently rewrites U+2028/U+2029 in `old_string`, breaking matches against regex-escape source

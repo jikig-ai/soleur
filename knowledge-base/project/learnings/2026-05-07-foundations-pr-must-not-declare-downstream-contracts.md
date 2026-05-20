@@ -1,24 +1,16 @@
 ---
-module: System
+title: Foundations PRs MUST NOT declare contracts the dispatch layer does not yet deliver
 date: 2026-05-07
-problem_type: workflow_issue
-component: development_workflow
-symptoms:
-  - "Foundations PR shipped a system-prompt directive that declared a content-block contract delivered by a downstream PR"
-  - "Multi-agent review (architecture-strategist + data-integrity-guardian + user-impact-reviewer) converged on the same P1 BLOCK finding"
-  - "Production-reachable interim window where the directive promised behavior the dispatch layer would not deliver"
-  - "Brand-survival threshold (single-user incident) crossed: chapter prefix would have laundered fabrication"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: high
-tags:
-  - feature-splitting
-  - foundations-pr
-  - directive-without-delivery
-  - multi-agent-review
-  - atomic-delivery
-  - brand-survival
+category: workflow-patterns
+tags: [feature-splitting, foundations-pr, directive-without-delivery, multi-agent-review, atomic-delivery, brand-survival]
+symptoms: [Foundations PR shipped a system-prompt directive that declared a content-block contract delivered by a downstream PR, Multi-agent review (architecture-strategist + data-integrity-guardian + user-impact-reviewer) converged on the same P1 BLOCK finding, Production-reachable interim window where the directive promised behavior the dispatch layer would not deliver, Brand-survival threshold (single-user incident) crossed: chapter prefix would have laundered fabrication]
+module: System
 synced_to: [plan]
+component: development_workflow
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: high
 ---
 
 # Foundations PRs MUST NOT declare contracts the dispatch layer does not yet deliver

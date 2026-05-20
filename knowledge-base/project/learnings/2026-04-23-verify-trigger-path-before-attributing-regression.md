@@ -1,12 +1,12 @@
 ---
+title: Verify trigger path before attributing a symptom to a recent PR
 date: 2026-04-23
 category: integration-issues
-module: debugging-discipline
 tags: [regression-analysis, diagnostic, post-deploy, attribution]
+module: debugging-discipline
 brainstorm: 2026-04-23-command-center-activity-ux-brainstorm.md
-issue: "#2861"
-related:
-  - 2026-04-23-command-center-bubble-lifecycle-invariants.md
+issue: '#2861'
+related: [2026-04-23-command-center-bubble-lifecycle-invariants.md]
 ---
 
 # Verify trigger path before attributing a symptom to a recent PR

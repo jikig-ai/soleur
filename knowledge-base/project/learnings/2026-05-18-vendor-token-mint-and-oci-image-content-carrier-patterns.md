@@ -1,18 +1,16 @@
 ---
-module: Web Platform Infrastructure
+title: 'Vendor-token mint via Playwright + OCI image as host-content-carrier (PR-A / #3960)'
 date: 2026-05-18
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Playwright browser_evaluate returns a vendor token into the conversation transcript"
-  - "Doppler stores a token with surrounding JSON-string quotes; API tolerates but Terraform rejects"
-  - "Container-based OCI deploy script fails at systemctl daemon-reload because the Alpine base lacks systemctl"
-  - "Doppler --name-transformer tf-var does not strip an existing TF_VAR_ prefix from secret names"
-root_cause: workflow_drift
-resolution_type: skill_instruction_change
-severity: medium
+category: ci-cd
 tags: [playwright, doppler, terraform, oci, alpine, systemctl, betterstack, inngest, vendor-token-mint]
+symptoms: [Playwright browser_evaluate returns a vendor token into the conversation transcript, Doppler stores a token with surrounding JSON-string quotes; API tolerates but Terraform rejects, Container-based OCI deploy script fails at systemctl daemon-reload because the Alpine base lacks systemctl, Doppler --name-transformer tf-var does not strip an existing TF_VAR_ prefix from secret names]
+module: Web Platform Infrastructure
 synced_to: []
+component: tooling
+problem_type: integration_issue
+resolution_type: skill_instruction_change
+root_cause: workflow_drift
+severity: medium
 ---
 
 # Vendor-token mint via Playwright + OCI image as host-content-carrier (PR-A / #3960)

@@ -1,13 +1,16 @@
 ---
+title: Re-review after the first fix pass catches new P1s; ADR-number collision needs a pre-merge guard
 date: 2026-05-13
 category: review-process
+tags: [re, review, after, fix, catches, new, p1s, adr, number, collision]
 module: review,plan,ship
-related_prs: [3701]
-related_issues: [3698, 3710, 3711]
-related_learnings:
-  - 2026-04-15-multi-agent-review-catches-bugs-tests-miss.md
-  - 2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md
-  - 2026-05-12-plan-review-5-agent-panel-and-architecture-only-p1s.md
+related_issues:
+  - 3698
+  - 3710
+  - 3711
+related_learnings: [2026-04-15-multi-agent-review-catches-bugs-tests-miss.md, 2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md, 2026-05-12-plan-review-5-agent-panel-and-architecture-only-p1s.md]
+related_prs:
+  - 3701
 ---
 
 # Re-review after the first fix pass catches new P1s; ADR-number collision needs a pre-merge guard

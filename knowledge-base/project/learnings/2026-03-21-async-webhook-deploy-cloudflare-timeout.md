@@ -1,3 +1,10 @@
+---
+title: Async webhook deploy pattern to eliminate Cloudflare edge timeouts
+date: 2026-03-21
+category: engineering
+tags: [ci-cd, .github/workflows, web-platform, telegram-bridge, infrastructure]
+---
+
 # Learning: Async webhook deploy pattern to eliminate Cloudflare edge timeouts
 
 ## Problem

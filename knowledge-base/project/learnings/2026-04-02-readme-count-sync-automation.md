@@ -1,3 +1,10 @@
+---
+title: README count sync automation
+date: 2026-04-02
+category: engineering
+tags: [workflow-automation, scripts, ci, ship-skill, release-docs-skill]
+---
+
 # Learning: README count sync automation
 
 ## Problem

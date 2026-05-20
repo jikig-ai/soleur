@@ -1,3 +1,10 @@
+---
+title: canUseTool sandbox requires defense-in-depth — no single layer stops Bash escape
+date: 2026-03-20
+category: engineering
+tags: [security-issues, web-platform]
+---
+
 # Learning: canUseTool sandbox requires defense-in-depth — no single layer stops Bash escape
 
 ## Problem

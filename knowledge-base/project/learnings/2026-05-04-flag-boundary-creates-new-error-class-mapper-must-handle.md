@@ -1,11 +1,11 @@
 ---
+title: 'A `shouldCreateUser: false`-class flag creates a NEW error surface the mapper must handle in lockstep'
 date: 2026-05-04
 category: integration-issues
-module: apps/web-platform/lib/auth
 tags: [supabase, error-mapping, ux, account-enumeration, referrer-policy]
-issues: ["#1765", "PR #3180"]
-related:
-  - 2026-03-20-supabase-signinwithotp-creates-users.md
+module: apps/web-platform/lib/auth
+issues: [#1765, PR #3180]
+related: [2026-03-20-supabase-signinwithotp-creates-users.md]
 ---
 
 # Learning: A `shouldCreateUser: false`-class flag creates a NEW error surface the mapper must handle in lockstep

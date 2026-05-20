@@ -1,3 +1,10 @@
+---
+title: post-build token gates false-positive on worktree directory paths
+date: 2026-05-07
+category: workflow-patterns
+tags: [build-errors, web-platform/build-gates, feat-dev-signin-bypass r3, assert-dev-signin-eliminated.sh]
+---
+
 # Learning: post-build token gates false-positive on worktree directory paths
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: External API integration scope calibration
+date: 2026-03-09
+category: engineering
+tags: [implementation-patterns, plugins/soleur/skills/community]
+---
+
 # Learning: External API integration scope calibration
 
 ## Problem

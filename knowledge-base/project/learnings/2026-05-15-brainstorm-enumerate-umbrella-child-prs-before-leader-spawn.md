@@ -1,12 +1,13 @@
 ---
 title: Brainstorm Phase 1.1 — enumerate umbrella child PRs before spawning leaders
 date: 2026-05-15
-problem_type: logic_error
-component: brainstorm-skill
-module: plugins/soleur/skills/brainstorm
-severity: high
+category: engineering
 tags: [brainstorm, multi-stage-umbrella, leader-spawn, premise-verification, stale-context]
+module: plugins/soleur/skills/brainstorm
 synced_to: [brainstorm]
+component: brainstorm-skill
+problem_type: logic_error
+severity: high
 ---
 
 # Brainstorm Phase 1.1 — enumerate umbrella child PRs before spawning leaders

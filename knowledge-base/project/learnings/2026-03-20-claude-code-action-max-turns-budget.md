@@ -1,3 +1,10 @@
+---
+title: claude-code-action max-turns budget for Soleur plugin workflows
+date: 2026-03-20
+category: ci-cd
+tags: [ci-workflows, github-actions]
+---
+
 # Learning: claude-code-action max-turns budget for Soleur plugin workflows
 
 ## Problem

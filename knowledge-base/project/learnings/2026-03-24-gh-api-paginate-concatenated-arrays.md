@@ -1,3 +1,10 @@
+---
+title: gh api --paginate concatenates arrays on multi-page responses, breaking --argjson
+date: 2026-03-24
+category: engineering
+tags: [api-integration, community/github-stats, high]
+---
+
 # Learning: gh api --paginate concatenates arrays on multi-page responses, breaking --argjson
 
 ## Problem

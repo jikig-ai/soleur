@@ -1,14 +1,14 @@
 ---
+title: Stripe Projects as a New Tier Above MCP in the Vendor-Signup Priority Chain
 date: 2026-05-03
-problem_type: integration_pattern
-component: vendor_signup_automation
-symptoms:
-  - "MCP/API tiers cannot do cold vendor signup because they assume an authenticated session"
-  - "Playwright cold-signup blocked on roadmap pending CLO agency-liability legal framework"
-root_cause: missing_tier_in_priority_chain
-resolution_type: pattern_recognition
-severity: medium
+category: infrastructure
 tags: [vendor-signup, ops-provisioner, service-automator, stripe-projects, cloudflare, automation-priority]
+symptoms: [MCP/API tiers cannot do cold vendor signup because they assume an authenticated session, Playwright cold-signup blocked on roadmap pending CLO agency-liability legal framework]
+component: vendor_signup_automation
+problem_type: integration_pattern
+resolution_type: pattern_recognition
+root_cause: missing_tier_in_priority_chain
+severity: medium
 ---
 
 # Learning: Stripe Projects as a New Tier Above MCP in the Vendor-Signup Priority Chain

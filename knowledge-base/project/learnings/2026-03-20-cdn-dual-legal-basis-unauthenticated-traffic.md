@@ -1,3 +1,10 @@
+---
+title: CDN services require dual legal basis for authenticated vs unauthenticated traffic
+date: 2026-03-20
+category: legal
+tags: [legal-compliance, data-protection-disclosure]
+---
+
 # Learning: CDN services require dual legal basis for authenticated vs unauthenticated traffic
 
 ## Problem

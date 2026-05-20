@@ -1,8 +1,9 @@
 ---
-category: integration-issues
-module: competitive-intelligence
-tags: [competitive-analysis, cascade-architecture, data-consistency]
+title: Competitive Analysis Cascade Data Reconciliation
 date: 2026-03-12
+category: integration-issues
+tags: [competitive-analysis, cascade-architecture, data-consistency]
+module: competitive-intelligence
 ---
 
 # Learning: Competitive Analysis Cascade Data Reconciliation

@@ -1,10 +1,11 @@
 ---
-name: FAQ HTML / FAQPage JSON-LD parity drift on Eleventy templates
-description: When a Nunjucks page emits both a visible HTML answer and a mirrored FAQPage JSON-LD acceptedAnswer.text, any divergence — interpolated stat vs hardcoded integer, or HTML entity vs JSON-escaped codepoint — breaks Google's rich-result parity check. Neither `eleventy --dryrun` nor schema validators catch it; the parity is character-for-character.
-type: learning
+title: FAQ HTML / FAQPage JSON-LD parity drift on Eleventy templates
 date: 2026-04-18
 category: integration-issues
 tags: [faqpage, eleventy, nunjucks, json-ld, aeo, seo, structured-data, rich-results]
+description: 'When a Nunjucks page emits both a visible HTML answer and a mirrored FAQPage JSON-LD acceptedAnswer.text, any divergence — interpolated stat vs hardcoded integer, or HTML entity vs JSON-escaped codepoint — breaks Google''s rich-result parity check. Neither `eleventy --dryrun` nor schema validators catch it; the parity is character-for-character.'
+name: FAQ HTML / FAQPage JSON-LD parity drift on Eleventy templates
+type: learning
 ---
 
 # FAQ HTML / FAQPage JSON-LD parity drift on Eleventy templates

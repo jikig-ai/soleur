@@ -1,9 +1,10 @@
 ---
+title: '`Closes #N <qualifier>` in PR title auto-closes pre-merge, AND scheduled-workflow D4 abort-path neutralization silently fails'
 date: 2026-05-07
 category: workflow-traps
-related_issues: ["#3185", "#3155", "#3200", "#3153"]
-related_rules: ["wg-use-closes-n-in-pr-body-not-title-to", "cq-silent-fallback-must-mirror-to-sentry"]
 tags: [github-auto-close, scheduled-workflows, claude-code-action, silent-failure, dogfood]
+related_issues: [#3185, #3155, #3200, #3153]
+related_rules: [wg-use-closes-n-in-pr-body-not-title-to, cq-silent-fallback-must-mirror-to-sentry]
 ---
 
 # Learning: `Closes #N <qualifier>` in PR title auto-closes pre-merge, AND scheduled-workflow D4 abort-path neutralization silently fails

@@ -1,3 +1,10 @@
+---
+title: Static binary downloads replace sudo apt-get in agent scripts
+date: 2026-03-20
+category: engineering
+tags: [runtime-errors, feature-video]
+---
+
 # Learning: Static binary downloads replace sudo apt-get in agent scripts
 
 ## Problem

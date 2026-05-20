@@ -1,13 +1,13 @@
 ---
-title: "Drain plan must re-validate each issue's body claims against current codebase state, not just trust the issue snapshot"
+title: 'Drain plan must re-validate each issue''s body claims against current codebase state, not just trust the issue snapshot'
 date: 2026-05-15
-problem_type: workflow_gap
-severity: medium
-component: drain-labeled-backlog
+category: engineering
 tags: [drain, scope-out, plan-phase, issue-body-drift, multi-agent-review]
-related_rules:
-  - wg-plan-prescribed-skills-must-run-inline
 synced_to: []
+component: drain-labeled-backlog
+problem_type: workflow_gap
+related_rules: [wg-plan-prescribed-skills-must-run-inline]
+severity: medium
 ---
 
 # Drain plan must re-validate each issue's body claims against current codebase state

@@ -1,3 +1,10 @@
+---
+title: QA skill auto-start dev server — intent-based SKILL.md instructions
+date: 2026-03-28
+category: plugin-architecture
+tags: [workflow-patterns, plugins/soleur/skills/qa]
+---
+
 # Learning: QA skill auto-start dev server — intent-based SKILL.md instructions
 
 ## Problem

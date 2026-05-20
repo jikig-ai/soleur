@@ -1,3 +1,10 @@
+---
+title: Evaluate third-party tool replacements with headless-MCP-first test
+date: 2026-04-21
+category: infrastructure
+tags: [integration-issues, tooling-evaluation]
+---
+
 # Learning: Evaluate third-party tool replacements with headless-MCP-first test
 
 ## Problem

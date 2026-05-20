@@ -1,9 +1,12 @@
 ---
+title: Test-all.sh exit gate self-validated on the PR that created it
 date: 2026-05-11
-issues: [3533]
-prs: [3534]
-tags: [tdd, exit-gates, dogfooding, skill-prose-lint]
 category: best-practices
+tags: [tdd, exit-gates, dogfooding, skill-prose-lint]
+issues:
+  - 3533
+prs:
+  - 3534
 ---
 
 # Test-all.sh exit gate self-validated on the PR that created it

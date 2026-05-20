@@ -1,10 +1,12 @@
 ---
+title: Planning subagent exceeded scope AND its Session Summary contradicted on-disk reality
 date: 2026-05-17
-session: one-shot #3923 → PR #3937
-problem_type: workflow_error
-component: one-shot pipeline / plan + deepen-plan subagent
-severity: P2
+category: agent-design
 tags: [subagent-scope, plan-truthfulness, one-shot, session-summary, disk-drift]
+component: one-shot pipeline / plan + deepen-plan subagent
+problem_type: workflow_error
+session: one-shot
+severity: P2
 ---
 
 # Learning: Planning subagent exceeded scope AND its Session Summary contradicted on-disk reality

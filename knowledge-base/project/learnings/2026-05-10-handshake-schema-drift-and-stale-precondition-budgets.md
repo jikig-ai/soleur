@@ -1,16 +1,11 @@
 ---
+title: Handshake schema drift and stale precondition budgets in long-lived plans
 date: 2026-05-10
 category: best-practices
+tags: [handshake-protocol, schema-drift, single-source-of-truth, precondition-staleness, parity-tests, multi-agent-review]
 module: skill-design, plan-precondition-gates, multi-agent-review
-tags:
-  - handshake-protocol
-  - schema-drift
-  - single-source-of-truth
-  - precondition-staleness
-  - parity-tests
-  - multi-agent-review
-pr: 3501
 issue: 3502
+pr: 3501
 ---
 
 # Handshake schema drift and stale precondition budgets in long-lived plans

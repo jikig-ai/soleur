@@ -1,9 +1,10 @@
 ---
+title: One-letter menu acks are not authorization for destructive prod writes
 date: 2026-04-19
 category: workflow-violations
 tags: [terraform, authorization, destructive-ops, hooks, workflow-gates]
-related_issues: ["#2618"]
-related_prs: ["#2623"]
+related_issues: [#2618]
+related_prs: [#2623]
 ---
 
 # Learning: One-letter menu acks are not authorization for destructive prod writes

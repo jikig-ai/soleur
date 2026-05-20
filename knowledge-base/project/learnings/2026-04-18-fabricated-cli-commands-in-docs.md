@@ -1,9 +1,11 @@
 ---
-name: Fabricated CLI commands slip past docs review
-description: Plans can prescribe unverified CLI invocations that pattern-match as plausible; neither typecheck nor review catches them, so first-touch users hit immediate failure.
-type: learning
+title: Fabricated CLI commands in docs slip past review
+date: 2026-04-18
 category: content-quality
 tags: [docs, cli, content-audit, review-gap]
+description: Plans can prescribe unverified CLI invocations that pattern-match as plausible; neither typecheck nor review catches them, so first-touch users hit immediate failure.
+name: Fabricated CLI commands slip past docs review
+type: learning
 ---
 
 # Fabricated CLI commands in docs slip past review

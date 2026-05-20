@@ -1,11 +1,12 @@
 ---
+title: '`/soleur:work` stopped before Phase 11.7 / 11.8 — treated automatable pre-merge ACs as "manual operator steps"'
 date: 2026-05-18
-related: [3947, 3984]
-related_rules:
-  - wg-plan-prescribed-skills-must-run-inline
-  - hr-when-a-workflow-concludes-with-an
-  - hr-exhaust-all-automated-options-before
 category: workflow-adherence
+tags: [work, skill, stopped, before, phase, 11, pre, merge, acs]
+related:
+  - 3947
+  - 3984
+related_rules: [wg-plan-prescribed-skills-must-run-inline, hr-when-a-workflow-concludes-with-an, hr-exhaust-all-automated-options-before]
 ---
 
 # `/soleur:work` stopped before Phase 11.7 / 11.8 — treated automatable pre-merge ACs as "manual operator steps"

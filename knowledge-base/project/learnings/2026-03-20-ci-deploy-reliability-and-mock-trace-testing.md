@@ -1,3 +1,10 @@
+---
+title: CI deploy reliability and mock trace testing
+date: 2026-03-20
+category: ci-cd
+tags: [ci-cd, .github/workflows, apps/web-platform/infra]
+---
+
 # Learning: CI deploy reliability and mock trace testing
 
 ## Problem

@@ -1,15 +1,12 @@
 ---
+title: evaluating Anthropic-first-party plugin marketplaces
 date: 2026-05-15
 category: brainstorm-patterns
-module: brainstorm, plugin-evaluation
 tags: [vendor-lift, audience-fit, brand-positioning, mcp-connectors, apache-2.0, plugin-marketplace, user-brand-critical, compound-from-no-integration]
+module: brainstorm, plugin-evaluation
 related-brainstorm: knowledge-base/project/brainstorms/2026-05-15-claude-for-legal-evaluation-brainstorm.md
-related-issues: ["#3785", "#3786"]
-related-learnings:
-  - knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md
-  - knowledge-base/project/learnings/implementation-patterns/2026-02-22-bundle-external-plugin-into-soleur.md
-  - knowledge-base/project/learnings/2026-05-05-brainstorm-spawn-cpo-cmo-early-on-external-product-trigger.md
-  - knowledge-base/project/learnings/2026-02-25-stripe-atlas-legal-benchmark-mismatch.md
+related-issues: [#3785, #3786]
+related-learnings: [knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md, knowledge-base/project/learnings/implementation-patterns/2026-02-22-bundle-external-plugin-into-soleur.md, knowledge-base/project/learnings/2026-05-05-brainstorm-spawn-cpo-cmo-early-on-external-product-trigger.md, knowledge-base/project/learnings/2026-02-25-stripe-atlas-legal-benchmark-mismatch.md]
 ---
 
 # Learning: evaluating Anthropic-first-party plugin marketplaces

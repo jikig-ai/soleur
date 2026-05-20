@@ -1,7 +1,9 @@
 ---
+title: Dashboard onboarding state should not depend on conversation loading
+date: 2026-04-10
 category: ui-bugs
-module: web-platform/dashboard
 tags: [supabase, e2e, loading-state, onboarding]
+module: web-platform/dashboard
 severity: medium
 ---
 

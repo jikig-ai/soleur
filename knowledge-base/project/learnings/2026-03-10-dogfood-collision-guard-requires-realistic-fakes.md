@@ -1,3 +1,10 @@
+---
+title: Evolus/pencil collision guard requires realistic fake binaries for testing
+date: 2026-03-10
+category: engineering
+tags: [testing, pencil-setup]
+---
+
 # Learning: Evolus/pencil collision guard requires realistic fake binaries for testing
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Skill-enforced convention pattern for semantic rules
+date: 2026-03-19
+category: plugin-architecture
+tags: [architecture, plugins/soleur/skills/plan, plugins/soleur/skills/work]
+---
+
 # Learning: Skill-enforced convention pattern for semantic rules
 
 ## Problem

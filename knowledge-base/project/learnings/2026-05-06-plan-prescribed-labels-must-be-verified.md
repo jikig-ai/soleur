@@ -1,3 +1,10 @@
+---
+title: 'Plan-prescribed GitHub labels must be verified against the repo''s label set'
+date: 2026-05-06
+category: engineering
+tags: [workflow, plan, deepen-plan, cq-gh-issue-label-verify-name, 3378]
+---
+
 # Learning: Plan-prescribed GitHub labels must be verified against the repo's label set
 
 ## Problem

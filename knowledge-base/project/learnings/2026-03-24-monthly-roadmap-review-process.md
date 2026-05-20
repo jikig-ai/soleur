@@ -1,7 +1,9 @@
 ---
+title: Monthly Roadmap Consistency Review Process
+date: 2026-03-24
 category: workflow
-module: roadmap-review
 tags: [roadmap, github-issues, consistency-review, gh-cli]
+module: roadmap-review
 ---
 
 # Learning: Monthly Roadmap Consistency Review Process

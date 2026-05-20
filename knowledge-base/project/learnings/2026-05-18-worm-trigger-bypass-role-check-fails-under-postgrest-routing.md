@@ -1,11 +1,13 @@
 ---
+title: 'WORM-trigger `current_user = ''service_role''` bypass check silently always-false under PostgREST routing'
 date: 2026-05-18
-related: [3947, 3984, 3853]
-related_migrations:
-  - 043_tenant_deploy_audit.sql
-  - 044_add_tc_acceptances_ledger.sql
-  - 048_scope_grants.sql
 category: security-issues
+tags: [worm, trigger, bypass, role, check, fails, under, postgrest, routing]
+related:
+  - 3947
+  - 3984
+  - 3853
+related_migrations: [043_tenant_deploy_audit.sql, 044_add_tc_acceptances_ledger.sql, 048_scope_grants.sql]
 ---
 
 # WORM-trigger `current_user = 'service_role'` bypass check silently always-false under PostgREST routing

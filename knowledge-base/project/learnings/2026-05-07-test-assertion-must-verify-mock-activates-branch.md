@@ -1,10 +1,12 @@
 ---
-type: best-practice
+title: Test assertions on conditional branches must verify the mock activates that branch
+date: 2026-05-07
 category: test-failures
-created: 2026-05-07
-branch: feat-one-shot-concierge-loading-indicator-consistency
-pr: 3427
 tags: [testing, vitest, react-testing-library, mocks, conditional-rendering]
+branch: feat-one-shot-concierge-loading-indicator-consistency
+created: 2026-05-07
+pr: 3427
+type: best-practice
 ---
 
 # Learning: Test assertions on conditional branches must verify the mock activates that branch

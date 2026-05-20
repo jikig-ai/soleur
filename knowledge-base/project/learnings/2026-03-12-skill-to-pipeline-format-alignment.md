@@ -1,3 +1,10 @@
+---
+title: Skill-to-pipeline format alignment requires verification against existing files
+date: 2026-03-12
+category: plugin-architecture
+tags: [integration-issues, social-distribute, content-publisher]
+---
+
 # Learning: Skill-to-pipeline format alignment requires verification against existing files
 
 ## Problem

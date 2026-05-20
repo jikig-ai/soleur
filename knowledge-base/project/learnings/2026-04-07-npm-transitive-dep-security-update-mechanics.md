@@ -1,3 +1,10 @@
+---
+title: npm transitive dependency security update mechanics
+date: 2026-04-07
+category: security
+tags: [build-errors, apps/web-platform]
+---
+
 # Learning: npm transitive dependency security update mechanics
 
 ## Problem

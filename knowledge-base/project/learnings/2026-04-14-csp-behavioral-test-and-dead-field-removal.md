@@ -1,16 +1,15 @@
 ---
-module: web-platform / dashboard refactor
+title: CSP Behavioral Test + Dead-Field Removal + Typed Mock Factory
 date: 2026-04-14
-problem_type: code_quality
+category: engineering
+tags: [csp, behavioral-tests, refactor, dead-code, mock-factory, typescript]
+symptoms: [Source-string CSP test passed on dead code and broke on refactors, DOMAIN_LEADERS.color field had zero consumers but persisted as triple SOT, Shared mock factories silently miss new hook fields, breaking 2-of-8 call sites]
+module: web-platform / dashboard refactor
+synced_to: []
 component: route_handler / test_design / typescript
-symptoms:
-  - "Source-string CSP test passed on dead code and broke on refactors"
-  - "DOMAIN_LEADERS.color field had zero consumers but persisted as triple SOT"
-  - "Shared mock factories silently miss new hook fields, breaking 2-of-8 call sites"
+problem_type: code_quality
 root_cause: missing_behavioral_assertion / dead_data_drift / no_compile_time_drift_detection
 severity: medium
-tags: [csp, behavioral-tests, refactor, dead-code, mock-factory, typescript]
-synced_to: []
 ---
 
 # CSP Behavioral Test + Dead-Field Removal + Typed Mock Factory

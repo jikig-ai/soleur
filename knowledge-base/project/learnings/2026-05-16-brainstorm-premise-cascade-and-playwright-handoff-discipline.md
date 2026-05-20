@@ -1,26 +1,12 @@
 ---
+title: brainstorm premise-cascade detection + Playwright credential-handoff discipline
 date: 2026-05-16
 category: process
+tags: [brainstorm, playwright, host-verification, premise-cascade, credential-boundary, sentry, gdpr, pir, workflow-gate]
 module: brainstorm, incident, playwright-mcp, sentry-residency
-tags:
-  - brainstorm
-  - playwright
-  - host-verification
-  - premise-cascade
-  - credential-boundary
-  - sentry
-  - gdpr
-  - pir
-  - workflow-gate
-related_issues:
-  - "#3861"
-  - "#3863"
-related_prs:
-  - "#3863"
-related_learnings:
-  - 2026-05-15-sentry-dsn-cluster-substring-authoritative-residency
-  - 2026-05-15-token-namespace-divergence-across-secret-stores
-  - 2026-04-21-concurrent-cleanup-merged-wipes-active-worktree
+related_issues: [#3861, #3863]
+related_learnings: [2026-05-15-sentry-dsn-cluster-substring-authoritative-residency, 2026-05-15-token-namespace-divergence-across-secret-stores, 2026-04-21-concurrent-cleanup-merged-wipes-active-worktree]
+related_prs: [#3863]
 ---
 
 # Learning: brainstorm premise-cascade detection + Playwright credential-handoff discipline

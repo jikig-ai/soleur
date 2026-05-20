@@ -1,12 +1,13 @@
 ---
+title: '`claude-code-action` boundary semantics + auto-close keyword trap — bundled fix for #3403/#3404/#3407'
 date: 2026-05-07
 category: integration-issues
-related_issues: ["#3403", "#3404", "#3407", "#3185", "#3155", "#3200", "#3402", "#3420"]
-related_prs: ["#3411", "#3402", "#3200", "#3155"]
-related_rules: ["wg-use-closes-n-in-pr-body-not-title-to", "cq-agents-md-tier-gate", "rf-review-finding-default-fix-inline"]
-related_learnings: ["2026-05-07-pr-title-closes-keyword-ignores-qualifiers-and-d4-silent-failure.md"]
 tags: [claude-code-action, scheduled-workflows, github-auto-close, silent-failure, dogfood, programmatic-enforcement, exit-code-propagation, token-context-split, show-full-output, sandbox-recurrence-trap]
 synced_to: []
+related_issues: [#3403, #3404, #3407, #3185, #3155, #3200, #3402, #3420]
+related_learnings: [2026-05-07-pr-title-closes-keyword-ignores-qualifiers-and-d4-silent-failure.md]
+related_prs: [#3411, #3402, #3200, #3155]
+related_rules: [wg-use-closes-n-in-pr-body-not-title-to, cq-agents-md-tier-gate, rf-review-finding-default-fix-inline]
 ---
 
 # Learning: `claude-code-action` boundary semantics + auto-close keyword trap — bundled fix for #3403/#3404/#3407

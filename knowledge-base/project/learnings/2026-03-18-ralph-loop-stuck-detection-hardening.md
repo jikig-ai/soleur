@@ -1,3 +1,10 @@
+---
+title: Ralph loop stuck detection hardening
+date: 2026-03-18
+category: engineering
+tags: [runtime-errors, ralph-loop]
+---
+
 # Learning: Ralph loop stuck detection hardening
 
 ## Problem

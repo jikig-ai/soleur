@@ -1,10 +1,12 @@
 ---
-name: brainstorm-audit-vs-guidance-direction-reframe
-description: When a brainstorm issue cites an external pattern (e.g., karpathy-check, principles-as-rules), separate the audit direction (apply rules as a pre-merge checker) from the guidance direction (tell the LLM to follow them). They are orthogonal — one may be already covered and the other may have a partial gap that does NOT justify a new component. Always grep the existing review/* agent inventory before sizing.
-type: best-practice
-tags: [brainstorm, scoping, yagni, prior-art, agents-md-tier-gate, review-agents]
+title: Audit Direction vs. Guidance Direction in Pattern-Import Brainstorms
+date: 2026-05-15
 category: best-practices
+tags: [brainstorm, scoping, yagni, prior-art, agents-md-tier-gate, review-agents]
 module: brainstorm
+description: 'When a brainstorm issue cites an external pattern (e.g., karpathy-check, principles-as-rules), separate the audit direction (apply rules as a pre-merge checker) from the guidance direction (tell the LLM to follow them). They are orthogonal — one may be already covered and the other may have a partial gap that does NOT justify a new component. Always grep the existing review/* agent inventory before sizing.'
+name: brainstorm-audit-vs-guidance-direction-reframe
+type: best-practice
 ---
 
 # Audit Direction vs. Guidance Direction in Pattern-Import Brainstorms

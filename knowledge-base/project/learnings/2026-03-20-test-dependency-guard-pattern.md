@@ -1,3 +1,10 @@
+---
+title: Conditional test skipping for missing shell dependencies
+date: 2026-03-20
+category: engineering
+tags: [test-failures, test-infrastructure]
+---
+
 # Learning: Conditional test skipping for missing shell dependencies
 
 ## Problem

@@ -1,12 +1,11 @@
 ---
+title: 'Brainstorm: Pre-committed action ladder + data-source granularity check'
+date: 2026-05-19
+category: workflow-patterns
+tags: [brainstorm, pre, committed, ladder, data, source, granularity, check]
+description: Two compounding patterns surfaced in the
+metadata: {'type': 'workflow-patterns', 'applies_to': 'brainstorm, plan, premise-validation', 'surfaced_in': ['#4042 (learnings-decay reframe via R@K from #4043)', '#4043 (retrieval-bench one-shot reshape)']}
 name: brainstorm-pre-committed-ladder-and-data-source-granularity-check
-description: Two compounding patterns surfaced in the #4042 learnings-decay brainstorm. (a) When an issue body cites a JSON file as the source for a per-X aggregation, verify the file's actual entity granularity (per-rule vs per-learning vs per-file) BEFORE accepting the proposed mechanism — a 5-second `jq 'keys'` and `.rules[0]` probe of `rule-metrics.json` showed it tracks AGENTS.md rule IDs (78 entries with kebab-case `id` keys like `cm-challenge-reasoning-instead-of`), not learning file paths. The issue's "rule-fire hit counts per learning" framing was mechanically impossible. (b) The sibling brainstorm's pre-committed action ladder shape applied a second time same-day: when input data won't exist for weeks, the brainstorm output is a decision document with branches keyed on the eventual data shape — not the script. Pre-committing the response BEFORE the number lands prevents the operator from rationalizing post-hoc.
-metadata:
-  type: workflow-patterns
-  applies_to: brainstorm, plan, premise-validation
-  surfaced_in:
-    - "#4042 (learnings-decay reframe via R@K from #4043)"
-    - "#4043 (retrieval-bench one-shot reshape)"
 ---
 
 # Brainstorm: Pre-committed action ladder + data-source granularity check

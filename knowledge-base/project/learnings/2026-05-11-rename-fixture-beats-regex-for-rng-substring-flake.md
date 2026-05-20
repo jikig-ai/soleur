@@ -1,10 +1,13 @@
 ---
-name: Rename the fixture, don't regex the assertion — RNG-substring-collision flake class
-description: When `not.toContain("<literal>")` flakes because rendered output embeds RNG-derived strings, prefer renaming the fixture literal to a character outside the RNG's alphabet over adding word-boundary regex semantics.
-type: best-practices
+title: 'Rename the fixture, don''t regex the assertion (RNG-substring-collision flake class)'
+date: 2026-05-11
 category: test-design
+tags: [test-design, best-practices, apps/web-platform/test, work-skill, 3615, 3611, 3617 closed wontfix]
 module: apps/web-platform/test
+description: 'When `not.toContain("<literal>")` flakes because rendered output embeds RNG-derived strings, prefer renaming the fixture literal to a character outside the RNG''s alphabet over adding word-boundary regex semantics.'
+name: 'Rename the fixture, don''t regex the assertion — RNG-substring-collision flake class'
 related: 2026-04-15-multi-agent-review-catches-bugs-tests-miss.md
+type: best-practices
 ---
 
 # Rename the fixture, don't regex the assertion (RNG-substring-collision flake class)

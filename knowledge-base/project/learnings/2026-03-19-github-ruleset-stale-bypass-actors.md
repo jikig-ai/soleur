@@ -1,3 +1,10 @@
+---
+title: GitHub Rulesets Do Not Auto-Prune Bypass Actors
+date: 2026-03-19
+category: engineering
+tags: [integration-issues, github-rulesets]
+---
+
 # Learning: GitHub Rulesets Do Not Auto-Prune Bypass Actors
 
 ## Problem

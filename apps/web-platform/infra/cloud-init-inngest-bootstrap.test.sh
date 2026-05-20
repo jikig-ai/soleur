@@ -120,6 +120,33 @@ echo "--- AC3: cloud-init.yml YAML round-trip ---"
 assert "cloud-init.yml parses as valid YAML" \
   "python3 -c \"import yaml; yaml.safe_load(open('$CLOUD_INIT'))\""
 
+# --- AC5: sudoers byte-parity between source file and cloud-init inline (#4144) ---
+# The same Cmnd_Alias/Defaults/deploy lines live in three places:
+#   (a) apps/web-platform/infra/deploy-inngest-bootstrap.sudoers
+#   (b) apps/web-platform/infra/cloud-init.yml write_files inline (this file)
+#   (c) apps/web-platform/infra/ci-deploy.sh exec path
+# (a) and (b) MUST be byte-identical or fresh hosts drift from existing
+# hosts on the next /etc/sudoers.d/ reload. (c) is checked by grep.
+echo ""
+echo "--- AC5: sudoers parity (deploy-inngest-bootstrap) ---"
+SUDOERS_SRC="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
+SUDOERS_CONTENT_ONLY=$(grep -vE '^\s*#|^\s*$' "$SUDOERS_SRC")
+CLOUD_INIT_SUDOERS=$(awk '
+  /path: \/etc\/sudoers\.d\/deploy-inngest-bootstrap/ { found = 1; next }
+  found && /^[[:space:]]+content:[[:space:]]*\|/      { in_body = 1; next }
+  in_body && /^[[:space:]]+[a-z]+:/                   { exit }
+  in_body { sub(/^      /, ""); print }
+' "$CLOUD_INIT")
+assert "deploy-inngest-bootstrap.sudoers exists"         "[[ -s '$SUDOERS_SRC' ]]"
+assert "cloud-init inline block is non-empty"            "[[ -n '$CLOUD_INIT_SUDOERS' ]]"
+assert "sudoers source and cloud-init inline match"      "[[ \"\$SUDOERS_CONTENT_ONLY\" == \"\$CLOUD_INIT_SUDOERS\" ]]"
+assert "ci-deploy.sh invokes the sudoers-pinned path"    "grep -qE '/usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh' '$SCRIPT_DIR/ci-deploy.sh'"
+if command -v visudo >/dev/null 2>&1; then
+  assert "sudoers source parses via visudo -cf"          "visudo -cf '$SUDOERS_SRC' >/dev/null"
+else
+  echo "  SKIP: visudo not installed locally — CI will exercise the validation step"
+fi
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then

@@ -1,9 +1,12 @@
 ---
+title: Pure-CSS fixes can degrade Playwright QA to unit-test className contracts when dev server is broken
+date: 2026-05-11
 category: workflow
+tags: [workflow, qa]
 module: qa
 created: 2026-05-11
-related_pr: 3557
 related_issue: 3562
+related_pr: 3557
 ---
 
 # Learning: Pure-CSS fixes can degrade Playwright QA to unit-test className contracts when dev server is broken

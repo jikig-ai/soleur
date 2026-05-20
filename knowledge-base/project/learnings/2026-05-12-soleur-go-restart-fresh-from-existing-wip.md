@@ -1,3 +1,10 @@
+---
+title: 'Restart-fresh from existing WIP: /soleur:go needs a cleanup-scope ask before nuking'
+date: 2026-05-12
+category: engineering
+tags: [workflow, soleur-go]
+---
+
 # Restart-fresh from existing WIP: /soleur:go needs a cleanup-scope ask before nuking
 
 **Date:** 2026-05-12

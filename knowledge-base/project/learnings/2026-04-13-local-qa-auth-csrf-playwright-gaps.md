@@ -1,3 +1,10 @@
+---
+title: Local QA auth flow gaps — magic link redirect, CSRF port mismatch, missing test fixtures
+date: 2026-04-13
+category: engineering
+tags: [integration-issues, web-platform]
+---
+
 # Learning: Local QA auth flow gaps — magic link redirect, CSRF port mismatch, missing test fixtures
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: PWA manifest route requires PUBLIC_PATHS entry and Next.js icon purpose types are strict unions
+date: 2026-03-29
+category: engineering
+tags: [integration-issues, web-platform]
+---
+
 # Learning: PWA manifest route requires PUBLIC_PATHS entry and Next.js icon purpose types are strict unions
 
 ## Problem

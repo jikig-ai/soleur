@@ -1,12 +1,11 @@
 ---
+title: Doppler env values are baked at container start — flag flips need a redeploy
+date: 2026-05-19
+category: engineering
+tags: [integration-issues, infra/doppler, infra/deploy]
+description: 'Doppler env values are baked into the prd container at start time via --env-file; flipping a flag in Doppler does not affect a running container until redeploy. Two-step op: set in Doppler, then redeploy.'
+metadata: 
 name: doppler-env-hot-reload-limitation
-description: Doppler env values are baked into the prd container at start time via --env-file; flipping a flag in Doppler does not affect a running container until redeploy. Two-step op: set in Doppler, then redeploy.
-metadata:
-  type: learning
-  category: integration-issues
-  module: infra
-  surfaced_date: 2026-05-19
-  surfaced_during: PR-G POST-4→POST-5 flow (umbrella #3244)
 ---
 
 # Learning: Doppler env values are baked at container start — flag flips need a redeploy

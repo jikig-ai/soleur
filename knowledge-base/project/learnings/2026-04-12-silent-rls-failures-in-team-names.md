@@ -1,3 +1,10 @@
+---
+title: Silent RLS failures make empty results indistinguishable from auth errors
+date: 2026-04-12
+category: engineering
+tags: [ui-bugs, chat/at-mention-dropdown, server/domain-router, server/agent-runner]
+---
+
 # Learning: Silent RLS failures make empty results indistinguishable from auth errors
 
 ## Problem

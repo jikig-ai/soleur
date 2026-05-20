@@ -1,3 +1,10 @@
+---
+title: Skill defense-in-depth gate pattern (Phase N.5)
+date: 2026-03-27
+category: plugin-architecture
+tags: [workflow, skills/ship, skills/work]
+---
+
 # Learning: Skill defense-in-depth gate pattern (Phase N.5)
 
 ## Problem

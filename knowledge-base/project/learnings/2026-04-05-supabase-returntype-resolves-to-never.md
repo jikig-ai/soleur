@@ -1,3 +1,10 @@
+---
+title: 'Supabase ReturnType<typeof createClient> resolves query results to `never`'
+date: 2026-04-05
+category: engineering
+tags: [build-errors, web-platform/session-sync]
+---
+
 # Learning: Supabase ReturnType<typeof createClient> resolves query results to `never`
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: 'GitHub Actions ::error:: annotations only work on the runner'
+date: 2026-03-20
+category: ci-cd
+tags: [integration-issues, ci-cd]
+---
+
 # Learning: GitHub Actions ::error:: annotations only work on the runner
 
 ## Problem

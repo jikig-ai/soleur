@@ -1,3 +1,10 @@
+---
+title: Stale main ref in bare repo and Playwright-first violation
+date: 2026-04-11
+category: engineering
+tags: [workflow, agents.md / worktree-manager.sh / playwright]
+---
+
 # Learning: Stale main ref in bare repo and Playwright-first violation
 
 ## Problem

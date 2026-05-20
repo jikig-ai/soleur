@@ -1,9 +1,10 @@
 ---
+title: Claude Code PostToolUse hook on Task tool — empirically verified input shape
 date: 2026-05-10
 category: best-practices
+tags: [claude-code, hooks, posttooluse, task-tool, agent-tool]
 issue: 3494
 pr: 3495
-tags: [claude-code, hooks, posttooluse, task-tool, agent-tool]
 ---
 
 # Claude Code PostToolUse hook on Task tool — empirically verified input shape

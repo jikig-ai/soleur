@@ -1,10 +1,13 @@
 ---
+title: 'Vitest `vi.doMock` factory throw produces synthetic-wrapper Error — inner message is unobservable'
 date: 2026-05-07
 category: test-failures
-component: vitest, apps/web-platform/test
-related_pr: 3441
-related_issues: [3438, 3439]
 tags: [vitest, mocking, vi.doMock, error-handling, observability-tests]
+component: vitest, apps/web-platform/test
+related_issues:
+  - 3438
+  - 3439
+related_pr: 3441
 ---
 
 # Vitest `vi.doMock` factory throw produces synthetic-wrapper Error — inner message is unobservable

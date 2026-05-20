@@ -1,3 +1,10 @@
+---
+title: Document Plan Conditional Omissions
+date: 2026-03-10
+category: engineering
+tags: [workflow, planning]
+---
+
 # Learning: Document Plan Conditional Omissions
 
 ## Problem

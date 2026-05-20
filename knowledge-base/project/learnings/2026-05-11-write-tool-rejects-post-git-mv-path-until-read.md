@@ -1,12 +1,16 @@
 ---
+title: 'Write tool rejects post-`git mv` destination path until it is Read'
 date: 2026-05-11
-type: tooling-quirk
-component: claude-code-tools
-severity: low
+category: workflow-patterns
 tags: [git-mv, write-tool, read-tracker, worktree]
-related_issues: [3270]
-related_prs: [3560]
 synced_to: []
+component: claude-code-tools
+related_issues:
+  - 3270
+related_prs:
+  - 3560
+severity: low
+type: tooling-quirk
 ---
 
 # Learning: Write tool rejects post-`git mv` destination path until it is Read

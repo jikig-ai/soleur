@@ -1,16 +1,15 @@
 ---
-module: pencil-setup
+title: Pencil Headless CLI Uses Custom REPL, Not MCP Protocol
 date: 2026-03-24
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Pencil headless CLI interactive mode speaks custom REPL format, not MCP protocol"
-  - "Existing check_deps.sh detection patterns do not match headless CLI version string"
-  - "Binding names ephemeral across batch_design calls — adapter must track node IDs"
-root_cause: wrong_api
-resolution_type: documentation_update
-severity: high
+category: infrastructure
 tags: [pencil, headless, mcp, interactive-mode, cli-integration]
+symptoms: [Pencil headless CLI interactive mode speaks custom REPL format, not MCP protocol, Existing check_deps.sh detection patterns do not match headless CLI version string, Binding names ephemeral across batch_design calls — adapter must track node IDs]
+module: pencil-setup
+component: tooling
+problem_type: integration_issue
+resolution_type: documentation_update
+root_cause: wrong_api
+severity: high
 ---
 
 # Troubleshooting: Pencil Headless CLI Uses Custom REPL, Not MCP Protocol

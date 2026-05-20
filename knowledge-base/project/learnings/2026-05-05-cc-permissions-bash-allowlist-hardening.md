@@ -1,18 +1,16 @@
 ---
-title: "cc-permissions safe-Bash allowlist: cd + path-traversal + near-miss telemetry hardening"
+title: 'cc-permissions safe-Bash allowlist: cd + path-traversal + near-miss telemetry hardening'
 date: 2026-05-05
-module: cc-permissions
-problem_type: security_issue
-component: typescript_module
-symptoms:
-  - "Command Center modal-prompts every cd <dir>"
-  - "Path-traversal `cat ../../etc/passwd` auto-approves at canUseTool boundary"
-  - "Near-miss commands (lsof, cdrecord, pwdx) silently fall through to review-gate without drift signal"
-root_cause: "missing allowlist entry + missing path-traversal denylist + missing drift telemetry"
-severity: high
+category: shell-scripting
 tags: [cc-permissions, canUseTool, bash, path-traversal, sentry, review-driven-hardening]
+symptoms: [Command Center modal-prompts every cd <dir>, Path-traversal `cat ../../etc/passwd` auto-approves at canUseTool boundary, Near-miss commands (lsof, cdrecord, pwdx) silently fall through to review-gate without drift signal]
+module: cc-permissions
+component: typescript_module
 issue: 3252
 pr: 3277
+problem_type: security_issue
+root_cause: missing allowlist entry + missing path-traversal denylist + missing drift telemetry
+severity: high
 ---
 
 # cc-permissions safe-Bash allowlist: cd + path-traversal + near-miss telemetry hardening

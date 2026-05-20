@@ -1,3 +1,10 @@
+---
+title: Testing transient React state in async upload flows
+date: 2026-04-12
+category: engineering
+tags: [test-failures, chat-input]
+---
+
 # Learning: Testing transient React state in async upload flows
 
 ## Problem

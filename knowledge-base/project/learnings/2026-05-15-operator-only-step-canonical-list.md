@@ -1,11 +1,11 @@
 ---
-name: operator-only-step-canonical-list
+title: Operator-only step canonical list
+date: 2026-05-15
+category: engineering
+tags: [operator, only, step, canonical, list]
 description: Canonical list of genuinely-manual operator steps that Soleur should not try to automate (SSO, OAuth consent, fresh credential mint, payment-method entry)
-metadata:
-  type: feedback
-  date: 2026-05-15
-  rule_touched: hr-never-label-any-step-as-manual-without
-  triggering_issue: "#3849"
+metadata: {'type': 'feedback', 'date': datetime.date(2026, 5, 15), 'rule_touched': 'hr-never-label-any-step-as-manual-without', 'triggering_issue': '#3849'}
+name: operator-only-step-canonical-list
 ---
 
 # Operator-only step canonical list

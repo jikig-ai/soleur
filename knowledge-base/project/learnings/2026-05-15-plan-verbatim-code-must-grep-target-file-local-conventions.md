@@ -1,3 +1,10 @@
+---
+title: 'Plan-prescribed verbatim code must grep target file''s local conventions'
+date: 2026-05-15
+category: shell-scripting
+tags: [best-practices, plan-authoring, work-execution, 3819, 3501, 3839, 3809]
+---
+
 # Learning: Plan-prescribed verbatim code must grep target file's local conventions
 
 ## Problem

@@ -1,8 +1,9 @@
 ---
+title: pathspec→regex translation drift and classifier-piggyback threat model
 date: 2026-05-09
 category: best-practices
-module: skill-classifier-design
 tags: [preflight, review, regex, pathspec, classifier, security, multi-agent-review]
+module: skill-classifier-design
 related-pr: 3492
 ---
 

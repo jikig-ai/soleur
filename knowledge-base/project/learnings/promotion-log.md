@@ -1,7 +1,10 @@
 ---
-title: "Compound Promotion Loop — audit log"
+title: Compound Promotion Loop — audit log
+date: unknown
+category: engineering
+tags: [promotion, log]
+issue: '#2720'
 type: audit-log
-issue: "#2720"
 ---
 
 # Compound Promotion Loop — audit log

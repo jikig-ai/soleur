@@ -1,3 +1,10 @@
+---
+title: E2E Testing Authenticated Dashboard Pages with Mock Supabase
+date: 2026-04-10
+category: engineering
+tags: [test-infrastructure, apps/web-platform/e2e]
+---
+
 # Learning: E2E Testing Authenticated Dashboard Pages with Mock Supabase
 
 ## Problem

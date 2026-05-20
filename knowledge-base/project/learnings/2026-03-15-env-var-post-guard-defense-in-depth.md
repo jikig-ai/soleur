@@ -1,3 +1,10 @@
+---
+title: Environment Variable Post Guard as Defense-in-Depth
+date: 2026-03-15
+category: engineering
+tags: [prevention, plugins/soleur/skills/community, 629, 623]
+---
+
 # Learning: Environment Variable Post Guard as Defense-in-Depth
 
 ## Problem

@@ -40,13 +40,12 @@ const EXPECTED_TF_SECRETS = [
   "GITHUB_APP_WEBHOOK_SECRET",
 ];
 
-// Exact set of permissions in the committed manifest. Locked to the live App
-// snapshot taken at #4115 plan time; the drift-guard cron is the runtime
-// signal for divergence, this test catches an in-band manifest mutation
-// that adds an unexpected permission via a malicious or sloppy PR.
-// #4173: `secrets` added so the integrations/github provider can publish
-// `github_actions_secret.doppler_token_kb_drift` without 403-ing on the
-// `actions/secrets/public-key` endpoint at terraform apply time.
+// Exact set of permissions in the committed manifest. Reconciled to the live
+// App state at #4169 post-merge attestation (added `secrets: write` which the
+// live App already had but #4115 plan-time snapshot missed). The drift-guard
+// cron is the runtime signal for divergence; this test catches an in-band
+// manifest mutation that adds an unexpected permission via a malicious or
+// sloppy PR.
 const EXPECTED_PERMISSION_KEYS = [
   "actions",
   "administration",
@@ -143,7 +142,7 @@ describe("github-app-manifest.json symbol parity", () => {
 
   test("default_permissions keys EXACTLY match the expected set", () => {
     // Stored-injection guard: a malicious PR that adds an undeclared
-    // permission key (e.g., `admin: "write"`, `secrets: "write"`) would
+    // permission key (e.g., `admin: "write"`, `packages: "write"`) would
     // ride the manifest into GitHub's App-create form on the next operator
     // click. Lock the key set in addition to checking individual scopes.
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;

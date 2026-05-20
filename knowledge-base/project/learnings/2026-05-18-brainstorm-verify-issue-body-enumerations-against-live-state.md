@@ -1,13 +1,17 @@
 ---
-name: brainstorm-verify-issue-body-enumerations-against-live-state
-description: Issue body enumerations (counts, candidate lists, "Group N has ~X items") drift between issue creation and brainstorm. Run a `gh run list` / `gh issue view` / direct `ls` sanity-check against live state BEFORE letting the enumeration shape brainstorm scope. Pairs with two adjacent verification patterns documented inline.
-metadata:
-  type: best-practice
-  category: brainstorm-flow
-  module: brainstorm
+title: brainstorm verify issue-body enumerations against live state
 date: 2026-05-18
-related_issues: [3948, 3244, 3940, 3990]
+category: engineering
+tags: [brainstorm, verify, issue, body, enumerations, against, live, state]
+description: 'Issue body enumerations (counts, candidate lists, "Group N has ~X items") drift between issue creation and brainstorm. Run a `gh run list` / `gh issue view` / direct `ls` sanity-check against live state BEFORE letting the enumeration shape brainstorm scope. Pairs with two adjacent verification patterns documented inline.'
+metadata: {'type': 'best-practice', 'category': 'brainstorm-flow', 'module': 'brainstorm'}
+name: brainstorm-verify-issue-body-enumerations-against-live-state
 related_brainstorm: knowledge-base/project/brainstorms/2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md
+related_issues:
+  - 3948
+  - 3244
+  - 3940
+  - 3990
 ---
 
 # Learning: brainstorm verify issue-body enumerations against live state

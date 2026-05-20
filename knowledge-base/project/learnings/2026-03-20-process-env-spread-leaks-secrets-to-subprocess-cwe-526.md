@@ -1,3 +1,10 @@
+---
+title: Process.env spread leaks server secrets to agent subprocess (CWE-526)
+date: 2026-03-20
+category: security
+tags: [security-issues, web-platform/agent-runner]
+---
+
 # Learning: Process.env spread leaks server secrets to agent subprocess (CWE-526)
 
 ## Problem

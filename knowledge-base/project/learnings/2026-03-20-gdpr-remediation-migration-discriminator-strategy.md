@@ -1,3 +1,10 @@
+---
+title: GDPR data remediation -- metadata discriminator over timestamp proximity
+date: 2026-03-20
+category: legal
+tags: [data-remediation, web-platform/supabase-migrations]
+---
+
 # Learning: GDPR data remediation -- metadata discriminator over timestamp proximity
 
 ## Problem

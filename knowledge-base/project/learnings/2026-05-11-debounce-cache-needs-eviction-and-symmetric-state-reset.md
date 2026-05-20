@@ -1,5 +1,8 @@
 ---
+title: Module-level debounce caches need eviction; per-turn state resets must be symmetric across all reset sites
+date: 2026-05-11
 category: best-practices
+tags: [best-practices, observability, soleur-go-runner, cq-regex-unicode-separators-escape-only, cq-silent-fallback-must-mirror-to-sentry, rf-review-finding-default-fix-inline]
 module: observability + soleur-go-runner
 issue: 3040
 pr_branch: feat-one-shot-3040-v2-cc-hardening

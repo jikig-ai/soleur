@@ -1,8 +1,11 @@
 ---
-topic: Browser tasks require Playwright MCP, not "manual" labels
+title: 'Browser Tasks Require Playwright MCP, Not "Manual" Labels'
+date: 2026-03-13
 category: workflow
+tags: [browser, tasks, require, playwright, manual, labels]
+related_issues: [#139]
 severity: high
-related_issues: ["#139"]
+topic: 'Browser tasks require Playwright MCP, not "manual" labels'
 ---
 
 # Browser Tasks Require Playwright MCP, Not "Manual" Labels

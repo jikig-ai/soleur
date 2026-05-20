@@ -1,11 +1,15 @@
 ---
+title: Adding the First Multi-Word Required Check Exposed a Latent Strip-All-Whitespace Bug
 date: 2026-05-11
 category: best-practices
+tags: [best-practices, scripts/lint-bot-synthetic-completeness.sh, scripts/required-checks.txt, .github/actions/bot-pr-with-synthetic-checks/action.yml]
 module: scripts/lint-bot-synthetic-completeness.sh
-problem_type: latent-config-parser-bug
-related_pr: 3543
-related_issues: [3542, 2719]
 discoverable: lint-failure
+problem_type: latent-config-parser-bug
+related_issues:
+  - 3542
+  - 2719
+related_pr: 3543
 ---
 
 # Adding the First Multi-Word Required Check Exposed a Latent Strip-All-Whitespace Bug
