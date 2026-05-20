@@ -24,10 +24,11 @@
 # Post-#4173: adding a key to default_permissions in github-app-manifest.json
 # requires founder re-acceptance via the GitHub UI (no API — vendor limit,
 # vendor-authorization-scope class of the operator-only canonical list). See
-# runbook Step 2.1 for the procedure. Drift-guard at scheduled-github-app-
-# drift-guard.yml detects App-declared-vs-manifest divergence; installation-
-# grant-vs-manifest divergence (the class that produced #4173) is tracked in
-# #4179 as a drift-guard extension.
+# runbook Step 2.1 for the procedure. Both drift planes are now detected by
+# scheduled-github-app-drift-guard.yml: App-declared-vs-manifest (existing
+# block) and installation-grant-vs-manifest (the class that produced #4173
+# — added in the same workflow's `check` step, reusing the same App-JWT
+# and the same bin/diff-github-app-manifest.sh contract).
 #
 # Why ignore_changes on the 2 operator-supplied secrets: rotation via the
 # Doppler UI is invisible to subsequent `terraform plan` (the provider
