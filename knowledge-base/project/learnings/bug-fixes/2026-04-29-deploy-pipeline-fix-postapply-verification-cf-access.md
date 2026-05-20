@@ -1,13 +1,11 @@
 ---
+title: 'Post-apply verification for `deploy_pipeline_fix` drift: CF Access broke the HTTP-200 contract'
 date: 2026-04-29
 category: bug-fixes
 tags: [terraform, infra-drift, ci-deploy, cloudflare-access, post-apply-verification, ops-remediation]
-related_issues: ["#3019", "#3034", "#2881", "#2874", "#2618"]
-related_prs: ["#3022", "#2880"]
-related_files:
-  - apps/web-platform/infra/server.tf
-  - apps/web-platform/infra/ci-deploy.sh
-  - knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md
+related_files: [apps/web-platform/infra/server.tf, apps/web-platform/infra/ci-deploy.sh, knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md]
+related_issues: [#3019, #3034, #2881, #2874, #2618]
+related_prs: [#3022, #2880]
 ---
 
 # Post-apply verification for `deploy_pipeline_fix` drift: CF Access broke the HTTP-200 contract

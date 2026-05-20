@@ -1,9 +1,10 @@
 ---
+title: Manifest-as-IaC with shared diff-script contract between CI workflow and contract test
 date: 2026-05-20
 category: best-practices
-pr: 4121
-issue: 4115
 tags: [github-app, ci, drift-detection, brand-survival, iac]
+issue: 4115
+pr: 4121
 ---
 
 # Learning: Manifest-as-IaC with shared diff-script contract between CI workflow and contract test

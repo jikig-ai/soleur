@@ -1,11 +1,13 @@
 ---
-name: RED test must simulate SUT preconditions, not just assertion shape
-description: A negative-space assertion can pass vacuously if the SUT's buggy code path cannot fire in the test harness — the harness must preseed every precondition the bug requires
-type: test-failure
+title: RED test must simulate SUT preconditions, not just assertion shape
 date: 2026-04-22
-related_pr: 2828
-related_issue: 2815
+category: engineering
 tags: [tdd, bash-tests, test-fidelity, red-verification, worktree-manager]
+description: 'A negative-space assertion can pass vacuously if the SUT''s buggy code path cannot fire in the test harness — the harness must preseed every precondition the bug requires'
+name: RED test must simulate SUT preconditions, not just assertion shape
+related_issue: 2815
+related_pr: 2828
+type: test-failure
 ---
 
 # RED test must simulate SUT preconditions, not just assertion shape

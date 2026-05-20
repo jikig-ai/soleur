@@ -1,3 +1,10 @@
+---
+title: CI for Notifications and Infrastructure Setup Checklist
+date: 2026-02-12
+category: ci-cd
+tags: [implementation-patterns, ci, github-actions, release-announce, infrastructure, workflow skipped, secret not available, notification not sent]
+---
+
 # Learning: CI for Notifications and Infrastructure Setup Checklist
 
 ## Problem

@@ -2,9 +2,9 @@
 title: Service worker cache-first survives regression fix unless CACHE_NAME is bumped
 date: 2026-04-29
 category: runtime-errors
+tags: [sw, cache, survives, regression, fix, without, cache, name, bump]
+related_commits: [b2fed080]
 related_pr: TBD
-related_commits:
-  - b2fed080  # PR #3014 — module-load throw observability + canary fix
 ---
 
 # SW cache-first masks the regression fix until `CACHE_NAME` is bumped

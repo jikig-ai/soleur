@@ -1,3 +1,10 @@
+---
+title: History assistant bubbles incorrectly rendered completion checkmark
+date: 2026-04-23
+category: engineering
+tags: [ui-bug, apps/web-platform/lib/ws-client.ts, apps/web-platform/components/message-bubble.tsx, 2139, 2209, 2218]
+---
+
 # Learning: History assistant bubbles incorrectly rendered completion checkmark
 
 ## Problem

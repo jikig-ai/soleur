@@ -1,15 +1,15 @@
 ---
-module: WebPlatform
+title: Docker default seccomp profile silently disables bwrap sandbox
 date: 2026-04-05
-problem_type: security_issue
-component: tooling
-symptoms:
-  - "Docker default seccomp profile blocks CLONE_NEWUSER, disabling bwrap sandbox"
-  - "bwrap UID remapping incorrectly blamed for root-owned workspace files"
-root_cause: config_error
-resolution_type: documentation_update
-severity: high
+category: engineering
 tags: [bubblewrap, seccomp, docker, sandbox, user-namespace, uid-remapping]
+symptoms: [Docker default seccomp profile blocks CLONE_NEWUSER, disabling bwrap sandbox, bwrap UID remapping incorrectly blamed for root-owned workspace files]
+module: WebPlatform
+component: tooling
+problem_type: security_issue
+resolution_type: documentation_update
+root_cause: config_error
+severity: high
 ---
 
 # Learning: Docker default seccomp profile silently disables bwrap sandbox

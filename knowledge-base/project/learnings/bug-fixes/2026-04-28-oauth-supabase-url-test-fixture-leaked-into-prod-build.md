@@ -1,9 +1,11 @@
 ---
+title: 'OAuth broken in prod — test fixture host leaked into the production JS bundle via `secrets.NEXT_PUBLIC_SUPABASE_URL`'
 date: 2026-04-28
+category: security
 tags: [supabase, oauth, ci, secrets, build-time-inlining, dual-source-of-truth]
-status: applied
 issue: 2979
 pr: 2975
+status: applied
 ---
 
 # OAuth broken in prod — test fixture host leaked into the production JS bundle via `secrets.NEXT_PUBLIC_SUPABASE_URL`

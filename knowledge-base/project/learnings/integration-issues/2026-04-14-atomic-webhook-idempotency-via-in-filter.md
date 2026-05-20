@@ -1,17 +1,15 @@
 ---
-module: Billing
+title: 'Atomic Webhook Idempotency via PostgREST `.in()` Filter'
 date: 2026-04-14
-problem_type: integration_issue
-component: payments
-symptoms:
-  - "Replayed Stripe invoice.paid event could silently reactivate a cancelled subscription"
-  - "Per-session WebSocket cache kept user in active state up to session end after webhook suspended account"
-  - "Authenticated user could spam /api/billing/invoices (only Cloudflare IP throttle)"
-  - "Past-due banner re-appeared after every page reload even after dismissal"
-root_cause: logic_error
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [stripe, webhook, idempotency, toctou, postgrest, in-filter, websocket, rate-limit]
+symptoms: [Replayed Stripe invoice.paid event could silently reactivate a cancelled subscription, Per-session WebSocket cache kept user in active state up to session end after webhook suspended account, Authenticated user could spam /api/billing/invoices (only Cloudflare IP throttle), Past-due banner re-appeared after every page reload even after dismissal]
+module: Billing
+component: payments
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: logic_error
+severity: medium
 ---
 
 # Atomic Webhook Idempotency via PostgREST `.in()` Filter

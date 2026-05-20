@@ -1,3 +1,10 @@
+---
+title: socat is load-bearing for the Agent SDK bwrap sandbox (not just networking)
+date: 2026-04-19
+category: engineering
+tags: [socat, load, bearing, bwrap, sandbox]
+---
+
 # socat is load-bearing for the Agent SDK bwrap sandbox (not just networking)
 
 **Date:** 2026-04-19

@@ -1,15 +1,15 @@
 ---
-module: planning
+title: Plan-time PR-vs-issue disambiguation and self-derived in-body counts
 date: 2026-05-20
-problem_type: logic_error
+category: agent-design
+tags: [planning, github-cli, pr-vs-issue, route-to-definition]
+symptoms: [Plan body claimed a cross-referenced #N was a 'fabricated PR reference' because `gh pr view N` failed, The same #N actually resolved as a real CLOSED issue via `gh issue view N`]
+module: planning
+synced_to: [soleur:plan, soleur:go]
 component: plan_skill
-symptoms:
-  - "Plan body claimed a cross-referenced #N was a 'fabricated PR reference' because `gh pr view N` failed"
-  - "The same #N actually resolved as a real CLOSED issue via `gh issue view N`"
+problem_type: logic_error
 root_cause: insufficient_probe
 severity: low
-tags: [planning, github-cli, pr-vs-issue, route-to-definition]
-synced_to: [soleur:plan, soleur:go]
 ---
 
 # Plan-time PR-vs-issue disambiguation and self-derived in-body counts

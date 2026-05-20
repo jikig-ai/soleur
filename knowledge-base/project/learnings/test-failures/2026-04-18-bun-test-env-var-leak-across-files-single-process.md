@@ -1,16 +1,15 @@
 ---
-module: plugins/soleur/test/ux-audit
+title: 'bun:test env-var mutation leaks across files in a single process'
 date: 2026-04-18
-problem_type: test_failure
+category: security
+tags: [bun-test, test-isolation, env-vars, integration-tests, supabase]
+symptoms: [Integration test fails with 'Unable to connect https://project-ref.supabase.co', Subprocess spawned by test exits non-zero with env-var-related error, Test that imports a real module silently picks up another test's stub]
+module: plugins/soleur/test/ux-audit
+synced_to: [work]
 component: bun_test
-symptoms:
-  - "Integration test fails with 'Unable to connect https://project-ref.supabase.co'"
-  - "Subprocess spawned by test exits non-zero with env-var-related error"
-  - "Test that imports a real module silently picks up another test's stub"
+problem_type: test_failure
 root_cause: shared_process_env_mutation
 severity: high
-tags: [bun-test, test-isolation, env-vars, integration-tests, supabase]
-synced_to: [work]
 ---
 
 # bun:test env-var mutation leaks across files in a single process

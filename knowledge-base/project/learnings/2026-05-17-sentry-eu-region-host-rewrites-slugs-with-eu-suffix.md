@@ -1,5 +1,5 @@
 ---
-title: 'Sentry eu.sentry.io rewrites org-slugs ending in -eu to the literal ''eu'' org via activeorg-cookie hijack'
+title: 'Sentry eu.sentry.io rewrites org-slugs ending in -eu to the literal ''''eu'''' org via activeorg-cookie hijack'
 date: 2026-05-17
 category: engineering
 tags: [sentry, api-routing, org-subdomain, branch-c]

@@ -1,17 +1,16 @@
 ---
-module: System
+title: Shell Mock Testing Patterns and Disk Monitoring Provisioning
 date: 2026-04-05
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Shell script mock using ${!@} indirect expansion failed silently"
-  - "Terraform fmt check failed because Bash tool does not persist cd"
-  - "replace_all on checkbox patterns over-marked unfinished tasks"
-root_cause: incomplete_setup
-resolution_type: tooling_addition
-severity: medium
+category: shell-scripting
 tags: [shell-testing, mock-architecture, terraform, disk-monitoring]
+symptoms: [Shell script mock using ${!@} indirect expansion failed silently, Terraform fmt check failed because Bash tool does not persist cd, replace_all on checkbox patterns over-marked unfinished tasks]
+module: System
 synced_to: []
+component: tooling
+problem_type: integration_issue
+resolution_type: tooling_addition
+root_cause: incomplete_setup
+severity: medium
 ---
 
 # Learning: Shell Mock Testing Patterns and Disk Monitoring Provisioning

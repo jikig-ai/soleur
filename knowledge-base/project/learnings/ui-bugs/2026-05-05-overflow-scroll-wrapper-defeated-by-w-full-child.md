@@ -1,11 +1,11 @@
 ---
+title: '`overflow-x-auto` wrapper is defeated when the child has `w-full`'
 date: 2026-05-05
 category: ui-bugs
-module: web-platform / markdown-renderer
 tags: [tailwind, css, table-layout, overflow, markdown, regression-class]
-related:
-  - knowledge-base/project/learnings/ui-bugs/2026-04-15-flex-column-width-and-markdown-overflow-2229.md
-pr: "#3222"
+module: web-platform / markdown-renderer
+pr: '#3222'
+related: [knowledge-base/project/learnings/ui-bugs/2026-04-15-flex-column-width-and-markdown-overflow-2229.md]
 ---
 
 # `overflow-x-auto` wrapper is defeated when the child has `w-full`

@@ -1,16 +1,15 @@
 ---
-module: System
+title: doppler run one-liner variable expansion in documentation
 date: 2026-03-29
-problem_type: documentation_gap
-component: documentation
-symptoms:
-  - "doppler run one-liner examples use bare $DATABASE_URL"
-  - "$DATABASE_URL expanded by outer shell before Doppler injects it"
-  - "Commands silently connect to wrong database or fail with empty string"
-root_cause: config_error
-resolution_type: documentation_update
-severity: medium
+category: documentation
 tags: [doppler, shell-expansion, documentation, psql, runbook]
+symptoms: [doppler run one-liner examples use bare $DATABASE_URL, $DATABASE_URL expanded by outer shell before Doppler injects it, Commands silently connect to wrong database or fail with empty string]
+module: System
+component: documentation
+problem_type: documentation_gap
+resolution_type: documentation_update
+root_cause: config_error
+severity: medium
 ---
 
 # Learning: doppler run one-liner variable expansion in documentation

@@ -1,3 +1,10 @@
+---
+title: Supabase PostgREST anon key returns 401 for schema listing but 200 for table queries
+date: 2026-04-07
+category: engineering
+tags: [integration-issues, web-platform/server/health]
+---
+
 # Learning: Supabase PostgREST anon key returns 401 for schema listing but 200 for table queries
 
 ## Problem

@@ -1,16 +1,15 @@
 ---
-module: WebPlatform
+title: Disconnect Repository Fails Due to NOT NULL Constraint Violation
 date: 2026-04-06
-problem_type: database_issue
-component: database
-symptoms:
-  - "Failed to disconnect repository error on Settings page"
-  - "NOT NULL constraint violation on workspace_path column"
-  - "CHECK constraint violation on workspace_status column"
-root_cause: logic_error
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [supabase, not-null, check-constraint, disconnect, schema-code-mismatch]
+symptoms: [Failed to disconnect repository error on Settings page, NOT NULL constraint violation on workspace_path column, CHECK constraint violation on workspace_status column]
+module: WebPlatform
+component: database
+problem_type: database_issue
+resolution_type: code_fix
+root_cause: logic_error
+severity: high
 ---
 
 # Troubleshooting: Disconnect Repository Fails Due to NOT NULL Constraint Violation

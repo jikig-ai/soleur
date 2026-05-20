@@ -1,16 +1,15 @@
 ---
-module: Web Platform
+title: Supabase user.identities is null for email-first users who later linked GitHub
 date: 2026-04-03
-problem_type: integration_issue
-component: authentication
-symptoms:
-  - "Project Setup Failed error page after GitHub App install redirect"
-  - "POST /api/repo/install returns 403 for all users"
-  - "0 out of 6 users have github_installation_id set despite successful GitHub App installs"
-root_cause: wrong_api
-resolution_type: code_fix
-severity: critical
+category: engineering
 tags: [supabase, identities, github-app, oauth, email-first-users]
+symptoms: [Project Setup Failed error page after GitHub App install redirect, POST /api/repo/install returns 403 for all users, 0 out of 6 users have github_installation_id set despite successful GitHub App installs]
+module: Web Platform
+component: authentication
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: wrong_api
+severity: critical
 ---
 
 # Troubleshooting: Supabase user.identities is null for email-first users who later linked GitHub

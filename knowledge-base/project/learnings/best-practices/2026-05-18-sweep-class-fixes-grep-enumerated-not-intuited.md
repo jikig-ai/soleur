@@ -1,17 +1,16 @@
 ---
+title: 'Sweep-class fixes: grep-enumerated, not intuited'
 date: 2026-05-18
-problem_type: best_practice
+category: shell-scripting
+tags: [sweep-fixes, regex-widening, exit-trap, secret-handling, multi-agent-review]
+symptoms: [Runbook sweep missed 2 invocations in plan-named files (caught by multi-agent review), Hook regex widened to cover 4 configs but missed a 5th config used by in-scope runbooks, Bootstrap script's `set -euo pipefail` abort left cleartext secret artifact on disk]
+synced_to: [review]
 component: workflow
-symptoms:
-  - "Runbook sweep missed 2 invocations in plan-named files (caught by multi-agent review)"
-  - "Hook regex widened to cover 4 configs but missed a 5th config used by in-scope runbooks"
-  - "Bootstrap script's `set -euo pipefail` abort left cleartext secret artifact on disk"
+problem_type: best_practice
+related_issue: 4029
+related_pr: 4031
 root_cause: intuited_enumeration_replacing_grep_enumeration
 severity: high
-tags: [sweep-fixes, regex-widening, exit-trap, secret-handling, multi-agent-review]
-related_pr: 4031
-related_issue: 4029
-synced_to: [review]
 ---
 
 # Sweep-class fixes: grep-enumerated, not intuited

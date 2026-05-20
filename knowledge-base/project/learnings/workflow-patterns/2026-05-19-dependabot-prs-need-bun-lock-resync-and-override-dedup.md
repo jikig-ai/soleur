@@ -1,16 +1,11 @@
 ---
+title: 1. Worktree the dependabot branch, rebase onto current main (often there
+date: 2026-05-19
+category: engineering
+tags: [dependabot, lockfile, bun, npm, overrides]
+description: 'Dependabot''s npm-ecosystem PRs in apps/web-platform fail CI because they leave bun.lock drifted and skip nested vulnerable copies — both require a manual follow-up push.'
+metadata: {'category': 'workflow-patterns', 'module': 'dependabot', 'date': datetime.date(2026, 5, 19)}
 name: dependabot-prs-need-bun-lock-resync-and-override-dedup
-description: Dependabot's npm-ecosystem PRs in apps/web-platform fail CI because they leave bun.lock drifted and skip nested vulnerable copies — both require a manual follow-up push.
-metadata:
-  category: workflow-patterns
-  module: dependabot
-  date: 2026-05-19
-tags:
-  - dependabot
-  - lockfile
-  - bun
-  - npm
-  - overrides
 ---
 
 ## Problem

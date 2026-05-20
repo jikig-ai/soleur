@@ -1,16 +1,15 @@
 ---
-module: cc-soleur-go
+title: 'Widen the async contract — don''t proxy a sync interface around async work'
 date: 2026-04-27
-problem_type: integration_issue
+category: engineering
+tags: [contract-design, async-await, observability, proxy-anti-pattern, sentry-tagging]
+symptoms: [KeyInvalidError surfaced under op: "consumeStream" instead of op: "queryFactory", errorCode: "key_invalid" never reached client; users saw generic "router unavailable", 200+ lines of Query proxy indirection (8 forwarded methods, as any cast, eager .catch swallow)]
+module: cc-soleur-go
+synced_to: []
 component: typescript_module
-symptoms:
-  - "KeyInvalidError surfaced under op: \"consumeStream\" instead of op: \"queryFactory\""
-  - "errorCode: \"key_invalid\" never reached client; users saw generic \"router unavailable\""
-  - "200+ lines of Query proxy indirection (8 forwarded methods, as any cast, eager .catch swallow)"
+problem_type: integration_issue
 root_cause: sync_async_contract_mismatch
 severity: high
-tags: [contract-design, async-await, observability, proxy-anti-pattern, sentry-tagging]
-synced_to: []
 ---
 
 # Widen the async contract — don't proxy a sync interface around async work

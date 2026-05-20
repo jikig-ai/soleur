@@ -1,15 +1,15 @@
 ---
-module: System
+title: psql migration runner CI patterns
 date: 2026-03-28
-problem_type: best_practice
-component: development_workflow
-symptoms:
-  - "Database migrations not applied automatically to production"
-  - "4 rounds of manual SQL execution to fix missing migrations"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: high
+category: ci-cd
 tags: [psql, migration, ci, supabase, github-actions, doppler]
+symptoms: [Database migrations not applied automatically to production, 4 rounds of manual SQL execution to fix missing migrations]
+module: System
+component: development_workflow
+problem_type: best_practice
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: high
 ---
 
 # Learning: psql migration runner CI patterns

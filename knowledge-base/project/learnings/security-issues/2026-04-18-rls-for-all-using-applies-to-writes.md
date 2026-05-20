@@ -1,16 +1,16 @@
 ---
-module: web-platform/auth
+title: 'RLS `FOR ALL USING` (no `WITH CHECK`) applies to writes too — and how to keep trigger invariants canaried in tests'
 date: 2026-04-18
-problem_type: security_issue
-component: database
-symptoms:
-  - "Test comment claiming 'WITH CHECK falls back to USING' on a FOR ALL policy"
-  - "Redundant public.users upsert in test masks trigger regression"
-root_cause: misunderstood_rls_semantics
-resolution_type: documentation_and_test_restructure
-severity: medium
+category: engineering
 tags: [rls, supabase, postgres, tenant-isolation, byok, test-design]
+symptoms: [Test comment claiming 'WITH CHECK falls back to USING' on a FOR ALL policy, Redundant public.users upsert in test masks trigger regression]
+module: web-platform/auth
 synced_to: [work]
+component: database
+problem_type: security_issue
+resolution_type: documentation_and_test_restructure
+root_cause: misunderstood_rls_semantics
+severity: medium
 ---
 
 # RLS `FOR ALL USING` (no `WITH CHECK`) applies to writes too — and how to keep trigger invariants canaried in tests

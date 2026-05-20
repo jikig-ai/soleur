@@ -1,3 +1,10 @@
+---
+title: Prose utility class and Eleventy build patterns
+date: 2026-02-21
+category: engineering
+tags: [ui-bugs, docs-site, content-too-wide, changelog-unstyled, eleventy-build-failure]
+---
+
 # Learning: Prose utility class and Eleventy build patterns
 
 ## Problem

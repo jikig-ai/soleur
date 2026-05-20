@@ -1,12 +1,18 @@
 ---
+title: 'Three Review-Cycle Patterns From PR #3224 — Extracted-Function Self-Containment, Phrase-Tight Dedup, Co-Sign Order'
 date: 2026-05-05
 category: best-practices
-problem_type: contract_test_extractability
-component: github_actions_workflow + vitest_contract_test
-related_issues: [3187, 3224, 3236]
-related_prs: [3224, 3181]
 tags: [github-actions, vitest, contract-test, bash, extractFunctionBody, workflow-injection-defense, dedup-search, scope-out-protocol]
 synced_to: []
+component: github_actions_workflow + vitest_contract_test
+problem_type: contract_test_extractability
+related_issues:
+  - 3187
+  - 3224
+  - 3236
+related_prs:
+  - 3224
+  - 3181
 ---
 
 # Three Review-Cycle Patterns From PR #3224 — Extracted-Function Self-Containment, Phrase-Tight Dedup, Co-Sign Order

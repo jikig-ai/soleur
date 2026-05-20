@@ -1,16 +1,15 @@
 ---
-module: web-platform
+title: 'vi.stubEnv unavailable in bun''s test runner'
 date: 2026-03-29
-problem_type: developer_experience
-component: testing_framework
-symptoms:
-  - "vi.stubEnv is not a function when running bun test"
-  - "30 test failures after switching from process.env assignment to vi.stubEnv"
-  - "TypeScript TS2540 error: Cannot assign to NODE_ENV because it is a read-only property"
-root_cause: wrong_api
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [bun-test, vitest, process-env, typescript-strict, vi-stubenv]
+symptoms: [vi.stubEnv is not a function when running bun test, 30 test failures after switching from process.env assignment to vi.stubEnv, TypeScript TS2540 error: Cannot assign to NODE_ENV because it is a read-only property]
+module: web-platform
+component: testing_framework
+problem_type: developer_experience
+resolution_type: code_fix
+root_cause: wrong_api
+severity: medium
 ---
 
 # Troubleshooting: vi.stubEnv unavailable in bun's test runner

@@ -1,16 +1,15 @@
 ---
-module: web-platform/chat-input
+title: chat-input-attachments XHR-progress flake — manual-trigger pattern + negative-space assertion
 date: 2026-04-28
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "Intermittent CI failure: 'Unable to find an element with the text: 50%' in chat-input-attachments.test.tsx"
-  - "Test passes 14/14 in isolation but flakes 1/N in full-suite parallel run"
-  - "Sibling tests in 'send with attachments' describe block also flake on different CI runs"
-root_cause: async_timing
-resolution_type: test_fix
-severity: medium
+category: engineering
 tags: [vitest, flake, xmlhttprequest, manual-trigger, negative-space-assertion, cross-file-leak, user-event, react-batching]
+symptoms: [Intermittent CI failure: 'Unable to find an element with the text: 50%' in chat-input-attachments.test.tsx, Test passes 14/14 in isolation but flakes 1/N in full-suite parallel run, Sibling tests in 'send with attachments' describe block also flake on different CI runs]
+module: web-platform/chat-input
+component: testing_framework
+problem_type: test_failure
+resolution_type: test_fix
+root_cause: async_timing
+severity: medium
 ---
 
 # chat-input-attachments XHR-progress flake — manual-trigger pattern + negative-space assertion

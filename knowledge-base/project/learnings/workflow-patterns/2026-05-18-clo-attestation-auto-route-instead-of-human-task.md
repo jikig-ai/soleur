@@ -1,16 +1,15 @@
 ---
-module: System
+title: CLO attestation should auto-route to the clo agent, not the human user
 date: 2026-05-18
-problem_type: workflow_pattern
-component: soleur-go
-symptoms:
-  - "follow-through issue says 'CLO/human attestation' and waits indefinitely for the human to do statutory-text verification"
-  - "/soleur:go #N on the follow-through routes to /soleur:review (PR-number heuristic), but the issue is not a PR"
-  - "soleur assumes users have legal-domain knowledge sufficient to verify GDPR / CCPA / statute text"
-root_cause: incorrect_routing_assumption
-resolution_type: routing_table_update
-severity: medium
+category: engineering
 tags: [soleur-go, clo, legal, attestation, follow-through, manual-because, eur-lex, leginfo]
+symptoms: [follow-through issue says 'CLO/human attestation' and waits indefinitely for the human to do statutory-text verification, /soleur:go #N on the follow-through routes to /soleur:review (PR-number heuristic), but the issue is not a PR, soleur assumes users have legal-domain knowledge sufficient to verify GDPR / CCPA / statute text]
+module: System
+component: soleur-go
+problem_type: workflow_pattern
+resolution_type: routing_table_update
+root_cause: incorrect_routing_assumption
+severity: medium
 ---
 
 # CLO attestation should auto-route to the clo agent, not the human user

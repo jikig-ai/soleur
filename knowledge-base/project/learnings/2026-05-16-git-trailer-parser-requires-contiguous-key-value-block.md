@@ -3,7 +3,7 @@ title: 'Git trailer parser requires a contiguous `Token: value` block at the end
 date: 2026-05-16
 category: workflow-patterns
 tags: [git, trailers, commit-message, allowlist-diff, ci-gate]
-symptoms: [`Allowlist-Widened-By:` trailer present in commit body but `git interpret-trailers --parse` returns empty, `apps/web-platform/scripts/allowlist-diff.sh` ack mechanism reads `git log --format='%(trailers:key=Allowlist-Widened-By,valueonly)'` and sees nothing despite the line being in the commit message, Co-Authored-By renders correctly but a sibling trailer added above it silently drops]
+symptoms: [`Allowlist-Widened-By:` trailer present in commit body but `git interpret-trailers --parse` returns empty, `apps/web-platform/scripts/allowlist-diff.sh` ack mechanism reads `git log --format='%(trailers:key=Allowlist-Widened-By, valueonly)'` and sees nothing despite the line being in the commit message, Co-Authored-By renders correctly but a sibling trailer added above it silently drops]
 module: System
 synced_to: [work]
 component: development_workflow

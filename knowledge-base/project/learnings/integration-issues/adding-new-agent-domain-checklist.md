@@ -1,9 +1,10 @@
 ---
+title: Adding a New Agent Domain to Soleur
+date: 2026-02-22
 category: integration-issues
-module: plugin-docs
 tags: [domain, agents, skills, docs, eleventy, versioning, token-budget, domain-leader]
 symptoms: [missing domain on docs site, skills not appearing, build errors from wrong CWD, token budget exceeded]
-date: 2026-02-22
+module: plugin-docs
 ---
 
 # Learning: Adding a New Agent Domain to Soleur

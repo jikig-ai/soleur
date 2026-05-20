@@ -1,18 +1,16 @@
 ---
-module: docs-tooling
+title: 'markdownlint --fix silently converts literal `+` continuation to nested list marker'
 date: 2026-04-19
-problem_type: best_practice
-component: markdownlint-cli2
-symptoms:
-  - "`npx markdownlint-cli2 --fix` rewrites a literal `+` character at the start of an indented prose continuation into `-`, silently converting an intended continuation line into what CommonMark parses as a nested list item"
-  - "Original prose `  + \\`terraform_data.X\\` in \\`server.tf\\`` becomes `  - \\`terraform_data.X\\` in \\`server.tf\\`` after --fix, detaching the line from the surrounding bullet"
-  - "No MD00X diagnostic is emitted for this transformation — the autofix is lossy"
-root_cause: inadequate_documentation
-resolution_type: prose_pattern
-severity: low
+category: engineering
 tags: [markdownlint, markdown, prose-conventions, lint-pitfalls]
-related_learnings:
-  - 2026-04-19-markdownlint-fix-mangles-issue-ref-at-line-start.md
+symptoms: [`npx markdownlint-cli2 --fix` rewrites a literal `+` character at the start of an indented prose continuation into `-`, silently converting an intended continuation line into what CommonMark parses as a nested list item, Original prose `  + \`terraform_data.X\` in \`server.tf\`` becomes `  - \`terraform_data.X\` in \`server.tf\`` after --fix, detaching the line from the surrounding bullet, No MD00X diagnostic is emitted for this transformation — the autofix is lossy]
+module: docs-tooling
+component: markdownlint-cli2
+problem_type: best_practice
+related_learnings: [2026-04-19-markdownlint-fix-mangles-issue-ref-at-line-start.md]
+resolution_type: prose_pattern
+root_cause: inadequate_documentation
+severity: low
 ---
 
 # markdownlint --fix silently converts literal `+` continuation to nested list marker

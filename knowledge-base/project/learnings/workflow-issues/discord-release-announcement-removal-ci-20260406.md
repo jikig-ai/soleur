@@ -1,16 +1,15 @@
 ---
-module: System
+title: Discord Release Announcements Removed by Notification Migration
 date: 2026-04-06
-problem_type: workflow_issue
-component: development_workflow
-symptoms:
-  - "Discord release announcements stopped after PR #1578 notification migration"
-  - "DISCORD_RELEASES_WEBHOOK_URL secret unused since migration"
-  - "Stale references in skill docs claiming Discord notifications work"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: medium
+category: infrastructure
 tags: [discord, github-actions, ci-cd, release-announcements, notification-migration]
+symptoms: [Discord release announcements stopped after PR #1578 notification migration, DISCORD_RELEASES_WEBHOOK_URL secret unused since migration, Stale references in skill docs claiming Discord notifications work]
+module: System
+component: development_workflow
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: medium
 ---
 
 # Troubleshooting: Discord Release Announcements Removed by Notification Migration

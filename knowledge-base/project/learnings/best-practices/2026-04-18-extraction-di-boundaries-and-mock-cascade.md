@@ -1,9 +1,12 @@
 ---
-name: factory-extraction DI boundaries and mock-cascade hygiene
-description: When extracting a callback factory (like createCanUseTool) out of a god-module, inject only stateful/IO collaborators and direct-import pure helpers. Wide-DI contexts (22+ fields mixing pure and impure) inflate test surfaces without buying a seam the caller uses, and the first code-review agent will flag them P1. Extraction also breaks every downstream test that mocks modules the new module transitively imports — grep-and-batch the mock factories in the same commit.
-type: best-practice
+title: Factory-extraction DI boundaries and mock-cascade hygiene
+date: 2026-04-18
 category: refactoring
+tags: [refactoring, agent-runtime]
 module: agent-runtime
+description: When extracting a callback factory (like createCanUseTool) out of a god-module, inject only stateful/IO collaborators and direct-import pure helpers. Wide-DI contexts (22+ fields mixing pure and impure) inflate test surfaces without buying a seam the caller uses, and the first code-review agent will flag them P1. Extraction also breaks every downstream test that mocks modules the new module transitively imports — grep-and-batch the mock factories in the same commit.
+name: factory-extraction DI boundaries and mock-cascade hygiene
+type: best-practice
 ---
 
 # Factory-extraction DI boundaries and mock-cascade hygiene

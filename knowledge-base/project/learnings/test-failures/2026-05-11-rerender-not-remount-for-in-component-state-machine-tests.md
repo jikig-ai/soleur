@@ -1,19 +1,16 @@
 ---
-module: apps/web-platform
+title: 'Use `rerender`, not `unmount` + remount, when the gate-under-test is in-component state'
 date: 2026-05-11
-problem_type: test_failure
+category: engineering
+tags: [tdd, red-discipline, react-testing-library, rerender, in-component-state]
+symptoms: [RED test passes without the fix (vacuous green), Test claims to verify in-component state-machine behavior but resets the state under test on every fixture step, Bug recurs in production despite green CI]
+module: apps/web-platform
+synced_to: [work]
 component: react_testing_library
-symptoms:
-  - "RED test passes without the fix (vacuous green)"
-  - "Test claims to verify in-component state-machine behavior but resets the state under test on every fixture step"
-  - "Bug recurs in production despite green CI"
+problem_type: test_failure
+related: [knowledge-base/project/learnings/test-failures/2026-04-18-red-verification-must-distinguish-gated-from-ungated.md, knowledge-base/project/learnings/test-failures/2026-04-22-red-test-must-simulate-suts-preconditions.md]
 root_cause: test_harness_resets_sut_under_test
 severity: high
-tags: [tdd, red-discipline, react-testing-library, rerender, in-component-state]
-synced_to: [work]
-related:
-  - knowledge-base/project/learnings/test-failures/2026-04-18-red-verification-must-distinguish-gated-from-ungated.md
-  - knowledge-base/project/learnings/test-failures/2026-04-22-red-test-must-simulate-suts-preconditions.md
 ---
 
 # Use `rerender`, not `unmount` + remount, when the gate-under-test is in-component state

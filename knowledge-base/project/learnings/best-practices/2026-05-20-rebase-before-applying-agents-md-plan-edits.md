@@ -1,16 +1,15 @@
 ---
-module: workflow / plan / work skills
+title: 'Rebase before applying AGENTS.* plan edits when sibling PRs are in flight'
 date: 2026-05-20
-problem_type: integration_issue
+category: workflow-patterns
+tags: [agents-md, budget-reckoning, rebase, high-collision-file, plan-precondition-drift]
+symptoms: [Plan's B_ALWAYS budget baseline (24499) was stale at /work time (actual 23936, then 21849 after rebase), Sibling PR #4123 trimmed L15 + L55 of AGENTS.core.md while my work was in flight, Applied plan-prescribed trims duplicated #4123's work; lefthook still rejected commit; required reassessment + rebase + reapply]
+module: workflow / plan / work skills
+synced_to: []
 component: skill_workflow
-symptoms:
-  - "Plan's B_ALWAYS budget baseline (24499) was stale at /work time (actual 23936, then 21849 after rebase)"
-  - "Sibling PR #4123 trimmed L15 + L55 of AGENTS.core.md while my work was in flight"
-  - "Applied plan-prescribed trims duplicated #4123's work; lefthook still rejected commit; required reassessment + rebase + reapply"
+problem_type: integration_issue
 root_cause: stale_precondition_high_collision_file
 severity: medium
-tags: [agents-md, budget-reckoning, rebase, high-collision-file, plan-precondition-drift]
-synced_to: []
 ---
 
 # Rebase before applying AGENTS.* plan edits when sibling PRs are in flight

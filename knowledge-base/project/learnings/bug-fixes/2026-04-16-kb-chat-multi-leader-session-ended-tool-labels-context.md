@@ -1,3 +1,10 @@
+---
+title: KB chat multi-leader session lifecycle, tool labels, document context
+date: 2026-04-16
+category: engineering
+tags: [bug-fixes, kb-chat, agent-runner, tool-labels]
+---
+
 # Learning: KB chat multi-leader session lifecycle, tool labels, document context
 
 ## Problem

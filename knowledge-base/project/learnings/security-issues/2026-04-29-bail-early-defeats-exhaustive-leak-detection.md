@@ -1,10 +1,11 @@
 ---
+title: bail-early in security-gate traversal defeats exhaustive leak detection
 date: 2026-04-29
 category: security-issues
-module: preflight
 tags: [security-gates, traversal, bail-early, completeness]
-related_pr: 3029
+module: preflight
 related_issue: 3010
+related_pr: 3029
 ---
 
 # Learning: bail-early in security-gate traversal defeats exhaustive leak detection

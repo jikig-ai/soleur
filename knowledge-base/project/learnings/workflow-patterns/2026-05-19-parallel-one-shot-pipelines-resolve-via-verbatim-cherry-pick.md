@@ -1,7 +1,9 @@
 ---
+title: Parallel one-shot pipelines on the same root cause resolve via verbatim cherry-pick
+date: 2026-05-19
 category: workflow-patterns
-module: one-shot
 tags: [one-shot, cherry-pick, parallel-pipelines, code-review, cross-reconcile]
+module: one-shot
 status: applied
 ---
 

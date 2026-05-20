@@ -1,16 +1,15 @@
 ---
-module: System
+title: Skill instruction ambiguity causes agent improvisation failure
 date: 2026-04-11
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "Ship Phase 7 polling stuck indefinitely with pending= (empty string)"
-  - "Agent improvises Python3 inline JSON parsing when SKILL.md lacks --jq filter"
-  - "Poll loop exit condition never matches because empty string != '0'"
-root_cause: missing_workflow_step
-resolution_type: documentation_update
-severity: medium
+category: agent-design
 tags: [ship, phase-7, polling, jq, gh-cli, infinite-loop, agent-improvisation]
+symptoms: [Ship Phase 7 polling stuck indefinitely with pending= (empty string), Agent improvises Python3 inline JSON parsing when SKILL.md lacks --jq filter, Poll loop exit condition never matches because empty string != '0']
+module: System
+component: tooling
+problem_type: workflow_issue
+resolution_type: documentation_update
+root_cause: missing_workflow_step
+severity: medium
 ---
 
 # Troubleshooting: Skill instruction ambiguity causes agent improvisation failure

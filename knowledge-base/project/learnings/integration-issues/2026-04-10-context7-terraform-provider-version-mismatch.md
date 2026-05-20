@@ -1,3 +1,10 @@
+---
+title: Context7 docs may not match pinned Terraform provider version
+date: 2026-04-10
+category: infrastructure
+tags: [integration-issues, terraform, context7, cloudflare, doppler]
+---
+
 # Learning: Context7 docs may not match pinned Terraform provider version
 
 ## Problem

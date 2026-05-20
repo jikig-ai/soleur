@@ -1,3 +1,10 @@
+---
+title: Dev-mode graceful degradation for missing Supabase env vars
+date: 2026-04-13
+category: engineering
+tags: [runtime-errors, web-platform/supabase]
+---
+
 # Learning: Dev-mode graceful degradation for missing Supabase env vars
 
 ## Problem

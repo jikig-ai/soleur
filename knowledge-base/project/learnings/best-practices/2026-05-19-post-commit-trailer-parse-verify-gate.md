@@ -1,16 +1,16 @@
 ---
-module: ci-infrastructure
+title: Post-commit trailer-parse verify gate
 date: 2026-05-19
-problem_type: process_issue
-component: commit-message-format
-symptoms:
-  - "git log --format='%(trailers:key=Allowlist-Widened-By,valueonly)' returns empty after commit"
-  - "allowlist-diff.sh CI gate cannot find the ack trailer despite operator including it in the commit body"
-root_cause: rule_documented_but_not_auto_verified
-severity: medium
+category: workflow-patterns
 tags: [git-trailers, commit-format, ci-gates, workflow-enforcement]
+symptoms: [git log --format='%(trailers:key=Allowlist-Widened-By,valueonly)' returns empty after commit, allowlist-diff.sh CI gate cannot find the ack trailer despite operator including it in the commit body]
+module: ci-infrastructure
 synced_to: [commit, ship]
+component: commit-message-format
+problem_type: process_issue
+root_cause: rule_documented_but_not_auto_verified
 route_to_definition_issue: 4106
+severity: medium
 ---
 
 # Post-commit trailer-parse verify gate

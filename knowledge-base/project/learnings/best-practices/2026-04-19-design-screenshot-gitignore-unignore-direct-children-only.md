@@ -1,9 +1,10 @@
 ---
+title: 'Design screenshot `.gitignore` unignore covers direct children only'
 date: 2026-04-19
 category: best-practices
 tags: [gitignore, design, ux-design-lead, pencil-mcp, screenshots]
-related_pr: 2645
 related_issue: 2636
+related_pr: 2645
 ---
 
 # Design screenshot `.gitignore` unignore covers direct children only
