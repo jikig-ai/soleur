@@ -5,11 +5,29 @@ lane: single-domain
 classification: docs-only
 detail_level: MINIMAL
 requires_cpo_signoff: false
+deepened: 2026-05-20
 ---
 
 # Fix Inngest verification hostname (`web-platform.soleur.ai` → `app.soleur.ai`)
 
 Closes #4159.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** Implementation, Acceptance Criteria, Sharp Edges (precision adds — substring-collision audit; AC4 made grep-checkable; gate confirmations).
+**Research agents used:** none (inline-only — proportionate to a 4-edit, 2-file docs swap; per AGENTS.md `cm-delegate-verbose-exploration-3-file`, fan-out is not warranted).
+
+### Key Improvements
+
+1. **Substring-collision audit.** `grep -cF 'web-platform.soleur.ai'` returns exactly 1+3=4, matching the known sites. The standalone `web-platform` substring (without `.soleur.ai`) appears 30+ times in `apps/web-platform/infra/...` path references AND in the container/unit name `soleur-web-platform` — `replace_all=true` on the FQDN `web-platform.soleur.ai` does NOT collide with any of these (the literal `old_string` includes `.soleur.ai`). Risk R2 (scope creep) is therefore mechanically zero, not just "verified by AC4".
+2. **AC4 hardened.** Replaced prose file-list with a `git diff --name-only main...HEAD | sort` expected-output block.
+3. **Hard-gate confirmations** (Phase 4.6 User-Brand Impact: PASS; Phase 4.7 Observability: SKIP per pure-docs trigger; Phase 4.5 Network-Outage: FALSE-POSITIVE skip — see Gate Confirmations).
+
+### New Considerations Discovered
+
+- The plan body matches the Phase 4.5 SSH trigger (case-insensitive) via "no SSH required" (a parenthetical describing the runbook's verification approach, not an SSH-diagnosis hypothesis). Per the L3→L7 checklist's stated intent ("plans addressing SSH/network-connectivity symptoms"), this is a false positive — the plan is a hostname swap, not a connectivity diagnosis. Skipped with rationale rather than mechanically firing the deep-dive.
+- No new learnings need to be captured. The existing learning at `knowledge-base/project/learnings/best-practices/2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces.md` already documents the class. The PR will be a self-evident application of that rule.
 
 ## Overview
 
@@ -82,7 +100,16 @@ grep -nE 'app\.soleur\.ai/api/inngest' \
 - [ ] **AC1.** `grep -rE 'web-platform\.soleur\.ai' knowledge-base/` returns no lines (exit code 1). Verified post-edit by the implementer.
 - [ ] **AC2.** `grep -cE 'app\.soleur\.ai/api/inngest' knowledge-base/engineering/ops/runbooks/inngest-server.md` returns `1`.
 - [ ] **AC3.** `grep -cE 'app\.soleur\.ai/api/inngest' knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md` returns `3`.
-- [ ] **AC4.** No other file is modified in this PR (`git diff --name-only main...HEAD` returns exactly the runbook + the inngest plan file + this plan file + the spec/tasks scaffold for `feat-one-shot-runbook-hostname-4159`). Per issue body: "One-line fix; do not require new acceptance tests."
+- [ ] **AC4.** No other file is modified in this PR. `git diff --name-only main...HEAD | sort` returns EXACTLY:
+
+  ```
+  knowledge-base/engineering/ops/runbooks/inngest-server.md
+  knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md
+  knowledge-base/project/plans/2026-05-20-fix-runbook-inngest-hostname-app-soleur-ai-plan.md
+  knowledge-base/project/specs/feat-one-shot-runbook-hostname-4159/tasks.md
+  ```
+
+  Per issue body: "One-line fix; do not require new acceptance tests."
 - [ ] **AC5.** PR body uses `Closes #4159` (not `Refs`) — this is a docs change applied at merge time with no post-merge operator action, so auto-close at merge is correct.
 
 ### Post-merge (operator)
@@ -136,3 +163,16 @@ The issue is labeled `priority/p3-low` but the cost of fix is ~2 edits and the c
 4. `gh issue view 4159` — confirmed scope, labels, AC text.
 5. `git log --oneline -10 -- knowledge-base/engineering/ops/runbooks/inngest-server.md` — confirmed PR #4148 (`f2b2f959`) introduced the wrong hostname.
 6. `gh issue list --label code-review --state open` matched against edited file paths — zero overlap.
+
+## Deepen-pass verifications run
+
+7. `grep -cF 'web-platform.soleur.ai' <runbook> <inngest-plan>` returns `1` and `3` respectively, confirming the 4-hit total via a substring-anchored (not regex) count.
+8. `grep -nF 'web-platform' <runbook> <inngest-plan>` returns 30+ matches, none of which extend to `.soleur.ai` (all are `apps/web-platform/...` paths or `soleur-web-platform` unit/container names). Confirms `replace_all=true` on the FQDN `web-platform.soleur.ai` does NOT collide.
+
+## Gate Confirmations
+
+- **Phase 4.5 (Network-Outage Deep-Dive):** SKIP. Trigger pattern `SSH` matches (one occurrence: "no SSH required" in Files-to-Edit prose at line 51 of this plan, describing the runbook's existing SSH-free verification approach — NOT an SSH-diagnosis hypothesis). The L3→L7 checklist's stated intent is "plans addressing SSH/network-connectivity symptoms"; this plan addresses a literal-string hostname swap with no network-failure hypothesis to diagnose. False-positive trigger; deep-dive skipped with rationale. Resource-shape trigger does NOT fire (no `terraform apply` in this PR; no `provisioner "file"` / `remote-exec` / `connection { type = "ssh" }` in the edited files — both are markdown).
+- **Phase 4.6 (User-Brand Impact Halt):** PASS. Heading present at the `## User-Brand Impact` section. Body has all three required lines (lands-broken artifact, leaks-vector, threshold). Threshold = `none`. Sensitive-path regex does NOT match the diff (all edited paths are `.md` under `knowledge-base/`; no `apps/web-platform/(server|supabase|app/api|middleware.ts)`, no `apps/*/infra/`, no `.github/workflows/`, no `doppler*.{yml,yaml,sh}`). Scope-out line not required.
+- **Phase 4.7 (Observability Gate):** SKIP. All Files-to-Edit paths match `^knowledge-base/` (pure-docs trigger). No `apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, or `plugins/*/scripts/` paths. No `## Observability` section required.
+- **GDPR / Compliance Gate (Phase 2.7):** SKIP. Canonical regex (schemas/migrations/auth/API/`.sql`) does not match; expansion triggers (a)-(d) do not fire.
+- **Infrastructure-as-Code Gate (Phase 2.8):** SKIP. No new resource, no provider, no Terraform root edit, no cloud-init change. Pure docs.
