@@ -186,4 +186,81 @@ describe("buildCspHeader", () => {
       expect(prodCsp).toContain(directive);
     }
   });
+
+  describe("form-action override", () => {
+    test("defaults to 'self' when formActionExtra is not provided", () => {
+      const formAction = parseCspDirective(prodCsp, "form-action");
+      expect(formAction).toBe("'self'");
+    });
+
+    test("defaults to 'self' when formActionExtra is empty array", () => {
+      const csp = buildCspHeader({
+        nonce: TEST_NONCE,
+        isDev: false,
+        supabaseUrl: "https://abc.supabase.co",
+        appHost: "app.soleur.ai",
+        formActionExtra: [],
+      });
+      expect(parseCspDirective(csp, "form-action")).toBe("'self'");
+    });
+
+    test("extends form-action with whitelisted github.com origin", () => {
+      const csp = buildCspHeader({
+        nonce: TEST_NONCE,
+        isDev: false,
+        supabaseUrl: "https://abc.supabase.co",
+        appHost: "app.soleur.ai",
+        formActionExtra: ["https://github.com"],
+      });
+      expect(parseCspDirective(csp, "form-action")).toBe(
+        "'self' https://github.com",
+      );
+    });
+
+    test("deduplicates repeated origins in formActionExtra", () => {
+      const csp = buildCspHeader({
+        nonce: TEST_NONCE,
+        isDev: false,
+        supabaseUrl: "https://abc.supabase.co",
+        appHost: "app.soleur.ai",
+        formActionExtra: ["https://github.com", "https://github.com"],
+      });
+      expect(parseCspDirective(csp, "form-action")).toBe(
+        "'self' https://github.com",
+      );
+    });
+
+    test("throws when formActionExtra contains an origin not in the allowlist", () => {
+      expect(() =>
+        buildCspHeader({
+          nonce: TEST_NONCE,
+          isDev: false,
+          supabaseUrl: "https://abc.supabase.co",
+          appHost: "app.soleur.ai",
+          formActionExtra: ["https://evil.example"],
+        }),
+      ).toThrow(/not in the allowlist/);
+    });
+
+    test("throws when formActionExtra contains a subtly different github origin", () => {
+      // Defense-in-depth: github.io, raw.githubusercontent.com, codespaces,
+      // and case-variant Github.com must NOT be silently accepted.
+      for (const bad of [
+        "https://github.io",
+        "https://raw.githubusercontent.com",
+        "https://Github.com",
+        "http://github.com",
+      ]) {
+        expect(() =>
+          buildCspHeader({
+            nonce: TEST_NONCE,
+            isDev: false,
+            supabaseUrl: "https://abc.supabase.co",
+            appHost: "app.soleur.ai",
+            formActionExtra: [bad],
+          }),
+        ).toThrow(/not in the allowlist/);
+      }
+    });
+  });
 });
