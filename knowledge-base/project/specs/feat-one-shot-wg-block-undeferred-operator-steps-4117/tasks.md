@@ -30,11 +30,13 @@ Derived from `knowledge-base/project/plans/2026-05-20-feat-wg-block-pr-ready-on-
 - [ ] 2.5 Append pointer-index entry to `AGENTS.md`.
 - [ ] 2.6 Run `bun test ...gate.test.ts`. All 6 GREEN.
 
-## Phase 3 — AGENTS budget reckoning (HALT POINT)
+## Phase 3 — AGENTS budget reckoning (INLINE FOLD-IN per deepen-plan)
 
-- [ ] 3.1 Re-run budget linter; capture new B_ALWAYS.
-- [ ] 3.2 Operator chooses 3.2.a (paired demotion PR) — recommended path. File the sibling PR, merge, then return.
-- [ ] 3.3 Rebase this branch onto main, re-run linter, confirm `[PASS]`.
+- [ ] 3.1 Re-run budget linter; capture new B_ALWAYS (deepen-plan baseline: 24499).
+- [ ] 3.2.a-i Trim `AGENTS.core.md:15` (`hr-tagged-build-workflow-needs-initial-tag-push`) from 1372 B → ≤580 B; offload `**Why:**`+`**How to apply:**` content to new learning at `knowledge-base/project/learnings/best-practices/2026-05-20-tagged-build-workflow-needs-initial-tag-push.md`.
+- [ ] 3.2.a-ii Trim `AGENTS.core.md:55` (`wg-end-of-work-emit-resume-prompt`) from 1040 B → ≤580 B; verify or add the "Required fields" enumeration in `plugins/soleur/skills/work/SKILL.md` §Resume Prompt.
+- [ ] 3.2.a-iii Pick at least one `wg-*` to retire from candidates: `wg-when-an-audit-identifies-pre-existing`, `wg-when-fixing-a-workflow-gates-detection`, or operator nomination. Add entry to `scripts/retired-rule-ids.txt`. Remove from `AGENTS.core.md` AND pointer in `AGENTS.md`.
+- [ ] 3.3 Re-run both linters (`lint-agents-rule-budget.py` AND `lint-rule-ids.py --retired-file`). Both `[PASS]`. Iterate trim depth / retire one more `wg-*` if still over budget.
 
 ## Phase 4 — Self-test + counterfactual
 
