@@ -65,6 +65,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-plan-prescribed-skills-must-run-inline] → rest
 - [id: wg-end-of-work-emit-resume-prompt] → rest
 - [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
+- [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
 
 ## Code Quality
 
