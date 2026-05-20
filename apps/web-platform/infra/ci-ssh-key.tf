@@ -39,6 +39,15 @@ resource "tls_private_key" "ci_ssh" {
   algorithm = "ED25519"
 }
 
+locals {
+  # trimspace() strips the trailing newline tls_private_key.public_key_openssh
+  # carries. Used in 3 sites (remote-exec grep + echo, cloud-init template
+  # interpolation in server.tf) — without trim, grep -qxF never matches on
+  # the appended literal AND cloud-init renders an indented blank line under
+  # ssh_authorized_keys.
+  ci_ssh_pubkey = trimspace(tls_private_key.ci_ssh.public_key_openssh)
+}
+
 resource "doppler_secret" "deploy_ssh_private_key" {
   project    = "soleur"
   config     = "prd_terraform"
@@ -72,7 +81,7 @@ resource "terraform_data" "root_authorized_keys" {
       "chmod 700 /root/.ssh",
       "touch /root/.ssh/authorized_keys",
       "chmod 600 /root/.ssh/authorized_keys",
-      "grep -qxF '${trimspace(tls_private_key.ci_ssh.public_key_openssh)}' /root/.ssh/authorized_keys || echo '${trimspace(tls_private_key.ci_ssh.public_key_openssh)}' >> /root/.ssh/authorized_keys",
+      "grep -qxF '${local.ci_ssh_pubkey}' /root/.ssh/authorized_keys || echo '${local.ci_ssh_pubkey}' >> /root/.ssh/authorized_keys",
     ]
   }
 }

@@ -41,11 +41,9 @@ resource "hcloud_server" "web" {
     doppler_token                        = var.doppler_token
     resend_api_key                       = var.resend_api_key
     # Fresh-host parity for the CI SSH keypair generated in
-    # ci-ssh-key.tf. trimspace() drops the trailing newline that
-    # tls_private_key.public_key_openssh carries; without it the
-    # rendered cloud-init.yml would have an indented blank line under
-    # ssh_authorized_keys which still parses but is noisy.
-    ci_ssh_public_key_openssh = trimspace(tls_private_key.ci_ssh.public_key_openssh)
+    # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
+    # block in ci-ssh-key.tf for the rationale.
+    ci_ssh_public_key_openssh = local.ci_ssh_pubkey
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,
