@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { afterAll, afterEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
 // Pristine `fetch` captured at setup-file load. Several test files assign
 // `global.fetch = vi.fn(...)` directly; `vi.unstubAllGlobals()` does NOT
@@ -15,6 +15,13 @@ const originalFetch: typeof fetch | undefined =
 // See `originalFetch` above and PR #2524 / #2470.
 const originalXHR: typeof XMLHttpRequest | undefined =
   typeof globalThis !== "undefined" ? globalThis.XMLHttpRequest : undefined;
+
+// #4155 — Pristine `WebSocket` reference at setup-file load. Needed for the
+// conditional blockade install below; lets us distinguish "happy-dom's real
+// WebSocket is still in place" from "a test file already installed its own
+// MockWebSocket / vi.stubGlobal stub" so we only blockade the former.
+const originalWebSocket: typeof WebSocket | undefined =
+  typeof globalThis !== "undefined" ? globalThis.WebSocket : undefined;
 
 function resetBrowserLikeGlobals() {
   if (typeof sessionStorage !== "undefined") {
@@ -32,6 +39,62 @@ function resetBrowserLikeGlobals() {
     }
   }
 }
+
+// #4155 — fail-loud network blockade. happy-dom's Window provides a REAL
+// `WebSocket` (delegates to the `ws` npm package, opens a real TCP socket)
+// and a REAL `fetch`; `window.location.host` defaults to `localhost:3000`.
+// Without this blockade, an unmocked `useWebSocket()` or relative-path
+// `fetch("/api/...")` in a component test attempts a real loopback connect
+// and surfaces as a transient ECONNREFUSED only after vitest's 16s test
+// timeout — non-actionable error + wall-clock cost.
+//
+// Strategy: install loud stubs in `beforeEach` ONLY when the current global is
+// still the pristine happy-dom reference (or the blockade itself, for idempotent
+// re-install). If a test file already swapped in a mock — module-init
+// `vi.stubGlobal("fetch", mockFetch)`, file-level `globalThis.WebSocket =
+// MockWebSocket`, or a vi.spyOn wrapper — leave it alone. This preserves
+// pre-blockade test patterns and keeps file-level beforeEach overrides
+// (which run AFTER this hook in vitest's composition chain) free to win.
+class BlockedWebSocket {
+  constructor(url: string | URL) {
+    throw new Error(
+      `[setup-dom] Unmocked WebSocket construction in test — url=${String(url)}. ` +
+        `Mock @/lib/ws-client via vi.mock(...) OR assign globalThis.WebSocket = MockWebSocket in this test's beforeEach. ` +
+        `See knowledge-base/project/learnings/2026-05-20-happy-dom-ws-fetch-blockade.md.`,
+    );
+  }
+}
+
+const blockedFetch: typeof fetch = (input, _init) =>
+  Promise.reject(
+    new Error(
+      `[setup-dom] Unmocked fetch in test — input=${
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : "[Request]"
+      }. Mock with vi.stubGlobal("fetch", vi.fn().mockResolvedValue(...)) in this test's beforeEach.`,
+    ),
+  );
+
+beforeEach(() => {
+  if (typeof globalThis === "undefined") return;
+  const currentWS = globalThis.WebSocket as unknown;
+  if (
+    currentWS === (originalWebSocket as unknown) ||
+    currentWS === (BlockedWebSocket as unknown)
+  ) {
+    globalThis.WebSocket = BlockedWebSocket as unknown as typeof WebSocket;
+  }
+  const currentFetch = globalThis.fetch as unknown;
+  if (
+    currentFetch === (originalFetch as unknown) ||
+    currentFetch === (blockedFetch as unknown)
+  ) {
+    globalThis.fetch = blockedFetch;
+  }
+});
 
 afterEach(async () => {
   if (typeof document !== "undefined") {
