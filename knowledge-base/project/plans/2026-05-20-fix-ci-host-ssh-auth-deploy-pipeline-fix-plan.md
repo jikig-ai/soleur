@@ -7,9 +7,81 @@ branch: feat-one-shot-fix-ci-ssh-auth-deploy-pipeline-fix
 lane: cross-domain
 classification: infra
 requires_cpo_signoff: false
+deepened_on: 2026-05-20
 ---
 
 # fix(infra): unblock `Apply deploy-pipeline-fix.yml` CI→host SSH authentication
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** Overview, Hypotheses, Research Reconciliation, Option A details, Files to Create, ACs, IaC, Sharp Edges.
+
+### Key Improvements
+
+1. **Doppler `config` corrected.** Original plan draft prescribed `config = "prd_terraform"` on `doppler_secret.deploy_ssh_private_key`. Verified live: workflow reads `DEPLOY_SSH_PRIVATE_KEY` from `prd_terraform` (`apply-deploy-pipeline-fix.yml:117-127, 153-160`). The `doppler-write-token.tf:42` precedent confirms `doppler_secret`-class resources CAN write to `prd_terraform` (the `DOPPLER_TOKEN_TF` provider token is workplace-scope, NOT config-scoped — see `apps/web-platform/infra/main.tf:provider "doppler"` + `kb-drift.tf:# workplace-scope DOPPLER_TOKEN_TF`). All other `doppler_secret` resources happen to pin `config = "prd"` because they're consumed by the runtime, not by Terraform — the choice is target-driven, not provider-constrained.
+2. **Reference type corrected.** `#4177` is a CLOSED *issue* ("follow-through: CI→host SSH timeout blocks Apply deploy-pipeline-fix.yml"). PR #4181 closed it for L3. This PR is the L7 follow-on and uses `Ref #4177` (not `Closes`) per `wg-use-closes-n-in-pr-body-not-title-to` — the issue is already closed, but `Ref` keeps backlink continuity.
+3. **Provider pin verified.** `.terraform.lock.hcl` shows `dopplerhq/doppler = 1.21.2 (~> 1.21)`. `hashicorp/tls` is NOT yet pinned — `terraform init` after the new file lands adds the lockfile entry. Add `terraform { required_providers { tls = { source = "hashicorp/tls", version = "~> 4.0" } } }` to `main.tf` or rely on auto-discovery; check the existing `main.tf` shape.
+4. **Cloud-init schema verified for ubuntu-24.04.** `users:` block uses the cloud-init `users-and-groups` module. The correct shape is `- name: <user>\n  ssh_authorized_keys: [<key>]` under each user entry. The existing `- default` entry inherits Hetzner-provided keys; to add the CI key for root specifically use a separate `- name: root\n  ssh_authorized_keys: [...]` entry (and `lock_passwd: true`). Alternatively, `ssh_authorized_keys:` at root level applies to the default user only — for root login the per-user form is needed since `AllowUsers root` (sshd_config.d/01-hardening.conf:29) makes root the auth target.
+5. **CF Tunnel SSH bridge dependency for `terraform_data.root_authorized_keys`.** The bridge is set up only in `apply-deploy-pipeline-fix.yml`, NOT in `apply-web-platform-infra.yml` (which is what dispatches the new resource). Re-verified: `apply-web-platform-infra.yml` does NOT install cloudflared / set iptables NAT. The new `terraform_data.root_authorized_keys` MUST be applied from a context where the operator's `~/.ssh/id_ed25519` is in ssh-agent AND the operator's IP is in `var.admin_ips` (i.e., from an operator-local `terraform apply`, NOT from CI). This shifts the bootstrap pattern — see "Bootstrap Path Correction" below.
+6. **Reading `private_key_openssh` from `tls_private_key`.** `tls_private_key.public_key_openssh` includes the trailing newline; in `authorized_keys` we want a single line. Use `trimspace(tls_private_key.ci_ssh.public_key_openssh)` everywhere the value is embedded, OR rely on `grep -qxF` (full-line match) which is newline-insensitive. The plan now prescribes `trimspace()`.
+
+### New Considerations Discovered
+
+- **`apply-web-platform-infra.yml` cannot apply the new `terraform_data.root_authorized_keys` resource without CF Tunnel bridge.** The new resource opens SSH to root@host; the operator's IP IS in `var.admin_ips` but the CI runner's IP is not. Two paths:
+  - **Path A (chosen):** Operator runs the FIRST apply locally from a worktree (operator IP allowlisted at the firewall). After the keypair is generated and the host's `authorized_keys` updated, every subsequent CI dispatch of `apply-deploy-pipeline-fix.yml` works because the CF Tunnel SSH bridge IS configured there.
+  - **Path B (rejected):** Extend `apply-web-platform-infra.yml` with the same CF Tunnel + iptables NAT setup as `apply-deploy-pipeline-fix.yml`. Larger blast radius; this workflow already excludes server.tf SSH-provisioned resources from its `-target=` allow-list per its header comment. Not pursued.
+- **Pre-existing `DEPLOY_SSH_PRIVATE_KEY` value in Doppler.** Either (a) it was a stale operator key matching a pre-#4181 era of `authorized_keys` and the host's `authorized_keys` was updated separately at some point, or (b) it was the operator's own key. Either way, the new resource OVERWRITES the value. There is no migration data loss because Doppler `prd_terraform/DEPLOY_SSH_PRIVATE_KEY` has only one consumer (`apply-deploy-pipeline-fix.yml`).
+- **Phase 4.5 Network-Outage Deep-Dive triggered + verified.** Plan body matches both prose keywords (`SSH`, `handshake`) AND resource-shape (`terraform_data.deploy_pipeline_fix` has `provisioner "file"`). L3 verified closed (handshake initiates); L7 sshd `authorized_keys` is the load-bearing layer.
+- **Phase 4.6 User-Brand Impact halt:** PASS (section present, threshold = `none`, scope-out reason present for sensitive-path diff).
+- **Phase 4.7 Observability halt:** PASS (section present, all 5 fields populated, `discoverability_test.command` is `gh run list ...` — no `ssh `).
+- **Phase 4.8 PAT halt:** PASS (no PAT-shaped tokens; `tls_private_key` generates the keypair).
+
+### Verification Probes Run
+
+```text
+gh issue view 4177 -> state: CLOSED ("follow-through: CI→host SSH timeout blocks Apply deploy-pipeline-fix.yml")
+gh pr view 4181   -> state: MERGED ("fix(infra): bridge CI→host SSH via Cloudflare Tunnel + Access service token")
+gh pr view 4192   -> state: MERGED ("fix(infra): use literal APP_DOMAIN_BASE in cloudflared bridge step")
+gh pr view 4196   -> state: MERGED ("fix(infra): mint write-capable Doppler service token for apply-web-platform-infra sync step")
+gh issue view 4116 -> state: CLOSED ("observability: Better Stack heartbeat broken...")
+gh issue view 4144 -> state: CLOSED ("infra: deploy webhook can't sudo inngest-bootstrap.sh...")
+gh run view 26178703953 -> conclusion: failure (the run this plan unblocks)
+grep "dopplerhq/doppler" apps/web-platform/infra/.terraform.lock.hcl -> version = "1.21.2"
+grep 'config\s*=\s*"prd_terraform"' apps/web-platform/infra/*.tf -> doppler-write-token.tf:42 (precedent for prd_terraform writes)
+grep "hashicorp/tls" apps/web-platform/infra/.terraform.lock.hcl -> not pinned (terraform init will add)
+```
+
+### Bootstrap Path Correction (load-bearing — supersedes the original Phase 2 description)
+
+The original Phase 2 said "Operator dispatches `apply-web-platform-infra.yml` ... the new 3 `-target=` entries land". That is WRONG for `terraform_data.root_authorized_keys` — the CI runner cannot SSH to root@host (no CF Tunnel setup in that workflow, no admin_ips allowance).
+
+**Corrected sequence:**
+
+1. PR merges (lands the new `ci-ssh-key.tf` + cloud-init edits + variable cleanup).
+2. **Operator runs the first apply LOCALLY** from a worktree:
+   ```bash
+   cd apps/web-platform/infra
+   export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+   terraform init -input=false
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+     terraform apply -input=false \
+       -var="ssh_key_path=$HOME/.ssh/id_ed25519.pub" \
+       -target=tls_private_key.ci_ssh \
+       -target=doppler_secret.deploy_ssh_private_key \
+       -target=terraform_data.root_authorized_keys
+   ```
+   The operator's `~/.ssh/id_ed25519` (already in `authorized_keys` from the original host provision) authenticates the `terraform_data.root_authorized_keys` provisioner. Operator IP is in `var.admin_ips` so the firewall permits the direct SSH (no CF Tunnel needed for the operator path).
+3. CI dispatches `apply-deploy-pipeline-fix.yml` — the new `DEPLOY_SSH_PRIVATE_KEY` from Doppler matches the host's `authorized_keys`; runs green.
+4. Future CI runs use the same private key (no per-run regeneration needed; `tls_private_key.ci_ssh` is in TF state).
+5. `apply-web-platform-infra.yml` does NOT need a `-target=` entry for `terraform_data.root_authorized_keys` because that resource has `triggers_replace = sha256(tls_private_key.ci_ssh.public_key_openssh)` — it only fires when the keypair rotates, and rotation is operator-explicit. The other two new resources (`tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key`) CAN be added to the `apply-web-platform-infra.yml` allow-list (they don't require SSH); doing so keeps state in sync if drift occurs.
+
+**`-target=` allow-list (corrected):**
+- `apply-web-platform-infra.yml`: add `tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key` (NOT `terraform_data.root_authorized_keys` — needs SSH, operator-local apply only).
+- Document the local-apply requirement for `terraform_data.root_authorized_keys` as a one-time operator step in the PR's post-merge AC list; this is the smallest deviation from "everything in CI" — equivalent to `hr-fresh-host-provisioning-reachable-from-terraform-apply` which expects operator-driven bootstrap of new hosts.
+
+This correction does NOT violate `hr-all-infrastructure-provisioning-servers` (the change still lands via Terraform/IaC, not manual SSH) or `hr-fresh-host-provisioning-reachable-from-terraform-apply` (the apply is reachable from `terraform apply`, just from operator context, mirroring how new hosts are bootstrapped).
 
 ## Overview
 
@@ -116,7 +188,7 @@ Rewires sshd to trust the Cloudflare Access CA, then CF Access mints ephemeral c
 - `apps/web-platform/infra/ci-ssh-key.tf` — new file containing:
   - `resource "tls_private_key" "ci_ssh"` (algorithm = "ED25519")
   - `resource "doppler_secret" "deploy_ssh_private_key"` (project = "soleur", config = "prd_terraform", name = "DEPLOY_SSH_PRIVATE_KEY", value = `tls_private_key.ci_ssh.private_key_openssh`, visibility = "masked")
-  - `resource "terraform_data" "root_authorized_keys"` — `connection { type = "ssh", host = hcloud_server.web.ipv4_address, user = "root", agent = true }`, `triggers_replace = sha256(tls_private_key.ci_ssh.public_key_openssh)`, `provisioner "remote-exec" { inline = ["mkdir -p /root/.ssh", "chmod 700 /root/.ssh", "touch /root/.ssh/authorized_keys", "chmod 600 /root/.ssh/authorized_keys", "grep -qxF '${tls_private_key.ci_ssh.public_key_openssh}' /root/.ssh/authorized_keys || echo '${tls_private_key.ci_ssh.public_key_openssh}' >> /root/.ssh/authorized_keys"] }`
+  - `resource "terraform_data" "root_authorized_keys"` — `connection { type = "ssh", host = hcloud_server.web.ipv4_address, user = "root", agent = true }`, `triggers_replace = sha256(tls_private_key.ci_ssh.public_key_openssh)`, `provisioner "remote-exec" { inline = ["mkdir -p /root/.ssh", "chmod 700 /root/.ssh", "touch /root/.ssh/authorized_keys", "chmod 600 /root/.ssh/authorized_keys", "grep -qxF '${trimspace(tls_private_key.ci_ssh.public_key_openssh)}' /root/.ssh/authorized_keys || echo '${trimspace(tls_private_key.ci_ssh.public_key_openssh)}' >> /root/.ssh/authorized_keys"] }`. `trimspace()` drops the trailing newline `tls_private_key.public_key_openssh` carries — required because the appended literal lands as a single `authorized_keys` line.
   - `output "ci_ssh_public_key_openssh"` (sensitive = false — public key, safe to log)
 
 ## Files to Edit
@@ -274,14 +346,15 @@ discoverability_test:
 - [ ] **AC6** — `apps/web-platform/infra/variables.tf` no longer contains `variable "deploy_ssh_public_key"`. Verified by `! grep -q 'variable "deploy_ssh_public_key"' apps/web-platform/infra/variables.tf`.
 - [ ] **AC7** — `cloud-init.yml` contains `ssh_authorized_keys:` under the `default` user (or root user, per cloud-init schema). Verified by `grep -A2 ssh_authorized_keys apps/web-platform/infra/cloud-init.yml`.
 - [ ] **AC8** — Header comment in `apply-deploy-pipeline-fix.yml` rewrites the false "matches DEPLOY_SSH_PUBLIC_KEY already registered with the server via cloud-init" claim to the actual mechanism (`tls_private_key.ci_ssh` → `terraform_data.root_authorized_keys`).
-- [ ] **AC9** — `apply-web-platform-infra.yml` apply allow-list contains 3 new `-target=` entries: `tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key`, `terraform_data.root_authorized_keys`. Verified by `grep -c "tls_private_key.ci_ssh\|doppler_secret.deploy_ssh_private_key\|terraform_data.root_authorized_keys" .github/workflows/apply-web-platform-infra.yml` returns ≥3.
+- [ ] **AC9** — `apply-web-platform-infra.yml` apply allow-list contains 2 new `-target=` entries: `tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key` (per `Bootstrap Path Correction`: `terraform_data.root_authorized_keys` is operator-local-apply only; CI cannot SSH-provision from this workflow). Verified by `grep -c "tls_private_key.ci_ssh\|doppler_secret.deploy_ssh_private_key" .github/workflows/apply-web-platform-infra.yml` returns ≥4 (2 -target each on plan + apply per saved-plan workflow shape).
 - [ ] **AC10** — `.terraform.lock.hcl` updated to include `hashicorp/tls` provider entry.
 - [ ] **AC11** — Plan reconciliation: `## Hypotheses` table includes a row classifying L7 sshd authorized_keys as the load-bearing layer; `## Research Reconciliation` calls out the cloud-init `ssh_authorized_keys` absence; `## Open Code-Review Overlap` = "None" (verified).
 - [ ] **AC12** — `Ref #4177` in PR body (not `Closes` — issue #4177 was already closed by PR #4181; this PR is the L7 follow-on, referenced not auto-closing).
 
 ### Post-merge (operator)
 
-- [ ] **AC13** — Operator dispatches `apply-web-platform-infra.yml` with `reason = "Provision CI SSH key for #4177 follow-on"`. Workflow returns `conclusion=success`. `tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key`, `terraform_data.root_authorized_keys` all in TF state. Verifiable via `gh run view --json conclusion --jq '.conclusion'` (automatable).
+- [ ] **AC13a** — Operator runs the LOCAL bootstrap apply from a worktree (per `Bootstrap Path Correction`): `terraform apply -target=tls_private_key.ci_ssh -target=doppler_secret.deploy_ssh_private_key -target=terraform_data.root_authorized_keys` using operator's `~/.ssh/id_ed25519.pub` as `ssh_key_path`. All 3 resources end up in TF state. Verifiable via `terraform state list | grep -E "tls_private_key.ci_ssh|doppler_secret.deploy_ssh_private_key|terraform_data.root_authorized_keys"` returns 3 lines. (Operator-local — non-automatable per `terraform_data.root_authorized_keys` SSH dependency on operator IP; analogous to fresh-host bootstrap allowed by `hr-fresh-host-provisioning-reachable-from-terraform-apply`.)
+- [ ] **AC13b** — Operator subsequently dispatches `apply-web-platform-infra.yml` with `reason = "Adopt CI SSH key resources into CI allow-list"`. Workflow returns `conclusion=success`; `tls_private_key.ci_ssh` and `doppler_secret.deploy_ssh_private_key` are re-applied as no-ops (state already matches). Verifiable via `gh run view --json conclusion --jq '.conclusion'` returns `success`. (Automatable.)
 - [ ] **AC14** — Doppler `prd_terraform/DEPLOY_SSH_PRIVATE_KEY` matches `tls_private_key.ci_ssh.private_key_openssh` after AC13. Verifiable via `doppler secrets get DEPLOY_SSH_PRIVATE_KEY -p soleur -c prd_terraform --plain | ssh-keygen -y -f /dev/stdin` returns the same public key as `terraform output -raw ci_ssh_public_key_openssh`. (Automatable; no manual eyeballing.)
 - [ ] **AC15** — Operator dispatches `apply-deploy-pipeline-fix.yml` with `reason = "Verify #4177 follow-on auth fix"`. Workflow returns `conclusion=success`. Verifiable via `gh run list --workflow=apply-deploy-pipeline-fix.yml --limit 1 --json conclusion --jq '.[0].conclusion'` returns `success`.
 - [ ] **AC16** — `gh issue comment 4177 --body "<verification comment with workflow run URL>"` posted. (Automatable.)
