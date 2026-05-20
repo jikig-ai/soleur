@@ -8,6 +8,16 @@ packages:
 groups:
   - docker
 
+# CI SSH key for the apply-deploy-pipeline-fix.yml file/remote-exec
+# provisioner chain. Mirrors terraform_data.root_authorized_keys
+# (see ci-ssh-key.tf) for fresh-host parity — on a brand-new host this
+# block lands the key before the terraform_data resource fires, then the
+# resource's `grep -qxF` no-ops on the subsequent apply. Top-level
+# placement applies the key to the default user (root on Hetzner
+# ubuntu-24.04 cloud images).
+ssh_authorized_keys:
+  - ${ci_ssh_public_key_openssh}
+
 users:
   - default
   - name: deploy

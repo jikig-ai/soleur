@@ -13,7 +13,7 @@
 # Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
 #   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
 #      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
-#   2. `-target=`-scoped apply (70 explicit targets). server.tf SSH-provisioned
+#   2. `-target=`-scoped apply (74 explicit targets). server.tf SSH-provisioned
 #      `terraform_data.*` resources are EXCLUDED — the GitHub runner egress IP is
 #      not in `var.admin_ips`, so any SSH connection from the runner fails with
 #      `ssh: handshake failed: connection reset by peer`. Those 7 resources land
@@ -21,6 +21,10 @@
 #      pattern). `hcloud_server.web`, `hcloud_volume.workspaces`,
 #      `hcloud_volume_attachment.workspaces`, and `hcloud_ssh_key.default` are
 #      also excluded — managed by initial-apply + drift detector, not per-PR.
+#      `terraform_data.root_authorized_keys` (ci-ssh-key.tf) is ALSO excluded
+#      for the same SSH-from-runner reason — applied operator-locally on the
+#      first bootstrap; subsequent rotations re-fire via `triggers_replace`
+#      from a future operator-local `terraform apply -replace=tls_private_key.ci_ssh`.
 #
 # Destroy-guard shape: copies `apply-github-infra.yml` (post-#3903) — numeric-regex
 # validation of `destroy_count` + `set -e` re-enable after `rc=$?` capture.
@@ -279,6 +283,8 @@ jobs:
               -target=github_actions_secret.doppler_token_kb_drift \
               -target=doppler_service_token.write \
               -target=github_actions_secret.doppler_token_write \
+              -target=tls_private_key.ci_ssh \
+              -target=doppler_secret.deploy_ssh_private_key \
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
               -target=random_id.inngest_signing_key_prd \

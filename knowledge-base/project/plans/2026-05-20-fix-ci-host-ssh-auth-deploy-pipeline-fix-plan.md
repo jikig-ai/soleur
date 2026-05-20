@@ -338,17 +338,17 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** — `apps/web-platform/infra/ci-ssh-key.tf` exists with `tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key`, `terraform_data.root_authorized_keys`, `output.ci_ssh_public_key_openssh`.
-- [ ] **AC2** — `cd apps/web-platform/infra && terraform init -input=false -lockfile=readonly && terraform validate` exits 0.
-- [ ] **AC3** — `terraform fmt -check apps/web-platform/infra/` exits 0.
-- [ ] **AC4** — `actionlint` clean on `.github/workflows/apply-deploy-pipeline-fix.yml` and `.github/workflows/apply-web-platform-infra.yml`.
-- [ ] **AC5** — `bash -c` clean on any new/modified embedded shell snippets in those workflow files.
-- [ ] **AC6** — `apps/web-platform/infra/variables.tf` no longer contains `variable "deploy_ssh_public_key"`. Verified by `! grep -q 'variable "deploy_ssh_public_key"' apps/web-platform/infra/variables.tf`.
-- [ ] **AC7** — `cloud-init.yml` contains `ssh_authorized_keys:` under the `default` user (or root user, per cloud-init schema). Verified by `grep -A2 ssh_authorized_keys apps/web-platform/infra/cloud-init.yml`.
-- [ ] **AC8** — Header comment in `apply-deploy-pipeline-fix.yml` rewrites the false "matches DEPLOY_SSH_PUBLIC_KEY already registered with the server via cloud-init" claim to the actual mechanism (`tls_private_key.ci_ssh` → `terraform_data.root_authorized_keys`).
-- [ ] **AC9** — `apply-web-platform-infra.yml` apply allow-list contains 2 new `-target=` entries: `tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key` (per `Bootstrap Path Correction`: `terraform_data.root_authorized_keys` is operator-local-apply only; CI cannot SSH-provision from this workflow). Verified by `grep -c "tls_private_key.ci_ssh\|doppler_secret.deploy_ssh_private_key" .github/workflows/apply-web-platform-infra.yml` returns ≥4 (2 -target each on plan + apply per saved-plan workflow shape).
-- [ ] **AC10** — `.terraform.lock.hcl` updated to include `hashicorp/tls` provider entry.
-- [ ] **AC11** — Plan reconciliation: `## Hypotheses` table includes a row classifying L7 sshd authorized_keys as the load-bearing layer; `## Research Reconciliation` calls out the cloud-init `ssh_authorized_keys` absence; `## Open Code-Review Overlap` = "None" (verified).
+- [x] **AC1** — `apps/web-platform/infra/ci-ssh-key.tf` exists with `tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key`, `terraform_data.root_authorized_keys`, `output.ci_ssh_public_key_openssh`.
+- [x] **AC2** — `cd apps/web-platform/infra && terraform init -input=false -lockfile=readonly && terraform validate` exits 0.
+- [x] **AC3** — `terraform fmt -check apps/web-platform/infra/` exits 0.
+- [x] **AC4** — `actionlint` clean on `.github/workflows/apply-deploy-pipeline-fix.yml` and `.github/workflows/apply-web-platform-infra.yml`.
+- [x] **AC5** — `bash -c` clean on any new/modified embedded shell snippets in those workflow files.
+- [x] **AC6** — `apps/web-platform/infra/variables.tf` no longer contains `variable "deploy_ssh_public_key"`. Verified by `! grep -q 'variable "deploy_ssh_public_key"' apps/web-platform/infra/variables.tf`.
+- [x] **AC7** — `cloud-init.yml` contains `ssh_authorized_keys:` under the `default` user (or root user, per cloud-init schema). Verified by `grep -A2 ssh_authorized_keys apps/web-platform/infra/cloud-init.yml`.
+- [x] **AC8** — Header comment in `apply-deploy-pipeline-fix.yml` rewrites the false "matches DEPLOY_SSH_PUBLIC_KEY already registered with the server via cloud-init" claim to the actual mechanism (`tls_private_key.ci_ssh` → `terraform_data.root_authorized_keys`).
+- [x] **AC9** — `apply-web-platform-infra.yml` apply allow-list contains 2 new `-target=` entries: `tls_private_key.ci_ssh`, `doppler_secret.deploy_ssh_private_key` (per `Bootstrap Path Correction`: `terraform_data.root_authorized_keys` is operator-local-apply only; CI cannot SSH-provision from this workflow). Verified by `grep -cE '^\s+-target=(tls_private_key\.ci_ssh|doppler_secret\.deploy_ssh_private_key)' .github/workflows/apply-web-platform-infra.yml` returns 2 (saved-plan workflow shape — `-target=` lives in the plan step only; the apply step consumes the saved tfplan).
+- [x] **AC10** — `.terraform.lock.hcl` updated to include `hashicorp/tls` provider entry.
+- [x] **AC11** — Plan reconciliation: `## Hypotheses` table includes a row classifying L7 sshd authorized_keys as the load-bearing layer; `## Research Reconciliation` calls out the cloud-init `ssh_authorized_keys` absence; `## Open Code-Review Overlap` = "None" (verified).
 - [ ] **AC12** — `Ref #4177` in PR body (not `Closes` — issue #4177 was already closed by PR #4181; this PR is the L7 follow-on, referenced not auto-closing).
 
 ### Post-merge (operator)
