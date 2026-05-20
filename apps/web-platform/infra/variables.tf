@@ -152,39 +152,21 @@ variable "betterstack_paid_tier" {
 }
 
 # --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
+# Post-#4150: client_id / client_secret / github_actions_token /
+# doppler_token_kb_drift variables were deleted. See plan
+# knowledge-base/project/plans/2026-05-20-fix-apply-web-platform-infra-tf-autonomy-4150-plan.md
+# Provider switched to App-installation auth (main.tf); kb-drift Doppler
+# token now minted in-band by `doppler_service_token` resource (kb-drift.tf).
+# autonomy-considered: provider-mint-applied (App auth + doppler_service_token).
 
 variable "github_app_id" {
-  description = "GitHub App ID for Soleur-Concierge (operator-supplied; created at https://github.com/settings/apps/new during PR-H Phase 2 manual gate)."
+  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf)."
   type        = string
   sensitive   = true
 }
 
 variable "github_app_private_key" {
-  description = "PEM-encoded RSA private key for the GitHub App. One-shot download from the App settings page at App creation; cannot be re-downloaded."
-  type        = string
-  sensitive   = true
-}
-
-variable "github_app_client_id" {
-  description = "GitHub App OAuth Client ID."
-  type        = string
-  sensitive   = true
-}
-
-variable "github_app_client_secret" {
-  description = "GitHub App OAuth Client Secret."
-  type        = string
-  sensitive   = true
-}
-
-variable "github_app_installation_id" {
-  description = "Installation ID of the soleur-ai GitHub App on jikig-ai org. Discoverable via apps/web-platform/infra/scripts/get-app-installation-id.sh; stable thereafter. Per AGENTS.core.md hr-github-app-auth-not-pat: GitHub App auth supersedes PAT for infra-time writes (#4144)."
-  type        = string
-  sensitive   = true
-}
-
-variable "doppler_token_kb_drift" {
-  description = "Doppler service token scoped to the `prd_kb_drift_walker` config. Published to the repo as Actions secret DOPPLER_TOKEN_KB_DRIFT for the kb-drift cron workflow."
+  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded."
   type        = string
   sensitive   = true
 }

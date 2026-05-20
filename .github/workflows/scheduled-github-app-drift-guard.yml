@@ -7,8 +7,13 @@
 # GitHub App backing OAuth means every sign-in attempt routes to a
 # different App's consent screen — one user's broken sign-in IS the
 # brand-ending incident. Three labels split the failure modes:
-#   - ci/auth-broken      : drift detected (App swap, key rotation, etc.)
-#   - ci/guard-broken     : guard itself malfunctioned (bad PEM, network)
+#   - ci/auth-broken      : drift detected
+#                            * id / client_id mismatch (App swap, key rotation)
+#                            * permission_drift (manifest declares X, live lacks X — #4115)
+#   - ci/guard-broken     : guard itself malfunctioned
+#                            * bad PEM, network, jwt-mint failures (#3187)
+#                            * permission_unexpected_grant (live > manifest, #4115)
+#                            * response_shape_unparseable (#4115)
 #   - security/leak-suspected : log scan suggests credential leak
 #
 # Security: PEM is base64-decoded into $RUNNER_TEMP (mode 0o600), masked
@@ -55,11 +60,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout (sparse, for notify-ops-email)
+      - name: Checkout (sparse, for notify-ops-email + manifest diff)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           sparse-checkout: |
             .github/actions
+            bin/diff-github-app-manifest.sh
+            apps/web-platform/infra/github-app-manifest.json
+            apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL
           sparse-checkout-cone-mode: false
 
       - name: Defensively create labels
@@ -264,6 +272,85 @@ jobs:
                 record_failure "client_id_mismatch" \
                   "GitHub App client_id drift: expected ${EXPECTED_CLIENT_ID}, got ${ACTUAL_CLIENT_ID}" \
                   "ci/auth-broken"
+              fi
+            fi
+          fi
+
+          # =============================================================
+          # Manifest-vs-live permission/event diff (#4115).
+          #
+          # Runs AFTER the id / client_id immutability check above. The
+          # identity-swap detection is the primary brand-survival gate
+          # (CTO R1); this diff catches permission-scope creep and
+          # GitHub-side rename drift as a defense-in-depth Art. 33
+          # detection primitive (CLO finding).
+          #
+          # First-merge suppression: when a PR changes the manifest, the
+          # operator MUST update the live App's permissions out-of-band.
+          # The window between merge and that update would otherwise
+          # produce a noisy false-positive. To suppress:
+          #     apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL
+          # contains a UTC ISO timestamp (e.g., 2026-05-21T10:00:00Z).
+          # When `now < suppress_until`, the diff emits a visible
+          # ::warning:: annotation and SKIPS record_failure. When the
+          # timestamp has passed (or the file is absent), the diff runs
+          # normally. Operator deletes the file once the live App is
+          # reconciled.
+          # =============================================================
+          MANIFEST_FILE="apps/web-platform/infra/github-app-manifest.json"
+          SUPPRESS_FILE="apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL"
+
+          if [[ -z "$failure_mode" && -n "${RESPONSE_FILE:-}" && -f "$MANIFEST_FILE" ]]; then
+            suppress_active=0
+            if [[ -f "$SUPPRESS_FILE" ]]; then
+              suppress_until=$(tr -d ' \t\r\n' < "$SUPPRESS_FILE" || true)
+              if [[ -n "$suppress_until" ]]; then
+                # Strict ISO-8601 UTC. `date -d` would otherwise accept
+                # natural-language strings ("100 years", "next decade"),
+                # silently suppressing drift detection indefinitely on a
+                # PR-committed file. Defense-in-depth against the
+                # operator-typo / compromised-PR vector.
+                if ! [[ "$suppress_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+                  echo "::warning::MANIFEST_DRIFT_SUPPRESS_UNTIL must be strict ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ); got '${suppress_until}'. Ignoring suppression."
+                elif suppress_epoch=$(date -d "$suppress_until" -u +%s 2>/dev/null); then
+                  now_epoch=$(date -u +%s)
+                  max_window_s=$((30 * 24 * 3600))
+                  if (( suppress_epoch - now_epoch > max_window_s )); then
+                    echo "::warning::MANIFEST_DRIFT_SUPPRESS_UNTIL exceeds 30-day cap (until ${suppress_until}); ignoring suppression to prevent indefinite silence."
+                  elif (( now_epoch < suppress_epoch )); then
+                    suppress_active=1
+                    echo "::warning::Manifest drift detected but suppressed until ${suppress_until} (MANIFEST_DRIFT_SUPPRESS_UNTIL). Delete the file once the live App is reconciled."
+                  fi
+                else
+                  echo "::warning::MANIFEST_DRIFT_SUPPRESS_UNTIL contains an unparseable timestamp; ignoring suppression."
+                fi
+              fi
+            fi
+
+            if [[ "$suppress_active" -eq 0 ]]; then
+              diff_out=""
+              diff_rc=0
+              diff_out=$(MANIFEST_FILE="$MANIFEST_FILE" RESPONSE_FILE="$RESPONSE_FILE" \
+                bash bin/diff-github-app-manifest.sh 2>/dev/null) || diff_rc=$?
+
+              if (( diff_rc != 0 )); then
+                # Output shape is `<mode>:<details>` per
+                # bin/diff-github-app-manifest.sh contract.
+                diff_mode="${diff_out%%:*}"
+                diff_detail="${diff_out#*:}"
+                case "$diff_mode" in
+                  permission_drift)
+                    record_failure "$diff_mode" "$diff_detail" "ci/auth-broken"
+                    ;;
+                  permission_unexpected_grant|response_shape_unparseable)
+                    record_failure "$diff_mode" "$diff_detail" "ci/guard-broken"
+                    ;;
+                  *)
+                    record_failure "manifest_diff_unknown_mode" \
+                      "diff-github-app-manifest exited ${diff_rc} with output: ${diff_out}" \
+                      "ci/guard-broken"
+                    ;;
+                esac
               fi
             fi
           fi

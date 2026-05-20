@@ -20,6 +20,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-fresh-host-provisioning-reachable-from-terraform-apply] → core
 - [id: hr-autonomous-loop-skill-api-budget-disclosure] → core
 - [id: hr-every-new-terraform-root-must-include-an] → core
+- [id: hr-tf-variable-no-operator-mint-default] → core
 - [id: hr-new-skills-agents-or-user-facing] → core
 - [id: hr-before-shipping-ship-phase-5-5-runs] → core
 - [id: hr-when-a-workflow-concludes-with-an] → core
@@ -44,7 +45,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 ## Workflow Gates
 
 - [id: wg-every-feature-listed-in-a-roadmap-phase] → core
-- [id: wg-when-closing-a-phase-milestone-update] → core
+- [id: wg-when-closing-a-phase-milestone-update] → rest
 - [id: wg-when-fixing-a-workflow-gates-detection] → rest
 - [id: wg-zero-agents-until-user-confirms] → core
 - [id: wg-never-bump-version-files-in-feature] → rest
