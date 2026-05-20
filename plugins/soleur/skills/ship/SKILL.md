@@ -248,6 +248,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Tests pass
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
+- [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
 - [ ] Push to remote
 - [ ] Create PR with semver label
 - [ ] PR is mergeable (no conflicts)
@@ -604,6 +605,89 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 **If not triggered:** Skip silently.
 
 **Why:** In #1265, the CMO content gate was fixed to catch product features but the PWA feature itself was never assessed — the fix shipped without remediating the original gap. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
+
+### Undeferred Operator-Step Gate (mandatory)
+
+Enforces hard rule `hr-never-label-any-step-as-manual-without` at the `gh pr ready` boundary. Blocks PR-ready when the PR body contains "operator runs"-class steps without a `Tracks #NNNN` / `Refs #NNNN` companion linking to an OPEN `type/chore` (or `type/feature`) issue that carries the `deferred-automation` / `automation gap` sentinel.
+
+Emit rule-application telemetry (records the gate fired):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident wg-block-pr-ready-on-undeferred-operator-steps applied \
+  '`/ship` Phase 5.5 blocks PR-ready when the PR body has operator-action'
+```
+
+**Detection.** Capture the PR body once, **strip fenced code blocks** (the gate body and `AC-PM` example snippets in PRs that edit this skill would otherwise self-trip), then run a multi-pattern grep with LIST-ANCHORED patterns. Bash ERE has no `(?i)` modifier — use `grep -iE`.
+
+```bash
+PR_BODY_FILE=$(mktemp)
+trap 'rm -f "$PR_BODY_FILE"' EXIT INT TERM
+PR_BODY=$(gh pr view --json body --jq .body)
+
+# Strip fenced code blocks (```...```) — the gate body and the AC section
+# in the PR will quote the regex and the AC-PM tokens; those quotations
+# inside ``` fences MUST NOT count as undeferred declarations.
+# FAIL-CLOSED on unbalanced fence: an unclosed ``` would otherwise drop
+# every subsequent line and silently bypass the gate (PR-H failure class).
+printf '%s' "$PR_BODY" | awk '
+  /^```/ { in_fence = !in_fence; next }
+  !in_fence { print }
+  END { if (in_fence) exit 2 }
+' > "$PR_BODY_FILE"
+if [ "$?" -eq 2 ]; then
+  echo "[gate] WARN: unbalanced ``` fence in PR body — re-scanning unfiltered body (fail-closed)" >&2
+  printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+fi
+
+# LIST-ANCHORED regex: a match requires the LINE to start with a bullet
+# (`-`/`*`) or numbered-list marker (`1.`), optionally a checklist box
+# (`[ ]`/`[x]`), optionally bold (`**`), then a keyword. Excludes
+# prose-style mid-paragraph mentions of "operator" or "AC-PM".
+DETECT_RE='^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+(\[[[:space:]xX]\][[:space:]]+)?(\*\*)?(AC-PM[0-9]+|operator[[:space:]]+(run|create|provision|configure|paste|cop(y|ies))s?|manual[[:space:]]+gate|post-merge[[:space:]]+operator)'
+
+MATCHES=$(grep -niE "$DETECT_RE" "$PR_BODY_FILE" || true)
+```
+
+**Why list-anchored.** PR bodies routinely discuss operator behavior in prose ("the operator's choice", "the operator runs the script ONCE post-merge per the prior convention"). Only DECLARATIVE list-shape entries (`- Operator runs ...` or `- [ ] **AC-PM3** Operator creates ...`) are operator-step accretion vectors. Prose mentions are review-noise.
+
+**Rule.** For each match, the previous line, the same line, OR the following line MUST contain `(Tracks|Refs) #NNNN` (header-above + same-line-trailing + next-line continuation all qualify). Extract every referenced `#NNNN` from those companions, then for each: verify the linked issue is OPEN, labeled `type/chore` or `type/feature`, AND its body contains the sentinel `deferred-automation` or `automation gap` (case-insensitive).
+
+```bash
+UNDEFERRED=()
+for line_no in $(printf '%s\n' "$MATCHES" | awk -F: '$1 ~ /^[0-9]+$/ {print $1}'); do
+  prev=$((line_no > 1 ? line_no - 1 : 1))
+  ctx=$(sed -n "${prev}p;${line_no}p;$((line_no+1))p" "$PR_BODY_FILE")
+  refs=$(printf '%s' "$ctx" | grep -oE '(Tracks|Refs)[[:space:]]+#[0-9]+' || true)
+  if [ -z "$refs" ]; then
+    UNDEFERRED+=("$line_no"); continue
+  fi
+  ok=0
+  for n in $(printf '%s' "$refs" | grep -oE '[0-9]+'); do
+    state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")
+    [ "$state" = "OPEN" ] || continue
+    labels=$(gh issue view "$n" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+    [[ "$labels" =~ (^|,)type/(chore|feature)(,|$) ]] || continue
+    body=$(gh issue view "$n" --json body --jq .body 2>/dev/null || echo "")
+    if printf '%s' "$body" | grep -qiE 'deferred-automation|automation gap'; then
+      ok=1; break
+    fi
+  done
+  [ "$ok" = 1 ] || UNDEFERRED+=("$line_no")
+done
+```
+
+**If not triggered (`${#UNDEFERRED[@]}` is 0):** Skip silently.
+
+**If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (3-option choice). The operator chooses one:
+
+1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then `gh issue create --label type/chore --title <...> --body "<...>\n\nThis is a deferred-automation backlog item per wg-block-pr-ready-on-undeferred-operator-steps. Re-evaluate when: <...>"`. Update the PR body with `Tracks #NNNN` companions. Re-run detection.
+2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
+3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
+
+**Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice.
+
+**Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late). This gate moves enforcement from honor-system to mechanical.
 
 ## Phase 6.4: Unpushed-Commits Gate
 
