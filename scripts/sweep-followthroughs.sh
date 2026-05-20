@@ -207,4 +207,7 @@ main() {
   log "sweep done"
 }
 
-main "$@"
+# Allow tests to source this script without running main().
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
