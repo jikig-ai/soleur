@@ -1,9 +1,15 @@
 ---
+title: AGENTS sidecar per-rule cap audit — zero violations (2026-05-15)
 date: 2026-05-15
 category: best-practices
-issue: "#3834"
-related: [3833, 3837, 3839, 3808, 3681]
 tags: [agents-md, per-rule-cap, audit, byte-budget]
+issue: '#3834'
+related:
+  - 3833
+  - 3837
+  - 3839
+  - 3808
+  - 3681
 ---
 
 # Learning: AGENTS sidecar per-rule cap audit — zero violations (2026-05-15)

@@ -1,3 +1,10 @@
+---
+title: Plan review simplifies CI audit from 4 scripts to 1
+date: 2026-03-30
+category: ci-cd
+tags: [ci-infrastructure, scripts/rule-audit]
+---
+
 # Learning: Plan review simplifies CI audit from 4 scripts to 1
 
 ## Problem

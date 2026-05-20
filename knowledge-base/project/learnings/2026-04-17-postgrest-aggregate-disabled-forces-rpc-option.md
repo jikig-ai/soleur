@@ -1,9 +1,10 @@
 ---
+title: Supabase hosted PostgREST disables aggregates — plan-claimed Option A is unavailable
+date: 2026-04-17
 category: learnings
 tags: [supabase, postgrest, rpc, security-definer, numeric-precision, index-only-scan]
-date: 2026-04-17
-pr: 2501
 issue: 2478
+pr: 2501
 ---
 
 # Supabase hosted PostgREST disables aggregates — plan-claimed Option A is unavailable

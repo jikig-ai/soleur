@@ -1,3 +1,10 @@
+---
+title: Docker fast-liveness pattern for slow-starting Bun containers
+date: 2026-03-20
+category: engineering
+tags: [integration-issues, telegram-bridge]
+---
+
 # Learning: Docker fast-liveness pattern for slow-starting Bun containers
 
 ## Problem

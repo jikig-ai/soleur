@@ -1,13 +1,13 @@
 ---
-module: web-platform
+title: 'MU1 AC-2 fixture-repo gate design (#2605)'
 date: 2026-04-19
-problem_type: integration_issue
-component: vitest_integration_test
-severity: medium
+category: engineering
 tags: [mu1, github-app, doppler, vitest, describe-skipif, integration-test]
-symptoms:
-  - "AC-2 (provisionWorkspaceWithRepo clones fixture) was deferred until a public fixture repo existed"
-  - "Partial Doppler secret set could silently skip the test"
+symptoms: [AC-2 (provisionWorkspaceWithRepo clones fixture) was deferred until a public fixture repo existed, Partial Doppler secret set could silently skip the test]
+module: web-platform
+component: vitest_integration_test
+problem_type: integration_issue
+severity: medium
 ---
 
 # Learning: MU1 AC-2 fixture-repo gate design (#2605)

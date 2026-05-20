@@ -1,3 +1,10 @@
+---
+title: Spawn CPO + CMO early when a brainstorm is triggered by external-product comparison
+date: 2026-05-05
+category: engineering
+tags: [category-workflow-issues, module-pluginssoleurskillsbrainstorm, related, --2026-02-13-brainstorm-domain-routing-patternmd, --workflow-issuesdomain-leader-false-status-assertions-20260323md, trigger-external-product-comparison-brainstorm]
+---
+
 # Learning: Spawn CPO + CMO early when a brainstorm is triggered by external-product comparison
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: SEO meta description character counts and frontmatter coherence
+date: 2026-03-26
+category: marketing
+tags: [content, marketing/docs-site]
+---
+
 # Learning: SEO meta description character counts and frontmatter coherence
 
 ## Problem

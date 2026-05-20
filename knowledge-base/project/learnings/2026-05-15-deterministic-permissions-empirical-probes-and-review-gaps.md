@@ -2,11 +2,12 @@
 title: Deterministic permissions — empirical Phase 0 probes + multi-agent review caught what the unit tests passed on
 date: 2026-05-15
 category: best-practices
+tags: [best-practices, claude-code-hooks, 3789, empirical-probe + multi-agent-post-impl-review]
 module: claude-code-hooks
-issue: 3789
-pr: 3787
-plan: knowledge-base/project/plans/2026-05-15-feat-deterministic-permissions-plan.md
 brand_survival_threshold: single-user incident
+issue: 3789
+plan: knowledge-base/project/plans/2026-05-15-feat-deterministic-permissions-plan.md
+pr: 3787
 ---
 
 # Learning

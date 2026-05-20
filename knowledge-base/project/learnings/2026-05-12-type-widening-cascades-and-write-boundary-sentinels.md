@@ -1,3 +1,10 @@
+---
+title: Type widening cascades to consumer obligations; write-boundary sentinels must cover every write call site
+date: 2026-05-12
+category: engineering
+tags: [yaml, category-integration-issues, module-cc-dispatcher, class-type-widening-cascade--write-boundary-sentinel-coverage, gdpr-relevance-art-3334-cross-tenant, art-51c-data-minimization, art-133-new-category-disclosure, load-bearing-yes, discovered-by-8-agent-implementation-time-multi-reviewer-pass, escaped-from-3-reviewer-plan-time-pass]
+---
+
 # Type widening cascades to consumer obligations; write-boundary sentinels must cover every write call site
 
 **Date:** 2026-05-12

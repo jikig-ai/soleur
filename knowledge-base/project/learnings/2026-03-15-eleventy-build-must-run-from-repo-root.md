@@ -1,3 +1,10 @@
+---
+title: Eleventy docs build must run from repo root
+date: 2026-03-15
+category: engineering
+tags: [build-errors, docs]
+---
+
 # Learning: Eleventy docs build must run from repo root
 
 ## Problem

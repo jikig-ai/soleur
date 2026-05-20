@@ -1,3 +1,10 @@
+---
+title: metadata-only pdfjs reads on Node without canvas
+date: 2026-04-18
+category: engineering
+tags: [integration-issues, kb-share, pdfjs-dist, sharp, node 22]
+---
+
 # Learning: metadata-only pdfjs reads on Node without canvas
 
 ## Problem

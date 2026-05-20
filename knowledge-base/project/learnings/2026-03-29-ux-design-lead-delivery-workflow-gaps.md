@@ -1,3 +1,10 @@
+---
+title: UX Design Lead Delivery Workflow Gaps
+date: 2026-03-29
+category: engineering
+tags: [workflow-gap, plugins/soleur/agents/ux-design-lead, plugins/soleur/skills/brainstorm]
+---
+
 # Learning: UX Design Lead Delivery Workflow Gaps
 
 ## Problem

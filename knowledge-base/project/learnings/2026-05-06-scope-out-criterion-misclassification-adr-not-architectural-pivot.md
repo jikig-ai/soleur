@@ -1,10 +1,11 @@
 ---
+title: Scope-out criterion misclassification — ADR work fails architectural-pivot; misclassified-but-legitimate deferrals should re-file, not absorb
 date: 2026-05-06
 category: workflow
-component: review-skill
-related_pr: 3271
-related_issue: 3232
 tags: [scope-out, second-reviewer-concur, ADR, architectural-pivot, contested-design]
+component: review-skill
+related_issue: 3232
+related_pr: 3271
 ---
 
 # Learning: Scope-out criterion misclassification — ADR work fails architectural-pivot; misclassified-but-legitimate deferrals should re-file, not absorb

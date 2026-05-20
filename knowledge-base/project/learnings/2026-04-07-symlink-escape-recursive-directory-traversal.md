@@ -1,12 +1,9 @@
 ---
-category: security
-module: web-platform/server
-tags:
-  - CWE-59
-  - symlink
-  - directory-traversal
-  - filesystem
+title: Symlink escape in recursive directory traversal
 date: 2026-04-07
+category: security
+tags: [CWE-59, symlink, directory-traversal, filesystem]
+module: web-platform/server
 ---
 
 # Learning: Symlink escape in recursive directory traversal

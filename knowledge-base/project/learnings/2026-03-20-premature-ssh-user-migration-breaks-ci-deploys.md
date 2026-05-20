@@ -1,3 +1,10 @@
+---
+title: Premature SSH user migration breaks CI deploys
+date: 2026-03-20
+category: ci-cd
+tags: [integration-issues, ci/cd release workflows]
+---
+
 # Learning: Premature SSH user migration breaks CI deploys
 
 ## Problem

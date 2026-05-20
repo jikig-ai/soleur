@@ -1,3 +1,10 @@
+---
+title: Electron/AppImage desktop apps crash in headless terminals
+date: 2026-03-10
+category: engineering
+tags: [runtime-errors, pencil-setup, trace/breakpoint trap, sigtrap, electron crash in ssh, appimage crash headless]
+---
+
 # Learning: Electron/AppImage desktop apps crash in headless terminals
 
 ## Problem

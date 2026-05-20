@@ -1,3 +1,10 @@
+---
+title: Tag-and-Route Multi-Leader Chat Architecture
+date: 2026-03-27
+category: engineering
+tags: [architecture, web-platform]
+---
+
 # Learning: Tag-and-Route Multi-Leader Chat Architecture
 
 ## Problem

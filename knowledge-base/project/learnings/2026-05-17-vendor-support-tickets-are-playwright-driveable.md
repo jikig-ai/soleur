@@ -1,10 +1,11 @@
 ---
-title: "Vendor support tickets are Playwright-driveable; OTP is the only legitimate operator-handoff gate"
+title: Vendor support tickets are Playwright-driveable; OTP is the only legitimate operator-handoff gate
 date: 2026-05-17
-pr: 3946
 category: workflow
-status: encoded
+tags: [vendor, support, tickets, are, playwright, driveable]
 encoded_in: plugins/soleur/skills/work/SKILL.md (Phase 4 Playwright-First Audit)
+pr: 3946
+status: encoded
 ---
 
 ## Symptom

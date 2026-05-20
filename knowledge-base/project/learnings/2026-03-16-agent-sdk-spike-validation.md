@@ -1,3 +1,10 @@
+---
+title: Agent SDK Spike — canUseTool Requires Empty Permissions
+date: 2026-03-16
+category: agent-design
+tags: [integration-issues, agent-sdk]
+---
+
 # Learning: Agent SDK Spike — canUseTool Requires Empty Permissions
 
 ## Problem

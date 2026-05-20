@@ -1,3 +1,10 @@
+---
+title: Plan baked in operator-SSH + Doppler-CLI; existing IaC rule was never consulted at plan time
+date: 2026-05-18
+category: engineering
+tags: [workflow-gate-gaps, plugins/soleur/skills/plan + .claude/hooks, rule-exists-no-gate-enforces-it, user-question-after-merge why isnt this done through terraform?, plan-phase-2-8 + iac-plan-write-guard.sh + agents.core.md marker]
+---
+
 # Plan baked in operator-SSH + Doppler-CLI; existing IaC rule was never consulted at plan time
 
 **Captured:** 2026-05-18

@@ -1,3 +1,10 @@
+---
+title: First PII collection requires comprehensive legal doc overhaul
+date: 2026-03-10
+category: legal
+tags: [feature-implementation, legal-docs, docs-infrastructure, gdpr, legal-compliance, pii, newsletter, buttondown, grep-verification]
+---
+
 # Learning: First PII collection requires comprehensive legal doc overhaul
 
 ## Problem

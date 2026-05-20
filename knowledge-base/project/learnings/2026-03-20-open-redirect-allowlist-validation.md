@@ -1,3 +1,10 @@
+---
+title: Open Redirect Prevention via Set-Based Origin Allowlist
+date: 2026-03-20
+category: engineering
+tags: [security, apps/web-platform]
+---
+
 # Learning: Open Redirect Prevention via Set-Based Origin Allowlist
 
 ## Problem

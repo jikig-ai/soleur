@@ -1,3 +1,10 @@
+---
+title: Query Existing Data Before Building Analytics Pipelines
+date: 2026-04-10
+category: engineering
+tags: [integration-issues, analytics, analytics, brainstorm, product-validation, supabase, worktree, data-reuse, low, true]
+---
+
 # Learning: Query Existing Data Before Building Analytics Pipelines
 
 ## Problem

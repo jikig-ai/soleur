@@ -1,13 +1,9 @@
 ---
-category: best-practices
-module: brainstorm-skill
+title: Premise-challenge + productize-repeat-workflow patterns for brainstorm
 date: 2026-04-21
-tags:
-  - brainstorm
-  - competitive-intelligence
-  - workflow-productization
-  - premise-validation
-  - worktree-manager
+category: best-practices
+tags: [brainstorm, competitive-intelligence, workflow-productization, premise-validation, worktree-manager]
+module: brainstorm-skill
 ---
 
 # Learning: Premise-challenge + productize-repeat-workflow patterns for brainstorm

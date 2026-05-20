@@ -1,3 +1,10 @@
+---
+title: GitHub Ruleset PUT API replaces entire payload
+date: 2026-04-03
+category: engineering
+tags: [integration-issues, github-actions]
+---
+
 # Learning: GitHub Ruleset PUT API replaces entire payload
 
 ## Problem

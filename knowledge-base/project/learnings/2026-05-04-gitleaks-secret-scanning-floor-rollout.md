@@ -1,17 +1,12 @@
 ---
-title: Gitleaks secret-scanning floor — rollout learnings (#3121 PR1)
+title: 'Gitleaks secret-scanning floor — rollout learnings (#3121 PR1)'
 date: 2026-05-04
-issue: https://github.com/jikig-ai/soleur/issues/3121
+category: security
+tags: [security, secret-scanning, gitleaks, ci, github-push-protection]
+follow_up: 'https://github.com/jikig-ai/soleur/issues/3160'
+issue: 'https://github.com/jikig-ai/soleur/issues/3121'
 pr: behavior-harness-uplift (PR1)
-follow_up: https://github.com/jikig-ai/soleur/issues/3160
-tags:
-  - security
-  - secret-scanning
-  - gitleaks
-  - ci
-  - github-push-protection
-related:
-  - knowledge-base/engineering/operations/secret-scanning.md
+related: [knowledge-base/engineering/operations/secret-scanning.md]
 ---
 
 # Gitleaks secret-scanning floor — rollout learnings

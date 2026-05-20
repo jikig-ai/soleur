@@ -1,3 +1,10 @@
+---
+title: 'pre-merge-rebase.sh false positives on string content containing "merge"'
+date: 2026-03-19
+category: workflow-patterns
+tags: [integration-issues, hooks]
+---
+
 # Learning: pre-merge-rebase.sh false positives on string content containing "merge"
 
 ## Problem

@@ -1,12 +1,12 @@
 ---
-name: postgrest-builder-thenable-not-promise-catch-absent
-description: Supabase PostgrestBuilder is a thenable that awaits cleanly but does not implement `.catch()` — TS2551 errors at edit time and silent runtime breakage if the type check is bypassed. Use `try`/`catch` around `await` instead.
+title: 'PostgrestBuilder is a thenable, not a Promise — no `.catch()` available'
 date: 2026-05-16
 category: build-errors
 tags: [supabase, postgrest, typescript, thenable, vitest, tests]
-related_prs: ["#3883"]
-related_learnings:
-  - knowledge-base/project/learnings/test-failures/2026-04-17-vitest-mockReturnValue-eager-factory-async-event-race.md
+description: 'Supabase PostgrestBuilder is a thenable that awaits cleanly but does not implement `.catch()` — TS2551 errors at edit time and silent runtime breakage if the type check is bypassed. Use `try`/`catch` around `await` instead.'
+name: postgrest-builder-thenable-not-promise-catch-absent
+related_learnings: [knowledge-base/project/learnings/test-failures/2026-04-17-vitest-mockReturnValue-eager-factory-async-event-race.md]
+related_prs: [#3883]
 ---
 
 # Learning: PostgrestBuilder is a thenable, not a Promise — no `.catch()` available

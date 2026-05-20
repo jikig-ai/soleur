@@ -1,9 +1,15 @@
 ---
+title: Canary Layer 3 mount path + dedupe ordering + pipefail-around-logger
+date: 2026-04-29
 category: integration-issues
-module: web-platform-infra
 tags: [canary, ci-deploy, terraform, cloud-init, bash-strict-mode, pipefail, dedupe]
+module: web-platform-infra
+related_issues:
+  - 3033
+  - 3045
+  - 3047
+  - 3048
 related_pr: 3042
-related_issues: [3033, 3045, 3047, 3048]
 ---
 
 # Learning: Canary Layer 3 mount path + dedupe ordering + pipefail-around-logger

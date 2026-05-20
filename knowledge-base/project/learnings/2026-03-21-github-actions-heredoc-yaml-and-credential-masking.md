@@ -1,3 +1,10 @@
+---
+title: 'HEREDOC in YAML `run: |` Blocks and Credential Masking in GitHub Actions'
+date: 2026-03-21
+category: ci-cd
+tags: [integration-issues, github-actions, terraform, doppler]
+---
+
 # Learning: HEREDOC in YAML `run: |` Blocks and Credential Masking in GitHub Actions
 
 ## Problem

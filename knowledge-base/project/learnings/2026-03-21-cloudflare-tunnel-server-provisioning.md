@@ -1,3 +1,10 @@
+---
+title: Cloudflare Tunnel server-side provisioning
+date: 2026-03-21
+category: engineering
+tags: [infrastructure, web-platform, ci]
+---
+
 # Learning: Cloudflare Tunnel server-side provisioning
 
 ## Problem

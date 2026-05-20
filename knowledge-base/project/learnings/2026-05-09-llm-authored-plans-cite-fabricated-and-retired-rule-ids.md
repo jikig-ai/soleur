@@ -1,9 +1,10 @@
 ---
+title: LLM-authored plans cite fabricated and retired AGENTS.md rule IDs; multi-agent review catches them, single-pass review does not
 date: 2026-05-09
 category: best-practices
 tags: [agents-md, rule-ids, plan-skill, deepen-plan-skill, multi-agent-review]
-issue: "#3485"
-pr: "#3486"
+issue: '#3485'
+pr: '#3486'
 ---
 
 # Learning: LLM-authored plans cite fabricated and retired AGENTS.md rule IDs; multi-agent review catches them, single-pass review does not

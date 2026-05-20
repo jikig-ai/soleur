@@ -1,7 +1,8 @@
 ---
+title: Cloudflare Access Service Token Expiry Monitoring
+date: 2026-03-21
 category: infrastructure
 tags: [cloudflare, service-token, monitoring, terraform, github-actions]
-date: 2026-03-21
 module: web-platform/infra
 problem_type: infrastructure-monitoring
 ---

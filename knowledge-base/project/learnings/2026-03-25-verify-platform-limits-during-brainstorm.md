@@ -1,3 +1,10 @@
+---
+title: Verify Platform Limits During Brainstorm, Not Implementation
+date: 2026-03-25
+category: engineering
+tags: [verify, platform, limits, during, brainstorm]
+---
+
 # Verify Platform Limits During Brainstorm, Not Implementation
 
 **Date:** 2026-03-25

@@ -1,16 +1,13 @@
 ---
-name: Defense relaxation requires naming the new ceiling
-description: When a plan relaxes or removes a load-bearing defense, plan/deepen-plan must enumerate "what was the previous defense protecting against, and what's the new ceiling for the same threat?"
-type: best-practice
+title: Defense Relaxation Must Name the New Ceiling
 date: 2026-05-05
-pr: "#3225"
+category: engineering
+tags: [planning, defense-in-depth, testing, dom-testing, scope-out-criteria]
+description: 'When a plan relaxes or removes a load-bearing defense, plan/deepen-plan must enumerate "what was the previous defense protecting against, and what''s the new ceiling for the same threat?"'
 domain: engineering
-tags:
-  - planning
-  - defense-in-depth
-  - testing
-  - dom-testing
-  - scope-out-criteria
+name: Defense relaxation requires naming the new ceiling
+pr: '#3225'
+type: best-practice
 ---
 
 # Learning: Defense Relaxation Must Name the New Ceiling

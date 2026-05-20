@@ -1,13 +1,11 @@
 ---
+title: PR-E autonomous one-shot pipeline — cross-reconcile + CONCUR-DISSENT in practice
 date: 2026-05-16
 category: best-practices
 tags: [autonomous-pipeline, multi-agent-review, scope-out, cross-reconcile, single-user-incident, concur-dissent]
-pr: 3922
 issue: 3887
-related_learnings:
-  - 2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md
-  - 2026-05-11-scope-out-bundling-hides-cheap-inline-fixes.md
-  - 2026-05-04-wrapper-extension-test-mock-chain-sweep.md
+pr: 3922
+related_learnings: [2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md, 2026-05-11-scope-out-bundling-hides-cheap-inline-fixes.md, 2026-05-04-wrapper-extension-test-mock-chain-sweep.md]
 ---
 
 # PR-E autonomous one-shot pipeline — cross-reconcile + CONCUR-DISSENT in practice

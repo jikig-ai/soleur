@@ -1,13 +1,10 @@
 ---
+title: Anticipatory Hook Bypass + Leader/Substrate Cross-Check
 date: 2026-05-12
-session: feat-dsar-art15-export-endpoint brainstorm (#3637)
-tags: [hooks, workflow-discipline, brainstorm, domain-leaders, substrate, parallel-research]
 category: workflow-discipline
-related:
-  - 2026-04-27-autoloop-pr-quality-failure-modes.md
-  - 2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md
-  - 2026-05-11-brainstorm-parallel-domain-and-research-fan-out-and-duplicate-issue-discovery.md
-  - knowledge-base/project/specs/feat-cc-soleur-go-transcript-hardening-pr-a/spec.md
+tags: [hooks, workflow-discipline, brainstorm, domain-leaders, substrate, parallel-research]
+related: [2026-04-27-autoloop-pr-quality-failure-modes.md, 2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md, 2026-05-11-brainstorm-parallel-domain-and-research-fan-out-and-duplicate-issue-discovery.md, knowledge-base/project/specs/feat-cc-soleur-go-transcript-hardening-pr-a/spec.md]
+session: 'feat-dsar-art15-export-endpoint brainstorm (#3637)'
 ---
 
 # Anticipatory Hook Bypass + Leader/Substrate Cross-Check

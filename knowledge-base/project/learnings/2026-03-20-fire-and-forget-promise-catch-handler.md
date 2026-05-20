@@ -1,3 +1,10 @@
+---
+title: Fire-and-forget async calls require explicit .catch() to prevent process termination
+date: 2026-03-20
+category: engineering
+tags: [reliability, web-platform, promises, error-handling, node, fire-and-forget, defense-in-depth, 2026-03-20]
+---
+
 # Learning: Fire-and-forget async calls require explicit .catch() to prevent process termination
 
 ## Problem

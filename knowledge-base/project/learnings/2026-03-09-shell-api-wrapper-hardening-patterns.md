@@ -1,3 +1,10 @@
+---
+title: Shell API Wrapper Hardening Patterns
+date: 2026-03-09
+category: shell-scripting
+tags: [security, community, token-leakage, arithmetic-crash, malformed-response, input-validation]
+---
+
 # Learning: Shell API Wrapper Hardening Patterns
 
 ## Problem

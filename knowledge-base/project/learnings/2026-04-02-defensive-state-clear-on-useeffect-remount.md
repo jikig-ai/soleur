@@ -1,3 +1,10 @@
+---
+title: defensive state clear on useEffect remount
+date: 2026-04-02
+category: engineering
+tags: [ui-bugs, web-platform/ws-client]
+---
+
 # Learning: defensive state clear on useEffect remount
 
 ## Problem

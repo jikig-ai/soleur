@@ -1,9 +1,10 @@
 ---
+title: 'Plan-phase precedent search must include `lib/` helpers, not just sibling components'
 date: 2026-05-04
 category: best-practices
-module: planning
 tags: [planning, code-reuse, lib-helpers, review-catches]
-pr: "#3186"
+module: planning
+pr: '#3186'
 ---
 
 # Plan-phase precedent search must include `lib/` helpers, not just sibling components

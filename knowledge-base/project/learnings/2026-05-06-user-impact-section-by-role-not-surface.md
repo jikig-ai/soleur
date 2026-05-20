@@ -1,3 +1,10 @@
+---
+title: User-Brand Impact sections should enumerate by user role, not by surface
+date: 2026-05-06
+category: engineering
+tags: [best-practices, user-impact-reviewer, plan, review]
+---
+
 # Learning: User-Brand Impact sections should enumerate by user role, not by surface
 
 ## Problem

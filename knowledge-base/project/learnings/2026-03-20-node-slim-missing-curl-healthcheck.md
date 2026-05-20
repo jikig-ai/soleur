@@ -1,3 +1,10 @@
+---
+title: 'node:22-slim does not include curl -- use Node.js fetch for HEALTHCHECK'
+date: 2026-03-20
+category: engineering
+tags: [runtime-errors, docker]
+---
+
 # Learning: node:22-slim does not include curl -- use Node.js fetch for HEALTHCHECK
 
 ## Problem

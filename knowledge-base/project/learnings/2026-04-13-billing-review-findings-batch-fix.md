@@ -1,3 +1,10 @@
+---
+title: Billing code-review fixes — race condition, accessibility, duplication
+date: 2026-04-13
+category: engineering
+tags: [code-review, apps/web-platform/billing, 2046, 2047, 2048, 2065, 2036]
+---
+
 # Learning: Billing code-review fixes — race condition, accessibility, duplication
 
 ## Problem

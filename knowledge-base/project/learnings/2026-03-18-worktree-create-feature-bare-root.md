@@ -1,3 +1,10 @@
+---
+title: worktree create/feature commands fail from bare repo root
+date: 2026-03-18
+category: workflow-patterns
+tags: [runtime-errors, plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh]
+---
+
 # Learning: worktree create/feature commands fail from bare repo root
 
 ## Problem

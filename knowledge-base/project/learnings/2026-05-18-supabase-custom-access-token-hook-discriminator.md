@@ -1,14 +1,14 @@
 ---
+title: Supabase Custom Access Token Hook — runtime vs dashboard OTP discrimination
 date: 2026-05-18
-topic: supabase-custom-access-token-hook-discriminator
 category: integration-issues
+tags: [supabase, custom, access, token, hook, discriminator]
 module: lib/supabase/tenant.ts + supabase/migrations/047-050
-status: solved
-prs: [#3983]
 issues: [#3363]
-related_learnings:
-  - 2026-05-18-vendor-token-mint-content-carrier-patterns.md
-  - 2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md
+prs: [#3983]
+related_learnings: 
+status: solved
+topic: supabase-custom-access-token-hook-discriminator
 ---
 
 # Supabase Custom Access Token Hook — runtime vs dashboard OTP discrimination

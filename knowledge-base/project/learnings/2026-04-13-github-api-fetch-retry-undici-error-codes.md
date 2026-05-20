@@ -1,3 +1,10 @@
+---
+title: GitHub API fetch retry with undici error code detection
+date: 2026-04-13
+category: ci-cd
+tags: [runtime-errors, apps/web-platform/server/github-api]
+---
+
 # Learning: GitHub API fetch retry with undici error code detection
 
 ## Problem

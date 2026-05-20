@@ -1,3 +1,10 @@
+---
+title: Producer-consumer merge pattern for subagent limit compliance
+date: 2026-03-05
+category: workflow-patterns
+tags: [architecture, compound]
+---
+
 # Learning: Producer-consumer merge pattern for subagent limit compliance
 
 ## Problem

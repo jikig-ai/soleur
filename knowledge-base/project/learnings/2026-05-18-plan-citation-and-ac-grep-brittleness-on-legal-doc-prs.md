@@ -1,3 +1,10 @@
+---
+title: Plan citation provenance + AC grep brittleness on legal-doc PRs
+date: 2026-05-18
+category: legal
+tags: [process, plan / deepen-plan / one-shot]
+---
+
 # Plan citation provenance + AC grep brittleness on legal-doc PRs
 
 **Date:** 2026-05-18

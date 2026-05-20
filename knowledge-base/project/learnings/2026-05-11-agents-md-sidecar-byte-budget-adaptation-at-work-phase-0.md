@@ -1,16 +1,12 @@
 ---
-title: "AGENTS.md sidecar split (PR #3496) — byte-budget adaptation at /work Phase 0 for plans that pre-date the split"
+title: 'AGENTS.md sidecar split (PR #3496) — byte-budget adaptation at /work Phase 0 for plans that pre-date the split'
 date: 2026-05-11
+category: agent-design
+tags: [agents-md-sidecar, byte-budget, precondition-staleness, work-phase-0]
+issue: '#2720'
+pr: '#3559'
+related: [knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md]
 type: learning
-issue: "#2720"
-pr: "#3559"
-tags:
-  - agents-md-sidecar
-  - byte-budget
-  - precondition-staleness
-  - work-phase-0
-related:
-  - knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md
 ---
 
 # AGENTS.md sidecar split (PR #3496) — byte-budget adaptation at /work Phase 0 for plans that pre-date the split

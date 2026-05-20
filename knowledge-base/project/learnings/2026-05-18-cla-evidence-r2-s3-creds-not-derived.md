@@ -1,3 +1,10 @@
+---
+title: Cloudflare R2 S3-compat credentials are NOT derivable from a generic CF API token
+date: 2026-05-18
+category: legal
+tags: [cla, evidence, r2, s3, creds, derived]
+---
+
 # Cloudflare R2 S3-compat credentials are NOT derivable from a generic CF API token
 
 **Date:** 2026-05-18

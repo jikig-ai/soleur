@@ -1,9 +1,11 @@
 ---
+title: Bash tool CWD persists across calls; work-skill prose is stale
+date: 2026-05-16
 category: best-practices
-module: harness
-issue: null
-related_pr: 3917
 tags: [bash, cwd, tooling, harness, work-skill]
+module: harness
+issue: None
+related_pr: 3917
 ---
 
 # Learning: Bash tool CWD persists across calls; work-skill prose is stale

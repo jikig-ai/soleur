@@ -1,7 +1,8 @@
 ---
+title: AC Vocabulary-Regex Blind Spots + Multi-Runner Awk Portability
+date: 2026-05-17
 category: best-practices
 tags: [planning, regex, ac-design, cross-artifact-drift, test-portability, mawk, gawk]
-date: 2026-05-17
 issue: 3924
 pr: 3939
 ---

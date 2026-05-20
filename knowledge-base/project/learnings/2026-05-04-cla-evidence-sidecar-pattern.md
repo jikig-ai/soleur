@@ -1,7 +1,8 @@
 ---
+title: CLA Evidence Sidecar Pattern — Sharp Edges and Greenfield Precedents
+date: 2026-05-04
 category: best-practices
 tags: [cla, evidence, r2, terraform, github-actions, rfc-3161, gdpr, object-lock]
-date: 2026-05-04
 issue: 3209
 pr: 3201
 ---

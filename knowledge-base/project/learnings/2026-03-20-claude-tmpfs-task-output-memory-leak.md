@@ -1,3 +1,10 @@
+---
+title: Claude Code tmpfs task output can exhaust system RAM
+date: 2026-03-20
+category: security
+tags: [runtime-errors, worktree-manager]
+---
+
 # Learning: Claude Code tmpfs task output can exhaust system RAM
 
 ## Problem

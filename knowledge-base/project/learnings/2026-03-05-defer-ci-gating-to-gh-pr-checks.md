@@ -1,7 +1,9 @@
 ---
-category: integration-issues
-module: ci-cd
+title: Defer CI Gating to gh pr checks
 date: 2026-03-05
+category: integration-issues
+tags: [integration-issues, ci-cd]
+module: ci-cd
 ---
 
 # Learning: Defer CI Gating to gh pr checks

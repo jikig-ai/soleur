@@ -1,3 +1,10 @@
+---
+title: URL-encode special characters in shell API wrapper URLs
+date: 2026-03-13
+category: shell-scripting
+tags: [integration-issues, community-scripts]
+---
+
 # Learning: URL-encode special characters in shell API wrapper URLs
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: DPD processor table dual-file sync gap
+date: 2026-03-18
+category: engineering
+tags: [legal-compliance, data-protection-disclosure]
+---
+
 # Learning: DPD processor table dual-file sync gap
 
 ## Problem

@@ -1,24 +1,14 @@
 ---
+title: Named-tool exclusion list as a gated exception to the baseline anti-priming guard (Phase 2 closure of cc-pdf cascade)
 date: 2026-05-05
-problem_type: integration_issue
-component: system_prompt_builder
-severity: high
-tags:
-  - prompt-engineering
-  - cc-pdf
-  - cc-soleur-go
-  - anti-priming
-  - shared-factory
-related_issues:
-  - "#3287"
-  - "#3288"
-  - "#3292"
-  - "#3293"
-  - "#3294"
-related_learnings:
-  - 2026-05-05-baseline-prompt-must-declare-capabilities-or-model-fabricates-missing-tools.md
-  - 2026-05-05-phase-1-instrumentation-when-prior-fix-visibly-missed.md
+category: engineering
+tags: [prompt-engineering, cc-pdf, cc-soleur-go, anti-priming, shared-factory]
 synced_to: []
+component: system_prompt_builder
+problem_type: integration_issue
+related_issues: [#3287, #3288, #3292, #3293, #3294]
+related_learnings: [2026-05-05-baseline-prompt-must-declare-capabilities-or-model-fabricates-missing-tools.md, 2026-05-05-phase-1-instrumentation-when-prior-fix-visibly-missed.md]
+severity: high
 ---
 
 # Learning: Named-tool exclusion list as a gated exception to the baseline anti-priming guard (Phase 2 closure of cc-pdf cascade)

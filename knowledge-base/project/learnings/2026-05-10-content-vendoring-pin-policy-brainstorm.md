@@ -1,17 +1,13 @@
 ---
+title: Content-Vendoring Pin Policy — Three Process Insights from the Brainstorm
 date: 2026-05-10
 category: best-practices
-problem_type: brainstorm_process
-component: brainstorm
-severity: medium
 tags: [brainstorm-process, learnings-researcher, vendor-pin, freshness-pattern, runtime-vs-cron, content-vendoring, agent-research-quality]
-related_artifacts:
-  - knowledge-base/project/brainstorms/2026-05-10-gosprinto-pin-policy-brainstorm.md
-  - knowledge-base/project/specs/feat-gosprinto-pin-policy/spec.md
-  - knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md
-  - https://github.com/jikig-ai/soleur/issues/3517
-  - https://github.com/jikig-ai/soleur/pull/3521
 synced_to: [brainstorm, learnings-researcher]
+component: brainstorm
+problem_type: brainstorm_process
+related_artifacts: [knowledge-base/project/brainstorms/2026-05-10-gosprinto-pin-policy-brainstorm.md, knowledge-base/project/specs/feat-gosprinto-pin-policy/spec.md, knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md, https://github.com/jikig-ai/soleur/issues/3517, https://github.com/jikig-ai/soleur/pull/3521]
+severity: medium
 ---
 
 # Content-Vendoring Pin Policy — Three Process Insights from the Brainstorm

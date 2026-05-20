@@ -1,3 +1,10 @@
+---
+title: Sentry URL routing has THREE orthogonal dimensions — slug, cluster, token scope
+date: 2026-05-19
+category: engineering
+tags: [workflow-patterns, vendor-topology / sentry / residency]
+---
+
 # Learning: Sentry URL routing has THREE orthogonal dimensions — slug, cluster, token scope
 
 **Date:** 2026-05-19

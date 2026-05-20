@@ -1,14 +1,14 @@
 ---
-name: CF Cache Purge on KB Share Revoke
-description: Active Cloudflare cache purge from revokeShare to close the s-maxage TTL leak window after a share is revoked, plus drift-path bypass remediation
-type: project
+title: CF Cache Purge on KB Share Revoke
 date: 2026-04-18
-issue: 2568
-pr: 2569
-related:
-  - 2026-04-18-cloudflare-default-bypasses-dynamic-paths.md
-  - 2026-04-15-multi-agent-review-catches-bugs-tests-miss.md
+category: engineering
 tags: [security, cloudflare, cache-invalidation, kb-share, revocation]
+description: Active Cloudflare cache purge from revokeShare to close the s-maxage TTL leak window after a share is revoked, plus drift-path bypass remediation
+issue: 2568
+name: CF Cache Purge on KB Share Revoke
+pr: 2569
+related: [2026-04-18-cloudflare-default-bypasses-dynamic-paths.md, 2026-04-15-multi-agent-review-catches-bugs-tests-miss.md]
+type: project
 ---
 
 # Learning: CF Cache Purge on KB Share Revoke

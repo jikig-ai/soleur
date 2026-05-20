@@ -1,3 +1,10 @@
+---
+title: Worktree creation can silently fail while reporting success
+date: 2026-04-10
+category: workflow-patterns
+tags: [integration-issues, git-worktree]
+---
+
 # Learning: Worktree creation can silently fail while reporting success
 
 ## Problem

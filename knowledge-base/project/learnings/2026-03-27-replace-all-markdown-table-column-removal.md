@@ -1,15 +1,15 @@
 ---
-module: Claude Code Edit Tool
+title: replace_all on markdown table columns destroys adjacent cell spacing
 date: 2026-03-27
-problem_type: logic_error
+category: engineering
+tags: [replace-all, markdown-tables, edit-tool, spacing]
+symptoms: [Markdown table cells lose leading space after replace_all column removal, Table renders with |Value instead of | Value after bulk edit]
+module: Claude Code Edit Tool
+synced_to: []
 component: edit_tool
-symptoms:
-  - "Markdown table cells lose leading space after replace_all column removal"
-  - "Table renders with |Value instead of | Value after bulk edit"
+problem_type: logic_error
 root_cause: adjacent_whitespace_destruction
 severity: medium
-tags: [replace-all, markdown-tables, edit-tool, spacing]
-synced_to: []
 ---
 
 # Learning: replace_all on markdown table columns destroys adjacent cell spacing

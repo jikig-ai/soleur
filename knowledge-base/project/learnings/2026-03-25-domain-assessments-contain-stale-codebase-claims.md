@@ -1,10 +1,11 @@
 ---
 title: Domain Leader Assessments Contain Stale Codebase Claims
-category: logic_error
-module: brainstorm
-severity: medium
-problem_type: workflow_issue
 date: 2026-03-25
+category: logic_error
+tags: [logic-error, brainstorm, plan]
+module: brainstorm
+problem_type: workflow_issue
+severity: medium
 ---
 
 # Learning: Domain Leader Assessments Contain Stale Codebase Claims

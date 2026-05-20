@@ -1,30 +1,18 @@
 ---
+title: Cross-Session Lock + Lease Bash Primitives — Implementation Gotchas
 date: 2026-05-12
+category: shell-scripting
+tags: [concurrency, flock, bash-traps, hooks, leases, claude-bg, sibling-race]
+symptoms: [Sibling cleanup-merged reaps an operator's active worktree mid-flight, Wrapped CLI invocations bypass PreToolUse hook regex, PID-reuse race when releasing key=value pidfile-style leases, date -d natural-language input causes forever-active lease (DoS), Bash signal traps don't fire when blocked on a foreground child]
 module: session-state (bash hooks lib)
-problem_type: integration_issue
 component: bash_concurrency_primitives
-symptoms:
-  - "Sibling cleanup-merged reaps an operator's active worktree mid-flight"
-  - "Wrapped CLI invocations bypass PreToolUse hook regex"
-  - "PID-reuse race when releasing key=value pidfile-style leases"
-  - "date -d natural-language input causes forever-active lease (DoS)"
-  - "Bash signal traps don't fire when blocked on a foreground child"
-root_cause: cross-process-coordination-primitives-need-careful-pairing-with-existing-hook-and-test-infrastructure
-severity: high
-tags:
-  - concurrency
-  - flock
-  - bash-traps
-  - hooks
-  - leases
-  - claude-bg
-  - sibling-race
-related:
-  - 2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md
-  - 2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md
-pr: 3689
 issue: 3690
 plan: knowledge-base/project/plans/2026-05-12-feat-bg-readiness-concurrency-hardening-plan.md
+pr: 3689
+problem_type: integration_issue
+related: [2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md, 2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md]
+root_cause: cross-process-coordination-primitives-need-careful-pairing-with-existing-hook-and-test-infrastructure
+severity: high
 ---
 
 # Cross-Session Lock + Lease Bash Primitives — Implementation Gotchas

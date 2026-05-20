@@ -1,6 +1,8 @@
 ---
+title: Third-Party DPA Gap Analysis Pattern
 date: 2026-03-11
 category: integration-issues
+tags: [integration-issues, legal-agents, gdpr]
 module: legal-agents
 problem_type: compliance-review
 severity: high

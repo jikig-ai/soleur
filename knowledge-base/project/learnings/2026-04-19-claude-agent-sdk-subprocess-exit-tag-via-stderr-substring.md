@@ -1,3 +1,10 @@
+---
+title: Tag Sentry by stderr-substring when SDK subprocess does process.exit(1)
+date: 2026-04-19
+category: agent-design
+tags: [integration-issues, agent-runner, 2634, 2646, knowledge-base/project/learnings/security-issues/2026-04-19-socat-load-bearing-for-bwrap-sandbox.md]
+---
+
 # Learning: Tag Sentry by stderr-substring when SDK subprocess does process.exit(1)
 
 **Date:** 2026-04-19

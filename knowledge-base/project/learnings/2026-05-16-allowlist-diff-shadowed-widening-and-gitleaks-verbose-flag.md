@@ -1,12 +1,10 @@
 ---
-title: "allowlist-diff under-detects shadowed cross-rule widening; gitleaks needs -v to surface finding details"
+title: allowlist-diff under-detects shadowed cross-rule widening; gitleaks needs -v to surface finding details
 date: 2026-05-16
-type: workflow-issue
-related:
-  - https://github.com/jikig-ai/soleur/issues/3874
-  - https://github.com/jikig-ai/soleur/issues/3268
-  - https://github.com/jikig-ai/soleur/issues/3877
+category: security
 tags: [secret-scan, gitleaks, allowlist-diff, ci-gate, defense-in-depth]
+related: [https://github.com/jikig-ai/soleur/issues/3874, https://github.com/jikig-ai/soleur/issues/3268, https://github.com/jikig-ai/soleur/issues/3877]
+type: workflow-issue
 ---
 
 # allowlist-diff parser under-detects shadowed cross-rule widening

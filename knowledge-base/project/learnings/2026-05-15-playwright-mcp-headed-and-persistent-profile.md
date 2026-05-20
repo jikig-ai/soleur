@@ -1,10 +1,11 @@
 ---
+title: Playwright MCP runs headed with a persistent profile
+date: 2026-05-15
+category: infrastructure
+tags: [playwright, mcp, headed, persistent, profile]
+description: 'The Soleur Playwright MCP server runs headed (visible browser window on the operator''s display) with a persistent --user-data-dir profile, so a one-time interactive SSO login unlocks full Soleur-driven UI automation for subsequent sessions'
+metadata: {'type': 'reference', 'date': datetime.date(2026, 5, 15), 'triggering_issue': '#3849'}
 name: playwright-mcp-headed-and-persistent-profile
-description: The Soleur Playwright MCP server runs headed (visible browser window on the operator's display) with a persistent --user-data-dir profile, so a one-time interactive SSO login unlocks full Soleur-driven UI automation for subsequent sessions
-metadata:
-  type: reference
-  date: 2026-05-15
-  triggering_issue: "#3849"
 ---
 
 # Playwright MCP runs headed with a persistent profile

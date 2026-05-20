@@ -1,3 +1,10 @@
+---
+title: Milestone-Roadmap Integrity Requires Bidirectional Enforcement
+date: 2026-04-03
+category: engineering
+tags: [workflow, product-management]
+---
+
 # Learning: Milestone-Roadmap Integrity Requires Bidirectional Enforcement
 
 ## Problem

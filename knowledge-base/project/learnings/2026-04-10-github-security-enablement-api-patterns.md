@@ -1,3 +1,10 @@
+---
+title: GitHub Security Feature Enablement via API
+date: 2026-04-10
+category: security
+tags: [integration-issues, github-api]
+---
+
 # Learning: GitHub Security Feature Enablement via API
 
 ## Problem

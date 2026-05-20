@@ -1,9 +1,10 @@
 ---
+title: Empirical Hook-Input-Shape Verification Prevents Silent Zero-Emission
 date: 2026-05-10
 category: best-practices
+tags: [hooks, claude-code, telemetry, tdd, empirical-verification]
 issue: 3494
 pr: 3495
-tags: [hooks, claude-code, telemetry, tdd, empirical-verification]
 ---
 
 # Empirical Hook-Input-Shape Verification Prevents Silent Zero-Emission

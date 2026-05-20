@@ -1,3 +1,10 @@
+---
+title: Content publisher push rejected by CLA Required ruleset
+date: 2026-03-19
+category: legal
+tags: [integration-issues, github-actions]
+---
+
 # Learning: Content publisher push rejected by CLA Required ruleset
 
 ## Problem

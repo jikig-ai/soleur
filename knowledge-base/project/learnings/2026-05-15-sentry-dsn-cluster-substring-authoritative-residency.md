@@ -1,14 +1,13 @@
 ---
-name: sentry-dsn-cluster-substring-authoritative-residency
-description: Sentry DSN of shape o<orgInternalId>.ingest.<cluster>.sentry.io carries authoritative region binding in the <cluster> segment — orgs are region-bound, the substring is faster than the /organizations API probe (which 403s on sntrys_ org-auth tokens) and lower-scope
+title: Sentry DSN cluster substring as authoritative residency signal
 date: 2026-05-15
 category: integration-issues
 tags: [sentry, gdpr, residency, dsn, probe, article-30]
-related_issue: "#3861"
-related_pr: "#3863"
-related_learnings:
-  - 2026-05-04-sentry-org-token-region-probe-and-dashboards-scope-guard.md
-  - 2026-05-15-sentry-iac-billing-and-quirks.md
+description: 'Sentry DSN of shape o<orgInternalId>.ingest.<cluster>.sentry.io carries authoritative region binding in the <cluster> segment — orgs are region-bound, the substring is faster than the /organizations API probe (which 403s on sntrys_ org-auth tokens) and lower-scope'
+name: sentry-dsn-cluster-substring-authoritative-residency
+related_issue: '#3861'
+related_learnings: [2026-05-04-sentry-org-token-region-probe-and-dashboards-scope-guard.md, 2026-05-15-sentry-iac-billing-and-quirks.md]
+related_pr: '#3863'
 ---
 
 # Learning: Sentry DSN cluster substring as authoritative residency signal
