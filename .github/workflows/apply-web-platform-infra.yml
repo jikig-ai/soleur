@@ -140,6 +140,24 @@ jobs:
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
           printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
 
+      # TWO-TOKEN MODEL (post-#4195). This workflow consumes two distinct
+      # Doppler service tokens via separate GH Actions secrets:
+      #
+      #   - `secrets.DOPPLER_TOKEN`        — `prd_terraform` READ-only.
+      #                                       Used by every step that only
+      #                                       READS Doppler secrets (init,
+      #                                       plan, apply).
+      #   - `secrets.DOPPLER_TOKEN_WRITE`  — `prd_terraform` READ/WRITE.
+      #                                       Used by the post-apply sync
+      #                                       step that WRITES the
+      #                                       CI_SSH_ACCESS_TOKEN_*
+      #                                       outputs back into Doppler.
+      #
+      # New steps that need write access MUST use `DOPPLER_TOKEN_WRITE`;
+      # do NOT copy the `secrets.DOPPLER_TOKEN` line below without
+      # confirming the step only reads. The `--silent` + `add-mask`
+      # discipline in the sync step (~line 367-368) is the leak-defense
+      # for the write-scoped token.
       - name: Verify required secrets present
         env:
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
@@ -259,6 +277,8 @@ jobs:
               -target=doppler_secret.kb_drift_ingest_url \
               -target=doppler_service_token.kb_drift \
               -target=github_actions_secret.doppler_token_kb_drift \
+              -target=doppler_service_token.write \
+              -target=github_actions_secret.doppler_token_write \
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
               -target=random_id.inngest_signing_key_prd \
@@ -316,6 +336,31 @@ jobs:
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
+      # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
+      # `github_actions_secret.doppler_token_write`, the runner started
+      # before the secret existed — interpolation returns empty for
+      # that one run because GH Actions resolves secrets at job-start,
+      # not step-start. The warning is non-fatal; the operator re-fires
+      # the workflow once after first merge via `gh workflow run
+      # apply-web-platform-infra.yml --ref main -F reason='bootstrap'`.
+      # The local-fallback script
+      # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
+      # remains available as backup. Operator follow-through obligation
+      # is tracked separately as a `follow-through` GH issue per
+      # `wg-block-pr-ready-on-undeferred-operator-steps`.
+      - name: Verify DOPPLER_TOKEN_WRITE present
+        id: doppler_write_check
+        env:
+          DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_WRITE_CHECK" ]]; then
+            echo "::warning::DOPPLER_TOKEN_WRITE not yet present — this is expected on the first apply that creates it. Subsequent applies will use the synced token. If you see this on the second+ run, manually trigger one more apply via gh workflow run."
+            echo "skip_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Sync CF Access CI-SSH service token to Doppler
         # Reads the new sensitive outputs produced by the
         # `cloudflare_zero_trust_access_service_token.ci_ssh` resource
@@ -323,9 +368,14 @@ jobs:
         # `apply-deploy-pipeline-fix.yml` workflow can pull them at run
         # time without an operator handoff step (closes #4177 P1).
         # Idempotent — doppler-secrets-set overwrites in place.
+        # Uses the in-band-minted write-capable service token (post-#4195
+        # — see apps/web-platform/infra/doppler-write-token.tf) — every
+        # other step in this workflow consumes the existing read-only
+        # token.
+        if: steps.doppler_write_check.outputs.skip_sync != 'true'
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
         run: |
           set -euo pipefail
           CLIENT_ID=$(terraform output -raw ci_ssh_access_service_token_client_id 2>/dev/null || true)
@@ -336,10 +386,15 @@ jobs:
           fi
           printf '::add-mask::%s\n' "$CLIENT_ID"
           printf '::add-mask::%s\n' "$CLIENT_SECRET"
+          # `--silent` suppresses doppler's success-path value-echo;
+          # stderr is intentionally NOT redirected so permission-denied
+          # / quota / network errors surface in the GH Actions log (the
+          # original #4195 failure was masked by a `>/dev/null 2>&1`
+          # redirect on these two lines).
           printf '%s' "$CLIENT_ID" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform
           printf '%s' "$CLIENT_SECRET" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform
           unset CLIENT_ID CLIENT_SECRET
           echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
