@@ -31,11 +31,33 @@ fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 # Parse a single directive from an issue body. Stdin = body text.
 # Writes lines: `KEY VALUE` for script/earliest/secrets, or nothing if no
-# directive is present. Multiple directives in one body → only the first
-# is honored (log a warning).
+# directive is present. Multiple directives in one body → only the FIRST
+# is honored; the parser emits a synthetic `__sweeper_meta__
+# multi_directive_count <N>` line so the bash caller can log a warning.
+# The `__sweeper_meta__` key shape is a private contract with run_one;
+# future directive fields MUST NOT use that name.
+#
+# Fenced markdown code blocks (lines starting with three backticks, the
+# canonical GitHub-flavored markdown form) are skipped wholesale. This
+# closes the residual where a directive copy-pasted into a ```html``` fence
+# at column 1 would otherwise satisfy the anchored start-range regex.
 parse_directive() {
   awk '
-    /<!-- *soleur:followthrough/, /-->/ {
+    BEGIN { in_dir = 0; seen = 0; closing = 0; fence = 0 }
+    /^```/ { fence = !fence; next }
+    fence { next }
+    /^<!-- *soleur:followthrough/ {
+      seen++
+      if (seen == 1) in_dir = 1
+    }
+    # End-of-directive check MUST run BEFORE the in_dir body block, because
+    # the body block gsub(/-->/, "") strips the closing marker from $0 in
+    # place, which would prevent /-->/ from matching on the same line. Set
+    # a flag here, apply it in a post-body block.
+    /-->/ && in_dir {
+      closing = 1
+    }
+    in_dir {
       gsub(/^<!-- *soleur:followthrough/, "")
       gsub(/-->/, "")
       for (i = 1; i <= NF; i++) {
@@ -44,6 +66,8 @@ parse_directive() {
         if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
       }
     }
+    closing { in_dir = 0; closing = 0 }
+    END { if (seen > 1) print "__sweeper_meta__ multi_directive_count " seen }
   '
 }
 
@@ -60,10 +84,32 @@ run_one() {
 
   local script earliest secrets
   while read -r key val; do
+    # First-wins, not last-wins: a directive line containing multiple
+    # `script=`/`earliest=`/`secrets=` tokens (e.g.,
+    # `<!-- soleur:followthrough script=a.sh script=b.sh -->`) emits one
+    # KEY VALUE line per matching field in the awk for-loop. Without the
+    # `-z` guard the bash loop would take the LAST value, which is the
+    # same multi-directive bypass that Gap 2 closed across directives.
     case "$key" in
-      script)   script="$val" ;;
-      earliest) earliest="$val" ;;
-      secrets)  secrets="$val" ;;
+      script)   [[ -z "${script:-}" ]]   && script="$val" ;;
+      earliest) [[ -z "${earliest:-}" ]] && earliest="$val" ;;
+      secrets)  [[ -z "${secrets:-}" ]]  && secrets="$val" ;;
+      __sweeper_meta__)
+        # val shape: "<meta_kind> <args>". Decode whitespace-tolerantly via
+        # `read` so a future parser-side reformat does not silently break
+        # the consumer; fallthrough log fires for unknown meta_kind so an
+        # additive parser change cannot quietly no-op here.
+        local meta_kind meta_args
+        read -r meta_kind meta_args <<<"$val"
+        case "$meta_kind" in
+          multi_directive_count)
+            log "issue #$issue_num: multi-directive body: $meta_args directives found, honoring first only"
+            ;;
+          *)
+            log "issue #$issue_num: unknown __sweeper_meta__ kind '$meta_kind' (val='$val') — ignoring"
+            ;;
+        esac
+        ;;
     esac
   done < <(printf '%s' "$body" | parse_directive)
 
@@ -74,12 +120,39 @@ run_one() {
 
   log "issue #$issue_num: directive found (script=$script earliest=${earliest:-now} secrets=${secrets:-none})"
 
-  # Path safety: script MUST live under scripts/followthroughs/. Reject
-  # anything else so a tampered issue body can't point at /etc/passwd.
-  case "$script" in
-    "$SCRIPTS_ROOT"/*) : ok ;;
+  # Path safety: script MUST canonicalize to a path under
+  # scripts/followthroughs/. Use realpath rather than a bare prefix-match —
+  # a path that traverses out of the allowlist root via `..` would satisfy
+  # a naïve case-glob but is rejected after canonicalization. `-m` accepts
+  # non-existent paths (the on-disk check below handles missing scripts
+  # with a clearer error). `|| true` guards against realpath failures on
+  # exotic input: empty $canon fails the case-glob → REJECT.
+  #
+  # Symlinks are rejected BEFORE canonicalization: realpath follows
+  # symlinks, so an attacker-controlled symlink under scripts/followthroughs/
+  # would canonicalize to its target outside the allowlist and get rejected
+  # (good) but more importantly, a symlink TARGETING another committed
+  # script in the repo (e.g. a privileged terraform-apply wrapper) would
+  # have its existence/executability checks pass against the symlink. The
+  # cheapest defense is to refuse symlinks under the allowlist root.
+  if [[ -L "$script" ]]; then
+    fail "issue #$issue_num: script path '$script' is a symlink — refusing to run"
+    return 2
+  fi
+  local canon
+  canon=$(realpath -m --relative-to="$PWD" "$script" 2>/dev/null || true)
+  # Reject embedded newlines in the canonical path: `realpath -m` happily
+  # round-trips a path containing \n, and the case-glob's prefix match
+  # would still accept the canonical-form's first line. Defense-in-depth
+  # on top of the case-glob.
+  if [[ "$canon" == *$'\n'* ]]; then
+    fail "issue #$issue_num: script path '$script' contains embedded newline — refusing to run"
+    return 2
+  fi
+  case "$canon" in
+    "$SCRIPTS_ROOT"/*) script="$canon" ;;
     *)
-      fail "issue #$issue_num: script path '$script' not under $SCRIPTS_ROOT/ — refusing to run"
+      fail "issue #$issue_num: script path '$script' escapes $SCRIPTS_ROOT/ — refusing to run"
       return 2
       ;;
   esac
@@ -103,7 +176,13 @@ run_one() {
 
   # Build the env allowlist. Default = nothing. Only vars named in
   # `secrets=` are passed through to the script.
-  local -a env_args=("env" "-i" "PATH=$PATH" "HOME=$HOME")
+  #
+  # PATH is pinned to the FHS default rather than forwarded from the
+  # parent environment: forwarding the workflow runner's PATH (which may
+  # be augmented with tool-cache or actions-runner-prefix dirs) defeats
+  # the purpose of `env -i`. The verification scripts under
+  # scripts/followthroughs/ should not depend on caller-side PATH state.
+  local -a env_args=("env" "-i" "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "HOME=$HOME")
   if [[ -n "${secrets:-}" ]]; then
     IFS=',' read -r -a secret_names <<<"$secrets"
     for name in "${secret_names[@]}"; do
@@ -207,4 +286,7 @@ main() {
   log "sweep done"
 }
 
-main "$@"
+# Allow tests to source this script without running main().
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

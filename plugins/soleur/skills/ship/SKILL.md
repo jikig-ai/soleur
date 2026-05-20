@@ -1316,7 +1316,7 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
 
    ```bash
    awk '
-     /<!-- *soleur:followthrough/, /-->/ {
+     /^<!-- *soleur:followthrough/, /-->/ {
        gsub(/^<!-- *soleur:followthrough/, "")
        gsub(/-->/, "")
        for (i = 1; i <= NF; i++) {
