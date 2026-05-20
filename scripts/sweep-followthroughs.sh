@@ -102,12 +102,19 @@ run_one() {
 
   log "issue #$issue_num: directive found (script=$script earliest=${earliest:-now} secrets=${secrets:-none})"
 
-  # Path safety: script MUST live under scripts/followthroughs/. Reject
-  # anything else so a tampered issue body can't point at /etc/passwd.
-  case "$script" in
-    "$SCRIPTS_ROOT"/*) : ok ;;
+  # Path safety: script MUST canonicalize to a path under
+  # scripts/followthroughs/. Use realpath rather than a bare prefix-match —
+  # a path that traverses out of the allowlist root via `..` would satisfy
+  # a naïve case-glob but is rejected after canonicalization. `-m` accepts
+  # non-existent paths (the on-disk check below handles missing scripts
+  # with a clearer error). `|| true` guards against realpath failures on
+  # exotic input: empty $canon fails the case-glob → REJECT.
+  local canon
+  canon=$(realpath -m --relative-to="$PWD" "$script" 2>/dev/null || true)
+  case "$canon" in
+    "$SCRIPTS_ROOT"/*) script="$canon" ;;
     *)
-      fail "issue #$issue_num: script path '$script' not under $SCRIPTS_ROOT/ — refusing to run"
+      fail "issue #$issue_num: script path '$script' escapes $SCRIPTS_ROOT/ — refusing to run"
       return 2
       ;;
   esac
