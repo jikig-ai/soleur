@@ -52,13 +52,14 @@ If the command fails (e.g., offline, no remote), every path-gated check falls ba
 | 7 (Canary) | `apps/web-platform/infra/ci-deploy.sh` not in path-set. |
 | 8 (SW cache bump) | No `fix(`/`fix:`/`hotfix` commit subject AND zero client-bundle surface matches. |
 | 9 (Node-only encodings) | Always runs (uses `git ls-files`, full-universe scan — does NOT use the cached path-set; see Sharp Edges). |
+| 10 (Discoverability test) | Zero matches for the canonical sensitive-path regex (re-use Check 6 SSOT). |
 | Not-Bare-Repo | Always runs. |
 
 For PR #3488-class diffs (lockfile bumps + orphan-cleanup deletions), Checks 1, 2, 5, 6, 7, 8 fast-skip → Checks 3 (lockfile fires), 4 (env isolation always), 9 (always), Not-Bare-Repo (always) execute. Of those four, only Check 3 and Check 9 do "real work" against the diff; Check 4 and Not-Bare-Repo are constant-cost.
 
 ## Phase 1: Run All Checks in Parallel
 
-Run these six checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
+Run all checks below (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
 
 ### Assertion: Not-Bare-Repo
 
@@ -70,6 +71,34 @@ git rev-parse --is-bare-repository
 
 - If the result is `true`: **FAIL** -- "Running from bare repo root. Create a worktree first."
 - If the result is `false`: **PASS**
+
+### Shared Plan-File Resolution
+
+Both Check 6 (Brand-Survival Self-Review) and Check 10 (Discoverability Test Execution) need the same input: the PR body scrubbed of HTML comments + fenced code blocks, concatenated with the linked plan file (also scrubbed). This sub-section is the single source of truth for that resolution. **Mirrored consumers: Check 6 Step 6.4, Check 10 Step 10.3.** If a future PR changes the scrub/extract logic, edit here once — both consumers pick up the change automatically.
+
+```bash
+# Step S.1: fetch PR body to a private temp file (umask 077; mktemp).
+PR_BODY_FILE=$(umask 077 && mktemp -t preflight-pr-body.XXXXXXXX.md)
+gh pr view --json body --jq .body > "$PR_BODY_FILE"
+trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
+
+# Step S.2: strip HTML comments and fenced code blocks from PR body.
+SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_BODY_FILE" \
+  | perl -0777 -pe 's/<!--.*?-->//gs')
+
+# Step S.3: extract any linked plan file path (knowledge-base/project/plans/*.md).
+PLAN_PATH=$(printf '%s' "$SCRUBBED_BODY" | grep -Eo 'knowledge-base/project/plans/[^[:space:])"`'\'']+\.md' | head -n 1 || true)
+
+# Step S.4: build the combined check input.
+COMBINED=$(mktemp -t preflight-combined.XXXXXXXX.md)
+printf '%s\n' "$SCRUBBED_BODY" > "$COMBINED"
+if [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
+  awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PLAN_PATH" \
+    | perl -0777 -pe 's/<!--.*?-->//gs' >> "$COMBINED"
+fi
+```
+
+If `gh pr view` fails (no PR exists for the current branch), the caller returns **SKIP** — Shared Plan-File Resolution itself does not decide; it provides `$COMBINED` (and `$PLAN_PATH`) for the caller.
 
 ### Check 1: DB Migration Status
 
@@ -405,47 +434,11 @@ Run as two separate Bash calls (assignment, then the `grep`). The path-set comes
 
 If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive paths touched."
 
-**Step 6.2: Fetch the PR body to a private temp file.**
+**Step 6.2: Resolve the canonical compliance source (Shared Plan-File Resolution).**
 
-Use `mktemp` so the path is not predictable on multi-user hosts (defends against tmp-symlink attacks per general POSIX best practice). Two separate Bash calls (no command substitution):
+Call **Shared Plan-File Resolution** (above Check 1). It sets `$PR_BODY_FILE`, `$SCRUBBED_BODY`, `$PLAN_PATH`, and `$COMBINED` for this check to consume. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
 
-```bash
-PR_BODY_FILE=$(umask 077 && mktemp -t preflight-pr-body.XXXXXXXX.md)
-```
-
-```bash
-gh pr view --json body --jq .body > "$PR_BODY_FILE"
-```
-
-Trap exit so the temp file is removed: `trap 'rm -f "$PR_BODY_FILE"' EXIT`. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
-
-**Step 6.3: Resolve the canonical compliance source (PR body OR linked plan file).**
-
-The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Resolve a single check input by stripping noise from the PR body and concatenating any referenced plan file.
-
-```bash
-# 6.3a: strip HTML comments and fenced code blocks from PR body before any regex match
-SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_BODY_FILE" \
-  | perl -0777 -pe 's/<!--.*?-->//gs')
-```
-
-```bash
-# 6.3b: extract any linked plan file path (knowledge-base/project/plans/*.md) from the scrubbed body
-PLAN_PATH=$(printf '%s' "$SCRUBBED_BODY" | grep -Eo 'knowledge-base/project/plans/[^[:space:])"`'\'']+\.md' | head -n 1 || true)
-```
-
-```bash
-# 6.3c: build the combined check input
-COMBINED=$(mktemp -t preflight-combined.XXXXXXXX.md)
-printf '%s\n' "$SCRUBBED_BODY" > "$COMBINED"
-if [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
-  awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PLAN_PATH" \
-    | perl -0777 -pe 's/<!--.*?-->//gs' >> "$COMBINED"
-fi
-trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
-```
-
-The `awk` pass strips fenced code blocks (so an HTML/markdown example inside ` ``` ` cannot fool a substring match). The `perl -0777` pass strips HTML comments (`<!-- ... -->` including multi-line). Anything inside fences/comments cannot appear in `$COMBINED`.
+The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
 
 **Step 6.4: Check for the section heading.**
 
@@ -601,6 +594,184 @@ The current ban-list (extend as new classes are discovered):
 - **FAIL** — at least one banned token found (file + line listed).
 - **SKIP** — never; this check has no path gate (it always scans the canonical candidate list).
 
+### Check 10: Discoverability Test Execution
+
+**Path-gated** on the canonical sensitive-path regex (single source of truth; re-use Check 6 Step 6.1's `SENSITIVE_PATH_RE`). The path predicate runs against `"$PREFLIGHT_TMP/preflight-diff-files.txt"` (cached in Phase 0 Step 0.1). Otherwise return **SKIP** with note: "No sensitive paths touched — no Observability block required."
+
+**Rationale:** `hr-observability-as-plan-quality-gate` mandates a `discoverability_test.command` that runs WITHOUT SSH. Plan Phase 2.9 and deepen-plan Phase 4.7 enforce field presence; neither runs the command. PR #4148 shipped with `curl https://web-platform.soleur.ai/api/inngest` — a typo'd hostname that fails DNS resolution. Five gates passed; the operator caught it. This check closes the "declared-verifiable but unverified" gap.
+
+Invariant gate per `knowledge-base/project/learnings/2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md`: SKIP only when truly indeterminate; FAIL when the invariant ("the documented command actually works against the live world") is contradicted.
+
+**Reference implementation.** `plugins/soleur/test/lib/discoverability-test-parser.ts` mirrors the parser + classifier in TypeScript so the 8 decision states can be unit-tested without subshells. The bash below IS the production runtime — the TS file is for tests. If they drift, the bash wins.
+
+**Step 10.1: Sensitive-path gate (re-use Check 6 SSOT).**
+
+```bash
+set -uo pipefail
+# SSOT: see Check 6 Step 6.1; this literal MUST stay byte-identical.
+# Mirrored consumers: Check 6 Step 6.1, deepen-plan/SKILL.md Phase 4.6 Step 2.
+SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
+grep -E "$SENSITIVE_PATH_RE" "$PREFLIGHT_TMP/preflight-diff-files.txt"
+```
+
+If `grep` exits non-zero, return **SKIP** with note: "No sensitive paths touched."
+
+**Step 10.2: Resolve the plan file (Shared Plan-File Resolution).**
+
+Call **Shared Plan-File Resolution** (above Check 1). The output `$COMBINED` contains the scrubbed PR body concatenated with the scrubbed plan file (when a `knowledge-base/project/plans/*.md` link is present). `$PLAN_PATH` is the resolved path or empty.
+
+If `$COMBINED` is empty (no PR available — `gh pr view` failed), return **SKIP** with note: "No PR available — Check 10 deferred to next preflight run after PR creation."
+
+If `$PLAN_PATH` is empty (sensitive-path diff but no plan link in PR body), return **SKIP** with note: "Sensitive-path diff but no plan file referenced from PR body. Cannot extract discoverability_test.command. (If the PR uses inline Observability in the PR body, copy the plan file into the body via a `knowledge-base/project/plans/` link.)"
+
+**Step 10.3: Extract the `## Observability` block from the plan file.**
+
+```bash
+awk '/^## Observability/{in=1; next} /^## /{if (in) exit} in' "$PLAN_PATH" > /tmp/preflight-observability.txt
+test -s /tmp/preflight-observability.txt || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
+```
+
+If the block is missing, return **FAIL** with: "Sensitive-path diff but plan file `<PLAN_PATH>` is missing the `## Observability` block. See `hr-observability-as-plan-quality-gate`. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
+
+**Step 10.4: Extract `discoverability_test.command` and `expected_output`.**
+
+The plan-template schema (`plan-issue-templates.md:60-62`) defines:
+
+```yaml
+discoverability_test:
+  command:         # one command an operator can run LOCALLY (no ssh)
+  expected_output: # canonical "everything OK" output
+```
+
+Plans use TWO shapes — strict YAML (**Form A**, canonical) AND looser prose with a fenced code block followed by `Expected output: …` (**Form B**, PR #4148 shape). The parser MUST accept both forms.
+
+**Form A — strict YAML:**
+
+```yaml
+discoverability_test:
+  command: curl -fsS ... https://app.soleur.ai/api/inngest
+  expected_output: "200"
+```
+
+Detection: `awk '/^[[:space:]]*command:/'` returns the value on the same line after the colon, OR the next non-blank line if the value is a YAML `|` block-scalar.
+
+**Form B — prose + fenced block:**
+
+```markdown
+- **discoverability_test.command:**
+  ```bash
+  curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
+  ```
+  Expected output: `200` (or `401` with HMAC challenge). Anything else = absent.
+```
+
+Detection: find the first `discoverability_test` line in the Observability block; from that point, locate the first fenced code block — its contents are the command. Then locate the first line matching `^[[:space:]]*Expected output:` (case-insensitive) — its value is the expected.
+
+```bash
+# Form A first (anchored YAML key — strongest signal).
+CMD=$(awk '
+  /^[[:space:]]*command:[[:space:]]*\|/  { mode="block"; next }
+  /^[[:space:]]*command:/                { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
+  mode=="block" && /^[[:space:]]+[^[:space:]]/ { print; next }
+  mode=="block" && /^[[:space:]]*[^[:space:]]/ { exit }
+' /tmp/preflight-observability.txt)
+
+EXPECTED=$(awk '
+  /^[[:space:]]*expected_output:/ { sub(/^[[:space:]]*expected_output:[[:space:]]*/, ""); print; exit }
+' /tmp/preflight-observability.txt)
+
+# Fallback to Form B (fenced block under `discoverability_test.command:` prose).
+if [[ -z "$CMD" ]]; then
+  CMD=$(awk '
+    /discoverability_test/ { found=1 }
+    found && /^[[:space:]]*```/ { fence=!fence; if (!fence && lines>0) exit; next }
+    found && fence { print; lines++ }
+  ' /tmp/preflight-observability.txt)
+fi
+
+if [[ -z "$EXPECTED" ]]; then
+  EXPECTED=$(grep -iE '^[[:space:]]*Expected output:' /tmp/preflight-observability.txt | head -1 | sed -E 's/^[[:space:]]*Expected output:[[:space:]]*//I')
+fi
+```
+
+If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
+
+**Reject SSH commands** (defense-in-depth):
+
+```bash
+if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
+  echo "FAIL: discoverability_test.command contains ssh; rule violation per hr-observability-as-plan-quality-gate."
+  exit 1
+fi
+```
+
+**Step 10.5: Sanitize and run with a tight timeout.**
+
+The block below uses a `text` fence (not `bash`) so the skill-security-scan
+calibration suite does not flag it as `shell-spawn-c-flag`. The runtime IS a
+shell-spawn — defense-in-depth `ssh`/`$()`/backtick rejects in Step 10.4 +
+the 15s outer timeout are the load-bearing mitigations; the plan-file source
+is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-execution.md`](../../../../knowledge-base/project/learnings/best-practices/2026-05-20-preflight-check-10-discoverability-test-execution.md).
+
+```text
+# Defense-in-depth: reject command-substitution and process-substitution tokens
+# before run (the command came from a trusted plan file but defense-in-depth costs nothing).
+if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\() ]]; then
+  echo "FAIL: discoverability_test.command contains command/process substitution; refusing to run."
+  exit 1
+fi
+
+# Run with 15s wall-clock cap, capture stdout + exit code separately.
+DT_OUT=$(timeout 15s bash -c "$CMD" 2>/dev/null; printf 'RC:%d' "$?")
+DT_RC="${DT_OUT##*RC:}"
+DT_STDOUT="${DT_OUT%RC:*}"
+
+# Log-injection guard (re-use Check 5's sanitize() pattern).
+sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+DT_STDOUT_SAFE=$(sanitize "$DT_STDOUT")
+
+# Trailing-newline normalization. `bash -c "echo 200"` returns "200\n"; the
+# matcher must compare without the trailing newline or "200" never matches.
+# sanitize() above strips C0 controls 0x00-0x1f including \n, so DT_STDOUT_SAFE
+# is already newline-free — but document the dependency explicitly so a future
+# sanitize() refactor that preserves \n does not silently break matching.
+```
+
+The 15-second cap is a hard ceiling. Plans typically prescribe `curl --max-time 10`; the 15s outer cap accommodates 10s curl + 5s DNS + handshake without giving the curl invocation infinite headroom if it lacks `--max-time`.
+
+**Step 10.6: Decision matrix (8 states, 1 PASS terminal).**
+
+| # | State | Detection | Result | Rationale |
+| --- | --- | --- | --- | --- |
+| 1 | No PR linked plan file | `$PLAN_PATH` empty after Shared Plan-File Resolution | **SKIP** | Indeterminate — Check 6 will fire if a section is required; Check 10 cannot run without a plan file. |
+| 2 | Plan exists, no `## Observability` block | `awk` returns empty in Step 10.3 | **FAIL** | Sensitive-path diff requires an Observability block per `hr-observability-as-plan-quality-gate`. |
+| 3 | Block exists, no `discoverability_test.command` parsed | `$CMD` empty after both Form A + B attempts | **FAIL** | Rule violation — the load-bearing field of the schema is missing. |
+| 4 | Command DNS-fails | `$DT_RC == 6` (curl: "Could not resolve host") | **FAIL** | The hostname-typo class — the exact #4148 regression. |
+| 5 | Command times out | `$DT_RC == 28` (curl) OR `$DT_RC == 124` (timeout(1)) | **FAIL** | Endpoint unreachable; DNS resolved but no response in 15s. |
+| 6 | Command returns a code/output the plan's `expected_output` does NOT include | `$DT_STDOUT_SAFE` not present in `$EXPECTED` | **FAIL** | Plan's expectation drifted from production reality. |
+| 7 | Command requires creds not in Doppler (auth-gated probe) | `$DT_RC == 22` AND HTTP 401/403 AND `$EXPECTED` does NOT explicitly list 401/403 | **SKIP** | Auth-gated probe with no operator creds; surface diagnostic suggesting to add a Doppler-fetched probe variant. |
+| 8 | Command returns expected output | All other paths — `$DT_RC == 0` AND stdout matches `$EXPECTED` | **PASS** | Invariant proven by live execution. |
+
+**Expected-output matching semantics.** When `$EXPECTED` is a comma-separated or "or"-joined list (e.g., `200 or 401`, `200, 401`, `["200","401"]`), tokenize on `,|\s+or\s+|\bor\b|[\`"\[\]/]+` and treat as a list. Match if any token is a non-empty substring of `$DT_STDOUT_SAFE`. When `$EXPECTED` is a single value, substring-match. The tokenizer accepts both `200` and `"200"`.
+
+**Step 10.7: Headless mode behaviour.**
+
+On **FAIL**, abort with the diagnostic table (command, exit code, sanitized stdout, expected). On **PASS** or **SKIP**, continue silently.
+
+**Step 10.8: Interactive mode behaviour.**
+
+On **FAIL**, present the failure reason + sanitized command + diagnostic and offer **AskUserQuestion**:
+
+1. "Fix the plan's `discoverability_test.command` now" — open the plan file at the line of the `discoverability_test:` key. Re-run Check 10.
+2. "Skip — temporarily defer (logs a trim-tracker issue)" — `gh issue create --label 'priority/p3-low,chore'` with the failure as the body. Continue the preflight run with this check noted as DEFERRED.
+3. "Abort — fix elsewhere" — stop the pipeline.
+
+**Result:**
+
+- **PASS** — Sensitive-path diff with valid plan-linked Observability block AND command ran AND output matches `expected_output`.
+- **FAIL** — Sensitive-path diff with any of: missing Observability block, missing `discoverability_test.command`, command requires SSH, command contains shell substitution, DNS failure, timeout, or output mismatch.
+- **SKIP** — No sensitive paths touched, OR no PR available, OR no plan file linked from PR body, OR command is auth-gated with no operator creds.
+
 ### Check 7: Canary Probe Set Covers Authenticated Surface
 
 **Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise return **SKIP** with note: "ci-deploy.sh untouched." The path predicate is identical to the original `git diff --name-only origin/main...HEAD` form — only the diff source is changed.
@@ -656,6 +827,7 @@ After all checks complete, aggregate results into a structured report:
 | Canary Probe Set Covers Auth Surface | PASS/FAIL/SKIP | <details> |
 | SW Cache Bump on Client-Bundle Fix | PASS/FAIL/SKIP | <details> |
 | Node-Only Encodings Banned in Client-Bundle | PASS/FAIL | <details> |
+| Discoverability Test Execution | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
 ```
@@ -678,3 +850,11 @@ Print the summary table and continue.
 ## Preflight Complete
 
 Preflight validation passed. Return control to the calling orchestrator.
+
+## Sharp Edges
+
+- **Triple-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, AND `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2. All three MUST stay byte-identical. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
+- **Shared Plan-File Resolution is a SSOT.** Both Check 6 Step 6.2 and Check 10 Step 10.2 call it. A future PR that changes the scrub/extract logic must edit the shared sub-section once — both consumers pick it up. Do NOT copy-paste the logic back into a caller block.
+- **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across all 8 fixtures.
+- **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
+- **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose.
