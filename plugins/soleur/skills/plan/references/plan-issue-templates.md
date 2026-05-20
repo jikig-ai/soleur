@@ -33,6 +33,35 @@ date: YYYY-MM-DD
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
+## Observability
+
+(Required when the plan touches production code/infra. Pure-docs plans skip — see plan Phase 2.9. No field may contain `TODO`, `TBD`, `placeholder`, `manual operator check`, or any `ssh ` command.)
+
+```yaml
+liveness_signal:
+  what:            # e.g. "Better Stack heartbeat / Sentry cron monitor / Docker HEALTHCHECK"
+  cadence:         # e.g. "60s / daily / per-run"
+  alert_target:    # e.g. "operator email / Sentry issue / Discord ops channel"
+  configured_in:   # path to TF/yaml/code where this is set up (e.g. apps/web-platform/infra/inngest.tf:108)
+
+error_reporting:
+  destination:     # Sentry project + DSN env var (e.g. "Sentry web-platform via SENTRY_DSN")
+  fail_loud:       # what HTTP / log line tells the operator something is wrong
+
+failure_modes:
+  - mode:          # e.g. "Inngest queue depth > 100 SCHEDULED runs"
+    detection:     # how it is noticed (NOT operator-eyeball)
+    alert_route:   # who gets paged
+
+logs:
+  where:           # journalctl unit / docker logs / external aggregator path
+  retention:       # how long until lost
+
+discoverability_test:
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  expected_output: # canonical "everything OK" output
+```
+
 ## Acceptance Criteria
 
 - [ ] Core requirement 1
@@ -131,6 +160,35 @@ List ALL code paths that touch the security surface being fixed:
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
+
+## Observability
+
+(Required when the plan touches production code/infra. Pure-docs plans skip — see plan Phase 2.9. No field may contain `TODO`, `TBD`, `placeholder`, `manual operator check`, or any `ssh ` command.)
+
+```yaml
+liveness_signal:
+  what:            # e.g. "Better Stack heartbeat / Sentry cron monitor / Docker HEALTHCHECK"
+  cadence:         # e.g. "60s / daily / per-run"
+  alert_target:    # e.g. "operator email / Sentry issue / Discord ops channel"
+  configured_in:   # path to TF/yaml/code where this is set up
+
+error_reporting:
+  destination:     # Sentry project + DSN env var
+  fail_loud:       # what HTTP / log line tells the operator something is wrong
+
+failure_modes:
+  - mode:          # e.g. "queue depth > 100"
+    detection:     # how it is noticed (NOT operator-eyeball)
+    alert_route:   # who gets paged
+
+logs:
+  where:           # journalctl unit / docker logs / external aggregator path
+  retention:       # how long until lost
+
+discoverability_test:
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  expected_output: # canonical "everything OK" output
+```
 
 ## Acceptance Criteria
 
@@ -244,6 +302,35 @@ date: YYYY-MM-DD
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
 If the threshold is `single-user incident` or `aggregate pattern`, list each user-facing artifact + exposure vector pair on its own bullet so `user-impact-reviewer` can cross-check them against the diff.
+
+## Observability
+
+(Required when the plan touches production code/infra. Pure-docs plans skip — see plan Phase 2.9. No field may contain `TODO`, `TBD`, `placeholder`, `manual operator check`, or any `ssh ` command.)
+
+```yaml
+liveness_signal:
+  what:            # e.g. "Better Stack heartbeat / Sentry cron monitor / Docker HEALTHCHECK"
+  cadence:         # e.g. "60s / daily / per-run"
+  alert_target:    # e.g. "operator email / Sentry issue / Discord ops channel"
+  configured_in:   # path to TF/yaml/code where this is set up
+
+error_reporting:
+  destination:     # Sentry project + DSN env var
+  fail_loud:       # what HTTP / log line tells the operator something is wrong
+
+failure_modes:
+  - mode:          # e.g. "queue depth > 100"
+    detection:     # how it is noticed (NOT operator-eyeball)
+    alert_route:   # who gets paged
+
+logs:
+  where:           # journalctl unit / docker logs / external aggregator path
+  retention:       # how long until lost
+
+discoverability_test:
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  expected_output: # canonical "everything OK" output
+```
 
 ## Acceptance Criteria
 

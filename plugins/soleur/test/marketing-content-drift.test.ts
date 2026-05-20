@@ -59,6 +59,9 @@ let buildAttempted = false;
 let buildOk = false;
 let buildStderr = "";
 
+// 30_000 ms: full Eleventy build measures 5-10s cold; default 5s bun hook
+// timeout flakes. NOTE: bun reports this as `beforeEach/afterEach hook
+// timed out` even for `beforeAll` — grep both when debugging.
 beforeAll(async () => {
   // Build the Eleventy site once for tests 3-5. Argv array (no shell metacharacters).
   buildAttempted = true;
@@ -74,7 +77,7 @@ beforeAll(async () => {
   } else {
     buildOk = true;
   }
-});
+}, 30_000);
 
 describe("marketing-content-drift", () => {
   test("Test 1: prose uses soft floors, not stale exact counts", () => {

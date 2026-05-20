@@ -20,6 +20,21 @@ export default defineConfig({
   },
   test: {
     exclude: ["e2e/**", "node_modules/**"],
+    // #4128 — bump vitest defaults (5000ms test / 10000ms hook). Observed
+    // slow-first-test runtimes under full-suite contention (473 files, 5003
+    // tests, single ubuntu-latest runner — local `npm test` is unsharded):
+    //   chat-page#sessionConfirmed=false           2837ms isolated → 6-14s contended
+    //   chat-surface-resume-classifying#T5a        4031ms isolated → 5-12s contended
+    //   chat-surface-sidebar#dashboard-header      4256ms isolated → 5-11s contended
+    //   kb-chat-sidebar#close-button-aria-label    3901ms isolated → 5-13s contended
+    //   pdfjs-dist `beforeAll` pre-warm (PR #4097 Fix 3) → 8-15s contended
+    // 16_000ms is one tick above vitest's browser-env default (15_000) —
+    // happy-dom component tests do browser-shaped work without browser-env
+    // defaults applying. 20_000ms hookTimeout = 2× default, gives pdfjs
+    // pre-warm + Supabase-fixture setup headroom.
+    // Inherits to both `unit` and `component` projects via `extends: true`.
+    testTimeout: 16_000,
+    hookTimeout: 20_000,
     projects: [
       {
         extends: true,

@@ -17,6 +17,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-tagged-build-workflow-needs-initial-tag-push] → core
 - [id: hr-when-triaging-a-batch-of-issues-never] → core
 - [id: hr-all-infrastructure-provisioning-servers] → core
+- [id: hr-fresh-host-provisioning-reachable-from-terraform-apply] → core
 - [id: hr-autonomous-loop-skill-api-budget-disclosure] → core
 - [id: hr-every-new-terraform-root-must-include-an] → core
 - [id: hr-new-skills-agents-or-user-facing] → core
@@ -37,19 +38,18 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-type-widening-cross-consumer-grep] → core
 - [id: hr-write-boundary-sentinel-sweep-all-write-sites] → core
 - [id: hr-no-dashboard-eyeball-pull-data-yourself] → core
+- [id: hr-observability-as-plan-quality-gate] → core
 
 ## Workflow Gates
 
-- [id: wg-when-moving-github-issues-between] → core
 - [id: wg-every-feature-listed-in-a-roadmap-phase] → core
 - [id: wg-when-closing-a-phase-milestone-update] → core
-- [id: wg-when-fixing-a-workflow-gates-detection] → core
+- [id: wg-when-fixing-a-workflow-gates-detection] → rest
 - [id: wg-zero-agents-until-user-confirms] → core
-- [id: wg-before-every-commit-run-compound-skill] → core
 - [id: wg-never-bump-version-files-in-feature] → rest
 - [id: wg-after-marking-a-pr-ready-run-gh-pr-merge] → core
 - [id: wg-ship-push-before-merge] → rest
-- [id: wg-after-a-pr-merges-to-main-verify-all] → core
+- [id: wg-after-a-pr-merges-to-main-verify-all] → rest
 - [id: wg-at-session-start-run-bash-plugins-soleur] → core
 - [id: wg-at-session-start-after-cleanup-merged] → core
 - [id: wg-when-a-test-runner-crashes-segfault-oom] → rest
@@ -60,8 +60,9 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-every-session-error-must-produce-either] → rest
 - [id: wg-use-closes-n-in-pr-body-not-title-to] → rest
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
-- [id: wg-plan-prescribed-skills-must-run-inline] → core
-- [id: wg-end-of-work-emit-resume-prompt] → core
+- [id: wg-plan-prescribed-skills-must-run-inline] → rest
+- [id: wg-end-of-work-emit-resume-prompt] → rest
+- [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
 
 ## Code Quality
 

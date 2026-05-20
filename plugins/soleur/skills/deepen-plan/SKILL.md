@@ -364,6 +364,56 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 **Why:** The framing layer (brainstorm Phase 0.1) and the template layer (plan Phase 2.6) can both be skipped or filled with placeholders. This phase is the load-bearing pre-implementation gate that catches both — a plan with an empty section cannot pass deepen-plan, which means it cannot proceed to `/work`. Combined with preflight Check 6 (ship-time gate) and the `user-impact-reviewer` conditional agent (review-time gate), this closes the workflow loop introduced for #2887.
 
+### 4.7. Observability Gate Verification (Always)
+
+Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan whose Files-to-Edit touches production code/infra (per plan Phase 2.9 trigger set) MUST contain a `## Observability` section with the 5-field schema. Symmetric to Phase 4.6 above; this gate is what makes plan Phase 2.9 load-bearing.
+
+**Step 1 — Detect trigger.** Inspect the plan's `## Files to Edit` (or equivalent) list. If every path matches one of:
+
+- `^knowledge-base/`
+- `^docs/`
+- `^README\.md$`
+- `^CHANGELOG\.md$`
+- `\.md$` outside `plugins/*/skills/` and `apps/*/`
+
+then the plan is pure-docs — skip silently (no further checks).
+
+Otherwise the gate applies; proceed to Step 2.
+
+**Step 2 — Locate the section.** Grep the target plan file:
+
+```bash
+grep -q '^## Observability' <plan-file>
+```
+
+If absent, HALT with:
+
+> Error: Plan touches production code/infra but is missing `## Observability` section.
+> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the schema.
+> Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan that ships production
+> code or infrastructure must declare its observability surface before deepen-plan proceeds.
+
+**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required top-level fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if ANY of:
+
+- **Field key absent** — `grep -qE "^\s*<field>:" <body>` returns no match.
+- **Field value is a placeholder** — the field-value line (case-insensitive) matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\s*$` (anchored — distinguish "field is exactly this string" from "prose contains this string"). Also reject `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\b` — trailing whitespace + extra text still counts as a placeholder.
+- **Field is empty / has no children** — for fields that template as a YAML block (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), the line immediately following `<field>:` MUST be either a continuation (indented sub-field starting with whitespace + non-`#` content) OR an inline scalar value on the same line as the key. A bare `<field>:` followed by a blank line or another top-level key fails the gate. This is the empty-key case (#4116 review). Detect with: locate the `<field>:` line; if `awk "NR==<n>+1 {print}"` returns a blank line OR a line matching `^[^[:space:]]`, reject.
+- **`discoverability_test.command` requires SSH** — extract the `command:` sub-field's value and reject if it matches `(^|\s|/)ssh(\s|$)` (word-boundary `ssh` followed by whitespace, end-of-string, or a path-style `/usr/bin/ssh`). Distinguishes the verb from `ssh-free` / `xssh` / `ssh.md` prose.
+
+On rejection, HALT with a message naming the specific field and its failure mode (e.g., `"Phase 4.7 reject: liveness_signal is empty (no sub-fields and no inline value)"`).
+
+**Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-observability-as-plan-quality-gate applied \
+  "Every plan touching production code/infra MUST declar"
+```
+
+**Step 5 — Pass-through.** If the section is present, all 5 fields exist with non-placeholder values, no field is empty, and `discoverability_test.command` does not require SSH, deepen-plan proceeds normally. No telemetry on pass.
+
+**Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours because the substrate (introduced in #4085) declared no observability surface and the operator never had a non-SSH way to verify the heartbeat. Combined with plan Phase 2.9 (template-time gate), this phase is the load-bearing pre-implementation gate. The empty-key reject was added per the PR #4123 review — the most common drift mode is `liveness_signal:` with no children, which earlier regex-only forms allowed through.
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>
@@ -567,6 +617,7 @@ Before finalizing:
 - [ ] When a plan migrates a CI job to a vendor-supplied container image (`mcr.microsoft.com/playwright:*`, `cypress/included:*`, language-specific images, etc.), enumerate every existing step's `uses:` action AND every `run:` shell-out dependency, then `docker run <image> which <tool>` each one empirically. Vendor base images are scoped to their primary tool (Playwright Jammy = Node + Chromium; Cypress = Node + Cypress browsers); generic CLI tooling (`unzip`, `git`, `jq`, `make`, `gcc`, `tar`, `gzip`, `xz-utils`) may be absent. Failure mode is the action failing fast at setup — e.g., `oven-sh/setup-bun` shelling out to `unzip` and emitting `error: unzip is required to install bun` (open issue oven-sh/setup-bun#55). Plan-time mitigation: add a one-line `apt-get update -qq && apt-get install -y -qq --no-install-recommends <pkgs>` step BEFORE the dependent action, AND document why in the workflow comment. **Why:** PR #3664 — `setup-bun` inside `mcr.microsoft.com/playwright:v1.58.2-jammy` failed because unzip is absent; deepen-plan caught it empirically pre-push. See `knowledge-base/project/learnings/best-practices/2026-05-12-ci-playwright-container-replaces-cache-and-install-deps.md` "Follow-up: when the consumer uses bun instead of npm".
 - [ ] When a plan binds an Acceptance Criterion to a specific shell primitive whose behavior depends on **process-group / session / signal-defer semantics** (`kill 0` / `kill -- -$$` / `set -m` / `setsid` / signal traps + foreground commands), write a 10-line `parent.sh`/`child.sh` repro and run it before committing the AC to text. Man-page and "verified in tooling" lookups frequently miss the runtime context that matters: e.g., `set -m` puts CHILDREN in new PGIDs but does NOT move bash itself out of its parent's PGID, so `kill -TERM 0` from a fork-exec'd child reaches the parent. Plan v1 of #3704 prescribed `kill -TERM 0` on this incorrect assumption; the repro at /work confirmed the bug pre-merge. Same class for `wait` vs foreground-defer: bash dispatches TERM traps only between commands or in `wait $!`, never during a hung `docker pull`. **Why:** PR #3704 — see `knowledge-base/project/learnings/2026-05-12-pgid-inheritance-and-bash-trap-defer-on-foreground-commands.md`.
 - [ ] When a plan verifies a multi-clause SQL predicate (`IF A AND B THEN ... flag := true; END IF`, `CASE WHEN A AND B`, `OR ... AND ...` n-ary, idempotent-update guards) by citing line numbers, the plan body MUST literally restate EVERY operand of the predicate alongside the line citation — never paraphrase a predicate by its most-discussed clause alone. A predicate of shape `IF v_paused_at IS NULL AND v_total > v_cap THEN v_flag := true` requires restating both `v_paused_at IS NULL` (when true, when false, when it flips) AND `v_total > v_cap` AND the conjunction (`v_flag` true iff BOTH clauses fire, not either alone). Same rule for migration triggers, plpgsql functions, and any boolean predicate with ≥2 operands. **Why:** PR #3987 — deepen-pass on migration `046_runtime_cost_state.sql:227` extracted `v_total > v_cap` but missed the `v_paused_at IS NULL` co-condition; plan documented "calls 6-10 return kill_tripped=true" while the actual invariant (stronger atomicity: exactly one call wins the flip) was discovered only at /work time when live-DB test failed. Same defect class as `2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md` (TS union enumeration) extended to SQL boolean predicates. See `knowledge-base/project/learnings/2026-05-18-premise-validation-and-multi-clause-predicate-reading.md`.
+- [ ] Every grep-based Acceptance Criterion whose scope contains the plan or its paired `tasks.md` includes `--exclude-dir=<spec-dir>` and `--exclude=<plan-basename>.md` flags. Plans that quote the search pattern in prose ("rename `X` to `Y`", "no remaining `X` references") cause whole-scope greps to match the plan itself post-edit. AND: every backticked identifier the plan cites with a file:line attribution (Terraform variable, function, schema column, env-var, RPC name) is re-read from the declaration line — not copied from the issue body — and the plan quotes the declaration form (e.g., `variable "app_domain" { ... }`), not the default value alone. Treat upstream identifiers (issue prose, sibling PR text) as hypotheses, not facts. **Why:** PR #4160 — plan AC1 claimed `grep -rE 'web-platform.soleur.ai' knowledge-base/` returns 0 lines but the plan + tasks.md retained the literal string in prose; same plan cited the Terraform variable as `app_subdomain` 4x (actual: `app_domain` at `variables.tf:85-89`). Both caught at work + review. See `knowledge-base/project/learnings/best-practices/2026-05-20-plan-acs-self-grep-scope-and-identifier-source-verification.md`.
 - [ ] Enhancement summary accurately reflects changes
 
 ## Post-Enhancement Options

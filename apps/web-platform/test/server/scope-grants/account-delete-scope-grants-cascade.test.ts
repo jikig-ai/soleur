@@ -6,15 +6,18 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 //   The destructive cascade calls these RPCs in this fixed order BEFORE
 //   auth.admin.deleteUser fires:
 //     1. anonymise_dsar_export_audit_pii  (non-fatal — logs and continues)
-//     2. anonymise_scope_grants           (FATAL — aborts on failure;     PR-G NEW)
-//     3. anonymise_tc_acceptances         (FATAL — aborts on failure)
-//     4. auth.admin.deleteUser            (FATAL — aborts on failure)
+//     2. anonymise_action_sends           (FATAL — aborts on failure;     PR-H #4077)
+//     3. anonymise_scope_grants           (FATAL — aborts on failure;     PR-G NEW)
+//     4. anonymise_tc_acceptances         (FATAL — aborts on failure)
+//     5. auth.admin.deleteUser            (FATAL — aborts on failure)
 //
-//   The ordering is load-bearing: FKs on public.users(id) for both
-//   scope_grants and tc_acceptances are ON DELETE RESTRICT, so skipping
-//   either anonymise step would leave the auth.admin.deleteUser call
-//   unable to cascade. anonymise_scope_grants MUST run BEFORE
-//   anonymise_tc_acceptances per plan rev-2 to match FK order.
+//   The ordering is load-bearing: FKs on public.users(id) for action_sends,
+//   scope_grants, and tc_acceptances are ON DELETE RESTRICT, so skipping
+//   any anonymise step would leave the auth.admin.deleteUser call unable
+//   to cascade. anonymise_action_sends MUST run BEFORE anonymise_scope_grants
+//   (mig 051 action_sends.grant_id → scope_grants(id) FK); scope_grants
+//   MUST run BEFORE anonymise_tc_acceptances per plan rev-2 to match FK
+//   order.
 //
 // Test cases (all run against a vi.mock'd service client — no DB):
 //   1. Happy path: all RPCs OK + auth-delete OK → success.
@@ -137,11 +140,15 @@ describe("deleteAccount cascade ordering (PR-G AC5)", () => {
 
     expect(result).toEqual({ success: true });
 
-    // All three anonymise RPCs were called exactly once.
+    // All four anonymise RPCs were called exactly once.
     const rpcNames = mockRpc.mock.calls.map((c) => c[0] as string);
     expect(rpcNames).toContain("anonymise_dsar_export_audit_pii");
+    expect(rpcNames).toContain("anonymise_action_sends");
     expect(rpcNames).toContain("anonymise_scope_grants");
     expect(rpcNames).toContain("anonymise_tc_acceptances");
+    expect(
+      rpcNames.filter((n) => n === "anonymise_action_sends").length,
+    ).toBe(1);
     expect(
       rpcNames.filter((n) => n === "anonymise_scope_grants").length,
     ).toBe(1);
@@ -154,12 +161,15 @@ describe("deleteAccount cascade ordering (PR-G AC5)", () => {
     expect(mockDeleteUser).toHaveBeenCalledWith(USER_ID);
 
     // Ordering invariants (the load-bearing assertion for AC5):
+    const idxActionSends = callOrder.indexOf("anonymise_action_sends");
     const idxScope = callOrder.indexOf("anonymise_scope_grants");
     const idxTc = callOrder.indexOf("anonymise_tc_acceptances");
     const idxAuth = callOrder.indexOf("auth.admin.deleteUser");
+    expect(idxActionSends).toBeGreaterThanOrEqual(0);
     expect(idxScope).toBeGreaterThanOrEqual(0);
     expect(idxTc).toBeGreaterThanOrEqual(0);
     expect(idxAuth).toBeGreaterThanOrEqual(0);
+    expect(idxActionSends).toBeLessThan(idxScope);
     expect(idxScope).toBeLessThan(idxTc);
     expect(idxTc).toBeLessThan(idxAuth);
 

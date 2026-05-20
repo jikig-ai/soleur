@@ -98,3 +98,4 @@
 /apps/web-platform/infra/                               @deruelle
 /.github/workflows/                                     @deruelle
 /.github/workflows/apply-sentry-infra.yml               @deruelle
+/.github/workflows/apply-web-platform-infra.yml         @deruelle
