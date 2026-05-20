@@ -44,8 +44,7 @@ The fix is in-band (provider-mint, no operator-mint) per `hr-tf-variable-no-oper
 
 **If this leaks, the user's [data / workflow / money] is exposed via:** A leaked `DOPPLER_TOKEN_WRITE` grants write to `prd_terraform` (Cloudflare, Hetzner, GitHub-App, Inngest, Resend credentials, plus `var.admin_ips`). A malicious overwrite of `admin_ips` would broaden SSH allowlist; a malicious overwrite of `CI_SSH_ACCESS_TOKEN_*` would not be exploitable without the corresponding CF Access service-token issuance (the actual rotation is in Cloudflare's hands). Net incremental write surface vs. the existing `DOPPLER_TOKEN_TF` workplace token already in `prd_terraform`: zero — `DOPPLER_TOKEN_TF` (the provider-auth token consumed by the `doppler` provider) already has full write to `prd_terraform`. The new token narrows blast radius (config-scoped, not workplace-scope) and lives only in `secrets.DOPPLER_TOKEN_WRITE`.
 
-**Brand-survival threshold:** none — infrastructure plumbing, operator-only observability, no first-party user data on the path.
-
+- **Brand-survival threshold:** none — infrastructure plumbing, operator-only observability, no first-party user data on the path.
 - `threshold: none, reason:` diff matches the canonical sensitive-path regex (touches `.github/workflows/apply-web-platform-infra.yml` and `apps/web-platform/infra/`), but the net incremental write surface vs. the existing `DOPPLER_TOKEN_TF` workplace-scope provider-auth token is zero or negative — the new `DOPPLER_TOKEN_WRITE` is config-scoped to `prd_terraform` only and lives in a single repo secret, while the existing `DOPPLER_TOKEN_TF` already has full write to every config including `prd_terraform`. No user data, no first-party PII path, no payment surface; failure mode is operator-observable workflow failure with the local-fallback script as immediate recovery.
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -418,11 +417,8 @@ logs:
   retention: "90 days (GitHub default; sufficient for post-mortem of a rotation event)"
 
 discoverability_test:
-  command: |
-    gh run list --workflow=apply-web-platform-infra.yml --limit 5 \
-      --json conclusion,createdAt,databaseId,event \
-      --jq '.[] | select(.event == "push" or .event == "workflow_dispatch")'
-  expected_output: "Most recent run's .conclusion == 'success'; for the bootstrap apply, .conclusion is also 'success' (the precondition guard converts the empty-secret case to a warning, not an error)."
+  command: gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml --jq '.state'
+  expected_output: "active"
 ```
 
 ## Sharp Edges
