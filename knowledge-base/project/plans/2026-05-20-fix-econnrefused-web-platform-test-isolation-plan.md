@@ -10,7 +10,67 @@ branch: feat-one-shot-econnrefused-web-platform-4155
 
 # fix(test): close the happy-dom ECONNREFUSED-on-127.0.0.1:3000 test-isolation gap
 
-Close the residual `ECONNREFUSED 127.0.0.1:3000` flake class in `apps/web-platform`'s
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** Hypotheses (H1 empirical confirmation), Implementation Phases
+(Phase 0 hook-composition empirical verification), Risks (vi.spyOn / vi.stubGlobal
+edge cases), Acceptance Criteria (project-scoping clarification).
+**Research method:** direct codebase inspection + 1 empirical vitest hook-composition
+probe (Node 22.x + vitest 3.2.4) + read of `node_modules/happy-dom@20.8.9` WebSocket
+source. No external research agents spawned (scope: 1 file edit + 1 drift-guard test;
+strong local signals; established jest/vitest pattern from the broader ecosystem).
+
+### Key Improvements
+
+1. **Empirical verification of vitest setup-file hook ordering.** Ran an isolated
+   probe (vitest 3.2.4, the version installed at `apps/web-platform/package.json:77`)
+   confirming `setupFiles` `beforeEach` runs BEFORE file-level `beforeEach` runs
+   BEFORE `describe`-level `beforeEach`. Order: `["setup-file", "file-level",
+   "describe-level"]`. This is the load-bearing invariant for the blockade design.
+   Probe code attached in the Research Insights section so a future operator can
+   re-run it on a vitest minor upgrade.
+2. **Project-scope clarification.** `apps/web-platform/test/setup-dom.ts` is loaded
+   ONLY by the `component` project (`environment: 'happy-dom'`, `include:
+   ['test/**/*.test.tsx']`). The `unit` project (`environment: 'node'`,
+   `include: ['test/**/*.test.ts', 'lib/**/*.test.ts']`) does NOT load it. The
+   blockade scope is correct: the flake class only exists in happy-dom (which
+   provides real `WebSocket` + real `fetch`); node-env tests don't have that
+   exposure. Recorded in AC5.
+3. **vi.spyOn + vi.stubGlobal interaction verified safe.** Five test files use
+   `vi.spyOn(globalThis, "fetch")` (`useWebSocket-abort.test.tsx`,
+   `ws-client-resume-history.test.tsx`, `file-tree-rename.test.tsx`, plus 2
+   `server/health-supabase.test.ts` callers that live under `test/server/` →
+   node-env, not affected). Three test files use `vi.stubGlobal("fetch",
+   mockFetch)` at module-init time (`api-analytics-track.test.ts` — node-env,
+   safe; `cf-cache-purge.test.ts` — node-env, safe; `token-validators.test.ts`
+   — node-env, safe). One file (`connect-repo-page.test.tsx`) uses
+   `vi.stubGlobal` inside `beforeEach` — composition order ensures it overwrites
+   the blockade. New risk subsection added documenting both interactions.
+4. **Quantified per-file override coverage.** 25 `.test.tsx` files assign
+   `global.fetch = vi.fn(...)` or `globalThis.fetch = vi.fn(...)` in
+   `beforeEach`/`it()` bodies (counted via `git grep -l 'global\.fetch =\|globalThis\.fetch ='
+   apps/web-platform/test/ | grep '\.tsx$' | wc -l`). 33 files use
+   `vi.mock("@/lib/ws-client", ...)`. The blockade catches a small residual set
+   of components that hit unmocked fetch/WS surfaces transitively (e.g., a
+   `useEffect` firing `fetch("/api/admin/check")` in an indirectly-rendered
+   layout under happy-dom).
+
+### New Considerations Discovered
+
+- **happy-dom WebSocket uses Node `ws` package directly** (verified at
+  `node_modules/happy-dom/lib/web-socket/WebSocket.js:8` and `:67`). It opens a
+  real TCP socket on construction — no mocking layer. This is the canonical real-network
+  exposure that justifies the blockade.
+- **`vi.spyOn(globalThis, "fetch").mockResolvedValue(...)` wraps the CURRENT
+  `globalThis.fetch` value at spy-create time.** With the blockade installed at
+  setup-file `beforeEach`, the spy records `blockedFetch` as the original. After
+  `fetchSpy.mockRestore()` the blockade is restored (harmless — next `beforeEach`
+  reinstalls it). After `vi.restoreAllMocks()` in setup-file `afterAll` and
+  `vi.unstubAllGlobals()` (existing behavior), the `originalFetch` capture from
+  module-init is then re-assigned. Order is correct; no leak.
+
+
 vitest suite (1-in-3 frequency post-#4128). Root cause: happy-dom's `window` provides a
 real `WebSocket` (delegates to the `ws` npm package, opens a real TCP connection) and a
 real `fetch`; `window.location.host` defaults to `localhost:3000`. Any happy-dom test
@@ -173,8 +233,11 @@ contains($path)) | "#\(.number): \(.title)"'` returned 0 matches. Same for
 - [ ] **AC5 — No false positives in existing suite:** All 5003 tests in the full suite
   still pass after the blockade install — `cd apps/web-platform && doppler run -p soleur
   -c dev -- npm test` exits 0 on every one of the 5 AC4 runs. Per-file `globalThis.WebSocket
-  = MockWebSocket` and `global.fetch = vi.fn(...)` assignments in 50+ existing test
-  files override the blockade stub correctly.
+  = MockWebSocket` and `global.fetch = vi.fn(...)` assignments in 25+ component-project
+  test files override the blockade stub correctly. The blockade ONLY applies to the
+  `component` project (happy-dom env, `.test.tsx`); the `unit` project (node env,
+  `.test.ts`) is unaffected — `setupFiles: ["test/setup-dom.ts"]` is scoped to the
+  `component` project per `vitest.config.ts:55`.
 
 - [ ] **AC6 — `tsc --noEmit` clean:** `cd apps/web-platform && npx tsc --noEmit` →
   0 errors.
@@ -229,22 +292,30 @@ None. Pure test-infra change applied at merge.
   `kb-chat-resume-hydration.test.tsx`. (If a 4th file appears, audit it for compatibility
   with the blockade — it should already work since beforeEach-in-file runs after
   setup-file beforeEach.)
-- [ ] Confirm vitest beforeEach composition order via a 1-test fixture:
+- [ ] Confirm vitest beforeEach composition order — **already empirically verified
+  during deepen-plan** (Node 22.x + vitest 3.2.4, the version pinned at
+  `apps/web-platform/package.json:77` via `"vitest": "^3.1.0"`). Probe:
+
   ```ts
-  // tmp/precondition-beforeeach-order.test.tsx
+  // /tmp/hook-order-probe/test/example.test.ts (DELETE after re-verifying)
+  // setup.ts has `beforeEach(() => { globalThis.order = ["setup-file"]; });`
   import { beforeEach, describe, it, expect } from "vitest";
-  let order: string[] = [];
-  beforeEach(() => { order.push("file-level"); });
+  beforeEach(() => { globalThis.order.push("file-level"); });
   describe("composition", () => {
-    beforeEach(() => { order.push("describe-level"); });
-    it("file before describe before test", () => {
-      expect(order).toEqual(["file-level", "describe-level"]);
+    beforeEach(() => { globalThis.order.push("describe-level"); });
+    it("captures order", () => {
+      expect(globalThis.order).toEqual(["setup-file", "file-level", "describe-level"]);
     });
   });
   ```
-  Setup-file beforeEach is at the same composition level as file-level; the per-file
-  beforeEach in a sibling test file runs AFTER (vitest composes hooks in registration
-  order across the chain). Delete after verifying.
+
+  Empirical output: ✓ 1 passed. Confirmed: setup-file `beforeEach` runs FIRST, then
+  file-level `beforeEach`, then `describe`-level `beforeEach`. The blockade
+  installation at setup-file scope is overridden by any per-file/per-describe
+  reassignment of `globalThis.WebSocket` / `globalThis.fetch`. Re-run this probe
+  in Phase 0 only if `apps/web-platform/package.json:77` has been bumped to a new
+  vitest major; for any patch/minor (`^3.1.0` range), accept the deepen-plan
+  verification as canonical.
 
 ### Phase 1 — RED test (drift guard)
 
@@ -431,6 +502,43 @@ pool), #4128/#4141 (timeout headroom), and #4155 (this fix).
   **Mitigation:** `setup-dom-network-blockade.test.ts` (created in Phase 1) is a
   drift-guard test that reads `setup-dom.ts` source and asserts both blockade tokens
   exist. Mirrors the `setup-dom-leak-guard.test.ts` precedent (PR #2594, #2505).
+
+- **Risk (vi.spyOn interaction):** `vi.spyOn(globalThis, "fetch")` (used by
+  `useWebSocket-abort.test.tsx:84`, `ws-client-resume-history.test.tsx:67`,
+  `file-tree-rename.test.tsx:152,187,209,240,267`) records the current value
+  of `globalThis.fetch` as the "original" at spy-create time. With the blockade
+  installed at setup-file `beforeEach`, the spy records `blockedFetch` as its
+  original.
+  **Mitigation:** This is safe because:
+  (1) `vi.spyOn(...).mockResolvedValue(mock)` replaces the implementation with
+  `mock` immediately — the recorded "original" is what `.mockRestore()` returns
+  to, but `.mockRestore()` is followed by setup-file's `afterAll` which restores
+  `originalFetch` (the pristine happy-dom value captured at module-init).
+  (2) The spy's recorded "original" is never invoked during the test body
+  (`.mockResolvedValue` redirects all calls), so the fact that it points to the
+  fail-loud stub never surfaces.
+  Verified by reading each call site's `.mockResolvedValue(...)` / `.mockReturnValue(...)`
+  pattern — none of them use `mockImplementationOnce(() => originalFetch.call(this, ...))`
+  or similar pass-through, so the blockade is never invoked transitively.
+
+- **Risk (vi.stubGlobal at module-init):** Three test files call
+  `vi.stubGlobal("fetch", mockFetch)` at module top-level
+  (`api-analytics-track.test.ts:36`, `cf-cache-purge.test.ts` (multiple),
+  `token-validators.test.ts:6`).
+  **Mitigation:** ALL THREE are `.test.ts` files routed to the `unit` project
+  (`environment: 'node'`, `include: ['test/**/*.test.ts', 'lib/**/*.test.ts']`)
+  per `vitest.config.ts:39-50`. The `unit` project does NOT load
+  `setupFiles: ["test/setup-dom.ts"]` — that's `component`-project only
+  (`vitest.config.ts:55`). So module-init `vi.stubGlobal` in node-env tests
+  never interacts with the blockade.
+
+- **Risk (vi.stubGlobal in beforeEach, component project):** One test file
+  (`connect-repo-page.test.tsx:101`) calls `vi.stubGlobal("fetch", mockFetch)`
+  inside file-level `beforeEach`.
+  **Mitigation:** Composition order (verified empirically — Enhancement Summary
+  Key Improvement 1): setup-file `beforeEach` runs first → installs blockade;
+  file-level `beforeEach` runs second → `vi.stubGlobal` overwrites blockade
+  with `mockFetch`. Test body sees `mockFetch`. Safe.
 
 ## Domain Review
 
