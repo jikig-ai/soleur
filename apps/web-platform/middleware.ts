@@ -33,12 +33,22 @@ export async function middleware(request: NextRequest) {
     request.headers.get("host"),
   );
   const appHost = new URL(origin).host;
+  // `/internal/github-app-init` POSTs the committed manifest JSON to
+  // GitHub's App-create form (https://github.com/settings/apps/new) per
+  // the manifest-flow design in #4115. Default `form-action 'self'`
+  // CSP-blocks the POST. Narrow per-route extension keeps the
+  // default-deny posture for every other route.
+  const formActionExtra =
+    pathname === "/internal/github-app-init"
+      ? ["https://github.com"]
+      : undefined;
   const cspValue = buildCspHeader({
     nonce,
     isDev: process.env.NODE_ENV === "development",
     supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
     appHost,
     sentryReportUri: process.env.SENTRY_CSP_REPORT_URI,
+    formActionExtra,
   });
 
   // Set nonce and CSP on request headers for Next.js SSR nonce extraction.
