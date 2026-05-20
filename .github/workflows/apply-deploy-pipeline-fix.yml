@@ -59,6 +59,12 @@ permissions:
 env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
+  # cloudflared binary for the CF Tunnel SSH bridge (see #4177).
+  # SHA-256 is computed against the real binary at the pinned version
+  # (NEVER paste a checksum from documentation or AI output per the
+  # 2026-03-21 server-provisioning learning, Session Error #4).
+  CLOUDFLARED_VERSION: "2026.5.0"
+  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 
 jobs:
   preflight:
@@ -164,6 +170,103 @@ jobs:
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false
+
+      - name: Install cloudflared (SHA-pinned)
+        # The runner cannot reach the host on port 22 — the Hetzner firewall
+        # restricts SSH to var.admin_ips (operator/static), and the ~6575
+        # GitHub Actions egress CIDRs cannot be added (Hetzner firewall
+        # rule cap is 100). Bridge SSH through the existing Cloudflare
+        # Tunnel via `cloudflared access tcp` (see #4177, #749 precedent).
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/cloudflared \
+            "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"
+          echo "${CLOUDFLARED_SHA256}  /tmp/cloudflared" | sha256sum -c -
+          sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+          rm /tmp/cloudflared
+          cloudflared --version
+
+      - name: Pull CF Access service-token credentials from Doppler
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null) || {
+            echo "::error::Doppler secret CI_SSH_ACCESS_TOKEN_ID is missing. Run apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh after the first apply that creates the CF Access service token."
+            exit 1
+          }
+          TOKEN_SECRET=$(doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null) || {
+            echo "::error::Doppler secret CI_SSH_ACCESS_TOKEN_SECRET is missing. Run apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh."
+            exit 1
+          }
+          if [[ -z "$TOKEN_ID" || -z "$TOKEN_SECRET" ]]; then
+            echo "::error::CF Access service-token credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$TOKEN_ID"
+          printf '::add-mask::%s\n' "$TOKEN_SECRET"
+          printf 'TUNNEL_SERVICE_TOKEN_ID=%s\n' "$TOKEN_ID" >> "$GITHUB_ENV"
+          printf 'TUNNEL_SERVICE_TOKEN_SECRET=%s\n' "$TOKEN_SECRET" >> "$GITHUB_ENV"
+
+      - name: Start cloudflared SSH bridge + rewrite ~/.ssh/config
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain)
+          SERVER_IP=$(terraform output -raw server_ip)
+          printf '::add-mask::%s\n' "$SERVER_IP"
+
+          # Start cloudflared in the background; it forwards 127.0.0.1:2222
+          # over the tunnel to host's localhost:22 (sshd) via the new
+          # `ssh.${app_domain_base}` ingress rule. Service-token auth at
+          # the CF Access edge uses TUNNEL_SERVICE_TOKEN_ID/_SECRET env.
+          cloudflared access tcp \
+            --hostname "ssh.${APP_DOMAIN_BASE}" \
+            --url 127.0.0.1:2222 \
+            > /tmp/cloudflared.log 2>&1 &
+          CF_PID=$!
+          printf 'CLOUDFLARED_PID=%s\n' "$CF_PID" >> "$GITHUB_ENV"
+          disown $CF_PID || true
+
+          # Wait up to 15s for the local TCP listener to come up.
+          for _ in $(seq 1 15); do
+            if nc -z 127.0.0.1 2222 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if ! nc -z 127.0.0.1 2222 2>/dev/null; then
+            echo "::error::cloudflared TCP forward did not open on 127.0.0.1:2222 within 15s."
+            cat /tmp/cloudflared.log >&2 || true
+            exit 1
+          fi
+
+          # Seed host-key (cloudflared forwards the real sshd banner, so the
+          # captured fingerprint is the production host's, not an MITM).
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p 2222 -H 127.0.0.1 >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Rewrite SERVER_IP → 127.0.0.1:2222 for the embedded Go SSH
+          # client in terraform's `provisioner` block (which cannot accept
+          # a free-form ProxyCommand). The bastion_* fields in the
+          # `connection {}` block require a standard SSH bastion; CF
+          # Access is not one. The TCP forward sidesteps both limits.
+          {
+            echo "Host ${SERVER_IP}"
+            echo "  Hostname 127.0.0.1"
+            echo "  Port 2222"
+            echo "  User root"
+            echo "  StrictHostKeyChecking yes"
+            echo "  UserKnownHostsFile ~/.ssh/known_hosts"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Terraform plan
         working-directory: ${{ env.INFRA_DIR }}
