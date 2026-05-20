@@ -60,7 +60,7 @@ No app code, IaC, workflow YAML, test fixture, or `apps/**` doc reference the wr
 
 | Claim (from issue body) | Reality (grep on 2026-05-20) | Plan response |
 | --- | --- | --- |
-| "The actual prod hostname is `app.soleur.ai` (per `variables.tf` `app_subdomain` default)" | Confirmed at `apps/web-platform/infra/variables.tf:88` (`default = "app.soleur.ai"`) | Use `app.soleur.ai` as the canonical replacement. |
+| "The actual prod hostname is `app.soleur.ai` (per `variables.tf` `app_domain` default)" | Confirmed at `apps/web-platform/infra/variables.tf:85-89` (`variable "app_domain" { default = "app.soleur.ai" }`) | Use `app.soleur.ai` as the canonical replacement. |
 | "Update `knowledge-base/engineering/ops/runbooks/inngest-server.md` (the `## Fresh-host provisioning (#4118)` section) and any other reference" | Grep returns 4 hits in 2 files (1 runbook, 1 plan file under `plans/` — NOT yet under `plans/archive/`) | Fix all 4 hits in the same commit. The merged plan file is historical but not archived; future operators searching by content can still copy-paste the bad URL. Per AGENTS.md `2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces`, operator-facing surfaces include `knowledge-base/project/plans/` outside `archive/`. |
 | "Verify by grepping `grep -rE 'web-platform\.soleur\.ai' knowledge-base/` — every hit needs the swap" | 4 hits, all enumerated above | Acceptance Criteria includes the grep with expected `0` lines after the fix. |
 
@@ -97,7 +97,7 @@ grep -nE 'app\.soleur\.ai/api/inngest' \
 
 ### Pre-merge (PR)
 
-- [ ] **AC1.** `grep -rE 'web-platform\.soleur\.ai' knowledge-base/` returns no lines (exit code 1). Verified post-edit by the implementer.
+- [ ] **AC1.** `grep -rE 'web-platform\.soleur\.ai' knowledge-base/ --exclude-dir=feat-one-shot-runbook-hostname-4159 --exclude=2026-05-20-fix-runbook-inngest-hostname-app-soleur-ai-plan.md` returns no lines (exit code 1). The exclusions cover this fix plan and `tasks.md`, both of which intentionally retain the literal bad string in prose describing the rename (meta-documentation, not operator-actionable). Verified post-edit by the implementer.
 - [ ] **AC2.** `grep -cE 'app\.soleur\.ai/api/inngest' knowledge-base/engineering/ops/runbooks/inngest-server.md` returns `1`.
 - [ ] **AC3.** `grep -cE 'app\.soleur\.ai/api/inngest' knowledge-base/project/plans/2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md` returns `3`.
 - [ ] **AC4.** No other file is modified in this PR. `git diff --name-only main...HEAD | sort` returns EXACTLY:
@@ -120,13 +120,13 @@ None. No deploy, no migration, no apply, no follow-up verification — the runbo
 
 No new tests. Per issue body: "One-line fix; do not require new acceptance tests." The verification greps in AC1-AC3 are the post-conditions; running them after the edit is the test. No drift-guard test is justified — the canonical hostname is locked in `apps/web-platform/infra/variables.tf:88` and propagating it into the runbook is a one-shot doc fix, not a recurring contract.
 
-(If this class of regression recurs — wrong hostname in operator-facing docs — a future PR could add a CI grep step against operator-facing surfaces to flag any literal hostname that disagrees with `variables.tf`'s `app_subdomain` default. Out of scope for this PR; tracked implicitly by the existing learning `2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces.md`.)
+(If this class of regression recurs — wrong hostname in operator-facing docs — a future PR could add a CI grep step against operator-facing surfaces to flag any literal hostname that disagrees with `variables.tf`'s `app_domain` default. Out of scope for this PR; tracked implicitly by the existing learning `2026-04-29-docs-fix-verification-greps-must-span-operator-surfaces.md`.)
 
 ## Risks
 
 - **R1 (low):** the merged plan file at `2026-05-20-feat-one-shot-inngest-cloud-init-iac-plan.md` is historical record. Editing it post-merge mildly muddies the audit trail of "what the plan looked like when it merged." Mitigation: git history preserves the pre-edit content; anyone needing the original can run `git show <pre-fix-sha>:<path>`. The benefit (preventing future operator copy-paste of the bad URL) outweighs the audit-trail cost — same logic as updating any merged-and-living document.
 - **R2 (none):** scope creep into adjacent files. Mitigated by AC1's exit-code-1 verification (zero remaining hits) AND AC4's file-list assertion (only the runbook + the inngest plan + this plan's scaffold).
-- **R3 (none):** wrong replacement value. `app_subdomain = "app.soleur.ai"` at `variables.tf:88` is the single source of truth; 7 sibling files (sentry README, seo-rulesets.tf, 3 sibling runbooks, more) already cite `app.soleur.ai` — corroborated. No alternative candidate hostname exists.
+- **R3 (none):** wrong replacement value. `app_domain = "app.soleur.ai"` at `variables.tf:85-89` is the single source of truth; 7 sibling files (sentry README, seo-rulesets.tf, 3 sibling runbooks, more) already cite `app.soleur.ai` — corroborated. No alternative candidate hostname exists.
 
 ## Domain Review
 
@@ -157,7 +157,7 @@ The issue is labeled `priority/p3-low` but the cost of fix is ~2 edits and the c
 
 ## Plan-time verifications run
 
-1. Read `apps/web-platform/infra/variables.tf:88` — confirmed `app_subdomain` default = `app.soleur.ai`.
+1. Read `apps/web-platform/infra/variables.tf:85-89` — confirmed `app_domain` default = `app.soleur.ai`.
 2. `grep -rn 'web-platform\.soleur\.ai' .` (excluding `.git`/`node_modules`/`_site`/`.next`) — 4 hits, enumerated above.
 3. `grep -rn 'app\.soleur\.ai' apps/web-platform/infra/ knowledge-base/engineering/ops/runbooks/` — confirmed canonical hostname appears in 6+ sibling locations.
 4. `gh issue view 4159` — confirmed scope, labels, AC text.
