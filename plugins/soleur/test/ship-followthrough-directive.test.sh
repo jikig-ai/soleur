@@ -27,7 +27,9 @@ echo "=== ship-followthrough-directive tests ==="
 # parser MUST be mirrored here; assertion 5 below diff-checks against the
 # sweeper's actual parse_directive() so drift is caught at PR time.
 # shellcheck disable=SC2016  # single quotes are intentional — awk vars ($i, $NF) must not be bash-expanded
-PARSER='BEGIN { in_dir = 0; seen = 0; closing = 0 }
+PARSER='BEGIN { in_dir = 0; seen = 0; closing = 0; fence = 0 }
+/^```/ { fence = !fence; next }
+fence { next }
 /^<!-- *soleur:followthrough/ {
   seen++
   if (seen == 1) in_dir = 1
