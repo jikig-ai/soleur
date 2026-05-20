@@ -330,7 +330,7 @@ logs:
   retention: "90 days"
 
 discoverability_test:
-  command: "gh run list --workflow=apply-deploy-pipeline-fix.yml --limit 1 --json conclusion --jq '.[0].conclusion'"
+  command: gh run list --workflow=apply-deploy-pipeline-fix.yml --limit 1 --json conclusion --jq '.[0].conclusion'
   expected_output: "success or failure"
   # "success" is the post-bootstrap steady state. "failure" is the legitimate
   # pre-bootstrap signal that operator-local apply for #4202 (the deferred-
