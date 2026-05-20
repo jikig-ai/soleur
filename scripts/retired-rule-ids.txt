@@ -95,3 +95,6 @@ wg-when-a-pr-includes-database-migrations | 2026-04-24 | - | knowledge-base/proj
 wg-when-a-feature-creates-external | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture
 wg-for-user-facing-pages-with-a-product-ux | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture
 wg-when-a-feature-stores-user-generated | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture (already present; retired as duplicate AGENTS.md entry)
+
+wg-when-moving-github-issues-between | 2026-05-20 | #4117 | covered-by wg-every-feature-listed-in-a-roadmap-phase + wg-when-closing-a-phase-milestone-update
+wg-before-every-commit-run-compound-skill | 2026-05-20 | #4117 | structurally-enforced at ship-time via plugins/soleur/skills/ship/SKILL.md Phase 1.7/Phase 2 compound invocation; per-intermediate-commit invariant intentionally dropped (compound runs once per feature, not per-commit)
