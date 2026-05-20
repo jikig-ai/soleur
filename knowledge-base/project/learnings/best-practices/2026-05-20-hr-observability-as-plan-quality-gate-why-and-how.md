@@ -60,3 +60,5 @@ Pure-docs plans (e.g., `knowledge-base/*.md` only) skip the gate. Any plan whose
 ## Re-evaluation
 
 This rule should be considered for retirement when a higher-level primitive (e.g., a `discoverability_test:` block in `spec.md` frontmatter parsed by a CI check) makes the plan-text declaration mechanical. Until then, the prose declaration is what makes the gate observable to reviewers.
+
+**Update (2026-05-20, issue #4162):** Preflight Check 10 (`plugins/soleur/skills/preflight/SKILL.md` §"Check 10: Discoverability Test Execution") partially answers the re-evaluation criterion by EXECUTING the declared `discoverability_test.command` and FAILing on DNS-fail / timeout / mismatch. The rule is still load-bearing for the static field-presence guarantee at plan time; Check 10 closes the "declared but unverified" gap at ship time. Full retirement deferred until `discoverability_test:` migrates to `spec.md` frontmatter parsed by CI directly.
