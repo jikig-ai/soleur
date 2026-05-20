@@ -22,12 +22,20 @@ STUB="$REPO_ROOT/plugins/soleur/skills/ship/references/followthrough-stub-templa
 
 echo "=== ship-followthrough-directive tests ==="
 
-# Parser block copied verbatim from scripts/sweep-followthroughs.sh:36-48 so
-# the test exercises the EXACT shape the sweeper runs. Edits to the sweeper
+# Parser block mirrored from scripts/sweep-followthroughs.sh parse_directive()
+# so the test exercises the EXACT shape the sweeper runs. Edits to the sweeper
 # parser MUST be mirrored here; assertion 5 below diff-checks against the
 # sweeper's actual parse_directive() so drift is caught at PR time.
 # shellcheck disable=SC2016  # single quotes are intentional — awk vars ($i, $NF) must not be bash-expanded
-PARSER='/<!-- *soleur:followthrough/, /-->/ {
+PARSER='BEGIN { in_dir = 0; seen = 0; closing = 0 }
+/^<!-- *soleur:followthrough/ {
+  seen++
+  if (seen == 1) in_dir = 1
+}
+/-->/ && in_dir {
+  closing = 1
+}
+in_dir {
   gsub(/^<!-- *soleur:followthrough/, "")
   gsub(/-->/, "")
   for (i = 1; i <= NF; i++) {
@@ -35,7 +43,9 @@ PARSER='/<!-- *soleur:followthrough/, /-->/ {
     if ($i ~ /^earliest=/) { sub(/^earliest=/, "", $i); print "earliest " $i }
     if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
   }
-}'
+}
+closing { in_dir = 0; closing = 0 }
+END { if (seen > 1) print "__sweeper_meta__ multi_directive_count " seen }'
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

@@ -31,11 +31,26 @@ fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 # Parse a single directive from an issue body. Stdin = body text.
 # Writes lines: `KEY VALUE` for script/earliest/secrets, or nothing if no
-# directive is present. Multiple directives in one body → only the first
-# is honored (log a warning).
+# directive is present. Multiple directives in one body → only the FIRST
+# is honored; the parser emits a synthetic `__sweeper_meta__
+# multi_directive_count <N>` line so the bash caller can log a warning.
+# The `__sweeper_meta__` key shape is a private contract with run_one;
+# future directive fields MUST NOT use that name.
 parse_directive() {
   awk '
-    /^<!-- *soleur:followthrough/, /-->/ {
+    BEGIN { in_dir = 0; seen = 0; closing = 0 }
+    /^<!-- *soleur:followthrough/ {
+      seen++
+      if (seen == 1) in_dir = 1
+    }
+    # End-of-directive check MUST run BEFORE the in_dir body block, because
+    # the body block gsub(/-->/, "") strips the closing marker from $0 in
+    # place, which would prevent /-->/ from matching on the same line. Set
+    # a flag here, apply it in a post-body block.
+    /-->/ && in_dir {
+      closing = 1
+    }
+    in_dir {
       gsub(/^<!-- *soleur:followthrough/, "")
       gsub(/-->/, "")
       for (i = 1; i <= NF; i++) {
@@ -44,6 +59,8 @@ parse_directive() {
         if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
       }
     }
+    closing { in_dir = 0; closing = 0 }
+    END { if (seen > 1) print "__sweeper_meta__ multi_directive_count " seen }
   '
 }
 
@@ -64,6 +81,17 @@ run_one() {
       script)   script="$val" ;;
       earliest) earliest="$val" ;;
       secrets)  secrets="$val" ;;
+      __sweeper_meta__)
+        # val shape: "multi_directive_count <N>". Emit the warning the
+        # parse_directive comment promises; do NOT overwrite script/
+        # earliest/secrets — the parser already restricted those to the
+        # first directive's fields.
+        case "$val" in
+          "multi_directive_count "*)
+            log "issue #$issue_num: multi-directive body: ${val#multi_directive_count } directives found, honoring first only"
+            ;;
+        esac
+        ;;
     esac
   done < <(printf '%s' "$body" | parse_directive)
 
