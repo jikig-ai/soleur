@@ -32,12 +32,10 @@ If `$ARGUMENTS` is empty, ask: "What would you like to search for in the knowled
 
 ## Privacy & Cost
 
-<!-- stage-2-paraphrase-union-v1 -->
-
 - Runtime paraphrase is inline; no countable spend. If Option B is ever adopted, caps land with it.
 - Operator queries MAY be sent to the Anthropic API (Haiku) by [scripts/learning-retrieval-bench.sh](../../../../scripts/learning-retrieval-bench.sh) only when the operator runs the bench-rerun gate (explicit opt-in via the existing `--confirm` flag). No runtime invocation forwards queries outside the executing agent's existing context.
-- Use `--no-paraphrase` for queries containing secrets, customer PII, or in-flight incident details. The skill auto-refuses paraphrase when the query matches the sensitive-value-shape regex (`(=|:)\s*[a-zA-Z0-9+/]{16,}`, `sk-[a-zA-Z0-9]{20,}`, `dsn=`); `--no-paraphrase` is the manual override for queries that are sensitive but don't trip the regex (e.g., a customer name).
-- Cache location: `.soleur/cache/kb-search/query-paraphrases.ndjson` (gitignored per `.soleur/` convention). TTL: 14 days. Clear with `--clear-cache` or by deleting the file.
+- Use `--no-paraphrase` for queries containing secrets, customer PII, or in-flight incident details. The skill auto-refuses paraphrase when the query matches the sensitive-shape regex (value-shape blobs + vendor key prefixes for Anthropic, OpenAI, GitHub, AWS, Stripe, Slack, JWT — see Phase 2.5 for the full byte-exact regex); `--no-paraphrase` is the manual override for queries that are sensitive but don't trip the regex (e.g., a customer name as a bare topic keyword).
+- Cache location: `.soleur/cache/kb-search/query-paraphrases.ndjson` (gitignored per `.soleur/` convention; refuses to write outside `.soleur/cache/`). File mode 0600, directory mode 0700 (re-applied on every append so a pre-existing looser-mode directory is hardened). The cache row stores `{sha256, query, variants, cached_at}` — `query` is stored in plaintext to enable manual inspection / debugging; rely on the directory + file modes (and `--clear-cache`) for confidentiality. TTL: 14 days.
 
 ## Execution
 
@@ -88,7 +86,7 @@ Accept both inline (`tags: [a, b]`) and block (`tags:\n  - a`) forms. Compare va
 
 If both flags are supplied, a file must match BOTH to survive (AND).
 
-### Phase 2.5: Paraphrase Pre-Pass
+### Phase 2.5: Paraphrase Pre-Pass (Stage 2, #4176)
 
 <!-- stage-2-paraphrase-union-v1 -->
 
@@ -99,7 +97,11 @@ Stage 2 (#4176) adaptive pre-pass — runs after Phase 3 has produced a baseline
 1. `$KEYWORD` is non-empty (facet-only queries skip).
 2. Phase 3's two-tier grep returned **< 5 unique paths** (combined tier-1 + tier-2 dedupe-by-path count).
 3. `--no-paraphrase` was NOT passed.
-4. `$KEYWORD` does NOT match the sensitive-value-shape regex `((=|:)\s*[a-zA-Z0-9+/]{16,}|sk-[a-zA-Z0-9]{20,}|dsn=)` (case-insensitive — value-shape anchoring, not bare uppercase tokens; queries like `"JWT token refresh"` or `"keypress event"` are not blocked).
+4. `$KEYWORD` does NOT match the sensitive-shape regex below (case-insensitive). The regex blends value-shape anchoring (assignment-blobs, postgres dsn=) and vendor-prefix anchoring (Anthropic, OpenAI, GitHub, AWS, Stripe, Slack, JWT triple-blob) — prefix anchors avoid blocking topic-keyword queries like `"JWT token refresh"` or `"keypress event"` while still catching credential paste-throughs. Source of truth is `SENSITIVE_QUERY_REGEX` in [scripts/learning-retrieval-bench.sh](../../../../scripts/learning-retrieval-bench.sh); [plugins/soleur/test/kb-search-lockstep.test.sh](../../../test/kb-search-lockstep.test.sh) asserts byte-equality across both files.
+
+   ```text
+   ((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-(ant-)?[a-zA-Z0-9_-]{20,}|sk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,}|rk_live_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{40,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[abprs]-[a-zA-Z0-9-]{10,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.+/=-]{15,}|dsn=)
+   ```
 
 If any condition fails, skip Phase 2.5 and return Phase 3's result unchanged.
 
@@ -127,7 +129,7 @@ On hit (newline-separated variants, < 14 days old) skip variant generation and g
 bash plugins/soleur/skills/kb-search/scripts/kb-search-cache.sh append "$KEYWORD" "$v1" "$v2" "$v3"
 ```
 
-**Union execution:** for each of the 4 strings (original `$KEYWORD` + 3 variants), run Phase 3's two-tier grep, collect path lists, union, dedupe by path, rank by union-hit-count descending (paths matched by more variants rank higher). Apply the existing per-tier cap-split (8 tier-1 + 12 tier-2) to the ranked merged list.
+**Union execution:** for each of the 4 strings (original `$KEYWORD` + 3 variants), run Phase 3's two-tier grep under its own per-tier 8+12 caps. The 4 per-variant ranked lists are then merged into a single flat hit-count rerank capped at 20 — per-tier identity does not survive the union (by design — union-by-hit-count is the new ranking signal), and 20 is the absolute ceiling on what kb-search returns.
 
 **Fallback policy:** paraphrase failure (rate limit, network, model refusal, all variants empty) → emit to stderr and fall back to Phase 3's baseline result:
 

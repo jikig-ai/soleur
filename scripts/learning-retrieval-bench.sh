@@ -504,12 +504,16 @@ rank_paths_min_rank() {
   echo "${min_rank:-}"
 }
 
-# Sensitive-query regex (#4176). Value-shape-anchored — refuses paraphrase
-# forward when the query carries a credential-looking literal (assignment-
-# operator + base64 blob, OpenAI-style sk- key, postgres dsn= prefix). Bare
-# topic-keyword queries like "JWT token refresh" or "keypress event" do NOT
-# match. Mirrors plugins/soleur/skills/kb-search/SKILL.md §Phase 2.5 guard.
-SENSITIVE_QUERY_REGEX='((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-[a-zA-Z0-9]{20,}|dsn=)'
+# Sensitive-query regex (#4176). Value-shape-anchored AND prefix-anchored —
+# refuses paraphrase forward when the query carries a credential-looking
+# literal: assignment-operator + base64 blob, vendor key prefixes (Anthropic,
+# OpenAI, GitHub, AWS, Stripe, Slack), JWT triple-blob, postgres dsn= prefix.
+# Bare topic-keyword queries like "JWT token refresh" or "keypress event" do
+# NOT match — the prefix anchors and assignment shape avoid blocking
+# legitimate developer vocabulary. Mirrors plugins/soleur/skills/kb-search/SKILL.md
+# §Phase 2.5 guard; the kb-search-lockstep.test.sh asserts byte-equality of
+# the regex literal across both files.
+SENSITIVE_QUERY_REGEX='((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-(ant-)?[a-zA-Z0-9_-]{20,}|sk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,}|rk_live_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{40,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[abprs]-[a-zA-Z0-9-]{10,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.+/=-]{15,}|dsn=)'
 
 # query_is_sensitive: returns 0 (match) when the query carries a credential-
 # shaped literal, 1 otherwise. Case-insensitive.
@@ -527,9 +531,11 @@ query_is_sensitive() {
 # AND NO_PARAPHRASE != 1 AND the query is not sensitive-value-shaped, fan
 # out 3 paraphrase variants via PROMPT_QUERY_PARAPHRASE and union-rank by
 # the count of paraphrase-variants that hit each path. The 4 strings
-# (original + 3 variants) each run the baseline two-tier path; results are
-# merged, deduped, ranked by union-hit-count descending, then the original
-# 8+12 cap-split is reapplied to the merged list.
+# (original + 3 variants) each run the baseline two-tier path under their
+# own per-tier 8+12 caps; the per-variant ranked lists are then merged into
+# a single flat hit-count rerank capped at 20 (the cap-split metadata is
+# lost at merge time — per-tier identity does not survive the union, by
+# design — and 20 is the absolute ceiling on what kb-search returns).
 kbsearch_rank() {
   local query="$1" source_path="$2" synced_paths_json="$3"
   if [[ -z "$query" ]]; then echo ""; return; fi
@@ -585,8 +591,9 @@ kbsearch_rank() {
         printf '%s\n' "$vcomb" | awk 'NF' >> "$merged_paths"
       done
       # Re-rank: count hits per path across original + variants, sort by
-      # hit-count desc then lexicographic. Reapply cap-split (8+12) by
-      # truncating to 20 total.
+      # hit-count desc then lexicographic. Flat cap at 20 (per-tier 8/12
+      # identity is lost at merge time — see comment above kbsearch_rank;
+      # union-by-hit-count is the new ranking signal).
       combined=$(sort "$merged_paths" | uniq -c | sort -rn -k1,1 -k2,2 \
         | awk '{ $1=""; sub(/^ +/, ""); print }' | head -20)
       rm -f "$merged_paths"
@@ -811,29 +818,51 @@ self_test_paraphrase_prepass() {
   # fires, 3 paraphrase variants are generated via PROMPT_QUERY_PARAPHRASE,
   # and the union-by-path rank recovers the target.
   #
-  # CURL_BIN is overridden by a stub that returns a canonical paraphrase
-  # ("database connection pool exhaustion") on each call, so this assertion
-  # self-verifies without external API access. ANTHROPIC_API_KEY is not
-  # required — the stub does not consult it. cq-test-fixtures-synthesized-only.
+  # CURL_BIN is overridden by a stub that returns THREE DISTINCT paraphrases
+  # (cycled via a tmp counter file) so the dedupe-by-exact-string-match branch
+  # in kbsearch_rank's variant loop is actually exercised — three different
+  # canonical phrasings, each lexically overlapping the orm-target.md corpus
+  # content. ANTHROPIC_API_KEY is supplied locally for the kbsearch_rank
+  # `[[ -n "${ANTHROPIC_API_KEY:-}" ]]` gate; restored to its prior state
+  # post-test even when the operator had a real key set (the previous
+  # `export` shape would have forwarded a real key into subsequent self-test
+  # cases). cq-test-fixtures-synthesized-only.
   local stub_curl="$KB_ROOT/stub-curl.sh"
-  cat > "$stub_curl" <<'STUB'
+  local stub_counter="$KB_ROOT/stub-curl-counter"
+  cat > "$stub_curl" <<STUB
 #!/usr/bin/env bash
-# Returns a canonical paraphrase that lexically overlaps the orm-target.md
-# corpus content. The bench's anthropic_paraphrase strips newlines + writes
-# the __HTTP_STATUS__ trailer; we mimic the response shape it expects.
-cat <<JSON
-{"content":[{"text":"database connection pool exhaustion under burst load"}],"stop_reason":"end_turn"}
-JSON
+# Cycles through three distinct paraphrases (lexically overlap with corpus).
+# Each call increments the counter file. The bench's anthropic_paraphrase
+# strips newlines + writes the __HTTP_STATUS__ trailer; we mimic the shape.
+COUNTER_FILE="${stub_counter}"
+[[ -f "\$COUNTER_FILE" ]] || echo 0 > "\$COUNTER_FILE"
+idx=\$(cat "\$COUNTER_FILE")
+echo \$((idx + 1)) > "\$COUNTER_FILE"
+case \$((idx % 3)) in
+  0) phrase='database connection pool exhaustion under burst load' ;;
+  1) phrase='transaction allocation timeout when concurrency exceeds maximum' ;;
+  2) phrase='TimeoutError on queries during pool saturation' ;;
+esac
+printf '{"content":[{"text":"%s"}],"stop_reason":"end_turn"}\n' "\$phrase"
 printf '__HTTP_STATUS__:200\n'
 STUB
   chmod +x "$stub_curl"
 
-  local rk_stage2 prev_curl_bin="$CURL_BIN" prev_api_key="${ANTHROPIC_API_KEY:-}"
+  local rk_stage2 prev_curl_bin="$CURL_BIN"
+  local prev_api_key_was_set=0 prev_api_key=""
+  if [[ -n "${ANTHROPIC_API_KEY+x}" ]]; then
+    prev_api_key_was_set=1
+    prev_api_key="$ANTHROPIC_API_KEY"
+  fi
   CURL_BIN="$stub_curl"
-  export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-stub-key-self-test}"
+  ANTHROPIC_API_KEY="stub-key-self-test"
   rk_stage2=$(kbsearch_rank "$query" "$target" "[]")
   CURL_BIN="$prev_curl_bin"
-  if [[ -z "$prev_api_key" ]]; then unset ANTHROPIC_API_KEY; else export ANTHROPIC_API_KEY="$prev_api_key"; fi
+  if (( prev_api_key_was_set == 1 )); then
+    ANTHROPIC_API_KEY="$prev_api_key"
+  else
+    unset ANTHROPIC_API_KEY
+  fi
 
   SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1))
   if [[ -n "$rk_stage2" && "$rk_stage2" -le 8 ]]; then
