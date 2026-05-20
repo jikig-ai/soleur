@@ -75,6 +75,7 @@ For each smell found:
 ### Refactoring Roadmap
 
 Ordered list of recommended refactorings, sequenced by:
+
 1. Dependencies (what must happen first)
 2. Risk (low-risk changes first)
 3. Impact (highest-impact changes prioritized)
@@ -83,3 +84,7 @@ Ordered list of recommended refactorings, sequenced by:
 
 - Estimated effort per refactoring (Small/Medium/Large)
 - Expected quality improvement after completing the roadmap
+
+## Sharp Edges
+
+- **Draft-PR placeholder bodies are NOT P1 findings.** When reviewing a PR whose state is `draft` AND whose body matches the `soleur:one-shot` Step 0c placeholder shape ("Draft PR created automatically..." / pipeline-skeleton body), do NOT raise a P1 finding for "PR body missing `Closes #N` list, issues will not auto-close". The body population is owned by `/soleur:ship` Phase 1 which runs AFTER review in the one-shot pipeline; the missing list at review-time is structurally unavoidable, not a defect. Downgrade to P3-informational ("expected at this pipeline phase; ship will populate") OR omit entirely. Detection: `gh pr view --json isDraft,body | jq '.isDraft and (.body | test("Draft PR created automatically"))'`. **Why:** PR #2567 — this finding fired on every one-shot run as P1-blocking, even though the body got populated 1-2 phases later. See `knowledge-base/project/learnings/2026-04-18-one-shot-draft-pr-body-review-timing-gap.md`.

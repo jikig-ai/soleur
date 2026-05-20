@@ -297,6 +297,19 @@ mcp__plugin_soleur_context7__query-docs: Query documentation for specific patter
 
 Search for recent (2024-2026) articles, blog posts, and documentation on topics in the plan.
 
+### 4.4. Precedent-Diff Gate (Pattern-bound Behaviors)
+
+When the plan section prescribes **pattern-bound behaviors** with sibling-precedent files in the same repo — (a) SQL function definitions with `SECURITY DEFINER`/`INVOKER`, (b) atomic write sequences (open/write/rename/fsync), (c) lock acquisition or mutex patterns, (d) RPC permissioning, (e) connection-pool tuning, (f) circuit-breaker shapes, or (g) any other shape where the codebase has established a canonical form — `git grep` for the precedent and produce a side-by-side diff in the plan's "Risks & Mitigations" section. If no precedent exists, the plan must explicitly note "no precedent; pattern is novel" so reviewers know to scrutinize. **Why:** PR #2954 — initial plan prescribed `SECURITY INVOKER` for a v1→v2 BYOK migration RPC; deepen-plan caught and corrected to `SECURITY DEFINER` via precedent migration 027. Same PR: atomic-write missing `fdatasync` between write and close; deepen-plan added it after grepping for prior atomic-write call sites. See `knowledge-base/project/learnings/2026-05-05-trace-callgraph-from-entrypoint-when-placing-guards.md`. Plan-skill counterpart: `precedent-diff is enforced at deepen-plan` (forward-pointer).
+
+### 4.45. Round-1 Implementation-Realism Passes
+
+After Phase 4 spawns per-section research agents, fan out two additional agent passes in the same parallel batch:
+
+1. **Verify-the-negative pass.** For every negative security claim in the plan body (regex: `NEVER|MUST NOT|does not reach|cannot leak|is not exposed`), spawn a targeted agent task: "grep the named/implied implementation file for the constrained behavior; report `contradicts | confirms | not-applicable` with file:line citation." This catches "the field is not exposed to clients" claims that contradict a `process.env.NEXT_PUBLIC_*` site one grep away.
+2. **Post-edit self-audit pass.** After round-1 edits drop or rename infrastructure (tables, columns, modules), spawn a re-read pass that greps the plan body for references to dropped symbols. Every hit is a candidate for a downstream rewrite that round 1 missed (e.g., `tenant_cost_window` ON CONFLICT after the table was dropped).
+
+**Why:** PR #3240 deepen-pass for `feat-agent-runtime-platform` showed two round-1 misses (BYOK process.env contradiction; `tenant_cost_window` ON CONFLICT after table-drop) that round 2 caught only because the user re-invoked the skill. Folding both passes into round 1 closes the loop without requiring a second user invocation. See `knowledge-base/project/learnings/best-practices/2026-05-05-deepen-pass-round-2-implementation-realism-vs-round-1-structural.md`.
+
 ### 4.5. Network-Outage Deep-Dive (Conditional)
 
 If the plan's Overview, Problem Statement, or Hypotheses contain any of the trigger patterns `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case-insensitive), read `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` and spawn a dedicated "Network-Outage Deep-Dive" research agent in parallel with the other deepen agents.
@@ -337,7 +350,7 @@ If the heading is absent, HALT with:
 > must answer the user-impact framing question before deepen-plan can proceed.
 > Re-run `/soleur:plan` (or edit the plan directly) to add the section, then re-run deepen-plan.
 
-**Step 2 — Validate the body.** If the heading exists, extract the section body (everything between `^## User-Brand Impact` and the next `^## ` heading). Reject the section as non-compliant if ANY of:
+**Step 2 — Validate the body.** If the heading exists, extract the section body (everything between `^## User-Brand Impact` and the next `^##` heading). Reject the section as non-compliant if ANY of:
 
 - The body is empty (only whitespace between headings).
 - Every bullet contains only `TBD`, `TODO`, `N/A`, `<placeholder>`, or single-word stubs.
