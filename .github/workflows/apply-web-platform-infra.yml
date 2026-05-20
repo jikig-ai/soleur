@@ -13,7 +13,7 @@
 # Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
 #   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
 #      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
-#   2. `-target=`-scoped apply (66 explicit targets). server.tf SSH-provisioned
+#   2. `-target=`-scoped apply (70 explicit targets). server.tf SSH-provisioned
 #      `terraform_data.*` resources are EXCLUDED — the GitHub runner egress IP is
 #      not in `var.admin_ips`, so any SSH connection from the runner fails with
 #      `ssh: handshake failed: connection reset by peer`. Those 7 resources land
@@ -102,7 +102,7 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
-    # Budget: ~0.6 min/resource × ~67 targets = ~40 min worst-case cold-cache,
+    # Budget: ~0.6 min/resource × ~70 targets = ~42 min worst-case cold-cache,
     # but plan + apply against an already-provisioned state typically completes
     # in ~3-5 min. 15 min is the operator-tolerance ceiling that matches
     # `apply-deploy-pipeline-fix.yml`.
@@ -222,10 +222,14 @@ jobs:
               -target=cloudflare_zero_trust_access_application.deploy \
               -target=cloudflare_zero_trust_access_service_token.deploy \
               -target=cloudflare_zero_trust_access_policy.deploy_service_token \
+              -target=cloudflare_zero_trust_access_application.ssh \
+              -target=cloudflare_zero_trust_access_service_token.ci_ssh \
+              -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token \
               -target=cloudflare_notification_policy.service_token_expiry \
               -target=cloudflare_zone_settings_override.soleur_ai \
               -target=cloudflare_record.app \
               -target=cloudflare_record.deploy \
+              -target=cloudflare_record.ssh \
               -target=cloudflare_record.dkim_resend \
               -target=cloudflare_record.spf_send \
               -target=cloudflare_record.mx_send \
@@ -311,6 +315,33 @@ jobs:
           set -euo pipefail
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
+
+      - name: Sync CF Access CI-SSH service token to Doppler
+        # Reads the new sensitive outputs produced by the
+        # `cloudflare_zero_trust_access_service_token.ci_ssh` resource
+        # and writes them into Doppler prd_terraform so the sibling
+        # `apply-deploy-pipeline-fix.yml` workflow can pull them at run
+        # time without an operator handoff step (closes #4177 P1).
+        # Idempotent — doppler-secrets-set overwrites in place.
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          CLIENT_ID=$(terraform output -raw ci_ssh_access_service_token_client_id 2>/dev/null || true)
+          CLIENT_SECRET=$(terraform output -raw ci_ssh_access_service_token_client_secret 2>/dev/null || true)
+          if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" ]]; then
+            echo "::warning::ci_ssh_access_service_token outputs missing or empty — likely a -target= run that skipped the SSH-access resources. Falling back to operator sync."
+            exit 0
+          fi
+          printf '::add-mask::%s\n' "$CLIENT_ID"
+          printf '::add-mask::%s\n' "$CLIENT_SECRET"
+          printf '%s' "$CLIENT_ID" \
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          printf '%s' "$CLIENT_SECRET" \
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          unset CLIENT_ID CLIENT_SECRET
+          echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
       - name: Post-apply summary
         if: always()
