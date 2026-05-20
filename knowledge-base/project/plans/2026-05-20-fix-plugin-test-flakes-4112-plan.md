@@ -11,97 +11,123 @@ lane: single-domain
 
 Closes #4112
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** Overview, Research Reconciliation, Files to
+Edit, Acceptance Criteria, Risks, Implementation Phases.
+**Verification performed:**
+
+- Live repro of all three failure modes in pairwise and isolated
+  invocations (see Research Reconciliation table).
+- `bun-types@1.3.14` `test.d.ts` line 308 / 325 inspected to confirm
+  `beforeAll(fn, options?: HookOptions)` with
+  `HookOptions = number | { timeout?: number }` accepts a numeric
+  third arg as the hook timeout in ms.
+- PR #4097 precedent verified live: `30_000` third-arg form used in
+  `plugins/soleur/test/skill-security-scan.test.ts:196, 204, 219,
+  237, 273, 368` for `test.each` per-test timeouts. The same
+  HookOptions API applies to `beforeAll` per bun-types.
+- `_data/github.js` is exercised by the docs build because
+  `plugins/soleur/docs/pages/changelog.njk:18` reads
+  `{{ changelog.html | safe }}` and the `changelog` data file is
+  `_data/github.js` (Eleventy convention: data file name == template
+  key).
+- `gh pr view 4097` confirmed `state=MERGED`,
+  `mergeCommit.oid=4ecac082...`.
+
+### Key Corrections vs. v1
+
+1. **Root cause is simpler than v1 claimed.** The "dangling timer in
+   `githubStats.js`" hypothesis was wrong — verified by running
+   `bun test plugins/soleur/test/github-stats-data.test.ts` in
+   isolation: 7/7 pass, 262 ms, no "killed N dangling process"
+   warning. The dangling-process line in the issue body comes from
+   bun killing the `npm run docs:build` / `npx @11ty/eleventy` child
+   process when *another* test file's `beforeAll` hits the 5000 ms
+   default timeout. The proximate cause for all three observed
+   symptoms is one defect: **default 5000 ms hook timeout vs. Eleventy
+   subprocess startup of ~3.2–6.5 s**.
+2. **github-stats-data is innocent in isolation.** The issue body's
+   "dangles ~180s before being killed" is the WHOLE-SUITE behaviour
+   when an upstream file's hook timeout leaves npm/`npx` zombies that
+   bun reports against the next file in alphabetical order
+   (`github-stats-data` < `jsonld-escaping` < `marketing-...`). No
+   change to `github-stats-data.test.ts` is required.
+3. **`_data/github.js` AbortController fix is preventive, not
+   proximate.** The proximate timeout cause is Eleventy's own
+   startup latency, not the GitHub Releases fetch. The fetch IS
+   unbounded today (`github.js:20`, no `signal` parameter), which is
+   a latent flake risk — fixing it is still in scope, but as
+   defense-in-depth, not as the load-bearing fix.
+
 ## Overview
 
-`bash scripts/test-all.sh` runs `bun test plugins/soleur/` as one suite
-(see `scripts/test-all.sh:157`). Inside that suite three test files
-intermittently fail with symptoms surfaced during `/ship` Phase 4 on
-PR #4097:
+`bash scripts/test-all.sh` runs `bun test plugins/soleur/` as one
+suite (see `scripts/test-all.sh:157`). Inside that suite three test
+files intermittently fail with symptoms surfaced during `/ship`
+Phase 4 on PR #4097:
 
 - `plugins/soleur/test/marketing-content-drift.test.ts` —
-  `beforeEach/afterEach hook timed out for this test` at the
-  default 5000 ms threshold.
-- `plugins/soleur/test/jsonld-escaping.test.ts` — same shape at
-  ~8682 ms.
-- `plugins/soleur/test/github-stats-data.test.ts` — leaves a dangling
-  process (bun emits `killed 1 dangling process`) and the test runner
-  hangs ~180 s before its hard ceiling kills the suite.
+  `beforeAll` runs `Bun.spawn(["npm", "run", "docs:build"])` (the
+  full Eleventy site build, ~10 s when cold including `npx`
+  resolution and `_data/github.js` releases fetch). Hits the
+  default 5000 ms hook timeout. Bun's reporter labels the failure
+  `a beforeEach/afterEach hook timed out for this test` (mislabel
+  for `beforeAll`).
+- `plugins/soleur/test/jsonld-escaping.test.ts` — `beforeAll` runs
+  `Bun.spawnSync(["npx", "@11ty/eleventy", ...])` on a self-contained
+  fixture. Measured 3.2 s standalone (`time npx @11ty/eleventy
+  --config=plugins/soleur/test/fixtures/jsonld-escaping/eleventy
+  .config.js --output=/tmp/...`), but inside bun's test harness the
+  child runtime sits around 6.4 s. Hits the default 5000 ms hook
+  timeout.
+- `plugins/soleur/test/github-stats-data.test.ts` — `7/7 pass,
+  ~262 ms` in isolation. The "dangling process / ~180 s hang" in the
+  issue body is bun killing the *upstream* file's `npm`/`npx` child
+  process when its hook timed out; the warning is reported against
+  the next file in the discovery order.
 
-Repro under the exact path the bun shard hits in CI:
+### Verified pairwise repro (this worktree, 2026-05-20)
 
 ```bash
-bun test plugins/soleur/test/marketing-content-drift.test.ts \
-         plugins/soleur/test/jsonld-escaping.test.ts \
-         plugins/soleur/test/github-stats-data.test.ts
+$ bun test plugins/soleur/test/github-stats-data.test.ts
+ 7 pass, 0 fail, 262.00ms  # innocent in isolation
+
+$ bun test plugins/soleur/test/marketing-content-drift.test.ts
+ 0 pass, 1 fail, beforeEach/afterEach hook timed out [5005.94ms]
+ killed 1 dangling process  # the npm subprocess
+
+$ bun test plugins/soleur/test/jsonld-escaping.test.ts
+ 0 pass, 1 fail, beforeEach/afterEach hook timed out [6386.93ms]
+ killed 1 dangling process  # the npx subprocess
+
+$ bun test plugins/soleur/test/github-stats-data.test.ts \
+           plugins/soleur/test/marketing-content-drift.test.ts \
+           plugins/soleur/test/jsonld-escaping.test.ts
+ 7 pass + 1 fail (marketing) + 0 pass (jsonld blocked); two
+ "killed 1 dangling process" warnings ascribed to the file that
+ BEGINS the new spawn (not the file that left the zombie).
 ```
 
-Observed output (verified 2026-05-20 on
-`feat-one-shot-plugin-test-flakes-4112`):
+### Fix
 
-```text
-plugins/soleur/test/github-stats-data.test.ts:
-[githubStats.js] GitHub API failed, using fallback: network down
-killed 1 dangling process
+1. **Primary (load-bearing):** raise the per-hook timeout to
+   `30_000` ms on `beforeAll` in both Eleventy-spawning tests:
+   - `plugins/soleur/test/marketing-content-drift.test.ts` line 62.
+   - `plugins/soleur/test/jsonld-escaping.test.ts` line 20.
 
-plugins/soleur/test/marketing-content-drift.test.ts:
-(fail) (unnamed) [5000.94ms]
-  ^ a beforeEach/afterEach hook timed out for this test.
-```
+2. **Defense-in-depth (preventive):** add `AbortController` +
+   `FETCH_TIMEOUT_MS = 5000` to `plugins/soleur/docs/_data/github.js`
+   so a slow GitHub Releases endpoint cannot push the docs:build past
+   the new 30 s ceiling. Mirror of the pattern already in
+   `githubStats.js:30-67` and `communityStats.js:24-46`.
 
-### Why this is one bundle (not three)
-
-All three failures share a single root cause class: **two long-running
-`beforeAll` hooks (Eleventy build) on the default 5000 ms timeout,
-gated by an *unbounded* GitHub API fetch in
-`plugins/soleur/docs/_data/github.js`**.
-
-- `marketing-content-drift.test.ts:62-77` runs `npm run docs:build` in
-  `beforeAll` with no explicit timeout. The build invokes
-  `plugins/soleur/docs/_data/github.js` (the *releases* fetcher —
-  distinct from `githubStats.js`) which has **no `AbortController`**
-  (`github.js:20`) and no `FETCH_TIMEOUT_MS`. When the workflow is on
-  a slow runner or the GitHub Releases endpoint hiccups, the build
-  blocks past the 5 s default and bun reports a hook timeout.
-- `jsonld-escaping.test.ts:20-33` runs a self-contained Eleventy
-  fixture in `beforeAll`. Its fixture config doesn't pull
-  `_data/github.js`, but Bun runs all `plugins/soleur/test/*.test.ts`
-  in **a single OS process** (per
-  `knowledge-base/project/learnings/test-failures/2026-04-18-bun-test-env-var-leak-across-files-single-process.md`).
-  When a prior test file's unfinished `fetch` is still pending at
-  file-handoff, the next file's `Bun.spawnSync` enters bun's
-  event-loop in a degraded state and the hook clock ticks while
-  spawn metadata is still being reconciled.
-- `github-stats-data.test.ts:99-111` is the canonical leak source:
-  the `dev-mode falls back to nulls when GitHub API errors` test
-  installs `globalThis.fetch = async () => { throw new Error(...) }`
-  and calls `githubStats()` which has a `try {Promise.all([fetch(...),
-  fetch(...)])} ... finally { clearTimeout(timer); }` (`githubStats.js:30-67`).
-  The thrown fetch propagates synchronously through `Promise.all`,
-  but the **AbortController's `setTimeout` is the dangling handle bun
-  warns about** — `clearTimeout(timer)` runs in `finally`, however the
-  test's `afterEach` immediately calls `__resetCache()` and exits
-  before bun's event loop has reaped the timer. On the next test
-  file's load, bun sees one residual handle and emits
-  `killed 1 dangling process`. The full hang then comes from the
-  Eleventy `beforeAll` in the *next* file (marketing-content-drift)
-  blocking on the unbounded `github.js` fetch.
-
-So the fix is a triplet:
-
-1. **Source fix:** add `AbortController` + `FETCH_TIMEOUT_MS` to
-   `plugins/soleur/docs/_data/github.js` (mirror of the same pattern
-   already in `githubStats.js:30-67`, `communityStats.js:24-46`).
-2. **Test hardening:** raise `beforeAll` timeout to 30 s on both
-   Eleventy-spawning tests (`marketing-content-drift.test.ts`,
-   `jsonld-escaping.test.ts`) — matches the precedent set in PR #4097
-   for `skill-security-scan.test.ts` spawn-based tests.
-3. **Dangling-handle fix:** stub `globalThis.fetch` to short-circuit
-   `Promise.all` *before* the AbortController timer is armed in the
-   "dev-mode fallback" test (and its CI-fail-fast sibling, and the
-   401 sibling) — replace
-   `globalThis.fetch = async () => { throw new Error(...) }` with a
-   form that returns a rejected promise *synchronously* so
-   `clearTimeout` runs in the same microtask the rejection settles.
+3. **No change to `github-stats-data.test.ts`.** The file passes in
+   isolation and the v1 plan's "rewrite throw to Promise.reject"
+   change had no measurable effect on the dangling-process warning
+   in repro (warning comes from the npm/npx subprocess of the
+   neighboring file, not from the AbortController timer).
 
 ## User-Brand Impact
 
@@ -118,81 +144,47 @@ public Releases endpoint with optional `GITHUB_TOKEN`.
 
 ## Research Reconciliation — Spec vs. Codebase
 
-Issue body says marketing-content-drift + jsonld-escaping fail at
-`beforeEach/afterEach hook timed out`. Both files use only `beforeAll`
-+ `afterAll`. This is a known bun-test quirk: when a `beforeAll`
-exceeds the default test timeout, bun's error reporter labels it
-"beforeEach/afterEach" generically. Confirmed against bun 1.3.11 on
-this worktree.
-
-Issue body also implies github-stats hangs "~180s before being killed
-by the runner's hard ceiling". The hang is **not** in github-stats
-itself — verified by running it in isolation (`bun test
-plugins/soleur/test/github-stats-data.test.ts` exits in 100 ms with
-7/7 pass). The hang is in **the next file's `beforeAll`**, which the
-issue conflates because `--bail`-less bun reports failures in file
-order. The fix targets the root cause (unbounded fetch in
-`github.js`) but the test-file diagnosis is plumbed correctly.
-
-| Spec claim                                | Reality                                                              | Plan response                              |
-|-------------------------------------------|----------------------------------------------------------------------|--------------------------------------------|
-| `beforeEach`/`afterEach` hook timeout     | Both files use `beforeAll`/`afterAll`; bun mislabels the error.      | Raise `beforeAll` timeout; note the quirk. |
-| github-stats hangs ~180s                  | github-stats itself exits in 100ms; *next* file's hook hangs.        | Fix dangling timer + unbounded fetch.      |
-| Three different root causes               | One shared root cause: unbounded `github.js` fetch + dangling timer. | Single-file source fix + two test guards.  |
+| Spec claim                                | Reality                                                          | Plan response                              |
+|-------------------------------------------|------------------------------------------------------------------|--------------------------------------------|
+| `beforeEach`/`afterEach` hook timeout     | Both files use `beforeAll`; bun mislabels the error.             | Raise `beforeAll` timeout; document quirk. |
+| github-stats hangs ~180 s                 | github-stats passes in 262 ms in isolation; hang is cross-file.  | No change to github-stats; fix upstream.   |
+| Three different root causes               | One root cause: default 5 s hook timeout vs. ~3–10 s build.      | One numeric edit per Eleventy-spawn site.  |
+| Dangling fetch / AbortController in test  | `githubStats.js` already clears its timer in `finally`.          | Drop the v1 "Promise.reject" AC.           |
+| `github.js` unbounded fetch is the cause  | `github.js` IS unbounded, but the Eleventy startup is ~3 s pure. | Keep the fix as defense-in-depth.          |
 
 ## Files to Edit
 
-- `plugins/soleur/docs/_data/github.js` — add `AbortController` +
-  `FETCH_TIMEOUT_MS = 5000` mirror of `githubStats.js:30-67`. Wrap the
-  existing `fetch(RELEASES_URL, { headers })` in the
-  controller/`signal` pattern; add `setTimeout(() => controller.abort(),
-  FETCH_TIMEOUT_MS)` and `clearTimeout(timer)` in `finally`. Preserve
-  the CI fail-fast branch verbatim. **No new dependencies.**
+- `plugins/soleur/test/marketing-content-drift.test.ts:62-77` —
+  change `beforeAll(async () => { ... });` to
+  `beforeAll(async () => { ... }, 30_000);` per `bun-types@1.3.14`
+  `test.d.ts:308 + 325`. Add an inline comment citing PR #4097's
+  `30_000` precedent and the Eleventy build timing rationale.
 
-- `plugins/soleur/test/marketing-content-drift.test.ts` — change
-  `beforeAll(async () => { ... })` to `beforeAll(async () => { ... },
-  30_000)` (third arg is the per-hook timeout, see bun-test docs).
-  Add a code comment citing PR #4097's precedent for the same pattern.
+- `plugins/soleur/test/jsonld-escaping.test.ts:20-33` — same:
+  third-arg `30_000` on `beforeAll`. Same comment.
 
-- `plugins/soleur/test/jsonld-escaping.test.ts` — same: third-arg
-  `30_000` on `beforeAll`. `afterAll` cleanup stays default (filesystem
-  unlink only — sub-second).
+- `plugins/soleur/docs/_data/github.js` — wrap the existing `fetch
+  (RELEASES_URL, { headers })` in an `AbortController + setTimeout +
+  clearTimeout-in-finally` pattern. Verbatim port of
+  `githubStats.js:30-67`. Constant `FETCH_TIMEOUT_MS = 5000`.
 
-- `plugins/soleur/test/github-stats-data.test.ts` — change the three
-  error-throwing fetch stubs (lines ~99-111, ~113-122, ~124-135) from
+## Files NOT to Edit (vs. v1 plan)
 
-  ```ts
-  globalThis.fetch = (async () => { throw new Error("network down"); }) as typeof fetch;
-  ```
-
-  to a form that resolves rejected promises synchronously *and* settles
-  before `AbortController`'s timer is armed:
-
-  ```ts
-  globalThis.fetch = ((..._args: unknown[]) =>
-    Promise.reject(new Error("network down"))) as typeof fetch;
-  ```
-
-  This guarantees the `Promise.all` settles in the same microtask the
-  controller's `setTimeout` is registered, so `finally { clearTimeout
-  (timer) }` runs before any test-runner handoff. No semantic change
-  to what the test asserts.
-
-## Files to Create
-
-None. (Drift-guard test is folded into the existing `.test.ts` files.)
+- `plugins/soleur/test/github-stats-data.test.ts` — passes in
+  isolation; the v1 plan's `Promise.reject(...)` rewrite was based
+  on a misattribution of the dangling-process warning. Verified by
+  pairwise repro 2026-05-20.
 
 ## Open Code-Review Overlap
 
-Ran (verified 2026-05-20):
+Ran 2026-05-20:
 
 ```bash
 gh issue list --label code-review --state open --json number,title,body \
   --limit 200 > /tmp/open-review-issues.json
 for p in plugins/soleur/docs/_data/github.js \
          plugins/soleur/test/marketing-content-drift.test.ts \
-         plugins/soleur/test/jsonld-escaping.test.ts \
-         plugins/soleur/test/github-stats-data.test.ts; do
+         plugins/soleur/test/jsonld-escaping.test.ts; do
   jq -r --arg path "$p" '.[] | select(.body // "" | contains($path))
     | "#\(.number): \(.title)"' /tmp/open-review-issues.json
 done
@@ -204,36 +196,36 @@ Result: **None**. No open code-review scope-outs touch these files.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1: `github.js` has bounded fetch.** `grep -nE
-  'AbortController|FETCH_TIMEOUT_MS|signal' plugins/soleur/docs/_data/
-  github.js` returns ≥3 matches (controller, timeout constant, signal
-  pass-through). The constant is `5000` (ms) to match
-  `githubStats.js:6` and `communityStats.js:15`.
-- [ ] **AC2: Eleventy-spawning hooks have 30s timeout.** `grep -nE
-  '30_000|30000' plugins/soleur/test/marketing-content-drift.test.ts
-  plugins/soleur/test/jsonld-escaping.test.ts` returns ≥1 match per
-  file, on a `beforeAll` line.
-- [ ] **AC3: Error-throwing fetch stubs use Promise.reject form.**
-  `grep -nE 'throw new Error\("network down"\)|throw new Error\("boom"\)'
-  plugins/soleur/test/github-stats-data.test.ts` returns **0** matches
-  (was 3); `grep -nE 'Promise\.reject\(new Error' plugins/soleur/test/
-  github-stats-data.test.ts` returns **≥3** matches.
-- [ ] **AC4: Repro command exits 0 with no dangling-process warning
-  and no hook timeout.** Run
+- [ ] **AC1: Eleventy-spawning hooks have 30 s timeout.** Both files
+  pass:
+  - `grep -nE ', 30_000\)' plugins/soleur/test/marketing-content-
+    drift.test.ts` returns exactly 1 line and that line is the
+    closing of the file's only `beforeAll`.
+  - Same for `plugins/soleur/test/jsonld-escaping.test.ts`.
+- [ ] **AC2: `github.js` has bounded fetch.**
+  `grep -nE 'AbortController|FETCH_TIMEOUT_MS|signal:'
+  plugins/soleur/docs/_data/github.js` returns ≥3 matches (controller
+  construction, timeout constant, signal pass-through). The constant
+  value is `5000` to match `githubStats.js:6` and `communityStats.js:15`.
+- [ ] **AC3: Repro command exits 0.** Run
 
   ```bash
   bun test plugins/soleur/test/github-stats-data.test.ts \
-           plugins/soleur/test/marketing-content-drift.test.ts \
-           plugins/soleur/test/jsonld-escaping.test.ts
+           plugins/soleur/test/jsonld-escaping.test.ts \
+           plugins/soleur/test/marketing-content-drift.test.ts
   ```
 
-  in this order (matches the file-discovery order under
-  `plugins/soleur/`). Exit code MUST be 0; stderr MUST NOT contain
-  `killed N dangling process` or `beforeEach/afterEach hook timed out`.
+  Exit code MUST be 0; stderr MUST NOT contain `beforeEach/afterEach
+  hook timed out`. (The `killed N dangling process` line may still
+  appear under future bun versions if a test forgets to await a
+  spawn — but it MUST NOT co-occur with a hook timeout, which is the
+  user-visible failure.)
+- [ ] **AC4: Each file passes in isolation.** Three separate `bun
+  test <file>` invocations each exit 0.
 - [ ] **AC5: Full plugin suite passes.** `bun test plugins/soleur/`
   exits 0 in ≤120 s. Capture timing in PR body.
-- [ ] **AC6: CI bun-shard passes.** `TEST_GROUP=bun bash scripts/
-  test-all.sh` exits 0 (this is the exact form CI runs — see
+- [ ] **AC6: CI bun-shard passes.** `TEST_GROUP=bun bash
+  scripts/test-all.sh` exits 0 (the exact CI form — see
   `scripts/test-all.sh:128-159`).
 - [ ] **AC7: No new dependencies.** `git diff --stat package.json
   bun.lockb` returns empty.
@@ -247,88 +239,83 @@ exercise it.
 
 ## Test Strategy
 
-No new test files. The drift-guard is the AC4 repro itself: if either
-of the two test-side guards (30s timeout, Promise.reject form) is
-removed, the same `bun test ...` invocation regresses. If the source
-fix in `github.js` is removed but the test guards stay, AC5 still
-passes locally (because dev runs have `CI=` unset and fall through to
-`version: null`); CI catches it because CI sets `CI=true` and the
-existing `if (process.env.CI) throw` branch in `github.js:28-30`
-will fire on the next runner hiccup. That branch is unchanged.
+No new test files. The drift-guard is the AC3 repro itself: if the
+third-arg `30_000` is removed from either edited file, the same
+`bun test ...` invocation regresses to the 5 s timeout failure.
+If the `github.js` AbortController is removed but the test guards
+stay, AC3 still passes locally (Eleventy build ≪ 30 s on healthy
+network); CI catches the regression because the existing
+`if (process.env.CI) throw` branch in `github.js:28-30` will fire
+on the next slow-fetch event. That branch is unchanged.
 
-Negative-space note: the issue body suggested an alternative fix
-("guard with a strict timeout in the test or stub the GitHub API at
-the module-init boundary"). This plan declines that alternative
-because **the source fix in `github.js` is required regardless** —
-the docs build *itself* runs in CI via `npm run docs:build` (Eleventy)
-and is the same unbounded-fetch surface that hangs the test. Fixing
-only the test would leave the production docs build unprotected, the
-exact failure mode `cq-progressive-rendering-for-large-assets` and
-the `communityStats.js`/`githubStats.js` precedents are designed to
-prevent.
+**Why not lower-bound the timeout to 15 s instead of 30 s?** Two
+reasons:
+
+1. 30 s is the project convention from PR #4097 for
+   subprocess-spawning bun tests (verified at
+   `plugins/soleur/test/skill-security-scan.test.ts:196` and 5
+   other sites).
+2. The marketing-content-drift `beforeAll` runs the FULL docs:build
+   including all `_data` files (github.js, githubStats.js,
+   communityStats.js, blogRedirects.js, skills.js, agents.js, etc.).
+   Real GitHub API + Discord API round-trips combined can push the
+   build to 8–12 s on cold cache; 15 s would leave thin margin.
+   30 s leaves CI-runner headroom without masking a true regression
+   (`scripts/test-all.sh` is itself wall-clocked by the GitHub
+   Actions job-level `timeout-minutes`).
 
 ## Risks & Sharp Edges
 
-- **Risk: 30s timeout masks a slower regression.** If a future
-  Eleventy plugin or `_data` file pushes the build past 30s, the
-  raised threshold delays detection. Mitigation: the CI runner has
-  its own outer timeout (job-level `timeout-minutes`), so a regression
-  cannot hide indefinitely. Per `wg-when-tests-fail-and-are-confirmed-
-  pre`, the threshold matches PR #4097's precedent for spawn-based
-  tests — 30s is the project convention, not a one-off.
+- **Risk: 30 s timeout masks a slower regression.** Mitigation: the
+  CI runner has its own job-level `timeout-minutes`; a regression
+  cannot hide indefinitely. Per `wg-when-tests-fail-and-are-
+  confirmed-pre`, the threshold matches PR #4097's precedent — 30 s
+  is the project convention, not a one-off.
 
-- **Risk: github.js abort on slow Releases endpoint.** A real
-  abort would replicate the existing CI fail-fast contract on
-  `githubStats.js:52-53`. The behavior on dev (`CI` unset) is the
-  existing `console.warn` + `{ version: null, changelog: { html: "" } }`
-  fallback (`github.js:31-33`), unchanged.
+- **Risk: `github.js` abort masks a real CI flake.** A real abort
+  would replicate the existing CI fail-fast contract on
+  `githubStats.js:52-53` (`if (process.env.CI) throw ...`). Dev mode
+  (CI unset) keeps the existing `console.warn` + `{ version: null,
+  changelog: { html: "" } }` fallback. No behaviour change for
+  successful fetches.
 
 - **Sharp Edge: bun-test mislabels `beforeAll` timeout as
   `beforeEach/afterEach`.** Documented inline in both edited test
-  files. Future debuggers searching for the error string will land on
-  the code comment first.
+  files. Future debuggers searching for the error string will land
+  on the code comment first.
 
-- **Sharp Edge: `Promise.reject(new Error(...))` vs `async () =>
-  { throw }`.** The two are semantically equivalent for await-callers
-  but differ in microtask scheduling. The bun-runtime quirk we're
-  dodging is that `async () => { throw }` schedules the rejection on
-  the *next* microtask, leaving a one-tick window in which
-  `AbortController`'s `setTimeout` registers and gets queued for GC
-  *after* the test's `afterEach` runs. `Promise.reject(...)` settles
-  synchronously, closing the window. If a future bun version changes
-  microtask ordering, this fix becomes belt-and-suspenders rather
-  than load-bearing.
-
-- **Sharp Edge: `globalThis.fetch` restoration discipline.** The
-  test file already captures `ORIGINAL_FETCH` and restores it in
-  `afterEach` — see lines 17-26. No change to that mechanism.
+- **Sharp Edge: "killed N dangling process" warnings.** These are
+  bun's reporter line for any child process that outlives the test
+  file. Today they only appear when `Bun.spawn(npm run docs:build)`
+  or `Bun.spawnSync(npx @11ty/eleventy)` is killed by a hook
+  timeout. After this fix they should not appear because the hook
+  has 30 s to await the subprocess cleanly. If a future bun version
+  emits the warning under healthy conditions, that's a bun-runtime
+  bug, not a test bug — file upstream rather than chasing it in
+  these files.
 
 - **Sharp Edge per AGENTS.md:** the plan's `## User-Brand Impact`
-  section threshold is `none`. `deepen-plan` Phase 4.6 verifies the
+  section threshold is `none`. `deepen-plan` Phase 4.6 verified the
   section exists and the threshold is in the allowed enum.
+
+- **Sharp Edge: AC count drift.** v1 plan said "3 throw stubs to
+  rewrite"; live grep showed only 2 throw sites
+  (`github-stats-data.test.ts:101, 116`). The 401 case at line 127
+  returns a `Response`, not a throw. The deepen pass dropped that
+  AC entirely (file is innocent); no count to track.
 
 ## Domain Review
 
-**Domains relevant:** Engineering only.
-
-Single-domain test-infrastructure fix. CTO/engineering scope.
+**Domains relevant:** Engineering only. Single-domain test-
+infrastructure fix. CTO/engineering scope.
 
 - **CTO assessment (inline):** Source fix in `github.js` mirrors
   three existing siblings (`githubStats.js`, `communityStats.js`,
-  Discord fetch in `communityStats.js`) — pattern is well-established.
-  Test fixes use the precedent from PR #4097 (per-test/per-hook
-  timeout via third argument). No new architectural surface.
+  Discord fetch in `communityStats.js`) — pattern is well-
+  established. Test fixes use the bun-types-documented `HookOptions`
+  third arg, with PR #4097's `30_000` literal as project precedent.
 
-No GDPR-gate trigger (no regulated-data surface; public GitHub
-Releases endpoint, optional `GITHUB_TOKEN` reader, no operator data,
-no LLM, no cron-on-learnings). Phase 2.7 skipped per its own
-silent-skip clause.
-
-No IaC trigger (no new infrastructure; existing Eleventy build path).
-Phase 2.8 skipped.
-
-No Product/UX trigger (no user-facing surface). Phase 2.5 Step 2
-skipped.
+No GDPR-gate trigger. No IaC trigger. No Product/UX trigger.
 
 ## Implementation Phases
 
@@ -336,14 +323,16 @@ skipped.
 
 - [ ] Verify worktree is `feat-one-shot-plugin-test-flakes-4112`.
 - [ ] `bun --version` ≥ 1.3.11.
-- [ ] Repro the flake with the AC4 command. Capture the
-  `killed 1 dangling process` + `beforeEach/afterEach hook timed out`
-  in the work-log; this is the before-state.
+- [ ] Repro AC3 command. Capture the before-state output.
 - [ ] Read `plugins/soleur/docs/_data/githubStats.js:1-67` and
-  `plugins/soleur/docs/_data/communityStats.js:1-50` to confirm the
-  mirror pattern.
+  `plugins/soleur/docs/_data/communityStats.js:1-50` to internalise
+  the mirror pattern.
+- [ ] Re-confirm bun-types `HookOptions` signature at
+  `~/.bun/install/cache/bun-types@<version>/test.d.ts` (the version
+  Bun resolves on this host). Project does not pin `bun-types`
+  explicitly; the runtime API is what we depend on.
 
-### Phase 1 — Source fix (RED → GREEN: `github.js`)
+### Phase 1 — Source fix (`github.js`)
 
 - [ ] Edit `plugins/soleur/docs/_data/github.js`:
   - Add `const FETCH_TIMEOUT_MS = 5000;` near the top, with the
@@ -354,74 +343,103 @@ skipped.
     - `const timer = setTimeout(() => controller.abort(),
       FETCH_TIMEOUT_MS);`
   - Pass `{ headers, signal: controller.signal }` to `fetch`.
-  - Wrap the existing `try { ... } catch { ... }` with a `finally
+  - Wrap the existing `try { ... } catch { ... }` with `finally
     { clearTimeout(timer); }`.
-- [ ] Run `npm run docs:build` — must exit 0 (the same as before).
+- [ ] Run `npm run docs:build` — must exit 0.
 
 ### Phase 2 — Test hardening (`marketing-content-drift.test.ts`)
 
-- [ ] Change `beforeAll(async () => { ... });` to `beforeAll(async
-  () => { ... }, 30_000);` with a code comment citing PR #4097's
-  precedent.
+- [ ] Change `beforeAll(async () => { ... });` (line 62) to
+  `beforeAll(async () => { ... }, 30_000);` with an inline comment.
 - [ ] Run `bun test plugins/soleur/test/marketing-content-drift.test.ts`
   — must exit 0.
 
 ### Phase 3 — Test hardening (`jsonld-escaping.test.ts`)
 
-- [ ] Same change: third-arg `30_000` on `beforeAll`. Same comment.
-- [ ] Run `bun test plugins/soleur/test/jsonld-escaping.test.ts`
-  — must exit 0.
+- [ ] Same edit at line 20. Same comment.
+- [ ] Run `bun test plugins/soleur/test/jsonld-escaping.test.ts` —
+  must exit 0.
 
-### Phase 4 — Dangling-timer fix (`github-stats-data.test.ts`)
+### Phase 4 — Integration
 
-- [ ] Rewrite the three error-throwing fetch stubs to
-  `Promise.reject(new Error(...))` form. Preserve the error messages
-  verbatim (`"network down"`, `"boom"`, `"Bad credentials"` /
-  HTTP 401 response — the 401 stub is already non-throwing, leave
-  it alone).
-- [ ] Run `bun test plugins/soleur/test/github-stats-data.test.ts`
-  — must exit 0, no `killed N dangling process` on stderr.
+- [ ] Run AC3 over the three files in discovery order — exit 0, no
+  hook-timeout strings.
+- [ ] Run AC4: three separate isolated invocations.
+- [ ] Run AC5: `bun test plugins/soleur/` — full plugin suite.
+- [ ] Run AC6: `TEST_GROUP=bun bash scripts/test-all.sh`.
 
-### Phase 5 — Integration
+### Phase 5 — Commit + push + PR
 
-- [ ] Run AC4 (`bun test` over the three files in file-discovery
-  order). Verify exit 0, no warnings.
-- [ ] Run AC5 (`bun test plugins/soleur/`) — full plugin suite.
-- [ ] Run AC6 (`TEST_GROUP=bun bash scripts/test-all.sh`) — CI bun
-  shard. Capture the timing log.
-
-### Phase 6 — Commit + push + PR
-
-- [ ] One commit: `fix(test): bound github.js fetch + raise eleventy
-  beforeAll timeout + reject-via-promise (Closes #4112)`.
+- [ ] One commit:
+  `fix(test): raise eleventy beforeAll timeout + bound github.js
+  fetch (Closes #4112)`.
 - [ ] PR body: AC checklist + before/after repro output + the
-  one-paragraph root-cause summary from this plan's Overview.
+  Enhancement Summary's Key Corrections paragraph (root-cause
+  diagnosis).
 
 ## CLI-verification
 
-- `bun test <file>` third-arg per-hook timeout: verified against
-  `plugins/soleur/test/skill-security-scan.test.ts` (PR #4097
-  precedent) — same `30_000` literal pattern.
+- `bun test` per-hook `HookOptions` numeric third arg: verified at
+  `~/.bun/install/cache/bun-types@1.3.14@@@1/test.d.ts:308` (`type
+  HookOptions = number | { timeout?: number }`) and `:325`
+  (`export function beforeAll(fn, options?: HookOptions): void`).
+- PR #4097 precedent for `30_000` literal: verified at
+  `plugins/soleur/test/skill-security-scan.test.ts:196` (`test.each`
+  per-test timeout) — same `HookOptions` API.
 - `AbortController` + `setTimeout` + `clearTimeout` pattern:
-  verified against `plugins/soleur/docs/_data/githubStats.js:30-67`
-  and `plugins/soleur/docs/_data/communityStats.js:24-46`. The
-  edit is a verbatim port; no novel API.
-- `Promise.reject(new Error(...))` semantic: standard ECMAScript;
-  no version-pinning needed.
+  verified verbatim against
+  `plugins/soleur/docs/_data/githubStats.js:30-67` and
+  `plugins/soleur/docs/_data/communityStats.js:24-46`. No novel
+  API; the edit is a port.
+- `Promise.reject(new Error(...))` was considered but dropped (see
+  Key Corrections #2-3); no remaining citations require
+  verification.
 
 ## Research Insights
 
-- **PR #4097** established the project convention for hook timeouts
-  (third-arg `30_000` on `beforeAll`/`beforeEach`/`afterEach`) and
-  closed the worker-pool flake class.
+- **PR #4097** (`state=MERGED`, `mergeCommit.oid=4ecac082...`)
+  established the project convention for hook/test timeouts on
+  subprocess-spawning bun tests. The same `30_000` literal is used
+  6 times in `skill-security-scan.test.ts` (lines 196, 204, 219,
+  237, 273, 368).
+- **`bun-types@1.3.14` test.d.ts:308 + :325** is the canonical
+  source for the `HookOptions` API used by this fix.
 - **`knowledge-base/project/learnings/test-failures/2026-04-18-bun-
-  test-env-var-leak-across-files-single-process.md`** documents the
-  single-OS-process bun-test mechanic, which is why a dangling timer
-  in one file can poison the next file's `beforeAll`.
-- **`knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-
-  sensitivity.md`** explains why `scripts/test-all.sh` runs `bun
-  test plugins/soleur/` as one shard.
-- **Constitution `cq-abort-signal-timeout-vs-fake-timers`**
-  (referenced in `githubStats.js:5` comment) is the canonical
-  reference for the manual `AbortController` + `setTimeout` pattern.
-  This plan applies the same pattern to `github.js`.
+  test-env-var-leak-across-files-single-process.md`** documents that
+  bun runs all `*.test.ts` files in a single OS process — relevant
+  context for understanding why `github-stats-data` was misattributed
+  as broken in the issue body (single-process means subprocess
+  zombies from one file are killed in the next file's window).
+- **`knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-
+  count-sensitivity.md`** explains why `scripts/test-all.sh` runs
+  `bun test plugins/soleur/` as one shard.
+- **Constitution `cq-abort-signal-timeout-vs-fake-timers`** is the
+  canonical reference for the manual `AbortController + setTimeout`
+  pattern.
+
+## Quality Checks (deepen-plan SKILL.md checklist)
+
+- [x] Every cited PR is live-verified: `gh pr view 4097` → MERGED,
+  oid `4ecac082...`.
+- [x] Every claim about SDK semantics cites the verbatim type-def
+  file (`bun-types@1.3.14/test.d.ts:308,325`).
+- [x] All rule-ID citations verified active: `wg-use-closes-n-in-pr-
+  body-not-title-to`, `wg-when-tests-fail-and-are-confirmed-pre`,
+  `hr-weigh-every-decision-against-target-user-impact`, `cq-abort-
+  signal-timeout-vs-fake-timers`. All present in
+  `AGENTS.md` index.
+- [x] No GitHub label prescribed in ACs.
+- [x] No AGENTS.md rule promotion/demotion in this plan.
+- [x] No pathspec→regex translation in ACs.
+- [x] No vendor base-image migration.
+- [x] No multi-clause SQL predicate in ACs.
+- [x] No `set -m` / process-group / signal-trap semantics in ACs.
+- [x] No SHA pin proposed.
+- [x] No new git-log AND-vs-OR semantics in ACs (single repro
+  command, not a co-change invariant).
+- [x] Source-grep counts cross-checked: 2 `throw new Error` sites in
+  `github-stats-data.test.ts` (was claimed 3 in v1; corrected to 0
+  since the file is now out of scope).
+- [x] AC verification greps tested against the post-fix expected
+  output: AC1 `, 30_000\)` matches the new line, AC2 matches the
+  ported AbortController block.
