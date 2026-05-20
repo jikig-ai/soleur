@@ -22,7 +22,8 @@
     "contents": "write",
     "members": "read",
     "metadata": "read",
-    "pull_requests": "write"
+    "pull_requests": "write",
+    "secrets": "write"
   },
   "default_events": []
 }

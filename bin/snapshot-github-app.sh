@@ -14,7 +14,7 @@
 #   /tmp/app.pem    (disk) — the App's RS256 private key, mode 0600.
 #                            Caller fetches via:
 #                              doppler secrets get GITHUB_APP_PRIVATE_KEY --plain \
-#                                -p soleur -c prd | base64 -d > /tmp/app.pem
+#                                -p soleur -c prd > /tmp/app.pem
 #                              chmod 600 /tmp/app.pem
 #                            Caller shreds via `shred -u /tmp/app.pem` after.
 #
