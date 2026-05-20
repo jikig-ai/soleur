@@ -174,7 +174,7 @@ GHCR is free for public images; `ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.
 - **discoverability_test.command:**
   ```bash
   # Run from operator workstation (NO SSH). Returns 200 or 401 if Inngest is alive; non-200/401 means absent.
-  curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://web-platform.soleur.ai/api/inngest
+  curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
   ```
   Expected output: `200` (or `401` with HMAC challenge). Anything else = Inngest absent or unreachable. `--max-time 10` per `hr-ssh-diagnosis-verify-firewall` sibling guidance on unbounded network calls.
 
@@ -234,7 +234,7 @@ GHCR is free for public images; `ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.
 
 These do NOT close at merge; they close when the operator runs the verification.
 
-- [ ] **AC-post-1.** Operator runs `curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://web-platform.soleur.ai/api/inngest` and observes `200` or `401`. (Existing VM — confirms no regression from cloud-init.yml edit.)
+- [ ] **AC-post-1.** Operator runs `curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest` and observes `200` or `401`. (Existing VM — confirms no regression from cloud-init.yml edit.)
 - [ ] **AC-post-2.** For NEW Soleur users: optional smoke validation on a clean Hetzner project (`terraform apply` from empty state → `curl /api/inngest` returns 200/401 within 5 min of cloud-init completion). Documented in the runbook but not enforced in this PR (Tier 2 / #4126 makes this a CI check).
 - [ ] **AC-post-3.** `gh issue close 4118` AFTER AC-post-1 passes. Per `wg-use-closes-n-in-pr-body-not-title-to` ops-remediation extension (Sharp Edge in plan/SKILL.md), the issue closure is operator-driven, not automatic at merge.
 
@@ -376,7 +376,7 @@ A new VM gets Inngest installed automatically by cloud-init's runcmd block.
 
 Verification (no SSH required):
 ```bash
-curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://web-platform.soleur.ai/api/inngest
+curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
 ```
 Expected: `200` or `401`. Anything else: Inngest absent or unreachable; investigate `/var/log/cloud-init-output.log` on the host (via Hetzner console if SSH is also broken).
 
