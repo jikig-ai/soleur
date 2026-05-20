@@ -91,6 +91,14 @@ Procedure:
    Expected: the new key is present at the listed level (e.g.,
    `"secrets": "write"`).
 
+4. The next hourly run of `scheduled-github-app-drift-guard.yml` will
+   re-check the installation grant against the committed manifest via the
+   `installation_permission_drift` failure mode (#4179). Any open tracking
+   issue labeled `ci/auth-broken` titled "GitHub App drift-guard..." will
+   auto-close once the run is green (existing auto-close-stale step in the
+   workflow). To force immediate verification instead of waiting up to an
+   hour: `gh workflow run scheduled-github-app-drift-guard.yml --ref main`.
+
 ### Step 3 — Paste 3 identity credentials into Doppler `prd`
 
 From the App's settings page, copy each value into Doppler. **Prefer the
