@@ -103,7 +103,7 @@ jobs:
 
       # ---- App-JWT -> installation-token mint (#3569) ----
       # Three-step chain: (1) mint RS256 App-JWT inline (drift-guard pattern,
-      # lines 119-150 of scheduled-github-app-drift-guard.yml), (2) resolve
+      # lines 127-158 of scheduled-github-app-drift-guard.yml), (2) resolve
       # this repo's installation_id at runtime via /repos/{owner}/{repo}/installation
       # so we don't need a new INSTALLATION_ID secret, (3) POST to
       # /app/installations/{id}/access_tokens with scope-down body so the
@@ -126,7 +126,7 @@ jobs:
           mint_failure_detail=""
           mint_failure_label=""
 
-          # 3-arg signature mirrors drift-guard's record_failure (line 98-117)
+          # 3-arg signature mirrors drift-guard's record_failure (line 106-125)
           # so the label-allowlist tripwire fires on a future typo (e.g.,
           # ci/auth-borken). The audit step's failure-routing only consumes
           # failure_label from the audit script (steps.check.outputs.*), but
@@ -569,7 +569,7 @@ jobs:
           # Cleanup all step-scoped temp files (PEM, JWTs, install tokens,
           # mint stderr, lookup responses). rm -f, not shred - runners are
           # ephemeral cloud VMs on COW filesystems; shred adds no security.
-          # Mirror of drift-guard cleanup step (yaml :466-474).
+          # Mirror of drift-guard cleanup step (yaml :552-554).
           rm -f "$RUNNER_TEMP"/app.pem.* \
                 "$RUNNER_TEMP"/app-jwt.* \
                 "$RUNNER_TEMP"/install-lookup.* \
