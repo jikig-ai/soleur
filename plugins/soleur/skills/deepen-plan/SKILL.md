@@ -393,13 +393,14 @@ If absent, HALT with:
 > Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan that ships production
 > code or infrastructure must declare its observability surface before deepen-plan proceeds.
 
-**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if:
+**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required top-level fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if ANY of:
 
-- The field key is missing from the body.
-- The field's value line matches `^\s*<field>:\s*(TODO|TBD|placeholder|manual operator check)\s*$` (field-value-equals-placeholder; surrounding prose mentioning TBD is allowed).
-- For `discoverability_test.command` specifically: the value contains the substring `ssh ` (with trailing space — the verb, not "ssh-free" docs).
+- **Field key absent** — `grep -qE "^\s*<field>:" <body>` returns no match.
+- **Field value is a placeholder** — the field-value line (case-insensitive) matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\s*$` (anchored — distinguish "field is exactly this string" from "prose contains this string"). Also reject `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\b` — trailing whitespace + extra text still counts as a placeholder.
+- **Field is empty / has no children** — for fields that template as a YAML block (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), the line immediately following `<field>:` MUST be either a continuation (indented sub-field starting with whitespace + non-`#` content) OR an inline scalar value on the same line as the key. A bare `<field>:` followed by a blank line or another top-level key fails the gate. This is the empty-key case (#4116 review). Detect with: locate the `<field>:` line; if `awk "NR==<n>+1 {print}"` returns a blank line OR a line matching `^[^[:space:]]`, reject.
+- **`discoverability_test.command` requires SSH** — extract the `command:` sub-field's value and reject if it matches `(^|\s|/)ssh(\s|$)` (word-boundary `ssh` followed by whitespace, end-of-string, or a path-style `/usr/bin/ssh`). Distinguishes the verb from `ssh-free` / `xssh` / `ssh.md` prose.
 
-On rejection, HALT with a message naming the specific field and its failure mode.
+On rejection, HALT with a message naming the specific field and its failure mode (e.g., `"Phase 4.7 reject: liveness_signal is empty (no sub-fields and no inline value)"`).
 
 **Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
 
@@ -409,9 +410,9 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "Every plan touching production code/infra MUST declar"
 ```
 
-**Step 5 — Pass-through.** If the section is present, all 5 fields exist with non-placeholder values, and `discoverability_test.command` does not require SSH, deepen-plan proceeds normally. No telemetry on pass.
+**Step 5 — Pass-through.** If the section is present, all 5 fields exist with non-placeholder values, no field is empty, and `discoverability_test.command` does not require SSH, deepen-plan proceeds normally. No telemetry on pass.
 
-**Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours because the plan (PR-F #3940) declared no observability surface and the operator never had a non-SSH way to verify the heartbeat. Combined with plan Phase 2.9 (template-time gate), this phase is the load-bearing pre-implementation gate.
+**Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours because the substrate (introduced in #4085) declared no observability surface and the operator never had a non-SSH way to verify the heartbeat. Combined with plan Phase 2.9 (template-time gate), this phase is the load-bearing pre-implementation gate. The empty-key reject was added per the PR #4123 review — the most common drift mode is `liveness_signal:` with no children, which earlier regex-only forms allowed through.
 
 ### 5. Discover and Run ALL Review Agents
 

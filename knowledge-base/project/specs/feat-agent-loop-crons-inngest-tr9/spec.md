@@ -132,3 +132,5 @@ discoverability_test:
   command: "curl -fsS https://deploy.soleur.ai/hooks/deploy-status | jq '.services.inngest_heartbeat'"
   expected_output: '"active"'
 ```
+
+**Note on shared discoverability:** The `services.inngest_heartbeat` field (added by the same PR #4123 that introduced this backfill) is a substrate-level liveness signal — it confirms the Inngest server is alive, NOT that this specific cron fired on its schedule. A per-cron `last_ok_at` check would be ideal but lives outside this PR's scope; see follow-up #4116-FU-1. Until then, the Sentry cron monitor (`scheduled-daily-triage`) is the per-cron signal; the heartbeat is the substrate signal.

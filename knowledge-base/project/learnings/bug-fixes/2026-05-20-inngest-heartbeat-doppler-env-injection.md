@@ -3,7 +3,7 @@ title: "EnvironmentFile= decoupled from env-population is an env-injection trap"
 date: 2026-05-20
 category: bug-fixes
 issue: 4116
-related_prs: [3940, 4085, 4093, 4104, 4111]
+related_prs: [3973, 4085, 4093, 4104, 4111]
 tags: [systemd, doppler, observability, env-injection, substrate-cascade]
 ---
 
@@ -28,7 +28,7 @@ Per `systemd.exec(5)`: "If `EnvironmentFile=` is missing or empty, no error is g
 
 The substrate cascade (#4017 → #4085 → #4093 → #4104 → #4111) was a five-PR sequence specifically focused on env-injection bugs. Each PR's acceptance criteria centered on inngest-server.service starting successfully — none checked the heartbeat sibling. The heartbeat resource has `paused = true` at apply time (intentional to prevent first-ping alerting), so Better Stack never sent a missed-ping alert even though the script was failing every 60s.
 
-The PR that introduced the broken pattern (PR-F #3940) passed every plan-time gate but declared no observability surface. The operator-blind zone aggregated across the cascade until issue #4116 surfaced it via post-mortem.
+The PR that introduced the heartbeat unit (PR-A #3973 — "feat(infra): IaC for inngest-server — Doppler + BetterStack providers + bootstrap + OCI build") passed every plan-time gate but declared no observability surface. PR-F #3940 was the upstream trigger-layer feature (runtime code, no infra files); the substrate that hosts the heartbeat was retroactively built in PR-A. The operator-blind zone aggregated across the substrate cascade until issue #4116 surfaced it via post-mortem.
 
 ## Generalization: the trap class
 
@@ -36,7 +36,7 @@ The PR that introduced the broken pattern (PR-F #3940) passed every plan-time ga
 
 Two failure shapes:
 
-1. **Caller assumes env-population path; population is incomplete.** PR-F's heartbeat unit assumed `INNGEST_HEARTBEAT_URL` would be in `/etc/default/inngest-server`. Bootstrap script (then and now) writes only the keys it knows about. Drift between "what the unit reads" and "what the writer writes" is invisible until runtime.
+1. **Caller assumes env-population path; population is incomplete.** PR-A's heartbeat unit assumed `INNGEST_HEARTBEAT_URL` would be in `/etc/default/inngest-server`. Bootstrap script (then and now) writes only the keys it knows about. Drift between "what the unit reads" and "what the writer writes" is invisible until runtime.
 
 2. **Caller assumes Doppler-wrapped invocation; unit forgets to wrap.** The fix moves the contract from "host-side env file is source of truth" to "Doppler prd is source of truth, materialized at `doppler run` time". Pattern-parity with `inngest-server.service` ensures the same source-of-truth across all sibling units.
 
