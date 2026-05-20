@@ -136,7 +136,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // #4128 — Doppler `dev` config injects `CC_PERSIST_USAGE=true` at process
     // spawn. `vi.unstubAllEnvs()` reverts `stubEnv` writes only; it cannot
     // delete a process-inherited env var. Force-empty here so default-off
-    // tests (T-W4-basic-off at line ~1455) see a falsy value at the strict
+    // tests (e.g. `T-W4-basic-off`) see a falsy value at the strict
     // `=== "true"` check in server/cc-dispatcher.ts:425. Tests that need
     // the flag on continue to call `vi.stubEnv("CC_PERSIST_USAGE", "true")`
     // explicitly in their own bodies — the local stub overrides this default.
