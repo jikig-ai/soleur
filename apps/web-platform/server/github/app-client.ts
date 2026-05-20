@@ -64,10 +64,17 @@ function readEnv(name: string): string {
  *     via recordGithubApiCall. The hook is non-blocking — a Supabase
  *     outage cannot wedge an Octokit request.
  *
+ * CALLER CONTRACT:
+ *   `founderId` MUST be derived from a validated session (cookie-scoped
+ *   `supabase.auth.getUser()` or equivalent webhook predicate) — NEVER
+ *   from a request body, query string, or other client-supplied source.
+ *   The audit-writer trusts the value and writes it straight to the
+ *   `audit_github_token_use.founder_id` column; a client-controlled
+ *   value would let an attacker forge cross-tenant audit attribution.
+ *
  * @param installationId — GitHub App installation id (per repo or per org)
- * @param founderId      — Soleur founder UUID. Audit rows attribute here;
- *                          MUST be the founder on whose behalf this client
- *                          is acting (multi-org install class).
+ * @param founderId      — Soleur founder UUID derived from a session-validated
+ *                          source. Audit rows attribute here.
  */
 export async function createGitHubAppClient(
   installationId: number,
@@ -107,10 +114,18 @@ export async function createGitHubAppClient(
 
   octokit.hook.error("request", async (error, options) => {
     const url = String(options.url ?? "");
-    const status =
+    // status normalized to null for non-HTTP failures (network reset,
+    // abort, DNS, no .status field). The audit row's response_status
+    // CHECK constraint allows NULL OR 100-599 — a synthetic 0 would
+    // violate CHECK and cause silent row drop.
+    const rawStatus =
       error && typeof error === "object" && "status" in error
-        ? Number((error as { status?: unknown }).status) || 0
-        : 0;
+        ? Number((error as { status?: unknown }).status)
+        : Number.NaN;
+    const status =
+      Number.isFinite(rawStatus) && rawStatus >= 100 && rawStatus <= 599
+        ? rawStatus
+        : null;
     void recordGithubApiCall({
       founderId,
       installationId,

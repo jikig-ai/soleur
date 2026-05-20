@@ -2,21 +2,24 @@
 //
 // recordGithubApiCall is the bridge between Octokit's afterResponse hook
 // and the record_github_token_use SECURITY DEFINER RPC. Per AC8: failure
-// is non-blocking and Sentry-mirrored (cq-silent-fallback-must-mirror-to-sentry).
+// is non-blocking and mirrors via reportSilentFallback to Sentry
+// (cq-silent-fallback-must-mirror-to-sentry). reportSilentFallback's own
+// internal try/catch wrapping guarantees a Sentry SDK throw cannot
+// escape into the Octokit hook chain.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { rpcMock, captureExceptionMock } = vi.hoisted(() => ({
+const { rpcMock, reportSilentFallbackMock } = vi.hoisted(() => ({
   rpcMock: vi.fn(),
-  captureExceptionMock: vi.fn(),
+  reportSilentFallbackMock: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({ rpc: rpcMock }),
+  getServiceClient: () => ({ rpc: rpcMock }),
 }));
 
-vi.mock("@sentry/nextjs", () => ({
-  captureException: captureExceptionMock,
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: reportSilentFallbackMock,
 }));
 
 import {
@@ -27,7 +30,7 @@ import {
 
 beforeEach(() => {
   rpcMock.mockReset();
-  captureExceptionMock.mockReset();
+  reportSilentFallbackMock.mockReset();
   rpcMock.mockResolvedValue({ data: "fake-id", error: null });
 });
 
@@ -42,6 +45,12 @@ describe("extractRepoFullName", () => {
     expect(
       extractRepoFullName("https://api.github.com/repos/jikig-ai/soleur"),
     ).toBe("jikig-ai/soleur");
+  });
+
+  it("strips query strings from bare paths (cardinality + PII guard)", () => {
+    expect(extractRepoFullName("/repos/jikig-ai/soleur?per_page=100")).toBe(
+      "jikig-ai/soleur",
+    );
   });
 
   it("returns null for non-repo endpoints", () => {
@@ -73,6 +82,17 @@ describe("extractEndpoint", () => {
     expect(
       extractEndpoint("/repos/jikig-ai/soleur/issues?per_page=100&page=1"),
     ).toBe("/repos/jikig-ai/soleur/issues");
+  });
+
+  it("returns the <unknown> sentinel on empty input (length-≥-1 CHECK guard)", () => {
+    expect(extractEndpoint("")).toBe("<unknown>");
+  });
+
+  it("caps the pathname at 256 chars (length-≤-256 CHECK guard)", () => {
+    const longSegment = "a".repeat(300);
+    const result = extractEndpoint(`/repos/${longSegment}`);
+    expect(result.length).toBe(256);
+    expect(result.startsWith("/repos/aaaa")).toBe(true);
   });
 });
 
@@ -107,7 +127,16 @@ describe("recordGithubApiCall", () => {
     );
   });
 
-  it("is non-blocking when the RPC returns an error (AC8 / cq-silent-fallback-must-mirror-to-sentry)", async () => {
+  it("forwards a null response_status for network-error hook paths", async () => {
+    await recordGithubApiCall({ ...ARGS, responseStatus: null });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "record_github_token_use",
+      expect.objectContaining({ p_response_status: null }),
+    );
+  });
+
+  it("is non-blocking when the RPC returns an error and mirrors via reportSilentFallback (AC8 + cq-silent-fallback-must-mirror-to-sentry)", async () => {
     rpcMock.mockResolvedValueOnce({
       data: null,
       error: { message: "supabase: connection refused" },
@@ -115,15 +144,25 @@ describe("recordGithubApiCall", () => {
 
     await expect(recordGithubApiCall(ARGS)).resolves.toBeUndefined();
 
-    expect(captureExceptionMock).toHaveBeenCalledTimes(1);
-    const [thrown, options] = captureExceptionMock.mock.calls[0];
-    expect((thrown as { message: string }).message).toMatch(/connection refused/);
-    expect(options).toEqual({
-      tags: {
-        surface: "github-audit-writer",
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+    const [thrown, options] = reportSilentFallbackMock.mock.calls[0];
+    expect((thrown as { message: string }).message).toMatch(
+      /connection refused/,
+    );
+    expect(options).toMatchObject({
+      feature: "github-audit",
+      op: "record",
+      extra: {
+        installationId: ARGS.installationId,
+        repoFullName: ARGS.repoFullName,
         endpoint: ARGS.endpoint,
+        responseStatus: ARGS.responseStatus,
       },
     });
+    // Sentry tag-cardinality guard — endpoint templated for the indexed tag.
+    expect(options.extra.endpointTemplate).toBe(
+      "/repos/:owner/:repo/pulls/:n",
+    );
   });
 
   it("is non-blocking when the RPC throws", async () => {
@@ -132,14 +171,15 @@ describe("recordGithubApiCall", () => {
     });
 
     await expect(recordGithubApiCall(ARGS)).resolves.toBeUndefined();
-    expect(captureExceptionMock).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
     expect(
-      (captureExceptionMock.mock.calls[0][0] as { message: string }).message,
+      (reportSilentFallbackMock.mock.calls[0][0] as { message: string })
+        .message,
     ).toMatch(/network down/);
   });
 
   it("does NOT page Sentry on the success path", async () => {
     await recordGithubApiCall(ARGS);
-    expect(captureExceptionMock).not.toHaveBeenCalled();
+    expect(reportSilentFallbackMock).not.toHaveBeenCalled();
   });
 });

@@ -27,28 +27,19 @@ vi.mock("@octokit/app", () => ({
   }),
 }));
 
-vi.mock("@/server/github/audit-writer", () => ({
-  recordGithubApiCall: recordCalls,
-  extractEndpoint: (s: string) => {
-    if (!s) return "";
-    try {
-      const base = "https://api.github.com";
-      const u =
-        s.startsWith("http://") || s.startsWith("https://")
-          ? new URL(s)
-          : new URL(s, base);
-      return u.pathname;
-    } catch {
-      return s;
-    }
-  },
-  extractRepoFullName: (s: string) => {
-    const m = /^\/repos\/([^/]+)\/([^/]+)(?:\/|$)/.exec(
-      s.startsWith("http") ? new URL(s).pathname : s,
-    );
-    return m ? `${m[1]}/${m[2]}` : null;
-  },
-}));
+// Mock recordGithubApiCall (Supabase RPC + Sentry side-effects) but
+// keep the real extractEndpoint / extractRepoFullName so the factory
+// hook's wiring is exercised against the production parsers — not a
+// drifting test-mock copy.
+vi.mock("@/server/github/audit-writer", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/server/github/audit-writer")
+  >("@/server/github/audit-writer");
+  return {
+    ...actual,
+    recordGithubApiCall: recordCalls,
+  };
+});
 
 const STUB_PRIVATE_KEY =
   "-----BEGIN RSA PRIVATE KEY-----\nstubpk\n-----END RSA PRIVATE KEY-----";
@@ -167,6 +158,55 @@ describe("createGitHubAppClient (PR-H Phase 3 + PR-H+1 audit hook)", () => {
       repoFullName: "jikig-ai/soleur",
       responseStatus: 422,
     });
+  });
+
+  it("records responseStatus=null on the error hook when the failure carries no HTTP status (network reset / DNS / abort)", async () => {
+    const mod = await import("@/server/github/app-client");
+    await mod.createGitHubAppClient(42, SYNTHETIC_FOUNDER_ID);
+
+    const handler = hookError.mock.calls[0][1] as (
+      error: unknown,
+      options: { url: string },
+    ) => unknown;
+
+    const networkError = new Error("ECONNRESET");
+
+    await expect(
+      handler(networkError, {
+        url: "https://api.github.com/repos/jikig-ai/soleur/pulls/4098",
+      }),
+    ).rejects.toBe(networkError);
+
+    expect(recordCalls).toHaveBeenCalledTimes(1);
+    expect(recordCalls).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responseStatus: null,
+      }),
+    );
+  });
+
+  it("clamps out-of-range HTTP statuses to null (defense-in-depth on response_status CHECK constraint)", async () => {
+    const mod = await import("@/server/github/app-client");
+    await mod.createGitHubAppClient(42, SYNTHETIC_FOUNDER_ID);
+
+    const handler = hookError.mock.calls[0][1] as (
+      error: unknown,
+      options: { url: string },
+    ) => unknown;
+
+    const weirdError = { status: 0, message: "synthetic" };
+
+    await expect(
+      handler(weirdError, {
+        url: "https://api.github.com/repos/jikig-ai/soleur",
+      }),
+    ).rejects.toBe(weirdError);
+
+    expect(recordCalls).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responseStatus: null,
+      }),
+    );
   });
 
   it("records app-level endpoints with repoFullName=null", async () => {
