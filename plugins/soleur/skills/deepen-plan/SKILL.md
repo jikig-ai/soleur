@@ -364,6 +364,55 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 **Why:** The framing layer (brainstorm Phase 0.1) and the template layer (plan Phase 2.6) can both be skipped or filled with placeholders. This phase is the load-bearing pre-implementation gate that catches both — a plan with an empty section cannot pass deepen-plan, which means it cannot proceed to `/work`. Combined with preflight Check 6 (ship-time gate) and the `user-impact-reviewer` conditional agent (review-time gate), this closes the workflow loop introduced for #2887.
 
+### 4.7. Observability Gate Verification (Always)
+
+Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan whose Files-to-Edit touches production code/infra (per plan Phase 2.9 trigger set) MUST contain a `## Observability` section with the 5-field schema. Symmetric to Phase 4.6 above; this gate is what makes plan Phase 2.9 load-bearing.
+
+**Step 1 — Detect trigger.** Inspect the plan's `## Files to Edit` (or equivalent) list. If every path matches one of:
+
+- `^knowledge-base/`
+- `^docs/`
+- `^README\.md$`
+- `^CHANGELOG\.md$`
+- `\.md$` outside `plugins/*/skills/` and `apps/*/`
+
+then the plan is pure-docs — skip silently (no further checks).
+
+Otherwise the gate applies; proceed to Step 2.
+
+**Step 2 — Locate the section.** Grep the target plan file:
+
+```bash
+grep -q '^## Observability' <plan-file>
+```
+
+If absent, HALT with:
+
+> Error: Plan touches production code/infra but is missing `## Observability` section.
+> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the schema.
+> Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan that ships production
+> code or infrastructure must declare its observability surface before deepen-plan proceeds.
+
+**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if:
+
+- The field key is missing from the body.
+- The field's value line matches `^\s*<field>:\s*(TODO|TBD|placeholder|manual operator check)\s*$` (field-value-equals-placeholder; surrounding prose mentioning TBD is allowed).
+- For `discoverability_test.command` specifically: the value contains the substring `ssh ` (with trailing space — the verb, not "ssh-free" docs).
+
+On rejection, HALT with a message naming the specific field and its failure mode.
+
+**Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-observability-as-plan-quality-gate applied \
+  "Every plan touching production code/infra MUST declar"
+```
+
+**Step 5 — Pass-through.** If the section is present, all 5 fields exist with non-placeholder values, and `discoverability_test.command` does not require SSH, deepen-plan proceeds normally. No telemetry on pass.
+
+**Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours because the plan (PR-F #3940) declared no observability surface and the operator never had a non-SSH way to verify the heartbeat. Combined with plan Phase 2.9 (template-time gate), this phase is the load-bearing pre-implementation gate.
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>

@@ -442,6 +442,35 @@ If the plan introduces infrastructure that needs to live somewhere — a server,
 
 Skip silently if the plan introduces no new infrastructure (pure code change against an already-provisioned surface). A plan that only edits files under `apps/<app>/src/` or `apps/<app>/server/` typically skips. A plan that introduces a new service, a new secret, a new vendor, or a new persistent runtime process does not.
 
+### 2.9. Observability Quality Gate
+
+[skill-enforced: plan Phase 2.9 + deepen-plan Phase 4.7]
+
+Every plan whose Files-to-Edit includes a code-class file under `apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`, or that introduces any new infrastructure surface (per Phase 2.8 trigger set), MUST emit a `## Observability` section using the 5-field schema. A feature that requires SSH to verify observability is a feature without observability.
+
+**Required schema (verbatim from `plan-issue-templates.md`):**
+
+```yaml
+liveness_signal:    # what / cadence / alert_target / configured_in
+error_reporting:    # destination / fail_loud
+failure_modes:      # list of {mode, detection, alert_route}
+logs:               # where / retention
+discoverability_test:  # command (NO ssh) / expected_output
+```
+
+**Reject conditions** (enforced at deepen-plan Phase 4.7 — see `deepen-plan/SKILL.md`):
+
+- Section missing entirely.
+- Any required field contains the substring `TODO`, `TBD`, `placeholder`, or `manual operator check` AS THE FIELD VALUE (a fallback note in surrounding prose mentioning TBD is allowed; the canonical "field is empty" reject regex is `^\s*<field>:\s*(TODO|TBD|placeholder|manual operator check)\s*$`).
+- `discoverability_test.command` contains `ssh ` (with trailing space — distinguish "ssh " the verb from "ssh-free" in docs).
+
+**Skip silently** when:
+
+- Plan is pure-docs (no Files-to-Edit under code/infra paths above).
+- Plan deletes-only (no new code/infra surface; revert PRs).
+
+**Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours. The plan that introduced it (PR-F #3940) passed every other plan-time gate but had no observability declaration; the operator-blind-zone aggregated across the substrate cascade (#4017 → #4111) until issue #4116 surfaced the gap. Codifying the gate at plan-time prevents the next feature from shipping a dark observability surface.
+
 ### 3. SpecFlow Analysis
 
 **If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
