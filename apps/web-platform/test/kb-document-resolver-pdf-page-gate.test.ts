@@ -11,7 +11,7 @@
 // gate (oversized_buffer + numPages above/below threshold + metadata-read
 // failures) without synthesizing real PDFs.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import {
   mkdtempSync,
   realpathSync,
@@ -100,6 +100,15 @@ afterEach(() => {
 });
 
 describe("kb-document-resolver PDF page-count gate (#3429)", () => {
+  // Pre-warm pdfjs-dist once per file — the real `@/server/pdf-text-extract`
+  // module (loaded via `vi.importActual` in the vi.mock factory above) pulls
+  // pdfjs lazily; first-test cold-load ~5-10s under contention blows the
+  // default 5s vitest timeout. Mirror of `pdf-text-extract.test.ts:135`
+  // precedent. See #3817 Fix 3.
+  beforeAll(async () => {
+    await import("pdfjs-dist/legacy/build/pdf.mjs");
+  }, 30_000);
+
   function seedPdf(rel: string, contents = "%PDF-1.4\nfake") {
     mkdirSync(path.join(tmpRoot, path.dirname(rel)), { recursive: true });
     writeFileSync(path.join(tmpRoot, rel), Buffer.from(contents));

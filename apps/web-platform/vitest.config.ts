@@ -4,14 +4,15 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Escape hatch for the kb-chat-sidebar/chat-page flake class (#3818, #2594,
-// #2505). `isolate: true` closes module-graph aliasing on `pool: 'threads'`
-// but does NOT close worker-pool resource-contention races. Flip via
-// `WEBPLAT_TEST_USE_FORKS=1 npm run test:ci` to switch the component project
-// to `pool: 'forks'` (per-file process isolation, ~2-3x slower but eliminates
-// worker-graph aliasing entirely). Default off.
+// Component-project worker pool. Default on `forks` (per-file process
+// isolation) since #3817 confirmed the kb-chat-sidebar/chat-page/ws-* flake
+// class is worker-pool resource contention under `pool: 'threads'`, not
+// module-graph aliasing. `isolate: true` closes the aliasing vector but does
+// NOT close the contention vector — forks does. Opt out via
+// `WEBPLAT_TEST_USE_THREADS=1 npm run test:ci` for diagnosis (the threads
+// pool is faster but reintroduces the contention class). Default on.
 const componentPool =
-  process.env.WEBPLAT_TEST_USE_FORKS === "1" ? "forks" : undefined;
+  process.env.WEBPLAT_TEST_USE_THREADS === "1" ? undefined : "forks";
 
 export default defineConfig({
   esbuild: {

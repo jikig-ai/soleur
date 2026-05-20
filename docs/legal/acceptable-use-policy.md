@@ -369,3 +369,7 @@ For questions about this Policy, please contact us through:
 > **Related documents:** This Acceptable Use Policy references data protection practices and obligations. Consider generating companion **Privacy Policy**, **GDPR Policy**, and **Terms and Conditions** documents to ensure consistency. If Soleur processes personal data on behalf of users in a controller-processor relationship, a **Data Protection Disclosure** may also be appropriate.
 
 ---
+
+---
+
+<!-- PR-H (#3244) #4066 — 2026-05-19: Card-screenshot-redaction clause. GitHub-sourced Today cards (source='github' rows on /dashboard) render with `redactGithubSourcedText` applied at the render layer. Founders are advised not to capture or share screenshots of cards containing third-party repository content beyond what Soleur presents — the runtime's render-time redaction is a minimization control, not a downstream sharing license. CVE / secret-scanning cards render ID + severity only by default; founders should not work around this to capture redacted body content for redistribution. KB-drift cards (source='kb-drift') are internal-infrastructure signal and render unredacted by design. Authoritative shape: knowledge-base/legal/article-30-register.md Processing Activity 17. -->

@@ -61,6 +61,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-use-closes-n-in-pr-body-not-title-to] → rest
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
 - [id: wg-plan-prescribed-skills-must-run-inline] → core
+- [id: wg-end-of-work-emit-resume-prompt] → core
 
 ## Code Quality
 

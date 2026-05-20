@@ -69,8 +69,8 @@
 // See ADR-033 [Refined 2026-05-19 post PR-2 plan review] for details.
 
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -79,12 +79,28 @@ import { reportSilentFallback } from "@/server/observability";
 // at spawn time → reportSilentFallback → Sentry status=error, instead of
 // throwing at /api/inngest route registration which would silently disable
 // the entire Inngest worker with no operator-visible Sentry signal.
+//
+// IMPLEMENTATION NOTE (#4017): the original `createRequire(import.meta.url)
+// + require.resolve(...)` shape works in dev but produces `TypeError: path
+// argument must be of type string (received number 32798)` in the Next.js
+// standalone bundle — webpack rewrites `require.resolve()` to module-id
+// integers. Use filesystem `existsSync` checks against known paths instead.
 function resolveClaudeBin(): string {
-  const require_ = createRequire(import.meta.url);
-  const pkgDir = dirname(
-    require_.resolve("@anthropic-ai/claude-code/package.json"),
+  const override = process.env.CLAUDE_BIN;
+  if (override && existsSync(override)) return override;
+
+  const candidates = [
+    "/app/node_modules/.bin/claude",
+    join(process.cwd(), "node_modules/.bin/claude"),
+    join(process.cwd(), "apps/web-platform/node_modules/.bin/claude"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `claude binary not found in any known location: ${candidates.join(", ")}. ` +
+      "Set CLAUDE_BIN env var to override.",
   );
-  return join(pkgDir, "..", "..", ".bin", "claude");
 }
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
@@ -223,12 +239,16 @@ predicates and SLA status.
 // constrained to its monitor role. Network verbs (`curl`, `dig`) widen
 // the surface vs PR-1; the in-prompt HTTPS-and-non-RFC1918 guard at step
 // 3c above is the load-bearing SSRF mitigation (Layer 1 of dual defense).
+// The trailing `--` is load-bearing — see cron-daily-triage.ts:CLAUDE_CODE_FLAGS
+// for the explanation. claude 2.x's --allowedTools is variadic and consumes
+// the prompt as a tool name without the end-of-options marker. #4017 bug 8/8.
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model", "claude-sonnet-4-6",
   "--max-turns", "30",
   "--allowedTools",
   "Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh label create:*),Bash(curl:*),Bash(dig:*),Read,Glob,Grep",
+  "--",
 ];
 
 // 15 min — see file-header MAX_TURN_DURATION_MS rationale. Exported for

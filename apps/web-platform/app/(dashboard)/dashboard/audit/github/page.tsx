@@ -1,0 +1,122 @@
+// PR-H (#3244) — Founder-facing read-only viewer for
+// `audit_github_token_use` rows. RLS policy
+// `audit_github_token_use_owner_select` is the primary gate; the
+// explicit `.eq("founder_id", user.id)` is belt-and-suspenders against
+// any future RLS loosening (precedent: app/(dashboard)/dashboard/audit/page.tsx).
+//
+// PR-H ships the table + RPC + Art. 17 cascade (mig 051) but does NOT
+// populate rows — the per-Octokit-call writer wires in PR-H+1 (#4098)
+// alongside the spawn-agent action loop. Until then this page shows the
+// empty-state copy noting where rows will come from.
+
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+
+export const dynamic = "force-dynamic";
+
+interface GhAuditRow {
+  ts: string;
+  installation_id: number;
+  repo_full_name: string | null;
+  endpoint: string;
+  response_status: number | null;
+}
+
+export default async function GitHubAuditPage() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
+
+  const { data } = await supabase
+    .from("audit_github_token_use")
+    .select("ts, installation_id, repo_full_name, endpoint, response_status")
+    .eq("founder_id", user.id)
+    .order("ts", { ascending: false })
+    .limit(50);
+
+  const rows = (data ?? []) as GhAuditRow[];
+
+  return (
+    <main className="mx-auto max-w-4xl px-6 py-8">
+      <header className="mb-8">
+        <h1 className="text-2xl font-medium text-soleur-text-primary">
+          GitHub token-use audit
+        </h1>
+        <p className="mt-2 text-sm text-soleur-text-secondary">
+          Every GitHub App installation-token use by Soleur, recorded as
+          Art. 5(2) accountability evidence. Read-only; rows are append-only
+          (WORM trigger) and anonymise on account deletion.
+        </p>
+      </header>
+
+      <section
+        aria-labelledby="gh-audit-section-header"
+        className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1"
+      >
+        <header className="border-b border-soleur-border-default px-5 py-3">
+          <h2 id="gh-audit-section-header" className="font-medium text-soleur-text-primary">
+            Recent token uses
+          </h2>
+          <p className="mt-1 text-xs text-soleur-text-muted">
+            Latest 50 calls, ordered most-recent first.
+          </p>
+        </header>
+        {rows.length === 0 ? (
+          <p
+            className="px-5 py-6 text-sm text-soleur-text-secondary"
+            data-testid="gh-audit-empty"
+          >
+            No GitHub token uses yet. The ledger populates when Soleur
+            spawns an agent action against your repository — PR-H ships
+            the read surface; the spawn-agent writer wires in the next
+            release (tracking #4098).
+          </p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase text-soleur-text-muted">
+              <tr>
+                <th className="px-5 py-2 font-medium">Timestamp</th>
+                <th className="px-5 py-2 font-medium">Repository</th>
+                <th className="px-5 py-2 font-medium">Endpoint</th>
+                <th className="px-5 py-2 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr
+                  key={`${r.ts}-${i}`}
+                  className="border-t border-soleur-border-default/50"
+                >
+                  <td className="px-5 py-2 text-soleur-text-secondary">
+                    {new Date(r.ts).toLocaleString()}
+                  </td>
+                  <td className="px-5 py-2 text-soleur-text-primary">
+                    {r.repo_full_name ?? <span className="text-soleur-text-muted">—</span>}
+                  </td>
+                  <td className="px-5 py-2 font-mono text-xs text-soleur-text-secondary">
+                    {r.endpoint}
+                  </td>
+                  <td className="px-5 py-2 text-soleur-text-secondary">
+                    {r.response_status ?? <span className="text-soleur-text-muted">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <p className="mt-6 text-xs text-soleur-text-muted">
+        Article 30 PA-16 (GitHub-sourced priority signals) governs this
+        ledger. Anonymisation runs automatically when you delete your
+        account (Art. 17). See{" "}
+        <span className="font-mono">
+          knowledge-base/legal/article-30-register.md
+        </span>{" "}
+        for the full processing record.
+      </p>
+    </main>
+  );
+}

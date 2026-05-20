@@ -43,6 +43,7 @@ import {
 } from "@/lib/messages/tiers";
 import {
   ACTION_CLASS_DEFAULTS,
+  type ActionClass,
   type ActionClassTier,
 } from "@/server/scope-grants/action-class-map";
 
@@ -53,6 +54,11 @@ interface PaymentFailedPayload {
   amount: number;
   currency: string;
   failureCode: string;
+  // PR-H (#4077): producer-declared literal. Webhook predicate sets this
+  // to "finance.payment_failed" at envelope assembly time. Optional on
+  // the envelope only to support pre-PR-H replays / test fixtures; the
+  // CFO function backfills from ACTION_CLASS_DEFAULTS when absent.
+  action_class?: ActionClass;
 }
 
 // PR-G (#3947) — RV4 cleanup: replaces inlined `const TIER = "draft_one_click"`.
@@ -223,6 +229,10 @@ export async function cfoHandler({
       urgency: "medium",
       trust_tier:
         event.data.tier ?? ACTION_CLASS_DEFAULTS["finance.payment_failed"],
+      // PR-H (#4077): producer-declared literal. Falls back to the constant
+      // for pre-PR-H envelopes where the payload omits action_class.
+      action_class:
+        payload.action_class ?? "finance.payment_failed",
     });
   });
 

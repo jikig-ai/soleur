@@ -1,0 +1,67 @@
+# PR-H (#3244) Phase 5 — nightly KB-drift walker.
+#
+# Runs scripts/kb-drift-walker.sh against the repo, HMAC-signs the JSON
+# output, and POSTs to /api/internal/kb-drift-ingest. The ingest route
+# is gated on KB_DRIFT_INGEST_SIGNING_KEY (Doppler `prd_kb_drift_walker`).
+#
+# Doppler service token `DOPPLER_TOKEN_KB_DRIFT` is published by Phase 2
+# IaC (apps/web-platform/infra/kb-drift.tf) as a repo Actions secret.
+# Scope: `prd_kb_drift_walker` only — leaked-walker-token threat model
+# is "read the signing key for this ingest route", not "read GitHub App
+# PEM or Stripe webhook secret". Blast radius confined.
+#
+# Untrusted-input handling: no GitHub-context inputs flow into run:
+# blocks. The only mutable input is the repo ref (read-only). Action
+# references are SHA-pinned per convention.
+
+name: KB-drift walker
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kb-drift-walker
+  cancel-in-progress: false
+
+jobs:
+  walk-and-ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@517441f1eaf80f64b34d0e4dca44c0aacb13a3a3 # v3
+
+      - name: Run walker and POST to ingest
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_KB_DRIFT }}
+        run: |
+          set -euo pipefail
+          FINDINGS_JSON="$(bash scripts/kb-drift-walker.sh)"
+          export KB_DRIFT_INGEST_SIGNING_KEY="$(doppler secrets get KB_DRIFT_INGEST_SIGNING_KEY -p soleur -c prd_kb_drift_walker --plain)"
+          INGEST_URL="$(doppler secrets get KB_DRIFT_INGEST_URL -p soleur -c prd_kb_drift_walker --plain)"
+          # Stream the HMAC key via env, not argv. `openssl dgst -hmac "$KEY"`
+          # exposes the key through /proc/<pid>/cmdline for the lifetime of the
+          # openssl process — visible to any other process on the runner with
+          # /proc access. Python's hmac reads the key from the env-resident
+          # variable only; no key bytes ever land in argv.
+          SIG_HEX="$(printf '%s' "$FINDINGS_JSON" | python3 -c 'import os,sys,hmac,hashlib;print(hmac.new(os.environ["KB_DRIFT_INGEST_SIGNING_KEY"].encode("utf-8"), sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')"
+          SIG="sha256=${SIG_HEX}"
+          HTTP_CODE="$(curl -sS -o /tmp/ingest.out -w '%{http_code}' \
+            -X POST "$INGEST_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Soleur-Kb-Drift-Signature: $SIG" \
+            --data-raw "$FINDINGS_JSON")"
+          echo "ingest response code: $HTTP_CODE"
+          cat /tmp/ingest.out
+          test "$HTTP_CODE" -ge 200 -a "$HTTP_CODE" -lt 300
