@@ -1,3 +1,10 @@
+---
+title: LLM-as-Script Pattern for CI File Generation
+date: 2026-03-12
+category: ci-cd
+tags: [implementation-patterns, campaign-calendar, 2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md, 2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md, 2026-02-22-skill-count-propagation-locations.md, 2026-02-06-parallel-plan-review-catches-overengineering.md]
+---
+
 # Learning: LLM-as-Script Pattern for CI File Generation
 
 ## Problem

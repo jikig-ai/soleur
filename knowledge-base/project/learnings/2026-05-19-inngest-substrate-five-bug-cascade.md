@@ -1,20 +1,13 @@
 ---
+title: The Inngest substrate had five compounding bugs in production
 date: 2026-05-19
 category: infrastructure
+tags: [inngest, substrate, five, bug, cascade]
+related_issues: [#4017 (P1: PR-1 substrate missed all scheduled fires), #4079 (PR-2 follow-through with auto-verification)]
+related_prs: [#3940 (PR-F substrate), #3985 (TR9 PR-1 cron-daily-triage)]
+related_rules: [hr-tagged-build-workflow-needs-initial-tag-push (NEW), hr-ship-message-no-operator-checklist, hr-no-dashboard-eyeball-pull-data-yourself, hr-multi-step-post-merge-bootstrap-script]
 topic: PR-F Inngest substrate — five compounding bugs that silently broke all cron functions in production
-trigger_prs:
-  - "#4062 (TR9 PR-2 cron-follow-through-monitor — ship-time audit surfaced it)"
-related_prs:
-  - "#3940 (PR-F substrate)"
-  - "#3985 (TR9 PR-1 cron-daily-triage)"
-related_issues:
-  - "#4017 (P1: PR-1 substrate missed all scheduled fires)"
-  - "#4079 (PR-2 follow-through with auto-verification)"
-related_rules:
-  - "hr-tagged-build-workflow-needs-initial-tag-push (NEW)"
-  - "hr-ship-message-no-operator-checklist"
-  - "hr-no-dashboard-eyeball-pull-data-yourself"
-  - "hr-multi-step-post-merge-bootstrap-script"
+trigger_prs: [#4062 (TR9 PR-2 cron-follow-through-monitor — ship-time audit surfaced it)]
 ---
 
 # The Inngest substrate had five compounding bugs in production

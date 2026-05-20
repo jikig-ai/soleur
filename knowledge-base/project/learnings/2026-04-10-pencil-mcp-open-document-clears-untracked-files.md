@@ -1,3 +1,10 @@
+---
+title: Pencil MCP open_document silently clears untracked .pen file contents
+date: 2026-04-10
+category: infrastructure
+tags: [integration-issues, design-tooling/mcp-tools, critical, pencil-mcp, data-loss, mcp-tools, design-tooling, untracked-files]
+---
+
 # Learning: Pencil MCP open_document silently clears untracked .pen file contents
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: 'when a render gate uses `.some(predicate)`, write a test that distinguishes it from `.length > 0`'
+date: 2026-05-05
+category: engineering
+tags: [best-practices, test-design, cq-write-failing-tests-before, hr-weigh-every-decision-against-target-user-impact, 3225, 3251]
+---
+
 # Learning: when a render gate uses `.some(predicate)`, write a test that distinguishes it from `.length > 0`
 
 ## Problem

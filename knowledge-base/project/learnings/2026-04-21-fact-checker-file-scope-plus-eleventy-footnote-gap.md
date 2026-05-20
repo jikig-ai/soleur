@@ -1,17 +1,14 @@
 ---
-name: fact-checker-file-scope-plus-eleventy-footnote-gap
-description: The `fact-checker` agent reviews each target file independently; a remediation applied to one file can leave the same claim stale in sibling files. Plus three Eleventy docs-site authoring gotchas surfaced in the same session (footnote plugin not wired, `#tag` hashtag rendering pitfall, `gemini-imagegen` pre-flight stale signal).
-type: integration-issues
+title: Fact-checker is file-scoped; Eleventy docs-site has three hidden authoring pitfalls
 date: 2026-04-21
+category: engineering
+tags: [fact-checker, eleventy, blog-authoring, content-review, multi-file-consistency]
+description: 'The `fact-checker` agent reviews each target file independently; a remediation applied to one file can leave the same claim stale in sibling files. Plus three Eleventy docs-site authoring gotchas surfaced in the same session (footnote plugin not wired, `#tag` hashtag rendering pitfall, `gemini-imagegen` pre-flight stale signal).'
 feature: content-service-automation
-pr: "#2747"
-issue: "#1944"
-tags:
-  - fact-checker
-  - eleventy
-  - blog-authoring
-  - content-review
-  - multi-file-consistency
+issue: '#1944'
+name: fact-checker-file-scope-plus-eleventy-footnote-gap
+pr: '#2747'
+type: integration-issues
 ---
 
 # Learning: Fact-checker is file-scoped; Eleventy docs-site has three hidden authoring pitfalls

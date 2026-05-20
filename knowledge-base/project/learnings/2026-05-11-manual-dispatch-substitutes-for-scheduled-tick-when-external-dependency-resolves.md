@@ -1,10 +1,15 @@
 ---
-name: Manual workflow_dispatch substitutes for first-scheduled-tick verification
+title: Manual workflow_dispatch substitutes for first-scheduled-tick verification when the external blocker resolves mid-cycle
 date: 2026-05-11
 category: best-practices
 tags: [github-actions, follow-through, workflow-dispatch, verification, bundling]
-related_issues: [3604, 3605]
-related_prs: [3559, 3606]
+name: Manual workflow_dispatch substitutes for first-scheduled-tick verification
+related_issues:
+  - 3604
+  - 3605
+related_prs:
+  - 3559
+  - 3606
 ---
 
 # Learning: Manual workflow_dispatch substitutes for first-scheduled-tick verification when the external blocker resolves mid-cycle

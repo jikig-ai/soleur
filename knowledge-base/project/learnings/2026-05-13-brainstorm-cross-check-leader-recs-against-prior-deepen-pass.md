@@ -1,12 +1,10 @@
 ---
+title: Cross-check leader recommendations against prior deepen-pass decisions before accepting them
 date: 2026-05-13
 category: process
-related_issues: ["#3712", "#3704", "#2207", "#3706", "#3723"]
-related_skills:
-  - soleur:brainstorm
-  - soleur:plan
-  - soleur:deepen-plan
 tags: [brainstorm, multi-agent, decision-archaeology, bundle-disposition]
+related_issues: [#3712, #3704, #2207, #3706, #3723]
+related_skills: [soleur:brainstorm, soleur:plan, soleur:deepen-plan]
 ---
 
 # Cross-check leader recommendations against prior deepen-pass decisions before accepting them

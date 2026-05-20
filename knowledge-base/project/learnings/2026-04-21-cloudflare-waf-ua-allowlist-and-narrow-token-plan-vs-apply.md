@@ -1,17 +1,13 @@
 ---
-name: cloudflare-waf-ua-allowlist-and-narrow-token-plan-vs-apply
-description: Lessons from PR #2740 shipping a Cloudflare AI-crawler UA allowlist (issue #2662) — the plan-vs-apply scope asymmetry on narrow CF tokens, UA substring-match pitfalls, and the provider-alias-description-drift trap when a narrow token gains a second consumer.
-type: integration-issues
+title: 'Cloudflare WAF UA allowlist: `terraform plan` vs `apply` scope, UA substring collisions, and narrow-token description drift'
 date: 2026-04-21
-pr: 2740
+category: engineering
+tags: [cloudflare, terraform, waf, narrow-token, firewall-ruleset, ua-match]
+description: Lessons from PR
 issue: 2662
-tags:
-  - cloudflare
-  - terraform
-  - waf
-  - narrow-token
-  - firewall-ruleset
-  - ua-match
+name: cloudflare-waf-ua-allowlist-and-narrow-token-plan-vs-apply
+pr: 2740
+type: integration-issues
 ---
 
 # Cloudflare WAF UA allowlist: `terraform plan` vs `apply` scope, UA substring collisions, and narrow-token description drift

@@ -1,15 +1,13 @@
 ---
-name: brainstorm-probe-first-before-leader-spawn
-description: When an issue body names a mechanical disambiguator (live API probe, DSN cluster substring, config lookup), run it BEFORE Phase 0.5 leader spawn — the answer often collapses speculative remediation tracks and softens brand-survival framing
+title: probe-driven reframing before leader spawn
 date: 2026-05-15
 category: best-practices
 tags: [brainstorm, leader-spawn, probe, premise-validation, sentry, gdpr]
-related_issue: "#3861"
-related_pr: "#3863"
-related_learnings:
-  - 2026-05-04-sentry-org-token-region-probe-and-dashboards-scope-guard.md
-  - 2026-05-12-anticipatory-hook-bypass-and-leader-substrate-cross-check.md
-  - 2026-05-11-brainstorm-grep-approach-hook-before-spawning-leaders.md
+description: When an issue body names a mechanical disambiguator (live API probe, DSN cluster substring, config lookup), run it BEFORE Phase 0.5 leader spawn — the answer often collapses speculative remediation tracks and softens brand-survival framing
+name: brainstorm-probe-first-before-leader-spawn
+related_issue: '#3861'
+related_learnings: [2026-05-04-sentry-org-token-region-probe-and-dashboards-scope-guard.md, 2026-05-12-anticipatory-hook-bypass-and-leader-substrate-cross-check.md, 2026-05-11-brainstorm-grep-approach-hook-before-spawning-leaders.md]
+related_pr: '#3863'
 ---
 
 # Learning: probe-driven reframing before leader spawn

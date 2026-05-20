@@ -1,3 +1,10 @@
+---
+title: 'Marketing Strategy Unification: CMO Orchestration Pattern'
+date: 2026-03-03
+category: marketing
+tags: [marketing, strategy, unification, pattern]
+---
+
 # Marketing Strategy Unification: CMO Orchestration Pattern
 
 **Date:** 2026-03-03

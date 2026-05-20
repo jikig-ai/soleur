@@ -1,3 +1,10 @@
+---
+title: Bare repos have two failure modes -- stale on-disk files and unguarded working-tree commands
+date: 2026-03-13
+category: engineering
+tags: [build-errors, git-worktree]
+---
+
 # Learning: Bare repos have two failure modes -- stale on-disk files and unguarded working-tree commands
 
 ## Problem

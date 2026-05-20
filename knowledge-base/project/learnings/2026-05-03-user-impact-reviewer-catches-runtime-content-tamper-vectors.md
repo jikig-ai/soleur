@@ -1,10 +1,11 @@
 ---
+title: '`user-impact-reviewer` catches runtime-content-tamper vectors that plan-time review misses'
 date: 2026-05-03
 category: best-practices
+tags: [review, security, single-user-incident, multi-agent-review, comment-mutability, defense-in-depth]
 module: schedule, review
 issue: 3094
 pr: 3067
-tags: [review, security, single-user-incident, multi-agent-review, comment-mutability, defense-in-depth]
 ---
 
 # Learning: `user-impact-reviewer` catches runtime-content-tamper vectors that plan-time review misses

@@ -1,17 +1,15 @@
 ---
-module: Web Platform Auth
+title: PKCE magic link requires same-browser context; email OTP is more resilient
 date: 2026-03-30
-problem_type: integration_issue
+category: engineering
+tags: [supabase, pkce, magic-link, otp, oauth, email-auth, same-browser]
+symptoms: [Magic link login silently redirects back to /login without error, 14 unconsumed PKCE flow_state entries in auth.flow_state table, OAuth buttons return 400 Unsupported provider: provider is not enabled, No new auth sessions created since March 18]
+module: Web Platform Auth
+synced_to: []
 component: supabase_auth
-symptoms:
-  - "Magic link login silently redirects back to /login without error"
-  - "14 unconsumed PKCE flow_state entries in auth.flow_state table"
-  - "OAuth buttons return 400 Unsupported provider: provider is not enabled"
-  - "No new auth sessions created since March 18"
+problem_type: integration_issue
 root_cause: pkce_cookie_requirement_and_missing_oauth_config
 severity: critical
-tags: [supabase, pkce, magic-link, otp, oauth, email-auth, same-browser]
-synced_to: []
 ---
 
 # Learning: PKCE magic link requires same-browser context; email OTP is more resilient

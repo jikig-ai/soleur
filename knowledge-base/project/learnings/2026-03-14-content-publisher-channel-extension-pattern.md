@@ -1,3 +1,10 @@
+---
+title: Content publisher channel extension pattern
+date: 2026-03-14
+category: engineering
+tags: [integration-issues, content-publisher]
+---
+
 # Learning: Content publisher channel extension pattern
 
 ## Problem

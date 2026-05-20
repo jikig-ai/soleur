@@ -1,3 +1,10 @@
+---
+title: GitHub App org repo creation requires endpoint routing and administration permission
+date: 2026-04-06
+category: engineering
+tags: [integration-issues, web-platform/server/github-app]
+---
+
 > **⚠️ PARTIALLY SUPERSEDED — 2026-05-07**
 >
 > The "Key Insight" claim that **`/user/repos` works for user installations**

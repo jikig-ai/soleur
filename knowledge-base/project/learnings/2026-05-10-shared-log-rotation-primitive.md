@@ -1,9 +1,13 @@
 ---
+title: 'Shared log-rotation primitive: design choices that bit on first draft'
 date: 2026-05-10
-issue: 3508
-related_pr: 3495
-related_issues: [3122, 3494]
 category: best-practices
+tags: [shared, log, rotation, primitive]
+issue: 3508
+related_issues:
+  - 3122
+  - 3494
+related_pr: 3495
 ---
 
 # Shared log-rotation primitive: design choices that bit on first draft

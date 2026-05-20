@@ -1,3 +1,10 @@
+---
+title: CI SSH deploy requires firewall rule, not just key rotation
+date: 2026-03-19
+category: ci-cd
+tags: [integration-issues, web-platform-infra]
+---
+
 # Learning: CI SSH deploy requires firewall rule, not just key rotation
 
 ## Problem

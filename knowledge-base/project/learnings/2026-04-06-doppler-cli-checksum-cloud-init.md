@@ -1,16 +1,16 @@
 ---
-module: web-platform-infra
+title: Doppler CLI pipe-to-shell install in cloud-init lacks checksum verification
 date: 2026-04-06
-problem_type: security_issue
-component: tooling
-symptoms:
-  - "Doppler CLI installed via curl pipe-to-shell without checksum verification"
-  - "No version pinning — always installs latest, risking breaking changes during provisioning"
-root_cause: config_error
-resolution_type: config_change
-severity: high
+category: engineering
 tags: [supply-chain, checksum, cloud-init, doppler, binary-verification]
+symptoms: [Doppler CLI installed via curl pipe-to-shell without checksum verification, No version pinning — always installs latest, risking breaking changes during provisioning]
+module: web-platform-infra
 synced_to: [one-shot]
+component: tooling
+problem_type: security_issue
+resolution_type: config_change
+root_cause: config_error
+severity: high
 ---
 
 # Troubleshooting: Doppler CLI pipe-to-shell install in cloud-init lacks checksum verification

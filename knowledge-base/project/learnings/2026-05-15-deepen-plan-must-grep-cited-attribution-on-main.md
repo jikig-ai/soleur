@@ -1,10 +1,11 @@
 ---
 title: deepen-plan must verify git-history attribution claims, not just PR/issue state
 date: 2026-05-15
+category: shell-scripting
 tags: [plan, deepen-plan, git-history, citation-verification, multi-agent-review]
 component: plugins/soleur/skills/deepen-plan
-related_pr: 3850
 related_issue: 2749
+related_pr: 3850
 ---
 
 # deepen-plan must verify git-history attribution claims against `main`, not just PR/issue state

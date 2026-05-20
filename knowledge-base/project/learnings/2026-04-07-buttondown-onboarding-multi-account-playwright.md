@@ -1,15 +1,15 @@
 ---
-module: System
+title: Buttondown Multi-Account Confusion During Playwright Automation
 date: 2026-04-07
-problem_type: integration_issue
-component: service_object
-symptoms:
-  - "Google OAuth Playwright login landed on wrong Buttondown account (personal vs business)"
-  - "Doppler auth token expired mid-session requiring manual re-authentication"
-root_cause: config_error
-resolution_type: config_change
-severity: medium
+category: engineering
 tags: [buttondown, playwright, oauth, multi-account, doppler]
+symptoms: [Google OAuth Playwright login landed on wrong Buttondown account (personal vs business), Doppler auth token expired mid-session requiring manual re-authentication]
+module: System
+component: service_object
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: medium
 ---
 
 # Learning: Buttondown Multi-Account Confusion During Playwright Automation

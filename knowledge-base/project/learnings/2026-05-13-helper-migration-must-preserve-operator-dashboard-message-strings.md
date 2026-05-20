@@ -1,16 +1,15 @@
 ---
-module: apps/web-platform/server/observability
+title: Helper-migration must preserve original logger message strings + plan-inventory blind spots
 date: 2026-05-13
-problem_type: integration_issue
+category: engineering
+tags: [helper-migration, operator-dashboards, observability, sentry, pseudonymisation, plan-inventory, three-dot-diff, async-context, asynclocalstorage, withisolationscope, multi-agent-review, cost-of-filing-gate]
+symptoms: [Operator dashboard queries keyed on pino message strings silently break after helper migration, Multi-agent review (data-integrity-guardian P1) catches what unit tests miss, Co-located unmigrated sites on the same route file slip past plan-inventory phase]
+module: apps/web-platform/server/observability
+synced_to: []
 component: typescript_helper_migration
-symptoms:
-  - "Operator dashboard queries keyed on pino message strings silently break after helper migration"
-  - "Multi-agent review (data-integrity-guardian P1) catches what unit tests miss"
-  - "Co-located unmigrated sites on the same route file slip past plan-inventory phase"
+problem_type: integration_issue
 root_cause: helper_default_substitutes_original_message
 severity: high
-tags: [helper-migration, operator-dashboards, observability, sentry, pseudonymisation, plan-inventory, three-dot-diff, async-context, asynclocalstorage, withisolationscope, multi-agent-review, cost-of-filing-gate]
-synced_to: []
 ---
 
 # Helper-migration must preserve original logger message strings + plan-inventory blind spots

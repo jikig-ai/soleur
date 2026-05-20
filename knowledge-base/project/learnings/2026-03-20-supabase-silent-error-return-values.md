@@ -1,3 +1,10 @@
+---
+title: 'Supabase JS client silently discards errors unless you destructure { error }'
+date: 2026-03-20
+category: engineering
+tags: [runtime-errors, web-platform/agent-runner]
+---
+
 # Learning: Supabase JS client silently discards errors unless you destructure { error }
 
 ## Problem

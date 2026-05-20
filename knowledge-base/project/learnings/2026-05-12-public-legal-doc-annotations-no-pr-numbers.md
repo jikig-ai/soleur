@@ -1,3 +1,10 @@
+---
+title: public legal-doc Last-Updated annotations must avoid PR/issue numbers
+date: 2026-05-12
+category: legal
+tags: [documentation-quality, legal-docs, knowledge-base/project/learnings/2026-03-18-dpd-processor-table-dual-file-sync.md, knowledge-base/project/learnings/2026-03-20-eleventy-mirror-dual-date-locations.md]
+---
+
 # Learning: public legal-doc Last-Updated annotations must avoid PR/issue numbers
 
 ## Problem

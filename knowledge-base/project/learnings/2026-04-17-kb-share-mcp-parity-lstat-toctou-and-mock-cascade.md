@@ -1,16 +1,12 @@
 ---
-name: kb-share-mcp-parity — lstat TOCTOU regression + shared-import mock cascade
-description: Two durable lessons from extracting kb-share lifecycle into a shared module and adding in-process MCP tools — (a) pre-open lstat reintroduces a CodeQL TOCTOU window even though it seems to add "more checks", (b) adding a new import to a widely-imported server module like agent-runner requires cascading mock updates in every test that loads that module.
+title: KB Share MCP Parity — lstat TOCTOU regression + shared-import mock cascade
+date: 2026-04-17
 category: runtime-errors
-tags:
-  - kb-share
-  - mcp
-  - agent-runner
-  - toctou
-  - vitest-mocks
-  - refactor-cascade
-pr: 2497
+tags: [kb-share, mcp, agent-runner, toctou, vitest-mocks, refactor-cascade]
+description: 'Two durable lessons from extracting kb-share lifecycle into a shared module and adding in-process MCP tools — (a) pre-open lstat reintroduces a CodeQL TOCTOU window even though it seems to add "more checks", (b) adding a new import to a widely-imported server module like agent-runner requires cascading mock updates in every test that loads that module.'
 issue: 2309
+name: kb-share-mcp-parity — lstat TOCTOU regression + shared-import mock cascade
+pr: 2497
 ---
 
 # KB Share MCP Parity — lstat TOCTOU regression + shared-import mock cascade

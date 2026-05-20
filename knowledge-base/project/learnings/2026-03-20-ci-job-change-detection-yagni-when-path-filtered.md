@@ -1,3 +1,10 @@
+---
+title: CI job-level change detection is YAGNI when the workflow is already path-filtered
+date: 2026-03-20
+category: ci-cd
+tags: [ci-cd, github-actions]
+---
+
 # Learning: CI job-level change detection is YAGNI when the workflow is already path-filtered
 
 ## Problem

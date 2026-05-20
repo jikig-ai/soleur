@@ -1,3 +1,15 @@
+---
+title: GIT_ASKPASS over shell-invoked credential helpers for headless git auth
+date: 2026-04-23
+category: workflow-patterns
+tags:
+- workflow-patterns
+- git
+- askpass
+- over
+- shell
+---
+
 # Learning: GIT_ASKPASS over shell-invoked credential helpers for headless git auth
 
 ## Problem

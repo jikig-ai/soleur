@@ -1,3 +1,10 @@
+---
+title: 'git tag --sort=-version:refname requires all tags fetched'
+date: 2026-03-19
+category: workflow-patterns
+tags: [integration-issues, ci-cd, github-actions, versioning, high]
+---
+
 # Learning: git tag --sort=-version:refname requires all tags fetched
 
 ## Problem

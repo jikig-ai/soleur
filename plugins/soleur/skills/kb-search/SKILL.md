@@ -5,7 +5,7 @@ description: "This skill should be used when searching the knowledge base for fi
 
 # KB Search
 
-Search the knowledge base across all domains. Returns title matches first (tier 1), then content matches (tier 2). Optional `--tag` and `--category` flags filter `knowledge-base/project/learnings/` by YAML frontmatter before grep runs, cutting result-set noise during cross-referencing.
+Search the knowledge base across all domains. Returns learnings-scoped title matches first (tier 1, cap 8), then learnings-content matches (tier 2, cap 12). Optional `--tag` and `--category` flags filter `knowledge-base/project/learnings/` by YAML frontmatter before grep runs, cutting result-set noise during cross-referencing.
 
 ## Arguments
 
@@ -80,9 +80,10 @@ If both flags are supplied, a file must match BOTH to survive (AND).
 ### Phase 3: Keyword Search
 
 - **Facet-only (no keyword):** Emit one line per surviving file in `- [Title](path)` form (title read from frontmatter or first `# heading`).
-- **Keyword-only (no facets):** Run the existing two-tier search:
-  1. Grep `knowledge-base/INDEX.md` for title matches (tier 1).
-  2. Grep `knowledge-base/` contents for the keyword (tier 2), excluding INDEX.md and archive/.
+- **Keyword-only (no facets):** Run the two-tier search with per-tier caps so tier-1 noise titles cannot starve tier-2 content matches (see #4119):
+  1. **Tier 1 (cap 8):** Grep `knowledge-base/INDEX.md` for the keyword, then restrict to lines whose link target is rooted under `knowledge-base/project/learnings/`. Anchor the filter so future paths like `sessions/learnings-retrospective/` cannot leak.
+  2. **Tier 2 (cap 12):** Grep `knowledge-base/project/learnings/**/*.md` content for the keyword. Exclude `archive/`.
+- Output tier-1 first, then tier-2, deduped by path. Maximum 20 total; each tier self-caps.
 - **Facets + keyword:** Apply keyword grep **only** to the facet-filtered file list (not the whole KB). Use `grep -F` (fixed-string).
 
 Missing `INDEX.md` → note and continue with content grep only.

@@ -1,9 +1,12 @@
 ---
+title: 'Test the public DOM contract, not setState''s side effects'
 date: 2026-05-06
 category: test-failures
 tags: [react-19, happy-dom, vitest, testing, theme-provider, aria]
+related_issues:
+  - 3316
+  - 3317
 related_pr: 3315
-related_issues: [3316, 3317]
 status: published
 ---
 

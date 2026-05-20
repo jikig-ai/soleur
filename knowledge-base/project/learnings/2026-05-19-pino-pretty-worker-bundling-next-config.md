@@ -1,12 +1,11 @@
 ---
+title: pino-pretty worker thread MODULE_NOT_FOUND under Next.js bundling
 date: 2026-05-19
 category: build-errors
-component: apps/web-platform
 tags: [next.js, pino, bundling, worker-threads, ci, e2e]
+component: apps/web-platform
+related_files: [apps/web-platform/next.config.ts, apps/web-platform/server/logger.ts]
 related_pr: 3984
-related_files:
-  - apps/web-platform/next.config.ts
-  - apps/web-platform/server/logger.ts
 ---
 
 # Learning: pino-pretty worker thread MODULE_NOT_FOUND under Next.js bundling

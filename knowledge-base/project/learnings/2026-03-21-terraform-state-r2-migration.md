@@ -1,3 +1,10 @@
+---
+title: Terraform State Migration to Cloudflare R2
+date: 2026-03-21
+category: infrastructure
+tags: [integration-issues, web-platform, infrastructure]
+---
+
 # Learning: Terraform State Migration to Cloudflare R2
 
 ## Problem

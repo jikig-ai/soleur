@@ -1,3 +1,10 @@
+---
+title: Deferred WebSocket Conversation Creation and Pending State Management
+date: 2026-04-11
+category: engineering
+tags: [architecture, ws-handler, use-conversations, conversation-row]
+---
+
 # Learning: Deferred WebSocket Conversation Creation and Pending State Management
 
 ## Problem

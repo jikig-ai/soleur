@@ -1,10 +1,11 @@
 ---
-title: "Slot lifecycle invariants must live at the DB layer when multiple writers bypass the application path"
+title: Slot lifecycle invariants must live at the DB layer when multiple writers bypass the application path
 date: 2026-05-04
-type: bug-fix
-related_pr: 3217
-related_migration: 036_release_slot_on_archive.sql
+category: ci-cd
 tags: [supabase, postgres-trigger, concurrency, command-center]
+related_migration: 036_release_slot_on_archive.sql
+related_pr: 3217
+type: bug-fix
 ---
 
 # Slot lifecycle invariants must live at the DB layer when multiple writers bypass the application path

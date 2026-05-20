@@ -1,25 +1,11 @@
 ---
+title: Under procedural compliance deadlines, the disclosure artifact is the critical path — NOT the remediation
 date: 2026-05-16
 category: process
+tags: [gdpr, art-33, art-34, ccpa, soc2, hipaa, disclosure, remediation, deadline-sequencing, pr-shape, critical-path]
 module: legal, compliance, brainstorm, deadline-sequencing
-tags:
-  - gdpr
-  - art-33
-  - art-34
-  - ccpa
-  - soc2
-  - hipaa
-  - disclosure
-  - remediation
-  - deadline-sequencing
-  - pr-shape
-  - critical-path
-related_issues:
-  - "#3861"
-  - "#3904"
-related_learnings:
-  - 2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline
-  - 2026-03-18-dpd-sub-processor-contradiction-fix
+related_issues: [#3861, #3904]
+related_learnings: [2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline, 2026-03-18-dpd-sub-processor-contradiction-fix]
 ---
 
 # Learning: Under procedural compliance deadlines, the disclosure artifact is the critical path — NOT the remediation

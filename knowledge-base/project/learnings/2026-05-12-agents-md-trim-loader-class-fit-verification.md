@@ -1,13 +1,19 @@
 ---
+title: 'AGENTS.md trim — loader-class fit and `[skill-enforced:]` tag-suffix dedup'
 date: 2026-05-12
-problem_type: workflow_gate_drift
-component: agents_md_loader
-severity: high
 category: best-practices
-module: agents-md
 tags: [agents-md, loader-class-fit, skill-enforced-tag, dedup, workflow-hardening, rule-budget, session-rules-loader, work-skill, demotion]
-related_prs: [3679, 3681, 3682, 3496, 3493]
+module: agents-md
 synced_to: []
+component: agents_md_loader
+problem_type: workflow_gate_drift
+related_prs:
+  - 3679
+  - 3681
+  - 3682
+  - 3496
+  - 3493
+severity: high
 ---
 
 # AGENTS.md trim — loader-class fit and `[skill-enforced:]` tag-suffix dedup

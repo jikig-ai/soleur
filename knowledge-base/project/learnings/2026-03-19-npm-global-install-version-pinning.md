@@ -1,3 +1,10 @@
+---
+title: npm global install version pinning in Dockerfiles
+date: 2026-03-19
+category: engineering
+tags: [build-errors, docker]
+---
+
 # Learning: npm global install version pinning in Dockerfiles
 
 ## Problem

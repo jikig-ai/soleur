@@ -1,3 +1,10 @@
+---
+title: Enabling Proton Mail on a Cloudflare-managed zone (Terraform)
+date: 2026-04-28
+category: infrastructure
+tags: [infrastructure, web-platform/infra/dns]
+---
+
 # Learning: Enabling Proton Mail on a Cloudflare-managed zone (Terraform)
 
 ## Problem

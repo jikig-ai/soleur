@@ -1,17 +1,21 @@
 ---
-name: Cloud Routines sub-agent auth inheritance (H6)
-description: Claude Code Cloud Routines that invoke /soleur:* sub-skills silently fail to produce PRs/issues — sub-agent sessions lose GitHub MCP + Doppler auth
-category: integration-issues
-module: cloud-routines
-issue: 2742
-parent_issue: 2714
-related_issues: [2716, 2743, 2744, 1095, 2050]
-related_learnings:
-  - 2026-04-03-content-cadence-gap-cloud-task-migration.md
-  - 2026-04-21-cloud-task-silence-watchdog-pattern.md
-  - 2026-03-13-browser-tasks-require-playwright-not-manual-labels.md
-pr: 2744
+title: Cloud Routines sub-agent auth inheritance (H6)
 date: 2026-04-21
+category: integration-issues
+tags: [integration-issues, cloud-routines, claude-code-routines, high, silent-output-drop, cloud-max-scheduling]
+module: cloud-routines
+description: 'Claude Code Cloud Routines that invoke /soleur:* sub-skills silently fail to produce PRs/issues — sub-agent sessions lose GitHub MCP + Doppler auth'
+issue: 2742
+name: Cloud Routines sub-agent auth inheritance (H6)
+parent_issue: 2714
+pr: 2744
+related_issues:
+  - 2716
+  - 2743
+  - 2744
+  - 1095
+  - 2050
+related_learnings: [2026-04-03-content-cadence-gap-cloud-task-migration.md, 2026-04-21-cloud-task-silence-watchdog-pattern.md, 2026-03-13-browser-tasks-require-playwright-not-manual-labels.md]
 ---
 
 # Learning: Cloud Routines sub-agent auth inheritance (H6)

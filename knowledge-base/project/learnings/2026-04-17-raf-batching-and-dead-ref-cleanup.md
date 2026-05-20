@@ -1,9 +1,11 @@
 ---
-name: rAF batching + dead-ref cleanup hazards
-description: Two recurring hazards when introducing rAF-coalesce in existing components — fake-timer tests don't auto-advance rAF, and ref removals leave orphaned cleanup references.
-category: runtime-errors
-module: testing
+title: rAF batching and dead-ref cleanup hazards
 date: 2026-04-17
+category: runtime-errors
+tags: [runtime-errors, testing, react-hooks, 2500]
+module: testing
+description: 'Two recurring hazards when introducing rAF-coalesce in existing components — fake-timer tests don''t auto-advance rAF, and ref removals leave orphaned cleanup references.'
+name: rAF batching + dead-ref cleanup hazards
 pr: 2500
 ---
 

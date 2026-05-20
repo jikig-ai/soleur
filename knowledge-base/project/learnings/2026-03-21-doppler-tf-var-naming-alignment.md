@@ -1,3 +1,10 @@
+---
+title: Doppler tf-var Transformer — Align TF Variable Names to External Key Names
+date: 2026-03-21
+category: engineering
+tags: [integration-issues, web-platform]
+---
+
 # Learning: Doppler tf-var Transformer — Align TF Variable Names to External Key Names
 
 ## Problem

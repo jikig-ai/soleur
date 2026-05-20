@@ -1,3 +1,10 @@
+---
+title: Vitest mock timing for module-level Supabase client
+date: 2026-04-06
+category: engineering
+tags: [test-failures, web-platform]
+---
+
 # Learning: Vitest mock timing for module-level Supabase client
 
 ## Problem

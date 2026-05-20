@@ -1,18 +1,17 @@
 ---
-module: review
+title: Multi-agent review catches cross-artifact contract drift the rest of the agents miss
 date: 2026-05-11
-problem_type: integration_issue
+category: agent-design
+tags: [multi-agent-review, contract-drift, cross-artifact, brand-guide, review-coverage]
+symptoms: [CSS file's self-documented contract with another file silently breaks when one side changes, Plan + pattern + architecture + code-quality reviewers approve a diff in isolation, Only git-history-analyzer reading the other-side artifact catches the drift]
+module: review
+synced_to: [review]
 component: review_skill
-symptoms:
-  - "CSS file's self-documented contract with another file silently breaks when one side changes"
-  - "Plan + pattern + architecture + code-quality reviewers approve a diff in isolation"
-  - "Only git-history-analyzer reading the other-side artifact catches the drift"
+problem_type: integration_issue
+related_issue: 3564
+related_pr: 3556
 root_cause: cross_artifact_contract_drift
 severity: medium
-tags: [multi-agent-review, contract-drift, cross-artifact, brand-guide, review-coverage]
-synced_to: [review]
-related_pr: 3556
-related_issue: 3564
 ---
 
 # Learning: Multi-agent review catches cross-artifact contract drift the rest of the agents miss

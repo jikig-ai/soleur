@@ -1,22 +1,14 @@
 ---
+title: Autonomous-loop PR-quality failure modes — three-layer fence
 date: 2026-04-27
+category: workflow-patterns
+tags: [autonomous-loop, git, ci-guards, workflow-injection, defense-in-depth]
 module: apps/web-platform/server/session-sync.ts
-problem_type: integration_issue
-component: connected_repo_writer
-severity: high
-tags:
-  - autonomous-loop
-  - git
-  - ci-guards
-  - workflow-injection
-  - defense-in-depth
-related:
-  - "#2857"
-  - "#2859"
-  - "#2904"
-  - "#2905"
-  - "#2906"
 synced_to: []
+component: connected_repo_writer
+problem_type: integration_issue
+related: [#2857, #2859, #2904, #2905, #2906]
+severity: high
 ---
 
 # Autonomous-loop PR-quality failure modes — three-layer fence

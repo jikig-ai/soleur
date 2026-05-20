@@ -1,3 +1,10 @@
+---
+title: Worktree creation requires absolute path from bare root
+date: 2026-03-17
+category: workflow-patterns
+tags: [integration-issues, git-worktree]
+---
+
 # Learning: Worktree creation requires absolute path from bare root
 
 ## Problem

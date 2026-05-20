@@ -1,15 +1,13 @@
 ---
+title: '`gh issue edit --body-file` against a parallel-write file races to a stale no-op'
 date: 2026-05-12
 category: integration-issues
+tags: [gh-cli, parallel-tools, file-staging]
 component: tool-orchestration
 problem_type: parallel_tool_batching
-severity: low
-tags:
-  - gh-cli
-  - parallel-tools
-  - file-staging
 related_issues:
   - 2721
+severity: low
 ---
 
 # Learning: `gh issue edit --body-file` against a parallel-write file races to a stale no-op

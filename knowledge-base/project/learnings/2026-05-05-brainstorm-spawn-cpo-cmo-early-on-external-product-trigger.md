@@ -1,3 +1,12 @@
+---
+title: Spawn CPO + CMO early when a brainstorm is triggered by external-product comparison
+date: 2026-05-05
+category: engineering
+tags:
+- engineering
+- trigger-external-product-comparison-brainstorm
+---
+
 # Learning: Spawn CPO + CMO early when a brainstorm is triggered by external-product comparison
 
 ## Problem

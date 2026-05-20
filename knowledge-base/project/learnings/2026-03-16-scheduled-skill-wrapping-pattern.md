@@ -1,3 +1,10 @@
+---
+title: Scheduled Workflow Pattern — Wrapping Skills for Autonomous CI Execution
+date: 2026-03-16
+category: plugin-architecture
+tags: [ci-cd, scheduled-workflows, marketing-automation]
+---
+
 # Learning: Scheduled Workflow Pattern — Wrapping Skills for Autonomous CI Execution
 
 ## Problem

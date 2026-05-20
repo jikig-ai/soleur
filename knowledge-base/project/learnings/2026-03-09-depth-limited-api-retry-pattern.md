@@ -1,3 +1,10 @@
+---
+title: Depth-Limited API Retry Pattern
+date: 2026-03-09
+category: engineering
+tags: [logic-errors, community, stack-overflow, rate-limit-loop, unbounded-recursion]
+---
+
 # Learning: Depth-Limited API Retry Pattern
 
 ## Problem

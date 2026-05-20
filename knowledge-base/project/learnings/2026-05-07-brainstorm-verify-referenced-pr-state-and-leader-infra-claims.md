@@ -1,3 +1,10 @@
+---
+title: Verify referenced PR/issue state and domain-leader infra claims before accepting brainstorm framing
+date: 2026-05-07
+category: workflow-patterns
+tags: [integration-issues, brainstorm-skill, 2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites, 2026-04-23-verify-trigger-path-before-attributing-regression, 2026-05-05-brainstorm-capability-gaps-need-repo-grep, 2026-05-05-brainstorm-spawn-cpo-cmo-early-on-external-product-trigger, 3436, 3509]
+---
+
 # Learning: Verify referenced PR/issue state and domain-leader infra claims before accepting brainstorm framing
 
 ## Problem

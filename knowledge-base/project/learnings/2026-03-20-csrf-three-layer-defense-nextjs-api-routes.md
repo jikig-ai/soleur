@@ -1,3 +1,10 @@
+---
+title: CSRF Three-Layer Defense for Next.js Custom Route Handlers
+date: 2026-03-20
+category: engineering
+tags: [security-issues, web-platform/api-routes]
+---
+
 # Learning: CSRF Three-Layer Defense for Next.js Custom Route Handlers
 
 ## Problem

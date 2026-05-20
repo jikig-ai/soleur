@@ -1,3 +1,10 @@
+---
+title: 'CLA allowlist needs GraphQL bot login, not REST `app/<slug>` form'
+date: 2026-04-27
+category: legal
+tags: [github-actions, cla, bot-identity, contributor-assistant, graphql-vs-rest]
+---
+
 # Learning: CLA allowlist needs GraphQL bot login, not REST `app/<slug>` form
 
 **Date:** 2026-04-27

@@ -1,3 +1,10 @@
+---
+title: Cloudflare Terraform provider v4 vs v5 resource attribute names
+date: 2026-03-20
+category: infrastructure
+tags: [integration-issues, infrastructure, terraform, cloudflare]
+---
+
 # Learning: Cloudflare Terraform provider v4 vs v5 resource attribute names
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: bare repo cleanup runs stale on-disk scripts and fetch needs refspec
+date: 2026-03-18
+category: engineering
+tags: [shell-scripts, worktree-manager]
+---
+
 # Learning: bare repo cleanup runs stale on-disk scripts and fetch needs refspec
 
 ## Problem

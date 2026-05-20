@@ -1,3 +1,10 @@
+---
+title: Workflow Platform Addition Pattern
+date: 2026-03-14
+category: engineering
+tags: [integration-issues, community-monitor, 592]
+---
+
 # Learning: Workflow Platform Addition Pattern
 
 ## Problem

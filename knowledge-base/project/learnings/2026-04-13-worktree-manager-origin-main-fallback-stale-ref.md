@@ -1,3 +1,10 @@
+---
+title: worktree-manager.sh origin/main fallback leaves local main stale
+date: 2026-04-13
+category: workflow-patterns
+tags: [integration-issues, git-worktree]
+---
+
 # Learning: worktree-manager.sh origin/main fallback leaves local main stale
 
 ## Problem

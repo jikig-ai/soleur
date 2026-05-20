@@ -1,3 +1,10 @@
+---
+title: Hook paths must use $CLAUDE_PROJECT_DIR for reliable resolution
+date: 2026-04-12
+category: engineering
+tags: [integration-issues, claude-code-hooks]
+---
+
 # Learning: Hook paths must use $CLAUDE_PROJECT_DIR for reliable resolution
 
 ## Problem

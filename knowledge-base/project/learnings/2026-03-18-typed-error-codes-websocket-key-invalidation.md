@@ -1,3 +1,10 @@
+---
+title: Typed Error Codes for WebSocket Key Invalidation
+date: 2026-03-18
+category: engineering
+tags: [integration-issues, web-platform]
+---
+
 # Learning: Typed Error Codes for WebSocket Key Invalidation
 
 ## Problem

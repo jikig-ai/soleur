@@ -1,20 +1,14 @@
 ---
+title: Plan-time pattern proposals need codebase-precedent grep, same as issue-body claims
 date: 2026-05-12
 category: best-practices
+tags: [plan-quality, parsing-patterns, verify-before-cite, awk, frontmatter-extraction]
 component: plan-skill
 problem_type: paraphrase_without_verification_extended_to_own_proposals
-severity: medium
-tags:
-  - plan-quality
-  - parsing-patterns
-  - verify-before-cite
-  - awk
-  - frontmatter-extraction
 related_issues:
   - 2721
-related_learnings:
-  - knowledge-base/project/learnings/2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md
-  - knowledge-base/project/learnings/2026-05-09-llm-authored-plans-cite-fabricated-and-retired-rule-ids.md
+related_learnings: [knowledge-base/project/learnings/2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md, knowledge-base/project/learnings/2026-05-09-llm-authored-plans-cite-fabricated-and-retired-rule-ids.md]
+severity: medium
 ---
 
 # Learning: Plan-time pattern proposals need codebase-precedent grep, same as issue-body claims

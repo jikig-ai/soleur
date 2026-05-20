@@ -1,3 +1,15 @@
+---
+title: bare-repo CI-bot identity silently overrides worktree commits → `test@test` authorship
+date: 2026-04-24
+category: workflow-patterns
+tags:
+- workflow-patterns
+- fake
+- git
+- author
+- bare
+---
+
 # Learning: bare-repo CI-bot identity silently overrides worktree commits → `test@test` authorship
 
 ## Problem

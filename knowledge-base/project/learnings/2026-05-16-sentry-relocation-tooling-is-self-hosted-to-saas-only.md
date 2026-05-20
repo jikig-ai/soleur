@@ -1,21 +1,11 @@
 ---
+title: 'Sentry "Relocation" tooling does NOT cover cross-region SaaS migration'
 date: 2026-05-16
 category: integration-issues
+tags: [sentry, vendor-evaluation, cross-region-migration, residency, probe-discipline, gdpr]
 module: sentry, vendor-evaluation, observability
-tags:
-  - sentry
-  - vendor-evaluation
-  - cross-region-migration
-  - residency
-  - probe-discipline
-  - gdpr
-related_issues:
-  - "#3861"
-  - "#3904"
-related_learnings:
-  - 2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline
-  - 2026-05-15-sentry-dsn-cluster-substring-authoritative-residency
-  - 2026-05-15-sentry-iac-billing-and-quirks
+related_issues: [#3861, #3904]
+related_learnings: [2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline, 2026-05-15-sentry-dsn-cluster-substring-authoritative-residency, 2026-05-15-sentry-iac-billing-and-quirks]
 ---
 
 # Learning: Sentry "Relocation" tooling does NOT cover cross-region SaaS migration

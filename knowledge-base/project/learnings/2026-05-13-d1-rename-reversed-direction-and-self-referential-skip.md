@@ -1,11 +1,15 @@
 ---
+title: Plan-time research can reverse a brainstorm-time rename direction; mechanical-rename plans must anticipate planner-emitted artifacts in AC filters
 date: 2026-05-13
-tags: [planning, mechanical-rename, plan-review, worktree, frontmatter, brand-survival-threshold, ac-filter, self-referential-skip]
-severity: low
 category: best-practices
-related_pr: 3737
-related_issues: [3724, 2725, 3741]
+tags: [planning, mechanical-rename, plan-review, worktree, frontmatter, brand-survival-threshold, ac-filter, self-referential-skip]
 brand_survival_threshold: none
+related_issues:
+  - 3724
+  - 2725
+  - 3741
+related_pr: 3737
+severity: low
 ---
 
 # Learning: Plan-time research can reverse a brainstorm-time rename direction; mechanical-rename plans must anticipate planner-emitted artifacts in AC filters

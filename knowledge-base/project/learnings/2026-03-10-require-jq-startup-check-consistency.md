@@ -1,3 +1,10 @@
+---
+title: require_jq startup check consistency across shell scripts
+date: 2026-03-10
+category: shell-scripting
+tags: [logic-errors, community-scripts]
+---
+
 # Learning: require_jq startup check consistency across shell scripts
 
 ## Problem

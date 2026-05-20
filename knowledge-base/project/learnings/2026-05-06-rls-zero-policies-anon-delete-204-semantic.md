@@ -2,10 +2,11 @@
 title: RLS-with-zero-policies + anon DELETE returns 204 (no-op), not 401
 date: 2026-05-06
 category: security-issues
+tags: [rls, zero, policies, anon, delete, 204, semantic]
 module: supabase
 related:
-  - PR #3355
-  - migration 030 (precedent: processed_stripe_events)
+  - PR
+  - {'migration 030 (precedent': 'processed_stripe_events)'}
   - migration 038 (this PR)
   - learnings/security-issues/2026-04-18-rls-for-all-using-applies-to-writes.md
 ---

@@ -1,3 +1,10 @@
+---
+title: Supabase Disk IO Budget alerts at low scale point to STRUCTURAL overhead, not user queries
+date: 2026-05-06
+category: engineering
+tags: [categoryperformance-issues, modulesupabase, postgres, realtime, pgcron]
+---
+
 # Learning: Supabase Disk IO Budget alerts at low scale point to STRUCTURAL overhead, not user queries
 
 **Date:** 2026-05-06

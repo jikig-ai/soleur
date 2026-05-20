@@ -1,3 +1,10 @@
+---
+title: OpenHands Portability Scan Methodology
+date: 2026-04-07
+category: engineering
+tags: [implementation-patterns, plugin-architecture]
+---
+
 # Learning: OpenHands Portability Scan Methodology
 
 ## Problem

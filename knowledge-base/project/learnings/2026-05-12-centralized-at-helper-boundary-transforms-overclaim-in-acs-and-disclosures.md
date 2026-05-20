@@ -1,13 +1,15 @@
 ---
+title: Centralized-at-helper-boundary transforms over-claim coverage in ACs and disclosures
 date: 2026-05-12
 category: best-practices
-module: observability, planning, legal
 tags: [helper-boundary-transform, plan-ac-design, pa8-disclosure, multi-agent-cross-reconcile, gdpr-recital-26]
-related_prs: [3685, 3638, 3696, 3698]
-related_learnings:
-  - 2026-05-11-multi-agent-review-catches-cross-artifact-contract-drift.md
-  - 2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md
-  - 2026-05-11-plan-research-reconciliation-must-grep-full-render-tree.md
+module: observability, planning, legal
+related_learnings: [2026-05-11-multi-agent-review-catches-cross-artifact-contract-drift.md, 2026-05-12-multi-agent-review-cross-reconcile-catches-false-positive-high-findings.md, 2026-05-11-plan-research-reconciliation-must-grep-full-render-tree.md]
+related_prs:
+  - 3685
+  - 3638
+  - 3696
+  - 3698
 ---
 
 # Learning: Centralized-at-helper-boundary transforms over-claim coverage in ACs and disclosures

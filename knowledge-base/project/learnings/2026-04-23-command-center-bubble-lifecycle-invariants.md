@@ -1,15 +1,12 @@
 ---
+title: Command Center bubble-lifecycle invariants + agent-native GitHub read tools
 date: 2026-04-23
 category: integration-issues
+tags: [websocket, state-machine, mcp-tools, agent-native, stream-lifecycle, github-app]
 module: web-platform
 component: command-center
-tags: [websocket, state-machine, mcp-tools, agent-native, stream-lifecycle, github-app]
 pr: 2843
-related:
-  - 2026-04-14-pure-reducer-extraction-requires-companion-state-migration.md
-  - 2026-04-13-websocket-cumulative-vs-delta-streaming-fix.md
-  - integration-issues/discriminated-union-exhaustive-switch-miss-20260410.md
-  - service-tool-registration-scope-guard-20260410.md
+related: [2026-04-14-pure-reducer-extraction-requires-companion-state-migration.md, 2026-04-13-websocket-cumulative-vs-delta-streaming-fix.md, integration-issues/discriminated-union-exhaustive-switch-miss-20260410.md, service-tool-registration-scope-guard-20260410.md]
 ---
 
 # Command Center bubble-lifecycle invariants + agent-native GitHub read tools

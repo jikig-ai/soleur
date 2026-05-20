@@ -1,3 +1,10 @@
+---
+title: gst-plugin-scanner infinite CPU loop on dev machines
+date: 2026-03-20
+category: plugin-architecture
+tags: [runtime-errors, worktree-manager]
+---
+
 # Learning: gst-plugin-scanner infinite CPU loop on dev machines
 
 ## Problem

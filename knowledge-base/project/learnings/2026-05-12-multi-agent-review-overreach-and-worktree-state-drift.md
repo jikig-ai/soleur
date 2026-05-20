@@ -1,10 +1,11 @@
 ---
+title: Multi-agent review overreach + worktree-state drift in PR-A2
 date: 2026-05-12
-issue: "#3603"
-pr: "#3602 (PR-A1, merged), PR-A2 (this branch)"
 category: best-practices
-module: review-skill, work-skill
 tags: [multi-agent-review, agent-tool-access, worktree-hygiene, plan-vs-prompt-conflict, lru-cache]
+module: review-skill, work-skill
+issue: '#3603'
+pr: '#3602 (PR-A1, merged), PR-A2 (this branch)'
 ---
 
 # Multi-agent review overreach + worktree-state drift in PR-A2

@@ -1,17 +1,15 @@
 ---
-module: gdpr-gate / vendor-drift workflow
+title: 'Multi-Agent Review Catches Vendor-Pipeline Trust-Model Gaps (PR #3521)'
 date: 2026-05-11
-problem_type: integration_issue
+category: agent-design
+tags: [vendor-pinning, supply-chain, classifier, regex, gdpr-gate, multi-agent-review, single-user-incident]
+symptoms: [Inline Python regex with non-greedy `+?` silently no-ops every NOTICE SHA bump, Classifier exit-code priority under-labels co-occurring security + license drift, Cron auto-PR opens against attacker-controlled upstream bytes before human review, NOTICE co-edit bypasses self-consistency integrity check (working-tree hash + frontmatter SHA can be updated together)]
+module: gdpr-gate / vendor-drift workflow
+synced_to: [review]
 component: ci_workflow
-symptoms:
-  - "Inline Python regex with non-greedy `+?` silently no-ops every NOTICE SHA bump"
-  - "Classifier exit-code priority under-labels co-occurring security + license drift"
-  - "Cron auto-PR opens against attacker-controlled upstream bytes before human review"
-  - "NOTICE co-edit bypasses self-consistency integrity check (working-tree hash + frontmatter SHA can be updated together)"
+problem_type: integration_issue
 root_cause: trust_model_gaps_in_vendored_content_pipeline
 severity: critical
-tags: [vendor-pinning, supply-chain, classifier, regex, gdpr-gate, multi-agent-review, single-user-incident]
-synced_to: [review]
 ---
 
 # Multi-Agent Review Catches Vendor-Pipeline Trust-Model Gaps (PR #3521)

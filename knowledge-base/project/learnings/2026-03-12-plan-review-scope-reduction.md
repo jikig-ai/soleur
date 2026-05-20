@@ -1,10 +1,14 @@
 ---
-problem_type: workflow-patterns
+title: Plan review as scope reduction tool
+date: 2026-03-12
+category: engineering
+tags: [workflow-patterns, plan-review]
 module: plan-review
-severity: medium
 first_seen: 2026-03-12
 last_seen: 2026-03-12
 occurrences: 1
+problem_type: workflow-patterns
+severity: medium
 slug: plan-review-scope-reduction
 ---
 

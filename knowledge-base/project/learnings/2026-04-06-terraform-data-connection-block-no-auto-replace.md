@@ -1,16 +1,16 @@
 ---
-module: Web Platform Infrastructure
+title: 'terraform_data Connection Block Changes Don''t Trigger Replacement'
 date: 2026-04-06
-problem_type: infrastructure_state
-component: terraform
-symptoms:
-  - "terraform_data resources still contain private_key in state after connection block migration"
-  - "terraform plan shows no changes despite connection block switching from private_key to agent=true"
-root_cause: terraform_behavior
-resolution_type: manual_replace
-severity: low
+category: infrastructure
 tags: [terraform, terraform_data, connection, agent, private_key, state, replace]
+symptoms: [terraform_data resources still contain private_key in state after connection block migration, terraform plan shows no changes despite connection block switching from private_key to agent=true]
+module: Web Platform Infrastructure
 synced_to: [ship]
+component: terraform
+problem_type: infrastructure_state
+resolution_type: manual_replace
+root_cause: terraform_behavior
+severity: low
 ---
 
 # terraform_data Connection Block Changes Don't Trigger Replacement

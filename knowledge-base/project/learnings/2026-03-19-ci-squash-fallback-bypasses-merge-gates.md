@@ -1,3 +1,10 @@
+---
+title: CI workflow squash fallback bypasses merge protection gates
+date: 2026-03-19
+category: ci-cd
+tags: [security-issues, ci-workflows]
+---
+
 # Learning: CI workflow squash fallback bypasses merge protection gates
 
 ## Problem

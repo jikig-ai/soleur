@@ -1,9 +1,10 @@
 ---
+title: Grep lib/ for existing helpers before writing new ones; test identity values first
 date: 2026-04-17
 category: process
-module: web-platform
 tags: [duplication, helpers, formatting, tdd-edge-cases, mock-supabase]
-issues: ["#1691", "#2464", "#2478"]
+module: web-platform
+issues: [#1691, #2464, #2478]
 ---
 
 # Learning: Grep lib/ for existing helpers before writing new ones; test identity values first

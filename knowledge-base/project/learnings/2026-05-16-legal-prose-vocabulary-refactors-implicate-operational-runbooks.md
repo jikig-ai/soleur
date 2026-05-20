@@ -1,7 +1,8 @@
 ---
+title: Legal-Prose Vocabulary Refactors Implicate Operational Runbooks
+date: 2026-05-16
 category: best-practices
 tags: [legal, runbooks, plan-time-discovery, cross-artifact-drift, gdpr]
-date: 2026-05-16
 issue: 3924
 pr: 3920
 ---

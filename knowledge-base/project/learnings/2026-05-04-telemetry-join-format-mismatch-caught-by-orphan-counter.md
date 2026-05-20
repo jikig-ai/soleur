@@ -1,3 +1,10 @@
+---
+title: 'orphan counter on a telemetry join surfaced its own producer''s format bug'
+date: 2026-05-04
+category: engineering
+tags: [integration-issues, skill-freshness, telemetry]
+---
+
 # Learning: orphan counter on a telemetry join surfaced its own producer's format bug
 
 ## Problem

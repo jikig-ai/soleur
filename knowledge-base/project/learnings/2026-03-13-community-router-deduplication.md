@@ -1,3 +1,10 @@
+---
+title: Community router eliminates triple-duplication of platform detection
+date: 2026-03-13
+category: engineering
+tags: [integration-issues, plugins/soleur/skills/community, 470]
+---
+
 # Learning: Community router eliminates triple-duplication of platform detection
 
 ## Problem

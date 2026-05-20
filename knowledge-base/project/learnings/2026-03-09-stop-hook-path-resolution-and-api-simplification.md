@@ -1,3 +1,10 @@
+---
+title: Stop hook path resolution and API simplification
+date: 2026-03-09
+category: engineering
+tags: [runtime-errors, plugins/soleur/hooks]
+---
+
 # Learning: Stop hook path resolution and API simplification
 
 ## Problem

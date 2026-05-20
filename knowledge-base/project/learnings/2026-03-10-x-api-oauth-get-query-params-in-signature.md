@@ -1,3 +1,10 @@
+---
+title: X API v2 GET requests require query params in OAuth signature
+date: 2026-03-10
+category: engineering
+tags: [integration-issues, community]
+---
+
 # Learning: X API v2 GET requests require query params in OAuth signature
 
 ## Problem

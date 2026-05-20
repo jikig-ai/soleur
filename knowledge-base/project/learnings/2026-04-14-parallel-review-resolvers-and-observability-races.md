@@ -1,23 +1,15 @@
 ---
-module: web-platform
+title: Parallel Review-Resolvers and Observability Race Conditions
 date: 2026-04-14
-problem_type: integration_issue
+category: engineering
+tags: [multi-agent-coordination, review-resolver, observability, race-condition, vitest, fix-symptom-class]
+symptoms: [Parallel resolver agents committed each other's uncommitted WIP, Agent reported resolving issue in commit that didn't exist, New observability feature introduced 3 silent-failure race conditions, vi.doMock registrations leaked across tests despite vi.resetModules()]
+module: web-platform
+synced_to: []
 component: multi_agent_workflow
-symptoms:
-  - "Parallel resolver agents committed each other's uncommitted WIP"
-  - "Agent reported resolving issue in commit that didn't exist"
-  - "New observability feature introduced 3 silent-failure race conditions"
-  - "vi.doMock registrations leaked across tests despite vi.resetModules()"
+problem_type: integration_issue
 root_cause: parallel_agent_file_scope_and_ordering
 severity: medium
-tags:
-  - multi-agent-coordination
-  - review-resolver
-  - observability
-  - race-condition
-  - vitest
-  - fix-symptom-class
-synced_to: []
 ---
 
 # Parallel Review-Resolvers and Observability Race Conditions

@@ -1,3 +1,10 @@
+---
+title: Terraform drift from dead code and missing Doppler secrets
+date: 2026-03-21
+category: infrastructure
+tags: [infrastructure-issues, apps/telegram-bridge/infra, apps/web-platform/infra]
+---
+
 # Learning: Terraform drift from dead code and missing Doppler secrets
 
 ## Problem
