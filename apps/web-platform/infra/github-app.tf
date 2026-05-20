@@ -26,8 +26,8 @@
 # vendor-authorization-scope class of the operator-only canonical list). See
 # runbook Step 2.1 for the procedure. Drift-guard at scheduled-github-app-
 # drift-guard.yml detects App-declared-vs-manifest divergence; installation-
-# grant-vs-manifest divergence (the class that produced #4173) is NOT yet
-# covered — see follow-up issue.
+# grant-vs-manifest divergence (the class that produced #4173) is tracked in
+# #4179 as a drift-guard extension.
 #
 # Why ignore_changes on the 2 operator-supplied secrets: rotation via the
 # Doppler UI is invisible to subsequent `terraform plan` (the provider
