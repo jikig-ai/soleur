@@ -80,19 +80,15 @@ def extract_inline_date(content):
 
 
 def _reject_yaml_block_noise(tags):
-    """Drop bullet-list-noise tokens from ## Tags YAML-block-scalar extraction.
+    """Drop bullet-list noise from `## Tags` extraction; scoped to that branch.
 
-    Tokens rejected (verified against commit 82584251 cleanup of 13 files):
-      - "category-*"    collisions from `category: <value>` rows
-      - "module-*"      collisions from `module: <value>` rows
-      - "--<digits>"    list-marker dash from `  - "2794"` sub-bullet rows
-      - tokens >50 chars   absorbed prose
-
-    Scoped to the `## Tags` branch only. The `**Tags:**` comma-form and
-    tags_from_slug() are unaffected: legitimate authored tags like
-    `module-level-state` and `category-design` live in pre-existing YAML
-    frontmatter (where extract_inline_tags is never called) or arrive
-    via the comma-form which short-circuits before this branch.
+    The `category-*` / `module-*` / `--<digits>` collisions emerge from the
+    normalize_tags fallback path (commit 82584251 cleanup): `key: value`
+    rows merged into the comma-split token via `\\s+` → `-` substitution.
+    The structured-kv path emits VALUES, so this filter only catches `--`
+    prefixes and >50-char absorbed prose there (defense-in-depth).
+    The `**Tags:**` comma-form is untouched — legitimate tags like
+    `module-level-state` and `category-design` arrive via that branch.
     """
     return [
         t for t in tags
@@ -276,12 +272,9 @@ def process_file_with_frontmatter(filepath, filename):
 
 
 def iter_learning_files(root=LEARNINGS_DIR):
-    """Yield (filepath, filename) for every .md file under root, recursively.
+    """Yield filepath for every .md file under root, recursively.
 
-    Excludes README.md (case-insensitive). `technical-debt/README.md` is a
-    ledger header, not a schema-compliant learning. Archive subdirs (e.g.,
-    `runtime-errors/archive/`) are included — they share the learning schema
-    and the acceptance grep does not exclude them.
+    Skips README.md (case-insensitive). Archive subdirs are included by design.
     """
     for dirpath, _dirnames, filenames in os.walk(root):
         for filename in sorted(filenames):
@@ -289,7 +282,7 @@ def iter_learning_files(root=LEARNINGS_DIR):
                 continue
             if filename.lower() == "readme.md":
                 continue
-            yield os.path.join(dirpath, filename), filename
+            yield os.path.join(dirpath, filename)
 
 
 def rename_dateless_file():
@@ -331,8 +324,9 @@ def main():
     renamed = rename_dateless_file()
 
     # Step 2: Process all files (recurse into taxonomy subdirs)
-    for filepath, filename in iter_learning_files():
+    for filepath in iter_learning_files():
         stats["processed"] += 1
+        filename = os.path.basename(filepath)
 
         with open(filepath) as f:
             first_line = f.readline().strip()
@@ -349,7 +343,7 @@ def main():
 
     # Verify all files have frontmatter (recurse into taxonomy subdirs)
     failed = []
-    for filepath, _filename in iter_learning_files():
+    for filepath in iter_learning_files():
         with open(filepath) as f:
             if f.readline().strip() != "---":
                 failed.append(filepath)
@@ -362,10 +356,11 @@ def main():
 
     # Verify all required fields present
     missing_fields = []
-    for filepath, filename in iter_learning_files():
+    for filepath in iter_learning_files():
         with open(filepath) as f:
             content = f.read()
         fm, _, _ = parse_frontmatter(content)
+        filename = os.path.basename(filepath)
         if fm is None:
             missing_fields.append((filename, ["all"]))
             continue
@@ -381,7 +376,7 @@ def main():
 
     # Category distribution
     categories = {}
-    for filepath, _filename in iter_learning_files():
+    for filepath in iter_learning_files():
         with open(filepath) as f:
             content = f.read()
         fm, _, _ = parse_frontmatter(content)

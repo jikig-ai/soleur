@@ -82,6 +82,17 @@ class ExtractInlineTagsHardeningTest(unittest.TestCase):
         self.assertIn("category-design", tags)
         self.assertIn("module-level-state", tags)
 
+    def test_inline_form_is_not_subject_to_yaml_block_filter(self):
+        # Locks the design invariant: _reject_yaml_block_noise is scoped to
+        # the `## Tags` branch ONLY. A future refactor that moves the filter
+        # call up to normalize_tags would silently strip authored tokens from
+        # the inline comma-form. Synthetic --prefix token simulates that
+        # regression.
+        content = "# Body\n\n**Tags:** category-design, --legit-edge, normal\n"
+        tags = bf.extract_inline_tags(content)
+        self.assertIn("--legit-edge", tags)
+        self.assertIn("category-design", tags)
+
     def test_block_fallback_path_drops_bullet_noise(self):
         # The canonical 82584251 corruption shape.
         tags = bf.extract_inline_tags(FIXTURE_TAGS_BLOCK_FALLBACK)
@@ -117,7 +128,7 @@ class IterLearningFilesTest(unittest.TestCase):
             archive.mkdir()
             (archive / "old.md").write_text("# old\n")
 
-            results = sorted(fn for _fp, fn in bf.iter_learning_files(tmp))
+            results = sorted(os.path.basename(fp) for fp in bf.iter_learning_files(tmp))
 
         self.assertEqual(results, ["nested.md", "old.md", "top.md"])
 

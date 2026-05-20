@@ -1,4 +1,3 @@
-
 .claude/hooks/guardrails.sh
 .claude/hooks/pre-merge-rebase.sh
 .github/actions/bot-pr-with-synthetic-checks/action.yml
@@ -177,7 +176,7 @@ apps/telegram-bridge
 apps/telegram-bridge/infra
 apps/web-platform
 apps/web-platform/billing
-apps/web-platform/components/message-bubble.tsx
+apps/web-platform/components/message-bubble.til-open
 apps/web-platform/e2e
 apps/web-platform/infra
 apps/web-platform/lib/ws-client.ts
@@ -314,11 +313,11 @@ bot-identity
 bot-management
 bot-pr
 both-panels-fire
-brainsimental features
 brainstorm
 brainstorm / premise-validation / sentry
 brainstorm phase 0.5
 brainstorm-hygiene
+brainstorm-mechanics
 brainstorm-process
 brainstorm-quality
 brainstorm-routing
@@ -407,6 +406,7 @@ cascade
 cascade-architecture
 case-arms
 case-sensitivity
+cat
 catches
 category-design
 categoryintegration-issues
@@ -913,8 +913,8 @@ external-services
 extract
 extractfunctionbody
 extraction-pattern
+faag
 fabrication
-facat
 fact-checker
 fact-checking
 factory-boundary
@@ -1086,11 +1086,11 @@ growth
 growth-audit
 growth-strategist
 growth-targets
+guarcat
 guard-itself-dark
 guard-testing
 guardrails
 guards
-guarncil
 hallucination
 handoff
 handshake-protocol
@@ -1213,7 +1213,7 @@ into
 invalidates
 inventory-grep
 invocation-surface
-ip-spooftorm-mechanics
+ip-spoofing
 irreversible
 isclassifying-gate
 isolation
@@ -1405,9 +1405,9 @@ multi-agent review test-design-reviewer
 multi-agent-cascade
 multi-agent-coordination
 multi-agent-cross-reconcile
+multi-agent-revi
 multi-agent-review
 multi-agent-review-after-mocked-unit-tests-passed
-multi-agent-revig
 multi-clause-and
 multi-cluster
 multi-component-releases
@@ -1536,11 +1536,11 @@ orphaned worktree
 orthogonal
 otp
 output-sanitization
-ovase
 over
 over-engineering
 over-match
 over-specified-prompts
+overengineering
 overflow
 overflow-wrap
 overrides
@@ -1589,7 +1589,7 @@ pdf
 pdf-extractor
 pdfjs
 pdfjs-dist
-pecat
+peds
 peer-dependency
 pencil
 pencil cli name collision with evoluscat
@@ -1825,6 +1825,7 @@ provisioner
 proxied-records
 proxy-anti-pattern
 prune
+pseudonymiase
 pseudonymisation
 pseudonymization
 psql
@@ -2350,12 +2351,12 @@ substrate-cascade
 substring-match
 sudo-rs
 sudoers
+supab/pencil
 supabase
 supabase-auth
 supabase-messages
 supabase-numeric
 supabase-rpc
-supabcat
 supply-chain
 supply-chain-security
 support
@@ -2492,7 +2493,7 @@ trigger-fallback-parity
 trigger-logic
 triggers
 triggers_replace
-trimew
+trimg
 trip
 true
 truncation
@@ -2533,7 +2534,7 @@ usage-limit
 use-conversations
 useeffect
 user
-user friction for expercat
+user friction for experdocumentation
 user-brand-critical
 user-confirmation
 user-event
