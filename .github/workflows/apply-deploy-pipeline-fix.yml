@@ -40,6 +40,7 @@ on:
       - "apps/web-platform/infra/cat-deploy-state.sh"
       - "apps/web-platform/infra/canary-bundle-claim-check.sh"
       - "apps/web-platform/infra/hooks.json.tmpl"
+      - "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
   workflow_dispatch:
     inputs:
       reason:
@@ -156,6 +157,7 @@ jobs:
             "${INFRA_DIR}/webhook.service" \
             "${INFRA_DIR}/cat-deploy-state.sh" \
             "${INFRA_DIR}/canary-bundle-claim-check.sh" \
+            "${INFRA_DIR}/deploy-inngest-bootstrap.sudoers" \
             > /tmp/local-hashes.txt
           cat /tmp/local-hashes.txt
 
@@ -202,7 +204,7 @@ jobs:
 
           REMOTE_OUT=$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             root@"$SERVER_IP" \
-            "sha256sum /usr/local/bin/ci-deploy.sh /usr/local/bin/ci-deploy-wrapper.sh /etc/systemd/system/webhook.service /usr/local/bin/cat-deploy-state.sh /usr/local/bin/canary-bundle-claim-check.sh && systemctl is-active webhook")
+            "sha256sum /usr/local/bin/ci-deploy.sh /usr/local/bin/ci-deploy-wrapper.sh /etc/systemd/system/webhook.service /usr/local/bin/cat-deploy-state.sh /usr/local/bin/canary-bundle-claim-check.sh /etc/sudoers.d/deploy-inngest-bootstrap && systemctl is-active webhook")
           echo "Server-side state:"
           echo "$REMOTE_OUT"
 
