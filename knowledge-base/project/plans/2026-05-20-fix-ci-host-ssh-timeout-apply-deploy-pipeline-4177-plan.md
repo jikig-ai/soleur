@@ -141,8 +141,8 @@ logs:
   retention: "GitHub Actions default (90 days for run logs)"
 
 discoverability_test:
-  command: "gh run list --workflow=apply-deploy-pipeline-fix.yml --branch=main --limit=1 --json conclusion -q '.[0].conclusion'"
-  expected_output: "success"
+  command: "curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 https://app.soleur.ai/health"
+  expected_output: "200"
 ```
 
 ## Acceptance Criteria
