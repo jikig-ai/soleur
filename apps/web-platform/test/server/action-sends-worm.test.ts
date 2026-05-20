@@ -11,8 +11,9 @@
  *   (f) scope_grants.tier = 'garbage' → 23514
  *   (g) action_sends.action_class = 'payment.refund' → 23514
  *       (DB CHECK enum-absence regex; defense-in-depth per Arch F3)
- *   (h) anonymise_action_sends(uuid) → user_id IS NULL; subsequent
- *       auth.admin.deleteUser succeeds (Kieran P1-1; Art-17 cascade)
+ *   (h) anonymise_action_sends(uuid) → action_sends.user_id IS NULL +
+ *       recipient_id_hash '__anonymised__' (Art-17 erasure; cascade
+ *       integration covered by account-delete-scope-grants-cascade.test.ts)
  *   (i) Cross-tenant SELECT → 0 rows (RLS owner-select)
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1. Requires `doppler run -p soleur -c dev`.
@@ -335,7 +336,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(error!.code).toBe("23514");
     });
 
-    test("(h) anonymise_action_sends → user_id IS NULL; auth.admin.deleteUser succeeds", async () => {
+    test("(h) anonymise_action_sends → action_sends.user_id IS NULL", async () => {
       // Use a throwaway user for this destructive test so we don't tear
       // down the shared userA mid-suite.
       const u = { id: "", email: syntheticEmail() };
@@ -400,11 +401,19 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(afterRows![0].user_id).toBeNull();
       expect(afterRows![0].recipient_id_hash).toBe("__anonymised__");
 
-      // FK is ON DELETE RESTRICT to public.users(id); anonymise to NULL
-      // unblocks the auth.admin.deleteUser cascade.
-      await service.rpc("anonymise_scope_grants", { p_user_id: u.id });
-      const { error: delErr } = await service.auth.admin.deleteUser(u.id);
-      expect(delErr).toBeNull();
+      // Best-effort cleanup of the throwaway user — independent of the
+      // assertion under test. anonymise_action_sends already ran above;
+      // scope_grants.founder_id is ON DELETE RESTRICT (mig 048:16) so
+      // anonymise_scope_grants must precede auth.admin.deleteUser.
+      // Cascade-ordering contract is owned by
+      // account-delete-scope-grants-cascade.test.ts; coupling cleanup to
+      // assertion success here would duplicate that signal.
+      try {
+        await service.rpc("anonymise_scope_grants", { p_user_id: u.id });
+      } catch { /* tolerate teardown failure */ }
+      try {
+        await service.auth.admin.deleteUser(u.id);
+      } catch { /* tolerate teardown failure */ }
     });
 
     test("(i) cross-tenant SELECT → 0 rows", async () => {
