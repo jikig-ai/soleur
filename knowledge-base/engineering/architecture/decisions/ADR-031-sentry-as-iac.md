@@ -121,7 +121,12 @@ of S3 conditional writes — same posture as the main root.
 
 Sentry secrets stay in **GitHub repository secrets**, not Doppler:
 
-- `SENTRY_AUTH_TOKEN` — provider auth, used by `terraform plan|apply`.
+- `SENTRY_IAC_AUTH_TOKEN` — provider auth, used by `terraform plan|apply` in
+  `.github/workflows/apply-sentry-infra.yml`. The env var exposed to the
+  terraform provider inside the workflow step is still named `SENTRY_AUTH_TOKEN`
+  (the canonical Sentry provider env var); only the GitHub-secret-name has
+  changed to make the IaC-specific role explicit and to permit independent
+  rotation from the runtime `web-platform-ci` integration.
 - `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` —
   DSN-derived (see plan Phase 0.8), consumed by the per-workflow check-in
   steps. Not read by Terraform.
@@ -132,13 +137,42 @@ runtime where the workflows execute reduces moving parts. R2 backend creds
 remain in Doppler `prd_terraform` per the existing pattern in
 `scheduled-terraform-drift.yml:54-65`.
 
+**Why a dedicated Internal Integration, not the runtime `web-platform-ci`
+token, and not an Org Auth Token (revised 2026-05-19):**
+
+- The runtime `web-platform-ci` token covers `org:read`, `project:read`,
+  `project:write`, `project:releases`, `org:ci` — wider than read-only but
+  narrower than IaC needs. It lacks `alerts:write` for `sentry_issue_alert`
+  rules, and reusing it for IaC would couple two distinct lifecycles
+  (runtime check-ins + ad-hoc IaC applies) onto a single auth secret,
+  defeating independent rotation.
+- Sentry **Org Auth Tokens** have been narrowed to a single available scope
+  (`org:ci` — source-map upload + release creation + code mappings); they
+  no longer carry sufficient permission for project/alert/monitor
+  resources. Path (c) in the 2026-05-19 triad re-spawn is empirically
+  dead. Falsified at `knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`
+  Appendix B.
+- Therefore the IaC token is provisioned as a **dedicated Internal
+  Integration** named `iac-terraform-prd` on `jikigai-eu`, with permission
+  set: Project=Admin, Issue & Event=Read, Organization=Read,
+  Alerts=Read & Write, CI=checked, everything else No Access. This yields
+  `auth.scopes = [alerts:read, alerts:write, event:read, org:read,
+  project:admin, project:read, project:write]` — least-privilege for IaC
+  while keeping `monitor:*` derivable via the `project:write` umbrella.
+- Integration creation logs to the Organization Audit Log
+  (`sentry-app.add`), providing §5(2) evidence of who provisioned the IaC
+  identity — a property Personal Tokens do not have.
+
 ### Local-token source for operator runs
 
 GitHub Actions exposes secret VALUES only inside workflow steps. For local
-execution (Phase 2.1 audit, Phase 5 import), the operator uses a personal
-**Sentry user token** from `https://eu.sentry.io/settings/account/api/auth-tokens/`
-with scope `project:read` + `monitor:read` (audit) and `project:write` (import).
-The token is never persisted to Doppler or committed.
+execution (Phase 2.1 audit, Phase 5 import), the operator can fetch the
+same `SENTRY_IAC_AUTH_TOKEN` value from Doppler `soleur/prd` (where it is
+mirrored for runtime introspection convenience), or mint a separate
+personal token from
+`https://jikigai-eu.sentry.io/settings/account/api/auth-tokens/` with
+scope `project:read` + `monitor:read` (audit) and `project:write`
+(import). Operator-personal tokens are never committed.
 
 ### DE region support
 

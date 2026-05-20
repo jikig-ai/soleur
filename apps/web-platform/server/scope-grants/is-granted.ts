@@ -7,31 +7,42 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as Sentry from "@sentry/nextjs";
-import type { ActionClassTier } from "./action-class-map";
+import type { ActionClass, ActionClassTier } from "./action-class-map";
 
-// Code-constant denylist. Inlined per Code Simplicity review — PR-G ships
-// with empty denylist; when the first entry lands, extract to a sibling
-// file alongside an unmocked rejection test.
-const ACTION_CLASS_DENYLIST: ReadonlySet<string> = new Set<string>();
+// Code-constant denylist. PR-H tightened the element type to ActionClass
+// so the literal-union narrows compile-time. Empty by default; adding an
+// entry requires a sibling rejection test (cq-write-failing-tests-before).
+const ACTION_CLASS_DENYLIST: ReadonlySet<ActionClass> = new Set<ActionClass>();
 
-export function isDenied(actionClass: string): boolean {
+export function isDenied(actionClass: ActionClass): boolean {
   return ACTION_CLASS_DENYLIST.has(actionClass);
 }
 
 export interface ActiveGrant {
+  id: string;
   tier: ActionClassTier;
 }
 
+// PR-H (#4077): cookie-scoped callers (`isGranted(supabase, ...)` from
+// dashboard routes) coexist with service-role callers (webhook). The
+// 1st argument is the client to query through — RLS lets cookie-scoped
+// founders self-read; service-role-scoped webhook calls bypass RLS and
+// rely on `.eq("founder_id", founderId)` as the tenant gate.
+//
+// Returns `id` alongside `tier` so callers writing action_sends rows
+// (which carry grant_id) don't need to re-SELECT — collapsing the two
+// queries also closes the revoke race window between the tier-check and
+// the grant_id lookup.
 export async function isGranted(
-  serviceClient: SupabaseClient,
+  client: SupabaseClient,
   founderId: string,
-  actionClass: string,
+  actionClass: ActionClass,
 ): Promise<ActiveGrant | null> {
   if (isDenied(actionClass)) return null;
 
-  const { data, error } = await serviceClient
+  const { data, error } = await client
     .from("scope_grants")
-    .select("tier")
+    .select("id, tier")
     .eq("founder_id", founderId)
     .eq("action_class", actionClass)
     .is("revoked_at", null)
@@ -50,5 +61,5 @@ export async function isGranted(
     return null;
   }
   if (!data) return null;
-  return { tier: data.tier as ActionClassTier };
+  return { id: data.id as string, tier: data.tier as ActionClassTier };
 }

@@ -18,8 +18,17 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/signup")).toBe(true);
       expect(isPublicPath("/callback")).toBe(true);
       expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
+      expect(isPublicPath("/api/inngest")).toBe(true);
       expect(isPublicPath("/ws")).toBe(true);
       expect(isPublicPath("/manifest.webmanifest")).toBe(true);
+    });
+
+    test("/api/inngest is public (HMAC-gated by Inngest SDK, not Supabase)", () => {
+      // ADR-030 I4: signature verification at /api/inngest is performed by
+      // `inngest/next.serve` (signingKey from INNGEST_SIGNING_KEY).
+      // Supabase middleware would redirect server→SDK sync to /login.
+      // Regression guard for #4017 (PR-1 cron-daily-triage missed all scheduled fires).
+      expect(isPublicPath("/api/inngest")).toBe(true);
     });
 
     test("public path sub-routes are allowed", () => {

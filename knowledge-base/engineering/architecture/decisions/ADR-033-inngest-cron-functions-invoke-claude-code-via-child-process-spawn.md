@@ -62,6 +62,16 @@ The decision lands with PR-1 of #3948 (proof-of-pattern `scheduled-daily-triage`
 - Stdout determinism is load-bearing for replay-cost safety; any future `claude-code` upgrade that adds nondeterministic stdout chatter silently breaks memoization. Mitigation: FR10 jitter-guard integration test catches it (second invocation MUST early-return without spawning).
 - The 11 follow-up PRs all depend on the spawn primitive landing in PR-1. If PR-1's spawn primitive is wrong, fixing it requires a cross-cutting touchup of every migrated cron-* file (mitigated by per-workflow PR shape — the substrate primitive lives in a shared helper, not per-function code).
 
+**[Refined 2026-05-19 post PR-2 plan review — account-scope concurrency keying]**
+
+PR-2 (`cron-follow-through-monitor`) shares the `account`-scope `"cron-platform"` concurrency slot with PR-1 (`cron-daily-triage`). Decision: KEEP the global `"cron-platform"` key (vs per-function-class key like `"cron-platform-${fn.id}"`) at PR-2 scope. Rationale:
+
+- Two cron-* functions today; schedule overlap impossible (PR-1 fires `0 4 * * *` daily, PR-2 fires `0 9 * * 1-5` weekdays).
+- Manual-trigger latency upper bound under global keying = `max(MAX_TURN_DURATION_MS)` across all cron-* = 60 min (PR-1's daily-triage). Acceptable at PR-2 scale.
+- Hetzner OOM protection that motivated the global slot at PR-1 remains correct: per-function-class keying would shift sizing budget from `max` to `Σ` and require Hetzner node up-sizing as the cron-* fan-out grows.
+
+**Re-evaluation criterion:** if the cron-* count grows past 3 functions OR if any future cron-* requires a `MAX_TURN_DURATION_MS` > 60 min, revisit. Switching to per-function-class keying (`{scope: "account", key: '"cron-platform-${fn.id}"', limit: 1}`) is mechanically simple but requires concurrent Hetzner sizing review.
+
 ## Cost Impacts
 
 **None.** Inngest substrate is already in `knowledge-base/operations/expenses.md` (PR-F shipped self-hosted on existing Hetzner node; no new vendor, no billing-tier change). `claude-code` CLI install on Hetzner is free; binary pin is a config change, not a paid resource. Operator `ANTHROPIC_API_KEY` consumption stays in the same operator-Anthropic billing surface — the migration is a substrate swap (GitHub Actions runner → Hetzner node), not a budget increase.
