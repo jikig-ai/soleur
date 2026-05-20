@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Local-fallback sync (#4177) — write the CF Access CI-SSH service-token
-# credentials into Doppler `prd_terraform`. The canonical path is the
-# `Sync CF Access CI-SSH service token to Doppler` step in
+# Local-reprovisioning sync (#4177, #4195) — write the CF Access CI-SSH
+# service-token credentials into Doppler `prd_terraform`. The canonical
+# path is the `Sync CF Access CI-SSH service token to Doppler` step in
 # `.github/workflows/apply-web-platform-infra.yml`, which runs post-apply
-# on every infra merge. Use this script only for local reprovisioning
-# (e.g., after `terraform apply` from a workstation, or rotating the
-# token by tainting the resource). Idempotent (`doppler secrets set`
-# overwrites in place).
+# on every infra merge and (post-#4195) consumes the in-band-minted
+# `secrets.DOPPLER_TOKEN_WRITE` with `read/write` scope on
+# `prd_terraform`. The canonical CI path now works end-to-end —
+# Use this script only for local reprovisioning after a workstation
+# `terraform apply` (or for rotating the token by tainting the
+# resource). Idempotent (`doppler secrets set` overwrites in place).
 #
 # Pre-requisites:
 #   - Operator has just run `terraform apply` against apps/web-platform/infra/.
