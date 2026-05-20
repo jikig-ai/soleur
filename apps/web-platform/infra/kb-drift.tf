@@ -45,18 +45,30 @@ resource "doppler_secret" "kb_drift_ingest_url" {
   }
 }
 
-# GH Actions secret for the cron workflow. Requires `var.github_actions_token`
-# with `repo` scope on jikig-ai/soleur. Operator mints the token once and
-# stores it in `prd_terraform` Doppler config under TF_VAR_github_actions_token.
-resource "github_actions_secret" "doppler_token_kb_drift" {
-  repository  = "soleur"
-  secret_name = "DOPPLER_TOKEN_KB_DRIFT"
-  # Operator-supplied Doppler service token scoped to prd_kb_drift_walker.
-  # Mint at: https://dashboard.doppler.com/workplace/{...}/projects/soleur/
-  #   prd_kb_drift_walker → Access → Service Tokens → Generate.
-  plaintext_value = var.doppler_token_kb_drift
+# Doppler service token minted in-band by Terraform. The workplace-scope
+# DOPPLER_TOKEN_TF (provider auth) has scope to create config-scoped service
+# tokens. Closes the operator-mint requirement called out in #4150.
+# access = "read" — kb-drift cron only reads secrets; do NOT widen to "write".
+# autonomy-considered: provider-mint-applied.
+resource "doppler_service_token" "kb_drift" {
+  project = "soleur"
+  config  = "prd_kb_drift_walker"
+  name    = "kb-drift-ci-tf"
+  access  = "read"
+}
 
-  lifecycle {
-    ignore_changes = [plaintext_value]
-  }
+# GH Actions secret for the cron workflow. Token value minted in-band by
+# `doppler_service_token.kb_drift` above; integrations/github provider
+# authenticates via App-installation auth (see main.tf) with secrets:write
+# scope on the soleur-ai App. Pre-existing `prd_kb_drift_walker` config is
+# still a precondition (see operator note above).
+#
+# NO ignore_changes on plaintext_value — rotation is
+# `terraform apply -replace=doppler_service_token.kb_drift` and the new
+# token MUST propagate to the published Actions secret, or the cron would
+# continue using a revoked token.
+resource "github_actions_secret" "doppler_token_kb_drift" {
+  repository      = "soleur"
+  secret_name     = "DOPPLER_TOKEN_KB_DRIFT"
+  plaintext_value = doppler_service_token.kb_drift.key
 }
