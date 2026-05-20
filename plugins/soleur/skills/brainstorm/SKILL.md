@@ -204,6 +204,8 @@ If the feature description references an external platform, marketplace, or serv
 
 If the feature description references named external systems, prior issues, prior brainstorms, or numerical claims (caps, counts, byte budgets), grep existing truth sources (CI report, roadmap, prior brainstorms) for those named entities or claims before launching research agents. Three exit branches: (a) confirmed → proceed to 1.1; (b) contradiction → re-scope with the operator and restart 1.0.5 on the revised framing; (c) operator override → annotate the disagreement in the brainstorm body and proceed. A framing defect caught here is worth more than a full research sprint built on it.
 
+**Verify dependency-chain target states when the feature description cites cross-issue actions.** Extend the Pre-worktree premise probe above: if the feature description (or referenced parent issue body) names actions like `unblock #N`, `comment on #N to close`, `closes #N when this lands`, or `depends on #N closing`, run `gh issue view <N> --json state,closedByPullRequestsReferences` for each cited target. If the target is already CLOSED via a PR whose number is NOT in the current brainstorm's scope, the dependency chain has been satisfied through an independent path — record in the brainstorm doc's `## Session Errors` so PR-body authors don't add stale cross-issue actions. See `knowledge-base/project/learnings/workflow-patterns/2026-05-20-brainstorm-ladder-collapse-and-dependency-chain-staleness.md`.
+
 #### 1.1 Research (Context Gathering)
 
 **Pre-research: check existing KB artifacts first.** Before spawning any agents, run one local check for prior brainstorms and specs matching the feature's topic keywords:
