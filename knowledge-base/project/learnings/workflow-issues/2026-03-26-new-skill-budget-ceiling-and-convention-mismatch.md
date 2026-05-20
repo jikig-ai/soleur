@@ -1,16 +1,15 @@
 ---
-module: plugins/soleur
+title: Adding a new skill at the description word budget ceiling
 date: 2026-03-26
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "Pre-commit hook fails with Budget exceeded 1838/1800 words when adding new skill"
-  - "SKILL.md built with XML structure per reference doc but all sibling skills use markdown headings"
-  - "Background domain leader agents output files not found at expected paths during brainstorm"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: medium
+category: plugin-architecture
 tags: [skill-budget, convention-mismatch, new-skill-workflow]
+symptoms: [Pre-commit hook fails with Budget exceeded 1838/1800 words when adding new skill, SKILL.md built with XML structure per reference doc but all sibling skills use markdown headings, Background domain leader agents output files not found at expected paths during brainstorm]
+module: plugins/soleur
+component: tooling
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: medium
 ---
 
 # Learning: Adding a new skill at the description word budget ceiling

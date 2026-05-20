@@ -1,12 +1,11 @@
 ---
+title: Preflight Check 10 — Discoverability Test Execution
 date: 2026-05-20
 category: best-practices
 tags: [preflight, observability, plan-quality-gate, discoverability-test]
-related:
-  - 2026-05-20-hr-observability-as-plan-quality-gate-why-and-how.md
-  - 2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md
 issue: 4162
 pr: 4164
+related: [2026-05-20-hr-observability-as-plan-quality-gate-why-and-how.md, 2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md]
 ---
 
 # Preflight Check 10 — Discoverability Test Execution

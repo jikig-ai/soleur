@@ -1,18 +1,16 @@
 ---
-module: docs-tooling
+title: '`markdownlint --fix` mangles `#NNNN` at line-start into a phantom h1'
 date: 2026-04-19
-problem_type: best_practice
-component: markdownlint-cli2
-symptoms:
-  - "`npx markdownlint-cli2 --fix` rewrites prose so `#NNNN` lands at column 0, then flags MD025 single-h1 violation"
-  - "Subsequent --fix runs do not auto-recover; the file gains a phantom h1 mid-document"
-  - "Verification.md gained a `# 2416 dismissed all 9 alerts...` heading where the original prose said `bulk-dismiss PR #2416. It became an orphan when PR #2416 dismissed all 9 alerts.`"
-root_cause: inadequate_documentation
-resolution_type: prose_pattern
-severity: low
+category: engineering
 tags: [markdownlint, markdown, prose-conventions, lint-pitfalls]
-related_learnings:
-  - 2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md
+symptoms: [`npx markdownlint-cli2 --fix` rewrites prose so `#NNNN` lands at column 0, then flags MD025 single-h1 violation, Subsequent --fix runs do not auto-recover; the file gains a phantom h1 mid-document, Verification.md gained a `# 2416 dismissed all 9 alerts...` heading where the original prose said `bulk-dismiss PR #2416. It became an orphan when PR #2416 dismissed all 9 alerts.`]
+module: docs-tooling
+component: markdownlint-cli2
+problem_type: best_practice
+related_learnings: [2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md]
+resolution_type: prose_pattern
+root_cause: inadequate_documentation
+severity: low
 ---
 
 # `markdownlint --fix` mangles `#NNNN` at line-start into a phantom h1

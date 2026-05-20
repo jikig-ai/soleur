@@ -1,18 +1,16 @@
 ---
-module: Web Platform Infrastructure
+title: Doppler Not Installed on Server — Silent .env Fallback Caused Outage
 date: 2026-04-03
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "GITHUB_APP_ID missing from container environment"
-  - "500 error on POST /api/repo/install"
-  - "ci-deploy.sh silently falls back to stale /mnt/data/.env"
-  - "Doppler CLI not installed on Hetzner server despite cloud-init template"
-root_cause: config_error
-resolution_type: config_change
-severity: critical
+category: engineering
 tags: [doppler, deploy, secrets, systemd, terraform, cloud-init, env-file]
+symptoms: [GITHUB_APP_ID missing from container environment, 500 error on POST /api/repo/install, ci-deploy.sh silently falls back to stale /mnt/data/.env, Doppler CLI not installed on Hetzner server despite cloud-init template]
+module: Web Platform Infrastructure
 synced_to: []
+component: tooling
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: critical
 ---
 
 # Doppler Not Installed on Server — Silent .env Fallback Caused Outage

@@ -1,15 +1,15 @@
 ---
-module: Dashboard
+title: Custom Icons Not Showing on Dashboard Surfaces
 date: 2026-04-14
-problem_type: ui_bug
-component: frontend_stimulus
-symptoms:
-  - "Custom icons uploaded via team settings show only on settings page and chat, not dashboard"
-  - "ConversationRow, foundation cards, and LeaderStrip always show default lucide-react icons"
-root_cause: missing_include
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [leader-avatar, custom-icon, useTeamNames, prop-wiring, test-mock]
+symptoms: [Custom icons uploaded via team settings show only on settings page and chat, not dashboard, ConversationRow, foundation cards, and LeaderStrip always show default lucide-react icons]
+module: Dashboard
+component: frontend_stimulus
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: missing_include
+severity: medium
 ---
 
 # Troubleshooting: Custom Icons Not Showing on Dashboard Surfaces

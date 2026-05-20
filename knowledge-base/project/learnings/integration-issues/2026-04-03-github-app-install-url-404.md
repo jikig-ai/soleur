@@ -1,16 +1,15 @@
 ---
-module: Web Platform
+title: GitHub App Install URL Returns 404 During Onboarding
 date: 2026-04-03
-problem_type: integration_issue
-component: authentication
-symptoms:
-  - "GitHub App install URL https://github.com/apps/soleur-ai/installations/new returns 404"
-  - "New users cannot complete onboarding connect-repo step"
-  - "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY missing from all Doppler configs"
-root_cause: incomplete_setup
-resolution_type: environment_setup
-severity: high
+category: engineering
 tags: [github-app, oauth, onboarding, env-vars, docker-build-args]
+symptoms: [GitHub App install URL https://github.com/apps/soleur-ai/installations/new returns 404, New users cannot complete onboarding connect-repo step, GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY missing from all Doppler configs]
+module: Web Platform
+component: authentication
+problem_type: integration_issue
+resolution_type: environment_setup
+root_cause: incomplete_setup
+severity: high
 ---
 
 # Troubleshooting: GitHub App Install URL Returns 404 During Onboarding

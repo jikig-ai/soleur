@@ -1,3 +1,10 @@
+---
+title: GitHub App manifest authoring must snapshot live state, not plan-time memory
+date: 2026-05-20
+category: engineering
+tags: [best-practices, github-app-manifest]
+---
+
 # Learning: GitHub App manifest authoring must snapshot live state, not plan-time memory
 
 ## Problem

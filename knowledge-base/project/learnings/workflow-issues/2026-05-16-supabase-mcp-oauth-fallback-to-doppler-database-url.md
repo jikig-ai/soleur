@@ -1,10 +1,11 @@
 ---
-title: "Supabase MCP OAuth failure: fall back to Doppler DATABASE_URL_POOLER, not manual handoff"
+title: 'Supabase MCP OAuth failure: fall back to Doppler DATABASE_URL_POOLER, not manual handoff'
 date: 2026-05-16
+category: infrastructure
 tags: [workflow, supabase, mcp, oauth, automation, hr-exhaust-all-automated-options-before, hr-never-label-any-step-as-manual-without]
 feature: feat-oauth-tc-consent-3205
-pr: 3853
 issue: 3205
+pr: 3853
 ---
 
 # Supabase MCP OAuth failure: fall back to Doppler DATABASE_URL_POOLER, not manual handoff

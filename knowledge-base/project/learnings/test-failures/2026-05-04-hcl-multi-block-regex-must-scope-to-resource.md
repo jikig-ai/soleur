@@ -1,18 +1,17 @@
 ---
-module: System
+title: HCL Multi-Block Regex Must Scope to the Owning Resource
 date: 2026-05-04
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "Self-healing parity test extracted basenames from the wrong triggers_replace block in server.tf"
-  - "Test asserted [\"disk-monitor.sh\"] but expected the 5-element deploy_pipeline_fix list"
-root_cause: incorrect_scope
-resolution_type: test_fix
-severity: low
+category: engineering
 tags: [regex, terraform, hcl, parity-tests, self-healing-tests, ship-gate, dpf]
-related_pr: "#3068 fix"
-related_learnings:
-  - 2026-04-29-cross-language-regex-and-terraform-indirect-reference.md
+symptoms: [Self-healing parity test extracted basenames from the wrong triggers_replace block in server.tf, Test asserted ["disk-monitor.sh"] but expected the 5-element deploy_pipeline_fix list]
+module: System
+component: testing_framework
+problem_type: test_failure
+related_learnings: [2026-04-29-cross-language-regex-and-terraform-indirect-reference.md]
+related_pr: '#3068 fix'
+resolution_type: test_fix
+root_cause: incorrect_scope
+severity: low
 ---
 
 # HCL Multi-Block Regex Must Scope to the Owning Resource

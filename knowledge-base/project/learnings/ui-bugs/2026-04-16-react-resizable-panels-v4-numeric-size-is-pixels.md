@@ -1,3 +1,10 @@
+---
+title: react-resizable-panels v4 treats numeric sizes as pixels, not percentages
+date: 2026-04-16
+category: engineering
+tags: [ui-bugs, react-resizable-panels, kb-layout]
+---
+
 # Learning: react-resizable-panels v4 treats numeric sizes as pixels, not percentages
 
 ## Problem

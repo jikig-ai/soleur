@@ -1,16 +1,15 @@
 ---
-module: WebPlatform
+title: AskUserQuestion SDK Schema Mismatch
 date: 2026-04-10
-problem_type: integration_issue
-component: service_object
-symptoms:
-  - "Review gate cards always show 'Agent needs your input' instead of the actual question"
-  - "Clicking review gate buttons throws errors or has no visible effect"
-  - "Review gate cards never disappear after responding"
-root_cause: wrong_api
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [review-gate, askuserquestion, claude-agent-sdk, websocket, schema-mismatch]
+symptoms: [Review gate cards always show 'Agent needs your input' instead of the actual question, Clicking review gate buttons throws errors or has no visible effect, Review gate cards never disappear after responding]
+module: WebPlatform
+component: service_object
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: wrong_api
+severity: high
 ---
 
 # Learning: AskUserQuestion SDK Schema Mismatch

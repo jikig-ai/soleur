@@ -1,10 +1,11 @@
 ---
+title: 'KB chat "Continuing from <ts>" banner-without-messages — H1/H5 residual races'
 date: 2026-05-05
 category: ui-bugs
 tags: [react, websocket, supabase, sentry, observability, kb-chat]
-related_pr: "#3267"
-precursor_pr: "#3237"
 precursor_learning: 2026-05-05-kb-chat-resume-hydration-race-strict-mode-and-prefetch-clobber.md
+precursor_pr: '#3237'
+related_pr: '#3267'
 ---
 
 # KB chat "Continuing from <ts>" banner-without-messages — H1/H5 residual races

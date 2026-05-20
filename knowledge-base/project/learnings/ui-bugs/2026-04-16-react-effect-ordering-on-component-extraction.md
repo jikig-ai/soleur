@@ -1,3 +1,10 @@
+---
+title: React effect ordering changes when extracting components
+date: 2026-04-16
+category: engineering
+tags: [ui-bugs, kb-layout, react-resizable-panels]
+---
+
 # Learning: React effect ordering changes when extracting components
 
 ## Problem

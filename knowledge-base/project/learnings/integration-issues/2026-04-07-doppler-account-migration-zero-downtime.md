@@ -1,9 +1,10 @@
 ---
+title: Doppler Workspace Account Migration (Zero Downtime)
+date: 2026-04-07
 category: integration-issues
+tags: [doppler, secrets-management, account-migration, operations]
 module: doppler
 severity: low
-tags: [doppler, secrets-management, account-migration, operations]
-date: 2026-04-07
 ---
 
 # Learning: Doppler Workspace Account Migration (Zero Downtime)

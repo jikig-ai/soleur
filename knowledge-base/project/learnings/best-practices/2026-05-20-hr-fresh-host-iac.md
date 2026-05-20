@@ -1,12 +1,13 @@
 ---
+title: 'Fresh-Host Provisioning Reachable from `terraform apply` (companion to `hr-fresh-host-provisioning-reachable-from-terraform-apply`)'
 date: 2026-05-20
-type: best-practice
+category: engineering
+tags: [hr, fresh, host, iac]
 companion_rule: hr-fresh-host-provisioning-reachable-from-terraform-apply
-trigger_pr: 4118
+related: [hr-tagged-build-workflow-needs-initial-tag-push, hr-all-infrastructure-provisioning-servers]
 trigger_issue: 4017
-related:
-  - hr-tagged-build-workflow-needs-initial-tag-push
-  - hr-all-infrastructure-provisioning-servers
+trigger_pr: 4118
+type: best-practice
 ---
 
 # Fresh-Host Provisioning Reachable from `terraform apply` (companion to `hr-fresh-host-provisioning-reachable-from-terraform-apply`)

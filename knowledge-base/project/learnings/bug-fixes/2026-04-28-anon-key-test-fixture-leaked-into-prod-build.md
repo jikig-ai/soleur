@@ -1,10 +1,12 @@
 ---
+title: 'Sign-in fully broken in prod — test-fixture anon-key JWT leaked into the production JS bundle via `secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY`'
 date: 2026-04-28
+category: security
 tags: [supabase, auth, ci, secrets, build-time-inlining, dual-source-of-truth, jwt, recurrence]
-status: applied
 issue: 3006
 pr: 3007
 predecessor: 2975
+status: applied
 ---
 
 # Sign-in fully broken in prod — test-fixture anon-key JWT leaked into the production JS bundle via `secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY`

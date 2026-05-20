@@ -1,16 +1,15 @@
 ---
-module: WebPlatform
+title: 'WebSocket Rate Limiting: XFF Trust and Defense-in-Depth'
 date: 2026-03-29
-problem_type: security_issue
-component: authentication
-symptoms:
-  - "No rate limiting on WebSocket upgrade requests"
-  - "Unbounded agent session creation per user"
-  - "x-forwarded-for header trusted without Cloudflare validation"
-root_cause: missing_validation
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [rate-limiting, websocket, ip-spoofing, cloudflare, defense-in-depth]
+symptoms: [No rate limiting on WebSocket upgrade requests, Unbounded agent session creation per user, x-forwarded-for header trusted without Cloudflare validation]
+module: WebPlatform
+component: authentication
+problem_type: security_issue
+resolution_type: code_fix
+root_cause: missing_validation
+severity: high
 ---
 
 # WebSocket Rate Limiting: XFF Trust and Defense-in-Depth

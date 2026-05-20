@@ -1,16 +1,15 @@
 ---
-module: web-platform
+title: Sentry server-side SDK not sending events -- SENTRY_DSN missing from container
 date: 2026-04-05
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Sentry server-side SDK sending zero events from production container"
-  - "captureException calls silently do nothing"
-  - "SENTRY_DSN missing from Docker container env despite being in Doppler prd"
-root_cause: config_error
-resolution_type: config_change
-severity: high
+category: engineering
 tags: [sentry, doppler, docker, env-file, observability]
+symptoms: [Sentry server-side SDK sending zero events from production container, captureException calls silently do nothing, SENTRY_DSN missing from Docker container env despite being in Doppler prd]
+module: web-platform
+component: tooling
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: high
 ---
 
 # Troubleshooting: Sentry server-side SDK not sending events -- SENTRY_DSN missing from container

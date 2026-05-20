@@ -1,10 +1,12 @@
 ---
+title: Distribution content Liquid markers leaked to Discord/X/LinkedIn (2026-04-17)
 date: 2026-04-17
 category: bug-fixes
+tags: [distribution, content, liquid, marker, leak]
 module: content-publisher, social-distribute, lefthook
+pr_reference: '#2491'
 problem_type: authoring_publishing_contract
 severity: P1
-pr_reference: "#2491"
 ---
 
 # Distribution content Liquid markers leaked to Discord/X/LinkedIn (2026-04-17)

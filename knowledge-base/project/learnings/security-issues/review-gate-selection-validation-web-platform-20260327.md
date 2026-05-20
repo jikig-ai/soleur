@@ -1,18 +1,16 @@
 ---
 title: Review gate selection validation against offered options
-module: web-platform
 date: 2026-03-27
-problem_type: security_issue
-component: authentication
-symptoms:
-  - "resolveReviewGate accepts arbitrary strings from WebSocket client"
-  - "No server-side validation of selection against offered options"
-  - "Potential prompt injection via review gate answer field"
-root_cause: missing_validation
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [review-gate, input-validation, defense-in-depth, websocket, prompt-injection]
+symptoms: [resolveReviewGate accepts arbitrary strings from WebSocket client, No server-side validation of selection against offered options, Potential prompt injection via review gate answer field]
+module: web-platform
 synced_to: []
+component: authentication
+problem_type: security_issue
+resolution_type: code_fix
+root_cause: missing_validation
+severity: medium
 ---
 
 # Review Gate Selection Validation

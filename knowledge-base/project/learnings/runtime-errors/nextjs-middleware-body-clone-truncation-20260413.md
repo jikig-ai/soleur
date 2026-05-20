@@ -1,16 +1,15 @@
 ---
-module: web-platform
+title: 'Next.js middleware silently truncates upload bodies >10 MB'
 date: 2026-04-13
-problem_type: runtime_error
-component: tooling
-symptoms:
-  - "TypeError: Failed to parse body as FormData."
-  - "KB file uploads >10 MB fail with 400 Invalid form data"
-  - "Sentry breadcrumb: Unrecognized key(s) in object: 'serverActions'"
-root_cause: config_error
-resolution_type: config_change
-severity: high
+category: engineering
 tags: [nextjs, middleware, upload, formdata, body-size, truncation]
+symptoms: [TypeError: Failed to parse body as FormData., KB file uploads >10 MB fail with 400 Invalid form data, Sentry breadcrumb: Unrecognized key(s) in object: 'serverActions']
+module: web-platform
+component: tooling
+problem_type: runtime_error
+resolution_type: config_change
+root_cause: config_error
+severity: high
 ---
 
 # Troubleshooting: Next.js middleware silently truncates upload bodies >10 MB

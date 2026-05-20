@@ -1,17 +1,16 @@
 ---
-module: Web Platform
+title: 'Fix: Start Fresh Shows Import Screen and Vision Gets Sync Command Text'
 date: 2026-04-10
-problem_type: ui_bug
-component: authentication
-symptoms:
-  - "Start Fresh project creation shows import/repo-list screen instead of dashboard"
-  - "vision.md populated with '### Vision /soleur:sync --headless' instead of founder's idea"
-  - "Returning to /connect-repo after setup shows repo list for already-completed project"
-root_cause: logic_error
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [connect-repo, start-fresh, vision, onboarding, sessionstorage, welcome-hook, sentinel]
+symptoms: [Start Fresh project creation shows import/repo-list screen instead of dashboard, vision.md populated with '### Vision /soleur:sync --headless' instead of founder's idea, Returning to /connect-repo after setup shows repo list for already-completed project]
+module: Web Platform
 synced_to: []
+component: authentication
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: logic_error
+severity: high
 ---
 
 # Fix: Start Fresh Shows Import Screen and Vision Gets Sync Command Text

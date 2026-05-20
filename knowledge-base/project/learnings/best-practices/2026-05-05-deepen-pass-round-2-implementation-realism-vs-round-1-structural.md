@@ -1,10 +1,11 @@
 ---
+title: Deepen-pass round 2 surfaces plan-vs-code drift that round 1 cannot
 date: 2026-05-05
 category: best-practices
 tags: [planning, deepen-plan, security, plan-vs-code-drift, internal-consistency]
-module: soleur:plan, soleur:deepen-plan
-symptom: "Plan body asserts a security boundary or atomic primitive; the actual code path or downstream SQL grammar contradicts the plan claim; only a second deepen-pass catches it"
-root_cause: "Round-1 deepen agents (security-sentinel, architecture-strategist) operate on plan TEXT; they validate the plan's internal logic against external best practices but rarely grep the implementation file the plan is supposedly hardening. Round-1 also doesn't self-audit later sections of the plan after earlier sections drop the infrastructure those later sections reference."
+symptoms: [Plan body asserts a security boundary or atomic primitive; the actual code path or downstream SQL grammar contradicts the plan claim; only a second deepen-pass catches it]
+module: 'soleur:plan, soleur:deepen-plan'
+root_cause: 'Round-1 deepen agents (security-sentinel, architecture-strategist) operate on plan TEXT; they validate the plan''s internal logic against external best practices but rarely grep the implementation file the plan is supposedly hardening. Round-1 also doesn''t self-audit later sections of the plan after earlier sections drop the infrastructure those later sections reference.'
 ---
 
 # Deepen-pass round 2 surfaces plan-vs-code drift that round 1 cannot

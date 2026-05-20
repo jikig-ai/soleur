@@ -5,11 +5,11 @@ category: workflow-issues
 tags: [background-tasks, bench, anthropic-api, process-verification, observability]
 module: workflow-discipline
 synced_to: [work-skill]
-problem_type: workflow_issue
-severity: high
+description: 'A long-running background bench appeared dead due to log buffering and a too-restrictive pgrep pattern. Three concurrent benches got launched against the same API key before the truth surfaced. Cost: ~$2-3 of extra Anthropic API spend.'
 issue: 4119
 pr: 4156
-description: A long-running background bench appeared dead due to log buffering and a too-restrictive pgrep pattern. Three concurrent benches got launched against the same API key before the truth surfaced. Cost: ~$2-3 of extra Anthropic API spend.
+problem_type: workflow_issue
+severity: high
 ---
 
 # Verify long-running background processes are actually dead before relaunching

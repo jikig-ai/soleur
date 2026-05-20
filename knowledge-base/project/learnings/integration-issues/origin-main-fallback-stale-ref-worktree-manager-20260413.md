@@ -1,16 +1,16 @@
 ---
-module: System
+title: origin/main Fallback Stale Ref in worktree-manager
 date: 2026-04-13
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "git fetch origin main:main fails silently in bare repos when main is checked out in any worktree"
-  - "New worktrees created from stale local main instead of latest remote state"
-root_cause: config_error
-resolution_type: code_change
-severity: medium
+category: workflow-patterns
 tags: [git-worktree, bare-repo, fetch-refspec, update-ref, stale-ref]
+symptoms: [git fetch origin main:main fails silently in bare repos when main is checked out in any worktree, New worktrees created from stale local main instead of latest remote state]
+module: System
 synced_to: plugins/soleur/skills/git-worktree/SKILL.md
+component: tooling
+problem_type: integration_issue
+resolution_type: code_change
+root_cause: config_error
+severity: medium
 ---
 
 # origin/main Fallback Stale Ref in worktree-manager

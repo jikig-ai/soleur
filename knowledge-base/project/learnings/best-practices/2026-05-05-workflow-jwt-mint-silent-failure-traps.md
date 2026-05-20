@@ -1,12 +1,16 @@
 ---
+title: 'Workflow JWT-Mint Silent-Failure Traps — Three Patterns That Pass `--help` But Break In Prod'
 date: 2026-05-05
 category: best-practices
-problem_type: silent_failure_class
-component: github_actions_workflow + jwt + gh_api
-related_issues: [3187, 3181]
-related_prs: [3224]
 tags: [github-actions, jwt, openssl, gh-cli, base64url, silent-failure, plan-review-catch]
 synced_to: []
+component: github_actions_workflow + jwt + gh_api
+problem_type: silent_failure_class
+related_issues:
+  - 3187
+  - 3181
+related_prs:
+  - 3224
 ---
 
 # Workflow JWT-Mint Silent-Failure Traps — Three Patterns That Pass `--help` But Break In Prod

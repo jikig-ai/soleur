@@ -1,16 +1,15 @@
 ---
-module: System
+title: Cloudflare MCP OAuth Read Only Scope Insufficient for Security Audits
 date: 2026-04-10
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Cloudflare MCP Read Only OAuth scope returns 9109 Unauthorized for zone settings"
-  - "CF_API_TOKEN from Doppler also lacks zone settings permissions"
-  - "Cannot verify SSL mode, WAF, Bot Fight Mode, Security Analytics, or Audit Logs via API"
-root_cause: missing_permission
-resolution_type: workflow_improvement
-severity: medium
+category: infrastructure
 tags: [cloudflare, mcp, oauth, api-token, security-audit, permissions]
+symptoms: [Cloudflare MCP Read Only OAuth scope returns 9109 Unauthorized for zone settings, CF_API_TOKEN from Doppler also lacks zone settings permissions, Cannot verify SSL mode, WAF, Bot Fight Mode, Security Analytics, or Audit Logs via API]
+module: System
+component: tooling
+problem_type: integration_issue
+resolution_type: workflow_improvement
+root_cause: missing_permission
+severity: medium
 ---
 
 # Troubleshooting: Cloudflare MCP OAuth Read Only Scope Insufficient for Security Audits

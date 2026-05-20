@@ -1,3 +1,10 @@
+---
+title: 'Terraform `-var=` injection: pick the precedent whose SHAPE matches your workflow'
+date: 2026-05-20
+category: engineering
+tags: [best-practices, infra/terraform/ci-workflows]
+---
+
 # Terraform `-var=` injection: pick the precedent whose SHAPE matches your workflow
 
 ## Problem

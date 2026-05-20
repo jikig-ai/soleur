@@ -79,6 +79,27 @@ def extract_inline_date(content):
     return match.group(1) if match else ""
 
 
+def _reject_yaml_block_noise(tags):
+    """Drop bullet-list-noise tokens from ## Tags YAML-block-scalar extraction.
+
+    Tokens rejected (verified against commit 82584251 cleanup of 13 files):
+      - "category-*"    collisions from `category: <value>` rows
+      - "module-*"      collisions from `module: <value>` rows
+      - "--<digits>"    list-marker dash from `  - "2794"` sub-bullet rows
+      - tokens >50 chars   absorbed prose
+
+    Scoped to the `## Tags` branch only. The `**Tags:**` comma-form and
+    tags_from_slug() are unaffected: legitimate authored tags like
+    `module-level-state` and `category-design` live in pre-existing YAML
+    frontmatter (where extract_inline_tags is never called) or arrive
+    via the comma-form which short-circuits before this branch.
+    """
+    return [
+        t for t in tags
+        if not t.startswith(("--", "category-", "module-")) and len(t) <= 50
+    ]
+
+
 def extract_inline_tags(content):
     """Extract tags from **Tags:** or ## Tags section."""
     # Check **Tags:** inline format (comma-separated)
@@ -93,11 +114,11 @@ def extract_inline_tags(content):
         raw = match.group(1).strip()
         if raw:
             # Detect key: value format (CORA-style inline metadata)
-            lines = raw.strip().split("\n")
-            if all(":" in line for line in lines if line.strip()):
+            lines_in_section = raw.strip().split("\n")
+            if all(":" in line for line in lines_in_section if line.strip()):
                 # Extract values as tags, split comma-separated values
                 tags = []
-                for line in lines:
+                for line in lines_in_section:
                     if ":" not in line:
                         continue
                     val = line.split(":", 1)[1].strip()
@@ -108,8 +129,8 @@ def extract_inline_tags(content):
                         part = re.sub(r"[#\[\]{}()$\"']", "", part).strip()
                         if part:
                             tags.append(part)
-                return tags
-            return normalize_tags(raw)
+                return _reject_yaml_block_noise(tags)
+            return _reject_yaml_block_noise(normalize_tags(raw))
 
     return []
 
@@ -254,8 +275,29 @@ def process_file_with_frontmatter(filepath, filename):
     stats["augmented"] += 1
 
 
+def iter_learning_files(root=LEARNINGS_DIR):
+    """Yield (filepath, filename) for every .md file under root, recursively.
+
+    Excludes README.md (case-insensitive). `technical-debt/README.md` is a
+    ledger header, not a schema-compliant learning. Archive subdirs (e.g.,
+    `runtime-errors/archive/`) are included — they share the learning schema
+    and the acceptance grep does not exclude them.
+    """
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in sorted(filenames):
+            if not filename.endswith(".md"):
+                continue
+            if filename.lower() == "readme.md":
+                continue
+            yield os.path.join(dirpath, filename), filename
+
+
 def rename_dateless_file():
-    """Rename agent-prompt-sharp-edges-only.md with date prefix from git history."""
+    """Rename agent-prompt-sharp-edges-only.md with date prefix from git history.
+
+    Top-level-only by design: the dateless-file scenario is a one-shot
+    historical artifact, not a recurring class. No recursion needed.
+    """
     dateless = os.path.join(LEARNINGS_DIR, "agent-prompt-sharp-edges-only.md")
     if not os.path.exists(dateless):
         return None
@@ -288,13 +330,8 @@ def main():
     # Step 1: Rename dateless file
     renamed = rename_dateless_file()
 
-    # Step 2: Process all files
-    files = sorted(os.listdir(LEARNINGS_DIR))
-    for filename in files:
-        if not filename.endswith(".md"):
-            continue
-
-        filepath = os.path.join(LEARNINGS_DIR, filename)
+    # Step 2: Process all files (recurse into taxonomy subdirs)
+    for filepath, filename in iter_learning_files():
         stats["processed"] += 1
 
         with open(filepath) as f:
@@ -310,12 +347,9 @@ def main():
           f"Augmented: {stats['augmented']} | Skipped: {stats['skipped']} | "
           f"Errors: {stats['errors']}")
 
-    # Verify all files have frontmatter
+    # Verify all files have frontmatter (recurse into taxonomy subdirs)
     failed = []
-    for filename in sorted(os.listdir(LEARNINGS_DIR)):
-        if not filename.endswith(".md"):
-            continue
-        filepath = os.path.join(LEARNINGS_DIR, filename)
+    for filepath, _filename in iter_learning_files():
         with open(filepath) as f:
             if f.readline().strip() != "---":
                 failed.append(filepath)
@@ -328,10 +362,7 @@ def main():
 
     # Verify all required fields present
     missing_fields = []
-    for filename in sorted(os.listdir(LEARNINGS_DIR)):
-        if not filename.endswith(".md"):
-            continue
-        filepath = os.path.join(LEARNINGS_DIR, filename)
+    for filepath, filename in iter_learning_files():
         with open(filepath) as f:
             content = f.read()
         fm, _, _ = parse_frontmatter(content)
@@ -350,10 +381,7 @@ def main():
 
     # Category distribution
     categories = {}
-    for filename in sorted(os.listdir(LEARNINGS_DIR)):
-        if not filename.endswith(".md"):
-            continue
-        filepath = os.path.join(LEARNINGS_DIR, filename)
+    for filepath, _filename in iter_learning_files():
         with open(filepath) as f:
             content = f.read()
         fm, _, _ = parse_frontmatter(content)

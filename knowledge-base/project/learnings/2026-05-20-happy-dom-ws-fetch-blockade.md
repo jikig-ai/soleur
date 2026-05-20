@@ -1,4 +1,5 @@
 ---
+title: 'happy-dom''s WebSocket and fetch are real network adapters — install a fail-loud blockade in setup-dom for deterministic test isolation'
 date: 2026-05-20
 category: test-failures
 tags: [vitest, happy-dom, test-isolation, network-blockade, econnrefused]

@@ -1,3 +1,10 @@
+---
+title: Test mock chain sweep when extending Supabase wrappers
+date: 2026-04-27
+category: engineering
+tags: [best-practices, apps/web-platform/server]
+---
+
 # Test mock chain sweep when extending Supabase wrappers
 
 **Date:** 2026-04-27

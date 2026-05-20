@@ -1,15 +1,15 @@
 ---
-module: GitHub App
+title: GitHub Org Membership API 302 Redirect and Test Isolation
 date: 2026-04-02
-problem_type: integration_issue
-component: authentication
-symptoms:
-  - "Organization installations rejected with 403 'not yet supported'"
-  - "account.login for org installations returns org name, not installing user's login"
-root_cause: missing_permission
-resolution_type: code_fix
-severity: medium
+category: workflow-patterns
 tags: [github-api, org-membership, redirect-handling, token-cache-isolation]
+symptoms: [Organization installations rejected with 403 'not yet supported', account.login for org installations returns org name, not installing user's login]
+module: GitHub App
+component: authentication
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: missing_permission
+severity: medium
 ---
 
 # Troubleshooting: GitHub Org Membership API 302 Redirect and Test Isolation

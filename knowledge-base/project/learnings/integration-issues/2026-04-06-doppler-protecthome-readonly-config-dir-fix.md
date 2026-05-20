@@ -1,16 +1,15 @@
 ---
-module: System
+title: Doppler CLI fails under systemd ProtectHome=read-only
 date: 2026-04-06
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "FATAL: Doppler secrets download failed on all webhook-triggered deploys"
-  - "Doppler token works when tested directly via SSH but fails under systemd service"
-  - "2>/dev/null swallows actual error message making diagnosis opaque"
-root_cause: config_error
-resolution_type: config_change
-severity: critical
+category: engineering
 tags: [doppler, systemd, protecthome, deploy-pipeline, infrastructure]
+symptoms: [FATAL: Doppler secrets download failed on all webhook-triggered deploys, Doppler token works when tested directly via SSH but fails under systemd service, 2>/dev/null swallows actual error message making diagnosis opaque]
+module: System
+component: tooling
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: critical
 ---
 
 # Troubleshooting: Doppler CLI fails under systemd ProtectHome=read-only

@@ -1,9 +1,10 @@
 ---
 title: Agent description token budget optimization
+date: 2026-02-20
 category: performance-issues
-module: plugin-loader
 tags: [agents, frontmatter, token-budget, system-prompt, descriptions]
-symptoms: ["Large cumulative agent descriptions will impact performance (~15.8k tokens > 15.0k)"]
+symptoms: [Large cumulative agent descriptions will impact performance (~15.8k tokens > 15.0k)]
+module: plugin-loader
 ---
 
 # Agent Description Token Budget Optimization

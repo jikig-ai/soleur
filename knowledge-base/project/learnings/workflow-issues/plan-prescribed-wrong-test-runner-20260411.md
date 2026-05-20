@@ -1,15 +1,15 @@
 ---
-module: System
+title: Plan Prescribed Wrong Test Runner Command
 date: 2026-04-11
-problem_type: workflow_issue
-component: testing_framework
-symptoms:
-  - "bun test filter returned 'no test files found' despite test files existing"
-  - "Shell CWD shifted after cd into subdirectory, causing path-relative commands to fail"
-root_cause: config_error
-resolution_type: workflow_improvement
-severity: low
+category: engineering
 tags: [vitest, bun-test, test-runner, plan-accuracy, cwd-management]
+symptoms: [bun test filter returned 'no test files found' despite test files existing, Shell CWD shifted after cd into subdirectory, causing path-relative commands to fail]
+module: System
+component: testing_framework
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: config_error
+severity: low
 ---
 
 # Troubleshooting: Plan Prescribed Wrong Test Runner Command

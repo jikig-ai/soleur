@@ -1,3 +1,10 @@
+---
+title: PDF viewer flex height containment and react-pdf sizing
+date: 2026-04-16
+category: engineering
+tags: [ui-bugs, kb-viewer]
+---
+
 # Learning: PDF viewer flex height containment and react-pdf sizing
 
 ## Problem

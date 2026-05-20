@@ -1,9 +1,10 @@
 ---
+title: Plan-time grep ACs must exclude meta-docs; cited identifiers must come from source
 date: 2026-05-20
-issue: 4159
-pr: 4160
 category: best-practices
 tags: [plan-quality, acceptance-criteria, deepen-plan, verification, grep, terraform]
+issue: 4159
+pr: 4160
 ---
 
 # Plan-time grep ACs must exclude meta-docs; cited identifiers must come from source

@@ -1,3 +1,10 @@
+---
+title: Supabase client created at module scope crashes dev server when env vars absent
+date: 2026-04-05
+category: engineering
+tags: [runtime-errors, web-platform/session-sync]
+---
+
 # Learning: Supabase client created at module scope crashes dev server when env vars absent
 
 ## Problem

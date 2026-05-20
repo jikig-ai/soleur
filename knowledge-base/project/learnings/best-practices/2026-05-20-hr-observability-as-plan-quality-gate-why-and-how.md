@@ -1,9 +1,12 @@
 ---
+title: 'Observability as a Plan-Quality Gate (companion to `hr-observability-as-plan-quality-gate`)'
 date: 2026-05-20
-type: best-practice
+category: engineering
+tags: [hr, observability, as, plan, quality, gate, why, how]
 companion_rule: hr-observability-as-plan-quality-gate
-trigger_pr: 4116
 related: [hr-no-dashboard-eyeball-pull-data-yourself]
+trigger_pr: 4116
+type: best-practice
 ---
 
 # Observability as a Plan-Quality Gate (companion to `hr-observability-as-plan-quality-gate`)

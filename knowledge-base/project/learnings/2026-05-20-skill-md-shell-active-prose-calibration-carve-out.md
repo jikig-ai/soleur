@@ -1,11 +1,11 @@
 ---
+title: 'SKILL.md Prose With Shell-Active Patterns: Calibration Carve-Out'
 date: 2026-05-20
 category: integration-issues
 tags: [skill-security-scan, calibration, false-positive, fence-language, defense-in-depth]
-related:
-  - 2026-05-20-preflight-check-10-discoverability-test-execution.md
 issue: 4162
 pr: 4164
+related: [2026-05-20-preflight-check-10-discoverability-test-execution.md]
 ---
 
 # SKILL.md Prose With Shell-Active Patterns: Calibration Carve-Out
