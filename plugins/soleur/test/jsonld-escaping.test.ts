@@ -17,6 +17,12 @@ let outputDir: string;
 let homepageHtml: string;
 let blogPostHtml: string;
 
+// 30_000 ms hook timeout: `npx @11ty/eleventy` cold-start (incl. npx resolve)
+// measures 3-7s under bun-test; default 5s bun hook timeout flakes
+// intermittently. Precedent: `skill-security-scan.test.ts:196` (PR #4097).
+// bun-types `HookOptions = number | { timeout?: number }` accepts numeric ms.
+// NOTE: bun mislabels the failure as `beforeEach/afterEach hook timed out`
+// even though this is `beforeAll` — search for either string when debugging.
 beforeAll(() => {
   outputDir = mkdtempSync(join(tmpdir(), "jsonld-test-"));
   const proc = Bun.spawnSync(
@@ -30,7 +36,7 @@ beforeAll(() => {
   }
   homepageHtml = readFileSync(join(outputDir, "index.html"), "utf8");
   blogPostHtml = readFileSync(join(outputDir, "blog", "test-post", "index.html"), "utf8");
-});
+}, 30_000);
 
 afterAll(() => {
   rmSync(outputDir, { recursive: true, force: true });

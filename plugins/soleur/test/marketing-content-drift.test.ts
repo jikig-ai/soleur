@@ -59,6 +59,13 @@ let buildAttempted = false;
 let buildOk = false;
 let buildStderr = "";
 
+// 30_000 ms hook timeout: `npm run docs:build` is the full Eleventy build
+// (incl. `_data/github.js` Releases fetch + sibling _data modules). Cold
+// runs measure 5-10s; default 5s bun hook timeout flakes intermittently.
+// Precedent: `skill-security-scan.test.ts:196` (PR #4097). bun-types
+// `HookOptions = number | { timeout?: number }` accepts a numeric ms arg.
+// NOTE: bun mislabels the failure as `beforeEach/afterEach hook timed out`
+// even though this is `beforeAll` — search for either string when debugging.
 beforeAll(async () => {
   // Build the Eleventy site once for tests 3-5. Argv array (no shell metacharacters).
   buildAttempted = true;
@@ -74,7 +81,7 @@ beforeAll(async () => {
   } else {
     buildOk = true;
   }
-});
+}, 30_000);
 
 describe("marketing-content-drift", () => {
   test("Test 1: prose uses soft floors, not stale exact counts", () => {

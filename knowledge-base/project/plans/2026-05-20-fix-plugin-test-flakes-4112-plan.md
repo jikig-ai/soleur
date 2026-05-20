@@ -196,18 +196,18 @@ Result: **None**. No open code-review scope-outs touch these files.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1: Eleventy-spawning hooks have 30 s timeout.** Both files
+- [x] **AC1: Eleventy-spawning hooks have 30 s timeout.** Both files
   pass:
   - `grep -nE ', 30_000\)' plugins/soleur/test/marketing-content-
     drift.test.ts` returns exactly 1 line and that line is the
     closing of the file's only `beforeAll`.
   - Same for `plugins/soleur/test/jsonld-escaping.test.ts`.
-- [ ] **AC2: `github.js` has bounded fetch.**
+- [x] **AC2: `github.js` has bounded fetch.**
   `grep -nE 'AbortController|FETCH_TIMEOUT_MS|signal:'
   plugins/soleur/docs/_data/github.js` returns ≥3 matches (controller
   construction, timeout constant, signal pass-through). The constant
   value is `5000` to match `githubStats.js:6` and `communityStats.js:15`.
-- [ ] **AC3: Repro command exits 0.** Run
+- [x] **AC3: Repro command exits 0.** Run
 
   ```bash
   bun test plugins/soleur/test/github-stats-data.test.ts \
@@ -220,14 +220,14 @@ Result: **None**. No open code-review scope-outs touch these files.
   appear under future bun versions if a test forgets to await a
   spawn — but it MUST NOT co-occur with a hook timeout, which is the
   user-visible failure.)
-- [ ] **AC4: Each file passes in isolation.** Three separate `bun
+- [x] **AC4: Each file passes in isolation.** Three separate `bun
   test <file>` invocations each exit 0.
-- [ ] **AC5: Full plugin suite passes.** `bun test plugins/soleur/`
+- [x] **AC5: Full plugin suite passes.** `bun test plugins/soleur/`
   exits 0 in ≤120 s. Capture timing in PR body.
-- [ ] **AC6: CI bun-shard passes.** `TEST_GROUP=bun bash
+- [x] **AC6: CI bun-shard passes.** `TEST_GROUP=bun bash
   scripts/test-all.sh` exits 0 (the exact CI form — see
   `scripts/test-all.sh:128-159`).
-- [ ] **AC7: No new dependencies.** `git diff --stat package.json
+- [x] **AC7: No new dependencies.** `git diff --stat package.json
   bun.lockb` returns empty.
 - [ ] **AC8: PR body uses `Closes #4112`** (per
   `wg-use-closes-n-in-pr-body-not-title-to`).
@@ -321,20 +321,20 @@ No GDPR-gate trigger. No IaC trigger. No Product/UX trigger.
 
 ### Phase 0 — Preconditions
 
-- [ ] Verify worktree is `feat-one-shot-plugin-test-flakes-4112`.
-- [ ] `bun --version` ≥ 1.3.11.
-- [ ] Repro AC3 command. Capture the before-state output.
-- [ ] Read `plugins/soleur/docs/_data/githubStats.js:1-67` and
+- [x] Verify worktree is `feat-one-shot-plugin-test-flakes-4112`.
+- [x] `bun --version` ≥ 1.3.11.
+- [x] Repro AC3 command. Capture the before-state output.
+- [x] Read `plugins/soleur/docs/_data/githubStats.js:1-67` and
   `plugins/soleur/docs/_data/communityStats.js:1-50` to internalise
   the mirror pattern.
-- [ ] Re-confirm bun-types `HookOptions` signature at
+- [x] Re-confirm bun-types `HookOptions` signature at
   `~/.bun/install/cache/bun-types@<version>/test.d.ts` (the version
   Bun resolves on this host). Project does not pin `bun-types`
   explicitly; the runtime API is what we depend on.
 
 ### Phase 1 — Source fix (`github.js`)
 
-- [ ] Edit `plugins/soleur/docs/_data/github.js`:
+- [x] Edit `plugins/soleur/docs/_data/github.js`:
   - Add `const FETCH_TIMEOUT_MS = 5000;` near the top, with the
     comment block copied from `githubStats.js:4-5`.
   - Inside the function, before the existing `try { const res =
@@ -345,28 +345,28 @@ No GDPR-gate trigger. No IaC trigger. No Product/UX trigger.
   - Pass `{ headers, signal: controller.signal }` to `fetch`.
   - Wrap the existing `try { ... } catch { ... }` with `finally
     { clearTimeout(timer); }`.
-- [ ] Run `npm run docs:build` — must exit 0.
+- [x] Run `npm run docs:build` — must exit 0.
 
 ### Phase 2 — Test hardening (`marketing-content-drift.test.ts`)
 
-- [ ] Change `beforeAll(async () => { ... });` (line 62) to
+- [x] Change `beforeAll(async () => { ... });` (line 62) to
   `beforeAll(async () => { ... }, 30_000);` with an inline comment.
-- [ ] Run `bun test plugins/soleur/test/marketing-content-drift.test.ts`
+- [x] Run `bun test plugins/soleur/test/marketing-content-drift.test.ts`
   — must exit 0.
 
 ### Phase 3 — Test hardening (`jsonld-escaping.test.ts`)
 
-- [ ] Same edit at line 20. Same comment.
-- [ ] Run `bun test plugins/soleur/test/jsonld-escaping.test.ts` —
+- [x] Same edit at line 20. Same comment.
+- [x] Run `bun test plugins/soleur/test/jsonld-escaping.test.ts` —
   must exit 0.
 
 ### Phase 4 — Integration
 
-- [ ] Run AC3 over the three files in discovery order — exit 0, no
+- [x] Run AC3 over the three files in discovery order — exit 0, no
   hook-timeout strings.
-- [ ] Run AC4: three separate isolated invocations.
-- [ ] Run AC5: `bun test plugins/soleur/` — full plugin suite.
-- [ ] Run AC6: `TEST_GROUP=bun bash scripts/test-all.sh`.
+- [x] Run AC4: three separate isolated invocations.
+- [x] Run AC5: `bun test plugins/soleur/` — full plugin suite.
+- [x] Run AC6: `TEST_GROUP=bun bash scripts/test-all.sh`.
 
 ### Phase 5 — Commit + push + PR
 
