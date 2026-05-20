@@ -298,7 +298,7 @@ so cloud-init.yml edits never re-render the existing host.
 ```bash
 # Run from the operator's workstation. 200 or 401 = Inngest is alive.
 curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 \
-  https://web-platform.soleur.ai/api/inngest
+  https://app.soleur.ai/api/inngest
 ```
 
 Anything other than `200` / `401` means Inngest is absent or unreachable.
