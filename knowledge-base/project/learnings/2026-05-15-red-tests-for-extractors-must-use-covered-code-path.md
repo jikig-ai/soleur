@@ -2,7 +2,9 @@
 title: RED tests for regex-based extractors must inject the indicator on a covered code path
 date: 2026-05-15
 category: engineering
-tags: [yaml, category-test-failures, module-extractors-and-walkers, related, --knowledge-baseprojectlearningstest-failures2026-04-18-red-verification-must-distinguish-gated-from-ungatedmd, --knowledge-baseprojectlearningstest-failures2026-04-22-red-test-must-simulate-suts-preconditionsmd, --knowledge-baseprojectlearnings2026-05-04-vacuous-red-via-shared-fixture-and-toolchain-pinningmd, --knowledge-baseprojectlearningstest-failures2026-05-11-rerender-not-remount-for-in-component-state-machine-testsmd, issue-2726]
+tags:
+- engineering
+- issue-2726
 ---
 
 # Learning: RED tests for regex-based extractors must inject the indicator on a covered code path

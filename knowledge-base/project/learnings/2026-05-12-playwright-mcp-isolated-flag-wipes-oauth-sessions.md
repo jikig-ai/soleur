@@ -1,8 +1,10 @@
 ---
-title: 'Playwright MCP `--isolated` flag wipes OAuth sessions on every browser respawn'
+title: Playwright MCP `--isolated` flag wipes OAuth sessions on every browser respawn
 date: 2026-05-12
 category: infrastructure
-tags: [yaml, category-integration-issues, module-mcp-config, class-stateless-mcp-server-vs-multi-turn-oauth-flow, load-bearing-yes-blocked-the-sentry-token-creation-flow, fix-target-project-level-mcpjson]
+tags:
+- infrastructure
+- fix-target-project-level-mcpjson
 ---
 
 # Playwright MCP `--isolated` flag wipes OAuth sessions on every browser respawn

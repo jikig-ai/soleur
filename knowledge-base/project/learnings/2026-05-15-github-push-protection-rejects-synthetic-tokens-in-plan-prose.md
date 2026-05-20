@@ -2,7 +2,9 @@
 title: GitHub push protection rejects synthetic secret tokens in plan/spec prose
 date: 2026-05-15
 category: engineering
-tags: [category-integration-issues, module-git-workflow, related, --knowledge-baseprojectlearnings2026-05-15-fail-closed-redaction-enables-committed-default-outputmd, --knowledge-baseprojectplans2026-05-15-feat-code-to-prd-skill-planmd, issue-2726]
+tags:
+- engineering
+- issue-2726
 ---
 
 # Learning: GitHub push protection rejects synthetic secret tokens in plan/spec prose

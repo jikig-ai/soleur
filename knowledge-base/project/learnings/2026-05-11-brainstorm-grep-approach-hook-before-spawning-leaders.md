@@ -2,7 +2,10 @@
 title: Grep main for the approach hook before brainstorm leader spawn
 date: 2026-05-11
 category: shell-scripting
-tags: [category-process, module-brainstorm, related, --knowledge-baseprojectlearnings2026-05-07-brainstorm-verify-referenced-pr-state-and-leader-infra-claimsmd, --knowledge-baseprojectlearnings2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sitesmd, --knowledge-baseprojectlearnings2026-04-23-verify-trigger-path-before-attributing-regressionmd, issues, --3258-closed, superseded-by-3286, --3603-hardening-umbrella, open, prs, --3286-the-already-shipped-fix-that-this-brainstorm-rediscovered, --3602-this-sessions-draft-pr, now-tracking-3603]
+tags:
+- shell-scripting
+- superseded-by-3286
+- now-tracking-3603
 ---
 
 # Learning: Grep main for the approach hook before brainstorm leader spawn

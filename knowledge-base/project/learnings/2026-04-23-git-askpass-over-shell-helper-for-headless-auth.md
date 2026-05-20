@@ -2,7 +2,12 @@
 title: GIT_ASKPASS over shell-invoked credential helpers for headless git auth
 date: 2026-04-23
 category: workflow-patterns
-tags: [category-integration-issues, module-web-platform-repo-setup, prs, --2842, sentryids, --6aac752a7dbd4587857fb617abb1e6ac, scopeouts, --2846, --2847, --2848]
+tags:
+- workflow-patterns
+- git
+- askpass
+- over
+- shell
 ---
 
 # Learning: GIT_ASKPASS over shell-invoked credential helpers for headless git auth

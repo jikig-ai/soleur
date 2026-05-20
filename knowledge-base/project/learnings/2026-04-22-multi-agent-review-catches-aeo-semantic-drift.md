@@ -2,7 +2,12 @@
 title: multi-agent review catches AEO semantic drift that drift-guard tests accept
 date: 2026-04-22
 category: marketing
-tags: [category-integration-issues, module-marketing-aeo, prs, --2794, closes, --2707, --2708, --2709, --2711, follow-up, --2799]
+tags:
+- marketing
+- multi
+- agent
+- review
+- catches
 ---
 
 # Learning: multi-agent review catches AEO semantic drift that drift-guard tests accept
