@@ -420,19 +420,19 @@ Per AGENTS.md `hr-github-app-auth-not-pat`, plans that introduce or reference a 
 
 **Step 1 — Trigger.** Always runs. The detection only fires on match; no opt-out.
 
-**Step 2 — Grep the plan.** Run the following regex sweep against the plan file:
+**Step 2 — Grep the plan.** Run the following regex sweep against the plan file (case-insensitive):
 
 ```bash
 PLAN="<plan-file>"
-HITS=$(grep -nE '\bvar\.github_actions_token\b|\bTF_VAR_GITHUB_(TOKEN|PAT)\b|\bvar\.[a-z_]*_pat\b|\bghp_[A-Za-z0-9]{36,}\b' "$PLAN" || true)
+HITS=$(grep -niE '\bvar\.(github_actions_token|github_token|gh_token|gh_pat|github_pat|actions_token|installation_token|repo_token)\b|\bTF_VAR_(GITHUB|GH)_(TOKEN|PAT|AUTH)\b|\bvar\.[a-z_]*_(pat|token)\b|\b(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82,})\b' "$PLAN" || true)
 ```
 
 The four patterns target distinct PAT shapes:
 
-- `\bvar\.github_actions_token\b` — the specific Terraform variable name eliminated in #4144.
-- `\bTF_VAR_GITHUB_(TOKEN|PAT)\b` — the env-var form Doppler `--name-transformer tf-var` would produce for any `var.github_token` / `var.github_pat` reintroduction.
-- `\bvar\.[a-z_]*_pat\b` — any plan variable suffixed `_pat` (catches `var.gh_pat`, `var.org_pat`, etc.).
-- `\bghp_[A-Za-z0-9]{36,}\b` — a literal fine-grained PAT token in the plan prose (per the synthetic-token learning, this catches accidental pastes; the placeholder-shape `ghp_XXX...` placeholder form is allowed and only the literal token shape rejects).
+- Named `var.*_token`/`var.*_pat` Terraform variables — covers the specific name eliminated in #4144 plus common rename shapes (`github_token`, `gh_pat`, `installation_token`, etc.).
+- `TF_VAR_(GITHUB|GH)_(TOKEN|PAT|AUTH)` (case-insensitive) — the env-var form Doppler `--name-transformer tf-var` produces.
+- `var.*_(pat|token)` — any plan variable suffixed `_pat` or `_token` (catches `var.gh_pat`, `var.org_token`, etc.).
+- Literal token shapes — classic 40-char `ghp_<40>` and fine-grained `github_pat_<82+>`. The placeholder form `ghp_XXX...` is allowed; only literal-shape tokens reject.
 
 **Step 3 — HALT on match.** If `HITS` is non-empty, emit:
 

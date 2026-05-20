@@ -61,15 +61,26 @@ JWT="${UNSIGNED}.${SIG_B64}"
 RESPONSE="$(mktemp -p /dev/shm get-app-installation-id-response.XXXXXX.json)"
 trap 'rm -f "$PEM_FILE" "$RESPONSE"' EXIT INT TERM HUP
 
-HTTP_CODE="$(curl --max-time 10 -sS -w '%{http_code}' \
-  -H "Accept: application/vnd.github+json" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  --header @<(printf 'Authorization: Bearer %s' "$JWT") \
-  https://api.github.com/orgs/jikig-ai/installation \
-  -o "$RESPONSE")"
+# 3-attempt curl with exponential backoff (1s, 2s) — GitHub API p99 can
+# spike during regional incidents; JWT TTL (540s) covers retries.
+HTTP_CODE=""
+for attempt in 1 2 3; do
+  HTTP_CODE="$(curl --max-time 15 -sS -w '%{http_code}' \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    --header @<(printf 'Authorization: Bearer %s' "$JWT") \
+    https://api.github.com/orgs/jikig-ai/installation \
+    -o "$RESPONSE" || echo "000")"
+  [[ "$HTTP_CODE" == "200" ]] && break
+  # Retry only on transient classes; 4xx will not change between attempts.
+  case "$HTTP_CODE" in
+    5*|000) sleep "$attempt" ;;
+    *) break ;;
+  esac
+done
 
 if [[ "$HTTP_CODE" != "200" ]]; then
-  echo "ERROR: GitHub API returned HTTP $HTTP_CODE" >&2
+  echo "ERROR: GitHub API returned HTTP $HTTP_CODE (3 attempts)" >&2
   cat "$RESPONSE" >&2
   exit 1
 fi

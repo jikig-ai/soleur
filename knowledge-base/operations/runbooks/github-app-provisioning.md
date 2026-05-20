@@ -107,7 +107,7 @@ Capture the resulting `installation_id` (visible in the URL of the install page:
 
 ## Failure modes
 
-- **Apply fails on the `github` provider auth:** verify the soleur-ai GitHub App installation grants `Repository permissions → Secrets: Read and write` on jikig-ai/soleur. Probe with `gh api /app/installations/$TF_VAR_github_app_installation_id | jq -r .permissions.secrets` (expect `"write"`). If `read` or missing, visit `https://github.com/organizations/jikig-ai/settings/installations/<id>/permissions/update` to grant. The prior PAT path was eliminated in #4144.
+- **Apply fails on the `github` provider auth:** verify the soleur-ai GitHub App installation grants `Repository permissions → Secrets: Read and write` on jikig-ai/soleur. App-JWT endpoints require `Authorization: Bearer <jwt>` — `gh api` sends `Authorization: token <value>` and 401s; use curl directly. Mint a JWT the same way `apps/web-platform/infra/scripts/get-app-installation-id.sh` does, then: `curl -sH "Authorization: Bearer $JWT" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations/$TF_VAR_github_app_installation_id" | jq -r .permissions.secrets` (expect `"write"`). If `read` or missing, visit `https://github.com/organizations/jikig-ai/settings/installations/<id>/permissions/update` to grant. The prior PAT path was eliminated in #4144.
 - **Apply fails on `prd_kb_drift_walker` config not found:** the Doppler config must exist before first apply. Create it in the Doppler dashboard.
 - **Webhook 401 in production:** signature verification failing. Confirm Step 5 (you pasted the new secret into the App). The route fails closed and Sentry mirrors the event at `level: error`.
 

@@ -577,8 +577,22 @@ case "$COMPONENT" in
     # Ubuntu 24.04's sudo-rs rejects wildcards in command arguments.
     # Webhook serializes deploys; concurrent collisions not possible. (#4144)
     INNGEST_EXTRACT_DIR=/tmp/inngest-extract
+    # Symlink precondition: refuse to rm -rf a symlink (would follow the
+    # link and clobber unrelated paths); refuse to operate if a hostile
+    # local user pre-created the dir with non-deploy ownership. Defensive
+    # against TOCTOU races on world-writable /tmp.
+    if [[ -L "$INNGEST_EXTRACT_DIR" ]]; then
+      logger -t "$LOG_TAG" "FAILED: $INNGEST_EXTRACT_DIR is a symlink — refusing to extract"
+      final_write_state 1 "inngest_extract_symlink_refused"
+      exit 1
+    fi
+    if [[ -e "$INNGEST_EXTRACT_DIR" && "$(stat -c %U "$INNGEST_EXTRACT_DIR" 2>/dev/null)" != "$(id -un)" ]]; then
+      logger -t "$LOG_TAG" "FAILED: $INNGEST_EXTRACT_DIR owned by unexpected user — refusing to extract"
+      final_write_state 1 "inngest_extract_owner_mismatch"
+      exit 1
+    fi
     rm -rf "$INNGEST_EXTRACT_DIR"
-    mkdir -p "$INNGEST_EXTRACT_DIR"
+    mkdir -m 0700 -p "$INNGEST_EXTRACT_DIR"
     INNGEST_EXTRACT_CONTAINER="soleur-inngest-extract-$$"
     docker rm -f "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
     if ! docker create --name "$INNGEST_EXTRACT_CONTAINER" "$IMAGE:$TAG" >/dev/null; then

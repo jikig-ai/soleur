@@ -268,9 +268,15 @@ resource "terraform_data" "deploy_pipeline_fix" {
   # Mirrors cloud-init.yml write_files for the same path; this resource
   # keeps already-running hosts in sync (hcloud_server.web has
   # ignore_changes=[user_data], so cloud-init never re-applies).
+  # Stage to /tmp first; remote-exec validates with visudo -cf, then
+  # `install` atomically moves into /etc/sudoers.d/ only on validation
+  # success. Sudo loads everything in sudoers.d on next invocation
+  # regardless of visudo exit, so direct-write would risk lockout on a
+  # malformed file. The staged path is in /tmp because root owns this
+  # SSH session and /tmp is the conventional pre-install staging area.
   provisioner "file" {
     source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
-    destination = "/etc/sudoers.d/deploy-inngest-bootstrap"
+    destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
   }
 
   provisioner "remote-exec" {
@@ -283,11 +289,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
       # it contains the HMAC secret. Provisioner "file" uploads as root:root by default.
       "chown root:deploy /etc/webhook/hooks.json",
       "chmod 640 /etc/webhook/hooks.json",
-      # #4144 — sudoers requires 0440 owned by root:root; validate via visudo
-      # before sudo loads it (an invalid file would lock out sudo entirely).
-      "chown root:root /etc/sudoers.d/deploy-inngest-bootstrap",
-      "chmod 0440 /etc/sudoers.d/deploy-inngest-bootstrap",
-      "visudo -cf /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #4144 — validate staged sudoers BEFORE installing into /etc/sudoers.d/.
+      # visudo -cf exit != 0 → leave the staged file, do NOT install; install
+      # uses --mode/--owner/--group atomically so a partial write can't load.
+      "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged && install --mode=0440 --owner=root --group=root /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
+      "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
       # Append DOPPLER_CONFIG_DIR and DOPPLER_ENABLE_VERSION_CHECK to webhook-deploy env file.
       # Redirects Doppler CLI config to /tmp (writable under PrivateTmp) instead of ~/.doppler
       # (blocked by ProtectHome=read-only). grep guard makes this idempotent.

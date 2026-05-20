@@ -43,8 +43,9 @@ write_files:
   # so terraform_data.deploy_pipeline_fix can refresh existing hosts.
   - path: /etc/sudoers.d/deploy-inngest-bootstrap
     content: |
-      Defaults env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256"
-      deploy ALL=(root) NOPASSWD: /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
+      Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
+      Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256"
+      deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
     owner: root:root
     permissions: '0440'
 

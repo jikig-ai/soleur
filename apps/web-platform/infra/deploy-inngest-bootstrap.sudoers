@@ -12,5 +12,6 @@
 #
 # Provisioned via cloud-init (fresh hosts) and terraform_data.deploy_pipeline_fix
 # (already-running hosts). See #4144 / #4118.
-Defaults env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256"
-deploy ALL=(root) NOPASSWD: /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
+Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
+Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256"
+deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
