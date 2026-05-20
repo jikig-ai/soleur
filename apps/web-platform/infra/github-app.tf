@@ -21,15 +21,13 @@
 # webhook flow. The App-installation auth in main.tf supersedes the need
 # for OAuth client credentials.
 #
-# Post-#4173: `secrets:write` added to the App manifest's default_permissions
-# (apps/web-platform/infra/github-app-manifest.json); installation 122213433
-# re-accepted the new permission via the GitHub UI (operator-only carve-out
-# per 2026-05-15-operator-only-step-canonical-list.md case-b —
-# App-permission acceptance has no GitHub API). The drift-guard at
-# .github/workflows/scheduled-github-app-drift-guard.yml is the standing
-# detection primitive for manifest-vs-live divergence going forward; the
-# Step 2a subsection of knowledge-base/engineering/ops/runbooks/github-app-provisioning.md
-# codifies the re-acceptance procedure for every future permission widening.
+# Post-#4173: adding a key to default_permissions in github-app-manifest.json
+# requires founder re-acceptance via the GitHub UI (no API — vendor limit,
+# vendor-authorization-scope class of the operator-only canonical list). See
+# runbook Step 2.1 for the procedure. Drift-guard at scheduled-github-app-
+# drift-guard.yml detects App-declared-vs-manifest divergence; installation-
+# grant-vs-manifest divergence (the class that produced #4173) is NOT yet
+# covered — see follow-up issue.
 #
 # Why ignore_changes on the 2 operator-supplied secrets: rotation via the
 # Doppler UI is invisible to subsequent `terraform plan` (the provider

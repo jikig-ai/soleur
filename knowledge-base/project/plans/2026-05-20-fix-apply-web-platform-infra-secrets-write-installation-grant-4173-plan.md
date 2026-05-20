@@ -298,7 +298,7 @@ Expected: `"success"`. The cron consumes `DOPPLER_TOKEN_KB_DRIFT` as `DOPPLER_TO
 - [ ] AC1: `apps/web-platform/infra/github-app-manifest.json` `default_permissions` contains 8 keys including `"secrets": "write"`. Verify: `jq '.default_permissions | keys | length' apps/web-platform/infra/github-app-manifest.json` returns `8`.
 - [ ] AC2: `apps/web-platform/infra/github-app-manifest.json` parses as valid JSON. Verify: `jq -e '.' apps/web-platform/infra/github-app-manifest.json > /dev/null && echo PASS`.
 - [ ] AC3: Manifest-vs-live diff script reports no drift. Verify: `MANIFEST_FILE=apps/web-platform/infra/github-app-manifest.json RESPONSE_FILE=<(gh api apps/soleur-ai) bash bin/diff-github-app-manifest.sh; echo "exit=$?"` returns `exit=0` with no stdout.
-- [ ] AC4: Manifest-drift-guard contract test passes (6/6 cases). Verify: `cd apps/web-platform && bun test test/github-app-manifest-drift-guard.test.ts` exits 0 with 6 pass.
+- [ ] AC4: Manifest parity + drift-guard contract tests pass. Verify: `cd apps/web-platform && ./node_modules/.bin/vitest run test/github-app-manifest-parity.test.ts test/github-app-manifest-drift-guard.test.ts test/github-app-drift-guard-contract.test.ts` exits 0 with all assertions passing. (apps/web-platform uses vitest, not bun-test — `bunfig.toml` blocks bun-test discovery.)
 - [ ] AC5: `apps/web-platform/infra/main.tf` comment block at lines 58-65 cites #4173 and the post-#4173 installation-grant state. Verify: `grep -c '#4173' apps/web-platform/infra/main.tf` returns ≥1.
 - [ ] AC6: `apps/web-platform/infra/github-app.tf` header references the operator-only carve-out for App-permission acceptance. Verify: `grep -c 'Post-#4173' apps/web-platform/infra/github-app.tf` returns ≥1.
 - [ ] AC7: `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` enumerates all 8 permission keys and includes the Step 2a re-acceptance subsection. Verify: `grep -c 'secrets:write' knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` returns ≥1 AND `grep -c 'Re-accept App installation' knowledge-base/engineering/ops/runbooks/github-app-provisioning.md` returns ≥1.
@@ -398,7 +398,7 @@ Expected downtime/blast-radius: **zero**. The failed apply mutated zero resource
 ## Test Strategy
 
 - **Unit / contract tests**:
-  - `apps/web-platform/test/github-app-manifest-drift-guard.test.ts` — 6/6 cases pass (unchanged behavior; the manifest content is fixture-synthesized inside each case, so no test-fixture coupling to the production manifest).
+  - `apps/web-platform/test/github-app-manifest-drift-guard.test.ts` — all cases pass (unchanged behavior; the manifest content is fixture-synthesized inside each case, so no test-fixture coupling to the production manifest). `apps/web-platform/test/github-app-manifest-parity.test.ts` — EXPECTED_PERMISSION_KEYS extended to 8 keys; all assertions pass.
   - JSON parse + key-count via `jq` (AC1, AC2).
 
 - **Integration**:
@@ -427,6 +427,6 @@ No new test framework required. The existing vitest + `bun test` toolchain cover
   - **R3 follow-up**: investigate why the drift-guard's last 3 hourly runs missed the live=8/manifest=7 drift. File a `ci/guard-broken` issue if reproducible after this PR's manifest edit lands (the edit clears the divergence; the bug-window is the past — Sentry data and a targeted re-run of the workflow against the pre-merge SHA would be needed to reproduce, may be out of scope).
   - **Installation-grant drift-guard extension** (separate scope): extend `bin/diff-github-app-manifest.sh` (or add a sibling script) to ALSO compare `gh api /orgs/jikig-ai/installations` per-installation permissions against the manifest. The current script reads App-level only. Filing as `feat: scheduled-github-app-drift-guard installation-grant comparison` — re-evaluate when the next App-permission widening is queued.
 - Canonical TF invocation: `knowledge-base/project/learnings/2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`
-- Operator-only canonical list (App-permission accept is case-b): `knowledge-base/project/learnings/best-practices/2026-05-15-operator-only-step-canonical-list.md`
+- Operator-only canonical list (App-permission accept is the vendor-authorization-scope class): `knowledge-base/project/learnings/2026-05-15-operator-only-step-canonical-list.md`
 - Hard rule `hr-exhaust-all-automated-options-before` — exhausted: GitHub has no API for App-installation permission self-modification; the click is the legitimate operator-only carve-out.
 - Hard rule `hr-never-label-any-step-as-manual-without` — satisfied: Phase 1 documents WHY the step is operator-only (no API), HOW the agent automates as much as possible (Playwright MCP up to the click), and links the canonical-list case.

@@ -13,7 +13,7 @@ App-create form so the operator clicks one button instead of typing 12 values.
 
 **Operator-only.** Single manual gate: the click on GitHub's App-create form
 (OAuth-consent-class carve-out per
-[operator-only canonical list](../../../project/learnings/best-practices/2026-05-15-operator-only-step-canonical-list.md)
+[operator-only canonical list](../../../project/learnings/2026-05-15-operator-only-step-canonical-list.md)
 case b). Everything else is automated.
 
 ## When to run this
@@ -48,9 +48,10 @@ The manifest pre-fills:
 - Name: `Soleur AI`
 - Homepage: `https://soleur.ai`
 - Description: as committed in the manifest
-- Permissions: 8 keys per the manifest's `default_permissions`
-  (`actions:write`, `administration:write`, `checks:read`, `contents:write`,
-   `members:read`, `metadata:read`, `pull_requests:write`, `secrets:write`)
+- Permissions: every key in the manifest's `default_permissions` (canonical
+  source — see `apps/web-platform/infra/github-app-manifest.json`). The
+  parity test in `apps/web-platform/test/github-app-manifest-parity.test.ts`
+  locks the expected set so an in-band manifest mutation is caught at CI.
 - Callback URLs: 3 entries (Flow A Supabase + custom domain + Flow B App-direct)
 - Setup URL: `https://app.soleur.ai/dashboard/repos`
 - Webhook URL: `https://app.soleur.ai/api/webhooks/github`
@@ -58,13 +59,15 @@ The manifest pre-fills:
 - Webhook secret: **NOT** pre-filled (Soleur-managed via `random_id` in
   `apps/web-platform/infra/github-app.tf` — see Step 4).
 
-### Step 2a — Re-accept App installation when permissions widen
+### Step 2.1 — Re-accept App installation when permissions widen
 
 If a Soleur PR adds a new key to `default_permissions` in
 `apps/web-platform/infra/github-app-manifest.json`, the founder MUST
 re-accept the App installation. GitHub has no API for this — it is a
 one-time UI click per installation per permission widening (operator-only
-carve-out per `2026-05-15-operator-only-step-canonical-list.md` case-b).
+carve-out per the [operator-only canonical
+list](../../../project/learnings/2026-05-15-operator-only-step-canonical-list.md),
+vendor-authorization-scope class).
 
 Symptom of a missing re-acceptance: `terraform apply` against
 `apps/web-platform/infra/` fails with `403 Resource not accessible by
@@ -87,12 +90,6 @@ Procedure:
 
    Expected: the new key is present at the listed level (e.g.,
    `"secrets": "write"`).
-
-PR #4173 is the canonical example: `secrets:write` was added to the
-manifest's `default_permissions` (and to the App-level declaration); the
-installation needed re-acceptance before the `integrations/github`
-Terraform provider could publish the `github_actions_secret.doppler_token_kb_drift`
-resource without 403-ing on the public-key endpoint.
 
 ### Step 3 — Paste 3 identity credentials into Doppler `prd`
 
