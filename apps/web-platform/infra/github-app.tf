@@ -21,6 +21,14 @@
 # webhook flow. The App-installation auth in main.tf supersedes the need
 # for OAuth client credentials.
 #
+# Post-#4173: adding a key to default_permissions in github-app-manifest.json
+# requires founder re-acceptance via the GitHub UI (no API — vendor limit,
+# vendor-authorization-scope class of the operator-only canonical list). See
+# runbook Step 2.1 for the procedure. Drift-guard at scheduled-github-app-
+# drift-guard.yml detects App-declared-vs-manifest divergence; installation-
+# grant-vs-manifest divergence (the class that produced #4173) is tracked in
+# #4179 as a drift-guard extension.
+#
 # Why ignore_changes on the 2 operator-supplied secrets: rotation via the
 # Doppler UI is invisible to subsequent `terraform plan` (the provider
 # skips the value read-back). NO ignore_changes on the random_id-derived

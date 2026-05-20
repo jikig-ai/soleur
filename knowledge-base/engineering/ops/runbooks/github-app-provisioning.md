@@ -13,7 +13,7 @@ App-create form so the operator clicks one button instead of typing 12 values.
 
 **Operator-only.** Single manual gate: the click on GitHub's App-create form
 (OAuth-consent-class carve-out per
-[operator-only canonical list](../../../project/learnings/best-practices/2026-05-15-operator-only-step-canonical-list.md)
+[operator-only canonical list](../../../project/learnings/2026-05-15-operator-only-step-canonical-list.md)
 case b). Everything else is automated.
 
 ## When to run this
@@ -48,13 +48,48 @@ The manifest pre-fills:
 - Name: `Soleur AI`
 - Homepage: `https://soleur.ai`
 - Description: as committed in the manifest
-- Permissions: 7 keys per the manifest's `default_permissions`
+- Permissions: every key in the manifest's `default_permissions` (canonical
+  source — see `apps/web-platform/infra/github-app-manifest.json`). The
+  parity test in `apps/web-platform/test/github-app-manifest-parity.test.ts`
+  locks the expected set so an in-band manifest mutation is caught at CI.
 - Callback URLs: 3 entries (Flow A Supabase + custom domain + Flow B App-direct)
 - Setup URL: `https://app.soleur.ai/dashboard/repos`
 - Webhook URL: `https://app.soleur.ai/api/webhooks/github`
 - `public: false`, `setup_on_update: true`
 - Webhook secret: **NOT** pre-filled (Soleur-managed via `random_id` in
   `apps/web-platform/infra/github-app.tf` — see Step 4).
+
+### Step 2.1 — Re-accept App installation when permissions widen
+
+If a Soleur PR adds a new key to `default_permissions` in
+`apps/web-platform/infra/github-app-manifest.json`, the founder MUST
+re-accept the App installation. GitHub has no API for this — it is a
+one-time UI click per installation per permission widening (operator-only
+carve-out per the [operator-only canonical
+list](../../../project/learnings/2026-05-15-operator-only-step-canonical-list.md),
+vendor-authorization-scope class).
+
+Symptom of a missing re-acceptance: `terraform apply` against
+`apps/web-platform/infra/` fails with `403 Resource not accessible by
+integration` on any endpoint the new permission gates (e.g.,
+`actions/secrets/public-key` when `secrets:write` is the missing grant).
+
+Procedure:
+
+1. Navigate to `https://github.com/organizations/jikig-ai/settings/installations/122213433`
+2. GitHub renders a "Soleur AI is requesting an update to its permissions"
+   banner with a "Review request" link when any declared permission exceeds
+   the installation's current grants. Click **Review request** then
+   **Accept new permissions**.
+3. Verify the installation now grants the new key:
+
+   ```bash
+   gh api /orgs/jikig-ai/installations \
+     --jq '.installations[] | select(.app_slug=="soleur-ai") | .permissions'
+   ```
+
+   Expected: the new key is present at the listed level (e.g.,
+   `"secrets": "write"`).
 
 ### Step 3 — Paste 3 identity credentials into Doppler `prd`
 
