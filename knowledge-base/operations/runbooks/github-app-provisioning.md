@@ -56,13 +56,10 @@ In your terminal (one shell session for the apply):
 
     export TF_VAR_github_app_id="<APP_ID>"
     export TF_VAR_github_app_private_key="$(cat ~/Downloads/soleur-concierge.<date>.private-key.pem)"
-    export TF_VAR_github_app_client_id="<CLIENT_ID>"
-    export TF_VAR_github_app_client_secret="<CLIENT_SECRET>"
 
-For the GitHub Actions secret publishing path, also mint:
+Post-#4150: `TF_VAR_github_app_client_id` and `TF_VAR_github_app_client_secret` are no longer required — the OAuth client credentials had no runtime consumer and were removed. If a future feature needs the OAuth client flow, re-add the variables and the matching `doppler_secret` resources in `github-app.tf`.
 
-- A fine-grained GitHub PAT scoped to jikig-ai/soleur with `Secrets: Read & Write` permission. Save as `TF_VAR_github_actions_token`.
-- A Doppler service token scoped to the `prd_kb_drift_walker` config (Dashboard → Project → soleur → prd_kb_drift_walker → Access → Service Tokens → Generate). Save as `TF_VAR_doppler_token_kb_drift`.
+For the GitHub Actions secret publishing path, the `integrations/github` provider now authenticates via App-installation auth (`main.tf` `app_auth { id, installation_id, pem_file }`) using the same `TF_VAR_github_app_id` + `TF_VAR_github_app_private_key` already exported above. The App's `Secrets: Read & Write` repository permission is the load-bearing scope. The Doppler service token for the kb-drift cron is now minted in-band by the `doppler_service_token.kb_drift` resource (`kb-drift.tf`) — no operator-mint required.
 
 NOTE: the `prd_kb_drift_walker` Doppler config must exist BEFORE first apply. Create it once via the Doppler dashboard (Project → soleur → New config under `prd` environment, name = `prd_kb_drift_walker`). Future Terraform automation tracked separately.
 
@@ -75,9 +72,11 @@ Per learning `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan`:
     cd apps/web-platform/infra
     terraform init -input=false
     doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -out=plan.tfplan
-    # Review the plan: expect 5 doppler_secret + 1 random_id (webhook secret)
-    #   + 1 random_id (kb-drift signing key) + 1 doppler_secret (kb-drift signing key)
-    #   + 1 doppler_secret (kb-drift ingest URL) + 1 github_actions_secret
+    # Review the plan: expect 3 doppler_secret in `prd` (github_app_id, pem,
+    #   webhook_secret) + 1 random_id (webhook secret) + 1 random_id
+    #   (kb-drift signing key) + 1 doppler_secret (kb-drift signing key)
+    #   + 1 doppler_secret (kb-drift ingest URL) + 1 doppler_service_token
+    #   (kb-drift Actions secret source) + 1 github_actions_secret
     #   + 3 betteruptime_* resources (only when betterstack_paid_tier=true).
     doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply plan.tfplan
 
@@ -103,11 +102,12 @@ Capture the resulting `installation_id` (visible in the URL of the install page:
 
 - **Webhook secret rotation:** `terraform apply -replace=random_id.github_webhook_secret` — then re-paste per Step 5.
 - **App PEM rotation:** generate a new PEM in the GitHub App settings (the old PEM stays valid until revoked). Update `TF_VAR_github_app_private_key` and `terraform apply` — the `ignore_changes = [value]` on the doppler_secret means you must use `terraform taint doppler_secret.github_app_private_key` first.
-- **Client Secret rotation:** mint a new secret in the App UI; old one stays valid for a short window per GitHub's policy. Update `TF_VAR_github_app_client_secret`, taint + apply.
+- **kb-drift Doppler token rotation:** `terraform apply -replace=doppler_service_token.kb_drift`. The new token value propagates to the published `DOPPLER_TOKEN_KB_DRIFT` Actions secret in the same apply (no `ignore_changes` on `github_actions_secret.doppler_token_kb_drift.plaintext_value` — Post-#4150 deliberate change).
 
 ## Failure modes
 
-- **Apply fails on the `github` provider auth:** verify `TF_VAR_github_actions_token` has `Secrets: Read & Write` on jikig-ai/soleur. PAT must be fine-grained, not classic.
+- **Apply fails on the `github` provider auth (401/403):** Post-#4150 the provider uses App-installation auth. Verify (a) `TF_VAR_github_app_id` + `TF_VAR_github_app_private_key` are set, (b) the App is installed on the org with installation_id `122213433` (`gh api /orgs/jikig-ai/installations`), (c) the App declares `secrets:write` at the App-permissions level AND the installation has accepted that permission.
+- **Apply fails on `doppler_service_token.kb_drift`:** verify (a) `prd_kb_drift_walker` config exists, (b) `DOPPLER_TOKEN_TF` (workplace personal token) has scope to mint config-scoped service tokens.
 - **Apply fails on `prd_kb_drift_walker` config not found:** the Doppler config must exist before first apply. Create it in the Doppler dashboard.
 - **Webhook 401 in production:** signature verification failing. Confirm Step 5 (you pasted the new secret into the App). The route fails closed and Sentry mirrors the event at `level: error`.
 
