@@ -12,6 +12,32 @@ related_prs: [4174, 4121]
 
 # feat(drift-guard): diff installation-grant permissions vs manifest (post-#4173 follow-up)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** 4 (Proposed Solution, Sharp Edges, Acceptance Criteria, Test Scenarios)
+**Research probes used:**
+- Live `gh api /orgs/jikig-ai/installations` (shape verification)
+- `@octokit/openapi-types/types.d.ts:85507-85530` (canonical schema for `apps/list-installations`)
+- `https://docs.github.com/en/rest/apps/apps#list-installations-for-the-authenticated-app` (auth + pagination)
+- `https://docs.github.com/en/rest/orgs/orgs#list-app-installations-for-an-organization` (rejected endpoint cross-check)
+- `.github/workflows/scheduled-ruleset-bypass-audit.yml:328` (sibling workflow endpoint precedent)
+- AGENTS.md gates (Phase 4.6/4.7/4.8 all PASS at plan-write time)
+
+### Key Improvements (caught at deepen-pass, pre-/work)
+
+1. **Endpoint-shape mismatch caught.** Plan v1 prescribed `jq -c '.installations[]'` (wrapper-style) for `GET /app/installations`. The official OpenAPI schema at `apps/web-platform/node_modules/@octokit/openapi-types/types.d.ts:85517-85528` is a **flat array** under `application/json` — the wrapper-style jq would return zero iterations against a real response, silently bypassing the per-install diff. Correct form is `jq -c '.[]'` (no `.installations` key). The `/orgs/{org}/installations` endpoint IS wrapper-style — the plan was mixing shapes. Now corrected and locked via an AC + explicit Sharp Edge.
+2. **Pagination (Link header) acknowledged.** `GET /app/installations` defaults to `per_page=30`, max `100`. Future-proofs against >30 installations (currently 1). Plan now prescribes `?per_page=100` in the URL plus a Link-header presence check that records `installation_list_truncated` as a `ci/guard-broken` mode rather than silently iterating only the first page.
+3. **`response_shape_unparseable` mode lined up.** Mode name in the per-install diff loop already matches the existing diff script's vocabulary; documented as REUSED, not relabeled.
+4. **Sister-workflow precedent confirmed.** `scheduled-ruleset-bypass-audit.yml:109,299,328` already mints installation tokens against `/app/installations/{id}/access_tokens` using the same JWT pattern. The plan's endpoint choice is consistent with the existing precedent.
+5. **Fold-in #3561 (`tr -d '\x7f'`) confirmed orthogonal.** The new failure-mode strings (`installation_permission_drift` etc.) DO contain `f` (`installation_permissi_on_dri{f}t`, `installation_response_shape_unparseable`'s `_unparseable`) — a literal `f` would silently be dropped from sanitized stdout when the mode is echoed to `$GITHUB_OUTPUT`. The bug DOES manifest against the new modes. **Fold-in is now load-bearing, not opportunistic.** Updated risk R4 from "medium → low w/ fold-in" to "P1 must-fix".
+
+### New Considerations Discovered
+
+- **Plan v1's "no test fixture changes" claim was incomplete.** The contract test stays unchanged for the EXISTING 7 cases (script is unmodified). The plan adds ONE new case for the workflow's per-installation synthesis pattern (covered as AC10). Phrasing in §Proposed Solution updated.
+- **The `MANIFEST_DRIFT_SUPPRESS_UNTIL` is currently active (`2026-05-21T16:00:00Z`).** This means the first scheduled run AFTER merge but BEFORE 2026-05-21T16:00:00Z will silently suppress BOTH diffs (a-vs-b AND c-vs-b). Operator action item: extend the suppress file's expiry by 24h if PR merges within 24h of plan-write time, OR delete it post-merge to force immediate verification. Added to Post-merge AC list.
+- **`installation_unexpected_grant` is the **easier synthetic** for AC19** because plane-(c) drift "live has Y, manifest doesn't" can be produced by deleting a key from the committed manifest (no UI click required). The inverse direction "manifest declares X, live lacks X" requires the operator to NOT re-accept after a manifest add — much harder to synthesize. Plan clarifies which direction the synthetic test should use.
+
 ## Overview
 
 Extend `.github/workflows/scheduled-github-app-drift-guard.yml` to diff the
@@ -75,34 +101,99 @@ App-level manifest diff at YAML:280-356 and the `strip_log_injection` block at
 YAML:366), guarded by the same `MANIFEST_DRIFT_SUPPRESS_UNTIL` suppression
 logic that the existing diff already honors.
 
-Pseudocode:
+Pseudocode (corrected at deepen-pass — note `jq -c '.[]'` against a FLAT
+ARRAY, `per_page=100`, and Link-header truncation check):
 
 ```bash
 # After App-level manifest diff completes successfully...
 if [[ -z "$failure_mode" && -n "${JWT:-}" && -f "$MANIFEST_FILE" && \
       "$suppress_active" -eq 0 ]]; then
   INSTALL_LIST_FILE=$(mktemp -p "$RUNNER_TEMP" installations.XXXXXX)
+  INSTALL_HEADERS_FILE=$(mktemp -p "$RUNNER_TEMP" installations-hdr.XXXXXX)
   HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
     -o "$INSTALL_LIST_FILE" \
+    -D "$INSTALL_HEADERS_FILE" \
     -H 'Accept: application/vnd.github+json' \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     --header @<(printf 'Authorization: Bearer %s' "$JWT") \
-    https://api.github.com/app/installations) || HTTP_CODE="network_error"
+    'https://api.github.com/app/installations?per_page=100') \
+    || HTTP_CODE="network_error"
 
-  # Apply same HTTP/JSON shape checks as the /app call.
-  # Then for EACH installation in the response:
-  #   - mktemp a per-install response file containing only that installation's
-  #     {permissions, events} keys (matches diff-script input contract)
-  #   - re-invoke bin/diff-github-app-manifest.sh against it
-  #   - if drift detected: relabel modes to `installation_permission_drift`
-  #     and `installation_unexpected_grant` so triage distinguishes plane.
-  #
-  # Failure-mode → label routing (matches existing convention at YAML:341-353):
-  #   installation_permission_drift          → ci/auth-broken   (security-regression direction)
-  #   installation_unexpected_grant          → ci/guard-broken  (inventory drift)
-  #   installation_response_shape_unparseable→ ci/guard-broken  (malformed response)
-  #   installation_api_http                  → ci/guard-broken  (HTTP non-200)
+  # HTTP routing (matches the /app call's pattern at YAML:235-254).
+  if [[ "$HTTP_CODE" == "network_error" || "$HTTP_CODE" != "200" ]]; then
+    record_failure installation_api_http \
+      "GET /app/installations -> HTTP ${HTTP_CODE}" ci/guard-broken
+  # Pagination check: if Link: <...>; rel="next" present, the loop would
+  # silently miss installations past page 1. Today's 1-install state can't
+  # paginate, but installations is unbounded over time.
+  elif grep -qiE '^link:.*rel="next"' "$INSTALL_HEADERS_FILE"; then
+    record_failure installation_list_truncated \
+      "GET /app/installations returned a paginated response (Link: rel=next present); per-page bump or pagination loop required" \
+      ci/guard-broken
+  # FLAT ARRAY (per @octokit/openapi-types/types.d.ts:85517-85528 — NOT
+  # object-wrapped like /orgs/{org}/installations).
+  elif [[ "$(jq -r '. | type' "$INSTALL_LIST_FILE" 2>/dev/null)" != "array" ]]; then
+    record_failure installation_response_shape_unparseable \
+      "GET /app/installations response root is not an array" ci/guard-broken
+  else
+    while IFS= read -r install_json; do
+      INSTALL_RESP_FILE=$(mktemp -p "$RUNNER_TEMP" install-resp.XXXXXX)
+      printf '%s' "$install_json" \
+        | jq -c '{permissions, events}' > "$INSTALL_RESP_FILE"
+      install_id=$(printf '%s' "$install_json" | jq -r '.id // "unknown"')
+
+      diff_out=""
+      diff_rc=0
+      diff_out=$(MANIFEST_FILE="$MANIFEST_FILE" RESPONSE_FILE="$INSTALL_RESP_FILE" \
+        bash bin/diff-github-app-manifest.sh 2>/dev/null) || diff_rc=$?
+
+      if (( diff_rc != 0 )); then
+        diff_mode="${diff_out%%:*}"
+        diff_detail="${diff_out#*:}"
+        case "$diff_mode" in
+          permission_drift)
+            record_failure installation_permission_drift \
+              "installation_id=${install_id} ${diff_detail}" \
+              ci/auth-broken
+            ;;
+          permission_unexpected_grant)
+            record_failure installation_unexpected_grant \
+              "installation_id=${install_id} ${diff_detail}" \
+              ci/guard-broken
+            ;;
+          response_shape_unparseable)
+            # Should never fire here — synthesis always produces a valid shape.
+            # If it does, the bug is in synthesis; route as guard-broken.
+            record_failure installation_response_shape_unparseable \
+              "installation_id=${install_id} ${diff_detail}" \
+              ci/guard-broken
+            ;;
+          *)
+            record_failure installation_diff_unknown_mode \
+              "installation_id=${install_id} diff_rc=${diff_rc} out=${diff_out}" \
+              ci/guard-broken
+            ;;
+        esac
+      fi
+    done < <(jq -c '.[]' "$INSTALL_LIST_FILE")
+  fi
 fi
+```
+
+Endpoint-shape verification (canonical evidence):
+
+```bash
+$ grep -nB1 -A 5 '"/app/installations":' \
+    apps/web-platform/node_modules/@octokit/openapi-types/types.d.ts
+107: "/app/installations": {
+108:   /** List installations for the authenticated app
+109:    *  You must use a JWT to access this endpoint. */
+114:   get: operations["apps/list-installations"];
+
+$ sed -n '85517,85528p' apps/web-platform/node_modules/@octokit/openapi-types/types.d.ts
+# response 200 → application/json → bare object with `id: number` at root
+# (i.e., element type, not wrapper). Hence `jq '. | type' == "array"`,
+# `jq '.[]'`, not `jq '.installations[]'`.
 ```
 
 The suppression window applies identically — a manifest-edit PR triggers a
@@ -110,21 +201,42 @@ window during which BOTH plane (a) reconciliation (semi-automatic via App
 settings) AND plane (c) re-acceptance (operator UI click per `runbook Step 2.1`)
 are expected to complete out-of-band.
 
-**Endpoint choice rationale.** Issue body suggests
-`GET /orgs/{org}/installations` (PAT-auth, requires admin:org scope). The plan
-uses `GET /app/installations` instead because:
+**Endpoint choice rationale (corrected at deepen-pass).** Issue body suggests
+`GET /orgs/{org}/installations` (PAT/OAuth admin:read scope required, per the
+official docs cross-checked at deepen-pass). The plan uses
+`GET /app/installations?per_page=100` instead because:
 
 1. It accepts the App-JWT the guard already mints — no new auth primitive, no
-   new secret, no new scope question.
-2. It returns ALL installations of this App (across any future target org/user),
+   new secret, no new scope question. Per AGENTS.md `hr-github-app-auth-not-pat`,
+   adding a PAT-shaped variable to bypass the App is a hard-no.
+2. It returns ALL installations of THIS App (across any future target org/user),
    not just `jikig-ai` — future-proofs against multi-tenant install.
-3. Per `gh api /orgs/jikig-ai/installations` probe at plan-write time, both
-   endpoints return identical per-installation shape (`{id, app_slug, app_id,
-   permissions: {…}, events: […], target_id, target_type, …}`). Either would
-   work; `/app/installations` is cheaper to integrate.
+3. Sister workflow `.github/workflows/scheduled-ruleset-bypass-audit.yml:328`
+   already uses App-JWT against `/app/installations/{id}/access_tokens` — same
+   auth primitive, same plumbing pattern, same masking discipline.
+
+**Endpoint-shape WARNING (caught at deepen-pass).** The two endpoints have
+DIFFERENT response shapes:
+
+- `GET /orgs/{org}/installations` → object-wrapped: `{total_count, installations:[…]}`
+- `GET /app/installations` → **flat array**: `[…]` (per the canonical OpenAPI
+  schema at `apps/web-platform/node_modules/@octokit/openapi-types/types.d.ts:85507-85530`)
+
+Plan v1 conflated the two. The pseudocode above uses `jq '. | type' == "array"`
+for shape validation and `jq -c '.[]'` for iteration — correct for
+`/app/installations`. Any later edit that flips back to `'.installations[]'`
+will silently iterate zero times.
+
+**Pagination handled.** GitHub defaults `per_page=30`, max 100. The new URL
+pins `?per_page=100`. With current 1-installation state, no Link header
+appears. The new `installation_list_truncated` failure mode fires only if a
+future state introduces a second page (>100 installations); routed to
+`ci/guard-broken` rather than silently iterating only page 1.
 
 **Live shape verification at plan-write time** (against `gh api
-/orgs/jikig-ai/installations`):
+/orgs/jikig-ai/installations` — this is the OBJECT-WRAPPED endpoint used for
+read-only state inspection; the workflow itself uses the FLAT-ARRAY
+`/app/installations` endpoint above):
 
 ```json
 {
@@ -204,12 +316,50 @@ positive surface at first scheduled run.
   `knowledge-base/project/learnings/2026-05-20-github-app-installation-grant-vs-manifest-three-plane-drift.md`
   Session Error 2.
 
-- **`installations[]` array iteration in bash.** `jq -c '.installations[]'`
-  emits one JSON object per line; bash `while read -r install_json` consumes
-  them safely (no need for `mapfile`). Each iteration writes a synthetic
-  per-install file matching the diff-script's `{permissions, events}`
-  contract via `printf '%s' "$install_json" | jq '{permissions, events}' >
+- **Endpoint-shape (caught at deepen-pass).** `GET /app/installations` is a
+  **flat array**, NOT object-wrapped. The plan-time iteration uses `jq -c
+  '.[]'` (no `.installations` key). A future edit that flips to
+  `'.installations[]'` will silently iterate zero times AND silently pass the
+  shape-validation check above (because the wrong jq would also return
+  `null`, which `jq -r '. | type'` reports as `"null"` — not `"array"` — and
+  the shape validator catches it). The canonical reference is
+  `apps/web-platform/node_modules/@octokit/openapi-types/types.d.ts:85507-85530`
+  AND the OpenAPI docs at
+  `https://docs.github.com/en/rest/apps/apps#list-installations-for-the-authenticated-app`.
+  Symmetric to but distinct from the `/orgs/{org}/installations` endpoint
+  (object-wrapped) used for read-only operator inspection.
+
+- **`installations` array iteration in bash.** `jq -c '.[]'` emits one JSON
+  object per line; bash `while IFS= read -r install_json` consumes them
+  safely (no need for `mapfile`). Each iteration writes a synthetic per-install
+  file matching the diff-script's `{permissions, events}` contract via
+  `printf '%s' "$install_json" | jq -c '{permissions, events}' >
   "$INSTALL_RESP_FILE"`.
+
+- **Pagination via Link header.** GitHub defaults `per_page=30`, max 100. The
+  URL pins `?per_page=100`. Curl's `-D <file>` dumps response headers; a
+  `Link:` header with `rel="next"` indicates truncation, which fires
+  `installation_list_truncated` → `ci/guard-broken`. Today (1 install) this
+  cannot trigger; the gate exists because installations is unbounded over
+  time. **Do NOT replace this with a pagination loop** — extending the cron
+  step to handle multiple pages adds complexity disproportionate to current
+  state, and the explicit failure is more reviewable than a silent loop.
+
+- **`tr -d '\x7f'` interaction with new failure-mode strings (caught at
+  deepen-pass).** The fold-in of #3561 is **load-bearing**, not opportunistic.
+  The new mode strings `installation_permission_drift`,
+  `installation_unexpected_grant`, `installation_response_shape_unparseable`,
+  `installation_list_truncated`, `installation_api_http`,
+  `installation_diff_unknown_mode` all contain the letter `f` (`drift`,
+  `installation_*`). The current `tr -d '\r\n\f\v\x7f'` interprets `\x7f` as
+  literal chars `x`, `7`, `f` — silently stripping every `f` from the
+  sanitized output that lands in `$GITHUB_OUTPUT.failure_mode`. Issue body
+  would show `installation_permission_drit`, `installation_unexpected_grant`
+  (no `f`, looks fine), `installation_response_shape_unparseable` (no `f`,
+  looks fine), `installation_diff_unknown_mode` → `installation_di_unknown_mode`.
+  Operator triage breaks because the mode names disagree with code and with
+  any future grep against the workflow source. **MUST replace `\x7f` with
+  `\177` (octal) in the same PR.**
 
 - **First-fail-wins vs all-fails-collected.** The existing `record_failure`
   function only records the FIRST failure mode (`if [[ -z "$failure_mode" ]]`).
@@ -323,22 +473,31 @@ discoverability_test:
 - [ ] AC3 — New diff block reuses `suppress_active` (set at YAML:330) and
   ONLY runs when `suppress_active -eq 0`. Verified by grepping the new block
   for `if [[ "$suppress_active" -eq 0`.
-- [ ] AC4 — Endpoint is `https://api.github.com/app/installations` (App-JWT
-  auth), NOT `/orgs/jikig-ai/installations` (PAT-auth). Verified by `grep -c
-  '/app/installations' .github/workflows/scheduled-github-app-drift-guard.yml`
+- [ ] AC4 — Endpoint is `https://api.github.com/app/installations?per_page=100`
+  (App-JWT auth, max-page-size pinned), NOT `/orgs/jikig-ai/installations`
+  (PAT-auth, object-wrapped, wrong shape). Verified by `grep -c
+  '/app/installations?per_page=100' .github/workflows/scheduled-github-app-drift-guard.yml`
   returns at least 1.
+- [ ] AC4b — Iteration uses `jq -c '.[]'` against the FLAT array, NOT
+  `jq -c '.installations[]'`. Verified by `grep -cE "jq -c '\.installations\[\]'" .github/workflows/scheduled-github-app-drift-guard.yml`
+  returns 0 AND `grep -cE "jq -c '\.\[\]'" .github/workflows/scheduled-github-app-drift-guard.yml`
+  returns at least 1.
+- [ ] AC4c — Pagination Link-header guard present: `grep -cE 'rel="next"' .github/workflows/scheduled-github-app-drift-guard.yml`
+  returns at least 1 AND the matching block routes to
+  `installation_list_truncated` → `ci/guard-broken`.
 - [ ] AC5 — Curl invocation uses `--header @<(printf 'Authorization: Bearer
   %s' "$JWT")` form (NOT `-H "Authorization: Bearer $JWT"` directly, per
   P1-2 trap dossier at YAML:28). Verified by `grep -c '@<(printf'
   .github/workflows/scheduled-github-app-drift-guard.yml` returns at least 2
   (existing /app call + new /app/installations call).
 - [ ] AC6 — New failure modes emitted via `record_failure` use the prefix
-  `installation_` (e.g., `installation_permission_drift`,
+  `installation_` (`installation_permission_drift`,
   `installation_unexpected_grant`, `installation_api_http`,
-  `installation_response_shape_unparseable`) so the auto-filed issue body
+  `installation_response_shape_unparseable`, `installation_list_truncated`,
+  `installation_diff_unknown_mode`) so the auto-filed issue body
   distinguishes plane (c) from plane (a) drift. Verified by `grep -cE
-  'installation_(permission_drift|unexpected_grant|api_http|response_shape_unparseable)'
-  .github/workflows/scheduled-github-app-drift-guard.yml` returns 4 or more.
+  'installation_(permission_drift|unexpected_grant|api_http|response_shape_unparseable|list_truncated|diff_unknown_mode)'
+  .github/workflows/scheduled-github-app-drift-guard.yml` returns 6 or more.
 - [ ] AC7 — Failure-label routing: `installation_permission_drift` →
   `ci/auth-broken` (security-regression direction, mirrors plane-(a)
   precedent at YAML:342-343); `installation_unexpected_grant`,
@@ -346,13 +505,14 @@ discoverability_test:
   `ci/guard-broken`. Verified by reading the new case statement in the PR
   diff.
 - [ ] AC8 — Per-installation iteration uses `while IFS= read -r install_json;
-  do … done < <(jq -c '.installations[]' "$INSTALL_LIST_FILE")` (process-
-  substitution-as-input is safe; the file is a regular file read once via
-  jq). Defensive: empty installations array silently produces zero iterations
+  do … done < <(jq -c '.[]' "$INSTALL_LIST_FILE")` (FLAT array; process-
+  substitution-as-input is safe — the file is a regular file read once via
+  jq). Defensive: empty array silently produces zero iterations
   and no `record_failure`. Verified by reading the new block.
 - [ ] AC9 — Cleanup step at YAML:553-561 extended to include `rm -f
-  "$RUNNER_TEMP"/installations.* "$RUNNER_TEMP"/install-resp.*`. Verified by
-  `grep -c 'install-resp\|installations\.\*' .github/workflows/scheduled-github-app-drift-guard.yml` returns at least 2.
+  "$RUNNER_TEMP"/installations.* "$RUNNER_TEMP"/installations-hdr.*
+  "$RUNNER_TEMP"/install-resp.*`. Verified by
+  `grep -cE 'install-resp|installations\.\*|installations-hdr' .github/workflows/scheduled-github-app-drift-guard.yml` returns at least 3.
 - [ ] AC10 — Contract test
   `apps/web-platform/test/github-app-manifest-drift-guard.test.ts` adds ONE
   new case proving the workflow's per-install synthesis pattern: given a
@@ -371,9 +531,13 @@ discoverability_test:
   drift-guard.yml (App-declared vs manifest at YAML:280-356, installation-
   grant vs manifest at YAML:<new line>)." Verified by `grep -c '#4179'
   apps/web-platform/infra/github-app.tf` returns 0 after the edit.
-- [ ] AC13 — `Closes #4179` appears in the PR body (NOT title — per
-  `wg-use-closes-n-in-pr-body-not-title-to`). Verified at `gh pr view --json
-  body --jq .body | grep -c 'Closes #4179'` returns 1.
+- [ ] AC13 — `Closes #4179` AND `Closes #3561` appear in the PR body (NOT
+  title — per `wg-use-closes-n-in-pr-body-not-title-to`). Verified at `gh pr
+  view --json body --jq .body | grep -cE 'Closes #(4179|3561)'` returns 2.
+- [ ] AC13b — **MUST-FIX: #3561 fold-in.** Replace `tr -d '\r\n\f\v\x7f'`
+  with `tr -d '\r\n\f\v\177'` (octal `\177` survives `tr`'s POSIX
+  no-hex-escape interpretation) at `strip_log_injection` (around YAML:370).
+  Verified by `grep -cE "tr -d '\\\\r\\\\n\\\\f\\\\v\\\\177'" .github/workflows/scheduled-github-app-drift-guard.yml` returns at least 1 AND `grep -c '\\\\x7f' .github/workflows/scheduled-github-app-drift-guard.yml` returns 0. This is **load-bearing** for the new failure modes (every `installation_*` name contains `f` — see Sharp Edges).
 - [ ] AC14 — All existing contract test cases pass unchanged (the script is
   not edited). Verified by `./node_modules/.bin/vitest run apps/web-platform/test/github-app-manifest-drift-guard.test.ts` AND `./node_modules/.bin/vitest run apps/web-platform/test/github-app-manifest-parity.test.ts` both green.
 - [ ] AC15 — `actionlint .github/workflows/scheduled-github-app-drift-guard.yml`
@@ -389,10 +553,23 @@ discoverability_test:
 
 ### Post-merge (operator)
 
-- [ ] AC18 — Operator manually triggers `gh workflow run scheduled-github-app-drift-guard.yml`
-  once post-merge and verifies the run completes green (current installation
-  grants the same 8 permissions as the manifest declares; no drift expected).
-  Verified by `gh run list --workflow scheduled-github-app-drift-guard.yml --limit 1 --json conclusion --jq '.[0].conclusion'` returns `"success"`.
+- [ ] AC17b — **If the merge happens before 2026-05-21T16:00:00Z**, the active
+  `MANIFEST_DRIFT_SUPPRESS_UNTIL` file will suppress BOTH a-vs-b AND c-vs-b
+  diffs on the first post-merge run. To force immediate verification, either:
+  (a) `rm apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL` in the same
+  PR (and re-add a fresh one if a manifest edit happens post-merge), or
+  (b) wait until after 2026-05-21T16:00:00Z to run AC18. The agent SHOULD
+  remove the suppress file in this PR since plane (c) reconciliation completed
+  in PR #4174.
+- [ ] AC18 — Operator (or agent via Playwright/`gh` CLI per
+  hr-exhaust-all-automated-options-before) manually triggers `gh workflow run
+  scheduled-github-app-drift-guard.yml --ref main` once post-merge and
+  verifies the run completes green (current installation grants the same 8
+  permissions as the manifest declares; no drift expected). Verified by
+  `gh run list --workflow scheduled-github-app-drift-guard.yml --limit 1 --json conclusion --jq '.[0].conclusion'`
+  returns `"success"`. **Automation feasibility:** fully automatable —
+  `/soleur:ship` Phase 6 post-merge already includes a `gh workflow run`
+  step for modified workflows; this AC is automatable inline.
 - [ ] AC19 — Synthetic-drift test in fork: operator forks `jikig-ai/soleur` to
   a personal account, removes `secrets` from `apps/web-platform/infra/github-app-manifest.json`,
   commits, manually dispatches the workflow, confirms an `installation_unexpected_grant`
@@ -585,11 +762,16 @@ Two open code-review issues touch `.github/workflows/scheduled-github-app-drift-
   fewer permissions than the manifest declares. Either is a real signal
   the operator should act on, not noise.
 
-- **R4 (medium → low w/ fold-in).** The `tr -d '\x7f'` bug at workflow:283
-  (#3561) could silently mangle one of the new failure mode names if it
-  contained `x`/`7`/`f` in a load-bearing position. None of the proposed
-  names do, but folding in #3561 eliminates the residual risk and is
-  trivial.
+- **R4 (P1 → must-fix in this PR).** Deepen-pass caught that EVERY proposed
+  failure mode name (`installation_permission_drift`,
+  `installation_unexpected_grant`, `installation_response_shape_unparseable`,
+  `installation_list_truncated`, `installation_diff_unknown_mode`) contains
+  the letter `f` in load-bearing positions. The current `tr -d '\x7f'` bug
+  at workflow:370 silently strips every `f` from sanitized output — the
+  operator-facing issue body would show garbled mode names (e.g.,
+  `installation_permission_drit`). The #3561 fold-in is no longer
+  opportunistic; it is **load-bearing** for the new feature. Tracked as
+  AC13b.
 
 ## Infrastructure (IaC)
 
