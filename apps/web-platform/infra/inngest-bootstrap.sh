@@ -61,15 +61,25 @@ done
 
 log() { printf '[inngest-bootstrap] %s\n' "$*" >&2; }
 
-# Idempotency short-circuit: skip everything if the service is active AND
-# the recorded version matches the requested version. Second invocation of
-# the same vX.Y.Z is a no-op (~50ms).
+# Idempotency short-circuit: when the server is already active AND the recorded
+# version matches, skip the binary download/install + server unit write — but
+# ALWAYS fall through to reconcile heartbeat units, env file, and daemon-reload.
+# Without this, a bootstrap-script fix (e.g. PR #4123's doppler-run heartbeat
+# wrap) stays masked indefinitely: the version match short-circuits before the
+# unit writes, so the host runs the OLD unit shape even though the deployed
+# image embeds the new script. Surfaced 2026-05-20 during the #4144 cascade —
+# v1.0.1 image carried the heartbeat fix but every no-op redeploy skipped the
+# unit reconcile, leaving inngest-heartbeat.service in `failed` with
+# `curl: (3) URL rejected: Malformed input to a URL function`.
+SKIP_BINARY_INSTALL=
 if [[ -f "$VERSION_FILE" ]] && [[ "$(cat "$VERSION_FILE" 2>/dev/null || true)" == "$INNGEST_CLI_VERSION" ]]; then
   if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
-    log "inngest-server.service already active at $INNGEST_CLI_VERSION — no-op"
-    exit 0
+    log "inngest-server.service already active at $INNGEST_CLI_VERSION — skipping binary install, reconciling units"
+    SKIP_BINARY_INSTALL=1
   fi
 fi
+
+if [[ -z "$SKIP_BINARY_INSTALL" ]]; then
 
 # Detect in-place version upgrade (existing service running an older version).
 # Pause the server so the in-memory queue drains to the SQLite store before
@@ -155,6 +165,8 @@ TimeoutStopSec=180
 [Install]
 WantedBy=multi-user.target
 UNITEOF
+
+fi  # end SKIP_BINARY_INSTALL guard — heartbeat reconcile below always runs
 
 # Heartbeat ping script + service + 60s timer.
 # The URL lives in $INNGEST_HEARTBEAT_URL — resolved at ExecStart time via
@@ -259,9 +271,13 @@ echo "$INNGEST_CLI_VERSION" > "$VERSION_FILE"
 systemctl daemon-reload
 systemctl enable --now inngest-server.service
 systemctl enable --now inngest-heartbeat.timer
+# Force one heartbeat tick now so a unit-shape change (e.g. ExecStart) takes
+# effect immediately rather than waiting up to 60s for the next timer fire.
+# Oneshot in `failed` state: restart re-runs ExecStart with the new unit.
+systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-zero (timer will retry in 60s)"
 
 # Resume from upgrade pause (if any).
-if [[ -n "$UPGRADE_FROM" ]]; then
+if [[ -n "${UPGRADE_FROM:-}" ]]; then
   sleep 2  # let the new server bind loopback before resume
   "$INSTALL_PATH" resume >/dev/null 2>&1 || log "warn: resume command failed (server is still running)"
   log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"
