@@ -84,14 +84,14 @@ Single atomic commit. All four files below land in ONE `git commit`.
 
 ## Phase 3: PR housekeeping (commit 3)
 
-- [ ] **3.1** Verify the `deferred-scope-out` GitHub label exists: `gh label list --limit 200 | grep -E "^deferred-scope-out\b"`. Substitute with `domain/engineering` + `chore` if missing (per learning `2026-05-06-plan-prescribed-labels-must-be-verified.md`).
-- [ ] **3.2** File 14-day actuals validation issue per AC13: `gh issue create --title "feat: kb-search Stage 2 — 14-day actuals validation (paraphrase invocation telemetry)" --body "<AC13 body>" --milestone "Post-MVP / Later" --label deferred-scope-out`.
-- [ ] **3.3** Edit draft PR #4183 body via `gh pr edit 4183 --body-file <path>`. Body MUST include:
+- [x] **3.1** Verify the `deferred-scope-out` GitHub label exists: `gh label list --limit 200 | grep -E "^deferred-scope-out\b"`. Substitute with `domain/engineering` + `chore` if missing (per learning `2026-05-06-plan-prescribed-labels-must-be-verified.md`).
+- [x] **3.2** File 14-day actuals validation issue per AC13: `gh issue create --title "feat: kb-search Stage 2 — 14-day actuals validation (paraphrase invocation telemetry)" --body "<AC13 body>" --milestone "Post-MVP / Later" --label deferred-scope-out`.
+- [x] **3.3** Edit draft PR #4183 body via `gh pr edit 4183 --body-file <path>`. Body MUST include:
   - The 7-item CLO disclosure (AC10).
   - The #4042 premise-correction note (AC11).
   - `Ref #4176` (NOT `Closes #4176` — AC12).
   - Link to the 14-day actuals validation follow-up issue from 3.2.
-- [ ] **3.4** No file changes in repo from this phase (PR body is GH-side). If any operator-facing doc updates surface during PR-body authoring (rare), bundle into a single `docs(kb-search): PR housekeeping (#4176)` commit.
+- [x] **3.4** No file changes in repo from this phase (PR body is GH-side). If any operator-facing doc updates surface during PR-body authoring (rare), bundle into a single `docs(kb-search): PR housekeeping (#4176)` commit.
 
 ## Phase 4 (post-merge, operator-acked): bench rerun
 
