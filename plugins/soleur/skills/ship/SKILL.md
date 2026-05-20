@@ -1299,8 +1299,8 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
    follow-through-shaped — file a regular GitHub issue without the `follow-through` label.
 
    **Step 3.5.C — Declare needed secrets.** If the script reads any `$X` value beyond
-   `GH_TOKEN` / `GH_REPO` / `HOME` / `PATH`, declare each as a comma-separated value in
-   the directive's `secrets=` clause AND add the secret to
+   `GH_TOKEN` / `GH_REPO` / `HOME` / `PATH`, declare them as a comma-separated list in
+   the directive's `secrets=` clause AND add each secret to
    `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block (the sweeper
    passes ONLY allowlisted vars into the script's environment per the directive's
    `secrets=` clause). Omit the `secrets=` line entirely if no secrets are needed.
@@ -1329,7 +1329,20 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
    ```
 
    Assert that:
-   1. `script` extracted is non-empty AND points under the [scripts/followthroughs/](../../../../scripts/followthroughs/) root (path-allowlist match — the sweeper rejects anything outside that root),
+   1. `script` extracted is non-empty AND, after `realpath -m --relative-to=$REPO_ROOT`
+      canonicalization, points under the [scripts/followthroughs/](../../../../scripts/followthroughs/)
+      root. Use realpath rather than a bare prefix-match — a path that uses `..` traversal
+      under the followthroughs root (e.g. one pointing at `../../bin/sh` via the
+      followthroughs directory) satisfies a naïve `case` prefix match but is rejected
+      after canonicalization. Concrete check:
+
+      ```bash
+      canon=$(realpath -m --relative-to="$REPO_ROOT" "$script_path" 2>/dev/null)
+      case "$canon" in
+        scripts/followthroughs/*) : ;;
+        *) fail "script '$script_path' escapes scripts/followthroughs/ root" ;;
+      esac
+      ```
    2. `earliest` extracted parses cleanly via `date -u -d "$earliest" +%s`,
    3. The referenced script path exists on disk and is executable.
 

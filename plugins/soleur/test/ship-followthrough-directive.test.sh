@@ -24,8 +24,9 @@ echo "=== ship-followthrough-directive tests ==="
 
 # Parser block copied verbatim from scripts/sweep-followthroughs.sh:36-48 so
 # the test exercises the EXACT shape the sweeper runs. Edits to the sweeper
-# parser MUST be mirrored here; the verbatim-copy convention is the cheap
-# defense against drift (plan §Risks and Sharp Edges).
+# parser MUST be mirrored here; assertion 5 below diff-checks against the
+# sweeper's actual parse_directive() so drift is caught at PR time.
+# shellcheck disable=SC2016  # single quotes are intentional — awk vars ($i, $NF) must not be bash-expanded
 PARSER='/<!-- *soleur:followthrough/, /-->/ {
   gsub(/^<!-- *soleur:followthrough/, "")
   gsub(/-->/, "")
@@ -73,6 +74,29 @@ echo "  PASS: SKILL.md contains no OLD-convention type: YAML keys"
 grep -qF 'knowledge-base/engineering/ops/runbooks/followthrough-convention.md' "$SKILL_MD" \
   || fail "SKILL.md Step 3.5 does not reference the canonical runbook"
 echo "  PASS: SKILL.md references canonical runbook"
+
+# --- Assertion 5: this test's PARSER is behaviorally equivalent to the
+#     sweeper's parse_directive() on the canonical fixture. Catches drift
+#     between the test/SKILL.md awk-block copies and the authoritative parser
+#     at PR time (pattern-recognition P1-1, multi-agent review of #4190).
+SWEEPER="$REPO_ROOT/scripts/sweep-followthroughs.sh"
+[[ -f "$SWEEPER" ]] || fail "sweeper script missing: $SWEEPER"
+# Source parse_directive() in a subshell to avoid pulling in main(); use sed
+# to extract the function body and eval it in isolation.
+sweeper_fn=$(sed -n '/^parse_directive() {/,/^}/p' "$SWEEPER")
+[[ -n "$sweeper_fn" ]] || fail "could not extract parse_directive() from sweeper"
+sweeper_out=$(bash -c "$sweeper_fn
+parse_directive < '$FIXTURE_DIR/expected-issue-body.md'")
+test_out=$(awk "$PARSER" "$FIXTURE_DIR/expected-issue-body.md")
+if [[ "$sweeper_out" != "$test_out" ]]; then
+  echo "FAIL: test PARSER output differs from sweeper parse_directive()" >&2
+  echo "--- sweeper parse_directive ---" >&2
+  printf '%s\n' "$sweeper_out" >&2
+  echo "--- test PARSER ---" >&2
+  printf '%s\n' "$test_out" >&2
+  exit 1
+fi
+echo "  PASS: test PARSER and sweeper parse_directive produce equivalent output"
 
 echo ""
 echo "PASS: ship-followthrough-directive contract"
