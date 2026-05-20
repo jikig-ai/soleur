@@ -10,10 +10,16 @@
 #   - ci/auth-broken      : drift detected
 #                            * id / client_id mismatch (App swap, key rotation)
 #                            * permission_drift (manifest declares X, live lacks X — #4115)
+#                            * installation_permission_drift (live install grants &lt; manifest — #4179)
 #   - ci/guard-broken     : guard itself malfunctioned
 #                            * bad PEM, network, jwt-mint failures (#3187)
 #                            * permission_unexpected_grant (live > manifest, #4115)
 #                            * response_shape_unparseable (#4115)
+#                            * installation_api_http / installation_list_truncated /
+#                              installation_list_shape_unparseable /
+#                              installation_unexpected_grant /
+#                              installation_response_shape_unparseable /
+#                              installation_diff_unknown_mode (#4179)
 #   - security/leak-suspected : log scan suggests credential leak
 #
 # Security: PEM is base64-decoded into $RUNNER_TEMP (mode 0o600), masked
@@ -102,6 +108,15 @@ jobs:
           failure_mode=""
           failure_detail=""
           failure_label=""
+          # Hoisted to step prologue so the installation-grant block at the
+          # bottom can read $suppress_active under `set -u` even when the
+          # App-level diff block's outer if-guard short-circuits (e.g.,
+          # MANIFEST_FILE missing under a sparse-checkout race). Without
+          # this hoist, the read at the install-block guard tripped
+          # "unbound variable" and aborted the step with no failure_mode
+          # recorded -- silent guard failure. Defensive against future
+          # edits that reorder the App-level diff block.
+          suppress_active=0
 
           record_failure() {
             local mode="$1"
@@ -390,7 +405,15 @@ jobs:
               'https://api.github.com/app/installations?per_page=100') \
               || HTTP_CODE="network_error"
 
-            if [[ "$HTTP_CODE" == "network_error" || "$HTTP_CODE" != "200" ]]; then
+            # HTTP routing. /app/installations is reached only after /app
+            # already validated the JWT above, so a 401 here is most
+            # likely an installation revocation OR App suspension between
+            # the two calls (~100ms window) -- both rare; route any
+            # non-200 as ci/guard-broken rather than mirroring the
+            # App-level 401-disambiguation flow which exists because /app
+            # is the first JWT-validating call. Operator triage at issue
+            # body still distinguishes via failure_detail's HTTP code.
+            if [[ "$HTTP_CODE" != "200" ]]; then
               record_failure "installation_api_http" \
                 "GET /app/installations -> HTTP ${HTTP_CODE}" \
                 "ci/guard-broken"
@@ -407,9 +430,13 @@ jobs:
             # Shape validation BEFORE iteration. /app/installations is a
             # FLAT array per @octokit/openapi-types. A `null` (wrong jq
             # filter) or object (wrong endpoint) reports "null"/"object"
-            # here -- not "array" -- and short-circuits the loop.
+            # here -- not "array" -- and short-circuits the loop. Mode
+            # name `installation_list_shape_unparseable` (not
+            # `installation_response_shape_unparseable`) distinguishes
+            # this list-endpoint failure from the per-install synthesis
+            # failure below -- different remediation, different alert.
             elif [[ "$(jq -r '. | type' "$INSTALL_LIST_FILE" 2>/dev/null)" != "array" ]]; then
-              record_failure "installation_response_shape_unparseable" \
+              record_failure "installation_list_shape_unparseable" \
                 "GET /app/installations response root is not an array" \
                 "ci/guard-broken"
             else

@@ -175,18 +175,36 @@ describe.skipIf(!jqAvailable)("bin/diff-github-app-manifest.sh contract", () => 
     };
 
     // Mirrors the FLAT-ARRAY shape of `GET /app/installations` per the
-    // canonical OpenAPI schema (see plan §Sharp Edges). Install #1 matches
-    // manifest; install #2 declares fewer permissions (drops `contents`).
+    // canonical OpenAPI schema (see plan §Sharp Edges). Install #1 carries
+    // realistic extra fields the synthesis filter `jq '{permissions, events}'`
+    // MUST discard (account, repository_selection, target_id, target_type,
+    // suspended_at, etc.) -- proves the filter is correctly narrowing the
+    // shape that bin/diff-github-app-manifest.sh contracts on. Without these
+    // extras, the test would silently pass even if a future edit broadened
+    // the synthesis filter (e.g., `{permissions, events, app_slug}`) and
+    // re-introduced shape drift on the diff-script's input contract.
+    // Install #2 declares fewer permissions (drops `contents`) -- drives the
+    // permission_drift classification path.
     const installations = [
       {
         id: 111,
         app_slug: "soleur-ai",
+        target_id: 9001,
+        target_type: "Organization",
+        account: { login: "jikig-ai", type: "Organization" },
+        repository_selection: "selected",
+        suspended_at: null,
         permissions: { contents: "write", metadata: "read" },
         events: [],
       },
       {
         id: 222,
         app_slug: "soleur-ai",
+        target_id: 9002,
+        target_type: "Organization",
+        account: { login: "jikig-ai-staging", type: "Organization" },
+        repository_selection: "all",
+        suspended_at: null,
         permissions: { metadata: "read" },
         events: [],
       },

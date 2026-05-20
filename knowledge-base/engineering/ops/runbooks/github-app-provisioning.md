@@ -99,6 +99,14 @@ Procedure:
    workflow). To force immediate verification instead of waiting up to an
    hour: `gh workflow run scheduled-github-app-drift-guard.yml --ref main`.
 
+   To confirm auto-close fired:
+
+   ```bash
+   gh issue list --state closed --label ci/auth-broken \
+     --search 'in:title "GitHub App drift-guard"' \
+     --limit 1 --json number,closedAt
+   ```
+
 ### Step 3 — Paste 3 identity credentials into Doppler `prd`
 
 From the App's settings page, copy each value into Doppler. **Prefer the
