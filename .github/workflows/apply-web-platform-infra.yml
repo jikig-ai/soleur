@@ -131,6 +131,15 @@ jobs:
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering.
+        # hcloud_ssh_key.default is NOT in the apply allow-list (header lines
+        # 21-23), so this dummy public key is never consumed -- it just
+        # satisfies HCL parsing. Mirrors scheduled-terraform-drift.yml:49-52.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
       - name: Verify required secrets present
         env:
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
@@ -194,6 +203,7 @@ jobs:
           set -uo pipefail
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
               -target=betteruptime_policy.github_webhook \
               -target=betteruptime_monitor.github_webhook_failures \
               -target=betteruptime_heartbeat.github_webhook_sig_failures \
