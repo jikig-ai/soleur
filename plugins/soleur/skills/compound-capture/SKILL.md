@@ -341,7 +341,7 @@ This dual-routing ensures session errors feed back into the definitions that cau
 
 Apply the proposed edit to the definition file. Filing a GitHub issue is NOT an option in either mode -- the backlog-growth pressure that produced 22 stale `compound: route-to-definition proposal` issues by 2026-05 is the original problem this step exists to avoid. If Step 8.3 produced a draft, it has already cleared the "skip if no suitable section / insight is general knowledge" gate; that gate is the only safety hatch.
 
-**Headless mode (`HEADLESS_MODE=true`):** Write the edit to the target file directly without prompting.
+**Headless mode (`HEADLESS_MODE=true`):** Before writing, assert the resolved target path is prefixed by `plugins/soleur/skills/`, `plugins/soleur/agents/`, or `plugins/soleur/commands/` — refuse otherwise. Then write the edit to the target file directly without prompting. The prefix check enforces `hr-write-boundary-sentinel-sweep-all-write-sites` for this new write surface; the Step 8.1 path map is the implicit allowlist, this assertion makes it explicit.
 
 **Interactive mode:** Use **AskUserQuestion** with options:
 
