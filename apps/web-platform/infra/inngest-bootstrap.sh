@@ -207,6 +207,13 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+User=deploy
+Group=deploy
+# Doppler CLI calls os.UserHomeDir() during init even when DOPPLER_CONFIG_DIR
+# is set in the env file. Running as root with no HOME triggers
+# "Doppler Error: \$HOME is not defined". User=deploy gets HOME=/home/deploy
+# automatically, matching inngest-server.service's hardening pattern.
+# Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
 ExecStart=${DOPPLER_BIN} run --project soleur --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
