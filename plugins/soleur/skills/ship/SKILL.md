@@ -615,40 +615,49 @@ Emit rule-application telemetry (records the gate fired):
 ```bash
 source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   emit_incident wg-block-pr-ready-on-undeferred-operator-steps applied \
-  'At gh pr ready boundary, /ship Phase 5.5 blocks PR-ready when'
+  '`/ship` Phase 5.5 blocks PR-ready when the PR body has operator-action'
 ```
 
 **Detection.** Capture the PR body once, **strip fenced code blocks** (the gate body and `AC-PM` example snippets in PRs that edit this skill would otherwise self-trip), then run a multi-pattern grep with LIST-ANCHORED patterns. Bash ERE has no `(?i)` modifier — use `grep -iE`.
 
 ```bash
+PR_BODY_FILE=$(mktemp)
+trap 'rm -f "$PR_BODY_FILE"' EXIT INT TERM
 PR_BODY=$(gh pr view --json body --jq .body)
 
 # Strip fenced code blocks (```...```) — the gate body and the AC section
 # in the PR will quote the regex and the AC-PM tokens; those quotations
 # inside ``` fences MUST NOT count as undeferred declarations.
-PR_BODY_STRIPPED=$(printf '%s' "$PR_BODY" | awk '
+# FAIL-CLOSED on unbalanced fence: an unclosed ``` would otherwise drop
+# every subsequent line and silently bypass the gate (PR-H failure class).
+printf '%s' "$PR_BODY" | awk '
   /^```/ { in_fence = !in_fence; next }
   !in_fence { print }
-')
-PR_BODY_FILE=$(mktemp); printf '%s' "$PR_BODY_STRIPPED" > "$PR_BODY_FILE"
+  END { if (in_fence) exit 2 }
+' > "$PR_BODY_FILE"
+if [ "$?" -eq 2 ]; then
+  echo "[gate] WARN: unbalanced ``` fence in PR body — re-scanning unfiltered body (fail-closed)" >&2
+  printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+fi
 
 # LIST-ANCHORED regex: a match requires the LINE to start with a bullet
 # (`-`/`*`) or numbered-list marker (`1.`), optionally a checklist box
 # (`[ ]`/`[x]`), optionally bold (`**`), then a keyword. Excludes
 # prose-style mid-paragraph mentions of "operator" or "AC-PM".
-DETECT_RE='^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+(\[[[:space:]xX]\][[:space:]]+)?(\*\*)?(AC-PM[0-9]+|operator[[:space:]]+(run|create|provision|configure|paste|copies?)s?|manual[[:space:]]+gate|post-merge[[:space:]]+operator)'
+DETECT_RE='^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+(\[[[:space:]xX]\][[:space:]]+)?(\*\*)?(AC-PM[0-9]+|operator[[:space:]]+(run|create|provision|configure|paste|cop(y|ies))s?|manual[[:space:]]+gate|post-merge[[:space:]]+operator)'
 
 MATCHES=$(grep -niE "$DETECT_RE" "$PR_BODY_FILE" || true)
 ```
 
 **Why list-anchored.** PR bodies routinely discuss operator behavior in prose ("the operator's choice", "the operator runs the script ONCE post-merge per the prior convention"). Only DECLARATIVE list-shape entries (`- Operator runs ...` or `- [ ] **AC-PM3** Operator creates ...`) are operator-step accretion vectors. Prose mentions are review-noise.
 
-**Rule.** For each match, the same line OR the following line MUST contain `(Tracks|Refs) #NNNN`. Extract every referenced `#NNNN` from those companions, then for each: verify the linked issue is OPEN, labeled `type/chore` or `type/feature`, AND its body contains the sentinel `deferred-automation` or `automation gap` (case-insensitive).
+**Rule.** For each match, the previous line, the same line, OR the following line MUST contain `(Tracks|Refs) #NNNN` (header-above + same-line-trailing + next-line continuation all qualify). Extract every referenced `#NNNN` from those companions, then for each: verify the linked issue is OPEN, labeled `type/chore` or `type/feature`, AND its body contains the sentinel `deferred-automation` or `automation gap` (case-insensitive).
 
 ```bash
 UNDEFERRED=()
-for line_no in $(printf '%s\n' "$MATCHES" | awk -F: '{print $1}'); do
-  ctx=$(sed -n "${line_no}p;$((line_no+1))p" "$PR_BODY_FILE")
+for line_no in $(printf '%s\n' "$MATCHES" | awk -F: '$1 ~ /^[0-9]+$/ {print $1}'); do
+  prev=$((line_no > 1 ? line_no - 1 : 1))
+  ctx=$(sed -n "${prev}p;${line_no}p;$((line_no+1))p" "$PR_BODY_FILE")
   refs=$(printf '%s' "$ctx" | grep -oE '(Tracks|Refs)[[:space:]]+#[0-9]+' || true)
   if [ -z "$refs" ]; then
     UNDEFERRED+=("$line_no"); continue
@@ -668,9 +677,9 @@ for line_no in $(printf '%s\n' "$MATCHES" | awk -F: '{print $1}'); do
 done
 ```
 
-**If `${#UNDEFERRED[@]}` is 0:** Pass silently.
+**If not triggered (`${#UNDEFERRED[@]}` is 0):** Skip silently.
 
-**If `${#UNDEFERRED[@]}` > 0:** Halt and present the structured prompt (3-option choice). The operator chooses one:
+**If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (3-option choice). The operator chooses one:
 
 1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then `gh issue create --label type/chore --title <...> --body "<...>\n\nThis is a deferred-automation backlog item per wg-block-pr-ready-on-undeferred-operator-steps. Re-evaluate when: <...>"`. Update the PR body with `Tracks #NNNN` companions. Re-run detection.
 2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
@@ -678,7 +687,7 @@ done
 
 **Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice.
 
-**Why.** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late). This gate moves enforcement from honor-system to mechanical.
+**Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late). This gate moves enforcement from honor-system to mechanical.
 
 ## Phase 6.4: Unpushed-Commits Gate
 

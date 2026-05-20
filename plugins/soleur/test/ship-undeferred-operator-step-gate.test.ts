@@ -33,13 +33,16 @@ const RULE_ID = "hr-never-label-any-step-as-manual-without";
 // JS port: `[[:space:]]` → `\s`; case-insensitive via /i flag.
 // Anchored to start-of-line: only DECLARATIVE list-shape entries match.
 const DETECT_REGEX =
-  /^\s*([-*]|[0-9]+\.)\s+(\[[\sxX]\]\s+)?(\*\*)?(AC-PM[0-9]+|operator\s+(run|create|provision|configure|paste|copies?)s?|manual\s+gate|post-merge\s+operator)/im;
+  /^\s*([-*]|[0-9]+\.)\s+(\[[\sxX]\]\s+)?(\*\*)?(AC-PM[0-9]+|operator\s+(run|create|provision|configure|paste|cop(y|ies))s?|manual\s+gate|post-merge\s+operator)/im;
 
-// Companion regex — same/following line containing Tracks/Refs #NNNN
+// Companion regex — previous/same/following line containing Tracks/Refs #NNNN
 const COMPANION_REGEX = /(Tracks|Refs)\s+#[0-9]+/i;
 
 function stripFencedCode(body: string): string {
-  // awk '/^```/ { in_fence = !in_fence; next } !in_fence { print }'
+  // Mirrors the bash awk + fail-closed fallback in ship/SKILL.md.
+  // awk '/^```/ { in_fence = !in_fence; next } !in_fence { print } END { if (in_fence) exit 2 }'
+  // If the END handler would trip (unbalanced fence), fail-closed: return the
+  // un-stripped body so detection runs against everything (no silent bypass).
   const lines = body.split("\n");
   let inFence = false;
   const kept: string[] = [];
@@ -50,6 +53,7 @@ function stripFencedCode(body: string): string {
     }
     if (!inFence) kept.push(line);
   }
+  if (inFence) return body; // fail-closed on unbalanced fence
   return kept.join("\n");
 }
 
@@ -66,16 +70,17 @@ function detectMatches(body: string): number[] {
 }
 
 function undeferredCount(body: string): number {
-  // Mirrors the gate's rule: for each detection match, check same line OR next
-  // line for `(Tracks|Refs) #NNNN`. Count those without companion.
+  // Mirrors the gate's rule: for each detection match, check previous, same,
+  // OR following line for `(Tracks|Refs) #NNNN`. Count those without companion.
   const stripped = stripFencedCode(body);
   const lines = stripped.split("\n");
   const matches = detectMatches(body);
   let undeferred = 0;
   for (const lineNo of matches) {
+    const prevLine = lineNo > 1 ? (lines[lineNo - 2] || "") : "";
     const sameLine = lines[lineNo - 1] || "";
     const nextLine = lines[lineNo] || "";
-    const ctx = sameLine + "\n" + nextLine;
+    const ctx = prevLine + "\n" + sameLine + "\n" + nextLine;
     if (!COMPANION_REGEX.test(ctx)) undeferred++;
   }
   return undeferred;
@@ -253,6 +258,46 @@ describe("TC-8: fenced-code-block strip", () => {
       "- **AC-PM2** Operator runs cleanup",
     ].join("\n");
     expect(detectMatches(body).length).toBe(1);
+  });
+
+  test("UNBALANCED fence fails closed (gate-bypass guard)", () => {
+    // Adversarial pattern: append a single unbalanced ``` and an
+    // operator-step line after it. Naive fence-strip would drop the line;
+    // fail-closed restoration keeps the line in scope so detection fires.
+    const body = [
+      "Some prose.",
+      "```bash",
+      "- **AC-PM1** Operator runs terraform apply",
+    ].join("\n");
+    expect(detectMatches(body).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("TC-10: companion-citation lookup spans prev/same/next line", () => {
+  test("Tracks #N on the PREVIOUS line exempts the match (header-above shape)", () => {
+    const body = [
+      "Tracks #4115",
+      "- **AC-PM1** Operator runs terraform apply",
+    ].join("\n");
+    expect(undeferredCount(body)).toBe(0);
+  });
+
+  test("Tracks #N on the NEXT line exempts the match (continuation shape)", () => {
+    const body = [
+      "- **AC-PM1** Operator runs terraform apply",
+      "  Tracks #4115",
+    ].join("\n");
+    expect(undeferredCount(body)).toBe(0);
+  });
+});
+
+describe("TC-11: copy/copies verb-morphology", () => {
+  test("Operator copies (plural) matches", () => {
+    expect(detectMatches("- Operator copies the bootstrap script").length).toBe(1);
+  });
+
+  test("Operator copy (singular) matches", () => {
+    expect(detectMatches("- Operator copy the bootstrap script").length).toBe(1);
   });
 });
 
