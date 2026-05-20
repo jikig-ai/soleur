@@ -1,0 +1,28 @@
+{
+  "name": "Soleur AI",
+  "url": "https://soleur.ai",
+  "description": "Soleur connects to your GitHub repositories to enable AI-powered project management and collaboration.",
+  "public": false,
+  "redirect_url": "https://${app_domain}/internal/github-app-init",
+  "hook_attributes": {
+    "url": "https://${app_domain}/api/webhooks/github",
+    "active": true
+  },
+  "callback_urls": [
+    "https://app.soleur.ai/api/auth/github-resolve/callback",
+    "https://api.soleur.ai/auth/v1/callback",
+    "https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback"
+  ],
+  "setup_url": "https://${app_domain}/dashboard/repos",
+  "setup_on_update": true,
+  "default_permissions": {
+    "actions": "write",
+    "administration": "write",
+    "checks": "read",
+    "contents": "write",
+    "members": "read",
+    "metadata": "read",
+    "pull_requests": "write"
+  },
+  "default_events": []
+}

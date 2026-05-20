@@ -19,39 +19,39 @@ Plan: `knowledge-base/project/plans/2026-05-20-feat-github-app-manifest-plan.md`
 
 ## Phase 0: Preconditions
 
-- [ ] 0.1 Snapshot live App via JWT path (Kieran P0-2 — PAT does NOT work for `gh api /app`)
-  - [ ] 0.1.1 Fetch PEM: `doppler secrets get GITHUB_APP_PRIVATE_KEY --plain -p soleur -c prd | base64 -d > /tmp/app.pem && chmod 600 /tmp/app.pem`
-  - [ ] 0.1.2 Read `APP_ID` from Doppler
-  - [ ] 0.1.3 Run `bin/snapshot-github-app.sh > /tmp/github-app-snapshot.json` (after task 5.3)
-  - [ ] 0.1.4 `shred -u /tmp/app.pem` after snapshot captured
-- [ ] 0.2 Verify `apps/web-platform/app/internal/` does NOT exist yet: `find apps/web-platform/app -maxdepth 2 -type d | grep internal` returns empty
-- [ ] 0.3 Verify operator-auth coverage: `grep -n 'matcher\|config' apps/web-platform/middleware.ts`; record whether `/internal/*` is gated
-- [ ] 0.4 Verify Article 30 PA-17 line numbers: `grep -n "^### Processing Activity 17" knowledge-base/legal/article-30-register.md` and `sed -n '299p' ... | wc -l` returns `1`
-- [ ] 0.5 Verify `apps/web-platform/tsconfig.json` has `resolveJsonModule: true` (Kieran P1-2)
-- [ ] 0.6 Capture pre-edit line numbers of `scheduled-github-app-drift-guard.yml` JWT-mint block (currently 119-150 per `scheduled-ruleset-bypass-audit.yml:106` citation) so Phase 3.3 can verify the citation post-edit (Kieran P0-3)
+- [x] 0.1 Snapshot live App via JWT path (Kieran P0-2 — PAT does NOT work for `gh api /app`)
+  - [x] 0.1.1 Fetch PEM: `doppler secrets get GITHUB_APP_PRIVATE_KEY --plain -p soleur -c prd | base64 -d > /tmp/app.pem && chmod 600 /tmp/app.pem`
+  - [x] 0.1.2 Read `APP_ID` from Doppler
+  - [x] 0.1.3 Run `bin/snapshot-github-app.sh > /tmp/github-app-snapshot.json` (after task 5.3)
+  - [x] 0.1.4 `shred -u /tmp/app.pem` after snapshot captured
+- [x] 0.2 Verify `apps/web-platform/app/internal/` does NOT exist yet: `find apps/web-platform/app -maxdepth 2 -type d | grep internal` returns empty
+- [x] 0.3 Verify operator-auth coverage: `grep -n 'matcher\|config' apps/web-platform/middleware.ts`; record whether `/internal/*` is gated
+- [x] 0.4 Verify Article 30 PA-17 line numbers: `grep -n "^### Processing Activity 17" knowledge-base/legal/article-30-register.md` and `sed -n '299p' ... | wc -l` returns `1`
+- [x] 0.5 Verify `apps/web-platform/tsconfig.json` has `resolveJsonModule: true` (Kieran P1-2)
+- [x] 0.6 Capture pre-edit line numbers of `scheduled-github-app-drift-guard.yml` JWT-mint block (currently 119-150 per `scheduled-ruleset-bypass-audit.yml:106` citation) so Phase 3.3 can verify the citation post-edit (Kieran P0-3)
 
 ## Phase 1: Manifest JSON + parity test (RED → GREEN)
 
-- [ ] 1.1 Write parity test at `apps/web-platform/test/github-app-manifest-parity.test.ts`. Asserts:
-  - [ ] 1.1.1 File exists at `apps/web-platform/infra/github-app-manifest.json` and parses as JSON
-  - [ ] 1.1.2 `hook_attributes.url` template contains `/api/webhooks/github`
-  - [ ] 1.1.3 `callback_urls.length >= 3` (per `2026-05-04-github-app-callback-url-three-entries.md`)
-  - [ ] 1.1.4 `default_permissions.administration === "write"`
-  - [ ] 1.1.5 `public === false`
-  - [ ] 1.1.6 `setup_on_update === true`
-  - [ ] 1.1.7 Every `doppler_secret.github_app_*` in `github-app.tf` (5 resources) maps to a documented expected-output via regex grep
-- [ ] 1.2 Run parity test — confirm RED
-- [ ] 1.3 Write `apps/web-platform/infra/github-app-manifest.json` from the Phase 0.1 snapshot:
-  - [ ] 1.3.1 Copy `permissions` from snapshot → `default_permissions` in manifest verbatim
-  - [ ] 1.3.2 Copy `events` from snapshot → `default_events` in manifest verbatim (preserve ordering — see Sharp Edges)
-  - [ ] 1.3.3 Set `name`, `url`, `description` from snapshot
-  - [ ] 1.3.4 Set `public: false`, `setup_on_update: true`
-  - [ ] 1.3.5 Set `redirect_url: "https://${app_domain}/internal/github-app-init"` (literal `${app_domain}` placeholder; runtime-substituted)
-  - [ ] 1.3.6 Set `hook_attributes.url: "https://${app_domain}/api/webhooks/github"` (same placeholder)
-  - [ ] 1.3.7 Set `setup_url: "https://${app_domain}/dashboard/repos"`
-  - [ ] 1.3.8 `callback_urls` array with three entries from the 2026-05-04 learning, preserving snapshot ordering
-  - [ ] 1.3.9 OMIT `hook_attributes.secret` (Risks R6 — Soleur-managed via `random_id`; webhook secret pasted in Phase 5)
-- [ ] 1.4 Re-run parity test — confirm GREEN
+- [x] 1.1 Write parity test at `apps/web-platform/test/github-app-manifest-parity.test.ts`. Asserts:
+  - [x] 1.1.1 File exists at `apps/web-platform/infra/github-app-manifest.json` and parses as JSON
+  - [x] 1.1.2 `hook_attributes.url` template contains `/api/webhooks/github`
+  - [x] 1.1.3 `callback_urls.length >= 3` (per `2026-05-04-github-app-callback-url-three-entries.md`)
+  - [x] 1.1.4 `default_permissions.administration === "write"`
+  - [x] 1.1.5 `public === false`
+  - [x] 1.1.6 `setup_on_update === true`
+  - [x] 1.1.7 Every `doppler_secret.github_app_*` in `github-app.tf` (5 resources) maps to a documented expected-output via regex grep
+- [x] 1.2 Run parity test — confirm RED
+- [x] 1.3 Write `apps/web-platform/infra/github-app-manifest.json` from the Phase 0.1 snapshot:
+  - [x] 1.3.1 Copy `permissions` from snapshot → `default_permissions` in manifest verbatim
+  - [x] 1.3.2 Copy `events` from snapshot → `default_events` in manifest verbatim (preserve ordering — see Sharp Edges)
+  - [x] 1.3.3 Set `name`, `url`, `description` from snapshot
+  - [x] 1.3.4 Set `public: false`, `setup_on_update: true`
+  - [x] 1.3.5 Set `redirect_url: "https://${app_domain}/internal/github-app-init"` (literal `${app_domain}` placeholder; runtime-substituted)
+  - [x] 1.3.6 Set `hook_attributes.url: "https://${app_domain}/api/webhooks/github"` (same placeholder)
+  - [x] 1.3.7 Set `setup_url: "https://${app_domain}/dashboard/repos"`
+  - [x] 1.3.8 `callback_urls` array with three entries from the 2026-05-04 learning, preserving snapshot ordering
+  - [x] 1.3.9 OMIT `hook_attributes.secret` (Risks R6 — Soleur-managed via `random_id`; webhook secret pasted in Phase 5)
+- [x] 1.4 Re-run parity test — confirm GREEN
 
 ## Phase 2: Static init page
 
