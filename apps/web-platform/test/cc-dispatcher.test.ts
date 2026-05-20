@@ -133,6 +133,14 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // defaults to off (unset) at merge per AC9/AC11; tests that need the
     // flag on stub it explicitly via `vi.stubEnv`.
     vi.unstubAllEnvs();
+    // #4128 — Doppler `dev` config injects `CC_PERSIST_USAGE=true` at process
+    // spawn. `vi.unstubAllEnvs()` reverts `stubEnv` writes only; it cannot
+    // delete a process-inherited env var. Force-empty here so default-off
+    // tests (T-W4-basic-off at line ~1455) see a falsy value at the strict
+    // `=== "true"` check in server/cc-dispatcher.ts:425. Tests that need
+    // the flag on continue to call `vi.stubEnv("CC_PERSIST_USAGE", "true")`
+    // explicitly in their own bodies — the local stub overrides this default.
+    vi.stubEnv("CC_PERSIST_USAGE", "");
     // Default: a stable stub workspace path so existing tests that don't
     // care about the workspace-resolve path still get a deterministic value.
     mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
