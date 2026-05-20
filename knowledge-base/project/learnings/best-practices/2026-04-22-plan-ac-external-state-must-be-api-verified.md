@@ -1,17 +1,15 @@
 ---
-module: System
+title: Plan ACs on external-service state must be API-verified, not code-grep-inferred
 date: 2026-04-22
-problem_type: best_practice
-component: development_workflow
-symptoms:
-  - "Plan AC claimed 'dev Doppler has all 6 NEXT_PUBLIC_* secrets; confirmed by codebase audit'"
-  - "Dev Doppler was actually missing 3 keys (SENTRY_DSN, VAPID_PUBLIC_KEY, GITHUB_APP_SLUG)"
-  - "Happy-path smoke at work-phase failed immediately; AC had to be rewritten"
-  - "Plan review looked green because no reviewer queried the live API"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: medium
+category: engineering
 tags: [planning, external-services, doppler, verification, acceptance-criteria, plan-ac]
+symptoms: [Plan AC claimed 'dev Doppler has all 6 NEXT_PUBLIC_* secrets; confirmed by codebase audit', Dev Doppler was actually missing 3 keys (SENTRY_DSN, VAPID_PUBLIC_KEY, GITHUB_APP_SLUG), Happy-path smoke at work-phase failed immediately; AC had to be rewritten, Plan review looked green because no reviewer queried the live API]
+module: System
+component: development_workflow
+problem_type: best_practice
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: medium
 ---
 
 # Plan ACs on external-service state must be API-verified, not code-grep-inferred

@@ -1,16 +1,15 @@
 ---
-module: agent-runner
+title: Service tool registration must not be gated behind unrelated feature guards
 date: 2026-04-10
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Plausible MCP tools not registered for users without GitHub installation"
-  - "Service tools nested inside GitHub-specific code block"
-  - "Test passed but only because mock also lacked installation"
-root_cause: scope_issue
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [mcp-tools, canUseTool, service-automation, scope-guard]
+symptoms: [Plausible MCP tools not registered for users without GitHub installation, Service tools nested inside GitHub-specific code block, Test passed but only because mock also lacked installation]
+module: agent-runner
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: scope_issue
+severity: high
 ---
 
 # Learning: Service tool registration must not be gated behind unrelated feature guards

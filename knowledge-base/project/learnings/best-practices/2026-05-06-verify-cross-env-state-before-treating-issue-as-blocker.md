@@ -1,10 +1,11 @@
 ---
+title: Verify cross-env state before treating an open issue as a plan blocker
 date: 2026-05-06
 category: best-practices
 tags: planning, code-review-overlap, supabase, multi-env, management-api
-source_session: feat-supabase-disk-io-budget plan-stage compound
-related_pr: 3356
 related_issue: 3358
+related_pr: 3356
+source_session: feat-supabase-disk-io-budget plan-stage compound
 ---
 
 # Learning: Verify cross-env state before treating an open issue as a plan blocker

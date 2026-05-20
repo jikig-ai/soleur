@@ -1,16 +1,15 @@
 ---
-module: github-rulesets
+title: 'GitHub CI Required ruleset bypass_mode "always" silently skips checks'
 date: 2026-04-06
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "PRs merged with failing CI checks without any warning"
-  - "Admin bypass_mode 'always' silently skips required status checks"
-  - "No audit trail when admin merges PR with failing checks"
-root_cause: config_error
-resolution_type: config_change
-severity: high
+category: ci-cd
 tags: [github-rulesets, bypass-mode, ci-checks, auto-merge, branch-protection]
+symptoms: [PRs merged with failing CI checks without any warning, Admin bypass_mode 'always' silently skips required status checks, No audit trail when admin merges PR with failing checks]
+module: github-rulesets
+component: tooling
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: high
 ---
 
 # Troubleshooting: GitHub CI Required ruleset bypass_mode "always" silently skips checks

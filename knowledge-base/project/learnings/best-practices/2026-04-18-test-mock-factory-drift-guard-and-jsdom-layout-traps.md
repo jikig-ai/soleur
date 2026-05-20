@@ -1,18 +1,15 @@
 ---
-module: web-platform
+title: Test Mock Factory Drift-Guard, DI Seams, and jsdom Layout Traps
 date: 2026-04-18
-problem_type: best_practice
-component: testing_framework
-symptoms:
-  - "Hand-rolled mock object literals duplicated across 7+ test files drift silently when wrapped hook return shape changes"
-  - "Inline native-setter copy-paste for controlled-value events repeated in 3 files"
-  - "jsdom test gated on layout values (clientWidth > 0) silently passes as no-op"
-  - "Plan scoped to N files actually touches N+M files (incomplete adoption)"
-  - "Code comments referencing other code via line numbers (~line 826) drift on refactor"
-root_cause: inadequate_documentation
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [testing, mocks, drift-resistance, jsdom, di-seam, code-comments, factory-pattern]
+symptoms: [Hand-rolled mock object literals duplicated across 7+ test files drift silently when wrapped hook return shape changes, Inline native-setter copy-paste for controlled-value events repeated in 3 files, jsdom test gated on layout values (clientWidth > 0) silently passes as no-op, Plan scoped to N files actually touches N+M files (incomplete adoption), Code comments referencing other code via line numbers (~line 826) drift on refactor]
+module: web-platform
+component: testing_framework
+problem_type: best_practice
+resolution_type: code_fix
+root_cause: inadequate_documentation
+severity: medium
 ---
 
 # Test Mock Factory Drift-Guard, DI Seams, and jsdom Layout Traps

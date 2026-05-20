@@ -1,16 +1,15 @@
 ---
-module: web-platform
+title: Sentry Server-Side SDK Not Sending Events from Production
 date: 2026-04-05
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Sentry project soleur-web-platform has zero events ever despite captureException calls in code"
-  - "Setup failure error not appearing in Sentry API queries (24h and 14d ranges)"
-  - "Manual test event via curl to same DSN was received within 60 seconds"
-root_cause: config_error
-resolution_type: documentation_update
-severity: high
+category: engineering
 tags: [sentry, observability, docker, doppler, env-vars, verification]
+symptoms: [Sentry project soleur-web-platform has zero events ever despite captureException calls in code, Setup failure error not appearing in Sentry API queries (24h and 14d ranges), Manual test event via curl to same DSN was received within 60 seconds]
+module: web-platform
+component: tooling
+problem_type: integration_issue
+resolution_type: documentation_update
+root_cause: config_error
+severity: high
 ---
 
 # Sentry Server-Side SDK Not Sending Events from Production

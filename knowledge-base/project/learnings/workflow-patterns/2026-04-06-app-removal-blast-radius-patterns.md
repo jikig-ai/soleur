@@ -1,17 +1,15 @@
 ---
-module: System
+title: App Removal Blast Radius Patterns
 date: 2026-04-06
-problem_type: workflow_issue
-component: development_workflow
-symptoms:
-  - "Pre-push hook fails on deleted test files"
-  - "Docker image prune removes unrelated images"
-  - "Worktrees disappear between conversation turns"
-  - "GitHub API connection resets on bulk secret deletion"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: medium
+category: engineering
 tags: [app-removal, pre-push-hook, docker-prune, worktree-race, github-api]
+symptoms: [Pre-push hook fails on deleted test files, Docker image prune removes unrelated images, Worktrees disappear between conversation turns, GitHub API connection resets on bulk secret deletion]
+module: System
+component: development_workflow
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: medium
 ---
 
 # Learning: App Removal Blast Radius Patterns

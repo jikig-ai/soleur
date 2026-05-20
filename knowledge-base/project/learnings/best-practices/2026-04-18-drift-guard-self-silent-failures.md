@@ -1,16 +1,15 @@
 ---
-module: plugins/soleur/skills/ux-audit
+title: Drift Guard Tests Must Survive Their Own Silent-Failure Modes
 date: 2026-04-18
-problem_type: test_quality_issue
+category: engineering
+tags: [drift-guard, test-design, regex, schema, parser-underread, review-catch]
+symptoms: [toContain(short_token) false-positives on substring matches in prose, JSON Schema path pattern ^/ permits traversal with no current consumer, YAML parser regex covers only one style, silently underreads the rest]
+module: plugins/soleur/skills/ux-audit
+synced_to: []
 component: drift_guard_tests
-symptoms:
-  - "toContain(short_token) false-positives on substring matches in prose"
-  - "JSON Schema path pattern ^/ permits traversal with no current consumer"
-  - "YAML parser regex covers only one style, silently underreads the rest"
+problem_type: test_quality_issue
 root_cause: drift_guard_assertions_weaker_than_the_drift_they_claim_to_catch
 severity: medium
-tags: [drift-guard, test-design, regex, schema, parser-underread, review-catch]
-synced_to: []
 ---
 
 # Drift Guard Tests Must Survive Their Own Silent-Failure Modes

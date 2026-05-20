@@ -1,22 +1,12 @@
 ---
+title: Plan-vs-shipped reality check + Octokit factory-boundary audit-writer pattern
 date: 2026-05-20
-problem_type: integration_issue
+category: engineering
+tags: [one-shot, plan-deepen, work-phase-0, octokit, audit-writer, factory-boundary, check-constraint, reportSilentFallback]
+symptoms: [Deepened plan prescribes work already shipped by sibling PRs, /work Phase 0 reconciliation table references files in their pre-merge locations, Audit-write surface design diverges from where the actual API calls fire]
+synced_to: []
 component: workflow_skill
-symptoms:
-  - "Deepened plan prescribes work already shipped by sibling PRs"
-  - "/work Phase 0 reconciliation table references files in their pre-merge locations"
-  - "Audit-write surface design diverges from where the actual API calls fire"
-root_cause: stale_research_artifact
-severity: high
-tags:
-  - one-shot
-  - plan-deepen
-  - work-phase-0
-  - octokit
-  - audit-writer
-  - factory-boundary
-  - check-constraint
-  - reportSilentFallback
+problem_type: integration_issue
 related_issues:
   - 4098
   - 4100
@@ -24,7 +14,8 @@ related_issues:
   - 4065
   - 4124
   - 4130
-synced_to: []
+root_cause: stale_research_artifact
+severity: high
 ---
 
 # Plan-vs-shipped reality check + Octokit factory-boundary audit-writer pattern

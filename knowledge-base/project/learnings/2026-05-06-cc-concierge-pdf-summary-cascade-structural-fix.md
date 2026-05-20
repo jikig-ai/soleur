@@ -7,23 +7,8 @@ symptoms: [Concierge replies 'environment is missing poppler-utils' on KB PDF ch
 module: cc-soleur-go (Concierge router)
 component: server-prompt-builder + sdk-toolset-config
 problem_type: integration_issue
-related_issues:
-  - 3346
-  - 3342
-  - 3343
-  - 3344
-  - 3345
-  - 3332
-  - 3243
-related_prs:
-  - 3253
-  - 3263
-  - 3278
-  - 3287
-  - 3288
-  - 3294
-  - 3326
-  - 3338
+related_issues: 
+related_prs: 
 root_cause: prompt_only_mitigation_plateau + sdk_semantics_misread
 severity: critical
 ---

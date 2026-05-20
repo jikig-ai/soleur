@@ -1,12 +1,15 @@
 ---
+title: Leak Tripwires Must Filter Their Own Mask Registrations Before Scanning
 date: 2026-05-05
 category: best-practices
-problem_type: workflow_self_leak_false_positive
-component: github_actions_workflow + leak_tripwire
-related_issues: [3187]
-related_prs: [3224]
 tags: [github-actions, leak-detection, add-mask, tee, step-output, self-leak, guard-itself-dark]
 synced_to: []
+component: github_actions_workflow + leak_tripwire
+problem_type: workflow_self_leak_false_positive
+related_issues:
+  - 3187
+related_prs:
+  - 3224
 ---
 
 # Leak Tripwires Must Filter Their Own Mask Registrations Before Scanning

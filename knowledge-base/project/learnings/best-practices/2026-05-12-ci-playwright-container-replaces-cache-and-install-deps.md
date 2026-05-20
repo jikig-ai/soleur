@@ -1,21 +1,12 @@
 ---
+title: 'CI Playwright gates: prefer official container image over `actions/cache` + `playwright install-deps`'
 date: 2026-05-12
 category: best-practices
-problem_type: ci_performance
+tags: [github-actions, playwright, container, critical-css-gate, deploy-docs, vendor-pinning]
 component: github-actions-playwright-gate
-tags:
-  - github-actions
-  - playwright
-  - container
-  - critical-css-gate
-  - deploy-docs
-  - vendor-pinning
-related_prs:
-  - "#3624"
-  - "#3654"
-related_learnings:
-  - 2026-05-12-ci-playwright-cache-key-must-track-npm-version-not-script-hash.md
-  - 2026-03-20-playwright-shared-cache-version-coupling.md
+problem_type: ci_performance
+related_learnings: [2026-05-12-ci-playwright-cache-key-must-track-npm-version-not-script-hash.md, 2026-03-20-playwright-shared-cache-version-coupling.md]
+related_prs: [#3624, #3654]
 ---
 
 # CI Playwright gates: prefer official container image over `actions/cache` + `playwright install-deps`

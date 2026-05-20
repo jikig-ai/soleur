@@ -1,9 +1,10 @@
 ---
+title: PostgREST cannot infer ON CONFLICT against a partial unique index
 date: 2026-05-03
 category: integration-issues
 tags: [postgrest, postgres, supabase, on-conflict, partial-index, ux-audit, migrations]
-related: [PR #2584, #2585, scheduled-ux-audit run 25210899975]
 synced_to: [plan]
+related: [PR #2584, #2585, scheduled-ux-audit run 25210899975]
 ---
 
 # PostgREST cannot infer ON CONFLICT against a partial unique index

@@ -1,9 +1,11 @@
 ---
-module: infrastructure
+title: Pre-commit Hooks Do Not Run Tests
 date: 2026-02-12
-problem_type: best_practice
-component: ci
+category: workflow-patterns
 tags: [lefthook, pre-commit, testing, bun-test]
+module: infrastructure
+component: ci
+problem_type: best_practice
 severity: medium
 status: open
 ---

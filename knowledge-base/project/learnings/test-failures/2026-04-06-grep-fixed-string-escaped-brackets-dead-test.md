@@ -1,16 +1,16 @@
 ---
-module: System
+title: grep -qF with escaped brackets creates dead test branches
 date: 2026-04-06
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "grep -qF with escaped brackets created dead test branch"
-  - "test_critical_email_subject always fell through to fallback"
-root_cause: logic_error
-resolution_type: test_fix
-severity: low
+category: shell-scripting
 tags: [grep, shell-testing, dead-code, test-coverage]
+symptoms: [grep -qF with escaped brackets created dead test branch, test_critical_email_subject always fell through to fallback]
+module: System
 synced_to: []
+component: testing_framework
+problem_type: test_failure
+resolution_type: test_fix
+root_cause: logic_error
+severity: low
 ---
 
 # Learning: grep -qF with escaped brackets creates dead test branches

@@ -1,18 +1,12 @@
 ---
-title: "Parallel agents working on main cause merge conflicts"
+title: Parallel agents working on main cause merge conflicts
+date: 2026-02-17
 category: logic-errors
-tags:
-  - parallel-agents
-  - git-branching
-  - worktree
-  - workflow
-  - merge-conflicts
+tags: [parallel-agents, git-branching, worktree, workflow, merge-conflicts]
 module: workflow-commands
+synced_to: [plugins/soleur/commands/soleur/work.md, plugins/soleur/commands/soleur/one-shot.md]
 created: 2026-02-17
 severity: high
-synced_to:
-  - plugins/soleur/commands/soleur/work.md
-  - plugins/soleur/commands/soleur/one-shot.md
 ---
 
 # Learning: Agents must branch before editing, even for trivial fixes

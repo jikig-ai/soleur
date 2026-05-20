@@ -1,12 +1,17 @@
 ---
+title: 'Migrating Terraform `integrations/github` from PAT to App Auth — and Discovering Ubuntu 24.04 sudo-rs Rejects Argument Wildcards'
 date: 2026-05-20
 category: bug-fixes
-problem_type: infra_remediation
-component: terraform_provider + sudoers + ci_deploy
-related_issues: [4144, 4066, 4118, 4126]
-related_prs: []
 tags: [terraform, github-app, sudo-rs, ubuntu-24-04, sudoers, doppler, pat-rotation, agents-md-budget]
 synced_to: []
+component: terraform_provider + sudoers + ci_deploy
+problem_type: infra_remediation
+related_issues:
+  - 4144
+  - 4066
+  - 4118
+  - 4126
+related_prs: []
 ---
 
 # Migrating Terraform `integrations/github` from PAT to App Auth — and Discovering Ubuntu 24.04 sudo-rs Rejects Argument Wildcards

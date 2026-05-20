@@ -1,17 +1,15 @@
 ---
-module: Web Platform
+title: Adding React Context Provider Breaks Existing Tests
 date: 2026-04-10
-problem_type: integration_issue
-component: testing_framework
-symptoms:
-  - "28 test failures: useTeamNames must be used within a TeamNamesProvider"
-  - "esbuild parse error: Expected '>' but found 'value' on <Context value={}>"
-  - "esbuild transform error: JSX in .ts file not processed"
-  - "getByText('CMO') found multiple elements after badge text change"
-root_cause: missing_validation
-resolution_type: test_fix
-severity: medium
+category: engineering
 tags: [react-context, vitest, esbuild, testing-library, team-names]
+symptoms: [28 test failures: useTeamNames must be used within a TeamNamesProvider, esbuild parse error: Expected '>' but found 'value' on <Context value={}>, esbuild transform error: JSX in .ts file not processed, getByText('CMO') found multiple elements after badge text change]
+module: Web Platform
+component: testing_framework
+problem_type: integration_issue
+resolution_type: test_fix
+root_cause: missing_validation
+severity: medium
 ---
 
 # Troubleshooting: Adding React Context Provider Breaks Existing Tests

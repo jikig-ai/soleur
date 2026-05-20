@@ -1,18 +1,16 @@
 ---
-module: Pencil MCP Adapter
+title: Pencil MCP Adapter — Zod 4 Compat, Stderr Capture, and Detection Gotchas
 date: 2026-03-24
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "MCP listTools() crashes with Cannot read properties of undefined (reading '_zod') when using z.record(z.unknown())"
-  - "batch_design errors return empty response text — pencil writes errors to stderr not stdout"
-  - "detect_headless_cli() fails because binary requires Node 22+ but system has Node 21"
-  - ".mcp.json created by claude mcp add -s project contains plaintext API key"
-root_cause: wrong_api
-resolution_type: code_fix
-severity: high
+category: infrastructure
 tags: [mcp-adapter, zod-4, stderr, pencil, node-version, detection]
+symptoms: [MCP listTools() crashes with Cannot read properties of undefined (reading '_zod') when using z.record(z.unknown()), batch_design errors return empty response text — pencil writes errors to stderr not stdout, detect_headless_cli() fails because binary requires Node 22+ but system has Node 21, .mcp.json created by claude mcp add -s project contains plaintext API key]
+module: Pencil MCP Adapter
 synced_to: []
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: wrong_api
+severity: high
 ---
 
 # Learning: Pencil MCP Adapter — Zod 4 Compat, Stderr Capture, and Detection Gotchas

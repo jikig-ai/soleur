@@ -1,21 +1,17 @@
 ---
-module: web-platform
+title: Tokenize-on-touch when theme tokens already exist for the literal pattern
 date: 2026-05-06
-problem_type: best_practice
+category: engineering
+tags: [scope-out, exacerbation-rule, theme-tokens, tokenization, review-workflow, fix-inline]
+symptoms: [Multi-agent review flagged P1 'literal-hex propagation' on a className swap, Initial cross-cutting-refactor scope-out filing got DISSENTed by code-simplicity-reviewer, Plan author had Non-Goal'd tokenization with a piecemeal-migration rationale that the review-time exacerbation check overrode]
+module: web-platform
 component: review_workflow
-symptoms:
-  - "Multi-agent review flagged P1 'literal-hex propagation' on a className swap"
-  - "Initial cross-cutting-refactor scope-out filing got DISSENTed by code-simplicity-reviewer"
-  - "Plan author had Non-Goal'd tokenization with a piecemeal-migration rationale that the review-time exacerbation check overrode"
+issue_followup: '#3334'
+pr: '#3330'
+problem_type: best_practice
+related: [2026-05-04-in-isolation-probe-missed-user-shape-and-scope-out-exacerbation.md, 2026-05-06-scope-out-criterion-misclassification-adr-not-architectural-pivot.md, 2026-05-06-token-on-accent-vs-text-primary-on-status-backgrounds.md]
 root_cause: scope_out_exacerbation_misapplication
 severity: medium
-tags: [scope-out, exacerbation-rule, theme-tokens, tokenization, review-workflow, fix-inline]
-related:
-  - 2026-05-04-in-isolation-probe-missed-user-shape-and-scope-out-exacerbation.md
-  - 2026-05-06-scope-out-criterion-misclassification-adr-not-architectural-pivot.md
-  - 2026-05-06-token-on-accent-vs-text-primary-on-status-backgrounds.md
-pr: "#3330"
-issue_followup: "#3334"
 ---
 
 # Tokenize-on-touch when theme tokens already exist for the literal pattern

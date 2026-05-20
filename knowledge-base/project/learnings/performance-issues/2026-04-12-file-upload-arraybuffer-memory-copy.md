@@ -1,3 +1,10 @@
+---
+title: File upload triple memory copy on large files
+date: 2026-04-12
+category: engineering
+tags: [performance-issues, web-platform/api/kb/upload]
+---
+
 # Learning: File upload triple memory copy on large files
 
 ## Problem

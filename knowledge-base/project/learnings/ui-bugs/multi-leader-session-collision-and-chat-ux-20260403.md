@@ -1,17 +1,15 @@
 ---
-module: Command Center
+title: Multi-Leader Session Key Collision and Chat UX Bugs
 date: 2026-04-03
-problem_type: ui_bug
-component: tooling
-symptoms:
-  - "CPO appears twice in leader list when starting auto-route conversation"
-  - "No visual feedback while leaders are processing (thinking state missing)"
-  - "Raw markdown syntax (###, |---|, **bold**) displayed as plain text"
-  - "CTO never replied in multi-leader auto-routed session"
-root_cause: logic_error
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [session-key, multi-leader, markdown, react-markdown, thinking-indicator, websocket]
+symptoms: [CPO appears twice in leader list when starting auto-route conversation, No visual feedback while leaders are processing (thinking state missing), Raw markdown syntax (###, |---|, **bold**) displayed as plain text, CTO never replied in multi-leader auto-routed session]
+module: Command Center
+component: tooling
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: logic_error
+severity: high
 ---
 
 # Troubleshooting: Multi-Leader Session Key Collision and Chat UX Bugs

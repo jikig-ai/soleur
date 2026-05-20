@@ -1,3 +1,10 @@
+---
+title: Worktree discipline -- always edit in the worktree
+date: 2026-02-11
+category: workflow-patterns
+tags: [workflow-patterns, git-worktree, changes lost, edits in wrong directory, uncommitted work disappeared]
+---
+
 # Learning: Worktree discipline -- always edit in the worktree
 
 ## Problem

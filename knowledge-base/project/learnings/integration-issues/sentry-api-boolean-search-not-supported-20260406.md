@@ -1,15 +1,15 @@
 ---
-module: System
+title: Sentry API Search Does Not Support Boolean Operators
 date: 2026-04-06
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Sentry API search query with OR operator returns error instead of results"
-  - "jq length returns 1 for error response object, masking the real failure"
-root_cause: wrong_api
-resolution_type: workflow_improvement
-severity: low
+category: engineering
 tags: [sentry, api, search, verification, production]
+symptoms: [Sentry API search query with OR operator returns error instead of results, jq length returns 1 for error response object, masking the real failure]
+module: System
+component: tooling
+problem_type: integration_issue
+resolution_type: workflow_improvement
+root_cause: wrong_api
+severity: low
 ---
 
 # Troubleshooting: Sentry API Search Does Not Support Boolean Operators

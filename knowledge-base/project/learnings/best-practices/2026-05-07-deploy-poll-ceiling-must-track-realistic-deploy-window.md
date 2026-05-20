@@ -1,16 +1,15 @@
 ---
-module: System
+title: Deploy Poll Ceiling Must Track Realistic Deploy Window (Recurrence Pattern)
 date: 2026-05-07
-problem_type: best_practice
-component: development_workflow
-symptoms:
-  - "Verify deploy script completion step timed out at 300s while deploy was healthy"
-  - "gh run rerun --failed POSTed a fresh deploy that hit flock lock_contention"
-  - "Successful prod deploy reported as failed release workflow (silent-success inverse)"
-root_cause: config_error
-resolution_type: config_change
-severity: medium
+category: engineering
 tags: [ci, deploy, polling, timeout, observability, web-platform-release, recurrence]
+symptoms: [Verify deploy script completion step timed out at 300s while deploy was healthy, gh run rerun --failed POSTed a fresh deploy that hit flock lock_contention, Successful prod deploy reported as failed release workflow (silent-success inverse)]
+module: System
+component: development_workflow
+problem_type: best_practice
+resolution_type: config_change
+root_cause: config_error
+severity: medium
 ---
 
 # Deploy Poll Ceiling Must Track Realistic Deploy Window (Recurrence Pattern)

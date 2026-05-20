@@ -1,15 +1,15 @@
 ---
-module: System
+title: Git Ref Format Validation Requires Multi-Check Approach
 date: 2026-04-11
-problem_type: best_practice
-component: tooling
-symptoms:
-  - "Branch names with special characters reach git/GitHub API producing cryptic errors"
-  - "Single regex cannot express all 10 git ref format rules without catastrophic backtracking"
-root_cause: missing_validation
-resolution_type: code_fix
-severity: medium
+category: workflow-patterns
 tags: [git, branch-validation, security, extraction-pattern, defense-in-depth]
+symptoms: [Branch names with special characters reach git/GitHub API producing cryptic errors, Single regex cannot express all 10 git ref format rules without catastrophic backtracking]
+module: System
+component: tooling
+problem_type: best_practice
+resolution_type: code_fix
+root_cause: missing_validation
+severity: medium
 ---
 
 # Learning: Git Ref Format Validation Requires Multi-Check Approach

@@ -1,16 +1,16 @@
 ---
-module: Web Platform Infrastructure
+title: '`variable { sensitive = true }` is the most expensive secret-supply shape — exhaust autonomous paths first'
 date: 2026-05-20
-problem_type: workflow_drift
-component: tooling
-symptoms:
-  - "`terraform plan` fails with `Error: No value for required variable` on `apply-web-platform-infra.yml` post-merge"
-  - "PR adds 4 new `variable \"...\" { sensitive = true }` blocks; issue body asks operator to mint each in vendor dashboards"
-root_cause: design_smell
-resolution_type: rule_addition
-severity: medium
+category: engineering
 tags: [terraform, doppler, github-app, iac, autonomy, operator-mint]
+symptoms: [`terraform plan` fails with `Error: No value for required variable` on `apply-web-platform-infra.yml` post-merge, PR adds 4 new `variable "..." { sensitive = true }` blocks; issue body asks operator to mint each in vendor dashboards]
+module: Web Platform Infrastructure
 synced_to: []
+component: tooling
+problem_type: workflow_drift
+resolution_type: rule_addition
+root_cause: design_smell
+severity: medium
 ---
 
 # `variable { sensitive = true }` is the most expensive secret-supply shape — exhaust autonomous paths first

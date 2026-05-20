@@ -1,15 +1,15 @@
 ---
-module: web-platform
+title: Missing path validation on exported rm -rf function
 date: 2026-04-05
-problem_type: security_issue
-component: tooling
-symptoms:
-  - "removeWorkspaceDir accepts arbitrary paths with no self-validation"
-  - "Future callers could pass untrusted input enabling rm -rf outside workspace root"
-root_cause: missing_validation
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [path-traversal, defense-in-depth, cwe-22, workspace, rm-rf]
+symptoms: [removeWorkspaceDir accepts arbitrary paths with no self-validation, Future callers could pass untrusted input enabling rm -rf outside workspace root]
+module: web-platform
+component: tooling
+problem_type: security_issue
+resolution_type: code_fix
+root_cause: missing_validation
+severity: medium
 ---
 
 # Troubleshooting: Missing path validation on exported rm -rf function

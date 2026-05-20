@@ -1,7 +1,7 @@
-# Cloudflare Tunnel for webhook-based deploys.
-# Eliminates the need for SSH from GitHub Actions runners (see #749).
-# Only the deploy webhook routes through the tunnel; app traffic and
-# admin SSH stay on their existing paths (A record + admin_ips firewall).
+# Cloudflare Tunnel for webhook-based deploys + CI-runner SSH ingress.
+# Routes the deploy webhook (#749) and the CI-runner SSH path (#4177)
+# through the tunnel so runner egress doesn't need IP allowlisting.
+# Operator/admin SSH still uses the direct A record + admin_ips firewall.
 
 resource "random_id" "tunnel_secret" {
   byte_length = 32
@@ -31,6 +31,15 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     ingress_rule {
       hostname = "deploy.${var.app_domain_base}"
       service  = "http://localhost:9000"
+    }
+    # SSH ingress for CI runner — `terraform_data.*` provisioner resources
+    # in server.tf reach the host through this tunnel after the runner
+    # establishes a `cloudflared access tcp` localhost forward.
+    # CF Tunnel ingress rules are first-match; this MUST stay above the
+    # catch-all `http_status:404` rule below.
+    ingress_rule {
+      hostname = "ssh.${var.app_domain_base}"
+      service  = "ssh://localhost:22"
     }
     # Catch-all rule (required by Cloudflare)
     ingress_rule {
@@ -68,14 +77,52 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
   }
 }
 
-# Alert one week before the deploy service token expires.
+# Cloudflare Access: protect the SSH ingress with a service token (#4177).
+# GitHub Actions runs `cloudflared access tcp --hostname ssh.${app_domain_base}`
+# carrying TUNNEL_SERVICE_TOKEN_ID + TUNNEL_SERVICE_TOKEN_SECRET. CF Access
+# validates the headers and bridges the raw TCP forward into the tunnel,
+# where the host-side cloudflared daemon delivers to localhost:22 (sshd).
+
+resource "cloudflare_zero_trust_access_application" "ssh" {
+  zone_id = var.cf_zone_id
+  name    = "SSH (CI runner) - soleur-web-platform"
+  domain  = "ssh.${var.app_domain_base}"
+  type    = "self_hosted"
+  # 15m is CF's documented minimum; tighter than the deploy app's 24h
+  # because SSH grants host shell access (higher blast radius). A typical
+  # apply-deploy-pipeline-fix run is ~3-5 min, so 15m leaves headroom
+  # without prolonged token reuse if the cloudflared sidecar's in-memory
+  # session token is exfiltrated mid-run.
+  session_duration = "15m"
+}
+
+resource "cloudflare_zero_trust_access_service_token" "ci_ssh" {
+  account_id = var.cf_account_id
+  name       = "github-actions-ci-ssh"
+}
+
+resource "cloudflare_zero_trust_access_policy" "ci_ssh_service_token" {
+  zone_id        = var.cf_zone_id
+  application_id = cloudflare_zero_trust_access_application.ssh.id
+  name           = "Allow GitHub Actions CI SSH"
+  decision       = "non_identity"
+  precedence     = 1
+
+  include {
+    service_token = [cloudflare_zero_trust_access_service_token.ci_ssh.id]
+  }
+}
+
+# Alert one week before any CF Access service token expires.
 # Cloudflare sends expiring_service_token_alert 7 days pre-expiry.
 # Note: this alert fires for ALL service tokens in the account (no per-token
-# filtering). Currently only one token exists (github-actions-deploy).
+# filtering). Two tokens exist: `github-actions-deploy` (webhook) and
+# `github-actions-ci-ssh` (CI runner SSH bridge, #4177); the alert body
+# names the specific token.
 resource "cloudflare_notification_policy" "service_token_expiry" {
   account_id  = var.cf_account_id
-  name        = "Deploy service token expiring"
-  description = "Alert when github-actions-deploy service token approaches expiry"
+  name        = "CF Access service token expiring"
+  description = "Alert when any CF Access service token (github-actions-deploy or github-actions-ci-ssh) approaches expiry"
   alert_type  = "expiring_service_token_alert"
   enabled     = true
 
@@ -96,5 +143,15 @@ output "access_service_token_client_id" {
 
 output "access_service_token_client_secret" {
   value     = cloudflare_zero_trust_access_service_token.deploy.client_secret
+  sensitive = true
+}
+
+output "ci_ssh_access_service_token_client_id" {
+  value     = cloudflare_zero_trust_access_service_token.ci_ssh.client_id
+  sensitive = true
+}
+
+output "ci_ssh_access_service_token_client_secret" {
+  value     = cloudflare_zero_trust_access_service_token.ci_ssh.client_secret
   sensitive = true
 }

@@ -1,3 +1,10 @@
+---
+title: Authenticated MCP Servers Cannot Be Bundled in Plugin.json
+date: 2026-02-18
+category: infrastructure
+tags: [integration-issues, infra-security-agent]
+---
+
 # Learning: Authenticated MCP Servers Cannot Be Bundled in Plugin.json
 
 ## Problem
