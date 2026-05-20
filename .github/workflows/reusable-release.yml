@@ -329,6 +329,14 @@ jobs:
           # MUST hit the right host for slug-scoped probes to work.
           SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
           SENTRY_URL: ${{ secrets.SENTRY_URL }}
+          # Required for Gate 4 (audit_dsn_org_id_matches_token_org_id) — the
+          # split-state detector that catches an audit token authenticating
+          # against a different org than the runtime DSN points at. Without
+          # the DSN env, gate 4 cannot run and the residency check is silently
+          # downgraded. The script tolerates empty NEXT_PUBLIC_SENTRY_DSN (the
+          # `|| true` brace on the o<id> extraction protects pipefail), but
+          # passing it makes the gate meaningful at release time.
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
