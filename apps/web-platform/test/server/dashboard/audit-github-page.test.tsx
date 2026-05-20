@@ -67,12 +67,16 @@ describe("/dashboard/audit/github page", () => {
     expect(mockLimit).toHaveBeenCalledWith(50);
   });
 
-  it("renders the empty-state copy when no rows returned (pre-PR-H+1 default)", async () => {
+  it("renders the empty-state copy when no rows returned", async () => {
     const Page = await GitHubAuditPage();
     render(Page);
     expect(screen.getByTestId("gh-audit-empty")).toBeInTheDocument();
     expect(screen.getByText(/No GitHub token uses yet/i)).toBeInTheDocument();
-    expect(screen.getByText(/#4098/)).toBeInTheDocument();
+    // PR-H+1 (#4098): empty-state copy no longer carries a forward-
+    // reference to the tracking issue — the writer is live.
+    expect(
+      screen.getByText(/populates as Soleur uses your GitHub App/i),
+    ).toBeInTheDocument();
   });
 
   it("renders the row table when at least one row is returned", async () => {

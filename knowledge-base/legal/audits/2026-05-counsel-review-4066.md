@@ -28,7 +28,7 @@ The PR was held in draft state until all rows below were signed off.
 
 **Particular attention requested on:**
 1. Lawful-basis three-part test for Art. 6(1)(f): is the "founder benefits from priority signals on their own dashboard from their own installation" framing sufficiently narrow?
-2. PA-17 TOM-#10 caveat — `record_github_token_use` ships as schema-only in PR-H; per-Octokit-call writer wires in PR-H+1 (#4098). Is the unpopulated-ledger disclosure language adequate?
+2. PA-17 TOM-#10 caveat — `record_github_token_use` ships as schema-only in PR-H; per-Octokit-call writer wires in PR-H+1 (#4098). Is the unpopulated-ledger disclosure language adequate? **Resolved 2026-05-20 by PR-H+1 (#4098):** writer landed at `server/github/app-client.ts` via `octokit.hook.after`/`hook.error` → `recordGithubApiCall` → `record_github_token_use` RPC. Ledger now populates per Octokit response. PA-17 TOM-#10 updated to reflect populated state.
 3. Render-time `redactGithubSourcedText` is the load-bearing Art. 14 minimization gate. INSERT-time redaction is belt-and-suspenders. CVE / secret-scan rows additionally have `draft_preview` summary-body stripped server-side (review P2 fix). Is the layered-minimisation framing accurately characterized?
 
 | Counsel | Date | Channel | Sign-off | Substantive comments |
