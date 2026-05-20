@@ -20,6 +20,10 @@
 - When a test runner crashes (segfault, OOM, abort), never dismiss it as "known" or "unrelated" [id: wg-when-a-test-runner-crashes-segfault-oom]. Either fix the root cause, file a GitHub issue to track it, or document a concrete workaround. A crash without a tracking issue is a workflow violation.
 - When tests fail and are confirmed pre-existing (same on main), create a GitHub issue to track them before proceeding [id: wg-when-tests-fail-and-are-confirmed-pre]. Pre-existing failures without tracking issues normalize a red suite.
 - Never bump version files in feature branches [id: wg-never-bump-version-files-in-feature]. Version is derived from git tags — CI creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels. Set labels with `/ship`. Do NOT edit `plugin.json` version (frozen sentinel) or `marketplace.json` version.
+- When an audit identifies pre-existing issues, create GitHub issues to track them before fixing [id: wg-when-an-audit-identifies-pre-existing]. Don't just note them in conversation -- file them.
+- When deferring a capability, create a GitHub issue (what, why, re-evaluation criteria) milestoned to the target phase or "Post-MVP / Later" [id: wg-when-deferring-a-capability-create-a]. A deferral without a tracking issue is invisible.
+- When a plan checkpoint names a Soleur skill (e.g., `/soleur:gdpr-gate`, `/soleur:qa`, `/soleur:preflight`), `/soleur:work` MUST invoke it at the checkpoint — never defer to operator at PR time [id: wg-plan-prescribed-skills-must-run-inline]. If unavailable, mark `pending-operator` and surface the gap. **Why:** #3603.
+- At end of any `/soleur:work` (or multi-phase arc — `/one-shot`, `/loop`, autonomous pipelines), emit a self-contained **Resume Prompt** as the final user-facing block, fenced in ` ``` ` [id: wg-end-of-work-emit-resume-prompt]. Required fields: branch, worktree path, PR #, last-pushed SHA, phases done, skipped ship-gates + why, remaining AC chain, 1-3 open questions. Must paste into a fresh session and continue without re-reading. **Why:** the resume prompt IS the handoff artifact.
 
 ## Review & Feedback
 
