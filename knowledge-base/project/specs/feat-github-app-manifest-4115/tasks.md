@@ -103,40 +103,40 @@ Plan: `knowledge-base/project/plans/2026-05-20-feat-github-app-manifest-plan.md`
 
 ## Phase 4: Legal register edits (atomic with surface change)
 
-- [ ] 4.1 Edit `knowledge-base/legal/article-30-register.md` line 299: append TOM (13) as a SINGLE CONTINUOUS STRING with NO embedded newlines (Kieran P1-5). Text per plan Files-to-Edit §3. Verify post-edit: `sed -n '299p' knowledge-base/legal/article-30-register.md | wc -l` returns `1`
-- [ ] 4.2 Edit `knowledge-base/legal/compliance-posture.md`: substitute literal `"GitHub App creation + webhook URL wiring"` → `"GitHub App creation via committed manifest (#4115) + webhook URL wiring"` (Kieran P1-4 confirmed clean substitution surface)
+- [x] 4.1 Edit `knowledge-base/legal/article-30-register.md` line 299: append TOM (13) as a SINGLE CONTINUOUS STRING with NO embedded newlines (Kieran P1-5). Text per plan Files-to-Edit §3. Verify post-edit: `sed -n '299p' knowledge-base/legal/article-30-register.md | wc -l` returns `1`
+- [x] 4.2 Edit `knowledge-base/legal/compliance-posture.md`: substitute literal `"GitHub App creation + webhook URL wiring"` → `"GitHub App creation via committed manifest (#4115) + webhook URL wiring"` (Kieran P1-4 confirmed clean substitution surface)
 
 ## Phase 5: Operator runbook + snapshot script + webhook-secret automation alternative
 
-- [ ] 5.1 Write `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md`:
-  - [ ] 5.1.1 When-to-run section (first-time prd, future stg, App re-create, manifest-update follow-up)
-  - [ ] 5.1.2 4-step operator flow with 5 Doppler pastes + 1 GitHub-side webhook-secret paste (SpecFlow §1+§6)
-  - [ ] 5.1.3 Doppler key mapping table (5 keys)
-  - [ ] 5.1.4 Webhook-secret automation alternative: `gh api -X PATCH /app/hook/config -f secret="$webhook_secret"` (via App-JWT)
-  - [ ] 5.1.5 PEM `openssl base64 -A -in app.pem -out app.pem.b64` cross-platform one-liner (SpecFlow §6)
-  - [ ] 5.1.6 Doppler-write CLI Leak-2 form: `doppler secrets set X --silent --no-interactive -p soleur -c prd <<< "$value" >/dev/null 2>&1`
-  - [ ] 5.1.7 Manifest-drift discipline: operator updates manifest in follow-up PR within 1h of any GitHub-side permission change (or use `manifest-drift-window` label)
-- [ ] 5.2 Document operator-only canonical list citation (case b OAuth-consent carve-out) in runbook preamble
-- [ ] 5.3 Write `bin/snapshot-github-app.sh`:
-  - [ ] 5.3.1 `set -euo pipefail` + `set -o pipefail`
-  - [ ] 5.3.2 Reads `$APP_ID` from env, `/tmp/app.pem` from disk
-  - [ ] 5.3.3 Mints 10-min RS256 JWT inline (mirror drift-guard `mint_jwt` at workflow lines 122-148 — base64url-encode header + payload via `base64 -w 0 | tr '+/' '-_' | tr -d '=\n'`)
-  - [ ] 5.3.4 `curl -sS -H "Authorization: Bearer $JWT" -H "Accept: application/vnd.github+json" https://api.github.com/app | jq` → stdout
-  - [ ] 5.3.5 Header comment: operator-only; CI uses workflow's own JWT-mint
-  - [ ] 5.3.6 Pass `shellcheck`; `chmod +x`
+- [x] 5.1 Write `knowledge-base/engineering/ops/runbooks/github-app-provisioning.md`:
+  - [x] 5.1.1 When-to-run section (first-time prd, future stg, App re-create, manifest-update follow-up)
+  - [x] 5.1.2 4-step operator flow with 5 Doppler pastes + 1 GitHub-side webhook-secret paste (SpecFlow §1+§6)
+  - [x] 5.1.3 Doppler key mapping table (5 keys)
+  - [x] 5.1.4 Webhook-secret automation alternative: `gh api -X PATCH /app/hook/config -f secret="$webhook_secret"` (via App-JWT)
+  - [x] 5.1.5 PEM `openssl base64 -A -in app.pem -out app.pem.b64` cross-platform one-liner (SpecFlow §6)
+  - [x] 5.1.6 Doppler-write CLI Leak-2 form: `doppler secrets set X --silent --no-interactive -p soleur -c prd <<< "$value" >/dev/null 2>&1`
+  - [x] 5.1.7 Manifest-drift discipline: operator updates manifest in follow-up PR within 1h of any GitHub-side permission change (or use `manifest-drift-window` label)
+- [x] 5.2 Document operator-only canonical list citation (case b OAuth-consent carve-out) in runbook preamble
+- [x] 5.3 Write `bin/snapshot-github-app.sh`:
+  - [x] 5.3.1 `set -euo pipefail` + `set -o pipefail`
+  - [x] 5.3.2 Reads `$APP_ID` from env, `/tmp/app.pem` from disk
+  - [x] 5.3.3 Mints 10-min RS256 JWT inline (mirror drift-guard `mint_jwt` at workflow lines 122-148 — base64url-encode header + payload via `base64 -w 0 | tr '+/' '-_' | tr -d '=\n'`)
+  - [x] 5.3.4 `curl -sS -H "Authorization: Bearer $JWT" -H "Accept: application/vnd.github+json" https://api.github.com/app | jq` → stdout
+  - [x] 5.3.5 Header comment: operator-only; CI uses workflow's own JWT-mint
+  - [x] 5.3.6 Pass `shellcheck`; `chmod +x`
 
 ## Phase 6: Verification + AC sweep
 
-- [ ] 6.1 Run all new tests: `bun --cwd apps/web-platform test test/github-app-manifest-parity.test.ts test/github-app-manifest-drift-guard.test.ts` — all pass
-- [ ] 6.2 Run typecheck: `bun --cwd apps/web-platform run typecheck` — clean
-- [ ] 6.3 Run lint: `bun --cwd apps/web-platform run lint` on the changed files
-- [ ] 6.4 `actionlint .github/workflows/scheduled-github-app-drift-guard.yml`
-- [ ] 6.5 `shellcheck bin/diff-github-app-manifest.sh bin/snapshot-github-app.sh`
-- [ ] 6.6 Verify AC1 through AC8b per the plan's Acceptance Criteria section
-- [ ] 6.7 `/soleur:gdpr-gate` against the diff at /work Phase 2 exit per `hr-gdpr-gate-on-regulated-data-surfaces`
+- [x] 6.1 Run all new tests: `bun --cwd apps/web-platform test test/github-app-manifest-parity.test.ts test/github-app-manifest-drift-guard.test.ts` — all pass
+- [x] 6.2 Run typecheck: `bun --cwd apps/web-platform run typecheck` — clean
+- [x] 6.3 Run lint: `bun --cwd apps/web-platform run lint` on the changed files
+- [x] 6.4 `actionlint .github/workflows/scheduled-github-app-drift-guard.yml`
+- [x] 6.5 `shellcheck bin/diff-github-app-manifest.sh bin/snapshot-github-app.sh`
+- [x] 6.6 Verify AC1 through AC8b per the plan's Acceptance Criteria section
+- [x] 6.7 `/soleur:gdpr-gate` against the diff at /work Phase 2 exit per `hr-gdpr-gate-on-regulated-data-surfaces`
 - [ ] 6.8 PR body wording: replace "measurable Art. 32 improvement" with "Art. 32 trade-off"; add Out-of-scope section listing #4145 + #4146 + their re-evaluation triggers
 - [ ] 6.9 PR body uses `Ref #4115` (NOT `Closes #4115`) — Sharp Edge
-- [ ] 6.10 Update PR description: link brainstorm + spec + plan paths
+- [x] 6.10 Update PR description: link brainstorm + spec + plan paths
 
 ## Post-merge (operator)
 
