@@ -146,3 +146,38 @@ inngest.createFunction(
 At PR-2 merge, update issue #3948 body to:
 - Check the `scheduled-follow-through` checkbox.
 - Add a strike-through note next to `scheduled-followthrough-sweeper`: "RECLASSIFIED group (a)/(b) infra-cron — stays on GHA, drops from TR9 scope (see PR-2)."
+
+## Observability
+
+(Backfilled 2026-05-20 per #4116 — `hr-observability-as-plan-quality-gate`. Original PR-2 spec predated the gate; declaring the surface here keeps the rule's coverage retroactively honest.)
+
+```yaml
+liveness_signal:
+  what: "Sentry cron monitor `scheduled-follow-through`"
+  cadence: "Mon-Fri 09:00 UTC (per cron-monitors.tf schedule)"
+  alert_target: "Sentry issue (web-platform project) → Discord ops channel via Sentry alert rule"
+  configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf"
+
+error_reporting:
+  destination: "Sentry web-platform project (DSN via SENTRY_DSN in Doppler prd)"
+  fail_loud: "Sentry cron monitor flips to `error` on non-zero exit; missed_check_in fires if no ok/error received within the schedule window. Visible at sentry.io/organizations/<org>/crons/."
+
+failure_modes:
+  - mode: "Inngest function throws or exits non-zero"
+    detection: "Sentry cron monitor reports `error` status + captured exception"
+    alert_route: "Sentry → operator email + Discord ops channel"
+  - mode: "Inngest server down (function never fires)"
+    detection: "Sentry missed_check_in alert after schedule window + 1× grace"
+    alert_route: "Sentry → operator email"
+  - mode: "Function silently returns empty result (no actionable PRs found, legitimate)"
+    detection: "expected — not a failure; per-run output committed to follow-through artifact"
+    alert_route: "n/a"
+
+logs:
+  where: "Inngest run logs (self-hosted, on Hetzner VM via journalctl -u inngest-server.service); Sentry breadcrumbs"
+  retention: "Inngest run history per local SQLite (~30 days); Sentry per project plan"
+
+discoverability_test:
+  command: "curl -fsS https://deploy.soleur.ai/hooks/deploy-status | jq '.services.inngest_heartbeat'"
+  expected_output: '"active"'
+```
