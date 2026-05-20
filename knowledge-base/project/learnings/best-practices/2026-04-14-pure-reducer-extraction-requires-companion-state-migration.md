@@ -1,18 +1,15 @@
 ---
-module: Chat
+title: Pure Reducer Extraction Requires Companion-State Migration
 date: 2026-04-14
-problem_type: best_practice
-component: frontend_stimulus
-symptoms:
-  - "Extracted pure reducer still mutates a React ref from inside a setState updater"
-  - "Reducer returns a `timerAction` contract that the hook silently ignores"
-  - "Two parallel decision tables for the same event taxonomy drift over time"
-  - "TS errors in tests surface only at review time because vitest type-checks test files lazily"
-  - "4 review agents independently flagged the same purity-drift pattern"
-root_cause: logic_error
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [react, reducer, state-machine, purity, chat, websocket, strict-mode, typescript]
+symptoms: [Extracted pure reducer still mutates a React ref from inside a setState updater, Reducer returns a `timerAction` contract that the hook silently ignores, Two parallel decision tables for the same event taxonomy drift over time, TS errors in tests surface only at review time because vitest type-checks test files lazily, 4 review agents independently flagged the same purity-drift pattern]
+module: Chat
+component: frontend_stimulus
+problem_type: best_practice
+resolution_type: code_fix
+root_cause: logic_error
+severity: medium
 ---
 
 # Pure Reducer Extraction Requires Companion-State Migration

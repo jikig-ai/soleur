@@ -1,17 +1,15 @@
 ---
-module: web-platform
+title: Silent Project Setup Failure — No Error Capture
 date: 2026-04-03
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Project setup fails at 'Copying your project files' step"
-  - "Generic 'Project Setup Failed' error with no details"
-  - "Sentry receives zero events from production (7-day window)"
-  - "repo_status set to 'error' but no error message preserved"
-root_cause: incomplete_setup
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [error-handling, sentry, observability, project-setup, workspace-provisioning]
+symptoms: [Project setup fails at 'Copying your project files' step, Generic 'Project Setup Failed' error with no details, Sentry receives zero events from production (7-day window), repo_status set to 'error' but no error message preserved]
+module: web-platform
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: incomplete_setup
+severity: high
 ---
 
 # Silent Project Setup Failure — No Error Capture

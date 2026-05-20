@@ -1,10 +1,11 @@
 ---
-category: test-failures
-module: pre-merge-rebase-hook-tests
+title: PATH-prefix gh stubs must touch sentinels inside recognized dispatch branches, not before
 date: 2026-04-22
-pr: 2816
-issue: 2801
+category: test-failures
 tags: [bun-test, path-stubbing, gh-cli, ci-flake, signal-drift]
+module: pre-merge-rebase-hook-tests
+issue: 2801
+pr: 2816
 ---
 
 # Learning: PATH-prefix gh stubs must touch sentinels inside recognized dispatch branches, not before

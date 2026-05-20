@@ -1,23 +1,15 @@
 ---
-module: docs-site
+title: Inline event-handler attributes are silently blocked by CSP — and no static gate caught it
 date: 2026-04-27
-problem_type: integration_issue
+category: engineering
+tags: [csp, inline-event-handler, silent-failure, workflow-gate, validate-csp, eleventy]
+symptoms: [Production docs site rendered the entire below-the-fold area in default browser styles for ~9 hours, <link rel=preload onload=this.rel=stylesheet> async-swap pattern silently failed in browsers with JS enabled, validate-csp.sh PASSED on every commit while the bug was live; eleventy build PASSED; SEO validator PASSED, Compound failure: PR #2904 introduced the bug, PR #2960 fixed only the above-the-fold symptom (inline-CSS coverage), PR #2966 fixed the actual root cause (CSP-blocked swap), PR #2967 closed the workflow gap]
+module: docs-site
+synced_to: []
 component: csp_inline_event_handler
-symptoms:
-  - "Production docs site rendered the entire below-the-fold area in default browser styles for ~9 hours"
-  - "<link rel=preload onload=this.rel=stylesheet> async-swap pattern silently failed in browsers with JS enabled"
-  - "validate-csp.sh PASSED on every commit while the bug was live; eleventy build PASSED; SEO validator PASSED"
-  - "Compound failure: PR #2904 introduced the bug, PR #2960 fixed only the above-the-fold symptom (inline-CSS coverage), PR #2966 fixed the actual root cause (CSP-blocked swap), PR #2967 closed the workflow gap"
+problem_type: integration_issue
 root_cause: csp_script_src_blocks_inline_event_handlers_without_unsafe_inline_or_unsafe_hashes
 severity: critical
-tags:
-  - csp
-  - inline-event-handler
-  - silent-failure
-  - workflow-gate
-  - validate-csp
-  - eleventy
-synced_to: []
 ---
 
 # Inline event-handler attributes are silently blocked by CSP — and no static gate caught it

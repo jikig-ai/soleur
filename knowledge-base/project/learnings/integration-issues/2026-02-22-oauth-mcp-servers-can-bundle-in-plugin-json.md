@@ -1,3 +1,10 @@
+---
+title: OAuth MCP Servers Can Bundle in Plugin.json
+date: 2026-02-22
+category: infrastructure
+tags: [integration-issues, plugin-architecture, 116, 258]
+---
+
 # Learning: OAuth MCP Servers Can Bundle in Plugin.json
 
 ## Problem

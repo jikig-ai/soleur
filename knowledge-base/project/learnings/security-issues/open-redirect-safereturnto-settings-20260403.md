@@ -1,17 +1,16 @@
 ---
-module: WebPlatform
+title: Open Redirect Prevention with safeReturnTo
 date: 2026-04-03
-problem_type: security_issue
-component: frontend_stimulus
-symptoms:
-  - "safeReturnTo allowed path traversal via ../ sequences"
-  - "return_to param stored unsanitized in sessionStorage before validation"
-  - "repoStatus typed as bare string instead of union type"
-root_cause: missing_validation
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [open-redirect, path-traversal, sessionStorage, type-safety, settings]
+symptoms: [safeReturnTo allowed path traversal via ../ sequences, return_to param stored unsanitized in sessionStorage before validation, repoStatus typed as bare string instead of union type]
+module: WebPlatform
 synced_to: []
+component: frontend_stimulus
+problem_type: security_issue
+resolution_type: code_fix
+root_cause: missing_validation
+severity: high
 ---
 
 # Learning: Open Redirect Prevention with safeReturnTo

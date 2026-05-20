@@ -1,10 +1,13 @@
 ---
+title: Passive Sentry signal closes follow-through verification issues
 date: 2026-04-22
 category: best-practices
-module: observability
 tags: [sentry, verification, follow-through, post-deploy, brainstorm]
+module: observability
+related_issues:
+  - 2773
+  - 2774
 triggered_by_pr: 2767
-related_issues: [2773, 2774]
 ---
 
 # Passive Sentry signal closes follow-through verification issues

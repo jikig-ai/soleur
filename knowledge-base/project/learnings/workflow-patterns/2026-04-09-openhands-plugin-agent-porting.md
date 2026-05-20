@@ -1,9 +1,11 @@
 ---
-module: soleur-plugin
+title: OpenHands Plugin Agent Porting Pattern
 date: 2026-04-09
-problem_type: workflow-pattern
-component: openhands-plugin
+category: agent-design
 tags: [openhands, portability, agents, plugin-format, multi-platform]
+module: soleur-plugin
+component: openhands-plugin
+problem_type: workflow-pattern
 severity: info
 ---
 

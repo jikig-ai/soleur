@@ -1,28 +1,19 @@
 ---
-module: System
+title: Supabase Auth probe + Sentry rule API quirks
 date: 2026-04-29
-problem_type: integration_issue
+category: engineering
+tags: [supabase-auth, sentry-api, github-actions, synthetic-probe, api-contract, heredoc]
+symptoms: [curl -sI on /auth/v1/authorize returns HTTP 405 (Allow: GET), curl on /auth/v1/settings returns HTTP 401 with external: { google: null } when no apikey header, Sentry POST /api/0/.../rules/ rejects EventFrequencyCondition.interval=10m with HTTP 400, Two Sentry rules can share the same name; match-by-name idempotency picks one arbitrarily, GitHub Actions heredoc bodies preserve leading whitespace; 4+ leading spaces render the issue body as a code block]
+module: System
 component: authentication
-symptoms:
-  - "curl -sI on /auth/v1/authorize returns HTTP 405 (Allow: GET)"
-  - "curl on /auth/v1/settings returns HTTP 401 with external: { google: null } when no apikey header"
-  - "Sentry POST /api/0/.../rules/ rejects EventFrequencyCondition.interval=10m with HTTP 400"
-  - "Two Sentry rules can share the same name; match-by-name idempotency picks one arbitrarily"
-  - "GitHub Actions heredoc bodies preserve leading whitespace; 4+ leading spaces render the issue body as a code block"
-root_cause: wrong_api
-resolution_type: code_fix
-severity: high
-tags:
-  - supabase-auth
-  - sentry-api
-  - github-actions
-  - synthetic-probe
-  - api-contract
-  - heredoc
-related_prs:
-  - 3030
+problem_type: integration_issue
 related_issues:
   - 2997
+related_prs:
+  - 3030
+resolution_type: code_fix
+root_cause: wrong_api
+severity: high
 ---
 
 # Supabase Auth probe + Sentry rule API quirks

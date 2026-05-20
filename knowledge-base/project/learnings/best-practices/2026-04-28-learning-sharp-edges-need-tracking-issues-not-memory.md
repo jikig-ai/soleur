@@ -1,12 +1,11 @@
 ---
-title: "Learning Sharp Edges need tracking issues, not next-sweep memory; permalink restructures must sweep CI path-tests"
+title: Learning Sharp Edges need tracking issues, not next-sweep memory; permalink restructures must sweep CI path-tests
 date: 2026-04-28
 category: best-practices
+tags: [best-practices, ci-cd, learning-process, faqpage, eleventy, docs, deploy-docs.yml, plugins/soleur/docs]
 modules: [docs, ci, eleventy, faqpage, deploy-docs]
-related_prs: ["#2589", "#2973", "#2977", "#2978", "#2996", "#1851"]
-related_learnings:
-  - knowledge-base/project/learnings/2026-04-18-faq-html-jsonld-parity.md
-  - knowledge-base/project/learnings/best-practices/2026-04-27-hand-extracted-critical-css-misses-globally-rendered-selectors.md
+related_learnings: [knowledge-base/project/learnings/2026-04-18-faq-html-jsonld-parity.md, knowledge-base/project/learnings/best-practices/2026-04-27-hand-extracted-critical-css-misses-globally-rendered-selectors.md]
+related_prs: [#2589, #2973, #2977, #2978, #2996, #1851]
 ---
 
 # Sharp Edges in learning files don't survive — file tracking issues; permalink restructures need a CI path-sweep

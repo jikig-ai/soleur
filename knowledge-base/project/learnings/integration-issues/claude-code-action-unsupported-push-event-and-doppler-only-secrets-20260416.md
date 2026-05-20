@@ -1,16 +1,15 @@
 ---
-module: System
+title: claude-code-action unsupported push event and Doppler --only-secrets flag
 date: 2026-04-16
-problem_type: integration_issue
-component: development_workflow
-symptoms:
-  - "claude-code-action throws 'Unsupported event type: push' on push-triggered workflow runs"
-  - "Doppler CLI prints error for invalid --only-secrets flag but exits 0, leaking all prd secrets into GITHUB_ENV"
-  - "Issue #2376 misdiagnosed the error as an SDK/Ajv crash when it was minified source context around a credit balance error"
-root_cause: config_error
-resolution_type: config_change
-severity: high
+category: ci-cd
 tags: [claude-code-action, github-actions, doppler, workflow, misdiagnosis]
+symptoms: [claude-code-action throws 'Unsupported event type: push' on push-triggered workflow runs, Doppler CLI prints error for invalid --only-secrets flag but exits 0, leaking all prd secrets into GITHUB_ENV, Issue #2376 misdiagnosed the error as an SDK/Ajv crash when it was minified source context around a credit balance error]
+module: System
+component: development_workflow
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: high
 ---
 
 # Troubleshooting: claude-code-action unsupported push event and Doppler --only-secrets flag

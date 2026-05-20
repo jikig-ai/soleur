@@ -1,9 +1,11 @@
 ---
+title: '`{{ site.url }}<path>` without leading slash silently breaks rendered URLs'
 date: 2026-04-21
 category: best-practices
 tags: [eleventy, nunjucks, site.url, url-concatenation, content-move, drift-guard]
+related_issues:
+  - 2658
 related_pr: 2705
-related_issues: [2658]
 ---
 
 # Learning: `{{ site.url }}<path>` without leading slash silently breaks rendered URLs

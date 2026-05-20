@@ -1,17 +1,12 @@
 ---
-title: "Skills page category consolidation from 8 to 4"
+title: Skills page category consolidation from 8 to 4
+date: 2026-02-17
 category: ui-bugs
-tags:
-  - documentation
-  - information-architecture
-  - skills-page
-  - category-design
-  - ux
+tags: [documentation, information-architecture, skills-page, category-design, ux]
 module: docs-site
+synced_to: [plugins/soleur/skills/release-docs/SKILL.md]
 created: 2026-02-17
 severity: low
-synced_to:
-  - plugins/soleur/skills/release-docs/SKILL.md
 ---
 
 # Learning: Too many categories fragment navigation on catalog pages

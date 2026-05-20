@@ -1,10 +1,12 @@
 ---
-name: multi-agent-review-catches-feature-wiring-bugs
-description: When wiring a new subsystem (SDK runner, registry, rate limiter) into an existing entry point (ws-handler.ts), multi-agent review in parallel catches a distinct bug class — semantic-collision, resource-leak, and defense-in-depth — that tsc + unit tests + semgrep all pass cleanly on
-type: best-practice
-tags: [code-review, multi-agent, feature-wiring, command-center, soleur-go]
+title: Multi-Agent Review Catches Feature-Wiring Bugs (feat-cc-single-leader-routing Stage 2)
+date: 2026-04-24
 category: best-practices
+tags: [code-review, multi-agent, feature-wiring, command-center, soleur-go]
 module: apps/web-platform/server
+description: When wiring a new subsystem (SDK runner, registry, rate limiter) into an existing entry point (ws-handler.ts), multi-agent review in parallel catches a distinct bug class — semantic-collision, resource-leak, and defense-in-depth — that tsc + unit tests + semgrep all pass cleanly on
+name: multi-agent-review-catches-feature-wiring-bugs
+type: best-practice
 ---
 
 # Multi-Agent Review Catches Feature-Wiring Bugs (feat-cc-single-leader-routing Stage 2)

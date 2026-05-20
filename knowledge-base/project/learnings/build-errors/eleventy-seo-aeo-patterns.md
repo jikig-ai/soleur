@@ -1,3 +1,10 @@
+---
+title: Eleventy SEO/AEO build-time patterns
+date: unknown
+category: marketing
+tags: [build-errors, docs-site, changelog invisible to crawlers, 404 in sitemap, ci cannot run claude]
+---
+
 # Learning: Eleventy SEO/AEO build-time patterns
 
 ## Problem

@@ -1,17 +1,16 @@
 ---
-module: Web Platform Infrastructure
+title: Terraform + Doppler Dual Credential Pattern and Discord Bot Re-Authorization
 date: 2026-04-05
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "terraform plan fails with 'No value for required variable' when using bare doppler run"
-  - "terraform init fails with 'No valid credential sources found' when using --name-transformer tf-var"
-  - "Discord bot API returns 403 Missing Permissions for channel creation"
-root_cause: config_error
-resolution_type: config_change
-severity: medium
+category: infrastructure
 tags: [terraform, doppler, name-transformer, tf-var, r2-backend, discord-bot, oauth2]
+symptoms: [terraform plan fails with 'No value for required variable' when using bare doppler run, terraform init fails with 'No valid credential sources found' when using --name-transformer tf-var, Discord bot API returns 403 Missing Permissions for channel creation]
+module: Web Platform Infrastructure
 synced_to: []
+component: tooling
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: medium
 ---
 
 # Terraform + Doppler Dual Credential Pattern and Discord Bot Re-Authorization

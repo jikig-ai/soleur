@@ -1,16 +1,15 @@
 ---
-module: System
+title: CI Playwright Cache Key Must Track npm Version, Not Consumer Script Hash
 date: 2026-05-12
-problem_type: best_practice
-component: ci
-symptoms:
-  - "critical-css-gate fails on PRs that do not touch docs (Playwright chromium binary missing)"
-  - "browserType.launch: Executable doesn't exist at /home/runner/.cache/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-linux64/chrome-headless-shell"
-  - "actions/cache restores a stale Playwright browser tree across Playwright version bumps"
-root_cause: config_error
-resolution_type: config_change
-severity: medium
+category: ci-cd
 tags: [ci, playwright, cache-key, workflow-conditional, paths-filter, github-actions]
+symptoms: [critical-css-gate fails on PRs that do not touch docs (Playwright chromium binary missing), browserType.launch: Executable doesn't exist at /home/runner/.cache/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-linux64/chrome-headless-shell, actions/cache restores a stale Playwright browser tree across Playwright version bumps]
+module: System
+component: ci
+problem_type: best_practice
+resolution_type: config_change
+root_cause: config_error
+severity: medium
 ---
 
 # CI Playwright Cache Key Must Track npm Version, Not Consumer Script Hash

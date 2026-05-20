@@ -1,11 +1,12 @@
 ---
-title: "SSH Operator Precedence in Bash Deploy Scripts"
+title: SSH Operator Precedence in Bash Deploy Scripts
+date: 2026-02-13
 category: runtime-errors
 tags: [bash, ssh, operator-precedence, docker, deployment, set-euo-pipefail]
+symptoms: [Docker container starts with stale image after failed pull because || true catches the pull failure]
 module: deploy-skill
-symptom: "Docker container starts with stale image after failed pull because || true catches the pull failure"
-root_cause: "Bash && and || have equal precedence (left-to-right), so command1 && command2 || true && command3 evaluates as (command1 && command2 || true) && command3, causing || true to suppress pull failure and proceed to docker run with stale/missing image"
-date_discovered: "2026-02-13"
+date_discovered: 2026-02-13
+root_cause: 'Bash && and || have equal precedence (left-to-right), so command1 && command2 || true && command3 evaluates as (command1 && command2 || true) && command3, causing || true to suppress pull failure and proceed to docker run with stale/missing image'
 severity: critical
 ---
 

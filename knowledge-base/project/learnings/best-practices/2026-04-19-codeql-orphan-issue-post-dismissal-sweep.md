@@ -1,21 +1,16 @@
 ---
-module: github-actions
+title: Auto-close CodeQL-derived issues after bulk-dismiss via post-dismissal sweep
 date: 2026-04-19
-problem_type: workflow_gap
-component: codeql-to-issues-workflow
-symptoms:
-  - "Open type/security issue persists after the CodeQL alerts it cites are bulk-dismissed in a separate PR"
-  - "Resumed sessions waste time re-validating issues that are already remediated"
-  - "Issue tracker shows phantom unfinished P1/P2 security work"
-root_cause: missing_post_dismissal_sweep
-resolution_type: workflow_addition
-severity: low
+category: engineering
 tags: [codeql, github-actions, triage, automation, security]
-related_learnings:
-  - 2026-04-13-codeql-to-issues-invalid-workflow-trigger.md
-  - 2026-04-13-codeql-alert-triage-and-issue-automation.md
-  - 2026-04-13-codeql-alert-tracking-and-api-format-prevention.md
-  - 2026-04-10-codeql-api-dismissal-format.md
+symptoms: [Open type/security issue persists after the CodeQL alerts it cites are bulk-dismissed in a separate PR, Resumed sessions waste time re-validating issues that are already remediated, Issue tracker shows phantom unfinished P1/P2 security work]
+module: github-actions
+component: codeql-to-issues-workflow
+problem_type: workflow_gap
+related_learnings: [2026-04-13-codeql-to-issues-invalid-workflow-trigger.md, 2026-04-13-codeql-alert-triage-and-issue-automation.md, 2026-04-13-codeql-alert-tracking-and-api-format-prevention.md, 2026-04-10-codeql-api-dismissal-format.md]
+resolution_type: workflow_addition
+root_cause: missing_post_dismissal_sweep
+severity: low
 ---
 
 # Auto-close CodeQL-derived issues after bulk-dismiss via post-dismissal sweep

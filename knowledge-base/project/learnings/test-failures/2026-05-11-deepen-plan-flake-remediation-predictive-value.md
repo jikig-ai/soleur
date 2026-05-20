@@ -1,19 +1,15 @@
 ---
-module: web-platform / one-shot pipeline
+title: 'Deepen-plan''s predictive value on flake-remediation work — adopt the canonical sibling pattern, not a novel approach'
 date: 2026-05-11
-problem_type: workflow_insight
+category: engineering
+tags: [deepen-plan, flake-remediation, test-mocking, canonical-pattern, one-shot-pipeline]
+symptoms: [Flake remediation plans pass all ACs first try when deepen-plan adopts a canonical in-repo sibling pattern]
+module: web-platform / one-shot pipeline
+synced_to: []
 component: deepen-plan + one-shot pipeline
-symptoms:
-  - "Flake remediation plans pass all ACs first try when deepen-plan adopts a canonical in-repo sibling pattern"
+problem_type: workflow_insight
 root_cause: positive_signal
 severity: low
-tags:
-  - deepen-plan
-  - flake-remediation
-  - test-mocking
-  - canonical-pattern
-  - one-shot-pipeline
-synced_to: []
 ---
 
 # Deepen-plan's predictive value on flake-remediation work — adopt the canonical sibling pattern, not a novel approach

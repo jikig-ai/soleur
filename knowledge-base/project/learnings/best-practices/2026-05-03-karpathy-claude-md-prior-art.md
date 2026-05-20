@@ -1,10 +1,12 @@
 ---
-name: karpathy-claude-md-prior-art
-description: Karpathy's 4-rule CLAUDE.md (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution) maps to existing Claude Code system-prompt defaults plus our AGENTS.md/skill enforcement. Recorded as confirmation of posture, not as new rules — adding them verbatim would duplicate upstream guidance and burn the AGENTS.md byte budget without behavior change.
-type: best-practice
-tags: [agents-md, prior-art, byte-budget, placement-gate, prompt-engineering]
+title: Karpathy CLAUDE.md — Prior Art for Our Posture
+date: 2026-05-03
 category: best-practices
+tags: [agents-md, prior-art, byte-budget, placement-gate, prompt-engineering]
 module: AGENTS.md
+description: 'Karpathy''s 4-rule CLAUDE.md (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution) maps to existing Claude Code system-prompt defaults plus our AGENTS.md/skill enforcement. Recorded as confirmation of posture, not as new rules — adding them verbatim would duplicate upstream guidance and burn the AGENTS.md byte budget without behavior change.'
+name: karpathy-claude-md-prior-art
+type: best-practice
 ---
 
 # Karpathy CLAUDE.md — Prior Art for Our Posture

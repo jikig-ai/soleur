@@ -1,3 +1,10 @@
+---
+title: 'happy-dom getAllByRole("img") fails for decorative images'
+date: 2026-04-10
+category: engineering
+tags: [test-failures, web-platform]
+---
+
 # Learning: happy-dom getAllByRole("img") fails for decorative images
 
 ## Problem

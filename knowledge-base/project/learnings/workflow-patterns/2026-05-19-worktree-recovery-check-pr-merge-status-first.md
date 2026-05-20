@@ -1,14 +1,11 @@
 ---
+title: 2026-05-19-worktree-recovery-check-pr-merge-status-first
+date: 2026-05-19
+category: workflow-patterns
+tags: [worktree, recovery, pr-status]
+description: 'Before recommending "reset to remote branch" to recover a stale worktree, verify the PR isn''t already merged — the remote feature branch may be post-merge stale.'
+metadata: {'category': 'workflow-patterns', 'module': 'git-worktree', 'date': datetime.date(2026, 5, 19)}
 name: worktree-recovery-check-pr-merge-status-first
-description: Before recommending "reset to remote branch" to recover a stale worktree, verify the PR isn't already merged — the remote feature branch may be post-merge stale.
-metadata:
-  category: workflow-patterns
-  module: git-worktree
-  date: 2026-05-19
-tags:
-  - worktree
-  - recovery
-  - pr-status
 ---
 
 ## Problem

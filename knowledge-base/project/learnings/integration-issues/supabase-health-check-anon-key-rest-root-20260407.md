@@ -1,15 +1,15 @@
 ---
-module: System
+title: Supabase Health Check False Negative Due to Anon Key on REST Root
 date: 2026-04-07
-problem_type: integration_issue
-component: authentication
-symptoms:
-  - "/health returns supabase: error despite Supabase being reachable"
-  - "Health check reports false negative for weeks without being caught by deploy verification"
-root_cause: wrong_api
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [supabase, health-check, anon-key, service-role-key, rest-api]
+symptoms: [/health returns supabase: error despite Supabase being reachable, Health check reports false negative for weeks without being caught by deploy verification]
+module: System
+component: authentication
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: wrong_api
+severity: medium
 ---
 
 # Troubleshooting: Supabase Health Check False Negative Due to Anon Key on REST Root

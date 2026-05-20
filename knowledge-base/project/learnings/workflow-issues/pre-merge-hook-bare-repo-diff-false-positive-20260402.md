@@ -1,15 +1,15 @@
 ---
-module: System
+title: pre-merge hook false positive in bare repo worktree setups
 date: 2026-04-02
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "BLOCKED: Uncommitted changes detected. Commit before merging."
-  - "gh pr merge blocked in bare repo worktree setups even when working tree is clean"
-root_cause: logic_error
-resolution_type: code_fix
-severity: high
+category: workflow-patterns
 tags: [bare-repo, pre-merge-hook, git-diff, false-positive, worktree]
+symptoms: [BLOCKED: Uncommitted changes detected. Commit before merging., gh pr merge blocked in bare repo worktree setups even when working tree is clean]
+module: System
+component: tooling
+problem_type: workflow_issue
+resolution_type: code_fix
+root_cause: logic_error
+severity: high
 ---
 
 # Troubleshooting: pre-merge hook false positive in bare repo worktree setups

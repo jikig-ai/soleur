@@ -1,3 +1,10 @@
+---
+title: Async status message lifecycle in Telegram bots
+date: unknown
+category: infrastructure
+tags: [runtime-errors, telegram-bridge, response not delivered, race condition, status message not deleted, timer fires after cleanup]
+---
+
 # Learning: Async status message lifecycle in Telegram bots
 
 ## Problem

@@ -1,17 +1,16 @@
 ---
-module: web-platform
+title: Supabase JS query builder mocks must be thenable
 date: 2026-04-07
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "TypeError: query.eq is not a function"
-  - "Supabase query builder mock breaks when chaining after .limit()"
-  - "await query.order(...) resolves to undefined instead of query result"
-root_cause: async_timing
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [supabase, vitest, mock, thenable, query-builder]
+symptoms: [TypeError: query.eq is not a function, Supabase query builder mock breaks when chaining after .limit(), await query.order(...) resolves to undefined instead of query result]
+module: web-platform
 synced_to: []
+component: testing_framework
+problem_type: test_failure
+resolution_type: code_fix
+root_cause: async_timing
+severity: medium
 ---
 
 # Learning: Supabase JS query builder mocks must be thenable

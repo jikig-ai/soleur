@@ -1,9 +1,12 @@
 ---
+title: Destructive-test allowlist regex must pin the exact synthetic-identifier shape
+date: 2026-04-18
 category: best-practices
 tags: [testing, security, destructive-tests, allowlist, regex, runbook]
-date: 2026-04-18
+related_issues:
+  - 1448
+  - 2597
 related_rule: cq-destructive-prod-tests-allowlist
-related_issues: [1448, 2597]
 ---
 
 # Destructive-test allowlist regex must pin the exact synthetic-identifier shape

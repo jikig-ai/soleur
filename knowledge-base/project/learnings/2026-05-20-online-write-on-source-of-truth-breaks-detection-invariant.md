@@ -1,14 +1,16 @@
 ---
-name: online-write-on-source-of-truth-breaks-detection-invariant
-description: When an architecture proposal adds an online write path to a config/store that an existing detection primitive reads from, the detection's invariant silently regresses. The detector now reads what an online attacker can plant.
+title: 'Online write on a detection''s source-of-truth silently regresses the detection''s invariant'
 date: 2026-05-20
 category: architecture
-module: engineering
 tags: [security, detection, drift-guard, threat-model, brainstorm, doppler]
-related_issues: [4115, 3187, 3244]
-related_brainstorms:
-  - knowledge-base/project/brainstorms/2026-05-20-github-app-manifest-brainstorm.md
-  - knowledge-base/project/brainstorms/2026-05-05-github-app-drift-guard-brainstorm.md
+module: engineering
+description: 'When an architecture proposal adds an online write path to a config/store that an existing detection primitive reads from, the detection''s invariant silently regresses. The detector now reads what an online attacker can plant.'
+name: online-write-on-source-of-truth-breaks-detection-invariant
+related_brainstorms: [knowledge-base/project/brainstorms/2026-05-20-github-app-manifest-brainstorm.md, knowledge-base/project/brainstorms/2026-05-05-github-app-drift-guard-brainstorm.md]
+related_issues:
+  - 4115
+  - 3187
+  - 3244
 ---
 
 # Learning: Online write on a detection's source-of-truth silently regresses the detection's invariant
