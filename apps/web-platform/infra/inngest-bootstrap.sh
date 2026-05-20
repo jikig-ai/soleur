@@ -157,17 +157,36 @@ WantedBy=multi-user.target
 UNITEOF
 
 # Heartbeat ping script + service + 60s timer.
-# The URL lives in $INNGEST_HEARTBEAT_URL (loaded by systemd from
-# /etc/default/inngest-server). Indirecting through a script file rather
-# than inlining the curl in ExecStart= keeps the URL out of systemd's
-# journal (which logs resolved ExecStart= lines on some configurations).
-# Defense-in-depth — the URL is also `sensitive = true` in the TF output.
+# The URL lives in $INNGEST_HEARTBEAT_URL — resolved at ExecStart time via
+# `doppler run --project soleur --config prd` (same pattern as
+# inngest-server.service above). The earlier shape relied on systemd's
+# EnvironmentFile=/etc/default/inngest-server to provide the URL, but the
+# substrate-fix in PR #4085 only writes DOPPLER_TOKEN / DOPPLER_CONFIG_DIR /
+# DOPPLER_ENABLE_VERSION_CHECK into that file — INNGEST_HEARTBEAT_URL was
+# silently empty and curl errored every 60s (#4116). Wrapping in `doppler run`
+# collapses the env-injection class: Doppler prd is the single source of
+# truth, no host-side materialization required.
+#
+# Indirecting through a script file rather than inlining the curl in
+# ExecStart= keeps the URL out of systemd's journal (which logs resolved
+# ExecStart= lines on some configurations). Defense-in-depth — the URL is
+# also `sensitive = true` in the TF output.
 cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 #!/bin/sh
 # Posted to Better Stack every 60s by inngest-heartbeat.timer.
 exec /usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
 HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
+
+# Resolve the doppler binary path at bootstrap time. cloud-init installs to
+# /usr/local/bin/doppler (cloud-init.yml:289-290); inngest-server.service:137
+# hardcodes /usr/bin/doppler. Interpolating `command -v` here avoids
+# inheriting that latent path discrepancy in the heartbeat unit.
+DOPPLER_BIN="$(command -v doppler 2>/dev/null || true)"
+if [[ -z "$DOPPLER_BIN" ]]; then
+  log "ERROR: doppler CLI not found on PATH — cloud-init must install /usr/local/bin/doppler before inngest-bootstrap"
+  exit 1
+fi
 
 cat > "$HEARTBEAT_UNIT" <<HEARTBEATEOF
 [Unit]
@@ -177,7 +196,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=${HEARTBEAT_SCRIPT}
+ExecStart=${DOPPLER_BIN} run --project soleur --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
 
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'

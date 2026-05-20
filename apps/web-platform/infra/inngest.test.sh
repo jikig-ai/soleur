@@ -21,6 +21,7 @@ INNGEST_TF="$SCRIPT_DIR/inngest.tf"
 MAIN_TF="$SCRIPT_DIR/main.tf"
 VARS_TF="$SCRIPT_DIR/variables.tf"
 OUTPUTS_TF="$SCRIPT_DIR/outputs.tf"
+BOOTSTRAP_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
 
 PASS=0
 FAIL=0
@@ -104,6 +105,26 @@ echo ""
 echo "--- Inngest CLI version pin ---"
 assert "inngest_cli_version local set"       "grep -qE 'inngest_cli_version *= *\"v[0-9]+\\.[0-9]+\\.[0-9]+\"' '$INNGEST_TF'"
 assert "inngest_cli_sha256 local set (64 hex)" "grep -qE 'inngest_cli_sha256 *= *\"[0-9a-f]{64}\"' '$INNGEST_TF'"
+
+# --- Heartbeat unit shape in inngest-bootstrap.sh (#4116) ---
+echo ""
+echo "--- Heartbeat unit shape (inngest-bootstrap.sh) ---"
+assert "inngest-bootstrap.sh exists" "[[ -f '$BOOTSTRAP_SH' ]]"
+
+# Extract the heartbeat unit's heredoc body so the assertions only fire on the
+# HEARTBEAT_UNIT block (not the unrelated UNITEOF block for inngest-server).
+HEARTBEAT_BLOCK=$(awk '/cat > "\$HEARTBEAT_UNIT" <</,/^HEARTBEATEOF$/' "$BOOTSTRAP_SH")
+
+assert "heartbeat unit uses doppler run" \
+  "[[ -n '$HEARTBEAT_BLOCK' ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --project soleur --config prd'"
+assert "heartbeat unit ExecStart is exactly one line" \
+  "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
+assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --project soleur --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+HEARTBEAT_UNIT_LINE=$(grep -nE 'cat > "\$HEARTBEAT_UNIT"' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
+  "[[ -n '$DOPPLER_BIN_LINE' && -n '$HEARTBEAT_UNIT_LINE' && '$DOPPLER_BIN_LINE' -lt '$HEARTBEAT_UNIT_LINE' ]]"
 
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
