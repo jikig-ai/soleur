@@ -73,33 +73,33 @@ Plan: `knowledge-base/project/plans/2026-05-20-feat-github-app-manifest-plan.md`
 
 ## Phase 3: Drift-guard extension (shared script + workflow + test)
 
-- [ ] 3.1 Read `.github/workflows/scheduled-github-app-drift-guard.yml`, locate `RESPONSE_FILE` save site (post-line 218) and `record_failure` allowlist (~lines 98-117). Kieran P2-3: if `record_failure` has a mode allowlist, add `permission_drift`, `permission_unexpected_grant`, `response_shape_unparseable` to it
-- [ ] 3.2 Write `bin/diff-github-app-manifest.sh` (shared script — Phase 3.3 contract). Reads `MANIFEST_FILE` + `RESPONSE_FILE` env vars:
-  - [ ] 3.2.1 Response-shape sanity check: assert `.permissions` is object, `.events` is array. If malformed → exit non-zero, stdout: `response_shape_unparseable:<details>`
-  - [ ] 3.2.2 Normalize permissions: `jq --sort-keys '.default_permissions' MANIFEST_FILE` vs `jq --sort-keys '.permissions' RESPONSE_FILE`
-  - [ ] 3.2.3 Normalize events: `jq '.default_events | sort // []' MANIFEST_FILE` vs `jq '.events | sort // []' RESPONSE_FILE` (arrays — `--sort-keys` does NOT sort array elements)
-  - [ ] 3.2.4 Diff direction classification:
+- [x] 3.1 Read `.github/workflows/scheduled-github-app-drift-guard.yml`, locate `RESPONSE_FILE` save site (post-line 218) and `record_failure` allowlist (~lines 98-117). Kieran P2-3: if `record_failure` has a mode allowlist, add `permission_drift`, `permission_unexpected_grant`, `response_shape_unparseable` to it
+- [x] 3.2 Write `bin/diff-github-app-manifest.sh` (shared script — Phase 3.3 contract). Reads `MANIFEST_FILE` + `RESPONSE_FILE` env vars:
+  - [x] 3.2.1 Response-shape sanity check: assert `.permissions` is object, `.events` is array. If malformed → exit non-zero, stdout: `response_shape_unparseable:<details>`
+  - [x] 3.2.2 Normalize permissions: `jq --sort-keys '.default_permissions' MANIFEST_FILE` vs `jq --sort-keys '.permissions' RESPONSE_FILE`
+  - [x] 3.2.3 Normalize events: `jq '.default_events | sort // []' MANIFEST_FILE` vs `jq '.events | sort // []' RESPONSE_FILE` (arrays — `--sort-keys` does NOT sort array elements)
+  - [x] 3.2.4 Diff direction classification:
     - Manifest declares > live grants → `permission_drift:<details>` (exit non-zero)
     - Live has > manifest declares → `permission_unexpected_grant:<details>` (exit non-zero)
-  - [ ] 3.2.5 Match → exit 0 (silent)
-  - [ ] 3.2.6 Add `set -euo pipefail`; pass `shellcheck`
-- [ ] 3.3 First-merge suppression window — pick ONE mechanism and implement:
-  - [ ] 3.3.1 EITHER: PR-label `manifest-drift-window` triggers 24h warning-only mode (workflow reads `gh pr list --search "<sha> in:body"` to find the merging PR's labels)
-  - [ ] 3.3.2 OR: `MANIFEST_DRIFT_SUPPRESS_UNTIL` file committed with each manifest change (UTC ISO timestamp; workflow reads via `cat`)
-  - [ ] 3.3.3 Either way: emit a visible step annotation/warning ("drift detected but suppressed until X") — silent pass would defeat Art. 33 framing
-- [ ] 3.4 Extend `.github/workflows/scheduled-github-app-drift-guard.yml`:
-  - [ ] 3.4.1 Add step AFTER the existing `id`/`client_id` immutability check, BEFORE `shred -u "$KEY_FILE"` cleanup
-  - [ ] 3.4.2 Step invokes `bash bin/diff-github-app-manifest.sh`; captures stdout; on non-zero exit, parse `<mode>:<details>` and call `record_failure <mode> "<details>" <label>` per Phase 3.2 mode-classification (label: `ci/auth-broken` for `permission_drift`; `ci/guard-broken` for the other two)
-  - [ ] 3.4.3 Update workflow's failure-mode comment header (lines 8-12) to enumerate 5 modes total
-  - [ ] 3.4.4 Run `actionlint .github/workflows/scheduled-github-app-drift-guard.yml`
-- [ ] 3.5 Sibling-workflow line-number sweep (Kieran P0-3): `grep -n "119-150" .github/workflows/scheduled-ruleset-bypass-audit.yml`; verify the cited drift-guard JWT-mint block range is still 119-150 post-edit. Update citation if shifted
-- [ ] 3.6 Write `apps/web-platform/test/github-app-manifest-drift-guard.test.ts` (Kieran P1-3: mirror `apps/web-platform/test/github-app-drift-guard-contract.test.ts:3,375` `spawnSync` + skip-on-missing-jq pattern). 6-case matrix:
-  - [ ] 3.6.1 Permission match → exit 0
-  - [ ] 3.6.2 Manifest declares `administration:write`, live grants `administration:read` → exit non-zero, mode `permission_drift`
-  - [ ] 3.6.3 Live has `events:["repository_dispatch"]` not in manifest → exit non-zero, mode `permission_unexpected_grant`
-  - [ ] 3.6.4 Response `{message:"Not Found"}` → exit non-zero, mode `response_shape_unparseable`
-  - [ ] 3.6.5 Empty arrays both sides → exit 0
-  - [ ] 3.6.6 Same array content, different ordering → exit 0 (proves `jq sort` normalization)
+  - [x] 3.2.5 Match → exit 0 (silent)
+  - [x] 3.2.6 Add `set -euo pipefail`; pass `shellcheck`
+- [x] 3.3 First-merge suppression window — pick ONE mechanism and implement:
+  - [x] 3.3.1 EITHER: PR-label `manifest-drift-window` triggers 24h warning-only mode (workflow reads `gh pr list --search "<sha> in:body"` to find the merging PR's labels)
+  - [x] 3.3.2 OR: `MANIFEST_DRIFT_SUPPRESS_UNTIL` file committed with each manifest change (UTC ISO timestamp; workflow reads via `cat`)
+  - [x] 3.3.3 Either way: emit a visible step annotation/warning ("drift detected but suppressed until X") — silent pass would defeat Art. 33 framing
+- [x] 3.4 Extend `.github/workflows/scheduled-github-app-drift-guard.yml`:
+  - [x] 3.4.1 Add step AFTER the existing `id`/`client_id` immutability check, BEFORE `shred -u "$KEY_FILE"` cleanup
+  - [x] 3.4.2 Step invokes `bash bin/diff-github-app-manifest.sh`; captures stdout; on non-zero exit, parse `<mode>:<details>` and call `record_failure <mode> "<details>" <label>` per Phase 3.2 mode-classification (label: `ci/auth-broken` for `permission_drift`; `ci/guard-broken` for the other two)
+  - [x] 3.4.3 Update workflow's failure-mode comment header (lines 8-12) to enumerate 5 modes total
+  - [x] 3.4.4 Run `actionlint .github/workflows/scheduled-github-app-drift-guard.yml`
+- [x] 3.5 Sibling-workflow line-number sweep (Kieran P0-3): `grep -n "119-150" .github/workflows/scheduled-ruleset-bypass-audit.yml`; verify the cited drift-guard JWT-mint block range is still 119-150 post-edit. Update citation if shifted
+- [x] 3.6 Write `apps/web-platform/test/github-app-manifest-drift-guard.test.ts` (Kieran P1-3: mirror `apps/web-platform/test/github-app-drift-guard-contract.test.ts:3,375` `spawnSync` + skip-on-missing-jq pattern). 6-case matrix:
+  - [x] 3.6.1 Permission match → exit 0
+  - [x] 3.6.2 Manifest declares `administration:write`, live grants `administration:read` → exit non-zero, mode `permission_drift`
+  - [x] 3.6.3 Live has `events:["repository_dispatch"]` not in manifest → exit non-zero, mode `permission_unexpected_grant`
+  - [x] 3.6.4 Response `{message:"Not Found"}` → exit non-zero, mode `response_shape_unparseable`
+  - [x] 3.6.5 Empty arrays both sides → exit 0
+  - [x] 3.6.6 Same array content, different ordering → exit 0 (proves `jq sort` normalization)
 
 ## Phase 4: Legal register edits (atomic with surface change)
 
