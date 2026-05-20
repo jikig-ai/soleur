@@ -10,6 +10,25 @@ closes: 4150
 
 # fix(infra): autonomous resolution of apply-web-platform-infra terraform variables (#4150)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-20
+**Sections enhanced:** Research Reconciliation, Phase 1.4 (kb-drift wiring), Phase 3 (canonical TF invocation), Risks (R4 expanded), Sharp Edges (R4 enforcement), Prior Art (Inngest IaC sibling).
+
+### Key Improvements (vs. initial plan)
+
+1. **Phase 3 canonical TF invocation** — replaced the simplified `doppler run … terraform plan` form with the AWS-exports-first triplet per `2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`. Without `AWS_ACCESS_KEY_ID/SECRET` exported plain, the R2 backend silently fails to authenticate and emits a confusing error.
+2. **Risk R4 → enforced fix** — confirmed `kb-drift.tf:60` currently carries `lifecycle.ignore_changes = [plaintext_value]`. This MUST be removed in Phase 1.4 or in-band rotation would never propagate. Promoted from Risks to a hard Phase 1.4 sub-step.
+3. **Prior-art linkage** — explicitly reference `inngest.tf:97-104`'s policy comment as the precedent pattern (workplace-token-mints-config-token, `ignore_changes` discipline). The Inngest IaC migration (#3973) collapsed 4 operator-mint variables to 4 `random_id` resources using the same autonomy reasoning.
+4. **App permissions verification step** — verify both `administration:write` AND `secrets:write` on the soleur-ai App at Phase 0.2 (publishing `github_actions_secret` requires `secrets:write`, the brief asserted only `administration:write`).
+5. **Plan-output structural verification** — added `terraform show -json tfplan | jq` to Phase 3 so the expected `+ create / - destroy / ~ update` shape can be asserted against the actual plan, not just the human-readable summary line.
+
+### New Considerations Discovered
+
+- **Workflow apply-step also has the allow-list** — Phase 1.5 mirrors the `-target=` changes to both the plan step AND the apply step (verified at lines 195 + 303). A one-side edit ships a plan/apply mismatch that surfaces at apply time only.
+- **The OPERATOR NOTE in `kb-drift.tf:14-22` about `prd_kb_drift_walker` config-existence stays** — the in-band Doppler service token mint depends on the config existing, which is still operator-only because the doppler_environment resource manages environment+configs as a unit. This is acceptable under `hr-never-label-any-step-as-manual-without` because the config already exists (verified at Phase 0.1) and creating a new Doppler config is a fresh-credential-bootstrap-class operation per `2026-05-15-operator-only-step-canonical-list.md`.
+- **Github App installation token has a 1-hour TTL** — `app_auth` issues fresh tokens per terraform invocation. Drift detection (`scheduled-terraform-drift.yml`) and ad-hoc applies all get fresh tokens; this is strictly better than a long-lived PAT.
+
 ## Problem
 
 `.github/workflows/apply-web-platform-infra.yml` fails at the `Terraform plan` step because four variables defined in `apps/web-platform/infra/variables.tf` have no value source in Doppler `prd_terraform`:
@@ -96,9 +115,23 @@ discoverability_test:
 
 0.1 Verify the `prd_kb_drift_walker` Doppler config exists: `doppler configs --project soleur --json | jq '.[] | select(.name == "prd_kb_drift_walker") | .name'` returns `"prd_kb_drift_walker"`.
 
-0.2 Verify the `soleur-ai` GitHub App is installed org-wide on jikig-ai with the right permissions:
-- `gh api /repos/jikig-ai/soleur/installation --jq '.app_slug + " " + (.permissions | tojson)'` (need a user-context PAT for this; if it returns 401 from the App context, fall back to reading the App settings page via Playwright — the brief asserts `administration:write` and `secrets:write` are present)
-- Confirm installation_id `122213433` against the jikig-ai installation list.
+0.2 Verify the `soleur-ai` GitHub App has BOTH required permissions on the soleur repo:
+- `administration:write` (needed for ruleset/repository APIs the kb-drift workflow may touch in the future)
+- `secrets:write` (needed for `github_actions_secret.doppler_token_kb_drift` to publish — this is the load-bearing one for this PR)
+
+Command (user-context auth):
+```bash
+gh api /repos/jikig-ai/soleur/installation --jq '.app_slug + " perms=" + (.permissions | tojson)'
+```
+Expected: `app_slug = "soleur-ai"`, `permissions` JSON includes both `administration: "write"` and `secrets: "write"`.
+
+If the call returns 401 (JWT-only endpoint), fall back to the App settings page at <https://github.com/organizations/jikig-ai/settings/apps/soleur-ai/permissions> (operator-visible via Playwright if needed; the brief asserts these are present).
+
+Confirm installation_id `122213433` is current:
+```bash
+gh api /orgs/jikig-ai/installations --jq '.installations[] | select(.app_slug == "soleur-ai") | .id'
+```
+Expected output: `122213433`. If different, update `main.tf` with the new value in Phase 1.2.
 
 0.3 Verify `DOPPLER_TOKEN_TF` (workplace personal token) can mint a service token in `prd_kb_drift_walker`. The provider docs say workplace-scope tokens can create config-scoped service tokens; verify by running `terraform plan` locally (see Phase 4) rather than minting upfront.
 
@@ -155,7 +188,8 @@ provider "github" {
   }
   ```
 - Replace line 57 `plaintext_value = var.doppler_token_kb_drift` with `plaintext_value = doppler_service_token.kb_drift.key`.
-- Update the OPERATOR NOTE at lines 14-22 to drop the "operator mints token" sentence at line 50 and replace lines 48-58 header with: "GH Actions secret for the cron workflow. Token minted in-band by `doppler_service_token.kb_drift` (above) — workplace-scope DOPPLER_TOKEN_TF authenticates the provider, which has scope to mint config-scoped tokens. Pre-existing config `prd_kb_drift_walker` is still a precondition (see operator note above)."
+- **Delete the `lifecycle { ignore_changes = [plaintext_value] }` block at lines 59-61** (verified present in current file). Reason: the operator-mint flow needed ignore_changes to suppress drift from out-of-band rotation. In-band rotation via `terraform apply -replace=doppler_service_token.kb_drift` is now the canonical path, and the published Actions secret MUST update when the source token rotates — otherwise the kb-drift cron will continue using a revoked token until someone notices. This is Risk R4's enforcement clause: ignore_changes removal is mandatory, not optional.
+- Update the OPERATOR NOTE at lines 14-22 to drop the "operator mints token" sentence at line 50 and replace lines 48-58 header with: "GH Actions secret for the cron workflow. Token minted in-band by `doppler_service_token.kb_drift` (above) — workplace-scope DOPPLER_TOKEN_TF authenticates the provider, which has scope to mint config-scoped tokens. Pre-existing config `prd_kb_drift_walker` is still a precondition (see operator note above). NO ignore_changes — rotation is `terraform apply -replace=doppler_service_token.kb_drift` and the new value MUST propagate to the Actions secret."
 
 1.5 Edit `.github/workflows/apply-web-platform-infra.yml`:
 - Delete lines 204-205 (`-target=doppler_secret.github_app_client_id` and `..._secret`).
@@ -200,16 +234,29 @@ Expected: `OK: no operator-mint vars remain`.
 
 ### Phase 3 — Local `terraform plan` smoke test
 
-3.1 From repo root:
+3.1 From repo root, use the canonical TF invocation triplet per `knowledge-base/project/learnings/2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md` — AWS exports MUST be plain (not under `tf-var` transform) or the R2/S3 backend silently fails to authenticate:
+
 ```bash
 cd apps/web-platform/infra
+# (1) AWS creds for R2 backend — plain, NOT under tf-var transform
 export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
 export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+# (2) Init against the R2 backend
 terraform init -input=false
+# (3) Plan with --name-transformer tf-var (~13 TF_VAR_* inputs needed)
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-  terraform plan -no-color -input=false
+  terraform plan -no-color -input=false -out=tfplan
+# Inspect the structured plan to confirm expected diff shape
+terraform show -json tfplan | jq '[.resource_changes[] | {address, actions: .change.actions}] | sort_by(.address)'
 ```
-Expected: plan succeeds. The `doppler_service_token.kb_drift` resource shows as `+ create`; the `doppler_secret.github_app_client_id` and `..._client_secret` resources show as `- destroy`; no `Error: No value for required variable` lines.
+
+Expected diff shape:
+- `+ create doppler_service_token.kb_drift`
+- `- destroy doppler_secret.github_app_client_id`
+- `- destroy doppler_secret.github_app_client_secret`
+- `~ update in-place github_actions_secret.doppler_token_kb_drift` (plaintext_value changes from operator-mint to doppler_service_token.kb_drift.key — only if `lifecycle.ignore_changes = [plaintext_value]` was removed per Risk R4)
+
+No `Error: No value for required variable` lines should appear. If they do, the cause is almost always a leftover `TF_VAR_*` that wasn't deleted — re-verify Phase 1.1 and Phase 2.
 
 3.2 If plan fails:
 - `Error: 401` from github provider → app_auth misconfigured (verify installation_id matches `gh api /orgs/jikig-ai/installations` lookup).
@@ -368,7 +415,53 @@ Skipped. Plan touches no regulated-data surfaces: no schemas / migrations / auth
 - **R1 — installation_id drift**: hardcoding `installation_id = "122213433"` couples this provider to the current jikig-ai installation. If the App is uninstalled+reinstalled, the ID changes. Mitigation: monitor via the existing `apply-web-platform-infra.yml` workflow's failure annotation; recovery is a single TF edit. Probability: very low (App installations are durable).
 - **R2 — DOPPLER_TOKEN_TF scope**: the workplace-scope personal token's ability to mint config-scoped service tokens depends on the workplace's RBAC settings. Mitigation: Phase 3 local plan smoke test fails early if scope is insufficient, before the merge. Recovery would be to grant the workspace personal token a wider scope (operator action).
 - **R3 — terraform `-replace` semantics on doppler_service_token**: if the operator runs `terraform apply -replace=doppler_service_token.kb_drift`, the old token is revoked and a new one is issued; there is a brief (<1s) window where the published Actions secret holds the new value but a kb-drift cron run started before the publish hits the old (revoked) token. Mitigation: the kb-drift workflow runs daily, not hourly; the rotation event is rare. Acceptable.
-- **R4 — github_actions_secret.plaintext_value churn on every apply**: when `doppler_service_token.kb_drift` is re-created (e.g., manual `-replace`), the published `plaintext_value` changes. The `lifecycle.ignore_changes = [plaintext_value]` line at `kb-drift.tf:60` was correct for the operator-mint flow but now would BLOCK propagation of the in-band rotation. **Action**: remove the `ignore_changes` block from `github_actions_secret.doppler_token_kb_drift` in Phase 1.4. Drift detector will catch any out-of-band churn.
+- **R4 — github_actions_secret.plaintext_value churn on rotation (ENFORCED in Phase 1.4)**: when `doppler_service_token.kb_drift` is re-created (e.g., manual `-replace`), the published `plaintext_value` MUST change. The current `lifecycle.ignore_changes = [plaintext_value]` at `kb-drift.tf:59-61` was correct for the operator-mint flow but now would BLOCK propagation of the in-band rotation, leaving the cron with a revoked token. **Action — promoted from Risk to mandatory Phase 1.4 sub-step**: delete the entire `lifecycle { ignore_changes = [plaintext_value] }` block. The drift detector's daily run will catch any out-of-band churn.
+- **R5 — `app_auth` provider call latency adds to plan time**: each terraform invocation makes a JWT-RS256 sign + installation-token-exchange API call (~200-500ms). On the apply workflow's 15-minute budget this is negligible; on long-running drift detection runs (hourly, in the apply workflow path) it adds ~1 sec/run. Acceptable — token reuse within a single `terraform plan` invocation is handled by the provider.
+- **R6 — operator's existing `prd_terraform` Doppler secrets for the deleted vars**: if `GITHUB_APP_CLIENT_SECRET`, `GITHUB_ACTIONS_TOKEN`, or `DOPPLER_TOKEN_KB_DRIFT` are still present in `prd_terraform`, they leak into `TF_VAR_*` env vars but don't bind to any TF variable (the variables are deleted). Terraform 1.6+ tolerates extra `TF_VAR_*` env vars silently. Phase 2.3 deletes them as cleanup; not load-bearing for plan success.
+
+## Research Insights
+
+**Prior art — Inngest IaC (#3973):**
+
+This plan is structurally identical to the `inngest.tf` migration that closed #3960 (PR-F operator follow-through). That migration collapsed 4 operator-mint variables (Inngest signing/event keys for `prd` + `dev`) to 4 `random_id` resources, using the same workplace-scope Doppler token to author Doppler secrets. The pattern transfers cleanly: where Inngest's keys were operator-chosen-randoms (per ADR-030 self-hosted), this plan's `doppler_service_token` is a vendor-issued-but-API-mintable token. The autonomy classification differs (random_id vs. provider-mint), but the variable-collapse result is the same. See [`inngest.tf:1-21`](apps/web-platform/infra/inngest.tf) for the canonical comment block this plan should mirror.
+
+**Provider docs verified:**
+
+- `integrations/github` v6.12.1 `app_auth` block: <https://registry.terraform.io/providers/integrations/github/6.12.1/docs#authenticating-via-github-app-installation>. Required fields: `id` (App ID), `installation_id`, `pem_file` (PEM contents OR file path). The provider exchanges these for an installation token at every invocation.
+- `DopplerHQ/doppler` v1.21.2 `doppler_service_token` resource: <https://registry.terraform.io/providers/DopplerHQ/doppler/1.21.2/docs/resources/service_token>. Required: `project`, `config`, `name`. Optional: `access` (default `read`, alt `read/write`).
+
+**Best practices:**
+
+- Authenticate the `integrations/github` provider via App installation rather than PAT when the App already exists — narrower scope, automatic rotation, no operator-secret-lifecycle to manage.
+- For Doppler service tokens published to GitHub Actions secrets, mint via `doppler_service_token` resource rather than operator action — TF state captures the token value (encrypted in R2), enabling deterministic re-publish on `-replace`.
+- For any sensitive variable, write an inline comment `# autonomy-considered: <none|provider-mint-rejected|reuse-rejected|operator-only-per-...>` so the rationale is visible at PR review (per new `hr-tf-variable-no-operator-mint-default`).
+
+**Anti-patterns to avoid:**
+
+- Reusing `lifecycle.ignore_changes = [plaintext_value]` on a `github_actions_secret` whose source value rotates in-band — silently strands the consumer on the previous token (Risk R4).
+- Hardcoding `installation_id` without a comment explaining the lookup path (`gh api /repos/<owner>/<repo>/installation --jq '.id'`) — future maintainers can't refresh it without re-discovering the API.
+- Adding `--name-transformer tf-var` to BOTH outer and inner `doppler run` invocations (the inner-must-be-tf-var, outer-must-be-plain pattern is documented in `main.tf:1-13` and `2026-03-21-doppler-tf-var-naming-alignment.md`).
+
+**Performance considerations:**
+
+- App-installation token exchange adds ~200-500ms per `terraform plan`/`apply`. Within the 15-min workflow budget — negligible.
+- `doppler_service_token` creation is a one-shot at first apply; subsequent applies are no-ops unless the resource is `-replace`'d. State storage: token value lands in `terraform.tfstate` (R2-encrypted-at-rest).
+
+**Edge cases:**
+
+- **`prd_kb_drift_walker` config deletion out-of-band**: Phase 0.1 verifies presence; Phase 3 plan would fail loud with `Error: 404 config not found` if it disappears between verification and apply.
+- **Soleur-AI App uninstalled and reinstalled**: `installation_id` changes; plan fails with 401 at first invocation. Recovery is a single-line edit + new apply.
+- **DOPPLER_TOKEN_TF rotation**: workplace personal tokens have no automatic rotation; if the operator rotates it manually, the provider authentication breaks until `prd_terraform`'s value is updated. Out of scope for this PR.
+
+**References:**
+
+- App installation auth in `integrations/github` provider: <https://registry.terraform.io/providers/integrations/github/6.12.1/docs#authenticating-via-github-app-installation>
+- Doppler service token resource: <https://registry.terraform.io/providers/DopplerHQ/doppler/1.21.2/docs/resources/service_token>
+- Canonical TF invocation triplet for `apps/web-platform/infra/`: `knowledge-base/project/learnings/2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`
+- Vendor-token-mint patterns and the in-band random_id precedent: `knowledge-base/project/learnings/2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md`
+- Operator-only step canonical list (the exclusions): `knowledge-base/project/learnings/2026-05-15-operator-only-step-canonical-list.md`
+- Inngest IaC sibling pattern (#3973): `apps/web-platform/infra/inngest.tf`, in-repo
+- Doppler TF-var naming alignment: `knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md`
 
 ## Non-Goals (deferred)
 
