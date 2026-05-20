@@ -176,7 +176,7 @@ apps/telegram-bridge
 apps/telegram-bridge/infra
 apps/web-platform
 apps/web-platform/billing
-apps/web-platform/components/message-bubble.til-open
+apps/web-platform/components/message-bubble.tsx
 apps/web-platform/e2e
 apps/web-platform/infra
 apps/web-platform/lib/ws-client.ts
@@ -404,9 +404,9 @@ cap-coupling
 capability-precedent
 cascade
 cascade-architecture
+cascadet package manager
 case-arms
 case-sensitivity
-cat
 catches
 category-design
 categoryintegration-issues
@@ -639,7 +639,7 @@ counts
 coverage
 coverage-gap
 cpo
-cq-gh-issue-label-verifyp
+cq-gh-issue-label-verify-name
 cq-regex-unicode-separators-escape-only
 cq-regex-unicode-separators-escape-only sibling defect class
 cq-silent-fallback-must-mirror-to-sentry
@@ -732,7 +732,7 @@ demotion
 deny-by-default
 dependabot
 dependencies
-dependency check for gui app without package manager
+dependency check for gui app withoutag
 dependency-cascade
 dependency-detection
 dependency-management
@@ -913,7 +913,6 @@ external-services
 extract
 extractfunctionbody
 extraction-pattern
-faag
 fabrication
 fact-checker
 fact-checking
@@ -1041,7 +1040,7 @@ git-pull
 git-rebase
 git-reset-hard
 git-rev-parse
-git-stash
+git-stascat
 git-tags
 git-trailers
 git-workflow
@@ -1050,7 +1049,6 @@ gitdir
 github
 github-actions
 github-actions-yaml
-github-apcat
 github-api
 github-app
 github-app-manifest
@@ -1129,6 +1127,7 @@ history-fetch
 hkdf
 hook
 hook-design
+hook-timeout
 hook_enforcement
 hooks
 host
@@ -1405,7 +1404,6 @@ multi-agent review test-design-reviewer
 multi-agent-cascade
 multi-agent-coordination
 multi-agent-cross-reconcile
-multi-agent-revi
 multi-agent-review
 multi-agent-review-after-mocked-unit-tests-passed
 multi-clause-and
@@ -1589,10 +1587,10 @@ pdf
 pdf-extractor
 pdfjs
 pdfjs-dist
-peds
+pecat
 peer-dependency
 pencil
-pencil cli name collision with evoluscat
+pencil cli name collision with evolus/pencil
 pencil-cli
 pencil-mcp
 pencil-setup
@@ -1622,7 +1620,6 @@ pip
 pipefail
 pipeline
 pipeline-gotchas
-pir
 pivot
 pkce
 placement-gate
@@ -1644,6 +1641,7 @@ plan-inventory
 plan-phase
 plan-phase-2-8 + iac-plan-write-guard.sh + agents.core.md marker
 plan-precondition-drift
+plan-preconditions
 plan-quality
 plan-quality-gate
 plan-review
@@ -1757,6 +1755,7 @@ prefix
 preflight
 preload
 premise-cascade
+premise-validacat
 premise-validation
 premise-verification
 prescribed
@@ -1825,7 +1824,6 @@ provisioner
 proxied-records
 proxy-anti-pattern
 prune
-pseudonymiase
 pseudonymisation
 pseudonymization
 psql
@@ -2047,7 +2045,6 @@ schema.org
 scope
 scope-boundaries
 scope-calibration
-scope-cat
 scope-challenge
 scope-cuts
 scope-extension
@@ -2351,7 +2348,6 @@ substrate-cascade
 substring-match
 sudo-rs
 sudoers
-supab/pencil
 supabase
 supabase-auth
 supabase-messages
@@ -2493,7 +2489,7 @@ trigger-fallback-parity
 trigger-logic
 triggers
 triggers_replace
-trimg
+trim
 trip
 true
 truncation
@@ -2534,7 +2530,7 @@ usage-limit
 use-conversations
 useeffect
 user
-user friction for experdocumentation
+user friction for experimental features
 user-brand-critical
 user-confirmation
 user-event
@@ -2605,6 +2601,7 @@ waf
 walk
 watchdog
 weakset
+web-platfocat
 web-platform
 web-platform-infra
 web-platform-release
@@ -2707,6 +2704,7 @@ xss
 yagni
 yaml
 yaml-frontmatter
+yaml-serialization
 zero
 zero-downtime
 zod
