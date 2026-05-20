@@ -5,8 +5,10 @@
 #   - 4 operator-supplied doppler_secret resources in `prd` for the GitHub
 #     App's identity material (App ID, PEM, Client ID, Client Secret).
 #     Operator creates the App once at github.com/settings/apps/new (single
-#     manual gate per hr-never-label-any-step-as-manual-without; deferred-
-#     automation issue tracks future Terraform-provider availability).
+#     manual gate per hr-never-label-any-step-as-manual-without — vendor
+#     limit: github.com/settings/apps/new requires a human session, no API).
+#     `terraform apply` against these resources runs automatically post-merge
+#     via `.github/workflows/apply-web-platform-infra.yml` (closes #4114).
 #   - 1 random_id resource for the webhook secret (Soleur-generated; rotation
 #     = `terraform apply -replace=random_id.github_webhook_secret`).
 #   - 1 doppler_secret resource publishing the webhook secret to `prd`.
