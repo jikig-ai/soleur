@@ -83,6 +83,30 @@ The two layers are complementary FOR runner-mediated drift: the gate catches fut
 4. **PostgREST schema cache lag.** RPC signature changes via `DROP FUNCTION ... CREATE FUNCTION` (vs `CREATE OR REPLACE` overloading) can leave PostgREST advertising a stale schema for ~seconds to minutes. `NOTIFY pgrst, 'reload schema'` forces an immediate refresh. For rolling-deploy-safe RPC changes, prefer overloading (additive `CREATE OR REPLACE` with a distinct parameter list) per learning `2026-05-12-stub-handlers-as-silent-undercount-vectors.md`.
 5. **Pooler port determines DDL capability.** `DATABASE_URL_POOLER` on Supabase pooler `:6543` is transaction-mode and rejects multi-statement DDL with SQLSTATE 42601. Rewrite to `:5432` for session mode whenever a migration file contains `BEGIN; ... COMMIT;` blocks or multiple top-level statements.
 
+## Session Errors
+
+This section records workflow mistakes from the session that produced this learning. Each item names the trip-wire + recovery + future-session prevention. Format: `**[symptom]** — Recovery: [what fixed it] — Prevention: [proposed enforcement].`
+
+1. **`git show <ref>:path/${n}_*.down.sql` expanded to empty files.** Git's `<ref>:<path>` argument is taken literally, not glob-expanded by the shell. — Recovery: enumerate filenames explicitly (`for f in ...053..., ...054...`). — Prevention: when using `git show <ref>:<path>` against multi-file revs, always materialize the exact filename list first via `git show <ref> --name-only | grep <pattern>`.
+
+2. **`/tmp/down-057.sql` failed under the transaction-wrapping apply runner.** The file contains its own `BEGIN; ... COMMIT;` block; wrapping it in another `BEGIN/COMMIT` produces a nested-transaction error. — Recovery: added `apply-sql-raw.mjs` that does NOT wrap, used for files with embedded transactions. — Prevention: detect `^BEGIN;` in the file before wrapping.
+
+3. **`/tmp/down-053.sql` failed with "cannot drop function is_workspace_member because other objects depend on it"** when `054.down.sql` had not yet been applied. — Recovery: apply `054.down.sql` first; the down-migration chain has implicit ordering dependencies even within the same revert sweep. — Prevention: strict reverse-of-forward apply order, exactly as the team-workspace branch's `rollback.md` documents.
+
+4. **`_schema_migrations` row delete returned 0 rows** even though dev had the constraints/tables from migrations 053-057. — Recovery: investigated; team-workspace operator applied via direct `psql` without `INSERT INTO _schema_migrations`. — Prevention: the apply-time gate this PR adds catches future runner-mediated applies; the runtime probe surfaces residual tracked drift; the direct-`psql` class remains a coverage gap requiring `pg_catalog` introspection to fully close.
+
+5. **First revert (053-056) appeared to unblock `lifecycle.test.ts` but `cross-tenant-read-denied.test.ts` still failed with `PGRST202` on `write_byok_audit`.** — Recovery: investigation revealed a 5th drifted migration (057 — `byok_audit_workspace_id_rpcs`, also from `feat-team-workspace-multi-user`). Reverted it and the suite passed. — Prevention: plan reverts as iterations (revert → re-run → observe next failure → repeat) rather than assuming a single-pass revert is complete.
+
+6. **`git fetch --quiet origin main` placed inside the apply loop caused the test runner to time out at 60s** (one fetch per migration × 70 migrations × 2s = 140s). — Recovery: hoisted the fetch above the loop. — Prevention: network calls per-iteration are a perf antipattern in CLI scripts; runner steps that need a remote ref should fetch ONCE at startup.
+
+7. **Adding migration 054 in the same PR as the unmerged-apply gate caused the gate to self-block** (the new migration is not on `origin/main` yet, so the gate fires when the workflow runs against this PR's branch). — Recovery: set `ALLOW_UNMERGED_DEV_APPLY=1` in the workflow's apply step with an explanatory comment; the workflow is the legitimate apply path, PR review is the gate for content. — Prevention: when a PR introduces both a new migration AND a new apply-path constraint, document the bootstrap interaction explicitly.
+
+8. **Gate test asserted on a specific synthetic filename that broke when a real in-PR migration sorted before it lexically.** — Recovery: relaxed the assertion to match the gate's *contract* (`/::error::Migration .*\.sql is NOT on origin\/main/`) rather than a specific filename. — Prevention: tests for predicates over file lists should assert on predicate behavior, not on a specific element of the list — future additions can change the first-matching element without changing the predicate.
+
+9. **Dev `scope_grants_workspace_id_check` returned mid-session, after a clean revert.** Between Phase 1 (revert) and the broader test suite run, some other path re-applied migration 055 to dev. — Recovery: re-reverted. — Prevention: this confirms the architecture-strategist's observation that shared dev-Supabase amplifies per-branch drift; concurrent sessions or workflows applying to the same project can re-introduce drift faster than a single operator can clean it. Long-term fix is the `pg_catalog` introspection probe (architectural follow-up); short-term fix is "if you're working on the apply path, expect drift to recur during the session."
+
+10. **Pre-existing failure in 5 tenant-iso suites traces to PR-I fixture regression** (`template_id NOT NULL` from migration 053 + tests not passing `template_id` in `seedDraftMessage`). — Recovery: filed #4254 with the exact call-site list and proposed one-line fix per file. — Prevention: when a migration adds a NOT-NULL column to a frequently-fixtured table, the same PR should grep `apps/web-platform/test/` for all `.from("<table>").insert(` and update the fixture writes — wrapper-extension-test-mock-chain-sweep pattern (already in AGENTS.md, but the pattern applies to schema changes too).
+
 ## References
 
 - Issue: #4241
