@@ -40,8 +40,11 @@ vi.mock("@/lib/supabase/tenant", () => ({
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
+const { mockReportSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+}));
 vi.mock("@/server/observability", () => ({
-  reportSilentFallback: vi.fn(),
+  reportSilentFallback: mockReportSilentFallback,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -397,6 +400,32 @@ describe("syncWorkspace", () => {
     expect(errSpy).toHaveBeenCalledWith(
       expect.objectContaining({ userId: TEST_USER_ID, op: "upload" }),
       expect.stringContaining("upload"),
+    );
+  });
+
+  // #4224 Phase 3 — Sentry-mirror sweep (cq-silent-fallback-must-mirror-to-sentry).
+  test("on git pull failure, mirrors to Sentry via reportSilentFallback with feature:kb-route-helpers and op:workspace-sync-${op}", async () => {
+    const pullErr = new Error("non-fast-forward");
+    mockGitWithAuth.mockRejectedValue(pullErr);
+    mockReportSilentFallback.mockClear();
+
+    await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
+      userId: TEST_USER_ID,
+      op: "delete",
+    });
+
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      pullErr,
+      expect.objectContaining({
+        feature: "kb-route-helpers",
+        op: "workspace-sync-delete",
+        message: expect.stringMatching(/workspace sync failed/i),
+        extra: expect.objectContaining({
+          userId: TEST_USER_ID,
+          workspacePath: TEST_WORKSPACE_PATH,
+        }),
+      }),
     );
   });
 });

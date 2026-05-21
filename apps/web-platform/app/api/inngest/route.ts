@@ -21,6 +21,7 @@ import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-fa
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
+import { workspaceReconcileOnPush } from "@/server/inngest/functions/workspace-reconcile-on-push";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
 // next build page-data collection loads this module without runtime env.
@@ -34,6 +35,12 @@ if (!IS_BUILD_PHASE && !SIGNING_KEY) {
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [cfoOnPaymentFailed, cronDailyTriage, cronFollowThroughMonitor, githubOnEvent],
+  functions: [
+    cfoOnPaymentFailed,
+    cronDailyTriage,
+    cronFollowThroughMonitor,
+    githubOnEvent,
+    workspaceReconcileOnPush,
+  ],
   signingKey: SIGNING_KEY ?? "build-phase-placeholder",
 });

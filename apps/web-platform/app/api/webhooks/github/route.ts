@@ -289,6 +289,7 @@ export async function POST(request: Request) {
           defaultBranch: reconcilable.defaultBranch,
           headSha: reconcilable.headSha,
           beforeSha: reconcilable.beforeSha,
+          pushReceivedAt: Date.now(),
         },
       });
     } catch (err) {

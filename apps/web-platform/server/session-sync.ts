@@ -302,6 +302,81 @@ async function recordKbSyncHistory(
   }
 }
 
+/**
+ * Rich kb_sync_history row shape used by webhook-push reconcile (#4224)
+ * and the manual /api/kb/sync route. Heterogeneous with the legacy
+ * `{ date, count }` shape produced by `recordKbSyncHistory` — the reader
+ * (KbSyncStatus) discriminates inline.
+ */
+export type KbSyncRow = {
+  at: string; // ISO timestamp
+  trigger: "webhook_push" | "manual" | "session";
+  sha_before?: string;
+  sha_after?: string;
+  ok: boolean;
+  error_class?: string;
+  push_received_at?: number; // Unix ms — only set on webhook_push rows
+  sync_completed_at: number; // Unix ms
+};
+
+const KB_SYNC_HISTORY_CAP = 100;
+
+/**
+ * Append a rich `KbSyncRow` to the user's `kb_sync_history` JSONB array,
+ * preserving any legacy `{ date, count }` rows already there. Caps at 100.
+ * Best-effort — failures are mirrored to Sentry via `reportSilentFallback`
+ * but do not throw.
+ *
+ * NOTE: `recordKbSyncHistory` is intentionally NOT widened — its
+ * 14-row cap and `{date,count}` shape continue to serve the daily-count
+ * sparkline; this new helper writes the per-event reconciliation rows.
+ */
+export async function appendKbSyncRow(
+  userId: string,
+  row: KbSyncRow,
+): Promise<void> {
+  try {
+    const tenant = await getFreshTenantClient(userId);
+    const { data, error: fetchErr } = await tenant
+      .from("users")
+      .select("kb_sync_history")
+      .eq("id", userId)
+      .maybeSingle();
+    if (fetchErr) {
+      reportSilentFallback(fetchErr, {
+        feature: "session-sync",
+        op: "appendKbSyncRow.fetch",
+        extra: { userId },
+        message: "kb_sync_history fetch failed",
+      });
+      return;
+    }
+    const existing = Array.isArray(data?.kb_sync_history)
+      ? (data!.kb_sync_history as unknown[])
+      : [];
+    const updated = [...existing, row].slice(-KB_SYNC_HISTORY_CAP);
+    const { error: updateErr } = await tenant
+      .from("users")
+      .update({ kb_sync_history: updated })
+      .eq("id", userId);
+    if (updateErr) {
+      reportSilentFallback(updateErr, {
+        feature: "session-sync",
+        op: "appendKbSyncRow.update",
+        extra: { userId },
+        message: "kb_sync_history update failed",
+      });
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "session-sync",
+      op: "appendKbSyncRow",
+      extra: { userId },
+      message: "kb_sync_history append failed",
+    });
+  }
+}
+
 async function updateLastSynced(userId: string): Promise<void> {
   // PR-C §2.1 (#3244): tenant-scoped UPDATE on `users`.
   const tenant = await getFreshTenantClient(userId);
@@ -379,6 +454,12 @@ export async function syncPull(
     log.info({ userId }, "Sync pull completed");
   } catch (err) {
     log.warn({ err, userId }, "Sync pull failed — continuing with local state");
+    reportSilentFallback(err, {
+      feature: "session-sync",
+      op: "syncPull",
+      extra: { userId, workspacePath },
+      message: "Sync pull failed — continuing with local state",
+    });
   }
 }
 
@@ -447,11 +528,23 @@ export async function syncPush(
       await recordKbSyncHistory(userId, workspacePath);
     } catch (err) {
       log.warn({ err, userId }, "KB sync history recording failed");
+      reportSilentFallback(err, {
+        feature: "session-sync",
+        op: "recordKbSyncHistory",
+        extra: { userId, workspacePath },
+        message: "KB sync history recording failed",
+      });
     }
 
     await updateLastSynced(userId);
     log.info({ userId }, "Sync push completed");
   } catch (err) {
     log.warn({ err, userId }, "Sync push failed — next session will retry");
+    reportSilentFallback(err, {
+      feature: "session-sync",
+      op: "syncPush",
+      extra: { userId, workspacePath },
+      message: "Sync push failed — next session will retry",
+    });
   }
 }
