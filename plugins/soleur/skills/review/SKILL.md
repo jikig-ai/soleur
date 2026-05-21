@@ -271,9 +271,9 @@ Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; u
 
 ### Anti-slop Scanner Hook
 
-**If the diff touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$`:**
+**If the diff touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$` OR `plugins/soleur/docs/.*\.(njk|css)$`:**
 
-17. Run the `soleur:frontend-anti-slop` Tier 1 scanner inline (no separate agent spawn — v1 simplification per plan PR #4265):
+17. Run the `soleur:frontend-anti-slop` Tier 1 scanner inline (no separate agent spawn — v1 simplification per plan PR #4265). Scope covers both the Next.js platform and the Eleventy marketing site so AI-assisted edits to landing pages or blog posts get the same audit as React component changes.
 
     ```bash
     # NUL-delimited path collection + quoted argv expansion — prevents the
@@ -282,7 +282,7 @@ Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; u
     # whitespace-free.
     mapfile -d '' -t CHANGED_FILES < <(
       git diff --name-only -z origin/main...HEAD |
-        grep -zE 'apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$' || true
+        grep -zE '(apps/web-platform/(app|components)/.*\.(tsx|jsx|css)|plugins/soleur/docs/.*\.(njk|css))$' || true
     )
     if (( ${#CHANGED_FILES[@]} > 0 )); then
       bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts \

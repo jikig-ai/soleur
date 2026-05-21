@@ -171,6 +171,56 @@ describe("frontend-anti-slop tier1-scan: 5 rules × pos + neg fixtures", () => {
       },
     );
   });
+
+  // 6. PURE-BW-BASE — calibrated 2026-05-21 (issue #4270 v1.1 tightening):
+  // initial regex matched bg-black/bg-white anywhere in a className, producing
+  // 6/6 FP on the prod tree (all hits were buttons, not root wrappers). The
+  // tightened regex requires <html|body|main> elements OR co-occurrence with
+  // a root-layout class (min-h-screen|min-h-dvh|h-screen) so a button's
+  // bg-white never trips it but a page wrapper does.
+  test("PURE-BW-BASE POSITIVE: html element with bg-black", () => {
+    withFile(
+      "layout.tsx",
+      `<html className="bg-black text-white"><body>{children}</body></html>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE POSITIVE: full-screen div wrapper with bg-black", () => {
+    withFile(
+      "page.tsx",
+      `<div className="min-h-screen bg-black"><Hero /></div>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE NEGATIVE: button with bg-white (the original FP class)", () => {
+    withFile(
+      "login.tsx",
+      `<button className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200">Sign in</button>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE NEGATIVE: icon with bg-white (no layout-class proximity)", () => {
+    withFile(
+      "icon.tsx",
+      `<div className="h-8 w-8 rounded-full bg-white p-2"><Icon /></div>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
 });
 
 describe("frontend-anti-slop tier1-scan: per-file disable comment", () => {
@@ -243,5 +293,38 @@ describe("frontend-anti-slop tier1-scan: rule parsing", () => {
       expect(r.pattern).toBeInstanceOf(RegExp);
       expect(r.severity).toMatch(/^(critical|high|medium|low)$/);
     }
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: file-filter scope", () => {
+  // Scope was widened to include `.njk` so the Eleventy marketing site
+  // (plugins/soleur/docs/) is audited alongside the Next.js platform.
+  // These tests lock the scope so a future refactor of `expandPaths` /
+  // `listFilesRecursive` can't silently drop `.njk` and break the docs-site
+  // audit path. See the SKILL.md "Scope" table and review/SKILL.md
+  // "Anti-slop Scanner Hook" trigger regex — both share this same file-
+  // extension set.
+
+  test("scanFile on a .njk fixture is well-defined (rule fires when pattern matches)", () => {
+    withFile(
+      "landing.njk",
+      `<a class="bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-blue-500">Try it</a>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("GRADIENT-TEXT")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].selector).toMatch(/\.njk#GRADIENT-TEXT$/);
+      },
+    );
+  });
+
+  test("scanFile on a .njk fixture with no slop returns 0 (rule set tolerates non-Tailwind markup)", () => {
+    withFile(
+      "blog-post.njk",
+      `{% extends "base.njk" %}\n{% block content %}<article class="prose">{{ body | safe }}</article>{% endblock %}`,
+      (abs) => {
+        const findings = scanFile(abs, RULES);
+        expect(findings).toHaveLength(0);
+      },
+    );
   });
 });

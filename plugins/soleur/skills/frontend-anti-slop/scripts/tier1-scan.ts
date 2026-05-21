@@ -12,7 +12,8 @@
  *     [--paths <file-or-glob> ...] [--dry-run|--json] [--rule <id>]
  *
  * Default paths: `git diff --name-only --cached --diff-filter=AMR` filtered to
- * `apps/web-platform/(app|components)/**\*.(tsx|jsx|css)`.
+ * `apps/web-platform/(app|components)/**\*.(tsx|jsx|css)` AND
+ * `plugins/soleur/docs/**\*.(njk|css)`.
  *
  * Output:
  *   - `--dry-run` (default) — human-readable findings on stdout.
@@ -241,7 +242,9 @@ function defaultPaths(): string[] {
       .map((p) => p.trim())
       .filter(Boolean);
     return all.filter((p) =>
-      /^apps\/web-platform\/(app|components)\/.*\.(tsx|jsx|css)$/.test(p),
+      /^(apps\/web-platform\/(app|components)\/.*\.(tsx|jsx|css)|plugins\/soleur\/docs\/.*\.(njk|css))$/.test(
+        p,
+      ),
     );
   } catch {
     return [];
@@ -276,11 +279,11 @@ function expandPaths(inputs: string[]): string[] {
     if (ls.isSymbolicLink()) continue;
     const s = statSync(abs);
     if (s.isFile()) {
-      if (/\.(tsx|jsx|css)$/.test(abs)) out.push(abs);
+      if (/\.(tsx|jsx|css|njk)$/.test(abs)) out.push(abs);
     } else if (s.isDirectory()) {
       out.push(
         ...listFilesRecursive(abs).filter((f) =>
-          /\.(tsx|jsx|css)$/.test(f),
+          /\.(tsx|jsx|css|njk)$/.test(f),
         ),
       );
     }
