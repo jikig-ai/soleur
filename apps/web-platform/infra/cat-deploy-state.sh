@@ -25,16 +25,22 @@ service_status() {
   fi
 }
 
-# Tail of recent journal entries for a unit. Read-only; returns at most 10
-# lines (capped to ~2000 chars total). Strips control bytes so the JSON
+# Tail of recent journal entries for a unit. Read-only; returns at most 100
+# lines (capped to ~8000 chars total). Strips control bytes so the JSON
 # `vector_journal_tail` field round-trips cleanly. Empty on missing
 # journalctl OR non-existent unit. Used for no-SSH RCA of vector.service
 # startup failures (TR9 PR-5).
+#
+# Tail bumped from 10 → 100 lines because the original cap was eclipsed
+# by high-volume per-request error logs (e.g., Vector's sink retries
+# flooded the 10-line window). The 8000-char cap keeps the JSON payload
+# small enough for the webhook response while letting diagnostic content
+# (envelope_debug sink output, init errors) rise above per-request noise.
 service_journal_tail() {
   local unit="$1"
   if command -v journalctl >/dev/null 2>&1; then
-    journalctl -u "$unit" --no-pager --output=cat -n 10 2>/dev/null \
-      | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 2000 \
+    journalctl -u "$unit" --no-pager --output=cat -n 100 2>/dev/null \
+      | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 8000 \
       || true
   fi
 }

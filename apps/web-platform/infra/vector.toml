@@ -198,8 +198,13 @@ inputs = ["envelope_events", "envelope_metrics"]
 uri = "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/envelope/?sentry_key=${SENTRY_PUBLIC_KEY}&sentry_version=7"
 method = "post"
 batch.max_events = 1
-encoding.codec = "raw_message"
-framing.method = "newline_delimited"
+encoding.codec = "text"
+# framing.method dropped: with batch=1, each request body IS one message.
+# `newline_delimited` framing wraps the body in framing logic that may
+# escape the internal newlines our envelope requires (3 newline-separated
+# JSON lines). Letting Vector default to no framing means the raw
+# `.message` field bytes are POSTed as-is, matching the manual-curl
+# probe that returned 200.
 [sinks.sentry.request]
 timeout_secs = 10
 retry_attempts = 2
@@ -234,6 +239,6 @@ target = "stdout"
 [sinks.envelope_debug]
 type = "console"
 inputs = ["envelope_events", "envelope_metrics"]
-encoding.codec = "raw_message"
-framing.method = "newline_delimited"
+encoding.codec = "text"
+# Same framing-drop rationale as the sentry sink above — see comment there.
 target = "stdout"
