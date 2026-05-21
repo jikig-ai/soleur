@@ -17,6 +17,22 @@ echo ""
 
 assert_file_exists "$AGENT" "ux-design-lead agent exists"
 
+# The deprecated `knowledge-base/design/` directory must not appear in HEAD.
+# Guards against future regressions of the kind introduced by #2617.
+set +e
+head_tree=$(git -C "$REPO_ROOT" ls-tree -r HEAD -- knowledge-base/design/ 2>/dev/null)
+rc=$?
+set -e
+assert_eq "0" "$rc" "git ls-tree HEAD succeeded"
+assert_eq "" "$head_tree" "no knowledge-base/design/ entries in HEAD"
+
+# On-disk: only canonical knowledge-base/product/design must exist.
+set +e
+disk_dirs=$(find "$REPO_ROOT/knowledge-base" -maxdepth 2 -type d -name design 2>/dev/null | sort)
+set -e
+expected="$REPO_ROOT/knowledge-base/product/design"
+assert_eq "$expected" "$disk_dirs" "only knowledge-base/product/design exists on disk"
+
 # The deprecated `knowledge-base/design/` path must not appear. Grep with
 # a word boundary after `design/` so we don't match `knowledge-base/product/design/`.
 set +e
