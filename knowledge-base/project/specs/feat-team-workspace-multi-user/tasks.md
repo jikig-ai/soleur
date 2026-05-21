@@ -27,41 +27,41 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 ## Phase 1 — Migrations 053–056
 
 ### 1.1 Migration 053 — organizations + workspaces + workspace_members + helper + backfill
-- [ ] **1.1.1** Create `apps/web-platform/supabase/migrations/053_organizations_and_workspace_members.sql`
-- [ ] **1.1.2** Define `public.organizations(id, name NULL by default for solo backfill, domain, owner_user_id RESTRICT, created_at)`; enable RLS; add LAWFUL_BASIS comment per AC-GDPR-6
-- [ ] **1.1.3** Define `public.workspaces(id, organization_id RESTRICT, name, created_at)`; enable RLS
-- [ ] **1.1.4** Define `public.workspace_members(workspace_id, user_id RESTRICT, role CHECK in ('owner','member'), attestation_id, created_at, PRIMARY KEY (workspace_id, user_id))`; enable RLS
-- [ ] **1.1.5** Create `is_workspace_member(p_workspace_id, p_user_id)` helper — `LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp`. **Drop STABLE keyword per Kieran C3.** `REVOKE ALL ON FUNCTION ... FROM PUBLIC, anon, authenticated, service_role; GRANT EXECUTE TO authenticated`.
-- [ ] **1.1.6** RLS policies: `orgs_select_for_members`, `workspaces_select_for_members`, `members_select_peers` — all via `is_workspace_member()` helper.
-- [ ] **1.1.7** Backfill block (TR per AC1): `DO $$ ... GET DIAGNOSTICS rc = ROW_COUNT; RAISE NOTICE` pattern. Insert one organization (name=NULL) per existing user; one workspace per organization (`workspaces.id = owner_user_id` per N2); one workspace_members(workspace_id, user_id, 'owner', NULL) per workspace. Idempotent via `WHERE NOT EXISTS` discriminator per learning 2026-03-20-gdpr-remediation-migration-discriminator-strategy.
-- [ ] **1.1.8** Verify `handle_new_user` trigger (if present) + TS fallback parity per learning 2026-03-20-supabase-trigger-fallback-parity. `upsert(onConflict, ignoreDuplicates:true)` on TS side.
+- [x] **1.1.1** Create `apps/web-platform/supabase/migrations/053_organizations_and_workspace_members.sql`
+- [x] **1.1.2** Define `public.organizations(id, name NULL by default for solo backfill, domain, owner_user_id RESTRICT, created_at)`; enable RLS; add LAWFUL_BASIS comment per AC-GDPR-6
+- [x] **1.1.3** Define `public.workspaces(id, organization_id RESTRICT, name, created_at)`; enable RLS
+- [x] **1.1.4** Define `public.workspace_members(workspace_id, user_id RESTRICT, role CHECK in ('owner','member'), attestation_id, created_at, PRIMARY KEY (workspace_id, user_id))`; enable RLS
+- [x] **1.1.5** Create `is_workspace_member(p_workspace_id, p_user_id)` helper — `LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp`. **Drop STABLE keyword per Kieran C3.** `REVOKE ALL ON FUNCTION ... FROM PUBLIC, anon, authenticated, service_role; GRANT EXECUTE TO authenticated`.
+- [x] **1.1.6** RLS policies: `orgs_select_for_members`, `workspaces_select_for_members`, `members_select_peers` — all via `is_workspace_member()` helper.
+- [x] **1.1.7** Backfill block (TR per AC1): `DO $$ ... GET DIAGNOSTICS rc = ROW_COUNT; RAISE NOTICE` pattern. Insert one organization (name=NULL) per existing user; one workspace per organization (`workspaces.id = owner_user_id` per N2); one workspace_members(workspace_id, user_id, 'owner', NULL) per workspace. Idempotent via `WHERE NOT EXISTS` discriminator per learning 2026-03-20-gdpr-remediation-migration-discriminator-strategy.
+- [x] **1.1.8** Verify `handle_new_user` trigger (if present) + TS fallback parity per learning 2026-03-20-supabase-trigger-fallback-parity. `upsert(onConflict, ignoreDuplicates:true)` on TS side.
 
 ### 1.2 Migration 054 — workspace_member_attestations (WORM) + RPCs
-- [ ] **1.2.1** Create `apps/web-platform/supabase/migrations/054_workspace_member_attestations.sql` with LAWFUL_BASIS + RETENTION header block per AC-GDPR-6 + AC-GDPR-5e.
-- [ ] **1.2.2** Define `workspace_member_attestations(id, workspace_id RESTRICT, inviter_user_id RESTRICT, invitee_user_id RESTRICT, attestation_text, accepted_at, ip_hash, user_agent)`; enable RLS.
-- [ ] **1.2.3** WORM trigger `workspace_member_attestations_no_mutate` BEFORE UPDATE/DELETE.
-- [ ] **1.2.4** Column-level posture per learning 2026-03-20-supabase-column-level-grant-override: `REVOKE UPDATE ON TABLE … FROM authenticated, anon` FIRST. NO column-level GRANT.
-- [ ] **1.2.5** RLS SELECT policy via `is_workspace_member(workspace_id, auth.uid())`.
-- [ ] **1.2.6** SECURITY DEFINER RPCs (all `SET search_path = public, pg_temp`, `REVOKE ALL FROM PUBLIC, anon`): `invite_workspace_member`, `remove_workspace_member`, `anonymise_workspace_member_attestations`, `anonymise_workspace_members`, `anonymise_organization_membership`.
-- [ ] **1.2.7** ALTER `workspace_members` to add FK `attestation_id REFERENCES workspace_member_attestations(id)` now that the target table exists.
-- [ ] **1.2.8** Update `workspace_members.attestation_id` for backfilled owner rows: leave NULL (no human-attested act; backfill is system-driven). Documented in 053 backfill comment.
+- [x] **1.2.1** Create `apps/web-platform/supabase/migrations/054_workspace_member_attestations.sql` with LAWFUL_BASIS + RETENTION header block per AC-GDPR-6 + AC-GDPR-5e.
+- [x] **1.2.2** Define `workspace_member_attestations(id, workspace_id RESTRICT, inviter_user_id RESTRICT, invitee_user_id RESTRICT, attestation_text, accepted_at, ip_hash, user_agent)`; enable RLS.
+- [x] **1.2.3** WORM trigger `workspace_member_attestations_no_mutate` BEFORE UPDATE/DELETE.
+- [x] **1.2.4** Column-level posture per learning 2026-03-20-supabase-column-level-grant-override: `REVOKE UPDATE ON TABLE … FROM authenticated, anon` FIRST. NO column-level GRANT.
+- [x] **1.2.5** RLS SELECT policy via `is_workspace_member(workspace_id, auth.uid())`.
+- [x] **1.2.6** SECURITY DEFINER RPCs (all `SET search_path = public, pg_temp`, `REVOKE ALL FROM PUBLIC, anon`): `invite_workspace_member`, `remove_workspace_member`, `anonymise_workspace_member_attestations`, `anonymise_workspace_members`, `anonymise_organization_membership`.
+- [x] **1.2.7** ALTER `workspace_members` to add FK `attestation_id REFERENCES workspace_member_attestations(id)` now that the target table exists.
+- [x] **1.2.8** Update `workspace_members.attestation_id` for backfilled owner rows: leave NULL (no human-attested act; backfill is system-driven). Documented in 053 backfill comment.
 
 ### 1.3 Migration 055 — workspace-keyed RLS sweep + audit_byok_use.workspace_id + aggregate view
-- [ ] **1.3.1** Create `apps/web-platform/supabase/migrations/055_workspace_keyed_rls_sweep.sql` with dependency-on-053 header per Kieran N1.
-- [ ] **1.3.2** Add `workspace_id uuid REFERENCES workspaces(id)` to: conversations (001), messages (001), kb_share_links (017), push_subscriptions (020 — both policies), concurrency_slots (029), audit_byok_use (037 — ON TOP OF founder_id), dsar_export_jobs (041), scope_grants (048), multi_source_dedup (052).
-- [ ] **1.3.3** Backfill `workspace_id = workspace_members.workspace_id WHERE user_id = <table>.user_id` for each. `IS DISTINCT FROM` discriminator + `GET DIAGNOSTICS rc; RAISE NOTICE` per learning.
-- [ ] **1.3.4** ALTER COLUMN `workspace_id` SET NOT NULL after backfill.
-- [ ] **1.3.5** Drop old `auth.uid() = user_id` / `auth.uid() = founder_id` policies on each table.
-- [ ] **1.3.6** Create new `is_workspace_member(workspace_id, auth.uid())` policies on each.
-- [ ] **1.3.7** For `is_message_owner`-routed tables (019 message_attachments, 046 messages external drafts, 051 action_sends): extend the helper to accept workspace context OR add sibling `is_message_owner_in_workspace`. Verify each call site via `git grep -nE "is_message_owner\(" apps/web-platform/supabase/migrations/`.
-- [ ] **1.3.8** Create `public.workspace_cost_aggregate` VIEW with `security_invoker = true`.
+- [x] **1.3.1** Create `apps/web-platform/supabase/migrations/055_workspace_keyed_rls_sweep.sql` with dependency-on-053 header per Kieran N1.
+- [x] **1.3.2** Add `workspace_id uuid REFERENCES workspaces(id)` to: conversations (001), messages (001), kb_share_links (017), push_subscriptions (020 — both policies), concurrency_slots (029), audit_byok_use (037 — ON TOP OF founder_id), dsar_export_jobs (041), scope_grants (048), multi_source_dedup (052).
+- [x] **1.3.3** Backfill `workspace_id = workspace_members.workspace_id WHERE user_id = <table>.user_id` for each. `IS DISTINCT FROM` discriminator + `GET DIAGNOSTICS rc; RAISE NOTICE` per learning.
+- [x] **1.3.4** ALTER COLUMN `workspace_id` SET NOT NULL after backfill.
+- [x] **1.3.5** Drop old `auth.uid() = user_id` / `auth.uid() = founder_id` policies on each table.
+- [x] **1.3.6** Create new `is_workspace_member(workspace_id, auth.uid())` policies on each.
+- [x] **1.3.7** For `is_message_owner`-routed tables (019 message_attachments, 046 messages external drafts, 051 action_sends): extend the helper to accept workspace context OR add sibling `is_message_owner_in_workspace`. Verify each call site via `git grep -nE "is_message_owner\(" apps/web-platform/supabase/migrations/`.
+- [x] **1.3.8** Create `public.workspace_cost_aggregate` VIEW with `security_invoker = true`.
 
 ### 1.4 Migration 056 — current_organization_id JWT custom-claim hook (Phase 5.4 / Kieran C4)
-- [ ] **1.4.1** Create `apps/web-platform/supabase/migrations/056_current_organization_jwt_hook.sql`.
-- [ ] **1.4.2** Define `user_session_state(user_id uuid PK, current_organization_id uuid)`.
-- [ ] **1.4.3** Backfill `user_session_state` with `MIN(workspaces.id)` per user.
-- [ ] **1.4.4** Custom access-token hook injects `app_metadata.current_organization_id` from `user_session_state`. Mirror existing hook precedent (verify migration number at /work-time).
-- [ ] **1.4.5** SECURITY DEFINER RPC `set_current_organization_id(p_org_id)` — caller must be a member of p_org_id; writes `user_session_state`.
+- [x] **1.4.1** Create `apps/web-platform/supabase/migrations/056_current_organization_jwt_hook.sql`.
+- [x] **1.4.2** Define `user_session_state(user_id uuid PK, current_organization_id uuid)`.
+- [x] **1.4.3** Backfill `user_session_state` with `MIN(workspaces.id)` per user.
+- [x] **1.4.4** Custom access-token hook injects `app_metadata.current_organization_id` from `user_session_state`. Mirror existing hook precedent (verify migration number at /work-time).
+- [x] **1.4.5** SECURITY DEFINER RPC `set_current_organization_id(p_org_id)` — caller must be a member of p_org_id; writes `user_session_state`.
 
 ## Phase 2 — Filesystem + sandbox
 
@@ -136,7 +136,7 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 9 — Rollback runbook
 
-- [ ] **9.1** Create `knowledge-base/project/specs/feat-team-workspace-multi-user/rollback.md` — 6-step incident response (disable flag, down-migrate 056→053, restore old policies, drop symlinks, notify members, post-mortem via /soleur:compound). Commit BEFORE migration 053 commit (AC-G).
+- [x] **9.1** Create `knowledge-base/project/specs/feat-team-workspace-multi-user/rollback.md` — 6-step incident response (disable flag, down-migrate 056→053, restore old policies, drop symlinks, notify members, post-mortem via /soleur:compound). Commit BEFORE migration 053 commit (AC-G). — Committed alongside Phase 1 migration files; rollback runbook covers trigger conditions + 6-step response + rolling-deploy safety notes.
 
 ## Phase 10 — Legal scaffolding (parallel PR — DO NOT include in this branch)
 
