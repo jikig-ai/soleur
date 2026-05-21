@@ -15,21 +15,21 @@ plan_review_revision: 2026-05-21-v2
 
 ## Phase 0 — Preconditions Verification
 
-- [ ] 0.1 Run `jq -r '.scripts.test, .scripts["test:ci"]' apps/web-platform/package.json` → expect `"vitest"` and `"vitest run"`.
-- [ ] 0.2 Run `grep -A2 '\[test\]' apps/web-platform/bunfig.toml` → expect `pathIgnorePatterns = ["**"]`.
-- [ ] 0.3 Run `ls apps/web-platform/supabase/migrations/ | sort | tail -5` → confirm highest is `052_*.sql`.
-- [ ] 0.4 Run `grep -n 'SET LOCAL session_replication_role' apps/web-platform/supabase/migrations/051_action_class_widening_and_action_sends.sql` → confirm line 224.
-- [ ] 0.5 STOP and resolve if any check fails.
+- [x] 0.1 Run `jq -r '.scripts.test, .scripts["test:ci"]' apps/web-platform/package.json` → expect `"vitest"` and `"vitest run"`.
+- [x] 0.2 Run `grep -A2 '\[test\]' apps/web-platform/bunfig.toml` → expect `pathIgnorePatterns = ["**"]`.
+- [x] 0.3 Run `ls apps/web-platform/supabase/migrations/ | sort | tail -5` → confirm highest is `052_*.sql`.
+- [x] 0.4 Run `grep -n 'SET LOCAL session_replication_role' apps/web-platform/supabase/migrations/051_action_class_widening_and_action_sends.sql` → confirm line 224.
+- [x] 0.5 STOP and resolve if any check fails.
 
 ## Phase 1 — Template Registry + Hash + `messages.template_id`
 
-- [ ] 1.1 Create `apps/web-platform/server/templates/template-registry.ts` with `TEMPLATE_IDS = ['default_legacy'] as const`, `TEMPLATE_REGISTRY` Record, `isKnownTemplateId` typeguard, and `getTemplateHash(message)` (merged from former template-hash.ts per v2 plan-review).
-- [ ] 1.2 Write `apps/web-platform/test/server/templates/template-registry.test.ts` — hash determinism + pairwise collision regression (TR8).
+- [x] 1.1 Create `apps/web-platform/server/templates/template-registry.ts` with `TEMPLATE_IDS = ['default_legacy'] as const`, `TEMPLATE_REGISTRY` Record, `isKnownTemplateId` typeguard, and `getTemplateHash(message)` (merged from former template-hash.ts per v2 plan-review).
+- [x] 1.2 Write `apps/web-platform/test/server/templates/template-registry.test.ts` — hash determinism + pairwise collision regression (TR8).
 - [ ] 1.3 In mig 053 (under `BEGIN;`), Part A — `ALTER TABLE public.messages ADD COLUMN template_id text` → `UPDATE … SET template_id = 'default_legacy' WHERE template_id IS NULL` → `ALTER TABLE … ALTER COLUMN template_id SET NOT NULL` → `ADD CONSTRAINT messages_template_id_check`.
-- [ ] 1.4 Edit `apps/web-platform/app/api/dashboard/today/[id]/send/route.ts:70-80` — delete inline `templateHashFor`; import `getTemplateHash`.
-- [ ] 1.5 Edit `send/route.ts:111-116` SELECT projection to include `template_id`.
-- [ ] 1.6 Edit `send/route.ts:244` — replace inline call with `getTemplateHash(message)`.
-- [ ] 1.7 Edit `apps/web-platform/server/action-sends/write-action-send.ts` — `template_hash` via shared `getTemplateHash`.
+- [x] 1.4 Edit `apps/web-platform/app/api/dashboard/today/[id]/send/route.ts:70-80` — delete inline `templateHashFor`; import `getTemplateHash`.
+- [x] 1.5 Edit `send/route.ts:111-116` SELECT projection to include `template_id`.
+- [x] 1.6 Edit `send/route.ts:244` — replace inline call with `getTemplateHash(message)`.
+- [x] 1.7 Edit `apps/web-platform/server/action-sends/write-action-send.ts` — `template_hash` via shared `getTemplateHash`.
 
 ## Phase 2 — `template_authorizations` Table + WORM Trigger + Indexes
 

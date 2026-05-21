@@ -98,6 +98,7 @@ function setupMessageRow(
     status: string;
     draft_preview: string | null;
     owning_domain: string | null;
+    template_id: string;
   }> = {},
 ) {
   const row = {
@@ -107,6 +108,7 @@ function setupMessageRow(
     status: "draft",
     draft_preview: DRAFT_PREVIEW,
     owning_domain: "cfo",
+    template_id: "default_legacy",
     ...overrides,
   };
 

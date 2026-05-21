@@ -67,18 +67,6 @@ function assertNeverTier(tier: never): never {
   throw new Error(`unhandled tier: ${String(tier)}`);
 }
 
-function templateHashFor(message: {
-  action_class: ActionClass;
-  owning_domain: string | null;
-}, tier: string): string {
-  // PR-H template hash: stable across (action_class, owning_domain, tier)
-  // triple. PR-I will replace this with a real template_authorizations
-  // record once template-bound E&O windows ship.
-  return createHash("sha256")
-    .update(`${message.action_class}:${message.owning_domain ?? ""}:${tier}`)
-    .digest("hex");
-}
-
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -110,7 +98,9 @@ export async function POST(
   // owner-select RLS lets the founder self-read). Service-role NOT used.
   const { data: message, error: msgErr } = await supabase
     .from("messages")
-    .select("id, user_id, action_class, status, draft_preview, owning_domain")
+    .select(
+      "id, user_id, action_class, status, draft_preview, owning_domain, template_id",
+    )
     .eq("id", messageId)
     .eq("user_id", user.id) // belt-and-suspenders alongside RLS
     .maybeSingle();
@@ -234,6 +224,7 @@ export async function POST(
         id: message.id as string,
         action_class: actionClass,
         draft_preview: draftPreview,
+        template_id: (message.template_id as string | null) ?? "default_legacy",
       },
       grant,
       tier: grant.tier,
@@ -241,13 +232,6 @@ export async function POST(
       typedValue,
       recipientIdentifier,
       bodyContent,
-      templateHash: templateHashFor(
-        {
-          action_class: actionClass,
-          owning_domain: (message.owning_domain as string | null) ?? null,
-        },
-        grant.tier,
-      ),
     });
 
     // Flip the draft to archived. RLS owner-update.
