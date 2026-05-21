@@ -27,7 +27,17 @@ PrivateTmp=true
 # the chown step inside this sandbox. The /var/lib/inngest entry is required
 # because mkdir+chown for SQLite's data dir runs ahead of the systemd unit's
 # own ReadWritePaths.
-ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /var/lib/inngest /usr/local/bin
+# /etc/vector + /var/lib/vector added 2026-05-21 (TR9 PR-5): inngest-bootstrap.sh
+# now also installs Vector (observability shipper) alongside the inngest CLI;
+# its config + state dirs need bootstrap-time write access from inside this
+# namespace. Surfaced via v1.1.1 deploy diagnostic capture
+# (reason="mkdir: cannot create directory /etc/vector: Read-only file system").
+# `-` prefix on /var/lib/vector + /etc/vector marks them optional:
+# systemd silently ignores the path if absent, instead of refusing to set up
+# the mount namespace (which on prior PR #4257 took webhook.service down
+# entirely until the dirs were created). Once inngest-bootstrap.sh creates
+# them on first v1.1.x deploy, they become real ReadWritePaths.
+ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
 ReadOnlyPaths=/etc/webhook /etc/default/webhook-deploy
 TimeoutStopSec=180
 
