@@ -41,11 +41,21 @@ new monitor types and offers no drift detection for the rules it manages.
 
 ## Cluster / Host Glossary
 
-Sentry's EU footprint splits across three host classes; conflating them is the
-root failure mode of the 2026-03-28 → 2026-05-16 phantom-ingest window
-(see PIR `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
-and Article 30 PA8 §(d) recipient-drift disclosure). All future Sentry-touching
-work in this repo MUST reference this glossary by name when choosing a host.
+Sentry's EU footprint splits along **three orthogonal routing axes** — URL slug
+(which dashboard / API subdomain you reach), database cluster (which physical
+EU ingest cluster serves DSN POSTs), and token-membership scope (which orgs an
+`SENTRY_AUTH_TOKEN` can read or write). Conflating any two — most pointedly,
+assuming `<org-slug>.sentry.io/api/0/organizations/<slug>/` returning 401 means
+"the slug names an unowned third-party org" rather than "the token's membership
+scope does not include this slug" — was the root inference failure that drove
+the 2026-03-28 → 2026-05-16 ingest routing confusion documented in PIR
+`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+(see Phase 9 Gate-3b correction; both `jikigai` and `jikigai-eu` orgs were
+operator-owned EU-database orgs throughout, per Sentry support replies
+2026-05-19, and the duplicate `jikigai` org was canceled vendor-side on
+2026-05-21). All future Sentry-touching work in this repo MUST reference this
+glossary by name when choosing a host AND verify token-membership scope before
+inferring ownership from any HTTP status.
 
 | Host class      | Hostname(s)                                         | Serves                                                                                                                       | Does NOT serve                                                                            |
 |-----------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
@@ -63,14 +73,14 @@ work in this repo MUST reference this glossary by name when choosing a host.
   Setting it to `https://de.sentry.io/api/` produces silent 404s (ingest-only
   host has no `/api/0/...` surface). The org-subdomain is the only base_url
   shape that works for slug-scoped operations regardless of org slug.
-  **Transition note (as of this ADR revision, 2026-05-16, updated 2026-05-17
-  for the slug-rewrite finding):** `apps/web-platform/infra/sentry/main.tf:30`
-  still resolves to `https://de.sentry.io/api/` under
-  `var.sentry_region == "de"`. The flip lands in PR-β of #3861 atomic with
-  the tfstate drop + serial re-import sequence (plan
-  `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md`
-  Phase 2 step 9 + Phase 6). Target value: `"https://${var.sentry_org}.sentry.io/api/"`
-  (org-subdomain pattern), NOT the originally-planned `"https://eu.sentry.io/api/"`.
+  **Transition note (2026-05-16, updated 2026-05-17 for the slug-rewrite
+  finding, updated 2026-05-21 for the token-scope correction):**
+  `apps/web-platform/infra/sentry/main.tf` now uses
+  `"https://${var.sentry_org}.sentry.io/api/"` (org-subdomain pattern) under
+  `var.sentry_region == "de"`, landed by PR-β #3945 atomic with the tfstate
+  drop + serial re-import sequence. The `de.sentry.io` and `eu.sentry.io`
+  regional hosts are reserved for slug-less endpoints (`/users/me/`, `/auth/*`)
+  per the API row above.
 - **Audit script `api_host`** (`apps/web-platform/scripts/sentry-monitors-audit.sh`)
   region-probe loop MUST include `eu.sentry.io` (and prefer it over `sentry.io`
   for EU-resident orgs) — `de.sentry.io` will return 404 for every API call.
