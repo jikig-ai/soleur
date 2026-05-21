@@ -41,7 +41,7 @@ Triad-endorsed (CPO + CLO + CTO) Approach A. Brand-survival threshold = single-u
 
 **If this leaks, the user's workspace data is exposed via:** mis-routed `syncWorkspace` invocation pulling into the wrong operator's `workspace_path`. Mitigated by: (a) install-scoped `gitWithInstallationAuth` (existing), (b) write-scope test in Phase 2 covering `installation_id → user_id → workspace_path` AND concurrent two-installation isolation (Kieran #8), (c) Inngest CEL key scoped to `installation_id` (no cross-operator coalescing).
 
-**Brand-survival threshold:** single-user incident. Carry-forward from brainstorm Phase 0.1 framing. CPO sign-off REQUIRED before `/work` — brainstorm Phase 0.5 CPO assessment covers this; reaffirm before starting Phase 1.
+- **Brand-survival threshold:** `single-user incident`. Carry-forward from brainstorm Phase 0.1 framing. CPO sign-off REQUIRED before `/work` — brainstorm Phase 0.5 CPO assessment covers this; reaffirm before starting Phase 1.
 
 ## Open Code-Review Overlap
 
@@ -189,13 +189,15 @@ logs:
   retention: 30 days (existing tier per knowledge-base/legal/sub-processors.md)
 
 discoverability_test:
-  command: |
-    mcp__plugin_supabase_supabase__execute_sql with SQL:
-      SELECT kb_sync_history->-1 AS latest FROM public.users WHERE id = '<operator-uuid>';
-  expected_output: |
-    Latest entry is either legacy {date, count} (pre-merge data) or new shape
-    {at, trigger ∈ ["webhook_push","manual","session"], ok, ...}. Empty array
-    on never-synced operators is acceptable; renders "Workspace ready" copy.
+  command: curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 https://app.soleur.ai/api/inngest
+  expected_output: "200 or 401"
+  # 200 = Inngest endpoint reachable + signature-check pass for an admin probe.
+  # 401 = Inngest endpoint reachable but signature-check refused (the expected
+  # response for a probe without HMAC) — proves the route is registered.
+  # Anything else (000 DNS-fail, 5xx, 404) means the Inngest function/route is absent.
+  # Deeper verification (kb_sync_history row presence post-push) is operator-driven
+  # via `mcp__plugin_supabase_supabase__execute_sql` with SQL
+  # `SELECT kb_sync_history->-1 FROM public.users WHERE id = '<id>'` (AC9).
 ```
 
 ## Domain Review
