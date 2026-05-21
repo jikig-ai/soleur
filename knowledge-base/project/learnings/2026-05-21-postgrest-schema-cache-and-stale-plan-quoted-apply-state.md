@@ -114,7 +114,7 @@ state" — but no equivalent gate fires today.
    the Doppler pooler path, the operator should EITHER (a) trigger a Supabase
    Management API restart of PostgREST, OR (b) wait for the natural schema
    poll cycle (~10 minutes by Supabase Cloud default). The "NOTIFY via pooler"
-   shape will not work.
+   shape will not work. **Tooling tracked at #4285** — `apps/web-platform/scripts/postgrest-reload-schema.sh` will fire via Supabase Management API after `run-migrations.sh` apply.
 
 ## Session Errors
 
