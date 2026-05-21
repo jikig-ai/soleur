@@ -11,7 +11,7 @@ const MAX_ICON_SIZE = 100 * 1024; // 100KB
 const MAX_ICON_DIMENSION = 256;
 const ACCEPTED_ICON_TYPES = ["image/png", "image/webp"];
 
-export function TeamSettingsContent() {
+export function ConversationNamesSettingsContent() {
   const { names, updateName, updateIcon, getIconPath, loading } = useTeamNames();
 
   if (loading) {
@@ -153,7 +153,7 @@ function LeaderRow({
 
         await onIconChange(leaderId, `${targetDir}/${iconFilename}`);
       } catch (err) {
-        console.error("[team-settings] icon upload error:", err);
+        console.error("[conversation-names-settings] icon upload error:", err);
         setError("Upload failed. Please try again.");
       } finally {
         setUploading(false);
