@@ -655,6 +655,23 @@ Before emitting `## Work Phase Complete` (one-shot mode) or chaining into the po
 
 **Form rationale.** `git rev-parse --abbrev-ref HEAD` matches `ship/SKILL.md:619` precedent and returns the literal `HEAD` on detached state (vs. `git branch --show-current` which returns empty), so the detached-HEAD guard catches both shapes. `git rev-list ... --count` returns a clean integer ready for `[[ "$N" == "0" ]]`; the `wc -l` shape requires a `tr -d` strip and is whitespace-padded. Precedent: `plugins/soleur/skills/ship/SKILL.md:619`, `.claude/hooks/ship-unpushed-commits-gate.sh`. **Distinct exit codes** (`2 = pause-and-commit`, `1 = halt-and-investigate`) let one-shot orchestrators distinguish the two recovery paths rather than treating both as opaque non-zero failures.
 
+#### Post-Merge Section Self-Audit (HARD GATE)
+
+After drafting the PR body and BEFORE `gh pr ready` / `gh pr merge --auto`, scan every line under headings matching `^##\s+(Post-?merge|Operator|Follow-?ups?)` (case-insensitive). For each bullet, classify and resolve **before** marking ready:
+
+| Pattern | Action |
+|---|---|
+| Doppler/env-var verification | Inline-execute via `doppler secrets get <KEY> -p soleur -c <env> --plain`; if missing, set from a known source via `doppler secrets set` or update the handler to read the existing canonical name. |
+| `Within Nh of merge: file <issue>` | File the issue NOW via `gh issue create` using the template the bullet describes; replace the bullet with `Done: #<num>`. |
+| `gh issue close` / `gh issue comment` on existing issues | Run NOW via `gh` CLI. |
+| Sentry / Better Stack / monitor verification | Replace with the monitor's own auto-page mechanism (`failure_issue_threshold = 1` is the verification — no operator gaze required per `hr-no-dashboard-eyeball-pull-data-yourself`). If active verification is still wanted, create a one-time scheduled workflow via `/soleur:schedule create --once --at <date>` with a self-disabling `verify-and-close-or-file-issue` body. |
+| Genuinely operator-only (CAPTCHA, SSO consent, payment-card entry, hardware MFA, K-bis-style first-onboarding) | File a `type/chore` issue carrying the literal `deferred-automation` sentinel via `gh issue create --label type/chore --body "deferred-automation backlog item; re-evaluate when: <criterion>" ...`, then add `Tracks #N` to the bullet in the PR body. |
+| Anything else | Inline-execute. Default-deny on "operator should later …" phrasing. |
+
+After resolution, re-scan; the section MUST contain zero unaccompanied operator/manual bullets. The `ship-operator-step-gate.sh` PreToolUse hook enforces this mechanically at `gh pr ready` / `gh pr merge --auto` — the gate's deny message lists each undeferred match. Override via `SOLEUR_SKIP_OPERATOR_STEP_GATE=1` is reserved for the rare attestation case.
+
+**Why:** PR #4227 (TR9 PR-3) shipped with a "Post-merge" section listing four operator items (Doppler secrets check, T+90 min Sentry verify, T+24h auto-resolve verify, file follow-up issue within 48h) — all four were inline-automatable; the agent had hard rules forbidding the deferral (`hr-exhaust-all-automated-options-before`, `hr-never-label-any-step-as-manual-without`, `wg-block-pr-ready-on-undeferred-operator-steps`) and still wrote the bullets. The gate existed at `/ship` Phase 5.5 but the agent reached `gh pr ready` directly. This self-audit + the hook close both halves of that bypass. See `knowledge-base/project/learnings/best-practices/2026-05-21-post-merge-section-self-audit.md`.
+
 #### Invocation Mode
 
 **If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Output exactly `## Work Phase Complete` and then **immediately invoke** `skill: soleur:review` (step 4 of the one-shot sequence). Do NOT end your turn after outputting the marker — you ARE the orchestrator, so you must continue executing one-shot steps 4 through 10 in order. The marker is a progress signal, not a stopping point.
