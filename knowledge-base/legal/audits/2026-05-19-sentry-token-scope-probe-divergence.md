@@ -6,8 +6,10 @@ related_issues: [3962, 3849]
 related_pr: 4044
 related_plan: knowledge-base/project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md
 gate: 3b
-status: halt
-verdict: theories-falsified-pending-triad-respawn
+status: superseded
+status_superseded_by: knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md
+status_superseded_at: 2026-05-21T07:00:00Z
+verdict: theories-falsified-T3-confirmed-as-T4-internal-integration-mechanism
 probe_run_at: 2026-05-19T10:34:30Z
 probe_token_minted_at_utc: 2026-05-19T10:42:20Z
 probe_token_revoked_at_utc: 2026-05-19T10:45:03Z
@@ -48,7 +50,8 @@ re-spawn agrees on a new theory shape.
 | T0 | 2026-05-17 original: "phantom-ingest to an unowned third-party Sentry organization, Art-33 deadline 2026-05-19T12:50:00Z" | **FALSIFIED** | Sentry support replies 2026-05-19 (billing + Rodolfo). `jikigai` is operator-owned. |
 | T1 | Plan's reframe: "Token-scope mismatch — token has `org:read` only for `jikigai-eu` slug, not for `jikigai`" | **IMPRECISE** | (a) STEP1=403 not 401 (still permission-class, but the plan's AC1 wording fails); (b) Sentry Personal Tokens carry scope flags (`org:read`, `event:read`, etc.) that are NOT per-org-slug — the slug-scope model is wrong for Personal Tokens. |
 | T2 | "Org Auth Token slug-binding": runtime token is an Org Auth Token bound to `jikigai-eu` org; Org Auth Tokens cannot access other orgs by design | **FALSIFIED** | `https://jikigai-eu.sentry.io/settings/auth-tokens/` (Organization Tokens page) shows literal zero: "You haven't created any authentication tokens yet." If the runtime token were an Org Auth Token bound to `jikigai-eu`, it would appear there. It does not. |
-| T3 | Current best: "Personal Token, user-membership boundary — the runtime token's token-holder identity (the user / service-account it authenticates as) is recognized by Sentry but is not a member of the `jikigai` org" | **NOT YET TESTED** | Consistent with STEP1=403 + STEP2=200 + STEP3=200 + zero `jikigai-eu` Org Auth Tokens. Verification path: hit `https://sentry.io/api/0/` or `/api/0/me/` with the runtime token to surface its identity. Or read `https://jikigai.sentry.io/settings/members/` and compare against jean.deruelle's known membership. |
+| T3 | Current best: "Personal Token, user-membership boundary — the runtime token's token-holder identity (the user / service-account it authenticates as) is recognized by Sentry but is not a member of the `jikigai` org" | **CONFIRMED AS T4 (2026-05-21)** | T3's substance confirmed (membership-boundary causal claim correct). Auth-class label corrected from "Personal Token" to "Internal Integration token" (a distinct Sentry auth class that shares the legacy 64-hex token shape). Verification path was walked 2026-05-21 — full evidence: `knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md`. |
+| T4 | The runtime `SENTRY_AUTH_TOKEN` is a Sentry **Internal Integration token** issued for the `web-platform-ci` Internal Integration installed on `jikigai-eu`. The token authenticates as an auto-generated proxy-user identity (`web-platform-ci-26eeaf-...@proxy-user.sentry.io`) that is — by Sentry's design — a member only of the integration's installation org. | **CONFIRMED 2026-05-21** | (a) `/api/0/users/me/` returns 403 (definitive: User Auth Tokens return 200); (b) `/api/0/organizations/` returns `[]` across all hosts (Internal Integrations cannot enumerate orgs); (c) `/api/0/organizations/jikigai-eu/sentry-apps/` lists `web-platform-ci-26eeaf` with scopes matching the runtime token's `auth.scopes` byte-for-byte and slug matching the proxy-user prefix byte-for-byte. Full audit: `knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md`. |
 
 **T0 falsification is canonical regardless of T1/T2/T3 outcome.** The substantive corrective story
 holds in every variant; what's unstable is the precise causal claim about why the original 401 /

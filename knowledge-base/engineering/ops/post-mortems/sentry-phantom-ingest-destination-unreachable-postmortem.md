@@ -5,8 +5,8 @@ incident_pr: 1235
 incident_window: "2026-03-28T18:03:00Z → 2026-05-16T12:50:00Z"
 suspected_change: "PR #1235 introduced Sentry SDK + SENTRY_DSN to Doppler prd on 2026-03-28. DSN points to org ID 4511123328466944 on the de.sentry.io ingest cluster — the destination org is not enumerable, not controllable, and likely orphaned. Phantom-ingest window ≈ 49 days."
 brand_survival_threshold: none
-status: open
-gate_3_pending: true
+status: resolved
+gate_3_pending: false
 gate_3_expiry: "2026-05-31T19:19Z"
 triggers:
   []
@@ -15,9 +15,13 @@ art_34_triggered: false
 art_33_deadline: "superseded-2026-05-19T12:50:00Z"
 correction_pending: false
 correction_evidence: "knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md"
+t3_resolution_evidence: "knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md"
 gate_3_resolution: 3b
 gate_3_resolved_at: "2026-05-19T10:34:30Z"
+t3_mechanism: "T4-internal-integration-proxy-user-membership-boundary"
+t3_resolved_at: "2026-05-21T07:00:00Z"
 duplicate_org_canceled_at: "2026-05-21"
+resolved_at: "2026-05-21T08:30:00Z"
 classification_override:
   advisory: aggregate pattern
   chosen: none
@@ -170,15 +174,58 @@ monitor inventory verified the same day: **10 active cron monitors**
 (HTTP 200), 0 disabled (additive to the 8 enumerated by PR-β #3945; added
 since: `scheduled-follow-through`, `scheduled-gh-pages-cert-state`).
 
-**What stays open.** PIR `status: open` is retained until the Phase 9
-narrative's T3 token-membership-boundary mechanism is empirically nailed
-(probe report §Theory state). The substantive corrective story (operator
-ownership confirmed; no third-party recipient occurred; no Art-33 / Art-34
-exposure) is canonical regardless of T3 outcome and is the load-bearing
-finding for the §5(2) accountability record carried by PA8 §(d).
+**T3 mechanism — RESOLVED 2026-05-21 (promoted to T4).** The probe
+deferred from 2026-05-19 was walked on 2026-05-21 against the runtime
+`SENTRY_AUTH_TOKEN`. Full evidence:
+`knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md`.
 
-**Corpus surfaces updated by PR-2 (this commit).** Article 30 PA8 §(d)
-retract-in-place UPDATE block; this PIR Phase 9 section + frontmatter flip;
-ADR-031 §Cluster/Host Glossary reframed to three orthogonal axes; auth.users
-audit artifact renamed (drop "phantom-ingest") + correcting note; learnings
-sweep cross-linked.
+Summary: the runtime token is a Sentry **Internal Integration token**
+(legacy 64-hex format, but a distinct auth class from User Auth Tokens)
+issued for the `web-platform-ci` Internal Integration installed on the
+`jikigai-eu` organization. It authenticates as an auto-generated proxy-user
+identity (`web-platform-ci-26eeaf-...@proxy-user.sentry.io`, user ID
+`4569715`, dateJoined `2026-05-17T11:25:11Z` — 12 minutes after `jikigai-eu`
+org creation). The proxy-user is — by Sentry's design — a member only of
+the integration's installation org; against any other org slug (including
+operator-owned ones like the pre-cutover `jikigai`) the membership-scope
+check returns HTTP 401/403 depending on the route's auth-class boundary.
+
+Disambiguating evidence (full table in the resolution audit):
+- `/api/0/users/me/` returns HTTP 403 (User Auth Tokens return 200; proxy-users cannot call this surface) — definitive negative evidence the token is NOT a User Auth Token
+- `/api/0/organizations/` listing returns `[]` on every host (Internal Integrations cannot enumerate orgs; only slug-direct paths work)
+- `/api/0/organizations/jikigai-eu/sentry-apps/` lists `web-platform-ci-26eeaf` with scopes that match the runtime token's `/api/0/` `auth.scopes` byte-for-byte, and a slug that matches the proxy-user prefix byte-for-byte
+
+T3's "Personal Token" wording is corrected to "Internal Integration token"
+(the precise auth-class label); T3's membership-boundary causal claim is
+preserved verbatim. The composite original-window 401/403 surface is fully
+explained by the integration's proxy-user membership scope + the
+`eu.sentry.io` regional host's `activeorg`-cookie slug-rewrite bug for
+`-eu`-suffix slugs (ADR-031 §Cluster/Host Glossary, API row) acting in
+superposition.
+
+**Mapping back to the 2026-03-28 → 2026-05-16 window:** the runtime token
+then was the equivalent `web-platform-ci` Internal Integration installed on
+the original (now-canceled, vendor-side, 2026-05-21) `jikigai` org. The
+mechanism class is identical; only the specific installation moved at the
+2026-05-17 cutover. **There was never a third-party recipient.** The
+integration's proxy-user is Sentry-internal bookkeeping infrastructure for
+the operator-administered integration; it is not a separate data controller,
+sub-processor, or recipient under Art. 30.
+
+PIR `status: open → resolved`. All Phase 8 gates + Phase 9 T4 mechanism
+nailed. §5(2) accountability evidence is complete across:
+- 2026-05-17 SQL-count audit (renamed by PR-2 to drop "phantom-ingest"):
+  `knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md`
+- 2026-05-19 probe-divergence audit:
+  `knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`
+- 2026-05-21 T3-resolution audit (this PIR section's principal evidence):
+  `knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md`
+- Article 30 PA8 §(d) UPDATE block:
+  `knowledge-base/legal/article-30-register.md:160`
+
+**Corpus surfaces updated by PR-2 (2026-05-21 merge commit `057927af`).**
+Article 30 PA8 §(d) retract-in-place UPDATE block; this PIR Phase 9 section
++ frontmatter flip; ADR-031 §Cluster/Host Glossary reframed to three
+orthogonal axes; auth.users audit artifact renamed (drop "phantom-ingest") +
+correcting note; compliance-posture row UPDATE block; learnings sweep
+cross-linked.
