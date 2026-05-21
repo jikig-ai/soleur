@@ -155,9 +155,9 @@ Tracked separately. Branch `feat-team-workspace-legal-scaffolding`. Spawns `lega
 
 ## Phase 11 — Compliance posture + Article 30
 
-- [ ] **11.1** Edit `knowledge-base/legal/compliance-posture.md` Active Items: add Phase 10 legal-PR dependency entry.
-- [ ] **11.2** Edit `knowledge-base/legal/article-30-register.md` PA-2 (or new PA entry) — add "workspace co-member" data category with jikigai as initial test case.
-- [ ] **11.3** Edit `knowledge-base/product/roadmap.md` — move #4229 to In-progress.
+- [x] **11.1** Edit `knowledge-base/legal/compliance-posture.md` Active Items: add Phase 10 legal-PR dependency entry. — Added IN-PROGRESS row "Team workspace multi-user — legal-doc lockstep gate dependency" before the Sentry residency row.
+- [x] **11.2** Edit `knowledge-base/legal/article-30-register.md` PA-2 (or new PA entry) — add "workspace co-member" data category with jikigai as initial test case. — Added "Workspace co-member data category" row inside PA-2 before the (g) TOMs row; documents the new recipient relationship, RLS predicate, FK-reverse Art-17 cascade, and AC-LEGAL-FLIP gate.
+- [x] **11.3** Edit `knowledge-base/product/roadmap.md` — move #4229 to In-progress. — Added MU4 row to the Multi-User Readiness Gate table; status In-progress with PR #4225 link and legal-PR blocker.
 
 ## Phase 12 — PR ready + ship
 
