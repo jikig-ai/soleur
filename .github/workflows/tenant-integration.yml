@@ -114,6 +114,18 @@ jobs:
           fi
           echo "Doppler config dev_scheduled -> environment=dev (verified)."
 
+      # Drift probe (#4241) — composite action shared with scheduled cron at
+      # `.github/workflows/scheduled-dev-migration-drift.yml`. Surfaces
+      # `_schema_migrations` rows on dev whose file is missing from
+      # origin/main OR whose content_sha drifts (caught by migration 054).
+      # Severity is `::warning::` by design: the apply-time gate in
+      # `apps/web-platform/scripts/run-migrations.sh` (#4241 Phase 3.1) is
+      # the enforcement layer, this probe is the visibility layer.
+      - name: Detect dev-vs-main migration drift
+        uses: ./.github/actions/dev-migration-drift-probe
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+
       # Apply migrations to dev before running tests. Without this step,
       # tenant-integration tests run against whatever schema dev happens to
       # have, which can lag behind the PR's migration files — producing
@@ -141,6 +153,15 @@ jobs:
         working-directory: apps/web-platform
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          # The unmerged-apply gate (#4241) blocks files not on origin/main
+          # unless this env is set. The workflow IS the legitimate apply path
+          # for this PR's own in-flight migrations — PR review (mandatory for
+          # merge) is the gate for content; this env flag is the gate for the
+          # apply path. Direct-`psql` applies outside CI still require explicit
+          # operator ack via the same flag. The drift probe above surfaces any
+          # leave-behind state on every run, so a maliciously-shipped migration
+          # cannot stay invisible. See learning file for full discussion.
+          ALLOW_UNMERGED_DEV_APPLY: "1"
         run: |
           set -uo pipefail
           doppler run -p soleur -c dev_scheduled -- \
