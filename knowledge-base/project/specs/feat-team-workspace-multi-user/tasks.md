@@ -26,6 +26,8 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 1 — Migrations 053–056
 
+**Apply status (dev):** all 4 forward migrations applied to dev project via Doppler `DATABASE_URL_POOLER` (session-mode :5432 rewrite) at 2026-05-21. Backfill counts: 437 organizations / 437 workspaces / 437 workspace_members (53 new + 36 pre-existing in dev) → 473 total per table aligned with `public.users` count. 055 sweep: 179 conversations, 172 messages, 1224 audit_byok_use, 71 scope_grants, 0 in the other 5 tables (no rows in dev). 056 user_session_state: 473 rows post-idempotent-retop (gap closed via re-run; root cause likely pre-existing test rows that were deleted between 056 apply and verify). Schema integrity verified: all 5 new tables, 10 functions, 18 RLS policies present; 0 NOT NULL violations across all `workspace_id` columns; workspace_cost_aggregate view + scope_grants_workspace_id_check constraint present. **prd apply deferred** — same Doppler+pg path applies; pending operator approval to flip target config.
+
 ### 1.1 Migration 053 — organizations + workspaces + workspace_members + helper + backfill
 - [x] **1.1.1** Create `apps/web-platform/supabase/migrations/053_organizations_and_workspace_members.sql`
 - [x] **1.1.2** Define `public.organizations(id, name NULL by default for solo backfill, domain, owner_user_id RESTRICT, created_at)`; enable RLS; add LAWFUL_BASIS comment per AC-GDPR-6
