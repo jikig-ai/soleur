@@ -296,7 +296,12 @@ async function resolveSupabaseRefFromCname(apiHost: string): Promise<string | nu
 async function probeOauth(): Promise<ProbeResult> {
   const appHost = process.env.APP_HOST || DEFAULT_APP_HOST;
   const apiHost = process.env.API_HOST || DEFAULT_API_HOST;
-  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+  // The GHA workflow mapped `secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY` → env
+  // `SUPABASE_ANON_KEY`. Doppler prd carries it under its canonical name
+  // (`NEXT_PUBLIC_SUPABASE_ANON_KEY`); accept either to avoid creating a
+  // redundant secret.
+  const supabaseAnonKey =
+    process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const githubClientId = process.env.OAUTH_PROBE_GITHUB_CLIENT_ID;
   const supabaseProjectRef = process.env.SUPABASE_PROJECT_REF;
 
