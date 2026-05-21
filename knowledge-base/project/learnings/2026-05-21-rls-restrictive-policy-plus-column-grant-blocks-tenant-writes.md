@@ -14,7 +14,7 @@ tags:
   - kb-sync-history
 related_pr: 4226
 related_issue: 4224
-synced_to: []
+synced_to: [data-integrity-guardian-issue-4240]
 ---
 
 # RLS RESTRICTIVE policy + column-level GRANT silently blocks every tenant-client write
