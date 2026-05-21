@@ -119,9 +119,11 @@ if [[ "$row_count" -eq 0 ]]; then
 fi
 
 # Refresh origin/main once so the unmerged-apply gate below (issue #4241)
-# reads a current `git ls-tree`. Tolerate offline — the worst case is a
-# false-positive that the operator overrides with ALLOW_UNMERGED_DEV_APPLY=1.
-git fetch --quiet origin main 2>/dev/null || true
+# reads a current `git ls-tree`. Tolerate offline; emit a visible warning so
+# a stale ref does not silently route every file through the ack-bypass path.
+if ! git fetch --quiet origin main 2>/tmp/run-migrations-fetch.err; then
+  echo "::warning::git fetch origin main failed (see /tmp/run-migrations-fetch.err); unmerged-apply gate may produce false positives."
+fi
 
 # Apply unapplied migrations in sorted order
 applied=0
@@ -149,26 +151,38 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     *.down.sql) continue ;;
   esac
 
+  # Filename shape whitelist — defense in depth for the SQL literal interpolations
+  # below and the `git ls-tree` path interpolation in the unmerged-apply gate.
+  # The *.sql glob does NOT exclude quotes, newlines, backslashes, or path-
+  # traversal sequences in filenames; an attacker with repo-write would otherwise
+  # have a small SQL-injection surface against the dev-only `_schema_migrations`
+  # table via crafted migration filenames.
+  case "$filename" in
+    *[!a-zA-Z0-9._-]*)
+      echo "::error::Migration filename contains unsupported characters: $filename"
+      exit 1 ;;
+  esac
+
   # Unmerged-apply gate (#4241). Block apply of migration filenames that are
   # not on origin/main unless the operator explicitly acks with
   # ALLOW_UNMERGED_DEV_APPLY=1. Closes the dev-vs-main drift class that broke
   # `Tenant integration (dev-Supabase)` on 2026-05-21 when migrations 053-057
   # from an unmerged branch were applied to dev. `git ls-tree origin/main`
   # reads the local fetch (refreshed once before the loop above). The opt-in
-  # env var mirrors hr-menu-option-ack-not-prod-write-auth applied to dev
-  # migration applies.
+  # env var is a local-iteration valve: dev is unshared and synthetic-only per
+  # hr-dev-prd-distinct-supabase-projects, so the ack here prevents leave-behind
+  # drift rather than authorising a destructive prd write (distinct from the
+  # prd-only ack class governed by hr-menu-option-ack-not-prod-write-auth).
   if [[ -z "$(git ls-tree origin/main -- "apps/web-platform/supabase/migrations/$filename" 2>/dev/null)" ]]; then
     if [[ "${ALLOW_UNMERGED_DEV_APPLY:-0}" != "1" ]]; then
-      echo "::error::Migration $filename is NOT on origin/main."
-      echo "          Applying unmerged migrations to dev creates dev-vs-main drift"
-      echo "          (precedent: #4241). To proceed, re-run with"
-      echo "          ALLOW_UNMERGED_DEV_APPLY=1 and revert before vacation."
+      echo "::error::Migration $filename is NOT on origin/main. Applying unmerged migrations to dev creates dev-vs-main drift (precedent: #4241). To override locally, re-run with ALLOW_UNMERGED_DEV_APPLY=1 and revert the dev schema before pushing — see knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md."
       exit 1
     fi
-    echo "  WARNING: $filename is not on origin/main; proceeding under ALLOW_UNMERGED_DEV_APPLY=1."
+    echo "::warning::$filename is not on origin/main; proceeding under ALLOW_UNMERGED_DEV_APPLY=1."
   fi
 
-  # Filenames are from a controlled glob (*.sql) — safe for direct interpolation.
+  # Filenames are from a controlled glob (*.sql) AND have passed the shape
+  # whitelist above — safe for direct interpolation.
   already_applied=$(run_sql "SELECT count(*) FROM public._schema_migrations WHERE filename = '$filename';")
   if [[ "$already_applied" -gt 0 ]]; then
     skipped=$((skipped + 1))

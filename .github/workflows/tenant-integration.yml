@@ -129,19 +129,43 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
         run: |
           set -uo pipefail
-          applied=$(doppler run -p soleur -c dev_scheduled -- \
-            psql "$DATABASE_URL_POOLER" --no-psqlrc -tAq -c \
-            "SELECT filename FROM public._schema_migrations ORDER BY filename;")
+          # Refresh origin/main locally so `git ls-tree` reflects merged state.
+          # actions/checkout@v4 defaults to fetch-depth=1 and on pull_request runs
+          # does not populate refs/remotes/origin/main; without this fetch the
+          # ls-tree below would return empty for every filename and false-report
+          # all rows as drift. Tolerate offline (|| true); a stale ref produces
+          # a noisy ::warning:: list, not a silent green.
+          if ! git fetch --depth=1 origin main 2>/tmp/fetch.err; then
+            echo "::warning::git fetch origin main failed (see /tmp/fetch.err); drift probe may produce false positives."
+          fi
+          # Wrap psql in `sh -c` so `$DATABASE_URL_POOLER` expands inside the
+          # doppler-injected env of the child process. Expanding in the outer
+          # GitHub Actions shell (where set -u is active and DATABASE_URL_POOLER
+          # is unbound) would abort the step before psql runs.
+          if ! applied=$(doppler run -p soleur -c dev_scheduled -- \
+                sh -c 'psql "$DATABASE_URL_POOLER" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "SELECT filename FROM public._schema_migrations ORDER BY filename;"'); then
+            echo "::warning::drift probe psql query failed; skipping drift check (visibility, not enforcement)."
+            exit 0
+          fi
+          # Filename shape whitelist — defense in depth. `_schema_migrations.filename`
+          # is runner-controlled today, but a future migration could relax that;
+          # reject any row whose filename contains characters outside the safe
+          # set before interpolating into `git ls-tree`'s path argument.
           drift=""
           while IFS= read -r f; do
             [[ -z "$f" ]] && continue
+            case "$f" in
+              *[!a-zA-Z0-9._-]*)
+                echo "::warning::skipping suspicious _schema_migrations row: $f"
+                continue ;;
+            esac
             if [[ -z "$(git ls-tree origin/main -- "apps/web-platform/supabase/migrations/$f")" ]]; then
               drift+="$f"$'\n'
             fi
           done <<<"$applied"
           if [[ -n "$drift" ]]; then
             echo "::warning::dev-Supabase has _schema_migrations rows that are NOT on origin/main."
-            echo "::warning::See #4241 for the precedent (team-workspace branch applied to dev pre-merge)."
+            echo "::warning::See #4241 + knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md for revert procedure."
             echo "::warning::Drift list:"
             while IFS= read -r f; do
               [[ -z "$f" ]] && continue
