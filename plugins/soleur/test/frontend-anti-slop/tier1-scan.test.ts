@@ -171,6 +171,56 @@ describe("frontend-anti-slop tier1-scan: 5 rules × pos + neg fixtures", () => {
       },
     );
   });
+
+  // 6. PURE-BW-BASE — calibrated 2026-05-21 (issue #4270 v1.1 tightening):
+  // initial regex matched bg-black/bg-white anywhere in a className, producing
+  // 6/6 FP on the prod tree (all hits were buttons, not root wrappers). The
+  // tightened regex requires <html|body|main> elements OR co-occurrence with
+  // a root-layout class (min-h-screen|min-h-dvh|h-screen) so a button's
+  // bg-white never trips it but a page wrapper does.
+  test("PURE-BW-BASE POSITIVE: html element with bg-black", () => {
+    withFile(
+      "layout.tsx",
+      `<html className="bg-black text-white"><body>{children}</body></html>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE POSITIVE: full-screen div wrapper with bg-black", () => {
+    withFile(
+      "page.tsx",
+      `<div className="min-h-screen bg-black"><Hero /></div>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE NEGATIVE: button with bg-white (the original FP class)", () => {
+    withFile(
+      "login.tsx",
+      `<button className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200">Sign in</button>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE NEGATIVE: icon with bg-white (no layout-class proximity)", () => {
+    withFile(
+      "icon.tsx",
+      `<div className="h-8 w-8 rounded-full bg-white p-2"><Icon /></div>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
 });
 
 describe("frontend-anti-slop tier1-scan: per-file disable comment", () => {
