@@ -13,6 +13,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import type { RevocationReason } from "@/lib/messages/trust-tier-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +27,15 @@ interface RevokeBody {
 // vendor / policy / quarantine paths go through other code paths (the
 // predicate's auto-revoke, account-delete's cascade, the classifier
 // feedback loop in PR-I+1).
-const FOUNDER_REVOKE_REASONS = new Set([
+//
+// Typed as Set<RevocationReason>: renaming the enum on the TS side
+// (lib/messages/trust-tier-copy.ts) without updating this set fails tsc.
+// The mig 053 revoke_template_authorization RPC additionally gates
+// authenticated callers to reason='founder_revoked' as defense-in-depth.
+// Surfaced by PR-I multi-agent review (pattern-recognition P1-4).
+const FOUNDER_REVOKE_REASONS = new Set<RevocationReason>([
   "founder_revoked",
-] as const);
+]);
 
 export async function POST(req: Request) {
   const { valid, origin } = validateOrigin(req);
@@ -64,7 +71,7 @@ export async function POST(req: Request) {
   }
   if (
     typeof reason !== "string" ||
-    !FOUNDER_REVOKE_REASONS.has(reason as "founder_revoked")
+    !FOUNDER_REVOKE_REASONS.has(reason as RevocationReason)
   ) {
     return NextResponse.json({ error: "invalid_reason" }, { status: 400 });
   }

@@ -439,7 +439,7 @@ All tests use vitest. Integration tests gated by `TENANT_INTEGRATION_TEST=1`.
 2. **Pre-merge acceptance criteria** (see Acceptance Criteria section below).
 
 3. **Post-merge automation** (NO operator-only steps per `2026-05-15-operator-only-step-canonical-list.md`):
-   - Mig 053 applies on prd via `apply-web-platform-migrations.yml` (auto on merge).
+   - Mig 053 applies on prd via the `migrate` job in `.github/workflows/web-platform-release.yml` (auto on push to `main` touching `apps/web-platform/**`). Plan v2 originally referenced a non-existent `apply-web-platform-migrations.yml`; corrected at multi-agent review per data-migration-expert F2.
    - `gh issue close 4078` via `Closes #4078`.
    - Sentry watch for `kind:template_*` tags via existing `/soleur:ship` post-merge verification.
 
@@ -464,7 +464,7 @@ All tests use vitest. Integration tests gated by `TENANT_INTEGRATION_TEST=1`.
 
 ### Post-merge (operator-NO-ops)
 
-- [ ] **AC13** Mig 053 applied on prd via `apply-web-platform-migrations.yml`.
+- [ ] **AC13** Mig 053 applied on prd via the `migrate` job in `.github/workflows/web-platform-release.yml` (auto on push to `main`).
 - [ ] **AC14** Issue #4078 auto-closes via `Closes #4078` link.
 
 ## Risks
@@ -482,7 +482,7 @@ All tests use vitest. Integration tests gated by `TENANT_INTEGRATION_TEST=1`.
 | Mig 053 partial-apply between CREATE TABLE and CREATE INDEX | Low | Wrapped in `BEGIN;…COMMIT;` envelope per architecture review. Down migration drops in reverse order. |
 | Cap coupling with PR-H (learning 2026-05-06) | Low | PR-H ships no cap surface to align with (action_sends has no time-bound expiry); PR-I introduces its own. |
 | Sentry helper consolidation #3739 interference | Low | PR-I uses helpers as-shipped; #3739 sweeps later. |
-| First-send transaction failure mid-flow (authorize_template succeeds, action_sends INSERT fails) | Low | Single Supabase transaction wraps both writes; if action_sends INSERT fails, template_authorizations INSERT also rolls back. No orphaned row. |
+| First-send transaction failure mid-flow (authorize_template succeeds, action_sends INSERT fails) | Low | The two writes run as SEPARATE Supabase REST calls (NOT a single SQL transaction — supabase-js does not expose transactions client-side). If `writeActionSend` 23505s (already_sent on `action_sends_message_unique`), the `template_authorizations` row persists; on the next legitimate send for the same template the predicate finds the row and branches as `authorized`, writes the new `action_sends` row, and consumes one quota slot — no double-authorization. If `writeActionSend` fails with a non-23505 error, the row is benign (founder can revoke at `/dashboard/settings/scope-grants`). Original plan v2 wording claimed a single transaction; corrected at multi-agent review per user-impact-reviewer FINDING 2. The orphan-row outcome is the documented behavior of first-send-IS-authorization, not a defect. |
 
 ## Dependencies
 

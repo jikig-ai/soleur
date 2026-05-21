@@ -56,6 +56,23 @@ describe("template-registry — runtime gates", () => {
     }
   });
 
+  test("(b3) canonicalization lineage snapshot: default_legacy hash is frozen", () => {
+    // Lineage snapshot — guards against an accidental canonicalization
+    // change (whitespace, normalization, or chunk-order in
+    // createHash().update(...)) that would orphan every existing
+    // template_authorizations row keyed off the prior hash. If the
+    // body_template literal at template-registry.ts intentionally
+    // changes, regenerate the frozen hex with:
+    //   node -e "const c=require('crypto'); console.log(c.createHash('sha256').update('default_legacy:v1').digest('hex'));"
+    // and update BOTH this snapshot AND any production rows (via a
+    // SECURITY DEFINER migration RPC, not a direct UPDATE — WORM trigger
+    // applies). Surfaced by PR-I multi-agent review (pattern-recognition
+    // P1-3).
+    expect(getTemplateHash({ template_id: "default_legacy" })).toBe(
+      "75a881772d86a85b59308c7142dd35fc6c396b959739907c8d24864d3365a1e4",
+    );
+  });
+
   test("(c) collision regression (TR8): pairwise distinct hashes for all template-id pairs", () => {
     const hashesById = new Map<TemplateId, string>();
     for (const id of TEMPLATE_IDS) {

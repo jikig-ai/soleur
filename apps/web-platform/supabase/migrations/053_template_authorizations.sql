@@ -187,8 +187,19 @@ CREATE TRIGGER template_authorizations_no_delete
   EXECUTE FUNCTION public.template_authorizations_no_mutate();
 
 -- ============================================================================
--- (d) RLS — owner-select + owner-insert. NO FOR ALL USING per learning
---     2026-04-18-rls-for-all-using-applies-to-writes.md.
+-- (d) RLS — owner-select only. NO FOR ALL USING per learning
+--     2026-04-18-rls-for-all-using-applies-to-writes.md. NO owner-insert
+--     policy because the SECURITY DEFINER `authorize_template` RPC
+--     (mig 053 §(e)) is the ONLY supported writer; SECURITY DEFINER
+--     bypasses RLS so the RPC is unaffected, while the absence of an
+--     INSERT policy denies direct supabase-js INSERTs that would
+--     otherwise bypass the RPC's input validation (template_hash
+--     length, action_class regex, partial-UNIQUE conflict handling)
+--     and let a founder self-mint an arbitrary-bound authorization row
+--     (max_sends=10_000, expires_at='2099-01-01'). Surfaced by PR-I
+--     multi-agent review (user-impact-reviewer FINDING 8). See ADR-035
+--     §Consequences for the "writes go through SECURITY DEFINER RPCs"
+--     invariant.
 -- ============================================================================
 ALTER TABLE public.template_authorizations ENABLE ROW LEVEL SECURITY;
 
@@ -197,10 +208,10 @@ CREATE POLICY template_authorizations_owner_select ON public.template_authorizat
   FOR SELECT TO authenticated
   USING (founder_id = auth.uid());
 
+-- Belt-and-suspenders: explicitly drop any pre-existing owner-insert
+-- policy from earlier mig 053 drafts so re-running this migration on a
+-- dev DB that applied the prior shape lands at the intended posture.
 DROP POLICY IF EXISTS template_authorizations_owner_insert ON public.template_authorizations;
-CREATE POLICY template_authorizations_owner_insert ON public.template_authorizations
-  FOR INSERT TO authenticated
-  WITH CHECK (founder_id = auth.uid());
 
 -- No FOR UPDATE / FOR DELETE policies: writes route through SECURITY
 -- DEFINER RPCs that bypass the WORM trigger via session_replication_role.
@@ -251,11 +262,24 @@ BEGIN
       -- 23505 against template_authorizations_active_unique. Concurrent
       -- first-send raced us; return the winner's id. Idempotent first-
       -- writer-wins (learning 2026-05-03).
+      --
+      -- NOTE: do NOT filter by `revoked_at IS NULL` here. The partial
+      -- UNIQUE only covers active rows, so the 23505 implies an active
+      -- winner existed at INSERT time — but read-committed semantics let
+      -- a concurrent revoke land between the failed INSERT and this
+      -- SELECT, in which case `WHERE revoked_at IS NULL` would return
+      -- zero rows and force a false re-raise. Ordering by authorized_at
+      -- DESC LIMIT 1 returns the most-recent row regardless of state;
+      -- the caller (send/route.ts first_send branch) treats the returned
+      -- id as the authorization id and proceeds to writeActionSend. If
+      -- the row was just revoked, the next predicate call will detect
+      -- the revocation and surface the appropriate DenyReason. Surfaced
+      -- by PR-I multi-agent review (data-migration-expert F1).
       SELECT id INTO v_existing_id
         FROM public.template_authorizations
        WHERE founder_id = v_founder_id
          AND template_hash = p_template_hash
-         AND revoked_at IS NULL
+       ORDER BY authorized_at DESC
        LIMIT 1;
       IF v_existing_id IS NULL THEN
         -- Shouldn't happen — the 23505 by definition implies a row
@@ -305,6 +329,24 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'revoke_template_authorization: invalid reason %', p_reason
       USING ERRCODE = '22023';
+  END IF;
+
+  -- Authenticated callers (founder-initiated revoke surface at
+  -- /api/template-authorizations/revoke) MUST use reason='founder_revoked'.
+  -- The other 7 enum values are reserved for service-role / postgres
+  -- callers: 'quota_exhausted' / 'expired' fire from the
+  -- isTemplateAuthorized predicate's auto-revoke side effect; 'dsr_erasure'
+  -- fires from anonymise_template_authorizations; the remaining four are
+  -- reserved for operator surfaces (regulator orders, vendor TOS, AUP
+  -- enforcement, classifier feedback in PR-I+1). Without this gate, an
+  -- authenticated founder calling supabase-js RPC directly could stamp
+  -- their OWN row with any reason in the enum (RLS scopes by auth.uid()
+  -- so cross-tenant is impossible, but the founder's own audit-trail
+  -- attribution would break — surfaced by PR-I multi-agent review,
+  -- user-impact-reviewer FINDING 1).
+  IF auth.uid() IS NOT NULL AND p_reason <> 'founder_revoked' THEN
+    RAISE EXCEPTION 'revoke_template_authorization: authenticated callers must use reason=founder_revoked (got %)', p_reason
+      USING ERRCODE = '42501';
   END IF;
 
   -- WORM trigger blocks all UPDATEs including founder-initiated revoke; bypass is required.

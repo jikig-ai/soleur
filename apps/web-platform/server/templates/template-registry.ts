@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 
 import { warnSilentFallback } from "@/server/observability";
+import type { ActionClass } from "@/server/scope-grants/action-class-map";
 
 export const TEMPLATE_IDS = ["default_legacy"] as const;
 
@@ -30,8 +31,12 @@ export interface TemplateRegistryEntry {
   // treat as effectively immutable once a template ships.
   body_template: string;
   // The action_class this template applies to. `null` means the
-  // template is class-agnostic (today only `default_legacy`).
-  action_class: string | null;
+  // template is class-agnostic (today only `default_legacy`). Typed as
+  // ActionClass | null (NOT string | null) to honor ADR-035 §Decision (1)
+  // "mirroring ADR-034's ACTION_CLASSES pattern" — a new template
+  // referencing a non-registry class fails tsc. Surfaced by PR-I
+  // multi-agent review (pattern-recognition P1-1).
+  action_class: ActionClass | null;
   // The owning domain (e.g., `external`, `engineering`). `null` for
   // class-agnostic templates.
   owning_domain: string | null;

@@ -118,4 +118,51 @@ describe("revocation-reason registry — runtime gates", () => {
       new Set(Object.keys(REVOCATION_REASON_COPY)),
     );
   });
+
+  test("(f) RPC IN-clause parity: revoke_template_authorization validates the same 8 values", () => {
+    // The 8 literals are replicated in THREE sites: (1) mig 053 CHECK,
+    // (2) REVOCATION_REASON_COPY in trust-tier-copy.ts, (3) the
+    // revoke_template_authorization RPC's `IF p_reason NOT IN (...)`
+    // validator. (e) covers (1)↔(2); (f) covers (3)↔(2) so all three
+    // sites are pinned together. Surfaced by PR-I multi-agent review
+    // (pattern-recognition P2-4 + code-quality F2).
+    const migPath = join(
+      __dirname,
+      "../../../supabase/migrations/053_template_authorizations.sql",
+    );
+    const sql = readFileSync(migPath, "utf8");
+
+    // Match the `revoke_template_authorization` RPC body and locate the
+    // `IF p_reason NOT IN ( ... )` block. The .*?\$\$ stop-at-dollar-quote
+    // limit prevents the regex spilling into a later function whose body
+    // also contains an IN clause.
+    const rpcBodyMatch = sql.match(
+      /CREATE OR REPLACE FUNCTION public\.revoke_template_authorization[\s\S]*?\$\$([\s\S]*?)\$\$/,
+    );
+    expect(
+      rpcBodyMatch,
+      "mig 053 must define revoke_template_authorization RPC",
+    ).not.toBeNull();
+
+    const rpcBody = rpcBodyMatch![1]!;
+    const inClauseMatch = rpcBody.match(
+      /IF\s+p_reason\s+NOT\s+IN\s*\(([\s\S]*?)\)/,
+    );
+    expect(
+      inClauseMatch,
+      "revoke_template_authorization must validate p_reason via NOT IN (...)",
+    ).not.toBeNull();
+
+    const inValues = Array.from(
+      inClauseMatch![1]!.matchAll(/'([a-z_]+)'/g),
+    ).map((m) => m[1]!);
+
+    expect(
+      inValues.length,
+      "RPC IN-clause must list exactly 8 values",
+    ).toBe(8);
+    expect(new Set(inValues)).toEqual(
+      new Set(Object.keys(REVOCATION_REASON_COPY)),
+    );
+  });
 });

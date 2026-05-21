@@ -14,6 +14,7 @@ import { useState, useTransition } from "react";
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { humanTitle } from "@/lib/messages/action-class-copy";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
+import type { DenyReason } from "@/server/templates/is-template-authorized";
 
 interface TodayCardProps {
   id: string;
@@ -80,9 +81,15 @@ const BASE_BUTTON =
 // in v2 (first-send-IS-authorization). `no_scope_grant` corresponds to
 // the legacy 403 `error: 'no_active_grant'` shape — kept here for
 // completeness so future predicate denials map cleanly.
-const DENY_REASON_COPY: Record<string, string> = {
+//
+// Typed as Record<DenyReason, string>: a 6th DenyReason member would
+// fail tsc here without a copy entry. Surfaced by PR-I multi-agent
+// review (code-quality F1 + pattern P1-2).
+const DENY_REASON_COPY: Record<DenyReason, string> = {
   no_scope_grant:
     "You need a scope grant first. Visit Settings → Scope grants.",
+  template_unauthorized:
+    "Send couldn't verify your template authorization. Try again in a moment.",
   template_revoked:
     "This template was revoked. Click Send again to re-authorize.",
   template_expired:
@@ -286,11 +293,11 @@ function StripeCard({
             deny_reason?: string;
             action_class?: string;
           };
-          const copy = json.deny_reason
-            ? DENY_REASON_COPY[json.deny_reason]
-            : undefined;
-          if (copy) {
-            setError(copy);
+          if (
+            json.deny_reason !== undefined &&
+            json.deny_reason in DENY_REASON_COPY
+          ) {
+            setError(DENY_REASON_COPY[json.deny_reason as DenyReason]);
             return;
           }
           if (json.error === "no_active_grant") {

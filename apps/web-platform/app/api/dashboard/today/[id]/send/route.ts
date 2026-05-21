@@ -40,19 +40,9 @@ import {
 } from "@/server/scope-grants/action-class-map";
 import { writeActionSend } from "@/server/action-sends/write-action-send";
 import { hashUserId, reportSilentFallback } from "@/server/observability";
-import {
-  isTemplateAuthorized,
-  PredicateException,
-} from "@/server/templates/is-template-authorized";
+import { tierRequiresTemplateAuth } from "@/server/templates/is-template-authorized";
 import { getTemplateHash } from "@/server/templates/template-registry";
-import logger from "@/server/logger";
-
-// 5s ceiling on the template-authorization probe. Per plan §Phase 4 §4:
-// exceeding this hard timeout fails-closed with 500 + Sentry capture
-// (kind:template_predicate_timeout). The timeout is wrapped via
-// Promise.race; the request is allowed to abandon the probe rather than
-// block the founder's UI on a slow DB connection.
-const PREDICATE_TIMEOUT_MS = 5_000;
+import { runTemplateGate } from "@/server/templates/run-template-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -183,108 +173,51 @@ export async function POST(
 
   // PR-I (#4078) — Template-authorization two-probe gate.
   // Fires AFTER isGranted and BEFORE the tier-specific confirm gate.
-  // Only `draft_one_click` requires template authorization in v1; other
-  // tiers (auto / auto_with_digest are rejected above; approve_every_time
-  // gates on its own typed-confirm path). Plan §Phase 4 §4 + Sharp Edges.
-  const founderIdHash = hashUserId(user.id);
-  const templateHashForGate = getTemplateHash({
-    template_id: (message.template_id as string | null) ?? "default_legacy",
-  });
-  if (grant.tier === "draft_one_click") {
-    let predicateResult;
-    try {
-      // 5s race ceiling. On timeout the request fails 500 + Sentry tag.
-      predicateResult = await Promise.race([
-        isTemplateAuthorized(
-          supabase,
-          user.id,
-          templateHashForGate,
-          grant.id,
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new PredicateException("predicate timed out")),
-            PREDICATE_TIMEOUT_MS,
-          ),
-        ),
-      ]);
-    } catch (err) {
-      // Fail-closed: any predicate exception (DB error, timeout) is
-      // 500 + Sentry capture. NEVER admitted as 'authorized'.
-      reportSilentFallback(err, {
-        feature: "dashboard-send",
-        op: "template-authorize",
-        message: "isTemplateAuthorized threw (fail-closed)",
-        extra: {
-          userId: user.id,
-          messageId,
-          actionClass,
-          kind: "template_predicate_timeout",
-        },
-      });
-      return NextResponse.json(
-        { error: "internal_error", action_class: actionClass },
-        { status: 500 },
-      );
-    }
-
-    if (predicateResult.status === "denied") {
-      // Per plan §Phase 4 §5: pino structured log on every denial. NO
-      // Sentry mirror on routine denials (Art. 7(3) — denials are
-      // expected behavior, not silent fallbacks). Sentry tags are
-      // reserved for actual errors.
-      logger.info(
-        {
-          feature: "template-authorizations",
-          op: "denied",
-          template_hash: templateHashForGate,
-          action_class: actionClass,
-          deny_reason: predicateResult.reason,
-          founder_id_hash: founderIdHash,
-        },
-        "template-authorization denied",
-      );
-      return NextResponse.json(
-        {
-          error: "template_not_authorized",
-          deny_reason: predicateResult.reason,
-          action_class: actionClass,
-        },
-        { status: 403 },
-      );
-    }
-
-    if (predicateResult.status === "first_send") {
-      // First-send-IS-authorization (plan §Phase 4 §2 + §Sharp Edges).
-      // The Send click on a labeled draft_one_click button IS the
-      // Art. 7(3) "specific" + "informed" consent act. Write the
-      // authorization row BEFORE proceeding to action_sends — if
-      // writeActionSend fails downstream, the authorization row is
-      // benign (next send sees it and branches as 'authorized').
-      const { error: authErr } = await supabase.rpc("authorize_template", {
-        p_template_hash: templateHashForGate,
-        p_action_class: actionClass,
-        p_grant_id: grant.id,
-      });
-      if (authErr) {
-        reportSilentFallback(authErr, {
-          feature: "dashboard-send",
-          op: "authorize-template",
-          message: "authorize_template RPC failed (first-send path)",
-          extra: {
-            userId: user.id,
-            messageId,
-            actionClass,
-            kind: "template_authorization_race",
-          },
-        });
+  // Only `draft_one_click` requires template authorization in v1; the
+  // `tierRequiresTemplateAuth` helper carries an exhaustive switch
+  // over ActionClassTier so a future 5th tier fails tsc until it
+  // declares its stance. Orchestration (5s timeout, fail-closed,
+  // first-send-IS-authorization RPC dispatch, pino denial log) is
+  // extracted to `runTemplateGate` per multi-agent review
+  // (code-quality F3). Plan §Phase 4 §4 + Sharp Edges + ADR-035.
+  if (tierRequiresTemplateAuth(grant.tier)) {
+    const templateHashForGate = getTemplateHash({
+      template_id: (message.template_id as string | null) ?? "default_legacy",
+    });
+    const gate = await runTemplateGate({
+      supabase,
+      founderId: user.id,
+      founderIdHash: hashUserId(user.id),
+      templateHash: templateHashForGate,
+      grantId: grant.id,
+      actionClass,
+      messageId,
+    });
+    switch (gate.kind) {
+      case "predicate_error":
+      case "authorize_error":
         return NextResponse.json(
           { error: "internal_error", action_class: actionClass },
           { status: 500 },
         );
+      case "deny":
+        return NextResponse.json(
+          {
+            error: "template_not_authorized",
+            deny_reason: gate.denyReason,
+            action_class: actionClass,
+          },
+          { status: 403 },
+        );
+      case "allow":
+        // Fall through to the tier-specific gate (approve_every_time
+        // typed-confirm) + writeActionSend.
+        break;
+      default: {
+        const _exhaustive: never = gate;
+        void _exhaustive;
       }
     }
-    // status === 'authorized' → fall through unchanged.
   }
 
   const confirmedTyped = body.confirmed_typed === true;

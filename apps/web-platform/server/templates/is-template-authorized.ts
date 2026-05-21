@@ -29,6 +29,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { warnSilentFallback } from "@/server/observability";
+import type { ActionClassTier } from "@/server/scope-grants/action-class-map";
 
 export type DenyReason =
   | "no_scope_grant"
@@ -36,6 +37,39 @@ export type DenyReason =
   | "template_quota_exhausted"
   | "template_expired"
   | "template_revoked";
+
+/**
+ * Exhaustive predicate: does the given tier require a per-template
+ * authorization row to be present (or first-send-IS-authorized) before
+ * the send route admits the request?
+ *
+ * v1: only `draft_one_click` carries template-level authorization.
+ * `auto` and `auto_with_digest` are rejected at the route's tier switch
+ * (founder-initiated send is not the producer path for these);
+ * `approve_every_time` gates on its own typed-confirm primitive and does
+ * NOT carry a template_authorizations row in v1.
+ *
+ * The compile-time `_exhaustive: never` rail FORCES future tier additions
+ * to declare their template-auth stance — a hypothetical 5th tier would
+ * fail tsc here, surfacing the design decision before it can silently
+ * bypass the gate. Surfaced by PR-I multi-agent review (architecture-
+ * strategist P2 tier-exhaustiveness gap).
+ */
+export function tierRequiresTemplateAuth(tier: ActionClassTier): boolean {
+  switch (tier) {
+    case "draft_one_click":
+      return true;
+    case "auto":
+    case "auto_with_digest":
+    case "approve_every_time":
+      return false;
+    default: {
+      const _exhaustive: never = tier;
+      void _exhaustive;
+      return false;
+    }
+  }
+}
 
 export type PredicateResult =
   | { status: "authorized"; rowId: string; sendsUsed: number }

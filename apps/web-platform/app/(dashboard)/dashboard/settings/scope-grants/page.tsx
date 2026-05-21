@@ -72,9 +72,16 @@ export default async function ScopeGrantsPage() {
   const { data: templateAuthRows } = await supabase
     .from("template_authorizations")
     .select(
-      "id, template_hash, action_class, authorized_at, expires_at, soft_reconfirm_at, max_sends, grant_id, scope_grants!inner(revoked_at)",
+      "id, template_hash, action_class, authorized_at, expires_at, soft_reconfirm_at, max_sends, grant_id, scope_grants!inner(revoked_at, founder_id)",
     )
     .eq("founder_id", user.id)
+    // Belt-and-suspenders on the joined scope_grants row: independent of
+    // scope_grants RLS, the JOIN's `founder_id` MUST match the calling
+    // founder. If a future migration loosens scope_grants RLS, this
+    // filter still prevents cross-tenant leakage of the joined
+    // revoked_at flag. Surfaced by PR-I multi-agent review
+    // (architecture-strategist P2-2).
+    .eq("scope_grants.founder_id", user.id)
     .is("revoked_at", null)
     .is("scope_grants.revoked_at", null)
     .order("authorized_at", { ascending: false });
