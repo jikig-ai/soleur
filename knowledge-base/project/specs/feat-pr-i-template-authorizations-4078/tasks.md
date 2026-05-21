@@ -105,24 +105,24 @@ Continue mig 053 (same `BEGIN;…COMMIT;`). All use `SET LOCAL session_replicati
 
 ## Phase 8 — Account-Delete Cascade Extension
 
-- [ ] 8.1 Edit `apps/web-platform/server/account-delete.ts:200-251` — insert `anonymise_template_authorizations(p_user_id)` call between line 211 and line 238.
-- [ ] 8.2 Inline comment-of-record citing SEMANTIC ordering (NOT FK-driven): `dsr_erasure` reason MUST be set on child rows BEFORE parent scope_grant's user_id is nulled — otherwise Art. 5(2) attribution breaks. (NOT "FK ON DELETE RESTRICT requires this ordering" — that rationale is wrong per Kieran v2 review.)
-- [ ] 8.3 Error handling matches surrounding try/catch; on failure `{status: 'failed', step: 'template_authorizations'}`.
+- [x] 8.1 Edit `apps/web-platform/server/account-delete.ts:200-251` — insert `anonymise_template_authorizations(p_user_id)` call between line 211 and line 238.
+- [x] 8.2 Inline comment-of-record citing SEMANTIC ordering (NOT FK-driven): `dsr_erasure` reason MUST be set on child rows BEFORE parent scope_grant's user_id is nulled — otherwise Art. 5(2) attribution breaks. (NOT "FK ON DELETE RESTRICT requires this ordering" — that rationale is wrong per Kieran v2 review.)
+- [x] 8.3 Error handling matches surrounding try/catch; on failure `{status: 'failed', step: 'template_authorizations'}`.
 
 ## Phase 9 — Tests
 
 All tests via vitest. Integration tests gated by `TENANT_INTEGRATION_TEST=1`.
 
-- [ ] 9.1 Write `test/server/templates/template-registry.test.ts` (TR8 collision + determinism).
-- [ ] 9.2 Write `test/server/templates/is-template-authorized.test.ts` (TR4 two-probe + first-send + exception fail-closed).
-- [ ] 9.3 Write `test/server/template-authorizations-worm.test.ts` (`TENANT_INTEGRATION_TEST=1`):
+- [x] 9.1 Write `test/server/templates/template-registry.test.ts` (TR8 collision + determinism).
+- [x] 9.2 Write `test/server/templates/is-template-authorized.test.ts` (TR4 two-probe + first-send + exception fail-closed).
+- [x] 9.3 Write `test/server/template-authorizations-worm.test.ts` (`TENANT_INTEGRATION_TEST=1`):
   - TR3 PostgREST-routed anonymise bypass under service-role AND self-DSAR authenticated.
   - TR5 parallel-grant race: exactly one row revoked_at IS NULL.
   - Auto-revoke: row with sends_used = max_sends - 1; write 1 action_send; predicate; assert revoked_at set.
   - First-send-IS-auth (AC12): synthetic founder + active scope_grant + no template_auth → first Send writes BOTH rows → second Send increments sends_used.
-- [ ] 9.4 Write `test/server/account-delete-template-authorizations-cascade.test.ts` (`TENANT_INTEGRATION_TEST=1`):
+- [x] 9.4 Write `test/server/account-delete-template-authorizations-cascade.test.ts` (`TENANT_INTEGRATION_TEST=1`):
   - TR7 cascade semantic ordering verification (children carry `dsr_erasure` reason BEFORE grant nulled).
-- [ ] 9.5 Write `test/server/scope-grants/revocation-reason-exhaustive.test.ts` (TR6):
+- [x] 9.5 Write `test/server/scope-grants/revocation-reason-exhaustive.test.ts` (TR6):
   - Mirror `action-class-exhaustive.test.ts`. Parity + exhaustive switch + runtime regex. Count locked at 8.
 - [x] 9.6 Update `test/api/dashboard/today/send-route.test.ts` — add cases for first-send-IS-authorization + each DenyReason 403 path.
 
