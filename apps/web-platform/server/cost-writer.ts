@@ -56,8 +56,8 @@ export interface TurnCostInput {
  * `reportSilentFallback`.
  *
  * Phase 3 (feat-team-workspace-multi-user) — `workspaceId` is the
- * `audit_byok_use.workspace_id` value (NOT NULL after migration 055).
- * Threads through `write_byok_audit`'s 6-arg signature (migration 057).
+ * `audit_byok_use.workspace_id` value (NOT NULL after migration 059).
+ * Threads through `write_byok_audit`'s 6-arg signature (migration 061).
  *
  * @param userId         Authenticated founder UUID (BYOK key owner).
  * @param conversationId Conversation UUID the turn belongs to.

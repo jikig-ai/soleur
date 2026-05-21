@@ -2187,7 +2187,7 @@ export function setupWebSocket(server: HTTPServer) {
         // workspace-membership.ts:removeWorkspaceMember can SIGTERM only the
         // sessions running against the workspace being revoked (and not
         // sibling sessions in the user's other workspaces). The JWT custom
-        // claim `current_organization_id` (migration 056) is the source of
+        // claim `current_organization_id` (migration 060) is the source of
         // truth; the lookup translates org_id → workspace_id once at WS open.
         try {
           const orgId = getCurrentOrganizationId({

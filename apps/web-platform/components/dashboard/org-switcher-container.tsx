@@ -8,7 +8,7 @@ import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
 // Container pairs OrgSwitcher (pure UI) with the runtime data plumbing:
 //   - on mount: GET /api/workspace/list-memberships
 //   - on switch: POST /api/workspace/set-current-organization, then call
-//     supabase.auth.refreshSession() so the JWT custom claim (migration 056)
+//     supabase.auth.refreshSession() so the JWT custom claim (migration 060)
 //     re-mints with the new app_metadata.current_organization_id, then reload
 //     so server components re-render against the new claim.
 //

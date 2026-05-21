@@ -91,7 +91,7 @@ describe("persistTurnCost — workspace_id wiring (Phase 3)", () => {
       (c) => (c[0] as string) === "increment_conversation_cost",
     );
     expect(incrementCall).toBeDefined();
-    // The conversation row carries workspace_id (migration 055 sweep); the
+    // The conversation row carries workspace_id (migration 059 sweep); the
     // RPC signature is unchanged because the conversation_id already pins
     // the workspace. But the audit row needs explicit threading.
     expect(incrementCall![1]).toMatchObject({

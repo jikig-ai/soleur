@@ -4,7 +4,7 @@ import { resolveOrgMemberships } from "@/server/org-memberships-resolver";
 
 // Powers the dashboard OrgSwitcher (Phase 5.3). Returns the user's full list
 // of organization memberships with role + member count, plus an `isCurrent`
-// marker derived from the JWT custom claim (migration 056).
+// marker derived from the JWT custom claim (migration 060).
 //
 // AC-C: solo users (memberships.length <= 1) get [] or a single-entry array;
 // the OrgSwitcher client component renders nothing in either case.

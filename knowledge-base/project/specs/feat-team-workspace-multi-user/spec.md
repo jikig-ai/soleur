@@ -112,7 +112,7 @@ Header dropdown shows when `auth.uid()` has rows in >1 organization. Selecting a
 Create `knowledge-base/architecture/adr/NNNN-organizations-and-workspace-members.md` via `/soleur:architecture create`. Reference issues #2778, #3815, #3723 as downstream beneficiaries.
 
 ### TR2: Migration numbering
-Likely `053_organizations_and_workspace_members.sql`, `054_workspace_member_attestations.sql`, `055_runtime_cost_state_workspace_id.sql`. Verify highest current migration before final naming.
+Likely `053_organizations_and_workspace_members.sql`, `058_workspace_member_attestations.sql`, `055_runtime_cost_state_workspace_id.sql`. Verify highest current migration before final naming.
 
 ### TR3: Coordinate with active branches
 - `feat-workspace-reconciliation-4224` — sequence after, or coordinate `workspace.ts` edits.

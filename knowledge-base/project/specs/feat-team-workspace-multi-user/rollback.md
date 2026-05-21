@@ -11,7 +11,7 @@ brand_survival_threshold: single-user incident
 
 # Rollback runbook — `feat-team-workspace-multi-user`
 
-This runbook covers the incident-response path if the team-workspace migrations (053–056), the workspace-keyed RLS sweep, the bwrap-mount rewrite, or the feature-flagged invite UI causes a `single-user incident` (defined: any cross-user `messages` / `kb_share_links` / filesystem read; any BYOK key-mis-routing; any cross-workspace attestation visibility).
+This runbook covers the incident-response path if the team-workspace migrations (053 + 058–060), the workspace-keyed RLS sweep, the bwrap-mount rewrite, or the feature-flagged invite UI causes a `single-user incident` (defined: any cross-user `messages` / `kb_share_links` / filesystem read; any BYOK key-mis-routing; any cross-workspace attestation visibility).
 
 Land BEFORE migration 053 commits, per AC-G.
 
@@ -56,13 +56,13 @@ Required only when the migration itself is the failure source (RLS predicate, he
 
 cd apps/web-platform
 doppler run -p soleur -c prd -- bun run scripts/apply-migration.ts \
-  --file supabase/migrations/056_current_organization_jwt_hook.down.sql
+  --file supabase/migrations/060_current_organization_jwt_hook.down.sql
 
 doppler run -p soleur -c prd -- bun run scripts/apply-migration.ts \
-  --file supabase/migrations/055_workspace_keyed_rls_sweep.down.sql
+  --file supabase/migrations/059_workspace_keyed_rls_sweep.down.sql
 
 doppler run -p soleur -c prd -- bun run scripts/apply-migration.ts \
-  --file supabase/migrations/054_workspace_member_attestations.down.sql
+  --file supabase/migrations/058_workspace_member_attestations.down.sql
 
 doppler run -p soleur -c prd -- bun run scripts/apply-migration.ts \
   --file supabase/migrations/053_organizations_and_workspace_members.down.sql
@@ -156,7 +156,7 @@ File the post-mortem as a learning under `knowledge-base/project/learnings/secur
 
 - **RPC signature changes use overloading, not DROP+CREATE.** Per ADR-038 + `2026-05-12-stub-handlers-as-silent-undercount-vectors`. Old pods continue resolving v1 signatures during the rolling deploy window.
 - **Symlinks for legacy `/workspaces/<userId>/` stay in place for one release cycle.** Read-only call sites in `dsar-export.ts`, `sandbox.ts`, `tool-labels.ts`, `agent-runner.ts` keep their existing paths during the transition.
-- **`workspace_id NOT NULL` is the LAST step of migration 055.** Backfill completes BEFORE the constraint adds. A failed backfill leaves the column NULLABLE and the old policies still in place (drop-policies is sequenced after backfill succeeds).
+- **`workspace_id NOT NULL` is the LAST step of migration 059.** Backfill completes BEFORE the constraint adds. A failed backfill leaves the column NULLABLE and the old policies still in place (drop-policies is sequenced after backfill succeeds).
 - **Backfill is idempotent.** `IS DISTINCT FROM` discriminator + `WHERE NOT EXISTS` guards. Re-running 053 against a populated DB logs `0 rows`.
 
 ## What this runbook does NOT cover

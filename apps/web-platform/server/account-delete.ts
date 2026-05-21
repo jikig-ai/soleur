@@ -63,14 +63,14 @@ export interface DeleteAccountResult {
  *                             has ON DELETE RESTRICT, so the auth cascade to
  *                             public.users would abort without prior anonymisation.
  *   5.6 anonymise-workspace-attestations — anonymise_workspace_member_attestations
- *                             RPC (migration 054). FK-reverse: attestations
+ *                             RPC (migration 058). FK-reverse: attestations
  *                             reference users via inviter_user_id +
  *                             invitee_user_id (RESTRICT).
  *   5.7 anonymise-workspace-members — anonymise_workspace_members RPC
- *                             (migration 054). DELETEs membership rows
+ *                             (migration 058). DELETEs membership rows
  *                             (workspace_id RESTRICT to workspaces).
  *   5.8 anonymise-organization-membership — anonymise_organization_membership
- *                             RPC (migration 054). Orphan-cleanup or reassign-
+ *                             RPC (migration 058). Orphan-cleanup or reassign-
  *                             owner; breaks the RESTRICT FK to public.users.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
@@ -357,7 +357,7 @@ export async function deleteAccount(
   }
 
   // 3.90 Anonymise workspace_member_attestations BEFORE workspace_members
-  //      (migration 054, feat-team-workspace-multi-user). FK-reverse
+  //      (migration 058, feat-team-workspace-multi-user). FK-reverse
   //      order per Phase 7.4 AC-GDPR-17-CALLER:
   //        attestations → workspace_members → organizations → auth.users
   //      attestations.invitee_user_id + .inviter_user_id are both ON
@@ -385,7 +385,7 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
-  // 3.91 Anonymise workspace_members rows (migration 054). DELETEs every
+  // 3.91 Anonymise workspace_members rows (migration 058). DELETEs every
   //      membership row keyed on user_id, including the user's solo
   //      backfill owner row. FK workspace_members.workspace_id +
   //      .attestation_id are RESTRICT — attestations were already
@@ -411,7 +411,7 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
-  // 3.92 Anonymise organization membership (migration 054). For every
+  // 3.92 Anonymise organization membership (migration 058). For every
   //      organization where the deleted user was owner: if no members
   //      remain across its workspaces, the RPC DELETEs workspaces +
   //      organization (orphan cleanup); otherwise it reassigns

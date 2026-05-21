@@ -169,7 +169,7 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // the user provided the membership relation; they retain portability.
   workspace_members: { ownerField: "user_id", article: "15+20" },
 
-  // feat-team-workspace-multi-user (migration 054) — invite consent
+  // feat-team-workspace-multi-user (migration 058) — invite consent
   // attestations the user accepted. ownerField = invitee_user_id (the
   // user who clicked accept); inviter_user_id is also their own row when
   // they invited someone else — the next allowlist entry covers that

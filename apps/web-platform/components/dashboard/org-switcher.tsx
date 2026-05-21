@@ -10,7 +10,7 @@ import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
 //
 // Phase 5.4 wiring: the org switch posts to /api/workspace/set-current-organization,
 // which writes user_session_state, then the client calls supabase.auth
-// .refreshSession() to force the JWT custom claim (migration 056) to refresh
+// .refreshSession() to force the JWT custom claim (migration 060) to refresh
 // across all tabs. Until 5.4 lands, the onSwitch callback is a stub that
 // reloads the page after a best-effort POST.
 

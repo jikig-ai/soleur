@@ -4,7 +4,7 @@ import { join } from "path";
 //
 // Two distinct lookups:
 //   1. getCurrentOrganizationId(session) — reads the Supabase Auth JWT custom
-//      claim `app_metadata.current_organization_id` populated by migration 056's
+//      claim `app_metadata.current_organization_id` populated by migration 060's
 //      access-token hook. Synchronous, no DB call. Returns null when the claim
 //      is absent (single-membership users) or the session is anonymous; callers
 //      then fall back to getDefaultWorkspaceForUser.
@@ -34,7 +34,7 @@ interface SessionLike {
 
 /**
  * Returns the `app_metadata.current_organization_id` JWT custom claim
- * populated by migration 056's `custom_access_token` hook, or null.
+ * populated by migration 060's `custom_access_token` hook, or null.
  *
  * Phase 5.4 dependency: the org-switcher writes user_session_state then
  * calls `supabase.auth.refreshSession()` to force a token refresh so the
@@ -133,13 +133,13 @@ interface WorkspaceMemberWorkspaceJoin {
  * Resolve the workspace_id a user belongs to inside a specific organization.
  *
  * Used by ws-handler at session-open time (Phase 5.5) to translate the JWT
- * custom claim `app_metadata.current_organization_id` (migration 056) into
+ * custom claim `app_metadata.current_organization_id` (migration 060) into
  * the workspace_id required by `abortAllWorkspaceMemberSessions`. One join
  * + one filter; runs once per WS connection, then the result is cached on
  * the ClientSession.
  *
  * Returns null when the user has no membership in the named organization.
- * Defense-in-depth: the JWT claim is server-controlled (migration 056's
+ * Defense-in-depth: the JWT claim is server-controlled (migration 060's
  * access-token hook reads `user_session_state` written by the RPC which
  * itself re-checks workspace_members), so this lookup is the third gate.
  */

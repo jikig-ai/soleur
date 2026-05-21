@@ -118,7 +118,7 @@ Repo-research surfaced multiple spec-vs-code mismatches that change scope and fi
 2. A missed sentinel-sweep site that retains `owner_id === session.user_id` semantics after migration, granting cross-workspace reads (Vector 3).
 3. BYOK-lease silently falling back to owner's key when member has none, debiting cost to wrong user_id and leaking key-derivation artifacts in error paths (Vector 2).
 
-**Brand-survival threshold:** `single-user incident`. One leak = revert migrations 053-055, restore `auth.uid() = user_id` predicates, drop symlinks, take post-mortem to /soleur:compound. `user-impact-reviewer` agent at PR-review time is load-bearing per CLO and CPO.
+**Brand-survival threshold:** `single-user incident`. One leak = revert migrations 053 + 058 + 059, restore `auth.uid() = user_id` predicates, drop symlinks, take post-mortem to /soleur:compound. `user-impact-reviewer` agent at PR-review time is load-bearing per CLO and CPO.
 
 ## Implementation Phases
 
@@ -240,7 +240,7 @@ CREATE POLICY members_select_peers ON public.workspace_members FOR SELECT
 **Header comment block** (load-bearing per AC-GDPR-5e + AC-GDPR-6):
 
 ```sql
--- 054_workspace_member_attestations.sql
+-- 058_workspace_member_attestations.sql
 -- LAWFUL_BASIS:
 --   workspace_member_attestations.invitee_user_id, ip_hash, user_agent:
 --     Art. 6(1)(b) contract performance (employment/contractor relationship)
@@ -254,7 +254,7 @@ CREATE POLICY members_select_peers ON public.workspace_members FOR SELECT
 --   + accepted_at as the immutable legal record of the act (Art. 7(1)).
 ```
 
-**File to create:** `apps/web-platform/supabase/migrations/054_workspace_member_attestations.sql`
+**File to create:** `apps/web-platform/supabase/migrations/058_workspace_member_attestations.sql`
 
 Mirrors `scope_grants` (048) WORM pattern. Key points:
 
@@ -334,11 +334,11 @@ ALTER `workspace_members.attestation_id` to add FK reference now that 054's tabl
 
 #### Phase 1.3: Migration 055 — RLS sweep + `audit_byok_use.workspace_id` + aggregate view
 
-**File to create:** `apps/web-platform/supabase/migrations/055_workspace_keyed_rls_sweep.sql`
+**File to create:** `apps/web-platform/supabase/migrations/059_workspace_keyed_rls_sweep.sql`
 
 **Header (per Kieran N1):**
 ```sql
--- 055_workspace_keyed_rls_sweep.sql
+-- 059_workspace_keyed_rls_sweep.sql
 -- DEPENDENCY: requires 053_organizations_and_workspace_members.sql to have
 -- created public.workspaces, public.workspace_members, AND completed the
 -- Phase 6 backfill in 053's body (one workspace + one workspace_members row
@@ -639,7 +639,7 @@ See `## Observability` section below.
 
 Documents the brand-survival-incident response:
 1. Disable feature flag: `doppler secrets set FLAG_TEAM_WORKSPACE_INVITE=0 --config prd`
-2. Migrate down migrations 053-055 (idempotent down-migrations included in each)
+2. Migrate down migrations 053 + 058 + 059 (idempotent down-migrations included in each)
 3. Restore `auth.uid() = user_id` predicates from migration backups
 4. Drop `/workspaces/<userId>` symlinks (atomically — script in `apps/web-platform/server/workspace-fs-rollback.ts`)
 5. Notify Harry (and any in-band members) of revert; preserve audit logs
@@ -688,9 +688,9 @@ These ship as a separate PR on branch `feat-team-workspace-legal-scaffolding`. F
 | Path | Purpose |
 |---|---|
 | `apps/web-platform/supabase/migrations/053_organizations_and_workspace_members.sql` | Phase 1.1 |
-| `apps/web-platform/supabase/migrations/054_workspace_member_attestations.sql` | Phase 1.2 |
-| `apps/web-platform/supabase/migrations/055_workspace_keyed_rls_sweep.sql` | Phase 1.3 |
-| `apps/web-platform/supabase/migrations/056_current_organization_jwt_hook.sql` | Phase 5.4: user_session_state table + custom access-token hook injecting `app_metadata.current_organization_id` (Kieran C4) |
+| `apps/web-platform/supabase/migrations/058_workspace_member_attestations.sql` | Phase 1.2 |
+| `apps/web-platform/supabase/migrations/059_workspace_keyed_rls_sweep.sql` | Phase 1.3 |
+| `apps/web-platform/supabase/migrations/060_current_organization_jwt_hook.sql` | Phase 5.4: user_session_state table + custom access-token hook injecting `app_metadata.current_organization_id` (Kieran C4) |
 | `apps/web-platform/server/workspace-membership.ts` | invite_workspace_member / remove_workspace_member RPC wrappers |
 | `apps/web-platform/server/workspace-resolver.ts` | getCurrentOrganizationId, getDefaultWorkspaceForUser |
 | `apps/web-platform/server/workspace-fs-migrate.ts` | Idempotent fs migration script (Phase 2.2) |
@@ -756,7 +756,7 @@ logs:
 
 discoverability_test:
   command: "curl -s https://app.soleur.ai/api/health/team-membership | jq .status"
-  expected_output: "\"ok\" when migrations 053-055 applied, flag wired, attestation table queryable. Returns \"degraded\" with reason field if helper missing."
+  expected_output: "\"ok\" when migrations 053 + 058 + 059 applied, flag wired, attestation table queryable. Returns \"degraded\" with reason field if helper missing."
 ```
 
 ## Acceptance Criteria
@@ -789,7 +789,7 @@ discoverability_test:
 - [ ] **AC-GDPR-6.** Each new table (organizations, workspaces, workspace_members, workspace_member_attestations) and each new `workspace_id` column on existing tables has a `-- LAWFUL_BASIS:` comment block in the migration. Org/workspace/member rows annotated Art. 6(1)(f) legitimate interest (controller operating workspace); attestation rows annotated Art. 6(1)(b) contract performance + Art. 6(1)(f) for audit trail
 - [ ] **AC-GDPR-5e.** Migration 054 header comment block documents retention: attestation rows retained for workspace lifetime + 7 years post-membership-removal, then anonymised via `anonymise_workspace_member_attestations(p_attestation_id)` (nulls user_id-bearing columns; preserves attestation_text + accepted_at as the immutable legal record)
 - [ ] **AC-GDPR-17.** Migration 054 ships three SECURITY DEFINER anonymise RPCs (`anonymise_workspace_member_attestations`, `anonymise_workspace_members`, `anonymise_organization_membership`), `search_path = public, pg_temp`, REVOKE ALL PUBLIC, GRANT EXECUTE to service_role only. Each nulls identifiable columns; preserves the act-of-the-record (timestamps, attestation_text→`'<anonymised>'`). Mirror migration 048's `anonymise_scope_grants` exactly
-- [ ] **AC-GDPR-17-CALLER.** `apps/web-platform/server/account-delete.ts` invokes anonymise RPCs in FK-reverse order (attestations → workspace_members → workspaces → organizations) BEFORE `auth.admin.deleteUser`. Integration test exercises the full user-deletion path against migrations 053-055; test passes when the RESTRICT cascade completes successfully
+- [ ] **AC-GDPR-17-CALLER.** `apps/web-platform/server/account-delete.ts` invokes anonymise RPCs in FK-reverse order (attestations → workspace_members → workspaces → organizations) BEFORE `auth.admin.deleteUser`. Integration test exercises the full user-deletion path against migrations 053 + 058 + 059; test passes when the RESTRICT cascade completes successfully
 - [ ] **AC-LEGAL-FLIP.** `TEAM_WORKSPACE_INVITE` flag MUST NOT evaluate to `1` in any environment until the legal-scaffolding PR (Phase 10) is merged on `main`. Encoded as a Doppler config audit step in `/soleur:ship`; PR body references the legal-PR number explicitly
 - [ ] **AC-RATE-LIMIT.** `invite_workspace_member` RPC and `/api/workspace/invite` route apply a rate-limit (5 invites/min/owner). Existing rate-limit module reused if present; otherwise documented as `code-review` follow-up scope-out (with rationale: jikigai-only allowlist bounds exposure)
 - [ ] **AC-ROLE-UNION.** Per `cq-union-widening-grep-three-patterns` (Kieran N6): when `workspace_members.role` enum is introduced (`'owner' | 'member'`), PR body includes output of three pattern greps over `apps/web-platform/` for: (1) `role ===` usage sites, (2) `_exhaustive: never` exhaustiveness rails, (3) `\.role\?` optional-chained access. New ladder/switch sites must enumerate both `'owner'` and `'member'` cases
@@ -808,7 +808,7 @@ NONE. Per `2026-05-12-mid-plan-pause-gates-and-operator-step-pushback`: all Supa
 - **R6. BYOK lease parameter split — silent fallback regression.** Mitigation: AC8 integration test; remove all fallback-to-owner-key code paths in byok-lease.ts (fail-closed per AC-D).
 - **R7. Multi-tab session-scoped org switch surprises user.** Mitigation: AC-FLOW3 Playwright multi-context test; UI badge during switch.
 - **R8. Member-removal in-flight cost row attribution.** Mitigation: AC-FLOW2 SIGTERM + status='interrupted'; failure_modes #5 detects orphan rows.
-- **R9. `ON DELETE RESTRICT` blocks Art. 17 user deletion without anonymise wiring.** Mitigation: AC-GDPR-17 + AC-GDPR-17-CALLER ship the three anonymise RPCs in migration 054 and wire them in `account-delete.ts` in FK-reverse order. Integration test exercises the full deletion path.
+- **R9. `ON DELETE RESTRICT` blocks Art. 17 user deletion without anonymise wiring.** Mitigation: AC-GDPR-17 + AC-GDPR-17-CALLER ship the three anonymise RPCs in migration 058 and wire them in `account-delete.ts` in FK-reverse order. Integration test exercises the full deletion path.
 - **R10. Flag flip races legal scaffolding merge.** Mitigation: AC-LEGAL-FLIP enforces Doppler audit step in `/soleur:ship`; PR body cross-references legal-PR number.
 - **R11. Invite endpoint enumeration oracle.** Mitigation: AC-RATE-LIMIT (5/min/owner). If existing rate-limit module is absent, ship as `code-review` follow-up with documented bounded exposure (jikigai-only allowlist).
 

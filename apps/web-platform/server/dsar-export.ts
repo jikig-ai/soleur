@@ -669,7 +669,7 @@ export async function exportSqlTable(
     });
   }
 
-  // -- workspace_member_attestations (migration 054) --------------------
+  // -- workspace_member_attestations (migration 058) --------------------
   // Art. 15: WORM consent records the user clicked-accept on. Owner
   // field is invitee_user_id (the user who accepted). The inviter side
   // is reachable transitively via workspace_members rows for the same

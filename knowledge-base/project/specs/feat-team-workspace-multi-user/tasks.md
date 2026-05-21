@@ -18,13 +18,13 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 ## Phase 0 — Preconditions (no commits)
 
 - [x] **0.1** Probe PR-D (`feat-pr-d-attachments-storage-tenant-rls`) state and current `is_message_owner` shape. Decide: match PR-D's shape if it pre-merges, else lock to `plpgsql + public, pg_temp`. — PR-D #3883 MERGED; `is_message_owner` on main is `LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp`. Lock new `is_workspace_member` to same shape.
-- [x] **0.2** Verify migration 052 is current `main` HEAD. Increment plan migration numbers if any 053+ landed since. — Confirmed `052_multi_source_dedup.sql` is HEAD; 053-056 numbering unchanged.
+- [x] **0.2** Verify migration 052 is current `main` HEAD. Increment plan migration numbers if any 053+ landed since. — Confirmed `052_multi_source_dedup.sql` is HEAD; 053 + 058–060 numbering unchanged.
 - [x] **0.3** Probe `feat-workspace-reconciliation-4224` for any code commits. Sequence-after if code added. — PR #4226 has docs-only commits (brainstorm + plan + tasks + init); no code → proceed without sequencing wait.
 - [x] **0.4** Run `/soleur:architecture create "Introduce organizations and workspace_members; decouple workspace from userId"`. ADR text MUST include the permanent `workspaces.id = owner_user_id` (backfilled solo users) decision per Kieran N2. — ADR-038 written at `knowledge-base/engineering/architecture/decisions/ADR-038-team-workspace-multi-user-organizations-and-workspace-members.md`; includes N2 invariant section.
 - [x] **0.5** Service-role allowlist: pre-stage entries for `workspace-membership.ts` + `workspace-resolver.ts`. — Added under feat-team-workspace-multi-user pre-stage block; gate is safe vs nonexistent files (uses `git ls-files` to find importers).
 - [x] **0.6** Spec amendment: drop `kb_files`/`kb_chunks` from G3; reframe G4 (workspace_id on `audit_byok_use`, not on a non-existent runtime_cost_state table); fix file:line refs in G6/FR9 (bwrap is `agent-runner-sandbox-config.ts`, not `agent-runner.ts:941`); name the existing-team-route rename decision in FR6. Commit: `docs(spec): reconcile with codebase reality`. — G3, G4, G6, FR6, FR8, FR9 amended with explicit "Amended 2026-05-21 (Phase 0.6)" markers.
 
-## Phase 1 — Migrations 053–056
+## Phase 1 — Migrations 053 + 058–060
 
 **Apply status (dev):** all 4 forward migrations applied to dev project via Doppler `DATABASE_URL_POOLER` (session-mode :5432 rewrite) at 2026-05-21. Backfill counts: 437 organizations / 437 workspaces / 437 workspace_members (53 new + 36 pre-existing in dev) → 473 total per table aligned with `public.users` count. 055 sweep: 179 conversations, 172 messages, 1224 audit_byok_use, 71 scope_grants, 0 in the other 5 tables (no rows in dev). 056 user_session_state: 473 rows post-idempotent-retop (gap closed via re-run; root cause likely pre-existing test rows that were deleted between 056 apply and verify). Schema integrity verified: all 5 new tables, 10 functions, 18 RLS policies present; 0 NOT NULL violations across all `workspace_id` columns; workspace_cost_aggregate view + scope_grants_workspace_id_check constraint present. **prd apply deferred** — same Doppler+pg path applies; pending operator approval to flip target config.
 
@@ -39,7 +39,7 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 - [x] **1.1.8** Verify `handle_new_user` trigger (if present) + TS fallback parity per learning 2026-03-20-supabase-trigger-fallback-parity. `upsert(onConflict, ignoreDuplicates:true)` on TS side.
 
 ### 1.2 Migration 054 — workspace_member_attestations (WORM) + RPCs
-- [x] **1.2.1** Create `apps/web-platform/supabase/migrations/054_workspace_member_attestations.sql` with LAWFUL_BASIS + RETENTION header block per AC-GDPR-6 + AC-GDPR-5e.
+- [x] **1.2.1** Create `apps/web-platform/supabase/migrations/058_workspace_member_attestations.sql` with LAWFUL_BASIS + RETENTION header block per AC-GDPR-6 + AC-GDPR-5e.
 - [x] **1.2.2** Define `workspace_member_attestations(id, workspace_id RESTRICT, inviter_user_id RESTRICT, invitee_user_id RESTRICT, attestation_text, accepted_at, ip_hash, user_agent)`; enable RLS.
 - [x] **1.2.3** WORM trigger `workspace_member_attestations_no_mutate` BEFORE UPDATE/DELETE.
 - [x] **1.2.4** Column-level posture per learning 2026-03-20-supabase-column-level-grant-override: `REVOKE UPDATE ON TABLE … FROM authenticated, anon` FIRST. NO column-level GRANT.
@@ -49,7 +49,7 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 - [x] **1.2.8** Update `workspace_members.attestation_id` for backfilled owner rows: leave NULL (no human-attested act; backfill is system-driven). Documented in 053 backfill comment.
 
 ### 1.3 Migration 055 — workspace-keyed RLS sweep + audit_byok_use.workspace_id + aggregate view
-- [x] **1.3.1** Create `apps/web-platform/supabase/migrations/055_workspace_keyed_rls_sweep.sql` with dependency-on-053 header per Kieran N1.
+- [x] **1.3.1** Create `apps/web-platform/supabase/migrations/059_workspace_keyed_rls_sweep.sql` with dependency-on-053 header per Kieran N1.
 - [x] **1.3.2** Add `workspace_id uuid REFERENCES workspaces(id)` to: conversations (001), messages (001), kb_share_links (017), push_subscriptions (020 — both policies), concurrency_slots (029), audit_byok_use (037 — ON TOP OF founder_id), dsar_export_jobs (041), scope_grants (048), multi_source_dedup (052).
 - [x] **1.3.3** Backfill `workspace_id = workspace_members.workspace_id WHERE user_id = <table>.user_id` for each. `IS DISTINCT FROM` discriminator + `GET DIAGNOSTICS rc; RAISE NOTICE` per learning.
 - [x] **1.3.4** ALTER COLUMN `workspace_id` SET NOT NULL after backfill.
@@ -59,7 +59,7 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 - [x] **1.3.8** Create `public.workspace_cost_aggregate` VIEW with `security_invoker = true`.
 
 ### 1.4 Migration 056 — current_organization_id JWT custom-claim hook (Phase 5.4 / Kieran C4)
-- [x] **1.4.1** Create `apps/web-platform/supabase/migrations/056_current_organization_jwt_hook.sql`.
+- [x] **1.4.1** Create `apps/web-platform/supabase/migrations/060_current_organization_jwt_hook.sql`.
 - [x] **1.4.2** Define `user_session_state(user_id uuid PK, current_organization_id uuid)`.
 - [x] **1.4.3** Backfill `user_session_state` with `MIN(workspaces.id)` per user.
 - [x] **1.4.4** Custom access-token hook injects `app_metadata.current_organization_id` from `user_session_state`. Mirror existing hook precedent (verify migration number at /work-time).
@@ -68,7 +68,7 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 ## Phase 2 — Filesystem + sandbox
 
 - [x] **2.1.1** Edit `apps/web-platform/server/workspace.ts` — rename `userId`→`workspaceId` param across `provisionWorkspace`/`provisionWorkspaceWithRepo`/`deleteWorkspace`. Solo callers (signup, account-delete) pass `user.id` directly per the N2 invariant (`workspaces.id === user.id`); 5 call sites carry N2 invariant comments. Resolver helper landed as `workspace-resolver.ts` per 2.1.2.
-- [x] **2.1.2** Create `apps/web-platform/server/workspace-resolver.ts` — `getCurrentOrganizationId(session)` reads JWT app_metadata claim (migration 056); `getDefaultWorkspaceForUser(userId, supabase)` queries workspace_members ORDER BY workspaces.created_at LIMIT 1; `resolveWorkspacePathForUser` composes with WORKSPACES_ROOT. Fail-closed on no membership. 7 unit tests.
+- [x] **2.1.2** Create `apps/web-platform/server/workspace-resolver.ts` — `getCurrentOrganizationId(session)` reads JWT app_metadata claim (migration 060); `getDefaultWorkspaceForUser(userId, supabase)` queries workspace_members ORDER BY workspaces.created_at LIMIT 1; `resolveWorkspacePathForUser` composes with WORKSPACES_ROOT. Fail-closed on no membership. 7 unit tests.
 - [x] **2.2.1** Create `apps/web-platform/server/workspace-fs-migrate.ts` — idempotent per-user `migrateUserWorkspace`: solo no-op, rename legacy→canonical + legacy-as-symlink, `realpathSync` both sides per CWE-59, refuses dangling/mismatched symlinks, refuses both-paths-exist collision. `migrateAllUserWorkspaces` batch wrapper collects per-row errors. 8 unit tests.
 - [x] **2.2.2** Wire into deploy pipeline (inline). `apps/web-platform/scripts/run-workspace-fs-migrate.ts` — Supabase service-role query for all `workspace_members` rows + `migrateAllUserWorkspaces` invocation. Structured single-line JSON output. Today's fleet is solo-only → no-op pass per N2.
 - [x] **2.3.1** `agent-runner-sandbox-config.ts` — no code change required. `buildAgentSandboxConfig(workspacePath)` is data-driven via the path argument; `agent-runner.ts:894` reads `user.workspace_path` from DB and the fs-migrate updates that column. Drift-guard `agent-runner-helpers.test.ts:60` already pins `allowWrite ← workspacePath`.
@@ -79,7 +79,7 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 3 — BYOK split
 
-**Apply status (dev):** migration 057 applied to dev via Doppler `DATABASE_URL_POOLER` (session-mode `:5432` rewrite) at 2026-05-21. Both `write_byok_audit` + `record_byok_use_and_check_cap` widened to 6-arg signature with `p_workspace_id`; smoke INSERT verified `audit_byok_use.workspace_id NOT NULL` constraint satisfied. See `migration-checklist.md`. **prd apply deferred** — 055 + 057 must land in the SAME prd window.
+**Apply status (dev):** migration 061 applied to dev via Doppler `DATABASE_URL_POOLER` (session-mode `:5432` rewrite) at 2026-05-21. Both `write_byok_audit` + `record_byok_use_and_check_cap` widened to 6-arg signature with `p_workspace_id`; smoke INSERT verified `audit_byok_use.workspace_id NOT NULL` constraint satisfied. See `migration-checklist.md`. **prd apply deferred** — 055 + 057 must land in the SAME prd window.
 
 - [x] **3.1.1** Edit `apps/web-platform/server/byok-lease.ts` — split `workspaceContextUserId` / `keyOwnerUserId` parameters via `ByokLeaseArgs` object; lease exposes both userIds for downstream cost-writers. All 5 call sites updated (agent-runner.ts:863 + :2363, cc-dispatcher.ts:883, cfo-on-payment-failed.ts:199, github-on-event.ts:208). Test mocks updated to match new shape.
 - [x] **3.1.2** `audit_byok_use` writes tag both `founder_id` (= keyOwnerUserId) and `workspace_id`. Migration 057 widens `write_byok_audit` + `record_byok_use_and_check_cap` RPCs to 6-arg signatures threading `p_workspace_id` into the INSERT. `cost-writer.ts persistTurnCost` accepts workspaceId as 4th positional arg; under N2 invariant `workspaceId === userId` for solo (agent-runner.ts:1884, cc-dispatcher.ts:1710). `usage_update` WS event widened with optional `workspaceId` field for one release cycle.
@@ -110,7 +110,7 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 **Phase 5.3 also lands:**
 - `apps/web-platform/server/org-memberships-resolver.ts` — workspace_members + workspaces + organizations + per-workspace member counts → OrgMembershipSummary[]
 - `app/api/workspace/list-memberships/route.ts` — GET endpoint powering the container fetch
-- `app/api/workspace/set-current-organization/route.ts` — POST endpoint calling migration 056's `set_current_organization_id` RPC; `validateOrigin` gated per CSRF drift-guard
+- `app/api/workspace/set-current-organization/route.ts` — POST endpoint calling migration 060's `set_current_organization_id` RPC; `validateOrigin` gated per CSRF drift-guard
 - [x] **5.4.1** JWT custom-claim hook landed in 056 (Phase 1.4). No middleware change. — Verified.
 - [x] **5.4.2** `getCurrentOrganizationId(supabaseSession)` reads from JWT claim; fallback to user's default org for single-membership users (AC-FLOW1). — Landed in `server/workspace-resolver.ts` (Phase 2.1.2). Now consumed by ws-handler at session open (Phase 5.5.2 wiring).
 - [x] **5.4.3** Org-switcher selection calls `set_current_organization_id(p_org_id)` RPC, then `supabase.auth.refreshSession()` to force JWT refresh. — Landed in `components/dashboard/org-switcher-container.tsx` (commit d96152ce / Phase 5.3). Endpoint `/api/workspace/set-current-organization` wraps the RPC.
@@ -121,7 +121,7 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 6 — Backfill verification
 
-- [x] **6.1** Backfill defined inline in 053 (Phase 1.1.7). Verify idempotency: re-run migration 053 against a populated DB → `RAISE NOTICE` lines show `0 rows`. — Re-applied 053–057 to dev (1128 orgs/workspaces/members; 1265 audit_byok_use; 1128 user_session_state). Re-run of 053 backfill DO block returned 0/0/0 per `WHERE NOT EXISTS` discriminator. Audit appended to migration-checklist.md §"Migration 053 idempotency re-run".
+- [x] **6.1** Backfill defined inline in 053 (Phase 1.1.7). Verify idempotency: re-run migration 053 against a populated DB → `RAISE NOTICE` lines show `0 rows`. — Re-applied 053 + 058–061 to dev (1128 orgs/workspaces/members; 1265 audit_byok_use; 1128 user_session_state). Re-run of 053 backfill DO block returned 0/0/0 per `WHERE NOT EXISTS` discriminator. Audit appended to migration-checklist.md §"Migration 053 idempotency re-run".
 - [x] **6.2** Verify trigger-vs-fallback race shape per learning 2026-03-20-supabase-trigger-fallback-parity. TS fallback path tested via integration test that races `handle_new_user` trigger with explicit `upsert`. — `test/server/workspace-backfill-trigger-parity.test.ts` (3 cases): trigger creates the canonical solo trio on signup; TS fallback upsert is a no-op after trigger — no duplicate rows; third-pass re-fire — fallback is idempotent across re-runs. Opt-in via `TENANT_INTEGRATION_TEST=1` matching the rest of the DB-layer suite. 3/3 pass against dev.
 
 ## Phase 7 — DSAR endpoint extension (Kieran N5 expanded)

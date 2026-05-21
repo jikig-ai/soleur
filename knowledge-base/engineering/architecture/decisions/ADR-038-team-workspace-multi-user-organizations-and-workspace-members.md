@@ -41,7 +41,7 @@ Brand-survival threshold: **single-user incident.** If `is_workspace_member()` o
 
 **Introduce four new Postgres primitives keyed by stable UUIDs, and a single `SECURITY DEFINER plpgsql` membership helper as the substrate for all rewritten RLS predicates. `workspaces.id` is permanently equal to `owner_user_id` for backfilled solo workspaces; new workspaces created post-flag-flip use `gen_random_uuid()`. BYOK keys stay per-user (HKDF unchanged); cost attribution shifts to workspace_id grain via an additive column on `audit_byok_use` plus a workspace-aggregate view. The bwrap mount becomes `/workspaces/<workspace_id>/` with backward-compat symlinks. The feature flag is a two-key gate (env var AND org allowlist) OFF by default in production until the legal-PR merges.**
 
-### Schema (migrations 053–056)
+### Schema (migrations 053+058-060)
 
 ```text
 organizations
@@ -76,7 +76,7 @@ workspace_member_attestations   -- WORM (BEFORE UPDATE/DELETE trigger rejects al
   ip_hash text NOT NULL
   user_agent text NOT NULL
 
-user_session_state               -- current_organization_id JWT claim source (migration 056)
+user_session_state               -- current_organization_id JWT claim source (migration 060)
   user_id uuid PK FK → auth.users(id)
   current_organization_id uuid NULL FK → organizations(id) ON DELETE SET NULL
 ```
@@ -98,7 +98,7 @@ GRANT EXECUTE ON FUNCTION public.is_workspace_member(uuid, uuid) TO authenticate
 
 Shape matches `is_message_owner` on `main` (migration 045) and `cq-pg-security-definer-search-path-pin-pg-temp`. Phase 0 probe (2026-05-21) confirmed PR-D #3883 merged with the same plpgsql + `public, pg_temp` shape.
 
-### RLS rewrite (migration 055)
+### RLS rewrite (migration 059)
 
 Add `workspace_id uuid REFERENCES workspaces(id)` to **9 user-keyed tables** (full enumeration: `conversations`, `messages`, `kb_share_links`, `push_subscriptions`, `concurrency_slots`, `audit_byok_use`, `dsar_export_jobs`, `scope_grants`, `multi_source_dedup`). Backfill `workspace_id = workspace_members.workspace_id WHERE user_id = <table>.user_id` (one membership per user post-053). Drop old `auth.uid() = user_id` policies, replace with `is_workspace_member(workspace_id, auth.uid())`. Set `workspace_id NOT NULL` after backfill.
 
@@ -123,7 +123,7 @@ issueLease({
 
 bwrap mount in `apps/web-platform/server/agent-runner-sandbox-config.ts` changes from `/workspaces/<userId>` to `/workspaces/<workspace_id>`. Read-only call sites in `dsar-export.ts`, `sandbox.ts`, `tool-labels.ts`, `agent-runner.ts` keep their existing paths; a `realpathSync`-validated symlink `/workspaces/<userId> → /workspaces/<workspace_id>` covers the in-flight transition for one release cycle (CWE-59 defense per `2026-03-20-symlink-escape-cwe59-workspace-sandbox.md`). Filesystem migration is idempotent (`realpathSync` two-sided + `lstatSync` dangling check) and runs inline at deploy time, NOT as a Post-merge operator step.
 
-### Current organization JWT claim (Phase 5.4, migration 056)
+### Current organization JWT claim (Phase 5.4, migration 060)
 
 `user_session_state.current_organization_id` is the source-of-truth for the active org context. A Supabase custom access-token hook injects it as `app_metadata.current_organization_id` into the JWT. The org-switcher UI calls a `SECURITY DEFINER` RPC `set_current_organization_id(p_org_id)` (membership-checked) then forces a `supabase.auth.refreshSession()`. Reasons for JWT-resident over middleware-resolved:
 

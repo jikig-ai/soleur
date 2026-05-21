@@ -125,7 +125,7 @@ apps/web-platform/server/github/audit-writer.ts
 # so the gate doesn't fail when the files land in subsequent commits.
 
 # PERMANENT — workspace-membership.ts wraps `invite_workspace_member`
-# and `remove_workspace_member` SECURITY DEFINER RPCs (migration 054).
+# and `remove_workspace_member` SECURITY DEFINER RPCs (migration 058).
 # Both RPCs are `REVOKE FROM PUBLIC, anon`; only service-role can call
 # them. The wrapper also invokes `abortAllWorkspaceMemberSessions` on
 # the agent-session-registry after removal returns, which is process-

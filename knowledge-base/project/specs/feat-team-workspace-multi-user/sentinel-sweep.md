@@ -52,8 +52,8 @@ supabase/migrations/045_attachments_storage_rls.sql:87  CREATE FUNCTION public.i
 supabase/migrations/045_attachments_storage_rls.sql:111 REVOKE ALL ON FUNCTION public.is_message_owner(uuid, uuid)
 supabase/migrations/045_attachments_storage_rls.sql:112 GRANT EXECUTE ON FUNCTION public.is_message_owner(uuid, uuid) TO authenticated
 supabase/migrations/045_attachments_storage_rls.sql:119  policy USING is_message_owner(message_attachments.message_id, auth.uid())
-supabase/migrations/055_workspace_keyed_rls_sweep.down.sql:9-29  rollback: restore 045 shape
-supabase/migrations/055_workspace_keyed_rls_sweep.sql:410-441  workspace-aware reimplementation of the same helper
+supabase/migrations/059_workspace_keyed_rls_sweep.down.sql:9-29  rollback: restore 045 shape
+supabase/migrations/059_workspace_keyed_rls_sweep.sql:410-441  workspace-aware reimplementation of the same helper
 ```
 
 Annotation: **converted in-place**. Migration 055 §"Reimplement
@@ -72,7 +72,7 @@ to change. Per Phase 1.3.7 plan note + `cq-pg-security-definer-search-path-pin-p
 | `server/agent-runner.ts:430` | 1 | kept | Legacy-shape doc comment, not executable. |
 | `server/ws-handler.ts:1781` | 1 | kept | Legacy-shape doc comment, not executable. |
 | `supabase/migrations/045_attachments_storage_rls.sql` | 6 | converted | Helper body rewritten in 055; signature stable, so 045's CREATE/GRANT/USING references continue to compile. |
-| `supabase/migrations/055_workspace_keyed_rls_sweep.sql` | 3 | converted | New workspace-aware body (CREATE OR REPLACE, identical signature). |
+| `supabase/migrations/059_workspace_keyed_rls_sweep.sql` | 3 | converted | New workspace-aware body (CREATE OR REPLACE, identical signature). |
 
 No write sites in `server/` or `app/api/` carry the legacy auth.uid()
 shape on executable code paths. The 2 documentation matches are kept

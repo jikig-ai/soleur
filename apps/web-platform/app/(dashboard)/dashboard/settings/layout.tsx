@@ -14,7 +14,7 @@ async function resolveMembersTab(): Promise<{ href: string; label: string } | nu
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  // JWT custom-claim (migration 056). Synchronous; no DB call.
+  // JWT custom-claim (migration 060). Synchronous; no DB call.
   const session = { user: { id: user.id, app_metadata: user.app_metadata } };
   const orgId = getCurrentOrganizationId(session);
   if (!orgId) return null;
