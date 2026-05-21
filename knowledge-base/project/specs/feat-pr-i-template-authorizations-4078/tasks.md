@@ -77,8 +77,8 @@ Continue mig 053 (same `BEGIN;…COMMIT;`). All use `SET LOCAL session_replicati
 
 ## Phase 5 — Today-Card Deny Surface + Revocation Reason Copy
 
-- [ ] 5.1 Edit `apps/web-platform/lib/messages/trust-tier-copy.ts` — append `REVOCATION_REASON_COPY` sibling export (8 keys, `{label, description}` each).
-- [ ] 5.2 Edit `apps/web-platform/components/dashboard/today-card.tsx`:
+- [x] 5.1 Edit `apps/web-platform/lib/messages/trust-tier-copy.ts` — append `REVOCATION_REASON_COPY` sibling export (8 keys, `{label, description}` each).
+- [x] 5.2 Edit `apps/web-platform/components/dashboard/today-card.tsx`:
   - On 403 with `error.deny_reason`, render inline note below disabled button.
   - Per-DenyReason copy:
     - `no_scope_grant`: "You need a scope grant first. Visit Settings → Scope grants."
@@ -90,15 +90,15 @@ Continue mig 053 (same `BEGIN;…COMMIT;`). All use `SET LOCAL session_replicati
 
 ## Phase 6 — DSAR Allowlist Extension
 
-- [ ] 6.1 Edit `apps/web-platform/server/dsar-export.ts` — add `'template_authorizations'` to `DSAR_TABLE_ALLOWLIST`.
+- [x] 6.1 Edit `apps/web-platform/server/dsar-export.ts` — add `'template_authorizations'` to `DSAR_TABLE_ALLOWLIST`.
 
 ## Phase 7 — Scope-Grants Settings Section + Revoke Surface
 
-- [ ] 7.1 Create `apps/web-platform/components/scope-grants/template-authorization-row.tsx`:
+- [x] 7.1 Create `apps/web-platform/components/scope-grants/template-authorization-row.tsx`:
   - Server component with props `{id, template_hash, action_class, authorized_at, expires_at, soft_reconfirm_at, max_sends, sends_used}`.
   - Renders row + per-row "Revoke" button (server action calling `revoke_template_authorization(template_hash, 'founder_revoked')`).
   - Failure UX: pessimistic update (button disabled in-flight), `revalidatePath('/dashboard/settings/scope-grants')` on success, error toast with retry on failure.
-- [ ] 7.2 Edit `apps/web-platform/app/(dashboard)/dashboard/settings/scope-grants/page.tsx`:
+- [x] 7.2 Edit `apps/web-platform/app/(dashboard)/dashboard/settings/scope-grants/page.tsx`:
   - Append `<section>` "Template authorizations" below existing scope-grants list.
   - Query JOINs scope_grants and filters `sg.revoked_at IS NULL` AND `ta.revoked_at IS NULL`.
   - Empty-state copy: static "No template authorizations yet. When you 1-click send a draft, the template will be authorized for up to 100 sends over 90 days."

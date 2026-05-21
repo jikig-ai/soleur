@@ -13,6 +13,7 @@ import {
 } from "@/server/scope-grants/action-class-map";
 import { ACTION_CLASSES_BY_CATEGORY } from "@/lib/messages/action-class-copy";
 import { ScopeGrantRow } from "@/components/scope-grants/scope-grant-row";
+import { TemplateAuthorizationRow } from "@/components/scope-grants/template-authorization-row";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,18 @@ interface ActiveGrant {
   action_class: ActionClass;
   tier: ActionClassTier;
   granted_at: string;
+}
+
+interface ActiveTemplateAuth {
+  id: string;
+  template_hash: string;
+  action_class: string;
+  authorized_at: string;
+  expires_at: string;
+  soft_reconfirm_at: string;
+  max_sends: number;
+  // sends_used is computed via a parallel COUNT against action_sends —
+  // see scope-grants/page.tsx below. NOT a column on the row.
 }
 
 export default async function ScopeGrantsPage() {
@@ -49,6 +62,46 @@ export default async function ScopeGrantsPage() {
     if (!activeByClass.has(r.action_class)) {
       activeByClass.set(r.action_class, r);
     }
+  }
+
+  // PR-I (#4078) — Active template authorizations. Plan §Phase 7 query:
+  // JOIN scope_grants and filter sg.revoked_at IS NULL so template_auths
+  // under revoked grants do not appear (architecture-strategist P1).
+  // supabase-js !inner join produces an INNER JOIN; the .is filter on
+  // the joined relation enforces the scope_grants.revoked_at IS NULL leg.
+  const { data: templateAuthRows } = await supabase
+    .from("template_authorizations")
+    .select(
+      "id, template_hash, action_class, authorized_at, expires_at, soft_reconfirm_at, max_sends, grant_id, scope_grants!inner(revoked_at)",
+    )
+    .eq("founder_id", user.id)
+    .is("revoked_at", null)
+    .is("scope_grants.revoked_at", null)
+    .order("authorized_at", { ascending: false });
+
+  const templateAuths = (templateAuthRows ?? []) as Array<
+    ActiveTemplateAuth & { grant_id: string }
+  >;
+
+  // Per-row sends_used count. Parallel COUNT against action_sends with
+  // matching (user_id, template_hash). Sequenced after the rows fetch so
+  // we know which template_hashes to count for.
+  const sendsByHash = new Map<string, number>();
+  if (templateAuths.length > 0) {
+    const uniqueHashes = Array.from(
+      new Set(templateAuths.map((r) => r.template_hash)),
+    );
+    const counts = await Promise.all(
+      uniqueHashes.map(async (h) => {
+        const { count } = await supabase
+          .from("action_sends")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("template_hash", h);
+        return [h, count ?? 0] as const;
+      }),
+    );
+    for (const [h, c] of counts) sendsByHash.set(h, c);
   }
 
   return (
@@ -106,6 +159,42 @@ export default async function ScopeGrantsPage() {
           class until you authorize one above.
         </p>
       ) : null}
+
+      {/* PR-I (#4078) — Template authorizations section. */}
+      <section
+        aria-labelledby="template-authorizations-heading"
+        className="mt-10"
+      >
+        <h2
+          id="template-authorizations-heading"
+          className="mb-3 text-sm font-medium uppercase tracking-wide text-soleur-text-muted"
+        >
+          Template authorizations
+        </h2>
+        {templateAuths.length > 0 ? (
+          <ul className="space-y-4">
+            {templateAuths.map((row) => (
+              <li key={row.id}>
+                <TemplateAuthorizationRow
+                  id={row.id}
+                  templateHash={row.template_hash}
+                  actionClass={row.action_class}
+                  authorizedAt={row.authorized_at}
+                  expiresAt={row.expires_at}
+                  softReconfirmAt={row.soft_reconfirm_at}
+                  maxSends={row.max_sends}
+                  sendsUsed={sendsByHash.get(row.template_hash) ?? 0}
+                />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 p-4 text-sm text-soleur-text-secondary">
+            No template authorizations yet. When you 1-click send a draft,
+            the template will be authorized for up to 100 sends over 90 days.
+          </p>
+        )}
+      </section>
     </div>
   );
 }

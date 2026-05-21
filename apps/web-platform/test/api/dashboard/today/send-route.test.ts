@@ -416,7 +416,7 @@ describe("POST /api/dashboard/today/[id]/send", () => {
     });
     mockRpc.mockResolvedValueOnce({
       data: null,
-      error: { message: "rpc failed", code: "P0001" },
+      error: { message: "rpc failed", code: "P0001" } as unknown as null,
     });
 
     const res = await POST(makeRequest({}), ctx());

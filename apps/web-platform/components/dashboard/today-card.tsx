@@ -75,6 +75,22 @@ interface ConfirmationPayload {
 const BASE_BUTTON =
   "min-h-[44px] rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
 
+// PR-I (#4078) — Per-DenyReason copy surfaced when the send route
+// returns 403 with `deny_reason`. `template_unauthorized` is unreachable
+// in v2 (first-send-IS-authorization). `no_scope_grant` corresponds to
+// the legacy 403 `error: 'no_active_grant'` shape — kept here for
+// completeness so future predicate denials map cleanly.
+const DENY_REASON_COPY: Record<string, string> = {
+  no_scope_grant:
+    "You need a scope grant first. Visit Settings → Scope grants.",
+  template_revoked:
+    "This template was revoked. Click Send again to re-authorize.",
+  template_expired:
+    "This template authorization expired (90-day limit). Click Send again to re-authorize.",
+  template_quota_exhausted:
+    "You've sent 100 messages with this template. Click Send again to re-authorize for another 100.",
+};
+
 export function TodayCard(props: TodayCardProps) {
   if (props.source === "kb-drift") return <KbDriftCard {...props} />;
   if (props.source === "github") return <GitHubCard {...props} />;
@@ -259,6 +275,26 @@ function StripeCard({
           }
           if (json.error === "already_sent") {
             setArchived(true);
+            return;
+          }
+        }
+        if (res.status === 403) {
+          // PR-I (#4078) — Surface the predicate's deny_reason as
+          // founder-readable copy. Plan §Phase 5 §2.
+          const json = (await res.json().catch(() => ({}))) as {
+            error?: string;
+            deny_reason?: string;
+            action_class?: string;
+          };
+          const copy = json.deny_reason
+            ? DENY_REASON_COPY[json.deny_reason]
+            : undefined;
+          if (copy) {
+            setError(copy);
+            return;
+          }
+          if (json.error === "no_active_grant") {
+            setError(DENY_REASON_COPY.no_scope_grant);
             return;
           }
         }
