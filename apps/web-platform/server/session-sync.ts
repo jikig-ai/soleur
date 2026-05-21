@@ -302,6 +302,93 @@ async function recordKbSyncHistory(
   }
 }
 
+// #4224 — shared constants for the workspace-reconcile feature.
+// Re-exported from the Inngest function module too so test files and
+// future consumers have one source of truth.
+export const WORKSPACE_RECONCILE_REQUESTED_EVENT =
+  "platform/workspace.reconcile.requested" as const;
+export const WORKSPACE_RECONCILE_SCHEMA_V = "1" as const;
+export const WORKSPACE_RECONCILE_SENTRY_FEATURE =
+  "workspace-reconcile-push" as const;
+
+// kb_sync_history error_class literals. Load-bearing for the 30-day drift
+// analysis (TR4 / DS1 gating in plan §Phase 5).
+export const ERROR_CLASS_NON_FAST_FORWARD = "non_fast_forward" as const;
+export const ERROR_CLASS_WORKSPACE_NOT_READY = "workspace_not_ready" as const;
+export const ERROR_CLASS_SYNC_FAILED = "sync_failed" as const;
+export type KbSyncErrorClass =
+  | typeof ERROR_CLASS_NON_FAST_FORWARD
+  | typeof ERROR_CLASS_WORKSPACE_NOT_READY
+  | typeof ERROR_CLASS_SYNC_FAILED;
+
+/**
+ * Rich kb_sync_history row shape used by webhook-push reconcile (#4224)
+ * and the manual /api/kb/sync route. Heterogeneous with the legacy
+ * `{ date, count }` shape produced by `recordKbSyncHistory` — the reader
+ * (KbSyncStatus) discriminates inline.
+ */
+export type KbSyncRow = {
+  at: string; // ISO timestamp; anchored to sync_completed_at semantics
+  trigger: "webhook_push" | "manual" | "session";
+  sha_before?: string;
+  sha_after?: string;
+  ok: boolean;
+  error_class?: KbSyncErrorClass;
+  push_received_at?: number; // Unix ms — only set on webhook_push rows
+  sync_completed_at: number; // Unix ms
+};
+
+/** Legacy daily-count row shape produced by `recordKbSyncHistory`. */
+export type LegacyKbSyncRow = { date: string; count: number };
+
+const KB_SYNC_HISTORY_CAP = 100;
+
+/**
+ * Append a rich `KbSyncRow` to the user's `kb_sync_history` JSONB array,
+ * preserving any legacy `{ date, count }` rows already there. Caps at 100.
+ * Best-effort — failures are mirrored to Sentry via `reportSilentFallback`
+ * but do not throw.
+ *
+ * Implementation routes through the `append_kb_sync_row` SECURITY DEFINER
+ * RPC (migration 053). Direct UPDATE on `kb_sync_history` is blocked by
+ * migration 006's column grant (authenticated has UPDATE(email) only) and
+ * migration 017's RESTRICTIVE policy; the RPC is the only tenant-callable
+ * write path. The RPC also makes the read-modify-write atomic under a
+ * row-level lock, removing the lost-update race that a JS-side fetch +
+ * update would have under concurrent webhook + manual sync calls.
+ *
+ * NOTE: `recordKbSyncHistory` is intentionally NOT widened — its
+ * `{date,count}` shape continues to serve the daily-count sparkline; this
+ * new helper writes the per-event reconciliation rows.
+ */
+export async function appendKbSyncRow(
+  userId: string,
+  row: KbSyncRow,
+): Promise<void> {
+  try {
+    const tenant = await getFreshTenantClient(userId);
+    const { error } = await tenant.rpc("append_kb_sync_row", {
+      p_row: row,
+      p_cap: KB_SYNC_HISTORY_CAP,
+    });
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "session-sync",
+        op: "appendKbSyncRow",
+        extra: { userId },
+        message: "append_kb_sync_row RPC failed",
+      });
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "session-sync",
+      op: "appendKbSyncRow",
+      extra: { userId },
+      message: "kb_sync_history append failed",
+    });
+  }
+}
+
 async function updateLastSynced(userId: string): Promise<void> {
   // PR-C §2.1 (#3244): tenant-scoped UPDATE on `users`.
   const tenant = await getFreshTenantClient(userId);
@@ -379,6 +466,17 @@ export async function syncPull(
     log.info({ userId }, "Sync pull completed");
   } catch (err) {
     log.warn({ err, userId }, "Sync pull failed — continuing with local state");
+    reportSilentFallback(err, {
+      feature: "session-sync",
+      op: "syncPull",
+      // workspacePath omitted intentionally — it embeds the raw userId
+      // (workspacePath = `<root>/<userId>`), which bypasses the
+      // hashExtraUserId boundary's top-level rename (Recital 26 +
+      // ADR-029 rename-at-boundary). The pseudonymous userId carries the
+      // diagnostic value; the path adds no information.
+      extra: { userId },
+      message: "Sync pull failed — continuing with local state",
+    });
   }
 }
 
@@ -447,11 +545,25 @@ export async function syncPush(
       await recordKbSyncHistory(userId, workspacePath);
     } catch (err) {
       log.warn({ err, userId }, "KB sync history recording failed");
+      reportSilentFallback(err, {
+        feature: "session-sync",
+        op: "recordKbSyncHistory",
+        // workspacePath dropped — see syncPull catch for the rationale.
+        extra: { userId },
+        message: "KB sync history recording failed",
+      });
     }
 
     await updateLastSynced(userId);
     log.info({ userId }, "Sync push completed");
   } catch (err) {
     log.warn({ err, userId }, "Sync push failed — next session will retry");
+    reportSilentFallback(err, {
+      feature: "session-sync",
+      op: "syncPush",
+      // workspacePath dropped — see syncPull catch for the rationale.
+      extra: { userId },
+      message: "Sync push failed — next session will retry",
+    });
   }
 }
