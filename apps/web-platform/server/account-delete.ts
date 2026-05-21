@@ -62,6 +62,16 @@ export interface DeleteAccountResult {
  *                             MUST come before auth-delete: tc_acceptances.user_id
  *                             has ON DELETE RESTRICT, so the auth cascade to
  *                             public.users would abort without prior anonymisation.
+ *   5.6 anonymise-workspace-attestations — anonymise_workspace_member_attestations
+ *                             RPC (migration 054). FK-reverse: attestations
+ *                             reference users via inviter_user_id +
+ *                             invitee_user_id (RESTRICT).
+ *   5.7 anonymise-workspace-members — anonymise_workspace_members RPC
+ *                             (migration 054). DELETEs membership rows
+ *                             (workspace_id RESTRICT to workspaces).
+ *   5.8 anonymise-organization-membership — anonymise_organization_membership
+ *                             RPC (migration 054). Orphan-cleanup or reassign-
+ *                             owner; breaks the RESTRICT FK to public.users.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -344,6 +354,88 @@ export async function deleteAccount(
       { userId, err },
       "anonymise_audit_github_token_use threw — relying on ON DELETE SET NULL cascade (non-fatal)",
     );
+  }
+
+  // 3.90 Anonymise workspace_member_attestations BEFORE workspace_members
+  //      (migration 054, feat-team-workspace-multi-user). FK-reverse
+  //      order per Phase 7.4 AC-GDPR-17-CALLER:
+  //        attestations → workspace_members → organizations → auth.users
+  //      attestations.invitee_user_id + .inviter_user_id are both ON
+  //      DELETE RESTRICT, so they MUST be NULLed before the auth-delete
+  //      cascade reaches them. SECURITY DEFINER + idempotent.
+  //      FATAL: skipping guarantees auth-delete fails on the RESTRICT FK,
+  //      leaving a half-deleted user (GDPR Art. 17 violation).
+  try {
+    const { error: anonAttErr } = await service.rpc(
+      "anonymise_workspace_member_attestations",
+      { p_user_id: userId },
+    );
+    if (anonAttErr) {
+      log.error(
+        { userId, err: anonAttErr },
+        "anonymise_workspace_member_attestations failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_workspace_member_attestations threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.91 Anonymise workspace_members rows (migration 054). DELETEs every
+  //      membership row keyed on user_id, including the user's solo
+  //      backfill owner row. FK workspace_members.workspace_id +
+  //      .attestation_id are RESTRICT — attestations were already
+  //      NULLed in 3.90, and workspaces stay live (they're cleaned up by
+  //      anonymise_organization_membership in 3.92 if they orphan).
+  try {
+    const { error: anonMemErr } = await service.rpc(
+      "anonymise_workspace_members",
+      { p_user_id: userId },
+    );
+    if (anonMemErr) {
+      log.error(
+        { userId, err: anonMemErr },
+        "anonymise_workspace_members failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_workspace_members threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.92 Anonymise organization membership (migration 054). For every
+  //      organization where the deleted user was owner: if no members
+  //      remain across its workspaces, the RPC DELETEs workspaces +
+  //      organization (orphan cleanup); otherwise it reassigns
+  //      owner_user_id to the oldest remaining member. Either way the
+  //      RESTRICT FK from organizations.owner_user_id → public.users(id)
+  //      is broken before the auth-delete cascade fires.
+  try {
+    const { error: anonOrgErr } = await service.rpc(
+      "anonymise_organization_membership",
+      { p_user_id: userId },
+    );
+    if (anonOrgErr) {
+      log.error(
+        { userId, err: anonOrgErr },
+        "anonymise_organization_membership failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_organization_membership threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

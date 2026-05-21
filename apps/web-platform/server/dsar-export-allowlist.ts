@@ -140,6 +140,45 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // cascade in account-delete.ts between anonymise_action_sends and
   // anonymise_scope_grants).
   template_authorizations: { ownerField: "founder_id", article: "15+20" },
+
+  // feat-team-workspace-multi-user (migration 053) — organizations the
+  // user owns. ownerField = owner_user_id (direct). Art. 15 only:
+  // backfill-shaped solo organizations have name=NULL; the user did not
+  // "provide" the row, the trigger created it on signup. Post-flag-flip
+  // orgs created by an explicit invite-flow may carry user-provided name
+  // — they remain Art. 15 (the entity-of-record) rather than Art. 20
+  // because the value identifies the corporate context, not the user.
+  organizations: { ownerField: "owner_user_id", article: "15" },
+
+  // feat-team-workspace-multi-user (migration 053) — workspaces the user
+  // is a member of. No direct user_id column — joined via
+  // workspace_members.workspace_id. Art. 15: workspace metadata (name)
+  // identifies the shared context but is not user-provided content.
+  workspaces: {
+    ownerField: "user_id",
+    article: "15",
+    joinVia: {
+      parentTable: "workspace_members",
+      parentJoinColumn: "id", // workspaces.id matches workspace_members.workspace_id
+    },
+  },
+
+  // feat-team-workspace-multi-user (migration 053) — every workspace
+  // membership row the user holds. ownerField = user_id (direct). Art.
+  // 15+20: by accepting an invite (or owning the workspace at signup)
+  // the user provided the membership relation; they retain portability.
+  workspace_members: { ownerField: "user_id", article: "15+20" },
+
+  // feat-team-workspace-multi-user (migration 054) — invite consent
+  // attestations the user accepted. ownerField = invitee_user_id (the
+  // user who clicked accept); inviter_user_id is also their own row when
+  // they invited someone else — the next allowlist entry covers that
+  // case via a sibling chain. Art. 15: WORM consent record, analogous to
+  // tc_acceptances. The Art. 17 anonymise RPC handles erasure separately.
+  workspace_member_attestations: {
+    ownerField: "invitee_user_id",
+    article: "15",
+  },
 };
 
 /**
@@ -186,55 +225,18 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "No user-provided content; user_id is the only column and is already " +
     "in the DSAR's auth.users export. Per spec FR8 not enumerated as " +
     "Art. 15 personal data.",
-  // feat-team-workspace-multi-user (migrations 053/054/056): the 5 new
-  // workspace-keyed tables are excluded from Art. 15 export at this Phase 2
-  // checkpoint and scheduled for promotion to the allowlist in Phase 7
-  // (plan §Phase 7 / AC-GDPR-15). The plan explicitly sequences the worker
-  // extension (dsar-export.ts JOIN via workspace_member_id) after the Phase
-  // 1 schema lands, so the worker chain that the per-row WHERE lint
-  // requires would be premature here. Tracked as a single block so the
-  // closure can flip them together when Phase 7 lands.
-  //
-  // Art. 17 erasure in the interim is fully handled by:
-  //   - ON DELETE CASCADE / RESTRICT chains from auth.users → owner_user_id
-  //     (organizations) → workspaces → workspace_members
-  //   - Phase 7 anonymise_workspace_member_attestations / anonymise_*
-  //     RPCs invoked in account-delete.ts BEFORE auth.admin.deleteUser
-  //   - user_session_state CASCADE from auth.users
-  //
-  // Promotion checklist (Phase 7 PR):
-  //   1. Add allowlist entries (ownerField + article + joinVia for workspaces)
-  //   2. Add service.from("<table>") chains in dsar-export.ts with .eq(ownerField, userId)
-  //   3. Remove these 5 exclusion entries
-  //   4. Update privacy-policy §4.7, GDPR policy §6.1.b, DPD §2.3 + §5.3,
-  //      compliance-posture via the legal-doc cross-document gate.
-  organizations:
-    "Deferred to Phase 7 of feat-team-workspace-multi-user (AC-GDPR-15). " +
-    "Worker JOIN extension lands together with workspace_members + " +
-    "attestations + workspaces + user_session_state. Art. 17 erasure " +
-    "covered today via ON DELETE chains from auth.users → owner_user_id.",
-  workspaces:
-    "Deferred to Phase 7 of feat-team-workspace-multi-user (AC-GDPR-15). " +
-    "Workspace metadata (name, organization_id) is reachable transitively " +
-    "via workspace_members → workspaces JOIN that Phase 7 adds to the " +
-    "worker. Solo workspaces have name=NULL by N2 backfill. Art. 17 via " +
-    "CASCADE from organizations.owner_user_id.",
-  workspace_members:
-    "Deferred to Phase 7 of feat-team-workspace-multi-user (AC-GDPR-15). " +
-    "Membership rows (user_id, role, attestation_id) are the primary " +
-    "Phase 7 export surface. Promotion drops this exclusion + adds " +
-    "ownerField=user_id allowlist entry. Art. 17 via CASCADE.",
-  workspace_member_attestations:
-    "Deferred to Phase 7 of feat-team-workspace-multi-user (AC-GDPR-15). " +
-    "WORM consent log; Phase 7 exposes via ownerField=invitee_user_id. " +
-    "Art. 17 anonymisation runs via anonymise_workspace_member_attestations " +
-    "RPC called BEFORE auth.admin.deleteUser per Phase 7.4 FK-reverse order.",
+  // feat-team-workspace-multi-user — `user_session_state` remains
+  // excluded after Phase 7 promotion of organizations + workspaces +
+  // workspace_members + workspace_member_attestations. The single row's
+  // `current_organization_id` is duplicated into the JWT custom claim
+  // `app_metadata.current_organization_id` which is already part of the
+  // auth.users export. No user-provided content; transient UX
+  // preference. ON DELETE CASCADE from auth.users handles Art. 17.
   user_session_state:
-    "Deferred to Phase 7 of feat-team-workspace-multi-user. Per-user UX " +
-    "preference (current_organization_id) duplicated in JWT custom claim " +
-    "app_metadata.current_organization_id which is already part of the " +
-    "auth.users export. No user-provided content. ON DELETE CASCADE from " +
-    "auth.users handles Art. 17 erasure.",
+    "Per-user UX preference (current_organization_id) duplicated in JWT " +
+    "custom claim app_metadata.current_organization_id which is already " +
+    "part of the auth.users export. No user-provided content. ON DELETE " +
+    "CASCADE from auth.users handles Art. 17 erasure.",
 
   tenant_deploy_audit:
     "Multi-tenant deploy substrate orchestration-plane meta-audit log " +

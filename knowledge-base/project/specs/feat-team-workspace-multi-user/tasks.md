@@ -126,8 +126,8 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 7 — DSAR endpoint extension (Kieran N5 expanded)
 
-- [ ] **7.1** Edit `apps/web-platform/server/dsar-reauth.ts` — extend to query by `workspace_member_id` JOIN. Existing `founder_id` paths unaffected.
-- [ ] **7.2** Edit `apps/web-platform/server/dsar-export.ts:291,311,415,434` — sibling endpoint. Same JOIN extension.
+- [x] **7.1** Edit `apps/web-platform/server/dsar-reauth.ts` — extend to query by `workspace_member_id` JOIN. Existing `founder_id` paths unaffected. — Re-scoped: `dsar-reauth.ts` is the in-process reauth-event store + JWT session-id resolver; it carries no DB data queries to extend. Departed Harry's identity is already resolved via his own JWT (his `auth.users.id` survives workspace-removal — only his `workspace_members` row is anonymised). All Phase 7 DSAR-data work lives in `dsar-export.ts` + `dsar-export-allowlist.ts` (task 7.2).
+- [x] **7.2** Edit `apps/web-platform/server/dsar-export.ts:291,311,415,434` — sibling endpoint. Same JOIN extension. — Promoted 4 of 5 deferred tables from `DSAR_TABLE_EXCLUSIONS` to `DSAR_TABLE_ALLOWLIST`: `organizations` (ownerField=owner_user_id, Art. 15), `workspaces` (joinVia workspace_members, Art. 15), `workspace_members` (ownerField=user_id, Art. 15+20), `workspace_member_attestations` (ownerField=invitee_user_id, Art. 15). `user_session_state` stays excluded — duplicated in JWT `app_metadata.current_organization_id`. Added 4 new export chains to `dsar-export.ts`; the `workspaces` chain mirrors the messages-via-conversations CrossTenantViolation guard shape. Lint `dsar-allowlist-completeness.test.ts` + `dsar-worker-per-row-where.test.ts` 5+3+15 = 23/23 pass.
 - [ ] **7.3** Integration test: departed Harry's user_id resolves Art. 15/17/20 endpoints over his identifiable rows.
 - [ ] **7.4** Edit `apps/web-platform/server/account-delete.ts` per AC-GDPR-17-CALLER. Invoke anonymise RPCs in FK-reverse order: attestations → workspace_members → workspaces → organizations → auth.users.delete. Integration test exercises full path.
 

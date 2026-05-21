@@ -578,6 +578,124 @@ export async function exportSqlTable(
     });
   }
 
+  // -- organizations (migration 053, feat-team-workspace-multi-user) ----
+  // Art. 15: every organization the user owns (1:1 today, N:1 future
+  // when an operator-managed org adopts existing user as owner). Direct
+  // ownerField = owner_user_id; no JOIN required.
+  {
+    const { data, error } = await service
+      .from("organizations")
+      .select("*")
+      .eq("owner_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`organizations read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "organizations", {
+      ownerField: "owner_user_id",
+    });
+    results.push({
+      table: "organizations",
+      spec: DSAR_TABLE_ALLOWLIST.organizations,
+      rows,
+    });
+  }
+
+  // -- workspace_members (migration 053) --------------------------------
+  // Art. 15+20: every membership row the user holds. Direct
+  // ownerField = user_id; the row is user-provided (they clicked accept
+  // on the invite) so portability applies. After Harry is removed from
+  // Jean's workspace, his membership row is anonymised via Phase 7.4 —
+  // until that runs the row is still visible to him here.
+  let workspaceIds: string[] = [];
+  {
+    const { data, error } = await service
+      .from("workspace_members")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(`workspace_members read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "workspace_members", {
+      ownerField: "user_id",
+    });
+    workspaceIds = rows
+      .map((r) => r.workspace_id)
+      .filter((v): v is string => typeof v === "string");
+    results.push({
+      table: "workspace_members",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_members,
+      rows,
+    });
+  }
+
+  // -- workspaces (joinVia workspace_members) ---------------------------
+  // Art. 15: the workspace rows the user belongs to, reached through
+  // the workspace_members JOIN above (no direct user_id column on
+  // workspaces). Cross-tenant scope: every returned row's id MUST
+  // appear in the owner-scoped workspaceIds set (otherwise raise
+  // CrossTenantViolation, mirroring the messages-via-conversations
+  // shape).
+  if (workspaceIds.length > 0) {
+    const { data, error } = await service
+      .from("workspaces")
+      .select("*")
+      .in("id", workspaceIds);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`workspaces read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    const ownedSet = new Set(workspaceIds);
+    for (const row of rows) {
+      if (typeof row.id !== "string" || !ownedSet.has(row.id)) {
+        const err = new CrossTenantViolation(
+          "workspaces",
+          expectedUserId,
+          null,
+        );
+        mirrorCrossTenantViolation(null, expectedUserId, "workspaces", err);
+        throw err;
+      }
+    }
+    results.push({
+      table: "workspaces",
+      spec: DSAR_TABLE_ALLOWLIST.workspaces,
+      rows,
+    });
+  } else {
+    results.push({
+      table: "workspaces",
+      spec: DSAR_TABLE_ALLOWLIST.workspaces,
+      rows: [],
+    });
+  }
+
+  // -- workspace_member_attestations (migration 054) --------------------
+  // Art. 15: WORM consent records the user clicked-accept on. Owner
+  // field is invitee_user_id (the user who accepted). The inviter side
+  // is reachable transitively via workspace_members rows for the same
+  // user — exporting both sides under one ownerField avoids the GDPR
+  // 'symmetric consent ledger' export gap CLO Capability Gap #1 names.
+  {
+    const { data, error } = await service
+      .from("workspace_member_attestations")
+      .select("*")
+      .eq("invitee_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_member_attestations read failed: ${error.message}`,
+      );
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "workspace_member_attestations", {
+      ownerField: "invitee_user_id",
+    });
+    results.push({
+      table: "workspace_member_attestations",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_member_attestations,
+      rows,
+    });
+  }
+
   return results;
 }
 
