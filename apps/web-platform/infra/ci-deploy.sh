@@ -620,8 +620,17 @@ case "$COMPONENT" in
     docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
     INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-)
     INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-)
-    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | cut -d= -f2-)
-    VECTOR_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_SHA256=' | cut -d= -f2-)
+    # `|| true` is load-bearing: ci-deploy.sh runs under `set -euo pipefail`;
+    # grep-no-match returns 1, which `pipefail` propagates as the pipeline
+    # exit, which `$(...)` captures as the assignment exit. set -e then exits
+    # the script BEFORE final_write_state runs, and the EXIT trap writes
+    # reason=unhandled. Old inngest-bootstrap images (pre-TR9 PR-5) don't carry
+    # these env vars; rollback to such an image MUST stay functional. Missing
+    # values flow through to the bootstrap's `${VECTOR_CLI_VERSION:-}`
+    # warn-and-skip guard. Hotfix surfaced 2026-05-21 — v1.0.3 baseline rollback
+    # failed with reason=unhandled after TR9 PR-5 introduced this extraction.
+    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | cut -d= -f2- || true)
+    VECTOR_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_SHA256=' | cut -d= -f2- || true)
     if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
       logger -t "$LOG_TAG" "FAILED: image missing INNGEST_CLI_{VERSION,SHA256} ENV"
       rm -rf "$INNGEST_EXTRACT_DIR"
