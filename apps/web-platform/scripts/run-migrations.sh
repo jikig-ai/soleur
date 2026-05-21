@@ -118,6 +118,11 @@ if [[ "$row_count" -eq 0 ]]; then
   fi
 fi
 
+# Refresh origin/main once so the unmerged-apply gate below (issue #4241)
+# reads a current `git ls-tree`. Tolerate offline — the worst case is a
+# false-positive that the operator overrides with ALLOW_UNMERGED_DEV_APPLY=1.
+git fetch --quiet origin main 2>/dev/null || true
+
 # Apply unapplied migrations in sorted order
 applied=0
 skipped=0
@@ -143,6 +148,25 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   case "$filename" in
     *.down.sql) continue ;;
   esac
+
+  # Unmerged-apply gate (#4241). Block apply of migration filenames that are
+  # not on origin/main unless the operator explicitly acks with
+  # ALLOW_UNMERGED_DEV_APPLY=1. Closes the dev-vs-main drift class that broke
+  # `Tenant integration (dev-Supabase)` on 2026-05-21 when migrations 053-057
+  # from an unmerged branch were applied to dev. `git ls-tree origin/main`
+  # reads the local fetch (refreshed once before the loop above). The opt-in
+  # env var mirrors hr-menu-option-ack-not-prod-write-auth applied to dev
+  # migration applies.
+  if [[ -z "$(git ls-tree origin/main -- "apps/web-platform/supabase/migrations/$filename" 2>/dev/null)" ]]; then
+    if [[ "${ALLOW_UNMERGED_DEV_APPLY:-0}" != "1" ]]; then
+      echo "::error::Migration $filename is NOT on origin/main."
+      echo "          Applying unmerged migrations to dev creates dev-vs-main drift"
+      echo "          (precedent: #4241). To proceed, re-run with"
+      echo "          ALLOW_UNMERGED_DEV_APPLY=1 and revert before vacation."
+      exit 1
+    fi
+    echo "  WARNING: $filename is not on origin/main; proceeding under ALLOW_UNMERGED_DEV_APPLY=1."
+  fi
 
   # Filenames are from a controlled glob (*.sql) — safe for direct interpolation.
   already_applied=$(run_sql "SELECT count(*) FROM public._schema_migrations WHERE filename = '$filename';")

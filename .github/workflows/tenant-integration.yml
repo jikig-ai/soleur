@@ -114,6 +114,43 @@ jobs:
           fi
           echo "Doppler config dev_scheduled -> environment=dev (verified)."
 
+      # Drift probe (#4241). Surfaces _schema_migrations rows on dev whose
+      # filename is NOT on origin/main. Complements the apply-time gate in
+      # `run-migrations.sh` (#4241 Phase 3.1): the gate catches future drift
+      # attempts; this probe catches residual drift left by direct `psql`
+      # applies that bypass the runner. Severity is `::warning::` (not
+      # `::error::`) so a local-iteration valve in 3.1 does not block the
+      # gate it intentionally bypassed — visibility, not enforcement.
+      # No untrusted github.event.* inputs are interpolated; only secrets.*
+      # is referenced (mirrors the surrounding step pattern).
+      - name: Detect dev-vs-main migration drift
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          applied=$(doppler run -p soleur -c dev_scheduled -- \
+            psql "$DATABASE_URL_POOLER" --no-psqlrc -tAq -c \
+            "SELECT filename FROM public._schema_migrations ORDER BY filename;")
+          drift=""
+          while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            if [[ -z "$(git ls-tree origin/main -- "apps/web-platform/supabase/migrations/$f")" ]]; then
+              drift+="$f"$'\n'
+            fi
+          done <<<"$applied"
+          if [[ -n "$drift" ]]; then
+            echo "::warning::dev-Supabase has _schema_migrations rows that are NOT on origin/main."
+            echo "::warning::See #4241 for the precedent (team-workspace branch applied to dev pre-merge)."
+            echo "::warning::Drift list:"
+            while IFS= read -r f; do
+              [[ -z "$f" ]] && continue
+              echo "::warning::  - $f"
+            done <<<"$drift"
+          else
+            echo "No dev-vs-main migration drift detected."
+          fi
+
       # Apply migrations to dev before running tests. Without this step,
       # tenant-integration tests run against whatever schema dev happens to
       # have, which can lag behind the PR's migration files — producing
