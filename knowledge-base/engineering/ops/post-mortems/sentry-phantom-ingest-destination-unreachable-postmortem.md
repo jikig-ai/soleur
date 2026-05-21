@@ -94,6 +94,8 @@ Per learning `2026-05-06-user-impact-section-by-role-not-surface.md` — enumera
 
 ## Phase 8 — Recovery Completeness
 
+> **[2026-05-19 UPDATE: Gate 3 resolved as 3b — see Phase 9 below. The 3a/3c/3d branch descriptions in this Phase 8 section describe options that were never selected; they are preserved for audit-trail integrity. The "unowned destination org" framing in the lead paragraph below is also superseded by Phase 9 (both `jikigai` and `jikigai-eu` orgs are operator-owned).]**
+
 This PIR transitions from `status: open` to `status: resolved` when all three gates below hold. Recovery is not a single event; it is the conjunction of (1) cluster surgery, (2) audit prevention, and (3) residual disclosure on the unowned destination org.
 
 - **Gate 1 — Runtime cluster surgery complete (PR-β #3945, merged 2026-05-17T14:36Z; dedup-fix #3954 merged 2026-05-17T15:02Z).** Evidence: runtime `SENTRY_DSN` substring matches the new DE org's orgInternalId (`o4511404939345920.ingest.de.sentry.io/4511404943671376`) in Doppler `prd` + `prd_scheduled` + GH secrets (timestamps `2026-05-17T14:00:56-14:01:08Z`). Controllability probe against `https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/` returns 2xx with the runtime token. Old US-shadow-org token `sntrys_***bgtw` (name `soleur-web-platform-ci`) revoked via the `sentry.io/settings/jikigai/auth-tokens/` page at 2026-05-17T18:03Z. The §9 2h observation window passed: synthetic event + 3 release-version startup events queryable in `jikigai-eu` post-cutover.
