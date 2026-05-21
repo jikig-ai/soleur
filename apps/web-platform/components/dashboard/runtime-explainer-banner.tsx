@@ -16,7 +16,10 @@
 
 import Link from "next/link";
 import { RUNTIME_COST_DISCLOSURE } from "@/lib/legal/disclosures";
-import { ACTION_CLASSES } from "@/server/scope-grants/action-class-map";
+import {
+  ACTION_CLASS_COPY,
+  ACTION_CLASSES_BY_CATEGORY,
+} from "@/lib/messages/action-class-copy";
 
 interface Props {
   onDismiss: () => void;
@@ -39,14 +42,27 @@ export function RuntimeExplainerBanner({ onDismiss }: Props) {
           </h2>
           <p className="text-soleur-text-secondary">
             Soleur can act on your behalf for specific action classes. Today
-            that is:{" "}
-            {ACTION_CLASSES.map((ac, i) => (
-              <span key={ac}>
-                <code className="text-soleur-text-primary">{ac}</code>
-                {i < ACTION_CLASSES.length - 1 ? ", " : ""}
-              </span>
-            ))}
-            . You decide which ones, at what tier, in{" "}
+            that is:
+          </p>
+          <ul className="ml-4 list-disc space-y-1 text-soleur-text-secondary">
+            {Array.from(ACTION_CLASSES_BY_CATEGORY.entries()).map(
+              ([category, classes]) => {
+                if (classes.length === 0) return null;
+                const titles = classes.map(
+                  (ac) => ACTION_CLASS_COPY[ac].title,
+                );
+                return (
+                  <li key={category}>
+                    <span className="text-soleur-text-primary">{category}</span>
+                    {" — "}
+                    {titles.join(", ")}
+                  </li>
+                );
+              },
+            )}
+          </ul>
+          <p className="text-soleur-text-secondary">
+            You decide which ones, at what tier, in{" "}
             <Link
               href="/dashboard/settings/scope-grants"
               className="text-soleur-gold hover:underline"

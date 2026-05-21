@@ -12,6 +12,7 @@
 import { useState, useTransition } from "react";
 
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
+import { humanTitle } from "@/lib/messages/action-class-copy";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
 
 interface TodayCardProps {
@@ -408,7 +409,7 @@ function StripeCard({
         open={confirming !== null}
         recipientExcerpt={confirming?.recipientExcerpt ?? ""}
         contentExcerpt={confirming?.contentExcerpt ?? ""}
-        actionClassLabel={confirming?.actionClass ?? ""}
+        actionClassLabel={confirming ? humanTitle(confirming.actionClass) : ""}
         tierLabel={confirming?.tier ?? ""}
         onCancel={onCancelConfirm}
         onConfirm={onConfirmTyped}

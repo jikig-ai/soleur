@@ -14,6 +14,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { humanTitle } from "@/lib/messages/action-class-copy";
 import { RedactedEventSummary } from "./redacted-event-summary";
 
 export interface ByokRow {
@@ -48,11 +49,13 @@ type Props = ByokProps | InngestProps;
 const REQUEST_REVIEW_SUBJECT_PREFIX = "Request human review";
 
 function buildMailto(run: InngestRunRow): string {
-  const subject = `${REQUEST_REVIEW_SUBJECT_PREFIX}: ${run.actionClass} (${run.id})`;
+  const title = humanTitle(run.actionClass);
+  const subject = `${REQUEST_REVIEW_SUBJECT_PREFIX}: ${title} (${run.id})`;
   const body =
     "I'd like a human to review this automated action.\n\n" +
     `Run: ${run.id}\n` +
-    `Action class: ${run.actionClass}\n` +
+    `Action: ${title}\n` +
+    `Technical ID: ${run.actionClass}\n` +
     `Tier at time: ${run.tierAtTimeOfEvent ?? "(unspecified)"}\n\n` +
     "[Your perspective]";
   return `mailto:legal@jikigai.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -188,7 +191,7 @@ function InngestSection({ initialRows }: { initialRows?: InngestRunRow[] }) {
                 <div className="min-w-0 flex-1">
                   <RedactedEventSummary
                     masked={run.customerIdMasked}
-                    eventName={run.actionClass}
+                    eventLabel={humanTitle(run.actionClass)}
                   />
                   <p className="mt-1 text-xs text-soleur-text-muted">
                     {run.startedAt

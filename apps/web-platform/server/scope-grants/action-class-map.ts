@@ -8,7 +8,10 @@
 // Adding an entry: extend ACTION_CLASSES, add to ACTION_CLASS_DEFAULTS
 // AND ACTION_CLASS_CATEGORY, extend the switch in
 // `test/server/scope-grants/action-class-exhaustive.test.ts`. Bump
-// `expect(ACTION_CLASSES.length).toBe(...)` in the same test.
+// `expect(ACTION_CLASSES.length).toBe(...)` in the same test. Extend
+// `lib/messages/action-class-copy.ts` with `{title, description, category}`
+// per `test/messages/action-class-copy.test.ts` content rules
+// (≤60-char title, ≤200-char description, category ∈ CATEGORY_ORDER).
 //
 // Consumers:
 //   - server/inngest/functions/cfo-on-payment-failed.ts
