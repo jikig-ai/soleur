@@ -336,6 +336,47 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Doppler had the working `DATABASE_URL_POOLER` and applied via
    pg directly — the path it should have taken at step 1.
 
+   **Pre-apply collision check (always, even on first attempt).**
+   Before invoking pg apply (or `supabase migration up`) against any
+   shared env, run `git fetch origin main && git ls-tree origin/main
+   -- apps/web-platform/supabase/migrations/ | awk '{print $4}' |
+   grep -oE '^[0-9]{3}_[^.]+' | sort -u`. For each LOCAL migration
+   file the branch introduces, assert no DIFFERENT filename with the
+   same 3-digit prefix exists in that list. A collision means a
+   sibling PR is landing the same number window; renumber FIRST,
+   then apply under the final filename. **Why:** PR #4225 — applied
+   053–057 in the morning; PR #4251 landed `054_schema_migrations_
+   content_sha.sql` 10 hours later and main's CI drift probe flagged
+   the entire branch; the recovery (renumber 054→058, 055→059, 056→060,
+   057→061 + reconcile `public._schema_migrations` on both dev + prd
+   via `git hash-object` content_sha) took ~30 min and could have been
+   zero-cost if the operator had grepped origin/main first.
+
+   **Tracking row in the SAME transaction as the migration body.**
+   The project's canonical `apps/web-platform/scripts/run-migrations.sh`
+   writes `INSERT INTO public._schema_migrations (filename, content_sha)
+   VALUES ('<basename>', '<git-hash-object>')` in the same transaction
+   as the migration SQL. The Doppler+pg fallback MUST mirror this —
+   bare `BEGIN; <migration>; COMMIT;` produces a phantom-applied state
+   where the schema reflects the migration but `_schema_migrations`
+   does not, and the next deploy attempts re-apply (failing on
+   non-idempotent statements like `CREATE TRIGGER`). The reconciliation
+   pattern (UPSERT with `ON CONFLICT (filename) DO UPDATE SET
+   content_sha = EXCLUDED.content_sha`) is the recovery shape — but
+   doing it inline is cheaper.
+
+   **PostgREST schema cache reload via session-mode pooler does NOT
+   work.** `NOTIFY pgrst, 'reload schema'` over a `:5432` pooler
+   connection does not reach PostgREST's `LISTEN` (PgBouncer
+   multiplexes; LISTEN/NOTIFY channel scope is bound to backend
+   process identity, not session). 90 attempts over 5 minutes
+   returned `PGRST205`. After a direct-pg apply: either wait for the
+   natural ~10-min schema poll cycle, OR use the Supabase Management
+   API to restart PostgREST. The direct DB host
+   (`db.<ref>.supabase.co:5432`) is IPv6-only and typically
+   unreachable from operator networks, so the canonical "NOTIFY via
+   direct connection" workaround documented upstream isn't available.
+
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 
    Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):
