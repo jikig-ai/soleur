@@ -1,0 +1,59 @@
+name: "Scheduled: Nag on #4216 readiness"
+
+on:
+  schedule:
+    - cron: '0 14 * * 1'
+  workflow_dispatch: {}
+
+concurrency:
+  group: schedule-nag-4216-readiness
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  ISSUE_NUMBER: "4216"
+  PR_I_MERGE_DATE: "2026-05-21"
+
+jobs:
+  nag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Check issue state and post nag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          STATE=$(gh issue view "$ISSUE_NUMBER" --json state --jq .state)
+          if [[ "$STATE" != "OPEN" ]]; then
+            echo "::notice::Issue #$ISSUE_NUMBER is $STATE — no nag needed."
+            exit 0
+          fi
+
+          DAYS_SINCE=$(( ( $(date -u +%s) - $(date -u -d "$PR_I_MERGE_DATE" +%s) ) / 86400 ))
+          TODAY=$(date -u +%F)
+
+          BODY=$(cat <<EOF
+          **Weekly readiness check ($TODAY)** — PR-I (#4078) merged $DAYS_SINCE days ago.
+
+          Re-evaluation criteria from this issue's body:
+
+          - [ ] ≥1 cohort founder with \`draft_one_click\` send history → query: \`SELECT count(*) FROM action_sends WHERE template_hash IS NOT NULL AND template_hash != 'default_legacy' GROUP BY founder_id;\`
+          - [ ] Misclassification signal exists → check Discord #founder-feedback + recent issues + operator-side classifier audit.
+
+          If both met, re-run \`/soleur:go #4216\` to start the PR-I+1 brainstorm. If neither, ignore this nag.
+
+          _Posted by \`.github/workflows/scheduled-nag-4216-readiness.yml\`. Edit or delete the workflow to stop._
+          EOF
+          )
+
+          gh issue comment "$ISSUE_NUMBER" --body "$BODY"
+
+          echo "::notice::Posted readiness nag on #$ISSUE_NUMBER (day $DAYS_SINCE since PR-I)."
