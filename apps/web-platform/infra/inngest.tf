@@ -171,3 +171,27 @@ resource "doppler_secret" "inngest_heartbeat_url_prd" {
     ignore_changes = [value] # URL is stable per heartbeat resource lifetime.
   }
 }
+
+# ---------------- Vector observability shipper → Better Stack Logs ----------------
+# After ~6 PR cycles of Vector ↔ Sentry envelope-format interop issues
+# (#4250 ship → #4257, #4259, #4263, #4267, #4268, #4269, #4271, #4272),
+# we pivoted Vector's sink target from Sentry's HTTP envelope endpoint
+# to Better Stack Logs, which has a first-class Vector integration.
+# Strategic consolidation question tracked in issue #4273.
+#
+# IaC gap: the `betterstackhq/better-uptime` Terraform provider (v0.20.17)
+# does NOT yet expose a `telemetry_logging_source` resource — the
+# Telemetry/Logs product is a separate product from Uptime and not yet
+# covered by the provider. Provisioned out-of-band 2026-05-21 via
+# Playwright MCP automation against the Better Stack dashboard:
+#   source name: soleur-inngest-vector-prd
+#   source id:   2457081
+#   platform:    vector
+#   token:       stored in Doppler `prd.BETTERSTACK_LOGS_TOKEN` (24 chars)
+# Per hr-vendor-token-extraction-via-playwright-must-use-file-output, the
+# token was extracted via `browser_evaluate(filename: ...)` and piped to
+# `doppler secrets set --silent` — never entered the conversation
+# transcript. Validated via HTTP 202 against in.logs.betterstack.com.
+# Migration to proper IaC tracked alongside the consolidation decision in
+# issue #4273. Rotation procedure (until IaC catches up): regenerate via
+# Better Stack dashboard → re-extract via Playwright → re-Doppler-set.
