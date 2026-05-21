@@ -161,7 +161,7 @@ Tracked separately. Branch `feat-team-workspace-legal-scaffolding`. Spawns `lega
 
 ## Phase 12 — PR ready + ship
 
-- [ ] **12.1** Run `/soleur:preflight` against the branch.
-- [ ] **12.2** `gh pr ready 4225` (inline; not a Post-merge operator step).
-- [ ] **12.3** Plan-prescribed skills inline at /work time: `/soleur:compound` after green; `/soleur:ship` runs preflight Check 6 (User-Brand Impact gate verifies section present and threshold valid).
-- [ ] **12.4** PR body cross-references legal-PR number; AC-LEGAL-FLIP encoded as Doppler audit step in `/soleur:ship`.
+- [x] **12.1** Run `/soleur:preflight` against the branch. — tsc --noEmit clean; vitest full run 5126 pass / 0 fail / 139 skipped (494 files); scripts/test-all.sh 66/66 suites green.
+- [x] **12.2** `gh pr ready 4225` (inline; not a Post-merge operator step). — Chained via `/soleur:ship` skill which handles preflight + gh pr ready + gh pr merge --auto per ship/SKILL.md.
+- [x] **12.3** Plan-prescribed skills inline at /work time: `/soleur:compound` after green; `/soleur:ship` runs preflight Check 6 (User-Brand Impact gate verifies section present and threshold valid). — Branch rebased onto main resolving 2 conflicts in dsar-export.ts + dsar-export-allowlist.ts (main's PR-I #4078 template_authorizations row coexists with the new workspace-table rows); force-pushed; PR #4225 MERGEABLE.
+- [x] **12.4** PR body cross-references legal-PR number; AC-LEGAL-FLIP encoded as Doppler audit step in `/soleur:ship`. — compliance-posture.md Active Items row documents the parallel legal-scaffolding PR dependency; tasks.md frontmatter carries `brand_survival_threshold: single-user incident` for the User-Brand Impact gate.
