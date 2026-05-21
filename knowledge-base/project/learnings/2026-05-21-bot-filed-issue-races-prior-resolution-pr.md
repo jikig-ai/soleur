@@ -3,7 +3,7 @@ title: "Bot-filed issue races prior-resolution PR — extend triage-time duplica
 date: 2026-05-21
 category: engineering
 tags: [triage, bot, stale-issue, duplicate-detection, race-condition]
-related_prs: [4220, 4221-followup]
+related_prs: [4220, 4223]
 related_issues: [4221]
 related_learnings:
   - knowledge-base/project/learnings/2026-04-22-triage-time-duplicate-detection-for-workflow-fixes.md
@@ -26,9 +26,11 @@ The 2026-04-22 learning [`triage-time-duplicate-detection-for-workflow-fixes.md`
 
 AGENTS.md `hr-before-asserting-github-issue-status` fires on assertions about issue state (open/closed/merged), not on the upstream "does the referenced artifact still exist" check. AGENTS.md `hr-when-triaging-a-batch-of-issues-never` covers triage hygiene (don't auto-comment on N issues unverified) but not the existence sub-check. The gap is at issue-read boundary: we read the body, extract the workflow path, and proceed without checking `git ls-files <path>`.
 
-## Heuristic to add at triage / one-shot Step 0
+## Heuristic to add at triage / one-shot consumption time
 
 Before treating a bot-filed issue (or any issue whose body cites a specific file path) as actionable, check whether the referenced file still exists. If absent, search recent merged PRs for a deletion.
+
+**Wiring note:** this heuristic is filed as guidance, not as a landed skill edit. The natural integration points are `plugins/soleur/skills/one-shot/SKILL.md` Step 0a.5 (currently checks issue `state` and linked open PRs but NOT file-existence of cited paths) and the start of `plugins/soleur/skills/triage/SKILL.md` Step 1 (currently presents findings without a file-existence pre-check). The check below can be lifted directly into either skill — until then, `/soleur:triage` and `/soleur:one-shot` consumers should run it manually when the issue body cites a specific file path.
 
 ```bash
 # 1. Extract file path(s) from the issue body.

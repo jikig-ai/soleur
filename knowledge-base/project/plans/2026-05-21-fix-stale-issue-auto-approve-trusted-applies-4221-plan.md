@@ -224,7 +224,7 @@ gh issue view 4221 --json state | jq -r .state   # must be CLOSED
 - [ ] AC2: The learning file at `knowledge-base/project/learnings/2026-05-21-bot-filed-issue-races-prior-resolution-pr.md` exists with valid YAML frontmatter (date 2026-05-21, category engineering, ≥5 tags including `triage`, `bot`, `stale-issue`).
 - [ ] AC3: The learning body cross-references `2026-04-22-triage-time-duplicate-detection-for-workflow-fixes.md`: `grep -q '2026-04-22-triage-time-duplicate-detection-for-workflow-fixes' knowledge-base/project/learnings/2026-05-21-bot-filed-issue-races-prior-resolution-pr.md`.
 - [ ] AC4: The plan body's `Files to Edit` section names no source files — this PR is docs-only.
-  Verify: `awk '/^## Files to Edit/,/^## /' knowledge-base/project/plans/2026-05-21-fix-stale-issue-auto-approve-trusted-applies-4221-plan.md | grep -E '^[0-9]+\.' || echo "EMPTY (correct)"`.
+  Verify: `! awk '/^## Files to Edit/,/^## /' knowledge-base/project/plans/2026-05-21-fix-stale-issue-auto-approve-trusted-applies-4221-plan.md | grep -qE '^[0-9]+\.'` (exits 0 only when the section contains no numbered entries; non-zero exit indicates a Files-to-Edit entry was added and AC fails).
 - [ ] AC5: `git ls-files .github/workflows/ | grep -i approve` returns empty (workflow is and remains gone).
 - [ ] AC6: `gh run list --workflow=auto-approve-trusted-applies.yml --limit 100 --json createdAt | jq '[.[] | select(.createdAt > "2026-05-21T08:34:57Z")] | length'` returns `0`.
 

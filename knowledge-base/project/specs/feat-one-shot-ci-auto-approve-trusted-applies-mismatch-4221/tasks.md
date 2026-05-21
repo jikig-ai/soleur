@@ -39,10 +39,10 @@ This is a triage-cleanup PR. No source files are edited; a single learning file 
 
 ## Phase 2 — Commit, push, open PR with Closes #4221
 
-- [ ] 2.1 Stage the plan, the spec tasks.md, and the new learning file:
+- [ ] 2.1 Stage the plan, the spec directory (tasks.md + session-state.md), and the new learning file:
   ```bash
   git add knowledge-base/project/plans/2026-05-21-fix-stale-issue-auto-approve-trusted-applies-4221-plan.md \
-    knowledge-base/project/specs/feat-one-shot-ci-auto-approve-trusted-applies-mismatch-4221/tasks.md \
+    knowledge-base/project/specs/feat-one-shot-ci-auto-approve-trusted-applies-mismatch-4221/ \
     knowledge-base/project/learnings/2026-05-21-bot-filed-issue-races-prior-resolution-pr.md
   ```
 - [ ] 2.2 Commit with conventional title: `fix(triage): close stale issue #4221 + codify bot-races-prior-PR detection (closes #4221)`.
