@@ -4,14 +4,29 @@ import Link from "next/link";
 import { KbBreadcrumb } from "@/components/kb/kb-breadcrumb";
 import { SharePopover } from "@/components/kb/share-popover";
 import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
+import {
+  KbSyncStatus,
+  type KbSyncHistoryRow,
+} from "@/components/kb/kb-sync-status";
 
 export type KbContentHeaderProps = {
   joinedPath: string;
   chatUrl: string;
   download?: { href: string; filename: string };
+  /** Latest entry from the operator's kb_sync_history JSONB. Pass null for
+   *  never-synced operators. */
+  lastSync?: KbSyncHistoryRow | null;
+  /** Refetch hook invoked after a successful manual /api/kb/sync POST. */
+  onSynced?: () => void;
 };
 
-export function KbContentHeader({ joinedPath, chatUrl, download }: KbContentHeaderProps) {
+export function KbContentHeader({
+  joinedPath,
+  chatUrl,
+  download,
+  lastSync,
+  onSynced,
+}: KbContentHeaderProps) {
   return (
     <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
       <div className="flex items-center gap-2">
@@ -74,6 +89,9 @@ export function KbContentHeader({ joinedPath, chatUrl, download }: KbContentHead
             </svg>
             Download
           </a>
+        )}
+        {lastSync !== undefined && (
+          <KbSyncStatus lastSync={lastSync} onSynced={onSynced} />
         )}
         <SharePopover documentPath={joinedPath} />
         <KbChatTrigger fallbackHref={chatUrl} />

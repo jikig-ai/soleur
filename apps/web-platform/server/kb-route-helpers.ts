@@ -283,7 +283,10 @@ export async function syncWorkspace(
   installationId: number,
   workspacePath: string,
   log: Logger,
-  context: { userId: string; op: "delete" | "rename" | "upload" },
+  context: {
+    userId: string;
+    op: "delete" | "rename" | "upload" | "push" | "manual";
+  },
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
   const { gitWithInstallationAuth } = await import("@/server/git-auth");
   try {
@@ -298,6 +301,15 @@ export async function syncWorkspace(
       { err: syncError, userId: context.userId, op: context.op },
       `kb/${context.op}: workspace sync failed`,
     );
+    reportSilentFallback(syncError, {
+      feature: "kb-route-helpers",
+      op: `workspace-sync-${context.op}`,
+      // workspacePath omitted — the path embeds raw userId
+      // (workspacePath = `<root>/<userId>`) and bypasses the
+      // hashExtraUserId top-level rename (Recital 26).
+      extra: { userId: context.userId },
+      message: `kb/${context.op}: workspace sync failed`,
+    });
     return { ok: false, error: syncError };
   }
 }

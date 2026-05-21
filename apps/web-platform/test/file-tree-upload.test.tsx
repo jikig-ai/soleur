@@ -39,6 +39,7 @@ function renderFileTree(overrides: Partial<KbContextValue> = {}) {
     expanded: new Set(["assets"]),
     toggleExpanded: vi.fn(),
     refreshTree: mockRefreshTree,
+    lastSync: null,
     ...overrides,
   };
   return render(

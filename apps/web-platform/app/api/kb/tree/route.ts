@@ -10,7 +10,7 @@ async function getHandler(_req: Request, user: User) {
   const serviceClient = createServiceClient();
   const { data: userData, error: fetchError } = await serviceClient
     .from("users")
-    .select("workspace_path, workspace_status, repo_status")
+    .select("workspace_path, workspace_status, repo_status, kb_sync_history")
     .eq("id", user.id)
     .single();
 
@@ -22,10 +22,19 @@ async function getHandler(_req: Request, user: User) {
     return NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
   }
 
+  // #4224 — surface the latest kb_sync_history row alongside the tree so
+  // KbSyncStatus can render the staleness signal on layout mount without a
+  // second round-trip. Heterogeneous JSONB: legacy `{date,count}` rows from
+  // `recordKbSyncHistory` flow through unchanged; `KbSyncStatus` discriminates.
+  const historyArr = Array.isArray(userData.kb_sync_history)
+    ? (userData.kb_sync_history as unknown[])
+    : [];
+  const lastSync = historyArr.length > 0 ? historyArr[historyArr.length - 1] : null;
+
   try {
     const kbRoot = path.join(userData.workspace_path, "knowledge-base");
     const tree = await buildTree(kbRoot);
-    return NextResponse.json({ tree });
+    return NextResponse.json({ tree, lastSync });
   } catch (err) {
     logger.error({ err }, "kb/tree: unexpected error");
     return NextResponse.json(
