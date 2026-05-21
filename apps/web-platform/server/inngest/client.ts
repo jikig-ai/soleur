@@ -14,6 +14,8 @@
 
 import { Inngest } from "inngest";
 
+import { sentryCorrelationMiddleware } from "@/server/inngest/middleware/sentry-correlation";
+
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
 const EVENT_KEY = process.env.INNGEST_EVENT_KEY;
 const BASE_URL = process.env.INNGEST_BASE_URL;
@@ -57,5 +59,12 @@ if (BASE_URL) {
 export const inngest = new Inngest({
   id: "soleur-runtime",
   eventKey: EVENT_KEY ?? "build-phase-placeholder",
+  // sentry-correlation middleware tags every Sentry event captured during
+  // a function run with `inngest.run_id` + `inngest.fn_id` and emits per-
+  // step breadcrumbs. Final-result errors are captured to Sentry's issues
+  // stream via the middleware's `transformOutput` hook. Applied once
+  // here so every existing AND future Inngest function is covered without
+  // per-handler instrumentation.
+  middleware: [sentryCorrelationMiddleware],
   ...(BASE_URL ? { baseUrl: BASE_URL } : {}),
 });

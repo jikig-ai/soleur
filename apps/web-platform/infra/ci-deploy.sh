@@ -607,13 +607,21 @@ case "$COMPONENT" in
       final_write_state 1 "inngest_extract_copy_failed"
       exit 1
     fi
+    # Vector config (TR9 PR-5 observability shipper). Optional — image
+    # built before this feature lands won't have /vector.toml; the script's
+    # downstream `[[ -f /tmp/vector.toml ]]` guard skips Vector install
+    # gracefully when missing.
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/vector.toml" /tmp/vector.toml 2>/dev/null || true
     # Read ENV vars baked into the image at build time (see
     # .github/workflows/build-inngest-bootstrap-image.yml — ENV
-    # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...).
+    # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...
+    # plus VECTOR_CLI_VERSION / VECTOR_CLI_SHA256 (TR9 PR-5)).
     image_env=$(docker inspect "$IMAGE:$TAG" -f '{{range .Config.Env}}{{println .}}{{end}}')
     docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
     INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-)
     INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-)
+    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | cut -d= -f2-)
+    VECTOR_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_SHA256=' | cut -d= -f2-)
     if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
       logger -t "$LOG_TAG" "FAILED: image missing INNGEST_CLI_{VERSION,SHA256} ENV"
       rm -rf "$INNGEST_EXTRACT_DIR"
@@ -622,15 +630,15 @@ case "$COMPONENT" in
     fi
     chmod +x "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"
 
-    echo "Running inngest-bootstrap.sh on host (version=$INNGEST_CLI_VERSION)..."
+    echo "Running inngest-bootstrap.sh on host (version=$INNGEST_CLI_VERSION, vector=${VECTOR_CLI_VERSION:-disabled})..."
     # Execute on host. The script needs root to write /etc/systemd/system,
     # /usr/local/bin/inngest, /etc/default/inngest-server, and to invoke
     # systemctl. ci-deploy.sh itself runs as the `deploy` user with sudo
     # access (see webhook.service hardening). The sudoers entry at
     # /etc/sudoers.d/deploy-inngest-bootstrap (provisioned by Terraform)
-    # pins the exact command and env_keep's the two version vars (#4144).
-    export INNGEST_CLI_VERSION INNGEST_CLI_SHA256
-    if ! sudo --preserve-env=INNGEST_CLI_VERSION,INNGEST_CLI_SHA256 \
+    # pins the exact command and env_keep's the four version vars (#4144 + TR9 PR-5).
+    export INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256
+    if ! sudo --preserve-env=INNGEST_CLI_VERSION,INNGEST_CLI_SHA256,VECTOR_CLI_VERSION,VECTOR_CLI_SHA256 \
         /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh; then
       logger -t "$LOG_TAG" "FAILED: inngest-bootstrap.sh non-zero exit"
       rm -rf "$INNGEST_EXTRACT_DIR"

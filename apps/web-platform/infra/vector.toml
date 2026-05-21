@@ -1,0 +1,172 @@
+# Vector agent config — ships journald + host_metrics to Sentry.
+#
+# Co-located with inngest-server.service on the Hetzner VM. Provisioned by
+# inngest-bootstrap.sh (binary install) + vector.tf (version pin) +
+# vector.service systemd unit. Doppler `prd` injects SENTRY_INGEST_DOMAIN,
+# SENTRY_PROJECT_ID, SENTRY_PUBLIC_KEY at ExecStart time (same shape as
+# inngest-server.service).
+#
+# Throughput envelope: inngest-server.service emits <1 ERROR/day at steady
+# state; host_metrics every 30s. Sentry plan absorbs both well under the
+# alpha-internal volume.
+
+data_dir = "/var/lib/vector"
+
+# ---------------- Source 1: inngest-server journald (ERROR+) ----------------
+# `_SYSTEMD_UNIT` filter scopes to the unit we care about. PRIORITY <= 4
+# means EMERG..WARNING (numeric 0..4 in syslog severity); journalctl uses
+# the same scale. INFO+DEBUG (5,6,7) get dropped at the source — keeps the
+# Sentry quota focused on signal and avoids the "wall of breadcrumbs"
+# anti-pattern.
+[sources.inngest_journald]
+type = "journald"
+units = ["inngest-server.service"]
+include_priorities = ["emerg", "alert", "crit", "err", "warning"]
+journal_directory = "/var/log/journal"
+batch_size = 16
+
+# ---------------- Source 2: system journald (CRIT+) ----------------
+# Kernel oops, OOM-killer, networking drops — anything CRIT or worse at
+# the host level. Tighter filter than the inngest source because the host
+# journal is noisier and most of it is irrelevant to app-layer RCA.
+[sources.system_journald]
+type = "journald"
+exclude_units = ["inngest-server.service", "vector.service"]
+include_priorities = ["emerg", "alert", "crit"]
+journal_directory = "/var/log/journal"
+batch_size = 16
+
+# ---------------- Source 3: host metrics (CPU/mem/disk/net) ----------------
+# 30s scrape. Sentry receives these as one envelope per metric type per
+# scrape — low cardinality, low cost.
+[sources.host_metrics]
+type = "host_metrics"
+scrape_interval_secs = 30
+collectors = ["cpu", "memory", "disk", "filesystem", "load", "network"]
+
+# ---------------- Transform: build Sentry envelope payload ----------------
+# Inngest + system journald → Sentry "event" item. VRL formats each log
+# line into a one-event envelope text body that the http sink POSTs as
+# `application/x-sentry-envelope`.
+[transforms.envelope_events]
+type = "remap"
+inputs = ["inngest_journald", "system_journald"]
+source = '''
+event_id = uuid_v4()
+event_id = replace(event_id, "-", "")
+
+priority_str = string!(.PRIORITY) ?? "5"
+sentry_level = if priority_str == "0" || priority_str == "1" || priority_str == "2" { "fatal" } else if priority_str == "3" { "error" } else { "warning" }
+
+unit_safe = string!(._SYSTEMD_UNIT) ?? "system"
+host_safe = string!(.host) ?? "hetzner"
+message_safe = string!(.message) ?? ""
+
+# Sentry event payload (compact — one log line == one Sentry event).
+sentry_event = {
+    "event_id": event_id,
+    "timestamp": to_unix_timestamp(now()),
+    "platform": "other",
+    "level": sentry_level,
+    "logger": "vector.journald",
+    "server_name": host_safe,
+    "message": { "formatted": message_safe },
+    "tags": {
+        "systemd_unit": unit_safe,
+        "host": host_safe,
+        "priority": priority_str,
+        "source": "vector-journald-shipper"
+    },
+    "extra": {
+        "PRIORITY": priority_str,
+        "_SYSTEMD_UNIT": unit_safe,
+        "_HOSTNAME": host_safe
+    }
+}
+
+# Build the envelope body: 3 newline-delimited JSON lines.
+envelope_header = { "event_id": event_id, "sent_at": format_timestamp!(now(), "%Y-%m-%dT%H:%M:%S%.3fZ") }
+item_body = encode_json(sentry_event)
+item_header = { "type": "event", "length": length(item_body) }
+
+. = {
+    "envelope_body": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n",
+    "_routing": "sentry_envelope"
+}
+'''
+
+# Host metrics → Sentry metrics-style "log" item. Each scrape interval
+# produces N rows (one per metric); each becomes a one-item envelope.
+# Sentry-native "metric" envelopes require a more involved item format; we
+# emit them as structured `event` items (level=info, tag=metric_name) so
+# they show up in Sentry's "Logs" view, queryable by metric name. Trades
+# perfect cardinality for zero new vendor surface area.
+[transforms.envelope_metrics]
+type = "remap"
+inputs = ["host_metrics"]
+source = '''
+event_id = uuid_v4()
+event_id = replace(event_id, "-", "")
+
+metric_name = string!(.name) ?? "unknown"
+metric_value = if exists(.gauge.value) { .gauge.value } else if exists(.counter.value) { .counter.value } else { 0.0 }
+tag_struct = .tags ?? {}
+
+sentry_event = {
+    "event_id": event_id,
+    "timestamp": to_unix_timestamp(now()),
+    "platform": "other",
+    "level": "info",
+    "logger": "vector.host_metrics",
+    "message": { "formatted": string!(metric_name) + "=" + to_string!(metric_value) },
+    "tags": merge({
+        "metric_name": metric_name,
+        "source": "vector-host-metrics"
+    }, object!(tag_struct)),
+    "extra": { "value": metric_value }
+}
+
+envelope_header = { "event_id": event_id, "sent_at": format_timestamp!(now(), "%Y-%m-%dT%H:%M:%S%.3fZ") }
+item_body = encode_json(sentry_event)
+item_header = { "type": "event", "length": length(item_body) }
+
+. = {
+    "envelope_body": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n",
+    "_routing": "sentry_envelope"
+}
+'''
+
+# ---------------- Sink: Sentry envelope endpoint ----------------
+# URL templated from Doppler-injected env vars. Same shape as
+# cron-daily-triage.ts:329-371's heartbeat URL — the SENTRY_DOMAIN_RE /
+# SENTRY_PROJECT_RE / SENTRY_PUBLIC_KEY_RE validators in observability.ts
+# encode the canonical shape; Doppler-side typo guards apply equally.
+[sinks.sentry]
+type = "http"
+inputs = ["envelope_events", "envelope_metrics"]
+uri = "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/envelope/?sentry_key=${SENTRY_PUBLIC_KEY}&sentry_version=7"
+method = "post"
+batch.max_events = 1
+encoding.codec = "raw_message"
+framing.method = "newline_delimited"
+[sinks.sentry.request]
+timeout_secs = 10
+retry_attempts = 2
+retry_initial_backoff_secs = 1
+retry_max_duration_secs = 30
+[sinks.sentry.request.headers]
+content-type = "application/x-sentry-envelope"
+user-agent = "soleur-vector-shipper/1.0"
+
+# Internal Vector liveness — exposed on a loopback HTTP endpoint so the
+# inngest-heartbeat.timer can probe Vector itself. Without this, a Vector
+# crash would be invisible until the next Sentry issue volume anomaly.
+[sources.vector_internal]
+type = "internal_metrics"
+scrape_interval_secs = 60
+
+[sinks.vector_console]
+type = "console"
+inputs = ["vector_internal"]
+encoding.codec = "json"
+target = "stdout"

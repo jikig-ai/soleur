@@ -12,6 +12,16 @@ const devPort = process.env.PORT || "3000";
 const nextConfig: NextConfig = {
   // Custom server handles HTTP — disable standalone output
   output: undefined,
+  // Bake BUILD_VERSION / BUILD_SHA into both client and server bundles so
+  // Sentry's `release` field links every event (client OR server) to the
+  // deployed image. Build-arg flow: Dockerfile ARG → ENV → next.config env
+  // → webpack inline-substitution. Falls back to "dev" sentinel when
+  // missing (matches Dockerfile ARG defaults) so local dev / vitest don't
+  // collide events under a phantom release.
+  env: {
+    BUILD_VERSION: process.env.BUILD_VERSION ?? "dev",
+    BUILD_SHA: process.env.BUILD_SHA ?? "dev",
+  },
   // Allow WebSocket upgrade on the same port
   // NOTE: `pdfjs-dist` is intentionally NOT in this list, despite the
   // bundling-reorder bug it causes in the custom server (Sentry
