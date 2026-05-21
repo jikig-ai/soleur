@@ -293,6 +293,15 @@ fi
 log "bootstrap complete: inngest-server $INNGEST_CLI_VERSION active on 127.0.0.1:8288"
 
 # ----------------------------------------------------------------------
+# Vector block diagnostic: bash trace enabled for the entire Vector
+# install/config/start section. The trace lines write to stderr which
+# ci-deploy.sh captures into /tmp/inngest-bootstrap-stderr.log; the
+# `final_write_state` failure path surfaces the last ~400 chars via the
+# /hooks/deploy-status endpoint (no SSH needed). Will be reverted to
+# `set +x` only after Vector v1.1.x is verified live on prd.
+set -x
+
+# ----------------------------------------------------------------------
 # Vector observability shipper (TR9 PR-5 / observability stack).
 #
 # Streams ERROR+ journald lines AND host_metrics from this VM to Sentry's

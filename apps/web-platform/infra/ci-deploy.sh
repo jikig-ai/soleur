@@ -647,11 +647,25 @@ case "$COMPONENT" in
     # /etc/sudoers.d/deploy-inngest-bootstrap (provisioned by Terraform)
     # pins the exact command and env_keep's the four version vars (#4144 + TR9 PR-5).
     export INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256
+    # Capture stderr to a file so a non-zero exit's last lines are surfaced
+    # via cat-deploy-state (no-SSH debugging per hr-no-ssh-fallback-in-runbooks
+    # and the TR9 PR-5 observability stack). The bootstrap script logs to
+    # journald + stdout; stderr captures bash's own diagnostics (set -x,
+    # syntax errors, unbound var traps) which journald wouldn't show.
+    BOOTSTRAP_STDERR=/tmp/inngest-bootstrap-stderr.log
+    rm -f "$BOOTSTRAP_STDERR"
     if ! sudo --preserve-env=INNGEST_CLI_VERSION,INNGEST_CLI_SHA256,VECTOR_CLI_VERSION,VECTOR_CLI_SHA256 \
-        /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh; then
-      logger -t "$LOG_TAG" "FAILED: inngest-bootstrap.sh non-zero exit"
+        /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh 2> "$BOOTSTRAP_STDERR"; then
+      # Extract a SHORT (≤400 char) reason suffix from the stderr tail so
+      # cat-deploy-state's JSON reason field carries actionable detail.
+      # Strip control bytes that would break JSON encoding.
+      stderr_tail=$(tail -c 600 "$BOOTSTRAP_STDERR" 2>/dev/null \
+        | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 400)
+      logger -t "$LOG_TAG" "FAILED: inngest-bootstrap.sh non-zero exit; stderr_tail=${stderr_tail}"
       rm -rf "$INNGEST_EXTRACT_DIR"
-      final_write_state 1 "inngest_bootstrap_failed"
+      # Reason field carries the stderr tail so cat-deploy-state surfaces it
+      # via /hooks/deploy-status without requiring SSH to journalctl.
+      final_write_state 1 "inngest_bootstrap_failed:${stderr_tail}"
       exit 1
     fi
 
