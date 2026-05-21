@@ -14,6 +14,7 @@ import { useState, useTransition } from "react";
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { humanTitle } from "@/lib/messages/action-class-copy";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
+import type { DenyReason } from "@/server/templates/is-template-authorized";
 
 interface TodayCardProps {
   id: string;
@@ -74,6 +75,28 @@ interface ConfirmationPayload {
 
 const BASE_BUTTON =
   "min-h-[44px] rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
+
+// PR-I (#4078) — Per-DenyReason copy surfaced when the send route
+// returns 403 with `deny_reason`. `template_unauthorized` is unreachable
+// in v2 (first-send-IS-authorization). `no_scope_grant` corresponds to
+// the legacy 403 `error: 'no_active_grant'` shape — kept here for
+// completeness so future predicate denials map cleanly.
+//
+// Typed as Record<DenyReason, string>: a 6th DenyReason member would
+// fail tsc here without a copy entry. Surfaced by PR-I multi-agent
+// review (code-quality F1 + pattern P1-2).
+const DENY_REASON_COPY: Record<DenyReason, string> = {
+  no_scope_grant:
+    "You need a scope grant first. Visit Settings → Scope grants.",
+  template_unauthorized:
+    "Send couldn't verify your template authorization. Try again in a moment.",
+  template_revoked:
+    "This template was revoked. Click Send again to re-authorize.",
+  template_expired:
+    "This template authorization expired (90-day limit). Click Send again to re-authorize.",
+  template_quota_exhausted:
+    "You've sent 100 messages with this template. Click Send again to re-authorize for another 100.",
+};
 
 export function TodayCard(props: TodayCardProps) {
   if (props.source === "kb-drift") return <KbDriftCard {...props} />;
@@ -259,6 +282,26 @@ function StripeCard({
           }
           if (json.error === "already_sent") {
             setArchived(true);
+            return;
+          }
+        }
+        if (res.status === 403) {
+          // PR-I (#4078) — Surface the predicate's deny_reason as
+          // founder-readable copy. Plan §Phase 5 §2.
+          const json = (await res.json().catch(() => ({}))) as {
+            error?: string;
+            deny_reason?: string;
+            action_class?: string;
+          };
+          if (
+            json.deny_reason !== undefined &&
+            json.deny_reason in DENY_REASON_COPY
+          ) {
+            setError(DENY_REASON_COPY[json.deny_reason as DenyReason]);
+            return;
+          }
+          if (json.error === "no_active_grant") {
+            setError(DENY_REASON_COPY.no_scope_grant);
             return;
           }
         }

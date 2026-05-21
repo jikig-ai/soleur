@@ -2,7 +2,11 @@ export interface UserRow {
   id: string;
   email: string;
   created_at: string;
-  kb_sync_history: Array<{ date: string; count: number }>;
+  // Heterogeneous JSONB array (#4224): legacy `{date,count}` rows from
+  // `recordKbSyncHistory` coexist with rich `{at,trigger,ok,...}` rows
+  // from `appendKbSyncRow`. The admin sparkline only consumes legacy
+  // rows; the kbHistory derivation filters via a type-narrowing guard.
+  kb_sync_history: unknown[];
 }
 
 export interface ConversationRow {
@@ -92,8 +96,17 @@ export function computeMetrics(
       domainCount: Object.keys(domainCounts).length,
       totalSessions: convs.length,
       sessionsByDay,
+      // Filter to legacy {date, count} rows — rich rows from
+      // appendKbSyncRow (#4224) lack the .count field the sparkline
+      // arithmetic depends on; including them produces NaN points.
       kbHistory: Array.isArray(user.kb_sync_history)
-        ? user.kb_sync_history
+        ? user.kb_sync_history.filter(
+            (r): r is { date: string; count: number } =>
+              typeof r === "object" &&
+              r !== null &&
+              typeof (r as { date?: unknown }).date === "string" &&
+              typeof (r as { count?: unknown }).count === "number",
+          )
         : [],
       ttfvDays,
       errorRate,

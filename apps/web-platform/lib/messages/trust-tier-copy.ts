@@ -42,3 +42,56 @@ export const TRUST_TIER_COPY = {
 } as const;
 
 export type TrustTier = keyof typeof TRUST_TIER_COPY;
+
+// PR-I (#4078) — Founder-facing copy for the 8-value
+// template_authorizations.revocation_reason enum. Surfaced on the
+// scope-grants settings page (Phase 7) when a template authorization
+// is revoked. Three reasons (regulator_ordered, vendor_tos_revoked,
+// policy_violation) have no v1 producer but are pre-provisioned per
+// plan §Sharp Edges (Art. 5(2) attribution; cheaper than ALTER later).
+// quarantine_retroactive is reserved for PR-I+1 (#4216) — keep the
+// copy stable to avoid a parity test churn when classifier-feedback
+// retroactive UI ships.
+export const REVOCATION_REASON_COPY = {
+  founder_revoked: {
+    label: "Revoked by you",
+    description: "You revoked this template authorization from Settings.",
+  },
+  quota_exhausted: {
+    label: "Quota exhausted",
+    description:
+      "Reached the 100-send limit for this template. Click Send again to re-authorize for another 100.",
+  },
+  expired: {
+    label: "Expired",
+    description:
+      "The 90-day authorization window closed. Click Send again to re-authorize.",
+  },
+  dsr_erasure: {
+    label: "Erased (DSAR)",
+    description:
+      "Your account or this row was anonymised under a data-subject erasure request (GDPR Art. 17).",
+  },
+  regulator_ordered: {
+    label: "Revoked by regulator order",
+    description:
+      "A regulator-mandated takedown applies to this template. Contact support to reauthorize.",
+  },
+  vendor_tos_revoked: {
+    label: "Revoked by vendor policy",
+    description:
+      "The downstream vendor's terms of service no longer permit this template.",
+  },
+  policy_violation: {
+    label: "Revoked for policy violation",
+    description:
+      "Soleur's acceptable use policy was violated. See the policy at /docs/legal/acceptable-use-policy.",
+  },
+  quarantine_retroactive: {
+    label: "Quarantined retroactively",
+    description:
+      "A misclassified send was reclassified by the classifier-feedback flow (PR-I+1).",
+  },
+} as const;
+
+export type RevocationReason = keyof typeof REVOCATION_REASON_COPY;

@@ -9,6 +9,7 @@ import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { safeSession } from "@/lib/safe-session";
 import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
 import type { TreeNode } from "@/server/kb-reader";
+import type { KbSyncHistoryRow } from "@/components/kb/kb-sync-status";
 
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
 
@@ -52,6 +53,7 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const chatPanelRef = usePanelRef();
   const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
+  const [lastSync, setLastSync] = useState<KbSyncHistoryRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<KbContextValue["error"]>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -93,6 +95,10 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
         }
         const data = await res.json();
         setTree(data.tree);
+        // #4224 — server tucks the latest kb_sync_history row alongside.
+        // Cached on the layout state; refetched on KbSyncStatus's Sync-now
+        // resolution via refreshTree (the same fetchTree callback).
+        setLastSync((data.lastSync as KbSyncHistoryRow | null) ?? null);
         setLoading(false);
       } catch {
         if (!signal?.aborted) {
@@ -178,8 +184,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       expanded,
       toggleExpanded,
       refreshTree: fetchTree,
+      lastSync,
     }),
-    [tree, loading, error, expanded, toggleExpanded, fetchTree],
+    [tree, lastSync, loading, error, expanded, toggleExpanded, fetchTree],
   );
 
   // --- Chat sidebar state -------------------------------------------------

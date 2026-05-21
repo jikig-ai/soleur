@@ -276,6 +276,8 @@ Attempts to bypass these guardrails are a material breach of Section 4 ("Prohibi
 
 **Audit and contestation.** Every automated action taken on your behalf is recorded in the `/dashboard/audit` viewer with the action class, tier active at the moment of the event, timestamp, and (for BYOK calls) token + cost data. You may contest any automated action through the inlined "Request human review" affordance on each audit row, or by contacting <legal@jikigai.com>.
 
+**Template-authorization revocation for AUP breaches.** Soleur reserves the right to revoke an individual template authorization (as recorded in the `template_authorizations` ledger introduced by PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP. The revocation is audit-recorded in the same WORM ledger as your founder-initiated revocations and is surfaced in `/dashboard/settings/scope-grants`; you may contest a `policy_violation` revocation through the same channels described above.
+
 ---
 
 ## 6. Enforcement

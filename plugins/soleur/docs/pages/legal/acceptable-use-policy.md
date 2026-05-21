@@ -8,7 +8,7 @@ permalink: legal/acceptable-use-policy/
 <section class="page-hero">
   <div class="container">
     <h1>Acceptable Use Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated May 18, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 21, 2026</p>
   </div>
 </section>
 
@@ -20,7 +20,7 @@ permalink: legal/acceptable-use-policy/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 18, 2026 -- added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
+**Last Updated:** May 21, 2026 -- added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; previous: May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
 
 ---
 
@@ -283,6 +283,8 @@ The Web Platform includes agent-runtime features that can act on your behalf in 
 Attempts to bypass these guardrails are a material breach of Section 4 ("Prohibited Conduct") and may result in suspension or termination of your Web Platform account.
 
 **Audit and contestation.** Every automated action taken on your behalf is recorded in the `/dashboard/audit` viewer with the action class, tier active at the moment of the event, timestamp, and (for BYOK calls) token + cost data. You may contest any automated action through the inlined "Request human review" affordance on each audit row, or by contacting <legal@jikigai.com>.
+
+**Template-authorization revocation for AUP breaches.** Soleur reserves the right to revoke an individual template authorization (as recorded in the `template_authorizations` ledger introduced by PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP. The revocation is audit-recorded in the same WORM ledger as your founder-initiated revocations and is surfaced in `/dashboard/settings/scope-grants`; you may contest a `policy_violation` revocation through the same channels described above.
 
 ---
 
