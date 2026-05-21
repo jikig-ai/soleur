@@ -62,16 +62,33 @@ collectors = ["cpu", "memory", "disk", "filesystem", "load", "network"]
 [transforms.envelope_events]
 type = "remap"
 inputs = ["inngest_journald", "system_journald"]
+# VRL note: use `to_string(...) ?? "default"` (fallible form) rather than
+# `string!(...) ?? "default"` (infallible form — VRL flags the `??` as
+# dead code because string!() aborts on bad input). Same for direct field
+# access (`.field ?? "x"` is also flagged); guard with explicit
+# `if exists(.field)` before assignment.
 source = '''
 event_id = uuid_v4()
 event_id = replace(event_id, "-", "")
 
-priority_str = string!(.PRIORITY) ?? "5"
+priority_str = "5"
+if exists(.PRIORITY) {
+    priority_str = to_string(.PRIORITY) ?? "5"
+}
 sentry_level = if priority_str == "0" || priority_str == "1" || priority_str == "2" { "fatal" } else if priority_str == "3" { "error" } else { "warning" }
 
-unit_safe = string!(._SYSTEMD_UNIT) ?? "system"
-host_safe = string!(.host) ?? "hetzner"
-message_safe = string!(.message) ?? ""
+unit_safe = "system"
+if exists(._SYSTEMD_UNIT) {
+    unit_safe = to_string(._SYSTEMD_UNIT) ?? "system"
+}
+host_safe = "hetzner"
+if exists(.host) {
+    host_safe = to_string(.host) ?? "hetzner"
+}
+message_safe = ""
+if exists(.message) {
+    message_safe = to_string(.message) ?? ""
+}
 
 # Sentry event payload (compact — one log line == one Sentry event).
 sentry_event = {
@@ -119,21 +136,30 @@ source = '''
 event_id = uuid_v4()
 event_id = replace(event_id, "-", "")
 
-metric_name = string!(.name) ?? "unknown"
+metric_name = "unknown"
+if exists(.name) {
+    metric_name = to_string(.name) ?? "unknown"
+}
 metric_value = if exists(.gauge.value) { .gauge.value } else if exists(.counter.value) { .counter.value } else { 0.0 }
-tag_struct = .tags ?? {}
+# VRL: `.tags ?? {}` is flagged because field access can't fail. Guard with
+# is_object() so the merge() call below sees a valid object.
+tag_struct = {}
+if is_object(.tags) {
+    tag_struct = object!(.tags)
+}
 
+value_str = to_string(metric_value) ?? "?"
 sentry_event = {
     "event_id": event_id,
     "timestamp": to_unix_timestamp(now()),
     "platform": "other",
     "level": "info",
     "logger": "vector.host_metrics",
-    "message": { "formatted": string!(metric_name) + "=" + to_string!(metric_value) },
+    "message": { "formatted": metric_name + "=" + value_str },
     "tags": merge({
         "metric_name": metric_name,
         "source": "vector-host-metrics"
-    }, object!(tag_struct)),
+    }, tag_struct),
     "extra": { "value": metric_value }
 }
 
