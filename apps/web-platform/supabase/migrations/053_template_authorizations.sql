@@ -268,7 +268,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.authorize_template(text, text, uuid)
-  FROM PUBLIC, anon, service_role;
+  FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.authorize_template(text, text, uuid)
   TO authenticated;
 
@@ -325,7 +325,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.revoke_template_authorization(text, text)
-  FROM PUBLIC, anon, service_role;
+  FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.revoke_template_authorization(text, text)
   TO authenticated;
 
@@ -390,9 +390,12 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.anonymise_template_authorizations(uuid)
-  FROM PUBLIC, anon;
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.anonymise_template_authorizations(uuid)
   TO service_role;
+-- authenticated grant + self-call guard above lets the user-initiated
+-- DSAR flow call the RPC directly without bouncing through a service-
+-- role endpoint (mig 051 §(h) precedent).
 GRANT EXECUTE ON FUNCTION public.anonymise_template_authorizations(uuid)
   TO authenticated;
 

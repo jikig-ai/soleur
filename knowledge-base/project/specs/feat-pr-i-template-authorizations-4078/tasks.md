@@ -140,8 +140,8 @@ All tests via vitest. Integration tests gated by `TENANT_INTEGRATION_TEST=1`.
 
 ## Phase 11 — Pre-flight + PR Body
 
-- [ ] 11.1 Run all preflight checks: `vitest run`, `bun run typecheck`, `next lint`, mig 053 dry-run via `db:migrate` against dev.
-- [ ] 11.2 Run `/soleur:preflight` to catch migration / security-header / lockfile issues.
+- [x] 11.1 Run all preflight checks: `vitest run`, `bun run typecheck`, `next lint`, mig 053 dry-run via `db:migrate` against dev.
+- [x] 11.2 Run `/soleur:preflight` to catch migration / security-header / lockfile issues.
 - [ ] 11.3 Update PR #4213 body:
   - Summary citing brainstorm + spec + plan v2 changes.
   - `## Changelog` section (semver:minor).

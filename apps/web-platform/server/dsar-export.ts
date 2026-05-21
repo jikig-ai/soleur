@@ -548,6 +548,36 @@ export async function exportSqlTable(
     });
   }
 
+  // -- template_authorizations (per-template authorization ledger; migration 053, PR-I #4078) --
+  // Art. 15+20: the founder explicitly authorised each template via the
+  // first-send-IS-authorization pattern (the Send click on a labeled
+  // draft_one_click button IS the Art. 7(3) "specific" + "informed"
+  // consent act). The ledger captures (template_hash, action_class,
+  // authorized_at, expires_at, soft_reconfirm_at, max_sends, revoked_at,
+  // revocation_reason, grant_id). Pure-template-hash + bounds are
+  // user-generated context — Art. 20 portability applies alongside
+  // Art. 15 access. WORM trigger + anonymise_template_authorizations
+  // RPC handle erasure separately.
+  {
+    const { data, error } = await service
+      .from("template_authorizations")
+      .select("*")
+      .eq("founder_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) {
+      throw new Error(`template_authorizations read failed: ${error.message}`);
+    }
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "template_authorizations", {
+      ownerField: "founder_id",
+    });
+    results.push({
+      table: "template_authorizations",
+      spec: DSAR_TABLE_ALLOWLIST.template_authorizations,
+      rows,
+    });
+  }
+
   return results;
 }
 
