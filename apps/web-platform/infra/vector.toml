@@ -118,8 +118,15 @@ item_body = encode_json(sentry_event)
 item_header = { "type": "event", "length": length(item_body) }
 
 . = {
-    "envelope_body": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n",
-    "_routing": "sentry_envelope"
+    # Sentry envelope body MUST land under the `message` field name so the
+    # downstream http sink's `encoding.codec = "raw_message"` ships it as
+    # the request body. The codec serializes ONLY the `message` field of
+    # each event — any other field (like the prior `envelope_body`) is
+    # silently dropped and Sentry receives an empty POST body → HTTP 400.
+    # Caught via deploy-status `vector_journal_tail` + manual curl probe
+    # that confirmed the envelope format itself is valid (Sentry returned
+    # 200 on the exact bytes when sent directly).
+    "message": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n"
 }
 '''
 
@@ -168,8 +175,15 @@ item_body = encode_json(sentry_event)
 item_header = { "type": "event", "length": length(item_body) }
 
 . = {
-    "envelope_body": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n",
-    "_routing": "sentry_envelope"
+    # Sentry envelope body MUST land under the `message` field name so the
+    # downstream http sink's `encoding.codec = "raw_message"` ships it as
+    # the request body. The codec serializes ONLY the `message` field of
+    # each event — any other field (like the prior `envelope_body`) is
+    # silently dropped and Sentry receives an empty POST body → HTTP 400.
+    # Caught via deploy-status `vector_journal_tail` + manual curl probe
+    # that confirmed the envelope format itself is valid (Sentry returned
+    # 200 on the exact bytes when sent directly).
+    "message": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n"
 }
 '''
 
