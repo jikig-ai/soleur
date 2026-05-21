@@ -27,19 +27,16 @@
 
 import {
   ACTION_CLASSES,
+  isKnownActionClass,
   type ActionClass,
 } from "@/server/scope-grants/action-class-map";
+import { warnSilentFallback } from "@/lib/client-observability";
 
-export interface ActionClassCopy {
-  title: string;
-  description: string;
-  category: string;
-}
-
-// Stable display order for category-grouped UIs (Scope Grants page,
-// runtime explainer banner). Matches the operator mental model: money
-// first (highest-stakes), then internal engineering, then external
-// surfaces, then infrastructure (lowest-stakes).
+// Editorial category labels (Title Case, user-visible). Distinct from
+// `ActionClassCategory` in `server/scope-grants/action-class-map.ts:61`,
+// which is the structural taxonomy (snake_case: `finance|engineering|…`)
+// used for audit-row tier labelling. Two-vocabulary design is intentional
+// — structural is a code/security primitive, editorial is UI copy.
 export const CATEGORY_ORDER = [
   "Money",
   "Engineering",
@@ -51,7 +48,17 @@ export const CATEGORY_ORDER = [
   "Infrastructure",
 ] as const;
 
-export type ActionClassCategory = (typeof CATEGORY_ORDER)[number];
+export type ActionClassCategoryLabel = (typeof CATEGORY_ORDER)[number];
+
+export interface ActionClassCopy {
+  title: string;
+  description: string;
+  category: ActionClassCategoryLabel;
+}
+
+// Re-export for ergonomic single-import consumers (audit-sections,
+// today-card use both `humanTitle` and `isKnownActionClass`).
+export { isKnownActionClass };
 
 export const ACTION_CLASS_COPY = {
   "finance.payment_failed": {
@@ -152,13 +159,32 @@ export const ACTION_CLASS_COPY = {
   },
 } as const satisfies Record<ActionClass, ActionClassCopy>;
 
-// Runtime guard for consumers that receive `actionClass` as untyped
-// `string` from the Inngest/webhook surface — falls back to the raw
-// value when an unknown class arrives (e.g., during a partial deploy).
-export function isKnownActionClass(s: string): s is ActionClass {
-  return (ACTION_CLASSES as readonly string[]).includes(s);
-}
+// Memoized category → action-classes index. Module-scope const — built
+// once at import, reused by every consumer (runtime-explainer-banner,
+// scope-grants/page). Shape: Map<categoryLabel, ActionClass[]> with
+// CATEGORY_ORDER iteration order preserved.
+export const ACTION_CLASSES_BY_CATEGORY: ReadonlyMap<
+  ActionClassCategoryLabel,
+  readonly ActionClass[]
+> = new Map(
+  CATEGORY_ORDER.map((category) => [
+    category,
+    ACTION_CLASSES.filter((ac) => ACTION_CLASS_COPY[ac].category === category),
+  ]),
+);
 
+// Fall back to the raw value when an unknown class arrives (e.g., during
+// a partial deploy where the DB CHECK enum has been widened but the web
+// bundle has not). Mirrors per `cq-silent-fallback-must-mirror-to-sentry`
+// so an unmapped class surfaces in Sentry instead of silently rendering
+// the dotted ID to founders.
 export function humanTitle(s: string): string {
-  return isKnownActionClass(s) ? ACTION_CLASS_COPY[s].title : s;
+  if (isKnownActionClass(s)) return ACTION_CLASS_COPY[s].title;
+  warnSilentFallback(null, {
+    feature: "action-class-copy",
+    op: "humanTitle",
+    message: "action-class-copy:unknown-class — partial deploy or registry drift",
+    extra: { actionClass: s },
+  });
+  return s;
 }
