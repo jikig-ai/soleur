@@ -221,3 +221,19 @@ type = "console"
 inputs = ["vector_internal"]
 encoding.codec = "json"
 target = "stdout"
+
+# Diagnostic console sink — temporary, to surface the EXACT envelope
+# bytes Vector is producing. Vector's sentry sink is getting HTTP 400
+# from every POST (v1.1.4 deploy diagnosis); the envelope format is
+# proven valid via manual curl, so the issue must be HOW Vector
+# serializes/encodes the .message field. Mirror the same inputs +
+# raw_message codec the sentry sink uses, but to stdout instead of
+# https://. Read via cat-deploy-state's vector_journal_tail — strip the
+# JSON wrapper to see the actual bytes. To revert: delete this entire
+# sinks block in the next vector.toml bump.
+[sinks.envelope_debug]
+type = "console"
+inputs = ["envelope_events", "envelope_metrics"]
+encoding.codec = "raw_message"
+framing.method = "newline_delimited"
+target = "stdout"
