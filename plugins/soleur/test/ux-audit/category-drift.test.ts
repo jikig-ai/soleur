@@ -14,6 +14,7 @@ const EXPECTED = [
   "consistency",
   "responsive",
   "comprehension",
+  "anti-slop",
 ] as const;
 
 const SKILL_MD = readFileSync(
@@ -36,7 +37,7 @@ describe("FINDING_CATEGORIES drift guard (#2356)", () => {
     // AND update SKILL.md §"Constants", ux-design-lead.md §"5-category
     // rubric" + field rule, AND finding.schema.json enum — then bump
     // this pin. Do not bump in isolation.
-    expect(FINDING_CATEGORIES.length).toBe(5);
+    expect(FINDING_CATEGORIES.length).toBe(6);
   });
 
   test.each([...FINDING_CATEGORIES])(
@@ -61,9 +62,9 @@ describe("FINDING_CATEGORIES drift guard (#2356)", () => {
     },
   );
 
-  test("agent field rule lists the canonical 5-category phrase", () => {
+  test("agent field rule lists the canonical 6-category phrase", () => {
     expect(AGENT_MD).toContain(
-      "real-estate | ia | consistency | responsive | comprehension",
+      "real-estate | ia | consistency | responsive | comprehension | anti-slop",
     );
   });
 });

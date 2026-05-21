@@ -104,4 +104,33 @@ describe("finding.schema.json contract (#2362.3)", () => {
       );
     }
   });
+
+  test("schema accepts an anti-slop finding with file-path#rule_id selector", () => {
+    // Anti-slop findings encode selector as `<file-path>#<rule-id>`
+    // (Option (a) from the frontend-anti-slop plan §"Research
+    // Reconciliation #2"). The schema's `selector` field has no
+    // `pattern` constraint — only `type: string` — so the relaxation
+    // is structural: assert no `pattern` is added later in tightening
+    // edits, and the example shape is in the enum.
+    const example = {
+      route: "/",
+      selector:
+        "apps/web-platform/components/ui/gold-button.tsx#GRADIENT-TEXT",
+      category: "anti-slop",
+      severity: "high",
+      title: "Gradient-fill headline (rule GRADIENT-TEXT)",
+      description:
+        "bg-clip-text + text-transparent + bg-gradient-to-* triad — gradient headline reads as AI default.",
+      fix_hint:
+        "Solid ink. Reach for weight, italic, or a display face for emphasis.",
+      screenshot_ref: "/tmp/sample.png",
+    };
+    expect(SCHEMA.properties.selector.type).toBe("string");
+    expect(SCHEMA.properties.selector.pattern).toBeUndefined();
+    expect(SCHEMA.properties.category.enum).toContain(example.category);
+    expect(SCHEMA.properties.severity.enum).toContain(example.severity);
+    for (const required of SCHEMA.required) {
+      expect(example).toHaveProperty(required);
+    }
+  });
 });
