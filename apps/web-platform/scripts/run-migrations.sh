@@ -125,6 +125,25 @@ skipped=0
 for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   filename="$(basename "$migration_file")"
 
+  # Skip down-migration artifacts. These are manual-rollback files (e.g.,
+  # `053_template_authorizations.down.sql`) — they live alongside the
+  # forward migration for paired-edit visibility but MUST NOT be applied
+  # during forward runs. Bash glob expansion sorts `.down.sql` BEFORE
+  # `.sql` (`.d` < `.s` lexically), so without this skip, a down file
+  # whose first statement targets an as-yet-uncreated relation (e.g.,
+  # `DROP TRIGGER ... ON public.<table>`) fails before the corresponding
+  # `.sql` runs. **Why:** PR-I (#4213) — mig 053 down file led with
+  # `DROP TRIGGER ... ON public.template_authorizations`; the dev apply
+  # job failed with "relation does not exist" because `.down.sql` was
+  # applied first. Mig 051's down file did not trip the same gate
+  # because its first statement is `CREATE OR REPLACE FUNCTION
+  # grant_action_class(...)` which is no-op-friendly against the prior
+  # mig-048 grant function. Filter at the glob level so the runner is
+  # independent of down-file shape.
+  case "$filename" in
+    *.down.sql) continue ;;
+  esac
+
   # Filenames are from a controlled glob (*.sql) — safe for direct interpolation.
   already_applied=$(run_sql "SELECT count(*) FROM public._schema_migrations WHERE filename = '$filename';")
   if [[ "$already_applied" -gt 0 ]]; then

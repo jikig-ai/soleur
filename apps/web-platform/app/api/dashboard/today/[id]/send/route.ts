@@ -39,7 +39,10 @@ import {
   type ActionClass,
 } from "@/server/scope-grants/action-class-map";
 import { writeActionSend } from "@/server/action-sends/write-action-send";
-import { reportSilentFallback } from "@/server/observability";
+import { hashUserId, reportSilentFallback } from "@/server/observability";
+import { tierRequiresTemplateAuth } from "@/server/templates/is-template-authorized";
+import { getTemplateHash } from "@/server/templates/template-registry";
+import { runTemplateGate } from "@/server/templates/run-template-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -65,18 +68,6 @@ function assertNeverTier(tier: never): never {
   // ActionClassTier without extending this switch trips tsc here
   // before reaching CI.
   throw new Error(`unhandled tier: ${String(tier)}`);
-}
-
-function templateHashFor(message: {
-  action_class: ActionClass;
-  owning_domain: string | null;
-}, tier: string): string {
-  // PR-H template hash: stable across (action_class, owning_domain, tier)
-  // triple. PR-I will replace this with a real template_authorizations
-  // record once template-bound E&O windows ship.
-  return createHash("sha256")
-    .update(`${message.action_class}:${message.owning_domain ?? ""}:${tier}`)
-    .digest("hex");
 }
 
 export async function POST(
@@ -110,7 +101,9 @@ export async function POST(
   // owner-select RLS lets the founder self-read). Service-role NOT used.
   const { data: message, error: msgErr } = await supabase
     .from("messages")
-    .select("id, user_id, action_class, status, draft_preview, owning_domain")
+    .select(
+      "id, user_id, action_class, status, draft_preview, owning_domain, template_id",
+    )
     .eq("id", messageId)
     .eq("user_id", user.id) // belt-and-suspenders alongside RLS
     .maybeSingle();
@@ -178,6 +171,55 @@ export async function POST(
       assertNeverTier(grant.tier);
   }
 
+  // PR-I (#4078) — Template-authorization two-probe gate.
+  // Fires AFTER isGranted and BEFORE the tier-specific confirm gate.
+  // Only `draft_one_click` requires template authorization in v1; the
+  // `tierRequiresTemplateAuth` helper carries an exhaustive switch
+  // over ActionClassTier so a future 5th tier fails tsc until it
+  // declares its stance. Orchestration (5s timeout, fail-closed,
+  // first-send-IS-authorization RPC dispatch, pino denial log) is
+  // extracted to `runTemplateGate` per multi-agent review
+  // (code-quality F3). Plan §Phase 4 §4 + Sharp Edges + ADR-035.
+  if (tierRequiresTemplateAuth(grant.tier)) {
+    const templateHashForGate = getTemplateHash({
+      template_id: (message.template_id as string | null) ?? "default_legacy",
+    });
+    const gate = await runTemplateGate({
+      supabase,
+      founderId: user.id,
+      founderIdHash: hashUserId(user.id),
+      templateHash: templateHashForGate,
+      grantId: grant.id,
+      actionClass,
+      messageId,
+    });
+    switch (gate.kind) {
+      case "predicate_error":
+      case "authorize_error":
+        return NextResponse.json(
+          { error: "internal_error", action_class: actionClass },
+          { status: 500 },
+        );
+      case "deny":
+        return NextResponse.json(
+          {
+            error: "template_not_authorized",
+            deny_reason: gate.denyReason,
+            action_class: actionClass,
+          },
+          { status: 403 },
+        );
+      case "allow":
+        // Fall through to the tier-specific gate (approve_every_time
+        // typed-confirm) + writeActionSend.
+        break;
+      default: {
+        const _exhaustive: never = gate;
+        void _exhaustive;
+      }
+    }
+  }
+
   const confirmedTyped = body.confirmed_typed === true;
   const typedValue =
     typeof body.typed_value === "string" ? body.typed_value : undefined;
@@ -234,6 +276,7 @@ export async function POST(
         id: message.id as string,
         action_class: actionClass,
         draft_preview: draftPreview,
+        template_id: (message.template_id as string | null) ?? "default_legacy",
       },
       grant,
       tier: grant.tier,
@@ -241,13 +284,6 @@ export async function POST(
       typedValue,
       recipientIdentifier,
       bodyContent,
-      templateHash: templateHashFor(
-        {
-          action_class: actionClass,
-          owning_domain: (message.owning_domain as string | null) ?? null,
-        },
-        grant.tier,
-      ),
     });
 
     // Flip the draft to archived. RLS owner-update.

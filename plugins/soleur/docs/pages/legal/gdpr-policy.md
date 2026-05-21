@@ -8,7 +8,7 @@ permalink: legal/gdpr-policy/
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated May 17, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 21, 2026</p>
   </div>
 </section>
 
@@ -19,7 +19,7 @@ permalink: legal/gdpr-policy/
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** May 17, 2026 (aligned Section 3.4 balancing-test prose and Section 2.2 sub-processor entry with Cloudflare R2 Lock Rules canonical vocabulary, dropping the transitional S3 implementation-equivalence framing now that the GDPR Article 17 admin-override procedure is implemented natively against R2 Lock Rules per #3924; the 10-year retention floor and the FreeTSA RFC 3161 monthly timestamp chain are preserved verbatim; previous: May 16, 2026 aligned Section 3.4 balancing-test prose and Section 2.2 sub-processor entry with Cloudflare R2 Lock Rules vocabulary per #3918; May 16, 2026 extended Section 3.4 CLA balancing test to cover the off-site Cloudflare R2 evidence archive with a 10-year retention floor and FreeTSA RFC 3161 monthly timestamping; added Section 2.2 sub-processor entry for Cloudflare R2 per #3209)
+**Last Updated:** May 21, 2026 (extended Section 5.3 Article 17 cascade prose with the `template_authorizations` ledger introduced by PR-I #4078: `anonymise_template_authorizations` runs between `anonymise_action_sends` and `anonymise_scope_grants` with semantic ordering (Article 5(2) audit-trail attribution); WORM trigger bypassed at the RPC call site via `SET LOCAL session_replication_role = 'replica'` per mig 051 §(h) precedent; Article 30 PA-18 records the activity; no new sub-processor engaged; previous: May 17, 2026 aligned Section 3.4 balancing-test prose and Section 2.2 sub-processor entry with Cloudflare R2 Lock Rules canonical vocabulary, dropping the transitional S3 implementation-equivalence framing now that the GDPR Article 17 admin-override procedure is implemented natively against R2 Lock Rules per #3924; the 10-year retention floor and the FreeTSA RFC 3161 monthly timestamp chain are preserved verbatim; previous: May 16, 2026 aligned Section 3.4 balancing-test prose and Section 2.2 sub-processor entry with Cloudflare R2 Lock Rules vocabulary per #3918; May 16, 2026 extended Section 3.4 CLA balancing test to cover the off-site Cloudflare R2 evidence archive with a 10-year retention floor and FreeTSA RFC 3161 monthly timestamping; added Section 2.2 sub-processor entry for Cloudflare R2 per #3209)
 
 ---
 

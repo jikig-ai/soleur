@@ -126,6 +126,20 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // The WORM trigger + anonymise_action_sends RPC handle erasure
   // separately (Art. 17 cascade in server/account-delete.ts).
   action_sends: { ownerField: "user_id", article: "15" },
+
+  // Per-template authorization ledger (migration 053, PR-I #4078).
+  // Art. 15+20: the founder explicitly authorised each template via the
+  // first-send-IS-authorization pattern — the Send click on a labeled
+  // draft_one_click button IS the Art. 7(3) "specific" + "informed"
+  // consent act. The ledger captures (template_hash, action_class,
+  // authorized_at, expires_at, soft_reconfirm_at, max_sends, revoked_at,
+  // revocation_reason, grant_id). Pure-template-hash + bounds are user-
+  // generated context (15+20 portability applies). Founder-readable
+  // via /dashboard/settings/scope-grants. WORM trigger + anonymise_
+  // template_authorizations RPC handle erasure separately (Art. 17
+  // cascade in account-delete.ts between anonymise_action_sends and
+  // anonymise_scope_grants).
+  template_authorizations: { ownerField: "founder_id", article: "15+20" },
 };
 
 /**
