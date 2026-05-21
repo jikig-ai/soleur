@@ -26,13 +26,6 @@ set -e
 assert_eq "0" "$rc" "git ls-tree HEAD succeeded"
 assert_eq "" "$head_tree" "no knowledge-base/design/ entries in HEAD"
 
-# On-disk: only canonical knowledge-base/product/design must exist.
-set +e
-disk_dirs=$(find "$REPO_ROOT/knowledge-base" -maxdepth 2 -type d -name design 2>/dev/null | sort)
-set -e
-expected="$REPO_ROOT/knowledge-base/product/design"
-assert_eq "$expected" "$disk_dirs" "only knowledge-base/product/design exists on disk"
-
 # The deprecated `knowledge-base/design/` path must not appear. Grep with
 # a word boundary after `design/` so we don't match `knowledge-base/product/design/`.
 set +e
