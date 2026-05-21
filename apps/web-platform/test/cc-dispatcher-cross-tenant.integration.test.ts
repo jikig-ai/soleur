@@ -460,6 +460,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         tool_calls: null,
         leader_id: "cc_router",
         usage: { cost_usd: 0.005 },
+        // PR-I (#4078, migration 053_template_authorizations.sql) added
+        // messages.template_id NOT NULL with CHECK ^[a-z][a-z0-9_]*$.
+        template_id: "default_legacy",
       });
       expect(seedErr).toBeNull();
 

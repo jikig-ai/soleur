@@ -122,6 +122,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           conversation_id: convRow!.id,
           role: "user",
           content: `synthesized message for ${user.email}`,
+          // PR-I (#4078, migration 053_template_authorizations.sql) added
+          // messages.template_id NOT NULL with CHECK ^[a-z][a-z0-9_]*$.
+          template_id: "default_legacy",
         });
         expect(msgError, `seed messages for ${user.email}`).toBeNull();
 
