@@ -29,12 +29,16 @@
 # daily/weekly where a single miss is itself noteworthy.
 #
 # `checkin_margin_minutes` is sized to observed GitHub Actions cron
-# behavior, not the workflow's `cron:` expression. Sub-hourly schedules
-# routinely degrade to ~60 min under runner-pool load; hourly schedules
-# observe ~10-30 min daytime jitter and longer overnight gaps. Margins
-# are intentionally generous enough to absorb daytime jitter while still
-# treating a deep overnight gap (paired with `failure_issue_threshold = 2`)
-# as real signal.
+# behavior, not the workflow's `cron:` expression. The May 18-21 2026
+# `gh run list --workflow=scheduled-oauth-probe.yml` distribution
+# (49 fires, 4 days) showed GHA hourly-cron drift degrading to a 150-min
+# median gap with a 293-min max (post-PR #3964 window) — far beyond the
+# original "~10-30 min daytime jitter" model. Hourly margins must
+# accommodate the observed substrate ceiling (~5h) or the monitor
+# generates false missed-checkin alerts indistinguishable from real
+# probe failures. Issue #4211 tracks the durable fix (migrate both
+# hourly monitors to Inngest cron substrate per TR9 PR-1 #3985 /
+# PR-2 #4062 precedent, where `checkin_margin_minutes = 30` is honest).
 #
 # `max_runtime_minutes` only matters for two-step (in_progress -> ok/error)
 # check-ins where Sentry can detect a job exceeding its declared budget.
@@ -59,12 +63,23 @@ resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   timezone                = "UTC"
 }
 
+# Margin bumped 30 → 360 on 2026-05-21 to silence recurring "missed
+# check-in" alerts (Sentry issue a94c4ec23f654101a7fc4491b16a560c).
+# Root cause: GHA hourly-cron substrate drifts to ~150-min median /
+# 293-min max gaps under runner-pool load, while the prior 30-min
+# margin assumed ~60-min daytime fires. 360 min covers the observed
+# distribution with headroom; this makes the monitor decorative for
+# outages <6h, but real auth-flow regressions still page via the
+# workflow's Resend ops-email and `ci/auth-broken` GitHub issue paths
+# (workflow lines 424-502). Durable fix: migrate to Inngest cron
+# substrate (TR9 PR-1 #3985 / PR-2 #4062 precedent) tracked by #4211.
+# At that point margin can drop back to 30 min.
 resource "sentry_cron_monitor" "scheduled_oauth_probe" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-oauth-probe"
   schedule                = { crontab = "0 * * * *" }
-  checkin_margin_minutes  = 30
+  checkin_margin_minutes  = 360
   max_runtime_minutes     = 10
   failure_issue_threshold = 2
   recovery_threshold      = 1
@@ -79,12 +94,18 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
 # workflow's schedule line lands in `.github/workflows/scheduled-cf-token-
 # expiry-check.yml` lines 13-15.
 
+# Margin bumped 180 → 360 on 2026-05-21 alongside scheduled_oauth_probe
+# above — same hourly GHA-cron substrate, same observed drift envelope
+# (max 307 min in the same May 18-21 window). 180-min margin was silently
+# absorbing misses below `failure_issue_threshold = 2`; bumping to 360
+# preempts the next regression-issue fire. Inngest-migration tracking
+# issue #4211 covers this monitor.
 resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-github-app-drift-guard"
   schedule                = { crontab = "0 * * * *" }
-  checkin_margin_minutes  = 180
+  checkin_margin_minutes  = 360
   max_runtime_minutes     = 10
   failure_issue_threshold = 2
   recovery_threshold      = 1
