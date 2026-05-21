@@ -33,6 +33,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { PG_UNIQUE_VIOLATION } from "@/lib/postgres-errors";
 import { isGranted } from "@/server/scope-grants/is-granted";
 import type { ActionClass } from "@/server/scope-grants/action-class-map";
+import { isReconcilablePush } from "@/server/webhook-push-reconcilable";
 
 // Map x-github-event header to the action_class registered in
 // scope_grants. `repository_advisory` and `secret_scanning_alert` both
@@ -184,7 +185,15 @@ export async function POST(request: Request) {
   }
 
   // Step 4: parse body (signature verified, dedup committed).
-  let body: { installation?: { id?: number }; action?: string; workflow_run?: { conclusion?: string | null } };
+  let body: {
+    installation?: { id?: number };
+    action?: string;
+    workflow_run?: { conclusion?: string | null };
+    ref?: string;
+    before?: string;
+    after?: string;
+    repository?: { default_branch?: string };
+  };
   try {
     body = JSON.parse(rawBody);
   } catch (err) {
@@ -244,8 +253,57 @@ export async function POST(request: Request) {
       "GitHub webhook: no founder for installation_id — 404",
     );
     // 404 mirrors GitHub's expectation that the receiver advertises
-    // "not for me"; GitHub will not retry 4xx.
+    // "not for me"; GitHub will not retry 4xx. Release the dedup row
+    // so a future install→delivery on the same delivery_id (unlikely
+    // but legitimate) is not silently short-circuited (Kieran #1).
+    await releaseDedupRow();
     return NextResponse.json({ error: "No founder for installation" }, { status: 404 });
+  }
+
+  // Step 5.5 (#4224): push-event reconcile dispatch. Branches BEFORE the
+  // scope-grant gate because workspace reconciliation is structurally NOT
+  // an ActionClass (ADR-034) — the GitHub App install IS the consent
+  // surface (Art. 6(1)(b)) per CLO carry-forward in the brainstorm. The
+  // dispatched Inngest function handles concurrency coalescing per
+  // installation_id via CEL. See plan
+  // knowledge-base/project/plans/2026-05-21-feat-workspace-reconciliation-with-main-plan.md.
+  if (githubEvent === "push") {
+    const reconcilable = isReconcilablePush(body);
+    if (!reconcilable.ok) {
+      logger.warn(
+        { deliveryId, reason: reconcilable.reason, ref: body.ref },
+        "GitHub webhook push: not reconcilable — drop",
+      );
+      return NextResponse.json({ received: true });
+    }
+    try {
+      const { inngest } = await import("@/server/inngest/client");
+      await inngest.send({
+        id: `github-${deliveryId}`,
+        name: "platform/workspace.reconcile.requested",
+        v: "1",
+        data: {
+          founderId,
+          installationId,
+          deliveryId,
+          defaultBranch: reconcilable.defaultBranch,
+          headSha: reconcilable.headSha,
+          beforeSha: reconcilable.beforeSha,
+        },
+      });
+    } catch (err) {
+      logger.error(
+        { err, deliveryId },
+        "GitHub webhook push: inngest.send failed — releasing dedup row",
+      );
+      Sentry.captureException(err, {
+        tags: { feature: "github-webhook", op: "inngest-send-push" },
+        extra: { deliveryId, founderId, installationId },
+      });
+      await releaseDedupRow();
+      return NextResponse.json({ error: "Dispatch failed" }, { status: 500 });
+    }
+    return NextResponse.json({ received: true });
   }
 
   // Step 6: scope-grant gate. fail-closed (200 without dispatch) on
