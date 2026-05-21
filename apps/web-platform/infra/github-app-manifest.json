@@ -20,10 +20,20 @@
     "administration": "write",
     "checks": "read",
     "contents": "write",
+    "issues": "read",
     "members": "read",
     "metadata": "read",
     "pull_requests": "write",
+    "repository_advisories": "read",
+    "secret_scanning_alerts": "read",
     "secrets": "write"
   },
-  "default_events": []
+  "default_events": [
+    "issues",
+    "pull_request",
+    "push",
+    "repository_advisory",
+    "secret_scanning_alert",
+    "workflow_run"
+  ]
 }
