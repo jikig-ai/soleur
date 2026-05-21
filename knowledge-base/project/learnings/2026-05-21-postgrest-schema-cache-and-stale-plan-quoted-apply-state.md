@@ -150,10 +150,67 @@ state" — but no equivalent gate fires today.
    `cm-delegate-verbose-exploration-3-file` already cover this; the trap fires
    when long sessions induce muscle-memory to drop the prefix.
 
+## Amendment §3 — Parallel-branch migration coordination (2026-05-21 evening)
+
+A third failure class compounded the first two: **before applying
+migrations to a shared environment, check whether a sibling branch
+is landing migrations in the same numbering window**. The session's
+direct-pg apply of 053–057 happened ~10 hours before main landed
+PR #4251 (`fix(ci): block unmerged-dev-apply + drift probe in
+tenant-integration`) — which BOTH added a new `054_schema_migrations_content_sha.sql`
+AND wired a CI drift probe that flags exactly this class. Result:
+
+- 054 filename collision (my `054_workspace_member_attestations.sql`
+  vs main's `054_schema_migrations_content_sha.sql`).
+- Live drift on dev + prd: my migrations applied to BOTH but tracked
+  in `public._schema_migrations` only on dev (via the original morning
+  apply through `run-migrations.sh`) — and after that branch was
+  rolled back-and-reapplied via my pg-runner, the dev tracking rows
+  pointed at the OLD filenames while the actual schema reflected the
+  NEW-filename forward migrations. PRD had the tables but ZERO
+  tracking rows (the entire prd apply bypassed `run-migrations.sh`).
+
+### Recovery sequence
+
+1. Renumber: 054→058, 055→059, 056→060, 057→061 (053 stayed —
+   filename-distinct from main's two 053s). Sweep all references in
+   the repo via `git grep -lnE "05[4-7]_(workspace_member|workspace_keyed|current_organization|byok_audit)"`
+   and bulk `sed` substitute.
+2. Merge `origin/main` (clean merge after rename — both 054 files
+   coexist by filename).
+3. Reconcile `public._schema_migrations` on dev + prd: DELETE old-numbered
+   rows (dev only) + UPSERT 5 rows under the new filenames with
+   `content_sha = git hash-object <file>`. The script
+   `/tmp/pg-runner/reconcile-tracking.mjs` is the canonical shape
+   (wrap in BEGIN/COMMIT for atomicity).
+4. Verify dev + prd produce identical listings post-reconcile.
+
+### Prevention (additional to §1 + §2)
+
+3. **Before applying migrations to a shared environment** (even dev),
+   `git fetch origin main && git log origin/main -- apps/web-platform/supabase/migrations/` to detect parallel
+   migration work landing in the same numbering window. If a sibling
+   migration is in flight at the same number, renumber FIRST and apply
+   under the final filename.
+4. **Always apply via `apps/web-platform/scripts/run-migrations.sh`,
+   never via direct-pg `BEGIN; <sql>; COMMIT;`.** The script writes
+   the `_schema_migrations` tracking row in the SAME transaction as
+   the migration body — bypassing it produces a phantom-applied state
+   where the schema reflects the migration but tracking does not, and
+   the next deploy attempts re-apply (fails on idempotency edge cases
+   like `CREATE TRIGGER` already-exists).
+5. **If the schema cache is stale after a CI-bypassing apply,** the
+   PostgREST NOTIFY workaround does not work via session-mode pooler
+   (§1 above). Either wait for natural schema poll cycle (~10 min,
+   Supabase Cloud default) OR trigger schema reload via Supabase
+   Management API. There is no operator-runnable fast path from the
+   pooler — see §1.
+
 ## Related
 
 - AGENTS.md hard rule `hr-exhaust-all-automated-options-before`
 - AGENTS.md "Supabase fallback chain" (extracted from `/work` SKILL.md)
 - Learning `2026-03-20-supabase-trigger-fallback-parity.md`
 - Learning `2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`
-- PR #4225 commit `5d85ddd5` (Phase 6 trigger-fallback parity test)
+- Learning `2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md` (the §3 trigger — PR #4251 from main)
+- PR #4225 commits `5d85ddd5` (Phase 6 trigger-fallback parity test), `c38e58d4` (prd apply record), the renumber + reconcile pair landing after this session.

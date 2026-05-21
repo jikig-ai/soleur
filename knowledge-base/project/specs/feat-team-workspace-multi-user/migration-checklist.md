@@ -119,3 +119,57 @@ remains in prd Doppler until the parallel legal-scaffolding PR (Phase 10,
 branch `feat-team-workspace-legal-scaffolding`) lands ToS 2.2.0 / AUP §5.5
 / DPD §2.3 / Side Letter. Migration apply ≠ flag flip; the schema is now
 in place to make the FLAG flip cheap when the legal-PR ships.
+
+## Renumber + tracking reconciliation — 2026-05-21 (post-merge of main)
+
+Main landed `054_schema_migrations_content_sha.sql` (PR #4251 —
+fix(ci): block unmerged-dev-apply + drift probe in tenant-integration)
+**while this branch was in flight**, colliding with the previously-named
+`054_workspace_member_attestations.sql`. Renumbered to avoid collision:
+
+| Old name                                | New name                                |
+| --------------------------------------- | --------------------------------------- |
+| 054_workspace_member_attestations.sql   | 058_workspace_member_attestations.sql   |
+| 055_workspace_keyed_rls_sweep.sql       | 059_workspace_keyed_rls_sweep.sql       |
+| 056_current_organization_jwt_hook.sql   | 060_current_organization_jwt_hook.sql  |
+| 057_byok_audit_workspace_id_rpcs.sql    | 061_byok_audit_workspace_id_rpcs.sql   |
+
+053 stayed (filename-distinct from main's two 053s — append_kb_sync_row_rpc
++ template_authorizations land alphabetically before and after mine).
+
+`public._schema_migrations` reconciled on both dev + prd via direct
+INSERT/UPDATE (script: `/tmp/pg-runner/reconcile-tracking.mjs`):
+
+- DEV: DELETEd 4 old-numbered rows; UPSERTed 5 new rows with `content_sha`
+  populated from `git hash-object`.
+- PRD: UPSERTed 5 new rows (no old rows present — my earlier
+  direct-pg apply bypassed tracking).
+
+Final state — DEV and PRD identical, all 9 migrations through 061
+tracked under canonical filenames:
+
+```text
+052_multi_source_dedup.sql
+053_append_kb_sync_row_rpc.sql              (from main PR #4226)
+053_organizations_and_workspace_members.sql (this branch)
+053_template_authorizations.sql             (from main PR #4213)
+054_schema_migrations_content_sha.sql        (from main PR #4251)
+058_workspace_member_attestations.sql        (this branch)
+059_workspace_keyed_rls_sweep.sql            (this branch)
+060_current_organization_jwt_hook.sql        (this branch)
+061_byok_audit_workspace_id_rpcs.sql         (this branch)
+```
+
+content_sha fingerprints (post-rename):
+
+```text
+dc6fde49e2dc1c4214e71e5db7f8929dd00f3d27  053_organizations_and_workspace_members.sql
+c175fe2117d958e7b31530c3690ad5a84f582fee  058_workspace_member_attestations.sql
+9e9bac622c1fc415a0397be4c412a2802f616e28  059_workspace_keyed_rls_sweep.sql
+b21a80f4422a6a48bf04a0ed8aa6de60649b526a  060_current_organization_jwt_hook.sql
+a30ffa4083d016da65816c9d72f9cf8e7f799b16  061_byok_audit_workspace_id_rpcs.sql
+```
+
+Main's `scheduled-dev-migration-drift.yml` workflow will compare these
+SHAs against `git ls-tree origin/main` at the canonical paths — once
+this PR merges, both will match.
