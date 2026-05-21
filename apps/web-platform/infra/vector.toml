@@ -82,14 +82,32 @@ if exists(.gauge.value) {
 }
 '''
 
-# ---------------- Sink: Better Stack Logs (native Vector integration) ----------------
-# Token from Doppler `prd.BETTERSTACK_LOGS_TOKEN`, injected at vector.service
-# ExecStart via `doppler run`. Better Stack's `https://in.logs.betterstack.com`
-# default endpoint is correct (sink uses it implicitly).
+# ---------------- Sink: Better Stack Logs via generic http sink ----------------
+# Vector 0.43.1 does NOT have a `better_stack_logs` sink (added in a
+# later release per its sink registry — confirmed via v1.1.7 deploy
+# diagnostic: the unknown-variant error listed every other sink type).
+# Use the generic `http` sink against Better Stack's `https://in.logs.
+# betterstack.com/` ingest endpoint with Bearer auth — same shape the
+# manual curl probe (HTTP 202) used. Each event posts as a JSON object;
+# Better Stack accepts arbitrary JSON shape.
+#
+# Bumping Vector to a version with the native sink is a separate
+# concern (#4273 substrate-version review).
 [sinks.betterstack]
-type = "better_stack_logs"
+type = "http"
 inputs = ["tag_journald", "tag_metrics"]
-source_token = "${BETTERSTACK_LOGS_TOKEN}"
+uri = "https://in.logs.betterstack.com/"
+method = "post"
+batch.max_events = 10
+encoding.codec = "json"
+[sinks.betterstack.request.headers]
+authorization = "Bearer ${BETTERSTACK_LOGS_TOKEN}"
+content-type = "application/json"
+[sinks.betterstack.request]
+timeout_secs = 10
+retry_attempts = 2
+retry_initial_backoff_secs = 1
+retry_max_duration_secs = 30
 
 # ---------------- Internal liveness sink (stdout → journald) ----------------
 # Vector emits its own internal_metrics every 60s so `cat-deploy-state.sh`'s
