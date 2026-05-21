@@ -50,6 +50,40 @@ Row insert succeeded; `audit_byok_use.workspace_id NOT NULL` constraint
 satisfied. Row deleted after verification (WORM trigger temporarily
 disabled to allow cleanup).
 
+## Migration 053 idempotency re-run (dev) — 2026-05-21
+
+Re-applied 053–057 to dev (the previous apply had been rolled back
+between runs; dev had no `organizations`/`workspaces`/`workspace_members`
+tables at re-entry). Apply path: same Doppler `DATABASE_URL_POOLER`
+session-mode (`:6543` → `:5432`) wrapper via `pg` (node-pg) per AGENTS.md
+"Supabase fallback chain". Counts:
+
+```text
+053 organizations inserted:     1128
+053 workspaces inserted:        1128
+053 workspace_members inserted: 1128
+055 conversations:               186
+055 messages:                    176
+055 audit_byok_use:              1265
+055 scope_grants:                  74
+055 (other 5 tables):              0 (no rows in dev)
+056 user_session_state:         1128
+057 RPCs widened (no row delta)
+```
+
+Then re-ran the 053 backfill DO block (Phase 6.1 idempotency check) —
+`WHERE NOT EXISTS` discriminator + `name IS NULL` defensive guard hold:
+
+```text
+[053-rerun-idempotency] organizations inserted:     0
+[053-rerun-idempotency] workspaces inserted:        0
+[053-rerun-idempotency] workspace_members inserted: 0
+```
+
+AC1 backfill idempotency verified end-to-end. Apply path is replay-safe
+under the same pattern documented in
+`2026-03-20-gdpr-remediation-migration-discriminator-strategy`.
+
 ## prd apply — pending
 
 Deferred to the prd-apply operator window. Sequence:

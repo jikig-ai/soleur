@@ -121,8 +121,8 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 6 — Backfill verification
 
-- [ ] **6.1** Backfill defined inline in 053 (Phase 1.1.7). Verify idempotency: re-run migration 053 against a populated DB → `RAISE NOTICE` lines show `0 rows`.
-- [ ] **6.2** Verify trigger-vs-fallback race shape per learning 2026-03-20-supabase-trigger-fallback-parity. TS fallback path tested via integration test that races `handle_new_user` trigger with explicit `upsert`.
+- [x] **6.1** Backfill defined inline in 053 (Phase 1.1.7). Verify idempotency: re-run migration 053 against a populated DB → `RAISE NOTICE` lines show `0 rows`. — Re-applied 053–057 to dev (1128 orgs/workspaces/members; 1265 audit_byok_use; 1128 user_session_state). Re-run of 053 backfill DO block returned 0/0/0 per `WHERE NOT EXISTS` discriminator. Audit appended to migration-checklist.md §"Migration 053 idempotency re-run".
+- [x] **6.2** Verify trigger-vs-fallback race shape per learning 2026-03-20-supabase-trigger-fallback-parity. TS fallback path tested via integration test that races `handle_new_user` trigger with explicit `upsert`. — `test/server/workspace-backfill-trigger-parity.test.ts` (3 cases): trigger creates the canonical solo trio on signup; TS fallback upsert is a no-op after trigger — no duplicate rows; third-pass re-fire — fallback is idempotent across re-runs. Opt-in via `TENANT_INTEGRATION_TEST=1` matching the rest of the DB-layer suite. 3/3 pass against dev.
 
 ## Phase 7 — DSAR endpoint extension (Kieran N5 expanded)
 
