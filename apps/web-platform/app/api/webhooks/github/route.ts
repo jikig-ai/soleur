@@ -34,6 +34,10 @@ import { PG_UNIQUE_VIOLATION } from "@/lib/postgres-errors";
 import { isGranted } from "@/server/scope-grants/is-granted";
 import type { ActionClass } from "@/server/scope-grants/action-class-map";
 import { isReconcilablePush } from "@/server/webhook-push-reconcilable";
+import {
+  WORKSPACE_RECONCILE_REQUESTED_EVENT,
+  WORKSPACE_RECONCILE_SCHEMA_V,
+} from "@/server/session-sync";
 
 // Map x-github-event header to the action_class registered in
 // scope_grants. `repository_advisory` and `secret_scanning_alert` both
@@ -280,8 +284,8 @@ export async function POST(request: Request) {
       const { inngest } = await import("@/server/inngest/client");
       await inngest.send({
         id: `github-${deliveryId}`,
-        name: "platform/workspace.reconcile.requested",
-        v: "1",
+        name: WORKSPACE_RECONCILE_REQUESTED_EVENT,
+        v: WORKSPACE_RECONCILE_SCHEMA_V,
         data: {
           founderId,
           installationId,

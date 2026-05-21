@@ -1,31 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import type { KbSyncRow, LegacyKbSyncRow } from "@/server/session-sync";
 
 // #4224 — single merged badge+button. Two primary states (synced / desync)
 // plus an implicit in-flight overlay. Empty-state renders the synced variant
 // with "Workspace ready" copy (Kieran #10 + Simplicity #1 — avoids a third
 // dedicated state).
 //
-// Inline 12-line discriminator handles the heterogeneous JSONB array:
+// Inline discriminator handles the heterogeneous JSONB array:
 //   - legacy `{ date, count }` rows (recordKbSyncHistory)        → treated as synced
 //   - new rich `{ at, trigger, ok, … }` rows (appendKbSyncRow)   → ok flag drives state
 //
-// Do NOT extract a normalizer module until a second consumer exists
-// (Simplicity #1, DHH #2).
+// The row types live in `@/server/session-sync` so the writer (the only
+// other consumer today) and this reader cannot drift. Per DHH #2 +
+// Simplicity #1, we do NOT extract a normalizer module — the
+// discriminator stays inline; the types are pure import.
 
-export type KbSyncHistoryRow =
-  | { date: string; count: number }
-  | {
-      at: string;
-      trigger: "webhook_push" | "manual" | "session";
-      ok: boolean;
-      sha_before?: string;
-      sha_after?: string;
-      error_class?: string;
-      push_received_at?: number;
-      sync_completed_at: number;
-    };
+export type KbSyncHistoryRow = LegacyKbSyncRow | KbSyncRow;
 
 type SyncErrorPayload = {
   error?: string;
@@ -50,7 +42,12 @@ function discriminate(row: KbSyncHistoryRow | null): {
   variant: Variant;
   label: string;
 } {
-  if (row === null) {
+  // Guard the `in` operator against non-object JSONB values. `kb_sync_history`
+  // is loosely typed at the wire boundary (`/api/kb/tree` forwards the row
+  // unverified), so a primitive (`null`, `string`, `number`) or a future
+  // shape can land here. Falling through to "Workspace ready" instead of
+  // throwing a TypeError keeps the surrounding KB layout mounted.
+  if (row === null || typeof row !== "object") {
     return { variant: "synced", label: "Workspace ready" };
   }
   // Legacy {date, count} rows always treated as synced — they predate the
@@ -58,10 +55,16 @@ function discriminate(row: KbSyncHistoryRow | null): {
   if ("date" in row && "count" in row) {
     return { variant: "synced", label: `Synced ${row.date}` };
   }
-  if ("ok" in row && row.ok) {
+  if ("ok" in row && row.ok && typeof row.at === "string") {
     return { variant: "synced", label: relativeLabel(row.at) };
   }
-  return { variant: "desync", label: "Workspace out of sync" };
+  if ("ok" in row && row.ok === false) {
+    return { variant: "desync", label: "Workspace out of sync" };
+  }
+  // Unknown shape (missing both legacy and new discriminators) — default to
+  // synced rather than false-alarm desync; the row is the operator's most
+  // recent kb_sync_history entry but we cannot prove it indicates a problem.
+  return { variant: "synced", label: "Workspace ready" };
 }
 
 function relativeLabel(at: string): string {

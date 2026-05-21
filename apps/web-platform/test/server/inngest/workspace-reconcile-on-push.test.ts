@@ -99,9 +99,15 @@ const appendKbSyncRowSpy = vi.fn(async (userId: string, row: unknown) => {
   if (existing) existing.kb_sync_history = updated;
   UPDATES.set(userId, { kb_sync_history: updated });
 });
-vi.mock("@/server/session-sync", () => ({
-  appendKbSyncRow: appendKbSyncRowSpy,
-}));
+vi.mock("@/server/session-sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/session-sync")>();
+  return {
+    // Preserve real constants (event name, schema version, error_class
+    // literals, feature tag) so the Inngest function's imports resolve.
+    ...actual,
+    appendKbSyncRow: appendKbSyncRowSpy,
+  };
+});
 
 const reportSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
@@ -152,7 +158,7 @@ function makeEvent(overrides: Partial<{
 }> = {}) {
   return {
     name: "platform/workspace.reconcile.requested" as const,
-    v: "1",
+    v: "1" as const,
     data: {
       founderId: "founder-A",
       installationId: 42,
@@ -231,8 +237,8 @@ describe("workspace-reconcile-on-push — happy path", () => {
   });
 });
 
-describe("workspace-reconcile-on-push — ff-only failure", () => {
-  it("appends row {ok:false, error_class:non_fast_forward} and mirrors to Sentry", async () => {
+describe("workspace-reconcile-on-push — sync failure", () => {
+  it("appends row {ok:false, error_class:sync_failed} and mirrors to Sentry", async () => {
     seedUser({ id: "founder-A", workspace_path: "/ws/A", github_installation_id: 42 });
     syncWorkspaceSpy.mockResolvedValue({
       ok: false,
@@ -245,7 +251,7 @@ describe("workspace-reconcile-on-push — ff-only failure", () => {
 
     const row = (UPDATES.get("founder-A")!.kb_sync_history as Array<Record<string, unknown>>).slice(-1)[0];
     expect(row).toEqual(
-      expect.objectContaining({ ok: false, error_class: "non_fast_forward" }),
+      expect.objectContaining({ ok: false, error_class: "sync_failed" }),
     );
 
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -257,6 +263,53 @@ describe("workspace-reconcile-on-push — ff-only failure", () => {
     expect(ctx.feature).toBe("workspace-reconcile-push");
     expect(ctx.op).toBe("sync");
     expect(ctx.message).toMatch(/workspace sync failed/i);
+  });
+});
+
+describe("workspace-reconcile-on-push — schema-gate", () => {
+  it("deadletters early when event.v is unsupported (non-throwing)", async () => {
+    seedUser({ id: "founder-A", workspace_path: "/ws/A", github_installation_id: 42 });
+    const handler = await importHandler();
+    const step = makeStep();
+    const result = (await handler({
+      event: { ...makeEvent(), v: "2" },
+      step,
+      logger,
+    })) as { ok: boolean; reason?: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/schema_v=2/);
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(step.calls.some((c) => c.name === "schema-gate")).toBe(true);
+  });
+});
+
+describe("workspace-reconcile-on-push — installation_id mismatch (defense-in-depth)", () => {
+  it("skips syncWorkspace + Sentry mirrors when event installationId differs from user row", async () => {
+    seedUser({
+      id: "founder-A",
+      workspace_path: "/ws/A",
+      github_installation_id: 99, // ROW says 99
+    });
+
+    const handler = await importHandler();
+    const step = makeStep();
+    // Event carries installationId=42 (mismatch).
+    const result = await handler({
+      event: makeEvent({ installationId: 42 }),
+      step,
+      logger,
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "install-mismatch" }));
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(reportSilentFallbackSpy.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        feature: "workspace-reconcile-push",
+        op: "skip-install-mismatch",
+      }),
+    );
   });
 });
 

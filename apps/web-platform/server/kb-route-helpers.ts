@@ -304,7 +304,10 @@ export async function syncWorkspace(
     reportSilentFallback(syncError, {
       feature: "kb-route-helpers",
       op: `workspace-sync-${context.op}`,
-      extra: { userId: context.userId, workspacePath },
+      // workspacePath omitted — the path embeds raw userId
+      // (workspacePath = `<root>/<userId>`) and bypasses the
+      // hashExtraUserId top-level rename (Recital 26).
+      extra: { userId: context.userId },
       message: `kb/${context.op}: workspace sync failed`,
     });
     return { ok: false, error: syncError };

@@ -13,7 +13,10 @@ import { createClient } from "@/lib/supabase/server";
 import { getFreshTenantClient, RuntimeAuthError } from "@/lib/supabase/tenant";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { syncWorkspace } from "@/server/kb-route-helpers";
-import { appendKbSyncRow } from "@/server/session-sync";
+import {
+  appendKbSyncRow,
+  ERROR_CLASS_SYNC_FAILED,
+} from "@/server/session-sync";
 import { reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
@@ -102,7 +105,6 @@ async function handleSync(userId: string): Promise<Response> {
     );
   }
 
-  const at = new Date().toISOString();
   const syncResult = await syncWorkspace(
     userData.github_installation_id,
     userData.workspace_path,
@@ -110,19 +112,28 @@ async function handleSync(userId: string): Promise<Response> {
     { userId, op: "manual" },
   );
 
+  // Anchor `at` to sync-completion (not sync-start) so manual and
+  // webhook-push rows share consistent semantics. Otherwise `relativeLabel`
+  // in `KbSyncStatus` shows "Synced just now" the instant the sync starts,
+  // even if the sync takes 25s.
   const sync_completed_at = Date.now();
+  const at = new Date(sync_completed_at).toISOString();
   if (!syncResult.ok) {
     await appendKbSyncRow(userId, {
       at,
       trigger: "manual",
       ok: false,
-      error_class: "non_fast_forward",
+      // Generic class — `syncWorkspace` cannot today distinguish
+      // non-fast-forward from auth/IO/net errors. Hard-coding
+      // "non_fast_forward" mislabels every failure as a rebase issue,
+      // sending operators to the reconnect modal for unrelated errors.
+      error_class: ERROR_CLASS_SYNC_FAILED,
       sync_completed_at,
     });
     return NextResponse.json({
       ok: false,
       at,
-      error_class: "non_fast_forward",
+      error_class: ERROR_CLASS_SYNC_FAILED,
     });
   }
 

@@ -70,9 +70,14 @@ vi.mock("@/server/kb-route-helpers", () => ({
   syncWorkspace: mockSyncWorkspace,
 }));
 
-vi.mock("@/server/session-sync", () => ({
-  appendKbSyncRow: mockAppendKbSyncRow,
-}));
+vi.mock("@/server/session-sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/session-sync")>();
+  return {
+    // Preserve real constants (error_class literals, event name, etc.)
+    ...actual,
+    appendKbSyncRow: mockAppendKbSyncRow,
+  };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
@@ -210,7 +215,7 @@ describe("POST /api/kb/sync — server-side workspace_path resolution", () => {
 });
 
 describe("POST /api/kb/sync — sync failure", () => {
-  it("appends row {ok:false, error_class:non_fast_forward} on syncWorkspace failure", async () => {
+  it("appends row {ok:false, error_class:sync_failed} on syncWorkspace failure", async () => {
     USER_ROWS.set("user-1", {
       workspace_path: "/ws/user-1",
       workspace_status: "ready",
@@ -229,12 +234,12 @@ describe("POST /api/kb/sync — sync failure", () => {
       expect.objectContaining({
         trigger: "manual",
         ok: false,
-        error_class: "non_fast_forward",
+        error_class: "sync_failed",
       }),
     );
     const body = await res.json();
     expect(body).toEqual(
-      expect.objectContaining({ ok: false, error_class: "non_fast_forward" }),
+      expect.objectContaining({ ok: false, error_class: "sync_failed" }),
     );
   });
 });

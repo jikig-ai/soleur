@@ -421,9 +421,11 @@ describe("syncWorkspace", () => {
         feature: "kb-route-helpers",
         op: "workspace-sync-delete",
         message: expect.stringMatching(/workspace sync failed/i),
+        // workspacePath intentionally NOT in extras — it embeds raw userId
+        // (workspacePath = `<root>/<userId>`), which bypasses the
+        // hashExtraUserId top-level rename (Recital 26).
         extra: expect.objectContaining({
           userId: TEST_USER_ID,
-          workspacePath: TEST_WORKSPACE_PATH,
         }),
       }),
     );
