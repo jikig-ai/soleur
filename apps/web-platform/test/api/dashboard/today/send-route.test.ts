@@ -19,24 +19,29 @@ import { createHash } from "node:crypto";
 const {
   mockGetUser,
   mockFrom,
+  mockRpc,
   mockIsGranted,
   mockWriteActionSend,
   mockValidateOrigin,
+  mockIsTemplateAuthorized,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
+  mockRpc: vi.fn(async () => ({ data: null, error: null })),
   mockIsGranted: vi.fn(),
   mockWriteActionSend: vi.fn(),
   mockValidateOrigin: vi.fn(() => ({
     valid: true,
     origin: "https://app.soleur.ai",
   })),
+  mockIsTemplateAuthorized: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
     from: mockFrom,
+    rpc: mockRpc,
   })),
 }));
 
@@ -57,6 +62,29 @@ vi.mock("@/server/action-sends/write-action-send", () => ({
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  warnSilentFallback: vi.fn(),
+  hashUserId: vi.fn(() => "founder-hash-stub"),
+}));
+
+vi.mock("@/server/templates/is-template-authorized", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    isTemplateAuthorized: mockIsTemplateAuthorized,
+  };
+});
+
+vi.mock("@/server/templates/template-registry", () => ({
+  getTemplateHash: vi.fn(() => "template-hash-stub"),
+}));
+
+vi.mock("@/server/logger", () => ({
+  default: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
 }));
 
 vi.mock("@sentry/nextjs", () => ({
@@ -160,6 +188,15 @@ describe("POST /api/dashboard/today/[id]/send", () => {
     });
     mockGetUser.mockResolvedValue({ data: { user: { id: FOUNDER_A } } });
     mockWriteActionSend.mockResolvedValue({ id: "as-1" });
+    // Default: predicate admits the send (existing happy-path tests assume
+    // template authorization is granted). Per-test overrides cover the
+    // first_send and denied branches.
+    mockIsTemplateAuthorized.mockResolvedValue({
+      status: "authorized",
+      rowId: "ta-1",
+      sendsUsed: 0,
+    });
+    mockRpc.mockResolvedValue({ data: null, error: null });
   });
 
   test("(6) 401 no JWT", async () => {
@@ -341,5 +378,130 @@ describe("POST /api/dashboard/today/[id]/send", () => {
     const res = await POST(makeRequest(), ctx());
     expect(res.status).toBe(422);
     expect(mockIsGranted).not.toHaveBeenCalled();
+  });
+
+  // ============================================================================
+  // PR-I (#4078) — Template-authorization predicate branching (Phase 9.6).
+  // Covers AC12 (first-send-IS-authorization) + each DenyReason 403 path +
+  // fail-closed exception → 500.
+  // ============================================================================
+
+  test("(PR-I/1) first-send-IS-authorization — first 1-click Send calls authorize_template RPC + writeActionSend", async () => {
+    setupMessageRow();
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockIsTemplateAuthorized.mockResolvedValue({
+      status: "first_send",
+      grantId: GRANT_ID,
+    });
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(200);
+
+    // authorize_template RPC called with (template_hash, action_class, grant_id).
+    expect(mockRpc).toHaveBeenCalledWith("authorize_template", {
+      p_template_hash: "template-hash-stub",
+      p_action_class: ACTION_CLASS,
+      p_grant_id: GRANT_ID,
+    });
+    // action_sends write follows the authorization.
+    expect(mockWriteActionSend).toHaveBeenCalledTimes(1);
+  });
+
+  test("(PR-I/2) first-send authorize_template RPC failure → 500 (fail-closed)", async () => {
+    setupMessageRow();
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockIsTemplateAuthorized.mockResolvedValue({
+      status: "first_send",
+      grantId: GRANT_ID,
+    });
+    mockRpc.mockResolvedValueOnce({
+      data: null,
+      error: { message: "rpc failed", code: "P0001" },
+    });
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(500);
+    expect(mockWriteActionSend).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["template_revoked"],
+    ["template_expired"],
+    ["template_quota_exhausted"],
+  ] as const)(
+    "(PR-I/3) 403 template_not_authorized with deny_reason=%s",
+    async (reason) => {
+      setupMessageRow();
+      mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+      mockIsTemplateAuthorized.mockResolvedValue({
+        status: "denied",
+        reason: reason as
+          | "template_revoked"
+          | "template_expired"
+          | "template_quota_exhausted",
+      });
+
+      const res = await POST(makeRequest({}), ctx());
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as {
+        error: string;
+        deny_reason: string;
+      };
+      expect(json.error).toBe("template_not_authorized");
+      expect(json.deny_reason).toBe(reason);
+      // RPC not called on denial path.
+      expect(mockRpc).not.toHaveBeenCalled();
+      expect(mockWriteActionSend).not.toHaveBeenCalled();
+    },
+  );
+
+  test("(PR-I/4) predicate exception → 500 + fail-closed (no writeActionSend)", async () => {
+    setupMessageRow();
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockIsTemplateAuthorized.mockRejectedValueOnce(
+      new Error("predicate connection refused"),
+    );
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(500);
+    expect(mockWriteActionSend).not.toHaveBeenCalled();
+  });
+
+  test("(PR-I/5) predicate NOT called for approve_every_time tier (per Phase 4 §4 plan)", async () => {
+    setupMessageRow();
+    mockIsGranted.mockResolvedValue({
+      id: GRANT_ID,
+      tier: "approve_every_time",
+    });
+
+    // approve_every_time path requires typed confirmation; passing the
+    // right hash + typed_value gets us through to writeActionSend.
+    const res = await POST(
+      makeRequest({
+        confirmed_typed: true,
+        typed_value: "SEND",
+        expected_draft_preview_hash: DRAFT_HASH,
+      }),
+      ctx(),
+    );
+    expect(res.status).toBe(200);
+    // Plan §Phase 4 §4: predicate only fires for draft_one_click.
+    expect(mockIsTemplateAuthorized).not.toHaveBeenCalled();
+  });
+
+  test("(PR-I/6) authorized path skips authorize_template RPC", async () => {
+    setupMessageRow();
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockIsTemplateAuthorized.mockResolvedValue({
+      status: "authorized",
+      rowId: "ta-1",
+      sendsUsed: 7,
+    });
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(200);
+    // Already-authorized path: no authorize_template RPC.
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockWriteActionSend).toHaveBeenCalledTimes(1);
   });
 });

@@ -56,24 +56,24 @@ Continue mig 053 (same `BEGIN;…COMMIT;`). All use `SET LOCAL session_replicati
 
 ## Phase 4 — Predicate + First-Send-IS-Authorization + Send-Route Wiring
 
-- [ ] 4.1 Create `apps/web-platform/server/templates/is-template-authorized.ts`:
+- [x] 4.1 Create `apps/web-platform/server/templates/is-template-authorized.ts`:
   - Inline `DenyReason` type at top (no separate file).
   - `PredicateResult` discriminated union: `authorized | first_send | denied`.
   - Single SELECT returns most-recent row (founder_id, template_hash) JOIN action_sends count; TS branches.
   - **Fail-closed exception:** wrap SELECT in try/catch; rethrow as `PredicateException`.
   - **Auto-revoke side effect:** on expired or quota-exhausted detection, fire `revoke_template_authorization` (best-effort, async-safe).
-- [ ] 4.2 Write `test/server/templates/is-template-authorized.test.ts`:
+- [x] 4.2 Write `test/server/templates/is-template-authorized.test.ts`:
   - Mock isGranted=null → assert predicate NOT called.
   - Mock each PredicateResult variant → assert send-route branches correctly.
   - Mock DB exception → assert 500 + Sentry (fail-closed).
   - First-send-IS-auth happy path: predicate returns first_send → authorize_template called → action_sends written.
-- [ ] 4.3 Edit `send/route.ts:155` — after isGranted 403 branch, before tier switch:
+- [x] 4.3 Edit `send/route.ts:155` — after isGranted 403 branch, before tier switch:
   - If `tier === 'draft_one_click'` (only tier currently requiring template auth), call `isTemplateAuthorized`.
   - On `denied` → 403 with `{ error: { code: 'template_not_authorized', deny_reason } }`.
   - On `first_send` → `authorize_template` RPC then write `action_sends` in same Supabase transaction.
   - On `authorized` → proceed to tier switch.
   - Wrap predicate in `Promise.race` 5s timeout.
-- [ ] 4.4 Emit pino `{template_hash, action_class, deny_reason, founder_id_hash}` on every denial. NO Sentry mirror on routine denials (v2 cut).
+- [x] 4.4 Emit pino `{template_hash, action_class, deny_reason, founder_id_hash}` on every denial. NO Sentry mirror on routine denials (v2 cut).
 
 ## Phase 5 — Today-Card Deny Surface + Revocation Reason Copy
 
@@ -124,7 +124,7 @@ All tests via vitest. Integration tests gated by `TENANT_INTEGRATION_TEST=1`.
   - TR7 cascade semantic ordering verification (children carry `dsr_erasure` reason BEFORE grant nulled).
 - [ ] 9.5 Write `test/server/scope-grants/revocation-reason-exhaustive.test.ts` (TR6):
   - Mirror `action-class-exhaustive.test.ts`. Parity + exhaustive switch + runtime regex. Count locked at 8.
-- [ ] 9.6 Update `test/api/dashboard/today/send-route.test.ts` — add cases for first-send-IS-authorization + each DenyReason 403 path.
+- [x] 9.6 Update `test/api/dashboard/today/send-route.test.ts` — add cases for first-send-IS-authorization + each DenyReason 403 path.
 
 ## Phase 10 — Legal Artifacts + ADR-035
 
