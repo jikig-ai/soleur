@@ -1,24 +1,24 @@
 ---
 title: "Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders?"
 type: comparison
-publish_date: 2026-03-16
-channels: discord, x
-status: published
+publish_date: 2026-05-21
+channels: discord, x, bluesky, linkedin-company
+status: scheduled
 ---
 
 ## Discord
 
-New article: Soleur vs. Anthropic Cowork.
+Refreshed: Soleur vs. Anthropic Cowork — updated for May 2026 (M365 E7 bundle now live, workflow lifecycle differentiation added).
 
-Anthropic Cowork covers 10 domains. Soleur covers 8. On paper, similar. In practice, the architectures are different enough to determine which belongs in your stack.
+Anthropic Cowork covers 10 domains. Soleur covers 9 departments. On paper, similar. In practice, the architectures determine which one runs a company versus executes individual tasks.
 
-The core difference: Cowork plugins don't share a knowledge base. Each one executes independently, starting fresh every session. The legal plugin doesn't know what the marketing plugin produced. You carry the context manually.
+The core difference: Cowork plugins start fresh every session. The legal plugin doesn't know what the marketing plugin produced. You carry the context manually.
 
-Soleur's 63 agents share a compounding knowledge base across all 9 departments. Brand guide informs marketing content. Competitive analysis shapes pricing. Legal decisions flow into engineering. The 100th session is dramatically more productive than the first.
+Soleur's 66 agents share a compounding knowledge base. What happens between the agents matters: enforced stage handoffs (brainstorm → plan → implement → review → compound), artifacts produced at each step, learnings captured automatically. The 100th session is dramatically more productive than the first.
 
-Also covered: Microsoft Copilot Cowork (launched March 9, powered by Anthropic Claude, now in M365 — Outlook, Teams, Excel). Real capabilities, honest tradeoffs, and which surface you should be on.
+Also covered: Microsoft Copilot Cowork, now available in the M365 E7 bundle at $99/user/month — real multi-step M365 workflow execution, no cross-domain knowledge base.
 
-<https://soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=discord&utm_medium=community&utm_campaign=soleur-vs-anthropic-cowork>
+<https://www.soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=discord&utm_medium=community&utm_campaign=soleur-vs-anthropic-cowork>
 
 ---
 
@@ -31,39 +31,39 @@ Anthropic Cowork has plugins for marketing, legal, engineering, finance, and 6 m
 2/ Cowork plugins don't share a knowledge base. Each one starts fresh. The Brand Voice plugin's output doesn't automatically inform the Financial Analysis plugin. You connect the dots manually — every time.
 
 **Tweet 3:**
-3/ Soleur's 63 agents share a single compounding knowledge base across 9 departments. Brand guide informs copywriting. Competitive intel updates sales battlecards. Legal decisions flow into engineering constraints. The context connects itself.
+3/ Soleur's 66 agents share a compounding knowledge base across 9 departments. Brand guide informs copy. Competitive intel updates battlecards. Legal decisions flow into engineering. What happens between agents matters as much as the agents.
 
 **Tweet 4:**
-4/ Also: Microsoft Copilot Cowork launched March 9 (powered by Anthropic Claude, now in Outlook, Teams, and Excel). Real capabilities for M365 workflows. No cross-domain knowledge base. Different surface, different use case.
+4/ The lifecycle: brainstorm → plan → implement → review → compound. Artifacts at each handoff. Learnings captured on completion. Not individual task invocation — an organizational workflow.
 
 **Tweet 5 (final):**
-Full comparison — knowledge architecture, workflow depth, pricing, open source:
+Full comparison — knowledge architecture, workflow lifecycle, pricing, open source:
 
-<https://soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=x&utm_medium=social&utm_campaign=soleur-vs-anthropic-cowork>
+https://www.soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=x&utm_medium=social&utm_campaign=soleur-vs-anthropic-cowork
 
-# solofounder
+#solofounder
 
 ---
 
 ## IndieHackers
 
-**Title:** Compared Soleur vs. Anthropic Cowork — the architecture difference is what actually matters
+**Title:** Refreshed: Soleur vs. Anthropic Cowork — why workflow lifecycle matters more than domain count
 
 **Body:**
 
-Published a comparison between Soleur (what I'm building) and Anthropic Cowork.
+Updated my comparison between Soleur (what I'm building) and Anthropic Cowork for May 2026.
 
-The feature lists look similar. Both cover marketing, legal, engineering, operations, finance. But the architecture is what separates them.
+The feature lists still look similar. Both cover marketing, legal, engineering, operations, finance. But the architecture is what separates them — and specifically, what happens between agents.
 
-Cowork plugins don't share a cross-domain knowledge base. Each plugin executes independently — no persistent memory across sessions, no shared context between domains. If you want your Brand Voice output to inform your Financial Analysis work, you carry that context manually.
+Cowork plugins don't share a cross-domain knowledge base. Each one executes independently — no persistent memory across sessions, no shared context between domains. You carry that context manually.
 
-Soleur's 63 agents share one compounding knowledge base across 9 departments. Knowledge accumulates. Every decision compounds into future sessions. The system doesn't start from zero each time.
+Soleur's 66 agents share one compounding knowledge base across 9 departments. But more than the knowledge base, the lifecycle matters: brainstorm → plan → implement → review → compound. Each stage produces artifacts. Each completion captures learnings. The system doesn't just remember — it applies what it learned to every future cycle.
 
-I also covered Microsoft Copilot Cowork (launched March 9), which brings Anthropic's Claude Cowork technology into M365. Real multi-step execution across Outlook, Teams, and Excel — but still no cross-domain knowledge base.
+This update also covers the Microsoft Copilot Cowork M365 E7 bundle, now available at $99/user/month as of May 2026. Real multi-step execution across Outlook, Teams, and Excel — no cross-domain knowledge compounding.
 
-Full breakdown including side-by-side comparison table, pricing (Claude Pro is $20/month with Cowork included), and who each platform is actually for:
+Full breakdown including side-by-side comparison, pricing, and who each platform is for:
 
-<https://soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=indiehackers&utm_medium=community&utm_campaign=soleur-vs-anthropic-cowork>
+<https://www.soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=indiehackers&utm_medium=community&utm_campaign=soleur-vs-anthropic-cowork>
 
 ---
 
@@ -71,59 +71,63 @@ Full breakdown including side-by-side comparison table, pricing (Claude Pro is $
 
 **Subreddit:** r/SaaS, r/solopreneur, r/artificial
 
-**Title:** Comparing AI agent platforms for solo founders — the architecture difference no one talks about
+**Title:** Comparing AI agent platforms for solo founders — what happens between the agents matters more than the agent count
 
 **Body:**
 
-Wrote a comparison between Soleur and Anthropic Cowork. Both cover multiple business domains (HR, legal, marketing, engineering, finance). The feature lists look similar. The architectures are not.
+Updated a comparison between Soleur and Anthropic Cowork. Both cover multiple business domains (HR, legal, marketing, engineering, finance). The feature lists look similar. The architectures produce different outcomes at month six.
 
-Cowork's plugins operate in silos — no shared knowledge base, no persistent memory across sessions. The marketing plugin and the legal plugin don't know what the other produced. You coordinate across domains manually.
+Cowork's plugins operate independently — no shared knowledge base, no persistent memory. The marketing plugin and the legal plugin don't know what the other produced. You coordinate manually.
 
-The alternative architecture: a shared compounding knowledge base where all agents read from and write to the same institutional memory. Brand decisions inform copy. Legal audits reference engineering specs. Context flows automatically.
+The alternative: a shared compounding knowledge base with enforced workflow stages. Not just "agents share memory" but "the system enforces brainstorm → plan → implement → review → compound, produces artifacts at each handoff, and captures learnings on completion." The cycle compounds — not resets.
 
-Also touches on Microsoft Copilot Cowork (launched March 9, 2026), which brings Anthropic Claude's Cowork technology into M365 — real multi-step execution across Outlook, Teams, and Excel, but still no cross-domain knowledge persistence.
+Also covers Microsoft Copilot Cowork (M365 E7 bundle now live at $99/user/month) — real multi-step task execution in Outlook, Teams, and Excel, no cross-domain knowledge persistence.
 
-Comparison covers: knowledge architecture, cross-domain coherence, workflow orchestration, pricing, and open source considerations.
+Comparison covers knowledge architecture, workflow orchestration, pricing, and open source.
 
-<https://soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=reddit>
+<https://www.soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=reddit>
 
 ---
 
 ## Hacker News
 
-**Title:** Soleur vs. Anthropic Cowork: architecture comparison for solo-founder AI platforms
-**URL:** <https://soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=hackernews&utm_medium=community&utm_campaign=soleur-vs-anthropic-cowork>
+**Title:** Soleur vs. Anthropic Cowork: architecture comparison for solo-founder AI platforms (updated May 2026)
+**URL:** https://www.soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=hackernews&utm_medium=community&utm_campaign=soleur-vs-anthropic-cowork
 
 ---
 
 ## LinkedIn Personal
 
-The hardest part about comparing AI agent platforms isn't the feature lists. It's figuring out which architecture compounds over time.
+The question that matters when comparing AI agent platforms isn't how many domains they cover. It's what happens between the agents.
 
-I wrote a comparison between Soleur and Anthropic Cowork. They cover similar ground — both offer multi-domain AI agents for business operations. But the underlying architectures produce different outcomes at month six versus month one.
+I updated my comparison between Soleur and Anthropic Cowork for May 2026. Both platforms cover similar business domains — HR, legal, marketing, engineering, finance. The architectural difference is where the outcomes diverge.
 
-Cowork's plugins are siloed. Each one executes independently without sharing context. The brand voice decisions from the Brand Voice plugin don't automatically inform the Financial Analysis plugin's outputs. You carry the context manually between domains.
+Cowork's plugins execute tasks in isolation. Each session starts fresh. The Brand Voice decisions from last month don't inform the Financial Analysis work this month. You carry that context manually.
 
-Soleur's 63 agents share a compounding knowledge base. Brand guide informs marketing. Competitive intelligence shapes sales battlecards. Legal audit findings flow into engineering constraints. The knowledge accumulates — not resets.
+Soleur's 66 agents share a compounding knowledge base — but the more important difference is the workflow lifecycle. The system enforces brainstorm → plan → implement → review → compound. Each stage produces artifacts. Each completion captures learnings. The 100th session is categorically more productive than the first, not because the model improved but because the institutional knowledge compounds.
 
-The article also covers Microsoft Copilot Cowork, which launched March 9 (powered by Anthropic Claude, integrated into Outlook, Teams, and Excel). Real capabilities for M365 workflows. No cross-domain compounding. Different surface, different use case.
+This update also reflects the Microsoft Copilot Cowork M365 E7 bundle, now available at $99/user/month as of May 2026. Real multi-step workflow execution across Outlook, Teams, and Excel — still no cross-domain compounding.
 
-If you're evaluating multi-domain AI platforms for a solo company, the question to ask isn't "how many domains does it cover?" It's "does institutional knowledge compound, or does it reset?"
+The full comparison — knowledge architecture, workflow depth, pricing, and who each platform is actually for: https://www.soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=soleur-vs-anthropic-cowork
 
-Full comparison — knowledge architecture, workflow depth, pricing, open source: <https://soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=soleur-vs-anthropic-cowork>
-
-# solofounder #buildinpublic
+#solofounder #buildinpublic
 
 ---
 
 ## LinkedIn Company Page
 
-Soleur published a direct comparison with Anthropic Cowork — one of the most common questions founders ask when evaluating AI agent platforms for multi-domain business operations.
+Soleur published an updated comparison with Anthropic Cowork — refreshed for May 2026 with current pricing and a sharper look at what separates the two architectures.
 
-Both platforms cover multiple business domains. The architectural difference is what determines long-term value: Cowork plugins execute independently without a shared knowledge base, while Soleur's 63 agents share a compounding institutional memory that grows across every session.
+Both platforms cover multiple business domains. The difference: Cowork plugins execute independently without shared context, while Soleur's 66 agents share a compounding knowledge base organized around an enforced workflow lifecycle (brainstorm → plan → implement → review → compound), with artifacts produced at each stage and learnings captured at completion.
 
-The comparison covers knowledge architecture, cross-domain coherence, workflow orchestration, pricing (Claude Pro at $20/month includes Cowork; Soleur's core is free and open-source), and the March 2026 launch of Microsoft Copilot Cowork — which brings Anthropic Claude's Cowork technology into Microsoft 365.
+The update includes the Microsoft Copilot Cowork M365 E7 bundle, now available at $99/user/month — multi-step task execution across Outlook, Teams, and Excel, without cross-domain knowledge persistence.
 
-Read the full comparison: <https://soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=linkedin-company&utm_medium=social&utm_campaign=soleur-vs-anthropic-cowork>
+Full comparison — knowledge architecture, workflow orchestration, pricing, and who each platform is for: https://www.soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=linkedin-company&utm_medium=social&utm_campaign=soleur-vs-anthropic-cowork
 
-# AIagents #solofounder
+#AIagents #solofounder
+
+---
+
+## Bluesky
+
+Cowork plugins start fresh every session. Soleur's 66 agents share a compounding knowledge base — and the lifecycle enforces brainstorm → plan → implement → review → compound. What happens between agents matters. https://www.soleur.ai/blog/soleur-vs-anthropic-cowork/?utm_source=bluesky&utm_medium=social&utm_campaign=soleur-vs-anthropic-cowork
