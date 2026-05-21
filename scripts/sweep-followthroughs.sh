@@ -115,6 +115,15 @@ run_one() {
 
   if [[ -z "${script:-}" ]]; then
     log "issue #$issue_num: no directive — skipping"
+    # Visibility: aggregate no-directive issues into the end-of-sweep
+    # summary. Without this, an issue filed without a directive (per the
+    # 2026-05-21 incident where #4244/#4245/#4246 all shipped directive-less)
+    # silently never gets evaluated. The summary surfaces the gap so the
+    # operator can either backfill the directive or close the issue as
+    # wontfix. Path: $NO_DIRECTIVE_FILE if set by main(), else no-op.
+    if [[ -n "${NO_DIRECTIVE_FILE:-}" ]]; then
+      printf '%s\n' "$issue_num" >> "$NO_DIRECTIVE_FILE"
+    fi
     return 0
   fi
 
@@ -269,6 +278,14 @@ $trimmed_out
 main() {
   log "sweep start (repo=$REPO dry_run=$DRY_RUN)"
 
+  # Tmpfile collects issue numbers that lack the soleur:followthrough
+  # directive. End-of-sweep summary surfaces them (closes #4244/#4245/#4246
+  # class — issues filed without a directive that the sweeper silently
+  # never evaluates).
+  NO_DIRECTIVE_FILE=$(mktemp -t followthrough-no-directive.XXXXXXXX.txt)
+  export NO_DIRECTIVE_FILE
+  trap 'rm -f "$NO_DIRECTIVE_FILE"' EXIT
+
   local issues_json
   issues_json=$(gh issue list --repo "$REPO" --label follow-through --state open --limit 50 --json number,body)
   local count
@@ -283,7 +300,32 @@ main() {
     run_one "$num" "$body" || fail "issue #$num: run_one returned non-zero (continuing)"
   done
 
-  log "sweep done"
+  # No-directive summary. If any issues lacked the directive, emit a
+  # structured warning section that bubbles to the workflow summary.
+  local no_dir_count=0
+  if [[ -s "$NO_DIRECTIVE_FILE" ]]; then
+    no_dir_count=$(wc -l < "$NO_DIRECTIVE_FILE" | tr -d '[:space:]')
+  fi
+  if [[ "$no_dir_count" -gt 0 ]]; then
+    log "WARN: $no_dir_count open follow-through issue(s) have no soleur:followthrough directive:"
+    while IFS= read -r issue_num; do
+      log "  - #$issue_num — needs directive or close as wontfix"
+    done < "$NO_DIRECTIVE_FILE"
+    # Emit to GITHUB_STEP_SUMMARY if running in CI so it appears in the
+    # workflow run page without forcing the operator to scroll the log.
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      {
+        printf '### ⚠️ Follow-through issues missing directive (%d)\n\n' "$no_dir_count"
+        printf 'These issues carry the `follow-through` label but no `<!-- soleur:followthrough ... -->` block. The sweeper cannot evaluate them — they will rot open until manually addressed.\n\n'
+        while IFS= read -r issue_num; do
+          printf -- '- [#%s](https://github.com/%s/issues/%s)\n' "$issue_num" "$REPO" "$issue_num"
+        done < "$NO_DIRECTIVE_FILE"
+        printf '\nResolve each by either (a) adding the directive (see `plugins/soleur/skills/ship/SKILL.md` §Phase 7 Step 3.5.A-F), or (b) closing as wontfix with rationale.\n'
+      } >> "$GITHUB_STEP_SUMMARY"
+    fi
+  fi
+
+  log "sweep done (no_directive=$no_dir_count)"
 }
 
 # Allow tests to source this script without running main().
