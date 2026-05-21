@@ -67,13 +67,15 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 2 — Filesystem + sandbox
 
-- [ ] **2.1.1** Edit `apps/web-platform/server/workspace.ts:35-37,67,121,227,247` — convert userId→workspaceId; create `resolveWorkspacePathForUser(userId)` helper.
-- [ ] **2.1.2** Create `apps/web-platform/server/workspace-resolver.ts` — `getCurrentOrganizationId(supabaseSession)`, `getDefaultWorkspaceForUser(userId)`.
-- [ ] **2.2.1** Create `apps/web-platform/server/workspace-fs-migrate.ts` — idempotent fs migration with `realpathSync` two-sided check + `lstatSync` dangling check per CWE-59 learning.
-- [ ] **2.2.2** Wire into deploy pipeline (inline; NOT a Post-merge operator step).
-- [ ] **2.3.1** Edit `apps/web-platform/server/agent-runner-sandbox-config.ts` — **real bwrap mount** (Kieran C1). Mount `/workspaces/<workspace_id>` instead of `/workspaces/<userId>`.
-- [ ] **2.3.2** Edit `apps/web-platform/server/sandbox.ts:110-148` `isPathInWorkspace` containment regex — accept both legacy `/workspaces/<userId>` (symlink-resolved) and canonical `/workspaces/<workspace_id>`.
-- [ ] **2.4.1** Audit `apps/web-platform/server/agent-env.ts:ALLOWED_KEYS` — confirm `FLAG_TEAM_WORKSPACE_INVITE`, `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` NOT present per CWE-526 learning. Add test asserting absence.
+- [x] **2.1.1** Edit `apps/web-platform/server/workspace.ts` — rename `userId`→`workspaceId` param across `provisionWorkspace`/`provisionWorkspaceWithRepo`/`deleteWorkspace`. Solo callers (signup, account-delete) pass `user.id` directly per the N2 invariant (`workspaces.id === user.id`); 5 call sites carry N2 invariant comments. Resolver helper landed as `workspace-resolver.ts` per 2.1.2.
+- [x] **2.1.2** Create `apps/web-platform/server/workspace-resolver.ts` — `getCurrentOrganizationId(session)` reads JWT app_metadata claim (migration 056); `getDefaultWorkspaceForUser(userId, supabase)` queries workspace_members ORDER BY workspaces.created_at LIMIT 1; `resolveWorkspacePathForUser` composes with WORKSPACES_ROOT. Fail-closed on no membership. 7 unit tests.
+- [x] **2.2.1** Create `apps/web-platform/server/workspace-fs-migrate.ts` — idempotent per-user `migrateUserWorkspace`: solo no-op, rename legacy→canonical + legacy-as-symlink, `realpathSync` both sides per CWE-59, refuses dangling/mismatched symlinks, refuses both-paths-exist collision. `migrateAllUserWorkspaces` batch wrapper collects per-row errors. 8 unit tests.
+- [x] **2.2.2** Wire into deploy pipeline (inline). `apps/web-platform/scripts/run-workspace-fs-migrate.ts` — Supabase service-role query for all `workspace_members` rows + `migrateAllUserWorkspaces` invocation. Structured single-line JSON output. Today's fleet is solo-only → no-op pass per N2.
+- [x] **2.3.1** `agent-runner-sandbox-config.ts` — no code change required. `buildAgentSandboxConfig(workspacePath)` is data-driven via the path argument; `agent-runner.ts:894` reads `user.workspace_path` from DB and the fs-migrate updates that column. Drift-guard `agent-runner-helpers.test.ts:60` already pins `allowWrite ← workspacePath`.
+- [x] **2.3.2** `sandbox.ts:110-148` — no code change required. `isPathInWorkspace` already realpath-canonicalizes both sides; the symlink chain `userId→workspaceId` resolves transparently. New test `test/server/sandbox-symlink-containment.test.ts` (3 cases) pins the property: accepts both forms for the same workspace, rejects sibling-workspace access, rejects `..`-traversal.
+- [x] **2.4.1** Audit `apps/web-platform/server/agent-env.ts` — `AGENT_ENV_ALLOWLIST` confirmed absent of `FLAG_TEAM_WORKSPACE_INVITE` + `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS`. New drift guard `test/server/agent-env-allowlist.test.ts` (3 cases) sets both vars in `process.env` and asserts `buildAgentEnv` does NOT propagate them to the agent subprocess env (CWE-526).
+
+**Phase 2 exit-gate closure (Phase 1 carry-over):** `server/dsar-export-allowlist.ts` — parked `organizations` / `workspaces` / `workspace_members` / `workspace_member_attestations` / `user_session_state` in `DSAR_TABLE_EXCLUSIONS` with explicit "deferred to Phase 7" reasons + promotion checklist. Closes the `dsar-allowlist-completeness` + `dsar-worker-per-row-where` gate failures that surfaced when the new tables landed without matching worker chains. Phase 7 will flip them to ALLOWLIST and add the JOIN-extended export chains in lockstep with the legal-doc cross-document gate.
 
 ## Phase 3 — BYOK split
 

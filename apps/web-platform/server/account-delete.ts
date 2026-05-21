@@ -123,7 +123,12 @@ export async function deleteAccount(
     log.warn({ userId, err }, "Failed to abort session during deletion (non-fatal)");
   }
 
-  // 3. Delete workspace directory
+  // 3. Delete workspace directory.
+  //
+  // The deleted user is, by the GDPR Art. 17 contract, the sole member of
+  // their own workspace at this point (Phase 7 anonymise_workspace_members
+  // strips any team memberships earlier in the cascade). `userId` ===
+  // `workspaces.id` per migration 053 §1.1.7 N2 invariant.
   try {
     await deleteWorkspace(userId);
   } catch (err) {
