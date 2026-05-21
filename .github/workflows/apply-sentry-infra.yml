@@ -82,7 +82,7 @@ jobs:
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # No `environment:` reviewer gate. PR #4221 removed it: the per-apply
+    # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
     # reviewer click was duplicative friction on top of the PR-merge gate
     # (CODEOWNERS review + branch protection on main), and was blocking
     # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
