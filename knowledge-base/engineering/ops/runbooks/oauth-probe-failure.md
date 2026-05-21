@@ -3,7 +3,7 @@ title: OAuth probe failure runbook
 date: 2026-04-29
 owners: engineering/ops
 applies_to:
-  - .github/workflows/scheduled-oauth-probe.yml
+  - apps/web-platform/server/inngest/functions/cron-oauth-probe.ts
   - apps/web-platform/scripts/configure-sentry-alerts.sh
 related_issues: [2997, 2979, 2982, 3001, 1784, 3183]
 related_prs: [2975, 2994, 3007, 3181]
@@ -13,9 +13,15 @@ related_prs: [2975, 2994, 3007, 3181]
 
 Triage steps for `[ci/auth-broken] Synthetic OAuth probe failed` issues
 or `[Soleur Ops] OAuth probe failure: ...` emails fired by
-`.github/workflows/scheduled-oauth-probe.yml`. The probe runs every
-hour from a GitHub-hosted runner against the prod public auth surface
-(`app.soleur.ai/login`, `api.soleur.ai/auth/v1/...`).
+`apps/web-platform/server/inngest/functions/cron-oauth-probe.ts`. The probe
+runs every hour from the self-hosted Inngest worker (Hetzner VM) against
+the prod public auth surface (`app.soleur.ai/login`, `api.soleur.ai/auth/v1/...`).
+
+**Before debugging the probe code path, check Better Stack `inngest-heartbeat`
+last_alive_at via the dashboard at <https://uptime.betterstack.com/team/376797/monitors>
+— if >2 min ago, this issue is likely a substrate-down false-positive
+(cross-check sibling `scheduled-daily-triage` / `scheduled-follow-through`
+Sentry monitors; they share the same Inngest worker).**
 
 ## Sentry check-in failures are silent to the workflow log
 
@@ -30,15 +36,19 @@ Sentry never receives a check-in, Sentry pages operators with
 Triage when Sentry says "Last successful check-in: Never" but the workflow
 runs themselves are green:
 
-1. Open the most recent green `Scheduled: OAuth Probe` run.
-2. Inspect the `Sentry check-in (final)` step log. A non-2xx curl line
-   (`curl: (22) The requested URL returned error: 401`) confirms a
+1. Open the most recent `cron-oauth-probe` run in the Inngest dashboard
+   (or `journalctl -u inngest-server.service -n 200` on the Hetzner VM).
+2. Look for `reportSilentFallback` breadcrumbs with
+   `feature: "cron-sentry-heartbeat"` in Sentry, OR an obvious non-2xx
+   from the heartbeat step in the Inngest run timeline — both confirm a
    Sentry-auth-side failure.
-3. Verify the three repo secrets (`SENTRY_INGEST_DOMAIN`,
+3. Verify the three Doppler `prd` secrets (`SENTRY_INGEST_DOMAIN`,
    `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY`) match the
    `apps/web-platform/infra/sentry/cron-monitors.tf` monitor's project
-   via `gh secret list` and the Sentry monitor settings page.
-4. Re-run with `workflow_dispatch` after fixing the secret.
+   via `doppler secrets list -p soleur -c prd` and the Sentry monitor
+   settings page.
+4. Re-run via `inngest send cron/oauth-probe.manual-trigger` after fixing
+   the secret.
 
 ## L3-first triage gate
 
@@ -225,7 +235,7 @@ Remediation:
 2. Confirm "Request user authorization (OAuth) during installation" is
    checked.
 3. Click Update (CSRF-protected — agent shells cannot auto-submit).
-4. Re-run the probe: `gh workflow run scheduled-oauth-probe.yml`.
+4. Re-run the probe: `inngest send cron/oauth-probe.manual-trigger`.
 5. Close the tracking issue with the closure-gate comment per
    `/ship` Phase 7 Step 3.5 callback-URL audit anchor: include the verbatim
    callback URLs, the workflow run ID, and the textarea byte count.
@@ -249,10 +259,11 @@ curl --max-time 10 -L -s -H "User-Agent: soleur-debug/1.0" \
   | tee /tmp/gh-authorize.html | tail -50
 ```
 
-Update `apps/web-platform/test/oauth-probe-contract.test.ts` sentinel
-constants AND `.github/workflows/scheduled-oauth-probe.yml` grep targets
-to match the new HTML in the same PR. Both must change atomically; the
-test gate prevents partial updates.
+Update `apps/web-platform/server/inngest/functions/oauth-probe-sentinels.ts`
+to match the new HTML; `apps/web-platform/test/oauth-probe-contract.test.ts`
+re-exports the constants so its semantic-invariant tests catch any drift
+between sentinel text and fabricated-body fixtures. Both files live in
+the same module graph — the typecheck + sentinel test is the gate.
 
 ### `github_oauth_<label>_http`
 
@@ -487,18 +498,25 @@ script is the only complete inventory path. Do not skip the script.
 
 ### Re-run the probe on demand
 
-`gh run watch` requires interactive selection (no TTY in agent
-shells); the agent-friendly form is to dispatch and poll the latest
-run:
+The probe is fired by the self-hosted Inngest worker. To trigger an
+on-demand run from the operator's machine:
 
 ```bash
-gh workflow run scheduled-oauth-probe.yml
-sleep 5
-RUN_ID=$(gh run list --workflow=scheduled-oauth-probe.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-gh run view "$RUN_ID" --json status,conclusion --jq '"\(.status) \(.conclusion)"'
+# Send the manual-trigger event the function registers as a sibling
+# trigger (see cron-oauth-probe.ts: `{ event: "cron/oauth-probe.manual-trigger" }`).
+inngest send cron/oauth-probe.manual-trigger
 ```
 
-Repeat the `gh run view` until `status` is `completed`.
+Watch the run in the Inngest dashboard (`https://app.inngest.com/env/.../functions/cron-oauth-probe`)
+or tail the worker on Hetzner: `journalctl -u inngest-server.service -f`.
+The Sentry monitor `scheduled-oauth-probe` records the resulting
+`?status=ok` / `?status=error` heartbeat — verify via the checkins API:
+
+```bash
+curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-oauth-probe/checkins/?limit=5" \
+  | jq -r '.[] | "\(.dateCreated) \(.status)"'
+```
 
 ### External provider status (machine-readable)
 
