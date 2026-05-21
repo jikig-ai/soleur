@@ -440,8 +440,10 @@ runcmd:
     INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | head -1 | cut -d= -f2-)
     # `|| true` for symmetry with ci-deploy.sh's hotfix (which runs under
     # `set -o pipefail` — this block doesn't, but defense-in-depth costs
-    # nothing). Bootstrap script's `${VECTOR_CLI_VERSION:-}` guard skips
-    # Vector install gracefully on empty values.
+    # nothing). Bootstrap script's bash `:-`-default guard on VECTOR_CLI_VERSION
+    # skips Vector install gracefully on empty values. (Comment intentionally
+    # avoids the literal $${ } shell-expansion syntax — this YAML is rendered
+    # by terraform `templatefile()` which would interpret it as TF interpolation.)
     VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
     VECTOR_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_SHA256=' | head -1 | cut -d= -f2- || true)
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
