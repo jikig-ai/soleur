@@ -94,8 +94,13 @@ function defaultFetch(input: RequestInfo | URL): Promise<Response> {
   if (url.includes("/auth/v1/settings"))
     return Promise.resolve(healthySettings());
   if (url.endsWith("/login")) return Promise.resolve(healthyLoginResponse());
-  if (url.includes(".sentry.io/api/")) return Promise.resolve(new Response("", { status: 202 }));
-  if (url.includes("api.resend.com")) return Promise.resolve(new Response("{}", { status: 200 }));
+  // Host-based routing — CodeQL js/incomplete-url-substring-sanitization
+  // (high severity) flags `.includes("api.resend.com")` because
+  // `attacker.api.resend.com.evil` would match. Parse the host instead.
+  let host = "";
+  try { host = new URL(url).host; } catch { /* malformed URL — fall through */ }
+  if (host === "api.resend.com") return Promise.resolve(new Response("{}", { status: 200 }));
+  if (host.endsWith(".sentry.io") && url.includes("/api/")) return Promise.resolve(new Response("", { status: 202 }));
   return Promise.resolve(new Response("", { status: 200 }));
 }
 
@@ -166,7 +171,10 @@ async function importHandler() {
 function findHeartbeatStatus(fetchSpy: ReturnType<typeof vi.fn>): "ok" | "error" | null {
   for (const call of fetchSpy.mock.calls) {
     const url = call[0];
-    if (typeof url === "string" && url.includes(".sentry.io/api/") && url.includes("/cron/scheduled-oauth-probe/")) {
+    if (typeof url !== "string") continue;
+    let host = "";
+    try { host = new URL(url).host; } catch { /* skip malformed */ }
+    if (host.endsWith(".sentry.io") && url.includes("/cron/scheduled-oauth-probe/")) {
       if (url.endsWith("?status=ok")) return "ok";
       if (url.endsWith("?status=error")) return "error";
     }
@@ -193,7 +201,10 @@ describe("cronOauthProbeHandler — happy path", () => {
     expect(issueCreates.length).toBe(0);
     // Notify-ops-email skipped on green.
     const resendCalls = fetchSpy.mock.calls.filter(
-      ([url]) => typeof url === "string" && url.includes("api.resend.com"),
+      ([url]) => {
+        if (typeof url !== "string") return false;
+        try { return new URL(url).host === "api.resend.com"; } catch { return false; }
+      },
     );
     expect(resendCalls.length).toBe(0);
   });
@@ -243,7 +254,10 @@ describe("cronOauthProbeHandler — failure modes", () => {
     });
     // Notify-ops-email fires on failure.
     const resendCalls = fetchSpy.mock.calls.filter(
-      ([u]) => typeof u === "string" && u.includes("api.resend.com"),
+      ([u]) => {
+        if (typeof u !== "string") return false;
+        try { return new URL(u).host === "api.resend.com"; } catch { return false; }
+      },
     );
     expect(resendCalls.length).toBe(1);
   });
