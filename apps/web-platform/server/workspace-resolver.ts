@@ -124,6 +124,53 @@ export async function getDefaultWorkspaceForUser(
   return rows[0].workspace_id;
 }
 
+interface WorkspaceMemberWorkspaceJoin {
+  workspace_id: string;
+  workspaces: { organization_id: string } | { organization_id: string }[] | null;
+}
+
+/**
+ * Resolve the workspace_id a user belongs to inside a specific organization.
+ *
+ * Used by ws-handler at session-open time (Phase 5.5) to translate the JWT
+ * custom claim `app_metadata.current_organization_id` (migration 056) into
+ * the workspace_id required by `abortAllWorkspaceMemberSessions`. One join
+ * + one filter; runs once per WS connection, then the result is cached on
+ * the ClientSession.
+ *
+ * Returns null when the user has no membership in the named organization.
+ * Defense-in-depth: the JWT claim is server-controlled (migration 056's
+ * access-token hook reads `user_session_state` written by the RPC which
+ * itself re-checks workspace_members), so this lookup is the third gate.
+ */
+export async function getWorkspaceForUserInOrganization(
+  userId: string,
+  organizationId: string,
+  supabase: SupabaseLike,
+): Promise<string | null> {
+  type ChainShape = {
+    select: (cols: string) => ChainShape;
+    eq: (col: string, val: string) => ChainShape;
+    limit: (n: number) => ChainShape;
+  } & PromiseLike<{
+    data: WorkspaceMemberWorkspaceJoin[] | null;
+    error: unknown;
+  }>;
+  const chain = supabase.from("workspace_members") as ChainShape;
+  const result = await (chain
+    .select("workspace_id, workspaces!inner(organization_id)")
+    .eq("user_id", userId)
+    .eq("workspaces.organization_id", organizationId)
+    .limit(1) as PromiseLike<{
+    data: WorkspaceMemberWorkspaceJoin[] | null;
+    error: unknown;
+  }>);
+  if (result.error) return null;
+  const rows = result.data ?? [];
+  if (rows.length === 0) return null;
+  return rows[0].workspace_id;
+}
+
 /**
  * Filesystem path resolver for a user's default workspace directory.
  *

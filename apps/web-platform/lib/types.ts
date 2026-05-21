@@ -146,6 +146,10 @@ export const WS_CLOSE_CODES = {
   IDLE_TIMEOUT: 4009,
   CONCURRENCY_CAP: 4010,
   TIER_CHANGED: 4011,
+  /** AC-FLOW2 — workspace owner removed this user's membership. The server
+   *  sends a `workspace_removed` preamble (with `organizationName`) before
+   *  closing so the client can render the terminal screen. */
+  MEMBERSHIP_REVOKED: 4012,
   SERVER_GOING_AWAY: 1001,
 } as const;
 
@@ -174,7 +178,23 @@ export interface TierChangedPreamble {
   newTier?: PlanTier;
 }
 
-export type ClosePreamble = ConcurrencyCapHitPreamble | TierChangedPreamble;
+/**
+ * Preamble written before `ws.close(4012)` when a workspace owner removes
+ * this user's membership. The client renders a terminal screen using
+ * `organizationName` so the user understands which workspace they were
+ * removed from.
+ */
+export interface MembershipRevokedPreamble {
+  type: "membership_revoked";
+  organizationName: string | null;
+  /** Optional workspace_id for client-side reconciliation / audit. */
+  workspaceId?: string;
+}
+
+export type ClosePreamble =
+  | ConcurrencyCapHitPreamble
+  | TierChangedPreamble
+  | MembershipRevokedPreamble;
 
 export class KeyInvalidError extends Error {
   constructor() {

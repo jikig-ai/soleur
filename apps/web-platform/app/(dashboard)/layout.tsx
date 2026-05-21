@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { SignOutConfirmModal } from "@/components/auth/sign-out-confirm-modal";
 import { useSignOut } from "@/components/auth/use-sign-out";
 import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-container";
+import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -400,6 +401,10 @@ export default function DashboardLayout({
         onConfirm={handleSignOut}
         isSigningOut={isSigningOut}
       />
+
+      {/* AC-FLOW2: terminal overlay rendered when ws.close(4012) fires. Mount
+          once at the dashboard root so it survives across route changes. */}
+      <MembershipRevokedScreen />
     </div>
     </TeamNamesProvider>
   );
