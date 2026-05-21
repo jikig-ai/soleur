@@ -90,9 +90,9 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 4 — Feature flag two-key gate
 
-- [ ] **4.1** Edit `apps/web-platform/lib/feature-flags/server.ts` — add `"team-workspace-invite": "FLAG_TEAM_WORKSPACE_INVITE"` row; add allowlist parser caching `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS`.
-- [ ] **4.2** Export `isTeamWorkspaceInviteEnabled(orgId)` 2-key helper.
-- [ ] **4.3** Boot-time Sentry breadcrumb in `apps/web-platform/server/boot.ts` (or equivalent) when both keys evaluate true in `NODE_ENV=production`.
+- [x] **4.1** Edit `apps/web-platform/lib/feature-flags/server.ts` — add `"team-workspace-invite": "FLAG_TEAM_WORKSPACE_INVITE"` row; add allowlist parser caching `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` (cache keyed on raw env value so test mutations re-parse without a reset hook).
+- [x] **4.2** Export `isTeamWorkspaceInviteEnabled(orgId)` 2-key helper — AND of `getFlag("team-workspace-invite")` and `getTeamWorkspaceAllowlist().has(orgId)`. Empty `orgId` short-circuits to false.
+- [x] **4.3** Boot-time Sentry breadcrumb in `apps/web-platform/server/team-workspace-boot.ts` (`server/boot.ts` does not exist in this codebase — boot sequence lives in `server/index.ts`'s `app.prepare()` block). Wired via `emitTeamWorkspaceInviteBootBreadcrumb()` call after `verifyPluginMountOnce()`. No-ops outside `NODE_ENV=production`; breadcrumb payload omits raw org IDs (carries `allowlistSize` only). Tests: `test/team-workspace-boot.test.ts` (4 cases) + `lib/feature-flags/server.test.ts` (18 cases including AC-F 2-key gate). Side fix: extended `MockQueryChain` interface in `test/helpers/mock-supabase.ts` with `maybeSingle: Mock` to surface the Phase 3 #4229 implementation already present at line 99 (interface had drifted from the implementation).
 
 ## Phase 5 — Settings UI + org-switcher + multi-tab + member-removal
 

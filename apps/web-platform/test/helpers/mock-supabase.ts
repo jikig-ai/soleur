@@ -20,6 +20,7 @@ export interface MockQueryChain {
   upsert: Mock;
   delete: Mock;
   single: Mock;
+  maybeSingle: Mock;
   then: (onfulfilled?: (v: unknown) => unknown) => Promise<unknown>;
 }
 
