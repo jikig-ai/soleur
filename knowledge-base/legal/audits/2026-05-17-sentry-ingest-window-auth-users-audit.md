@@ -1,5 +1,5 @@
 ---
-title: "Phantom-ingest window prd auth.users audit (Branch C PR-α evidence)"
+title: "Sentry ingest-window prd auth.users audit (Branch C PR-α evidence, framing superseded)"
 date: 2026-05-17
 incident_pir: knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md
 parent_issue: "#3861"
@@ -7,11 +7,36 @@ pr: "#3904"
 plan: knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md
 classification: art-30-5-accountability-evidence
 ropa_entry: PA8 §(d) Recipients cell in knowledge-base/legal/article-30-register.md
+framing_superseded_by: knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md
 ---
 
-# Phantom-ingest window — prd `auth.users` audit (Branch C PR-α evidence)
+# Sentry ingest-window — prd `auth.users` audit (Branch C PR-α evidence)
 
-## Purpose
+> **[2026-05-19 CORRECTION]** This audit's original title and framing
+> ("phantom-ingest", "recipient-drift to unowned third-party org") were
+> made under the false premise that the 2026-03-28 → 2026-05-16 ingest
+> destination was an unowned third-party Sentry organization. Sentry
+> support replies on 2026-05-19 (billing + Rodolfo forensics) confirm
+> the org was operator-owned throughout; both `jikigai` and `jikigai-eu`
+> orgs ran on EU databases; the 401 responses are reattributed to an
+> internal `SENTRY_AUTH_TOKEN` membership-scope defect (probe report:
+> `knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`).
+>
+> **What stays accurate:** the SQL count (10 operator-adjacent accounts
+> in the window) and the per-row email categorization (preserved below)
+> remain factually correct — they evidence the population during the
+> window irrespective of which operator-owned org received the ingest.
+>
+> **What is retracted:** the "recipient-drift to unowned third-party
+> org" causal narrative. PA8 §(d) of the Article 30 register carries
+> the retract-in-place UPDATE block; this audit is preserved (renamed)
+> as the original-state evidence under git history.
+>
+> **2026-05-21 follow-up:** the duplicate operator-owned `jikigai` org
+> was canceled vendor-side; $29 unused balance transferred as credit
+> to `jikigai-eu` (Sentry support confirmation, Joe).
+
+## Purpose (under original framing — see correction above)
 
 Establishes the Article 30(5) accountability evidence for the recipient-drift
 disclosure in PA8 §(d) of `knowledge-base/legal/article-30-register.md`. The PIR

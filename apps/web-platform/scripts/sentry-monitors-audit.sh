@@ -123,9 +123,11 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
 
   # Gate 4: audit_dsn_org_id_matches_token_org_id — extract `o<id>` from DSN
   # (e.g. `o4523123` from `https://k@o4523123.ingest.de.sentry.io/789`) and
-  # compare to `.id` from Gate 1's org body. Catches split state where audit
-  # token rotated but runtime DSN still points at the old org (the phantom-
-  # ingest failure mode #3861 originally documented).
+  # compare to `.id` from Gate 1's org body. Catches destination-controllability
+  # drift where the audit token's org-id and the runtime DSN's org-id diverge
+  # (#3861 — originally framed as "phantom-ingest to unowned third-party org"
+  # before the 2026-05-19 token-scope reframe; the gate remains useful as a
+  # general DSN/token org-id-matches check regardless of ownership framing).
   #
   # `|| true` braces keep `set -o pipefail` happy when the DSN env is unset
   # (callers like `reusable-release.yml`'s release-time audit step do not
