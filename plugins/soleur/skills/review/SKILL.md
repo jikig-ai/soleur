@@ -269,6 +269,25 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; use `data-integrity-guardian` for migration safety and judgment-based PII review; use `security-sentinel` for OWASP/CWE security-of-processing flaws. The three reviewers complement each other and may all fire on the same PR — gdpr-gate scans for regulatory-design gaps, data-integrity-guardian scans for ID-mapping and value-swap migration risks, security-sentinel scans for OWASP/CWE vulnerabilities. This is the **canonical disambiguation prose**; sibling agent files reference back here as the single source of truth.
 
+### Anti-slop Scanner Hook
+
+**If the diff touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$`:**
+
+17. Run the `soleur:frontend-anti-slop` Tier 1 scanner inline (no separate agent spawn — v1 simplification per plan PR #4265):
+
+    ```bash
+    CHANGED_FILES=$(git diff --name-only origin/main...HEAD | grep -E 'apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$' | tr '\n' ' ')
+    if [[ -n "$CHANGED_FILES" ]]; then
+      bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts --paths $CHANGED_FILES --json
+    fi
+    ```
+
+**What this hook checks:**
+
+- 15 deterministic Tier 1 gates adapted from [Nutlope/hallmark](https://github.com/Nutlope/hallmark) (MIT) — gradient-fill headlines, generic display fonts, purple→blue gradients, `transition-all`, uniform `hover:scale-105`, placeholder names, zero-chroma neutrals, off-scale spacing, prose-width out of range, two-icon-library imports, etc. See [slop-rules.md](../frontend-anti-slop/references/slop-rules.md).
+- Output is **advisory and non-blocking** in v1 (calibration mode). Findings surface in the review output for operator triage; no auto-file to GitHub issues. Promotion to auto-file gates on ≤ 10% FP rate over ≥ 20 findings ≥ 2 weeks (per `soleur:frontend-anti-slop` SKILL.md §"Calibration mode").
+- Findings conform to `finding.schema.json` with `category: "anti-slop"`, `selector: "<file-path>#<RULE-ID>"`. Pretty-print the JSON array directly into the review output as a fenced code block; the reviewing agent narrates which findings look like true positives.
+
 </conditional_agents>
 
 ### 2. Rate Limit Fallback

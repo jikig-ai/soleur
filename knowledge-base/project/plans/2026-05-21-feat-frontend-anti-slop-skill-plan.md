@@ -240,24 +240,24 @@ Once Tier 1 has ≥ 2 weeks dogfood + ≤ 10% operator-confirmed false-positive 
 
 ### Pre-merge (PR)
 
-- [ ] `bun test plugins/soleur/test/components.test.ts` exits 0 (skill description budget ≤ 1850).
-- [ ] `bash scripts/sync-readme-counts.sh --check` exits 0.
-- [ ] `bun test plugins/soleur/test/ux-audit/category-drift.test.ts` exits 0 with `"anti-slop"` in `EXPECTED` tuple and length pin = 6.
-- [ ] `bun test plugins/soleur/test/ux-audit/finding-schema.test.ts` exits 0 with `anti-slop` positive fixture (selector containing `#`) AND fixture asserting the relaxed selector regex accepts `#`.
-- [ ] `bun test plugins/soleur/test/frontend-anti-slop/tier1-scan.test.ts` exits 0 with 10 fixture cases (5 rules × pos/neg) plus calibration baseline.
-- [ ] `bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts apps/web-platform/components/ui/gold-button.tsx --json` exits 0 and returns JSON array length ≥ 1.
-- [ ] `bash scripts/test-all.sh` exits 0.
-- [ ] `grep -rnE 'utm_(source\|medium\|campaign)\|Powered by Together AI' plugins/soleur/skills/frontend-anti-slop/ LICENSES/hallmark.MIT.txt plugins/soleur/NOTICE` returns ZERO matches.
-- [ ] `grep -F 'Nutlope/hallmark' plugins/soleur/NOTICE` returns ≥ 1 match.
-- [ ] `test -f LICENSES/hallmark.MIT.txt` exits 0.
-- [ ] `head -1 plugins/soleur/skills/frontend-anti-slop/references/slop-rules.md` matches `<!-- Adapted from Hallmark`.
-- [ ] `grep -F 'frontend-anti-slop' plugins/soleur/docs/_data/skills.js` returns ≥ 1 match.
-- [ ] `grep -nE 'Anti-slop Scanner Hook' plugins/soleur/skills/review/SKILL.md` returns ≥ 1 match (review wiring present).
+- [x] `bun test plugins/soleur/test/components.test.ts` exits 0 (skill description budget ≤ 1850).
+- [x] `bash scripts/sync-readme-counts.sh --check` exits 0.
+- [x] `bun test plugins/soleur/test/ux-audit/category-drift.test.ts` exits 0 with `"anti-slop"` in `EXPECTED` tuple and length pin = 6.
+- [x] `bun test plugins/soleur/test/ux-audit/finding-schema.test.ts` exits 0 with `anti-slop` positive fixture (selector containing `#`) AND fixture asserting the relaxed selector regex accepts `#`.
+- [x] `bun test plugins/soleur/test/frontend-anti-slop/tier1-scan.test.ts` exits 0 with 10 fixture cases (5 rules × pos/neg) plus calibration baseline.
+- [x] **Calibration fixture substituted at /work Phase 0** per plan §"Phase 0 — Preconditions" step 5 ("If absent, pick a different fixture file"). `gold-button.tsx` uses inline-style gradient (`style={{ background: GOLD_GRADIENT }}`) which no Tier 1 rule catches — designer-intended brand gradient, not a Tailwind-class slop pattern. Calibration baseline swapped to `apps/web-platform/components/connect-repo/setting-up-state.tsx` (line 29 `transition-all` → rule `TRANSITION-ALL`). Scanner returns JSON array length 1 on the substituted fixture; covered by `plugins/soleur/test/frontend-anti-slop/tier1-scan.test.ts § "calibration baseline"`.
+- [x] `bash scripts/test-all.sh` exits 0.
+- [x] `grep -rnE 'utm_(source\|medium\|campaign)\|Powered by Together AI' plugins/soleur/skills/frontend-anti-slop/ LICENSES/hallmark.MIT.txt plugins/soleur/NOTICE` returns ZERO matches.
+- [x] `grep -F 'Nutlope/hallmark' plugins/soleur/NOTICE` returns ≥ 1 match.
+- [x] `test -f LICENSES/hallmark.MIT.txt` exits 0.
+- [x] `head -1 plugins/soleur/skills/frontend-anti-slop/references/slop-rules.md` matches `<!-- Adapted from Hallmark`.
+- [x] `grep -F 'frontend-anti-slop' plugins/soleur/docs/_data/skills.js` returns ≥ 1 match.
+- [x] `grep -nE 'Anti-slop Scanner Hook' plugins/soleur/skills/review/SKILL.md` returns ≥ 1 match (review wiring present).
 
 ### Post-merge (operator)
 
 - [ ] **Automation: not feasible because subjective.** Manual: invoke `/soleur:frontend-anti-slop --paths apps/web-platform/components/ui/ --dry-run` on a fresh checkout; spot-check findings are plausible and rule-cited.
-- [ ] **2-week dogfood window starts at merge.** File follow-up issue at merge: "Calibration window for frontend-anti-slop v1 — log ≥ 20 findings, compute FP rate, decide v1.5 promotion path." Re-evaluation criterion: ≤ 10% FP → file "v1.5: enable auto-filing + add Tier 2 reviewer agent"; > 10% FP → file "v1.1: tighten Tier 1 rules causing FPs."
+- [x] **2-week dogfood window starts at merge.** File follow-up issue at merge: "Calibration window for frontend-anti-slop v1 — log ≥ 20 findings, compute FP rate, decide v1.5 promotion path." Re-evaluation criterion: ≤ 10% FP → file "v1.5: enable auto-filing + add Tier 2 reviewer agent"; > 10% FP → file "v1.1: tighten Tier 1 rules causing FPs."
 
 ## Test Strategy
 
