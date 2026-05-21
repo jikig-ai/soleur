@@ -33,10 +33,12 @@
 # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
 #
 # Authorization model: the PR merge IS the human authorization
-# (`hr-menu-option-ack-not-prod-write-auth`), AND the `environment:` gate forces
-# an explicit reviewer-click before apply runs. Defense-in-depth: a leaked PAT with
-# `contents:write` would have to bypass BOTH CODEOWNERS review on `.github/workflows/`
-# AND the environment reviewer click.
+# (`hr-menu-option-ack-not-prod-write-auth`). PR #4221 dropped the
+# `environment:` reviewer-click gate after measuring its real-world cost
+# (apply runs sitting in `waiting` for up to 13h, blocking sibling
+# applies via the concurrency group). The merge-time gate (CODEOWNERS
+# on `.github/workflows/` + branch protection on `main`) is the load-
+# bearing control; the env-reviewer click was duplicative.
 #
 # Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
 # commit message to skip auto-apply for that merge.
@@ -111,18 +113,17 @@ jobs:
     # in ~3-5 min. 15 min is the operator-tolerance ceiling that matches
     # `apply-deploy-pipeline-fix.yml`.
     timeout-minutes: 15
-    # Required-reviewer gate. Configured at the repo level
-    # (Settings → Environments → web-platform-infra-apply) with @deruelle as
-    # the sole required reviewer and a custom branch policy restricting
-    # deployments to `main`. Defense layer paired with `.github/CODEOWNERS`
-    # for PR-time review — a leaked PAT with `contents:write` would have to
-    # bypass BOTH (the PR can't merge without code-owner review AND the
-    # apply can't run without manual approval click). Diverges from
-    # `apply-github-infra.yml` (which skips the gate) because the
-    # web-platform root rotates broader secret surface (Inngest signing
-    # keys, GitHub App webhook secret, R2 creds) than the rulesets-only
-    # github root.
-    environment: web-platform-infra-apply
+    # No `environment:` reviewer gate. PR #4221 removed it: the per-apply
+    # reviewer click was duplicative friction on top of the PR-merge gate
+    # (CODEOWNERS review + branch protection on main), and was blocking
+    # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
+    # human authorization per `hr-menu-option-ack-not-prod-write-auth`.
+    # `apply-github-infra.yml` already omits the gate without incident.
+    # The "broader secret surface" rationale below was the original
+    # justification for diverging from apply-github-infra.yml; in
+    # practice the divergence produced friction without measurable
+    # security benefit (a leaked PAT with `contents:write` can also
+    # bypass the env gate by submitting a workflow change).
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
