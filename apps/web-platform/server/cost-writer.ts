@@ -55,16 +55,25 @@ export interface TurnCostInput {
  * nothing the caller cares about; failures land in Sentry via
  * `reportSilentFallback`.
  *
- * @param userId         Authenticated founder UUID.
+ * Phase 3 (feat-team-workspace-multi-user) — `workspaceId` is the
+ * `audit_byok_use.workspace_id` value (NOT NULL after migration 055).
+ * Threads through `write_byok_audit`'s 6-arg signature (migration 057).
+ *
+ * @param userId         Authenticated founder UUID (BYOK key owner).
  * @param conversationId Conversation UUID the turn belongs to.
  * @param leaderId       Domain leader id (cc-soleur-go uses the router
  *                       leader; legacy uses the per-message leader).
+ * @param workspaceId    Workspace UUID for cost attribution. Sourced from
+ *                       `lease.workspaceContextUserId` under the N2
+ *                       invariant; future non-solo callers resolve via
+ *                       `workspace-resolver.getDefaultWorkspaceForUser`.
  * @param input          Cost + usage payload from the SDK result message.
  */
 export function persistTurnCost(
   userId: string,
   conversationId: string,
   leaderId: string,
+  workspaceId: string,
   input: TurnCostInput,
 ): void {
   const costDelta = Number.isFinite(input.totalCostUsd) ? input.totalCostUsd : 0;
@@ -116,6 +125,7 @@ export function persistTurnCost(
     .rpc("write_byok_audit", {
       p_invocation_id: randomUUID(),
       p_founder_id: userId,
+      p_workspace_id: workspaceId,
       p_agent_role: leaderId,
       p_token_count: totalTokens,
       p_unit_cost_cents: Math.round(costDelta * 100),
@@ -140,6 +150,7 @@ export function persistTurnCost(
   sendToClient(userId, {
     type: "usage_update",
     conversationId,
+    workspaceId,
     totalCostUsd: costDelta,
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,

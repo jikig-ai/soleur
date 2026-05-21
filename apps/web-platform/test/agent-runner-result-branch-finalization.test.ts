@@ -208,7 +208,11 @@ function setupSupabaseMockWithStatusCapture(opts: {
         data: [row],
         error: null,
         eq: () => createChain(),
-        limit: () => ({ single: () => ({ data: row, error: null }) }),
+        // Phase 3 #4229 — byok-lease switched to maybeSingle.
+        limit: () => ({
+          single: () => ({ data: row, error: null }),
+          maybeSingle: () => ({ data: row, error: null }),
+        }),
         then: (resolve: (v: unknown) => void) =>
           resolve({ data: [row], error: null }),
       });

@@ -152,15 +152,21 @@ const DEFAULT_API_KEY_ROW = {
   key_version: 2,
 };
 
-// Creates a chainable mock that supports both:
+// Creates a chainable mock that supports:
 // - getUserApiKey: select().eq().eq().eq().limit().single() -> { data, error }
+// - getUserApiKey: select().eq().eq().eq().limit().maybeSingle() -> { data, error }
+//   (Phase 3 #4229 — byok-lease switched to maybeSingle; see
+//   test/helpers/agent-runner-mocks.ts createApiKeysMock for canonical shape.)
 // - getUserServiceTokens: await select().eq().eq() -> { data, error }
 function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_ROW]) {
   const createChain = (): Record<string, unknown> => ({
     data: rows,
     error: null,
     eq: () => createChain(),
-    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
+    limit: () => ({
+      single: () => ({ data: rows[0] ?? null, error: null }),
+      maybeSingle: () => ({ data: rows[0] ?? null, error: null }),
+    }),
     then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
   });
   return { select: () => createChain() };

@@ -114,6 +114,10 @@ void _exhaustiveResponseKindCheck;
 // Typed error codes for structured error handling over WebSocket
 export type WSErrorCode =
   | "key_invalid"
+  // Phase 3.2 AC-D (feat-team-workspace-multi-user) — member-without-BYOK
+  // fail-closed path. Client renders the configure-banner linking to
+  // /dashboard/settings/byok rather than the `key_invalid` key-prompt.
+  | "byok_key_missing"
   | "session_expired"
   | "session_resumed"
   | "rate_limited"
@@ -271,6 +275,13 @@ export type WSMessage =
   | {
       type: "usage_update";
       conversationId: string;
+      /**
+       * Phase 3 (feat-team-workspace-multi-user) — workspace_id for
+       * workspace-grain cost attribution at the client. Optional for
+       * one release cycle to absorb rolling prd deploys; tighten in a
+       * follow-up after the old build ages out.
+       */
+      workspaceId?: string;
       totalCostUsd: number;
       inputTokens: number;
       outputTokens: number;

@@ -91,6 +91,16 @@ export function mockQueryChain<T>(
       Promise.resolve(result).then(onfulfilled),
   }));
 
+  // Terminal: `.maybeSingle()` — same shape as single but returns
+  // `{ data: null, error: null }` on no-rows (caller maps to its own
+  // domain error). Phase 3 byok-lease (#4229) switched to maybeSingle
+  // so api_keys absence triggers MissingByokKeyError rather than
+  // ByokLeaseError{fetch_failed}.
+  chain.maybeSingle = vi.fn(() => ({
+    then: (onfulfilled?: (v: unknown) => unknown) =>
+      Promise.resolve(result).then(onfulfilled),
+  }));
+
   return chain;
 }
 

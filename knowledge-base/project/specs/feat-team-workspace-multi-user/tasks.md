@@ -79,12 +79,14 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 3 — BYOK split
 
-- [ ] **3.1.1** Edit `apps/web-platform/server/byok-lease.ts:154-179` — split `workspaceContextUserId` / `keyOwnerUserId` parameters.
-- [ ] **3.1.2** `audit_byok_use` writes tag both `user_id` (= keyOwnerUserId) and `workspace_id` (from session JWT).
-- [ ] **3.1.3** `byok.ts:34-39` HKDF unchanged (per learning 2026-03-20-hkdf-salt-info-parameter-semantics: salt empty, userId in `info`).
-- [ ] **3.2.1** Member-without-BYOK fail-closed path: define `MissingByokKeyError`. UI banner: "Configure your BYOK key to run agents in this workspace" + link to /dashboard/settings/byok.
-- [ ] **3.2.2** Sentry breadcrumb (info-level) per Kieran N4 on every `MissingByokKeyError` encounter — captures workspace_id, user_id hash, no raw user_id or key prefix.
-- [ ] **3.2.3** NO fallback to owner's key. `byok_delegations` (#4232) referenced in error help link.
+**Apply status (dev):** migration 057 applied to dev via Doppler `DATABASE_URL_POOLER` (session-mode `:5432` rewrite) at 2026-05-21. Both `write_byok_audit` + `record_byok_use_and_check_cap` widened to 6-arg signature with `p_workspace_id`; smoke INSERT verified `audit_byok_use.workspace_id NOT NULL` constraint satisfied. See `migration-checklist.md`. **prd apply deferred** — 055 + 057 must land in the SAME prd window.
+
+- [x] **3.1.1** Edit `apps/web-platform/server/byok-lease.ts` — split `workspaceContextUserId` / `keyOwnerUserId` parameters via `ByokLeaseArgs` object; lease exposes both userIds for downstream cost-writers. All 5 call sites updated (agent-runner.ts:863 + :2363, cc-dispatcher.ts:883, cfo-on-payment-failed.ts:199, github-on-event.ts:208). Test mocks updated to match new shape.
+- [x] **3.1.2** `audit_byok_use` writes tag both `founder_id` (= keyOwnerUserId) and `workspace_id`. Migration 057 widens `write_byok_audit` + `record_byok_use_and_check_cap` RPCs to 6-arg signatures threading `p_workspace_id` into the INSERT. `cost-writer.ts persistTurnCost` accepts workspaceId as 4th positional arg; under N2 invariant `workspaceId === userId` for solo (agent-runner.ts:1884, cc-dispatcher.ts:1710). `usage_update` WS event widened with optional `workspaceId` field for one release cycle.
+- [x] **3.1.3** `byok.ts:34-39` HKDF unchanged (per learning 2026-03-20-hkdf-salt-info-parameter-semantics: salt empty, userId in `info`). Lease passes `slot.keyOwnerUserId` to `decryptKey`, preserving the existing per-user HKDF context.
+- [x] **3.2.1** Member-without-BYOK fail-closed path: `MissingByokKeyError` defined in `byok-lease.ts`. Lease uses `.maybeSingle()` to distinguish `data === null` (MissingByokKeyError) from `error !== null` (ByokLeaseError cause=fetch_failed). cc-dispatcher.ts catch branch sends WS error with `errorCode: "byok_key_missing"` + message "Configure your BYOK key to run agents in this workspace." `WSErrorCode` union + zod schema widened.
+- [x] **3.2.2** Sentry breadcrumb (info-level) per Kieran N4: `reportMissingByokKey(err)` helper in `byok-lease.ts` calls `Sentry.addBreadcrumb({ level: 'info', category: 'byok', data: { workspaceContextUserId, keyOwnerUserIdHash } })`. `keyOwnerUserIdHash` is sha256:16 prefix; raw `keyOwnerUserId` is NEVER captured. Wired at both catch sites: cc-dispatcher.ts dispatch catch + agent-runner.ts handleSessionError + agent-runner.ts startAgentSession outer catch.
+- [x] **3.2.3** NO fallback to owner's key. The new lease shape carries `keyOwnerUserId` explicitly; there is no implicit fallback path. `byok_delegations` (#4232) is the future opt-in remediation; documented in the MissingByokKeyError class docstring + Phase 3.2 cc-dispatcher comment.
 
 ## Phase 4 — Feature flag two-key gate
 

@@ -300,6 +300,11 @@ const sessionEndedSchema = z.strictObject({
 const usageUpdateSchema = z.strictObject({
   type: z.literal("usage_update"),
   conversationId: z.string(),
+  // Phase 3 (feat-team-workspace-multi-user) — workspace_id for client-side
+  // workspace-grain attribution. Optional for one release cycle so a
+  // rolling prd deploy doesn't drop frames between an old server (without
+  // the field) and a new client. Tighten in a follow-up.
+  workspaceId: z.string().optional(),
   totalCostUsd: z.number(),
   inputTokens: z.number(),
   outputTokens: z.number(),
@@ -335,6 +340,10 @@ const errorSchema = z.strictObject({
   errorCode: z
     .enum([
       "key_invalid",
+      // Phase 3.2 AC-D (#4229) — fail-closed when keyOwnerUserId has no
+      // api_keys row. Distinct from key_invalid (which means key exists
+      // but is unusable).
+      "byok_key_missing",
       "session_expired",
       "session_resumed",
       "rate_limited",
