@@ -12,13 +12,13 @@ Derived from `knowledge-base/project/plans/2026-05-21-fix-kb-drift-walker-dopple
 
 ## Phase 1 — Apply SHA correction
 
-- [ ] 1.1 Confirm CWD is the worktree (`pwd` ends in `.worktrees/feat-one-shot-fix-kb-drift-walker-doppler-sha`).
-- [ ] 1.2 Confirm branch is `feat-one-shot-fix-kb-drift-walker-doppler-sha` (not `main`).
-- [ ] 1.3 Read `.github/workflows/kb-drift-walker.yml` lines 40-45 to confirm line 43 still holds the bad SHA `517441f1eaf80f64b34d0e4dca44c0aacb13a3a3`.
-- [ ] 1.4 Edit `.github/workflows/kb-drift-walker.yml:43`: replace the bad SHA with `014df23b1329b615816a38eb5f473bb9000700b1`. Preserve the `dopplerhq/` lowercase prefix, indentation, and the `# v3` trailing comment.
-- [ ] 1.5 Verify diff shape: `git diff --stat .github/workflows/kb-drift-walker.yml` → expect `1 file changed, 1 insertion(+), 1 deletion(-)`.
-- [ ] 1.6 Verify bad SHA fully removed: `grep -rn "517441f1eaf80f64b34d0e4dca44c0aacb13a3a3" .github/` returns empty.
-- [ ] 1.7 Verify new line is verbatim with the length-pinned regex:
+- [x] 1.1 Confirm CWD is the worktree (`pwd` ends in `.worktrees/feat-one-shot-fix-kb-drift-walker-doppler-sha`).
+- [x] 1.2 Confirm branch is `feat-one-shot-fix-kb-drift-walker-doppler-sha` (not `main`).
+- [x] 1.3 Read `.github/workflows/kb-drift-walker.yml` lines 40-45 to confirm line 43 still holds the bad SHA `517441f1eaf80f64b34d0e4dca44c0aacb13a3a3`.
+- [x] 1.4 Edit `.github/workflows/kb-drift-walker.yml:43`: replace the bad SHA with `014df23b1329b615816a38eb5f473bb9000700b1`. Preserve the `dopplerhq/` lowercase prefix, indentation, and the `# v3` trailing comment.
+- [x] 1.5 Verify diff shape: `git diff --stat .github/workflows/kb-drift-walker.yml` → expect `1 file changed, 1 insertion(+), 1 deletion(-)`.
+- [x] 1.6 Verify bad SHA fully removed: `grep -rn "517441f1eaf80f64b34d0e4dca44c0aacb13a3a3" .github/` returns empty.
+- [x] 1.7 Verify new line is verbatim with the length-pinned regex:
 
   ```bash
   grep -cE '^        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3$' \
@@ -26,7 +26,7 @@ Derived from `knowledge-base/project/plans/2026-05-21-fix-kb-drift-walker-dopple
   # expect: 1
   ```
 
-- [ ] 1.8 Verify the SHA is 40 characters (truncation guard):
+- [x] 1.8 Verify the SHA is 40 characters (truncation guard):
 
   ```bash
   grep -oE 'dopplerhq/cli-action@[0-9a-f]+' .github/workflows/kb-drift-walker.yml \
@@ -34,7 +34,7 @@ Derived from `knowledge-base/project/plans/2026-05-21-fix-kb-drift-walker-dopple
   # expect: 40
   ```
 
-- [ ] 1.9 Best-effort `actionlint .github/workflows/kb-drift-walker.yml` if installed; skip otherwise (non-blocking).
+- [x] 1.9 Best-effort `actionlint .github/workflows/kb-drift-walker.yml` if installed; skip otherwise (non-blocking). (actionlint not installed; skipped)
 
 ## Phase 2 — Commit, push, open PR
 
