@@ -1352,6 +1352,27 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
    is the cheapest forward defense; the contract is asserted at PR time by
    `plugins/soleur/test/ship-followthrough-directive.test.sh`.
 
+   **Mechanical backstop** (defense-in-depth on top of this honor-system gate):
+   the PreToolUse hook [`.claude/hooks/follow-through-directive-gate.sh`](../../../../.claude/hooks/follow-through-directive-gate.sh)
+   intercepts every `gh issue create --label follow-through` call at the Bash-tool
+   boundary and re-runs the same awk parser against the resolved `--body-file` or
+   inline `--body`. The agent step above MUST still run — the hook is the second
+   net, not the first. The hook denies the tool call with a structured error if the
+   directive is absent, malformed, or references a missing/non-executable script.
+   See `.claude/hooks/follow-through-directive-gate.test.sh` for the cases the hook
+   enforces.
+
+   **Step 3.5.E.2 — Post-create re-validation.** After `gh issue create` succeeds,
+   re-fetch the just-created issue body via `gh issue view <N> --json body --jq .body`
+   and re-run the same awk parser against it. The on-create body MUST extract the
+   same `script`/`earliest` tokens as the proposed body. This catches the rare class
+   where GitHub's API silently truncates or mangles a body whose markdown collides
+   with one of GitHub's own template processors (the `<!-- ... -->` shape is
+   markdown-suppressed but mishandled by some legacy edit-path-validators). If the
+   post-create parse diverges from the proposed parse, fail the step: the issue
+   exists on GitHub but is sweeper-invisible — close it with a comment naming the
+   divergence and retry the create.
+
    **Step 3.5.F — Operator-only ack.** When the chosen pattern is operator-confirmed
    (Step 3.5.B), append a `## Operator instructions` block to the issue body explaining
    the `RESULT: PASS` / `RESULT: FAIL` comment sentinel the script greps for.
