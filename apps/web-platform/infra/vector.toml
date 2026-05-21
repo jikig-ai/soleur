@@ -20,8 +20,17 @@ data_dir = "/var/lib/vector"
 # anti-pattern.
 [sources.inngest_journald]
 type = "journald"
-units = ["inngest-server.service"]
-include_priorities = ["emerg", "alert", "crit", "err", "warning"]
+# Vector's documented field is `include_units`, not `units` (alias accepted
+# but undocumented in newer versions); naming aligned for forward-compat.
+include_units = ["inngest-server.service"]
+# Vector's priority filter uses `include_matches.PRIORITY` (object of
+# journal-field → allowed values per
+# https://vector.dev/docs/reference/configuration/sources/journald/).
+# `include_priorities` (my v1.1.0 typo) is NOT a real Vector field;
+# the misconfigured unit fail-loops with `unknown field` until fixed
+# (caught at v1.1.1 deploy via cat-deploy-state's vector_journal_tail).
+# PRIORITY values: 0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARNING.
+include_matches.PRIORITY = ["0", "1", "2", "3", "4"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
@@ -32,7 +41,9 @@ batch_size = 16
 [sources.system_journald]
 type = "journald"
 exclude_units = ["inngest-server.service", "vector.service"]
-include_priorities = ["emerg", "alert", "crit"]
+# CRIT-or-worse only at the host level (see source 1 comment for field
+# naming rationale). PRIORITY: 0=EMERG, 1=ALERT, 2=CRIT.
+include_matches.PRIORITY = ["0", "1", "2"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
