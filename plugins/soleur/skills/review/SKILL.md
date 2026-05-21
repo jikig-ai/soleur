@@ -276,9 +276,17 @@ Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; u
 17. Run the `soleur:frontend-anti-slop` Tier 1 scanner inline (no separate agent spawn — v1 simplification per plan PR #4265):
 
     ```bash
-    CHANGED_FILES=$(git diff --name-only origin/main...HEAD | grep -E 'apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$' | tr '\n' ' ')
-    if [[ -n "$CHANGED_FILES" ]]; then
-      bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts --paths $CHANGED_FILES --json
+    # NUL-delimited path collection + quoted argv expansion — prevents the
+    # shell-metacharacter / newline-in-filename injection class. Never
+    # expand `$CHANGED_FILES` unquoted; never assume git filenames are
+    # whitespace-free.
+    mapfile -d '' -t CHANGED_FILES < <(
+      git diff --name-only -z origin/main...HEAD |
+        grep -zE 'apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$' || true
+    )
+    if (( ${#CHANGED_FILES[@]} > 0 )); then
+      bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts \
+        --paths "${CHANGED_FILES[@]}" --json
     fi
     ```
 

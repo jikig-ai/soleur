@@ -31,6 +31,7 @@ import {
   readFileSync,
   existsSync,
   statSync,
+  lstatSync,
   readdirSync,
 } from "node:fs";
 import { resolve, relative, join } from "node:path";
@@ -247,15 +248,32 @@ function defaultPaths(): string[] {
   }
 }
 
+function isContainedInRepo(abs: string): boolean {
+  // Containment check: the resolved path must live under REPO_ROOT.
+  // `relative` returns "" when abs === REPO_ROOT, an absolute path on
+  // Windows-different-drive (defensive — Linux-only here), or a path
+  // starting with ".." when abs is outside REPO_ROOT.
+  const rel = relative(REPO_ROOT, abs);
+  if (rel === "" || rel.startsWith("..") || rel.startsWith("/")) return false;
+  return true;
+}
+
 function expandPaths(inputs: string[]): string[] {
   // Caller may pass repo-relative paths OR abs paths. Normalise to absolute,
-  // then keep only existing files matching the frontend glob. No glob expansion
-  // here — the shell already expanded any literal `*`; callers passing
-  // dir paths get all child .tsx/.jsx/.css.
+  // confine to REPO_ROOT, reject symlinks (no traversal via symlink chain),
+  // then keep only existing files matching the frontend glob. No glob
+  // expansion here — the shell already expanded any literal `*`; callers
+  // passing dir paths get all child .tsx/.jsx/.css.
   const out: string[] = [];
   for (const p of inputs) {
     const abs = resolve(REPO_ROOT, p);
+    if (!isContainedInRepo(abs)) continue;
     if (!existsSync(abs)) continue;
+    // `lstatSync` (not `statSync`) so we see the symlink itself, not its
+    // target. Symlinks under the repo pointing outside (or to sensitive
+    // files) are rejected here.
+    const ls = lstatSync(abs);
+    if (ls.isSymbolicLink()) continue;
     const s = statSync(abs);
     if (s.isFile()) {
       if (/\.(tsx|jsx|css)$/.test(abs)) out.push(abs);
@@ -283,6 +301,10 @@ function listFilesRecursive(dir: string): string[] {
     }
     for (const e of entries) {
       const full = join(d, e.name);
+      // Symlinks rejected — same containment posture as `expandPaths`,
+      // so a recursive walk cannot escape the repo via a symlinked
+      // subdirectory or grab a sensitive file via a symlinked entry.
+      if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) {
         if (e.name === "node_modules" || e.name === ".next") continue;
         stack.push(full);

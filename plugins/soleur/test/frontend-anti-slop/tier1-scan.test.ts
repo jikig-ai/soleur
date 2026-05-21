@@ -211,6 +211,18 @@ describe("frontend-anti-slop tier1-scan: calibration baseline", () => {
       repoRoot,
       "apps/web-platform/components/connect-repo/setting-up-state.tsx",
     );
+    // Precondition: the calibration fixture must still contain a pattern
+    // the rule set actually fires on. If a future refactor strips
+    // `transition-all` from this file the calibration intent is lost — fail
+    // fast here with a diagnostic that points at the fixture, not the
+    // scanner. Update by either restoring the pattern OR picking a new
+    // fixture and updating both this precondition + plan §"Calibration".
+    const content = readFileSync(calibFile, "utf8");
+    expect(
+      content,
+      `calibration fixture ${calibFile} no longer contains the \`transition-all\` token the TRANSITION-ALL rule keys on — refactor invalidated the calibration baseline. Either restore the pattern or pick a new fixture (and update the plan).`,
+    ).toContain("transition-all");
+
     const findings = scanFile(calibFile, RULES);
     expect(findings.length).toBeGreaterThanOrEqual(1);
     expect(findings.every((f) => f.category === "anti-slop")).toBe(true);

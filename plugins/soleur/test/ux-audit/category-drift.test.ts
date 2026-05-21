@@ -62,7 +62,7 @@ describe("FINDING_CATEGORIES drift guard (#2356)", () => {
     },
   );
 
-  test("agent field rule lists the canonical 5-category phrase", () => {
+  test("agent field rule lists the canonical 6-category phrase", () => {
     expect(AGENT_MD).toContain(
       "real-estate | ia | consistency | responsive | comprehension | anti-slop",
     );
