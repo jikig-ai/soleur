@@ -125,6 +125,30 @@ if ! git fetch --quiet origin main 2>/tmp/run-migrations-fetch.err; then
   echo "::warning::git fetch origin main failed (see /tmp/run-migrations-fetch.err); unmerged-apply gate may produce false positives."
 fi
 
+# Same-integer-prefix collision check (#4241 follow-up). The convention is
+# "one forward migration per integer prefix"; the runner is filename-keyed,
+# so two distinct `NNN_*.sql` files coexist as separate `_schema_migrations`
+# rows and apply in alphabetical order — order set by accident, not
+# convention. Severity is `::warning::` (not `::error::`) because main today
+# already carries one pre-existing collision (053_append_kb_sync_row_rpc.sql
+# from PR-H #4066 vs 053_template_authorizations.sql from PR-I #4213) that
+# the runner has been tolerating since both merged; failing here would block
+# every dev/prd apply until the collision is renumbered, which is its own
+# follow-up. The warning surfaces the convention violation at every apply so
+# the next reviewer who notices it can schedule the renumber.
+collision_check=$(find "$MIGRATIONS_DIR" -maxdepth 1 -name '*.sql' -not -name '*.down.sql' -printf '%f\n' \
+  | awk -F'_' '{print $1}' \
+  | sort \
+  | uniq -d)
+if [[ -n "$collision_check" ]]; then
+  echo "::warning::Migration filename prefix collision detected. Convention is one forward migration per integer prefix; renumber-on-rebase before adding a new collider."
+  while IFS= read -r prefix; do
+    [[ -z "$prefix" ]] && continue
+    echo "::warning::  prefix '$prefix' is shared by:"
+    find "$MIGRATIONS_DIR" -maxdepth 1 -name "${prefix}_*.sql" -not -name '*.down.sql' -printf '::warning::    - %f\n'
+  done <<<"$collision_check"
+fi
+
 # Apply unapplied migrations in sorted order
 applied=0
 skipped=0
@@ -190,10 +214,27 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   fi
 
   echo "Applying: $filename"
-  # Apply migration and record it in a single atomic transaction
+  # Compute the git blob SHA-1 of the file body so the drift probe can detect
+  # same-filename content drift (mig 054 adds the content_sha column to
+  # _schema_migrations). Same hash space as `git ls-tree origin/main`'s third
+  # column. Mig 054 is itself the first row to carry content_sha; pre-054 rows
+  # stay NULL by design (no apply-time history to retroactively populate).
+  content_sha=$(git hash-object "$migration_file" 2>/dev/null || echo "")
+  if [[ -z "$content_sha" ]]; then
+    # Fall back to sha1sum on systems without git available (no git is a
+    # broken state for this runner, but the script should still complete the
+    # apply — drift probe just won't have content_sha to compare).
+    content_sha=$(sha1sum "$migration_file" 2>/dev/null | awk '{print $1}' || echo "")
+  fi
+  # Apply migration and record it in a single atomic transaction. The INSERT
+  # row carries content_sha when known; NULL otherwise (column is nullable).
   if ! {
     cat "$migration_file"
-    printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
+    if [[ -n "$content_sha" ]]; then
+      printf "\nINSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
+    else
+      printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
+    fi
   } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1; then
     echo "::error::Migration failed: $filename"
     exit 1

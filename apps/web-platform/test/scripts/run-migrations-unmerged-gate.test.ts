@@ -134,18 +134,19 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
     sweep();
   });
 
-  test("ALLOW_UNMERGED_DEV_APPLY unset: gate blocks with exit 1 + ::error:: on stderr", () => {
+  test("ALLOW_UNMERGED_DEV_APPLY unset: gate blocks with exit 1 + ::error::", () => {
     const { stdout, stderr, status } = runScript({
       DATABASE_URL_POOLER: "postgres://stub@localhost:5432/stub",
       ALLOW_UNMERGED_DEV_APPLY: undefined,
     });
     expect(status).toBe(1);
-    // ::error:: annotations land on stdout (the script uses `echo`, not
-    // `echo >&2`); assert that explicitly so future stream-routing changes
-    // surface as test failures.
-    expect(stdout).toMatch(
-      new RegExp(`${SYNTHETIC_FILE} is NOT on origin/main`, "i"),
-    );
+    // The gate fires on the FIRST unmerged file the *.sql glob hits (this is
+    // the synthetic `zzz_*` if no other unmerged migration exists locally, or
+    // a lower-prefix unmerged migration introduced by this same PR if one
+    // sorts first). Assert the contract — the script exits with `::error::`
+    // referencing the unmerged-on-main predicate — not the specific filename.
+    // ::error:: lands on stdout (the script uses `echo`, not `echo >&2`).
+    expect(stdout).toMatch(/::error::Migration .*\.sql is NOT on origin\/main/i);
     expect(stdout).toMatch(/ALLOW_UNMERGED_DEV_APPLY=1/);
     expect(stderr).toBe("");
   });
@@ -156,6 +157,10 @@ describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
       ALLOW_UNMERGED_DEV_APPLY: "1",
     });
     expect(status).toBe(0);
+    // With the ack set, the gate downgrades to ::warning:: for every unmerged
+    // file — the synthetic one MUST appear (it is brand-new in this branch),
+    // and so MAY any other in-PR migrations. Assert the synthetic file gets
+    // its warning, plus the ack name surfaces in stdout for operator clarity.
     expect(stdout).toMatch(
       new RegExp(`${SYNTHETIC_FILE} is not on origin/main`, "i"),
     );
