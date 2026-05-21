@@ -51,7 +51,7 @@ rather than spawning leaders.
 
 **For #4067 specifically:** verified inline via Playwright + DOM
 MutationObserver on `app.soleur.ai/dashboard/settings/scope-grants` (operator
-already authenticated as ops@jikigai.com — no OTP handoff needed). Both
+already authenticated as the operator — no OTP handoff needed). Both
 assertions passed; issue closed with measured latencies in the comment.
 
 **For the template:** the wrong-host class affects every future
