@@ -20,8 +20,17 @@ data_dir = "/var/lib/vector"
 # anti-pattern.
 [sources.inngest_journald]
 type = "journald"
-units = ["inngest-server.service"]
-include_priorities = ["emerg", "alert", "crit", "err", "warning"]
+# Vector's documented field is `include_units`, not `units` (alias accepted
+# but undocumented in newer versions); naming aligned for forward-compat.
+include_units = ["inngest-server.service"]
+# Vector's priority filter uses `include_matches.PRIORITY` (object of
+# journal-field → allowed values per
+# https://vector.dev/docs/reference/configuration/sources/journald/).
+# `include_priorities` (my v1.1.0 typo) is NOT a real Vector field;
+# the misconfigured unit fail-loops with `unknown field` until fixed
+# (caught at v1.1.1 deploy via cat-deploy-state's vector_journal_tail).
+# PRIORITY values: 0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARNING.
+include_matches.PRIORITY = ["0", "1", "2", "3", "4"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
@@ -32,7 +41,9 @@ batch_size = 16
 [sources.system_journald]
 type = "journald"
 exclude_units = ["inngest-server.service", "vector.service"]
-include_priorities = ["emerg", "alert", "crit"]
+# CRIT-or-worse only at the host level (see source 1 comment for field
+# naming rationale). PRIORITY: 0=EMERG, 1=ALERT, 2=CRIT.
+include_matches.PRIORITY = ["0", "1", "2"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
@@ -51,16 +62,33 @@ collectors = ["cpu", "memory", "disk", "filesystem", "load", "network"]
 [transforms.envelope_events]
 type = "remap"
 inputs = ["inngest_journald", "system_journald"]
+# VRL note: use `to_string(...) ?? "default"` (fallible form) rather than
+# `string!(...) ?? "default"` (infallible form — VRL flags the `??` as
+# dead code because string!() aborts on bad input). Same for direct field
+# access (`.field ?? "x"` is also flagged); guard with explicit
+# `if exists(.field)` before assignment.
 source = '''
 event_id = uuid_v4()
 event_id = replace(event_id, "-", "")
 
-priority_str = string!(.PRIORITY) ?? "5"
+priority_str = "5"
+if exists(.PRIORITY) {
+    priority_str = to_string(.PRIORITY) ?? "5"
+}
 sentry_level = if priority_str == "0" || priority_str == "1" || priority_str == "2" { "fatal" } else if priority_str == "3" { "error" } else { "warning" }
 
-unit_safe = string!(._SYSTEMD_UNIT) ?? "system"
-host_safe = string!(.host) ?? "hetzner"
-message_safe = string!(.message) ?? ""
+unit_safe = "system"
+if exists(._SYSTEMD_UNIT) {
+    unit_safe = to_string(._SYSTEMD_UNIT) ?? "system"
+}
+host_safe = "hetzner"
+if exists(.host) {
+    host_safe = to_string(.host) ?? "hetzner"
+}
+message_safe = ""
+if exists(.message) {
+    message_safe = to_string(.message) ?? ""
+}
 
 # Sentry event payload (compact — one log line == one Sentry event).
 sentry_event = {
@@ -90,8 +118,15 @@ item_body = encode_json(sentry_event)
 item_header = { "type": "event", "length": length(item_body) }
 
 . = {
-    "envelope_body": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n",
-    "_routing": "sentry_envelope"
+    # Sentry envelope body MUST land under the `message` field name so the
+    # downstream http sink's `encoding.codec = "raw_message"` ships it as
+    # the request body. The codec serializes ONLY the `message` field of
+    # each event — any other field (like the prior `envelope_body`) is
+    # silently dropped and Sentry receives an empty POST body → HTTP 400.
+    # Caught via deploy-status `vector_journal_tail` + manual curl probe
+    # that confirmed the envelope format itself is valid (Sentry returned
+    # 200 on the exact bytes when sent directly).
+    "message": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n"
 }
 '''
 
@@ -108,21 +143,30 @@ source = '''
 event_id = uuid_v4()
 event_id = replace(event_id, "-", "")
 
-metric_name = string!(.name) ?? "unknown"
+metric_name = "unknown"
+if exists(.name) {
+    metric_name = to_string(.name) ?? "unknown"
+}
 metric_value = if exists(.gauge.value) { .gauge.value } else if exists(.counter.value) { .counter.value } else { 0.0 }
-tag_struct = .tags ?? {}
+# VRL: `.tags ?? {}` is flagged because field access can't fail. Guard with
+# is_object() so the merge() call below sees a valid object.
+tag_struct = {}
+if is_object(.tags) {
+    tag_struct = object!(.tags)
+}
 
+value_str = to_string(metric_value) ?? "?"
 sentry_event = {
     "event_id": event_id,
     "timestamp": to_unix_timestamp(now()),
     "platform": "other",
     "level": "info",
     "logger": "vector.host_metrics",
-    "message": { "formatted": string!(metric_name) + "=" + to_string!(metric_value) },
+    "message": { "formatted": metric_name + "=" + value_str },
     "tags": merge({
         "metric_name": metric_name,
         "source": "vector-host-metrics"
-    }, object!(tag_struct)),
+    }, tag_struct),
     "extra": { "value": metric_value }
 }
 
@@ -131,8 +175,15 @@ item_body = encode_json(sentry_event)
 item_header = { "type": "event", "length": length(item_body) }
 
 . = {
-    "envelope_body": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n",
-    "_routing": "sentry_envelope"
+    # Sentry envelope body MUST land under the `message` field name so the
+    # downstream http sink's `encoding.codec = "raw_message"` ships it as
+    # the request body. The codec serializes ONLY the `message` field of
+    # each event — any other field (like the prior `envelope_body`) is
+    # silently dropped and Sentry receives an empty POST body → HTTP 400.
+    # Caught via deploy-status `vector_journal_tail` + manual curl probe
+    # that confirmed the envelope format itself is valid (Sentry returned
+    # 200 on the exact bytes when sent directly).
+    "message": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n"
 }
 '''
 
@@ -169,4 +220,20 @@ scrape_interval_secs = 60
 type = "console"
 inputs = ["vector_internal"]
 encoding.codec = "json"
+target = "stdout"
+
+# Diagnostic console sink — temporary, to surface the EXACT envelope
+# bytes Vector is producing. Vector's sentry sink is getting HTTP 400
+# from every POST (v1.1.4 deploy diagnosis); the envelope format is
+# proven valid via manual curl, so the issue must be HOW Vector
+# serializes/encodes the .message field. Mirror the same inputs +
+# raw_message codec the sentry sink uses, but to stdout instead of
+# https://. Read via cat-deploy-state's vector_journal_tail — strip the
+# JSON wrapper to see the actual bytes. To revert: delete this entire
+# sinks block in the next vector.toml bump.
+[sinks.envelope_debug]
+type = "console"
+inputs = ["envelope_events", "envelope_metrics"]
+encoding.codec = "raw_message"
+framing.method = "newline_delimited"
 target = "stdout"

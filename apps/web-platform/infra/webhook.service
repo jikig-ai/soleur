@@ -32,7 +32,12 @@ PrivateTmp=true
 # its config + state dirs need bootstrap-time write access from inside this
 # namespace. Surfaced via v1.1.1 deploy diagnostic capture
 # (reason="mkdir: cannot create directory /etc/vector: Read-only file system").
-ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /var/lib/inngest /var/lib/vector /etc/vector /usr/local/bin
+# `-` prefix on /var/lib/vector + /etc/vector marks them optional:
+# systemd silently ignores the path if absent, instead of refusing to set up
+# the mount namespace (which on prior PR #4257 took webhook.service down
+# entirely until the dirs were created). Once inngest-bootstrap.sh creates
+# them on first v1.1.x deploy, they become real ReadWritePaths.
+ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /var/lib/inngest -/var/lib/vector -/etc/vector /usr/local/bin
 ReadOnlyPaths=/etc/webhook /etc/default/webhook-deploy
 TimeoutStopSec=180
 
