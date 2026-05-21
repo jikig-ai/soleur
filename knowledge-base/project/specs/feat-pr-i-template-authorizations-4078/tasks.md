@@ -25,7 +25,7 @@ plan_review_revision: 2026-05-21-v2
 
 - [x] 1.1 Create `apps/web-platform/server/templates/template-registry.ts` with `TEMPLATE_IDS = ['default_legacy'] as const`, `TEMPLATE_REGISTRY` Record, `isKnownTemplateId` typeguard, and `getTemplateHash(message)` (merged from former template-hash.ts per v2 plan-review).
 - [x] 1.2 Write `apps/web-platform/test/server/templates/template-registry.test.ts` — hash determinism + pairwise collision regression (TR8).
-- [ ] 1.3 In mig 053 (under `BEGIN;`), Part A — `ALTER TABLE public.messages ADD COLUMN template_id text` → `UPDATE … SET template_id = 'default_legacy' WHERE template_id IS NULL` → `ALTER TABLE … ALTER COLUMN template_id SET NOT NULL` → `ADD CONSTRAINT messages_template_id_check`.
+- [x] 1.3 In mig 053 (NO outer BEGIN/COMMIT per mig 051 Kieran P1-4 precedent), Part A — `ALTER TABLE public.messages ADD COLUMN template_id text` → `UPDATE … SET template_id = 'default_legacy' WHERE template_id IS NULL` → `ALTER TABLE … ALTER COLUMN template_id SET NOT NULL` → `ADD CONSTRAINT messages_template_id_check`.
 - [x] 1.4 Edit `apps/web-platform/app/api/dashboard/today/[id]/send/route.ts:70-80` — delete inline `templateHashFor`; import `getTemplateHash`.
 - [x] 1.5 Edit `send/route.ts:111-116` SELECT projection to include `template_id`.
 - [x] 1.6 Edit `send/route.ts:244` — replace inline call with `getTemplateHash(message)`.
@@ -33,26 +33,26 @@ plan_review_revision: 2026-05-21-v2
 
 ## Phase 2 — `template_authorizations` Table + WORM Trigger + Indexes
 
-- [ ] 2.1 Continue mig 053 Part B (within same `BEGIN;…COMMIT;`).
-- [ ] 2.2 `CREATE TABLE public.template_authorizations` with columns per plan FR4: `id`, `founder_id`, `template_hash`, `action_class`, `authorized_at DEFAULT now()`, `expires_at NOT NULL DEFAULT now()+90d`, `soft_reconfirm_at NOT NULL DEFAULT now()+30d`, `max_sends NOT NULL DEFAULT 100`, `revoked_at NULL`, `revocation_reason NULL`, `grant_id REFERENCES scope_grants(id) ON DELETE RESTRICT`, `created_at`.
-- [ ] 2.3 Add `CHECK ((revoked_at IS NULL) = (revocation_reason IS NULL))`.
-- [ ] 2.4 Add `CHECK (revocation_reason IS NULL OR revocation_reason IN ('founder_revoked','quota_exhausted','expired','dsr_erasure','regulator_ordered','vendor_tos_revoked','policy_violation','quarantine_retroactive'))` — 8 values.
-- [ ] 2.5 Create `template_authorizations_active_unique` partial UNIQUE on `(founder_id, template_hash) WHERE revoked_at IS NULL`.
-- [ ] 2.6 Create `template_authorizations_founder_revoked_idx` on `(founder_id, revoked_at)`.
-- [ ] 2.7 Create WORM trigger `template_authorizations_no_mutate()` — pure-reject UPDATE/DELETE except when `current_setting('session_replication_role') = 'replica'`. SECURITY DEFINER, `SET search_path = public, pg_temp`. REVOKE ALL FROM PUBLIC/anon/authenticated/service_role.
-- [ ] 2.8 `ALTER TABLE … ENABLE ROW LEVEL SECURITY`.
-- [ ] 2.9 `CREATE POLICY template_authorizations_owner_select` (SELECT TO authenticated USING `founder_id = auth.uid()`).
-- [ ] 2.10 `CREATE POLICY template_authorizations_owner_insert` (INSERT TO authenticated WITH CHECK `founder_id = auth.uid()`).
+- [x] 2.1 Continue mig 053 Part B (NO outer BEGIN/COMMIT — Supabase runner wraps; mig 051 precedent).
+- [x] 2.2 `CREATE TABLE public.template_authorizations` with columns per plan FR4: `id`, `founder_id`, `template_hash`, `action_class`, `authorized_at DEFAULT now()`, `expires_at NOT NULL DEFAULT now()+90d`, `soft_reconfirm_at NOT NULL DEFAULT now()+30d`, `max_sends NOT NULL DEFAULT 100`, `revoked_at NULL`, `revocation_reason NULL`, `grant_id REFERENCES scope_grants(id) ON DELETE RESTRICT`, `created_at`.
+- [x] 2.3 Add `CHECK ((revoked_at IS NULL) = (revocation_reason IS NULL))`.
+- [x] 2.4 Add `CHECK (revocation_reason IS NULL OR revocation_reason IN ('founder_revoked','quota_exhausted','expired','dsr_erasure','regulator_ordered','vendor_tos_revoked','policy_violation','quarantine_retroactive'))` — 8 values.
+- [x] 2.5 Create `template_authorizations_active_unique` partial UNIQUE on `(founder_id, template_hash) WHERE revoked_at IS NULL`.
+- [x] 2.6 Create `template_authorizations_founder_revoked_idx` on `(founder_id, revoked_at)`.
+- [x] 2.7 Create WORM trigger `template_authorizations_no_mutate()` — pure-reject UPDATE/DELETE except when `current_setting('session_replication_role') = 'replica'`. SECURITY DEFINER, `SET search_path = public, pg_temp`. REVOKE ALL FROM PUBLIC/anon/authenticated/service_role.
+- [x] 2.8 `ALTER TABLE … ENABLE ROW LEVEL SECURITY`.
+- [x] 2.9 `CREATE POLICY template_authorizations_owner_select` (SELECT TO authenticated USING `founder_id = auth.uid()`).
+- [x] 2.10 `CREATE POLICY template_authorizations_owner_insert` (INSERT TO authenticated WITH CHECK `founder_id = auth.uid()`).
 
 ## Phase 3 — SECURITY DEFINER RPCs
 
 Continue mig 053 (same `BEGIN;…COMMIT;`). All use `SET LOCAL session_replication_role='replica'` for WORM bypass.
 
-- [ ] 3.1 RPC `authorize_template(p_template_hash, p_action_class, p_grant_id)` — input validation, INSERT, return id, idempotent 23505 (first-writer-wins). GRANT TO authenticated; REVOKE FROM PUBLIC/anon/service_role.
-- [ ] 3.2 RPC `revoke_template_authorization(p_template_hash, p_reason)` — validate `p_reason IN (8-value enum)`. Inline comment-of-record: `-- WORM trigger blocks all UPDATEs including founder-initiated revoke; bypass is required.` `SET LOCAL session_replication_role='replica'`; UPDATE WHERE `founder_id = auth.uid() AND template_hash = p_template_hash AND revoked_at IS NULL`; `RESET session_replication_role`. Return ROW_COUNT.
-- [ ] 3.3 RPC `anonymise_template_authorizations(p_user_id)` — auth: `auth.uid() IS NULL && current_user IN ('service_role','postgres')` OR `auth.uid() = p_user_id`. UPDATE founder_id = NULL + revoked_at COALESCE + revocation_reason COALESCE 'dsr_erasure'. GRANT TO authenticated, service_role.
-- [ ] 3.4 Close `BEGIN;…COMMIT;` envelope.
-- [ ] 3.5 Write `apps/web-platform/supabase/migrations/053_template_authorizations.down.sql` — DROP order: TRIGGER → 3 RPCs → trigger function → table → ALTER messages DROP COLUMN template_id.
+- [x] 3.1 RPC `authorize_template(p_template_hash, p_action_class, p_grant_id)` — input validation, INSERT, return id, idempotent 23505 (first-writer-wins). GRANT TO authenticated; REVOKE FROM PUBLIC/anon/service_role.
+- [x] 3.2 RPC `revoke_template_authorization(p_template_hash, p_reason)` — validate `p_reason IN (8-value enum)`. Inline comment-of-record: `-- WORM trigger blocks all UPDATEs including founder-initiated revoke; bypass is required.` `SET LOCAL session_replication_role='replica'`; UPDATE WHERE `founder_id = auth.uid() AND template_hash = p_template_hash AND revoked_at IS NULL`; `RESET session_replication_role`. Return ROW_COUNT.
+- [x] 3.3 RPC `anonymise_template_authorizations(p_user_id)` — auth: `auth.uid() IS NULL && current_user IN ('service_role','postgres')` OR `auth.uid() = p_user_id`. UPDATE founder_id = NULL + revoked_at COALESCE + revocation_reason COALESCE 'dsr_erasure'. GRANT TO authenticated, service_role.
+- [x] 3.4 Close `BEGIN;…COMMIT;` envelope.
+- [x] 3.5 Write `apps/web-platform/supabase/migrations/053_template_authorizations.down.sql` — DROP order: TRIGGER → 3 RPCs → trigger function → table → ALTER messages DROP COLUMN template_id.
 
 ## Phase 4 — Predicate + First-Send-IS-Authorization + Send-Route Wiring
 
