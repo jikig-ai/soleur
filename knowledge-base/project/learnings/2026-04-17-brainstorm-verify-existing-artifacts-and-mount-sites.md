@@ -1,9 +1,10 @@
 ---
+title: Verify claims by grep; check existing KB artifacts before spawning research
 date: 2026-04-17
 category: process
-module: brainstorm
 tags: [brainstorm, verification, pre-research, grep-first]
-issues: ["#1691", "#2464"]
+module: brainstorm
+issues: [#1691, #2464]
 ---
 
 # Learning: Verify claims by grep; check existing KB artifacts before spawning research

@@ -1,3 +1,10 @@
+---
+title: Code review batch fixes — WS validation, error logging, concurrency comments
+date: 2026-04-07
+category: engineering
+tags: [security-issues, web-platform]
+---
+
 # Learning: Code review batch fixes — WS validation, error logging, concurrency comments
 
 ## Problem

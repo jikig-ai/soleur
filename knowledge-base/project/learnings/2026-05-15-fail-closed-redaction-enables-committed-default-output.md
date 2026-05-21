@@ -1,3 +1,12 @@
+---
+title: Fail-closed redaction enables committed-default output for security-aggregating artifacts
+date: 2026-05-15
+category: workflow-patterns
+tags:
+- workflow-patterns
+- issue-2726
+---
+
 # Learning: Fail-closed redaction enables committed-default output for security-aggregating artifacts
 
 ## Problem

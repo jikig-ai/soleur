@@ -1,3 +1,10 @@
+---
+title: 'Lefthook gobwas glob `**` matches 1+ directories, not 0+'
+date: 2026-03-21
+category: engineering
+tags: [integration-issues, lefthook]
+---
+
 # Learning: Lefthook gobwas glob `**` matches 1+ directories, not 0+
 
 ## Problem

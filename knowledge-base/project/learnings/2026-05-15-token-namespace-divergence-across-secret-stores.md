@@ -1,14 +1,13 @@
 ---
-name: token-namespace-divergence-across-secret-stores
-description: GitHub repo secrets and Doppler configs can hold tokens with identical names but distinct values, distinct scopes, and (in Sentry's case) distinct cluster bindings — surfaced by the #3861 Sentry residency contradiction where Doppler prd SENTRY_AUTH_TOKEN was DE-only while the GitHub repo secret SENTRY_AUTH_TOKEN had US-cluster access
+title: token namespace divergence across secret stores
 date: 2026-05-15
 category: integration-issues
 tags: [secrets, doppler, github-actions, sentry, multi-cluster, terraform]
-related_issue: "#3861"
-related_pr: "#3863"
-related_learnings:
-  - 2026-05-04-sentry-org-token-region-probe-and-dashboards-scope-guard.md
-  - 2026-05-15-sentry-iac-billing-and-quirks.md
+description: 'GitHub repo secrets and Doppler configs can hold tokens with identical names but distinct values, distinct scopes, and (in Sentry''s case) distinct cluster bindings — surfaced by the'
+name: token-namespace-divergence-across-secret-stores
+related_issue: '#3861'
+related_learnings: [2026-05-04-sentry-org-token-region-probe-and-dashboards-scope-guard.md, 2026-05-15-sentry-iac-billing-and-quirks.md]
+related_pr: '#3863'
 ---
 
 # Learning: token namespace divergence across secret stores

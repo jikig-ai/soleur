@@ -1,3 +1,10 @@
+---
+title: reusable workflow pattern for monorepo per-app releases
+date: 2026-03-19
+category: ci-cd
+tags: [implementation-patterns, ci-cd, github-actions, monorepo, medium]
+---
+
 # Learning: reusable workflow pattern for monorepo per-app releases
 
 ## Problem

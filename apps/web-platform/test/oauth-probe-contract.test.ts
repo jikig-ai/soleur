@@ -1,37 +1,21 @@
 import { describe, test, expect } from "vitest";
-import { readFileSync, existsSync } from "node:fs";
-import path from "node:path";
 
-// Load-bearing GitHub error sentinel. This exact substring is what the
-// scheduled-oauth-probe workflow greps for when validating that each
-// registered callback URL is still associated with our GitHub App.
-//
-// If GitHub rewords the error string ("redirect_uri" → "redirectUri", etc.),
-// the probe goes silent-pass and the next custom-domain CNAME flap or
-// operator-paste typo will break user sign-up unobserved.
-//
-// Quarterly skill-freshness audit must re-run a deliberately-broken
-// redirect_uri probe against GitHub's authorize endpoint and confirm the
-// rendered HTML still contains this sentinel.
-//
-// See: knowledge-base/project/learnings/integration-issues/2026-05-04-github-app-callback-url-three-entries.md
-export const GITHUB_REDIRECT_URI_ERROR_SENTINEL =
-  "redirect_uri is not associated";
+// TR9 PR-3 (#4211, AC3a) — sentinel constants moved to a server module so
+// the production handler (`server/inngest/functions/cron-oauth-probe.ts`)
+// shares the source-of-truth strings with the contract test. Re-exported
+// from this test file for backward compatibility with any consumer that
+// imported them from here historically.
+export {
+  GITHUB_REDIRECT_URI_ERROR_SENTINEL,
+  GITHUB_APP_SUSPENDED_SENTINEL,
+  GITHUB_AUTHORIZE_PAGE_ANCHORS,
+} from "@/server/inngest/functions/oauth-probe-sentinels";
 
-// Adjacent sentinels the probe also greps for.
-export const GITHUB_APP_SUSPENDED_SENTINEL = "Application suspended";
-
-// Positive-proof anchors. The probe requires at least one of these in the
-// authorize-page response body — both-missing is treated as drift rather
-// than silent-pass. These are GitHub-specific (not generic <form/Authorize)
-// to avoid false-positives on rate-limit / abuse-detection pages.
-export const GITHUB_AUTHORIZE_PAGE_ANCHORS = [
-  'name="authenticity_token"',
-  "Sign in to GitHub",
-  // The consent page renders "Authorize <App name>" — match the verb +
-  // capitalised follow-on as a regex in the workflow.
-  "Authorize",
-] as const;
+import {
+  GITHUB_REDIRECT_URI_ERROR_SENTINEL,
+  GITHUB_APP_SUSPENDED_SENTINEL,
+  GITHUB_AUTHORIZE_PAGE_ANCHORS,
+} from "@/server/inngest/functions/oauth-probe-sentinels";
 
 // The three callback URLs the GitHub App `soleur-ai` (client_id Iv23...)
 // MUST have registered. Any missing entry breaks the corresponding flow.
@@ -48,237 +32,27 @@ export const REQUIRED_GITHUB_APP_CALLBACK_URLS = [
   "https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback",
 ] as const;
 
-// User-shape end-to-end authorize path. The 3-URL probe greps each callback
-// URL in isolation against GitHub's authorize endpoint, but a user click on
-// "Continue with GitHub" issues `GET /auth/v1/authorize?provider=github&...`
-// against Supabase, which 302s to GitHub with `redirect_to` AND `redirect_uri`
-// in the same query string. A future drift could pass the in-isolation probes
-// while failing this combined shape — the user-reported failure mode #3183
-// went unobserved inside the probe's supposedly-protected 15-min window.
-//
-// Lock the workflow's grep target to this constant so the e2e leg cannot
-// silently drop the user-shape coverage.
-//
-// See: knowledge-base/project/plans/2026-05-04-fix-signup-oauth-helper-and-github-callback-recurrence-plan.md
+// User-shape end-to-end authorize path. Used by the Inngest handler's
+// `probeGithubSupabaseShapeE2E` to verify the combined redirect_to +
+// redirect_uri shape real users hit.
 export const SUPABASE_SHAPE_AUTHORIZE_PATH =
   "/auth/v1/authorize?provider=github&redirect_to=";
 
-const repoRoot = path.resolve(__dirname, "../../..");
-const workflowPath = path.join(
-  repoRoot,
-  ".github/workflows/scheduled-oauth-probe.yml",
-);
-
-// Extract a bash function body from the workflow's `run: |` script, robust
-// to indentation reflows. Finds the `<name>()` opening line via a same-line
-// regex that captures its leading indentation, then locates the matching
-// close brace at the same indentation. Intermediate `}` from `|| { … }`
-// blocks are deeper-indented than the function declaration, so the same-
-// indentation anchor is reliable.
-//
-// Replaces the prior `\n {10}\}` literal-indent pattern used for both
-// extractors (PR #3199 — the literal-indent pattern was a YAML-reformat
-// landmine; with two probe functions it doubled the surface area).
-function extractFunctionBody(yaml: string, name: string): string {
-  const declRe = new RegExp(`(?:^|\\n)([ \\t]+)${name}\\(\\)\\s*\\{`);
-  const decl = yaml.match(declRe);
-  if (!decl || decl.index === undefined) {
-    throw new Error(
-      `${name} function not found in workflow — has it been renamed or removed?`,
-    );
-  }
-  const indent = decl[1];
-  const start = decl.index + (decl[0].startsWith("\n") ? 1 : 0);
-  const tail = yaml.slice(start);
-  const closeRe = new RegExp(`\\n${indent}\\}(?:\\n|$)`);
-  const close = tail.match(closeRe);
-  if (!close || close.index === undefined) {
-    throw new Error(
-      `${name} function close brace not found at indent="${indent.replace(/\t/g, "\\t")}" — workflow may be malformed`,
-    );
-  }
-  return tail.slice(0, close.index + close[0].length);
-}
-
-const extractProbeFnBody = (yaml: string) =>
-  extractFunctionBody(yaml, "probe_github_redirect_uri");
-
-const extractSupabaseShapeFnBody = (yaml: string) =>
-  extractFunctionBody(yaml, "probe_github_supabase_shape_e2e");
-
-describe("scheduled-oauth-probe.yml — GitHub redirect_uri probe contract", () => {
-  test("workflow file exists at the expected path", () => {
-    expect(
-      existsSync(workflowPath),
-      `Workflow not found at ${workflowPath} — was it moved or renamed? Update workflowPath in oauth-probe-contract.test.ts.`,
-    ).toBe(true);
-  });
-
-  test("probe function greps for the GitHub redirect_uri error sentinel", () => {
-    // Negative-space gate: if this fails, the probe cannot detect the
-    // user-reported failure mode. Grep target must be inside the probe
-    // function body (not in a comment or unrelated step).
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractProbeFnBody(yaml);
-    expect(fnBody).toContain(GITHUB_REDIRECT_URI_ERROR_SENTINEL);
-  });
-
-  test("probe function greps for the Application suspended sentinel", () => {
-    // GitHub App suspension renders different HTML than redirect_uri error.
-    // Without this grep, suspension surfaces as a silent pass.
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractProbeFnBody(yaml);
-    expect(fnBody).toContain(GITHUB_APP_SUSPENDED_SENTINEL);
-  });
-
-  test("probe function uses GitHub-specific positive-proof anchors", () => {
-    // Generic <form/Authorize substrings appear on rate-limit and abuse
-    // pages too — false-positives mean a degraded GitHub state passes as
-    // healthy. Tighten to GitHub-specific anchors.
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractProbeFnBody(yaml);
-    for (const anchor of GITHUB_AUTHORIZE_PAGE_ANCHORS) {
-      expect(
-        fnBody,
-        `probe positive-proof grep is missing GitHub-specific anchor: ${anchor}`,
-      ).toContain(anchor);
-    }
-  });
-
-  test("workflow probes all three required GitHub App callback URLs", () => {
-    // Each of the three required URLs must appear verbatim in the workflow
-    // (as a literal in the host-substituted probe call). Drift between
-    // this list and the workflow OR the audit runbook breaks Flow A or B.
-    // Source-of-truth: knowledge-base/engineering/ops/runbooks/github-app-callback-audit.md
-    const yaml = readFileSync(workflowPath, "utf-8");
-    for (const url of REQUIRED_GITHUB_APP_CALLBACK_URLS) {
-      // The yml uses ${APP_HOST}/${API_HOST}/${SUPABASE_PROJECT_REF}.
-      // Verify each URL's distinctive path or host appears.
-      // For host-substituted URLs we check the path component which is
-      // literal in the yml.
-      const pathOnly = url.replace(/^https:\/\/[^/]+/, "");
-      expect(
-        yaml,
-        `workflow does not reference path ${pathOnly} from required URL ${url}`,
-      ).toContain(pathOnly);
-    }
-    // Also verify the host substitutions are wired correctly.
-    expect(yaml).toContain("${APP_HOST}/api/auth/github-resolve/callback");
-    expect(yaml).toContain("${API_HOST}/auth/v1/callback");
-    expect(yaml).toContain("${SUPABASE_PROJECT_REF}.supabase.co/auth/v1/callback");
-  });
-
-  test("probe pins curl --max-time and targets GitHub authorize endpoint", () => {
-    // Network calls inside CI steps must pin a timeout to prevent hung jobs.
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractProbeFnBody(yaml);
-    expect(fnBody).toMatch(/--max-time\s+\d+/);
-    // Use toContain (substring) instead of toMatch (regex) — CodeQL's
-    // `js/regex/missing-regexp-anchor` rule treats any URL-shaped regex
-    // without ^/$ anchors as URL-validator-shaped (attacker-host-prefix
-    // bypass class). False-positive in this contract test, but
-    // .toContain avoids the rule entirely and reads more clearly.
-    expect(fnBody).toContain("https://github.com/login/oauth/authorize");
-  });
-
-  test("probe asserts SUPABASE_PROJECT_REF agrees with live CNAME deref", () => {
-    // Catches silent Supabase project re-provisioning where the static
-    // workflow secret would otherwise probe a phantom URL. Use string
-    // substring checks (toContain) rather than regex to avoid CodeQL's
-    // js/regex/missing-regexp-anchor warnings on host-shaped regexes.
-    const yaml = readFileSync(workflowPath, "utf-8");
-    // Either the dig-CNAME line OR the cname_ref variable name proves
-    // the runtime cross-check is in place. Both substrings live in the
-    // SUPABASE_PROJECT_REF integrity block.
-    const hasDigCnameCheck = yaml.includes("dig +time=3 +tries=2 +short CNAME");
-    const hasCnameRefVar = yaml.includes("cname_ref");
-    expect(hasDigCnameCheck || hasCnameRefVar).toBe(true);
-    expect(yaml).toContain("supabase_project_ref_drift");
-  });
-
-  test("misconfigured-secret failure modes are split per missing secret", () => {
-    // Collapsing both into a single mode hid which `gh secret set` to run.
-    const yaml = readFileSync(workflowPath, "utf-8");
-    expect(yaml).toContain("github_client_id_probe_unset");
-    expect(yaml).toContain("supabase_project_ref_unset");
-    // Old combined mode should be gone.
-    expect(yaml).not.toContain("github_redirect_probe_misconfigured");
-  });
-
-  test("workflow exercises the Supabase user-shape authorize URL end-to-end", () => {
-    // The 3-URL in-isolation probe missed the user-reported failure (#3183)
-    // because real users click "Continue with GitHub" through Supabase's
-    // /auth/v1/authorize?provider=github&redirect_to=... endpoint, which
-    // 302s to GitHub with redirect_to AND redirect_uri in the same query
-    // string. A future drift could pass the in-isolation probes while
-    // failing this combined shape. Lock the grep target — assert against
-    // the function body, not raw YAML, so a stray comment match cannot
-    // make this assertion pass vacuously.
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractSupabaseShapeFnBody(yaml);
-    expect(fnBody).toContain(SUPABASE_SHAPE_AUTHORIZE_PATH);
-  });
-
-  test("supabase-shape probe function exists and uses log-injection-strip", () => {
-    // The new e2e probe must use the same strip_log_injection pattern
-    // as probe_github_redirect_uri — log-annotation forgery is a
-    // workflow-wide invariant, not a per-probe choice.
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractSupabaseShapeFnBody(yaml);
-    expect(fnBody).toContain("strip_log_injection");
-  });
-
-  test("supabase-shape probe greps for the redirect_uri error sentinel", () => {
-    // Same load-bearing sentinel as the in-isolation probe. If GitHub
-    // rewords the error string this fails simultaneously across both
-    // probe functions, signaling a global drift that the contract test
-    // catches at one place (GITHUB_REDIRECT_URI_ERROR_SENTINEL).
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractSupabaseShapeFnBody(yaml);
-    expect(fnBody).toContain(GITHUB_REDIRECT_URI_ERROR_SENTINEL);
-  });
-
-  test("supabase-shape probe pins curl --max-time", () => {
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractSupabaseShapeFnBody(yaml);
-    expect(fnBody).toMatch(/--max-time\s+\d+/);
-  });
-
-  test("supabase-shape probe is invoked exactly once at the call site", () => {
-    // Defensive: detect both accidental drop (zero invocations -> probe
-    // is dead code) and accidental duplication (multiple call sites ->
-    // unclear which step's failure surfaces first).
-    const yaml = readFileSync(workflowPath, "utf-8");
-    // Match the call site, not the function-definition line.
-    const callSiteRegex = /\bprobe_github_supabase_shape_e2e\b\s+["'$]/g;
-    const matches = yaml.match(callSiteRegex) ?? [];
-    expect(matches.length).toBe(1);
-  });
-
-  test("supabase-shape e2e failure mode is recorded and case-switch-routed", () => {
-    // Plan acceptance criterion: the failure-mode branch must include the
-    // new failure mode so the operator gets the same in-issue remediation
-    // guidance (the "Required GitHub App callback URLs" block).
-    //
-    // (a) Literal must appear inside the probe function (not just a comment
-    //     somewhere) — proves it is an actual record_failure value.
-    // (b) The issue-body case switch must include a glob that captures it —
-    //     proves the operator-facing remediation block fires for this mode.
-    const yaml = readFileSync(workflowPath, "utf-8");
-    const fnBody = extractSupabaseShapeFnBody(yaml);
-    expect(fnBody).toContain("github_oauth_supabase_shape_e2e_unregistered");
-    // The existing glob "github_oauth_*_unregistered" matches the new mode.
-    // Lock its presence so a future case-switch refactor that drops the glob
-    // doesn't silently strip the remediation block.
-    expect(yaml).toMatch(/github_oauth_\*_unregistered/);
-  });
-});
+// TR9 PR-3 NOTE: the workflow-grep contract suite (`scheduled-oauth-
+// probe yml — GitHub redirect_uri probe contract`) was deleted alongside
+// the GHA scheduled-oauth-probe workflow itself (AC9).
+// The probe is now `apps/web-platform/server/inngest/functions/cron-
+// oauth-probe.ts`; behavioral coverage moved to
+// `apps/web-platform/test/server/inngest/cron-oauth-probe.test.ts`. The
+// semantic-invariant tests below remain — they document what the probe
+// expects to see in the wild and would catch a sentinel-typo regression
+// at this single gate.
 
 describe("OAuth probe sentinel — semantic invariants", () => {
   test("a fabricated GitHub error response body matches the redirect_uri sentinel", () => {
     // This test documents what the probe expects to see in the wild.
     // If GitHub rewords, this stays green (we're testing the matcher,
-    // not the live GitHub HTML), but the workflow's grep against live
+    // not the live GitHub HTML), but the handler's grep against live
     // HTML will start failing — exactly the drift signal we want.
     const fabricatedErrorBody =
       '<html><body><div class="error">The redirect_uri is not associated with this application.</div></body></html>';

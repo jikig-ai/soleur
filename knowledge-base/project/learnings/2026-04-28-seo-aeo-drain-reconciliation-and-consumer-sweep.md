@@ -1,3 +1,10 @@
+---
+title: 'SEO/AEO drain — reconciliation-first + consumer-sweep classes (PR #2973)'
+date: 2026-04-28
+category: marketing
+tags: [seo, aeo, eleventy, multi-agent-review, consumer-sweep, reconciliation]
+---
+
 # Learning: SEO/AEO drain — reconciliation-first + consumer-sweep classes (PR #2973)
 
 **Date:** 2026-04-28

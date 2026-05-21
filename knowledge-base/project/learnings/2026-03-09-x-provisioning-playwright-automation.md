@@ -1,3 +1,10 @@
+---
+title: X/Twitter Account Provisioning via Playwright MCP
+date: 2026-03-09
+category: engineering
+tags: [integration-issues, community/x-setup]
+---
+
 # Learning: X/Twitter Account Provisioning via Playwright MCP
 
 ## Problem

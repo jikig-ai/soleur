@@ -1,3 +1,10 @@
+---
+title: FAQ section insertion point must be outside container divs for consistent layout
+date: 2026-03-17
+category: engineering
+tags: [template-patterns, docs-site, 653]
+---
+
 # Learning: FAQ section insertion point must be outside container divs for consistent layout
 
 ## Problem

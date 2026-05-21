@@ -1,8 +1,11 @@
 ---
-name: alignment fixes must verify both toggle states
-description: When fixing alignment of a toggleable UI control (chevron, accordion, collapse button), verify alignment holds in BOTH states -- a fix for one state can leave the other misaligned.
-type: ui-bug
+title: Alignment fixes on toggleable UI must verify both states
+date: 2026-04-17
+category: engineering
 tags: [ui, layout, tailwind, nav, toggle, alignment]
+description: When fixing alignment of a toggleable UI control (chevron, accordion, collapse button), verify alignment holds in BOTH states -- a fix for one state can leave the other misaligned.
+name: alignment fixes must verify both toggle states
+type: ui-bug
 ---
 
 # Learning: Alignment fixes on toggleable UI must verify both states

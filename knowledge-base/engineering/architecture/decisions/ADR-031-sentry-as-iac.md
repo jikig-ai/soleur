@@ -41,11 +41,21 @@ new monitor types and offers no drift detection for the rules it manages.
 
 ## Cluster / Host Glossary
 
-Sentry's EU footprint splits across three host classes; conflating them is the
-root failure mode of the 2026-03-28 → 2026-05-16 phantom-ingest window
-(see PIR `knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
-and Article 30 PA8 §(d) recipient-drift disclosure). All future Sentry-touching
-work in this repo MUST reference this glossary by name when choosing a host.
+Sentry's EU footprint splits along **three orthogonal routing axes** — URL slug
+(which dashboard / API subdomain you reach), database cluster (which physical
+EU ingest cluster serves DSN POSTs), and token-membership scope (which orgs an
+`SENTRY_AUTH_TOKEN` can read or write). Conflating any two — most pointedly,
+assuming `<org-slug>.sentry.io/api/0/organizations/<slug>/` returning 401 means
+"the slug names an unowned third-party org" rather than "the token's membership
+scope does not include this slug" — was the root inference failure that drove
+the 2026-03-28 → 2026-05-16 ingest routing confusion documented in PIR
+`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`
+(see Phase 9 Gate-3b correction; both `jikigai` and `jikigai-eu` orgs were
+operator-owned EU-database orgs throughout, per Sentry support replies
+2026-05-19, and the duplicate `jikigai` org was canceled vendor-side on
+2026-05-21). All future Sentry-touching work in this repo MUST reference this
+glossary by name when choosing a host AND verify token-membership scope before
+inferring ownership from any HTTP status.
 
 | Host class      | Hostname(s)                                         | Serves                                                                                                                       | Does NOT serve                                                                            |
 |-----------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
@@ -63,14 +73,14 @@ work in this repo MUST reference this glossary by name when choosing a host.
   Setting it to `https://de.sentry.io/api/` produces silent 404s (ingest-only
   host has no `/api/0/...` surface). The org-subdomain is the only base_url
   shape that works for slug-scoped operations regardless of org slug.
-  **Transition note (as of this ADR revision, 2026-05-16, updated 2026-05-17
-  for the slug-rewrite finding):** `apps/web-platform/infra/sentry/main.tf:30`
-  still resolves to `https://de.sentry.io/api/` under
-  `var.sentry_region == "de"`. The flip lands in PR-β of #3861 atomic with
-  the tfstate drop + serial re-import sequence (plan
-  `knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md`
-  Phase 2 step 9 + Phase 6). Target value: `"https://${var.sentry_org}.sentry.io/api/"`
-  (org-subdomain pattern), NOT the originally-planned `"https://eu.sentry.io/api/"`.
+  **Transition note (2026-05-16, updated 2026-05-17 for the slug-rewrite
+  finding, updated 2026-05-21 for the token-scope correction):**
+  `apps/web-platform/infra/sentry/main.tf` now uses
+  `"https://${var.sentry_org}.sentry.io/api/"` (org-subdomain pattern) under
+  `var.sentry_region == "de"`, landed by PR-β #3945 atomic with the tfstate
+  drop + serial re-import sequence. The `de.sentry.io` and `eu.sentry.io`
+  regional hosts are reserved for slug-less endpoints (`/users/me/`, `/auth/*`)
+  per the API row above.
 - **Audit script `api_host`** (`apps/web-platform/scripts/sentry-monitors-audit.sh`)
   region-probe loop MUST include `eu.sentry.io` (and prefer it over `sentry.io`
   for EU-resident orgs) — `de.sentry.io` will return 404 for every API call.
@@ -121,7 +131,12 @@ of S3 conditional writes — same posture as the main root.
 
 Sentry secrets stay in **GitHub repository secrets**, not Doppler:
 
-- `SENTRY_AUTH_TOKEN` — provider auth, used by `terraform plan|apply`.
+- `SENTRY_IAC_AUTH_TOKEN` — provider auth, used by `terraform plan|apply` in
+  `.github/workflows/apply-sentry-infra.yml`. The env var exposed to the
+  terraform provider inside the workflow step is still named `SENTRY_AUTH_TOKEN`
+  (the canonical Sentry provider env var); only the GitHub-secret-name has
+  changed to make the IaC-specific role explicit and to permit independent
+  rotation from the runtime `web-platform-ci` integration.
 - `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` —
   DSN-derived (see plan Phase 0.8), consumed by the per-workflow check-in
   steps. Not read by Terraform.
@@ -132,13 +147,42 @@ runtime where the workflows execute reduces moving parts. R2 backend creds
 remain in Doppler `prd_terraform` per the existing pattern in
 `scheduled-terraform-drift.yml:54-65`.
 
+**Why a dedicated Internal Integration, not the runtime `web-platform-ci`
+token, and not an Org Auth Token (revised 2026-05-19):**
+
+- The runtime `web-platform-ci` token covers `org:read`, `project:read`,
+  `project:write`, `project:releases`, `org:ci` — wider than read-only but
+  narrower than IaC needs. It lacks `alerts:write` for `sentry_issue_alert`
+  rules, and reusing it for IaC would couple two distinct lifecycles
+  (runtime check-ins + ad-hoc IaC applies) onto a single auth secret,
+  defeating independent rotation.
+- Sentry **Org Auth Tokens** have been narrowed to a single available scope
+  (`org:ci` — source-map upload + release creation + code mappings); they
+  no longer carry sufficient permission for project/alert/monitor
+  resources. Path (c) in the 2026-05-19 triad re-spawn is empirically
+  dead. Falsified at `knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`
+  Appendix B.
+- Therefore the IaC token is provisioned as a **dedicated Internal
+  Integration** named `iac-terraform-prd` on `jikigai-eu`, with permission
+  set: Project=Admin, Issue & Event=Read, Organization=Read,
+  Alerts=Read & Write, CI=checked, everything else No Access. This yields
+  `auth.scopes = [alerts:read, alerts:write, event:read, org:read,
+  project:admin, project:read, project:write]` — least-privilege for IaC
+  while keeping `monitor:*` derivable via the `project:write` umbrella.
+- Integration creation logs to the Organization Audit Log
+  (`sentry-app.add`), providing §5(2) evidence of who provisioned the IaC
+  identity — a property Personal Tokens do not have.
+
 ### Local-token source for operator runs
 
 GitHub Actions exposes secret VALUES only inside workflow steps. For local
-execution (Phase 2.1 audit, Phase 5 import), the operator uses a personal
-**Sentry user token** from `https://eu.sentry.io/settings/account/api/auth-tokens/`
-with scope `project:read` + `monitor:read` (audit) and `project:write` (import).
-The token is never persisted to Doppler or committed.
+execution (Phase 2.1 audit, Phase 5 import), the operator can fetch the
+same `SENTRY_IAC_AUTH_TOKEN` value from Doppler `soleur/prd` (where it is
+mirrored for runtime introspection convenience), or mint a separate
+personal token from
+`https://jikigai-eu.sentry.io/settings/account/api/auth-tokens/` with
+scope `project:read` + `monitor:read` (audit) and `project:write`
+(import). Operator-personal tokens are never committed.
 
 ### DE region support
 

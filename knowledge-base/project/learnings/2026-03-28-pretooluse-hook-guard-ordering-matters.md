@@ -1,3 +1,10 @@
+---
+title: PreToolUse hook guard ordering determines enforcement coverage
+date: 2026-03-28
+category: engineering
+tags: [hook-design, .claude/hooks/pre-merge-rebase.sh, medium]
+---
+
 # Learning: PreToolUse hook guard ordering determines enforcement coverage
 
 ## Problem

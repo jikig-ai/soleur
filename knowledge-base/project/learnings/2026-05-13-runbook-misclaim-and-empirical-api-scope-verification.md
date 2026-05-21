@@ -1,9 +1,14 @@
 ---
+title: 'Two compounding gaps caught while fixing the daily ruleset bypass audit (#3569)'
 date: 2026-05-13
-tags: [ops, ci, runbook, github-api, empirical-verification]
-issues: [3569, 3544, 3542, 2719]
-pr: 3736
 category: integration-issues
+tags: [ops, ci, runbook, github-api, empirical-verification]
+issues:
+  - 3569
+  - 3544
+  - 3542
+  - 2719
+pr: 3736
 ---
 
 # Two compounding gaps caught while fixing the daily ruleset bypass audit (#3569)

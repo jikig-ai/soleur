@@ -1,16 +1,15 @@
 ---
-module: System
+title: Cloudflare Dashboard React Select Comboboxes Unreachable via Playwright
 date: 2026-04-10
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Playwright browser_click on React Select combobox fails with 'element is outside of the viewport'"
-  - "React Select dropdown options not selectable via standard Playwright click even with 2000px viewport"
-  - "Downshift combobox fill() does not trigger search filter"
-root_cause: config_error
-resolution_type: workflow_improvement
-severity: medium
+category: engineering
 tags: [playwright, cloudflare, react-select, downshift, viewport, workaround]
+symptoms: [Playwright browser_click on React Select combobox fails with 'element is outside of the viewport', React Select dropdown options not selectable via standard Playwright click even with 2000px viewport, Downshift combobox fill() does not trigger search filter]
+module: System
+component: tooling
+problem_type: integration_issue
+resolution_type: workflow_improvement
+root_cause: config_error
+severity: medium
 ---
 
 # Troubleshooting: Cloudflare Dashboard React Select Comboboxes Unreachable via Playwright

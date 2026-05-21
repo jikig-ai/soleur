@@ -1,8 +1,9 @@
 ---
-title: "path.resolve does not follow symlinks -- use realpathSync for containment checks"
-category: security-issues
+title: path.resolve does not follow symlinks -- use realpathSync for containment checks
 date: 2026-03-20
-trigger: "Any path containment check (isPathInWorkspace, chroot guard, sandbox boundary) that uses path.resolve without fs.realpathSync"
+category: security-issues
+tags: [security-issues, web-platform/server, cwe-59, cwe-22, cve-2025-55130]
+trigger: Any path containment check (isPathInWorkspace, chroot guard, sandbox boundary) that uses path.resolve without fs.realpathSync
 ---
 
 # Learning: Symlink escape via path.resolve in workspace containment (CWE-59)

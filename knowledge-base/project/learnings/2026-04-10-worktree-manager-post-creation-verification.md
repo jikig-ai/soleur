@@ -1,3 +1,10 @@
+---
+title: worktree-manager.sh post-creation verification and dynamic self-path
+date: 2026-04-10
+category: workflow-patterns
+tags: [integration-issues, plugins/soleur/skills/git-worktree]
+---
+
 # Learning: worktree-manager.sh post-creation verification and dynamic self-path
 
 ## Problem

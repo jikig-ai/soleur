@@ -20,7 +20,7 @@ permalink: legal/terms-and-conditions/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 18, 2026 -- added Section 3a "Agent Command Authority" governing per-action-class scope grants and per-grant deny-by-default authorization for automated Web Platform actions; tightened Section 9 cross-reference (previous: April 10, 2026 -- added Section 8.1c Shared Content terms).
+**Last Updated:** May 19, 2026 -- extended Section 3a.2 to add the fourth tier `Auto with daily digest` for `infra.*` action classes and to clarify that the typed-SEND verbatim acknowledgement applies to the brand-critical classes under the `Approve every time` tier; refreshed the "drafts everywhere, sends nowhere" invariant to admit both autonomous tiers (PR-H #4077); previous: May 18, 2026 -- added Section 3a "Agent Command Authority" governing per-action-class scope grants and per-grant deny-by-default authorization for automated Web Platform actions; tightened Section 9 cross-reference; April 10, 2026 -- added Section 8.1c Shared Content terms.
 
 ---
 
@@ -59,13 +59,14 @@ The Web Platform performs no automated action on your behalf for an action class
 
 ### 3a.2 Default tier and "drafts everywhere, sends nowhere"
 
-Each grant carries one of three tiers:
+Each grant carries one of four tiers:
 
-- **Approve every time** -- the agent proposes; you authorize each instance before any external effect is produced. This is the safest tier and the default for any new action class.
+- **Approve every time** -- the agent proposes; you authorize each instance before any external effect is produced. For brand-critical action classes (marketing email blasts, public X threads, enterprise-tier Slack DMs, Soleur-handle Bluesky replies), you type `SEND` verbatim at click-time as the explicit consent primitive. This is the safest tier and the default for any new action class.
 - **Draft, one click** -- the agent prepares a draft; you approve with one click before any external effect is produced.
 - **Auto** -- the agent executes the action without a per-instance approval step. This tier is consequential; selecting it requires an explicit second-click acknowledgement on the grant page.
+- **Auto with daily digest** -- the agent executes infrastructure-class actions (`infra.*` -- for example, `infra.dependency_bump`, `infra.log_rotate`) without per-instance approval; you review the actions in a next-business-day digest in the Today section. Designed for action classes where per-instance oversight is uneconomic but a review window is still required.
 
-Regardless of tier, the Web Platform's binding invariant is "drafts everywhere, sends nowhere": no external message, payment instruction, or third-party transmission is produced unless either (a) you authorize that specific draft through the Web Platform user interface, or (b) you have granted the `Auto` tier for the specific action class triggering the event. Any send produced from a draft you authorize is your action, performed through Soleur as your instrument.
+Regardless of tier, the Web Platform's binding invariant is "drafts everywhere, sends nowhere": no external message, payment instruction, or third-party transmission is produced unless either (a) you authorize that specific draft through the Web Platform user interface, or (b) you have granted the `Auto` or `Auto with daily digest` tier for the specific action class triggering the event. Any send produced from a draft you authorize is your action, performed through Soleur as your instrument.
 
 ### 3a.3 Revocation
 

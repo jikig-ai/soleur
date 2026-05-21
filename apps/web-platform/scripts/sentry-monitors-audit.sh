@@ -123,10 +123,20 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
 
   # Gate 4: audit_dsn_org_id_matches_token_org_id — extract `o<id>` from DSN
   # (e.g. `o4523123` from `https://k@o4523123.ingest.de.sentry.io/789`) and
-  # compare to `.id` from Gate 1's org body. Catches split state where audit
-  # token rotated but runtime DSN still points at the old org (the phantom-
-  # ingest failure mode #3861 originally documented).
-  dsn_org_id=$(printf '%s' "${NEXT_PUBLIC_SENTRY_DSN:-${SENTRY_DSN:-}}" | grep -oE 'o[0-9]+' | head -1 | tr -d 'o')
+  # compare to `.id` from Gate 1's org body. Catches destination-controllability
+  # drift where the audit token's org-id and the runtime DSN's org-id diverge
+  # (#3861 — originally framed as "phantom-ingest to unowned third-party org"
+  # before the 2026-05-19 token-scope reframe; the gate remains useful as a
+  # general DSN/token org-id-matches check regardless of ownership framing).
+  #
+  # `|| true` braces keep `set -o pipefail` happy when the DSN env is unset
+  # (callers like `reusable-release.yml`'s release-time audit step do not
+  # pass `NEXT_PUBLIC_SENTRY_DSN`). The `[[ -n "$dsn_org_id" && ... ]]` guard
+  # below already handles empty `dsn_org_id` correctly — but without `|| true`
+  # the pipeline itself fails before reaching the guard, exiting the script
+  # with no visible error. Mirrors the same pattern on `dsn_cluster` below.
+  dsn_org_id=$(printf '%s' "${NEXT_PUBLIC_SENTRY_DSN:-${SENTRY_DSN:-}}" \
+    | { grep -oE 'o[0-9]+' || true; } | head -1 | tr -d 'o')
   token_org_id=$(jq -r '.id // empty' <<<"$gate1_body")
   if [[ -n "$dsn_org_id" && -n "$token_org_id" && "$dsn_org_id" != "$token_org_id" ]]; then
     echo "ERROR: Gate 4 (audit_dsn_org_id_matches_token_org_id) failed — DSN encodes org id ${dsn_org_id} but audit token authenticates against org id ${token_org_id}. Runtime DSN and audit token are pointing at different orgs (split-state). Refs #3861." >&2

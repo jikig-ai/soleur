@@ -1,3 +1,10 @@
+---
+title: GitHub Code Scanning API dismissed_reason format
+date: 2026-04-10
+category: engineering
+tags: [integration-issues, github-api]
+---
+
 # Learning: GitHub Code Scanning API dismissed_reason format
 
 ## Problem

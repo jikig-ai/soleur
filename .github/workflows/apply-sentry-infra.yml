@@ -15,7 +15,13 @@
 # transient failure or for ad-hoc applies (still scoped to cron monitors).
 #
 # Authentication divergence from apps/web-platform/infra/ root:
-#   - SENTRY_AUTH_TOKEN comes from a GitHub repo secret (NOT Doppler) per
+#   - SENTRY_IAC_AUTH_TOKEN (the GitHub repo secret) is dedicated to this
+#     IaC pipeline. It maps to the Internal Integration `iac-terraform-prd`
+#     on `jikigai-eu` (see ADR-031 §Authentication). The env var passed to
+#     terraform/audit scripts is still named `SENTRY_AUTH_TOKEN` because that
+#     is the canonical env var the Sentry terraform provider and audit
+#     tooling expect.
+#   - SENTRY_IAC_AUTH_TOKEN comes from a GitHub repo secret (NOT Doppler) per
 #     ADR-031 secret-store-divergence.
 #   - R2 backend creds (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) come from
 #     Doppler `prd_terraform` via `doppler secrets get --plain`.
@@ -76,14 +82,14 @@ jobs:
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Required-reviewer gate. Configured at the repo level
-    # (Settings → Environments → sentry-infra-apply) with deruelle as the
-    # sole required reviewer and a custom branch policy restricting
-    # deployments to `main`. Defense layer paired with `.github/CODEOWNERS`
-    # for PR-time review — a leaked PAT with `contents:write` would have
-    # to bypass BOTH (the PR can't merge without code-owner review AND
-    # the apply can't run without manual approval click).
-    environment: sentry-infra-apply
+    # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
+    # reviewer click was duplicative friction on top of the PR-merge gate
+    # (CODEOWNERS review + branch protection on main), and was blocking
+    # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
+    # human authorization per `hr-menu-option-ack-not-prod-write-auth`.
+    # `apply-github-infra.yml` already omits the gate without incident.
+    # See PR #4218 for the failed App-as-reviewer attempt; GitHub does
+    # not allow Apps in env reviewers (User/Team only).
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -98,11 +104,11 @@ jobs:
 
       - name: Verify required secrets present
         env:
-          SENTRY_TOKEN_CHECK: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_TOKEN_CHECK: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           if [[ -z "$SENTRY_TOKEN_CHECK" ]]; then
-            echo "::error::SENTRY_AUTH_TOKEN secret is not configured."
+            echo "::error::SENTRY_IAC_AUTH_TOKEN secret is not configured."
             exit 1
           fi
           if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
@@ -141,7 +147,7 @@ jobs:
         # operator-triggered apply traverses the 4-gate check. Fail-closed
         # — non-zero exit halts the workflow before any state mutation.
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
@@ -155,7 +161,7 @@ jobs:
         id: plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
           set -uo pipefail
@@ -169,6 +175,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_content_vendor_drift \
             -target=sentry_cron_monitor.scheduled_community_monitor \
             -target=sentry_cron_monitor.scheduled_gh_pages_cert_state \
+            -target=sentry_cron_monitor.scheduled_follow_through \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -201,7 +208,7 @@ jobs:
       - name: Terraform apply (cron monitors only)
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           terraform apply -auto-approve -input=false tfplan

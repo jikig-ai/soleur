@@ -1,3 +1,10 @@
+---
+title: 'T&C enforcement must be consistent across all surfaces'
+date: 2026-03-20
+category: engineering
+tags: [architecture, web-platform]
+---
+
 # Learning: T&C enforcement must be consistent across all surfaces
 
 ## Problem

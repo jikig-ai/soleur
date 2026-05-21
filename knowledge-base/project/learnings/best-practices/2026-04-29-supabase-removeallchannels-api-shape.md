@@ -1,10 +1,12 @@
 ---
-name: supabase-removeallchannels-api-shape
-description: supabase-js v2 `client.removeAllChannels()` returns a single Promise<RealtimeChannelStatus[]>, not an array of Promises. Wrapping it in `Promise.all(...)` typechecks but iterates the resolved status array as if each element were a Promise — coercing strings to Promises silently. Caught at typecheck only when strict; sign-out paths that ignore the return slip through.
-type: best-practice
-tags: [supabase, realtime, typescript, sdk-shape, sign-out]
+title: supabase-js removeAllChannels Returns One Promise, Not Many
+date: 2026-04-29
 category: best-practices
+tags: [supabase, realtime, typescript, sdk-shape, sign-out]
 module: apps/web-platform
+description: 'supabase-js v2 `client.removeAllChannels()` returns a single Promise<RealtimeChannelStatus[]>, not an array of Promises. Wrapping it in `Promise.all(...)` typechecks but iterates the resolved status array as if each element were a Promise — coercing strings to Promises silently. Caught at typecheck only when strict; sign-out paths that ignore the return slip through.'
+name: supabase-removeallchannels-api-shape
+type: best-practice
 ---
 
 # supabase-js removeAllChannels Returns One Promise, Not Many

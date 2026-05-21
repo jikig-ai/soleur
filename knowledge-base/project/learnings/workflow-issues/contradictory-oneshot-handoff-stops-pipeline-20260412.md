@@ -1,16 +1,16 @@
 ---
-module: System
+title: Contradictory One-Shot Handoff Instructions Stop Pipeline
 date: 2026-04-12
-problem_type: workflow_issue
-component: development_workflow
-symptoms:
-  - "One-shot pipeline stops after work skill outputs ## Work Phase Complete"
-  - "Steps 4-10 (review, QA, compound, ship) are skipped"
-root_cause: logic_error
-resolution_type: workflow_improvement
-severity: high
+category: engineering
 tags: [one-shot, pipeline, work-skill, handoff, contradictory-instructions]
+symptoms: [One-shot pipeline stops after work skill outputs ## Work Phase Complete, Steps 4-10 (review, QA, compound, ship) are skipped]
+module: System
 synced_to: [work]
+component: development_workflow
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: logic_error
+severity: high
 ---
 
 # Troubleshooting: Contradictory One-Shot Handoff Instructions Stop Pipeline

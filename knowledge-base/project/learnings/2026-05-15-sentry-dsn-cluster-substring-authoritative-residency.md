@@ -1,14 +1,13 @@
 ---
-name: sentry-dsn-cluster-substring-authoritative-residency
-description: Sentry DSN of shape o<orgInternalId>.ingest.<cluster>.sentry.io carries authoritative region binding in the <cluster> segment — orgs are region-bound, the substring is faster than the /organizations API probe (which 403s on sntrys_ org-auth tokens) and lower-scope
+title: Sentry DSN cluster substring as authoritative residency signal
 date: 2026-05-15
 category: integration-issues
 tags: [sentry, gdpr, residency, dsn, probe, article-30]
-related_issue: "#3861"
-related_pr: "#3863"
-related_learnings:
-  - 2026-05-04-sentry-org-token-region-probe-and-dashboards-scope-guard.md
-  - 2026-05-15-sentry-iac-billing-and-quirks.md
+description: 'Sentry DSN of shape o<orgInternalId>.ingest.<cluster>.sentry.io carries authoritative region binding in the <cluster> segment — orgs are region-bound, the substring is faster than the /organizations API probe (which 403s on sntrys_ org-auth tokens) and lower-scope'
+name: sentry-dsn-cluster-substring-authoritative-residency
+related_issue: '#3861'
+related_learnings: [2026-05-04-sentry-org-token-region-probe-and-dashboards-scope-guard.md, 2026-05-15-sentry-iac-billing-and-quirks.md]
+related_pr: '#3863'
 ---
 
 # Learning: Sentry DSN cluster substring as authoritative residency signal
@@ -59,6 +58,23 @@ This is the FIRST step of the deferred `/soleur:sentry-residency-check` skill (i
 1. **First Doppler call failed silently** — `doppler secrets get SENTRY_AUTH_TOKEN --plain --config prd` from the worktree returned exit code 1 with no output because the worktree CWD has no `.doppler/config.yaml` and the global token has no project binding. **Recovery:** added `--project soleur --config prd` explicitly. **Prevention:** from a fresh worktree, always pass both `--project <name> --config <name>` to `doppler secrets get` (or pre-bind via `doppler setup --project soleur --config prd --no-interactive` once at worktree creation time).
 
 2. **API probe 403'd on both clusters** — token scope too narrow for `/organizations/{org}/`, `/projects/`, `/customers/`. **Recovery:** pivoted to DSN cluster-substring (this learning). **Prevention:** in any future Sentry residency probe, attempt the DSN substring first; reach for the API only when the DSN isn't readable.
+
+## Update — 2026-05-21: three orthogonal axes, not a single residency signal
+
+This learning is correct for the **residency** question (DSN cluster substring
+is the authoritative database-cluster signal). But the 2026-05-19 reframe
+under #3861 (see learnings `2026-05-19-sentry-url-routing-three-orthogonal-dimensions.md`
+and `2026-05-19-sentry-401-is-not-unowned-verify-token-scope-first.md`)
+established that Sentry's host topology splits along **three orthogonal axes**,
+not one: (a) URL slug — which dashboard/API subdomain you reach, (b) database
+cluster — which physical EU ingest cluster serves DSN POSTs, (c) token-membership
+scope — which orgs the `SENTRY_AUTH_TOKEN` can read or write.
+
+DSN cluster substring resolves only axis (b). A 401 against
+`<slug>.sentry.io/api/0/organizations/<slug>/` is not evidence that the slug
+names an unowned org — it could equally mean the token has no membership in
+that slug. Cross-link: ADR-031 §Cluster/Host Glossary for the three-axis
+framing in operational use.
 
 ## Tags
 

@@ -1,10 +1,15 @@
 ---
+title: Agent-native review recommendations may collide with prior security removals
 date: 2026-05-05
 category: best-practices
-module: review
 tags: [review, security, agent-native, wire-schema, scope-out]
-related_issues: [3235, 3242, 2138, 2115]
+module: review
 problem_type: security_decision_collision
+related_issues:
+  - 3235
+  - 3242
+  - 2138
+  - 2115
 ---
 
 # Learning: Agent-native review recommendations may collide with prior security removals

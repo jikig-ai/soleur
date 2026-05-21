@@ -1,3 +1,10 @@
+---
+title: WebSocket First-Message Auth TOCTOU Race
+date: 2026-03-20
+category: engineering
+tags: [security-issues, web-platform/ws-handler]
+---
+
 # Learning: WebSocket First-Message Auth TOCTOU Race
 
 ## Problem

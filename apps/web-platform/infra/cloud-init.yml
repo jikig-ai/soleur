@@ -8,6 +8,16 @@ packages:
 groups:
   - docker
 
+# CI SSH key for the apply-deploy-pipeline-fix.yml file/remote-exec
+# provisioner chain. Mirrors terraform_data.root_authorized_keys
+# (see ci-ssh-key.tf) for fresh-host parity — on a brand-new host this
+# block lands the key before the terraform_data resource fires, then the
+# resource's `grep -qxF` no-ops on the subsequent apply. Top-level
+# placement applies the key to the default user (root on Hetzner
+# ubuntu-24.04 cloud images).
+ssh_authorized_keys:
+  - ${ci_ssh_public_key_openssh}
+
 users:
   - default
   - name: deploy
@@ -33,6 +43,19 @@ write_files:
   - path: /etc/sudoers.d/deploy-chown
     content: |
       deploy ALL=(root) NOPASSWD: /usr/bin/chown 1001\:1001 /mnt/data/workspaces
+    owner: root:root
+    permissions: '0440'
+
+  # #4144 — permits ci-deploy.sh to invoke inngest-bootstrap.sh as root
+  # from the fixed path /tmp/inngest-extract/ (no wildcards, sudo-rs safe).
+  # env_keep preserves INNGEST_CLI_VERSION + SHA across the sudo boundary.
+  # Mirrored in apps/web-platform/infra/deploy-inngest-bootstrap.sudoers
+  # so terraform_data.deploy_pipeline_fix can refresh existing hosts.
+  - path: /etc/sudoers.d/deploy-inngest-bootstrap
+    content: |
+      Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
+      Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256"
+      deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
     owner: root:root
     permissions: '0440'
 
@@ -198,8 +221,14 @@ write_files:
       ProtectSystem=strict
       ProtectHome=read-only
       PrivateTmp=true
-      ReadWritePaths=/mnt/data /var/lock
-      ReadOnlyPaths=/etc/webhook /usr/local/bin /etc/default/webhook-deploy
+      # Bootstrap path (inngest-bootstrap.sh + future deploy <component>
+      # handlers) installs systemd units + binaries + env files via sudo.
+      # ProtectSystem=strict is namespace-scoped — sudo elevates UID but does
+      # NOT escape the mount namespace, so without these explicit
+      # ReadWritePaths the inngest bootstrap fails with cryptic chown error
+      # messages. See #4017 substrate audit (2026-05-19).
+      ReadWritePaths=/mnt/data /var/lock /etc/systemd/system /etc/default /var/lib/inngest /usr/local/bin
+      ReadOnlyPaths=/etc/webhook /etc/default/webhook-deploy
       TimeoutStopSec=180
 
       [Install]
@@ -391,6 +420,26 @@ runcmd:
     printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=cloud-init" \
       > /mnt/data/plugins/soleur/.seed-complete
 
+  # Bootstrap Inngest server on first boot (#4118, Tier 1).
+  # Pinned image tag tracks apps/web-platform/infra/inngest.tf:locals.inngest_cli_version
+  # (image tag = bootstrap-script version; inngest-cli version is sourced from
+  # the image's Config.Env at run time). Upgrades go through the deploy webhook
+  # path (push vinngest-vX.Y.Z tag); cloud-init installs only on fresh hosts.
+  - |
+    set -e
+    docker pull ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0
+    EXTRACT_DIR=$(mktemp -d)
+    cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
+    trap cleanup EXIT
+    docker create --name soleur-inngest-bootstrap-extract ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0
+    docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
+    image_env=$(docker inspect ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0 -f '{{range .Config.Env}}{{println .}}{{end}}')
+    chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
+    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
+    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | head -1 | cut -d= -f2-)
+    env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
+      bash "$EXTRACT_DIR/inngest-bootstrap.sh"
+
   - |
     set -e
     # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)
@@ -414,6 +463,8 @@ runcmd:
       --restart unless-stopped \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
+      --add-host host.docker.internal:host-gateway \
+      -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:80:3000 \

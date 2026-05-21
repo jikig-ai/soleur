@@ -1,3 +1,15 @@
+---
+title: Multi-reviewer convergence, SDK onText cumulative-block contract, and exhaustiveness-mirror pattern
+date: 2026-05-12
+category: workflow-patterns
+tags:
+- workflow-patterns
+- implementation
+- and
+- multi
+- reviewer
+---
+
 # Learning: Multi-reviewer convergence, SDK onText cumulative-block contract, and exhaustiveness-mirror pattern
 
 ## Problem

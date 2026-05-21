@@ -1,12 +1,12 @@
 ---
+title: 'Brainstorm Phase 1.1 — walk migration history for shipped remediation when the issue''s named gap touches DB schema'
 date: 2026-05-15
-topic: brainstorm Phase 1.1 — walk migration history (not just grep) before designing a fix for a domain-with-schema issue
-related:
-  - 2026-05-13-brainstorm-grep-cited-flag-symbol-against-main-before-spawning-leaders.md
-  - 2026-05-11-brainstorm-grep-approach-hook-before-spawning-leaders.md
-  - 2026-05-07-brainstorm-verify-referenced-pr-state-and-leader-infra-claims.md
+category: engineering
+tags: [brainstorm, walk, migration, history, shipped, remediation]
 issue: 3205
 pr: 3853
+related: [2026-05-13-brainstorm-grep-cited-flag-symbol-against-main-before-spawning-leaders.md, 2026-05-11-brainstorm-grep-approach-hook-before-spawning-leaders.md, 2026-05-07-brainstorm-verify-referenced-pr-state-and-leader-infra-claims.md]
+topic: brainstorm Phase 1.1 — walk migration history (not just grep) before designing a fix for a domain-with-schema issue
 ---
 
 # Brainstorm Phase 1.1 — walk migration history for shipped remediation when the issue's named gap touches DB schema

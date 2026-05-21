@@ -1,7 +1,8 @@
 ---
+title: 'Cloudflare "Block AI bots" feature bypasses the WAF phase pipeline; terraform plan is structurally insufficient for cloudflare_ruleset PRs'
+date: 2026-04-21
 category: integration-issues
 tags: [cloudflare, bot-management, ruleset, waf, terraform, ai-crawlers, aeo]
-date: 2026-04-21
 module: apps/web-platform/infra
 problem_type: integration-issue
 ---

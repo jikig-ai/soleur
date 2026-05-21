@@ -1,3 +1,10 @@
+---
+title: Use --name-status not --name-only for diff-based validation gates
+date: 2026-04-05
+category: engineering
+tags: [logic-errors, plugins/soleur/skills/preflight]
+---
+
 # Learning: Use --name-status not --name-only for diff-based validation gates
 
 ## Problem

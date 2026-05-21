@@ -1,10 +1,11 @@
 ---
-category: security-issues
-module: preflight, ship-pipeline
+title: 'Preflight security gates: SKIP-vs-FAIL defaults and the "I don''t know" trap'
 date: 2026-04-27
+category: security-issues
+tags: [security, preflight, fail-open, fail-closed, dns, doppler, supabase, isolation]
+module: preflight, ship-pipeline
 issue: 2887
 pr: 2903
-tags: [security, preflight, fail-open, fail-closed, dns, doppler, supabase, isolation]
 ---
 
 # Preflight security gates: SKIP-vs-FAIL defaults and the "I don't know" trap

@@ -1,3 +1,10 @@
+---
+title: .dockerignore patterns differ between Next.js and Bun runtimes
+date: 2026-03-20
+category: engineering
+tags: [build-errors, web-platform, docker]
+---
+
 # Learning: .dockerignore patterns differ between Next.js and Bun runtimes
 
 ## Problem

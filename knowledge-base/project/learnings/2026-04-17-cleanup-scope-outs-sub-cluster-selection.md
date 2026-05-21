@@ -1,8 +1,9 @@
 ---
+title: cleanup-scope-outs sub-cluster selection on large areas
 date: 2026-04-17
 category: workflow
-module: cleanup-scope-outs
 tags: [scope-outs, refactor-batching, skill-improvement]
+module: cleanup-scope-outs
 ---
 
 # Learning: cleanup-scope-outs sub-cluster selection on large areas

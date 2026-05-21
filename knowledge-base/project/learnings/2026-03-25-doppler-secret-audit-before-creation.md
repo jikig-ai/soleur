@@ -1,3 +1,10 @@
+---
+title: Audit All Doppler Configs Before Declaring Secrets Missing
+date: 2026-03-25
+category: security
+tags: [doppler, secret, audit, before, creation]
+---
+
 # Audit All Doppler Configs Before Declaring Secrets Missing
 
 **Date:** 2026-03-25

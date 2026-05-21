@@ -1,3 +1,10 @@
+---
+title: CI sentinel paren-safety when substring-matching canonical prose
+date: 2026-05-15
+category: ci-cd
+tags: [best-practices, plugins/soleur/skills/plan, plugins/soleur/skills/review, 3819 caught at plan-review, 3809 canonical source, cq-regex-unicode-separators-escape-only sibling defect class]
+---
+
 # Learning: CI sentinel paren-safety when substring-matching canonical prose
 
 ## Problem

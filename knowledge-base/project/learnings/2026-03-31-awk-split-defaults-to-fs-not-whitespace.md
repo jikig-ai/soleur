@@ -1,16 +1,15 @@
 ---
-module: System
+title: awk split() Defaults to FS, Not Whitespace
 date: 2026-03-31
-problem_type: logic_error
-component: tooling
-symptoms:
-  - "awk split() returns 1 field for a multi-word string when -F is set to TAB"
-  - "wcount=1 despite rule text containing 12+ words"
-  - "Jaccard similarity always 0 because all words treated as single token"
-root_cause: config_error
-resolution_type: code_fix
-severity: high
+category: shell-scripting
 tags: [awk, mawk, split, field-separator, tokenization, bash]
+symptoms: [awk split() returns 1 field for a multi-word string when -F is set to TAB, wcount=1 despite rule text containing 12+ words, Jaccard similarity always 0 because all words treated as single token]
+module: System
+component: tooling
+problem_type: logic_error
+resolution_type: code_fix
+root_cause: config_error
+severity: high
 ---
 
 # Troubleshooting: awk split() Defaults to FS, Not Whitespace

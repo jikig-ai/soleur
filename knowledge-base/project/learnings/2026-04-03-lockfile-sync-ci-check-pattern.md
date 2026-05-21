@@ -1,3 +1,10 @@
+---
+title: CI lockfile sync check prevents dual-lockfile desync
+date: 2026-04-03
+category: ci-cd
+tags: [integration-issues, ci]
+---
+
 # Learning: CI lockfile sync check prevents dual-lockfile desync
 
 ## Problem

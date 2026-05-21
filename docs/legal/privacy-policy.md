@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** May 18, 2026 (added Section 8.3 "Automated decision-making and Article 22 rights" disclosing the Web Platform's agent-runtime scope grants and human-review affordance; scoped the Buttondown-newsletter "does not involve profiling or automated decision-making" line to that processor only; previous: May 16, 2026 extended Section 4.5 with the off-site Cloudflare R2 evidence archive for CLA signatures and added Section 5.11 Cloudflare R2 sub-processor entry per #3209)
+**Last Updated:** May 19, 2026 (extended Section 8.3 to add the fourth tier `Auto with daily digest` for `infra.*` action classes, refresh action-class examples to include the new `external_low_stakes` and `infra.*` categories landed in PR-H #4077, and add the Article 22(3) one-liner that the next-business-day digest review window IS the human-review path for `auto_with_digest`; added Section 4.10 "LinkedIn Company Page publication" data-class block, Section 5.12 "LinkedIn Ireland Unlimited Company" and Section 5.13 "Microsoft Ireland Operations Ltd" sub-processor entries, extended Section 6 with the dual-basis disclosure for LinkedIn Page operation [Art. 6(1)(f) marketing + Art. 6(1)(c) K-bis business-verification transfer], extended Section 7 retention, added Section 8.1 "LinkedIn-published content carve-out" paragraph for Article 17 cascade limitation per EDPB Guidelines 5/2019, and extended Section 10 international-transfers with the LinkedIn Ireland + Microsoft Ireland rows per #4051; previous: May 18, 2026 added Section 8.3 "Automated decision-making and Article 22 rights" disclosing the Web Platform's agent-runtime scope grants and human-review affordance; scoped the Buttondown-newsletter "does not involve profiling or automated decision-making" line to that processor only; May 16, 2026 extended Section 4.5 with the off-site Cloudflare R2 evidence archive for CLA signatures and added Section 5.11 Cloudflare R2 sub-processor entry per #3209)
 
 ## 1. Introduction
 
@@ -146,6 +146,26 @@ When you enable push notifications on the Web Platform, we store your push subsc
 
 <!-- End: Push notifications -->
 
+<!-- Added 2026-05-19: LinkedIn Company Page publication (#4051) -->
+
+### 4.10 LinkedIn Company Page publication
+
+Jikigai operates the Soleur-branded LinkedIn Company Page at `https://www.linkedin.com/company/jikigai/` as a marketing, community, and case-study distribution channel for Soleur content. The Page is administered by Jikigai SARL as a controller. The legitimate-interest analysis under Article 6(1)(f) for this processing is documented in the standalone Legitimate Interest Assessment at `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md`. Article 30 register entry: Processing Activity 15 (`knowledge-base/legal/article-30-register.md`).
+
+- **Data subjects:** (i) **LinkedIn members who follow the Jikigai Page**; (ii) **LinkedIn members who engage with Jikigai Page posts** (reactions, comments, shares); (iii) **the Jikigai SARL gérant** (Jean Deruelle) as a separately-identifiable data subject for the K-bis business-verification transfer to Microsoft Ireland (one-time at appeal-flow step).
+- **Data processed (Page operation):** Post content (operator-authored — no Soleur-user personal data; no `@mention` of LinkedIn members; no follower-list extraction to Soleur-controlled storage). Operational secrets (`LINKEDIN_ORG_ACCESS_TOKEN`, 60-day OAuth bearer, Doppler `prd` + GitHub Actions secret; `LINKEDIN_ORG_ID` organisation URN).
+- **Data processed (Page Insights consumption):** **Aggregate metrics only** surfaced by LinkedIn Page Insights to the Page admin — impressions, reactions, comments, shares, follower growth. No per-individual decisioning, no profiling on Soleur infrastructure, no cross-referencing against Soleur's own user database.
+- **Data processed (K-bis transfer, one-time):** K-bis extract contents (gérant full legal name, Jikigai SARL registered address, French commerce-registry number (RCS Paris 927 585 729), capital structure metadata) plus tax registration and registered-address proof — submitted once to Microsoft Ireland Operations Ltd via the LinkedIn Page admin upload UI; no Soleur-side persistence beyond the operator's local file system at the upload moment.
+- **Purpose:** Operating the Jikigai LinkedIn Company Page as a marketing / community / case-study distribution channel for Soleur content; consuming aggregate Page Insights to measure marketing effectiveness; satisfying LinkedIn's business-verification requirements (one-time K-bis transfer) as a precondition to Community Management API access.
+- **Legal basis (Page operation + Page Insights):** **Legitimate interest (Article 6(1)(f) GDPR)** — operating a B2B marketing presence on the canonical professional-network platform; the LIA referenced above documents the three-part purpose / necessity / balancing test.
+- **Legal basis (K-bis transfer):** **Legal obligation (Article 6(1)(c) GDPR)** — Microsoft's KYC-equivalent business-verification is a condition of Community Management API access under the LinkedIn Platform Terms; Jikigai must transmit corporate identity documents to satisfy the platform-side legal-due-diligence obligation.
+- **Joint-controller posture (Page Insights):** Under CJEU C-210/16 *Wirtschaftsakademie Schleswig-Holstein* and EDPB Guidelines 07/2020, the Page admin and LinkedIn Ireland are joint controllers with respect to Page Insights analytics on aggregate visitor data. The standard joint-controller arrangement provided by LinkedIn in its Page Admin terms governs this relationship; the Article 26 information requirements toward data subjects are satisfied via this Section 4.10 and Section 5.12 below.
+- **Recipients:** **LinkedIn Ireland Unlimited Company** (independent controller for the Page; joint controller with Jikigai for Page Insights — see Section 5.12); **Microsoft Ireland Operations Ltd** (custodian of business-verification documents — see Section 5.13). No other third-party recipients.
+- **Retention:** Posts and engagement metadata are controlled by LinkedIn under its Page-data retention policies — Soleur does not set the envelope. `LINKEDIN_ORG_ACCESS_TOKEN` follows the 60-day vendor-mandated rotation. K-bis extracts retained by Microsoft Ireland under its EU Data Boundary commitments (no Soleur-side persistence). The internal rolling tracker (GitHub Issue #4046) is append-only operational log, closed when queued posts are re-published post-approval.
+- **Right of erasure (Article 17) — LinkedIn-published content carve-out:** See Section 8.1 below. Soleur can delete its source copy of any post and issue a corresponding deletion request to LinkedIn, but cannot guarantee removal from LinkedIn's cached or replicated systems.
+
+<!-- End: LinkedIn Company Page publication -->
+
 ## 5. Third-Party Services
 
 ### 5.1 Anthropic Claude API
@@ -251,6 +271,29 @@ We use **Cloudflare R2** ([cloudflare.com/products/r2](https://www.cloudflare.co
 - **Retention:** Ten (10) years on the bucket; monthly RFC 3161 timestamps retained indefinitely as part of the chain.
 - **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR), with the balancing test documented in the GDPR Policy §3.4.
 
+### 5.12 LinkedIn Ireland Unlimited Company (LinkedIn Company Page)
+
+We operate the Soleur LinkedIn Company Page at `https://www.linkedin.com/company/jikigai/`. **LinkedIn Ireland Unlimited Company** ([linkedin.com](https://www.linkedin.com)) is an independent controller for the LinkedIn platform and a **joint controller** with Jikigai for Page Insights analytics (per CJEU C-210/16 *Wirtschaftsakademie* and EDPB Guidelines 07/2020).
+
+- **Data processed:** Posts published by Jikigai (operator-authored content); aggregate Page Insights metrics (impressions, reactions, comments, shares, follower growth); follower identifiers (display name + profile URL slug, voluntarily made public by the follower); engagement metadata (timestamps, reaction type, comment body).
+- **Purpose:** Operating the Jikigai Company Page as a B2B marketing / community / case-study distribution channel for Soleur content; consuming aggregate Page Insights to measure marketing effectiveness.
+- **DPA / Joint-controller arrangement:** [LinkedIn Subscription Agreement](https://www.linkedin.com/legal/l/subscription-agreement) and the [LinkedIn Pages Terms](https://www.linkedin.com/legal/l/pages-terms), incorporating the standard joint-controller arrangement for Page Insights. The arrangement is accepted by Jikigai SARL via its Page admin role on the `jikigai` Page slug.
+- **Storage location:** LinkedIn operates EU-region infrastructure for Page data with US fallback. International transfers governed by EU-US Data Privacy Framework (DPF) and Standard Contractual Clauses (SCCs), Module 2.
+- **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR) — operating the marketing channel and consuming aggregate Page Insights. The full three-part test is documented at `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md`.
+- **Data subject rights:** LinkedIn members exercise their rights under LinkedIn's own data-subject-request flows for data LinkedIn holds about them; for the Jikigai-specific Page admin's aggregate analytics, contact <legal@jikigai.com>. See Section 8.1 "LinkedIn-published content carve-out" for the Article 17 limitation.
+
+### 5.13 Microsoft Ireland Operations Ltd (LinkedIn business verification)
+
+We use **Microsoft Ireland Operations Ltd** (a Microsoft subsidiary; Microsoft is LinkedIn's parent company) as the custodian of the K-bis business-verification documents required by LinkedIn's Community Management API access flow. Microsoft Ireland acts as a **separate controller** for the document-custody role (distinct from LinkedIn Ireland's role as Page-data controller).
+
+- **Data processed:** K-bis extract contents (gérant full legal name, Jikigai SARL registered address, French commerce-registry number (RCS Paris 927 585 729), capital structure metadata) plus tax registration and registered-address proof. **One-time transfer** at the appeal-flow step; no ongoing transfer.
+- **Purpose:** Satisfying LinkedIn's KYC-equivalent business-verification requirement as a precondition to Community Management API access under the LinkedIn Platform Terms.
+- **DPA:** Microsoft's controller-to-controller transfer terms apply; document custody falls under [Microsoft's EU Data Boundary](https://aka.ms/EUDataBoundary) commitments.
+- **Storage location:** Microsoft routes verification documents under its EU Data Boundary; onward transfer safeguards rest on Microsoft's published EUDB scope (intra-EU at custody).
+- **Legal basis:** Legal obligation (Article 6(1)(c) GDPR) — Microsoft's verification process is a condition of LinkedIn API access under the LinkedIn Platform Terms, and Jikigai must transmit corporate identity documents to satisfy the platform-side legal-due-diligence obligation.
+- **Retention:** Controlled by Microsoft Ireland under its EUDB commitments — typical KYC retention envelope (years). Jikigai does not retain a Soleur-side copy beyond the operator's local file system at the upload moment.
+- **Note on natural-person disclosure:** The K-bis extract names the SARL gérant (Jean Deruelle) as a natural person; this is a controller-to-controller transfer of natural-person data per CNIL délibération SAN-2024-006. The gérant is informed of this transfer via this Section 5.13 and via Section 4.10 above.
+
 ## 6. Legal Basis for Processing (GDPR -- EU Users)
 
 For users in the European Union or European Economic Area:
@@ -267,6 +310,8 @@ If you interact with the GitHub repository (e.g., filing issues), the legal basi
 
 For newsletter subscriptions, the legal basis for processing your email address is **consent** (Article 6(1)(a) GDPR). You provide consent by submitting the signup form and confirming your subscription via the double opt-in email. You may withdraw consent at any time by unsubscribing. For the technical metadata automatically collected by Buttondown during subscription (IP address, referrer URL, subscription timestamp, browser/device metadata), the legal basis is **legitimate interest** (Article 6(1)(f) GDPR) -- service operation and abuse prevention. You may object to this processing under Article 21 (see Section 8).
 
+For the LinkedIn Company Page publication described in Section 4.10, the processing rests on a **dual basis** because two distinct sub-activities are bundled: (a) **Page operation and aggregate Page Insights consumption** rely on **legitimate interest** (Article 6(1)(f) GDPR) — operating a B2B marketing channel on the canonical professional-network platform; the full three-part purpose / necessity / balancing test is documented in the standalone LIA at `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md`, and the joint-controller posture for Page Insights with LinkedIn Ireland (per CJEU C-210/16 *Wirtschaftsakademie*) is recorded in Section 4.10 and Section 5.12. (b) **The one-time K-bis business-verification transfer to Microsoft Ireland** rests on **legal obligation** (Article 6(1)(c) GDPR) — Microsoft's KYC-equivalent verification is a condition of LinkedIn Community Management API access under the LinkedIn Platform Terms; Jikigai must transmit corporate identity documents to satisfy the platform-side legal-due-diligence obligation. The dual-basis split is intentional: the legitimate-interest balancing only applies to (a); (b) is not subject to a balancing test because Article 6(1)(c) bases do not require one.
+
 ## 7. Data Retention
 
 - **Plugin data:** All data created by the Plugin is stored locally on your machine. You control its retention and deletion entirely.
@@ -274,6 +319,7 @@ For newsletter subscriptions, the legal basis for processing your email address 
 - **Docs Site data:** Any data collected by GitHub Pages is retained according to GitHub's data retention policies.
 - **Repository interaction data:** Issues, pull requests, and other contributions are retained on GitHub according to its standard policies and your own account settings.
 - **Newsletter subscription data:** Your email address is retained by Buttondown for as long as you remain subscribed. Upon unsubscription, your email is removed from the active subscriber list. Technical metadata (IP address, referrer URL, subscription timestamp, browser/device metadata) is retained according to Buttondown's data retention practices. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription.
+- **LinkedIn Company Page data:** Posts and engagement metadata published to the Jikigai Company Page (`https://www.linkedin.com/company/jikigai/`) are controlled by LinkedIn Ireland under its Page-data retention policies; Soleur does not set the retention envelope. The internal rolling-tracker GitHub Issue (#4046) is append-only operational log, closed (`--reason completed`) when queued posts are re-published post-approval. `LINKEDIN_ORG_ACCESS_TOKEN` rotates on a 60-day vendor-mandated cadence (old tokens revoked at the LinkedIn developer portal). The K-bis business-verification documents (one-time transfer to Microsoft Ireland — Section 5.13) are retained by Microsoft Ireland under its EU Data Boundary commitments per its KYC retention envelope; Jikigai retains no Soleur-side copy.
 
 ## 8. Your Rights
 
@@ -296,6 +342,8 @@ For the Plugin, these rights are most relevant to your interactions with GitHub 
 
 Both channels fulfil the same legal right; the self-serve path exists for convenience and does not replace the email channel.
 
+**LinkedIn-published content carve-out (Article 17 limitation).** Where you exercise your right to erasure (Article 17 GDPR) in respect of **LinkedIn-published content** — that is, posts published by Jikigai to the Soleur LinkedIn Company Page at `https://www.linkedin.com/company/jikigai/` that reference you, or your engagement with such posts — Jikigai's obligations are necessarily limited by the fact that the content resides on LinkedIn's infrastructure (and downstream search-engine caches, archive services, and member-side notification surfaces) under LinkedIn Ireland's controller relationship with each LinkedIn member. Upon receiving a verified erasure request directed at LinkedIn-published content, Jikigai will (i) delete the source copy from its operator-side systems (drafts, internal trackers); (ii) issue a corresponding deletion request to LinkedIn via the Page admin UI within five (5) business days; and (iii) confirm in writing once the LinkedIn-side deletion has been issued. However, Jikigai **cannot guarantee removal from LinkedIn's cached or replicated systems, downstream search-engine indices, third-party archival services, or member-side notification surfaces**; this limitation flows from EDPB Guidelines 5/2019 on the criteria for the right to be forgotten, which recognises best-effort cascade rather than absolute removal across third-party-replicated content. For any erasure that requires removal of comments authored by a LinkedIn member other than yourself, the LinkedIn member retains primary control via their own LinkedIn account; please contact LinkedIn directly in that case. To initiate an erasure request directed at LinkedIn-published content on the Jikigai Page, email <legal@jikigai.com> with the subject "LinkedIn erasure" and a link to the specific post or comment.
+
 To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
 
 ### 8.2 Rights Under US Privacy Laws
@@ -306,9 +354,9 @@ Users in the United States may have additional rights under state privacy laws (
 
 The Web Platform includes agent-runtime features that can produce decisions on your behalf in response to external events (for example, a Stripe `invoice.payment_failed` webhook). These features are governed by Section 3a ("Agent Command Authority") of the Terms & Conditions and, on the data-protection side, by this section and by Section 2.3(o) of the Data Protection Disclosure.
 
-**Opt-in by class and tier.** The Web Platform performs no automated action on your behalf for an action class (for example, `finance.payment_failed`) unless you have explicitly granted authorization for that class via the `/dashboard/settings/scope-grants` interface, at one of three tiers: `Approve every time` (you authorize each instance), `Draft, one click` (the agent prepares a draft you approve), or `Auto` (the agent executes without per-instance approval, after a second-click acknowledgement at grant time). The absence of a grant is a denial; the `/dashboard/audit` viewer renders every automated action with the action class, tier active at the moment of the event, timestamp, and BYOK token + cost data.
+**Opt-in by class and tier.** The Web Platform performs no automated action on your behalf for an action class (for example, `finance.payment_failed`, `external.low_stakes.customer_status_update`, `infra.dependency_bump`) unless you have explicitly granted authorization for that class via the `/dashboard/settings/scope-grants` interface, at one of four tiers: `Approve every time` (you authorize each instance, typing `SEND` verbatim at click-time for brand-critical classes), `Draft, one click` (the agent prepares a draft you approve), `Auto` (the agent executes without per-instance approval, after a second-click acknowledgement at grant time), or `Auto with daily digest` (the agent executes infrastructure-class actions and summarizes them in a next-business-day digest you review). The absence of a grant is a denial; the `/dashboard/audit` viewer renders every automated action with the action class, tier active at the moment of the event, timestamp, and BYOK token + cost data. For infrastructure-class actions (`Auto with daily digest`), the right to human review under Article 22(3) is exercised via the next-business-day digest review window provided in the Today section -- you may revoke the grant or re-classify the action class at any time at `/dashboard/settings/scope-grants`.
 
-**Article 22 rights.** Where automated processing produces a decision concerning you (in particular, any action under the `Auto` tier), you have the right under Article 22(3) GDPR to:
+**Article 22 rights.** Where automated processing produces a decision concerning you (in particular, any action under the `Auto` or `Auto with daily digest` tier), you have the right under Article 22(3) GDPR to:
 
 - **Obtain human intervention** -- request that a human review the decision;
 - **Express your point of view** -- submit your perspective on the decision; and
@@ -340,6 +388,11 @@ When using the Anthropic Claude API, data may be transferred to Anthropic's serv
 For newsletter subscriptions, subscriber email addresses are transmitted to Buttondown, a US-based service. International data transfers are governed by Standard Contractual Clauses (SCCs) per Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). See [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy) for details.
 
 Plausible Analytics, used for Docs Site analytics (see Section 4.3), processes all data exclusively within the European Union (Hetzner, Germany). No international data transfers occur for analytics data. See [Plausible's Data Policy](https://plausible.io/data-policy) for details.
+
+For the LinkedIn Company Page publication (see Section 4.10 and Sections 5.12–5.13):
+
+- **LinkedIn Ireland Unlimited Company:** EU-region infrastructure for Page data with US fallback. International data transfers covered by the **EU-US Data Privacy Framework (DPF)** and **Standard Contractual Clauses (SCCs), Module 2** under LinkedIn / Microsoft's DPF certifications. The joint-controller arrangement for Page Insights with Jikigai is governed by LinkedIn's standard Page Admin terms.
+- **Microsoft Ireland Operations Ltd:** Intra-EU controller-to-controller transfer of the K-bis business-verification documents (one-time, at appeal-flow step). Microsoft routes onward processing under its [EU Data Boundary](https://aka.ms/EUDataBoundary) commitments; onward-transfer safeguards rest on Microsoft's published EUDB scope.
 
 ## 11. Security
 
@@ -390,3 +443,7 @@ To exercise your data subject rights under GDPR, send a written request to <lega
 ---
 
 > **Related documents:** This Privacy Policy should be read alongside the companion [Cookie Policy](cookie-policy.md) for detailed information about cookies used by the Docs Site (GitHub Pages), the [GDPR Policy](gdpr-policy.md) for detailed GDPR-specific disclosures, and the [Individual Contributor License Agreement](individual-cla.md) for details on contributor data processing.
+
+---
+
+<!-- PR-H (#3244) #4066 — 2026-05-19: Web Platform agent runtime ingests GitHub repository activity (PR titles/bodies, issue titles/bodies, CI run names+URLs, CVE / secret-scanning metadata) via a GitHub App webhook installed on the founder's own account/orgs. Surfaced display-only as draft cards in /dashboard Today section. Render-time `redactGithubSourcedText` is the load-bearing Art. 14 minimization gate (per plan TR6 amendment). Cache-Control: private, max-age=60 on the Today endpoint. Authoritative shape: knowledge-base/legal/article-30-register.md Processing Activity 17. Operator may revoke any GitHub action class at /dashboard/settings/scope-grants (PR-G). -->

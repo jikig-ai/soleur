@@ -1,3 +1,10 @@
+---
+title: Plausible API JSON response validation bypass
+date: 2026-04-02
+category: engineering
+tags: [runtime-errors, ci/weekly-analytics]
+---
+
 # Learning: Plausible API JSON response validation bypass
 
 ## Problem

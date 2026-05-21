@@ -1,3 +1,10 @@
+---
+title: startsWith path matching in Next.js middleware allows unintended bypasses
+date: 2026-03-20
+category: engineering
+tags: [security-issues, web-platform/middleware]
+---
+
 # Learning: startsWith path matching in Next.js middleware allows unintended bypasses
 
 ## Problem

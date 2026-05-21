@@ -1,15 +1,20 @@
 ---
-name: five-agent-panel-orthogonal-axis-converges-on-delete
-description: When a plan-review panel covers two orthogonal axes (simplification = DHH + code-simplicity; correctness = Kieran + architecture-strategist + spec-flow), independent convergence on the same scope from BOTH axes is a textbook "prefer delete over fix" signal. PR-1 of TR9 (#3948) had 4-of-5 agents flag `cron_run_ledger` from 4 different lenses (over-engineering / native-Inngest-semantics-duplicate / production plpgsql cast bug / 24h operator-retry trap); deletion dissolved all four findings AND the architecturally-suggested fix (forward-compatibility schema column) was made moot. Two latent-bug subpatterns surfaced alongside.
-metadata:
-  type: best-practice
-  category: plan-quality
-  module: plan-review
+title: '5-agent panel orthogonal-axis convergence is "prefer delete over fix"'
 date: 2026-05-18
-related_issues: [3948, 3947, 3244, 3940, 3985]
-related_pr: "#3985 (draft)"
-related_plan: knowledge-base/project/plans/2026-05-18-feat-pr-1-migrate-scheduled-daily-triage-to-inngest-cron-tr9-plan.md
+category: agent-design
+tags: [five, agent, panel, orthogonal, axis, converges, delete]
+description: 'When a plan-review panel covers two orthogonal axes (simplification = DHH + code-simplicity; correctness = Kieran + architecture-strategist + spec-flow), independent convergence on the same scope from BOTH axes is a textbook "prefer delete over fix" signal. PR-1 of TR9 (#3948) had 4-of-5 agents flag `cron_run_ledger` from 4 different lenses (over-engineering / native-Inngest-semantics-duplicate / production plpgsql cast bug / 24h operator-retry trap); deletion dissolved all four findings AND the architecturally-suggested fix (forward-compatibility schema column) was made moot. Two latent-bug subpatterns surfaced alongside.'
+metadata: {'type': 'best-practice', 'category': 'plan-quality', 'module': 'plan-review'}
+name: five-agent-panel-orthogonal-axis-converges-on-delete
 related_adr: ADR-033 (active; I3/I4 refined post-review)
+related_issues:
+  - 3948
+  - 3947
+  - 3244
+  - 3940
+  - 3985
+related_plan: knowledge-base/project/plans/2026-05-18-feat-pr-1-migrate-scheduled-daily-triage-to-inngest-cron-tr9-plan.md
+related_pr: '#3985 (draft)'
 ---
 
 # Learning: 5-agent panel orthogonal-axis convergence is "prefer delete over fix"

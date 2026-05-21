@@ -1,10 +1,12 @@
 ---
-name: plan-time-grep-all-agent-invocation-surfaces-not-just-named-entry-point
-description: When a plan extends an agent body (review, simplicity, security, etc.), grep ALL invocation surfaces across plugins/**, .claude/hooks/, scripts/, and .github/workflows/ — not just the named entry-point skill (/soleur:review, /soleur:plan-review, etc.). Agents are typically invoked from 3-7 surfaces; brainstorm + first-draft plan reliably name only 1-2. The unnamed surfaces often pass non-diff inputs that require explicit fallback strings in the agent body to avoid hallucinated content.
-type: best-practice
-tags: [plan-skill, agent-extension, invocation-surface, fallback-strings, plan-review]
+title: Grep ALL Agent Invocation Surfaces at Plan Time
+date: 2026-05-15
 category: best-practices
+tags: [plan-skill, agent-extension, invocation-surface, fallback-strings, plan-review]
 module: plan
+description: 'When a plan extends an agent body (review, simplicity, security, etc.), grep ALL invocation surfaces across plugins/**, .claude/hooks/, scripts/, and .github/workflows/ — not just the named entry-point skill (/soleur:review, /soleur:plan-review, etc.). Agents are typically invoked from 3-7 surfaces; brainstorm + first-draft plan reliably name only 1-2. The unnamed surfaces often pass non-diff inputs that require explicit fallback strings in the agent body to avoid hallucinated content.'
+name: plan-time-grep-all-agent-invocation-surfaces-not-just-named-entry-point
+type: best-practice
 ---
 
 # Grep ALL Agent Invocation Surfaces at Plan Time

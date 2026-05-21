@@ -1,23 +1,11 @@
 ---
+title: 'Repo-research for "rotate everywhere" features must inventory scheduled CI workflows, not just runtime config'
 date: 2026-05-16
 category: process
+tags: [repo-research, credential-rotation, secret-stores, atomic-swap, blast-radius, scheduled-workflows, brainstorm, sentry]
 module: brainstorm, repo-research, credential-rotation
-tags:
-  - repo-research
-  - credential-rotation
-  - secret-stores
-  - atomic-swap
-  - blast-radius
-  - scheduled-workflows
-  - brainstorm
-  - sentry
-related_issues:
-  - "#3861"
-  - "#3904"
-related_learnings:
-  - 2026-05-15-token-namespace-divergence-across-secret-stores
-  - 2026-03-25-doppler-secret-audit-before-creation
-  - 2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline
+related_issues: [#3861, #3904]
+related_learnings: [2026-05-15-token-namespace-divergence-across-secret-stores, 2026-03-25-doppler-secret-audit-before-creation, 2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline]
 ---
 
 # Learning: Repo-research for "rotate everywhere" features must inventory scheduled CI workflows, not just runtime config

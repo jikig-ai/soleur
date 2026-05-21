@@ -1,26 +1,12 @@
 ---
+title: brainstorm premise-cascade detection + Playwright credential-handoff discipline
 date: 2026-05-16
 category: process
+tags: [brainstorm, playwright, host-verification, premise-cascade, credential-boundary, sentry, gdpr, pir, workflow-gate]
 module: brainstorm, incident, playwright-mcp, sentry-residency
-tags:
-  - brainstorm
-  - playwright
-  - host-verification
-  - premise-cascade
-  - credential-boundary
-  - sentry
-  - gdpr
-  - pir
-  - workflow-gate
-related_issues:
-  - "#3861"
-  - "#3863"
-related_prs:
-  - "#3863"
-related_learnings:
-  - 2026-05-15-sentry-dsn-cluster-substring-authoritative-residency
-  - 2026-05-15-token-namespace-divergence-across-secret-stores
-  - 2026-04-21-concurrent-cleanup-merged-wipes-active-worktree
+related_issues: [#3861, #3863]
+related_learnings: [2026-05-15-sentry-dsn-cluster-substring-authoritative-residency, 2026-05-15-token-namespace-divergence-across-secret-stores, 2026-04-21-concurrent-cleanup-merged-wipes-active-worktree]
+related_prs: [#3863]
 ---
 
 # Learning: brainstorm premise-cascade detection + Playwright credential-handoff discipline
@@ -186,6 +172,19 @@ When `feature` command creates a new worktree, optionally copy a `--config=/path
 ### Proposal W5 — `/soleur:compound` should fail-friendly when on main, with worktree-create option
 
 Current behavior: hard abort with "Error: compound cannot run on main/master. Checkout a feature branch first." Proposed: present the operator with a single-line offer: "Compound requires a feature branch. Create worktree `feat-compound-<topic>-<date>` and continue? [y/N]" so the workflow doesn't dead-end on the gate.
+
+## Update — 2026-05-19: premise cascade replayed at the inference layer
+
+The 2026-05-16 cascade documented above was a planning-time premise failure
+(operator-confirmable facts were not probed before scoping). The 2026-05-19
+Sentry support replies surfaced a **second-order** cascade: when probe Step 1
+returned 401 against `<org-slug>.sentry.io/api/0/organizations/<slug>/`, the
+team inferred "unowned third-party org" without first verifying token-membership
+scope — the same premise-skip class as the original cascade, applied at the
+inference layer rather than the planning layer. See
+`knowledge-base/project/learnings/2026-05-19-sentry-401-is-not-unowned-verify-token-scope-first.md`
+for the corrective 3-step probe pattern (token, then control, then scope-matched
+mint).
 
 ## Tags
 

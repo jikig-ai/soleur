@@ -1,3 +1,10 @@
+---
+title: Plausible HTTP 402 Graceful Skip in CI Workflows
+date: 2026-03-30
+category: engineering
+tags: [integration-issues, ci/plausible-analytics]
+---
+
 # Learning: Plausible HTTP 402 Graceful Skip in CI Workflows
 
 ## Problem

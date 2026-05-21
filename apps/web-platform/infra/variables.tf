@@ -88,12 +88,6 @@ variable "app_domain" {
   default     = "app.soleur.ai"
 }
 
-variable "deploy_ssh_public_key" {
-  description = "SSH public key for the deploy user (legacy, kept for migration period)"
-  type        = string
-  default     = ""
-}
-
 variable "cf_account_id" {
   description = "Cloudflare account ID (required for Zero Trust tunnel resources)"
   type        = string
@@ -151,26 +145,22 @@ variable "betterstack_paid_tier" {
   default     = false
 }
 
-# --- jikigai.com (LinkedIn Page Verifications, #4046) ------------------------
-# jikigai.com is onboarded narrowly for the LinkedIn Company Page TXT
-# verification record only. The existing MX/SPF/DKIM/etc. for ops@jikigai.com
-# remain dashboard-managed; a separate follow-up (#4052) imports them into TF
-# state. The aliased provider (cloudflare.jikigai_com in jikigai-com.tf) and
-# the narrow API token below contain blast radius to this zone.
+# --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
+# Post-#4150: client_id / client_secret / github_actions_token /
+# doppler_token_kb_drift variables were deleted. See plan
+# knowledge-base/project/plans/2026-05-20-fix-apply-web-platform-infra-tf-autonomy-4150-plan.md
+# Provider switched to App-installation auth (main.tf); kb-drift Doppler
+# token now minted in-band by `doppler_service_token` resource (kb-drift.tf).
+# autonomy-considered: provider-mint-applied (App auth + doppler_service_token).
 
-variable "cf_zone_id_jikigai_com" {
-  description = "Cloudflare zone ID for jikigai.com"
-  type        = string
-}
-
-variable "cf_api_token_jikigai_com" {
-  description = "Cloudflare API token narrowed to Zone:DNS:Edit on jikigai.com (cloudflare_record resources; see jikigai-com.tf). Current consumers: jikigai-com.tf (LinkedIn Page Verifications TXT)."
+variable "github_app_id" {
+  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf)."
   type        = string
   sensitive   = true
 }
 
-variable "linkedin_page_verification_txt" {
-  description = "TXT record value supplied by LinkedIn at Page Verifications time. Single-purpose: becomes public TXT post-verification (low residual sensitivity). Persisted in terraform.tfstate (R2 backend, AES-256 at rest)."
+variable "github_app_private_key" {
+  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded."
   type        = string
   sensitive   = true
 }

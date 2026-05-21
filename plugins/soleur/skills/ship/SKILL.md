@@ -248,6 +248,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Tests pass
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
+- [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
 - [ ] Push to remote
 - [ ] Create PR with semver label
 - [ ] PR is mergeable (no conflicts)
@@ -495,8 +496,9 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/cat-deploy-state.sh"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/hooks.json.tmpl"
+  "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -604,6 +606,89 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 **If not triggered:** Skip silently.
 
 **Why:** In #1265, the CMO content gate was fixed to catch product features but the PWA feature itself was never assessed — the fix shipped without remediating the original gap. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
+
+### Undeferred Operator-Step Gate (mandatory)
+
+Enforces hard rule `hr-never-label-any-step-as-manual-without` at the `gh pr ready` boundary. Blocks PR-ready when the PR body contains "operator runs"-class steps without a `Tracks #NNNN` / `Refs #NNNN` companion linking to an OPEN `type/chore` (or `type/feature`) issue that carries the `deferred-automation` / `automation gap` sentinel.
+
+Emit rule-application telemetry (records the gate fired):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident wg-block-pr-ready-on-undeferred-operator-steps applied \
+  '`/ship` Phase 5.5 blocks PR-ready when the PR body has operator-action'
+```
+
+**Detection.** Capture the PR body once, **strip fenced code blocks** (the gate body and `AC-PM` example snippets in PRs that edit this skill would otherwise self-trip), then run a multi-pattern grep with LIST-ANCHORED patterns. Bash ERE has no `(?i)` modifier — use `grep -iE`.
+
+```bash
+PR_BODY_FILE=$(mktemp)
+trap 'rm -f "$PR_BODY_FILE"' EXIT INT TERM
+PR_BODY=$(gh pr view --json body --jq .body)
+
+# Strip fenced code blocks (```...```) — the gate body and the AC section
+# in the PR will quote the regex and the AC-PM tokens; those quotations
+# inside ``` fences MUST NOT count as undeferred declarations.
+# FAIL-CLOSED on unbalanced fence: an unclosed ``` would otherwise drop
+# every subsequent line and silently bypass the gate (PR-H failure class).
+printf '%s' "$PR_BODY" | awk '
+  /^```/ { in_fence = !in_fence; next }
+  !in_fence { print }
+  END { if (in_fence) exit 2 }
+' > "$PR_BODY_FILE"
+if [ "$?" -eq 2 ]; then
+  echo "[gate] WARN: unbalanced ``` fence in PR body — re-scanning unfiltered body (fail-closed)" >&2
+  printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+fi
+
+# LIST-ANCHORED regex: a match requires the LINE to start with a bullet
+# (`-`/`*`) or numbered-list marker (`1.`), optionally a checklist box
+# (`[ ]`/`[x]`), optionally bold (`**`), then a keyword. Excludes
+# prose-style mid-paragraph mentions of "operator" or "AC-PM".
+DETECT_RE='^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+(\[[[:space:]xX]\][[:space:]]+)?(\*\*)?(AC-PM[0-9]+|operator[[:space:]]+(run|create|provision|configure|paste|cop(y|ies))s?|manual[[:space:]]+gate|post-merge[[:space:]]+operator)'
+
+MATCHES=$(grep -niE "$DETECT_RE" "$PR_BODY_FILE" || true)
+```
+
+**Why list-anchored.** PR bodies routinely discuss operator behavior in prose ("the operator's choice", "the operator runs the script ONCE post-merge per the prior convention"). Only DECLARATIVE list-shape entries (`- Operator runs ...` or `- [ ] **AC-PM3** Operator creates ...`) are operator-step accretion vectors. Prose mentions are review-noise.
+
+**Rule.** For each match, the previous line, the same line, OR the following line MUST contain `(Tracks|Refs) #NNNN` (header-above + same-line-trailing + next-line continuation all qualify). Extract every referenced `#NNNN` from those companions, then for each: verify the linked issue is OPEN, labeled `type/chore` or `type/feature`, AND its body contains the sentinel `deferred-automation` or `automation gap` (case-insensitive).
+
+```bash
+UNDEFERRED=()
+for line_no in $(printf '%s\n' "$MATCHES" | awk -F: '$1 ~ /^[0-9]+$/ {print $1}'); do
+  prev=$((line_no > 1 ? line_no - 1 : 1))
+  ctx=$(sed -n "${prev}p;${line_no}p;$((line_no+1))p" "$PR_BODY_FILE")
+  refs=$(printf '%s' "$ctx" | grep -oE '(Tracks|Refs)[[:space:]]+#[0-9]+' || true)
+  if [ -z "$refs" ]; then
+    UNDEFERRED+=("$line_no"); continue
+  fi
+  ok=0
+  for n in $(printf '%s' "$refs" | grep -oE '[0-9]+'); do
+    state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")
+    [ "$state" = "OPEN" ] || continue
+    labels=$(gh issue view "$n" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+    [[ "$labels" =~ (^|,)type/(chore|feature)(,|$) ]] || continue
+    body=$(gh issue view "$n" --json body --jq .body 2>/dev/null || echo "")
+    if printf '%s' "$body" | grep -qiE 'deferred-automation|automation gap'; then
+      ok=1; break
+    fi
+  done
+  [ "$ok" = 1 ] || UNDEFERRED+=("$line_no")
+done
+```
+
+**If not triggered (`${#UNDEFERRED[@]}` is 0):** Skip silently.
+
+**If triggered (`${#UNDEFERRED[@]}` > 0):** Halt and present the structured prompt (3-option choice). The operator chooses one:
+
+1. **File deferred-automation issues now.** For each undeferred match, the skill prompts for an issue title + 1-paragraph re-evaluation criterion, then `gh issue create --label type/chore --title <...> --body "<...>\n\nThis is a deferred-automation backlog item per wg-block-pr-ready-on-undeferred-operator-steps. Re-evaluate when: <...>"`. Update the PR body with `Tracks #NNNN` companions. Re-run detection.
+2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
+3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
+
+**Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice.
+
+**Why:** PR-H #4066 violated `hr-never-label-any-step-as-manual-without` (3 unfiled deferred-automation steps; #4114 + #4115 filed too late). This gate moves enforcement from honor-system to mechanical.
 
 ## Phase 6.4: Unpushed-Commits Gate
 
@@ -1175,60 +1260,114 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
 
    ## Verification
 
-   ```yaml
-   type: manual
-   sla_business_days: 5
+   ```html
+   <!-- soleur:followthrough
+     script=scripts/followthroughs/<feature-name>-<ISSUE_NUM>.sh
+     earliest=<ISO-8601-UTC>
+     secrets=<comma-separated-secret-names-or-omit>
+   -->
    ```
 
-   Per `hr-no-dashboard-eyeball-pull-data-yourself`, default to automated verification — `type: manual` should be the exception, not the rule. Before emitting `type: manual`, check whether the verification can be expressed as a query against a credentialed API.
-
-   **Types currently implemented by `scheduled-follow-through.yml`** (the daily monitor):
-
-   - `http-200` — add `url: https://example.com`
-   - `dns-txt` — add `domain: example.com` and `expected: verification-string`
-   - `dns-a` — add `domain: example.com` and `expected: 1.2.3.4`
-
-   **Types in the prescriptive spec but not yet implemented by the daily monitor** (the monitor lacks Doppler secret access; widening that scope is a separate PR). When `/ship` Phase 7 Step 3.5 would otherwise emit `type: manual` for one of these, instead scaffold a dedicated `--once` GitHub Actions workflow via `/soleur:schedule --once` with the verdict baked in (the workflow brings its own Doppler env without widening the monitor's blast radius):
-
-   - `sql-query` — `doppler_token_secret: DOPPLER_TOKEN_PRD`, `project: soleur`, `config: prd`, `supabase_ref: <REF>`, `query: |` (multi-line SQL — read-only `SELECT` only), `verdict: |` (single jq expression returning `"PASS"` or `"FAIL: <detail>"` against the `/database/query` JSON response). Example:
-
-     ```yaml
-     type: sql-query
-     doppler_token_secret: DOPPLER_TOKEN_PRD
-     project: soleur
-     config: prd
-     supabase_ref: ifsccnjhymdmidffkzhl
-     query: |
-       SELECT SUM(reads + writes + extends + fsyncs) AS iops FROM pg_stat_io
-     verdict: |
-       if (.[0].iops | tonumber) < 1000 then "PASS" else "FAIL: iops=\(.[0].iops)" end
-     ```
-
-   - `api-curl` — `url:`, `headers_from_doppler:` (map of header → Doppler secret), `verdict:` (jq expression). For Sentry rate, Vercel deployment status, Cloudflare zone settings. HTTPS-only; host allow-list enforced at scaffold time.
-
-   When emitting `type: manual`, include a one-line `manual_because:` justification (`captcha-gated`, `oauth-consent-screen`, `subjective-design-call`, etc.). Bare `type: manual` without justification trips the review-time gate that enforces `hr-no-dashboard-eyeball-pull-data-yourself` — "the operator can read the gauge" is not a valid justification when the gauge value is API-accessible.
-
-   **`clo_routable: true` field (auto-emit when `manual_because: subjective-design-call` AND the issue concerns legal-source attestation).** When the verification asks the operator to compare a drafted legal-doc (AUP, Privacy Policy, GDPR Policy, DPD, Article 30 register, T&C) against external statutory text (EUR-Lex, leginfo.legislature.ca.gov, congress.gov, federalregister.gov, legislation.gov.uk, laws-lois.justice.gc.ca, or any cited `Art.\s*\d+` / `§\s*\d+` regulation/code section), append `clo_routable: true` and a short instruction line. The `clo_routable: true` field is the structured signal that `/soleur:go`'s classification table reads to auto-route the issue to the `clo` agent instead of asking the human operator — most Soleur users are not lawyers and cannot reliably verify statutory text.
-
-   Example verification block for a legal-source attestation follow-through:
-
-   ```yaml
-   type: manual
-   manual_because: subjective-design-call
-   clo_routable: true
-   sla_business_days: 14
-   ```
-
-   Followed by a one-line operator instruction: `Run /soleur:go #<this issue> to invoke the CLO agent for verification — faster and more accurate than manual attestation.` See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
+   Canonical convention: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`.
+   The directive is parsed daily by `.github/workflows/scheduled-followthrough-sweeper.yml`
+   via [scripts/sweep-followthroughs.sh](../../../../scripts/sweep-followthroughs.sh) — exit 0 PASS / exit 1 FAIL / other TRANSIENT.
 
    ## Status
 
-   Awaiting verification. The daily follow-through monitor will check this issue.
+   Awaiting verification. The follow-through sweeper will check this issue once `earliest` is reached.
    ````
+
+   **Step 3.5.A — Generate the stub script.** For each item, scaffold a stub under
+   [scripts/followthroughs/](../../../../scripts/followthroughs/) named
+   `<feature-name>-<ISSUE_NUM>.sh` by copying
+   [./references/followthrough-stub-template.sh](./references/followthrough-stub-template.sh)
+   and customizing the TODO block. Make the script executable (`chmod +x`). Mirror the structure of
+   [scripts/followthroughs/sentry-checkins-3859.sh](../../../../scripts/followthroughs/sentry-checkins-3859.sh) (the canonical reference).
+
+   **Step 3.5.B — Choose a verification pattern.** Default to automated per
+   `hr-no-dashboard-eyeball-pull-data-yourself`:
+
+   - **HTTP probe** (canary, status page): `curl -sS -o /dev/null -w '%{http_code}' "$URL" | grep -q '^200$' && exit 0 || exit 1`
+   - **DNS probe**: `dig +short +time=5 +tries=2 TXT example.com | grep -qF "$EXPECTED" && exit 0 || exit 1`
+   - **SQL probe** (Supabase prd): scaffold via `/soleur:schedule --once` so the workflow brings its own Doppler env; the follow-through script then queries the workflow run status via `gh run list --workflow <name>.yml --status success`.
+   - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
+   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script runs `gh issue view <N> --comments --json comments | jq -re '.comments[].body' | grep -qE '^RESULT: PASS$'` — the operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
+
+   Bare "operator manually checks" with NO scripted gate is non-compliant with
+   `hr-no-dashboard-eyeball-pull-data-yourself` AND `wg-pm-class-followthrough-for-operator-dogfood`
+   (#4188). If the operator-confirmed pattern is unsuitable, the verification is not
+   follow-through-shaped — file a regular GitHub issue without the `follow-through` label.
+
+   **Step 3.5.C — Declare needed secrets.** If the script reads any `$X` value beyond
+   `GH_TOKEN` / `GH_REPO` / `HOME` / `PATH`, declare them as a comma-separated list in
+   the directive's `secrets=` clause AND add each secret to
+   `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block (the sweeper
+   passes ONLY allowlisted vars into the script's environment per the directive's
+   `secrets=` clause). Omit the `secrets=` line entirely if no secrets are needed.
+
+   **Step 3.5.D — Choose `earliest`.** ISO-8601 UTC, formatted `YYYY-MM-DDTHH:MM:SSZ`.
+   Default `now + 24h` for HTTP/DNS probes; `now + 48h` for cron-triggered probes
+   (allows ≥2 cron windows to fire); `now + 5 business days` for operator-confirmed
+   patterns. The sweeper skips the issue until `now >= earliest`.
+
+   **Step 3.5.E — Precondition gate.** Before `gh issue create`, the agent MUST self-test
+   the body it composed by piping the proposed body through the same awk parser the
+   sweeper uses (extracted verbatim from [scripts/sweep-followthroughs.sh](../../../../scripts/sweep-followthroughs.sh) lines 36-48):
+
+   ```bash
+   awk '
+     /^<!-- *soleur:followthrough/, /-->/ {
+       gsub(/^<!-- *soleur:followthrough/, "")
+       gsub(/-->/, "")
+       for (i = 1; i <= NF; i++) {
+         if ($i ~ /^script=/)   { sub(/^script=/, "", $i);   print "script "   $i }
+         if ($i ~ /^earliest=/) { sub(/^earliest=/, "", $i); print "earliest " $i }
+         if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
+       }
+     }
+   ' /tmp/follow-through-body.md
+   ```
+
+   Assert that:
+   1. `script` extracted is non-empty AND, after `realpath -m --relative-to=$REPO_ROOT`
+      canonicalization, points under the [scripts/followthroughs/](../../../../scripts/followthroughs/)
+      root. Use realpath rather than a bare prefix-match — a path that uses `..` traversal
+      under the followthroughs root (e.g. one pointing at `../../bin/sh` via the
+      followthroughs directory) satisfies a naïve `case` prefix match but is rejected
+      after canonicalization. Concrete check:
+
+      ```bash
+      canon=$(realpath -m --relative-to="$REPO_ROOT" "$script_path" 2>/dev/null)
+      case "$canon" in
+        scripts/followthroughs/*) : ;;
+        *) fail "script '$script_path' escapes scripts/followthroughs/ root" ;;
+      esac
+      ```
+   2. `earliest` extracted parses cleanly via `date -u -d "$earliest" +%s`,
+   3. The referenced script path exists on disk and is executable.
+
+   If any assertion fails, warn the operator, do NOT create the issue, and offer to
+   scaffold the missing pieces. **Why:** PR #4178 was filed with the OLD-convention
+   YAML and rotted open for ~24h until #4186 retrofitted it. The precondition gate
+   is the cheapest forward defense; the contract is asserted at PR time by
+   `plugins/soleur/test/ship-followthrough-directive.test.sh`.
+
+   **Step 3.5.F — Operator-only ack.** When the chosen pattern is operator-confirmed
+   (Step 3.5.B), append a `## Operator instructions` block to the issue body explaining
+   the `RESULT: PASS` / `RESULT: FAIL` comment sentinel the script greps for.
+
+   **Legal-attestation follow-throughs** (replaces former `clo_routable: true` field):
+   for legal-source verification (AUP, Privacy Policy, GDPR Policy, DPD, Article 30
+   register, T&C against EUR-Lex / leginfo.legislature.ca.gov / congress.gov /
+   federalregister.gov / legislation.gov.uk / laws-lois.justice.gc.ca, or any cited
+   `Art.\s*\d+` / `§\s*\d+` regulation/code section), use the operator-confirmed pattern
+   (Step 3.5.B) with body instruction `Run /soleur:go #<this issue> to invoke the CLO
+   agent for verification`. The script reads the operator's `RESULT: PASS` comment after
+   CLO completes. See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
 
    **Step 4:** Report: "Created N follow-through issue(s): #X, #Y, #Z"
 
-   **Why this matters:** PR #1398 (Google OAuth brand verification) had no tracking mechanism after the session ended. External dependencies that outlive a session — DNS propagation, app store reviews, certificate issuance, brand verification — get forgotten without automated tracking. See [#1433](https://github.com/jikig-ai/soleur/issues/1433).
+   **Why this matters:** PR #1398 (Google OAuth brand verification) had no tracking mechanism after the session ended. External dependencies that outlive a session — DNS propagation, app store reviews, certificate issuance, brand verification — get forgotten without automated tracking. See [#1433](https://github.com/jikig-ai/soleur/issues/1433). PR #4178 was filed via the OLD-convention YAML emitter and rotted open for ~24h until PR #4186 retrofitted it; this directive shape (PR for #4190) prevents the regression class. See `knowledge-base/project/learnings/2026-05-20-test-stubs-env-and-csp-gates-miss-runtime-bugs.md`.
 
 3.6. **Post-merge Supabase migration verification.** If the PR includes database migration files (`supabase/migrations/`), verify each migration was applied to production before proceeding to cleanup.
 

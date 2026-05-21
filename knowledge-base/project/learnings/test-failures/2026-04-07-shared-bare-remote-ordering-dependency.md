@@ -1,3 +1,10 @@
+---
+title: shared bare remote ordering dependency in test isolation
+date: 2026-04-07
+category: engineering
+tags: [test-failures, pre-merge-rebase-hook]
+---
+
 # Learning: shared bare remote ordering dependency in test isolation
 
 ## Problem

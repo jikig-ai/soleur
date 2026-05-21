@@ -1,9 +1,15 @@
 ---
+title: CI test-job speedup — replan mechanics, synthetic aggregator, and 10-run validation pitfalls
 date: 2026-05-12
-issues: [3680]
-prs: [3672, 3692, 3693, 3694]
-tags: [ci, github-actions, vitest, bun, matrix-sharding, synthetic-aggregator, validation, replan]
 category: best-practices
+tags: [ci, github-actions, vitest, bun, matrix-sharding, synthetic-aggregator, validation, replan]
+issues:
+  - 3680
+prs:
+  - 3672
+  - 3692
+  - 3693
+  - 3694
 ---
 
 # CI test-job speedup — replan mechanics, synthetic aggregator, and 10-run validation pitfalls

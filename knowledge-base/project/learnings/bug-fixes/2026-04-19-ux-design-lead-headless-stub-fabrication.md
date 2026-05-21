@@ -1,9 +1,11 @@
 ---
+title: 'ux-design-lead fabricated "Pencil MCP headless stub" narrative'
 date: 2026-04-19
-type: bug-fix
-pr: "#2630"
-related-issues: ["#1162", "#2636"]
 category: agent-workflow, mcp-integration
+tags: [ux, design, lead, headless, stub, fabrication]
+pr: '#2630'
+related-issues: [#1162, #2636]
+type: bug-fix
 ---
 
 # ux-design-lead fabricated "Pencil MCP headless stub" narrative

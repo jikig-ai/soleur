@@ -1,3 +1,10 @@
+---
+title: Vitest vi.hoisted() for typed error classes in mocked modules
+date: 2026-04-10
+category: engineering
+tags: [test-failures, web-platform]
+---
+
 # Learning: Vitest vi.hoisted() for typed error classes in mocked modules
 
 ## Problem

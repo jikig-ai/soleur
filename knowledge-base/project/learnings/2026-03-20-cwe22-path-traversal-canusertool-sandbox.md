@@ -1,3 +1,10 @@
+---
+title: CWE-22 path traversal in canUseTool workspace sandbox
+date: 2026-03-20
+category: engineering
+tags: [security-issues, web-platform/server]
+---
+
 # Learning: CWE-22 path traversal in canUseTool workspace sandbox
 
 ## Problem

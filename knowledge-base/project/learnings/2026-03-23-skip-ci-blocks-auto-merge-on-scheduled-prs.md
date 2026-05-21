@@ -1,3 +1,10 @@
+---
+title: '[skip ci] in commit messages permanently blocks auto-merge on scheduled PRs'
+date: 2026-03-23
+category: ci-cd
+tags: [ci-issues, github-actions, high, skip-ci, auto-merge, branch-protection, check-runs, commit-statuses, scheduled-workflows]
+---
+
 # Learning: [skip ci] in commit messages permanently blocks auto-merge on scheduled PRs
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Module-scope constants to async state create hidden dependency bugs
+date: 2026-04-16
+category: engineering
+tags: [logic-errors, apps/web-platform]
+---
+
 # Learning: Module-scope constants to async state create hidden dependency bugs
 
 ## Problem

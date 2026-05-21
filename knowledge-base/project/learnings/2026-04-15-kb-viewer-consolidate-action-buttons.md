@@ -1,11 +1,12 @@
 ---
-name: KB viewer action-button consolidation and the hidden cost of `vi.mock` export drift
-description: Consolidating Download into the KB viewer header surfaced a predictable but easy-to-miss test failure pattern — adding a new named export to a component that is `vi.mock`-ed elsewhere silently breaks those mocks.
+title: KB Viewer Action-Button Consolidation
 date: 2026-04-15
 category: ui-bugs
-module: kb-viewer
-pr: 2340
 tags: [kb, ux, showDownload, breadcrumb, decodeURIComponent, vi-mock, test-infrastructure, aria-current, compareDocumentPosition]
+module: kb-viewer
+description: 'Consolidating Download into the KB viewer header surfaced a predictable but easy-to-miss test failure pattern — adding a new named export to a component that is `vi.mock`-ed elsewhere silently breaks those mocks.'
+name: 'KB viewer action-button consolidation and the hidden cost of `vi.mock` export drift'
+pr: 2340
 ---
 
 # Learning: KB Viewer Action-Button Consolidation

@@ -1,3 +1,10 @@
+---
+title: vitest mock sharing across test files and issue batching
+date: 2026-04-13
+category: engineering
+tags: [testing, web-platform]
+---
+
 # Learning: vitest mock sharing across test files and issue batching
 
 ## Problem

@@ -1,8 +1,10 @@
 ---
-module: plugins/soleur/skills
+title: Check Skill Description Budget Headroom Before Writing
 date: 2026-03-27
-problem_type: best_practice
+category: plugin-architecture
 tags: [skill-creation, token-budget, description]
+module: plugins/soleur/skills
+problem_type: best_practice
 severity: medium
 ---
 

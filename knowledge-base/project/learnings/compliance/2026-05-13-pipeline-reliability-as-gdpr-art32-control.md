@@ -1,15 +1,13 @@
 ---
+title: Pipeline Reliability as a GDPR Art. 32(1)(d) Organizational Control
 date: 2026-05-13
 category: compliance
-regulation: GDPR
-articles: ["32(1)(d)", "12(3)"]
 tags: [gdpr, art-32, release-pipeline, dsar, audit-trail]
-related_issues: ["#3704", "#3712", "#2207", "#3634"]
-related_prs: ["#3706", "#3719"]
-related_learnings:
-  - 2026-05-12-pgid-inheritance-and-bash-trap-defer-on-foreground-commands.md
-  - bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md
-  - bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md
+articles: [32(1)(d), 12(3)]
+regulation: GDPR
+related_issues: [#3704, #3712, #2207, #3634]
+related_learnings: [2026-05-12-pgid-inheritance-and-bash-trap-defer-on-foreground-commands.md, bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md, bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md]
+related_prs: [#3706, #3719]
 ---
 
 # Pipeline Reliability as a GDPR Art. 32(1)(d) Organizational Control

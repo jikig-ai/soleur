@@ -1,16 +1,14 @@
 ---
+title: 5-agent plan-review revision pass on a brand-survival single-user-incident plan
 date: 2026-05-15
 category: best-practices
-module: plan, plan-review, brand-survival
 tags: [plan-revision, plan-review-panel, brand-survival-threshold, paraphrase-without-verification, vendor-misclassification, gdpr-gate-signature, defer-vs-ship, anchor-resolution-over-architecture, compound-from-revision-pass]
-related-plan: knowledge-base/project/plans/2026-05-15-feat-clo-founder-threshold-detection-plan.md
+module: plan, plan-review, brand-survival
 related-brainstorm: knowledge-base/project/brainstorms/2026-05-15-claude-for-legal-evaluation-brainstorm.md
+related-issues: [#3785, #3786]
+related-learnings: [knowledge-base/project/learnings/2026-05-15-evaluating-anthropic-first-party-plugin-marketplaces.md, knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md, knowledge-base/project/learnings/best-practices/2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md]
+related-plan: knowledge-base/project/plans/2026-05-15-feat-clo-founder-threshold-detection-plan.md
 related-spec: knowledge-base/project/specs/feat-cc-legal-skill-bridge/spec.md
-related-issues: ["#3785", "#3786"]
-related-learnings:
-  - knowledge-base/project/learnings/2026-05-15-evaluating-anthropic-first-party-plugin-marketplaces.md
-  - knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md
-  - knowledge-base/project/learnings/best-practices/2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md
 ---
 
 # Learning: 5-agent plan-review revision pass on a brand-survival single-user-incident plan

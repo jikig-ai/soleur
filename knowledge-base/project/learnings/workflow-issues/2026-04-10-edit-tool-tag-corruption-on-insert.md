@@ -1,15 +1,15 @@
 ---
-module: System
+title: Edit Tool Tag Corruption When Inserting JSX Blocks
 date: 2026-04-10
-problem_type: workflow_issue
-component: development_workflow
-symptoms:
-  - "Edit tool merged closing tag character with replacement text, producing orphaned < on one line and tag attributes on the next"
-  - "QA dev server failed to start due to missing Supabase env vars in Doppler dev config"
-root_cause: logic_error
-resolution_type: workflow_improvement
-severity: low
+category: engineering
 tags: [edit-tool, tag-corruption, jsx, qa-environment, doppler]
+symptoms: [Edit tool merged closing tag character with replacement text, producing orphaned < on one line and tag attributes on the next, QA dev server failed to start due to missing Supabase env vars in Doppler dev config]
+module: System
+component: development_workflow
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: logic_error
+severity: low
 ---
 
 # Troubleshooting: Edit Tool Tag Corruption When Inserting JSX Blocks

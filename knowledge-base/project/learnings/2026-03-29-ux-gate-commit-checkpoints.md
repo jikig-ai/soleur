@@ -1,3 +1,10 @@
+---
+title: UX gate artifacts need incremental commit checkpoints
+date: 2026-03-29
+category: workflow-patterns
+tags: [workflow-improvement, soleur:work]
+---
+
 # Learning: UX gate artifacts need incremental commit checkpoints
 
 ## Problem

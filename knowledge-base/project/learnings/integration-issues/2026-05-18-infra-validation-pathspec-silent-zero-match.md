@@ -1,12 +1,14 @@
 ---
+title: git pathspec silent zero-match in CI matrix-detection pipelines
 date: 2026-05-18
 category: integration-issues
+tags: [infra, validation, pathspec, silent, zero, match]
+related_issues:
+  - 4012
+related_learnings: [2026-05-09-pathspec-regex-translation-and-classifier-piggyback.md, 2026-03-21-lefthook-gobwas-glob-double-star.md]
+related_prs:
+  - 4021
 topic: git pathspec silent zero-match in CI matrix-detection pipelines
-related_issues: [4012]
-related_prs: [4021]
-related_learnings:
-  - 2026-05-09-pathspec-regex-translation-and-classifier-piggyback.md
-  - 2026-03-21-lefthook-gobwas-glob-double-star.md
 ---
 
 # Learning: git pathspec silent zero-match in CI matrix-detection pipelines

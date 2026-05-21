@@ -1,3 +1,10 @@
+---
+title: Content publisher stderr capture needs hardening for public issues
+date: 2026-04-02
+category: engineering
+tags: [integration-issues, content-publisher]
+---
+
 # Learning: Content publisher stderr capture needs hardening for public issues
 
 ## Problem

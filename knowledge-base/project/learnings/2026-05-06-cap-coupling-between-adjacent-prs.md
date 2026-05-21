@@ -1,12 +1,14 @@
 ---
+title: Cap-coupling between adjacent PRs needs cross-PR audit
 date: 2026-05-06
-problem_type: integration_issue
-component: kb-concierge-pdf-extractor
-severity: high
+category: engineering
 tags: [cap-coupling, adjacent-prs, pdf-extractor, silent-fallback, hypothesis-driven-fix]
-related_prs: ["#3337", "#3338", "#3346", "#3353"]
-related_sentry_event: 9e0a3888fd3849cd87cb83cdcecca199
 synced_to: [plan]
+component: kb-concierge-pdf-extractor
+problem_type: integration_issue
+related_prs: [#3337, #3338, #3346, #3353]
+related_sentry_event: 9e0a3888fd3849cd87cb83cdcecca199
+severity: high
 ---
 
 # Cap-coupling between adjacent PRs needs cross-PR audit

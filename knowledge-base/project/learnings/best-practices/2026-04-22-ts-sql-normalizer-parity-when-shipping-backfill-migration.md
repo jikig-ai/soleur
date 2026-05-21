@@ -1,17 +1,15 @@
 ---
-module: web-platform
+title: TS/SQL Normalizer Parity Is a First-Class Concern When Shipping a Backfill Migration Alongside a Write-Boundary Normalizer
 date: 2026-04-22
-problem_type: integration_issue
+category: engineering
+tags: [normalizer, backfill-migration, sql-ts-parity, idempotence, agent-native-parity, drain-pr]
+symptoms: [SQL migration regex chain diverges from TS normalizer for trailing-slash inputs, TS+SQL normalizer both non-idempotent on repeated suffixes (.git.git), Plan's file-path and site-count assumptions stale against current working tree, Agent-native parity audit missed a UI action (updateStatus)]
+module: web-platform
+synced_to: [plan, work]
 component: data_migration
-symptoms:
-  - "SQL migration regex chain diverges from TS normalizer for trailing-slash inputs"
-  - "TS+SQL normalizer both non-idempotent on repeated suffixes (.git.git)"
-  - "Plan's file-path and site-count assumptions stale against current working tree"
-  - "Agent-native parity audit missed a UI action (updateStatus)"
+problem_type: integration_issue
 root_cause: ts_sql_regex_chain_drift_plus_incomplete_plan_reconciliation
 severity: high
-tags: [normalizer, backfill-migration, sql-ts-parity, idempotence, agent-native-parity, drain-pr]
-synced_to: [plan, work]
 ---
 
 # TS/SQL Normalizer Parity Is a First-Class Concern When Shipping a Backfill Migration Alongside a Write-Boundary Normalizer

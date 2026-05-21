@@ -1,3 +1,10 @@
+---
+title: Use native runtime for Docker HEALTHCHECK instead of installing external binaries
+date: 2026-03-20
+category: engineering
+tags: [infrastructure, docker]
+---
+
 # Learning: Use native runtime for Docker HEALTHCHECK instead of installing external binaries
 
 ## Problem

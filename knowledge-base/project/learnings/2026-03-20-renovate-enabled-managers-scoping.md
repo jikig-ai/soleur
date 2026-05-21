@@ -1,3 +1,10 @@
+---
+title: 'Renovate config:recommended silently enables all package managers'
+date: 2026-03-20
+category: engineering
+tags: [dependency-management, ci-cd]
+---
+
 # Learning: Renovate config:recommended silently enables all package managers
 
 ## Problem

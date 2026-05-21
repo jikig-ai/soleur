@@ -1,3 +1,10 @@
+---
+title: WebSocket error message sanitization prevents CWE-209 information disclosure
+date: 2026-03-20
+category: engineering
+tags: [security-issues, web-platform]
+---
+
 # Learning: WebSocket error message sanitization prevents CWE-209 information disclosure
 
 ## Problem

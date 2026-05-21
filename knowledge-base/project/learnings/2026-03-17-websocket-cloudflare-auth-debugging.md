@@ -1,3 +1,10 @@
+---
+title: WebSocket through Cloudflare — three-layer failure
+date: 2026-03-17
+category: engineering
+tags: [runtime-errors, web-platform]
+---
+
 # Learning: WebSocket through Cloudflare — three-layer failure
 
 ## Problem

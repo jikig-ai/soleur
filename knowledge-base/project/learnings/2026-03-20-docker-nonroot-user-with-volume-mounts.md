@@ -1,3 +1,10 @@
+---
+title: Adding a non-root user to a Node.js Dockerfile with volume mounts
+date: 2026-03-20
+category: engineering
+tags: [infrastructure, web-platform, 2026-03-19-docker-base-image-digest-pinning, 2026-03-19-docker-restart-does-not-apply-new-images]
+---
+
 # Learning: Adding a non-root user to a Node.js Dockerfile with volume mounts
 
 ## Problem

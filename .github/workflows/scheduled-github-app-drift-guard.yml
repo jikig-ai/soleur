@@ -7,8 +7,19 @@
 # GitHub App backing OAuth means every sign-in attempt routes to a
 # different App's consent screen — one user's broken sign-in IS the
 # brand-ending incident. Three labels split the failure modes:
-#   - ci/auth-broken      : drift detected (App swap, key rotation, etc.)
-#   - ci/guard-broken     : guard itself malfunctioned (bad PEM, network)
+#   - ci/auth-broken      : drift detected
+#                            * id / client_id mismatch (App swap, key rotation)
+#                            * permission_drift (manifest declares X, live lacks X — #4115)
+#                            * installation_permission_drift (live install grants &lt; manifest — #4179)
+#   - ci/guard-broken     : guard itself malfunctioned
+#                            * bad PEM, network, jwt-mint failures (#3187)
+#                            * permission_unexpected_grant (live > manifest, #4115)
+#                            * response_shape_unparseable (#4115)
+#                            * installation_api_http / installation_list_truncated /
+#                              installation_list_shape_unparseable /
+#                              installation_unexpected_grant /
+#                              installation_response_shape_unparseable /
+#                              installation_diff_unknown_mode (#4179)
 #   - security/leak-suspected : log scan suggests credential leak
 #
 # Security: PEM is base64-decoded into $RUNNER_TEMP (mode 0o600), masked
@@ -55,11 +66,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout (sparse, for notify-ops-email)
+      - name: Checkout (sparse, for notify-ops-email + manifest diff)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           sparse-checkout: |
             .github/actions
+            bin/diff-github-app-manifest.sh
+            apps/web-platform/infra/github-app-manifest.json
+            apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL
           sparse-checkout-cone-mode: false
 
       - name: Defensively create labels
@@ -94,6 +108,15 @@ jobs:
           failure_mode=""
           failure_detail=""
           failure_label=""
+          # Hoisted to step prologue so the installation-grant block at the
+          # bottom can read $suppress_active under `set -u` even when the
+          # App-level diff block's outer if-guard short-circuits (e.g.,
+          # MANIFEST_FILE missing under a sparse-checkout race). Without
+          # this hoist, the read at the install-block guard tripped
+          # "unbound variable" and aborted the step with no failure_mode
+          # recorded -- silent guard failure. Defensive against future
+          # edits that reorder the App-level diff block.
+          suppress_active=0
 
           record_failure() {
             local mode="$1"
@@ -268,6 +291,199 @@ jobs:
             fi
           fi
 
+          # =============================================================
+          # Manifest-vs-live permission/event diff (#4115).
+          #
+          # Runs AFTER the id / client_id immutability check above. The
+          # identity-swap detection is the primary brand-survival gate
+          # (CTO R1); this diff catches permission-scope creep and
+          # GitHub-side rename drift as a defense-in-depth Art. 33
+          # detection primitive (CLO finding).
+          #
+          # First-merge suppression: when a PR changes the manifest, the
+          # operator MUST update the live App's permissions out-of-band.
+          # The window between merge and that update would otherwise
+          # produce a noisy false-positive. To suppress:
+          #     apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL
+          # contains a UTC ISO timestamp (e.g., 2026-05-21T10:00:00Z).
+          # When `now < suppress_until`, the diff emits a visible
+          # ::warning:: annotation and SKIPS record_failure. When the
+          # timestamp has passed (or the file is absent), the diff runs
+          # normally. Operator deletes the file once the live App is
+          # reconciled.
+          # =============================================================
+          MANIFEST_FILE="apps/web-platform/infra/github-app-manifest.json"
+          SUPPRESS_FILE="apps/web-platform/infra/MANIFEST_DRIFT_SUPPRESS_UNTIL"
+
+          if [[ -z "$failure_mode" && -n "${RESPONSE_FILE:-}" && -f "$MANIFEST_FILE" ]]; then
+            suppress_active=0
+            if [[ -f "$SUPPRESS_FILE" ]]; then
+              suppress_until=$(tr -d ' \t\r\n' < "$SUPPRESS_FILE" || true)
+              if [[ -n "$suppress_until" ]]; then
+                # Strict ISO-8601 UTC. `date -d` would otherwise accept
+                # natural-language strings ("100 years", "next decade"),
+                # silently suppressing drift detection indefinitely on a
+                # PR-committed file. Defense-in-depth against the
+                # operator-typo / compromised-PR vector.
+                if ! [[ "$suppress_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+                  echo "::warning::MANIFEST_DRIFT_SUPPRESS_UNTIL must be strict ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ); got '${suppress_until}'. Ignoring suppression."
+                elif suppress_epoch=$(date -d "$suppress_until" -u +%s 2>/dev/null); then
+                  now_epoch=$(date -u +%s)
+                  max_window_s=$((30 * 24 * 3600))
+                  if (( suppress_epoch - now_epoch > max_window_s )); then
+                    echo "::warning::MANIFEST_DRIFT_SUPPRESS_UNTIL exceeds 30-day cap (until ${suppress_until}); ignoring suppression to prevent indefinite silence."
+                  elif (( now_epoch < suppress_epoch )); then
+                    suppress_active=1
+                    echo "::warning::Manifest drift detected but suppressed until ${suppress_until} (MANIFEST_DRIFT_SUPPRESS_UNTIL). Delete the file once the live App is reconciled."
+                  fi
+                else
+                  echo "::warning::MANIFEST_DRIFT_SUPPRESS_UNTIL contains an unparseable timestamp; ignoring suppression."
+                fi
+              fi
+            fi
+
+            if [[ "$suppress_active" -eq 0 ]]; then
+              diff_out=""
+              diff_rc=0
+              diff_out=$(MANIFEST_FILE="$MANIFEST_FILE" RESPONSE_FILE="$RESPONSE_FILE" \
+                bash bin/diff-github-app-manifest.sh 2>/dev/null) || diff_rc=$?
+
+              if (( diff_rc != 0 )); then
+                # Output shape is `<mode>:<details>` per
+                # bin/diff-github-app-manifest.sh contract.
+                diff_mode="${diff_out%%:*}"
+                diff_detail="${diff_out#*:}"
+                case "$diff_mode" in
+                  permission_drift)
+                    record_failure "$diff_mode" "$diff_detail" "ci/auth-broken"
+                    ;;
+                  permission_unexpected_grant|response_shape_unparseable)
+                    record_failure "$diff_mode" "$diff_detail" "ci/guard-broken"
+                    ;;
+                  *)
+                    record_failure "manifest_diff_unknown_mode" \
+                      "diff-github-app-manifest exited ${diff_rc} with output: ${diff_out}" \
+                      "ci/guard-broken"
+                    ;;
+                esac
+              fi
+            fi
+          fi
+
+          # =============================================================
+          # Installation-grant-vs-manifest diff (#4179).
+          #
+          # The App-level diff above compares plane (a) "App-declared
+          # permissions" vs plane (b) "committed manifest". Terraform
+          # apply uses the INSTALLATION token derived from plane (c),
+          # which can diverge from (a) when an operator does not
+          # re-accept after a manifest widening (#4173 root cause).
+          # The cron would stay green throughout while production
+          # workflows 403 on installation-token-gated endpoints.
+          #
+          # This block closes that gap by extracting each installation's
+          # {permissions, events} from `GET /app/installations` (flat
+          # array per the OpenAPI schema -- NOT object-wrapped like
+          # `/orgs/{org}/installations`) and re-invoking the same
+          # diff-github-app-manifest.sh script against a synthetic
+          # per-installation file matching its existing input contract.
+          #
+          # Endpoint choice: `/app/installations` (App-JWT) over
+          # `/orgs/{org}/installations` (PAT, admin:org). Reuses the
+          # JWT already minted; satisfies hr-github-app-auth-not-pat.
+          # =============================================================
+          if [[ -z "$failure_mode" && -n "${JWT:-}" && -f "$MANIFEST_FILE" && \
+                "$suppress_active" -eq 0 ]]; then
+            INSTALL_LIST_FILE=$(mktemp -p "$RUNNER_TEMP" installations.XXXXXX)
+            INSTALL_HEADERS_FILE=$(mktemp -p "$RUNNER_TEMP" installations-hdr.XXXXXX)
+            HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
+              -o "$INSTALL_LIST_FILE" \
+              -D "$INSTALL_HEADERS_FILE" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              --header @<(printf 'Authorization: Bearer %s' "$JWT") \
+              'https://api.github.com/app/installations?per_page=100') \
+              || HTTP_CODE="network_error"
+
+            # HTTP routing. /app/installations is reached only after /app
+            # already validated the JWT above, so a 401 here is most
+            # likely an installation revocation OR App suspension between
+            # the two calls (~100ms window) -- both rare; route any
+            # non-200 as ci/guard-broken rather than mirroring the
+            # App-level 401-disambiguation flow which exists because /app
+            # is the first JWT-validating call. Operator triage at issue
+            # body still distinguishes via failure_detail's HTTP code.
+            if [[ "$HTTP_CODE" != "200" ]]; then
+              record_failure "installation_api_http" \
+                "GET /app/installations -> HTTP ${HTTP_CODE}" \
+                "ci/guard-broken"
+            # Pagination guard: if `Link: rel="next"` is present, the loop
+            # would silently miss installations beyond page 1. The
+            # ?per_page=100 already pushes the threshold; today's
+            # 1-install state cannot trigger this, but installations is
+            # unbounded over time. Fail loud rather than silently iterate
+            # only page 1.
+            elif grep -qiE '^link:.*rel="next"' "$INSTALL_HEADERS_FILE"; then
+              record_failure "installation_list_truncated" \
+                "GET /app/installations returned a paginated response (Link: rel=next present); per-page bump or pagination loop required" \
+                "ci/guard-broken"
+            # Shape validation BEFORE iteration. /app/installations is a
+            # FLAT array per @octokit/openapi-types. A `null` (wrong jq
+            # filter) or object (wrong endpoint) reports "null"/"object"
+            # here -- not "array" -- and short-circuits the loop. Mode
+            # name `installation_list_shape_unparseable` (not
+            # `installation_response_shape_unparseable`) distinguishes
+            # this list-endpoint failure from the per-install synthesis
+            # failure below -- different remediation, different alert.
+            elif [[ "$(jq -r '. | type' "$INSTALL_LIST_FILE" 2>/dev/null)" != "array" ]]; then
+              record_failure "installation_list_shape_unparseable" \
+                "GET /app/installations response root is not an array" \
+                "ci/guard-broken"
+            else
+              while IFS= read -r install_json; do
+                INSTALL_RESP_FILE=$(mktemp -p "$RUNNER_TEMP" install-resp.XXXXXX)
+                printf '%s' "$install_json" \
+                  | jq -c '{permissions, events}' > "$INSTALL_RESP_FILE"
+                install_id=$(printf '%s' "$install_json" | jq -r '.id // "unknown"')
+
+                inst_diff_out=""
+                inst_diff_rc=0
+                inst_diff_out=$(MANIFEST_FILE="$MANIFEST_FILE" RESPONSE_FILE="$INSTALL_RESP_FILE" \
+                  bash bin/diff-github-app-manifest.sh 2>/dev/null) || inst_diff_rc=$?
+
+                if (( inst_diff_rc != 0 )); then
+                  inst_diff_mode="${inst_diff_out%%:*}"
+                  inst_diff_detail="${inst_diff_out#*:}"
+                  case "$inst_diff_mode" in
+                    permission_drift)
+                      record_failure "installation_permission_drift" \
+                        "installation_id=${install_id} ${inst_diff_detail}" \
+                        "ci/auth-broken"
+                      ;;
+                    permission_unexpected_grant)
+                      record_failure "installation_unexpected_grant" \
+                        "installation_id=${install_id} ${inst_diff_detail}" \
+                        "ci/guard-broken"
+                      ;;
+                    response_shape_unparseable)
+                      # Should never fire here -- synthesis always produces
+                      # a valid {permissions, events} shape. If it does,
+                      # the bug is in synthesis; route as guard-broken.
+                      record_failure "installation_response_shape_unparseable" \
+                        "installation_id=${install_id} ${inst_diff_detail}" \
+                        "ci/guard-broken"
+                      ;;
+                    *)
+                      record_failure "installation_diff_unknown_mode" \
+                        "installation_id=${install_id} diff_rc=${inst_diff_rc} out=${inst_diff_out}" \
+                        "ci/guard-broken"
+                      ;;
+                  esac
+                fi
+              done < <(jq -c '.[]' "$INSTALL_LIST_FILE")
+            fi
+          fi
+
           # Sanitize for $GITHUB_OUTPUT: strip CR/LF/form-feed/vertical-tab/
           # DEL plus NEL (U+0085) and Unicode line/paragraph separators
           # (U+2028/U+2029). The latter two render as line breaks in markdown
@@ -280,7 +496,14 @@ jobs:
             # First pass: ASCII control chars via tr (single-byte safe).
             # Second pass: explicit UTF-8 byte sequences for U+0085 (C2 85),
             # U+2028 (E2 80 A8), U+2029 (E2 80 A9) via sed.
-            tr -d '\r\n\f\v\x7f' | sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'
+            #
+            # tr's character-class language has NO `\xNN` hex escape — inside
+            # single quotes `\x7f` is interpreted as the literal SET {x, 7, f}
+            # AND tr de-duplicates against `\f` (POSIX form-feed), silently
+            # stripping every `x`, `7`, and `f` from the sanitized output.
+            # Octal `\177` is the canonical DEL byte and survives tr's
+            # POSIX-only-hex-disallowed parser. See #3561 / #4179.
+            tr -d '\r\n\f\v\177' | sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'
           }
           fail_mode_safe=$(printf '%s' "$failure_mode" | strip_log_injection)
           fail_detail_safe=$(printf '%s' "$failure_detail" | strip_log_injection)
@@ -466,11 +689,15 @@ jobs:
       - name: Cleanup PEM and response file (best-effort)
         if: always()
         run: |
-          # Cleanup all step-scoped temp files (PEM, response body, mint stderr).
+          # Cleanup all step-scoped temp files (PEM, response body, mint stderr,
+          # installation list + headers + per-install synth files from #4179).
           # rm -f, not shred — runners are ephemeral cloud VMs on COW
           # filesystems; shred adds no security here. See runbook.
           rm -f "$RUNNER_TEMP"/app.pem.* \
                 "$RUNNER_TEMP"/app-response.* \
+                "$RUNNER_TEMP"/installations.* \
+                "$RUNNER_TEMP"/installations-hdr.* \
+                "$RUNNER_TEMP"/install-resp.* \
                 "$RUNNER_TEMP/mint-stderr.log" 2>/dev/null || true
 
       # Single end-of-job heartbeat check-in via the shared

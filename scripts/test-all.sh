@@ -122,6 +122,7 @@ if want_scripts; then
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
+  run_suite "tests/scripts/kb-drift-walker" bash tests/scripts/test-kb-drift-walker.sh
 fi
 
 # Named bun-test entries — bun shard.

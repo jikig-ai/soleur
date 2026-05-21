@@ -1,9 +1,11 @@
 ---
-module: soleur-plugin
+title: Plan Review Catches Agent Duplication
 date: 2026-02-14
-problem_type: workflow-pattern
-component: plan-review
+category: agent-design
 tags: [plan-review, agent-design, simplification, ops-directory]
+module: soleur-plugin
+component: plan-review
+problem_type: workflow-pattern
 severity: info
 ---
 

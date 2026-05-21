@@ -1,17 +1,16 @@
 ---
-module: KB Chat / Concurrency
+title: stuck-active conversation leaks concurrency slot
 date: 2026-05-05
-problem_type: liveness_bug
-component: server_websocket
-symptoms:
-  - "Conversation stuck in Executing badge for 10+ minutes"
-  - "Free-tier user sees 'Concurrent-conversation limit reached' after one conversation"
-  - "WS closes 4010 on Ask about this document despite user perceiving zero active threads"
-root_cause: invariant_violation
-resolution_type: code_fix
-severity: high
+category: security
 tags: [cc-chat, concurrency, slots, agent-runner, ws-handler, stuck-active]
+symptoms: [Conversation stuck in Executing badge for 10+ minutes, Free-tier user sees 'Concurrent-conversation limit reached' after one conversation, WS closes 4010 on Ask about this document despite user perceiving zero active threads]
+module: KB Chat / Concurrency
 synced_to: []
+component: server_websocket
+problem_type: liveness_bug
+resolution_type: code_fix
+root_cause: invariant_violation
+severity: high
 ---
 
 # Learning: stuck-active conversation leaks concurrency slot

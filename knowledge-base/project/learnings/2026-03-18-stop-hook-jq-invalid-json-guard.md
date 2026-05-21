@@ -1,3 +1,10 @@
+---
+title: jq parse errors abort scripts under set -euo pipefail
+date: 2026-03-18
+category: shell-scripting
+tags: [runtime-errors, plugins/soleur/hooks/stop-hook.sh]
+---
+
 # Learning: jq parse errors abort scripts under set -euo pipefail
 
 ## Problem

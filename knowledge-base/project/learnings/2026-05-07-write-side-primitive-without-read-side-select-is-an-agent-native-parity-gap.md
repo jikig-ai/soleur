@@ -1,13 +1,11 @@
 ---
+title: Write-side primitive without matching read-side SELECT is an agent-native parity gap
 date: 2026-05-07
 category: best-practices
 tags: [agent-native, code-review, multi-agent-review, schema-evolution, abort-feature]
-related_pr: 3447
+related_commits: [69502e2c, 1d798ff4, 550e23e7]
 related_issue: 3448
-related_commits:
-  - 69502e2c # server+DB+protocol PR1
-  - 1d798ff4 # legal §5.5 + §4.7
-  - 550e23e7 # review-fix-inline P1/P2/P3
+related_pr: 3447
 ---
 
 # Write-side primitive without matching read-side SELECT is an agent-native parity gap

@@ -1,3 +1,10 @@
+---
+title: Supabase E2E tests need localStorage session injection
+date: 2026-04-10
+category: engineering
+tags: [test-failures, web-platform/e2e]
+---
+
 # Learning: Supabase E2E tests need localStorage session injection
 
 ## Problem

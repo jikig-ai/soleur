@@ -197,6 +197,35 @@ export async function deleteAccount(
     );
   }
 
+  // 3.82 Anonymise action_sends rows for this user BEFORE anonymise_scope_grants
+  //      (migration 052, PR-H #4077). FK action_sends.user_id → users.id is ON
+  //      DELETE RESTRICT, AND action_sends.grant_id → scope_grants.id is also
+  //      RESTRICT — so anonymise_action_sends MUST land BEFORE anonymise_scope_grants
+  //      (which we keep below) and BEFORE auth.admin.deleteUser. The RPC bypasses
+  //      the action_sends WORM trigger via SET LOCAL session_replication_role.
+  //      Failure here is FATAL on the same reasoning as 3.85: skipping it
+  //      guarantees auth-delete fails, leaving a half-deleted user (GDPR Art. 17
+  //      violation). Idempotent.
+  try {
+    const { error: anonAsErr } = await service.rpc(
+      "anonymise_action_sends",
+      { p_user_id: userId },
+    );
+    if (anonAsErr) {
+      log.error(
+        { userId, err: anonAsErr },
+        "anonymise_action_sends failed — aborting deletion to avoid FK-block",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_action_sends threw — aborting deletion to avoid FK-block",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
   // 3.84 Anonymise scope_grants rows for this user BEFORE the tc_acceptances
   //      cascade (migration 048, PR-G #3947). FK is ON DELETE RESTRICT — the
   //      auth.admin.deleteUser call would abort without this. Runs BEFORE
@@ -248,6 +277,31 @@ export async function deleteAccount(
       "anonymise_tc_acceptances threw — aborting deletion to avoid FK-block",
     );
     return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.86 Anonymise audit_github_token_use rows for this user BEFORE
+  //      auth-delete (migration 052, PR-H #3244). The FK is ON DELETE
+  //      SET NULL so the auth-delete cascade scrubs founder_id natively
+  //      — this explicit call is defense-in-depth + symmetry with the
+  //      043/044/048 anonymise RPCs above. Failure here is NON-FATAL
+  //      (the SET-NULL cascade will run anyway during auth-delete).
+  //      SECURITY DEFINER RPC, idempotent.
+  try {
+    const { error: anonGhErr } = await service.rpc(
+      "anonymise_audit_github_token_use",
+      { p_founder_id: userId },
+    );
+    if (anonGhErr) {
+      log.warn(
+        { userId, err: anonGhErr },
+        "anonymise_audit_github_token_use failed — relying on ON DELETE SET NULL cascade (non-fatal)",
+      );
+    }
+  } catch (err) {
+    log.warn(
+      { userId, err },
+      "anonymise_audit_github_token_use threw — relying on ON DELETE SET NULL cascade (non-fatal)",
+    );
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

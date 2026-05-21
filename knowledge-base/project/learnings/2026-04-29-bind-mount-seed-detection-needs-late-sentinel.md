@@ -1,10 +1,11 @@
 ---
+title: Bind-mount seed detection needs a late-written sentinel — manifest checks miss SIGKILL-mid-cp partial copies
 date: 2026-04-29
 category: integration-issues
+tags: [docker, bind-mount, deploy-pipeline, observability, partial-copy, sentinel]
 module: web-platform/infra
 issue: 3045
 pr: 3046
-tags: [docker, bind-mount, deploy-pipeline, observability, partial-copy, sentinel]
 ---
 
 # Bind-mount seed detection needs a late-written sentinel — manifest checks miss SIGKILL-mid-cp partial copies

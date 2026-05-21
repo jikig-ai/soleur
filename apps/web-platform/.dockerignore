@@ -3,6 +3,14 @@ node_modules
 
 # Terraform configs, not needed at runtime
 infra/
+# Re-include the GitHub App manifest (#4115) — page.tsx at
+# /internal/github-app-init statically imports it at build time via
+# `import manifest from "@/infra/github-app-manifest.json"`. The drift-guard
+# cron is the runtime source of truth for divergence; the build-time inline
+# guarantees the page always renders the committed manifest, not a runtime
+# FS read. Excluding the JSON file shrinks the build context by 28 lines —
+# leaving it in is harmless to the runtime image.
+!infra/github-app-manifest.json
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`

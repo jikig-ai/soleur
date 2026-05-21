@@ -1,11 +1,13 @@
 ---
+title: 'Plan-prescribed `nodeAtLeast` OR-bridge admits Node 21 — verify version-range predicates with a boundary truth table before implementing'
 date: 2026-05-07
-problem_type: logic_error
-component: test_infrastructure
-module: pdf-text-extract
-severity: medium
+category: engineering
 tags: [plan-fidelity, version-comparison, semver, engine-floor, vitest, node-version, pdfjs]
+module: pdf-text-extract
 synced_to: []
+component: test_infrastructure
+problem_type: logic_error
+severity: medium
 ---
 
 # Plan-prescribed `nodeAtLeast` OR-bridge admits Node 21 — verify version-range predicates with a boundary truth table before implementing

@@ -1,3 +1,10 @@
+---
+title: Unapplied database migration breaks Command Center chat
+date: 2026-03-28
+category: plugin-architecture
+tags: [database-issues, web-platform, high]
+---
+
 # Learning: Unapplied database migration breaks Command Center chat
 
 ## Problem

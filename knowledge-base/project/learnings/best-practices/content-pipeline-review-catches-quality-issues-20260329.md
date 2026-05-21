@@ -1,18 +1,16 @@
 ---
-module: Content Pipeline
+title: 'Content Pipeline: Review Agents Catch Quality Issues Before Ship'
 date: 2026-03-29
-problem_type: best_practice
-component: documentation
-symptoms:
-  - "Broken internal link using wrong blog slug"
-  - "JSON-LD structured data contained duplicate word"
-  - "Prohibited brand term used in content"
-  - "Inaccurate factual claim about credential helper duration"
-root_cause: inadequate_documentation
-resolution_type: workflow_improvement
-severity: medium
+category: engineering
 tags: [content-pipeline, review-agents, fact-checking, brand-voice, blog-post]
+symptoms: [Broken internal link using wrong blog slug, JSON-LD structured data contained duplicate word, Prohibited brand term used in content, Inaccurate factual claim about credential helper duration]
+module: Content Pipeline
 synced_to: []
+component: documentation
+problem_type: best_practice
+resolution_type: workflow_improvement
+root_cause: inadequate_documentation
+severity: medium
 ---
 
 # Content Pipeline: Review Agents Catch Quality Issues Before Ship

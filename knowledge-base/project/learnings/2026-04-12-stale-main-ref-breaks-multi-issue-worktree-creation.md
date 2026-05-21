@@ -1,3 +1,10 @@
+---
+title: stale local main ref breaks multi-issue worktree creation
+date: 2026-04-12
+category: workflow-patterns
+tags: [workflow, worktree-manager]
+---
+
 # Learning: stale local main ref breaks multi-issue worktree creation
 
 ## Problem

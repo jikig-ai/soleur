@@ -1,16 +1,15 @@
 ---
-module: apps/web-platform/supabase/migrations
+title: Supabase migrations cannot use CREATE INDEX CONCURRENTLY
 date: 2026-04-18
-problem_type: integration_issue
+category: engineering
+tags: [supabase, migrations, ddl, indexes, deployment]
+symptoms: [Migration deploy fails with SQLSTATE 25001 'CREATE INDEX CONCURRENTLY cannot run inside a transaction block', Every seed or write path that assumed the index fails with 42P10 post-merge, Plan prescribes CONCURRENTLY citing general Postgres docs without checking sibling migrations]
+module: apps/web-platform/supabase/migrations
+synced_to: [plan]
 component: supabase_migrations
-symptoms:
-  - "Migration deploy fails with SQLSTATE 25001 'CREATE INDEX CONCURRENTLY cannot run inside a transaction block'"
-  - "Every seed or write path that assumed the index fails with 42P10 post-merge"
-  - "Plan prescribes CONCURRENTLY citing general Postgres docs without checking sibling migrations"
+problem_type: integration_issue
 root_cause: migration_runner_transaction_vs_concurrently
 severity: high
-tags: [supabase, migrations, ddl, indexes, deployment]
-synced_to: [plan]
 ---
 
 # Supabase migrations cannot use CREATE INDEX CONCURRENTLY

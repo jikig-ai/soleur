@@ -1,17 +1,15 @@
 ---
-module: web-platform
+title: 'Bun Test DOM Preload: Execution Order and Dynamic Imports'
 date: 2026-04-03
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "71 .tsx test files fail with ReferenceError: document is not defined under bun test"
-  - "Tests pass under npx vitest run but fail under bun test"
-  - "@testing-library/react screen throws 'global document has to be available' when imported before DOM registration"
-  - "DOM state pollution between test files causes failures when running all tests together"
-root_cause: incomplete_setup
-resolution_type: config_change
-severity: high
+category: engineering
 tags: [bun-test, happy-dom, preload, dynamic-import, testing-library, dom-globals]
+symptoms: [71 .tsx test files fail with ReferenceError: document is not defined under bun test, Tests pass under npx vitest run but fail under bun test, @testing-library/react screen throws 'global document has to be available' when imported before DOM registration, DOM state pollution between test files causes failures when running all tests together]
+module: web-platform
+component: testing_framework
+problem_type: test_failure
+resolution_type: config_change
+root_cause: incomplete_setup
+severity: high
 ---
 
 # Bun Test DOM Preload: Execution Order and Dynamic Imports

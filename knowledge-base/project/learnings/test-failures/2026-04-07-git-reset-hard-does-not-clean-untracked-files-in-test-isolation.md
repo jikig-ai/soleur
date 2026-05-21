@@ -1,16 +1,15 @@
 ---
-module: System
+title: git reset --hard does not clean untracked files in test beforeEach
 date: 2026-04-07
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "Intermittent test failure: detached HEAD without review evidence is denied"
-  - "JSON.parse error on empty stdout when hook returns no deny output"
-  - "Test passes when it should fail — silent false-green from leaked state"
-root_cause: test_isolation
-resolution_type: test_fix
-severity: medium
+category: workflow-patterns
 tags: [git-clean, git-reset-hard, test-isolation, untracked-files, beforeeach]
+symptoms: [Intermittent test failure: detached HEAD without review evidence is denied, JSON.parse error on empty stdout when hook returns no deny output, Test passes when it should fail — silent false-green from leaked state]
+module: System
+component: testing_framework
+problem_type: test_failure
+resolution_type: test_fix
+root_cause: test_isolation
+severity: medium
 ---
 
 # Troubleshooting: git reset --hard does not clean untracked files in test beforeEach

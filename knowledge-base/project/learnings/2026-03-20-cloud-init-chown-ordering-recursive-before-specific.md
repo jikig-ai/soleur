@@ -1,3 +1,10 @@
+---
+title: 'Cloud-init chown ordering: recursive before specific'
+date: 2026-03-20
+category: engineering
+tags: [integration-issues, infrastructure]
+---
+
 # Learning: Cloud-init chown ordering: recursive before specific
 
 ## Problem

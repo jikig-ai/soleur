@@ -1,3 +1,10 @@
+---
+title: Concurrent PR merges can produce duplicate object properties undetected by git
+date: 2026-03-20
+category: workflow-patterns
+tags: [build-errors, web-platform/agent-runner]
+---
+
 # Learning: Concurrent PR merges can produce duplicate object properties undetected by git
 
 ## Problem

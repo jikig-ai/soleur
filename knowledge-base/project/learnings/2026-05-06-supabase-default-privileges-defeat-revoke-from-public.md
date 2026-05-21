@@ -1,9 +1,12 @@
 ---
+title: 'Supabase `ALTER DEFAULT PRIVILEGES` defeats `REVOKE ALL FROM PUBLIC` on `public`-schema functions'
 date: 2026-05-06
-session: PR-B agent-runtime-platform — §1.3 tenant isolation
+category: engineering
+tags: [supabase, default, privileges, defeat, revoke, from, public]
 class: security-issue
+related-pr: PR-B /
+session: PR-B agent-runtime-platform — §1.3 tenant isolation
 severity: high
-related-pr: PR-B / #3244
 ---
 
 # Supabase `ALTER DEFAULT PRIVILEGES` defeats `REVOKE ALL FROM PUBLIC` on `public`-schema functions

@@ -1,9 +1,12 @@
 ---
-name: regex-on-source delegation tests trim to negative-space only
-description: When using source-text regex assertions as a negative-space regression gate after extracting a helper, keep only the assertion that cannot be replicated behaviorally (absence of a specific symbol). Drop positive assertions (import present, call present) — they are transitively proven by the existing end-to-end tests and are brittle under legitimate refactors (barrel re-exports, aliases, formatting).
-type: best-practice
+title: Regex-on-source delegation tests trim to negative-space only
+date: 2026-04-17
 category: testing
+tags: [regex, source, delegation, tests, trim, negative, space]
 module: test-design
+description: When using source-text regex assertions as a negative-space regression gate after extracting a helper, keep only the assertion that cannot be replicated behaviorally (absence of a specific symbol). Drop positive assertions (import present, call present) — they are transitively proven by the existing end-to-end tests and are brittle under legitimate refactors (barrel re-exports, aliases, formatting).
+name: regex-on-source delegation tests trim to negative-space only
+type: best-practice
 ---
 
 # Regex-on-source delegation tests trim to negative-space only

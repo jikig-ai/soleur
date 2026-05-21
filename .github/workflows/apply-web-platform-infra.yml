@@ -1,0 +1,425 @@
+# Auto-apply Doppler / Cloudflare / Better Stack / GitHub / random_id / Hetzner-firewall
+# resources whenever a PR that touches `apps/web-platform/infra/*.tf` merges to main.
+# Closes the workflow gap surfaced by PR-H (#4066 — Daily Priorities multi-source
+# webhook + KB-drift walker): every infra-touching PR previously required the
+# operator to open a shell, `doppler run --name-transformer tf-var`, `terraform plan`,
+# `terraform apply` manually per a PR-body runbook.
+#
+# This workflow IS the canonical boundary for `hr-all-infrastructure-provisioning-servers`
+# for the `apps/web-platform/infra/` root (matches the precedent set by
+# `apply-sentry-infra.yml` for `apps/web-platform/infra/sentry/` and
+# `apply-github-infra.yml` for `infra/github/`).
+#
+# Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
+#   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
+#      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
+#   2. `-target=`-scoped apply (74 explicit targets). server.tf SSH-provisioned
+#      `terraform_data.*` resources are EXCLUDED — the GitHub runner egress IP is
+#      not in `var.admin_ips`, so any SSH connection from the runner fails with
+#      `ssh: handshake failed: connection reset by peer`. Those 7 resources land
+#      via `apply-deploy-pipeline-fix.yml` (mirrors that workflow's `-target=`
+#      pattern). `hcloud_server.web`, `hcloud_volume.workspaces`,
+#      `hcloud_volume_attachment.workspaces`, and `hcloud_ssh_key.default` are
+#      also excluded — managed by initial-apply + drift detector, not per-PR.
+#      `terraform_data.root_authorized_keys` (ci-ssh-key.tf) is ALSO excluded
+#      for the same SSH-from-runner reason — applied operator-locally on the
+#      first bootstrap; subsequent rotations re-fire via `triggers_replace`
+#      from a future operator-local `terraform apply -replace=tls_private_key.ci_ssh`.
+#
+# Destroy-guard shape: copies `apply-github-infra.yml` (post-#3903) — numeric-regex
+# validation of `destroy_count` + `set -e` re-enable after `rc=$?` capture.
+# `apply-sentry-infra.yml` is the structural template but its destroy-guard pattern
+# is vulnerable to the empty-string bypass class flagged in
+# `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
+#
+# Authorization model: the PR merge IS the human authorization
+# (`hr-menu-option-ack-not-prod-write-auth`). PR #4220 dropped the
+# `environment:` reviewer-click gate after measuring its real-world cost
+# (apply runs sitting in `waiting` for up to 13h, blocking sibling
+# applies via the concurrency group). The merge-time gate (CODEOWNERS
+# on `.github/workflows/` + branch protection on `main`) is the load-
+# bearing control; the env-reviewer click was duplicative.
+#
+# Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
+# commit message to skip auto-apply for that merge.
+#
+# Destroy acknowledgement: include `[ack-destroy]` on its own line in the merge
+# commit message to acknowledge planned destroys (otherwise apply halts).
+#
+# Manual escape hatch: `workflow_dispatch` is kept for re-runs after a transient
+# failure or for ad-hoc applies (still target-scoped to the allow-list below).
+#
+# Untrusted-input handling: HEAD_MSG and REASON are routed through env vars
+# (never interpolated directly into `run:` blocks) per the github.blog
+# workflow-injection guidance. All action references are SHA-pinned.
+
+name: Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web-platform/infra/**"
+      - ".github/workflows/apply-web-platform-infra.yml"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you applying? (manual re-run only — e.g. transient retry)"
+        required: true
+        type: string
+
+concurrency:
+  # `cancel-in-progress: false` per `hr-multi-step-post-merge-bootstrap-script`
+  # — cancelling a half-applied terraform run is worse than queueing the next.
+  group: terraform-apply-web-platform-infra
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    outputs:
+      skip: ${{ steps.kill_switch.outputs.skip }}
+    steps:
+      - id: kill_switch
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        # Anchor `[skip-web-platform-apply]` to its own line so it cannot
+        # fire from a quoted block, code fence, or trailer that happens
+        # to carry the literal substring. Symmetric posture with the
+        # `[ack-destroy]` gate in the apply job.
+        run: |
+          set -euo pipefail
+          if [[ "$HEAD_MSG" =~ (^|$'\n')\[skip-web-platform-apply\]($|$'\n') ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Kill switch detected in commit message — skipping apply."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  apply:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    # Budget: ~0.6 min/resource × ~70 targets = ~42 min worst-case cold-cache,
+    # but plan + apply against an already-provisioned state typically completes
+    # in ~3-5 min. 15 min is the operator-tolerance ceiling that matches
+    # `apply-deploy-pipeline-fix.yml`.
+    timeout-minutes: 15
+    # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
+    # reviewer click was duplicative friction on top of the PR-merge gate
+    # (CODEOWNERS review + branch protection on main), and was blocking
+    # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
+    # human authorization per `hr-menu-option-ack-not-prod-write-auth`.
+    # `apply-github-infra.yml` already omits the gate without incident.
+    # The "broader secret surface" rationale below was the original
+    # justification for diverging from apply-github-infra.yml; in
+    # practice the divergence produced friction without measurable
+    # security benefit (a leaked PAT with `contents:write` can also
+    # bypass the env gate by submitting a workflow change).
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering.
+        # hcloud_ssh_key.default is NOT in the apply allow-list (header lines
+        # 21-23), so this dummy public key is never consumed -- it just
+        # satisfies HCL parsing. Mirrors scheduled-terraform-drift.yml:49-52.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      # TWO-TOKEN MODEL (post-#4195). This workflow consumes two distinct
+      # Doppler service tokens via separate GH Actions secrets:
+      #
+      #   - `secrets.DOPPLER_TOKEN`        — `prd_terraform` READ-only.
+      #                                       Used by every step that only
+      #                                       READS Doppler secrets (init,
+      #                                       plan, apply).
+      #   - `secrets.DOPPLER_TOKEN_WRITE`  — `prd_terraform` READ/WRITE.
+      #                                       Used by the post-apply sync
+      #                                       step that WRITES the
+      #                                       CI_SSH_ACCESS_TOKEN_*
+      #                                       outputs back into Doppler.
+      #
+      # New steps that need write access MUST use `DOPPLER_TOKEN_WRITE`;
+      # do NOT copy the `secrets.DOPPLER_TOKEN` line below without
+      # confirming the step only reads. The `--silent` + `add-mask`
+      # discipline in the sync step (~line 367-368) is the leak-defense
+      # for the write-scoped token.
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        # `-lockfile=readonly` refuses to download a provider whose checksum
+        # is not already in `.terraform.lock.hcl`. Combined with the committed
+        # lockfile, this defends against a malicious republish of a pinned
+        # provider version. Verified present:
+        # `apps/web-platform/infra/.terraform.lock.hcl`.
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (allow-list, non-SSH resources only)
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        # ALLOW-LIST MAINTENANCE: if a future PR adds a new `.tf` resource at
+        # `apps/web-platform/infra/*.tf`, append a matching `-target=<addr>`
+        # line below (and exclude server.tf SSH-provisioned resources per
+        # header comment). `scheduled-terraform-drift.yml` is the 12h backstop
+        # if you forget — drift surfaces in the next cron run.
+        run: |
+          # `-e` is intentionally omitted so we can capture terraform plan's
+          # exit code in $rc — plan exits non-zero on legitimate failures we
+          # want to surface, not abort silently. Re-enabled with `set -e`
+          # after the rc-capture window per
+          # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target=betteruptime_policy.github_webhook \
+              -target=betteruptime_monitor.github_webhook_failures \
+              -target=betteruptime_heartbeat.github_webhook_sig_failures \
+              -target=betteruptime_heartbeat.github_api_429_sustained \
+              -target=cloudflare_ruleset.cache_shared_binaries \
+              -target=doppler_secret.github_app_id \
+              -target=doppler_secret.github_app_private_key \
+              -target=random_id.github_webhook_secret \
+              -target=doppler_secret.github_app_webhook_secret \
+              -target=cloudflare_bot_management.soleur_ai \
+              -target=cloudflare_ruleset.seo_page_redirects \
+              -target=cloudflare_ruleset.seo_response_headers \
+              -target=random_id.tunnel_secret \
+              -target=cloudflare_zero_trust_tunnel_cloudflared.web \
+              -target=cloudflare_zero_trust_tunnel_cloudflared_config.web \
+              -target=cloudflare_zero_trust_access_application.deploy \
+              -target=cloudflare_zero_trust_access_service_token.deploy \
+              -target=cloudflare_zero_trust_access_policy.deploy_service_token \
+              -target=cloudflare_zero_trust_access_application.ssh \
+              -target=cloudflare_zero_trust_access_service_token.ci_ssh \
+              -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token \
+              -target=cloudflare_notification_policy.service_token_expiry \
+              -target=cloudflare_zone_settings_override.soleur_ai \
+              -target=cloudflare_record.app \
+              -target=cloudflare_record.deploy \
+              -target=cloudflare_record.ssh \
+              -target=cloudflare_record.dkim_resend \
+              -target=cloudflare_record.spf_send \
+              -target=cloudflare_record.mx_send \
+              -target=cloudflare_record.dkim_resend_send \
+              -target=cloudflare_record.spf_send_send \
+              -target=cloudflare_record.mx_send_send \
+              -target=cloudflare_record.dmarc \
+              -target=cloudflare_record.supabase_custom_domain \
+              -target=cloudflare_record.supabase_acme_challenge \
+              -target=cloudflare_record.spf_root \
+              -target=cloudflare_record.google_site_verification \
+              -target=cloudflare_record.protonmail_verification \
+              -target=cloudflare_record.protonmail_mx_primary \
+              -target=cloudflare_record.protonmail_mx_secondary \
+              -target=cloudflare_record.protonmail_dkim_1 \
+              -target=cloudflare_record.protonmail_dkim_2 \
+              -target=cloudflare_record.protonmail_dkim_3 \
+              -target=cloudflare_record.github_pages \
+              -target=cloudflare_record.www \
+              -target=cloudflare_record.github_pages_challenge \
+              -target=cloudflare_record.buttondown_ns1 \
+              -target=cloudflare_record.buttondown_ns2 \
+              -target=cloudflare_zone_dnssec.soleur_ai \
+              -target=cloudflare_ruleset.allowlist_ai_crawlers \
+              -target=random_id.kb_drift_ingest_signing_key \
+              -target=doppler_secret.kb_drift_ingest_signing_key \
+              -target=doppler_secret.kb_drift_ingest_url \
+              -target=doppler_service_token.kb_drift \
+              -target=github_actions_secret.doppler_token_kb_drift \
+              -target=doppler_service_token.write \
+              -target=github_actions_secret.doppler_token_write \
+              -target=tls_private_key.ci_ssh \
+              -target=doppler_secret.deploy_ssh_private_key \
+              -target=betteruptime_monitor.soleur_apex \
+              -target=betteruptime_policy.uptime \
+              -target=random_id.inngest_signing_key_prd \
+              -target=random_id.inngest_signing_key_dev \
+              -target=random_id.inngest_event_key_prd \
+              -target=random_id.inngest_event_key_dev \
+              -target=doppler_secret.inngest_signing_key_prd \
+              -target=doppler_secret.inngest_signing_key_dev \
+              -target=doppler_secret.inngest_event_key_prd \
+              -target=doppler_secret.inngest_event_key_dev \
+              -target=betteruptime_heartbeat.inngest_prd \
+              -target=betteruptime_policy.inngest \
+              -target=doppler_secret.inngest_heartbeat_url_prd \
+              -target=hcloud_firewall.web \
+              -target=hcloud_firewall_attachment.web
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          # Authoritative destroy count via the structured plan, not the
+          # `Plan: …` summary line.
+          destroy_count=$(terraform show -json tfplan | \
+            jq '[.resource_changes[]? | select(.change.actions? | index("delete"))] | length')
+          # Validate destroy_count parsed correctly — an empty value from a jq
+          # failure would silently evaluate false in the `-gt 0` test and let
+          # destructive plans slip past the guard.
+          if [[ ! "$destroy_count" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy_count parse failed (jq returned: '${destroy_count}')."
+            exit 1
+          fi
+          # Anchor `[ack-destroy]` to its own line (start-of-string OR
+          # preceded by newline; followed by newline OR end-of-string) so
+          # the token cannot fire from a quoted block, code fence, or
+          # `Co-Authored-By:` trailer carrying that literal substring.
+          ack_destroy=false
+          if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+            ack_destroy=true
+          fi
+          if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
+            echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on web-platform infra."
+            echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
+            grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
+            exit 1
+          fi
+
+      - name: Terraform apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false tfplan
+
+      # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
+      # `github_actions_secret.doppler_token_write`, the runner started
+      # before the secret existed — interpolation returns empty for
+      # that one run because GH Actions resolves secrets at job-start,
+      # not step-start. The warning is non-fatal; the operator re-fires
+      # the workflow once after first merge via `gh workflow run
+      # apply-web-platform-infra.yml --ref main -F reason='bootstrap'`.
+      # The local-fallback script
+      # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
+      # remains available as backup. Operator follow-through obligation
+      # is tracked separately as a `follow-through` GH issue per
+      # `wg-block-pr-ready-on-undeferred-operator-steps`.
+      - name: Verify DOPPLER_TOKEN_WRITE present
+        id: doppler_write_check
+        env:
+          DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_WRITE_CHECK" ]]; then
+            echo "::warning::DOPPLER_TOKEN_WRITE not yet present — this is expected on the first apply that creates it. Subsequent applies will use the synced token. If you see this on the second+ run, manually trigger one more apply via gh workflow run."
+            echo "skip_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync CF Access CI-SSH service token to Doppler
+        # Reads the new sensitive outputs produced by the
+        # `cloudflare_zero_trust_access_service_token.ci_ssh` resource
+        # and writes them into Doppler prd_terraform so the sibling
+        # `apply-deploy-pipeline-fix.yml` workflow can pull them at run
+        # time without an operator handoff step (closes #4177 P1).
+        # Idempotent — doppler-secrets-set overwrites in place.
+        # Uses the in-band-minted write-capable service token (post-#4195
+        # — see apps/web-platform/infra/doppler-write-token.tf) — every
+        # other step in this workflow consumes the existing read-only
+        # token.
+        if: steps.doppler_write_check.outputs.skip_sync != 'true'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          CLIENT_ID=$(terraform output -raw ci_ssh_access_service_token_client_id 2>/dev/null || true)
+          CLIENT_SECRET=$(terraform output -raw ci_ssh_access_service_token_client_secret 2>/dev/null || true)
+          if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" ]]; then
+            echo "::warning::ci_ssh_access_service_token outputs missing or empty — likely a -target= run that skipped the SSH-access resources. Falling back to operator sync."
+            exit 0
+          fi
+          printf '::add-mask::%s\n' "$CLIENT_ID"
+          printf '::add-mask::%s\n' "$CLIENT_SECRET"
+          # `--silent` suppresses doppler's success-path value-echo;
+          # stderr is intentionally NOT redirected so permission-denied
+          # / quota / network errors surface in the GH Actions log (the
+          # original #4195 failure was masked by a `>/dev/null 2>&1`
+          # redirect on these two lines).
+          printf '%s' "$CLIENT_ID" \
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform
+          printf '%s' "$CLIENT_SECRET" \
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform
+          unset CLIENT_ID CLIENT_SECRET
+          echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
+
+      - name: Post-apply summary
+        if: always()
+        env:
+          TRIGGER: ${{ github.event_name }}
+          MERGE_SHA: ${{ github.sha }}
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Apply web-platform infra"
+            echo ""
+            echo "**Trigger:** ${TRIGGER}"
+            echo "**Merge SHA:** ${MERGE_SHA}"
+            echo "**Reason (manual only):** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"

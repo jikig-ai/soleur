@@ -1,17 +1,15 @@
 ---
-module: apps/web-platform + .github/actions
+title: Hooks Should Return Data, Not JSX — and Multi-Agent Review Catches Action Injection Risks
 date: 2026-04-18
-problem_type: integration_issue
+category: engineering
+tags: [code-review, multi-agent, hooks, composite-action, shell-injection, srp]
+symptoms: [State hook returned JSX fragments (sidebarContent, docContent) causing SRP leak, Composite action used `git add $ADD_PATHS` unquoted — word-splitting, glob expansion, and flag injection risk, 18-field hook return type conflated tree/collapse/chat/JSX concerns, Review agents (security-sentinel, architecture-strategist, code-quality-analyst) flagged both in seconds]
+module: apps/web-platform + .github/actions
+synced_to: []
 component: react_hook + composite_action
-symptoms:
-  - "State hook returned JSX fragments (sidebarContent, docContent) causing SRP leak"
-  - "Composite action used `git add $ADD_PATHS` unquoted — word-splitting, glob expansion, and flag injection risk"
-  - "18-field hook return type conflated tree/collapse/chat/JSX concerns"
-  - "Review agents (security-sentinel, architecture-strategist, code-quality-analyst) flagged both in seconds"
+problem_type: integration_issue
 root_cause: hooks_returning_jsx + shell_unquoted_expansion
 severity: high
-tags: [code-review, multi-agent, hooks, composite-action, shell-injection, srp]
-synced_to: []
 ---
 
 # Hooks Should Return Data, Not JSX — and Multi-Agent Review Catches Action Injection Risks

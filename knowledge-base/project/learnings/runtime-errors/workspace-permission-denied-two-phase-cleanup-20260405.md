@@ -1,16 +1,15 @@
 ---
-module: WebPlatform
+title: Workspace directory permission denied during project re-setup
 date: 2026-04-05
-problem_type: runtime_error
-component: tooling
-symptoms:
-  - "rm: cannot remove '.../knowledge-base/plans': Permission denied"
-  - "provisionWorkspaceWithRepo fails when re-setting up a project with existing workspace"
-  - "Account deletion (GDPR Art. 17) silently fails to delete workspace directory"
-root_cause: missing_permission
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [workspace, permissions, bubblewrap, uid-remapping, rm-rf, find-delete]
+symptoms: [rm: cannot remove '.../knowledge-base/plans': Permission denied, provisionWorkspaceWithRepo fails when re-setting up a project with existing workspace, Account deletion (GDPR Art. 17) silently fails to delete workspace directory]
+module: WebPlatform
+component: tooling
+problem_type: runtime_error
+resolution_type: code_fix
+root_cause: missing_permission
+severity: medium
 ---
 
 # Learning: Workspace directory permission denied during project re-setup

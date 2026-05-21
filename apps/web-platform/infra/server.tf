@@ -40,6 +40,10 @@ resource "hcloud_server" "web" {
     webhook_deploy_secret                = var.webhook_deploy_secret
     doppler_token                        = var.doppler_token
     resend_api_key                       = var.resend_api_key
+    # Fresh-host parity for the CI SSH keypair generated in
+    # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
+    # block in ci-ssh-key.tf for the rationale.
+    ci_ssh_public_key_openssh = local.ci_ssh_pubkey
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,
@@ -223,6 +227,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/webhook.service"),
     file("${path.module}/cat-deploy-state.sh"),
     file("${path.module}/canary-bundle-claim-check.sh"),
+    file("${path.module}/deploy-inngest-bootstrap.sudoers"),
     local.hooks_json,
   ]))
 
@@ -263,6 +268,21 @@ resource "terraform_data" "deploy_pipeline_fix" {
     destination = "/etc/webhook/hooks.json"
   }
 
+  # #4144 — sudoers entry for ci-deploy.sh → inngest-bootstrap.sh as root.
+  # Mirrors cloud-init.yml write_files for the same path; this resource
+  # keeps already-running hosts in sync (hcloud_server.web has
+  # ignore_changes=[user_data], so cloud-init never re-applies).
+  # Stage to /tmp first; remote-exec validates with visudo -cf, then
+  # `install` atomically moves into /etc/sudoers.d/ only on validation
+  # success. Sudo loads everything in sudoers.d on next invocation
+  # regardless of visudo exit, so direct-write would risk lockout on a
+  # malformed file. The staged path is in /tmp because root owns this
+  # SSH session and /tmp is the conventional pre-install staging area.
+  provisioner "file" {
+    source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
+    destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
+  }
+
   provisioner "remote-exec" {
     inline = [
       "chmod +x /usr/local/bin/ci-deploy.sh",
@@ -273,6 +293,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
       # it contains the HMAC secret. Provisioner "file" uploads as root:root by default.
       "chown root:deploy /etc/webhook/hooks.json",
       "chmod 640 /etc/webhook/hooks.json",
+      # #4144 — validate staged sudoers BEFORE installing into /etc/sudoers.d/.
+      # visudo -cf exit != 0 → leave the staged file, do NOT install; install
+      # uses --mode/--owner/--group atomically so a partial write can't load.
+      "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged && install --mode=0440 --owner=root --group=root /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
+      "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
       # Append DOPPLER_CONFIG_DIR and DOPPLER_ENABLE_VERSION_CHECK to webhook-deploy env file.
       # Redirects Doppler CLI config to /tmp (writable under PrivateTmp) instead of ~/.doppler
       # (blocked by ProtectHome=read-only). grep guard makes this idempotent.

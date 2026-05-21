@@ -1,3 +1,10 @@
+---
+title: GitHub Actions env indirection for context values
+date: 2026-03-19
+category: ci-cd
+tags: [security-issues, ci]
+---
+
 # Learning: GitHub Actions env indirection for context values
 
 ## Problem

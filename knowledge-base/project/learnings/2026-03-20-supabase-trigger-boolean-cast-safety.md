@@ -1,3 +1,10 @@
+---
+title: 'PL/pgSQL `::boolean` cast on user-controlled metadata can block all signups'
+date: 2026-03-20
+category: engineering
+tags: [database-issues, web-platform/auth]
+---
+
 # Learning: PL/pgSQL `::boolean` cast on user-controlled metadata can block all signups
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Strategy review script missing weekly cadence
+date: 2026-04-06
+category: marketing
+tags: [workflow, strategy-review-check]
+---
+
 # Learning: Strategy review script missing weekly cadence
 
 ## Problem

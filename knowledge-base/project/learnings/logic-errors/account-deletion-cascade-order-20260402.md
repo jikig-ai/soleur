@@ -1,15 +1,15 @@
 ---
-module: AccountDelete
+title: Account deletion cascade lacks transaction safety
 date: 2026-04-02
-problem_type: logic_error
-component: authentication
-symptoms:
-  - "User left with auth record but no data after partial deletion failure"
-  - "GDPR Article 17 violation — orphaned auth record persists after public data deleted"
-root_cause: logic_error
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [account-deletion, gdpr, fk-cascade, transaction-safety, supabase]
+symptoms: [User left with auth record but no data after partial deletion failure, GDPR Article 17 violation — orphaned auth record persists after public data deleted]
+module: AccountDelete
+component: authentication
+problem_type: logic_error
+resolution_type: code_fix
+root_cause: logic_error
+severity: high
 ---
 
 # Troubleshooting: Account deletion cascade lacks transaction safety

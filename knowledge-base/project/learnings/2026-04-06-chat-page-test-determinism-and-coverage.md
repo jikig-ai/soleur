@@ -1,3 +1,10 @@
+---
+title: RTL waitFor replaces setTimeout for negative assertions; getByText exact match prevents multi-element collisions
+date: 2026-04-06
+category: engineering
+tags: [test-failures, web-platform]
+---
+
 # Learning: RTL waitFor replaces setTimeout for negative assertions; getByText exact match prevents multi-element collisions
 
 ## Problem

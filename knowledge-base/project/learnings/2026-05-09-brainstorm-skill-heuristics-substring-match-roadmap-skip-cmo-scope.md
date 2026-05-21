@@ -1,22 +1,14 @@
 ---
+title: 'Brainstorm skill heuristics: three concrete gaps surfaced by a USER_BRAND_CRITICAL session'
 date: 2026-05-09
 category: workflow-gap
-topic: brainstorm skill heuristics — substring-match, roadmap-skip, CMO scope
-session: brainstorm for #3493 change-class AGENTS.md loader
+tags: [brainstorm, skill-heuristics, substring-match, roadmap-freshness, domain-routing, workflow-gap]
 branch: feat-agents-md-change-class-loader
-pr: "#3496"
-related_issues: ["#3493"]
-related_learnings:
-  - 2026-04-23-agents-md-governance-measure-before-asserting.md
-  - 2026-04-21-agents-md-rule-retirement-deprecation-pattern.md
-  - 2026-04-18-agents-md-byte-budget-and-why-compression.md
-tags:
-  - brainstorm
-  - skill-heuristics
-  - substring-match
-  - roadmap-freshness
-  - domain-routing
-  - workflow-gap
+pr: '#3496'
+related_issues: [#3493]
+related_learnings: [2026-04-23-agents-md-governance-measure-before-asserting.md, 2026-04-21-agents-md-rule-retirement-deprecation-pattern.md, 2026-04-18-agents-md-byte-budget-and-why-compression.md]
+session: brainstorm for
+topic: brainstorm skill heuristics — substring-match, roadmap-skip, CMO scope
 ---
 
 # Brainstorm skill heuristics: three concrete gaps surfaced by a USER_BRAND_CRITICAL session

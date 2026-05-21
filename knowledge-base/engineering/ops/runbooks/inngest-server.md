@@ -277,3 +277,49 @@ After the preview smoke passes, flip prd per the command above; within 1h fire a
 - PR-A (#3960 close) — IaC for inngest-server
 - `apps/web-platform/server/inngest/client.ts` — fail-closed startup guards (ADR-030 I4)
 - `apps/web-platform/server/scope-grants/is-granted.ts` — webhook predicate's grant probe (ADR-033)
+
+## Fresh-host provisioning (#4118)
+
+A new Hetzner VM (intentional `terraform destroy && terraform apply`, full
+`-replace`, or a brand-new Soleur user running `terraform apply` against an
+empty Hetzner project) installs Inngest automatically via the cloud-init
+`runcmd:` block at `apps/web-platform/infra/cloud-init.yml`. The block pulls
+`ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.0.0`, extracts the embedded
+`inngest-bootstrap.sh`, sources `INNGEST_CLI_VERSION` + `INNGEST_CLI_SHA256`
+from the image's `Config.Env`, and runs the script — same install path as the
+operator-triggered deploy webhook, just fired at first boot.
+
+The currently-running prod VM is unaffected by this addition. `hcloud_server.web`
+has `lifecycle.ignore_changes = [user_data]` (`apps/web-platform/infra/server.tf`),
+so cloud-init.yml edits never re-render the existing host.
+
+### Verification (no SSH required)
+
+```bash
+# Run from the operator's workstation. 200 or 401 = Inngest is alive.
+curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 \
+  https://app.soleur.ai/api/inngest
+```
+
+Anything other than `200` / `401` means Inngest is absent or unreachable.
+Investigate `/var/log/cloud-init-output.log` on the host (via Hetzner console
+if SSH is also broken).
+
+### Upgrade path (existing operator workflow, unchanged)
+
+1. Push `vinngest-vX.Y.Z` tag.
+2. The `build-inngest-bootstrap-image.yml` GHA workflow builds the OCI image.
+3. The operator triggers the deploy webhook
+   `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap vX.Y.Z`.
+
+Cloud-init installs only on FRESH hosts; live upgrades still go through the
+webhook. Pinning is documented inline in `cloud-init.yml`'s drift-sentinel
+comment ("Pinned image tag tracks
+`apps/web-platform/infra/inngest.tf:locals.inngest_cli_version`").
+
+### Tier 2 follow-up
+
+A weekly disaster-recovery test that exercises the full fresh-`terraform apply`
+path against a clean Hetzner test-workspace is tracked in #4126 (deferred).
+Until that lands, the post-merge verification above is the operator-driven
+canary on the prod VM.

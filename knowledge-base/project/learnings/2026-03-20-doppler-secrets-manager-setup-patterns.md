@@ -1,3 +1,10 @@
+---
+title: Doppler Secrets Manager Setup Patterns
+date: 2026-03-20
+category: security
+tags: [integration-issues, infrastructure, ci, secrets-management]
+---
+
 # Learning: Doppler Secrets Manager Setup Patterns
 
 ## Problem

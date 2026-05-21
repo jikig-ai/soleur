@@ -1,3 +1,10 @@
+---
+title: worktree-manager feature command can fail silently
+date: 2026-04-13
+category: workflow-patterns
+tags: [integration-issues, worktree-manager]
+---
+
 # Learning: worktree-manager feature command can fail silently
 
 ## Problem

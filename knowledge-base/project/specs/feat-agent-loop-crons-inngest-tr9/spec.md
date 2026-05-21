@@ -97,3 +97,40 @@ This spec scopes the proof-of-pattern migration + reshapes #3948 from "one big m
 | CPO | ✓ signed off | Ship before PR-G. Umbrella reshape with per-workflow children. |
 | CLO | ✓ signed off | Self-hosted preserves sub-processor posture. Per-workflow Article 30 audit before bucket (ii) migrations (NOT PR-1). NO-OP `hr-autonomous-loop-skill-api-budget-disclosure` for platform-loop crons; guard ADR records re-evaluation criteria. |
 | CTO | ✓ signed off | Substrate gap = `claude-code` spawn-child primitive (K9). Idempotency archetype = label-mutator natural key (set-union via GitHub API). Hobby tier execution budget 15× headroom; concurrency cap sidestepped by self-hosted. Inverse-assertion in sentinel sweep. |
+
+## Observability
+
+(Backfilled 2026-05-20 per #4116 — `hr-observability-as-plan-quality-gate`. Original PR-1 spec predated the gate; declaring the surface here keeps the rule's coverage retroactively honest.)
+
+```yaml
+liveness_signal:
+  what: "Sentry cron monitor `scheduled-daily-triage`"
+  cadence: "Daily 04:00 UTC (per cron-monitors.tf schedule)"
+  alert_target: "Sentry issue (web-platform project) → Discord ops channel via Sentry alert rule"
+  configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf"
+
+error_reporting:
+  destination: "Sentry web-platform project (DSN via SENTRY_DSN in Doppler prd)"
+  fail_loud: "Sentry cron monitor flips to `error` on non-zero exit; missed_check_in fires if no ok/error received within 24h+grace. Visible at sentry.io/organizations/<org>/crons/."
+
+failure_modes:
+  - mode: "Daily triage function throws or exits non-zero"
+    detection: "Sentry cron monitor reports `error` status + captured exception"
+    alert_route: "Sentry → operator email + Discord ops channel"
+  - mode: "Inngest server down (function never fires)"
+    detection: "Sentry missed_check_in alert after 24h schedule window + grace"
+    alert_route: "Sentry → operator email"
+  - mode: "Daily-priorities artifact generated empty (legitimate quiet day vs. silent skip)"
+    detection: "PR body / artifact diff — operator sweep; not currently alerted"
+    alert_route: "deferred — see #4116-FU-1 (queue-depth metric)"
+
+logs:
+  where: "Inngest run logs (self-hosted, journalctl -u inngest-server.service on Hetzner VM); Sentry breadcrumbs"
+  retention: "Inngest run history per local SQLite (~30 days); Sentry per project plan"
+
+discoverability_test:
+  command: "curl -fsS https://deploy.soleur.ai/hooks/deploy-status | jq '.services.inngest_heartbeat'"
+  expected_output: '"active"'
+```
+
+**Note on shared discoverability:** The `services.inngest_heartbeat` field (added by the same PR #4123 that introduced this backfill) is a substrate-level liveness signal — it confirms the Inngest server is alive, NOT that this specific cron fired on its schedule. A per-cron `last_ok_at` check would be ideal but lives outside this PR's scope; see follow-up #4116-FU-1. Until then, the Sentry cron monitor (`scheduled-daily-triage`) is the per-cron signal; the heartbeat is the substrate signal.

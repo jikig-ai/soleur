@@ -1,9 +1,10 @@
 ---
+title: UX and Content Review Gates Must Be Enforced for User-Facing Pages
 date: 2026-03-25
 category: integration-issues
+tags: [workflow, ux-design, content-review, pricing-page, specialist-gates]
 module: plan-skill, work-skill
 severity: high
-tags: [workflow, ux-design, content-review, pricing-page, specialist-gates]
 ---
 
 # Learning: UX and Content Review Gates Must Be Enforced for User-Facing Pages

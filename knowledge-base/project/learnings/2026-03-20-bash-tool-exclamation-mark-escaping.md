@@ -1,3 +1,10 @@
+---
+title: Claude Code Bash tool escapes exclamation marks in all shell contexts
+date: 2026-03-20
+category: shell-scripting
+tags: [integration-issues, claude-code]
+---
+
 # Learning: Claude Code Bash tool escapes exclamation marks in all shell contexts
 
 ## Problem

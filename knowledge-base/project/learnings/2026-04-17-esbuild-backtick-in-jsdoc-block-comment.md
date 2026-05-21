@@ -1,8 +1,9 @@
 ---
+title: esbuild transform rejects backtick-containing JSDoc block comments
 date: 2026-04-17
 category: build-errors
-module: apps/web-platform
 tags: [esbuild, vitest, jsdoc, typescript]
+module: apps/web-platform
 related_pr: 2517
 ---
 

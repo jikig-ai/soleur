@@ -1,3 +1,10 @@
+---
+title: 'Tailwind v4 accessibility patterns — focus rings, WCAG contrast, and @layer base'
+date: 2026-04-02
+category: engineering
+tags: [ui-bugs, web-platform]
+---
+
 # Learning: Tailwind v4 accessibility patterns — focus rings, WCAG contrast, and @layer base
 
 ## Problem

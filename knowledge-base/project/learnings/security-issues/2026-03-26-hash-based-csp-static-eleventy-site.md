@@ -1,17 +1,16 @@
 ---
-module: Docs Site
+title: Hash-Based CSP for Static Eleventy Sites
 date: 2026-03-26
-problem_type: security_issue
-component: frontend_stimulus
-symptoms:
-  - "No Content-Security-Policy header on docs site"
-  - "Inline scripts execute without restriction"
-  - "XSS injection in templates would execute without CSP constraint"
-root_cause: missing_validation
-resolution_type: code_fix
-severity: high
+category: shell-scripting
 tags: [csp, content-security-policy, xss, static-site, eleventy, sha256, hash-based-csp]
+symptoms: [No Content-Security-Policy header on docs site, Inline scripts execute without restriction, XSS injection in templates would execute without CSP constraint]
+module: Docs Site
 synced_to: [seo-aeo]
+component: frontend_stimulus
+problem_type: security_issue
+resolution_type: code_fix
+root_cause: missing_validation
+severity: high
 ---
 
 # Hash-Based CSP for Static Eleventy Sites

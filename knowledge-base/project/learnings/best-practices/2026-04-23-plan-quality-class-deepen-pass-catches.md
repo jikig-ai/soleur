@@ -1,13 +1,12 @@
 ---
+title: Plan-quality classes that deepen-plan reliably catches
 date: 2026-04-23
 category: best-practices
+tags: [plan-quality, deepen-plan, tool-tier, cost-slo, discriminated-union, sentinel-values, agent-native-parity]
 module: planning
 component: plan-skill
-tags: [plan-quality, deepen-plan, tool-tier, cost-slo, discriminated-union, sentinel-values, agent-native-parity]
 issue: 2853
-related:
-  - 2026-04-15-plan-skill-reconcile-spec-vs-codebase.md
-  - integration-issues/discriminated-union-exhaustive-switch-miss-20260410.md
+related: [2026-04-15-plan-skill-reconcile-spec-vs-codebase.md, integration-issues/discriminated-union-exhaustive-switch-miss-20260410.md]
 ---
 
 # Plan-quality classes that deepen-plan reliably catches

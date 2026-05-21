@@ -273,7 +273,9 @@ describe("scheduled-github-app-drift-guard.yml — failure routing", () => {
   test("idempotent label create for both new labels", () => {
     const yaml = readFileSync(workflowPath, "utf-8");
     // The pattern `gh label create … 2>/dev/null || true` is the load-bearing
-    // idempotency idiom — see scheduled-oauth-probe.yml:436-438 precedent.
+    // idempotency idiom — see the deleted scheduled-oauth-probe workflow's
+    // label-create call sites (lines ~436-438 pre-TR9 PR-3 #4211) for the
+    // original precedent.
     expect(yaml).toMatch(/gh\s+label\s+create\s+ci\/guard-broken[\s\S]+?(\|\|\s*true|2>\/dev\/null)/);
     expect(yaml).toMatch(/gh\s+label\s+create\s+security\/leak-suspected[\s\S]+?(\|\|\s*true|2>\/dev\/null)/);
   });

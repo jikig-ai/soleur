@@ -9,9 +9,15 @@
 #   - On version bump, pauses the running server (drains in-flight events),
 #     restarts, resumes.
 #
-# Self-hosted Inngest binds loopback only (127.0.0.1:8288 events / 8289 API)
-# per ADR-030. Signing/event keys + heartbeat URL come from Doppler `prd` via
-# `doppler run --project soleur --config prd --` wrapping ExecStart.
+# Self-hosted Inngest binds 0.0.0.0:8288 (events) + 8289 (connect-gateway).
+# ADR-030's "loopback only" intent — keep Inngest unreachable from the public
+# internet — is preserved via the host firewall (`apps/web-platform/infra/
+# firewall.tf`), which only allows 22 (admin IPs), 80, and 443 (Cloudflare
+# IPs) inbound. Port 8288 is implicitly closed externally. The 0.0.0.0 bind
+# is REQUIRED so the bridge-networked `soleur-web-platform` Docker container
+# can reach Inngest via `host.docker.internal` (= docker bridge gateway). The
+# original 127.0.0.1 bind worked for systemd unit-local consumers but blocked
+# the container's SDK from registering — surfaced 2026-05-19 via #4017.
 #
 # Embedded into OCI artifact `ghcr.io/jikig-ai/soleur-inngest-bootstrap:vX.Y.Z`
 # AND base64-embedded into cloud-init for fresh-host provisioning. Single
@@ -55,15 +61,25 @@ done
 
 log() { printf '[inngest-bootstrap] %s\n' "$*" >&2; }
 
-# Idempotency short-circuit: skip everything if the service is active AND
-# the recorded version matches the requested version. Second invocation of
-# the same vX.Y.Z is a no-op (~50ms).
+# Idempotency short-circuit: when the server is already active AND the recorded
+# version matches, skip the binary download/install + server unit write — but
+# ALWAYS fall through to reconcile heartbeat units, env file, and daemon-reload.
+# Without this, a bootstrap-script fix (e.g. PR #4123's doppler-run heartbeat
+# wrap) stays masked indefinitely: the version match short-circuits before the
+# unit writes, so the host runs the OLD unit shape even though the deployed
+# image embeds the new script. Surfaced 2026-05-20 during the #4144 cascade —
+# v1.0.1 image carried the heartbeat fix but every no-op redeploy skipped the
+# unit reconcile, leaving inngest-heartbeat.service in `failed` with
+# `curl: (3) URL rejected: Malformed input to a URL function`.
+SKIP_BINARY_INSTALL=
 if [[ -f "$VERSION_FILE" ]] && [[ "$(cat "$VERSION_FILE" 2>/dev/null || true)" == "$INNGEST_CLI_VERSION" ]]; then
   if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
-    log "inngest-server.service already active at $INNGEST_CLI_VERSION — no-op"
-    exit 0
+    log "inngest-server.service already active at $INNGEST_CLI_VERSION — skipping binary install, reconciling units"
+    SKIP_BINARY_INSTALL=1
   fi
 fi
+
+if [[ -z "$SKIP_BINARY_INSTALL" ]]; then
 
 # Detect in-place version upgrade (existing service running an older version).
 # Pause the server so the in-memory queue drains to the SQLite store before
@@ -80,7 +96,13 @@ if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
 fi
 
 # Download + SHA256 verify the pinned binary.
+# /var/lib/inngest is SQLite's writable dir; the unit runs as `deploy` so the
+# directory MUST be owned by deploy:deploy or SQLite returns CANTOPEN(14).
+# Surfaced 2026-05-19 via #4017 substrate audit (PR-1 cron-daily-triage missed
+# all scheduled fires — root cause one of five).
 mkdir -p /var/lib/inngest
+chown deploy:deploy /var/lib/inngest
+chmod 0750 /var/lib/inngest
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 TARBALL="$TMPDIR/inngest.tar.gz"
@@ -103,6 +125,16 @@ install -m 0755 "$TMPDIR/inngest" "$INSTALL_PATH"
 # `doppler run` wrapper materializes INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY /
 # INNGEST_HEARTBEAT_URL at process start; Doppler CLI uses
 # /etc/default/inngest-server for its own token.
+#
+# Signing-key prefix strip: Terraform sets INNGEST_SIGNING_KEY to the SDK-
+# format `signkey-prod-<64hex>`, but `inngest start --signing-key` requires
+# the bare 64-hex (the CLI literally errors `signing-key must be hex string
+# with even number of chars` on the prefixed form). Strip in-place via bash
+# `${VAR#prefix}`. The SDK consumer (apps/web-platform container) still uses
+# the full prefixed value — that's what the SDK helper expects per
+# `node_modules/inngest/helpers/strings.js`. Both sides resolve to the same
+# 32-byte HMAC seed; the prefix is purely a SDK-side string marker.
+# Surfaced 2026-05-19 via #4017 substrate audit.
 cat > "$UNIT_FILE" <<'UNITEOF'
 [Unit]
 Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
@@ -112,7 +144,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/inngest start --host 127.0.0.1 --port 8288 --sqlite-dir /var/lib/inngest
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/bin/bash -c '/usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --signing-key "$${INNGEST_SIGNING_KEY#signkey-prod-}" --event-key "$${INNGEST_EVENT_KEY}"'
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -134,18 +166,39 @@ TimeoutStopSec=180
 WantedBy=multi-user.target
 UNITEOF
 
+fi  # end SKIP_BINARY_INSTALL guard — heartbeat reconcile below always runs
+
 # Heartbeat ping script + service + 60s timer.
-# The URL lives in $INNGEST_HEARTBEAT_URL (loaded by systemd from
-# /etc/default/inngest-server). Indirecting through a script file rather
-# than inlining the curl in ExecStart= keeps the URL out of systemd's
-# journal (which logs resolved ExecStart= lines on some configurations).
-# Defense-in-depth — the URL is also `sensitive = true` in the TF output.
+# The URL lives in $INNGEST_HEARTBEAT_URL — resolved at ExecStart time via
+# `doppler run --project soleur --config prd` (same pattern as
+# inngest-server.service above). The earlier shape relied on systemd's
+# EnvironmentFile=/etc/default/inngest-server to provide the URL, but the
+# substrate-fix in PR #4085 only writes DOPPLER_TOKEN / DOPPLER_CONFIG_DIR /
+# DOPPLER_ENABLE_VERSION_CHECK into that file — INNGEST_HEARTBEAT_URL was
+# silently empty and curl errored every 60s (#4116). Wrapping in `doppler run`
+# collapses the env-injection class: Doppler prd is the single source of
+# truth, no host-side materialization required.
+#
+# Indirecting through a script file rather than inlining the curl in
+# ExecStart= keeps the URL out of systemd's journal (which logs resolved
+# ExecStart= lines on some configurations). Defense-in-depth — the URL is
+# also `sensitive = true` in the TF output.
 cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 #!/bin/sh
 # Posted to Better Stack every 60s by inngest-heartbeat.timer.
 exec /usr/bin/curl -fsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
 HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
+
+# Resolve the doppler binary path at bootstrap time. cloud-init installs to
+# /usr/local/bin/doppler (cloud-init.yml:289-290); inngest-server.service:137
+# hardcodes /usr/bin/doppler. Interpolating `command -v` here avoids
+# inheriting that latent path discrepancy in the heartbeat unit.
+DOPPLER_BIN="$(command -v doppler 2>/dev/null || true)"
+if [[ -z "$DOPPLER_BIN" ]]; then
+  log "ERROR: doppler CLI not found on PATH — cloud-init must install /usr/local/bin/doppler before inngest-bootstrap"
+  exit 1
+fi
 
 cat > "$HEARTBEAT_UNIT" <<HEARTBEATEOF
 [Unit]
@@ -154,8 +207,15 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+User=deploy
+Group=deploy
+# Doppler CLI calls os.UserHomeDir() during init even when DOPPLER_CONFIG_DIR
+# is set in the env file. Running as root with no HOME triggers
+# "Doppler Error: \$HOME is not defined". User=deploy gets HOME=/home/deploy
+# automatically, matching inngest-server.service's hardening pattern.
+# Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
-ExecStart=${HEARTBEAT_SCRIPT}
+ExecStart=${DOPPLER_BIN} run --project soleur --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
 
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
@@ -171,18 +231,42 @@ Persistent=true
 WantedBy=timers.target
 TIMEREOF
 
-# Materialize Doppler token env file (read-only, mode 0600, owned by deploy).
-# DOPPLER_TOKEN itself is already present in /etc/environment from the existing
-# cloud-init secrets-bootstrap path; we re-export here so the unit's
-# EnvironmentFile= sees it without exposing /etc/environment.
-if [[ -f /etc/default/inngest-server ]]; then
-  log "/etc/default/inngest-server exists — preserving"
+# Materialize Doppler token + CLI config dir env file. The unit's `User=deploy`
+# combined with `ProtectHome=read-only` blocks Doppler CLI's default fallback
+# dir (/home/deploy/.doppler/fallback) — must redirect via DOPPLER_CONFIG_DIR
+# to a PrivateTmp-writable location.
+#
+# Token source-of-truth: reuse /etc/default/webhook-deploy's DOPPLER_TOKEN
+# (provisioned at cloud-init for the webhook-deploy service). Originally this
+# script assumed the env-injection path would have DOPPLER_TOKEN set in the
+# caller env; in the GHA→webhook deploy path that's NOT the case, leaving the
+# token empty and inngest in a crash loop with "Doppler Error: you must
+# provide a token". Reading from webhook-deploy's env file collapses one
+# more substrate gap. Surfaced 2026-05-19 via #4017.
+if [[ -f /etc/default/inngest-server ]] && grep -q '^DOPPLER_TOKEN=dp\.' /etc/default/inngest-server; then
+  log "/etc/default/inngest-server exists with valid token — preserving"
 else
+  # Pull token from the sibling webhook-deploy env file (same Doppler scope
+  # — both run as `deploy` user against the `prd` config).
+  if [[ ! -f /etc/default/webhook-deploy ]]; then
+    log "ERROR: /etc/default/webhook-deploy not found — cannot source DOPPLER_TOKEN"
+    exit 1
+  fi
+  TOKEN=$(grep -oP '(?<=^DOPPLER_TOKEN=)dp\.\S+' /etc/default/webhook-deploy | head -n1)
+  if [[ -z "$TOKEN" ]]; then
+    log "ERROR: webhook-deploy env file has no DOPPLER_TOKEN — aborting"
+    exit 1
+  fi
   # umask-then-write to avoid a world-readable window between create and
   # chmod 0640. 0137 inverts: u=rw,g=r,o=none. DOPPLER_TOKEN is sensitive
   # so close that window even though it's microseconds in practice (CWE-732
   # defense-in-depth).
-  ( umask 0137 && printf 'DOPPLER_TOKEN=%s\n' "${DOPPLER_TOKEN:-}" > /etc/default/inngest-server )
+  ( umask 0137 && cat > /etc/default/inngest-server <<DOPPLEREOF
+DOPPLER_TOKEN=$TOKEN
+DOPPLER_CONFIG_DIR=/tmp/.doppler
+DOPPLER_ENABLE_VERSION_CHECK=false
+DOPPLEREOF
+  )
   chown root:deploy /etc/default/inngest-server
   chmod 0640 /etc/default/inngest-server
 fi
@@ -194,9 +278,13 @@ echo "$INNGEST_CLI_VERSION" > "$VERSION_FILE"
 systemctl daemon-reload
 systemctl enable --now inngest-server.service
 systemctl enable --now inngest-heartbeat.timer
+# Force one heartbeat tick now so a unit-shape change (e.g. ExecStart) takes
+# effect immediately rather than waiting up to 60s for the next timer fire.
+# Oneshot in `failed` state: restart re-runs ExecStart with the new unit.
+systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-zero (timer will retry in 60s)"
 
 # Resume from upgrade pause (if any).
-if [[ -n "$UPGRADE_FROM" ]]; then
+if [[ -n "${UPGRADE_FROM:-}" ]]; then
   sleep 2  # let the new server bind loopback before resume
   "$INSTALL_PATH" resume >/dev/null 2>&1 || log "warn: resume command failed (server is still running)"
   log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"

@@ -1,9 +1,13 @@
 ---
+title: Brand-workshop tokens are not founder-approvable without UX mockups
 date: 2026-05-05
 category: best-practices
 tags: [brand-workshop, brainstorm, ux-design-lead, brand-architect, founder-approval]
-related-prs: [3233]
-related-issues: [3232, 3234]
+related-issues:
+  - 3232
+  - 3234
+related-prs:
+  - 3233
 ---
 
 # Brand-workshop tokens are not founder-approvable without UX mockups

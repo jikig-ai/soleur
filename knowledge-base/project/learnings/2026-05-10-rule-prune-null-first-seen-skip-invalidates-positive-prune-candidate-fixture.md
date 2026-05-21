@@ -1,8 +1,13 @@
 ---
+title: 'Cross-PR coupling: a fix in #3156 silently invalidated T4''s positive precondition'
 date: 2026-05-10
-issue: 3507
-related_prs: [3156, 2213, 2876]
 category: test-failures
+tags: [rule, prune, null, first, seen, skip, invalidates, positive, prune, candidate, fixture]
+issue: 3507
+related_prs:
+  - 3156
+  - 2213
+  - 2876
 ---
 
 # Cross-PR coupling: a fix in #3156 silently invalidated T4's positive precondition

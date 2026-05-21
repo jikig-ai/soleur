@@ -1,16 +1,15 @@
 ---
-module: System
+title: Doppler service token config scope mismatch in CI
 date: 2026-03-29
-problem_type: best_practice
-component: ci_cd
-symptoms:
-  - "doppler run -c prd fails with 403 or token scope error"
-  - "CI workflow step cannot access secrets from expected Doppler config"
-  - "Doppler CLI ignores DOPPLER_CONFIG env var in CI"
-root_cause: config_mismatch
-resolution_type: prevention_strategy
-severity: high
+category: engineering
 tags: [doppler, ci, github-actions, service-tokens, secrets]
+symptoms: [doppler run -c prd fails with 403 or token scope error, CI workflow step cannot access secrets from expected Doppler config, Doppler CLI ignores DOPPLER_CONFIG env var in CI]
+module: System
+component: ci_cd
+problem_type: best_practice
+resolution_type: prevention_strategy
+root_cause: config_mismatch
+severity: high
 ---
 
 # Learning: Doppler service token config scope mismatch in CI

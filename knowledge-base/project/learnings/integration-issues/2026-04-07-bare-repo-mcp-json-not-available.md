@@ -1,3 +1,10 @@
+---
+title: Bare repo .mcp.json not available to Claude Code
+date: 2026-04-07
+category: infrastructure
+tags: [integration-issues, claude-code-mcp, medium, 2026-04-07]
+---
+
 # Learning: Bare repo .mcp.json not available to Claude Code
 
 ## Problem

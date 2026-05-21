@@ -1,3 +1,10 @@
+---
+title: KB upload API FormData field name contract
+date: 2026-04-13
+category: engineering
+tags: [integration-issues, web-platform/api/kb/upload]
+---
+
 # Learning: KB upload API FormData field name contract
 
 ## Problem

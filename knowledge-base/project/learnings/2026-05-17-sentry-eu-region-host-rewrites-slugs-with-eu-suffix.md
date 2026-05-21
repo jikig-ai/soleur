@@ -1,18 +1,11 @@
 ---
+title: 'Sentry eu.sentry.io rewrites org-slugs ending in -eu to the literal ''''eu'''' org via activeorg-cookie hijack'
 date: 2026-05-17
+category: engineering
+tags: [sentry, api-routing, org-subdomain, branch-c]
 classification: bug-fixes
-sources:
-  - "PR-β #3945 §7.4 verify probe"
-  - "ADR-031 glossary line 54 (needs update)"
-  - "plan task 8.9 (needs update)"
-related:
-  - "[[2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline]]"
-tags:
-  - sentry
-  - api-routing
-  - org-subdomain
-  - branch-c
-title: "Sentry eu.sentry.io rewrites org-slugs ending in -eu to the literal 'eu' org via activeorg-cookie hijack"
+related: [[[2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline]]]
+sources: [PR-β #3945 §7.4 verify probe, ADR-031 glossary line 54 (needs update), plan task 8.9 (needs update)]
 ---
 
 # Sentry `eu.sentry.io` rewrites org-slugs ending in `-eu` to the literal `eu` org via `activeorg`-cookie hijack

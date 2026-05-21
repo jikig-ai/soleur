@@ -1,3 +1,10 @@
+---
+title: Foundation card completion requires file size, not just existence
+date: 2026-04-13
+category: engineering
+tags: [ui-bugs, dashboard, kb-reader]
+---
+
 # Learning: Foundation card completion requires file size, not just existence
 
 ## Problem

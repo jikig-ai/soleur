@@ -1,15 +1,15 @@
 ---
-module: web-platform
+title: Missing resume_session on Existing Conversations
 date: 2026-04-12
-problem_type: runtime_error
+category: engineering
+tags: [websocket, session-management, resume-session, reconnection]
+symptoms: [Error: No active session. Send start_session first., Messages fail on existing conversation pages after page refresh or navigation]
+module: web-platform
+synced_to: []
 component: websocket_client
-symptoms:
-  - "Error: No active session. Send start_session first."
-  - "Messages fail on existing conversation pages after page refresh or navigation"
+problem_type: runtime_error
 root_cause: missing_protocol_message
 severity: high
-tags: [websocket, session-management, resume-session, reconnection]
-synced_to: []
 ---
 
 # Missing resume_session on Existing Conversations

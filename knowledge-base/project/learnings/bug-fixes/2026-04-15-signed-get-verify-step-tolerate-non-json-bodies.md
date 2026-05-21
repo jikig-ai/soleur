@@ -1,3 +1,10 @@
+---
+title: Signed-GET verify steps must tolerate non-JSON bodies
+date: 2026-04-15
+category: engineering
+tags: [signed, get, verify, step, tolerate, non, json, bodies]
+---
+
 # Signed-GET verify steps must tolerate non-JSON bodies
 
 **Date:** 2026-04-15

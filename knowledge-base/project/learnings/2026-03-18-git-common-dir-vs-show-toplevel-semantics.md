@@ -1,3 +1,10 @@
+---
+title: git --git-common-dir vs --show-toplevel resolve different roots in worktrees
+date: 2026-03-18
+category: workflow-patterns
+tags: [shell-scripts, resolve-git-root]
+---
+
 # Learning: git --git-common-dir vs --show-toplevel resolve different roots in worktrees
 
 ## Problem
