@@ -128,15 +128,15 @@ All tests via vitest. Integration tests gated by `TENANT_INTEGRATION_TEST=1`.
 
 ## Phase 10 — Legal Artifacts + ADR-035
 
-- [ ] 10.1 Edit `knowledge-base/legal/article-30-register.md` — append PA-16 mirroring PA-15 pattern.
-- [ ] 10.2 Edit `apps/web-platform/docs/legal/data-protection-disclosure.md` — append §2.3(t) "Template-authorization ledger". Include 8-value enum un-revocability + Art. 5(2) rationale (replaces former ADR-036).
-- [ ] 10.3 Edit `apps/web-platform/docs/legal/privacy-policy.md` — extend §8.3 with template-level authorization + forward-reference to PR-I+1.
-- [ ] 10.4 Edit `apps/web-platform/docs/legal/acceptable-use-policy.md` — one-line `policy_violation` revocation outcome.
-- [ ] 10.5 Eleventy mirror dual-write per `2026-03-20-eleventy-mirror-dual-date-locations.md`:
+- [x] 10.1 Edit `knowledge-base/legal/article-30-register.md` — append PA-16 mirroring PA-15 pattern.
+- [x] 10.2 Edit `apps/web-platform/docs/legal/data-protection-disclosure.md` — append §2.3(t) "Template-authorization ledger". Include 8-value enum un-revocability + Art. 5(2) rationale (replaces former ADR-036).
+- [x] 10.3 Edit `apps/web-platform/docs/legal/privacy-policy.md` — extend §8.3 with template-level authorization + forward-reference to PR-I+1.
+- [x] 10.4 Edit `apps/web-platform/docs/legal/acceptable-use-policy.md` — one-line `policy_violation` revocation outcome.
+- [x] 10.5 Eleventy mirror dual-write per `2026-03-20-eleventy-mirror-dual-date-locations.md`:
   - Mirror 10.2, 10.3, 10.4 to `plugins/soleur/docs/pages/legal/*.md`.
   - Update BOTH hero `<p>` Last-Updated AND body `**Last Updated:**` lines in each file. Date: `May 21, 2026`.
-- [ ] 10.6 Confirm NO T&C amendment needed (§3a already tier-agnostic).
-- [ ] 10.7 Create `knowledge-base/engineering/architecture/decisions/ADR-035-template-registry-code-static.md` — single ADR (others folded into legal §2.3(t) + plan Sharp Edges per v2 plan-review).
+- [x] 10.6 Confirm NO T&C amendment needed (§3a already tier-agnostic).
+- [x] 10.7 Create `knowledge-base/engineering/architecture/decisions/ADR-035-template-registry-code-static.md` — single ADR (others folded into legal §2.3(t) + plan Sharp Edges per v2 plan-review).
 
 ## Phase 11 — Pre-flight + PR Body
 
