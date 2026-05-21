@@ -611,6 +611,15 @@ case "$COMPONENT" in
     # built before this feature lands won't have /vector.toml; the script's
     # downstream `[[ -f /tmp/vector.toml ]]` guard skips Vector install
     # gracefully when missing.
+    #
+    # Clear /tmp/vector.toml FIRST so a prior deploy's content can't survive
+    # into this one if the docker cp silently fails. Without this rm, a
+    # silent cp failure (e.g., older OCI image missing /vector.toml) made
+    # the bootstrap re-install the stale prior config — surfaced 2026-05-21
+    # during the Better Stack pivot when v1.1.7 deploy left the old
+    # Sentry-sink config running because /tmp/vector.toml hadn't been
+    # replaced.
+    rm -f /tmp/vector.toml
     docker cp "$INNGEST_EXTRACT_CONTAINER:/vector.toml" /tmp/vector.toml 2>/dev/null || true
     # Read ENV vars baked into the image at build time (see
     # .github/workflows/build-inngest-bootstrap-image.yml — ENV

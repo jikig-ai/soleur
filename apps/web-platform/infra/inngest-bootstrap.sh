@@ -293,18 +293,12 @@ fi
 log "bootstrap complete: inngest-server $INNGEST_CLI_VERSION active on 127.0.0.1:8288"
 
 # ----------------------------------------------------------------------
-# Vector block diagnostic: bash trace enabled for the entire Vector
-# install/config/start section. The trace lines write to stderr which
-# ci-deploy.sh captures into /tmp/inngest-bootstrap-stderr.log; the
-# `final_write_state` failure path surfaces the last ~400 chars via the
-# /hooks/deploy-status endpoint (no SSH needed). Will be reverted to
-# `set +x` only after Vector v1.1.x is verified live on prd.
-set -x
-
-# ----------------------------------------------------------------------
-# Vector observability shipper (TR9 PR-5 / observability stack).
-#
-# Streams ERROR+ journald lines AND host_metrics from this VM to Sentry's
+# Vector observability shipper — ships journald + host_metrics to Better
+# Stack Logs via Vector's native `better_stack_logs` sink (#4273 pivot
+# from the original Sentry envelope target). ci-deploy.sh still captures
+# stderr at the sudo boundary into /tmp/inngest-bootstrap-stderr.log so
+# any future failure surfaces via the deploy-status endpoint without
+# needing SSH (permanent diagnostic kept post-pivot).
 # envelope endpoint. Same Doppler-injected envs as inngest-heartbeat
 # (SENTRY_INGEST_DOMAIN / SENTRY_PROJECT_ID / SENTRY_PUBLIC_KEY); no new
 # secrets minted.
@@ -362,19 +356,27 @@ else
       mkdir -p "$VECTOR_CONFIG_DIR" /var/lib/vector
       install -m 0644 /tmp/vector.toml "$VECTOR_CONFIG"
       chown -R deploy:deploy /var/lib/vector
+      # Log the sha256 of the installed config so cat-deploy-state's
+      # journal tail proves what content actually reached disk. Bitten
+      # 2026-05-21 by the stale `/tmp/vector.toml` reuse path; the hash
+      # comparison surfaces drift between the OCI-bundled config and
+      # what vector.service is actually reading.
+      log "vector config installed: sha256=$(sha256sum "$VECTOR_CONFIG" | awk '{print $1}')"
     fi
 
     if [[ -f "$VECTOR_CONFIG" ]]; then
       cat > "$VECTOR_UNIT" <<'VECTOREOF'
 [Unit]
-Description=Vector observability shipper (journald + host_metrics -> Sentry)
+Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
 After=network-online.target inngest-server.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/inngest-server
-# Vector needs Doppler-injected SENTRY_INGEST_DOMAIN/PROJECT_ID/PUBLIC_KEY.
+# Vector needs Doppler-injected BETTERSTACK_LOGS_TOKEN (and any other
+# secrets the config references). doppler run resolves them at
+# ExecStart time.
 ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
 Restart=on-failure
 RestartSec=10
@@ -395,8 +397,16 @@ WantedBy=multi-user.target
 VECTOREOF
 
       systemctl daemon-reload
-      systemctl enable --now vector.service || log "warn: vector.service failed to start (Sentry shipper deferred; check journalctl -u vector.service)"
-      log "vector observability shipper active"
+      # `enable --now` is a no-op when the unit is already running; the
+      # new config would never be picked up by an already-running vector
+      # process. Replace with explicit enable + restart so each deploy
+      # gives Vector a clean reload (it reads /etc/vector/vector.toml
+      # only at start, not on SIGHUP without explicit reload mapping).
+      # Surfaced 2026-05-21: v1.1.7 deploy reported "active" but kept
+      # running the v1.1.6 Sentry-sink config.
+      systemctl enable vector.service 2>/dev/null || true
+      systemctl restart vector.service || log "warn: vector.service failed to (re)start; check journalctl -u vector.service"
+      log "vector observability shipper restarted"
     else
       log "warn: $VECTOR_CONFIG missing — vector installed but not started"
     fi
