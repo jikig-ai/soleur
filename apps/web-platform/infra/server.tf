@@ -221,6 +221,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
   # to the existing server. This resource is the sole path for pushing ci-deploy.sh,
   # webhook.service, cat-deploy-state.sh, canary-bundle-claim-check.sh, and
   # hooks.json updates to production (#2185, #3033).
+  # Sentinel string at the end forces re-recreation when the inline
+  # remote-exec list itself changes (terraform_data doesn't auto-detect
+  # provisioner-block content drift; only triggers_replace is consulted).
+  # Bump the sentinel suffix in lockstep with any inline edit so the
+  # remote host re-receives + re-runs the updated commands.
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
     file("${path.module}/ci-deploy-wrapper.sh"),
@@ -229,6 +234,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/canary-bundle-claim-check.sh"),
     file("${path.module}/deploy-inngest-bootstrap.sudoers"),
     local.hooks_json,
+    "v2-pre-create-vector-dirs", # bump on inline remote-exec change
   ]))
 
   connection {
@@ -302,6 +308,15 @@ resource "terraform_data" "deploy_pipeline_fix" {
       # Redirects Doppler CLI config to /tmp (writable under PrivateTmp) instead of ~/.doppler
       # (blocked by ProtectHome=read-only). grep guard makes this idempotent.
       "grep -q DOPPLER_CONFIG_DIR /etc/default/webhook-deploy || printf 'DOPPLER_CONFIG_DIR=/tmp/.doppler\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' >> /etc/default/webhook-deploy",
+      # TR9 PR-5 / Vector observability shipper: pre-create the Vector dirs
+      # BEFORE webhook starts so the `-/var/lib/vector` `-/etc/vector`
+      # entries in webhook.service's ReadWritePaths are recognized as
+      # writable mounts inside the unit's namespace (systemd's `-` prefix
+      # only suppresses fail-on-missing — it does NOT grant write access
+      # to a non-existent path inside ProtectSystem=strict). Idempotent.
+      # Surfaced 2026-05-21 via v1.1.1 deploy diagnostic capture.
+      "mkdir -p /etc/vector /var/lib/vector",
+      "chown deploy:deploy /var/lib/vector",
       "systemctl daemon-reload",
       "systemctl restart webhook",
       # One-time cleanup: delete stale .env so deploys fail loudly if Doppler is unavailable.
