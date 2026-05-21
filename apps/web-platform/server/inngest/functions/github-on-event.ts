@@ -205,7 +205,9 @@ export async function githubOnEventHandler({
   // unitCostCents=0 deterministically. Mirrors the marker at
   // cfo-on-payment-failed.ts.
   const _draft = await step.run("draft-github-card", async () => {
-    return runWithByokLease(founderId, async () => {
+    return runWithByokLease(
+      { workspaceContextUserId: founderId, keyOwnerUserId: founderId },
+      async () => {
       // STUB: leader prompt loop wires later. Return raw preview now
       // so the persist step has the right shape to redact + insert.
       return {

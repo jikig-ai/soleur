@@ -155,10 +155,14 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
     });
 
     expect(mockPersistTurnCost).toHaveBeenCalledTimes(1);
+    // Phase 3 — workspaceId passed as 4th positional arg under the N2
+    // invariant (workspaces.id = owner_user_id for solo). cc-dispatcher
+    // sources it from `userId` directly.
     expect(mockPersistTurnCost).toHaveBeenCalledWith(
       "u-cost-1",
       "conv-cost-1",
       CC_ROUTER_LEADER_ID,
+      "u-cost-1",
       {
         totalCostUsd: 0.0042,
         usage: {

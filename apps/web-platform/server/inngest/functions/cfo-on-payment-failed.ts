@@ -196,7 +196,9 @@ export async function cfoHandler({
   // cohort onboarding lands. Until then there is no real token cost to
   // record; the stub returns tokenCount=0 / unitCostCents=0 deterministically.
   const _draft = await step.run("draft-customer-response", async () => {
-    return runWithByokLease(founderId, async (_lease) => {
+    return runWithByokLease(
+      { workspaceContextUserId: founderId, keyOwnerUserId: founderId },
+      async (_lease) => {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
       try {

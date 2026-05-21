@@ -305,6 +305,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Done |
 | MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Done |
 | MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Done |
+| MU4 | Team workspaces — multi-user invite/remove + workspace co-membership + JWT-claim org switching + Art 15/17/20 DSAR over workspace tables + WORM attestations + workspace-scoped sandbox + BYOK split | [#4229](https://github.com/jikig-ai/soleur/issues/4229) In-progress (PR [#4225](https://github.com/jikig-ai/soleur/pull/4225)) — rollback: `knowledge-base/project/specs/feat-team-workspace-multi-user/rollback.md`. Blocked on parallel legal-PR (Phase 10 `feat-team-workspace-legal-scaffolding`) before `FLAG_TEAM_WORKSPACE_INVITE=1` may flip ON. |
 
 **Gate:** All three must pass before any recruitment outreach.
 

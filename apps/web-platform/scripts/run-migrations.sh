@@ -203,6 +203,46 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
       exit 1
     fi
     echo "::warning::$filename is not on origin/main; proceeding under ALLOW_UNMERGED_DEV_APPLY=1."
+
+    # Cross-branch collision warning (#4225 follow-up). The file just passed
+    # the unmerged-apply gate under ALLOW_UNMERGED_DEV_APPLY=1 — surface
+    # whether origin/main already carries DIFFERENT file(s) at the same
+    # numeric prefix. That class fires when a sibling PR landed a same-
+    # numbered migration to main WHILE this branch was in flight (the
+    # actual #4225 → #4251 failure mode: branch's 054_workspace_member_
+    # attestations was in flight when main landed 054_schema_migrations_
+    # content_sha). The local same-prefix warning earlier in the script
+    # only fires AFTER rebase; this inline surface catches the gap when
+    # the operator applies BEFORE rebasing (direct-pg fallback, manual
+    # psql, anything that bypasses this script's discipline).
+    #
+    # Severity is ::warning:: (not ::error::) to match the pre-loop
+    # same-prefix tolerance — the 053-class triple-add (PR-H + PR-I +
+    # this branch) is by-design and would otherwise block every CI run
+    # for any future PR adding a sibling-prefix migration. The warning
+    # is the load-bearing signal: operator who sees it in their CI log
+    # has the chance to renumber before merge. See learning
+    # 2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md
+    # §3 "Parallel-branch migration coordination" for the rename +
+    # `public._schema_migrations` reconcile recovery pattern.
+    file_prefix=$(printf '%s' "$filename" | awk -F'_' '{print $1}')
+    if [[ "$file_prefix" =~ ^[0-9]{3}$ ]]; then
+      main_with_prefix=$(git ls-tree origin/main -- "apps/web-platform/supabase/migrations/" 2>/dev/null \
+        | awk '{print $NF}' \
+        | xargs -I{} basename {} \
+        | grep -E "^${file_prefix}_[^.]+\.sql$" \
+        | grep -v '\.down\.sql$' \
+        | grep -v "^${filename}$" || true)
+      if [[ -n "$main_with_prefix" ]]; then
+        echo "::warning::Cross-branch migration filename collision: branch '${filename}' shares prefix ${file_prefix} with origin/main file(s). Renumber the branch's collider to the next free prefix before merge (typical pattern: 054→058, 055→059, …) to avoid the tracking-table reconcile recovery class."
+        # printf '%s\n' (NOT '%s') so the final coexists-with line is newline-
+        # terminated — without the trailing newline, the next iteration's
+        # ::warning::… line glues onto the same line and a regex looking for
+        # `<prior-file>.*is not on origin/main` matches across the boundary
+        # (broke run-migrations-unmerged-gate.test.ts positive-control case).
+        printf '%s\n' "$main_with_prefix" | sed 's/^/::warning::  coexists-with: /'
+      fi
+    fi
   fi
 
   # Filenames are from a controlled glob (*.sql) AND have passed the shape

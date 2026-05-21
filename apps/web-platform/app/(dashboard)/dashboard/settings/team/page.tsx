@@ -1,12 +1,67 @@
-"use client";
+import { notFound, redirect } from "next/navigation";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
+import { TeamMembershipList } from "@/components/settings/team-membership-list";
+import { InviteMemberAction } from "@/components/settings/invite-member-action";
 
-import { TeamSettingsContent } from "@/components/settings/team-settings";
-import { TeamNamesProvider } from "@/hooks/use-team-names";
+// AC-A: flag OFF → HTTP 404 via notFound(). Two-key gate (FLAG_TEAM_WORKSPACE_INVITE
+// + TEAM_WORKSPACE_ALLOWLIST_ORG_IDS) lives inside resolveTeamMembershipPageData.
+// The "/dashboard/settings/team" href is not present in the client bundle when
+// the gate is OFF because the layout never injects the Members tab.
+export default async function TeamMembershipPage() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/login");
+  }
 
-export default function TeamSettingsPage() {
+  const service = createServiceClient();
+  const result = await resolveTeamMembershipPageData(supabase, service);
+  if (!result.ok) {
+    if (result.reason === "no-membership" || result.reason === "no-org") {
+      // Integrity surface — treat as 404 for the operator's view (Sentry will
+      // alarm separately via failure_modes #1).
+      notFound();
+    }
+    notFound();
+  }
+
+  const { data } = result;
+  const memberCount = data.members.length;
   return (
-    <TeamNamesProvider>
-      <TeamSettingsContent />
-    </TeamNamesProvider>
+    <div>
+      <h1 className="mb-2 text-2xl font-semibold text-soleur-text-primary">Team</h1>
+      <p className="mb-8 text-sm text-soleur-text-secondary">
+        People who can act in this workspace. All members share the same
+        workspace data, agents, and billing.
+      </p>
+
+      <div className="rounded-lg border border-soleur-border-default">
+        <div className="flex items-center justify-between border-b border-soleur-border-default px-6 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-soleur-text-primary">Members</h2>
+            <p className="mt-0.5 text-xs text-soleur-text-muted">
+              {memberCount === 1 ? "1 member" : `${memberCount} members`}
+            </p>
+          </div>
+          <InviteMemberAction workspaceId={data.workspaceId} />
+        </div>
+
+        <TeamMembershipList
+          members={data.members}
+          currentUserId={data.currentUserId}
+          workspaceId={data.workspaceId}
+        />
+      </div>
+
+      {memberCount === 1 && (
+        <p className="mt-6 text-sm text-soleur-text-secondary">
+          <span className="font-medium text-soleur-accent-gold-fg">Solo for now.</span>{" "}
+          Invite a teammate to share this workspace&apos;s agents, knowledge, and billing.
+        </p>
+      )}
+    </div>
   );
 }

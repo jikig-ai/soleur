@@ -53,8 +53,15 @@ vi.mock("@/lib/supabase/tenant", () => ({
 }));
 
 const runWithByokLeaseSpy = vi.fn(
-  async <T,>(_userId: string, fn: (lease: unknown) => Promise<T>) => {
-    return fn({ getApiKey: () => "fake-api-key" });
+  async <T,>(
+    args: { workspaceContextUserId: string; keyOwnerUserId: string },
+    fn: (lease: unknown) => Promise<T>,
+  ) => {
+    return fn({
+      workspaceContextUserId: args.workspaceContextUserId,
+      keyOwnerUserId: args.keyOwnerUserId,
+      getApiKey: () => "fake-api-key",
+    });
   },
 );
 vi.mock("@/server/byok-lease", () => ({
@@ -234,7 +241,10 @@ describe("cfo-on-payment-failed — draft + persist (R1, RV16)", () => {
     await handler({ event: makeEvent("1"), step, logger });
 
     expect(runWithByokLeaseSpy).toHaveBeenCalledTimes(1);
-    expect(runWithByokLeaseSpy.mock.calls[0][0]).toBe("founder-123");
+    expect(runWithByokLeaseSpy.mock.calls[0][0]).toEqual({
+      workspaceContextUserId: "founder-123",
+      keyOwnerUserId: "founder-123",
+    });
 
     // persist-draft fired with the CHECK-constraint-compatible shape.
     expect(insertSpy).toHaveBeenCalledTimes(1);

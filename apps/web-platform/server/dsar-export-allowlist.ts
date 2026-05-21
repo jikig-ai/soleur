@@ -140,6 +140,45 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // cascade in account-delete.ts between anonymise_action_sends and
   // anonymise_scope_grants).
   template_authorizations: { ownerField: "founder_id", article: "15+20" },
+
+  // feat-team-workspace-multi-user (migration 053) — organizations the
+  // user owns. ownerField = owner_user_id (direct). Art. 15 only:
+  // backfill-shaped solo organizations have name=NULL; the user did not
+  // "provide" the row, the trigger created it on signup. Post-flag-flip
+  // orgs created by an explicit invite-flow may carry user-provided name
+  // — they remain Art. 15 (the entity-of-record) rather than Art. 20
+  // because the value identifies the corporate context, not the user.
+  organizations: { ownerField: "owner_user_id", article: "15" },
+
+  // feat-team-workspace-multi-user (migration 053) — workspaces the user
+  // is a member of. No direct user_id column — joined via
+  // workspace_members.workspace_id. Art. 15: workspace metadata (name)
+  // identifies the shared context but is not user-provided content.
+  workspaces: {
+    ownerField: "user_id",
+    article: "15",
+    joinVia: {
+      parentTable: "workspace_members",
+      parentJoinColumn: "id", // workspaces.id matches workspace_members.workspace_id
+    },
+  },
+
+  // feat-team-workspace-multi-user (migration 053) — every workspace
+  // membership row the user holds. ownerField = user_id (direct). Art.
+  // 15+20: by accepting an invite (or owning the workspace at signup)
+  // the user provided the membership relation; they retain portability.
+  workspace_members: { ownerField: "user_id", article: "15+20" },
+
+  // feat-team-workspace-multi-user (migration 058) — invite consent
+  // attestations the user accepted. ownerField = invitee_user_id (the
+  // user who clicked accept); inviter_user_id is also their own row when
+  // they invited someone else — the next allowlist entry covers that
+  // case via a sibling chain. Art. 15: WORM consent record, analogous to
+  // tc_acceptances. The Art. 17 anonymise RPC handles erasure separately.
+  workspace_member_attestations: {
+    ownerField: "invitee_user_id",
+    article: "15",
+  },
 };
 
 /**
@@ -186,6 +225,19 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "No user-provided content; user_id is the only column and is already " +
     "in the DSAR's auth.users export. Per spec FR8 not enumerated as " +
     "Art. 15 personal data.",
+  // feat-team-workspace-multi-user — `user_session_state` remains
+  // excluded after Phase 7 promotion of organizations + workspaces +
+  // workspace_members + workspace_member_attestations. The single row's
+  // `current_organization_id` is duplicated into the JWT custom claim
+  // `app_metadata.current_organization_id` which is already part of the
+  // auth.users export. No user-provided content; transient UX
+  // preference. ON DELETE CASCADE from auth.users handles Art. 17.
+  user_session_state:
+    "Per-user UX preference (current_organization_id) duplicated in JWT " +
+    "custom claim app_metadata.current_organization_id which is already " +
+    "part of the auth.users export. No user-provided content. ON DELETE " +
+    "CASCADE from auth.users handles Art. 17 erasure.",
+
   tenant_deploy_audit:
     "Multi-tenant deploy substrate orchestration-plane meta-audit log " +
     "(migration 043, ADR-030, plan #3723). v1 single-tenant scope " +
