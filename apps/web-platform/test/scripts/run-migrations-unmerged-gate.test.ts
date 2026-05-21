@@ -1,12 +1,15 @@
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
+  openSync,
+  writeSync,
   writeFileSync,
+  closeSync,
   unlinkSync,
   mkdtempSync,
   chmodSync,
   rmSync,
-  existsSync,
+  constants as fsConstants,
 } from "node:fs";
 import { resolve, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -97,12 +100,13 @@ function runScript(env: Record<string, string | undefined>): {
 }
 
 function sweep(): void {
-  if (existsSync(SYNTHETIC_MIGRATION)) {
-    try {
-      unlinkSync(SYNTHETIC_MIGRATION);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
+  // Try-unlink + tolerate-ENOENT. Avoids the TOCTOU pattern of
+  // `if (existsSync(path)) unlinkSync(path)` flagged by CodeQL
+  // js/file-system-race.
+  try {
+    unlinkSync(SYNTHETIC_MIGRATION);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   for (const dir of stubDirs) {
     try {
@@ -115,16 +119,33 @@ function sweep(): void {
 
 describe("scripts/run-migrations.sh — unmerged-apply gate (#4241)", () => {
   beforeAll(() => {
-    if (existsSync(SYNTHETIC_MIGRATION)) {
-      throw new Error(
-        `precondition: ${SYNTHETIC_MIGRATION} already exists. ` +
-          `Likely orphaned from a prior crashed run — delete manually before re-running.`,
+    // Atomic exclusive create (O_CREAT|O_EXCL|O_WRONLY) — fails fast with
+    // EEXIST if the file is present, no TOCTOU window between exists-check
+    // and write. CodeQL js/file-system-race compliance.
+    let fd: number;
+    try {
+      fd = openSync(
+        SYNTHETIC_MIGRATION,
+        fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+        0o644,
       );
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(
+          `precondition: ${SYNTHETIC_MIGRATION} already exists. ` +
+            `Likely orphaned from a prior crashed run — delete manually before re-running.`,
+        );
+      }
+      throw err;
     }
-    writeFileSync(
-      SYNTHETIC_MIGRATION,
-      "-- synthetic test migration; never on origin/main.\nSELECT 1;\n",
-    );
+    try {
+      writeSync(
+        fd,
+        "-- synthetic test migration; never on origin/main.\nSELECT 1;\n",
+      );
+    } finally {
+      closeSync(fd);
+    }
     // Belt-and-braces: process.on("exit") fires even on uncaught throws /
     // explicit process.exit() that vitest's afterAll cannot intercept.
     process.on("exit", sweep);
