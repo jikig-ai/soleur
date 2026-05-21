@@ -61,7 +61,11 @@ export async function workspaceReconcileOnPushHandler({
   | { ok: true }
   | { ok: false; reason: string }
 > {
-  const log = stepLogger ?? logger;
+  // syncWorkspace expects a pino Logger; the Inngest `step.logger` only
+  // exposes warn/info/error. Use the module-scoped pino logger for the
+  // sync call (load-bearing for cq-silent-fallback-must-mirror-to-sentry
+  // attribution — kb-route-helpers tags its `feature` on this site).
+  void stepLogger;
   const { founderId, installationId, deliveryId, headSha, beforeSha, pushReceivedAt } = event.data;
 
   // Step 1: fetch user row. Defense-in-depth — the dispatcher already
@@ -130,7 +134,7 @@ export async function workspaceReconcileOnPushHandler({
   // Step 3: pull. syncWorkspace is `--ff-only`, so a non-fast-forward
   // returns ok:false, error_class="non_fast_forward". We mirror to
   // Sentry and let the UI's KbSyncStatus flip to desync.
-  const syncResult = await syncWorkspace(installationId, workspacePath, log, {
+  const syncResult = await syncWorkspace(installationId, workspacePath, logger, {
     userId: founderId,
     op: "push",
   });

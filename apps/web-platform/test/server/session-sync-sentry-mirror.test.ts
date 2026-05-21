@@ -13,7 +13,9 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
 
 const { reportSilentFallbackSpy, gitWithInstallationAuthSpy } = vi.hoisted(() => ({
   reportSilentFallbackSpy: vi.fn(),
-  gitWithInstallationAuthSpy: vi.fn(async () => Buffer.from("")),
+  gitWithInstallationAuthSpy: vi.fn<
+    (argv: string[]) => Promise<Buffer>
+  >(async () => Buffer.from("")),
 }));
 
 // `execFileSync` shape: `git remote -v` returns a remote line so syncPull
