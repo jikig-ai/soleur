@@ -291,3 +291,105 @@ if [[ -n "${UPGRADE_FROM:-}" ]]; then
 fi
 
 log "bootstrap complete: inngest-server $INNGEST_CLI_VERSION active on 127.0.0.1:8288"
+
+# ----------------------------------------------------------------------
+# Vector observability shipper (TR9 PR-5 / observability stack).
+#
+# Streams ERROR+ journald lines AND host_metrics from this VM to Sentry's
+# envelope endpoint. Same Doppler-injected envs as inngest-heartbeat
+# (SENTRY_INGEST_DOMAIN / SENTRY_PROJECT_ID / SENTRY_PUBLIC_KEY); no new
+# secrets minted.
+#
+# Idempotency: matches the inngest path — version file at
+# `/var/lib/vector/version`, sha256-verify on download, skip-install when
+# version matches.
+# ----------------------------------------------------------------------
+
+VECTOR_CLI_VERSION="${VECTOR_CLI_VERSION:-}"
+VECTOR_CLI_SHA256="${VECTOR_CLI_SHA256:-}"
+
+if [[ -z "$VECTOR_CLI_VERSION" || -z "$VECTOR_CLI_SHA256" ]]; then
+  log "warn: VECTOR_CLI_VERSION + VECTOR_CLI_SHA256 unset — skipping Vector install (observability shipper deferred until next bootstrap)"
+else
+  readonly VECTOR_INSTALL_PATH="/usr/local/bin/vector"
+  readonly VECTOR_VERSION_FILE="/var/lib/vector/version"
+  readonly VECTOR_CONFIG_DIR="/etc/vector"
+  readonly VECTOR_CONFIG="$VECTOR_CONFIG_DIR/vector.toml"
+  readonly VECTOR_UNIT="/etc/systemd/system/vector.service"
+  readonly VECTOR_DOWNLOAD_URL="https://packages.timber.io/vector/${VECTOR_CLI_VERSION}/vector-${VECTOR_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+
+  install_vector_binary() {
+    local current=""
+    [[ -f "$VECTOR_VERSION_FILE" ]] && current="$(cat "$VECTOR_VERSION_FILE")"
+    if [[ "$current" == "$VECTOR_CLI_VERSION" && -x "$VECTOR_INSTALL_PATH" ]]; then
+      log "vector $VECTOR_CLI_VERSION already installed; skipping download"
+      return 0
+    fi
+    log "downloading vector $VECTOR_CLI_VERSION"
+    local tmp
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' RETURN
+    curl -fsSL --max-time 120 -o "$tmp/vector.tar.gz" "$VECTOR_DOWNLOAD_URL"
+    local actual_sha
+    actual_sha="$(sha256sum "$tmp/vector.tar.gz" | awk '{print $1}')"
+    if [[ "$actual_sha" != "$VECTOR_CLI_SHA256" ]]; then
+      log "error: vector sha256 mismatch: expected $VECTOR_CLI_SHA256 actual $actual_sha"
+      return 1
+    fi
+    tar -xzf "$tmp/vector.tar.gz" -C "$tmp"
+    install -m 0755 "$tmp"/vector-x86_64-unknown-linux-musl/bin/vector "$VECTOR_INSTALL_PATH"
+    mkdir -p "$(dirname "$VECTOR_VERSION_FILE")"
+    echo "$VECTOR_CLI_VERSION" > "$VECTOR_VERSION_FILE"
+  }
+
+  install_vector_binary || { log "warn: vector install failed; skipping rest of observability bootstrap"; }
+
+  if [[ -x "$VECTOR_INSTALL_PATH" ]]; then
+    # The config file content is templated by the OCI build (same delivery
+    # as the systemd-unit heredoc above). The bootstrap script's caller
+    # is responsible for ensuring vector.toml exists at /tmp/vector.toml
+    # before invocation; if missing, we skip the rest gracefully.
+    if [[ -f /tmp/vector.toml ]]; then
+      mkdir -p "$VECTOR_CONFIG_DIR" /var/lib/vector
+      install -m 0644 /tmp/vector.toml "$VECTOR_CONFIG"
+      chown -R deploy:deploy /var/lib/vector
+    fi
+
+    if [[ -f "$VECTOR_CONFIG" ]]; then
+      cat > "$VECTOR_UNIT" <<'VECTOREOF'
+[Unit]
+Description=Vector observability shipper (journald + host_metrics -> Sentry)
+After=network-online.target inngest-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/inngest-server
+# Vector needs Doppler-injected SENTRY_INGEST_DOMAIN/PROJECT_ID/PUBLIC_KEY.
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
+Restart=on-failure
+RestartSec=10
+User=deploy
+Group=deploy
+SupplementaryGroups=systemd-journal
+MemoryMax=256M
+CPUQuota=50%
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/vector
+ReadOnlyPaths=/etc/vector
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+VECTOREOF
+
+      systemctl daemon-reload
+      systemctl enable --now vector.service || log "warn: vector.service failed to start (Sentry shipper deferred; check journalctl -u vector.service)"
+      log "vector observability shipper active"
+    else
+      log "warn: $VECTOR_CONFIG missing — vector installed but not started"
+    fi
+  fi
+fi
