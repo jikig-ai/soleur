@@ -295,3 +295,36 @@ describe("frontend-anti-slop tier1-scan: rule parsing", () => {
     }
   });
 });
+
+describe("frontend-anti-slop tier1-scan: file-filter scope", () => {
+  // Scope was widened to include `.njk` so the Eleventy marketing site
+  // (plugins/soleur/docs/) is audited alongside the Next.js platform.
+  // These tests lock the scope so a future refactor of `expandPaths` /
+  // `listFilesRecursive` can't silently drop `.njk` and break the docs-site
+  // audit path. See the SKILL.md "Scope" table and review/SKILL.md
+  // "Anti-slop Scanner Hook" trigger regex — both share this same file-
+  // extension set.
+
+  test("scanFile on a .njk fixture is well-defined (rule fires when pattern matches)", () => {
+    withFile(
+      "landing.njk",
+      `<a class="bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-blue-500">Try it</a>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("GRADIENT-TEXT")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].selector).toMatch(/\.njk#GRADIENT-TEXT$/);
+      },
+    );
+  });
+
+  test("scanFile on a .njk fixture with no slop returns 0 (rule set tolerates non-Tailwind markup)", () => {
+    withFile(
+      "blog-post.njk",
+      `{% extends "base.njk" %}\n{% block content %}<article class="prose">{{ body | safe }}</article>{% endblock %}`,
+      (abs) => {
+        const findings = scanFile(abs, RULES);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+});
