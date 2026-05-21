@@ -40,7 +40,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@517441f1eaf80f64b34d0e4dca44c0aacb13a3a3 # v3
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
 
       - name: Run walker and POST to ingest
         env:
