@@ -84,16 +84,38 @@ AC1 backfill idempotency verified end-to-end. Apply path is replay-safe
 under the same pattern documented in
 `2026-03-20-gdpr-remediation-migration-discriminator-strategy`.
 
-## prd apply — pending
+## prd apply — done (2026-05-21)
 
-Deferred to the prd-apply operator window. Sequence:
+Applied 053–057 to prd via Doppler `DATABASE_URL_POOLER` session-mode
+(`:6543` → `:5432` rewrite) per AGENTS.md "Supabase fallback chain". Counts:
 
-1. Apply migrations 053, 054, 055, 056, 057 in order (or 057 alongside
-   the 055 apply — they cannot land separately; the legacy 5-arg RPC
-   would fail under the NOT NULL constraint added by 055).
-2. Re-run the verification query above against the prd project ref to
-   confirm signatures + grants.
-3. Verify post-apply that no in-flight cc-soleur-go / agent-runner
-   session is blocked on the legacy RPC signature (the deploy of the
-   Phase 3 application code must precede or coincide with the prd
-   migration apply, NOT lag — see migration 057 header §Sequencing).
+```text
+053 organizations inserted:     14
+053 workspaces inserted:        14
+053 workspace_members inserted: 14
+055 conversations:               75
+055 messages:                   166
+055 kb_share_links:               8
+055 push_subscriptions:           1
+055 scope_grants:                 2
+055 (other 5 tables):             0 rows in prd
+056 user_session_state:          14
+057 RPCs widened (no row delta)
+```
+
+PostgREST schema cache reloaded via `NOTIFY pgrst, 'reload schema'`;
+REST probe confirms all 5 new tables return HTTP 200:
+
+```text
+organizations:                 HTTP 200
+workspaces:                    HTTP 200
+workspace_members:             HTTP 200
+workspace_member_attestations: HTTP 200
+user_session_state:            HTTP 200
+```
+
+**AC-LEGAL-FLIP still in effect** — `FLAG_TEAM_WORKSPACE_INVITE=0`
+remains in prd Doppler until the parallel legal-scaffolding PR (Phase 10,
+branch `feat-team-workspace-legal-scaffolding`) lands ToS 2.2.0 / AUP §5.5
+/ DPD §2.3 / Side Letter. Migration apply ≠ flag flip; the schema is now
+in place to make the FLAG flip cheap when the legal-PR ships.
