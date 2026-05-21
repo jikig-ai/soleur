@@ -293,18 +293,12 @@ fi
 log "bootstrap complete: inngest-server $INNGEST_CLI_VERSION active on 127.0.0.1:8288"
 
 # ----------------------------------------------------------------------
-# Vector block diagnostic: bash trace enabled for the entire Vector
-# install/config/start section. The trace lines write to stderr which
-# ci-deploy.sh captures into /tmp/inngest-bootstrap-stderr.log; the
-# `final_write_state` failure path surfaces the last ~400 chars via the
-# /hooks/deploy-status endpoint (no SSH needed). Will be reverted to
-# `set +x` only after Vector v1.1.x is verified live on prd.
-set -x
-
-# ----------------------------------------------------------------------
-# Vector observability shipper (TR9 PR-5 / observability stack).
-#
-# Streams ERROR+ journald lines AND host_metrics from this VM to Sentry's
+# Vector observability shipper — ships journald + host_metrics to Better
+# Stack Logs via Vector's native `better_stack_logs` sink (#4273 pivot
+# from the original Sentry envelope target). ci-deploy.sh still captures
+# stderr at the sudo boundary into /tmp/inngest-bootstrap-stderr.log so
+# any future failure surfaces via the deploy-status endpoint without
+# needing SSH (permanent diagnostic kept post-pivot).
 # envelope endpoint. Same Doppler-injected envs as inngest-heartbeat
 # (SENTRY_INGEST_DOMAIN / SENTRY_PROJECT_ID / SENTRY_PUBLIC_KEY); no new
 # secrets minted.
