@@ -226,6 +226,43 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
+  // 3.83 Anonymise template_authorizations rows for this user BETWEEN
+  //      anonymise_action_sends and anonymise_scope_grants (migration 053,
+  //      PR-I #4078). SEMANTIC ordering, NOT FK-driven: anonymise_* is
+  //      UPDATE, so scope_grants FK ON DELETE RESTRICT does not fire. The
+  //      required invariant is that `dsr_erasure` reason MUST be set on
+  //      child rows BEFORE the parent scope_grant's user_id is nulled —
+  //      otherwise Art. 5(2) audit-trail attribution breaks. SECURITY
+  //      DEFINER RPC, idempotent (UPDATE … WHERE founder_id = p_user_id
+  //      is a no-op on already-anonymised rows; COALESCE preserves any
+  //      prior revocation_reason). Failure here is FATAL on the same
+  //      reasoning as 3.85.
+  try {
+    const { error: anonTaErr } = await service.rpc(
+      "anonymise_template_authorizations",
+      { p_user_id: userId },
+    );
+    if (anonTaErr) {
+      log.error(
+        { userId, err: anonTaErr },
+        "anonymise_template_authorizations failed — aborting deletion to avoid Art. 5(2) attribution break",
+      );
+      return {
+        success: false,
+        error: "Account deletion failed. Please try again.",
+      };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_template_authorizations threw — aborting deletion to avoid Art. 5(2) attribution break",
+    );
+    return {
+      success: false,
+      error: "Account deletion failed. Please try again.",
+    };
+  }
+
   // 3.84 Anonymise scope_grants rows for this user BEFORE the tc_acceptances
   //      cascade (migration 048, PR-G #3947). FK is ON DELETE RESTRICT — the
   //      auth.admin.deleteUser call would abort without this. Runs BEFORE
