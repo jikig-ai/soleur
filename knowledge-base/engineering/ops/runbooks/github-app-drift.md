@@ -342,7 +342,8 @@ and creates false confidence.
 
 ## Why this guard exists
 
-The user-facing OAuth probe (`scheduled-oauth-probe.yml`, every hour)
+The user-facing OAuth probe
+(`apps/web-platform/server/inngest/functions/cron-oauth-probe.ts`, every hour)
 detects regressions at the request-level: callback URL drift,
 provider-disabled, settings-misconfigured. It does NOT detect a silent
 swap of the App itself — if an attacker (or a misconfigured operator)
