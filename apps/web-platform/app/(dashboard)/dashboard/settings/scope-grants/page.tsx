@@ -12,6 +12,10 @@ import {
   type ActionClass,
   type ActionClassTier,
 } from "@/server/scope-grants/action-class-map";
+import {
+  ACTION_CLASS_COPY,
+  CATEGORY_ORDER,
+} from "@/lib/messages/action-class-copy";
 import { ScopeGrantRow } from "@/components/scope-grants/scope-grant-row";
 
 export const dynamic = "force-dynamic";
@@ -64,20 +68,43 @@ export default async function ScopeGrantsPage() {
         </p>
       </header>
 
-      <ul className="space-y-4">
-        {ACTION_CLASSES.map((ac) => {
-          const active = activeByClass.get(ac);
-          return (
-            <li key={ac}>
-              <ScopeGrantRow
-                actionClass={ac}
-                currentTier={active?.tier ?? null}
-                grantedAt={active?.granted_at ?? null}
-              />
-            </li>
-          );
-        })}
-      </ul>
+      {CATEGORY_ORDER.map((category) => {
+        const inCategory = ACTION_CLASSES.filter(
+          (ac) => ACTION_CLASS_COPY[ac].category === category,
+        );
+        if (inCategory.length === 0) return null;
+        const headingId = `scope-grants-category-${category
+          .toLowerCase()
+          .replace(/\s+/g, "-")}`;
+        return (
+          <section
+            key={category}
+            aria-labelledby={headingId}
+            className="mb-8 last:mb-0"
+          >
+            <h2
+              id={headingId}
+              className="mb-3 text-sm font-medium uppercase tracking-wide text-soleur-text-muted"
+            >
+              {category}
+            </h2>
+            <ul className="space-y-4">
+              {inCategory.map((ac) => {
+                const active = activeByClass.get(ac);
+                return (
+                  <li key={ac}>
+                    <ScopeGrantRow
+                      actionClass={ac}
+                      currentTier={active?.tier ?? null}
+                      grantedAt={active?.granted_at ?? null}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        );
+      })}
       {activeByClass.size === 0 ? (
         <p className="mt-6 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 p-4 text-sm text-soleur-text-secondary">
           No grants yet — Soleur will not act on your behalf for any action
