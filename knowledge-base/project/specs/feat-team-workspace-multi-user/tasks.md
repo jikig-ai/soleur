@@ -17,12 +17,12 @@ Derived from the finalized plan (post-review). All Supabase MCP / `gh` / Playwri
 
 ## Phase 0 — Preconditions (no commits)
 
-- [ ] **0.1** Probe PR-D (`feat-pr-d-attachments-storage-tenant-rls`) state and current `is_message_owner` shape. Decide: match PR-D's shape if it pre-merges, else lock to `plpgsql + public, pg_temp`.
-- [ ] **0.2** Verify migration 052 is current `main` HEAD. Increment plan migration numbers if any 053+ landed since.
-- [ ] **0.3** Probe `feat-workspace-reconciliation-4224` for any code commits. Sequence-after if code added.
-- [ ] **0.4** Run `/soleur:architecture create "Introduce organizations and workspace_members; decouple workspace from userId"`. ADR text MUST include the permanent `workspaces.id = owner_user_id` (backfilled solo users) decision per Kieran N2.
-- [ ] **0.5** Service-role allowlist: pre-stage entries for `workspace-membership.ts` + `workspace-resolver.ts`.
-- [ ] **0.6** Spec amendment: drop `kb_files`/`kb_chunks` from G3; reframe G4 (workspace_id on `audit_byok_use`, not on a non-existent runtime_cost_state table); fix file:line refs in G6/FR9 (bwrap is `agent-runner-sandbox-config.ts`, not `agent-runner.ts:941`); name the existing-team-route rename decision in FR6. Commit: `docs(spec): reconcile with codebase reality`.
+- [x] **0.1** Probe PR-D (`feat-pr-d-attachments-storage-tenant-rls`) state and current `is_message_owner` shape. Decide: match PR-D's shape if it pre-merges, else lock to `plpgsql + public, pg_temp`. — PR-D #3883 MERGED; `is_message_owner` on main is `LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp`. Lock new `is_workspace_member` to same shape.
+- [x] **0.2** Verify migration 052 is current `main` HEAD. Increment plan migration numbers if any 053+ landed since. — Confirmed `052_multi_source_dedup.sql` is HEAD; 053-056 numbering unchanged.
+- [x] **0.3** Probe `feat-workspace-reconciliation-4224` for any code commits. Sequence-after if code added. — PR #4226 has docs-only commits (brainstorm + plan + tasks + init); no code → proceed without sequencing wait.
+- [x] **0.4** Run `/soleur:architecture create "Introduce organizations and workspace_members; decouple workspace from userId"`. ADR text MUST include the permanent `workspaces.id = owner_user_id` (backfilled solo users) decision per Kieran N2. — ADR-038 written at `knowledge-base/engineering/architecture/decisions/ADR-038-team-workspace-multi-user-organizations-and-workspace-members.md`; includes N2 invariant section.
+- [x] **0.5** Service-role allowlist: pre-stage entries for `workspace-membership.ts` + `workspace-resolver.ts`. — Added under feat-team-workspace-multi-user pre-stage block; gate is safe vs nonexistent files (uses `git ls-files` to find importers).
+- [x] **0.6** Spec amendment: drop `kb_files`/`kb_chunks` from G3; reframe G4 (workspace_id on `audit_byok_use`, not on a non-existent runtime_cost_state table); fix file:line refs in G6/FR9 (bwrap is `agent-runner-sandbox-config.ts`, not `agent-runner.ts:941`); name the existing-team-route rename decision in FR6. Commit: `docs(spec): reconcile with codebase reality`. — G3, G4, G6, FR6, FR8, FR9 amended with explicit "Amended 2026-05-21 (Phase 0.6)" markers.
 
 ## Phase 1 — Migrations 053–056
 

@@ -117,3 +117,28 @@ apps/web-platform/server/dsar-export.ts
 # RLS still owner-gates the read path (cookie-scoped query at
 # /dashboard/audit/github).
 apps/web-platform/server/github/audit-writer.ts
+
+# ── feat-team-workspace-multi-user pre-stage (#4229, PR #4225) ───────
+#
+# Two new files added in Phase 2 + Phase 5.5 use service-role for the
+# membership-mutation SECURITY DEFINER RPC chain. Pre-staged at Phase 0.4
+# so the gate doesn't fail when the files land in subsequent commits.
+
+# PERMANENT — workspace-membership.ts wraps `invite_workspace_member`
+# and `remove_workspace_member` SECURITY DEFINER RPCs (migration 054).
+# Both RPCs are `REVOKE FROM PUBLIC, anon`; only service-role can call
+# them. The wrapper also invokes `abortAllWorkspaceMemberSessions` on
+# the agent-session-registry after removal returns, which is process-
+# scoped infrastructure with no per-tenant JWT path.
+apps/web-platform/server/workspace-membership.ts
+
+# PERMANENT — workspace-resolver.ts reads the JWT `current_organization_id`
+# claim and resolves the default workspace for single-membership users
+# (AC-FLOW1). The default-org resolver MAY query workspace_members
+# pre-claim-injection (e.g., during initial sign-in before the first
+# JWT refresh) where the tenant JWT does not yet carry the claim. The
+# `set_current_organization_id` RPC is SECURITY DEFINER + membership-
+# checked so tenant-JWT escalation is structurally blocked at the RPC
+# boundary, but the lookup path uses service-role for the
+# pre-JWT-refresh window only.
+apps/web-platform/server/workspace-resolver.ts
