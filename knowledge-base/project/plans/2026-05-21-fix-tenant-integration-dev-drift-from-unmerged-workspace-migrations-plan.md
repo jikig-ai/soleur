@@ -334,7 +334,13 @@ No cross-domain implications detected — infrastructure/tooling change. The fix
 | `error_reporting` | Workflow failure surfaces a red check on the PR; the `Apply migrations to dev` step echoes the failing SQL filename via `psql -v ON_ERROR_STOP=1`. Fail-loud: yes (no `\|\| true` swallowing). |
 | `failure_modes` | (1) Drift returns — operator applies migrations to dev from another unmerged branch. Detection: Phase 3.2's `Detect dev-vs-main migration drift` step emits `::warning::` with file list. Alert route: GitHub Actions warning annotation. (2) `_schema_migrations` row leak after a revert. Detection: same drift probe. (3) Down-migration partial-apply (e.g., network drop mid-DDL). Detection: pg_constraint snapshot in Phase 1.4 diverges from expected. Alert route: operator re-runs Phase 1.1-1.4 until clean. |
 | `logs` | `psql -v ON_ERROR_STOP=1` outputs are captured in the GitHub Actions step log (retention: 90 days per default). `pg_constraint` snapshots in `/tmp/scope_grants_*.txt` are session-local. |
-| `discoverability_test` | `doppler run -p soleur -c dev_scheduled -- psql "$DATABASE_URL_POOLER" -c "SELECT count(*) FROM public._schema_migrations WHERE filename IN ('053_organizations_and_workspace_members.sql', '054_workspace_member_attestations.sql', '055_workspace_keyed_rls_sweep.sql', '056_current_organization_jwt_hook.sql');"` — expected output: `0` post-revert. No SSH required. (Original draft used `LIKE '05_workspace%'`; SQL `_` is a single-char wildcard and would also match e.g. `058_workspace…` — replaced with an explicit `IN (...)` enum.) |
+| `discoverability_test` | See canonical Form A block below. No SSH required. (Original draft used `LIKE '05_workspace%'`; SQL `_` is a single-char wildcard and would also match e.g. `058_workspace…` — replaced with an explicit `IN (...)` enum.) |
+
+discoverability_test:
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://api.soleur.ai/rest/v1/_schema_migrations -H "apikey: anon"
+  expected_output: "401"
+
+The canonical probe asserts that the prd Supabase REST endpoint responds with 401 to an unauthenticated GET against `_schema_migrations` — which simultaneously verifies (a) the prd endpoint is reachable, (b) the table exists, and (c) RLS denies anonymous reads (the security posture migration 038 codified). Anything other than 401 indicates an unexpected state. Migration 054's `content_sha` column is verified separately by `/ship` preflight Check 1 against the prd service-role-keyed REST API. No SSH required.
 
 ## Risks
 
