@@ -1,13 +1,15 @@
 ---
-title: "TR9 PR-3 — migrate scheduled-oauth-probe + scheduled-github-app-drift-guard to Inngest cron substrate"
+title: "TR9 PR-3 — migrate scheduled-oauth-probe to Inngest cron substrate (drift-guard deferred to PR-4 per plan-review)"
 issue: 4211
 parent_umbrella: 3948
 precedents: [3985, 4062]
 prior_plan: knowledge-base/project/plans/2026-05-21-fix-scheduled-oauth-probe-recurrence-plan.md
+revised_plan: knowledge-base/project/plans/2026-05-21-feat-tr9-pr3-oauth-probe-drift-guard-inngest-plan.md
 prior_immediate_relief: 4207
 brand_survival_threshold: single-user incident
 lane: cross-domain
 brainstorm: knowledge-base/project/brainstorms/2026-05-21-tr9-pr3-oauth-probe-drift-guard-inngest-brainstorm.md
+scope_revision_note: "Plan-review (DHH + Kieran + Code Simplicity) converged on single-probe scope; drift-guard → TR9 PR-4. AC27/AC28 cut. See revised plan."
 ---
 
 # Feature: TR9 PR-3 — OAuth-probe + GitHub-App drift-guard → Inngest cron
@@ -47,7 +49,9 @@ A new `apps/web-platform/server/inngest/functions/cron-oauth-probe.ts` function:
 
 ### FR2: `cron-github-app-drift-guard` Inngest function ports the drift-guard contract
 
-A new `apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts` function, same architectural shape as FR1 but on the drift-guard probe surface. Reuses the existing `.github/actions/sentry-heartbeat/action.yml` composite's status-branch logic for the divergent failure_mode handling.
+**[Deferred to TR9 PR-4 — 2026-05-21 plan-review verdict.]** Plan-review (DHH + Code Simplicity) converged that bundling drift-guard (724 LoC, 12+ failure modes, JWT minting, manifest-diff) into this PR doubles cutover blast radius under the elevated brand-survival threshold. Drift-guard ships as a separate PR-4 with the same pattern after PR-3 validates the cutover. The TR9 PR-4 issue is filed within 48h of PR-3 merge per AC25 of the revised plan. Original FR2 text below preserved for the PR-4 plan's reference:
+
+> A new `apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts` function, same architectural shape as FR1 but on the drift-guard probe surface. Reuses the existing `.github/actions/sentry-heartbeat/action.yml` composite's status-branch logic for the divergent failure_mode handling.
 
 ### FR3: Sentinel module extracted within-PR
 
@@ -86,13 +90,13 @@ NO two-step `in_progress → ok/error` heartbeat (banned by `2026-05-18-vendor-c
 
 Post-merge, fire `inngest send cron/oauth-probe.manual-trigger` (and the drift-guard equivalent) with a `data.overrideHost` pointing at a fixture URL serving each of the 8 canonical failure-body sentinels. Assert each maps to the correct `failureMode` AND a `?status=error` heartbeat lands in Sentry's checkins API within 90s per mode. If the handler doesn't support a host-override input, narrow the AC to "one synthetic failure mode via a feature-flagged probe target." This validates the canary still squawks, not just that it ticks.
 
-### TR4: Pre-deletion staging gate (AC27)
+### TR4: Pre-deletion staging gate (AC27) — **DROPPED per plan-review**
 
-The `.github/workflows/scheduled-{oauth-probe,github-app-drift-guard}.yml` deletion is staged ONLY after `inngest send cron/oauth-probe.manual-trigger` lands successfully in **staging** Inngest. Collapses the up-to-90-min cutover-blindness window if `app/api/inngest/route.ts:37` silently fails to discover the new function (typo, dead-code elimination, registration drift).
+Plan-review (DHH + Code Simplicity) converged: local `inngest dev` doesn't exercise the prd substrate (different runtime, different deploy path). The real cutover gate is the post-merge first-fire heartbeat (revised plan AC22) + the 1-command rollback contract (revised plan Risks #1: `git show HEAD~1:.github/workflows/scheduled-oauth-probe.yml > ... && commit && push`).
 
-### TR5: Substrate-vs-probe disambiguation in issue template (AC28)
+### TR5: Substrate-vs-probe disambiguation in issue template (AC28) — **DROPPED per plan-review**
 
-The `[ci/auth-broken]` issue template (filed in-process by `cron-oauth-probe.ts` on probe failure) MUST include the last Better Stack heartbeat timestamp inline. Source: pull from `https://uptime.betterstack.com/api/v2/heartbeats` for the `inngest-heartbeat` monitor at issue-file time. Operator opening the issue sees substrate-vs-probe disambiguation without dashboard hopping. Closes #4116-class silent-substrate-fail residual risk.
+Plan-review (DHH + Code Simplicity) converged: premature optimization. Adding a third-party API call to the auth-broken hot path to disambiguate an unrealized failure mode is YAGNI; cross-monitor correlation already disambiguates substrate-down (sibling Inngest monitors also miss). Replaced by AC13 runbook line in the revised plan: "Before debugging the probe code path, check Better Stack `inngest-heartbeat` last_alive_at." Zero new code, zero new dependency.
 
 ### TR6: Reuse existing sentry-heartbeat composite action
 

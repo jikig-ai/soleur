@@ -100,3 +100,20 @@ None. The plan is fully specified, deepened against live state, and the triad co
 ## Capability Gaps
 
 None reported. All affected domains covered by existing skills (`soleur:work`, `soleur:ship`, `soleur:postmerge`).
+
+---
+
+## Post-Brainstorm Update — 2026-05-21 (plan-review applied)
+
+Three plan-review reviewers (DHH + Kieran + Code Simplicity) spawned against the plan derived from this brainstorm produced convergent pushback. Operator chose **Full apply: split + cut AC27/28**.
+
+**Scope revisions to the brainstorm-blessed scope:**
+
+- **Bundled scope → single-probe scope.** Drift-guard deferred to TR9 PR-4 follow-up. Brainstorm's bundling rationale (shared substrate, shared composite, shared cron-monitors.tf cleanup) was infrastructure-symmetry; plan-review surfaced that risk-symmetry under elevated threshold favors split. Drift-guard is qualitatively heavier (724 LoC vs 540, 12+ failure modes vs 8, JWT minting, manifest-diff shell-out).
+- **AC27 (pre-deletion local `inngest dev` gate) cut.** Local dev doesn't exercise the prd substrate (different runtime, different deploy path). Real cutover gate is post-merge first-fire heartbeat + 1-command rollback contract.
+- **AC28 (Better Stack disambiguation in issue body) cut.** Premature optimization for an unrealized failure mode; cross-monitor correlation already disambiguates. Replaced by a runbook line in the revised plan.
+- **AC4 helper choice corrected.** The existing `apps/web-platform/server/github/app-client.ts` is wrong-shaped (installation-scoped + audit-writer attached, expects `founderId`). New helper at `apps/web-platform/server/github/probe-octokit.ts` exports `createProbeOctokit()` using `@octokit/app`'s `App` constructor (no audit-writer attachment — probe stays out of `audit_github_token_use` ledger).
+
+**The retained scope addition (AC20 in the revised plan):** post-merge synthetic-failure injection against a NON-prd surface (env-var-override in dev shell, NOT a handler input). Prd code path has zero fixture-injection plumbing — addresses Kieran's plan-review finding that brainstorm AC26's prd-vs-fixture-injection gate was incoherent.
+
+**Source-of-truth pointer:** the revised plan at `knowledge-base/project/plans/2026-05-21-feat-tr9-pr3-oauth-probe-drift-guard-inngest-plan.md` and the derived `knowledge-base/project/specs/feat-tr9-pr3-oauth-probe-drift-guard-inngest-4211/tasks.md` supersede this brainstorm's scope decisions where they conflict. This brainstorm document is preserved as historical record of the framing-time triad assessment.
