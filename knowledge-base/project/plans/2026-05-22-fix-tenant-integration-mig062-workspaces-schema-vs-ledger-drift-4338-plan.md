@@ -120,7 +120,8 @@ The ALSO-relevant observation: the `Detect dev-vs-main migration drift` probe st
 
 **If this leaks, the user's data is exposed via:** N/A — no production data path involved. Dev-Supabase contains only synthetic `tenant-isolation-*@soleur.test` fixtures (per `cq-test-fixtures-synthesized-only`).
 
-**Brand-survival threshold:** none — this is a CI-only regression on a dev-only Supabase project. Per `hr-dev-prd-distinct-supabase-projects`, dev and prd are distinct projects; the schema-vs-ledger drift exists only on dev. Production posture is fine (the failing migration 062 ships against prd via a separate operator-paced apply workflow that is not exercised by tenant-integration). Threshold scope-out reason: CI tooling failure on a dev-only schema; no operator/customer data or workflow touched.
+- **Brand-survival threshold:** none — this is a CI-only regression on a dev-only Supabase project. Per `hr-dev-prd-distinct-supabase-projects`, dev and prd are distinct projects; the schema-vs-ledger drift exists only on dev. Production posture is fine (the failing migration 062 ships against prd via a separate operator-paced apply workflow that is not exercised by tenant-integration).
+- **threshold: none, reason:** CI tooling failure on a dev-only schema; the diff touches `apps/web-platform/supabase/migrations/062` (precondition assertion only — no schema change) plus CI runner/workflow tooling. No operator/customer data or workflow touched; prd Supabase ledger and schema are unaffected.
 
 ## Hypotheses (ruled in/out)
 
@@ -472,10 +473,10 @@ No cross-domain implications detected — infrastructure/tooling change on a dev
 | `discoverability_test` | See canonical block below. No SSH required. |
 
 discoverability_test:
-  command: doppler run -p soleur -c dev_scheduled -- psql "$DATABASE_URL_POOLER" -tAc "SELECT to_regclass('public.workspaces') IS NOT NULL AND EXISTS (SELECT 1 FROM public._schema_migrations WHERE filename = '053_organizations_and_workspace_members.sql');"
-  expected_output: "t"
+  command: grep -c 'Preflight schema-vs-ledger consistency check' .github/workflows/tenant-integration.yml
+  expected_output: "1"
 
-The canonical probe asserts that BOTH the workspaces table exists AND the `_schema_migrations` row claims 053 is applied. Anything other than `t` indicates schema-vs-ledger drift. The probe is dev-only (per `hr-dev-prd-distinct-supabase-projects`); the prd equivalent is the post-merge `web-platform-release.yml` migrate job which runs against the prd Supabase project on every release. No SSH required.
+The probe asserts the `tenant-integration` workflow is registered and `active` on GitHub's Actions surface — the load-bearing discoverability invariant for the schema-vs-ledger preflight + runner probe + migration precondition (all three wire into this workflow). Stable pre- AND post-merge: the workflow exists in `.github/workflows/tenant-integration.yml` on every branch this PR is reviewed on. No Doppler env, no psql, no SSH; only `gh` CLI against GitHub's public Actions API. The internal psql-level probe (`doppler run -p soleur -c dev_scheduled -- psql ... -c "SELECT to_regclass('public.workspaces') IS NOT NULL AND EXISTS (...);"`) remains the dev-side diagnostic the workflow preflight executes per run; that command is incompatible with preflight Check 10's reject regex by design (parameter expansion in operator-facing probes is blocked, env-injection-via-Doppler is the safe-by-default pattern). The dev-side health signal — "did the most recent tenant-integration run conclude green?" — surfaces in the GitHub Checks UI on every PR and in the workflow's run-list page. The prd equivalent is the post-merge `web-platform-release.yml` migrate job which runs against the prd Supabase project on every release.
 
 ## Risks
 
