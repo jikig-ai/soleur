@@ -122,17 +122,13 @@ In the worktree:
 
 ### Stage 2 — Supabase migration: users.role
 
-- New migration `apps/web-platform/supabase/migrations/NNN_add_users_role.sql`:
-  ```sql
-  alter table public.users
-    add column role text not null default 'prd'
-    check (role in ('prd', 'dev'));
+Implemented as `apps/web-platform/supabase/migrations/054_users_role_column.sql`:
+- `add column role text not null default 'prd' check (role in ('prd','dev'))`.
+- `before update` trigger `users_prevent_role_self_mutation` raises 42501 unless `current_user in ('service_role','postgres')`.
 
-  create policy "users_role_service_only_update"
-    on public.users for update using (false);
-  -- (specific service-role grant is implicit via supabase service key)
-  ```
-- Run `doppler run -p soleur -c dev -- supabase db push` against dev project; verify via SQL.
+The original Stage-2 snippet here prescribed an additional `using (false)` RLS policy — **dropped** during implementation because Postgres has no column-level UPDATE RLS and a permissive `using (false)` is a no-op while restrictive would block legitimate non-role self-updates. Trigger covers the intent; migration's header comment explains. See ADR-038 §"Tradeoffs" and the rationale block in migration 054 itself.
+
+Rehearse: `doppler run -p soleur -c dev -- bash apps/web-platform/scripts/run-migrations.sh` (uses dockerised psql shim if host has no psql).
 
 ### Stage 3 — Identity-aware server.ts
 

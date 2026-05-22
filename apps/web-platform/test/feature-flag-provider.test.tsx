@@ -1,7 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { FeatureFlagProvider } from "@/components/feature-flags/provider";
-import { useFeatureFlag } from "@/components/feature-flags/use-feature-flag";
+import { FeatureFlagProvider, useFeatureFlag } from "@/components/feature-flags/provider";
 
 function Probe({ name }: { name: "dev-signin" | "kb-chat-sidebar" }) {
   const enabled = useFeatureFlag(name);

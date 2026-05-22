@@ -21,13 +21,12 @@ export function FeatureFlagProvider({
   );
 }
 
-// Internal — exposed for the hook in a sibling file.
-export function __useFlagContext(): FlagMap {
+export function useFeatureFlag(name: FlagName): boolean {
   const ctx = useContext(FeatureFlagContext);
   if (!ctx) {
     throw new Error(
       "useFeatureFlag must be used inside <FeatureFlagProvider> (wired in app/layout.tsx)",
     );
   }
-  return ctx;
+  return ctx[name];
 }

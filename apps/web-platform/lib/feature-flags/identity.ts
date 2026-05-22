@@ -1,12 +1,18 @@
+import { cache } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ANON_IDENTITY, type Identity, type Role } from "./server";
 
 // Resolve the calling user's flag identity from a server-side Supabase
-// client. Returns ANON_IDENTITY for logged-out requests, auth lookup
-// failures, or any case where the `users.role` row can't be read — these
-// all collapse to "treat as prd", which matches the fallback semantics
-// documented in ADR-038 v2 (anonymous = prd, never dark-launch).
-export async function resolveIdentity(supabase: SupabaseClient): Promise<Identity> {
+// client. Wrapped in React.cache so the underlying auth.getUser() + users.role
+// select is amortised across all server components in the same request tree.
+//
+// Fail-safe direction: anonymous + auth failure → ANON_IDENTITY (anon prd).
+// Authenticated-with-missing-row or unrecognised role value → preserves userId
+// but defaults role to "prd". Either way the role can never escalate to "dev"
+// on error (never dark-launch).
+export const resolveIdentity = cache(async (
+  supabase: SupabaseClient,
+): Promise<Identity> => {
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr || !userData.user) return ANON_IDENTITY;
 
@@ -15,11 +21,11 @@ export async function resolveIdentity(supabase: SupabaseClient): Promise<Identit
     .from("users")
     .select("role")
     .eq("id", userId)
-    .single();
+    .single<{ role: unknown }>();
   if (error || !data) return { userId, role: "prd" };
 
-  return { userId, role: normaliseRole((data as { role: unknown }).role) };
-}
+  return { userId, role: normaliseRole(data.role) };
+});
 
 function normaliseRole(value: unknown): Role {
   return value === "dev" ? "dev" : "prd";

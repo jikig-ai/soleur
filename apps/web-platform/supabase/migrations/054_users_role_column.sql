@@ -17,6 +17,20 @@ alter table public.users
 -- a user could `update users set role='dev'` and self-promote past the
 -- skill contract. Use a trigger (not WITH CHECK) so service_role bypass
 -- is explicit and auditable rather than relying on RLS subquery semantics.
+--
+-- The original plan prescribed an additional `users_role_service_only_update`
+-- RLS policy. Dropped here because (a) a permissive `using (false)` policy
+-- would be a no-op alongside the existing self-update policy, (b) a
+-- restrictive variant would block legitimate self-update of non-role columns,
+-- and (c) Postgres has no column-level UPDATE RLS. The trigger covers the
+-- intent with row-level granularity. Migration 006's column-level
+-- `GRANT UPDATE (email) ON public.users TO authenticated` is the
+-- belt-and-braces second defense at the GRANT layer.
+--
+-- INSERT path is intentionally not covered by the trigger because no RLS
+-- policy grants INSERT on public.users to `anon` or `authenticated` (verified
+-- against migrations 001-053). Any future INSERT policy MUST exclude `role`
+-- from the inserted column list or pin it to 'prd' explicitly.
 create or replace function public.users_prevent_role_self_mutation()
 returns trigger
 language plpgsql

@@ -10,12 +10,16 @@ vi.mock("flagsmith-nodejs", () => {
   };
 });
 
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
+
 import {
   getFlag,
   getRuntimeFlag,
   getFeatureFlags,
   ANON_IDENTITY,
-  __resetForTests,
+  __resetFeatureFlagsForTests,
   type Identity,
 } from "./server";
 
@@ -27,7 +31,7 @@ const ORIGINAL_ENV = process.env;
 beforeEach(() => {
   process.env = { ...ORIGINAL_ENV };
   mockGetIdentityFlags.mockReset();
-  __resetForTests();
+  __resetFeatureFlagsForTests();
 });
 
 afterEach(() => {
@@ -51,7 +55,7 @@ describe("getFlag (env-only, sync)", () => {
 });
 
 describe("getRuntimeFlag — identity-aware", () => {
-  it("passes the user's identity + role trait to Flagsmith", async () => {
+  it("passes role-prefixed identifier and role trait to Flagsmith (no userId leakage)", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     mockGetIdentityFlags.mockResolvedValueOnce({
       isFeatureEnabled: () => true,
@@ -59,7 +63,7 @@ describe("getRuntimeFlag — identity-aware", () => {
 
     await getRuntimeFlag("kb-chat-sidebar", DEV_USER);
 
-    expect(mockGetIdentityFlags).toHaveBeenCalledWith("user-dev-1", { role: "dev" });
+    expect(mockGetIdentityFlags).toHaveBeenCalledWith("role:dev", { role: "dev" });
   });
 
   it("returns role-specific values for same flag", async () => {
@@ -85,16 +89,22 @@ describe("getRuntimeFlag — identity-aware", () => {
     expect(mockGetIdentityFlags).toHaveBeenCalledTimes(2);
   });
 
-  it("anonymous identity resolves through prd cache with 'anon' identifier", async () => {
+  it("anonymous identity is forwarded with role=prd", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     mockGetIdentityFlags.mockResolvedValueOnce({ isFeatureEnabled: () => true });
 
     await getRuntimeFlag("kb-chat-sidebar", ANON_IDENTITY);
 
-    expect(mockGetIdentityFlags).toHaveBeenCalledWith("anon", { role: "prd" });
+    expect(mockGetIdentityFlags).toHaveBeenCalledWith("role:prd", { role: "prd" });
+  });
 
-    // Second anon call should hit the prd cache, not the SDK.
+  it("anonymous calls share the prd cache bucket (no second SDK hit)", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValueOnce({ isFeatureEnabled: () => true });
+
     await getRuntimeFlag("kb-chat-sidebar", ANON_IDENTITY);
+    await getRuntimeFlag("kb-chat-sidebar", ANON_IDENTITY);
+
     expect(mockGetIdentityFlags).toHaveBeenCalledTimes(1);
   });
 

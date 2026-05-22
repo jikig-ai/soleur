@@ -7,7 +7,7 @@ import { DynamicThemeColor } from "@/components/theme/dynamic-theme-color";
 import { FeatureFlagProvider } from "@/components/feature-flags/provider";
 import { getFeatureFlags } from "@/lib/feature-flags/server";
 import { resolveIdentity } from "@/lib/feature-flags/identity";
-import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { sans } from "./fonts";
 import "./globals.css";
 
@@ -44,7 +44,7 @@ export default async function RootLayout({
   // scripts, inline scripts, and styles automatically.
   const headerList = await headers();
   const nonce = headerList.get("x-nonce") ?? undefined;
-  const supabase = await createSupabaseServerClient();
+  const supabase = await createClient();
   const identity = await resolveIdentity(supabase);
   const flags = await getFeatureFlags(identity);
 

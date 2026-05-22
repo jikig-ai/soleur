@@ -107,7 +107,7 @@ The Flagsmith UI remains accessible for operator inspection ("what's the current
 ## Operational notes
 
 - **`FLAGSMITH_ENVIRONMENT_KEY`** (server-side SDK key) → Doppler `dev` + `prd` configs. Read by the app at request time.
-- **`FLAGSMITH_MANAGEMENT_API_KEY`** (organisation token, prefixed `Api-Key`) → operator-only Doppler config (PR #2 picks the config name). NEVER read by the app, only by Soleur skills.
+- **`FLAGSMITH_MANAGEMENT_API_KEY`** (organisation token, prefixed `Api-Key`) → operator-only Doppler config `cli` under the `soleur` project. Skills resolve it via `doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli --plain`. NEVER read by the app, only by Soleur skills.
 - **Doppler scope = `dev` + `prd` only** for the SDK key. Other configs (`ci`, `dev_scheduled`, `prd_scheduled`, etc.) silently fall through to env-var resolution. Not needed until one of those configs runs the web-platform request path against real users.
 - **Outage behavior is identical to PR #2408's env-var-only system.** When Flagsmith is unreachable, every flag resolves from `process.env.FLAG_*`. A Flagsmith outage cannot dark-launch features.
 
