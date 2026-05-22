@@ -635,9 +635,14 @@ describe("cronGithubAppDriftGuardHandler — leak tripwire", () => {
     await cronGithubAppDriftGuardHandler({ step, logger });
     const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     // The Resend POST should have happened (RESEND_API_KEY is set in beforeEach).
-    const resendCall = fetchSpy.mock.calls.find(
-      ([url]) => typeof url === "string" && url.includes("api.resend.com"),
-    );
+    const resendCall = fetchSpy.mock.calls.find(([url]) => {
+      if (typeof url !== "string") return false;
+      try {
+        return new URL(url).hostname === "api.resend.com";
+      } catch {
+        return false;
+      }
+    });
     expect(resendCall).toBeDefined();
     // Subject was leak-gated; it wouldn't have reached fetch if a leak existed.
   });
