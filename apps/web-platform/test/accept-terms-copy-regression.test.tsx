@@ -59,16 +59,18 @@ describe("accept-terms/page.tsx middleware-outage banner", () => {
   });
 });
 
-// PR #4289 — TC_VERSION 2.2.0 §Workspace Members re-acceptance Art. 13(3)
-// disclosure banner. Page is only reached when middleware detects a
-// tc_accepted_version mismatch; banner is rendered unconditionally for
-// every visitor.
-describe("accept-terms/page.tsx TC_VERSION update banner (PR #4289)", () => {
+// TC_VERSION update banner — structural Art. 13(3) disclosure surface.
+// Page is only reached when middleware detects a tc_accepted_version
+// mismatch; banner is rendered unconditionally for every visitor. The
+// constant TC_BUMP_METADATA.substantiveChange carries the human-readable
+// label of the current bump; the regex below intentionally accepts any
+// non-empty label so the test does not bake in a per-bump literal.
+describe("accept-terms/page.tsx TC_VERSION update banner", () => {
   const src = readFileSync(ACCEPT_TERMS_PAGE, "utf8");
 
-  test("consumes TC_BUMP_METADATA.substantiveChange (§3b cross-reference)", () => {
+  test("consumes TC_BUMP_METADATA.substantiveChange (non-empty)", () => {
     expect(src.includes("TC_BUMP_METADATA.substantiveChange")).toBe(true);
-    expect(TC_BUMP_METADATA.substantiveChange).toMatch(/Workspace Members/);
+    expect(TC_BUMP_METADATA.substantiveChange).toMatch(/\S/);
   });
 
   test("consumes TC_BUMP_METADATA.lastUpdated (canonical Last-Updated date)", () => {
