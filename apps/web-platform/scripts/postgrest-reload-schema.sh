@@ -91,33 +91,23 @@ if [[ -z "${NEXT_PUBLIC_SUPABASE_URL:-}" ]]; then
   fail_or_skip 2 "NEXT_PUBLIC_SUPABASE_URL is not set; cannot derive project ref."
 fi
 
-# Extract the 20-char project ref from https://<ref>.supabase.co.
-# Refs are lowercase alphanumeric (typically 20 chars); guard against
-# non-supabase URLs so a misconfigured env doesn't post to a wrong host.
-project_ref="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" \
-  | sed -nE 's#^https?://([a-z0-9]+)\.supabase\.co/?$#\1#p')"
+# Resolve the 20-char project ref via the canonical helper (handles both
+# https://<ref>.supabase.co and custom domains via CNAME, with the
+# subdomain-bypass guard). The helper lives at scripts/lib/ so future
+# callers can source the same shape and the security-critical anchored
+# regex stays single-sourced.
+RESOLVER="$(dirname "${BASH_SOURCE[0]}")/lib/supabase-ref-resolver.sh"
+# shellcheck source=lib/supabase-ref-resolver.sh
+source "$RESOLVER"
 
-# Custom-domain fallback: prd uses api.soleur.ai (CNAME → <ref>.supabase.co).
-# Mirrors the canonical-hostname-resolution shape in preflight Check 4.
-# Strip protocol + trailing path, CNAME-resolve, then re-apply the canonical
-# regex against the resolved target. The convergence on
-# `^[a-z0-9]{20}\.supabase\.co$` is the subdomain-bypass guard — a CNAME
-# pointing to `<ref>.supabase.co.evil.com` is rejected.
-if [[ -z "$project_ref" ]]; then
-  host="${NEXT_PUBLIC_SUPABASE_URL#http://}"
-  host="${host#https://}"
-  host="${host%%/*}"
-  if command -v dig >/dev/null 2>&1; then
-    cname_target="$(dig +short +time=5 +tries=2 CNAME "$host" 2>/dev/null | head -1 | sed 's/\.$//')"
-    if [[ -n "$cname_target" ]] && [[ "$cname_target" =~ ^[a-z0-9]{20}\.supabase\.co$ ]]; then
-      project_ref="${cname_target%%.supabase.co}"
-    fi
-  fi
+if ! project_ref=$(resolve_supabase_ref "$NEXT_PUBLIC_SUPABASE_URL" 2>&1); then
+  fail_or_skip 2 "$project_ref"
 fi
 
-if [[ -z "$project_ref" ]]; then
-  fail_or_skip 2 "Cannot parse project ref from NEXT_PUBLIC_SUPABASE_URL='$NEXT_PUBLIC_SUPABASE_URL'. Expected https://<ref>.supabase.co OR a custom domain whose CNAME resolves to <ref>.supabase.co (install 'dig' if the URL is a custom domain)."
-fi
+# Surface the resolved ref to stderr so operators see ref drift in the
+# script's own output BEFORE the POST lands. Cheap audit trail per the
+# data-integrity P3 + security F3 advisory (PR #4320 review).
+echo "postgrest-reload-schema: resolved NEXT_PUBLIC_SUPABASE_URL → ref=${project_ref}" >&2
 
 # Endpoint is pinned to api.supabase.com — no env override.
 # A `SUPABASE_API_HOST` test seam would let an attacker who controls env
