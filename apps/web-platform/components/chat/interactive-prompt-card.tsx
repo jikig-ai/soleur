@@ -132,7 +132,7 @@ const ResolvedCardRow = React.memo(function ResolvedCardRow({
 }) {
   return (
     <div data-prompt-kind={kind} data-prompt-id={promptId}>
-      <div className="flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 px-4 py-2 text-sm text-soleur-text-secondary transition-all duration-300">
+      <div className="flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 px-4 py-2 text-sm text-soleur-text-secondary transition-colors duration-300">
         <svg
           className="h-4 w-4 text-green-500"
           viewBox="0 0 24 24"

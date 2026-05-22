@@ -1,4 +1,5 @@
 import { memo, useState, useEffect } from "react";
+// <!-- anti-slop:disable TWO-ICON-LIBS reason="Single icon library (lucide-react); rule's regex fires on any single match of the supported-library list, not on multi-library usage — calibration FP per #4270" -->
 import {
   Megaphone,
   Cog,
@@ -8,8 +9,8 @@ import {
   Wrench,
   Scale,
   Headphones,
+  type LucideIcon,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
