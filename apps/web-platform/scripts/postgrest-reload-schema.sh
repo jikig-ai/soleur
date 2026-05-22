@@ -97,8 +97,26 @@ fi
 project_ref="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" \
   | sed -nE 's#^https?://([a-z0-9]+)\.supabase\.co/?$#\1#p')"
 
+# Custom-domain fallback: prd uses api.soleur.ai (CNAME → <ref>.supabase.co).
+# Mirrors the canonical-hostname-resolution shape in preflight Check 4.
+# Strip protocol + trailing path, CNAME-resolve, then re-apply the canonical
+# regex against the resolved target. The convergence on
+# `^[a-z0-9]{20}\.supabase\.co$` is the subdomain-bypass guard — a CNAME
+# pointing to `<ref>.supabase.co.evil.com` is rejected.
 if [[ -z "$project_ref" ]]; then
-  fail_or_skip 2 "Cannot parse project ref from NEXT_PUBLIC_SUPABASE_URL='$NEXT_PUBLIC_SUPABASE_URL'. Expected https://<ref>.supabase.co."
+  host="${NEXT_PUBLIC_SUPABASE_URL#http://}"
+  host="${host#https://}"
+  host="${host%%/*}"
+  if command -v dig >/dev/null 2>&1; then
+    cname_target="$(dig +short +time=5 +tries=2 CNAME "$host" 2>/dev/null | head -1 | sed 's/\.$//')"
+    if [[ -n "$cname_target" ]] && [[ "$cname_target" =~ ^[a-z0-9]{20}\.supabase\.co$ ]]; then
+      project_ref="${cname_target%%.supabase.co}"
+    fi
+  fi
+fi
+
+if [[ -z "$project_ref" ]]; then
+  fail_or_skip 2 "Cannot parse project ref from NEXT_PUBLIC_SUPABASE_URL='$NEXT_PUBLIC_SUPABASE_URL'. Expected https://<ref>.supabase.co OR a custom domain whose CNAME resolves to <ref>.supabase.co (install 'dig' if the URL is a custom domain)."
 fi
 
 # Endpoint is pinned to api.supabase.com — no env override.
