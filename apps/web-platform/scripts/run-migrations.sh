@@ -295,5 +295,12 @@ echo "Migration run complete: $applied applied, $skipped skipped."
 # missing SUPABASE_PAT or any transient upstream error never fails the
 # migration run. See learning 2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md §Prevention #5.
 if [[ "$applied" -gt 0 ]]; then
-  bash "$SCRIPT_DIR/postgrest-reload-schema.sh" --best-effort || true
+  # The hook is --best-effort: any non-zero exit it returns is itself a bug
+  # in the script (best-effort always exits 0). Surface that case as an
+  # attributable GHA annotation rather than swallowing with `|| true`, which
+  # would erase even the inner ::warning:: from this step's log context and
+  # make downstream PGRST205 test flakes hard to trace.
+  if ! bash "$SCRIPT_DIR/postgrest-reload-schema.sh" --best-effort; then
+    echo "::warning title=PostgREST schema reload hook failed::Migration applied OK; supabase-js may return PGRST205 for up to ~10 min until natural PostgREST poll. Re-run apps/web-platform/scripts/postgrest-reload-schema.sh manually if tests fail."
+  fi
 fi

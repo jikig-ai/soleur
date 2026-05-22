@@ -8,7 +8,7 @@
 # a fake `curl` binary that records its args and emits a configurable
 # response. The live api.supabase.com is NEVER called from this test.
 
-set -eu
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$SCRIPT_DIR/postgrest-reload-schema.sh"
@@ -214,6 +214,138 @@ if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qiE 'warn|skip|best-effort';
   pass "exit 0 with warn under best-effort"
 else
   fail "rc=$rc out=$out"
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
+# T9 — --help prints usage and exits 0 without requiring any env.
+# ------------------------------------------------------------------------
+echo "T9: --help renders cleanly"
+set +e
+out=$(env -i PATH="$PATH" HOME="$HOME" bash "$SCRIPT" --help 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "0" ]] \
+   && printf '%s' "$out" | grep -q '^Usage:' \
+   && printf '%s' "$out" | grep -q 'SUPABASE_PAT' \
+   && printf '%s' "$out" | grep -q 'Exit codes'; then
+  pass "exit 0; renders Usage, SUPABASE_PAT, Exit codes"
+else
+  fail "rc=$rc out=$out"
+fi
+
+# ------------------------------------------------------------------------
+# T10 — unknown argument exits 2 (per AC).
+# ------------------------------------------------------------------------
+echo "T10: unknown arg → exit 2"
+set +e
+out=$(env -i PATH="$PATH" HOME="$HOME" bash "$SCRIPT" --not-a-flag 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qi 'unknown'; then
+  pass "exit 2 with unknown-arg message"
+else
+  fail "rc=$rc out=$out"
+fi
+
+# ------------------------------------------------------------------------
+# T11 — curl network failure (curl_rc != 0) → exit 1, message scrubs PAT.
+# ------------------------------------------------------------------------
+echo "T11: curl network failure → exit 1, PAT scrubbed"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+make_fake_curl "$TMP"
+set +e
+out=$(PATH="$TMP:$PATH" \
+        CURL_ARGS_FILE="$TMP/args" \
+        CURL_EXIT=6 \
+        SUPABASE_PAT="sbp_must_not_leak_aaaaaaaaaaaaaaaaaaaa" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "1" ]] \
+   && printf '%s' "$out" | grep -q 'curl failed' \
+   && ! printf '%s' "$out" | grep -q 'sbp_must_not_leak'; then
+  pass "exit 1; PAT not echoed in error path"
+else
+  fail "rc=$rc out=$out"
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
+# T12 — HTTP 404 (wrong ref class) → exit 2 (operator-actionable).
+# ------------------------------------------------------------------------
+echo "T12: HTTP 404 → exit 2 (config)"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+make_fake_curl "$TMP"
+set +e
+out=$(PATH="$TMP:$PATH" \
+        CURL_ARGS_FILE="$TMP/args" \
+        CURL_HTTP_CODE=404 \
+        CURL_BODY='{"message":"not found"}' \
+        SUPABASE_PAT="sbp_fake" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "2" ]]; then
+  pass "exit 2 on 404"
+else
+  fail "rc=$rc out=$out"
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
+# T13 — non-numeric HTTP code (proxy MITM, curl '000', 1xx) → catch-all,
+#       exit 1 (transient).
+# ------------------------------------------------------------------------
+echo "T13: non-numeric HTTP code → catch-all exit 1"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+make_fake_curl "$TMP"
+set +e
+out=$(PATH="$TMP:$PATH" \
+        CURL_ARGS_FILE="$TMP/args" \
+        CURL_HTTP_CODE=000 \
+        SUPABASE_PAT="sbp_fake" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -qi 'unexpected'; then
+  pass "exit 1 on HTTP 000 (proxy disconnect)"
+else
+  fail "rc=$rc out=$out"
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
+# T14 — endpoint URL is pinned (no SUPABASE_API_HOST env override leakage).
+#       Verifies the security hardening from PR #4286 review.
+# ------------------------------------------------------------------------
+echo "T14: endpoint URL is pinned to api.supabase.com"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+make_fake_curl "$TMP"
+set +e
+out=$(PATH="$TMP:$PATH" \
+        CURL_ARGS_FILE="$TMP/args" \
+        CURL_HTTP_CODE=200 \
+        SUPABASE_API_HOST="https://evil.example.com" \
+        SUPABASE_PAT="sbp_fake" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "0" ]] \
+   && grep -q 'https://api.supabase.com/v1/projects/abcdefghijklmnop/database/query' "$TMP/args" \
+   && ! grep -q 'evil.example.com' "$TMP/args"; then
+  pass "endpoint ignores SUPABASE_API_HOST override (PAT exfil-safe)"
+else
+  fail "rc=$rc"
+  cat "$TMP/args" >&2
 fi
 rm -rf "$TMP"; trap - EXIT
 
