@@ -110,6 +110,14 @@ verification.
    actual dev-Supabase schema. A single failing tenant-iso test is
    often a 5-class iceberg.
 
+## Session Errors
+
+1. **`&&` chain in AC verification broke at `grep -c` returning 0.** Running `grep -cE '<pattern>' file && next_check` aborted the chain because `grep -c` exits 1 when count is 0 (legitimate "no destructive DDL" outcome). Recovery: re-ran as `;`-separated commands so each AC printed independently. **Prevention:** when chaining AC verifications, use `;` not `&&` for grep-count gates where zero-matches is a valid pass condition, or use `|| true` to neutralize the exit code. Already-enforced posture: AGENTS.md `hr-when-a-command-exits-non-zero-or-prints` covers the inverse direction (non-zero is failure), but does not cover the legitimate-zero-match case. No new rule warranted — judgment call.
+
+2. **Bash CWD persisted across calls after `cd apps/web-platform && tsc`.** Subsequent `ls apps/web-platform/test/` calls failed with "No such file or directory" because the prior `cd` stuck the harness in `apps/web-platform`, so the second call resolved relative paths from there. Recovery: switched to absolute paths via the worktree-root prefix. **Prevention:** harness docs already say "current working directory persists between commands"; the failure mode here is that I treated CWD as if it didn't. When chaining a `cd` for a tool that requires it (like `tsc` or `npm`), follow with explicit `cd <worktree-root>` or use absolute paths in the next call. Already-enforced via skill instruction patterns; no new rule warranted.
+
+3. **`rg -E` regex with `\(` and `\)` failed parse.** `rg -lE 'from\("conversations"\)\.insert'` errored with "grep config error: unknown encoding". `ugrep` (the locally-installed `rg`) parses `-E` differently than GNU `grep -E`. Recovery: fell back to `grep -rln 'from("conversations").insert'` (literal match works). **Prevention:** when scripted regexes fail with parse errors, drop `-E` and use literal substring grep where possible — the recursive `find . -name -exec grep` shape is also reliable. Tooling-environment-specific; no new rule warranted.
+
 ## Resolution shape
 
 Single `CREATE OR REPLACE`-only migration (`063`) repairs both classes
