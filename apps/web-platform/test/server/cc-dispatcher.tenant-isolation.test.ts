@@ -95,6 +95,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id,
+          workspace_id: userB.id, // solo-canary per mig 059 backfill
           session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           status: "active",
         })
@@ -145,6 +146,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .insert({
           id: randomUUID(),
           conversation_id: bConvId,
+          // mig 059 made messages.workspace_id NOT NULL. The spoof targets
+          // B's workspace; RLS messages_workspace_member_insert WITH CHECK
+          // (is_workspace_member(workspace_id, auth.uid())) denies A's JWT
+          // because A is not a member of B's workspace.
+          workspace_id: userB.id,
           role: "user",
           content: "spoofed by A",
           tool_calls: null,
@@ -174,6 +180,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .insert({
           id: randomUUID(),
           conversation_id: bConvId,
+          // Same shape as the user-role spoof above; RLS denies A's JWT
+          // because A is not a member of B's workspace.
+          workspace_id: userB.id,
           role: "assistant",
           content: "fake assistant text",
           tool_calls: null,

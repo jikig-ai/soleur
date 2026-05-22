@@ -96,6 +96,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .from("conversations")
           .insert({
             user_id: user.id,
+            workspace_id: user.id, // solo-canary per mig 059 backfill
             session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           })
           .select("id")
@@ -108,6 +109,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .from("messages")
           .insert({
             conversation_id: convRow!.id,
+            workspace_id: user.id, // solo-canary; mig 059 made this NOT NULL
             role: "user",
             content: `synthesized message for ${user.email}`,
             // PR-I (#4078, migration 053_template_authorizations.sql) added
