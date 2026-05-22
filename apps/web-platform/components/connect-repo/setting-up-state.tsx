@@ -26,7 +26,7 @@ export function SettingUpState({ steps }: SettingUpStateProps) {
       {/* Progress bar */}
       <div className="h-1 overflow-hidden rounded-full bg-soleur-bg-surface-2">
         <div
-          className="h-full rounded-full transition-all duration-700 ease-out"
+          className="h-full rounded-full transition-[width] duration-700 ease-out"
           style={{
             background: GOLD_GRADIENT,
             width: `${
