@@ -17,6 +17,8 @@ Added a `lockfile-sync` CI job that runs `npm install --package-lock-only` (rege
 
 Key technical detail: `npm install --package-lock-only` uses the same Arborist resolver as `npm ci`, ensuring detection parity. No `.npmrc` or version skew concerns when both CI and Docker use the same Node version.
 
+**Update 2026-05-22** (PR #4337): wrong on the "no version skew" claim. Same Node major (22) does not imply same npm version — `actions/setup-node@v4.4.0` ships npm 10.9.x with Node 22, while operator-local installs on Node 23+ or `bun add`-driven hotfix flows produce npm 11 lockfiles. The shape diverges on `"dev": true` for optional transitive packages (e.g., `@emnapi/runtime`, `@img/sharp-*`, `fsevents`). The gate now pins npm with `npm install -g npm@11` in the `lockfile-sync` job. See [2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md](2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md).
+
 ## Key Insight
 
 For dual-lockfile projects, add a CI check that regenerates the secondary lockfile and diffs it against the committed version. This is cheaper than running the full Docker build in CI and catches the exact failure class (stale lockfile) at PR time.
