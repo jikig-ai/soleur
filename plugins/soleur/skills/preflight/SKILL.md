@@ -321,7 +321,7 @@ If either call fails or returns empty, return **SKIP** with note: "Doppler unava
 
 **Step 4.2: Resolve project ref for each URL.**
 
-The single chokepoint is the canonical-hostname regex `^[a-z0-9]{20}\.supabase\.co$`. Both branches below MUST converge on a hostname matching that regex before Step 4.3 runs.
+The single chokepoint is the canonical-hostname regex `^[a-z0-9]{20}\.supabase\.co$`. Both branches below MUST converge on a hostname matching that regex before Step 4.3 runs. The canonical resolver lives at `apps/web-platform/scripts/lib/supabase-ref-resolver.sh` (`resolve_supabase_ref`); the same shape is mirrored in `apps/web-platform/lib/supabase/resolve-ref.ts` for TS callers and consumed by `.github/workflows/reusable-release.yml` via `source`. The sub-bullets below describe Check 4's wrapper semantics on top of the resolver (e.g., the A-record-only FAIL path is a Check 4 policy, not a resolver behavior).
 
 1. Strip the `https://` prefix and any trailing path; keep the bare host.
 2. If the bare host already matches the canonical regex, use it directly.
