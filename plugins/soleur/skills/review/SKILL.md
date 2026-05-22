@@ -276,7 +276,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **What this agent checks:**
 
-- `identity-rbac-reviewer`: 6-item Day-1 checklist (R1-R6) for multi-org/workspace boundary integrity. Surfaces known gaps in #4304/#4305/#4306/#4307/#4309 as `info`-severity findings on every identity-touching PR until closed. Body lives in `plugins/soleur/agents/engineering/review/identity-rbac-reviewer.md`.
+- `identity-rbac-reviewer`: 6-item Day-1 checklist (R1-R6) for multi-org/workspace boundary integrity. Surfaces known gaps in #4304/#4305/#4306/#4307/#4318 as `info`-severity findings on every identity-touching PR until closed. Body lives in `plugins/soleur/agents/engineering/review/identity-rbac-reviewer.md`.
 
 #### Boundary disambiguation — gdpr-gate vs. data-integrity-guardian vs. security-sentinel vs. identity-rbac-reviewer {#boundaries}
 
