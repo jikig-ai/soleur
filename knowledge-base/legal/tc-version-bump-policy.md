@@ -2,12 +2,15 @@
 title: "TC_VERSION Bump Policy"
 status: draft
 custodian: clo
-last_reviewed: 2026-05-15
+last_reviewed: 2026-05-22
 related:
   - apps/web-platform/lib/legal/tc-version.ts
+  - apps/web-platform/lib/legal/legal-doc-shas.ts
   - apps/web-platform/scripts/check-tc-document-sha.sh
+  - apps/web-platform/test/legal-doc-consistency.test.ts
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/project/plans/2026-05-15-feat-oauth-tc-consent-residual-audit-plan.md
+  - knowledge-base/project/plans/2026-05-22-feat-legal-doc-sha-mirror-guard-plan.md
 ---
 
 # TC_VERSION Bump Policy
@@ -162,6 +165,70 @@ CLO sign-off is captured in the PR comment thread. The CLO confirms:
 
 CLO sign-off is the gating signal for merge of any Tier 1 or Tier 2 PR
 that touches the canonical T&C document.
+
+## Non-T&C legal docs
+
+This section applies to the 8 non-T&C documents under `docs/legal/`:
+Acceptable Use Policy, Cookie Policy, Corporate CLA, Data Protection
+Disclosure, Disclaimer, GDPR Policy, Individual CLA, and Privacy Policy.
+
+Unlike T&C, these documents are **notice / disclosure documents**, not
+contracts of adhesion. No middleware reads a version constant for them
+and there is no WORM ledger that persists user-acceptance of a specific
+revision. Their per-doc SHA literal at
+`apps/web-platform/lib/legal/legal-doc-shas.ts` (`LEGAL_DOC_SHAS["<doc>"]`)
+serves drift-detection only — the CI job `tc-document-sha-guard` fails
+the build if a canonical edits without the paired SHA refresh.
+
+### SHA-refresh contract
+
+Every edit to a canonical at `docs/legal/<doc>.md` (where `<doc>` is one
+of the 8 above) MUST be paired with a refresh of the corresponding
+`LEGAL_DOC_SHAS["<doc>"]` entry in the same PR. There is NO equivalent
+of the T&C `TC_VERSION`-bump bypass; the SHA refresh is unconditional.
+
+Workflow:
+
+1. Edit `docs/legal/<doc>.md`.
+2. Run `sha256sum docs/legal/<doc>.md` and paste the value into
+   `LEGAL_DOC_SHAS["<doc>"]`.
+3. Update the Eleventy mirror at
+   `plugins/soleur/docs/pages/legal/<doc>.md` so the
+   `legal-doc-consistency` test (heading-sequence + Last-Updated parity)
+   continues to pass.
+4. Classify the edit per the Tier 1 / Tier 2 / Tier 3 framework above
+   and document the tier in the PR body. The classification still
+   applies for Article 30 register + counsel-review-ledger purposes
+   even though no `*_VERSION` constant is bumped.
+5. Update `knowledge-base/legal/article-30-register.md` if a Tier 1 /
+   Tier 2 change introduced or altered a Processing Activity limb.
+
+### CLA + Cookie Policy date discipline (exemption)
+
+The Individual CLA, Corporate CLA, and Cookie Policy carry no body
+`**Last Updated:**` line by design:
+
+- **CLAs** use Git tags + the in-document `**Version:**` line as the
+  authoritative versioning signal. A version-bump PR is the audit
+  trail; "Last Updated" prose would duplicate the Git history.
+- **Cookie Policy** carries the date only in the Eleventy mirror's
+  hero `<p>` (`Last Updated March 29, 2026`), not in the canonical body
+  line. Canonical uses `**Last updated:**` (lowercase "u") which the
+  parity test intentionally does not match — the hero is the user-
+  visible source of truth and is asserted separately if present.
+
+These three docs are listed in `NO_BODY_LAST_UPDATED` in
+`apps/web-platform/test/legal-doc-consistency.test.ts`; the
+"Last Updated date is identical" test skips body-line assertions for
+them. Adding a new doc to this exemption set requires updating both
+the test allowlist and this section.
+
+### CLO sign-off scope
+
+CLO sign-off for non-T&C docs follows the same Tier-based pattern as
+T&C: required for Tier 1 + Tier 2; advisory for Tier 3. The signoff
+attests to (a) correct tier classification, (b) Article 30 register
+fidelity, and (c) accuracy of the doc body's substantive changes.
 
 ---
 
