@@ -43,6 +43,8 @@ import { hashUserId, reportSilentFallback } from "@/server/observability";
 import { tierRequiresTemplateAuth } from "@/server/templates/is-template-authorized";
 import { getTemplateHash } from "@/server/templates/template-registry";
 import { runTemplateGate } from "@/server/templates/run-template-gate";
+import { inngest } from "@/server/inngest/client";
+import { parseSourceRef } from "@/server/inngest/agent-acknowledgment-templates";
 
 export const dynamic = "force-dynamic";
 
@@ -102,7 +104,7 @@ export async function POST(
   const { data: message, error: msgErr } = await supabase
     .from("messages")
     .select(
-      "id, user_id, action_class, status, draft_preview, owning_domain, template_id",
+      "id, user_id, action_class, status, draft_preview, owning_domain, template_id, source_ref",
     )
     .eq("id", messageId)
     .eq("user_id", user.id) // belt-and-suspenders alongside RLS
@@ -286,6 +288,60 @@ export async function POST(
       bodyContent,
     });
 
+    // PR-A (#4124): dispatch agent.spawn.requested AFTER writeActionSend
+    // AND BEFORE the messages-archive flip. Order is load-bearing for
+    // observability (writeActionSend is the WORM-committed durable
+    // artefact; an Inngest enqueue failure must not return 500 because
+    // that would suggest retry to the operator and create orphan
+    // action_sends rows). The Inngest function performs the actual
+    // GitHub artifact emission + UPDATE on action_sends.acknowledged_at.
+    //
+    // installationId is OMITTED from the event payload by design — the
+    // Inngest function server-resolves it from users.github_installation_id
+    // keyed by founderId per AC2 (two-layer guard: TypeScript event type
+    // + runtime sentinel grep).
+    const sourceRef = (message.source_ref as string | null) ?? "";
+    let degraded: "enqueue_failed" | undefined;
+    let artifactViewUrl = "";
+    if (sourceRef) {
+      try {
+        const parsed = parseSourceRef(sourceRef);
+        artifactViewUrl = parsed.isPr
+          ? `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`
+          : `https://github.com/${parsed.owner}/${parsed.repo}/issues/${parsed.number}`;
+      } catch {
+        // Malformed source_ref: still emit the event (the Inngest function
+        // will classify and persist failure_reason). The 200 response
+        // carries an empty artifact_view_url so the client renders the
+        // generic "Acknowledged (pending)" pill.
+        artifactViewUrl = "";
+      }
+      try {
+        await inngest.send({
+          name: "agent.spawn.requested",
+          data: {
+            founderId: user.id,
+            messageId: message.id as string,
+            actionClass,
+            sourceRef,
+            actionSendId: written.id,
+          },
+        });
+      } catch (sendErr) {
+        reportSilentFallback(
+          sendErr instanceof Error ? sendErr : new Error(String(sendErr)),
+          {
+            feature: "spawn-agent",
+            op: "inngest-enqueue",
+            message:
+              "inngest.send failed after action_sends written; row stays committed, manual retry via new messages row",
+            extra: { userId: user.id, messageId, actionSendId: written.id },
+          },
+        );
+        degraded = "enqueue_failed";
+      }
+    }
+
     // Flip the draft to archived. RLS owner-update.
     const { error: archiveErr } = await supabase
       .from("messages")
@@ -315,6 +371,9 @@ export async function POST(
       id: written.id,
       action_class: actionClass,
       tier: grant.tier,
+      action_send_id: written.id,
+      artifact_view_url: artifactViewUrl,
+      ...(degraded ? { degraded } : {}),
     });
   } catch (err) {
     // 23505 unique_violation on action_sends(message_id) → another row
