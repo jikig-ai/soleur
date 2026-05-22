@@ -23,8 +23,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIGRATIONS_DIR="$SCRIPT_DIR/../supabase/migrations"
 
-if [[ -z "${DATABASE_URL_POOLER:-}" ]]; then
-  echo "::error::DATABASE_URL_POOLER is not set. Run under 'doppler run -p soleur -c dev_scheduled --'."
+# Mirror run-migrations.sh:70 — prefer the IPv4 pooler (CI), fall back
+# to the direct connection (developer workstations where DATABASE_URL is
+# the only Doppler-injected name). Keeps idiom parity with the runner so
+# operators don't trip on inconsistent env-var contracts between scripts.
+DATABASE_URL="${DATABASE_URL_POOLER:-${DATABASE_URL:-}}"
+
+if [[ -z "$DATABASE_URL" ]]; then
+  echo "::error::Neither DATABASE_URL_POOLER nor DATABASE_URL is set. Ensure Doppler injects them."
   exit 1
 fi
 
@@ -36,7 +42,7 @@ fi
 command -v psql >/dev/null 2>&1 || { echo "::error::psql not found on PATH"; exit 1; }
 
 run_sql() {
-  psql "$DATABASE_URL_POOLER" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "$1"
+  psql "$DATABASE_URL" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "$1"
 }
 
 applied=$(run_sql "SELECT filename FROM public._schema_migrations ORDER BY filename;")
@@ -54,6 +60,11 @@ while IFS= read -r filename; do
   # of-scope for this drift class; the dev-migration-drift-probe action
   # catches that class separately).
   [[ -f "$path" ]] || continue
+  # Regex assumes the codebase convention: lowercase, `public.`-
+  # qualified relation names. Migrations using uppercase keywords
+  # (`Create Table`), schema-less `<name>`, or quoted identifiers
+  # (`"Public"."Foo"`) bypass this check — the FK parser remains the
+  # last line of defense for those shapes.
   declared_tables=$(grep -oE 'CREATE TABLE (IF NOT EXISTS )?public\.[a-z_][a-z0-9_]*' "$path" 2>/dev/null \
     | awk '{print $NF}' | sort -u || true)
   while IFS= read -r tbl; do

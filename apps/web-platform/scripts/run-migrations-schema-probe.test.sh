@@ -28,6 +28,17 @@ FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 
+# Allocate all temp dirs upfront with a single trap so partial-failure
+# in any test still cleans up every dir. Cascading per-test `trap …
+# EXIT` lines (the prior shape) only register the LAST tmpdir mentioned;
+# if make_temp_tree errors between trap installs, earlier dirs leak.
+# Single-quote the trap body so the variables expand at signal-fire
+# time, not at trap-install time (avoids shellcheck SC2064 class).
+tmp1=$(mktemp -d)
+tmp2=$(mktemp -d)
+tmp3=$(mktemp -d)
+trap 'rm -rf "$tmp1" "$tmp2" "$tmp3"' EXIT
+
 # Build a temp tree with the runner relocated and a fake psql.
 #   $tmp/scripts/run-migrations.sh   (copy of real)
 #   $tmp/supabase/migrations/099_test_missing_ref.sql
@@ -85,16 +96,16 @@ FAKE
 #       the probe exists to surface.
 # ------------------------------------------------------------------------
 echo "T1: probe enabled, missing referenced table → fail with named relation"
-tmp1=$(mktemp -d)
-trap "rm -rf '$tmp1'" EXIT
 make_temp_tree "$tmp1" "nonexistent_xyz_4338"
 
 set +e
-out=$(env PATH="$tmp1/bin:$PATH" \
+# env -i strips host env (matches postgrest-reload-schema.test.sh:53) so
+# host-exported MIGRATION_SCHEMA_PRECONDITION_PROBE / ALLOW_UNMERGED_DEV_APPLY
+# can't bleed in and mask T2/T3's opt-in / self-ref-subtract assertions.
+out=$(env -i PATH="$tmp1/bin:/usr/bin:/bin" HOME="$HOME" \
         DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
         MIGRATION_SCHEMA_PRECONDITION_PROBE=1 \
         ALLOW_UNMERGED_DEV_APPLY=1 \
-        BOOTSTRAP_MIGRATIONS=0 \
         bash "$tmp1/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e
@@ -111,15 +122,12 @@ fi
 #       remains the last line of defense when the env is not set.
 # ------------------------------------------------------------------------
 echo "T2: probe disabled (env unset) → apply proceeds (no probe-emitted error)"
-tmp2=$(mktemp -d)
-trap "rm -rf '$tmp1' '$tmp2'" EXIT
 make_temp_tree "$tmp2" "nonexistent_xyz_4338"
 
 set +e
-out=$(env PATH="$tmp2/bin:$PATH" \
+out=$(env -i PATH="$tmp2/bin:/usr/bin:/bin" HOME="$HOME" \
         DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
         ALLOW_UNMERGED_DEV_APPLY=1 \
-        BOOTSTRAP_MIGRATIONS=0 \
         bash "$tmp2/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e
@@ -141,9 +149,6 @@ fi
 #       works even when a table both creates and references itself.
 # ------------------------------------------------------------------------
 echo "T3: probe enabled, self-referencing CREATE TABLE → does not block"
-tmp3=$(mktemp -d)
-trap "rm -rf '$tmp1' '$tmp2' '$tmp3'" EXIT
-
 mkdir -p "$tmp3/bin" "$tmp3/scripts" "$tmp3/supabase/migrations"
 cp "$RUNNER" "$tmp3/scripts/run-migrations.sh"
 # Migration that both CREATES public.parent_4338 AND has an FK to it
@@ -182,11 +187,10 @@ FAKE
 chmod +x "$tmp3/bin/psql"
 
 set +e
-out=$(env PATH="$tmp3/bin:$PATH" \
+out=$(env -i PATH="$tmp3/bin:/usr/bin:/bin" HOME="$HOME" \
         DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
         MIGRATION_SCHEMA_PRECONDITION_PROBE=1 \
         ALLOW_UNMERGED_DEV_APPLY=1 \
-        BOOTSTRAP_MIGRATIONS=0 \
         bash "$tmp3/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e

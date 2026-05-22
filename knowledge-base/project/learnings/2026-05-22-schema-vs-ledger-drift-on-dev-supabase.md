@@ -82,6 +82,23 @@ DELETE FROM public._schema_migrations
 
 Branch B (manual forward apply via direct psql) is strictly riskier because it requires the operator to execute 5 non-trivial transaction bodies in sequence outside the runner's atomic-transaction discipline. Branch A delegates the apply chain to the runner, which already encodes the right invariants. Prefer Branch A.
 
+**Branch A precondition (partial-apply hazard).** Branch A is safe **when the schema-side state is fully absent** for the deleted ledger row's owned objects (verified via `to_regclass('public.<table>') = NULL`). When the schema partially committed (table present but, say, a CREATE POLICY or ADD CONSTRAINT from a later section survived), re-apply will fail on non-idempotent constructs:
+
+- `058_workspace_member_attestations.sql`'s `CREATE POLICY attestations_select_for_members` (line 64) has no preceding `DROP POLICY IF EXISTS`.
+- `058_workspace_member_attestations.sql`'s `ALTER TABLE public.workspace_members ADD CONSTRAINT workspace_members_attestation_id_fkey ...` (line 147) has no `IF NOT EXISTS` (Postgres doesn't support that clause on `ADD CONSTRAINT`).
+- `060_current_organization_jwt_hook.sql`'s `CREATE POLICY user_session_state_owner_select` (line 41) has no preceding `DROP POLICY IF EXISTS`.
+
+Before running Branch A's DELETE, verify the schema-side state is empty for these survivors:
+
+```sql
+SELECT 1 FROM pg_policies
+  WHERE policyname IN ('attestations_select_for_members', 'user_session_state_owner_select');
+SELECT 1 FROM pg_constraint
+  WHERE conname = 'workspace_members_attestation_id_fkey';
+```
+
+If any return rows, drop them manually before re-running Branch A — otherwise the runner's re-apply will trip on the surviving construct and the recovery procedure stalls mid-chain.
+
 ### Part 2 — Self-describing precondition in the failing migration
 
 Prepend a `DO $$ … RAISE EXCEPTION` block to `062_workspace_member_removals_and_remove_rpc_update.sql` that asserts `to_regclass('public.workspaces') IS NOT NULL` before the FK-bearing `CREATE TABLE`. When the drift recurs, the next operator sees a self-describing error with a link to this learning, instead of a cryptic three-layer-deep FK parser trace.

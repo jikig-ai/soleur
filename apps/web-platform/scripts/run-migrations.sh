@@ -274,6 +274,11 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # when the probe's regex can't see the dependency (dynamic SQL,
   # function-body SELECTs, view dependencies, etc.).
   if [[ "${MIGRATION_SCHEMA_PRECONDITION_PROBE:-0}" == "1" ]]; then
+    # Regex assumes the codebase convention: uppercase DDL keywords,
+    # lowercase + `public.`-qualified relation names. Shapes outside
+    # that convention (lowercase `references`, schema-less `<name>`,
+    # quoted `"public"."Foo"`, dynamic `EXECUTE format(...)`) bypass
+    # this probe; the FK parser remains the last line of defense.
     referenced_tables=$(grep -oE 'REFERENCES public\.[a-z_][a-z0-9_]*' "$migration_file" 2>/dev/null \
       | awk '{print $2}' \
       | sort -u || true)
