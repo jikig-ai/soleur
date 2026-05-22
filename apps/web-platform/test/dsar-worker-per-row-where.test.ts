@@ -94,17 +94,27 @@ describe("DSAR worker per-row WHERE lint (AC30)", () => {
     }
   });
 
-  it("every direct-owner table read carries .eq(<ownerField>, ...)", () => {
+  it("every direct-owner table read carries .eq(<ownerField>, ...) OR .or(...<ownerField>.eq....)", () => {
+    // .or() syntax allowed for tables with symmetric owner columns
+    // (e.g., workspace_member_attestations needs both invitee_user_id
+    // AND inviter_user_id to recover a departed-member's full row set
+    // — Kieran P1-1 / #4230). The lint contract is "the owner column
+    // is constrained per-row", satisfied equivalently by .eq(C, X) or
+    // by .or("C.eq.X,...") — both are positive predicates over C.
     for (const c of chains) {
       const spec = DSAR_TABLE_ALLOWLIST[c.table];
       if (!spec) continue; // not an allowlisted table — out of lint scope
       if (spec.joinVia) continue; // join-via tables checked in next test
 
-      const expected = new RegExp(`\\.eq\\(\\s*["']${spec.ownerField}["']`);
+      const eqShape = new RegExp(`\\.eq\\(\\s*["']${spec.ownerField}["']`);
+      // PostgREST `.or()` string: column.eq.value tokens joined by `,`.
+      // Match `<ownerField>.eq.` (any case for the value side).
+      const orShape = new RegExp(`\\.or\\([^)]*?\\b${spec.ownerField}\\.eq\\.`);
       expect(
-        expected.test(c.chain),
+        eqShape.test(c.chain) || orShape.test(c.chain),
         `service.from("${c.table}") chain at offset ${c.offset} is missing ` +
-          `\`.eq("${spec.ownerField}", expectedUserId)\`. Per AC30 every ` +
+          `BOTH \`.eq("${spec.ownerField}", expectedUserId)\` AND ` +
+          `\`.or("...${spec.ownerField}.eq.X,...")\`. Per AC30 every ` +
           `worker read of an allowlisted table MUST carry a positive ` +
           `per-row predicate over its owner column. Chain snippet: ` +
           `${c.chain.slice(0, 200)}…`,
