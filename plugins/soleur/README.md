@@ -40,7 +40,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 68 |
+| Agents | 67 |
 | Commands | 3 |
 | Skills | 77 |
 | MCP Servers | 3 |
@@ -88,7 +88,7 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `cto` | Engineering domain leader -- assesses technical implications and flags architecture risks during brainstorm and planning |
 
-#### Review (15)
+#### Review (14)
 
 | Agent | Description |
 |-------|-------------|
@@ -100,7 +100,6 @@ Agents are organized by domain, then by function.
 | `data-migration-expert` | Validate ID mappings match production, check for swapped values |
 | `deployment-verification-agent` | Create Go/No-Go deployment checklists for risky data changes |
 | `dhh-rails-reviewer` | Rails review from DHH's perspective |
-| `identity-rbac-reviewer` | Multi-org / workspace boundary integrity (RLS, JWT claim, attestation owner-check) |
 | `kieran-rails-reviewer` | Rails code review with strict conventions |
 | `legacy-code-expert` | Safely modify untested legacy code using Feathers' dependency-breaking techniques |
 | `pattern-recognition-specialist` | Analyze code for patterns and anti-patterns |
