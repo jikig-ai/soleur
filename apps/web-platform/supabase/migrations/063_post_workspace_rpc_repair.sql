@@ -65,20 +65,17 @@ BEGIN
   END IF;
 
   -- Derive workspace_id from the solo-canary predicate established by
-  -- migration 059's own backfill (059:344-347). For the post-workspace
-  -- schema with handle_new_user trigger (053), every authenticated user
-  -- has exactly one row in workspace_members where workspace_id =
-  -- user_id and role = 'owner' (their solo backfill workspace).
+  -- migration 059's own backfill (059:344-347). handle_new_user (053)
+  -- guarantees exactly one (user_id=X, workspace_id=X, role='owner') row
+  -- per signed-up user, so this SELECT returns at most one row. If the
+  -- canary row is missing for any reason, v_workspace_id stays NULL and
+  -- the INSERT below raises 23502 (NOT NULL) — column context preserved
+  -- by the DB error, no custom SQLSTATE needed.
   SELECT workspace_id INTO v_workspace_id
     FROM public.workspace_members
    WHERE user_id      = v_founder_id
      AND workspace_id = v_founder_id
      AND role         = 'owner';
-
-  IF v_workspace_id IS NULL THEN
-    RAISE EXCEPTION 'grant_action_class: no solo-workspace found for %', v_founder_id
-      USING ERRCODE = 'P0002';
-  END IF;
 
   -- Revoke any currently-active grant for this (founder, action_class).
   UPDATE public.scope_grants

@@ -104,15 +104,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
     test("After remove_workspace_member, Harry's member row is gone but his founder_id-keyed rows remain (AC10)", async () => {
       if (SCHEMA_CACHE_READY === false) return;
-      const owner = fixture.members[0];
       const harry = fixture.members[1];
 
       // remove_workspace_member is 2-arg (p_workspace_id, p_user_id) per
       // mig 062:272; the SECURITY DEFINER body reads the actor from
-      // auth.uid(). Service-role bypasses the SELECT but the v_caller_user_id
-      // owner-check fails when auth.uid() IS NULL; the fallback DELETE is
-      // intentional defense-in-depth (the dev Supabase service-role context
-      // doesn't carry an auth.uid()).
+      // auth.uid(). Service-role contexts have auth.uid() = NULL so the
+      // RPC raises 28000; fallback DELETE is the canonical removal path
+      // here (mirrors workspace-members.test.ts:113-119 precedent).
       const { error: rmErr } = await service.rpc("remove_workspace_member", {
         p_workspace_id: fixture.workspaceId,
         p_user_id: harry.userId,
@@ -125,9 +123,6 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .eq("user_id", harry.userId);
         expect(delErr).toBeNull();
       }
-      // Reference owner to keep the binding live for the assertion comment
-      // above (avoid TS6133 on an otherwise-unused fixture lookup).
-      expect(owner.userId).toBeTruthy();
 
       // Harry's membership in the SHARED workspace is gone. (Harry's own
       // solo backfill row at workspace_id=harry.id is intentionally NOT
