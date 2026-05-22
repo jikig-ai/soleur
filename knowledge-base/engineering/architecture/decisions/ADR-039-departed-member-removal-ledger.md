@@ -48,11 +48,15 @@ Brand-survival threshold: **single-user incident.** If the new ledger's RLS pred
 ```text
 workspace_member_removals
   id                 uuid         PRIMARY KEY DEFAULT gen_random_uuid()
-  workspace_id       uuid         NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT
+  -- NULL-able + SET NULL on workspace delete — orphan-org carve-out;
+  -- see §Invariants.1 for rationale. Pre-existing
+  -- workspace_member_attestations.workspace_id (058:43) is RESTRICT
+  -- and remains unchanged (sister-table tracked separately).
+  workspace_id       uuid         NULL    REFERENCES workspaces(id) ON DELETE SET NULL
   -- PII columns — NULL after Art. 17 anonymise.
   removed_user_id    uuid         NULL    REFERENCES users(id)      ON DELETE RESTRICT
   removed_by_user_id uuid         NULL    REFERENCES users(id)      ON DELETE RESTRICT
-  -- Audit lineage — never cleared.
+  -- Audit lineage — id + removed_at strictly immutable.
   removed_at         timestamptz  NOT NULL DEFAULT now()
 
 INDEX workspace_member_removals_workspace_idx
@@ -66,7 +70,7 @@ REVOKE INSERT, UPDATE, DELETE FROM PUBLIC, anon, authenticated
 
 ### Invariants
 
-1. **WORM (write-once, anonymise-only).** Same structural-shape pattern as `workspace_member_attestations_no_mutate` (058:72-141). DELETE is always rejected (use anonymise RPC); UPDATE is allowed only for NULL transitions on `removed_user_id` and `removed_by_user_id`; lineage columns `id`, `workspace_id`, `removed_at` are immutable. Pattern reference: structural-shape recognition over GUC + role gate per learning `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md`.
+1. **WORM (write-once, anonymise-only).** Structural-shape pattern derived from `workspace_member_attestations_no_mutate` (058:72-141), extended with a **workspace_id carve-out** added at review-time (PR #4294 code-simplicity-reviewer DISSENT on initial RESTRICT FK shape). DELETE is always rejected for non-retention rows (use anonymise RPC); UPDATE is allowed only for NULL transitions on `removed_user_id`, `removed_by_user_id`, **and `workspace_id`**; strict-immutable lineage columns are `id` and `removed_at` only. Pattern reference: structural-shape recognition over GUC + role gate per learning `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md`. **The workspace_id carve-out** (`ON DELETE SET NULL` + WORM trigger permits NOT NULL → NULL) lets `anonymise_organization_membership` (058:419-468) DELETE orphaned workspaces without being blocked by removal-event rows pointing at them. After the workspace is gone there are zero co-members left to read the row via RLS, so workspace_id has no remaining semantic value — surviving identifiers (id, removed_user_id, removed_by_user_id, removed_at) still serve DSAR Art. 15 export under the requester's userId scope. Pre-existing parallel: `workspace_member_attestations.workspace_id` (058:43) keeps its `ON DELETE RESTRICT` FK shape; that's the sister-table defect tracked as a separate pre-existing-unrelated finding against `main`.
 2. **All inserts route through `remove_workspace_member` RPC.** Per `cq-WORM-bypass` and the WORM-ledger contract: no TS-level inserts. The RPC's INSERT happens inside the same SECURITY DEFINER function body as the DELETE — atomic; if the INSERT raises (FK violation), the DELETE rolls back (AC2 verifies).
 3. **Cascade-order load-bearing.** `anonymise_workspace_member_removals(p_user_id)` runs in `account-delete.ts` AFTER `anonymise_workspace_member_attestations` and BEFORE `auth.admin.deleteUser()`. Failure to thread this leaves Art. 17 erasure broken for any user who has ever been removed from a workspace (the ON DELETE RESTRICT FK on `removed_user_id` blocks the auth-delete cascade).
 4. **RLS deviation from `workspace_member_attestations`.** The SELECT policy uses `is_workspace_member(workspace_id, auth.uid())` — meaning a departed member CANNOT read their own removal row via the policy. They access it through the DSAR export pipeline (service-role read). This is intentional: the removal row is co-member audit metadata, not the departed user's own profile data. The DSAR export is the gated surface for the departed user to see their row; co-members see all removal events for workspaces they currently belong to.

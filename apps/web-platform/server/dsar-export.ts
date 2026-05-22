@@ -704,9 +704,10 @@ export async function exportSqlTable(
   // side row, especially for ex-members whose workspace_members linkage
   // is gone (#4230 Kieran P1-1).
   //
-  // The `.or()` filter recovers BOTH sides under one query. assertReadScope
-  // below is two-arm aware: each returned row's owner column must be
-  // EITHER invitee_user_id OR inviter_user_id matching expectedUserId.
+  // The `.or()` filter recovers BOTH sides under one query. The inlined
+  // two-arm scope check below (NOT assertReadScope — which is single-
+  // ownerField) asserts each returned row's owner column matches
+  // expectedUserId on EITHER invitee_user_id OR inviter_user_id.
   {
     const { data, error } = await service
       .from("workspace_member_attestations")

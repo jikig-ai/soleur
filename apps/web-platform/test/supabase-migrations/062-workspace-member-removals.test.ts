@@ -46,9 +46,12 @@ describe("migration 062_workspace_member_removals_and_remove_rpc_update", () => 
       );
     });
 
-    it("workspace_id FK is NOT NULL REFERENCES workspaces ON DELETE RESTRICT", () => {
+    it("workspace_id FK is NULL-able REFERENCES workspaces ON DELETE SET NULL (orphan-org cleanup carve-out, ADR-039 §Invariants.1)", () => {
+      // post-DISSENT inline fix: workspace_id transitions NOT NULL → NULL
+      // via implicit UPDATE when anonymise_organization_membership DELETEs
+      // the workspace. RESTRICT would block that cleanup pathway.
       expect(executable).toMatch(
-        /workspace_id\s+uuid\s+NOT\s+NULL\s+REFERENCES\s+public\.workspaces\(id\)\s+ON\s+DELETE\s+RESTRICT/i,
+        /workspace_id\s+uuid\s+NULL\s+REFERENCES\s+public\.workspaces\(id\)\s+ON\s+DELETE\s+SET\s+NULL/i,
       );
     });
 
@@ -134,10 +137,16 @@ describe("migration 062_workspace_member_removals_and_remove_rpc_update", () => 
       expect(fnMatch![0]).not.toMatch(/current_user/i);
     });
 
-    it("UPDATE bypass uses structural-shape (lineage columns immutable; PII columns NOT NULL → NULL only)", () => {
-      // Lineage check: id, workspace_id, removed_at must be unchanged.
+    it("UPDATE bypass uses structural-shape (id + removed_at immutable; workspace_id + PII NOT NULL → NULL only)", () => {
+      // Strict-immutable lineage: id + removed_at only (workspace_id was
+      // demoted to NOT NULL→NULL admissible per DISSENT-flip; ADR-039
+      // §Invariants.1 carve-out).
       expect(executable).toMatch(
-        /NEW\.id\s+IS\s+DISTINCT\s+FROM\s+OLD\.id[\s\S]*?NEW\.workspace_id\s+IS\s+DISTINCT\s+FROM\s+OLD\.workspace_id[\s\S]*?NEW\.removed_at\s+IS\s+DISTINCT\s+FROM\s+OLD\.removed_at/i,
+        /NEW\.id\s+IS\s+DISTINCT\s+FROM\s+OLD\.id[\s\S]*?NEW\.removed_at\s+IS\s+DISTINCT\s+FROM\s+OLD\.removed_at/i,
+      );
+      // workspace_id NULL-transition shape (orphan-org cleanup).
+      expect(executable).toMatch(
+        /OLD\.workspace_id\s+IS\s+NULL\s+AND\s+NEW\.workspace_id\s+IS\s+NOT\s+NULL/i,
       );
       // PII NULL-transition shape for both PII columns.
       expect(executable).toMatch(
@@ -148,12 +157,20 @@ describe("migration 062_workspace_member_removals_and_remove_rpc_update", () => 
       );
     });
 
-    it("raises P0001 for non-anonymise UPDATE and non-retention DELETE", () => {
+    it("raises P0001 for non-anonymise UPDATE, non-retention DELETE, and workspace_id violations", () => {
       expect(executable).toMatch(
         /RAISE\s+EXCEPTION\s+'workspace_member_removals\s+is\s+append-only;\s+only\s+rows\s+past\s+36-month\s+retention\s+may\s+be\s+deleted'\s+USING\s+ERRCODE\s*=\s*'P0001'/i,
       );
       expect(executable).toMatch(
         /RAISE\s+EXCEPTION\s+'workspace_member_removals\s+is\s+append-only;\s+only\s+Art\.\s+17\s+anonymise[\s\S]*?'P0001'/i,
+      );
+      // workspace_id NULL→NOT NULL or value-change rejected
+      expect(executable).toMatch(
+        /RAISE\s+EXCEPTION\s+'workspace_member_removals\.workspace_id\s+is\s+append-only;\s+only\s+ON\s+DELETE\s+SET\s+NULL\s+transitions\s+permitted'/i,
+      );
+      // id + removed_at strictly immutable
+      expect(executable).toMatch(
+        /RAISE\s+EXCEPTION\s+'workspace_member_removals\s+audit\s+lineage\s+is\s+immutable\s+\(id,\s+removed_at\)'/i,
       );
     });
 
@@ -264,6 +281,19 @@ describe("migration 062_workspace_member_removals_and_remove_rpc_update", () => 
 
     it("tolerates duplicate_object on re-run (idempotent migration apply)", () => {
       expect(executable).toMatch(/EXCEPTION\s+WHEN\s+duplicate_object\s+THEN/i);
+    });
+
+    // user-impact-reviewer F7 (PR #4294 review): the WORM trigger's DELETE
+    // bypass condition (`OLD.removed_at < now() - interval '36 months'`) and
+    // the cron sweep's WHERE clause (`removed_at < now() - interval '36
+    // months'`) MUST match — drift between them silently keeps every retention
+    // row (sweep emits DELETE; trigger rejects). Both reference the same 36-mo
+    // boundary; lock it in.
+    it("trigger row-state DELETE bypass and cron sweep WHERE clause use the same 36-month boundary", () => {
+      // Count occurrences of the canonical `interval '36 months'` form in
+      // the executable SQL — at least 2 (trigger bypass + sweep WHERE).
+      const matches = executable.match(/interval\s+'36\s+months'/gi) ?? [];
+      expect(matches.length).toBeGreaterThanOrEqual(2);
     });
   });
 

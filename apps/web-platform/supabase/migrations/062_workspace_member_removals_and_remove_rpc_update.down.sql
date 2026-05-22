@@ -7,6 +7,30 @@
 -- load-bearing; AC1 includes a parity test that diffs this body
 -- against 058's source.
 
+-- 0. Non-empty table guard (data-integrity-guardian P2-1, PR #4294 review).
+--    DROP TABLE silently destroys rows because the BEFORE-DELETE WORM
+--    trigger is dropped first at step 3 below. For a rollback against
+--    a table that has accumulated removal-event rows, the silent destroy
+--    loses GDPR Art. 30(1)(g) audit lineage. Convert to a loud
+--    fail-stop; operator must explicitly anonymise + truncate before
+--    invoking the down migration.
+DO $$
+DECLARE v_count int;
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'workspace_member_removals'
+  ) THEN
+    EXECUTE 'SELECT count(*) FROM public.workspace_member_removals' INTO v_count;
+    IF v_count > 0 THEN
+      RAISE EXCEPTION 'Refusing to drop public.workspace_member_removals: % audit rows present. Anonymise + truncate first, OR escalate to CLO.', v_count
+        USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+END $$;
+
 -- 1. Unschedule the retention sweep.
 DO $$
 BEGIN

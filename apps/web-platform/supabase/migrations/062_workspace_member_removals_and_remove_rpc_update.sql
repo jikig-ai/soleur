@@ -63,11 +63,23 @@
 
 CREATE TABLE IF NOT EXISTS public.workspace_member_removals (
   id                  uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id        uuid         NOT NULL REFERENCES public.workspaces(id) ON DELETE RESTRICT,
+  -- workspace_id is ON DELETE SET NULL (NOT RESTRICT) so the orphan-
+  -- org cleanup branch of anonymise_organization_membership (058:442-
+  -- 447) can DELETE the workspace without being blocked by an audit
+  -- row pointing at it. Once the workspace + org are gone, the
+  -- workspace_id loses semantic value anyway — no co-member remains
+  -- to read the row via RLS. The row's surviving identifiers
+  -- (removed_user_id, removed_by_user_id, removed_at) still serve
+  -- DSAR Art. 15 export under the requester's userId scope. See
+  -- ADR-039 §Invariants.1 carve-out. The pre-existing
+  -- workspace_member_attestations.workspace_id (058:43) is filed
+  -- separately as a pre-existing-unrelated defect on `main`.
+  workspace_id        uuid         NULL REFERENCES public.workspaces(id) ON DELETE SET NULL,
   -- PII columns — NULL after Art. 17 anonymise.
   removed_user_id     uuid         NULL REFERENCES public.users(id) ON DELETE RESTRICT,
   removed_by_user_id  uuid         NULL REFERENCES public.users(id) ON DELETE RESTRICT,
-  -- Audit lineage — never cleared.
+  -- Audit lineage — id + removed_at never cleared. (workspace_id
+  -- carve-out documented above.)
   removed_at          timestamptz  NOT NULL DEFAULT now()
 );
 
@@ -122,11 +134,17 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
-  -- UPDATE shape "Art. 17 anonymise":
-  --   * every PII column transitions NOT NULL → NULL (or stays unchanged)
-  --   * audit lineage (id, workspace_id, removed_at) unchanged
-  -- Mirrors 058:85-121's structural-shape recognition. Recognised by
-  -- column-state transition rather than GUC + role gate per learning
+  -- UPDATE shape "Art. 17 anonymise OR orphan-org cleanup":
+  --   * every PII column AND workspace_id transitions NOT NULL → NULL
+  --     (or stays unchanged)
+  --   * audit lineage (id, removed_at) unchanged
+  -- Mirrors 058:85-121's structural-shape recognition (extended to
+  -- cover workspace_id NULL transition for orphan-org cleanup). The
+  -- ON DELETE SET NULL on workspace_id triggers an implicit UPDATE
+  -- by PostgreSQL when the workspaces row is deleted by
+  -- anonymise_organization_membership; this trigger must permit that
+  -- transition. Recognised by column-state transition rather than
+  -- GUC + role gate per learning
   -- 2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-
   -- routing.md.
   --
@@ -135,10 +153,20 @@ BEGIN
   -- only service-role-authenticated callers can issue the UPDATE that
   -- matches this shape.
   IF NEW.id              IS DISTINCT FROM OLD.id
-    OR NEW.workspace_id  IS DISTINCT FROM OLD.workspace_id
     OR NEW.removed_at    IS DISTINCT FROM OLD.removed_at
   THEN
-    RAISE EXCEPTION 'workspace_member_removals audit lineage is immutable'
+    RAISE EXCEPTION 'workspace_member_removals audit lineage is immutable (id, removed_at)'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- workspace_id may transition NOT NULL → NULL via the ON DELETE
+  -- SET NULL FK cascade when anonymise_organization_membership
+  -- deletes the workspace. NULL → NOT NULL or value-change is
+  -- rejected (lineage integrity for live rows).
+  IF (OLD.workspace_id IS NULL AND NEW.workspace_id IS NOT NULL)
+    OR (OLD.workspace_id IS NOT NULL AND NEW.workspace_id IS NOT NULL AND NEW.workspace_id IS DISTINCT FROM OLD.workspace_id)
+  THEN
+    RAISE EXCEPTION 'workspace_member_removals.workspace_id is append-only; only ON DELETE SET NULL transitions permitted'
       USING ERRCODE = 'P0001';
   END IF;
 
