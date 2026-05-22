@@ -49,9 +49,9 @@ Brand-survival threshold: **single-user incident.** If the new ledger's RLS pred
 workspace_member_removals
   id                 uuid         PRIMARY KEY DEFAULT gen_random_uuid()
   -- NULL-able + SET NULL on workspace delete — orphan-org carve-out;
-  -- see §Invariants.1 for rationale. Pre-existing
-  -- workspace_member_attestations.workspace_id (058:43) is RESTRICT
-  -- and remains unchanged (sister-table tracked separately).
+  -- see §Invariants.1 for rationale. Sister-table
+  -- workspace_member_attestations.workspace_id (058:43) resolved in
+  -- mig 064 (#4329); both tables now share the carve-out shape.
   workspace_id       uuid         NULL    REFERENCES workspaces(id) ON DELETE SET NULL
   -- PII columns — NULL after Art. 17 anonymise.
   removed_user_id    uuid         NULL    REFERENCES users(id)      ON DELETE RESTRICT
