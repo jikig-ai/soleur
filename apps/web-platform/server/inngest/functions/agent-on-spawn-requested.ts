@@ -2,15 +2,25 @@
 //
 // Consumes `agent.spawn.requested` events emitted by the dashboard /send
 // route AFTER `writeActionSend` and BEFORE the `messages.status` archive
-// flip. Produces exactly one deterministic GitHub artifact per event:
-//   - `pr-*` source refs → PR comment via createComment
-//   - everything else (ci-, issue-, cve-, secret-scan-, link-, anchor-) →
-//     issue label `soleur/acknowledged` via addLabels (idempotent at the
-//     GitHub API layer — re-adding an existing label is a no-op).
+// flip. PR-A's deterministic stub handles ONLY the source-ref shapes
+// that carry (owner, repo, number) per github-on-event.ts:deriveSourceRef:
+//   - `pr-<owner>:<repo>:<n>`         → PR comment via createComment
+//   - `issue-<owner>:<repo>:<n>`      → issue label `soleur/acknowledged`
+//   - `secret-scan-<owner>:<repo>:<n>`→ issue label `soleur/acknowledged`
 //
-// PR-B (filed before PR-A merges; ADR-039) replaces the deterministic stub
-// body with the Anthropic SDK leader-prompt loop + per-action-class
-// specialization.
+// Source-ref shapes that have NO per-class GitHub target — `ci-<run_id>`
+// (no repo binding), `cve-GHSA-...` (global advisory), `link-<hash>` /
+// `anchor-<hash>` (kb_drift) — are intercepted at the /send route BEFORE
+// the Inngest event is enqueued (route returns 200 with `degraded:
+// "no_artifact_in_pr_a"`). The Inngest function therefore never receives
+// these shapes in steady state; should one slip through (e.g., dev
+// replay), `parseSourceRef` throws `malformed_source_ref` and persist-
+// failure writes the row.
+//
+// PR-B (#4360, ADR-040+ — next free ordinal; ADR-039 already taken by
+// the departed-member-removal-ledger landed in #4294) replaces the
+// deterministic stub body with the Anthropic SDK leader-prompt loop
+// and adds per-class resolution for the deferred shapes.
 //
 // LOAD-BEARING INVARIANTS:
 //   I1 — `installationId` is server-resolved INSIDE step 1 from
@@ -179,30 +189,40 @@ export async function agentOnSpawnRequestedHandler({
   // WORM trigger (mig 064) admits this UPDATE because the SET list
   // touches ONLY acknowledged_at + artifact_url; any drift toward a
   // pre-064 column trips the trigger.
-  await step.run("mark-acknowledged", async () => {
-    const sb = getServiceClient();
-    const { error } = await sb
-      .from("action_sends")
-      .update({
-        acknowledged_at: new Date().toISOString(),
-        artifact_url: artifactUrl,
-      })
-      .eq("id", actionSendId);
-    if (error) {
-      // The artifact landed on GitHub but the row UPDATE failed.
-      // Surface to Sentry; the operator's "Acknowledged" pill rendered
-      // optimistically on the 200 response and the canonical artifact
-      // is on GitHub, so this is degraded-not-broken.
-      reportSilentFallback(error, {
-        feature: "spawn-agent",
-        op: "mark-acknowledged",
-        message:
-          "action_sends UPDATE failed after artifact emitted on GitHub",
-        extra: { founderId, messageId, actionClass, actionSendId },
-      });
-      throw error;
-    }
-  });
+  //
+  // Failure shape: the artifact is already on GitHub at this point (the
+  // canonical operator-visible record), so a row-UPDATE failure is
+  // degraded-not-broken. We DO NOT throw — throwing here would cause
+  // Inngest to retry the whole function (resolve-installation, post-
+  // acknowledgment re-runs from step memoization), which would re-fire
+  // `reportSilentFallback` once per retry attempt and spam Sentry. The
+  // single mirror + persist-failure write below is the terminal state.
+  try {
+    await step.run("mark-acknowledged", async () => {
+      const sb = getServiceClient();
+      const { error } = await sb
+        .from("action_sends")
+        .update({
+          acknowledged_at: new Date().toISOString(),
+          artifact_url: artifactUrl,
+        })
+        .eq("id", actionSendId);
+      if (error) {
+        throw error;
+      }
+    });
+  } catch (err) {
+    return await persistFailure(step, {
+      actionSendId,
+      reason: "acknowledgment_persist_failed",
+      err,
+      founderId,
+      messageId,
+      actionClass,
+      sourceRef,
+      logger,
+    });
+  }
 
   return { acknowledged: true, artifactUrl };
 }
@@ -233,13 +253,36 @@ async function persistFailure(
       actionSendId,
     },
   });
-  await step.run("persist-failure", async () => {
-    const sb = getServiceClient();
-    await sb
-      .from("action_sends")
-      .update({ failure_reason: reason })
-      .eq("id", actionSendId);
-  });
+  // Wrap the persist UPDATE in try/catch so a transient row-UPDATE error
+  // on the deadletter path does NOT throw out of the function and force
+  // an Inngest retry of the whole handler (which would re-fire
+  // `reportSilentFallback` above + spam Sentry once per retry). If the
+  // failure_reason write itself fails, the Sentry mirror above carries
+  // the operator-actionable evidence; the row remains acknowledged_at
+  // IS NULL + failure_reason IS NULL, which the dashboard can render
+  // as "in flight" rather than producing a runaway retry loop.
+  try {
+    await step.run("persist-failure", async () => {
+      const sb = getServiceClient();
+      const { error } = await sb
+        .from("action_sends")
+        .update({ failure_reason: reason })
+        .eq("id", actionSendId);
+      if (error) {
+        throw error;
+      }
+    });
+  } catch (persistErr) {
+    args.logger.warn(
+      {
+        founderId: args.founderId,
+        actionSendId,
+        reason,
+        persistErr,
+      },
+      "agent-on-spawn: persist-failure UPDATE failed; terminal state recorded via Sentry mirror only",
+    );
+  }
   return { acknowledged: false, failureReason: reason };
 }
 

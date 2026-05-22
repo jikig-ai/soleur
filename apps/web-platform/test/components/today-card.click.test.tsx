@@ -180,10 +180,13 @@ describe("GitHubCard onClick (PR-A)", () => {
 });
 
 describe("KbDriftCard onClick (PR-A)", () => {
-  it("happy-path: click 'Fix link' → POST /send → 200 → Acknowledged (pending artifact) pill", async () => {
-    // kb_drift link-* refs deadletter at the Inngest function as
-    // malformed_source_ref until PR-B; the route still returns 200 with
-    // an empty artifact_view_url so the card renders the pending pill.
+  it("happy-path: click 'Fix link' → POST /send → 200 with degraded:'no_artifact_in_pr_a' → no_artifact pill", async () => {
+    // kb_drift link-* refs don't carry an (owner, repo, number) GitHub
+    // target; the route returns 200 with degraded:"no_artifact_in_pr_a"
+    // and skips the Inngest dispatch entirely (avoids the
+    // malformed_source_ref deadletter + Sentry spam). The card renders
+    // the explicit no_artifact pill rather than the misleading pending
+    // pill. PR-B (#4360) handles per-class resolution.
     nextResponse = {
       status: 200,
       body: {
@@ -192,6 +195,7 @@ describe("KbDriftCard onClick (PR-A)", () => {
         tier: "draft_one_click",
         action_send_id: "as-2",
         artifact_view_url: "",
+        degraded: "no_artifact_in_pr_a",
       },
     };
 
@@ -212,7 +216,8 @@ describe("KbDriftCard onClick (PR-A)", () => {
     await waitFor(() => {
       const pill = screen.getByTestId("acknowledged-pill");
       expect(pill).toBeInTheDocument();
-      expect(pill.getAttribute("data-pill-state")).toBe("pending");
+      expect(pill.getAttribute("data-pill-state")).toBe("no_artifact");
+      expect(pill.textContent).toMatch(/PR-B/);
     });
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);

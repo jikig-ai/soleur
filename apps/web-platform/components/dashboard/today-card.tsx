@@ -424,17 +424,44 @@ function StripeCard({
 
 interface AcknowledgedPillProps {
   artifactUrl: string;
-  degraded: "enqueue_failed" | undefined;
+  degraded: "enqueue_failed" | "no_artifact_in_pr_a" | undefined;
+}
+
+type PillState = "ack" | "pending" | "queued" | "no_artifact";
+
+function derivePillState(
+  artifactUrl: string,
+  degraded: AcknowledgedPillProps["degraded"],
+): PillState {
+  // Pure derivation. Precedence: no_artifact_in_pr_a > enqueue_failed >
+  // artifactUrl-present > artifactUrl-absent. Each branch is exclusive.
+  // The pure shape lets the component test matrix all four states
+  // without rendering, and prevents the latent bug where a future
+  // "degraded WITH partial artifact" shape silently drops the link.
+  if (degraded === "no_artifact_in_pr_a") return "no_artifact";
+  if (degraded === "enqueue_failed") return "queued";
+  if (artifactUrl) return "ack";
+  return "pending";
 }
 
 function AcknowledgedPill({ artifactUrl, degraded }: AcknowledgedPillProps) {
   // PR-A — optimistic acknowledgment pill rendered on the 200 response
   // from /send. The Inngest function emits the actual GitHub artifact
   // within ~60s (happy path); operator follows the link to verify.
-  // `degraded: enqueue_failed` indicates the action_sends row is
-  // WORM-committed but inngest.send threw between writeActionSend and
-  // archive — operator retries via a fresh `messages` row.
-  if (degraded === "enqueue_failed") {
+  const state = derivePillState(artifactUrl, degraded);
+
+  if (state === "no_artifact") {
+    return (
+      <span
+        data-testid="acknowledged-pill"
+        data-pill-state="no_artifact"
+        className="inline-flex items-center gap-2 rounded-full bg-slate-700/40 px-3 py-1 text-xs font-medium text-slate-100"
+      >
+        Acknowledged — full handling lands in PR-B (#4360)
+      </span>
+    );
+  }
+  if (state === "queued") {
     return (
       <span
         data-testid="acknowledged-pill"
@@ -445,7 +472,7 @@ function AcknowledgedPill({ artifactUrl, degraded }: AcknowledgedPillProps) {
       </span>
     );
   }
-  if (!artifactUrl) {
+  if (state === "pending") {
     return (
       <span
         data-testid="acknowledged-pill"

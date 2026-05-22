@@ -300,28 +300,53 @@ export async function POST(
     // Inngest function server-resolves it from users.github_installation_id
     // keyed by founderId per AC2 (two-layer guard: TypeScript event type
     // + runtime sentinel grep).
-    // PR-A: stable string narrowing for the inngest envelope. The
+    // PR-A (#4124): dispatch agent.spawn.requested AFTER writeActionSend
+    // AND BEFORE the messages-archive flip. Order is load-bearing for
+    // observability (writeActionSend is the WORM-committed durable
+    // artefact; an Inngest enqueue failure must not return 500 because
+    // that would suggest retry to the operator and create orphan
+    // action_sends rows).
+    //
+    // PR-A scope: the deterministic stub only emits artifacts for source-
+    // ref shapes that carry (owner, repo, number): `pr-*`, `issue-*`,
+    // `secret-scan-*` (per github-on-event.ts:deriveSourceRef). Other
+    // shapes — `ci-<run_id>`, `cve-GHSA-...`, `link-<hash>`,
+    // `anchor-<hash>` — have no per-class GitHub target in PR-A. Per-class
+    // resolution lands in PR-B (#4360). For unsupported shapes we still
+    // write the action_sends row + archive the message (the click is
+    // operator intent), but we DO NOT enqueue an Inngest event (which
+    // would deadletter as malformed_source_ref + spam Sentry on every
+    // PR-A CVE/CI/kb_drift click) and we return `degraded:
+    // "no_artifact_in_pr_a"` so the card can render an honest pill state
+    // rather than the misleading "pending artifact" copy.
+    //
+    // installationId is OMITTED from the event payload by design — the
+    // Inngest function server-resolves it from users.github_installation_id
+    // keyed by founderId per AC2 (two-layer guard: TypeScript event type
+    // + runtime sentinel grep).
+    //
     // `messageIdStr` hoist is outside the inngest.send window so the
     // action-class typed-literal lint (PR-H ADR-034 §1) does not flag
     // the implicit Supabase `any` widen.
     const messageIdStr: string = String(message.id);
     const sourceRef: string =
       typeof message.source_ref === "string" ? message.source_ref : "";
-    let degraded: "enqueue_failed" | undefined;
+    let degraded: "enqueue_failed" | "no_artifact_in_pr_a" | undefined;
     let artifactViewUrl = "";
+
+    let parsed: ReturnType<typeof parseSourceRef> | null = null;
     if (sourceRef) {
       try {
-        const parsed = parseSourceRef(sourceRef);
-        artifactViewUrl = parsed.isPr
-          ? `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`
-          : `https://github.com/${parsed.owner}/${parsed.repo}/issues/${parsed.number}`;
+        parsed = parseSourceRef(sourceRef);
       } catch {
-        // Malformed source_ref: still emit the event (the Inngest function
-        // will classify and persist failure_reason). The 200 response
-        // carries an empty artifact_view_url so the client renders the
-        // generic "Acknowledged (pending)" pill.
-        artifactViewUrl = "";
+        parsed = null;
       }
+    }
+
+    if (parsed) {
+      artifactViewUrl = parsed.isPr
+        ? `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`
+        : `https://github.com/${parsed.owner}/${parsed.repo}/issues/${parsed.number}`;
       try {
         await inngest.send({
           name: "agent.spawn.requested",
@@ -346,6 +371,11 @@ export async function POST(
         );
         degraded = "enqueue_failed";
       }
+    } else if (sourceRef) {
+      // Unsupported source-ref class for PR-A's deterministic stub. No
+      // Inngest event enqueued; no malformed_source_ref deadletter; no
+      // Sentry spam. PR-B's leader-prompt loop will handle these.
+      degraded = "no_artifact_in_pr_a";
     }
 
     // Flip the draft to archived. RLS owner-update.

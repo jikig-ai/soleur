@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ACK_LABEL } from "@/server/inngest/agent-acknowledgment-templates";
+
 // PR-A (#4124) — Tests for the `agent-on-spawn-requested` Inngest function.
 //
 // Drives `agentOnSpawnRequestedHandler` directly with a mock `step` so the
@@ -197,12 +199,11 @@ describe("agent-on-spawn-requested handler", () => {
     });
     expect(result).toMatchObject({ acknowledged: true });
     expect(addLabelsSpy).toHaveBeenCalledTimes(1);
-    expect(addLabelsSpy).toHaveBeenCalledTimes(1);
     expect(addLabelsSpy.mock.calls[0][0]).toMatchObject({
       owner: "acme",
       repo: "repo",
       issue_number: 42,
-      labels: ["soleur/acknowledged"],
+      labels: [ACK_LABEL],
     });
     expect(createCommentSpy).not.toHaveBeenCalled();
   });

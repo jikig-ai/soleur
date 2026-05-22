@@ -186,7 +186,7 @@ beforeEach(() => {
 });
 
 describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => {
-  test("(1) kb_drift draft_one_click → 200 with action_send_id + inngest.send called once (artifact_view_url empty until PR-B)", async () => {
+  test("(1) kb_drift draft_one_click (unsupported shape) → 200 with degraded:'no_artifact_in_pr_a' and inngest.send NOT called", async () => {
     setupMessageRow("knowledge.kb_drift", "link-deadbeef00000000");
     mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
 
@@ -203,11 +203,24 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
     expect(json.id).toBe(AS_ID);
     expect(json.tier).toBe("draft_one_click");
     expect(json.action_send_id).toBe(AS_ID);
-    // kb_drift `link-<hash>` refs don't carry an issue target; the route
-    // returns empty artifact_view_url. PR-B's leader-prompt loop adds
+    // kb_drift `link-<hash>` refs don't carry a (owner, repo, number)
+    // GitHub target; the route surfaces `degraded:"no_artifact_in_pr_a"`
+    // so the card renders an honest pill state. PR-B (#4360) handles
     // per-class resolution.
     expect(json.artifact_view_url).toBe("");
-    expect(json.degraded).toBeUndefined();
+    expect(json.degraded).toBe("no_artifact_in_pr_a");
+    // No Inngest event is enqueued for unsupported shapes — avoids the
+    // malformed_source_ref deadletter + Sentry spam on every CVE/CI/
+    // kb_drift click.
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  test("(1b) PR-shaped source ref → inngest.send carries the canonical envelope without installationId", async () => {
+    setupMessageRow("engineering.pr_review_pending", "pr-acme:repo:7");
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(200);
 
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
     const sent = mockInngestSend.mock.calls[0][0] as {
@@ -218,8 +231,8 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
     expect(sent.data).toMatchObject({
       founderId: FOUNDER_A,
       messageId: MSG_ID,
-      actionClass: "knowledge.kb_drift",
-      sourceRef: "link-deadbeef00000000",
+      actionClass: "engineering.pr_review_pending",
+      sourceRef: "pr-acme:repo:7",
       actionSendId: AS_ID,
     });
     // The event payload MUST NOT carry installationId (cross-tenant guard).

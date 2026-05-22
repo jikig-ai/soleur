@@ -67,7 +67,7 @@ export interface UseActionSendResult {
   error: string | null;
   acknowledged: boolean;
   artifactUrl: string;
-  degraded: "enqueue_failed" | undefined;
+  degraded: "enqueue_failed" | "no_artifact_in_pr_a" | undefined;
   confirming: ConfirmationPayload | null;
   onConfirmTyped: (confirmedTyped: boolean, typedValue: string) => void;
   onCancelConfirm: () => void;
@@ -81,7 +81,7 @@ export function useActionSend(
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [artifactUrl, setArtifactUrl] = useState("");
-  const [degraded, setDegraded] = useState<"enqueue_failed" | undefined>(
+  const [degraded, setDegraded] = useState<"enqueue_failed" | "no_artifact_in_pr_a" | undefined>(
     undefined,
   );
   const [confirming, setConfirming] = useState<ConfirmationPayload | null>(
@@ -107,7 +107,11 @@ export function useActionSend(
     setAcknowledged(true);
     setArtifactUrl(json.artifact_view_url ?? "");
     setDegraded(
-      json.degraded === "enqueue_failed" ? "enqueue_failed" : undefined,
+      json.degraded === "enqueue_failed"
+        ? "enqueue_failed"
+        : json.degraded === "no_artifact_in_pr_a"
+          ? "no_artifact_in_pr_a"
+          : undefined,
     );
     onAcknowledgedArchive?.();
   }
