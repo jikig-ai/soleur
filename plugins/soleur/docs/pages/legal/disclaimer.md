@@ -8,7 +8,7 @@ permalink: legal/disclaimer/
 <section class="page-hero">
   <div class="container">
     <h1>Disclaimer</h1>
-    <p>Effective February 20, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated March 2, 2026</p>
   </div>
 </section>
 
@@ -187,6 +187,24 @@ Any disputes arising under or in connection with this Disclaimer shall be subjec
 ### 8.3 EU/EEA Consumers
 
 If you are a consumer in the EU/EEA, nothing in this Disclaimer affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence.
+
+---
+
+## 8b. Automated Tooling — Advisory Static Analysis
+
+Soleur skills may include automated static-analysis tools (such as the
+`skill-security-scan` advisory gate at `plugins/soleur/skills/skill-security-scan/`)
+that emit advisory verdicts (e.g., `LOW-RISK`, `REVIEW`, `HIGH-RISK`) on
+third-party content prior to installation. **These verdicts are advisory only
+and do not constitute a security audit, certification, or warranty of safety.**
+A `LOW-RISK` verdict does not imply that content is free from malicious code,
+prompt-injection attempts, supply-chain vulnerabilities, filesystem-boundary
+violations, or third-party telemetry. Users remain solely responsible for
+reviewing third-party content before installation and execution. We make no
+warranty that the static-analysis output detects all classes of risk; the
+detection rule pack is a heuristic and may produce false-positives or
+false-negatives. Use of automated tooling does not transfer or limit the
+"as-is" disclaimer above.
 
 ---
 
