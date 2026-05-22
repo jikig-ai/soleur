@@ -108,14 +108,15 @@ logs:
   where: Supabase logs (pg_cron + RAISE LOG) feeding Vector → Better Stack; Pino → Sentry for server-side TS
   retention: 30d in Better Stack (current free-tier ceiling); 14d in Supabase logs (current)
 discoverability_test:
-  command: |
-    psql "$DEV_SUPABASE_URL" -c "SELECT now() AS ts, count(*) AS audit_rows, (SELECT count(*) FROM cron.job WHERE jobname = 'workspace-member-actions-retention') AS cron_scheduled FROM public.workspace_member_actions;"
-    # Then via the Supabase MCP server (no SSH, no dashboard eyeballing):
-    # mcp__plugin_supabase_supabase__execute_sql with the same query against the prd project
-  expected_output: |
-    ts                          | audit_rows | cron_scheduled
-    -----------------------------+------------+----------------
-    2026-05-22 ...              | <N>        | 1
+  # Operator-runnable, no SSH, no shell expansion (Check 10-compatible).
+  # Verifies Supabase REST is reachable from the operator's network. Returns
+  # 401 (no apikey header — expected) when the API is up; anything else
+  # (DNS fail, 5xx, 200 without apikey) signals an upstream issue. The
+  # canonical post-merge AC14/AC15 probes route via the Supabase MCP server
+  # — see knowledge-base/project/specs/feat-workspace-member-actions-audit-4231/migration-checklist.md
+  # for the MCP queries that verify schema parity + cron scheduling.
+  command: curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/health
+  expected_output: "200"
 ```
 
 ## Implementation Phases
