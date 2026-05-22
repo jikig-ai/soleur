@@ -117,16 +117,19 @@ else
 fi
 
 # ------------------------------------------------------------------------
-# T2 — Probe DISABLED (env unset) → does NOT block apply on the
-#       missing-table reference. The probe is opt-in; the FK parser
-#       remains the last line of defense when the env is not set.
+# T2 — Probe explicit opt-out (MIGRATION_SCHEMA_PRECONDITION_PROBE=0) →
+#       does NOT block apply on the missing-table reference. The probe
+#       defaults to ON (#4325 follow-up); explicit "=0" is the documented
+#       escape hatch when the FK parser is the only desired line of
+#       defense.
 # ------------------------------------------------------------------------
-echo "T2: probe disabled (env unset) → apply proceeds (no probe-emitted error)"
+echo "T2: probe explicit opt-out (=0) → apply proceeds (no probe-emitted error)"
 make_temp_tree "$tmp2" "nonexistent_xyz_4338"
 
 set +e
 out=$(env -i PATH="$tmp2/bin:/usr/bin:/bin" HOME="$HOME" \
         DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
+        MIGRATION_SCHEMA_PRECONDITION_PROBE=0 \
         ALLOW_UNMERGED_DEV_APPLY=1 \
         bash "$tmp2/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
@@ -139,6 +142,33 @@ if [[ "$rc" == "0" ]] && ! printf '%s' "$out" | grep -q 'references tables that 
   pass "exit 0; probe error message absent"
 else
   fail "expected rc=0 + no probe error; got rc=$rc, out=$out"
+fi
+
+# ------------------------------------------------------------------------
+# T2b — Probe ENABLED via default (env unset) → MUST block apply on the
+#       missing-table reference. Verifies the #4325-follow-up default
+#       flip ({:-1} in run-migrations.sh:276): operator-local invocations
+#       get the same protection CI gets without needing to set the env.
+# ------------------------------------------------------------------------
+echo "T2b: probe default-on (env unset) → fail with named relation"
+tmp2b=$(mktemp -d)
+trap 'rm -rf "$tmp1" "$tmp2" "$tmp2b" "$tmp3"' EXIT
+make_temp_tree "$tmp2b" "nonexistent_xyz_4338"
+
+set +e
+# Note: NO MIGRATION_SCHEMA_PRECONDITION_PROBE in env. The default ({:-1})
+# inside the runner must enable the probe.
+out=$(env -i PATH="$tmp2b/bin:/usr/bin:/bin" HOME="$HOME" \
+        DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
+        ALLOW_UNMERGED_DEV_APPLY=1 \
+        bash "$tmp2b/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
+rc=$?
+set -e
+
+if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -q 'nonexistent_xyz_4338'; then
+  pass "exit $rc with nonexistent_xyz_4338 in error (default-on)"
+else
+  fail "expected non-zero exit + table name; got rc=$rc, out=$out"
 fi
 
 # ------------------------------------------------------------------------
