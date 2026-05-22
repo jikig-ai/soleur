@@ -247,19 +247,22 @@ describe("frontend-anti-slop tier1-scan: per-file disable comment", () => {
 });
 
 describe("frontend-anti-slop tier1-scan: calibration baseline", () => {
-  // Calibration fixture: setting-up-state.tsx uses `transition-all` at line 29
-  // (intentional, designer-chosen — but exactly the pattern the gate flags).
-  // The original plan §Phase 0.5 named gold-button.tsx; that file uses inline
-  // `style={{ background: GOLD_GRADIENT }}` which no Tier 1 rule catches.
-  // Swapping to setting-up-state.tsx preserves the spec AC4 contract ("real
-  // project file produces ≥ 1 finding") with a fixture the rule set actually
-  // exercises. Documented in /work Phase 0 deviation log.
+  // Calibration fixture: a dedicated test-only file at
+  // `plugins/soleur/test/fixtures/frontend-anti-slop/calibration-baseline.tsx`
+  // that deliberately contains a Tier 1 anti-pattern (`transition-all`).
+  //
+  // Originally pinned to a production file (gold-button.tsx in the plan,
+  // then setting-up-state.tsx in PR #4265). Draining production findings
+  // per the calibration window (#4270) removes the rule-keying token from
+  // production code and invalidates the baseline. Decoupling via a dedicated
+  // fixture lets the scanner's self-test stay green while findings drain.
+  // See `knowledge-base/project/learnings/best-practices/2026-05-21-calibration-fixture-probe-and-markdown-table-pipe-escapes.md`.
 
   test("scanner emits ≥ 1 anti-slop finding on the calibration baseline file", () => {
     const repoRoot = resolve(import.meta.dir, "../../../..");
     const calibFile = resolve(
       repoRoot,
-      "apps/web-platform/components/connect-repo/setting-up-state.tsx",
+      "plugins/soleur/test/fixtures/frontend-anti-slop/calibration-baseline.tsx",
     );
     // Precondition: the calibration fixture must still contain a pattern
     // the rule set actually fires on. If a future refactor strips
