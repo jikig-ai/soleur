@@ -42,7 +42,7 @@ The parties agree:
 
 **§1.2 "Customer Data".** All Personal Data that Customer (or a Co-Member on Customer's behalf) submits to, or generates in, the Web Platform under Customer's Web Platform subscription. Customer Data includes the categories enumerated in Schedule 1.
 
-**§1.3 Duration.** This DPA is co-terminus with the Customer's Web Platform subscription (Soleur ToS §14). Sections 28(3)(g) (deletion-or-return) and 28(3)(h) (audit cooperation) GDPR survive termination for 12 months as set out in §13. Confidentiality and §12 liability carve-outs survive indefinitely as set out in §13.
+**§1.3 Duration.** This DPA is co-terminus with the Customer's Web Platform subscription (Soleur ToS §14). GDPR Article 28(3)(g) (deletion-or-return) and Article 28(3)(h) (audit cooperation) obligations survive termination for 12 months as set out in §13 (the 12-month survival preserves Customer's audit-verification right to confirm deletion; it does NOT extend the 30-day deletion deadline in §13.4). Confidentiality and §12 liability carve-outs survive indefinitely as set out in §13.
 
 ---
 
@@ -74,8 +74,8 @@ The nature and purpose of processing are described in detail in DPD §2.3 sub-bu
 |---|---|---|
 | Account profile (email, hashed password, auth tokens, session data) | (f) | `users`, `auth.users`, `auth.sessions` |
 | OAuth identity (provider user IDs, display names, profile picture URLs) | (f) | `auth.identities` |
-| Subscription metadata + Stripe IDs | (g) | `users`, `subscriptions` |
-| Encrypted API keys (AES-256-GCM) | (h) | `byok_credentials` |
+| Subscription metadata + Stripe IDs | (g) | `users` (subscription metadata columns) |
+| Encrypted API keys (AES-256-GCM) | (h) | `api_keys` |
 | Conversations and messages | (i) | `conversations`, `messages` |
 | Push notification subscriptions | (j) | `push_subscriptions` |
 | Transactional email recipient metadata | (k) | (Resend audit only) |
@@ -86,8 +86,8 @@ The nature and purpose of processing are described in detail in DPD §2.3 sub-bu
 | Action-sends ledger | (r) (s) | `action_sends` |
 | Template-authorizations ledger | (t) | `template_authorizations` |
 | Workspace co-member data | (u) | `workspace_members`, `workspace_member_attestations`, `workspace_member_actions`, `workspace_member_removals` |
-| Knowledge-base files and chunks | (i) | `kb_files`, `kb_chunks` |
-| GitHub-sourced priority signals | (q) | `audit_github_token_use`, `processed_github_events` |
+| Knowledge-base files and chunks | (u) (cross-member workspace scope; no dedicated bullet — see DPD §5.3 "workspace files") | `kb_files`, `kb_chunks` (colloquial names for the workspace KB tree, filesystem-backed; cross-member visibility under §2.3(u)) |
+| GitHub-sourced priority signals | (o) + (r) (autonomous-draft runtime + workspace-sync extension; Article 30 register PA-17) | `audit_github_token_use`, `processed_github_events` |
 
 **§3.3 Special-category Personal Data (Article 9 GDPR).** Customer warrants under §4.1 that Customer does NOT submit special-category Personal Data through the Web Platform. The Acceptable Use Policy §4.7 (`docs/legal/acceptable-use-policy.md`) prohibits Article 9 and CCPA SPI submissions via prompts or attachments.
 
@@ -135,11 +135,13 @@ Jikigai shall:
 
 **§6.2 Flow-down (Article 28(4) GDPR).** Jikigai warrants that it imposes substantially-similar data-protection obligations on each Authorized Sub-processor by written contract, including obligations regarding (a) notification of further sub-processors, (b) deletion or return of Customer Data, (c) authorization to process, (d) location of processing, and (e) compliance with Customer's documented instructions to Jikigai. The Authorized Sub-processor DPAs are cited at the URLs recorded in Schedule 2.
 
-**§6.3 Customer-provisioned sub-processors (BYOK).** Where Customer's use of the Web Platform invokes Anthropic API calls under Customer's own Anthropic API key (the "BYOK" posture), Anthropic PBC acts as Customer's own sub-processor under the Anthropic Commercial Terms §C "authorized users" framework and the Anthropic DPA at `https://www.anthropic.com/legal/data-processing-addendum`. Customer is responsible for executing and maintaining Customer's own Anthropic DPA. Jikigai's sub-processor obligations under §6.1 and §6.2 do NOT apply to BYOK Anthropic invocations; Jikigai's obligation is limited to securely transmitting Customer's BYOK API requests through the Web Platform's BYOK pipeline (Section 2.3(o) DPD). When the Web Platform ships Soleur-managed (non-BYOK) Anthropic access, Anthropic promotes to Schedule 2 via a Schedule 2 amendment, triggering the §6.1 30-day notification.
+**§6.3 Customer-provisioned sub-processors (BYOK).** Where Customer's use of the Web Platform invokes Anthropic API calls under Customer's own Anthropic API key (the "BYOK" posture), Anthropic PBC acts as Customer's own sub-processor under the Anthropic Commercial Terms §C "authorized users" framework and the Anthropic DPA at `https://www.anthropic.com/legal/data-processing-addendum`. Customer is responsible for executing and maintaining Customer's own Anthropic DPA. Jikigai's sub-processor obligations under §6.1 and §6.2 do NOT apply to BYOK Anthropic invocations; Jikigai's obligation is limited to securely transmitting Customer's BYOK API requests through the Web Platform's BYOK pipeline (Section 2.3(o) DPD). If the Web Platform begins making Anthropic API calls processing Customer Data under a Jikigai-held (non-BYOK) Anthropic API key, Anthropic promotes from this subsection to the main "Web Platform sub-processors" table via a Schedule 2 amendment, triggering the §6.1 30-day notification. Jikigai's operator-side use of Anthropic for internal tooling (e.g., CI workflows, internal compliance tooling) that does NOT process Customer Data is outside the scope of this Customer DPA.
 
 **§6.4 Essential Sub-processors carve-out.** Customer acknowledges that the following sub-processors are "Essential" — they cannot be swapped on short notice without re-engineering the Web Platform substrate: **Supabase** (primary auth and database), **Hetzner** (primary infrastructure), **Cloudflare** (primary CDN and R2 object storage). Customer objection under §6.1 to an Essential Sub-processor does NOT block Jikigai's continued use; Customer's recourse is to terminate this DPA + the Web Platform subscription under §13 with a pro-rata refund of pre-paid fees for the remainder of the then-current subscription term. This clause adapts Linear DPA §3.3 to the Soleur substrate.
 
-**§6.5 Sub-processor list externalization (forward note).** Today, the Authorized Sub-processor list is published inline in Schedule 2 and cross-referenced to the live Vendor DPA Status table at `knowledge-base/legal/compliance-posture.md`. The compliance-posture table is the always-current reference; the Schedule 2 inline snapshot is the at-publish-time anchor. Jikigai's roadmap commits to publishing a publicly addressable sub-processor list page at `security.soleur.ai` (Vercel `security.vercel.com` precedent) — tracked under [issue #4350](https://github.com/jikig-ai/soleur/issues/4350) and the `knowledge-base/legal/compliance-posture.md` Active Compliance Items row.
+**§6.5 Sub-processor list externalization (forward note).** Today, the Authorized Sub-processor list is published inline in Schedule 2 and cross-referenced to the live Vendor DPA Status table at `knowledge-base/legal/compliance-posture.md`. The compliance-posture table is the always-current reference; the Schedule 2 inline snapshot is the at-publish-time anchor. Jikigai will publish a publicly addressable sub-processor list page (URL to be confirmed; published-DPA precedents include Vercel and Linear) before the first executed Customer DPA — tracked under [issue #4350](https://github.com/jikig-ai/soleur/issues/4350) and the `knowledge-base/legal/compliance-posture.md` Active Compliance Items row. Until that URL is live, `knowledge-base/legal/compliance-posture.md` is the always-current sub-processor reference and is made available to Customer on written request to `legal@jikigai.com`.
+
+**Schedule 2 reconciliation note.** The Better Stack row in Schedule 2 reflects the post-2026-05-21 substrate-change disclosed in DPD §2.3(m)(ii); the DPD §4.2 vendor table refresh (and a Sentry row in `compliance-posture.md` Vendor DPA Status) is a pre-existing reconciliation gap, tracked for the next legal-doc consistency sweep. Schedule 2 of this DPA reflects the as-of-template-date intent; at first publish trigger event, Schedule 2 regenerates from then-current DPD §4.2 with the §4.2 reconciliation gap closed (§6.5 single-source-of-truth resolution).
 
 ### Research insight — notification window
 
@@ -178,7 +180,7 @@ The detailed technical and organisational measures are set out in **Schedule 4**
 - **Encryption in transit:** TLS 1.3 minimum on all Customer-facing endpoints (`app.soleur.ai`, `api.soleur.ai`).
 - **Encryption at rest:** AES-256-GCM for stored BYOK credentials; Supabase platform encryption for the database; Cloudflare R2 platform encryption for object storage.
 - **Pseudonymisation:** `userIdHash` HMAC-SHA256 at the structured-log emission boundary (DPD §2.3(m)); customer-email-hash at the Inngest webhook boundary (DPD §2.3(o)); recipient-id-hash at the action-sends ledger (DPD §2.3(r)/(s)).
-- **Access control:** Per-tenant Row Level Security (RLS) on every database table holding Customer Data; the load-bearing `is_workspace_member(workspace_id, user_id)` SECURITY DEFINER helper (migration 053, `search_path = pg_temp`) enforces team-workspace boundary.
+- **Access control:** Per-tenant Row Level Security (RLS) on every database table holding Customer Data; the load-bearing `is_workspace_member(workspace_id, auth.uid())` SECURITY DEFINER helper (migration `053_organizations_and_workspace_members`, `search_path = public, pg_temp`) enforces team-workspace boundary.
 - **Authentication:** Supabase Auth (magic link + OAuth via Google, Apple, GitHub, Microsoft); Stripe SCA for payment-method changes.
 - **Integrity:** WORM (write-once-read-many) triggers on accountability ledgers (`action_sends_no_mutate`, `scope_grants_no_mutate`, `template_authorizations_no_mutate`, `workspace_member_attestations_no_mutate`, `workspace_member_actions` AFTER trigger); Recital 75 anti-tampering posture.
 - **Logging and breach detection:** Sentry + Better Stack (see DPD §2.3(m)); Vector VRL transforms (`pii_scrub_*`) at the log-egress boundary.
@@ -193,13 +195,13 @@ The detailed technical and organisational measures are set out in **Schedule 4**
 
 **§10.2 Information-provision in lieu of in-person inspection.** Jikigai shall fulfil Customer's audit right by providing, on Customer's written request: (a) the most recent operator-attested compliance posture summary at `knowledge-base/legal/compliance-posture.md`; (b) the most recent counsel-review audits in `knowledge-base/legal/audits/`; (c) the relevant operator-attestation records for the processing activities under audit (e.g., the most recent gdpr-gate report); and (d) such other documentation as Customer reasonably requires.
 
-**§10.3 SOC 2 substitute roadmap.** Jikigai does NOT hold a SOC 2 Type II audit report at the date of this template. Jikigai commits to obtaining a SOC 2 Type II audit report **within 24 months of the first executed Customer DPA**. The Vendor DPA Status table at `knowledge-base/legal/compliance-posture.md` tracks the SOC 2 roadmap commitment. Once obtained, the SOC 2 Type II report fulfils §10.2 audit cooperation in lieu of operator-attested summaries (Vercel "audit via SOC 2 report" precedent at [vercel.com/legal/dpa](https://vercel.com/legal/dpa) §9).
+**§10.3 SOC 2 substitute roadmap.** Jikigai does NOT hold a SOC 2 Type II audit report at the date of this template. Jikigai will evaluate engagement of a SOC 2 Type II auditor on a reasonable-best-efforts basis following execution of the first Customer DPA and will provide Customer with a status update on this evaluation no later than 12 months after first DPA execution. Nothing in this §10.3 constitutes a binding commitment to obtain a SOC 2 Type II report by a date certain; engagement timing depends on Jikigai's resourcing and auditor availability at the relevant time. If and when a SOC 2 Type II report is obtained, it fulfils §10.2 audit cooperation in lieu of operator-attested summaries (Vercel "audit via SOC 2 report" precedent at [vercel.com/legal/dpa](https://vercel.com/legal/dpa) §9). The Vendor DPA Status table at `knowledge-base/legal/compliance-posture.md` tracks the evaluation status.
 
 **§10.4 Anti-audit-fatigue cap.** Customer's right to audit is limited to once per calendar year (§10.1) and to information-provision under §10.2 unless material non-compliance is identified. This adapts Linear DPA §7.4 to prevent customer-side audit-fatigue attacks against Jikigai's operator-attested compliance posture.
 
 ### Research insight — audit substitute pattern
 
-Vercel offers third-party audit reports (SOC 2 Type 2) as Customer audit fulfilment without granting on-site access. Soleur has no SOC 2 today; the template ships with operator-attested compliance posture as the v1 substitute. The 24-month SOC 2 commitment in §10.3 is a binding claim — once the first DPA executes, Jikigai's operator initiates SOC 2 engagement within 90 days, tracked as a roadmap item in `compliance-posture.md`.
+Vercel offers third-party audit reports (SOC 2 Type 2) as Customer audit fulfilment without granting on-site access. Soleur has no SOC 2 today; the template ships with operator-attested compliance posture as the v1 substitute. §10.3 ships as a reasonable-best-efforts evaluation commitment rather than a date-certain obligation; once the first DPA executes, the evaluation status is tracked in `compliance-posture.md` Active Items.
 
 ---
 
@@ -209,7 +211,7 @@ Vercel offers third-party audit reports (SOC 2 Type 2) as Customer audit fulfilm
 
 **§11.2 Non-EU sub-processors — SCCs Modules 2 + 3.** Where an Authorized Sub-processor processes Customer Data in a third country without an adequacy decision under Article 45 GDPR, the parties incorporate by reference the Commission Implementing Decision (EU) 2021/914 of 4 June 2021 ("**SCCs**") in **Module 2 (Controller-to-Processor)** for the Jikigai-to-sub-processor transfer AND **Module 3 (Processor-to-Sub-processor)** for the flow-down. Customer is the data exporter under Module 2; Jikigai is the data importer + data exporter under Module 3; the sub-processor is the data importer under Module 3. The SCCs as so incorporated are detailed in **Schedule 3**.
 
-Sub-processors covered by §11.2: **Stripe** (US — EU-US DPF + SCCs as belt-and-suspenders), **Resend** (US — DPF + SCCs), **Sentry onward US transfers** (operationally rare given DE-primary; SCCs apply), **LinkedIn Ireland** (Section 2.3(p) — joint controller, not processor, but SCC Module 1 reference is included for transparency), **Microsoft Ireland** (Section 2.3(p)(iii) — controller-to-controller K-bis transfer; Microsoft EU Data Boundary applies).
+Sub-processors covered by §11.2: **Stripe** (US — EU-US DPF + SCCs as belt-and-suspenders), **Resend** (US — DPF + SCCs), **Sentry** (DE-primary processing; SCCs apply to any onward US transfer under Sentry's standard EU-region terms), **LinkedIn Ireland** (Section 2.3(p) — joint controller, not processor, but SCC Module 1 reference is included for transparency), **Microsoft Ireland** (Section 2.3(p)(iii) — controller-to-controller K-bis transfer; Microsoft EU Data Boundary applies).
 
 **§11.3 DPF reliance.** Where an Authorized Sub-processor is certified under the EU-US Data Privacy Framework ("DPF"), Jikigai relies on DPF as the primary transfer mechanism, with SCCs incorporated as belt-and-suspenders against DPF invalidation risk.
 
@@ -235,7 +237,7 @@ The EDPB Guidelines recommend Module 2 (C2P) AND Module 3 (P2P) for sub-processo
 - (d) breach of sub-processor flow-down obligations under §6.2;
 - (e) Customer's indemnification obligations under §4.2.
 
-**§12.3 Super-cap for sub-processor breach.** Jikigai's liability for a Personal Data Breach attributable to an Authorized Sub-processor is bounded by the actual sub-processor's liability cap of record under the Jikigai-sub-processor DPA. Jikigai's exposure does NOT compound the sub-processor's cap.
+**§12.3 Sub-processor breach recovery.** Jikigai's liability to Customer for a Personal Data Breach attributable to an Authorized Sub-processor is governed by the §12.1 cap and the §12.2 carve-outs. Jikigai will use reasonable efforts to pursue recovery from the responsible sub-processor under the Jikigai-sub-processor DPA. Where Jikigai's net recovery from the sub-processor (after costs of pursuit) exceeds the amount Jikigai has paid Customer for the same Personal Data Breach, Jikigai shall remit the excess to Customer up to the amount of Customer's actual loss. Nothing in this §12.3 limits a data subject's rights under GDPR Article 82 or shifts joint-and-several liability under Article 82(4).
 
 **§12.4 Sole remedy.** Except for the carve-outs in §12.2, the §12.1 cap is the sole and exclusive remedy of either party under this DPA.
 
@@ -307,8 +309,8 @@ The Authorized Sub-processors at the date of this template snapshot. The **alway
 | Sub-processor | Activity | Data processed | Location | DPA URL |
 |---|---|---|---|---|
 | Supabase Inc | Web Platform auth + database | Email addresses, hashed passwords, auth tokens, session data, conversation metadata, message content | EU (`eu-west-1` Ireland) | [supabase.com/legal/dpa](https://supabase.com/legal/dpa) |
-| Stripe Inc | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | US (EU-US DPF + SCCs) | [stripe.com/legal/service-providers](https://stripe.com/legal/service-providers) |
-| Hetzner Online GmbH | Web Platform infrastructure hosting | User workspaces, encrypted API keys, Docker containers | EU (Helsinki, Finland) | [hetzner.com/legal/terms-and-conditions](https://www.hetzner.com/legal/terms-and-conditions/) |
+| Stripe Inc | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | US (EU-US DPF + SCCs) | [stripe.com/legal/dpa](https://stripe.com/legal/dpa) (DPA) + [stripe.com/legal/service-providers](https://stripe.com/legal/service-providers) (sub-processor list) |
+| Hetzner Online GmbH | Web Platform infrastructure hosting | User workspaces, encrypted API keys, Docker containers | EU (Helsinki, Finland) | [hetzner.com/legal/order-processing](https://www.hetzner.com/legal/order-processing/) (AVV; concluded via Hetzner Cloud Console 2026-03-19, recorded in `compliance-posture.md`) |
 | Cloudflare Inc | Web Platform CDN/proxy (`app.soleur.ai`) | IP addresses, request headers, TLS termination data | Global CDN (DPF + SCCs + CBPR) | [cloudflare.com/cloudflare-customer-dpa](https://www.cloudflare.com/cloudflare-customer-dpa/) |
 | Sentry (Functional Software GmbH) | Error monitoring and breach detection | Error messages, stack traces, request metadata, pseudonymous `userIdHash` | DE primary (SCCs for onward US transfers) | [sentry.io/legal/dpa](https://sentry.io/legal/dpa/) |
 | Resend Inc | Web Platform transactional email notifications | Recipient email address, email content (notification summaries) | US (DPF + SCCs) | [resend.com/legal/dpa](https://resend.com/legal/dpa) |
@@ -329,7 +331,7 @@ The Authorized Sub-processors at the date of this template snapshot. The **alway
 | LinkedIn Ireland Unlimited Company | Joint controller with Jikigai for Page Insights analytics (DPD §2.3(p)(ii)) under CJEU C-210/16 *Wirtschaftsakademie* + EDPB Guidelines 07/2020 | DPD §4.2 LinkedIn row |
 | Microsoft Ireland Operations Ltd | Independent controller for one-time K-bis business-verification documents (DPD §2.3(p)(iii)) | DPD §4.2 Microsoft row |
 | FreeTSA | RFC 3161 Time Stamp Authority (DPD §2.3(n)) — receives SHA-256 hash only; outside Article 28 scope | DPD §4.2 FreeTSA row |
-| GitHub Inc | Sub-processor for operator GitHub App installations (DPD §2.3(q)) — scope is operator-side `cc-router` MCP tools, not Customer Data of the Web Platform subscription | DPD §4.2 GitHub row |
+| GitHub Inc | Sub-processor for operator GitHub App installations (DPD §2.3(o)+(r); Article 30 register PA-17) — scope is operator-side `cc-router` MCP tools, not Customer Data of the Web Platform subscription | DPD §4.2 GitHub row |
 
 ### Customer-provisioned sub-processors (BYOK — Customer's own contracts apply; not Jikigai sub-processors)
 
@@ -366,9 +368,9 @@ The SCCs as adopted in Commission Implementing Decision (EU) 2021/914 are incorp
 The 17 TOM categories below describe Jikigai's measures at the date of this template. They cross-reference DPD §2.3 sub-bullets and `knowledge-base/legal/compliance-posture.md` for the live state.
 
 1. **Encryption in transit.** TLS 1.3 minimum at all Customer-facing endpoints. Cloudflare-terminated TLS at `app.soleur.ai` with Cloudflare-managed certs; Hetzner-terminated TLS at internal HTTP hops.
-2. **Encryption at rest.** AES-256-GCM for BYOK credentials (`byok_credentials.encrypted_key`); Supabase platform encryption for the Postgres database; Cloudflare R2 platform encryption for object storage. Doppler-held secrets encrypted at the vendor.
+2. **Encryption at rest.** AES-256-GCM for BYOK credentials (`api_keys.encrypted_key`); Supabase platform encryption for the Postgres database; Cloudflare R2 platform encryption for object storage. Doppler-held secrets encrypted at the vendor.
 3. **Pseudonymisation (Article 4(5) GDPR; Article 32(1)(a)).** `userIdHash` HMAC-SHA256 with Doppler-held `SENTRY_USERID_PEPPER` at the structured-log emission boundary (DPD §2.3(m)); customer-email-hash at the Inngest webhook boundary (DPD §2.3(o)); recipient-id-hash at the action-sends ledger.
-4. **Access control.** Per-tenant Row Level Security (RLS) policies on every table holding Customer Data; the SECURITY DEFINER `is_workspace_member(workspace_id, user_id)` helper (migration 053, `search_path = pg_temp`) enforces team-workspace boundary; per-tenant RLS predicates enforced via `auth.uid() = founder_id` pattern.
+4. **Access control.** Per-tenant Row Level Security (RLS) policies on every table holding Customer Data. Three predicate shapes apply across the schema: (i) workspace-keyed tables enforce membership via the SECURITY DEFINER `is_workspace_member(workspace_id, auth.uid())` helper (migration `053_organizations_and_workspace_members`, `search_path = public, pg_temp`) wired into RLS USING / WITH CHECK clauses; (ii) per-founder ledgers (`scope_grants`, `template_authorizations`, `audit_byok_use`) use `auth.uid() = founder_id`; (iii) per-user surfaces (`action_sends`, `tc_acceptances`) use `auth.uid() = user_id`. The `is_workspace_member` helper is the load-bearing technical measure (Article 32 GDPR) for the team-workspace boundary.
 5. **Authentication.** Supabase Auth (magic link + OAuth via Google, Apple, GitHub, Microsoft); SCA via Stripe for payment-method changes; OAuth scope minimisation at each provider.
 6. **Confidentiality.** Operator-attested under §5.2; Jikigai SARL personnel are bound by employment contract confidentiality terms and the AUP at `docs/legal/acceptable-use-policy.md`.
 7. **Integrity (Recital 75 anti-tampering).** WORM (write-once-read-many) triggers on accountability ledgers — `action_sends_no_mutate` (pure-reject on UPDATE/DELETE), `scope_grants_no_mutate`, `template_authorizations_no_mutate`, `workspace_member_attestations_no_mutate`; `workspace_member_actions` AFTER-trigger captures `actor_user_id` + `target_user_id` per migration 063.
@@ -401,7 +403,7 @@ The 17 TOM categories below describe Jikigai's measures at the date of this temp
   - Regenerate Schedule 2 from the then-current DPD §4.2 Web Platform processor table.
   - Invoke external counsel review (track audit at `knowledge-base/legal/audits/<YYYY-MM>-counsel-review-dpa-template-<PR>.md`).
   - Initiate SOC 2 engagement within 90 days of first executed DPA (§10.3 commitment).
-  - Write `knowledge-base/legal/tenant-dpa-register.md` first row on counter-signature.
+  - Write the first row of a customer-DPA execution register on counter-signature. The existing `knowledge-base/legal/tenant-dpa-register.md` is scoped to the non-Soleur deploy-substrate flow (issue #3723) and is NOT the right register for customer-facing DPA execution — at first trigger event, either (a) create `knowledge-base/legal/customer-dpa-register.md` with a parallel schema, or (b) amend `tenant-dpa-register.md` frontmatter + body to declare it dual-purpose with two row classes. The compliance-posture #4330 row must agree with whichever path is chosen.
   - Bump `TC_VERSION` in `apps/web-platform/lib/legal/tc-version.ts` IF the customer-DPA cross-reference adds language to ToS §3b.4 supersession trigger.
 - **Related PRs:** #4225 (team-workspace schema) · #4287 (workspace_member_actions audit log) · #4289 (team-workspace legal scaffolding — establishes Workspace-Owner-as-controller framing) · #4294 (workspace_member_removals) · #4328 (AUP §5.5 softening — Side Letter optional) · this PR (#4330).
 - **Related issues:** [#4330](https://github.com/jikig-ai/soleur/issues/4330) (this template).
