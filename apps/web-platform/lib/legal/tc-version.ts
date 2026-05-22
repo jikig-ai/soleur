@@ -11,7 +11,7 @@
  * Bump-policy rubric (material / clarifying / cosmetic) lives at
  * knowledge-base/legal/tc-version-bump-policy.md (CLO-signed).
  */
-export const TC_VERSION = "2.1.0";
+export const TC_VERSION = "2.2.1";
 
 /**
  * SHA-256 of `docs/legal/terms-and-conditions.md` at the time of the
@@ -32,4 +32,22 @@ export const TC_VERSION = "2.1.0";
  *      `TC_VERSION` was also bumped.
  */
 export const TC_DOCUMENT_SHA =
-  "4d71100f0f663a933b955b898081257c6fe2ed0fe61db03e261e05ae5a072447";
+  "e87c8b453e377a932fa5febaf75fb7eec4c5295c4ada2d1461c8cfe4c6c8ba9f";
+
+/**
+ * Bump-metadata for the current `TC_VERSION`. Consumed by the Art. 13(3)
+ * re-acceptance banner on `/accept-terms` and the copy-regression test.
+ *
+ * When bumping `TC_VERSION`, update all four fields here in lockstep with
+ * the canonical doc:
+ *   - `lastUpdated`: human-readable date matching the canonical
+ *     `**Last Updated:**` line.
+ *   - `substantiveChange`: short label for the new top-level section
+ *     introduced by the bump (e.g., `§Workspace Members`).
+ *   - `fullTermsUrl`: canonical public URL for the full T&C.
+ */
+export const TC_BUMP_METADATA = {
+  lastUpdated: "May 22, 2026",
+  substantiveChange: "Workspace-Member responsibility simplified (Side Letter now optional)",
+  fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
+} as const;

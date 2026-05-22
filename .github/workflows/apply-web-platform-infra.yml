@@ -104,6 +104,11 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Vector config + VRL fixture validation lives in its own workflow at
+  # .github/workflows/validate-vector-config.yml (#4293 FR5) so it can trigger
+  # on pull_request -- this workflow only triggers on push to main, which is
+  # the apply gate. Branch protection requires the validate workflow's check
+  # before merge.
   apply:
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
