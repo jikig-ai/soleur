@@ -10,12 +10,12 @@
 #   (a) A SECURITY DEFINER RPC body that contains
 #       `set_config('workspace_audit.actor_user_id', ...)` — captures the
 #       actor for the AFTER trigger that writes workspace_member_actions.
-#       (mig 058 invite/remove RPCs re-CREATEd in mig 062.)
+#       (mig 058 invite/remove RPCs re-CREATEd in mig 063.)
 #
 #   (b) A SECURITY DEFINER RPC body that contains
 #       `SET LOCAL session_replication_role = 'replica'` — the
 #       documented bypass path used by anonymise_workspace_members
-#       (mig 062 re-CREATE; cascade DELETE under account-delete).
+#       (mig 063 re-CREATE; cascade DELETE under account-delete).
 #
 #   (c) A documented admin-tool / fixture / one-shot-migration path
 #       with an explicit NULL-actor expectation. Each site MUST be in
@@ -43,8 +43,8 @@ cd "$REPO_ROOT"
 # -----------------------------------------------------------------------------
 
 # Category (a) + (b): SQL RPC bodies in migration files.
-#   - mig 058 originals (invite/remove/anonymise) + their mig 062 re-CREATEs.
-#   - mig 062 also contains its own re-CREATEd bodies (3 of them).
+#   - mig 058 originals (invite/remove/anonymise) + their mig 063 re-CREATEs.
+#   - mig 063 also contains its own re-CREATEd bodies (3 of them).
 # These are checked structurally via the migration-shape test
 # (test/supabase-migrations/062-workspace-member-actions.test.ts) rather than
 # enumerated here, because their identity is "every body with the canonical
@@ -63,11 +63,11 @@ ALLOWED_LITERAL_WRITES=(
   # 062 itself contains the re-CREATEd invite_workspace_member + remove_workspace_member
   # + anonymise_workspace_members bodies — each carries the actor GUC or replica
   # bypass per category (a)/(b); structurally verified by the migration-shape test.
-  "apps/web-platform/supabase/migrations/062_workspace_member_actions.sql:^[[:space:]]*INSERT INTO public\\.workspace_members:062-recreate-invite-rpc-body"
-  "apps/web-platform/supabase/migrations/062_workspace_member_actions.sql:^[[:space:]]*DELETE FROM public\\.workspace_members:062-recreate-remove-or-anonymise-rpc-body"
+  "apps/web-platform/supabase/migrations/063_workspace_member_actions.sql:^[[:space:]]*INSERT INTO public\\.workspace_members:062-recreate-invite-rpc-body"
+  "apps/web-platform/supabase/migrations/063_workspace_member_actions.sql:^[[:space:]]*DELETE FROM public\\.workspace_members:062-recreate-remove-or-anonymise-rpc-body"
 
   # 058 contains the original invite/remove/anonymise bodies (carried forward
-  # at runtime by mig 062's CREATE OR REPLACE). Listed for completeness because
+  # at runtime by mig 063's CREATE OR REPLACE). Listed for completeness because
   # the migrations are applied in order — 058 lands first.
   "apps/web-platform/supabase/migrations/058_workspace_member_attestations.sql:INSERT INTO public\\.workspace_members:058-invite-rpc-body"
   "apps/web-platform/supabase/migrations/058_workspace_member_attestations.sql:DELETE FROM public\\.workspace_members:058-remove-and-anonymise-rpc-bodies"

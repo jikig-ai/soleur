@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-// Migration-shape test for 062_workspace_member_actions.sql.
+// Migration-shape test for 063_workspace_member_actions.sql.
 //
 // Pins the SQL invariants of feat-workspace-member-actions-audit (#4231)
 // so a future edit that drops them is caught at PR-time without
@@ -21,14 +21,14 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/062_workspace_member_actions.sql",
+  "../../supabase/migrations/063_workspace_member_actions.sql",
 );
 const DOWN_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/062_workspace_member_actions.down.sql",
+  "../../supabase/migrations/063_workspace_member_actions.down.sql",
 );
 
-describe("migration 062_workspace_member_actions (#4231)", () => {
+describe("migration 063_workspace_member_actions (#4231)", () => {
   const sql = readFileSync(MIGRATION_PATH, "utf8");
   const down = readFileSync(DOWN_PATH, "utf8");
   // Strip line-comments before pattern checks so a regex like

@@ -5,21 +5,21 @@ owner: ops
 domain: engineering
 related:
   - issue: 4231
-  - migration: apps/web-platform/supabase/migrations/062_workspace_member_actions.sql
-  - register: knowledge-base/legal/article-30-register.md (PA-19)
+  - migration: apps/web-platform/supabase/migrations/063_workspace_member_actions.sql
+  - register: knowledge-base/legal/article-30-register.md (PA-20)
 ---
 
 # pg_cron Retention Monitor — `workspace-member-actions-retention`
 
 Verifies the 7-year retention purge for `public.workspace_member_actions`
-(mig 062 / PA-19) is running on schedule. A silently-skipped retention
+(mig 063 / PA-20) is running on schedule. A silently-skipped retention
 sweep would be an **undetected Art. 5(1)(e) data-minimisation breach** —
 the load-bearing detection signal for the single-user-incident brand-
 survival threshold this PR was scoped against.
 
 ## 1. Schedule + observability surfaces
 
-The job is scheduled in mig 062 as:
+The job is scheduled in mig 063 as:
 
 ```sql
 SELECT cron.schedule(
@@ -119,7 +119,7 @@ If §3.1 fires:
    `return_message` for the failure shape. Common failures:
    - WORM trigger raised P0001 — means the wrapper RPC was DROPped or
      altered to remove `SET LOCAL session_replication_role='replica'`.
-     Re-apply mig 062 or a fix migration that restores the bypass.
+     Re-apply mig 063 or a fix migration that restores the bypass.
    - Permission error — means `GRANT EXECUTE ... TO postgres` was
      revoked. Re-grant.
    - Lock contention — extremely unlikely on this small table; if it

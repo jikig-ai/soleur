@@ -19,9 +19,9 @@ brainstorm: knowledge-base/project/brainstorms/2026-05-22-workspace-member-actio
 
 ## Overview
 
-Implement an append-only audit log for workspace membership mutations as a trigger-driven write fed by re-issued `invite_workspace_member` and `remove_workspace_member` RPCs (mig 058), with owner-only read access via SECURITY DEFINER RPC, pure-reject WORM trigger + `session_replication_role='replica'` bypass for anonymise and cron-purge paths, 7-year retention, Article 30 PA-19 registration, and DSAR Art. 15 export + Art. 17 anonymise cascade wiring.
+Implement an append-only audit log for workspace membership mutations as a trigger-driven write fed by re-issued `invite_workspace_member` and `remove_workspace_member` RPCs (mig 058), with owner-only read access via SECURITY DEFINER RPC, pure-reject WORM trigger + `session_replication_role='replica'` bypass for anonymise and cron-purge paths, 7-year retention, Article 30 PA-20 registration, and DSAR Art. 15 export + Art. 17 anonymise cascade wiring.
 
-The migration ships as `062_workspace_member_actions.sql` (+ `.down.sql`) and blocks the `TEAM_WORKSPACE_INVITE_ENABLED` feature flag flip for any non-jikigai org. Brand-survival threshold `single-user incident` inherited from the parent brainstorm (#4229) — the audit table's own RLS posture is the load-bearing risk axis.
+The migration ships as `063_workspace_member_actions.sql` (+ `.down.sql`) and blocks the `TEAM_WORKSPACE_INVITE_ENABLED` feature flag flip for any non-jikigai org. Brand-survival threshold `single-user incident` inherited from the parent brainstorm (#4229) — the audit table's own RLS posture is the load-bearing risk axis.
 
 ## User-Brand Impact
 
@@ -46,7 +46,7 @@ Phase 1 research surfaced material spec drift from the brainstorm-authored spec.
 | 3 | `workspaces.org_id` join column | Real column is `workspaces.organization_id` (mig 053:242) | spec FR4 + plan §Phase 3 owner-check JOIN use `organization_id` |
 | 4 | WORM via structural-diff (mig 058 pattern) | **Plan-review correction (2026-05-22):** mig 048 is `precheck_jwt_mint_sqlstate.sql` + `scope_grants.sql` — NEITHER ships pure-reject. The canonical pure-reject + `session_replication_role='replica'` bypass precedents are **mig 037** (`audit_byok_use_no_mutate`), **mig 051** (`action_sends_no_mutate`), **mig 052** (`audit_github_token_use_no_mutate` patches in mig 052's body), and **mig 053b** (`053_template_authorizations.sql`). Lift mig 037 as the simplest reference body. | spec FR5/FR6/FR7 + plan Phase 2 + Phase 4 switch to pure-reject lifted from **mig 037/051** |
 | 5 | DSAR cascade is 2 files | DSAR cascade is THREE files: `dsar-export-allowlist.ts`, `dsar-export.ts` (per-table read block), `account-delete.ts` (anonymise call in step 5.8) | spec FR9 enumerates all three; plan Phase 5 covers each |
-| 6 | "PA-X" placeholder in Article 30 register | PA-18 = template_authorizations (PR-I #4078). Next slot = **PA-19** | spec TR8 + plan Phase 6 use PA-19 |
+| 6 | "PA-X" placeholder in Article 30 register | PA-18 = template_authorizations (PR-I #4078). Next slot = **PA-20** | spec TR8 + plan Phase 6 use PA-20 |
 | 7 | Migration number TBD | 062 is free across all 14 sibling worktrees (audited 2026-05-22) | spec TR1 + plan claim 062 |
 | 8 | `pg_cron` does DELETE directly | Pure-reject WORM blocks direct DELETE silently — Art. 5(1)(e) breach per learning `2026-05-15-worm-trigger-blocks-pg-cron-retention-sweep.md` | spec FR7 + plan Phase 4 route cron through `purge_workspace_member_actions()` SECURITY DEFINER wrapper |
 | 9 | Backfill uses table-LOCK | No table-LOCK precedent in any migration; convention is `NOT EXISTS` discriminator inside the migration transaction. Backfill must also wrap in `SET LOCAL session_replication_role='replica'` to bypass the WORM trigger | spec FR8 + plan Phase 3 |
@@ -66,7 +66,7 @@ Phase 1 research surfaced material spec drift from the brainstorm-authored spec.
 ### Legal (CLO)
 
 **Status:** carry-forward
-**Assessment:** Endorses 7y retention + Art. 17 anonymise as SOC2/SOX-defensible without conflicting with Art. 5(1)(e) data-minimisation. PA-19 in the Article 30 register is the load-bearing legal artifact. Anonymise cascade ordering (BEFORE `auth.admin.deleteUser`) is non-negotiable.
+**Assessment:** Endorses 7y retention + Art. 17 anonymise as SOC2/SOX-defensible without conflicting with Art. 5(1)(e) data-minimisation. PA-20 in the Article 30 register is the load-bearing legal artifact. Anonymise cascade ordering (BEFORE `auth.admin.deleteUser`) is non-negotiable.
 
 ### Product (CPO)
 
@@ -126,15 +126,15 @@ discoverability_test:
 ### Phase 0 — Preconditions and CPO Sign-off Attestation
 
 - **0.1** — Verify branch + worktree: `git branch --show-current` returns `feat-workspace-member-actions-audit-4231`; `pwd` ends in `.worktrees/feat-workspace-member-actions-audit-4231`.
-- **0.2** — Re-verify migration 062 is still free: `for wt in /home/jean/git-repositories/jikig-ai/soleur/.worktrees/*/; do ls "$wt/apps/web-platform/supabase/migrations/" 2>/dev/null | grep '^062_'; done | head -5` — expect empty. If non-empty, bump to next free number across the spec + plan + tasks.md in one commit.
+- **0.2** — Re-verify migration 063 is still free: `for wt in /home/jean/git-repositories/jikig-ai/soleur/.worktrees/*/; do ls "$wt/apps/web-platform/supabase/migrations/" 2>/dev/null | grep '^062_'; done | head -5` — expect empty. If non-empty, bump to next free number across the spec + plan + tasks.md in one commit.
 - **0.3** — CPO sign-off attestation: this plan inherits CPO sign-off from #4229's parent brainstorm assessment (Decision 10 explicitly deferred this work with re-evaluation criteria). The narrowed v1 scope (membership-only) is strictly within Decision 10's bounded surface. No fresh CPO spawn required; note `cpo_signoff: carry-forward-from-4229` in plan body.
 - **0.4** — Read mig 037's `audit_byok_use_no_mutate` trigger + the matching anonymise RPC (`apps/web-platform/supabase/migrations/037_audit_byok_use.sql`) as the canonical pure-reject + replica-bypass template. Cross-reference mig 051 §(c)+(h) (`051_action_class_widening_and_action_sends.sql`) for the `RESET session_replication_role` convention after each replica-bypass call. Read mig 053 + 058 backfill / RPC bodies as call-site templates.
 - **0.5** — Probe canonical parsing pattern for any future `lane:` / frontmatter parsing in plan tooling: confirm `awk '/^lane:/ { gsub(/^lane:[[:space:]]*"?|"?$/, ""); print; exit }'` works against this plan file (defensive; tasks.md derivation may use this pattern).
 
 ### Phase 1 — Migration File Skeleton
 
-- **1.1** — Create `apps/web-platform/supabase/migrations/062_workspace_member_actions.sql` with header block (LAWFUL_BASIS, RETENTION, WORM contract reference to **mig 037 + 051**, RoPA PA-19 cite, learning cites for `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md`, `2026-05-15-worm-trigger-blocks-pg-cron-retention-sweep.md`, `2026-05-16-migration-mandates-must-have-wired-call-sites-in-same-pr.md`).
-- **1.2** — Create `apps/web-platform/supabase/migrations/062_workspace_member_actions.down.sql` with reverse-dependency DROP order: cron job → wrapper RPCs (`purge_*`, `anonymise_workspace_member_actions`, `list_*`) → AFTER trigger on workspace_members → WORM trigger on workspace_member_actions → indexes → table. **NOT REVERTED:** the `set_config('workspace_audit.actor_user_id', ...)` calls prepended to `invite_workspace_member` + `remove_workspace_member` + `anonymise_workspace_members`; they become harmless no-ops once the trigger that reads the GUC is dropped (no need to pin and restore mig 058's RPC bodies, which would be fragile per plan-review P0-4). Confirmed safe because `set_config` always returns the prior value and has no side-effect outside the read by the trigger.
+- **1.1** — Create `apps/web-platform/supabase/migrations/063_workspace_member_actions.sql` with header block (LAWFUL_BASIS, RETENTION, WORM contract reference to **mig 037 + 051**, RoPA PA-20 cite, learning cites for `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md`, `2026-05-15-worm-trigger-blocks-pg-cron-retention-sweep.md`, `2026-05-16-migration-mandates-must-have-wired-call-sites-in-same-pr.md`).
+- **1.2** — Create `apps/web-platform/supabase/migrations/063_workspace_member_actions.down.sql` with reverse-dependency DROP order: cron job → wrapper RPCs (`purge_*`, `anonymise_workspace_member_actions`, `list_*`) → AFTER trigger on workspace_members → WORM trigger on workspace_member_actions → indexes → table. **NOT REVERTED:** the `set_config('workspace_audit.actor_user_id', ...)` calls prepended to `invite_workspace_member` + `remove_workspace_member` + `anonymise_workspace_members`; they become harmless no-ops once the trigger that reads the GUC is dropped (no need to pin and restore mig 058's RPC bodies, which would be fragile per plan-review P0-4). Confirmed safe because `set_config` always returns the prior value and has no side-effect outside the read by the trigger.
 - **1.3** — Table DDL (section 1 of migration): `CREATE TABLE public.workspace_member_actions` with columns per spec FR1. **`created_at timestamptz NOT NULL DEFAULT now()`** explicit on the column. CHECK constraint allows `added | removed | role_changed`. FKs: `workspace_id REFERENCES public.workspaces(id) ON DELETE RESTRICT`; `actor_user_id REFERENCES public.users(id) ON DELETE RESTRICT` NULLable; `target_user_id REFERENCES public.users(id) ON DELETE RESTRICT` NULLable; `attestation_id REFERENCES public.workspace_member_attestations(id) ON DELETE RESTRICT` NULLable. **All user-ref FKs target `public.users(id)`, not `auth.users(id)`** — matches sibling mig 053:51,83 and mig 058:45,46 conventions; mixed-schema FKs would break the account-delete cascade ordering (plan-review P0-3).
 - **1.4** — Indexes (TR6): `CREATE INDEX workspace_member_actions_workspace_created_idx ON workspace_member_actions (workspace_id, created_at DESC);` `CREATE INDEX workspace_member_actions_target_idx ON workspace_member_actions (target_user_id) WHERE target_user_id IS NOT NULL;` `CREATE INDEX workspace_member_actions_actor_idx ON workspace_member_actions (actor_user_id) WHERE actor_user_id IS NOT NULL;` (Phase 1 Sharp Edge: no `CONCURRENTLY`).
 - **1.5** — RLS posture (TR4 + learning `2026-05-21-worm-ledger-rls-owner-insert-policy-is-an-rpc-bypass.md`): `ALTER TABLE ... ENABLE ROW LEVEL SECURITY;` then NO `CREATE POLICY` statements. Explicit `REVOKE INSERT, UPDATE, DELETE ON TABLE ... FROM PUBLIC, anon, authenticated, service_role;` (RPC-only writes). SELECT also REVOKED — reads route through `list_workspace_member_actions` SECURITY DEFINER RPC.
@@ -288,12 +288,12 @@ discoverability_test:
 - **5.2** — `apps/web-platform/server/dsar-export.ts`: add a per-table read block. Lift the shape from any sibling block (lines 603-630 per research). Predicate: `eq('actor_user_id', userId).or(eq('target_user_id', userId))` — supabase-js `.or()` syntax with `actor_user_id.eq.${userId},target_user_id.eq.${userId}`. Verify supabase-js syntax against `node_modules/@supabase/postgrest-js/dist/PostgrestFilterBuilder.d.ts` before committing.
 - **5.3** — `apps/web-platform/server/account-delete.ts`: add inline step **`3.93`** AFTER step `3.92` (`anonymise_organization_membership`) and BEFORE step `4` (`auth.admin.deleteUser`). With the Phase 3.6 fix (re-CREATE `anonymise_workspace_members` to bypass the AFTER trigger via replica role), step `3.91`'s cascade DELETEs no longer create audit rows. Step `3.93` only anonymises rows from prior legitimate `invite_workspace_member` / `remove_workspace_member` calls.
   ```ts
-  // 3.93 Anonymise workspace_member_actions audit rows (migration 062).
+  // 3.93 Anonymise workspace_member_actions audit rows (migration 063).
   //      Sets actor_user_id + target_user_id to NULL for every row referencing the
   //      departing user. Lineage columns (workspace_id, action_type, role, created_at,
   //      attestation_id) preserved. Idempotent. MUST run BEFORE auth.admin.deleteUser
   //      (public.users FK is RESTRICT). Cascade DELETEs at step 3.91 do NOT create new
-  //      audit rows — anonymise_workspace_members re-CREATE'd in mig 062 sets
+  //      audit rows — anonymise_workspace_members re-CREATE'd in mig 063 sets
   //      session_replication_role='replica' so the AFTER trigger is bypassed during
   //      cascade (eliminates the orphan-PII window).
   const { data: anonAuditCount, error: anonAuditErr } = await service
@@ -302,12 +302,12 @@ discoverability_test:
     // Fail-loud pattern matching sibling cascade steps 3.91/3.92.
   }
   ```
-- **5.4** — Update the JSDoc header at lines 57-75 to add `5.9 anonymise-workspace-member-actions — anonymise_workspace_member_actions RPC (migration 062). PII NULL-set on audit rows; lineage preserved.` after `5.8 anonymise-organization-membership` and before `6. auth`. (The inline `3.93` does not collide with any existing inline number; the header's `5.9` does not collide with any existing header number.)
+- **5.4** — Update the JSDoc header at lines 57-75 to add `5.9 anonymise-workspace-member-actions — anonymise_workspace_member_actions RPC (migration 063). PII NULL-set on audit rows; lineage preserved.` after `5.8 anonymise-organization-membership` and before `6. auth`. (The inline `3.93` does not collide with any existing inline number; the header's `5.9` does not collide with any existing header number.)
 - **5.5** — Add a test fixture wiring in `apps/web-platform/test/dsar-cascade.test.ts` (or sibling) asserting `anonymise_workspace_member_actions` is invoked between `anonymise_workspace_members` and `auth.admin.deleteUser`.
 
 ### Phase 6 — Article 30 Register + Observability Wiring (Pre-merge)
 
-- **6.1** — Append `## Processing Activity 19 — Workspace membership audit log` to `knowledge-base/legal/article-30-register.md` after the existing PA-18 entry. Schema must match sibling PAs (PA-10, PA-11, PA-17, PA-18 are the closest templates). Required keys per learning `2026-05-16-followthrough-verification-loop-catches-grant-vs-rls-deny-shape.md` + GDPR-gate fold-ins:
+- **6.1** — Append `## Processing Activity 20 — Workspace membership audit log` to `knowledge-base/legal/article-30-register.md` after the existing PA-18 entry. Schema must match sibling PAs (PA-10, PA-11, PA-17, PA-18 are the closest templates). Required keys per learning `2026-05-16-followthrough-verification-loop-catches-grant-vs-rls-deny-shape.md` + GDPR-gate fold-ins:
   - **Controller / Processor:** Workspace owner = controller; Soleur = processor (per parent #4229 Decision 11).
   - **Categories of data subjects:** workspace members (controllers' employees / contractors / collaborators).
   - **Categories of personal data:** UUID identifiers (actor_user_id, target_user_id); role enum (text); workspace_id (controller-derived). No Art. 9 special category.
@@ -319,7 +319,7 @@ discoverability_test:
   - **Anonymise cascade:** `anonymise_workspace_member_actions(p_user_id)` callable from `account-delete.ts` (step 5.8) + `dsar-export.ts`. Idempotent.
   - **Erasure mechanism:** Art. 17 anonymise (NULL PII columns, preserve lineage). Art. 16 rectification: not supported — see Spec §Out of Scope.
   - **Purpose limitation:** data shall NOT be used for product analytics, sales, ML training, feature decisions, or operational research outside the named audit purpose.
-  - Cite migration 062 + this PR.
+  - Cite migration 063 + this PR.
 - **6.2** — Add the runbook `knowledge-base/engineering/runbooks/cron-retention-monitor.md` documenting (a) the `cron.job_run_details` table contract (auto-populated by pg_cron with start/end timestamps + return value for `workspace-member-actions-retention`), (b) the Better Stack monitor to be created post-merge (queries `cron.job_run_details` via the Supabase logs API; alerts if no successful run in 26h), (c) the Supabase MCP server query pattern for an operator to manually verify: `mcp__plugin_supabase_supabase__execute_sql` with `SELECT * FROM cron.job_run_details WHERE jobname = 'workspace-member-actions-retention' ORDER BY start_time DESC LIMIT 7`, (d) the parallel `RAISE LOG 'audit_retention_purge ...'` stream visible in Supabase logs for ops drill-in.
 - **6.3** — `audit_orphan_actor` log rows route via Supabase logs → Vector → Better Stack (per `apps/web-platform/vector.toml` per recent fix #4279). Pino-side mirror NOT required — the DB-side `RAISE LOG` is the canonical signal. Document in the runbook the Better Stack alert query: filter Supabase logs for `audit_orphan_actor`; page on >5 events/24h.
 
@@ -341,7 +341,7 @@ discoverability_test:
 
 ## GDPR Gate Outcome (Phase 2.7)
 
-GDPR gate ran 2026-05-22 against this plan + spec + brainstorm. Three Critical Findings; two folded in (PA-19 enrichment + Sentry PII scrub); one deferred to flag-flip-prep PR (customer-facing privacy policy update — not load-bearing for this PR because the migration ships behind a flag OFF in prd outside jikigai; Jean + Harry are covered by parent #4229 Decision 11's Side Letter). Additional fold-ins:
+GDPR gate ran 2026-05-22 against this plan + spec + brainstorm. Three Critical Findings; two folded in (PA-20 enrichment + Sentry PII scrub); one deferred to flag-flip-prep PR (customer-facing privacy policy update — not load-bearing for this PR because the migration ships behind a flag OFF in prd outside jikigai; Jean + Harry are covered by parent #4229 Decision 11's Side Letter). Additional fold-ins:
 
 - **AP-05 (Art. 16 rectification gap)** — append-only ledger has no rectification mechanism. Folded in as explicit Spec §Out of Scope with rationale (data minimisation: rectification would require either a `corrects_id` column or a parallel correction-row pattern; both are v2 designs and the v1 use case has no observed need).
 - **T-01 (privacy policy update)** — deferred to a follow-up issue. Required before `TEAM_WORKSPACE_INVITE_ENABLED` flag flips ON for any non-jikigai org. File issue at this PR's merge time.
@@ -352,8 +352,8 @@ GDPR gate ran 2026-05-22 against this plan + spec + brainstorm. Three Critical F
 
 ## Files to Edit
 
-- `apps/web-platform/supabase/migrations/062_workspace_member_actions.sql` *(create)* — table, triggers, RPCs, indexes, backfill, cron schedule, header block.
-- `apps/web-platform/supabase/migrations/062_workspace_member_actions.down.sql` *(create)* — reverse-dependency DROP order including revert of 058 RPCs.
+- `apps/web-platform/supabase/migrations/063_workspace_member_actions.sql` *(create)* — table, triggers, RPCs, indexes, backfill, cron schedule, header block.
+- `apps/web-platform/supabase/migrations/063_workspace_member_actions.down.sql` *(create)* — reverse-dependency DROP order including revert of 058 RPCs.
 - `apps/web-platform/server/dsar-export-allowlist.ts` *(edit)* — append `workspace_member_actions` to the export table list.
 - `apps/web-platform/server/dsar-export.ts` *(edit)* — add per-table read block (predicate over `actor_user_id` OR `target_user_id`).
 - `apps/web-platform/server/account-delete.ts` *(edit)* — add inline step `3.93` invoking `anonymise_workspace_member_actions` AFTER `3.92` (`anonymise_organization_membership`) and BEFORE `4` (`auth.admin.deleteUser`); append `5.9` to the header JSDoc at lines 57-75.
@@ -361,7 +361,7 @@ GDPR gate ran 2026-05-22 against this plan + spec + brainstorm. Three Critical F
 - `apps/web-platform/e2e/team-membership.e2e.ts` *(edit)* — add four scenarios (invite emits audit row, owner list returns rows, non-owner list empty, remove emits second audit row).
 - `apps/web-platform/test/dsar-cascade.test.ts` *(edit; verify path exists or use closest sibling)* — extend cascade-order assertion.
 - `apps/web-platform/scripts/check-workspace-members-write-sites.sh` *(create; verify scripts dir convention)* — CI sentinel sweep.
-- `knowledge-base/legal/article-30-register.md` *(edit)* — append PA-19.
+- `knowledge-base/legal/article-30-register.md` *(edit)* — append PA-20.
 - `knowledge-base/engineering/runbooks/cron-retention-monitor.md` *(create)* — runbook for the retention purge observability + manual operator verification.
 
 ## Open Code-Review Overlap
@@ -402,7 +402,7 @@ Carry-forward from `spec.md` §`## Risks & Mitigations` (R1–R9, with R6/R7/R8/
 - **Trigger reads GUC via `NULLIF(current_setting(...), '')::uuid` wrapped in `EXCEPTION WHEN invalid_text_representation`** — empty-string returns from unset GUC, and a malformed string (future writer sets a non-UUID) raises `22P02` without the exception block. NULL is the correct empty-value; never fall back to `auth.uid()` (which under SECURITY DEFINER returns the definer postgres). Phase 2.2 names this explicitly. (Plan-review P0-4 + TR10a.)
 - **FK target for `actor_user_id`/`target_user_id` is `public.users(id)`, not `auth.users(id)`** — matches sibling mig 053/058 convention. Mixed-schema FKs break the cascade ordering documented in `account-delete.ts:359-441`. (Plan-review P0-3.)
 - **Cron observability surface is `cron.job_run_details` + `RAISE LOG`**, NOT `tenant_deploy_audit`. The latter's `event_type` CHECK constraint rejects new values and the table has no `payload` column. (Plan-review P0-2.)
-- **`anonymise_workspace_members` (mig 058) is re-CREATEd in mig 062** to set `SET LOCAL session_replication_role='replica'` before its DELETE, so the new AFTER trigger does NOT fire during account-delete cascade. Without this, step `3.91`'s cascade DELETE creates net-new `target_user_id=<userId>` audit rows for a user requesting Art. 17 erasure — orphan PII if step `3.93` then fails. (Plan-review P1-2.)
+- **`anonymise_workspace_members` (mig 058) is re-CREATEd in mig 063** to set `SET LOCAL session_replication_role='replica'` before its DELETE, so the new AFTER trigger does NOT fire during account-delete cascade. Without this, step `3.91`'s cascade DELETE creates net-new `target_user_id=<userId>` audit rows for a user requesting Art. 17 erasure — orphan PII if step `3.93` then fails. (Plan-review P1-2.)
 - **Backfill MUST `LOCK TABLE public.workspace_members IN SHARE MODE`** before the INSERT (Plan-review P1-1). Without it, concurrent app-server INSERTs during the migration window are double-audited (once via AFTER trigger, once via backfill SELECT).
 - **`RESET session_replication_role`** after each `SET LOCAL session_replication_role='replica'` block (mig 051/053b convention). Inside a SECURITY DEFINER function called from a larger transaction, the replica role persists to subsequent statements without RESET — silently bypassing triggers on adjacent tables the caller writes next.
 - **Use `NEW.attestation_id` directly in the trigger**, not a `SELECT ... ORDER BY accepted_at DESC LIMIT 1` lookup. The membership row already carries the FK; lookup is racy (re-invited members) and breaks post-anonymise. Phase 2.2 names this. (Plan-review P1-4.)

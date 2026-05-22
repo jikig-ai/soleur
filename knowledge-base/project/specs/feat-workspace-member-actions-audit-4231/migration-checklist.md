@@ -2,10 +2,10 @@
 feature: feat-workspace-member-actions-audit-4231
 date: 2026-05-22
 pr: 4287
-migration: apps/web-platform/supabase/migrations/062_workspace_member_actions.sql
+migration: apps/web-platform/supabase/migrations/063_workspace_member_actions.sql
 ---
 
-# Migration Apply Checklist — `062_workspace_member_actions.sql`
+# Migration Apply Checklist — `063_workspace_member_actions.sql`
 
 ## prd apply — pending
 
@@ -63,7 +63,7 @@ all probes route through the Supabase MCP server, never Studio):
 
 Filed at PR-ready time per Phase 9.4 of the plan:
 
-- **T-01** (privacy policy update for PA-19) — required before
+- **T-01** (privacy policy update for PA-20) — required before
   `TEAM_WORKSPACE_INVITE_ENABLED` flag-flips ON for any non-jikigai org.
 - **T-02** (invite-time data subject notice) — required for external
   workspaces; covered for jikigai (Jean + Harry) via parent #4229 Side Letter.

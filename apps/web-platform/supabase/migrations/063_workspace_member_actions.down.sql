@@ -1,5 +1,5 @@
--- 062_workspace_member_actions.down.sql
--- Reverse-dependency DROP order for migration 062.
+-- 063_workspace_member_actions.down.sql
+-- Reverse-dependency DROP order for migration 063.
 --
 -- NOT REVERTED: the set_config('workspace_audit.actor_user_id', ...)
 -- calls prepended to mig 058's invite_workspace_member,

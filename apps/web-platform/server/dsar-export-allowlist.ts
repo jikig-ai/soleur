@@ -182,16 +182,35 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
 
   // feat-team-workspace-multi-user (migration 058) — invite consent
   // attestations the user accepted. ownerField = invitee_user_id (the
-  // user who clicked accept); inviter_user_id is also their own row when
-  // they invited someone else — the next allowlist entry covers that
-  // case via a sibling chain. Art. 15: WORM consent record, analogous to
-  // tc_acceptances. The Art. 17 anonymise RPC handles erasure separately.
+  // primary owner column tracked here for allowlist-completeness lint).
+  // The export pipeline at dsar-export.ts uses a `.or()` filter on BOTH
+  // invitee_user_id AND inviter_user_id so a departed member's INVITER-
+  // side rows are recovered too (Kieran P1-1 / #4230). assertReadScope
+  // there is two-arm-aware (validates EITHER column matches). Art. 15:
+  // WORM consent record, analogous to tc_acceptances. The Art. 17
+  // anonymise RPC handles erasure separately.
   workspace_member_attestations: {
     ownerField: "invitee_user_id",
     article: "15",
   },
 
-  // feat-workspace-member-actions-audit (migration 062, #4231) — append-
+  // feat-dsar-departed-member-coverage (migration 062, #4230) — WORM
+  // ledger of workspace-member removal events. ownerField =
+  // removed_user_id; rows describe (workspace_id, removed_user_id,
+  // removed_by_user_id, removed_at). The actor (removed_by_user_id) is
+  // co-member audit metadata — when the actor files their own DSAR they
+  // see the removals they performed via the
+  // anonymise_workspace_member_removals Art. 17 cascade NULLing both
+  // PII columns. Art. 15 only: the user did not "provide" this row, the
+  // remove_workspace_member RPC wrote it on the actor's click.
+  // 36-month retention deviates from 24-mo PA-PII envelope; rationale
+  // in ADR-039.
+  workspace_member_removals: {
+    ownerField: "removed_user_id",
+    article: "15",
+  },
+
+  // feat-workspace-member-actions-audit (migration 063, #4231) — append-
   // only audit log of workspace membership mutations. The user can be
   // either the actor (an owner who added/removed/role-changed someone)
   // or the target (the affected member). OR-semantics via
@@ -200,7 +219,7 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // only — audit rows are controller-generated evidence, not user-
   // provided content. WORM trigger + anonymise_workspace_member_actions
   // RPC handle Art. 17 cascade separately (account-delete.ts step 3.93).
-  // PA-19 of the Article 30 register.
+  // PA-20 of the Article 30 register.
   workspace_member_actions: {
     ownerField: "actor_user_id",
     additionalOwnerFields: ["target_user_id"],

@@ -1,4 +1,4 @@
--- 062_workspace_member_actions.sql
+-- 063_workspace_member_actions.sql
 -- feat-workspace-member-actions-audit (#4231) — Append-only audit log for
 -- workspace membership mutations. Blocks the TEAM_WORKSPACE_INVITE_ENABLED
 -- flag-flip for any non-jikigai org.
@@ -11,7 +11,7 @@
 -- data is internal-use-only (never product analytics / sales / ML
 -- training / feature decisions); subjects retain Art. 15/17/20 rights
 -- via DSAR cascade; the audit trail itself protects subjects from
--- controller misconduct. Article 30 register entry: PA-19.
+-- controller misconduct. Article 30 register entry: PA-20.
 --
 -- RETENTION: 7 years. pg_cron 'workspace-member-actions-retention'
 -- runs daily 04:00 UTC and invokes purge_workspace_member_actions()
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS public.workspace_member_actions (
 
 COMMENT ON TABLE public.workspace_member_actions IS
   'Append-only audit log for workspace membership mutations (add, remove, role_change). '
-  'WORM (write-once-read-many). PA-19 of the Article 30 register. Reads route through '
+  'WORM (write-once-read-many). PA-20 of the Article 30 register. Reads route through '
   'list_workspace_member_actions SECURITY DEFINER RPC (owner-only). Writes are trigger-'
   'driven from public.workspace_members; admin-tool / backfill paths bypass the WORM '
   'trigger via SET LOCAL session_replication_role=''replica''. #4231.';
@@ -401,7 +401,7 @@ DECLARE
   v_is_owner       boolean;
   v_attestation_id uuid;
 BEGIN
-  -- mig 062: capture actor for the workspace_members AFTER trigger.
+  -- mig 063: capture actor for the workspace_members AFTER trigger.
   -- set_config(name, value, is_local=true) — SET LOCAL <key> = <expr>
   -- rejects non-literal expressions like COALESCE.
   PERFORM set_config('workspace_audit.actor_user_id', COALESCE(auth.uid()::text, ''), true);
@@ -484,7 +484,7 @@ DECLARE
   v_target_role    text;
   v_rows           int;
 BEGIN
-  -- mig 062: capture actor for the workspace_members AFTER trigger.
+  -- mig 063: capture actor for the workspace_members AFTER trigger.
   PERFORM set_config('workspace_audit.actor_user_id', COALESCE(auth.uid()::text, ''), true);
 
   IF v_caller_user_id IS NULL THEN
@@ -551,7 +551,7 @@ AS $$
 DECLARE
   v_rows int;
 BEGIN
-  -- mig 062: bypass the new workspace_members_audit_trigger so the
+  -- mig 063: bypass the new workspace_members_audit_trigger so the
   -- cascade DELETE does not create orphan-PII audit rows (plan-review
   -- P1-2; see also account-delete.ts step 3.93).
   SET LOCAL session_replication_role = 'replica';

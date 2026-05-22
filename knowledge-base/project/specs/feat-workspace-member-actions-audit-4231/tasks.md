@@ -26,8 +26,8 @@ Derived from `knowledge-base/project/plans/2026-05-22-feat-workspace-member-acti
 
 ## Phase 1 — Migration File Skeleton
 
-- 1.1 Create `apps/web-platform/supabase/migrations/062_workspace_member_actions.sql` with header block (LAWFUL_BASIS, RETENTION 7y, WORM contract → mig 037 + 051, RoPA PA-19 cite, learning cites for `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md`, `2026-05-15-worm-trigger-blocks-pg-cron-retention-sweep.md`, `2026-05-16-migration-mandates-must-have-wired-call-sites-in-same-pr.md`).
-- 1.2 Create `062_workspace_member_actions.down.sql` with DROP order: cron job → wrapper RPCs → AFTER trigger on workspace_members → WORM trigger → indexes → table. Do NOT revert mig 058 RPC prepends — the `set_config` calls become harmless no-ops once the trigger is gone.
+- 1.1 Create `apps/web-platform/supabase/migrations/063_workspace_member_actions.sql` with header block (LAWFUL_BASIS, RETENTION 7y, WORM contract → mig 037 + 051, RoPA PA-20 cite, learning cites for `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md`, `2026-05-15-worm-trigger-blocks-pg-cron-retention-sweep.md`, `2026-05-16-migration-mandates-must-have-wired-call-sites-in-same-pr.md`).
+- 1.2 Create `063_workspace_member_actions.down.sql` with DROP order: cron job → wrapper RPCs → AFTER trigger on workspace_members → WORM trigger → indexes → table. Do NOT revert mig 058 RPC prepends — the `set_config` calls become harmless no-ops once the trigger is gone.
 - 1.3 Section 1 of migration: `CREATE TABLE public.workspace_member_actions` per spec FR1 (FKs target `public.users`, NOT `auth.users`; `created_at timestamptz NOT NULL DEFAULT now()` explicit).
 - 1.4 Indexes (no `CONCURRENTLY`): `(workspace_id, created_at DESC)`, `(target_user_id) WHERE target_user_id IS NOT NULL`, `(actor_user_id) WHERE actor_user_id IS NOT NULL`.
 - 1.5 RLS posture: `ENABLE ROW LEVEL SECURITY`; zero policies; `REVOKE INSERT, UPDATE, DELETE, SELECT FROM PUBLIC, anon, authenticated, service_role`.
@@ -64,7 +64,7 @@ Derived from `knowledge-base/project/plans/2026-05-22-feat-workspace-member-acti
 
 ## Phase 6 — Article 30 register + observability
 
-- 6.1 Append `## Processing Activity 19 — Workspace membership audit log` to `knowledge-base/legal/article-30-register.md` per plan §6.1 (all GDPR-gate fold-in keys: Controller, Categories of data subjects, Categories of personal data, Recipients, Retention with 7y rationale, Security measures, Lawful basis with LIA balancing test, International transfers, Anonymise cascade, Erasure mechanism, Purpose limitation clause).
+- 6.1 Append `## Processing Activity 20 — Workspace membership audit log` to `knowledge-base/legal/article-30-register.md` per plan §6.1 (all GDPR-gate fold-in keys: Controller, Categories of data subjects, Categories of personal data, Recipients, Retention with 7y rationale, Security measures, Lawful basis with LIA balancing test, International transfers, Anonymise cascade, Erasure mechanism, Purpose limitation clause).
 - 6.2 Create `knowledge-base/engineering/runbooks/cron-retention-monitor.md` per plan §6.2 (4 sections: `cron.job_run_details` table contract, Better Stack monitor post-merge spec, MCP-accessible verification query, parallel `RAISE LOG` stream description).
 - 6.3 Document the `audit_orphan_actor` Better Stack alert query in the runbook (filter Supabase logs, page on >5/24h).
 
