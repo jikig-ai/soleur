@@ -110,11 +110,20 @@ state" — but no equivalent gate fires today.
    + dsar-worker-per-row-where lints carry the regression-prevention surface
    that the integration test would otherwise carry, but without the live-DB
    coupling.
-3. **Document the schema-reload workaround.** When a migration apply lands via
-   the Doppler pooler path, the operator should EITHER (a) trigger a Supabase
-   Management API restart of PostgREST, OR (b) wait for the natural schema
-   poll cycle (~10 minutes by Supabase Cloud default). The "NOTIFY via pooler"
-   shape will not work. **Tooling tracked at #4285** — `apps/web-platform/scripts/postgrest-reload-schema.sh` will fire via Supabase Management API after `run-migrations.sh` apply.
+3. **Force the reload via Supabase Management API.** When a migration apply
+   lands via the Doppler pooler path (direct-pg fallback), the in-band
+   `NOTIFY pgrst, 'reload schema'` does NOT propagate — see §1. The runnable
+   workaround is `apps/web-platform/scripts/postgrest-reload-schema.sh`
+   (PR #4286, closes #4285), which POSTs the same NOTIFY to
+   `POST /v1/projects/<ref>/database/query` on `api.supabase.com`; the
+   Management API executes the SQL on a backend that shares process identity
+   with PostgREST's LISTEN, so the reload fires immediately. `run-migrations.sh`
+   invokes it post-apply with `--best-effort` so a missing `SUPABASE_PAT` or
+   transient upstream issue cannot fail the migration run. Standalone usage:
+   `doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh`.
+   Requires `SUPABASE_PAT` (mint at <https://supabase.com/dashboard/account/tokens>,
+   then `doppler secrets set SUPABASE_PAT=… -p soleur -c dev` and `-c prd`).
+   Falls back to the natural ~10-minute schema poll if the API is unreachable.
 
 ## Session Errors
 
