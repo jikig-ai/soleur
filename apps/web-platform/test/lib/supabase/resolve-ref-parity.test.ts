@@ -95,6 +95,24 @@ const FIXTURES: Fixture[] = [
     expected: null,
     fastPath: false,
   },
+  // Length-anchor fixtures — both sides MUST require exactly 20 chars on
+  // the fast path. Without these, a bash regex of `[a-z0-9]+` would silently
+  // accept off-spec hosts the TS form rejects (subdomain-bypass guard
+  // bypassed via short/long ref). The CNAME fallback also rejects them.
+  {
+    name: "sub-20-char host rejected (length anchor)",
+    url: "https://abc.supabase.co",
+    cname: null,
+    expected: null,
+    fastPath: false,
+  },
+  {
+    name: "21-char host rejected (length anchor)",
+    url: "https://abcdefghijklmnopqrstu.supabase.co",
+    cname: null,
+    expected: null,
+    fastPath: false,
+  },
 ];
 
 // Write a fake `dig` to a tempdir that prints the fixture's CNAME line for
@@ -183,9 +201,19 @@ describe("resolve-ref bash/TS parity", () => {
       const bashResult: string | null =
         bash.rc === 0 && bash.stdout !== "" ? bash.stdout : null;
 
-      expect(tsResult).toBe(fx.expected);
-      expect(bashResult).toBe(fx.expected);
-      expect(tsResult).toBe(bashResult);
+      // Assert rc + stdout shape explicitly so a future refactor that
+      // accidentally `return 0`s on a parse miss (or `return 1`s with
+      // stdout-leaked output) fails this gate. data-integrity-guardian
+      // F2 — without this, the parity contract collapses both axes
+      // into `null` and silently passes regression rc drift.
+      if (fx.expected === null) {
+        expect(bash.rc, `bash rc for ${fx.name}`).toBe(1);
+      } else {
+        expect(bash.rc, `bash rc for ${fx.name}`).toBe(0);
+        expect(bash.stdout, `bash stdout for ${fx.name}`).toBe(fx.expected);
+      }
+      expect(tsResult, `TS for ${fx.name}`).toBe(fx.expected);
+      expect(bashResult, `bash for ${fx.name}`).toBe(fx.expected);
     });
   }
 });
