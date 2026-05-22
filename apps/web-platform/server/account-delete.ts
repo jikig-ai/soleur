@@ -375,6 +375,13 @@ export async function deleteAccount(
   //      cascade reaches them. SECURITY DEFINER + idempotent.
   //      FATAL: skipping guarantees auth-delete fails on the RESTRICT FK,
   //      leaving a half-deleted user (GDPR Art. 17 violation).
+  //
+  //      Post-mig 064 (#4329): attestations.workspace_id is now ON DELETE
+  //      SET NULL (was RESTRICT). The workspace DELETE in step 3.92 below
+  //      cascades the NULL-set to surviving attestation rows; the WORM
+  //      trigger admits this transition per ADR-038 §Invariants. The
+  //      attestation lineage (id, accepted_at) is preserved; workspace_id
+  //      transitions to NULL when its target workspace is orphan-cleaned.
   try {
     const { error: anonAttErr } = await service.rpc(
       "anonymise_workspace_member_attestations",
@@ -429,8 +436,10 @@ export async function deleteAccount(
   //      membership row keyed on user_id, including the user's solo
   //      backfill owner row. FK workspace_members.workspace_id +
   //      .attestation_id are RESTRICT — attestations were already
-  //      NULLed in 3.90, and workspaces stay live (they're cleaned up by
-  //      anonymise_organization_membership in 3.92 if they orphan).
+  //      NULLed in 3.90. Workspaces may be deleted by
+  //      anonymise_organization_membership in step 3.92 below if they
+  //      orphan; attestations.workspace_id ON DELETE SET NULL
+  //      (mig 064, #4329) admits the cascade post-merge of #4329.
   try {
     const { error: anonMemErr } = await service.rpc(
       "anonymise_workspace_members",
