@@ -58,6 +58,31 @@
 -- bypass.md.
 
 -- =====================================================================
+-- 0. Precondition: public.workspaces must exist (#4338)
+-- =====================================================================
+-- The CREATE TABLE below has a FK to public.workspaces(id). The FK
+-- declaration parses at DDL time, so an IF EXISTS clause cannot guard
+-- against a missing referenced table — by the time the FK parser fires,
+-- the body has already errored with the cryptic
+--   ERROR:  relation "public.workspaces" does not exist
+--
+-- That error masks the actual drift class: dev-Supabase's
+-- _schema_migrations ledger claims 053_organizations_and_workspace_
+-- members.sql is applied, but the schema state disagrees. Surface the
+-- real class with a self-describing RAISE EXCEPTION + link to the
+-- recovery procedure, so the next operator who trips this has a
+-- one-click path to fix rather than a three-layer-deep parser trace.
+DO $$
+BEGIN
+  IF to_regclass('public.workspaces') IS NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'Migration 062 precondition failed: public.workspaces does not exist.',
+      DETAIL  = '_schema_migrations may claim 053_organizations_and_workspace_members is applied while the workspaces table is absent (schema-vs-ledger drift class #4338).',
+      HINT    = 'Recovery: knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md (delete the stale ledger rows; the runner re-applies 053-061 on the next CI run).';
+  END IF;
+END $$;
+
+-- =====================================================================
 -- 1. Table
 -- =====================================================================
 

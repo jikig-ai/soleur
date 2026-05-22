@@ -126,6 +126,23 @@ jobs:
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
 
+      # Preflight: schema-vs-ledger consistency check (#4338). Logic
+      # lives in apps/web-platform/scripts/preflight-schema-vs-ledger.sh
+      # so the workflow surface stays free of inline run: shell with
+      # interpolated bash variables. Orthogonal to the drift probe above:
+      # the drift probe checks ledger-vs-origin/main (filename + content
+      # _sha drift class, #4241); this preflight checks ledger-vs-live-
+      # schema (the #4338 drift class). Both passing is the necessary-
+      # and-sufficient condition for a safe apply.
+      - name: Preflight schema-vs-ledger consistency check
+        working-directory: apps/web-platform
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c dev_scheduled -- \
+            bash scripts/preflight-schema-vs-ledger.sh
+
       # Apply migrations to dev before running tests. Without this step,
       # tenant-integration tests run against whatever schema dev happens to
       # have, which can lag behind the PR's migration files — producing
@@ -162,6 +179,16 @@ jobs:
           # leave-behind state on every run, so a maliciously-shipped migration
           # cannot stay invisible. See learning file for full discussion.
           ALLOW_UNMERGED_DEV_APPLY: "1"
+          # Schema-presence probe (#4338): before applying each migration,
+          # confirm the cross-file tables it REFERENCES exist in the live
+          # schema. Catches schema-vs-ledger drift one migration earlier
+          # than the FK parser, with a self-describing error that names
+          # the missing relation. Composes with the workflow-level
+          # preflight above: preflight runs once at workflow-time;
+          # this runner-level probe fires per-migration so dynamic-
+          # produced dependencies (caught later in the apply sequence)
+          # still get a named-relation error.
+          MIGRATION_SCHEMA_PRECONDITION_PROBE: "1"
         run: |
           set -uo pipefail
           doppler run -p soleur -c dev_scheduled -- \
