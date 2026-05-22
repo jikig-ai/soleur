@@ -51,7 +51,7 @@ FAKE
 echo "T1: missing SUPABASE_PAT (strict mode)"
 set +e
 out=$(env -i PATH="$PATH" HOME="$HOME" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
@@ -69,7 +69,7 @@ fi
 echo "T2: missing SUPABASE_PAT (--best-effort)"
 set +e
 out=$(env -i PATH="$PATH" HOME="$HOME" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" --best-effort 2>&1)
 rc=$?
 set -e
@@ -109,12 +109,12 @@ out=$(PATH="$TMP:$PATH" \
         CURL_HTTP_CODE=200 \
         CURL_BODY='{"ok":true}' \
         SUPABASE_PAT="sbp_fake" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
 if [[ "$rc" == "0" ]] \
-   && grep -q '/v1/projects/abcdefghijklmnop/database/query' "$TMP/args" \
+   && grep -q '/v1/projects/abcdefghijklmnopqrst/database/query' "$TMP/args" \
    && grep -qF "NOTIFY pgrst" "$TMP/args" \
    && grep -qE 'Authorization: Bearer sbp_fake' "$TMP/args"; then
   pass "exit 0, correct endpoint, NOTIFY body, bearer token"
@@ -140,7 +140,7 @@ out=$(PATH="$TMP:$PATH" \
         CURL_HTTP_CODE=401 \
         CURL_BODY='{"message":"unauthorized"}' \
         SUPABASE_PAT="sbp_bad" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
@@ -164,7 +164,7 @@ out=$(PATH="$TMP:$PATH" \
         CURL_HTTP_CODE=503 \
         CURL_BODY='{"message":"unavailable"}' \
         SUPABASE_PAT="sbp_fake" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
@@ -206,7 +206,7 @@ out=$(PATH="$TMP:$PATH" \
         CURL_ARGS_FILE="$TMP/args" \
         CURL_HTTP_CODE=503 \
         SUPABASE_PAT="sbp_fake" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" --best-effort 2>&1)
 rc=$?
 set -e
@@ -260,7 +260,7 @@ out=$(PATH="$TMP:$PATH" \
         CURL_ARGS_FILE="$TMP/args" \
         CURL_EXIT=6 \
         SUPABASE_PAT="sbp_must_not_leak_aaaaaaaaaaaaaaaaaaaa" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
@@ -286,7 +286,7 @@ out=$(PATH="$TMP:$PATH" \
         CURL_HTTP_CODE=404 \
         CURL_BODY='{"message":"not found"}' \
         SUPABASE_PAT="sbp_fake" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
@@ -310,7 +310,7 @@ out=$(PATH="$TMP:$PATH" \
         CURL_ARGS_FILE="$TMP/args" \
         CURL_HTTP_CODE=000 \
         SUPABASE_PAT="sbp_fake" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
@@ -381,12 +381,12 @@ out=$(PATH="$TMP:$PATH" \
         CURL_HTTP_CODE=200 \
         SUPABASE_API_HOST="https://evil.example.com" \
         SUPABASE_PAT="sbp_fake" \
-        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnop.supabase.co" \
+        NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1)
 rc=$?
 set -e
 if [[ "$rc" == "0" ]] \
-   && grep -q 'https://api.supabase.com/v1/projects/abcdefghijklmnop/database/query' "$TMP/args" \
+   && grep -q 'https://api.supabase.com/v1/projects/abcdefghijklmnopqrst/database/query' "$TMP/args" \
    && ! grep -q 'evil.example.com' "$TMP/args"; then
   pass "endpoint ignores SUPABASE_API_HOST override (PAT exfil-safe)"
 else
