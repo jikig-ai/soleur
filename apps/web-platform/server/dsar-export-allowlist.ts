@@ -28,6 +28,17 @@ export interface DsarTableSpec {
    */
   ownerField: string;
   /**
+   * Additional columns that also identify the data subject (OR-
+   * semantics — a row is "owned" by the user when ANY listed column
+   * equals their id). Used by audit-class tables whose rows have
+   * multiple actor positions (e.g. `workspace_member_actions` has
+   * actor_user_id OR target_user_id). The worker reads each column
+   * via a separate `.eq()` chain and merges/dedupes by row id; the
+   * per-row-where lint accepts `.eq("<col>", ...)` on either the
+   * canonical `ownerField` or any column listed here.
+   */
+  additionalOwnerFields?: string[];
+  /**
    * GDPR article(s) under which the rows are exported. `15` is the
    * right-of-access baseline; `15+20` adds portability (machine-
    * readable + reusable) which applies to data the subject themselves
@@ -196,6 +207,22 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // in ADR-039.
   workspace_member_removals: {
     ownerField: "removed_user_id",
+    article: "15",
+  },
+
+  // feat-workspace-member-actions-audit (migration 063, #4231) — append-
+  // only audit log of workspace membership mutations. The user can be
+  // either the actor (an owner who added/removed/role-changed someone)
+  // or the target (the affected member). OR-semantics via
+  // `additionalOwnerFields`: each column gets its own .eq() read chain
+  // in dsar-export.ts; results are merged and deduped by id. Art. 15
+  // only — audit rows are controller-generated evidence, not user-
+  // provided content. WORM trigger + anonymise_workspace_member_actions
+  // RPC handle Art. 17 cascade separately (account-delete.ts step 3.93).
+  // PA-20 of the Article 30 register.
+  workspace_member_actions: {
+    ownerField: "actor_user_id",
+    additionalOwnerFields: ["target_user_id"],
     article: "15",
   },
 };
