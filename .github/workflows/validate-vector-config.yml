@@ -37,6 +37,20 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # Bun is required by the fixture script to compute TS hashUserId
+      # parity (AC4 in the plan -- proves VRL HMAC-SHA256 matches the
+      # TS primitive byte-for-byte; openssl is the secondary backstop).
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version: latest
+
+      # observability.ts imports @sentry/nextjs + @/server/* path aliases --
+      # the fixture script's bun -e parity check needs node_modules to
+      # resolve those. bun install is fast (~5s) against bun.lock.
+      - name: bun install (apps/web-platform)
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
+
       - name: Parse vector_version from vector.tf
         id: vector_version
         # IaC-3 drift safeguard: version is sourced from vector.tf locals at
