@@ -157,7 +157,7 @@ describe("agent-on-spawn-requested handler", () => {
     );
     const step = makeStep();
     const result = await agentOnSpawnRequestedHandler({
-      event: makeEvent({ sourceRef: "pr-acme/repo#7" }),
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
       step,
       logger,
     });
@@ -182,7 +182,7 @@ describe("agent-on-spawn-requested handler", () => {
     const step = makeStep();
     const result = await agentOnSpawnRequestedHandler({
       event: makeEvent({
-        sourceRef: "issue-acme/repo#42",
+        sourceRef: "issue-acme:repo:42",
         actionClass: "triage.p0p1_issue",
       }),
       step,
@@ -201,21 +201,31 @@ describe("agent-on-spawn-requested handler", () => {
     expect(createCommentSpy).not.toHaveBeenCalled();
   });
 
-  it("adds a label for kb_drift link-* source refs (happy path)", async () => {
+  it("kb_drift link-* source refs deadletter as malformed_source_ref in PR-A (resolved in PR-B)", async () => {
+    // PR-A's deterministic stub only targets pr-*, issue-*, secret-scan-*
+    // source refs (the deriveSourceRef shapes that carry owner+repo+number).
+    // kb_drift `link-<hash>` and `anchor-<hash>` refs have no GitHub
+    // issue/PR target; PR-B's leader-prompt loop adds per-class
+    // resolution. Until then, the Inngest function classifies the ref as
+    // malformed and persists failure_reason.
     const { agentOnSpawnRequestedHandler } = await import(
       "@/server/inngest/functions/agent-on-spawn-requested"
     );
     const step = makeStep();
     const result = await agentOnSpawnRequestedHandler({
       event: makeEvent({
-        sourceRef: "link-acme/repo#5",
+        sourceRef: "link-deadbeef00000000",
         actionClass: "knowledge.kb_drift",
       }),
       step,
       logger,
     });
-    expect(result).toMatchObject({ acknowledged: true });
-    expect(addLabelsSpy).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "malformed_source_ref",
+    });
+    expect(addLabelsSpy).not.toHaveBeenCalled();
+    expect(createCommentSpy).not.toHaveBeenCalled();
   });
 
   it("persists failure_reason when founder lacks github_installation_id (cross-tenant guard)", async () => {
@@ -228,7 +238,7 @@ describe("agent-on-spawn-requested handler", () => {
     );
     const step = makeStep();
     const result = await agentOnSpawnRequestedHandler({
-      event: makeEvent({ sourceRef: "pr-acme/repo#7" }),
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
       step,
       logger,
     });
@@ -259,7 +269,7 @@ describe("agent-on-spawn-requested handler", () => {
     );
     const step = makeStep();
     const result = await agentOnSpawnRequestedHandler({
-      event: makeEvent({ sourceRef: "pr-acme/repo#7" }),
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
       step,
       logger,
     });
@@ -295,7 +305,7 @@ describe("agent-on-spawn-requested handler", () => {
       "@/server/inngest/functions/agent-on-spawn-requested"
     );
     await agentOnSpawnRequestedHandler({
-      event: makeEvent({ sourceRef: "pr-acme/repo#7" }),
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
       step: makeStep(),
       logger,
     });
@@ -316,12 +326,12 @@ describe("agent-on-spawn-requested handler", () => {
       "@/server/inngest/functions/agent-on-spawn-requested"
     );
     await agentOnSpawnRequestedHandler({
-      event: makeEvent({ sourceRef: "pr-acme/repo#7", actionSendId: "as-dup" }),
+      event: makeEvent({ sourceRef: "pr-acme:repo:7", actionSendId: "as-dup" }),
       step: makeStep(),
       logger,
     });
     await agentOnSpawnRequestedHandler({
-      event: makeEvent({ sourceRef: "pr-acme/repo#7", actionSendId: "as-dup" }),
+      event: makeEvent({ sourceRef: "pr-acme:repo:7", actionSendId: "as-dup" }),
       step: makeStep(),
       logger,
     });

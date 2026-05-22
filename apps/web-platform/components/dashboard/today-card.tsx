@@ -5,6 +5,11 @@
 //   time redaction is the load-bearing Art. 14 gate per plan TR6).
 // PR-H (#4077) — wires Send/Edit/Discard handlers + typed-confirm modal
 //   on the default (Stripe / CFO) source.
+// PR-A (#4124) — wires GitHubCard + KbDriftCard onClick handlers through
+//   the shared `useActionSend()` hook (3 callers now justify the
+//   extraction). Drops the `disabled aria-disabled` "Wires in PR-H+1"
+//   buttons on those variants. Renders "Acknowledged — View on GitHub"
+//   pill on the 200 response.
 //
 // Each source dispatches to its own component so React rules-of-hooks
 // stay clean (no conditional hooks after early returns).
@@ -12,6 +17,7 @@
 import { useState, useTransition } from "react";
 
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
+import { useActionSend } from "@/hooks/use-action-send";
 import { humanTitle } from "@/lib/messages/action-class-copy";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
 import type { DenyReason } from "@/server/templates/is-template-authorized";
@@ -54,37 +60,43 @@ function isCveOrSecretScan(sourceRef: string | null | undefined): boolean {
 function parseCveHeader(draftPreview: string): { id: string; severity: string } {
   // Walker shape mirrors server/inngest/functions/github-on-event.ts
   // extractRawPreview: `<ghsa_id> (<severity>): <summary>`.
-  const m = /^([^\s(]+)\s+\(([^)]+)\)/.exec(draftPreview);
+  const m = draftPreview.match(/^([^\s(]+)\s+\(([^)]+)\)/);
   if (m) return { id: m[1], severity: m[2] };
   return { id: "<unknown id>", severity: "<unknown severity>" };
 }
 
-interface ConfirmationPayload {
-  actionClass: string;
-  tier: string;
-  recipientExcerpt: string;
-  // Content excerpt as the SERVER saw draft_preview at 409-issue time —
-  // NOT the local `draft` state. Binding the modal's content preview to
-  // the server payload closes the Send→Edit→Send race where a sibling
-  // tab edits between the 409 and the confirm POST. The server returns
-  // the new hash on each 409; the second POST must echo it.
-  contentExcerpt: string;
-  expectedDraftPreviewHash: string;
-  messageId: string;
+/**
+ * GitHubCard's approve_every_time target label — PR / issue / advisory
+ * shape derived from source_ref so the typed-confirm modal names the
+ * actual GitHub target (PR-A AC12). Returns undefined for shapes that
+ * don't carry a parseable number.
+ */
+function githubActionTargetLabel(
+  sourceRef: string | null | undefined,
+): string | undefined {
+  const ref = sourceRef ?? "";
+  // Format: <prefix>-<owner>:<repo>:<n> (per github-on-event.ts deriveSourceRef).
+  const m = ref.match(/^(pr|issue|secret-scan)-[^:]+:[^:]+:(\d+)$/);
+  if (m) {
+    if (m[1] === "pr") return `PR #${m[2]}`;
+    return `issue #${m[2]}`;
+  }
+  const cveMatch = ref.match(/^cve-(.+)$/);
+  if (cveMatch) return `advisory ${cveMatch[1]}`;
+  return undefined;
 }
 
 const BASE_BUTTON =
   "min-h-[44px] rounded-md px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
+
+const SPAWN_BUTTON =
+  "min-h-[44px] rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50";
 
 // PR-I (#4078) — Per-DenyReason copy surfaced when the send route
 // returns 403 with `deny_reason`. `template_unauthorized` is unreachable
 // in v2 (first-send-IS-authorization). `no_scope_grant` corresponds to
 // the legacy 403 `error: 'no_active_grant'` shape — kept here for
 // completeness so future predicate denials map cleanly.
-//
-// Typed as Record<DenyReason, string>: a 6th DenyReason member would
-// fail tsc here without a copy entry. Surfaced by PR-I multi-agent
-// review (code-quality F1 + pattern P1-2).
 const DENY_REASON_COPY: Record<DenyReason, string> = {
   no_scope_grant:
     "You need a scope grant first. Visit Settings → Scope grants.",
@@ -104,8 +116,10 @@ export function TodayCard(props: TodayCardProps) {
   return <StripeCard {...props} />;
 }
 
-// KB-drift: direct-action (no leader delegation; internal-infra signal —
-// no third-party text to redact). Buttons disabled until PR-H+1 (#4098).
+// KB-drift: direct-action via /send. PR-A wires the click through
+// useActionSend; the Inngest function classifies link-* refs as
+// malformed_source_ref until PR-B adds per-class resolution (operator
+// still sees the "Acknowledged (queued)" pill).
 function KbDriftCard({
   id,
   source,
@@ -115,6 +129,9 @@ function KbDriftCard({
   urgency,
 }: TodayCardProps) {
   const label = (sourceRef ?? "").startsWith("link-") ? "Fix link" : "Update anchor";
+  const { onSend, isPending, error, acknowledged, artifactUrl, degraded } =
+    useActionSend({ messageId: id, denyReasonCopy: DENY_REASON_COPY });
+
   return (
     <article
       data-message-id={id}
@@ -130,18 +147,26 @@ function KbDriftCard({
         <span data-urgency-label={urgency}>{urgency}</span>
       </header>
       <p className="mb-3 whitespace-pre-line text-sm text-soleur-text-primary">{draftPreview}</p>
+      {error ? (
+        <p className="mb-2 text-xs text-red-600" role="alert">
+          {error}
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled
-          aria-disabled="true"
-          data-action="kb-drift-fix"
-          title="Wires in PR-H+1"
-          className="min-h-[44px] cursor-not-allowed rounded-md bg-amber-600/40 px-3 py-2 text-sm font-medium text-soleur-text-primary"
-          aria-label={label}
-        >
-          {label}
-        </button>
+        {acknowledged ? (
+          <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
+        ) : (
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={isPending}
+            data-action="kb-drift-fix"
+            className={SPAWN_BUTTON}
+            aria-label={label}
+          >
+            {label}
+          </button>
+        )}
       </div>
     </article>
   );
@@ -149,7 +174,9 @@ function KbDriftCard({
 
 // GitHub: source_ref-driven affordance + render-time redaction. CVE /
 // secret-scan renders ID + severity only by default (AC6); the summary
-// body is already stripped server-side. Buttons disabled until PR-H+1.
+// body is already stripped server-side. PR-A wires the click through
+// useActionSend; the approve_every_time tier (cve_alert, secret-scan)
+// surfaces the typed-confirm modal with action-target naming.
 function GitHubCard({
   id,
   source,
@@ -161,6 +188,17 @@ function GitHubCard({
   const button = githubButtonSpec(sourceRef);
   const cve = isCveOrSecretScan(sourceRef);
   const redactedBody = redactGithubSourcedText(draftPreview, { source: button.redactSource });
+  const {
+    onSend,
+    isPending,
+    error,
+    acknowledged,
+    artifactUrl,
+    degraded,
+    confirming,
+    onConfirmTyped,
+    onCancelConfirm,
+  } = useActionSend({ messageId: id, denyReasonCopy: DENY_REASON_COPY });
 
   return (
     <article
@@ -198,26 +236,50 @@ function GitHubCard({
         </p>
       )}
 
+      {error ? (
+        <p className="mb-2 text-xs text-red-600" role="alert">
+          {error}
+        </p>
+      ) : null}
+
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled
-          aria-disabled="true"
-          data-action="github-handle"
-          data-button-label={button.label}
-          title="Wires in PR-H+1"
-          className="min-h-[44px] cursor-not-allowed rounded-md bg-amber-600/40 px-3 py-2 text-sm font-medium text-soleur-text-primary"
-          aria-label={button.ariaLabel}
-        >
-          {button.label}
-        </button>
+        {acknowledged ? (
+          <AcknowledgedPill artifactUrl={artifactUrl} degraded={degraded} />
+        ) : (
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={isPending}
+            data-action="github-handle"
+            data-button-label={button.label}
+            className={SPAWN_BUTTON}
+            aria-label={button.ariaLabel}
+          >
+            {button.label}
+          </button>
+        )}
       </div>
+
+      <TypedConfirmModal
+        open={confirming !== null}
+        recipientExcerpt={confirming?.recipientExcerpt ?? ""}
+        contentExcerpt={confirming?.contentExcerpt ?? ""}
+        actionClassLabel={confirming ? humanTitle(confirming.actionClass) : ""}
+        tierLabel={confirming?.tier ?? ""}
+        actionTargetLabel={githubActionTargetLabel(sourceRef)}
+        onCancel={onCancelConfirm}
+        onConfirm={onConfirmTyped}
+      />
     </article>
   );
 }
 
 // Stripe / CFO path — PR-H (#4077) Send/Edit/Discard flow with typed-
-// confirm modal for approve_every_time tier.
+// confirm modal for approve_every_time tier. PR-A (#4124) refactor:
+// uses the shared `useActionSend()` hook with the
+// `onAcknowledgedArchive` callback wired to `setArchived(true)` —
+// preserves the pre-PR-A "card disappears on send" behavior. Edit /
+// Discard stay local to this component (StripeCard-only affordances).
 function StripeCard({
   id,
   source,
@@ -226,126 +288,26 @@ function StripeCard({
   draftPreview,
   urgency,
 }: TodayCardProps) {
-  const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  const [isPendingLocal, startTransition] = useTransition();
   const [archived, setArchived] = useState(false);
   const [draft, setDraft] = useState(draftPreview);
-  const [confirming, setConfirming] = useState<ConfirmationPayload | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
 
-  // The server derives body_content and recipient_identifier from the
-  // messages row at request time, so this client sends ONLY the typed-
-  // confirm signature surface. Sending body/recipient from here would
-  // let a compromised page bind the approval signature to content the
-  // founder never saw (GDPR Art. 5(2) accountability — DPD §2.3(q)).
-  async function postSend(extra?: {
-    confirmed_typed: true;
-    typed_value: string;
-    expected_draft_preview_hash: string;
-  }) {
-    const res = await fetch(`/api/dashboard/today/${id}/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(extra ?? {}),
-    });
-    return res;
-  }
+  const {
+    onSend,
+    isPending: isPendingSend,
+    error: sendError,
+    confirming,
+    onConfirmTyped,
+    onCancelConfirm,
+  } = useActionSend({
+    messageId: id,
+    denyReasonCopy: DENY_REASON_COPY,
+    onAcknowledgedArchive: () => setArchived(true),
+  });
 
-  function onSend() {
-    setError(null);
-    startTransition(async () => {
-      try {
-        const res = await postSend();
-        if (res.status === 200) {
-          setArchived(true);
-          return;
-        }
-        if (res.status === 409) {
-          const json = (await res.json()) as {
-            error?: string;
-            action_class?: string;
-            tier?: string;
-            recipient_excerpt?: string;
-            content_excerpt?: string;
-            expected_draft_preview_hash?: string;
-            message_id?: string;
-          };
-          if (json.error === "requires_confirmation") {
-            setConfirming({
-              actionClass: json.action_class ?? "",
-              tier: json.tier ?? "",
-              recipientExcerpt: json.recipient_excerpt ?? "",
-              contentExcerpt: json.content_excerpt ?? "",
-              expectedDraftPreviewHash: json.expected_draft_preview_hash ?? "",
-              messageId: json.message_id ?? id,
-            });
-            return;
-          }
-          if (json.error === "already_sent") {
-            setArchived(true);
-            return;
-          }
-        }
-        if (res.status === 403) {
-          // PR-I (#4078) — Surface the predicate's deny_reason as
-          // founder-readable copy. Plan §Phase 5 §2.
-          const json = (await res.json().catch(() => ({}))) as {
-            error?: string;
-            deny_reason?: string;
-            action_class?: string;
-          };
-          if (
-            json.deny_reason !== undefined &&
-            json.deny_reason in DENY_REASON_COPY
-          ) {
-            setError(DENY_REASON_COPY[json.deny_reason as DenyReason]);
-            return;
-          }
-          if (json.error === "no_active_grant") {
-            setError(DENY_REASON_COPY.no_scope_grant);
-            return;
-          }
-        }
-        setError(`Send failed (${res.status})`);
-      } catch {
-        setError("Send failed — network error");
-      }
-    });
-  }
-
-  function onConfirmTyped(confirmedTyped: boolean, typedValue: string) {
-    const pendingHash = confirming?.expectedDraftPreviewHash ?? "";
-    setConfirming(null);
-    startTransition(async () => {
-      try {
-        const res = await postSend({
-          confirmed_typed: true,
-          typed_value: typedValue,
-          expected_draft_preview_hash: pendingHash,
-        });
-        void confirmedTyped;
-        if (res.status === 200) {
-          setArchived(true);
-          return;
-        }
-        if (res.status === 409) {
-          const json = (await res.json().catch(() => ({}))) as { error?: string };
-          if (json.error === "already_sent") {
-            setArchived(true);
-            return;
-          }
-          setError("Draft changed since you confirmed — please re-send.");
-          return;
-        }
-        setError(`Send failed (${res.status})`);
-      } catch {
-        setError("Send failed — network error");
-      }
-    });
-  }
-
-  function onCancelConfirm() {
-    setConfirming(null);
-  }
+  const isPending = isPendingLocal || isPendingSend;
+  const error = sendError ?? editError;
 
   function onEdit() {
     const next = window.prompt("Edit draft", draft);
@@ -362,29 +324,28 @@ function StripeCard({
           setDraft(next);
           return;
         }
-        setError(`Edit failed (${res.status})`);
+        setEditError(`Edit failed (${res.status})`);
       } catch {
-        setError("Edit failed — network error");
+        setEditError("Edit failed — network error");
       }
     });
   }
 
   function onDiscard() {
     setArchived(true);
-    setError(null);
+    setEditError(null);
     startTransition(async () => {
       try {
         const res = await fetch(`/api/dashboard/today/${id}/discard`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
         });
         if (res.status !== 200) {
           setArchived(false);
-          setError(`Discard failed (${res.status})`);
+          setEditError(`Discard failed (${res.status})`);
         }
       } catch {
         setArchived(false);
-        setError("Discard failed — network error");
+        setEditError("Discard failed — network error");
       }
     });
   }
@@ -458,5 +419,53 @@ function StripeCard({
         onConfirm={onConfirmTyped}
       />
     </article>
+  );
+}
+
+interface AcknowledgedPillProps {
+  artifactUrl: string;
+  degraded: "enqueue_failed" | undefined;
+}
+
+function AcknowledgedPill({ artifactUrl, degraded }: AcknowledgedPillProps) {
+  // PR-A — optimistic acknowledgment pill rendered on the 200 response
+  // from /send. The Inngest function emits the actual GitHub artifact
+  // within ~60s (happy path); operator follows the link to verify.
+  // `degraded: enqueue_failed` indicates the action_sends row is
+  // WORM-committed but inngest.send threw between writeActionSend and
+  // archive — operator retries via a fresh `messages` row.
+  if (degraded === "enqueue_failed") {
+    return (
+      <span
+        data-testid="acknowledged-pill"
+        data-pill-state="queued"
+        className="inline-flex items-center gap-2 rounded-full bg-amber-700/30 px-3 py-1 text-xs font-medium text-amber-100"
+      >
+        Acknowledged (queued — retry from a fresh card if no artifact appears within a minute)
+      </span>
+    );
+  }
+  if (!artifactUrl) {
+    return (
+      <span
+        data-testid="acknowledged-pill"
+        data-pill-state="pending"
+        className="inline-flex items-center gap-2 rounded-full bg-green-700/30 px-3 py-1 text-xs font-medium text-green-100"
+      >
+        Acknowledged (pending artifact)
+      </span>
+    );
+  }
+  return (
+    <a
+      href={artifactUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      data-testid="acknowledged-pill"
+      data-pill-state="ack"
+      className="inline-flex items-center gap-2 rounded-full bg-green-700/30 px-3 py-1 text-xs font-medium text-green-100 hover:bg-green-700/40"
+    >
+      Acknowledged — View on GitHub
+    </a>
   );
 }

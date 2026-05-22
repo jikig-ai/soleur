@@ -27,28 +27,28 @@ export interface ParsedSourceRef {
   number: number;
 }
 
+// PR-A (#4124) — match the format emitted by
+// `server/inngest/functions/github-on-event.ts:deriveSourceRef`:
+//   - `pr-<owner>:<repo>:<n>`              for pull_request
+//   - `issue-<owner>:<repo>:<n>`           for issues
+//   - `secret-scan-<owner>:<repo>:<n>`     for secret-scan alerts
+//
+// The `:` (not `/`) is used between owner/repo because `:` is invalid in
+// GitHub repo names — so `org/repo-1` and `org/repo` with number 1
+// cannot collide at the dedup partial-unique index.
+//
+// Out-of-band shapes that do NOT carry (owner, repo, number) and so are
+// rejected here:
+//   - `ci-<workflow_run_id>` (no repo info at all)
+//   - `cve-GHSA-xxxx-xxxx-xxxx` (advisory id; not an issue-comment target)
+//   - `link-<hash>` / `anchor-<hash>` (kb_drift; resolved server-side in PR-B)
+//
+// Callers MUST catch the malformed-throw and UPDATE
+// action_sends.failure_reason. PR-B replaces the ci-/cve-/kb-drift legs
+// with per-class targeting via the leader-prompt loop.
 const SOURCE_REF_PATTERN =
-  /^(pr|issue|ci|cve|secret-scan|link|anchor)-([^/]+)\/([^#]+)#(\d+)$/;
+  /^(pr|issue|secret-scan)-([^:]+):([^:]+):(\d+)$/;
 
-/**
- * Parses a `messages.source_ref` value into the (owner, repo, number) tuple
- * needed by `octokit.rest.issues.createComment` / `addLabels`.
- *
- * Source-ref shapes (per webhook ingest envelope):
- *   - `pr-<owner>/<repo>#<n>`
- *   - `issue-<owner>/<repo>#<n>`
- *   - `ci-<owner>/<repo>#<n>`
- *   - `cve-<owner>/<repo>#<n>`
- *   - `secret-scan-<owner>/<repo>#<n>`
- *   - `link-<owner>/<repo>#<n>` (kb_drift)
- *   - `anchor-<owner>/<repo>#<n>` (kb_drift)
- *
- * Throws on malformed input — callers MUST catch and UPDATE
- * action_sends.failure_reason. The strict regex is the parsing contract;
- * the Inngest function's `retries: 3` + final-retry-writes-failure_reason
- * shape covers transient cases while malformed refs deadletter to a
- * persisted failure_reason.
- */
 export function parseSourceRef(sourceRef: string): ParsedSourceRef {
   const m = sourceRef.match(SOURCE_REF_PATTERN);
   if (!m) {

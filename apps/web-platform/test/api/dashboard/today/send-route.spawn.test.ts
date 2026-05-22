@@ -186,8 +186,8 @@ beforeEach(() => {
 });
 
 describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => {
-  test("(1) kb_drift draft_one_click → 200 with action_send_id + artifact_view_url + inngest.send called once", async () => {
-    setupMessageRow("knowledge.kb_drift", "link-acme/repo#5");
+  test("(1) kb_drift draft_one_click → 200 with action_send_id + inngest.send called once (artifact_view_url empty until PR-B)", async () => {
+    setupMessageRow("knowledge.kb_drift", "link-deadbeef00000000");
     mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
 
     const res = await POST(makeRequest({}), ctx());
@@ -203,9 +203,10 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
     expect(json.id).toBe(AS_ID);
     expect(json.tier).toBe("draft_one_click");
     expect(json.action_send_id).toBe(AS_ID);
-    expect(json.artifact_view_url).toBe(
-      "https://github.com/acme/repo/issues/5",
-    );
+    // kb_drift `link-<hash>` refs don't carry an issue target; the route
+    // returns empty artifact_view_url. PR-B's leader-prompt loop adds
+    // per-class resolution.
+    expect(json.artifact_view_url).toBe("");
     expect(json.degraded).toBeUndefined();
 
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
@@ -218,7 +219,7 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
       founderId: FOUNDER_A,
       messageId: MSG_ID,
       actionClass: "knowledge.kb_drift",
-      sourceRef: "link-acme/repo#5",
+      sourceRef: "link-deadbeef00000000",
       actionSendId: AS_ID,
     });
     // The event payload MUST NOT carry installationId (cross-tenant guard).
@@ -226,7 +227,7 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
   });
 
   test("(2) engineering.pr_review_pending → inngest.send dispatched AFTER writeActionSend AND BEFORE archive flip", async () => {
-    setupMessageRow("engineering.pr_review_pending", "pr-acme/repo#7");
+    setupMessageRow("engineering.pr_review_pending", "pr-acme:repo:7");
     mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
 
     const res = await POST(makeRequest({}), ctx());
@@ -252,7 +253,7 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
   });
 
   test("(3) inngest.send throws → 200 with degraded:'enqueue_failed'; reportSilentFallback fires", async () => {
-    setupMessageRow("engineering.pr_review_pending", "pr-acme/repo#7");
+    setupMessageRow("engineering.pr_review_pending", "pr-acme:repo:7");
     mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
     mockInngestSend.mockImplementationOnce(async () => {
       callOrder.push("inngest.send-throw");
@@ -287,7 +288,7 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
   });
 
   test("(4) inngest.send throws → route does NOT return 500 (orphan-prevention)", async () => {
-    setupMessageRow("triage.p0p1_issue", "issue-acme/repo#42");
+    setupMessageRow("triage.p0p1_issue", "issue-acme:repo:42");
     mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
     mockInngestSend.mockRejectedValueOnce(new Error("substrate down"));
 
