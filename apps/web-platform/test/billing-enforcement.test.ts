@@ -50,8 +50,20 @@ function setupSupabaseClient(userData: Record<string, unknown> | null, userError
   mockFrom.mockReturnValue({ select: mockSelect });
 
   const supabase = {
-    auth: { getUser: mockGetUser },
+    auth: {
+      getUser: mockGetUser,
+      // #4307: middleware revocation gate calls getSession() right after
+      // getUser(). Returning a null session short-circuits the gate so
+      // these billing-enforcement tests stay focused on the T&C / billing
+      // path under test. Dedicated coverage of the revocation gate lives
+      // at test/middleware.revocation-redirect.test.ts.
+      getSession: vi.fn().mockResolvedValue({
+        data: { session: null },
+        error: null,
+      }),
+    },
     from: mockFrom,
+    rpc: vi.fn().mockResolvedValue({ data: null, error: null }),
   };
   mockCreateServerClient.mockReturnValue(supabase);
   return { mockSelect, mockEq, mockSingle };

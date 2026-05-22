@@ -34,6 +34,18 @@ export function LoginForm() {
     }
   }, [searchParams]);
 
+  // #4307 revocation banner. Middleware redirects revoked sessions to
+  // /login?revoked=removed|role-changed and clears the auth cookies.
+  // Render a banner above the form so the user knows why they were
+  // signed out. Unknown values render no banner (defensive default).
+  const revokedReason = searchParams.get("revoked");
+  const revokedBanner =
+    revokedReason === "removed"
+      ? "A workspace owner removed you. Sign in below to continue with your other workspaces."
+      : revokedReason === "role-changed"
+        ? "Your role was updated. Sign in again to apply the new permissions."
+        : null;
+
   async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -165,6 +177,16 @@ export function LoginForm() {
             Enter your email to receive a sign-in code
           </p>
         </div>
+
+        {revokedBanner && (
+          <div
+            role="status"
+            data-testid="revoked-banner"
+            className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm text-soleur-text-secondary"
+          >
+            {revokedBanner}
+          </div>
+        )}
 
         <form onSubmit={handleSendOtp} className="space-y-4">
           <input

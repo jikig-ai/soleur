@@ -9,6 +9,73 @@ import { PUBLIC_PATHS, TC_EXEMPT_PATHS } from "@/lib/routes";
 // see `lib/auth/validate-origin.ts:3-7` for the documented constraint.
 import { reportEdgeSilentFallback } from "@/lib/observability-edge";
 
+// Inline JWT-payload decoder (edge-safe). The canonical decoder lives at
+// `lib/supabase/tenant.ts:decodeJwtPayloadUnsafe` but tenant.ts transitively
+// imports `@/server/observability` (pino), which is incompatible with the
+// edge runtime. Per #4307 plan §2.1 (C2 + K-P0-1): inline the decoder
+// rather than refactor tenant.ts to extract a shared edge-safe module.
+// Throws a plain `Error` so the call site (revocation gate below) can
+// route it through `reportEdgeSilentFallback` + 401 — no shared
+// RuntimeAuthError class on the edge.
+function decodeJwtPayloadEdgeSafe(jwt: string): Record<string, unknown> {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) {
+    throw new Error("malformed_jwt: expected 3 segments");
+  }
+  const padded =
+    parts[1].replace(/-/g, "+").replace(/_/g, "/") +
+    "=".repeat((4 - (parts[1].length % 4)) % 4);
+  try {
+    // atob is available in Edge runtime; Buffer is not.
+    const json = atob(padded);
+    return JSON.parse(json);
+  } catch {
+    throw new Error("malformed_jwt: payload not JSON");
+  }
+}
+
+// `clearSessionAndRedirect`: helper for the #4307 revocation gate. Clears
+// every `sb-*` cookie on BOTH Domain shapes (Domain-less AND
+// `Domain=NEXT_PUBLIC_COOKIE_DOMAIN` — F8 in plan-review) so a Domain-
+// scoped Supabase cookie can't survive the Domain-less clear as a phantom.
+// Sets `Cache-Control: no-store` so a downstream cache (Vercel edge cache
+// or operator-side proxy) cannot serve the redirect target with cookies
+// still attached.
+function clearSessionAndRedirect(
+  request: NextRequest,
+  cspValue: string,
+  pathname: string,
+  searchParams: URLSearchParams,
+): NextResponse {
+  const url = request.nextUrl.clone();
+  url.pathname = pathname;
+  url.search = searchParams.toString();
+  const response = NextResponse.redirect(url, { status: 302 });
+  response.headers.set("Content-Security-Policy", cspValue);
+  response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  response.headers.set("Pragma", "no-cache");
+  const cookieDomain = process.env.NEXT_PUBLIC_COOKIE_DOMAIN;
+  // Append Set-Cookie headers directly. `response.cookies.set(name, ...)`
+  // dedupes by name and would clobber the Domain-less clear with the
+  // Domain= clear; we need BOTH on the wire so a Supabase-set cookie with
+  // either Domain shape gets killed (F8).
+  for (const cookie of request.cookies.getAll()) {
+    if (cookie.name.startsWith("sb-")) {
+      response.headers.append(
+        "Set-Cookie",
+        `${cookie.name}=; Max-Age=0; Path=/`,
+      );
+      if (cookieDomain) {
+        response.headers.append(
+          "Set-Cookie",
+          `${cookie.name}=; Max-Age=0; Path=/; Domain=${cookieDomain}`,
+        );
+      }
+    }
+  }
+  return response;
+}
+
 function withCspHeaders(response: NextResponse, cspValue: string): NextResponse {
   response.headers.set("Content-Security-Policy", cspValue);
   return response;
@@ -121,6 +188,79 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  // #4307 revocation gate. Runs immediately after getUser() so a removed-
+  // or role-changed member with a still-valid JWT (natural ~1h expiry) is
+  // bounced to /login before any downstream RLS-bound query trusts the
+  // workspace_id claim.
+  //
+  // Topology:
+  //   - Per-request RPC call (no cache; Vercel edge isolates are non-
+  //     coherent so a per-isolate cache would still leak across regions).
+  //   - Fail-CLOSED: any RPC error → 503. Revocation IS a security
+  //     boundary; a silent fall-open here would silently re-leak.
+  //   - User-global predicate (plan F5): the RPC is keyed on auth.uid()
+  //     alone, NOT current_organization_id — multi-workspace user removed
+  //     from one workspace is bounced on ANY context.
+  if (user) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+    if (accessToken) {
+      let iatSeconds: number | null = null;
+      try {
+        const payload = decodeJwtPayloadEdgeSafe(accessToken);
+        if (typeof payload.iat === "number") {
+          iatSeconds = payload.iat;
+        }
+      } catch (err) {
+        // Malformed JWT — fail-CLOSED 401. The session is broken; signing
+        // the user out is the safe action.
+        await reportEdgeSilentFallback(err, {
+          feature: "middleware",
+          op: "revocation_gate.malformed_jwt",
+          extra: { userId: user.id },
+        });
+        const params = new URLSearchParams({ revoked: "removed" });
+        return clearSessionAndRedirect(request, cspValue, "/login", params);
+      }
+      if (iatSeconds === null) {
+        await reportEdgeSilentFallback(
+          new Error("JWT missing iat claim"),
+          {
+            feature: "middleware",
+            op: "revocation_gate.no_iat",
+            extra: { userId: user.id },
+          },
+        );
+        const params = new URLSearchParams({ revoked: "removed" });
+        return clearSessionAndRedirect(request, cspValue, "/login", params);
+      }
+
+      const iat = new Date(iatSeconds * 1000);
+      const { data: revokeData, error: revokeError } = await supabase.rpc(
+        "check_my_revocation",
+        { p_jwt_iat: iat.toISOString() },
+      );
+      if (revokeError) {
+        await reportEdgeSilentFallback(revokeError, {
+          feature: "middleware",
+          op: "revocation_gate.db_error",
+          extra: { userId: user.id },
+        });
+        return withCspHeaders(
+          new NextResponse("Service Unavailable", { status: 503 }),
+          cspValue,
+        );
+      }
+      const row = Array.isArray(revokeData) ? revokeData[0] : revokeData;
+      if (row && row.revoked === true) {
+        const reason =
+          row.reason === "role-changed" ? "role-changed" : "removed";
+        const params = new URLSearchParams({ revoked: reason });
+        return clearSessionAndRedirect(request, cspValue, "/login", params);
+      }
+    }
+  }
 
   function redirectWithCookies(pathname: string, searchParams?: URLSearchParams) {
     const url = request.nextUrl.clone();

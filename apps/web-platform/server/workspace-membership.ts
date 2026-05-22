@@ -128,6 +128,97 @@ export type RemoveFailureReason =
   | "caller_not_owner"
   | "rpc_failed";
 
+export interface UpdateWorkspaceMemberRoleArgs {
+  callerUserId: string;
+  workspaceId: string;
+  targetUserId: string;
+  newRole: "owner" | "member";
+}
+
+export type UpdateRoleResult =
+  | { ok: true }
+  | { ok: false; reason: UpdateRoleFailureReason; detail?: string };
+
+export type UpdateRoleFailureReason =
+  | "invalid_role"
+  | "caller_not_owner"
+  | "not_a_member"
+  | "rpc_failed";
+
+/**
+ * Change a workspace member's role (owner ↔ member) + cascade the
+ * revocation surface (#4307 plan §3.1).
+ *
+ * Mirrors `removeWorkspaceMember` shape:
+ *   1. SQL RPC `update_workspace_member_role` (mig 064) — atomic role
+ *      change + revocation INSERT + user_session_state clear + actor GUC.
+ *   2. `abortAllWorkspaceMemberSessions` — local-process SIGTERM for
+ *      any in-flight agent session the user has bound to this workspace.
+ *   3. WS close with `MEMBERSHIP_REVOKED` (4012) preamble. Cut C6: the
+ *      preamble's `reason` field is NOT added in PR-1; the in-flight
+ *      terminal screen renders identical copy for "removed" and
+ *      "role-changed" (acceptable per plan §"Risks" #7). Tracked at
+ *      AC20-2 follow-up.
+ */
+export async function updateWorkspaceMemberRole(
+  args: UpdateWorkspaceMemberRoleArgs,
+): Promise<UpdateRoleResult> {
+  if (args.newRole !== "owner" && args.newRole !== "member") {
+    return { ok: false, reason: "invalid_role" };
+  }
+
+  const service = createServiceClient();
+  const { error } = await service.rpc("update_workspace_member_role", {
+    p_workspace_id: args.workspaceId,
+    p_user_id: args.targetUserId,
+    p_new_role: args.newRole,
+  });
+  if (error) {
+    const msg = error.message ?? "";
+    if (msg.includes("caller is not an owner")) {
+      return { ok: false, reason: "caller_not_owner" };
+    }
+    if (msg.includes("no workspace_members row")) {
+      return { ok: false, reason: "not_a_member" };
+    }
+    if (msg.includes("invalid role")) {
+      return { ok: false, reason: "invalid_role" };
+    }
+    return { ok: false, reason: "rpc_failed", detail: msg };
+  }
+
+  try {
+    abortAllWorkspaceMemberSessions(args.workspaceId, args.targetUserId);
+  } catch (abortErr) {
+    reportSilentFallback(abortErr, {
+      feature: "workspace-membership",
+      op: "abort-role-changed-member-sessions",
+      extra: { workspaceId: args.workspaceId, targetUserId: args.targetUserId },
+    });
+  }
+
+  // WS close fan-out — mirrors removeWorkspaceMember at lines 187-192.
+  // No `reason` field on the preamble (cut C6 — deferred to AC20-2).
+  try {
+    const session = sessions.get(args.targetUserId);
+    if (session) {
+      closeWithPreamble(session.ws, WS_CLOSE_CODES.MEMBERSHIP_REVOKED, {
+        type: "membership_revoked",
+        organizationName: null,
+        workspaceId: args.workspaceId,
+      });
+    }
+  } catch (closeErr) {
+    reportSilentFallback(closeErr, {
+      feature: "workspace-membership",
+      op: "close-role-changed-member-socket",
+      extra: { workspaceId: args.workspaceId, targetUserId: args.targetUserId },
+    });
+  }
+
+  return { ok: true };
+}
+
 /**
  * Remove a member from a workspace + cascade the SIGTERM hook (AC-FLOW2).
  *
