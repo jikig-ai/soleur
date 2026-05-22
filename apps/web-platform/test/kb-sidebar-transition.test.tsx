@@ -4,6 +4,11 @@ import userEvent from "@testing-library/user-event";
 
 let mockPathname = "/dashboard/kb";
 
+vi.mock("@/components/feature-flags/provider", () => ({
+  FeatureFlagProvider: ({ children }: { children: React.ReactNode }) => children,
+  useFeatureFlag: () => true,
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
   usePathname: () => mockPathname,

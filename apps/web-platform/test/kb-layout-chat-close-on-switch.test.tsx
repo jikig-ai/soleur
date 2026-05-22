@@ -13,6 +13,11 @@ const stableRouter = {
 };
 
 const mockSearchParams = new URLSearchParams();
+vi.mock("@/components/feature-flags/provider", () => ({
+  FeatureFlagProvider: ({ children }: { children: React.ReactNode }) => children,
+  useFeatureFlag: () => true,
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => stableRouter,
   usePathname: () => mockPathname,
