@@ -300,7 +300,13 @@ export async function POST(
     // Inngest function server-resolves it from users.github_installation_id
     // keyed by founderId per AC2 (two-layer guard: TypeScript event type
     // + runtime sentinel grep).
-    const sourceRef = (message.source_ref as string | null) ?? "";
+    // PR-A: stable string narrowing for the inngest envelope. The
+    // `messageIdStr` hoist is outside the inngest.send window so the
+    // action-class typed-literal lint (PR-H ADR-034 §1) does not flag
+    // the implicit Supabase `any` widen.
+    const messageIdStr: string = String(message.id);
+    const sourceRef: string =
+      typeof message.source_ref === "string" ? message.source_ref : "";
     let degraded: "enqueue_failed" | undefined;
     let artifactViewUrl = "";
     if (sourceRef) {
@@ -321,7 +327,7 @@ export async function POST(
           name: "agent.spawn.requested",
           data: {
             founderId: user.id,
-            messageId: message.id as string,
+            messageId: messageIdStr,
             actionClass,
             sourceRef,
             actionSendId: written.id,

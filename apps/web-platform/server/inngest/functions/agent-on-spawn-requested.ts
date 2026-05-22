@@ -140,20 +140,26 @@ export async function agentOnSpawnRequestedHandler({
       const parsed = parseSourceRef(sourceRef);
       const octokit = await createGitHubAppClient(installationId, founderId);
       if (parsed.isPr) {
-        const { data } = await octokit.rest.issues.createComment({
+        const { data } = await octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          {
+            owner: parsed.owner,
+            repo: parsed.repo,
+            issue_number: parsed.number,
+            body: ACK_PR_COMMENT_TEMPLATE,
+          },
+        );
+        return (data as { html_url: string }).html_url;
+      }
+      await octokit.request(
+        "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
+        {
           owner: parsed.owner,
           repo: parsed.repo,
           issue_number: parsed.number,
-          body: ACK_PR_COMMENT_TEMPLATE,
-        });
-        return data.html_url;
-      }
-      await octokit.rest.issues.addLabels({
-        owner: parsed.owner,
-        repo: parsed.repo,
-        issue_number: parsed.number,
-        labels: [ACK_LABEL],
-      });
+          labels: [ACK_LABEL],
+        },
+      );
       return `https://github.com/${parsed.owner}/${parsed.repo}/issues/${parsed.number}`;
     });
   } catch (err) {

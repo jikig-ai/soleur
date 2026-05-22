@@ -67,15 +67,22 @@ vi.mock("@/lib/supabase/service", () => ({
   getServiceClient: vi.fn(() => buildSupabaseClient()),
 }));
 
+// Single `octokit.request(route, params)` mock dispatching by route
+// string. Mirrors how `cron-oauth-probe.ts` calls Octokit (no `.rest.*`
+// — that namespace isn't typed on `getInstallationOctokit`'s return).
 const createCommentSpy = vi.fn();
 const addLabelsSpy = vi.fn();
+const requestSpy = vi.fn(async (route: string, params: unknown) => {
+  if (route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments") {
+    return createCommentSpy(params);
+  }
+  if (route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels") {
+    return addLabelsSpy(params);
+  }
+  throw new Error(`unexpected octokit.request route: ${route}`);
+});
 const createGitHubAppClientSpy = vi.fn(async () => ({
-  rest: {
-    issues: {
-      createComment: createCommentSpy,
-      addLabels: addLabelsSpy,
-    },
-  },
+  request: requestSpy,
 }));
 vi.mock("@/server/github/app-client", () => ({
   createGitHubAppClient: createGitHubAppClientSpy,
@@ -190,14 +197,13 @@ describe("agent-on-spawn-requested handler", () => {
     });
     expect(result).toMatchObject({ acknowledged: true });
     expect(addLabelsSpy).toHaveBeenCalledTimes(1);
-    expect(addLabelsSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        owner: "acme",
-        repo: "repo",
-        issue_number: 42,
-        labels: ["soleur/acknowledged"],
-      }),
-    );
+    expect(addLabelsSpy).toHaveBeenCalledTimes(1);
+    expect(addLabelsSpy.mock.calls[0][0]).toMatchObject({
+      owner: "acme",
+      repo: "repo",
+      issue_number: 42,
+      labels: ["soleur/acknowledged"],
+    });
     expect(createCommentSpy).not.toHaveBeenCalled();
   });
 
