@@ -32,7 +32,7 @@ export const TC_VERSION = "2.2.1";
  *      `TC_VERSION` was also bumped.
  */
 export const TC_DOCUMENT_SHA =
-  "36d3b7372e7e567eb5dfc8df93e884cfaee3d57b99ed4c9377e5f08347b2632c";
+  "e87c8b453e377a932fa5febaf75fb7eec4c5295c4ada2d1461c8cfe4c6c8ba9f";
 
 /**
  * Bump-metadata for the current `TC_VERSION`. Consumed by the Art. 13(3)
@@ -48,6 +48,6 @@ export const TC_DOCUMENT_SHA =
  */
 export const TC_BUMP_METADATA = {
   lastUpdated: "May 22, 2026",
-  substantiveChange: "§3b.4 Side Letter no longer required (Owner choice of instrument)",
+  substantiveChange: "Workspace-Member responsibility simplified (Side Letter now optional)",
   fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
 } as const;

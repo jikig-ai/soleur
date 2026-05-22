@@ -68,9 +68,13 @@ describe("accept-terms/page.tsx middleware-outage banner", () => {
 describe("accept-terms/page.tsx TC_VERSION update banner", () => {
   const src = readFileSync(ACCEPT_TERMS_PAGE, "utf8");
 
-  test("consumes TC_BUMP_METADATA.substantiveChange (non-empty)", () => {
+  test("consumes TC_BUMP_METADATA.substantiveChange (sentence-shaped, ≥10 chars)", () => {
     expect(src.includes("TC_BUMP_METADATA.substantiveChange")).toBe(true);
-    expect(TC_BUMP_METADATA.substantiveChange).toMatch(/\S/);
+    // Sentence-shaped label: starts with a capital letter or §, no trailing
+    // period (banner template provides the period), at least 10 chars.
+    // Catches empty/garbage labels AND nonsensical interpolations from a
+    // future banner-template rewrite that would break grammatical parsing.
+    expect(TC_BUMP_METADATA.substantiveChange).toMatch(/^[§A-Z][^.]{9,}$/);
   });
 
   test("consumes TC_BUMP_METADATA.lastUpdated (canonical Last-Updated date)", () => {
