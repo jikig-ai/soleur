@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Snapshot the live GitHub App's identity + permissions + events via `GET /app`.
 #
-# Operator-only. CI uses the inline JWT-mint in
-# `.github/workflows/scheduled-github-app-drift-guard.yml` (mirror at lines
-# 127-158, shifted from 119-150 by the #4115 manifest-diff insertion)
-# instead of shelling out to this script — keeping CI free of any
-# external script reduces the runner's bash surface area. This script exists
+# Operator-only. The drift-guard scheduler uses the @octokit/app-driven
+# JWT mint in `apps/web-platform/server/github/probe-octokit.ts`
+# (`createAppJwtOctokit()`), invoked from
+# `apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts`,
+# instead of shelling out to this script — keeping the handler free of any
+# external script reduces the runtime's process-spawn surface. This script exists
 # so future re-snapshots (when GitHub adds a permission, when permissions
 # change) don't depend on operator memory of the JWT-mint dance.
 #
@@ -49,7 +50,9 @@ b64url() {
 }
 
 mint_jwt() {
-  # Mirror of scheduled-github-app-drift-guard.yml:123-150 mint_jwt.
+  # Operator-only JWT mint (the runtime handler at
+  # apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts
+  # uses @octokit/app via createAppJwtOctokit()).
   # 10-min cap is GitHub's hard ceiling; 540s forward + 60s backdate.
   set -o pipefail
   local backdate_s=60

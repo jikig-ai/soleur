@@ -22,23 +22,17 @@
 # convention.
 #
 # `failure_issue_threshold` default is 1 (single missed check-in opens an
-# issue). One remaining exception (`scheduled_github_app_drift_guard`, set
-# to 2) is still GHA-fired hourly, where a single transient network hiccup
-# is more likely than a real failure — requiring two consecutive misses
-# raises the noise floor without losing the signal. TR9 PR-4 follow-up
-# tracks migrating this last hourly monitor off GHA; at that point the
-# exception dissolves. All other monitors fire daily/weekly where a single
-# miss is itself noteworthy.
+# issue). All hourly Inngest-fired monitors use 1; daily/weekly monitors
+# use 1 because a single miss on a daily monitor is itself noteworthy.
 #
-# `checkin_margin_minutes` is sized per-substrate. GHA-fired monitors must
-# accommodate observed GHA hourly-cron drift (~150-min median / 293-min
-# max in the May 18-21 2026 window — far beyond the "~10-30 min daytime
-# jitter" model) — see the drift-guard resource below. Inngest-fired
-# monitors (`scheduled_oauth_probe`, `scheduled_daily_triage`,
-# `scheduled_follow_through`) fire deterministically with ≤2-min jitter,
-# so a 30-min margin is honest. TR9 PR-3 (#4211) migrated oauth-probe to
-# the Inngest substrate per the PR-1 (#3985) / PR-2 (#4062) precedent;
-# TR9 PR-4 tracks drift-guard.
+# `checkin_margin_minutes` is sized per-substrate. All hourly cron monitors
+# are now Inngest-fired (`scheduled_oauth_probe`, `scheduled_github_app_drift_guard`)
+# and use a 30-min margin — Inngest fires deterministically with ≤2-min
+# jitter, so 30 is honest. Daily/weekly monitors use 30-240 min as their
+# observed jitter dictates. The TR9 substrate-migration sequence completed
+# the move off GHA hourly cron: PR-1 #3985 (daily-triage), PR-2 #4062
+# (follow-through), PR-3 #4227 closing issue #4211 (oauth-probe), PR-4
+# closing issue #4235 (github-app-drift-guard).
 #
 # `max_runtime_minutes` only matters for two-step (in_progress -> ok/error)
 # check-ins where Sentry can detect a job exceeding its declared budget.
@@ -63,18 +57,11 @@ resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   timezone                = "UTC"
 }
 
-# TR9 PR-3 (#4211): now Inngest-fired via
-# `apps/web-platform/server/inngest/functions/cron-oauth-probe.ts`.
-# The GHA scheduled-oauth-probe workflow was deleted in the same commit
-# per TR9 I-13 hygiene. Margin / threshold revert to the honest
-# 30 / 1 values used by sibling Inngest monitors (`scheduled_daily_triage`,
-# `scheduled_follow_through`) — Inngest fires deterministically with ≤2-min
-# jitter, so a 30-min margin is real, not a GHA-jitter-cover decorative
-# value. The previous 360 / 2 bump (PR #4207, 2026-05-21) was immediate-
-# relief while the GHA substrate was the firing path; ADR-030 + ADR-033
-# precedent (PR-1 #3985, PR-2 #4062) shows the post-Inngest target.
-# Resource id, `name`, and Sentry monitor slug UNCHANGED — historical
-# check-in continuity preserved.
+# TR9 PR-3 (closes #4211): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-oauth-probe.ts`. The GHA
+# scheduled-oauth-probe workflow was deleted in the same commit per TR9 I-13
+# hygiene. Resource id, `name`, and Sentry monitor slug UNCHANGED —
+# historical check-in continuity preserved.
 resource "sentry_cron_monitor" "scheduled_oauth_probe" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
@@ -95,23 +82,19 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
 # workflow's schedule line lands in `.github/workflows/scheduled-cf-token-
 # expiry-check.yml` lines 13-15.
 
-# Margin bumped 180 → 360 on 2026-05-21: hourly GHA-cron substrate drifts
-# to ~150-min median / ~307-min max in the observed May 18-21 window —
-# 180 was silently absorbing misses below `failure_issue_threshold = 2`;
-# 360 preempts the next regression-issue fire. TR9 PR-4 follow-up tracks
-# migrating this monitor to the Inngest cron substrate (per the
-# `scheduled_oauth_probe` precedent above, where TR9 PR-3 #4211 dropped
-# margin back to 30 once on Inngest). Once that lands, the 360 / 2 values
-# revert to 30 / 1 and the joint-exception breadcrumb above can drop the
-# last named exception.
+# TR9 PR-4 (closes #4235): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts`.
+# The GHA scheduled-github-app-drift-guard workflow was deleted in the same
+# commit per TR9 I-13 hygiene. Resource id, `name`, and Sentry monitor slug
+# UNCHANGED — historical check-in continuity preserved.
 resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-github-app-drift-guard"
   schedule                = { crontab = "0 * * * *" }
-  checkin_margin_minutes  = 360
+  checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
-  failure_issue_threshold = 2
+  failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
 }
