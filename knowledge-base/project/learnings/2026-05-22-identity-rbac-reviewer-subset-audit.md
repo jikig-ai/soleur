@@ -38,12 +38,14 @@ Identity-touching = path-rule OR content-rule match per the dispatch glob at `pl
 
 Canonical attribution source: `git log --format=%B <review-sha>` on each branch's `review:` commit. (GitHub PR review/comment threads were empty — operator ran multi-agent review locally and recorded findings in the review commit body, then either fixed inline or filed scope-outs.)
 
-| PR | Review SHA | Agents credited in commit body | identity-rbac credited? |
-|---|---|---|---|
-| #4287 | `cf206114` | git-history-analyzer (P1, P2-1); pattern-recognition-specialist (P1-2, P1-1, P2-3); data-integrity-guardian (P1-A); migration-expert (P2-1); performance-oracle (P2-1); architecture-strategist (deferred ×2); test-design-reviewer (deferred) | **NO** |
-| #4289 | `29d80b80` | git-history-analyzer + data-integrity-guardian + pattern-recognition-specialist + test-design-reviewer (P2 concur); code-simplicity-reviewer (DISSENT flip) | **NO** |
-| #4294 | `5faf0134` | security-sentinel (P2 orphan-org FK); data-integrity-guardian (P2 down-mig guard); user-impact-reviewer (F7); pattern-recognition-specialist (stale comment); code-simplicity-reviewer (DISSENT flip); code-quality-analyst | **NO** |
-| #4339 | `6b2036ee` | pattern-recognition-specialist (F1/F3/F5); code-simplicity-reviewer (inline comment); data-integrity-guardian (P2 latent) | **NO** |
+| PR | Review SHA (pre-squash) | Squash-merge SHA (origin/main) | Agents credited in commit body | identity-rbac credited? |
+|---|---|---|---|---|
+| #4287 | `cf206114` | `e071b791` | git-history-analyzer (P1, P2-1); pattern-recognition-specialist (P1-2, P1-1, P2-3); data-integrity-guardian (P1-A); migration-expert (P2-1); performance-oracle (P2-1); architecture-strategist (deferred ×2); test-design-reviewer (deferred) | **NO** |
+| #4289 | `29d80b80` | `8877c198` | git-history-analyzer + data-integrity-guardian + pattern-recognition-specialist + test-design-reviewer (P2 concur); code-simplicity-reviewer (DISSENT flip) | **NO** |
+| #4294 | `5faf0134` | `ce53967f` | security-sentinel (P2 orphan-org FK); data-integrity-guardian (P2 down-mig guard); user-impact-reviewer (F7); pattern-recognition-specialist (stale comment); code-simplicity-reviewer (DISSENT flip); code-quality-analyst | **NO** |
+| #4339 | `6b2036ee` | `2d2ed6df` | pattern-recognition-specialist (F1/F3/F5); code-simplicity-reviewer (inline comment); data-integrity-guardian (P2 latent) | **NO** |
+
+The pre-squash SHAs are the canonical attribution source (a fresh clone of `origin/main` resolves them only via the squash-merge body); the squash-merge SHAs are reachable from `origin/main` and preserve the same `review:` ledger text verbatim, so the verdict is reproducible from either ref.
 
 Across the 4 PRs where identity-rbac-reviewer was eligible to fire, **zero** findings were attributed to it in the review-commit ledger. Every workspace-boundary-adjacent finding (mig 062 down-guard, mig 063 backfill ASSERTs, orphan-org RESTRICT→SET NULL, mig 062 idempotency hazard, stale-comment cleanup) was first-surfaced by `security-sentinel`, `data-integrity-guardian`, `pattern-recognition-specialist`, or `git-history-analyzer`.
 
@@ -73,7 +75,7 @@ The R1-R6 rules themselves are good — the verdict is about agent-architecture 
 
 ## Institutional lesson — falsifiability discipline worked
 
-The 7-day window between #4288 merging (2026-05-22) and the 5th identity-touching PR (#4339, same day under heavy traffic) is the right cadence: long enough to accumulate real attribution data, short enough that fold-back is still cheap (4 reference sites). Without the pre-committed falsifiability criterion, the standalone agent would have become load-bearing-by-default — fold gets harder the longer the agent exists (downstream references multiply, deletion blast-radius grows).
+The same-day burst between #4288 merging (2026-05-22T07:40Z) and the 5th identity-touching PR (#4339 at +4h54m) was much faster than the originally-expected multi-day cadence — 5 identity-touching PRs landed in a ~5-hour window. The empirical sample is still load-bearing (zero attributions across 4 eligible PRs) and fold-back is still cheap (4 reference sites); the lesson is that a high-traffic burst can satisfy the falsifiability criterion just as well as a deliberate week-long sample, as long as the dispatch eligibility is verified per-PR. Without the pre-committed falsifiability criterion, the standalone agent would have become load-bearing-by-default — fold gets harder the longer the agent exists (downstream references multiply, deletion blast-radius grows).
 
 **Pattern to repeat:** Any "split an existing reviewer into a sibling for clarity" decision should pre-commit an audit window with a binary fold-or-keep verdict criterion, so the choice is falsifiable post-merge rather than locked in by brainstorm-time judgment.
 

@@ -82,13 +82,13 @@ Agents are organized by domain, then by function.
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
-### Engineering (31)
+### Engineering (30)
 
 | Agent | Description |
 |-------|-------------|
 | `cto` | Engineering domain leader -- assesses technical implications and flags architecture risks during brainstorm and planning |
 
-#### Review (14)
+#### Review (17)
 
 | Agent | Description |
 |-------|-------------|
@@ -102,11 +102,13 @@ Agents are organized by domain, then by function.
 | `dhh-rails-reviewer` | Rails review from DHH's perspective |
 | `kieran-rails-reviewer` | Rails code review with strict conventions |
 | `legacy-code-expert` | Safely modify untested legacy code using Feathers' dependency-breaking techniques |
+| `observability-coverage-reviewer` | Verify every new error path / log call is reachable from Sentry/Better Stack without SSH (server-side code only) |
 | `pattern-recognition-specialist` | Analyze code for patterns and anti-patterns |
 | `performance-oracle` | Performance analysis and optimization |
-| `security-sentinel` | Security audits and vulnerability assessments |
+| `security-sentinel` | Security audits, vulnerability assessments, and multi-org / workspace boundary integrity (R1-R6 checklist) |
 | `semgrep-sast` | Deterministic SAST scanning using semgrep CLI for known vulnerability patterns |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
+| `user-impact-reviewer` | Enumerate user-facing failure modes when a plan declares Brand-survival threshold = single-user incident |
 
 #### Discovery (2)
 
