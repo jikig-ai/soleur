@@ -104,9 +104,79 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Path-filtered VRL config gate (#4293 / FR5). Runs only when this push
+  # touched apps/web-platform/infra/vector.toml or the fixture script. When
+  # vector.toml is not in the changed paths the steps no-op and the apply
+  # job resolves needs as success.
+  #
+  # Version pin sourced from apps/web-platform/infra/vector.tf locals at
+  # job-start time (IaC-3) -- no hardcoded Vector version in this YAML.
+  validate-vector-config:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
+
+      - name: Detect vector.toml / fixture changes
+        id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "vector_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only HEAD~1 HEAD | grep -qE '^(apps/web-platform/infra/vector\.toml|apps/web-platform/test/infra/)'; then
+            echo "vector_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "vector_changed=false" >> "$GITHUB_OUTPUT"
+            echo "Vector config + fixtures unchanged; skipping validate."
+          fi
+
+      - name: Parse vector_version from vector.tf
+        if: steps.changed.outputs.vector_changed == 'true'
+        id: vector_version
+        run: |
+          set -euo pipefail
+          v=$(awk -F'"' '/vector_version[[:space:]]*=/ { print $2; exit }' apps/web-platform/infra/vector.tf)
+          if [[ -z "$v" ]]; then
+            echo "ERROR: could not parse vector_version from vector.tf" >&2
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Vector version pinned: $v"
+
+      - name: Download Vector binary
+        if: steps.changed.outputs.vector_changed == 'true'
+        env:
+          V: ${{ steps.vector_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -sLo /tmp/vector.tar.gz "https://packages.timber.io/vector/${V}/vector-${V}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/vector.tar.gz -C /tmp ./vector-x86_64-unknown-linux-gnu/bin/vector
+          sudo mv /tmp/vector-x86_64-unknown-linux-gnu/bin/vector /usr/local/bin/vector
+          vector --version
+
+      - name: Schema validate (vector validate)
+        if: steps.changed.outputs.vector_changed == 'true'
+        env:
+          VECTOR_STRICT_ENV_VARS: "false"
+          BETTERSTACK_LOGS_TOKEN: dummy
+          SENTRY_USERID_PEPPER: dummy
+        run: vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml
+
+      - name: VRL fixture tests (BLOCKING -- Arch-F4)
+        if: steps.changed.outputs.vector_changed == 'true'
+        env:
+          SENTRY_USERID_PEPPER: fixture-only-do-not-use-in-prod
+        run: bash apps/web-platform/test/infra/vector-pii-scrub.test.sh
+
   apply:
-    needs: preflight
-    if: needs.preflight.outputs.skip != 'true'
+    needs: [preflight, validate-vector-config]
+    if: needs.preflight.outputs.skip != 'true' && (needs.validate-vector-config.result == 'success' || needs.validate-vector-config.result == 'skipped')
     runs-on: ubuntu-24.04
     # Budget: ~0.6 min/resource × ~70 targets = ~42 min worst-case cold-cache,
     # but plan + apply against an already-provisioned state typically completes
