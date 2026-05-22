@@ -144,6 +144,15 @@ jobs:
         with:
           node-version: 22
 
+      - name: Pin npm version
+        # The lockfile shape diverges between npm 10 (bundled with node:22.x on
+        # the runner) and npm 11 (the version operators typically have locally
+        # when `bun add` updates package.json without touching package-lock.json
+        # and they run `npm install --package-lock-only` to sync). Pinning to
+        # npm 11 here matches the committed lockfile's shape. See
+        # knowledge-base/project/learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md.
+        run: npm install -g npm@11
+
       - name: Regenerate package-lock.json
         working-directory: apps/web-platform
         run: npm install --package-lock-only
@@ -152,7 +161,7 @@ jobs:
         run: |
           if ! git diff --exit-code apps/web-platform/package-lock.json; then
             echo "::error::package-lock.json is out of sync with package.json in apps/web-platform/."
-            echo "::error::Run 'npm install' in apps/web-platform/ and commit the updated package-lock.json."
+            echo "::error::Run 'npx --yes npm@11 install --package-lock-only' in apps/web-platform/ and commit the updated package-lock.json. (CI pins npm@11 — using a different npm version locally will produce a divergent lockfile shape.)"
             exit 1
           fi
 
