@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
+import { LEGAL_DOC_SHAS } from "../lib/legal/legal-doc-shas";
 
 // Drift-class smoke test for apps/web-platform/scripts/check-tc-document-sha.sh
 // (the all-9-legal-docs SHA-pin guard). Verifies the script catches the
@@ -20,6 +21,9 @@ import { resolve, join } from "node:path";
 // lib/legal/, apps/web-platform/scripts/) so each test case can mutate
 // freely without touching the real working tree. spawnSync is invoked with
 // an explicit args array — no shell, no string interpolation, per AC7.
+//
+// Each test gets its own fresh tempdir via beforeEach so cases stay
+// order-independent and safe under concurrent execution.
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const SCRIPT_REL = "apps/web-platform/scripts/check-tc-document-sha.sh";
@@ -55,26 +59,46 @@ function runGuard(cwd: string): { status: number | null; stderr: string; stdout:
 describe("check-tc-document-sha.sh: drift-class smoke", () => {
   let tmp: string;
 
-  beforeAll(() => {
+  beforeEach(() => {
     tmp = makeTempCopy();
   });
 
-  afterAll(() => {
+  afterEach(() => {
     if (tmp) rmSync(tmp, { recursive: true, force: true });
   });
 
-  test("baseline: unmodified tree exits 0", () => {
+  test("EXPECTED_COUNT in the bash script matches the TS const-only file", () => {
+    // The bash sentinel `EXPECTED_COUNT=9` and the TS-side glob meta-
+    // assertion (legal-doc-consistency.test.ts) must stay in lockstep with
+    // the TS const file. There are 8 entries in LEGAL_DOC_SHAS plus T&C
+    // (whose SHA lives in tc-version.ts) → 9 total docs. If a future
+    // operator adds a doc to LEGAL_DOC_SHAS but forgets the bash sentinel,
+    // this assertion fails loudly.
+    const script = readFileSync(
+      resolve(REPO_ROOT, SCRIPT_REL),
+      "utf8",
+    );
+    const m = script.match(/^EXPECTED_COUNT=(\d+)\b/m);
+    expect(m, "EXPECTED_COUNT declaration not found in script").not.toBeNull();
+    const expectedFromScript = Number(m![1]);
+    expect(expectedFromScript).toBe(Object.keys(LEGAL_DOC_SHAS).length + 1);
+  });
+
+  test("baseline: unmodified tree exits 0 with no glob-empty warning", () => {
     const r = runGuard(tmp);
     expect(r.status, `stderr:\n${r.stderr}`).toBe(0);
+    // Positive control against a vacuous-pass shape where the glob silently
+    // returned zero entries (e.g. cpSync path typo): the script would print
+    // a "::warning::...glob returned 0..." line and still exit 0. Pinning
+    // this assertion makes the baseline gating-non-primitive.
+    expect(r.stderr).not.toMatch(/glob returned 0\b/);
   });
 
   test("mirror prose drift on T&C is detected (body-equivalence step)", () => {
-    // Restore baseline, then inject a sentinel paragraph into the T&C
-    // Eleventy mirror's content section. The sentinel is plain prose so
-    // the collapse + normalize_plugin pipeline preserves it; the canonical
-    // does not contain it, so the body-SHA comparison must fail.
-    rmSync(tmp, { recursive: true, force: true });
-    tmp = makeTempCopy();
+    // Inject a sentinel paragraph into the T&C Eleventy mirror's content
+    // section. The sentinel is plain prose so the collapse +
+    // normalize_plugin pipeline preserves it; the canonical does not
+    // contain it, so the body-SHA comparison must fail.
     const mirrorPath = join(tmp, "plugins/soleur/docs/pages/legal/terms-and-conditions.md");
     const original = readFileSync(mirrorPath, "utf8");
     const sentinel = "\n\nSENTINEL-MIRROR-DRIFT-FOR-TEST: this paragraph is only present in the test mutation.\n";
@@ -92,8 +116,6 @@ describe("check-tc-document-sha.sh: drift-class smoke", () => {
   });
 
   test("stale SHA literal on a non-T&C doc is detected", () => {
-    rmSync(tmp, { recursive: true, force: true });
-    tmp = makeTempCopy();
     const canonicalPath = join(tmp, "docs/legal/cookie-policy.md");
     const original = readFileSync(canonicalPath, "utf8");
     // Append a single newline byte — alters sha256 deterministically but
@@ -103,13 +125,15 @@ describe("check-tc-document-sha.sh: drift-class smoke", () => {
 
     const r = runGuard(tmp);
     expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
-    expect(r.stderr).toMatch(/cookie-policy/);
-    expect(r.stderr).toMatch(/LEGAL_DOC_SHAS/);
+    // Pin to the full stale-literal message to distinguish from the
+    // "literal missing" failure (different drift class with the same
+    // doc name in the output).
+    expect(r.stderr).toMatch(
+      /content changed but LEGAL_DOC_SHAS\["cookie-policy"\] is stale/,
+    );
   });
 
   test("stale SHA literal on T&C without TC_VERSION bump is detected", () => {
-    rmSync(tmp, { recursive: true, force: true });
-    tmp = makeTempCopy();
     const canonicalPath = join(tmp, "docs/legal/terms-and-conditions.md");
     const mirrorPath = join(tmp, "plugins/soleur/docs/pages/legal/terms-and-conditions.md");
     // Mutate both canonical AND mirror in lockstep so body-equivalence
@@ -129,11 +153,14 @@ describe("check-tc-document-sha.sh: drift-class smoke", () => {
     const r = runGuard(tmp);
     expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
     expect(r.stderr).toMatch(/TC_DOCUMENT_SHA literal is stale/);
+    // Guard against a future regression where the lockstep sentinel
+    // accidentally trips body-equivalence (e.g., if a new `collapse` sed
+    // rule matches the sentinel literal) — the failure should be SHA-
+    // stale, not body drift.
+    expect(r.stderr).not.toMatch(/T&C body drift/);
   });
 
   test("missing LEGAL_DOC_SHAS literal for a doc is detected", () => {
-    rmSync(tmp, { recursive: true, force: true });
-    tmp = makeTempCopy();
     const literalPath = join(tmp, "apps/web-platform/lib/legal/legal-doc-shas.ts");
     const original = readFileSync(literalPath, "utf8");
     // Drop the disclaimer entry — comment out the key/value pair.
@@ -146,7 +173,6 @@ describe("check-tc-document-sha.sh: drift-class smoke", () => {
 
     const r = runGuard(tmp);
     expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
-    expect(r.stderr).toMatch(/disclaimer/);
-    expect(r.stderr).toMatch(/literal/i);
+    expect(r.stderr).toMatch(/LEGAL_DOC_SHAS literal for "disclaimer" not found/);
   });
 });

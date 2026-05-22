@@ -37,10 +37,13 @@ LITERAL_FILE_OTHERS=apps/web-platform/lib/legal/legal-doc-shas.ts
 CANONICAL_DIR=docs/legal
 MIRROR_DIR=plugins/soleur/docs/pages/legal
 
-# Sentinel: bump in lockstep when a legal doc is added or removed.
-# A filesystem-glob hit count that disagrees with this constant emits a
-# ::warning:: and continues; an emergency wrong-deletion still gets caught
-# by the per-doc invariants below.
+# Sentinel (tripwire, NOT the actual gate). When a legal doc is added or
+# removed, bump this in lockstep with LEGAL_DOC_SHAS / docs/legal/. A
+# filesystem-glob hit count that disagrees emits a ::warning:: and
+# continues — the per-doc invariants below catch the wrong-deletion case.
+# A vitest harness (apps/web-platform/test/legal-doc-shas-guard.test.ts)
+# asserts EXPECTED_COUNT == |LEGAL_DOC_SHAS| + 1 so this constant cannot
+# silently drift from the TS map.
 EXPECTED_COUNT=9
 
 # ----------------------------------------------------------------------

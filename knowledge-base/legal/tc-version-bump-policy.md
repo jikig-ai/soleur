@@ -187,6 +187,17 @@ of the 8 above) MUST be paired with a refresh of the corresponding
 `LEGAL_DOC_SHAS["<doc>"]` entry in the same PR. There is NO equivalent
 of the T&C `TC_VERSION`-bump bypass; the SHA refresh is unconditional.
 
+**Body-equivalence scope (interim).** The CI guard enforces canonical-
+vs-Eleventy-mirror prose body-equivalence for **`terms-and-conditions`
+only**. The 8 notice docs receive SHA-pin only — the mirror's heading
+sequence and Last-Updated parity are covered by
+`apps/web-platform/test/legal-doc-consistency.test.ts`, but
+character-level body equivalence is deferred pending a one-off
+remediation PR that resolves the pre-existing benign drift (autolink
+forms, horizontal-rule layout differences, agent-count phrasing). Until
+that remediation lands, the operator's pre-flight responsibility is to
+visually compare canonical against mirror when editing a non-T&C doc.
+
 Workflow:
 
 1. Edit `docs/legal/<doc>.md`.
