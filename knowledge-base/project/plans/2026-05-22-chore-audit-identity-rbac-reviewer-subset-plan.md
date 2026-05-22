@@ -10,6 +10,25 @@ falsifiability-source: 4233
 
 Closes #4322.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-22
+**Sections enhanced:** Audit Data (verifications), Research Reconciliation (live SHA confirmation), Acceptance Criteria (regex-scoping refinements)
+**Deepen-plan gates run:** 4.6 User-Brand Impact (PASS — threshold=none documented), 4.7 Observability (SKIP — pure docs/agent-prose, no `plugins/*/scripts/` or `apps/*/{server,src,infra}/` paths), 4.8 PAT-shaped halt (PASS — zero matches)
+
+### Key Improvements after deepen-pass
+
+1. **Live SHA verification — all 4 review-commit SHAs in the audit table resolve on `main`:** `cf206114` (#4287), `29d80b80` (#4289), `5faf0134` (#4294), `6b2036ee` (#4339). No force-push amendment risk between plan-time and ship-time.
+2. **Live issue verification — all 9 cited issue numbers (#4233, #4288, #4304-#4307, #4318, #4322, #4329) exist with the expected state.** `#4233` is `CLOSED` (the falsifiability criterion's origin); `#4288` is `MERGED` (the agent-introduction PR); `#4304-#4307, #4318` are `OPEN` (the known-gap deferrals the R1-R6 checklist surfaces). No fabricated/retired-rule citations in the plan body.
+3. **Line-number drift check — SKILL.md citations are accurate at HEAD:** the identity-rbac dispatch block at lines 268-279 is confirmed; the `{#boundaries}` anchor at line 281 is confirmed; the duplicate `17.` numbering (lines 270 + 289) is confirmed and called out in Sharp Edges.
+
+### New Considerations Discovered during deepen-pass
+
+- **`#4322` self-grep scope hazard.** The Phase 6 verification grep `git grep -nE 'identity-rbac-reviewer|identity-rbac' plugins/ knowledge-base/ ...` MUST exclude both this plan AND the audit-learning that Phase 1 creates — otherwise the AC trivially fails post-write because the plan's prose contains the very token it's grepping for. The AC list already encodes the two `:!` pathspec excludes; verified at deepen time by `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} test -f {} || echo PENDING` (only `2026-05-22-identity-rbac-reviewer-subset-audit.md` is pending — the file Phase 1 creates).
+- **`security-sentinel.md` is 98 lines; appending an R1-R6 subsection (~76 lines from the source agent body, minus the front-matter and the "see boundaries" pointer) will roughly double the file.** This is acceptable — the agent body is a single LLM-prompt-style markdown file; doubling stays well under any practical context-window cost for spawning the agent.
+- **The `{#boundaries}` anchor is referenced cross-file** by `security-sentinel.md` (header line cites `plugins/soleur/skills/review/SKILL.md §boundaries`) and by other agent files. The Phase 3 rewrite MUST preserve the anchor verbatim and change ONLY the in-paragraph prose from four-reviewer to three-reviewer disambiguation. Captured in Sharp Edges.
+- **Alternative interpretation of the "empty attribution" finding.** Section 1 of the audit-learning (Phase 1) must explicitly address the counter-hypothesis that identity-rbac-reviewer was first-to-surface but the operator credited only the secondary re-surfacer in the commit body. Mitigation already in plan §Risks: even if identity-rbac was first-to-surface, every finding was also independently surfaced by an agent that fires on a broader trigger set (security-sentinel runs on every code PR). The standalone agent adds no marginal coverage even under the most charitable counter-interpretation.
+
 ## Overview
 
 PR #4288 (#4233) introduced the standalone `identity-rbac-reviewer` agent as a separable lens for multi-org / workspace boundary integrity. The plan §Implementation Choice carried a falsifiability criterion: after 5 identity-touching PRs post-merge, audit whether identity-rbac-reviewer's findings were a strict subset of other reviewers' findings — if so, fold the R1–R6 checklist back into `security-sentinel` as a "Multi-org / workspace boundary" subsection and delete the standalone agent.
@@ -54,6 +73,24 @@ Per-PR review commit attribution (canonical source: `git log --format=%B <review
 Across 4 PRs where identity-rbac-reviewer was eligible to fire and 100% of cases where the dispatch rule passed, **zero** findings were attributed to identity-rbac-reviewer in the review-commit ledger. Every workspace-boundary-adjacent finding (mig 062 down-guard, mig 063 backfill ASSERTs, orphan-org RESTRICT→SET NULL, mig 062 idempotency hazard) was attributed to security-sentinel, data-integrity-guardian, pattern-recognition-specialist, or git-history-analyzer.
 
 **Verdict: STRICT SUBSET (in fact, EMPTY) — fold R1–R6 into security-sentinel and delete the standalone agent.**
+
+### Research Insights
+
+**Institutional lesson — falsifiability discipline worked.** PR #4288's plan §Implementation Choice committed to a post-merge audit after 5 identity-touching PRs as a falsifiability criterion against the "Approach A (new agent) vs. Approach B (extend security-sentinel)" decision. Without that pre-committed criterion, the standalone agent would be load-bearing-by-default — fold becomes harder the longer the agent exists (downstream references multiply, deletion blast-radius grows). The 7-day window between #4288 merging (2026-05-15) and the 5th identity-touching PR (#4339 on 2026-05-22) is the right cadence: long enough to accumulate real attribution data, short enough that fold-back is still cheap (4 reference sites — see Files to Edit).
+
+**Why identity-rbac-reviewer was empirically empty.** Three structural reasons surface from the audit data:
+
+1. **Path-rule overlap with security-sentinel + data-integrity-guardian dispatch.** Every PR where identity-rbac was eligible (migration .sql, lib/supabase/tenant.ts, app/api/workspace) was already in security-sentinel's "code PR" universal scope AND in data-integrity-guardian's migration-safety scope. There was no diff shape that triggered identity-rbac but NOT one of the broader agents.
+2. **Workspace-boundary concerns are not orthogonal to OWASP/CWE concerns.** RLS predicate gaps (R1), write-boundary sentinels (R2), SECURITY DEFINER search_path pins (R5), and attestation owner-checks (R6) all map to OWASP A01 (Broken Access Control) / A03 (Injection) / A07 (ID & Auth Failures). The R1-R6 checklist is a domain-specific lens on top of security-sentinel's OWASP coverage, not a separable concern.
+3. **The five known-gap deferrals (#4304-#4307, #4318) are tracked as standalone issues** with their own owners and re-evaluation criteria. Surfacing them as `info`-severity on every identity-PR was design-time decoration — it added line-noise to the review output without changing reviewer behavior (the gaps are already in the backlog).
+
+**Forward-looking — preserving the checklist's value after fold.** The R1-R6 rules themselves are good — the audit verdict is about agent-architecture (standalone vs. inline), not about checklist content. The fold preserves the rules verbatim inside security-sentinel's body, ensuring future workspace-boundary PRs still get the lens via the agent that already fires on every code PR. Re-extraction is cheap if a future class emerges that security-sentinel cannot cover (per Risks §3).
+
+**References:**
+
+- PR #4288 (`feat(plugin): add identity-rbac-reviewer agent for multi-org/workspace boundary integrity (#4233)`) — the agent-introduction plan that pre-committed this audit.
+- Issue #4233 (`CLOSED`) — the originating "no current agent owns auth/sessions/RBAC cross-cutting" concern that motivated the agent.
+- Review-commit ledger pattern (canonical attribution source): `git log --grep="^review:" --format="%h %s" main` returns the per-PR review-fix commits, whose bodies attribute each P-rated finding to a specific agent. This is the load-bearing data source for any future "did agent X surface anything?" audit.
 
 ## Open Code-Review Overlap
 
