@@ -1,6 +1,6 @@
 ---
 name: flag-create
-description: "This skill should be used to create a new runtime feature flag end-to-end: registers the feature in Flagsmith, adds it to `RUNTIME_FLAGS` in server.ts, adds an env-var entry to .env.example, and mirrors the initial state to Doppler dev+prd."
+description: "Creates a new runtime feature flag end-to-end: Flagsmith feature + RUNTIME_FLAGS entry in server.ts + .env.example entry + Doppler dev/prd mirror."
 ---
 
 # flag-create
