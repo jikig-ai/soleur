@@ -1,6 +1,6 @@
 ---
 name: user-set-role
-description: "Promotes (or demotes) a Soleur user's flag-targeting role (prd/dev). Updates users.role via service-role Supabase + writes the Flagsmith identity trait so segment overrides take effect."
+description: "This skill should be used to promote or demote a user's flag-targeting role across Supabase users.role and the Flagsmith identity trait."
 ---
 
 # user-set-role

@@ -1,6 +1,6 @@
 ---
 name: flag-set-role
-description: "Flips a runtime feature flag's per-role (prd/dev) enablement in Flagsmith. Mirrors prd flips to Doppler so env-var fallback stays in sync. Rejects dev-off-while-prd-on (ADR-038 fallback-fidelity)."
+description: "This skill should be used to flip a runtime flag's per-role state in Flagsmith and mirror prd flips to Doppler."
 ---
 
 # flag-set-role
