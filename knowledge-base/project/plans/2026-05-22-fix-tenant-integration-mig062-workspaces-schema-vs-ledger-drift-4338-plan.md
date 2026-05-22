@@ -11,6 +11,61 @@ requires_cpo_signoff: false
 
 # fix(ci): tenant-integration mig 062 fails on missing public.workspaces — schema-vs-ledger drift on dev
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-22
+**Sections enhanced:** Overview / Root Cause / Research Reconciliation / Phase 2 / Phase 3 / Phase 4 / Risks / Observability
+**Verification gates executed:** Phase 4.5 (Network-Outage Deep-Dive — N/A, all `ssh` matches are in negation prose); Phase 4.6 (User-Brand Impact — PASS, threshold `none` with explicit non-sensitive-path scope-out reason); Phase 4.7 (Observability — PASS, all 5 fields populated with substantive content, `discoverability_test.command` uses `psql` not `ssh`); Phase 4.8 (PAT-shaped variable halt — PASS, zero matches).
+
+### Live verification artifacts (executed at deepen time)
+
+| Claim | Verification command | Result |
+|---|---|---|
+| Issue #4338 exists and is OPEN | `gh issue view 4338 --json state,title` | `OPEN`, title matches plan |
+| PR #4294 (PR-J, mig 062) merged | `gh pr view 4294 --json state` | `MERGED` |
+| PR #4225 (team-workspace 053/058/059/060) merged | `gh pr view 4225 --json state` | `MERGED` |
+| PR #4251 (unmerged-apply gate + drift probe) merged | `gh pr view 4251 --json state` | `MERGED` |
+| PR #4286 (postgrest-reload-schema hook) merged | `gh pr view 4286 --json state` | `MERGED` |
+| Failing CI run 26280818623 exists | `gh run view 26280818623 --json conclusion,headBranch` | `failure` on `main` |
+| Commit `ce53967f` (PR-J merge) reachable | `git rev-parse ce53967f` | `ce53967f53b22891…` |
+| Commit `7a922264` (team-workspace merge) reachable | `git rev-parse 7a922264` | `7a922264ec2b6933…` |
+| Commit `7ab25b71` (PR #4251 merge) reachable | `git rev-parse 7ab25b71` | `7ab25b711aded697…` |
+| Commit `be69fa94` (PR #4286 merge) reachable | `git rev-parse be69fa94` | `be69fa9479526d0c…` |
+| All 12 cited AGENTS.md rule IDs are ACTIVE | `for id in <ids>; do grep -qE "\[id: $id\]" AGENTS.md && echo OK \|\| echo MISSING; done` | 12/12 OK |
+| All 4 cited GitHub labels exist (AC8) | `gh label list \| grep ^<label>\b` | 4/4 OK |
+| Prior #4241 learning file exists | `[[ -f knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md ]]` | OK |
+| Drift-probe composite action exists | `[[ -f .github/actions/dev-migration-drift-probe/action.yml ]]` | OK |
+| Scheduled drift workflow exists | `[[ -f .github/workflows/scheduled-dev-migration-drift.yml ]]` | OK |
+| 062 contains `REFERENCES public.workspaces` | `grep -nE 'REFERENCES public\\.workspaces' apps/web-platform/supabase/migrations/062_*.sql` | line 77 |
+| 053 contains `CREATE TABLE IF NOT EXISTS public.workspaces` | `grep -nE 'CREATE TABLE.*public\\.workspaces' apps/web-platform/supabase/migrations/053_organizations_and_workspace_members.sql` | line 61 |
+| Phase 3 grep pattern correctly identifies workspaces as 062 dep | `grep -oE 'REFERENCES public\\.[a-z_][a-z0-9_]*' apps/web-platform/supabase/migrations/062_*.sql \| awk '{print $2}' \| sort -u` | `public.users`, `public.workspaces` |
+| Phase 4 grep pattern correctly identifies CREATEd tables in 053 | `grep -oE 'CREATE TABLE (IF NOT EXISTS )?public\\.[a-z_][a-z0-9_]*' apps/web-platform/supabase/migrations/053_*.sql \| awk '{print $NF}' \| sort -u` | `public.organizations`, `public.workspace_members`, `public.workspaces` |
+| Runner uses `set -euo pipefail` | `head -3 apps/web-platform/scripts/run-migrations.sh` | confirmed |
+| tenant-integration.yml checkout has NO `fetch-depth:` (defaults to 1) | `grep -B1 -A2 actions/checkout .github/workflows/tenant-integration.yml` | confirmed — NO with-block |
+| scheduled-dev-migration-drift.yml has `fetch-depth: 2` | `grep -A6 actions/checkout .github/workflows/scheduled-dev-migration-drift.yml` | confirmed |
+
+### Key Improvements
+
+1. **Phase 3 self-collision bug-fix (load-bearing).** The deepen pass discovered that 053_organizations_and_workspace_members.sql BOTH creates `public.workspaces` (line 61) AND references it (line 82, `workspace_members.workspace_id` FK). A naive `grep -oE 'REFERENCES public\\.*'` would surface `workspaces` as a dependency at probe time, AND on a fresh-dev first-apply the table doesn't yet exist — the probe would FAIL the apply for 053 itself. Phase 3.1 is updated to subtract the file's own `CREATE TABLE public.<name>` declarations from the referenced-set before probing. Without this fix, the runner probe would break first-apply against any fresh Supabase project that doesn't already have 053's schema.
+
+2. **fetch-depth=1 root cause for the "not on origin/main" false-positive cascade.** Research Reconciliation row #3 originally hypothesized the `git fetch` was failing. Live verification at deepen time shows the real cause: `tenant-integration.yml`'s `actions/checkout@v4.3.1` has NO `with: fetch-depth:` argument, defaulting to fetch-depth=1. The subsequent `git fetch --depth=1 origin main` in the drift-probe action lands `refs/remotes/origin/main` but the shallow clone state plus the action's chdir to `apps/web-platform` creates a confused git working state where `git ls-tree origin/main -- apps/web-platform/supabase/migrations/<file>` returns empty for files that clearly exist on main. The post-merge follow-up tracking issue (AC8) is updated to be specific: add `fetch-depth: 2` to `tenant-integration.yml`'s checkout step (mirrors the existing `scheduled-dev-migration-drift.yml` precedent at line 45).
+
+3. **Idempotency assertion for Phase 0.5 Branch A.** 053's backfill bodies (lines 187-188, 220-260) use `WHERE NOT EXISTS` discriminators on `organizations.owner_user_id`, `workspaces.id`, and the `(workspace_id, user_id)` PK. A re-apply against the existing schema (case where Branch A is chosen but partial schema persists) logs `0/0/0` rows inserted for backfill. The plan documents this so the operator knows what to expect in the re-apply logs.
+
+4. **Phase 2.1 precondition is safe against fresh-DB apply.** The deepen pass verified the precondition only fires when 053's `_schema_migrations` row exists AND `workspaces` doesn't. On a fresh apply: 053 commits FIRST (creating `workspaces`), then 062 runs the precondition (which passes because `workspaces` is now in `to_regclass`'s result). The precondition does NOT break first-apply.
+
+5. **Phase 4 preflight: tracking-row-vs-file-existence asymmetry handled.** The deepen pass added a `[[ -f "$path" ]] || continue` guard to the workflow preflight: if dev's ledger has a row for a file that no longer exists in this checkout (e.g., a migration was renamed and the ledger row wasn't migrated), the preflight skips it instead of false-rejecting. This is the right failure mode — file renames are out-of-scope for this drift class.
+
+### New Considerations Discovered
+
+- **The drift class addressed here is "ledger says applied, schema disagrees".** The orthogonal #4241 class is "ledger has rows for files not on origin/main". The two classes are fully independent — the new preflight (Phase 4.1) catches the new class without modifying the existing drift probe. Document both classes in the new learning file's "Generalized recipe" section.
+
+- **A future migration with dynamic `EXECUTE format('CREATE TABLE public.%I …', tbl_name)` would silently pass Phase 4's grep.** This is a known limitation of the regex-based parser; the plan body's Risks §R2 documents it. A complete solution would parse the SQL AST, which is out of scope. The runner-level probe (Phase 3) provides defense-in-depth for the FK class but does NOT cover dynamic CREATE TABLE either. The intentional design accepts the gap rather than ship a half-baked SQL parser.
+
+- **Phase 0.5 Branch B (manual forward apply) carries higher operational risk than Branch A** because it requires the operator to apply 053 → 058 → 059 → 060 → 061 in sequence against dev, each with their own non-trivial transaction body. Branch A delegates the apply chain to the runner, which already has the right discipline (atomic transaction, `INSERT INTO _schema_migrations` in the same commit, `ON_ERROR_STOP=1`). Branch A is strictly the recommended choice.
+
+- **The runner's `--single-transaction` argument wraps the file body + the `INSERT INTO _schema_migrations` row in one atomic commit (line 278 of run-migrations.sh).** This means a failure anywhere in the migration body rolls back BOTH the schema changes AND the ledger insert. Together with H3 (ruled out via this mechanism), this provides strong evidence the drift came from an out-of-band insert — most likely candidates: (i) the manual remediation chain during #4241's window, (ii) Supabase dashboard "Database → Migrations" UI write, (iii) an operator-paced script outside the runner. Without dev's Supabase audit log (read access not available to plan author), we cannot pick between (i)/(ii)/(iii); Phase 0.5.1 surfaces evidence (NULL `content_sha` is the load-bearing signal for an out-of-band insert).
+
 ## Overview
 
 Restore the `Tenant integration (dev-Supabase)` CI workflow to green by closing the schema-vs-ledger drift on dev-Supabase: `public._schema_migrations` records `053_organizations_and_workspace_members.sql`, `058_workspace_member_attestations.sql`, `059_workspace_keyed_rls_sweep.sql`, and `060_current_organization_jwt_hook.sql` as applied, but the schema state does not contain `public.workspaces` (verified at issue-file time via run `26280818623` — only `062` reached the `Applying:` line; 053-061 were skipped as already-applied; 062 then died with `ERROR: relation "public.workspaces" does not exist`).
@@ -218,21 +273,41 @@ The schema-vs-ledger split today surfaced as a cryptic FK error inside 062's tra
 
 The probe is opt-in via a new env var `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` so it can be rolled out gradually (CI sets it; ad-hoc operator runs default to off). The CI workflow sets it after Phase 4 wires the env.
 
-- [ ] **3.1** Add the probe to `apps/web-platform/scripts/run-migrations.sh` between line 254 (post-already-applied skip) and line 256 (`echo "Applying: $filename"`):
+- [ ] **3.1** Add the probe to `apps/web-platform/scripts/run-migrations.sh` between line 250-254 (the existing `already_applied` skip block) and line 256 (`echo "Applying: $filename"`):
 
   ```bash
   # Schema-presence probe (#4338). Before applying a migration, extract
-  # the `REFERENCES public.<table>` mentions from its body and confirm
-  # each table exists in the live schema. Catches the schema-vs-ledger
-  # drift class (ledger says applied; schema disagrees) one migration
-  # earlier than the FK parser would, with an error message that names
-  # the missing relation and links to the recovery learning.
+  # the `REFERENCES public.<table>` mentions from its body, SUBTRACT
+  # the tables the same file CREATEs, and confirm each remaining table
+  # exists in the live schema. Catches the schema-vs-ledger drift class
+  # (ledger says applied; schema disagrees) one migration earlier than
+  # the FK parser would, with an error message that names the missing
+  # relation and links to the recovery learning.
+  #
+  # SUBTRACTING same-file CREATEs is load-bearing: migration 053
+  # creates public.workspaces AND has an FK to it
+  # (workspace_members.workspace_id, line 82). Without the subtraction,
+  # a fresh-DB first-apply of 053 would fail the probe because the
+  # table doesn't yet exist when the probe runs — but it will exist
+  # immediately after 053's body executes. Self-references are the
+  # canonical FK pattern within a single migration; the probe must
+  # only catch CROSS-FILE dependencies.
+  #
   # Best-effort: degrades gracefully on parse-failure (the FK parser
   # remains the last line of defense).
   if [[ "${MIGRATION_SCHEMA_PRECONDITION_PROBE:-0}" == "1" ]]; then
     referenced_tables=$(grep -oE 'REFERENCES public\.[a-z_][a-z0-9_]*' "$migration_file" \
       | awk '{print $2}' \
       | sort -u || true)
+    same_file_creates=$(grep -oE 'CREATE TABLE (IF NOT EXISTS )?public\.[a-z_][a-z0-9_]*' "$migration_file" \
+      | awk '{print $NF}' \
+      | sort -u || true)
+    # comm -23: lines in referenced_tables NOT in same_file_creates.
+    # Both inputs are pre-sorted; tolerate empty inputs (comm errors
+    # on empty files in strict mode → guard with /dev/null fallbacks).
+    cross_file_deps=$(comm -23 \
+      <(printf '%s\n' "$referenced_tables" | sed '/^$/d') \
+      <(printf '%s\n' "$same_file_creates" | sed '/^$/d') 2>/dev/null || true)
     missing_tables=""
     while IFS= read -r tbl; do
       [[ -z "$tbl" ]] && continue
@@ -240,9 +315,9 @@ The probe is opt-in via a new env var `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` so
       if [[ "$exists" != "t" ]]; then
         missing_tables+="$tbl "
       fi
-    done <<<"$referenced_tables"
+    done <<<"$cross_file_deps"
     if [[ -n "$missing_tables" ]]; then
-      echo "::error::Migration $filename references tables that do not exist: $missing_tables"
+      echo "::error::Migration $filename references tables that do not exist in the live schema: $missing_tables"
       echo "::error::This indicates a schema-vs-ledger drift on this Supabase project."
       echo "::error::See knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md for the recovery procedure."
       exit 1
@@ -251,6 +326,8 @@ The probe is opt-in via a new env var `MIGRATION_SCHEMA_PRECONDITION_PROBE=1` so
   ```
 
   **Why best-effort, not always-on.** The probe's parse logic (`grep -oE 'REFERENCES public\.…'`) catches the common case (FK declarations in `CREATE TABLE`) but misses dynamic SQL (`EXECUTE format('… REFERENCES public.%I …', …)`), dependencies on functions/views/types/sequences (only relation-class objects are probed), and dependencies hidden behind `DO $$ … $$` blocks. A future migration could pass the probe and still trip a different missing-relation error. The probe is a load-bearing diagnostic improvement, NOT a complete dependency resolver — that's why the FK parser remains the last line of defense.
+
+  **Verified at deepen time.** Running the parse logic against current 062 returns `public.users public.workspaces` (matches expectations). Running against 053 returns `public.users public.workspaces` for REFERENCES but the `comm -23` subtracts `public.workspaces` (since 053 also CREATEs it), leaving only `public.users` — which already exists from migration 001. Correct behavior.
 
 - [ ] **3.2** Add a test for the probe in `apps/web-platform/scripts/lib/run-migrations-schema-probe.test.sh` (matching the existing `*.test.sh` convention in `apps/web-platform/scripts/`):
 
@@ -367,7 +444,7 @@ The runner-level probe (Phase 3) fires per-migration. Add a workflow-level prefl
 
 ### Post-merge (operator)
 
-- [ ] **AC8** Within 24 hours of merge, operator opens a follow-up tracking issue for the `git fetch origin main` reliability gap noted in Research Reconciliation row #3 (workflow's drift-probe action sees every migration as "not on origin/main", which means the gate is degraded to a permanent warning). Tracking-only; not a code change in this PR. Labels: `domain/engineering`, `chore`, `priority/p3-low`.
+- [ ] **AC8** Within 24 hours of merge, operator opens a follow-up tracking issue titled "ci(tenant-integration): add `fetch-depth: 2` to checkout to fix `not on origin/main` false-positive cascade" — verified at deepen time as the root cause for Research Reconciliation row #3. The fix is a 2-line YAML edit (mirrors `scheduled-dev-migration-drift.yml:40-45` precedent which already uses `fetch-depth: 2`). Tracking-only; not a code change in this PR (orthogonal to the schema-vs-ledger fix). Labels: `domain/engineering`, `chore`, `priority/p3-low`.
 - [ ] **AC9** Operator verifies prd-Supabase is unaffected by running `gh workflow run web-platform-release.yml --ref main` and confirming the migrate job lands green. Prd ledger + schema state are managed via a separate apply path (per `hr-dev-prd-distinct-supabase-projects`); the drift class addressed here is dev-only.
 
 ## Test Scenarios
