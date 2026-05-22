@@ -11,7 +11,8 @@
 
 import { inngest } from "@/server/inngest/client";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
-import { runWithByokLease } from "@/server/byok-lease";
+// BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
+import { resolveKeyOwnerThenLease } from "@/server/byok-resolver";
 import { reportSilentFallback } from "@/server/observability";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import {
@@ -205,9 +206,15 @@ export async function githubOnEventHandler({
   // unitCostCents=0 deterministically. Mirrors the marker at
   // cfo-on-payment-failed.ts.
   const _draft = await step.run("draft-github-card", async () => {
-    return runWithByokLease(
-      { workspaceContextUserId: founderId, keyOwnerUserId: founderId },
-      async () => {
+    // Sentinel sweep site #5 (#4232 PR-A). callerUserId = founderId
+    // from Inngest event payload (server-emitted by github-on-event
+    // webhook handler — never request-body-derived from GitHub
+    // payload signers, which carry repo-scoped identity not user-
+    // scoped).
+    return resolveKeyOwnerThenLease(
+      founderId,
+      founderId,
+      async (_lease) => {
       // STUB: leader prompt loop wires later. Return raw preview now
       // so the persist step has the right shape to redact + insert.
       return {

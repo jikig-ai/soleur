@@ -76,10 +76,11 @@ import {
 // (which returns a bare string) to `lease.getApiKey()` inside
 // `runWithByokLease`. Closes #3392 (cc-dispatcher BYOK item).
 import {
-  runWithByokLease,
   MissingByokKeyError,
   reportMissingByokKey,
 } from "./byok-lease";
+// BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
+import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import {
   fetchUserWorkspacePath,
@@ -887,8 +888,12 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Phase 3 (feat-team-workspace-multi-user): N2 invariant pins
   // workspaceContextUserId === keyOwnerUserId for solo workspaces;
   // team workspaces will diverge when Phase 4 invite flow ships.
-  return runWithByokLease(
-    { workspaceContextUserId: args.userId, keyOwnerUserId: args.userId },
+  // Sentinel sweep site #3 (#4232 PR-A). callerUserId = args.userId
+  // (server-derived per cc-dispatcher contract; provenance in PR body).
+  // N2 solo invariant kept: callerUserId === workspaceContextUserId.
+  return resolveKeyOwnerThenLease(
+    args.userId,
+    args.userId,
     async (lease): Promise<Query> => {
     // Plan §2.11 canonical pattern (mirrors agent-runner.ts:2361):
     // hoist `await lease.getApiKey()` OUT of `Promise.all` so the
@@ -1713,6 +1718,21 @@ export async function dispatchSoleurGo(
       // try/catch covers the residual synchronous-throw surface.
       // Phase 3 (feat-team-workspace-multi-user) — workspaceId from
       // userId under N2 invariant; see agent-runner.ts:1884 comment.
+      //
+      // BYOK Delegations PR-A (#4232) FOLLOW-UP. The lease scope opens
+      // inside `realSdkQueryFactory` (line 890) and CLOSES before this
+      // `onResult` callback fires (the queryFactory returns a Query
+      // iterator; the runner consumes it asynchronously). `lease.
+      // delegationId` is unreachable from this scope. Closing this gap
+      // needs a closure-captured `delegationContext` threaded from
+      // `realSdkQueryFactory` through `getSoleurGoRunner`'s state class
+      // into the `onResult` callback signature. Until that lands,
+      // cc-soleur-go runs under an active delegation will silently
+      // audit-attribute to the grantor via the SOLO `write_byok_audit`
+      // path — RPC-level cap checks DO NOT fire. Tracked for Phase 4
+      // alongside the integration tests that can validate the
+      // closure-capture wiring end-to-end. The legacy agent-runner.ts
+      // path (`:1911`) IS in-scope and threads correctly today.
       persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, userId, result);
     },
     onSessionIdCaptured: (capturedSessionId) => {

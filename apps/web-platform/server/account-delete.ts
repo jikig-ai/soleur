@@ -82,6 +82,16 @@ export interface DeleteAccountResult {
  *                             session_replication_role='replica' suppresses
  *                             the AFTER trigger — this step only anonymises
  *                             rows from prior legitimate invite/remove RPC calls.
+ *   5.10 anonymise-byok-delegations — anonymise_byok_delegations RPC
+ *                             (migration 064, BYOK Delegations PR-A #4232).
+ *                             Active rows take WORM Shape 1 (revoke flip with
+ *                             reason='art_17_anonymise'), then WORM Shape 2
+ *                             nulls identity + workspace + actor cols in a
+ *                             single txn. Required: byok_delegations.{grantor,
+ *                             grantee,created_by,revoked_by,cap_updated_by}
+ *                             all REFERENCES users(id) ON DELETE RESTRICT —
+ *                             without this step the auth-delete cascade
+ *                             would abort.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -505,6 +515,37 @@ export async function deleteAccount(
     log.error(
       { userId, err },
       "anonymise_workspace_member_actions threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.94 Anonymise byok_delegations (migration 064, #4232 PR-A).
+  //      byok_delegations.{grantor,grantee,created_by,revoked_by,
+  //      cap_updated_by}_user_id all reference users(id) ON DELETE
+  //      RESTRICT — without this step the auth-delete cascade would
+  //      abort with FK 23503. The RPC writes WORM Shape 1 (revoke
+  //      flip with revocation_reason='art_17_anonymise') for any
+  //      currently-active rows, then WORM Shape 2 nulls identity +
+  //      workspace + actor cols in a single txn. Idempotent: re-runs
+  //      no-op once every row referencing this user has been
+  //      anonymised. Sibling-error shape with anonymise_workspace_
+  //      member_actions above.
+  try {
+    const { error: anonByokErr } = await service.rpc(
+      "anonymise_byok_delegations",
+      { p_user_id: userId },
+    );
+    if (anonByokErr) {
+      log.error(
+        { userId, err: anonByokErr },
+        "anonymise_byok_delegations failed — aborting deletion to avoid FK-block",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_byok_delegations threw — aborting deletion to avoid FK-block",
     );
     return { success: false, error: "Account deletion failed. Please try again." };
   }

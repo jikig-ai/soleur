@@ -5,8 +5,13 @@
 //   1. Atomically increment `conversations.{total_cost_usd,
 //      input_tokens, output_tokens, cache_read_input_tokens,
 //      cache_creation_input_tokens}` via the v2 RPC.
-//   2. Append a forensic row to `audit_byok_use` via the existing
-//      `write_byok_audit` RPC (migration 037).
+//   2a. Solo path — append a forensic row to `audit_byok_use` via the
+//      existing `write_byok_audit` RPC (migration 037).
+//   2b. BYOK Delegations PR-A (#4232) — when `delegationId` is set,
+//      route the audit through the merged atomic RPC
+//      `check_and_record_byok_delegation_use` (migration 063) which
+//      performs grace + expired + hourly + daily cap checks under a
+//      single FOR UPDATE row lock before INSERTing the audit row.
 //   3. Fan out a `usage_update` WS event to the client (widened with
 //      cache tokens).
 //   4. Mirror all silent fallbacks to Sentry per
@@ -21,6 +26,12 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "@/server/observability";
 import { sendToClient } from "@/server/ws-handler";
 import { createChildLogger } from "@/server/logger";
+import {
+  ByokDelegationRevokedError,
+  ByokDelegationExpiredError,
+  ByokDelegationHourlyCapError,
+  ByokDelegationDailyCapError,
+} from "./byok-resolver";
 
 const log = createChildLogger("cost-writer");
 
@@ -69,12 +80,27 @@ export interface TurnCostInput {
  *                       `workspace-resolver.getDefaultWorkspaceForUser`.
  * @param input          Cost + usage payload from the SDK result message.
  */
+/**
+ * BYOK Delegations PR-A (#4232). Optional delegation context. When
+ * `delegationId` is set, the audit RPC routes to the merged atomic
+ * `check_and_record_byok_delegation_use` (mig 063) which enforces
+ * caps under a row lock + writes the audit row with attribution
+ * shift on post-grace/expired paths. `callerUserId` is the actual
+ * lease consumer (grantee under delegation, self under solo); see
+ * the SS F3 invariant comment in `byok-resolver.ts`.
+ */
+export interface ByokDelegationContext {
+  delegationId: string;
+  callerUserId: string;
+}
+
 export function persistTurnCost(
   userId: string,
   conversationId: string,
   leaderId: string,
   workspaceId: string,
   input: TurnCostInput,
+  delegation?: ByokDelegationContext,
 ): void {
   const costDelta = Number.isFinite(input.totalCostUsd) ? input.totalCostUsd : 0;
   const usage = input.usage;
@@ -110,39 +136,103 @@ export function persistTurnCost(
       }
     });
 
-  // (2) Forensic audit row via the existing migration-037 RPC. WORM
-  //     trigger raises on UPDATE/DELETE, so plain INSERT semantics.
-  //     Sub-cent precision is lost intentionally — the cent-precision
-  //     surface stays on `conversations.total_cost_usd`. Duplicate
-  //     audit rows on retry are tolerated (idempotency is not
-  //     load-bearing for a forensic surface).
+  // (2) Forensic audit row. WORM trigger raises on UPDATE/DELETE, so
+  //     plain INSERT semantics. Sub-cent precision is lost intentionally
+  //     — the cent-precision surface stays on
+  //     `conversations.total_cost_usd`. With `invocation_id` UNIQUE
+  //     (mig 063 Phase 0.9), the merged RPC's `ON CONFLICT
+  //     (invocation_id) DO NOTHING` makes Inngest retries idempotent.
   const totalTokens =
     usage.input_tokens +
     usage.output_tokens +
     usage.cache_read_input_tokens +
     usage.cache_creation_input_tokens;
-  supabase()
-    .rpc("write_byok_audit", {
-      p_invocation_id: randomUUID(),
-      p_founder_id: userId,
-      p_workspace_id: workspaceId,
-      p_agent_role: leaderId,
-      p_token_count: totalTokens,
-      p_unit_cost_cents: Math.round(costDelta * 100),
-    })
-    .then(({ error }) => {
-      if (error) {
-        log.error(
-          { err: error, conversationId, userId },
-          "Failed to write byok audit row",
-        );
-        reportSilentFallback(error, {
-          feature: "agent-cost-tracking",
-          op: "audit-write",
-          extra: { conversationId, totalTokens, costCents: Math.round(costDelta * 100) },
-        });
-      }
-    });
+  const invocationId = randomUUID();
+  const unitCostCents = Math.round(costDelta * 100);
+
+  if (delegation) {
+    // (2b) Delegated path — merged atomic RPC. SQLSTATE P0001 with a
+    // `^byok_delegations:<reason>` message maps to sibling errors
+    // (see ByokDelegationError hierarchy in byok-resolver.ts). The
+    // RPC itself writes the audit row with `attribution_shift_reason`
+    // set on post-grace / expired paths; cap-exceeded raises WITHOUT
+    // a row.
+    supabase()
+      .rpc("check_and_record_byok_delegation_use", {
+        p_delegation_id: delegation.delegationId,
+        p_invocation_id: invocationId,
+        p_token_count: totalTokens,
+        p_unit_cost_cents: unitCostCents,
+        p_caller_user_id: delegation.callerUserId,
+        p_agent_role: leaderId,
+      })
+      .then(({ error }) => {
+        if (!error) return;
+        const message = error.message ?? "";
+        const baseExtra = {
+          conversationId,
+          delegationId: delegation.delegationId,
+          totalTokens,
+          costCents: unitCostCents,
+        };
+        if (message.includes("byok_delegations:revoked_post_grace")) {
+          reportSilentFallback(
+            new ByokDelegationRevokedError(delegation.delegationId),
+            { feature: "byok-delegations", op: "revoke-past-grace", extra: baseExtra },
+          );
+        } else if (message.includes("byok_delegations:expired")) {
+          reportSilentFallback(
+            new ByokDelegationExpiredError(delegation.delegationId),
+            { feature: "byok-delegations", op: "expired", extra: baseExtra },
+          );
+        } else if (message.includes("byok_delegations:hourly_cap_exceeded")) {
+          reportSilentFallback(
+            new ByokDelegationHourlyCapError(delegation.delegationId),
+            { feature: "byok-delegations", op: "hourly-cap-exceeded", extra: baseExtra },
+          );
+        } else if (message.includes("byok_delegations:daily_cap_exceeded")) {
+          reportSilentFallback(
+            new ByokDelegationDailyCapError(delegation.delegationId),
+            { feature: "byok-delegations", op: "daily-cap-exceeded", extra: baseExtra },
+          );
+        } else {
+          log.error(
+            { err: error, conversationId, userId, delegationId: delegation.delegationId },
+            "Failed to record delegation use",
+          );
+          reportSilentFallback(error, {
+            feature: "byok-delegations",
+            op: "merged-rpc-failure",
+            extra: baseExtra,
+          });
+        }
+      });
+  } else {
+    // (2a) Solo path — existing migration-037 RPC (extended to 6 args
+    // in mig 061 with p_workspace_id).
+    supabase()
+      .rpc("write_byok_audit", {
+        p_invocation_id: invocationId,
+        p_founder_id: userId,
+        p_workspace_id: workspaceId,
+        p_agent_role: leaderId,
+        p_token_count: totalTokens,
+        p_unit_cost_cents: unitCostCents,
+      })
+      .then(({ error }) => {
+        if (error) {
+          log.error(
+            { err: error, conversationId, userId },
+            "Failed to write byok audit row",
+          );
+          reportSilentFallback(error, {
+            feature: "agent-cost-tracking",
+            op: "audit-write",
+            extra: { conversationId, totalTokens, costCents: unitCostCents },
+          });
+        }
+      });
+  }
 
   // (3) Fan out `usage_update` so the client cost badge reflects the
   //     just-billed turn. Widened with cache tokens so the chat-surface
