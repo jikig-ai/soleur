@@ -1,4 +1,5 @@
 "use client";
+// <!-- anti-slop:disable MIN-H-SCREEN-CENTERED-HERO reason="Next.js root error boundary; full-viewport centered hero is the canonical pattern for this surface" -->
 import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
 
