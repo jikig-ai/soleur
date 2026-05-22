@@ -22,6 +22,7 @@
 // reasons documented in `app-client.ts`.
 
 import { App } from "@octokit/app";
+import type { AppAuthentication } from "@octokit/auth-app";
 
 const APP_ID_ENV = "GITHUB_APP_ID";
 const PRIVATE_KEY_ENV = "GITHUB_APP_PRIVATE_KEY";
@@ -66,4 +67,37 @@ export async function createProbeOctokit() {
   );
 
   return app.getInstallationOctokit(installation.id);
+}
+
+/**
+ * TR9 PR-4 (#4235, AC4) — App-level JWT Octokit for `/app` + `/app/installations`.
+ *
+ * Mints an app-level JWT Octokit for surfaces requiring app-level
+ * authentication (the drift-guard's `GET /app` and `GET /app/installations`
+ * calls). Returns `{ octokit, appJwt }`:
+ *   - `octokit` is `app.octokit` (the app-level Octokit, NOT installation-
+ *     scoped) so callers can hit `/app` directly.
+ *   - `appJwt` is the raw JWT string so the leak tripwire (assertNoLeak in
+ *     cron-github-app-drift-guard.ts) can assert it never appears in
+ *     handler-emitted strings (Sentry breadcrumb, issue body, Resend body).
+ *
+ * CRITICAL: Deliberately omits the audit-writer hook (`audit_github_token_use`).
+ * The drift-guard is platform-owned synthetic traffic; writing audit rows
+ * would pollute the Article 30 PA-16 founder-activity ledger. Mirror of
+ * `createProbeOctokit()`'s same rationale.
+ *
+ * @throws if GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY is missing.
+ */
+export async function createAppJwtOctokit(): Promise<{
+  octokit: InstanceType<typeof App>["octokit"];
+  appJwt: string;
+}> {
+  const app = new App({
+    appId: readEnv(APP_ID_ENV),
+    privateKey: readEnv(PRIVATE_KEY_ENV),
+  });
+  // Cast: @octokit/app's `app.octokit.auth` overloads accept various option
+  // shapes; the `{ type: "app" }` form resolves to AppAuthentication at runtime.
+  const auth = (await app.octokit.auth({ type: "app" })) as AppAuthentication;
+  return { octokit: app.octokit, appJwt: auth.token };
 }
