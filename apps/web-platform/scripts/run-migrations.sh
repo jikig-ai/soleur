@@ -284,3 +284,16 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
 done
 
 echo "Migration run complete: $applied applied, $skipped skipped."
+
+# Post-apply: force a PostgREST schema-cache reload via the Supabase
+# Management API (issue #4285). Direct-pg apply paths through the IPv4
+# session-mode pooler cannot deliver NOTIFY to PostgREST's LISTEN — every
+# supabase-js call against a freshly-added table returns PGRST205 until
+# PostgREST's natural ~10-min schema poll. The Management-API path runs
+# the NOTIFY on a backend that shares process identity with PostgREST's
+# listener, so the reload actually fires. `--best-effort` ensures a
+# missing SUPABASE_PAT or any transient upstream error never fails the
+# migration run. See learning 2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md §Prevention #5.
+if [[ "$applied" -gt 0 ]]; then
+  bash "$SCRIPT_DIR/postgrest-reload-schema.sh" --best-effort || true
+fi
