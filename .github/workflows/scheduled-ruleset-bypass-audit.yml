@@ -28,7 +28,7 @@
 # (no persistence).
 #
 # Failure routing (3-output model, mirror of
-# scheduled-github-app-drift-guard.yml):
+# apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts):
 #   - bypass_actors_drift              -> ci/auth-broken + compliance/critical
 #   - canonical_file_*, github_api_*   -> ci/guard-broken
 #   - token_scope_insufficient (#3569) -> ci/guard-broken (audit token
@@ -103,7 +103,8 @@ jobs:
 
       # ---- App-JWT -> installation-token mint (#3569) ----
       # Three-step chain: (1) mint RS256 App-JWT inline (drift-guard pattern,
-      # lines 127-158 of scheduled-github-app-drift-guard.yml), (2) resolve
+      # now in apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts
+      # via createAppJwtOctokit() in apps/web-platform/server/github/probe-octokit.ts), (2) resolve
       # this repo's installation_id at runtime via /repos/{owner}/{repo}/installation
       # so we don't need a new INSTALLATION_ID secret, (3) POST to
       # /app/installations/{id}/access_tokens with scope-down body so the

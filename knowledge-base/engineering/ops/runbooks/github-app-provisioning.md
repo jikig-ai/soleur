@@ -24,7 +24,7 @@ case b). Everything else is automated.
   (rare; usually `terraform apply -replace` on the webhook secret + a
   manifest update is enough).
 - Follow-up to a `permission_drift` alert from
-  [`scheduled-github-app-drift-guard.yml`](../../../../.github/workflows/scheduled-github-app-drift-guard.yml).
+  [`cron-github-app-drift-guard.ts`](../../../../apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts).
 
 ## The 4-step operator flow
 
@@ -91,13 +91,14 @@ Procedure:
    Expected: the new key is present at the listed level (e.g.,
    `"secrets": "write"`).
 
-4. The next hourly run of `scheduled-github-app-drift-guard.yml` will
-   re-check the installation grant against the committed manifest via the
-   `installation_permission_drift` failure mode (#4179). Any open tracking
-   issue labeled `ci/auth-broken` titled "GitHub App drift-guard..." will
-   auto-close once the run is green (existing auto-close-stale step in the
-   workflow). To force immediate verification instead of waiting up to an
-   hour: `gh workflow run scheduled-github-app-drift-guard.yml --ref main`.
+4. The next hourly run of `cron-github-app-drift-guard.ts` (Inngest cron
+   substrate, TR9 PR-4) will re-check the installation grant against the
+   committed manifest via the `installation_permission_drift` failure mode
+   (#4179). Any open tracking issue labeled `ci/auth-broken` titled
+   "GitHub App drift-guard..." will auto-close once the run is green
+   (existing auto-close-stale logic in the handler). To force immediate
+   verification instead of waiting up to an hour:
+   `inngest send cron/github-app-drift-guard.manual-trigger --data '{}'`.
 
    To confirm auto-close fired:
 
@@ -184,8 +185,10 @@ doppler secrets get GITHUB_APP_PRIVATE_KEY --plain -p soleur -c prd \
 chmod 600 /tmp/app.pem
 APP_ID=$(doppler secrets get GITHUB_APP_ID --plain -p soleur -c prd)
 
-# 2. Mint a 10-min App-JWT inline (mirrors
-#    `.github/workflows/scheduled-github-app-drift-guard.yml:127-158`):
+# 2. Mint a 10-min App-JWT inline (the runtime handler uses
+#    `createAppJwtOctokit()` at
+#    apps/web-platform/server/github/probe-octokit.ts;
+#    this operator-only mint mirrors that contract):
 b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
 now=$(date +%s)
 header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
@@ -237,7 +240,7 @@ permission key, or the operator grants an additional permission via the
 GitHub dashboard for any reason), the operator MUST commit a corresponding
 update to `apps/web-platform/infra/github-app-manifest.json` in a
 follow-up PR within ~1 hour, OR the
-[drift-guard cron](../../../../.github/workflows/scheduled-github-app-drift-guard.yml)
+[drift-guard cron](../../../../apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts)
 will file a `ci/auth-broken` issue on the next hourly tick.
 
 **Suppression window for planned changes**: when the manifest-touching PR
