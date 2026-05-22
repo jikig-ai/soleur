@@ -99,7 +99,7 @@ missing recipient disclosure at flag-flip time (Art. 13(1)(e) gap); ToS
 co-member `recipient_id_hash` exposure path that ToS indemnification fails
 to cover.
 
-**Brand-survival threshold:** `single-user incident`.
+- **Brand-survival threshold:** `single-user incident`.
 
 The `user-impact-reviewer` agent at PR review is the load-bearing gate.
 CPO sign-off captured in brainstorm + reaffirmed by carry-forward in this
@@ -195,9 +195,12 @@ logs:
   where: tc_acceptances table (Postgres) + Sentry events
   retention: indefinite as append-only audit record; Art-17 anonymise RPC for erasure cascade
 discoverability_test:
-  command: |
-    psql "$DATABASE_URL" -c "select count(*) from tc_acceptances where version = '2.2.0';"
-  expected_output: post-merge: 0 → monotonically increasing as users log in; cap at registered user count
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/accept-terms
+  expected_output: "200 or 307"
+  operator_runbook: |
+    psql query against the audit ledger (run from a shell with DATABASE_URL set in Doppler dev/prd):
+      psql -c "select count(*) from tc_acceptances where version = '2.2.0';"
+    post-merge: 0 then monotonically increasing as users re-accept; cap at registered user count.
 ```
 
 NO ssh-based verification needed; all signals are API/CI/SQL queryable.
