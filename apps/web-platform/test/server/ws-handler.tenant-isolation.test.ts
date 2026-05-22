@@ -91,6 +91,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id,
+          workspace_id: userB.id, // solo-canary per mig 059 backfill
           session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           status: "active",
         })
@@ -185,6 +186,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id, // attacker spoofs ownership
+          workspace_id: userB.id, // spoofs workspace too; RLS WITH CHECK denies
           session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           status: "active",
         })
