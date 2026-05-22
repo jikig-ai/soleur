@@ -1,5 +1,5 @@
--- 063_byok_delegations.down.sql
--- Reverse of 063_byok_delegations.sql. Drops in dependency-safe order:
+-- 064_byok_delegations.down.sql (renumbered from 063 mid-flight).
+-- Reverse of 064_byok_delegations.sql. Drops in dependency-safe order:
 --   1. Workspace-members trigger (depends on byok_delegations_on_member_delete fn)
 --   2. RPCs that reference byok_delegations
 --   3. WORM + same-workspace triggers
@@ -48,7 +48,7 @@ ALTER TABLE public.audit_byok_use
 -- load-bearing for Inngest-retry idempotency once any record_byok_use_*
 -- / write_byok_audit caller uses ON CONFLICT (invocation_id) DO
 -- NOTHING. Dropping it on rollback would silently re-open the
--- double-write window. Operators reapplying 063 will see the
+-- double-write window. Operators reapplying 064 will see the
 -- IF NOT EXISTS guard in the DO block — no-op.
 
 COMMIT;

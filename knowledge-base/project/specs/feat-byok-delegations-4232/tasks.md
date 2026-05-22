@@ -29,17 +29,17 @@ Derived from `2026-05-22-feat-byok-delegations-pr-a-plan.md` v3 (post-3-agent-re
 - [ ] 0.6 Read `lib/feature-flags/server.ts` FLAG_VARS + `isTeamWorkspaceInviteEnabled` two-key gate
 - [ ] 0.7 Read `account-delete.ts:75-300`; identify phase 5.9 insertion point
 - [ ] 0.8 Read `workspace-resolver.ts:66` `getDefaultWorkspaceForUser`
-- [ ] 0.9 Verify `audit_byok_use.invocation_id UNIQUE` exists in mig 037; if absent, add to mig 063
+- [ ] 0.9 Verify `audit_byok_use.invocation_id UNIQUE` exists in mig 037; if absent, add to mig 064
 - [ ] 0.10 Verify `SENTRY_TAG_PEPPER` exists in Doppler dev + prd; if absent, operator-set first (32-byte hex)
-- [ ] 0.11 `mcp__plugin_supabase_supabase__list_migrations` (dev): 053-062 applied; 063 not yet; if drift, reconcile via `execute_sql` schema introspection (rebase reconciliation 2026-05-22: 062 slot taken by `062_workspace_member_removals_and_remove_rpc_update.sql` from sibling PR #4341 cluster)
+- [ ] 0.11 `mcp__plugin_supabase_supabase__list_migrations` (dev): 053-063 applied; 064 not yet; if drift, reconcile via `execute_sql` schema introspection (rebase reconciliation 2026-05-22 → 2026-05-23: 062 + two distinct 063_* slots taken by sibling PRs; renumbered 063→064 mid-PR. Plan §0.11 DIG F9 sibling-race scenario)
 - [ ] 0.12 Baseline `bun run typecheck` exits 0; capture `bun test` pass count
 
-## Phase 1 — Migration 063: Full Schema (Table + Triggers + RPCs + Down)
+## Phase 1 — Migration 064: Full Schema (Table + Triggers + RPCs + Down)
 
 ### 1.A — Table + Indexes + audit_byok_use Additions
 
 - [ ] 1.1 RED: `byok-delegations.test.ts` skeleton with table-creation assertions
-- [ ] 1.2 Create `apps/web-platform/supabase/migrations/063_byok_delegations.sql` with full header (LAWFUL_BASIS + RETENTION + DEPENDENCY + WORM-column-enum-sentinel reminder + trigger-not-CHECK rationale)
+- [ ] 1.2 Create `apps/web-platform/supabase/migrations/064_byok_delegations.sql` with full header (LAWFUL_BASIS + RETENTION + DEPENDENCY + WORM-column-enum-sentinel reminder + trigger-not-CHECK rationale)
 - [ ] 1.3 Define `public.byok_delegations` table with v3 columns: id, grantor_user_id, grantee_user_id, workspace_id (FK ON DELETE RESTRICT), daily_usd_cap_cents (CHECK BETWEEN 1 AND 1000000), hourly_usd_cap_cents (CHECK BETWEEN 1 AND daily_usd_cap_cents), created_by_user_id, created_at, expires_at, revoked_at, revoked_by_user_id, revocation_reason, cap_updated_at, cap_updated_by_user_id; table-level CHECKs (grantor <> grantee; revoked_at >= created_at; expires_at > created_at)
 - [ ] 1.4 Create partial unique index `(grantor, grantee, workspace_id) WHERE revoked_at IS NULL` (v3 — drop `expires_at > now()` from predicate per DIG F10)
 - [ ] 1.5 Create resolver hot-path index `(grantee_user_id, workspace_id) WHERE revoked_at IS NULL`
@@ -82,7 +82,7 @@ Derived from `2026-05-22-feat-byok-delegations-pr-a-plan.md` v3 (post-3-agent-re
 
 ### 1.E — Down Migration
 
-- [ ] 1.22 Write `063_byok_delegations.down.sql` in reverse order; restores audit_byok_use columns; drops table/triggers/functions cleanly
+- [ ] 1.22 Write `064_byok_delegations.down.sql` in reverse order; restores audit_byok_use columns; drops table/triggers/functions cleanly
 - [ ] 1.23 GREEN: migration test apply + down + re-apply cycle passes
 
 ## Phase 2 — TS Layer: byok-resolver.ts + Abstract Error Hierarchy + Type Widening + Sentry HMAC
@@ -155,7 +155,7 @@ Derived from `2026-05-22-feat-byok-delegations-pr-a-plan.md` v3 (post-3-agent-re
 - [ ] 4.20 Resolver multi-workspace regression (DIG F3): grantee in W_A + W_B; explicit `p_workspace_id = W_B` returns W_B delegations only
 - [ ] 4.21 pg_default_acl audit: canonical query asserts no leaked grants on byok_delegations + new RPCs
 - [ ] 4.22 Create `apps/web-platform/test/server/byok-delegations-worm-column-enum.test.ts` (v3 — SS F4): query `information_schema.columns` + `pg_get_functiondef(byok_delegations_no_mutate)`; assert every column appears in trigger body
-- [ ] 4.23 Create `apps/web-platform/test/migration/063_byok_delegations.migration.test.ts`: apply + down + re-apply cycle against dev-Supabase
+- [ ] 4.23 Create `apps/web-platform/test/migration/064_byok_delegations.migration.test.ts`: apply + down + re-apply cycle against dev-Supabase
 - [ ] 4.24 `bun run typecheck` exits 0
 - [ ] 4.25 `bun test` exits 0 (baseline + all new cases)
 
@@ -166,7 +166,7 @@ Derived from `2026-05-22-feat-byok-delegations-pr-a-plan.md` v3 (post-3-agent-re
 ## Phase 5 — PR Body + Verification
 
 - [ ] 5.1 PR title: `feat(byok): PR-A — byok_delegations migration + SQL resolver + sentinel sweep + cap enforcement + CLI (Ref #4232)`
-- [ ] 5.2 PR body enumerates: 5 sentinel-sweep sites + `callerUserId` provenance at each (SS F3); type widening sweep result; mig 063 LAWFUL_BASIS + RETENTION; ADR link; "v3 deepen-plan refinements" note
+- [ ] 5.2 PR body enumerates: 5 sentinel-sweep sites + `callerUserId` provenance at each (SS F3); type widening sweep result; mig 064 LAWFUL_BASIS + RETENTION; ADR link; "v3 deepen-plan refinements" note
 - [ ] 5.3 PR body uses `Ref #4232` (NOT `Closes`)
 - [ ] 5.4 Verify `FLAG_BYOK_DELEGATIONS=0` in prd Doppler: `doppler secrets get FLAG_BYOK_DELEGATIONS -c prd`
 - [ ] 5.5 Verify `SENTRY_TAG_PEPPER` non-empty in prd Doppler: `doppler secrets get SENTRY_TAG_PEPPER -c prd`
@@ -174,7 +174,7 @@ Derived from `2026-05-22-feat-byok-delegations-pr-a-plan.md` v3 (post-3-agent-re
 
 ## Post-merge (operator + auto)
 
-- [ ] P.1 Migration 063 applied to prd via `web-platform-release.yml#migrate` (auto-triggered; verify `gh run watch`)
+- [ ] P.1 Migration 064 applied to prd via `web-platform-release.yml#migrate` (auto-triggered; verify `gh run watch`)
 - [ ] P.2 PostgREST schema reload post-apply (container restart per learning `2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md`); automatable via `mcp__plugin_supabase_supabase__authenticate` flow or deploy hook
 - [ ] P.3 Sentry alert rule for `art_33_breach=true` tag with distinct action shape (one-time setup; automatable via Sentry API)
 - [ ] P.4 Release-time assertion in `web-platform-release.yml`: `BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS` parses to valid UUIDs only, count ≤ N ceiling (SS F8 defense-in-depth)

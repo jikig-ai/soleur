@@ -9,7 +9,7 @@
 //      existing `write_byok_audit` RPC (migration 037).
 //   2b. BYOK Delegations PR-A (#4232) — when `delegationId` is set,
 //      route the audit through the merged atomic RPC
-//      `check_and_record_byok_delegation_use` (migration 063) which
+//      `check_and_record_byok_delegation_use` (migration 064) which
 //      performs grace + expired + hourly + daily cap checks under a
 //      single FOR UPDATE row lock before INSERTing the audit row.
 //   3. Fan out a `usage_update` WS event to the client (widened with
@@ -83,7 +83,7 @@ export interface TurnCostInput {
 /**
  * BYOK Delegations PR-A (#4232). Optional delegation context. When
  * `delegationId` is set, the audit RPC routes to the merged atomic
- * `check_and_record_byok_delegation_use` (mig 063) which enforces
+ * `check_and_record_byok_delegation_use` (mig 064) which enforces
  * caps under a row lock + writes the audit row with attribution
  * shift on post-grace/expired paths. `callerUserId` is the actual
  * lease consumer (grantee under delegation, self under solo); see
@@ -140,7 +140,7 @@ export function persistTurnCost(
   //     plain INSERT semantics. Sub-cent precision is lost intentionally
   //     — the cent-precision surface stays on
   //     `conversations.total_cost_usd`. With `invocation_id` UNIQUE
-  //     (mig 063 Phase 0.9), the merged RPC's `ON CONFLICT
+  //     (mig 064Phase 0.9), the merged RPC's `ON CONFLICT
   //     (invocation_id) DO NOTHING` makes Inngest retries idempotent.
   const totalTokens =
     usage.input_tokens +

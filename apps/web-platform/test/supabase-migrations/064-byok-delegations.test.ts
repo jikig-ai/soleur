@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-// Migration-shape test for 063_byok_delegations.sql (#4232, PR-A).
+// Migration-shape test for 064_byok_delegations.sql (#4232, PR-A).
+// Renumbered from 063 → 064 mid-flight after siblings #4231 (workspace_
+// member_actions) and #4339 (post-workspace-rpc-repair) landed 063_*
+// slots on origin/main; sibling-race reconciliation per plan §0.11.
 // Offline lint — runs without a live database. Mirrors the
 // 062-workspace-member-removals.test.ts precedent shape.
 //
@@ -14,11 +17,11 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/063_byok_delegations.sql",
+  "../../supabase/migrations/064_byok_delegations.sql",
 );
 const DOWN_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/063_byok_delegations.down.sql",
+  "../../supabase/migrations/064_byok_delegations.down.sql",
 );
 
 const sql = readFileSync(MIGRATION_PATH, "utf8");
@@ -26,7 +29,7 @@ const downSql = readFileSync(DOWN_PATH, "utf8");
 const executable = sql.replace(/--[^\n]*/g, "");
 const downExecutable = downSql.replace(/--[^\n]*/g, "");
 
-describe("migration 063_byok_delegations", () => {
+describe("migration 064_byok_delegations", () => {
   describe("AC1: header carries LAWFUL_BASIS + RETENTION (joint controllership)", () => {
     it("LAWFUL_BASIS: Art. 6(1)(b) contract", () => {
       expect(sql).toMatch(/LAWFUL_BASIS:\s*Art\.\s*6\(1\)\(b\)\s*contract/);

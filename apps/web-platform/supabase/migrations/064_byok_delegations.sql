@@ -1,4 +1,8 @@
--- 063_byok_delegations.sql
+-- 064_byok_delegations.sql (renumbered from 063 mid-flight after
+-- siblings #4231 + #4339 landed 063_* slots; reconciliation per
+-- plan §0.11 DIG F9. Migration body content_sha unchanged; dev's
+-- _schema_migrations ledger row also renamed from 063 → 064 in the
+-- same transaction.)
 -- BYOK Delegations PR-A (#4232; parent #4229). Adds the
 -- `public.byok_delegations` WORM ledger that lets a grantor fund a
 -- grantee's BYOK runs within a single workspace, capped by a per-day +

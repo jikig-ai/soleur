@@ -86,7 +86,7 @@ None new. Existing agents cover:
 | 11 | RLS predicates | INSERT: `grantor_user_id = auth.uid() AND is_workspace_member(workspace_id, grantee_user_id)`. SELECT: `grantor_user_id = auth.uid() OR grantee_user_id = auth.uid()`. UPDATE (revoke) via SECURITY DEFINER RPC only. | CTO + CLO: cross-tenant insert structurally impossible; both parties to a grant can see it. |
 | 12 | Same-workspace constraint | **DB-level CHECK** that grantor + grantee both belong to `workspace_id` + Sentry alert on constraint violation. | CLO Art. 33: a constraint violation is a 72h breach trigger; silent fallback would mask. |
 | 13 | Legal sequencing | **Parallel track** — Delegation Consent Side Letter + DPD §2.3 addendum + AUP §5.6 ship in PR-B's window via legal-document-generator. Flag flips ON when both PRs + signed Side Letter land. | Operator chose parallel over legal-first; CLO non-negotiable requirement preserved via flag-gate. |
-| 14 | Packaging | **Two PRs (B).** PR-A (~3-4d): migration 063 + SQL resolver + 5 call-site updates + USD cap enforcement + CLI grant/revoke for dogfood. PR-B (~2-3d): UI surfaces + legal docs. Both behind `BYOK_DELEGATIONS_ENABLED` flag, OFF in prd. | Operator: reduces review surface; lets schema land + dogfood-test before UI polish. |
+| 14 | Packaging | **Two PRs (B).** PR-A (~3-4d): migration 064 + SQL resolver + 5 call-site updates + USD cap enforcement + CLI grant/revoke for dogfood. PR-B (~2-3d): UI surfaces + legal docs. Both behind `BYOK_DELEGATIONS_ENABLED` flag, OFF in prd. | Operator: reduces review surface; lets schema land + dogfood-test before UI polish. |
 | 15 | Member-departure | **Transactional auto-revoke** on `workspace_members` removal (same statement). History retained 7y. | CLO: financial/audit retention; Art. 5(1)(e) satisfied via documented purpose. |
 | 16 | ADR | **Required.** Cross-user authorization primitive (resolver-in-SQL-not-TS rationale + revocation-race billing decision). Run `/soleur:architecture create` before PR-A merges. | CTO. |
 | 17 | Sentinel sweep | **Pre-merge gate.** All 5 `runWithByokLease` call sites + every reader of `audit_byok_use.founder_id` in dashboards. | `hr-write-boundary-sentinel-sweep-all-write-sites` + reconciliation that research found 5 sites, not the 2 CTO initially estimated. |
@@ -110,7 +110,7 @@ None new. Existing agents cover:
 3. **CLI grant/revoke shape.** `pnpm soleur:byok grant --to <user> --workspace <id> --cap-cents <n> [--expires-in <duration>]`? Reuses tenant client + RLS or runs as service_role? Plan-skill decision.
 4. **Cap accounting granularity.** Daily = UTC midnight, or rolling 24h? UTC simpler; rolling fairer. CPO/CTO defer to plan-skill.
 5. **`record_byok_use_and_check_cap` integration.** Does it call the resolver (and re-check delegation state) on every token-batch write, or only at lease setup? Re-checking per-write closes the revocation grace window faster but adds RTT to a hot path. Plan-skill: measure or pick the safer default (per-write).
-6. **Default privileges audit.** Per learning `2026-05-06-supabase-default-privileges-defeat-revoke-from-public`, every new DEFINER RPC needs `pg_default_acl` post-apply audit. Plan-skill: add to migration 063's smoke test.
+6. **Default privileges audit.** Per learning `2026-05-06-supabase-default-privileges-defeat-revoke-from-public`, every new DEFINER RPC needs `pg_default_acl` post-apply audit. Plan-skill: add to migration 064's smoke test.
 7. **Sentry alert routing.** Cross-tenant CHECK violation → which channel? CLO Art. 33 implies escalation; existing Sentry → email path probably suffices for solo founder, but document. Plan-skill.
 
 ## Cross-Domain Dependencies
@@ -122,13 +122,13 @@ None new. Existing agents cover:
 | CLO | CTO | Member-departure transactional auto-revoke on `workspace_members` removal |
 | CTO | spec-flow-analyzer | 6-state failure-mode flow matrix (no delegation / expired / revoked / cap-hit / grantee-has-own-key / cross-tenant-attempt) |
 | CTO | ux-design-lead | Member-row grant affordance + Jean's funded pane + Harry's banner (PR-B) |
-| CTO | data-integrity-guardian | Migration 063 review (WORM trigger, RLS, anonymise RPC) |
+| CTO | data-integrity-guardian | Migration 064 review (WORM trigger, RLS, anonymise RPC) |
 | CTO | security-sentinel | RLS predicate review + sentinel sweep of 5 `runWithByokLease` call sites |
 | CPO | CTO | Bidirectional cost visibility surfaces (`audit_byok_use.delegation_id` column) |
 
 ## Out of Scope for This Brainstorm
 
-- Exact migration 063 SQL — plan-skill work (CTO sketch in Decisions above is the contract).
+- Exact migration 064 SQL — plan-skill work (CTO sketch in Decisions above is the contract).
 - Exact Delegation Consent Side Letter wording — legal-document-generator at plan-time.
 - Exact UI visual design for member row / panes / banner — ux-design-lead at plan-time.
 - ADR text — `/soleur:architecture create` post-plan.

@@ -32,7 +32,7 @@ CPO + CLO + CTO sign-offs carried forward from the brainstorm; the `user-impact-
 
 ## Decision
 
-PR-A introduces a single migration (`063_byok_delegations.sql`), a thin TS resolver (`server/byok-resolver.ts`), a sentinel sweep across 5 prod `runWithByokLease` invocations, a widening of `persistTurnCost` to route cap-aware audit writes, an account-delete cascade phase, two CLI scripts, and a two-key feature flag. Twelve sub-decisions land in v3 (post-3-agent-review + 3-agent-deepen-plan); the table below enumerates them with their forcing function.
+PR-A introduces a single migration (`064_byok_delegations.sql`), a thin TS resolver (`server/byok-resolver.ts`), a sentinel sweep across 5 prod `runWithByokLease` invocations, a widening of `persistTurnCost` to route cap-aware audit writes, an account-delete cascade phase, two CLI scripts, and a two-key feature flag. Twelve sub-decisions land in v3 (post-3-agent-review + 3-agent-deepen-plan); the table below enumerates them with their forcing function.
 
 | # | Decision | Forcing function | Alternatives weighed |
 |---|---|---|---|
@@ -73,7 +73,7 @@ Two additions sit on top of the v3 decisions to support eventual reconciliation:
 ## Open follow-ups within PR-A scope
 
 - **cc-dispatcher closure-capture.** The lease opens inside `realSdkQueryFactory` (`cc-dispatcher.ts:890`) and closes before `onResult` (`:1721`) fires; the `delegationId` is unreachable from the cost-writer caller in that path. Phase 3 annotates the gap inline. Closing it needs a closure-captured `delegationContext` threaded from `realSdkQueryFactory` through `getSoleurGoRunner`'s state class into the `onResult` callback signature. Tracked for Phase 4 alongside the integration tests that can validate the closure-capture end-to-end. Until then, cc-soleur-go runs under an active delegation silently audit-attribute via the solo path — RPC-level cap checks DO NOT fire on the cc-soleur-go surface; `FLAG_BYOK_DELEGATIONS=0` in prd is the operational guard.
-- **Migration 063 apply to dev-Supabase** via the Doppler `DATABASE_URL_POOLER` fallback (port rewrite :6543 → :5432 for session-mode DDL, single-txn apply with `_schema_migrations` tracking row). Phase 4 acceptance criterion.
+- **Migration 064 apply to dev-Supabase** via the Doppler `DATABASE_URL_POOLER` fallback (port rewrite :6543 → :5432 for session-mode DDL, single-txn apply with `_schema_migrations` tracking row). Phase 4 acceptance criterion.
 
 ## Implications and migration
 
@@ -88,7 +88,7 @@ Down migration preserves `audit_byok_use.invocation_id UNIQUE`; everything else 
 - Plan: `knowledge-base/project/plans/2026-05-22-feat-byok-delegations-pr-a-plan.md`
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-22-byok-delegations-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-byok-delegations-4232/spec.md`
-- Migration: `apps/web-platform/supabase/migrations/063_byok_delegations.sql`
+- Migration: `apps/web-platform/supabase/migrations/064_byok_delegations.sql`
 - ADR-038 (team workspace foundation; sibling): `ADR-038-team-workspace-multi-user-organizations-and-workspace-members.md`
 - ADR-039 (workspace_member_removals ledger; precedent for WORM-with-anonymise): `ADR-039-departed-member-removal-ledger.md`
 - ADR-026 (data-integrity / GDPR boundary): `ADR-026-*.md`

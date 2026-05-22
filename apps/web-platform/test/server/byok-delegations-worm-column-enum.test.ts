@@ -31,7 +31,7 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/063_byok_delegations.sql",
+  "../../supabase/migrations/064_byok_delegations.sql",
 );
 
 const sql = readFileSync(MIGRATION_PATH, "utf8");
