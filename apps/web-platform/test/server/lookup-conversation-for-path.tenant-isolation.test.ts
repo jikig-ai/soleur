@@ -85,6 +85,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       for (const user of [userA, userB]) {
         const { error } = await service.from("conversations").insert({
           user_id: user.id,
+          workspace_id: user.id, // solo-canary per mig 059 backfill
           session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           context_path: SHARED_CTX_PATH,
           repo_url: SHARED_REPO_URL,
