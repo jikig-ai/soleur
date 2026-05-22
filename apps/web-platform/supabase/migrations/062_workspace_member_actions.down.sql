@@ -18,7 +18,7 @@ SELECT cron.unschedule('workspace-member-actions-retention')
 -- Wrapper RPCs.
 DROP FUNCTION IF EXISTS public.purge_workspace_member_actions();
 DROP FUNCTION IF EXISTS public.anonymise_workspace_member_actions(uuid);
-DROP FUNCTION IF EXISTS public.list_workspace_member_actions(uuid, int, timestamptz);
+DROP FUNCTION IF EXISTS public.list_workspace_member_actions(uuid, int, timestamptz, uuid);
 
 -- AFTER trigger on workspace_members.
 DROP TRIGGER IF EXISTS workspace_members_audit_trigger ON public.workspace_members;

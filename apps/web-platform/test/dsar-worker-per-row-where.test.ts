@@ -120,6 +120,37 @@ describe("DSAR worker per-row WHERE lint (AC30)", () => {
     }
   });
 
+  it("every declared owner column has at least one .eq(<col>, ...) chain in the worker (inverse lint)", () => {
+    // Symmetric to the previous lint. The forward lint ensures every chain
+    // carries .eq() on AT LEAST ONE declared column; the inverse ensures
+    // every declared column has AT LEAST ONE chain — otherwise a future
+    // refactor that drops the `target_user_id` chain leaves the actor chain
+    // satisfying the forward lint alone, and Art. 15 silently loses the
+    // target-side rows. Same failure class as the FAQ-parity drift the
+    // pattern-recognition Sharp Edges document warns about.
+    for (const [tableName, spec] of Object.entries(DSAR_TABLE_ALLOWLIST)) {
+      if (spec.joinVia) continue; // join-via tables have their own scope check
+      const ownerFields = [spec.ownerField, ...(spec.additionalOwnerFields ?? [])];
+      if (ownerFields.length < 2) continue; // single-column tables covered by the chain-presence test above
+      const tableChains = chains.filter((c) => c.table === tableName);
+      for (const col of ownerFields) {
+        const covered = tableChains.some((c) =>
+          new RegExp(`\\.eq\\(\\s*["']${col}["']`).test(c.chain),
+        );
+        expect(
+          covered,
+          `Allowlisted table "${tableName}" declares owner column "${col}" ` +
+            `(via ownerField or additionalOwnerFields) but NO service.from("${tableName}") ` +
+            `chain in dsar-export.ts carries \`.eq("${col}", expectedUserId)\`. ` +
+            `Art. 15 completeness REQUIRES one read chain per declared owner ` +
+            `column; silent omission would drop rows where the user appears ` +
+            `via this column only. Add a per-column chain or remove the column ` +
+            `from additionalOwnerFields with a documented rationale.`,
+        ).toBe(true);
+      }
+    }
+  });
+
   it("every join-via table read carries .in(<parentJoinColumn>, ...)", () => {
     for (const c of chains) {
       const spec = DSAR_TABLE_ALLOWLIST[c.table];

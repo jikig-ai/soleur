@@ -193,10 +193,11 @@ BEGIN
     IF OLD.role IS NOT DISTINCT FROM NEW.role THEN
       RETURN NULL;  -- no-op UPDATE (same role); do not audit
     END IF;
-    v_action   := 'role_changed';
-    v_target   := NEW.user_id;
-    v_old_role := OLD.role;
-    v_new_role := NEW.role;
+    v_action      := 'role_changed';
+    v_target      := NEW.user_id;
+    v_old_role    := OLD.role;
+    v_new_role    := NEW.role;
+    v_attestation := NEW.attestation_id;  -- preserve consent attribution on role change
   END IF;
 
   INSERT INTO public.workspace_member_actions
@@ -235,7 +236,8 @@ CREATE TRIGGER workspace_members_audit_trigger
 CREATE OR REPLACE FUNCTION public.list_workspace_member_actions(
   p_workspace_id uuid,
   p_limit        int          DEFAULT 50,
-  p_cursor       timestamptz  DEFAULT NULL
+  p_cursor       timestamptz  DEFAULT NULL,
+  p_cursor_id    uuid         DEFAULT NULL
 ) RETURNS SETOF public.workspace_member_actions
   LANGUAGE plpgsql
   SECURITY DEFINER
@@ -256,25 +258,36 @@ BEGIN
     RETURN;  -- non-owner / nonexistent workspace → empty (no leak)
   END IF;
 
+  -- Keyset cursor on (created_at, id) — both required to disambiguate ties
+  -- when multiple audit rows share microsecond-resolution created_at (a
+  -- bulk-insert within one statement shares now()). The plain `created_at <
+  -- p_cursor` predicate skips every tied row from the prior page, producing
+  -- silent pagination drops. p_cursor_id NULL is accepted for back-compat
+  -- with first-page callers (no tiebreak needed when p_cursor is also NULL).
   RETURN QUERY
     SELECT *
     FROM public.workspace_member_actions
     WHERE workspace_id = p_workspace_id
-      AND (p_cursor IS NULL OR created_at < p_cursor)
+      AND (
+        p_cursor IS NULL
+        OR (p_cursor_id IS NULL AND created_at < p_cursor)
+        OR (p_cursor_id IS NOT NULL AND (created_at, id) < (p_cursor, p_cursor_id))
+      )
     ORDER BY created_at DESC, id DESC
     LIMIT GREATEST(1, LEAST(p_limit, 500));
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.list_workspace_member_actions(uuid, int, timestamptz)
+REVOKE ALL ON FUNCTION public.list_workspace_member_actions(uuid, int, timestamptz, uuid)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.list_workspace_member_actions(uuid, int, timestamptz)
+GRANT EXECUTE ON FUNCTION public.list_workspace_member_actions(uuid, int, timestamptz, uuid)
   TO authenticated;
 
-COMMENT ON FUNCTION public.list_workspace_member_actions(uuid, int, timestamptz) IS
+COMMENT ON FUNCTION public.list_workspace_member_actions(uuid, int, timestamptz, uuid) IS
   'Owner-only audit reader. Empty return on non-owner / nonexistent workspace '
-  '(no error, no table-existence leak). Cursor-paginated: pass oldest returned '
-  'created_at as p_cursor for next page. ORDER BY created_at DESC, id DESC. #4231.';
+  '(no error, no table-existence leak). Keyset cursor on (created_at, id) — pass '
+  'the oldest returned (created_at, id) of the previous page as (p_cursor, p_cursor_id) '
+  'for the next page. ORDER BY created_at DESC, id DESC. #4231.';
 
 -- =====================================================================
 -- 6. Anonymise RPC — Art. 17 cascade
@@ -570,11 +583,23 @@ GRANT EXECUTE ON FUNCTION public.anonymise_workspace_members(uuid)
 
 DO $$
 DECLARE
-  v_membership_count int;
-  v_backfilled_count int;
+  v_membership_count        int;
+  v_backfilled_count        int;
+  v_preexisting_added_count int;
 BEGIN
+  -- Bound the LOCK wait so a long-running concurrent INSERT cannot stall the
+  -- migration indefinitely; bound statements similarly so the SELECT cannot.
+  SET LOCAL lock_timeout = '30s';
+  SET LOCAL statement_timeout = '5min';
   LOCK TABLE public.workspace_members IN SHARE MODE;
   SET LOCAL session_replication_role = 'replica';
+
+  -- Capture pre-existing 'added' rows BEFORE the backfill INSERT so the
+  -- post-insert ASSERT can tolerate re-apply (where some rows already exist).
+  SELECT count(*) INTO v_preexisting_added_count
+    FROM public.workspace_member_actions
+   WHERE action_type = 'added';
+
   INSERT INTO public.workspace_member_actions
     (workspace_id, actor_user_id, target_user_id, action_type, new_role, created_at)
   SELECT m.workspace_id, NULL, m.user_id, 'added', m.role, m.created_at
@@ -589,16 +614,35 @@ BEGIN
   RESET session_replication_role;
 
   SELECT count(*) INTO v_membership_count FROM public.workspace_members;
-  RAISE NOTICE 'workspace_member_actions backfill: % rows inserted; % rows in workspace_members',
-    v_backfilled_count, v_membership_count;
+
+  -- AC8 invariant: every workspace_members row has at least one corresponding
+  -- 'added' audit row after backfill. Equality (not >=) on a fresh apply;
+  -- re-apply tolerates pre-existing rows via the discriminator above.
+  IF v_backfilled_count + v_preexisting_added_count <> v_membership_count THEN
+    RAISE EXCEPTION
+      'workspace_member_actions backfill parity failed: backfilled=% + pre-existing=% != members=%',
+      v_backfilled_count, v_preexisting_added_count, v_membership_count;
+  END IF;
+
+  RAISE NOTICE 'workspace_member_actions backfill: % rows inserted (+ % pre-existing) for % workspace_members',
+    v_backfilled_count, v_preexisting_added_count, v_membership_count;
 END $$;
 
 -- =====================================================================
 -- 10. pg_cron schedule — daily 7-year retention purge
 -- =====================================================================
 
-SELECT cron.schedule(
-  'workspace-member-actions-retention',
-  '0 4 * * *',
-  $$SELECT public.purge_workspace_member_actions()$$
-);
+-- Wrap in DO/EXCEPTION to mirror mig 041 + mig 043 precedent. Modern pg_cron
+-- upserts by name, but older revisions and self-hosted runners may raise
+-- duplicate_object on re-apply; the EXCEPTION block keeps the migration
+-- idempotent across pg_cron versions.
+DO $$
+BEGIN
+  PERFORM cron.schedule(
+    'workspace-member-actions-retention',
+    '0 4 * * *',
+    $cron$SELECT public.purge_workspace_member_actions()$cron$
+  );
+EXCEPTION WHEN duplicate_object THEN
+  NULL;  -- already scheduled; no-op on re-apply
+END $$;

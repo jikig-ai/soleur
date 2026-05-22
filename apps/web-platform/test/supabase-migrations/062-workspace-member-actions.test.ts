@@ -157,9 +157,9 @@ describe("migration 062_workspace_member_actions (#4231)", () => {
   });
 
   describe("RPC bodies (FR4, FR5, FR7)", () => {
-    it("list_workspace_member_actions SECURITY DEFINER with cursor pagination", () => {
+    it("list_workspace_member_actions SECURITY DEFINER with keyset cursor pagination", () => {
       expect(executable).toMatch(
-        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.list_workspace_member_actions\(\s*p_workspace_id\s+uuid,\s*p_limit\s+int\s+DEFAULT\s+50,\s*p_cursor\s+timestamptz\s+DEFAULT\s+NULL\s*\)/i,
+        /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.list_workspace_member_actions\(\s*p_workspace_id\s+uuid,\s*p_limit\s+int\s+DEFAULT\s+50,\s*p_cursor\s+timestamptz\s+DEFAULT\s+NULL,\s*p_cursor_id\s+uuid\s+DEFAULT\s+NULL\s*\)/i,
       );
       // Owner-check JOIN uses workspaces.organization_id (drift item #3).
       expect(executable).toMatch(
@@ -167,6 +167,11 @@ describe("migration 062_workspace_member_actions (#4231)", () => {
       );
       expect(executable).toMatch(
         /ORDER\s+BY\s+created_at\s+DESC,\s*id\s+DESC/i,
+      );
+      // Keyset cursor tiebreak — performance review P2-1: same-tick rows must
+      // not be silently dropped at page boundaries.
+      expect(executable).toMatch(
+        /\(created_at,\s*id\)\s*<\s*\(p_cursor,\s*p_cursor_id\)/i,
       );
     });
 
@@ -259,15 +264,18 @@ describe("migration 062_workspace_member_actions (#4231)", () => {
   });
 
   describe("pg_cron schedule (FR7, AC9)", () => {
-    it("schedules workspace-member-actions-retention daily at 04:00 UTC", () => {
+    it("schedules workspace-member-actions-retention daily at 04:00 UTC inside DO/EXCEPTION wrap", () => {
+      // Wrapped in DO/EXCEPTION duplicate_object per mig 041 + mig 043 precedent
+      // so re-apply is idempotent across pg_cron revisions.
       expect(executable).toMatch(
-        /SELECT\s+cron\.schedule\(\s*'workspace-member-actions-retention'\s*,\s*'0 4 \* \* \*'/i,
+        /PERFORM\s+cron\.schedule\(\s*'workspace-member-actions-retention'\s*,\s*'0 4 \* \* \*'/i,
       );
+      expect(executable).toMatch(/EXCEPTION\s+WHEN\s+duplicate_object\s+THEN/i);
     });
 
     it("invokes purge_workspace_member_actions wrapper (NOT direct DELETE)", () => {
       expect(executable).toMatch(
-        /cron\.schedule\([\s\S]*?\$\$SELECT\s+public\.purge_workspace_member_actions\(\)\$\$/i,
+        /cron\.schedule\([\s\S]*?\$cron\$SELECT\s+public\.purge_workspace_member_actions\(\)\$cron\$/i,
       );
     });
   });

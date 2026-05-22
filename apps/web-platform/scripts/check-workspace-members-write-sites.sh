@@ -147,12 +147,23 @@ while IFS= read -r site; do
 done <<< "$SQL_WRITES"
 
 # Walk TS writes (server / lib / scripts / app / components).
+# The TS server/lib surface MUST NOT contain any literal mutation by
+# default — all writes route through SQL RPCs. But category (c) of the
+# allowlist permits documented admin-tool / one-shot script paths if an
+# explicit ALLOWED_LITERAL_WRITES entry covers them. Route through
+# check_site so the allowlist contract is symmetric with SQL writes;
+# unmatched TS mutations still fail with the `[server-mutation forbidden]`
+# diagnostic so the asymmetry-was-the-bug failure shape is preserved.
 while IFS= read -r site; do
   [[ -z "$site" ]] && continue
-  # The TS server/lib surface MUST NOT contain any literal mutation —
-  # all writes route through SQL RPCs. A hit here is a regression
-  # regardless of allowlist.
-  unrecognised_count=$((unrecognised_count + 1))
+  if check_site "$site"; then
+    continue  # allowlisted category-(c) TS write
+  fi
+  # check_site already incremented unrecognised_count + appended a generic
+  # diag line; re-format the line to flag it as a server-mutation
+  # (preserves the operator-facing 'forbidden' framing for unallowlisted
+  # TS hits while keeping the allowlist contract uniform).
+  unrecognised_diag="${unrecognised_diag%"  ${site}"$'\n'}"
   unrecognised_diag="${unrecognised_diag}  [server-mutation forbidden] ${site}"$'\n'
 done <<< "$TS_WRITES"
 
