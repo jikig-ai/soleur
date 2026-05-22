@@ -40,7 +40,7 @@ Plan-time research surfaced 6 places where the issue body (#4124) does not match
 
 **If this leaks, the user's GitHub workflow is exposed via:** wrong-installation routing inside the new Inngest function — if `createGitHubAppClient(installationId, founderId)` resolves `installationId` from anything other than `users.github_installation_id` keyed by server-derived `founderId`, an action triggered by Operator A could write a PR comment / issue label on Operator B's connected repo. The cross-tenant leak vector is the `installationId` source-of-truth.
 
-**Brand-survival threshold:** single-user incident.
+- **Brand-survival threshold:** `single-user incident` — wrong-installation routing or an empty-result UX after click are both unrecoverable for a solo-operator trust footprint.
 
 Per `hr-weigh-every-decision-against-target-user-impact`: every design choice in this plan is justified against ONE of (a) closing the empty-result UX gap (deterministic acknowledgment artifact on every click), (b) closing the wrong-installation cross-tenant vector (`users.github_installation_id` invariant), or (c) keeping the dead-letter window bounded (try/catch + Sentry on `inngest.send` failure; retry via new `messages` row).
 
