@@ -385,6 +385,36 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
+  // 3.905 Anonymise workspace_member_removals (migration 062, #4230).
+  //      NULLs removed_user_id + removed_by_user_id for every removal
+  //      row where the deleted user appears on either side. Mirrors
+  //      3.90's pattern: lineage (id, workspace_id, removed_at) is
+  //      preserved (WORM); PII columns transition NOT NULL → NULL via
+  //      the SECURITY DEFINER RPC. Both FK columns are ON DELETE
+  //      RESTRICT — skipping this step would leave the auth-delete
+  //      cascade unable to clear users(id), same failure mode as 3.90.
+  //      Runs AFTER attestations to preserve the 058-cascade convention
+  //      (each ledger anonymise step covers its own table's user-FK).
+  try {
+    const { error: anonRemErr } = await service.rpc(
+      "anonymise_workspace_member_removals",
+      { p_user_id: userId },
+    );
+    if (anonRemErr) {
+      log.error(
+        { userId, err: anonRemErr },
+        "anonymise_workspace_member_removals failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_workspace_member_removals threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
   // 3.91 Anonymise workspace_members rows (migration 058). DELETEs every
   //      membership row keyed on user_id, including the user's solo
   //      backfill owner row. FK workspace_members.workspace_id +
