@@ -24,7 +24,7 @@ PR #4347 (one-shot for #4324) was planned with AC2 stating: "For each doc: (a) n
 
 The plan's deepen-pass verified the `collapse` link-rewrite set covered all cross-doc link forms by grep. It did NOT verify that the normalization pipeline actually produced byte-equal bodies for the 8 non-T&C canonical/mirror pairs. At /work Phase 0, a parity check across all 9 docs showed only T&C was byte-equal; the other 8 had pre-existing benign drift in three classes:
 
-- **Email autolink form:** canonical uses bare `legal@jikigai.com`, mirror uses `<legal@jikigai.com>`.
+- **Email autolink form:** canonical uses bare `legal@example.com`, mirror uses `<legal@example.com>`.
 - **Horizontal-rule layout:** canonical uses `---` separators between sections, mirror omits them (relies on CSS).
 - **Agent/skill count phrasing:** canonical says "45 agents, {{ stats.skills }} skills", mirror says "60+ agents, 60+ skills" (Eleventy template-var rendered out).
 
