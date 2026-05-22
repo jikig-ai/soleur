@@ -171,12 +171,31 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
 
   // feat-team-workspace-multi-user (migration 058) — invite consent
   // attestations the user accepted. ownerField = invitee_user_id (the
-  // user who clicked accept); inviter_user_id is also their own row when
-  // they invited someone else — the next allowlist entry covers that
-  // case via a sibling chain. Art. 15: WORM consent record, analogous to
-  // tc_acceptances. The Art. 17 anonymise RPC handles erasure separately.
+  // primary owner column tracked here for allowlist-completeness lint).
+  // The export pipeline at dsar-export.ts uses a `.or()` filter on BOTH
+  // invitee_user_id AND inviter_user_id so a departed member's INVITER-
+  // side rows are recovered too (Kieran P1-1 / #4230). assertReadScope
+  // there is two-arm-aware (validates EITHER column matches). Art. 15:
+  // WORM consent record, analogous to tc_acceptances. The Art. 17
+  // anonymise RPC handles erasure separately.
   workspace_member_attestations: {
     ownerField: "invitee_user_id",
+    article: "15",
+  },
+
+  // feat-dsar-departed-member-coverage (migration 062, #4230) — WORM
+  // ledger of workspace-member removal events. ownerField =
+  // removed_user_id; rows describe (workspace_id, removed_user_id,
+  // removed_by_user_id, removed_at). The actor (removed_by_user_id) is
+  // co-member audit metadata — when the actor files their own DSAR they
+  // see the removals they performed via the
+  // anonymise_workspace_member_removals Art. 17 cascade NULLing both
+  // PII columns. Art. 15 only: the user did not "provide" this row, the
+  // remove_workspace_member RPC wrote it on the actor's click.
+  // 36-month retention deviates from 24-mo PA-PII envelope; rationale
+  // in ADR-039.
+  workspace_member_removals: {
+    ownerField: "removed_user_id",
     article: "15",
   },
 };
