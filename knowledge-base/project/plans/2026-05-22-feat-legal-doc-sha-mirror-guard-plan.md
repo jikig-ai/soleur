@@ -71,7 +71,7 @@ This plan generalizes the SHA-pinning + body-equivalence guard from T&C to all 9
 
 **If this leaks, the user's [data / workflow / money] is exposed via:** Drift between canonical and mirror legal docs. A user reading the Eleventy mirror (e.g., footer link `/legal/acceptable-use-policy/`) sees prose that diverges from `docs/legal/acceptable-use-policy.md` — the GitHub-authoritative version. Article 13 transparency relies on these documents being identical; sustained drift creates a demonstrability gap when a regulator or counsel reads either copy and reaches a different conclusion than the other side.
 
-**Brand-survival threshold:** `aggregate pattern` — a single drift incident (e.g., a stale frontmatter date on one doc) is recoverable inline. The brand-survival concern is the *recurrence* of drift across multiple PRs; the guard converts a soft "review caught it" defense into a hard "CI blocks the merge" defense. No per-PR CPO sign-off required; CLO advisory only if the rubric extension changes the bump policy for any doc.
+- **Brand-survival threshold:** `aggregate pattern` — a single drift incident (e.g., a stale frontmatter date on one doc) is recoverable inline. The brand-survival concern is the *recurrence* of drift across multiple PRs; the guard converts a soft "review caught it" defense into a hard "CI blocks the merge" defense. No per-PR CPO sign-off required; CLO advisory only if the rubric extension changes the bump policy for any doc.
 
 ## Domain Review
 
@@ -101,7 +101,11 @@ No new infrastructure (no servers, services, secrets, DNS, certs, vendor account
 
 ## Observability
 
-Per Phase 2.9 trigger set: the plan edits `apps/web-platform/scripts/check-tc-document-sha.sh` (under `apps/*/scripts/` — does not match the trigger list `apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`) and does not introduce any new infrastructure surface. **Skip silently per Phase 2.9 "pure-docs / deletes-only / outside-trigger-set" exemption.** The CI job itself emits `::error::` annotations on guard failure; that observability is preserved (not new).
+Per Phase 2.9 trigger set: the plan edits `apps/web-platform/scripts/check-tc-document-sha.sh` (under `apps/*/scripts/` — does not match the trigger list `apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`) and does not introduce any new infrastructure surface. There is no runtime path for `legal-doc-shas.ts`; it is a constants-only export consumed exclusively by the CI guard script and the vitest harness. The CI job itself emits `::error::` annotations on guard failure; that observability is preserved (not new).
+
+discoverability_test:
+  command: sha256sum docs/legal/terms-and-conditions.md
+  expected_output: e87c8b453e377a932fa5febaf75fb7eec4c5295c4ada2d1461c8cfe4c6c8ba9f
 
 ## Acceptance Criteria
 
