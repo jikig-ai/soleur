@@ -57,3 +57,27 @@ describe("accept-terms/page.tsx middleware-outage banner", () => {
     expect(src.includes('role="status"')).toBe(true);
   });
 });
+
+// PR #4289 — TC_VERSION 2.2.0 §Workspace Members re-acceptance Art. 13(3)
+// disclosure banner. Page is only reached when middleware detects a
+// tc_accepted_version mismatch; banner is rendered unconditionally for
+// every visitor.
+describe("accept-terms/page.tsx TC_VERSION 2.2.0 update banner (PR #4289)", () => {
+  const src = readFileSync(ACCEPT_TERMS_PAGE, "utf8");
+
+  test('contains literal "Workspace Members" (§3b cross-reference)', () => {
+    expect(src.includes("Workspace Members")).toBe(true);
+  });
+
+  test('contains literal "May 22, 2026" (canonical Last-Updated date)', () => {
+    expect(src.includes("May 22, 2026")).toBe(true);
+  });
+
+  test('contains link target "terms-and-conditions.html" (full-text disclosure)', () => {
+    expect(src.includes("terms-and-conditions.html")).toBe(true);
+  });
+
+  test('carries data-testid="tc-version-update-banner" for downstream e2e', () => {
+    expect(src.includes('data-testid="tc-version-update-banner"')).toBe(true);
+  });
+});

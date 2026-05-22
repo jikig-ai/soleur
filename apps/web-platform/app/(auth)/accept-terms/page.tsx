@@ -63,6 +63,36 @@ export default function AcceptTermsPage() {
           </div>
         )}
 
+        {/* Art. 13(3) GDPR — informs returning users of the substantive */}
+        {/* change introduced in TC_VERSION 2.2.0 before re-acceptance.   */}
+        {/* Rendered unconditionally because /accept-terms is only        */}
+        {/* reached when the middleware detected a version mismatch       */}
+        {/* (server side, via Supabase tc_accepted_version SELECT).       */}
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="tc-version-update-banner"
+          className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 text-sm text-soleur-text-secondary"
+        >
+          <p className="font-medium text-soleur-text-primary">
+            Updated May 22, 2026
+          </p>
+          <p className="mt-1">
+            We&apos;ve added a new{" "}
+            <strong>§Workspace Members</strong> section governing the
+            team-workspace feature.{" "}
+            <a
+              href="https://soleur.ai/pages/legal/terms-and-conditions.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-soleur-text-link underline-offset-2 hover:underline"
+            >
+              Read the full Terms
+            </a>
+            .
+          </p>
+        </div>
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <label className="flex items-start gap-3 text-sm text-soleur-text-secondary">
             <input
