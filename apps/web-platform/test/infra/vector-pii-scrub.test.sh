@@ -219,6 +219,15 @@ run_fixture "oauth-callback-path-preserved (UI-F1)" \
   '{"message":"GET /api/auth/callback/github 200 OK"}' \
   '(.message | test("/api/auth/callback/github"))'
 
+# --- F2: OAuth query-param values redacted while path preserved (PR #4293 review) ---
+run_fixture "oauth-callback-querystring-redacted (review F2)" \
+  '{"message":"GET /api/auth/callback/github?code=ghu_AAAA1111&state=csrf-xyz 200"}' \
+  '(.message | test("/api/auth/callback/github"))' \
+  '(.message | test("code=\\[redacted\\]"))' \
+  '(.message | test("state=\\[redacted\\]"))' \
+  '(.message | test("ghu_AAAA1111") | not)' \
+  '(.message | test("csrf-xyz") | not)'
+
 # --- AC5(c): Arch-F2 ordering guard — structured branch SKIPS string scrub ---
 # A pino-shape input with userid= in a non-message field should be parsed
 # by structured (which doesnt touch the userid= substring inside arbitrary

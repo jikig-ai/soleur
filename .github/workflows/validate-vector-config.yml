@@ -86,3 +86,38 @@ jobs:
         env:
           SENTRY_USERID_PEPPER: fixture-only-do-not-use-in-prod
         run: bash apps/web-platform/test/infra/vector-pii-scrub.test.sh
+
+      # Better Stack source ID + cluster appear in vector.toml (load-bearing)
+      # AND in 4 disclosure surfaces (legal corpus). Drift between them goes
+      # silent if the source is rotated (e.g. via #4296 60-day re-decision).
+      # Extract the values from vector.toml at job-start and assert each
+      # disclosure surface still references them.
+      - name: Better Stack source/cluster parity (vector.toml vs legal corpus)
+        run: |
+          set -euo pipefail
+          uri=$(awk -F'"' '/^uri = "https:\/\/s[0-9]+\./ { print $2; exit }' apps/web-platform/infra/vector.toml)
+          if [[ -z "$uri" ]]; then
+            echo "ERROR: could not parse sink URI from vector.toml" >&2; exit 1
+          fi
+          # https://s<N>.<cluster>.betterstackdata.com/
+          source_id=$(echo "$uri" | sed -E 's@https://s([0-9]+)\..*@\1@')
+          cluster=$(echo "$uri" | sed -E 's@https://s[0-9]+\.([a-z0-9-]+)\.betterstackdata\.com.*@\1@')
+          echo "Source ID: $source_id  Cluster: $cluster"
+          DISCLOSURE_FILES=(
+            docs/legal/privacy-policy.md
+            docs/legal/data-protection-disclosure.md
+            knowledge-base/legal/article-30-register.md
+            knowledge-base/legal/compliance-posture.md
+            plugins/soleur/docs/pages/legal/privacy-policy.md
+            plugins/soleur/docs/pages/legal/data-protection-disclosure.md
+          )
+          rc=0
+          for f in "${DISCLOSURE_FILES[@]}"; do
+            if ! grep -q "$source_id" "$f"; then
+              echo "DRIFT: source ID $source_id missing from $f" >&2; rc=1
+            fi
+            if ! grep -q "$cluster" "$f"; then
+              echo "DRIFT: cluster $cluster missing from $f" >&2; rc=1
+            fi
+          done
+          exit "$rc"

@@ -82,7 +82,10 @@ if parse_err == null && is_object(parsed) {
 # ---------------- Transform 2/3: structured userId → userIdHash (HMAC) -------
 # Defense-in-depth backstop for ADR-029 (pino formatters.log already renames
 # pre-stdout). Top-level userId / user_id ONLY (matches TS hashUserId scope
-# byte-for-byte — workspaceId / nested forms are NOT in scope per SF-P0-3).
+# byte-for-byte for string-typed userId values — workspaceId / nested forms
+# are NOT in scope per SF-P0-3. For non-string types (the pino schema does
+# not emit these): VRL falls back to "" via `to_string ?? ""` while TS uses
+# String() coercion; theoretical divergence with no production occurrence.
 # Reuses SENTRY_USERID_PEPPER per ADR-029 §I4 (single source of truth — no
 # separate VRL_HMAC_KEY). HMAC-SHA256 + encode_base16 matches TS
 # crypto.createHmac("sha256", pepper).update(userId).digest("hex").
@@ -138,7 +141,11 @@ if parse_err == null && is_object(parsed) {
 # as JSON in pii_scrub_structured. Guard: if `pii_scrub_applied` already
 # contains "structured" (parse succeeded), SKIP this stage entirely to
 # avoid corrupting a clean JSON payload by re-running regex over the
-# serialised string (per Arch-F2 ordering fix).
+# serialised string (per Arch-F2 ordering fix). Trade-off: a kernel-shaped
+# string that happens to be valid JSON with a top-level userId key has its
+# rename applied but its non-rename payload preserved verbatim — accepted
+# per Arch-F2; pii_scrub_drop_userdata already strips the canonical
+# user-content keys at the top of the pipeline.
 #
 # Substring-stripped: userid=<token>, email-shaped substring, Authorization
 # Bearer/Basic value, line-injection control + Unicode-separator chars.
@@ -160,10 +167,15 @@ if contains(tag, "structured") {
     msg = slice!(msg, 0, 10000)
   }
   msg = replace(msg, r'(?i)\b(userid|user_id)=[\w-]+', "$${1}=[redacted]")
+  # OAuth query-param redaction (PR #4293 review F2): the /api/auth/callback/...
+  # path carve-out preserves the discriminator but query params can carry
+  # short-lived OAuth tokens (code, state, access_token, id_token, refresh_token).
+  # The path itself is not touched; only the value following =.
+  msg = replace(msg, r'(?i)([?&](code|state|access_token|id_token|refresh_token)=)[^\s&]+', "$${1}[redacted]")
   msg = replace(msg, r'\b[\w.+\-]+@[\w\-]+\.[\w.\-]+\b', "[email]")
   msg = replace(msg, r'(?i)(authorization:\s*)bearer\s+\S+', "$${1}Bearer [redacted]")
   msg = replace(msg, r'(?i)(authorization:\s*)basic\s+\S+', "$${1}Basic [redacted]")
-  msg = replace(msg, r'[\x00-\x1f\x7f  ]', "")
+  msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
   .message = msg
   .pii_scrub_applied = tag + "+string"
 }
