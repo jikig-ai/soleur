@@ -20,12 +20,15 @@ vi.mock("@/server/github/probe-octokit", () => ({
   createProbeOctokit: vi.fn(async () => ({ request: octokitRequestSpy })),
 }));
 
-// DNS mock for `resolveSupabaseRefFromCname`. The cron-no-byok-lease-sweep
-// test imports the SUT's source string, so node:dns must be mocked at the
-// promises shape used by the handler.
-const resolveCnameSpy = vi.fn(async (_host: string) => ["ifsccnjhymdmidffkzhl.supabase.co."]);
-vi.mock("node:dns", () => ({
-  promises: { resolveCname: resolveCnameSpy },
+// Mock for the canonical resolver `resolveSupabaseRef` (the handler now
+// imports from @/lib/supabase/resolve-ref instead of inlining a node:dns
+// call). The spy returns the canonical happy-path ref; per-test overrides
+// drive the drift scenario.
+const resolveSupabaseRefSpy = vi.fn(
+  async (_url: string): Promise<string | null> => "ifsccnjhymdmidffkzhl",
+);
+vi.mock("@/lib/supabase/resolve-ref", () => ({
+  resolveSupabaseRef: resolveSupabaseRefSpy,
 }));
 
 // --- Helpers ---------------------------------------------------------------
@@ -135,8 +138,8 @@ beforeEach(() => {
     if (route === "GET /search/issues") return { data: { items: [] } };
     return { data: {} };
   });
-  resolveCnameSpy.mockReset();
-  resolveCnameSpy.mockResolvedValue(["ifsccnjhymdmidffkzhl.supabase.co."]);
+  resolveSupabaseRefSpy.mockReset();
+  resolveSupabaseRefSpy.mockResolvedValue("ifsccnjhymdmidffkzhl");
   logger.info.mockReset();
   logger.warn.mockReset();
   logger.error.mockReset();
@@ -337,7 +340,7 @@ describe("cronOauthProbeHandler — failure modes", () => {
   });
 
   it("supabase_project_ref_drift → ?status=error when CNAME ref differs from env", async () => {
-    resolveCnameSpy.mockResolvedValue(["differentref99999999.supabase.co."]);
+    resolveSupabaseRefSpy.mockResolvedValue("differentref99999999");
     const { cronOauthProbeHandler } = await importHandler();
     const step = makeStep();
     const out = await cronOauthProbeHandler({ step, logger });
