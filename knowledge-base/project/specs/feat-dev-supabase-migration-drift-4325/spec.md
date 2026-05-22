@@ -49,7 +49,7 @@ related_issues: [4338, 4241]
 
 ## Acceptance Criteria
 
-- **AC1:** `tenant-integration.yml` passes on this PR's branch *after* operator runs Delta 1's dev recovery SQL. The green run is the proof gate.
+- **AC1:** Dev recovery proof is captured by the `/tmp/pg-runner/inspect.mjs` output on `_schema_migrations` showing (a) distinct (non-sub-millisecond) `applied_at` timestamps for 053/058/059/060/061/062, (b) `content_sha` matching `origin/main` blob SHAs, (c) `to_regclass` returning the table names for organizations, workspaces, workspace_members, workspace_member_attestations, workspace_member_removals. **Already verified 2026-05-22 — recovery ran out-of-band at 12:30 UTC** (likely as part of PR #4339's session). Tenant-integration green is NOT the proof gate — it has pre-existing failures in sibling features (`workspace_member_actions` AC4, `scope_grants_workspace_id_check`) per `wg-when-tests-fail-and-are-confirmed-pre`.
 - **AC2:** A synthetic test migration with an unprotected cross-file `REFERENCES` triggers the FR1 lint and fails CI. A counter-test with a `to_regclass` precondition block passes.
 - **AC3:** `MIGRATION_SCHEMA_PRECONDITION_PROBE=0 bash apps/web-platform/scripts/run-migrations.sh --help` succeeds and documents the opt-out (FR5+FR6).
 - **AC4:** The forward-only migration (FR4) re-applies cleanly against a dev where the recovery has run — verified by the post-recovery `tenant-integration` green.
