@@ -895,6 +895,21 @@ export const realSdkQueryFactory: QueryFactory = async (
     args.userId,
     args.userId,
     async (lease): Promise<Query> => {
+    // BYOK Delegations PR-A (#4232) closure-capture: publish the lease
+    // context to the dispatcher before the lease scope closes. The
+    // Query iterator is consumed by the runner ASYNC AFTER this factory
+    // returns — by then `slot.alive = false` and `lease.delegationId`
+    // is unreachable. The dispatcher's onResult callback reads from
+    // the closure variable that the sink writes here.
+    args.setDelegationContext?.(
+      lease.delegationId !== undefined
+        ? {
+            delegationId: lease.delegationId,
+            callerUserId: lease.workspaceContextUserId,
+          }
+        : undefined,
+    );
+
     // Plan §2.11 canonical pattern (mirrors agent-runner.ts:2361):
     // hoist `await lease.getApiKey()` OUT of `Promise.all` so the
     // `string | Promise<string>` union in `getApiKey`'s return type
@@ -1491,6 +1506,21 @@ export async function dispatchSoleurGo(
   // method contract.
   const state = new TurnPersistenceState();
 
+  // BYOK Delegations PR-A (#4232) closure-capture. The lease opens
+  // inside realSdkQueryFactory and closes before onResult fires.
+  // realSdkQueryFactory writes to this variable via the
+  // `setDelegationContext` sink threaded through DispatchArgs →
+  // QueryFactoryArgs; onResult reads it to route persistTurnCost
+  // through the merged atomic RPC when a delegation is active.
+  let leaseDelegationCtx:
+    | { delegationId: string; callerUserId: string }
+    | undefined;
+  const setDelegationContext = (
+    ctx: { delegationId: string; callerUserId: string } | undefined,
+  ): void => {
+    leaseDelegationCtx = ctx;
+  };
+
   // #3603 W4 — cc-path narrows the type-wide `Message.usage` shape to
   // cost-only on `'complete'` turns (Art. 5(1)(c) data-minimization). The
   // legacy agent-runner path emits the full `UsageSnapshot` (input_tokens,
@@ -1719,21 +1749,22 @@ export async function dispatchSoleurGo(
       // Phase 3 (feat-team-workspace-multi-user) — workspaceId from
       // userId under N2 invariant; see agent-runner.ts:1884 comment.
       //
-      // BYOK Delegations PR-A (#4232) FOLLOW-UP. The lease scope opens
-      // inside `realSdkQueryFactory` (line 890) and CLOSES before this
-      // `onResult` callback fires (the queryFactory returns a Query
-      // iterator; the runner consumes it asynchronously). `lease.
-      // delegationId` is unreachable from this scope. Closing this gap
-      // needs a closure-captured `delegationContext` threaded from
-      // `realSdkQueryFactory` through `getSoleurGoRunner`'s state class
-      // into the `onResult` callback signature. Until that lands,
-      // cc-soleur-go runs under an active delegation will silently
-      // audit-attribute to the grantor via the SOLO `write_byok_audit`
-      // path — RPC-level cap checks DO NOT fire. Tracked for Phase 4
-      // alongside the integration tests that can validate the
-      // closure-capture wiring end-to-end. The legacy agent-runner.ts
-      // path (`:1911`) IS in-scope and threads correctly today.
-      persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, userId, result);
+      // BYOK Delegations PR-A (#4232) closure-capture: read the
+      // delegationContext that realSdkQueryFactory wrote inside its
+      // lease body. The lease scope is closed by the time this
+      // callback fires; the value here was captured before scope-close
+      // via the `setDelegationContext` sink. Undefined under
+      // flag-OFF / solo callers / resolver fall-through; routes the
+      // audit through the merged atomic RPC under flag-ON +
+      // delegated runs.
+      persistTurnCost(
+        userId,
+        conversationId,
+        CC_ROUTER_LEADER_ID,
+        userId,
+        result,
+        leaseDelegationCtx,
+      );
     },
     onSessionIdCaptured: (capturedSessionId) => {
       // #3266 — fire-and-forget DB persist + synchronous in-process cache
@@ -1767,6 +1798,11 @@ export async function dispatchSoleurGo(
       documentContent,
       documentExtractError,
       documentExtractMeta,
+      // BYOK Delegations PR-A (#4232) closure-capture: bridge the
+      // lease body in realSdkQueryFactory to this dispatchSoleurGo
+      // scope so onResult can read leaseDelegationCtx and route
+      // persistTurnCost through the merged atomic RPC.
+      setDelegationContext,
       // 2026-05-06 Bug A1 fix — thread workspacePath through so the
       // runner builds the system prompt with workspace-absolute Read
       // instructions. Falls back to the locally-resolved value (set by

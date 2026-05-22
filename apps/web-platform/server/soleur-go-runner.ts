@@ -779,12 +779,34 @@ export interface DispatchArgs {
    * directives use the workspace-absolute form.
    */
   workspacePath?: string;
+  /**
+   * BYOK Delegations PR-A (#4232). Forwarded straight through to
+   * `QueryFactoryArgs.setDelegationContext`. See that field's docstring
+   * for the closure-capture protocol bridging the lease body to the
+   * dispatcher's `onResult` callback.
+   */
+  setDelegationContext?: DelegationContextSink;
 }
 
 export interface DispatchResult {
   queryReused: boolean;
   resumeSessionId?: string;
 }
+
+/**
+ * BYOK Delegations PR-A (#4232). Closure-capture sink so the
+ * realSdkQueryFactory can publish the lease's delegationId +
+ * callerUserId to the dispatcher BEFORE the lease scope closes. The
+ * dispatcher consumes the captured value from `onResult` (which fires
+ * after the lease scope has closed) to route the audit RPC through
+ * `check_and_record_byok_delegation_use` when a delegation is active.
+ * Structural type — the canonical shape lives in `cost-writer.ts` as
+ * `ByokDelegationContext`. Kept structurally-typed here to avoid the
+ * runner module importing from the cost-writer.
+ */
+export type DelegationContextSink = (
+  ctx: { delegationId: string; callerUserId: string } | undefined,
+) => void;
 
 export interface QueryFactoryArgs {
   prompt: AsyncIterable<SDKUserMessage>;
@@ -796,6 +818,18 @@ export interface QueryFactoryArgs {
    *  per-user `canUseTool` closure + audit logs. Tests can ignore. */
   userId: string;
   conversationId: string;
+  /**
+   * BYOK Delegations PR-A (#4232). Optional sink that the factory calls
+   * inside its `runWithByokLease`/`resolveKeyOwnerThenLease` body once
+   * the lease is opened. The dispatcher uses this to bridge
+   * `lease.delegationId` across the queryFactory-to-onResult boundary
+   * (lease scope closes before `onResult` fires, so direct read is
+   * impossible). See `apps/web-platform/server/cc-dispatcher.ts`
+   * `realSdkQueryFactory` for the producer and `dispatchSoleurGo`'s
+   * `onResult` for the consumer. Factories that do not handle BYOK
+   * may safely ignore the field.
+   */
+  setDelegationContext?: DelegationContextSink;
   /**
    * #2923 routing-relevant context (also surfaced to the system prompt
    * via `buildSoleurGoSystemPrompt`). Threaded from `DispatchArgs`.
@@ -2016,6 +2050,10 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           documentExtractError: args.documentExtractError,
           documentExtractMeta: args.documentExtractMeta,
           workspacePath: args.workspacePath,
+          // BYOK Delegations PR-A (#4232): forward the closure-capture
+          // sink so the real-SDK factory can publish lease.delegationId
+          // to the dispatcher before the lease scope closes.
+          setDelegationContext: args.setDelegationContext,
         });
       } catch (err) {
         reportSilentFallback(err, {
