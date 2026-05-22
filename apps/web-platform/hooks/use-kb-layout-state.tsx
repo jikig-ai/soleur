@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { usePanelRef } from "react-resizable-panels";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useFeatureFlag } from "@/components/feature-flags/provider";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { safeSession } from "@/lib/safe-session";
@@ -58,16 +59,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   const [error, setError] = useState<KbContextValue["error"]>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // Runtime feature flag — fetched from /api/flags (not build-time NEXT_PUBLIC_*)
-  const [kbChatFlag, setKbChatFlag] = useState(false);
-  useEffect(() => {
-    fetch("/api/flags")
-      .then((r) => r.json())
-      .then((flags: Record<string, boolean>) => {
-        setKbChatFlag(flags["kb-chat-sidebar"] ?? false);
-      })
-      .catch(() => {}); // flags stay off if fetch fails
-  }, []);
+  // Runtime feature flag — hydrated server-side via FeatureFlagProvider in
+  // app/layout.tsx (ADR-038 v2). No client fetch round-trip.
+  const kbChatFlag = useFeatureFlag("kb-chat-sidebar");
 
   const fetchTree = useCallback(
     async (signal?: AbortSignal) => {
