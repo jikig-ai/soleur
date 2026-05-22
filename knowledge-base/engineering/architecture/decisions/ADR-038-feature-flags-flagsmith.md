@@ -17,8 +17,8 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Accepted** (2026-05-22). Landed as a two-PR sequence:
-- **PR #1 (this PR)**: identity-aware resolution path, `users.role` column, ADR, provider+hook, tests. Until segments are configured (PR #2), runtime flags resolve identically for all roles — env-var fallback semantics dominate.
-- **PR #2 (follow-on)**: three Soleur skills (`flag-create`, `flag-set-role`, `user-set-role`), one-time segment bootstrap script. After PR #2 the per-role targeting is operationally usable.
+- **PR #4331** (merged 2026-05-22): identity-aware resolution path, `users.role` column, ADR, provider+hook, tests.
+- **PR #2** (this commit's PR): three Soleur skills (`soleur:flag-create`, `soleur:flag-set-role`, `soleur:user-set-role`) + one-time Flagsmith setup runbook at `plugins/soleur/skills/flag-bootstrap/SETUP.md`. Segments `role-prd` (id 1129195) and `role-dev` (id 1129194) created in Flagsmith project `web-platform` (id 39082); dead `command-center-soleur-go` feature archived. Operational interface is live.
 
 Closes the Phase 4 follow-on deliberately deferred by PR #2408 (issue #2409, closed): the original env-var-only system left "adopt a third-party provider" as an explicit future-phase action item.
 

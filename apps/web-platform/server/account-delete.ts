@@ -72,6 +72,16 @@ export interface DeleteAccountResult {
  *   5.8 anonymise-organization-membership — anonymise_organization_membership
  *                             RPC (migration 058). Orphan-cleanup or reassign-
  *                             owner; breaks the RESTRICT FK to public.users.
+ *   5.9 anonymise-workspace-member-actions — anonymise_workspace_member_actions
+ *                             RPC (migration 063, #4231). NULL-sets actor_user_id
+ *                             + target_user_id on the audit log; lineage
+ *                             (workspace_id, action_type, role, created_at,
+ *                             attestation_id) preserved. Cascade DELETEs from
+ *                             3.91 do NOT create new audit rows because
+ *                             anonymise_workspace_members SET LOCAL
+ *                             session_replication_role='replica' suppresses
+ *                             the AFTER trigger — this step only anonymises
+ *                             rows from prior legitimate invite/remove RPC calls.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -385,7 +395,7 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
-  // 3.905 Anonymise workspace_member_removals (migration 062, #4230).
+  // 3.905 Anonymise workspace_member_removals (migration 063, #4230).
   //      NULLs removed_user_id + removed_by_user_id for every removal
   //      row where the deleted user appears on either side. Mirrors
   //      3.90's pattern: lineage (id, workspace_id, removed_at) is
@@ -464,6 +474,37 @@ export async function deleteAccount(
     log.error(
       { userId, err },
       "anonymise_organization_membership threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.93 Anonymise workspace_member_actions audit rows (migration 063, #4231).
+  //      NULL-sets actor_user_id + target_user_id for every row referencing
+  //      the departing user. Lineage columns (workspace_id, action_type,
+  //      old_role, new_role, created_at, attestation_id) preserved. Idempotent
+  //      (re-run's WHERE matches zero already-NULLed rows). MUST run BEFORE
+  //      auth.admin.deleteUser — public.users FK is RESTRICT, so the auth
+  //      cascade aborts without prior anonymisation. Cascade DELETEs at
+  //      step 3.91 do NOT create new audit rows because anonymise_workspace_
+  //      members SET LOCAL session_replication_role='replica' suppresses the
+  //      AFTER trigger; step 3.93 only anonymises rows from prior legitimate
+  //      invite/remove RPC calls.
+  try {
+    const { error: anonAuditErr } = await service.rpc(
+      "anonymise_workspace_member_actions",
+      { p_user_id: userId },
+    );
+    if (anonAuditErr) {
+      log.error(
+        { userId, err: anonAuditErr },
+        "anonymise_workspace_member_actions failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_workspace_member_actions threw — aborting deletion",
     );
     return { success: false, error: "Account deletion failed. Please try again." };
   }

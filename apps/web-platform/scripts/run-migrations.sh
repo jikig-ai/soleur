@@ -253,6 +253,60 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     continue
   fi
 
+  # Schema-presence probe (#4338). Before applying a migration, extract
+  # the `REFERENCES public.<table>` mentions from its body, SUBTRACT the
+  # tables the same file CREATEs, and confirm each remaining cross-file
+  # dependency exists in the live schema. Catches the schema-vs-ledger
+  # drift class (ledger says applied, schema disagrees) one migration
+  # earlier than the FK parser, with an error message that names the
+  # missing relation and links to the recovery learning.
+  #
+  # SUBTRACTING same-file CREATEs is load-bearing: migration 053 creates
+  # public.workspaces AND has an FK to it (workspace_members.workspace_id).
+  # Without the subtraction, a fresh-DB first-apply of 053 would fail the
+  # probe because the table doesn't yet exist when the probe runs — but
+  # it will exist immediately after 053's body executes. Self-references
+  # are the canonical FK pattern within a single migration; the probe
+  # must only catch CROSS-FILE dependencies.
+  #
+  # Best-effort: opt-in via MIGRATION_SCHEMA_PRECONDITION_PROBE=1. The
+  # FK parser remains the last line of defense when the env is unset OR
+  # when the probe's regex can't see the dependency (dynamic SQL,
+  # function-body SELECTs, view dependencies, etc.).
+  if [[ "${MIGRATION_SCHEMA_PRECONDITION_PROBE:-0}" == "1" ]]; then
+    # Regex assumes the codebase convention: uppercase DDL keywords,
+    # lowercase + `public.`-qualified relation names. Shapes outside
+    # that convention (lowercase `references`, schema-less `<name>`,
+    # quoted `"public"."Foo"`, dynamic `EXECUTE format(...)`) bypass
+    # this probe; the FK parser remains the last line of defense.
+    referenced_tables=$(grep -oE 'REFERENCES public\.[a-z_][a-z0-9_]*' "$migration_file" 2>/dev/null \
+      | awk '{print $2}' \
+      | sort -u || true)
+    same_file_creates=$(grep -oE 'CREATE TABLE (IF NOT EXISTS )?public\.[a-z_][a-z0-9_]*' "$migration_file" 2>/dev/null \
+      | awk '{print $NF}' \
+      | sort -u || true)
+    # comm -23: lines in referenced_tables NOT in same_file_creates.
+    # Both inputs are pre-sorted; sed strips blank lines so comm
+    # doesn't error on empty input.
+    cross_file_deps=$(comm -23 \
+      <(printf '%s\n' "$referenced_tables" | sed '/^$/d') \
+      <(printf '%s\n' "$same_file_creates" | sed '/^$/d') 2>/dev/null || true)
+    missing_tables=""
+    while IFS= read -r tbl; do
+      [[ -z "$tbl" ]] && continue
+      exists=$(run_sql "SELECT to_regclass('$tbl') IS NOT NULL;" 2>/dev/null || echo "f")
+      if [[ "$exists" != "t" ]]; then
+        missing_tables+="$tbl "
+      fi
+    done <<<"$cross_file_deps"
+    if [[ -n "$missing_tables" ]]; then
+      echo "::error::Migration $filename references tables that do not exist in the live schema: $missing_tables"
+      echo "::error::This indicates a schema-vs-ledger drift on this Supabase project — the _schema_migrations ledger claims the parent migration(s) are applied, but the schema disagrees."
+      echo "::error::See knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md for the recovery procedure (delete the stale ledger rows; the runner re-applies the parent migrations on the next CI run)."
+      exit 1
+    fi
+  fi
+
   echo "Applying: $filename"
   # Compute the git blob SHA-1 of the file body so the drift probe can detect
   # same-filename content drift (mig 054 adds the content_sha column to
