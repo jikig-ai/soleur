@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 // Contract test for bin/diff-github-app-manifest.sh — the shared diff
-// script invoked by BOTH the workflow YAML and this test (Phase 3.3
+// script invoked by BOTH the drift-guard Inngest handler
+// (apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts
+// via child_process.spawn — TR9 PR-4 #4235) AND this test (Phase 3.3
 // "share the diff bash" requirement).
 //
-// Mirrors github-app-drift-guard-contract.test.ts:3,375 spawnSync pattern.
-// Skips when `jq` is unavailable on the runner.
+// spawnSync pattern. Skips when `jq` is unavailable on the runner.
 //
 // Six-case matrix per plan Phase 3.4:
 //   1. Permission match -> exit 0

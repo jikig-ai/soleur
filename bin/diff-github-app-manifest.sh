@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Diff the committed GitHub App manifest against a `GET /app` response and
 # classify the divergence into one of three modes. Shared between the
-# drift-guard workflow (.github/workflows/scheduled-github-app-drift-guard.yml)
-# and the contract test
+# drift-guard handler (apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts,
+# via child_process.spawn) and the contract test
 # (apps/web-platform/test/github-app-manifest-drift-guard.test.ts) per the
 # plan's Phase 3.3 "share the diff bash" requirement — duplicating the diff
-# logic inline in YAML means the test asserts behavior not in CI.
+# logic inline in TS means the test asserts behavior not in the handler.
 #
 # Inputs (env vars):
 #   $MANIFEST_FILE  path to apps/web-platform/infra/github-app-manifest.json

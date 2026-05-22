@@ -3,19 +3,27 @@ title: GitHub App drift-guard runbook
 date: 2026-05-05
 owners: engineering/ops
 applies_to:
-  - .github/workflows/scheduled-github-app-drift-guard.yml
+  - apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts
   - apps/web-platform/scripts/verify-required-secrets.sh
-related_issues: [3187, 3181, 2997]
+related_issues: [3187, 3181, 2997, 4235]
 related_prs: [3224]
 brand_survival_threshold: single-user incident
 ---
 
 # GitHub App drift-guard runbook
 
+**Before debugging the drift-guard code path, check Better Stack
+`inngest-heartbeat` last_alive_at** — if >2 min ago, this issue is likely
+a substrate-down false-positive (cross-check sibling
+`scheduled-daily-triage` / `scheduled-follow-through` /
+`scheduled-oauth-probe` monitors). When the Inngest substrate is healthy
+but this monitor pages alone, the cause is in the handler logic below.
+
 Triage and rotation procedures for the hourly drift-guard at
-`.github/workflows/scheduled-github-app-drift-guard.yml`. The guard
-mints an RS256 JWT, calls `https://api.github.com/app`, and asserts
-`response.id == GH_APP_DRIFTGUARD_APP_ID` AND
+`apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts`
+(TR9 PR-4 migration, closes #4235). The handler mints an app-level JWT via
+`createAppJwtOctokit()` (in `apps/web-platform/server/github/probe-octokit.ts`),
+calls `GET /app`, and asserts `response.id == GH_APP_DRIFTGUARD_APP_ID` AND
 `response.client_id == OAUTH_PROBE_GITHUB_CLIENT_ID` byte-for-byte.
 
 A failure surfaces under one of three label families — the title prefix
@@ -119,14 +127,19 @@ probe and is presumed already set (see `oauth-probe-failure.md`).
 ### 5. Verify the live workflow
 
 ```bash
-gh workflow run scheduled-github-app-drift-guard.yml
-# Wait ~30s, then poll:
-gh run list --workflow=scheduled-github-app-drift-guard.yml --limit 1 \
-  --json databaseId,status,conclusion
+# Trigger an on-demand run of the Inngest cron handler:
+inngest send cron/github-app-drift-guard.manual-trigger --data '{}'
+
+# Wait ~30s, then verify via Sentry checkins API (no dashboard
+# eyeballing per hr-no-dashboard-eyeball-pull-data-yourself):
+curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-github-app-drift-guard/checkins/?limit=1" \
+  | jq -r '.[0] | "\(.dateCreated) \(.status)"'
 ```
 
-A `conclusion: success` confirms both the JWT path and the assertion
-path. A `failure` surfaces a tracking issue; follow Triage below.
+An `ok` status confirms both the JWT path and the assertion path. An
+`error` status surfaces a tracking issue (filed by the handler via
+`createAppJwtOctokit`); follow Triage below.
 
 ## Triage
 
@@ -267,8 +280,8 @@ over `|` to avoid stdout buffers visible to ptrace on shared hosts.
 5. **Update Doppler.** `cat new-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --silent --plain -p soleur -c prd >/dev/null 2>&1`.
 6. **Sync to GitHub Actions.** `gh secret set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 < <(doppler secrets get GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 -p soleur -c prd --plain)`.
    (Process substitution avoids the intermediate pipe stdout buffer.)
-7. **Trigger the guard.** `gh workflow run scheduled-github-app-drift-guard.yml`.
-8. **Verify GREEN.** `gh run list --workflow=scheduled-github-app-drift-guard.yml --limit 1 --json conclusion` must show `success`.
+7. **Trigger the guard.** `inngest send cron/github-app-drift-guard.manual-trigger --data '{}'`.
+8. **Verify GREEN.** `curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-github-app-drift-guard/checkins/?limit=1" | jq -r '.[0].status'` must show `ok`.
 9. **Only now: revoke the old key on GitHub.** `[human-only: GitHub
    web UI; no DELETE /apps/{id}/keys/{key_id} REST endpoint]` App
    settings → Private keys → Delete. The window between step 1 and

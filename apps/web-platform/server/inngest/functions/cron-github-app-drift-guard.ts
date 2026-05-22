@@ -1,6 +1,6 @@
 // TR9 PR-4 (#4235) — GitHub App drift-guard migrated to Inngest cron.
 //
-// Migrated from .github/workflows/scheduled-github-app-drift-guard.yml
+// Migrated from the GHA scheduled-github-app-drift-guard workflow
 // (deleted in the same PR per TR9 I-13 hygiene). Carry-forward of PR-1 /
 // PR-2 / PR-3 substrate; ADR-030 + ADR-033 invariants apply.
 //

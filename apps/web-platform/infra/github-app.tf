@@ -25,10 +25,11 @@
 # requires founder re-acceptance via the GitHub UI (no API — vendor limit,
 # vendor-authorization-scope class of the operator-only canonical list). See
 # runbook Step 2.1 for the procedure. Both drift planes are now detected by
-# scheduled-github-app-drift-guard.yml: App-declared-vs-manifest (existing
-# block) and installation-grant-vs-manifest (the class that produced #4173
-# — added in the same workflow's `check` step, reusing the same App-JWT
-# and the same bin/diff-github-app-manifest.sh contract).
+# apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts:
+# App-declared-vs-manifest (existing block) and installation-grant-vs-manifest
+# (the class that produced #4173 — checked in the same handler, reusing the
+# same App-JWT via createAppJwtOctokit() and the same bin/diff-github-app-manifest.sh
+# contract).
 #
 # Why ignore_changes on the 2 operator-supplied secrets: rotation via the
 # Doppler UI is invisible to subsequent `terraform plan` (the provider
