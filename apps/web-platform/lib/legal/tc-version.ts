@@ -11,7 +11,7 @@
  * Bump-policy rubric (material / clarifying / cosmetic) lives at
  * knowledge-base/legal/tc-version-bump-policy.md (CLO-signed).
  */
-export const TC_VERSION = "2.2.0";
+export const TC_VERSION = "2.2.1";
 
 /**
  * SHA-256 of `docs/legal/terms-and-conditions.md` at the time of the
@@ -32,7 +32,7 @@ export const TC_VERSION = "2.2.0";
  *      `TC_VERSION` was also bumped.
  */
 export const TC_DOCUMENT_SHA =
-  "6bd7dd75ebfba8f1628cf2eddb8fde560f4f6df5fe4b5b6783f1dfdd7ca0fc33";
+  "e87c8b453e377a932fa5febaf75fb7eec4c5295c4ada2d1461c8cfe4c6c8ba9f";
 
 /**
  * Bump-metadata for the current `TC_VERSION`. Consumed by the Art. 13(3)
@@ -48,6 +48,6 @@ export const TC_DOCUMENT_SHA =
  */
 export const TC_BUMP_METADATA = {
   lastUpdated: "May 22, 2026",
-  substantiveChange: "§Workspace Members",
+  substantiveChange: "Workspace-Member responsibility simplified (Side Letter now optional)",
   fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
 } as const;

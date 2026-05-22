@@ -79,9 +79,7 @@ export default function AcceptTermsPage() {
             Updated {TC_BUMP_METADATA.lastUpdated}
           </p>
           <p className="mt-1">
-            We&apos;ve added a new{" "}
-            <strong>{TC_BUMP_METADATA.substantiveChange}</strong> section
-            governing the team-workspace feature.{" "}
+            <strong>{TC_BUMP_METADATA.substantiveChange}.</strong>{" "}
             <a
               href={TC_BUMP_METADATA.fullTermsUrl}
               target="_blank"
