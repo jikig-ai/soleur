@@ -50,7 +50,7 @@ Single dry-run knob: `UX_AUDIT_DRY_RUN` env. In the scheduled workflow it is har
 - `CAP_OPEN_ISSUES = 20` — global cap on open `ux-audit`-labeled issues; skill refuses to file when reached
 - `CAP_PER_RUN = 5` — severity-ranked top-N findings filed per run
 - `CAP_PER_ROUTE = 2` — no single route may contribute more than 2 findings to the top-N, so anonymous funnel pages (login/signup) cannot monopolize output and crowd out bot-authenticated dashboard findings. Ref #2378.
-- `FINDING_CATEGORIES = ["real-estate", "ia", "consistency", "responsive", "comprehension"]` — dedup hash keys on this exact set
+- `FINDING_CATEGORIES = ["real-estate", "ia", "consistency", "responsive", "comprehension", "anti-slop"]` — dedup hash keys on this exact set. `anti-slop` covers source-code findings from `soleur:frontend-anti-slop`.
 
 ## Workflow
 

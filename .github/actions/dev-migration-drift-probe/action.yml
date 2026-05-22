@@ -1,0 +1,133 @@
+# Dev-Supabase migration drift probe (#4241).
+#
+# Reads `public._schema_migrations` on dev-Supabase and cross-references
+# each row against `git ls-tree origin/main` for the corresponding file
+# under `apps/web-platform/supabase/migrations/`. Emits `::warning::`
+# annotations (NOT `::error::`) for any rows whose file is missing from
+# origin/main — these are dev-only migrations that drifted in from an
+# unmerged branch, the failure class that broke `Tenant integration
+# (dev-Supabase)` on 2026-05-21.
+#
+# Severity is `::warning::` by design. The apply-time gate in
+# `apps/web-platform/scripts/run-migrations.sh` (#4241 Phase 3.1) is the
+# enforcement layer; this probe is the visibility layer. The two
+# complementary roles let local-iteration valves (ALLOW_UNMERGED_DEV_APPLY=1)
+# remain usable without permanently silencing the drift class.
+#
+# Coverage gaps documented in
+# `knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`:
+# direct-`psql` DDL is invisible (operator bypasses both the runner and
+# the row INSERT); same-prefix collisions are not enforced; content drift
+# on same-named files is caught by the content-sha check (see migration
+# 054_schema_migrations_content_sha.sql).
+#
+# Replaces inline drift-probe step in `tenant-integration.yml`. Designed
+# to be invoked from any workflow that needs dev-vs-main drift visibility
+# (PR-driven CI, scheduled cron, ad-hoc workflow_dispatch).
+
+name: 'Detect dev-vs-main migration drift'
+description: 'Surface _schema_migrations rows on dev-Supabase whose filename or content_sha drifts from origin/main.'
+
+inputs:
+  doppler-token:
+    description: 'DOPPLER_TOKEN_DEV_SCHEDULED secret (caller forwards from secrets context).'
+    required: true
+  doppler-project:
+    description: 'Doppler project name.'
+    required: false
+    default: 'soleur'
+  doppler-config:
+    description: 'Doppler config (must resolve to environment=dev).'
+    required: false
+    default: 'dev_scheduled'
+
+outputs:
+  drift-detected:
+    description: '"true" if any drift was reported, "false" otherwise.'
+    value: ${{ steps.probe.outputs.drift-detected }}
+
+runs:
+  using: composite
+  steps:
+    - id: probe
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: ${{ inputs.doppler-project }}
+        DOPPLER_CONFIG: ${{ inputs.doppler-config }}
+      run: |
+        set -uo pipefail
+        # Refresh origin/main locally so `git ls-tree` reflects merged state.
+        # actions/checkout@v4 defaults to fetch-depth=1 and on pull_request runs
+        # does not populate refs/remotes/origin/main; without this fetch the
+        # ls-tree below would return empty for every filename and false-report
+        # all rows as drift. Tolerate offline (|| true); a stale ref produces
+        # a noisy ::warning:: list, not a silent green.
+        if ! git fetch --depth=1 origin main 2>/tmp/fetch.err; then
+          echo "::warning::git fetch origin main failed (see /tmp/fetch.err); drift probe may produce false positives."
+        fi
+        # Wrap psql in `sh -c` so `$DATABASE_URL_POOLER` expands inside the
+        # doppler-injected env of the child process. Expanding in the outer
+        # composite-action shell (where set -u is active and DATABASE_URL_POOLER
+        # is unbound) would abort the step before psql runs.
+        if ! applied=$(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
+              sh -c 'psql "$DATABASE_URL_POOLER" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -F "|" -c "SELECT filename, COALESCE(content_sha, '"'"''"'"') FROM public._schema_migrations ORDER BY filename;"'); then
+          echo "::warning::drift probe psql query failed; skipping drift check (visibility, not enforcement)."
+          echo "drift-detected=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # Filename shape whitelist — defense in depth. `_schema_migrations.filename`
+        # is runner-controlled today, but a future migration could relax that;
+        # reject any row whose filename contains characters outside the safe
+        # set before interpolating into `git ls-tree`'s path argument.
+        missing_drift=""
+        content_drift=""
+        while IFS='|' read -r f sha_applied; do
+          [[ -z "$f" ]] && continue
+          case "$f" in
+            *[!a-zA-Z0-9._-]*)
+              echo "::warning::skipping suspicious _schema_migrations row: $f"
+              continue ;;
+          esac
+          path="apps/web-platform/supabase/migrations/$f"
+          # `git ls-tree origin/main -- <path>` returns `<mode> <type> <sha> <path>`.
+          # Empty stdout means the file is not on origin/main (missing-class drift).
+          ls_out=$(git ls-tree origin/main -- "$path" 2>/dev/null || true)
+          if [[ -z "$ls_out" ]]; then
+            missing_drift+="$f"$'\n'
+            continue
+          fi
+          # Compare git blob sha (column 3 of ls-tree output) with the sha
+          # the runner stored when it applied the row. Old rows (pre-migration
+          # 054) have NULL content_sha — skip the content-drift check rather
+          # than surface a noisy "applied before content-sha tracking" line.
+          [[ -z "$sha_applied" ]] && continue
+          main_blob_sha=$(awk '{print $3}' <<<"$ls_out")
+          if [[ "$sha_applied" != "$main_blob_sha" ]]; then
+            content_drift+="$f (applied=$sha_applied main=$main_blob_sha)"$'\n'
+          fi
+        done <<<"$applied"
+        drift_seen="false"
+        if [[ -n "$missing_drift" ]]; then
+          drift_seen="true"
+          echo "::warning::dev-Supabase has _schema_migrations rows whose file is NOT on origin/main."
+          echo "::warning::See #4241 + knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md for revert procedure."
+          echo "::warning::Missing-on-main:"
+          while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            echo "::warning::  - $f"
+          done <<<"$missing_drift"
+        fi
+        if [[ -n "$content_drift" ]]; then
+          drift_seen="true"
+          echo "::warning::dev-Supabase has _schema_migrations rows whose content drifts from origin/main (same filename, different blob)."
+          echo "::warning::Content drift:"
+          while IFS= read -r entry; do
+            [[ -z "$entry" ]] && continue
+            echo "::warning::  - $entry"
+          done <<<"$content_drift"
+        fi
+        if [[ "$drift_seen" == "false" ]]; then
+          echo "No dev-vs-main migration drift detected."
+        fi
+        echo "drift-detected=${drift_seen}" >> "$GITHUB_OUTPUT"

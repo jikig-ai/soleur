@@ -1,166 +1,264 @@
-# Vector agent config — ships journald + host_metrics to Sentry.
+# Vector agent config — ships journald + host_metrics to Better Stack Logs.
 #
 # Co-located with inngest-server.service on the Hetzner VM. Provisioned by
 # inngest-bootstrap.sh (binary install) + vector.tf (version pin) +
-# vector.service systemd unit. Doppler `prd` injects SENTRY_INGEST_DOMAIN,
-# SENTRY_PROJECT_ID, SENTRY_PUBLIC_KEY at ExecStart time (same shape as
-# inngest-server.service).
+# vector.service systemd unit. Doppler `prd` injects BETTERSTACK_LOGS_TOKEN
+# + SENTRY_USERID_PEPPER at ExecStart time.
 #
-# Throughput envelope: inngest-server.service emits <1 ERROR/day at steady
-# state; host_metrics every 30s. Sentry plan absorbs both well under the
-# alpha-internal volume.
+# Sink shape (#4293): generic HTTP sink against Better Stack is the canonical
+# vendor-recommended pattern (per https://betterstack.com/docs/logs/vector/).
+# The native `better_stack_logs` sink does NOT exist — Vector PR #19274
+# (proposed sink, opened 2023-11-30) was closed unmerged 2025-01-27.
+# Strategic single-provider consolidation question tracked in #4296 (60-day
+# re-decision).
+#
+# PII redaction (#4293): three VRL transforms run before the sink —
+# pii_scrub_drop_userdata (Art-9 user-content key drop) → pii_scrub_structured
+# (userId → userIdHash via HMAC-SHA256 reusing SENTRY_USERID_PEPPER per
+# ADR-029 §I4) → pii_scrub_string (regex backstop for non-pino / kernel-oops
+# lines, runs ONLY when the structured branch did not parse).
 
 data_dir = "/var/lib/vector"
 
-# ---------------- Source 1: inngest-server journald (ERROR+) ----------------
-# `_SYSTEMD_UNIT` filter scopes to the unit we care about. PRIORITY <= 4
-# means EMERG..WARNING (numeric 0..4 in syslog severity); journalctl uses
-# the same scale. INFO+DEBUG (5,6,7) get dropped at the source — keeps the
-# Sentry quota focused on signal and avoids the "wall of breadcrumbs"
-# anti-pattern.
+# ---------------- Source 1: inngest-server journald (WARN+) ----------------
+# Filter by syslog priority via `include_matches.PRIORITY`. INFO+DEBUG
+# (5,6,7) drop at source — keeps the log quota focused on signal.
+# 0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARNING.
 [sources.inngest_journald]
 type = "journald"
-units = ["inngest-server.service"]
-include_priorities = ["emerg", "alert", "crit", "err", "warning"]
+include_units = ["inngest-server.service"]
+include_matches.PRIORITY = ["0", "1", "2", "3", "4"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
 # ---------------- Source 2: system journald (CRIT+) ----------------
 # Kernel oops, OOM-killer, networking drops — anything CRIT or worse at
-# the host level. Tighter filter than the inngest source because the host
-# journal is noisier and most of it is irrelevant to app-layer RCA.
+# the host level. Tighter filter (PRIORITY 0-2) than the inngest source.
 [sources.system_journald]
 type = "journald"
 exclude_units = ["inngest-server.service", "vector.service"]
-include_priorities = ["emerg", "alert", "crit"]
+include_matches.PRIORITY = ["0", "1", "2"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
 # ---------------- Source 3: host metrics (CPU/mem/disk/net) ----------------
-# 30s scrape. Sentry receives these as one envelope per metric type per
-# scrape — low cardinality, low cost.
+# 30s scrape. Each scrape emits ~80-100 metric series on the cx33;
+# rate-limited downstream by Vector's internal batching.
 [sources.host_metrics]
 type = "host_metrics"
 scrape_interval_secs = 30
 collectors = ["cpu", "memory", "disk", "filesystem", "load", "network"]
 
-# ---------------- Transform: build Sentry envelope payload ----------------
-# Inngest + system journald → Sentry "event" item. VRL formats each log
-# line into a one-event envelope text body that the http sink POSTs as
-# `application/x-sentry-envelope`.
-[transforms.envelope_events]
+# ---------------- Transform 1/3: drop user-content keys (Art-9) ----------------
+# Pino consumers may carry user-supplied content via `{body, content, message,
+# userMessage, prompt, chat_message, userInput, user_input}` keys (chat
+# messages, AI prompts, support-ticket bodies — Art-9-class fragments per
+# GDPR-gate Crit-5). Drop these AT THE VECTOR BOUNDARY before any HMAC /
+# regex stage so they never reach Better Stack regardless of downstream
+# transform correctness. Top-level only — nested forms (extra.body,
+# ctx.message) are explicitly out-of-scope per ADR-029 §I2 boundary contract.
+# Non-pino lines (kernel oops, raw stderr) fall through to pii_scrub_string.
+[transforms.pii_scrub_drop_userdata]
 type = "remap"
 inputs = ["inngest_journald", "system_journald"]
 source = '''
-event_id = uuid_v4()
-event_id = replace(event_id, "-", "")
-
-priority_str = string!(.PRIORITY) ?? "5"
-sentry_level = if priority_str == "0" || priority_str == "1" || priority_str == "2" { "fatal" } else if priority_str == "3" { "error" } else { "warning" }
-
-unit_safe = string!(._SYSTEMD_UNIT) ?? "system"
-host_safe = string!(.host) ?? "hetzner"
-message_safe = string!(.message) ?? ""
-
-# Sentry event payload (compact — one log line == one Sentry event).
-sentry_event = {
-    "event_id": event_id,
-    "timestamp": to_unix_timestamp(now()),
-    "platform": "other",
-    "level": sentry_level,
-    "logger": "vector.journald",
-    "server_name": host_safe,
-    "message": { "formatted": message_safe },
-    "tags": {
-        "systemd_unit": unit_safe,
-        "host": host_safe,
-        "priority": priority_str,
-        "source": "vector-journald-shipper"
-    },
-    "extra": {
-        "PRIORITY": priority_str,
-        "_SYSTEMD_UNIT": unit_safe,
-        "_HOSTNAME": host_safe
-    }
-}
-
-# Build the envelope body: 3 newline-delimited JSON lines.
-envelope_header = { "event_id": event_id, "sent_at": format_timestamp!(now(), "%Y-%m-%dT%H:%M:%S%.3fZ") }
-item_body = encode_json(sentry_event)
-item_header = { "type": "event", "length": length(item_body) }
-
-. = {
-    "envelope_body": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n",
-    "_routing": "sentry_envelope"
+.pii_scrub_applied = ""
+parsed, parse_err = parse_json(.message)
+if parse_err == null && is_object(parsed) {
+  parsed_obj = object!(parsed)
+  if exists(parsed_obj.body) { del(parsed_obj.body) }
+  if exists(parsed_obj.content) { del(parsed_obj.content) }
+  if exists(parsed_obj.message) { del(parsed_obj.message) }
+  if exists(parsed_obj.userMessage) { del(parsed_obj.userMessage) }
+  if exists(parsed_obj.prompt) { del(parsed_obj.prompt) }
+  if exists(parsed_obj.chat_message) { del(parsed_obj.chat_message) }
+  if exists(parsed_obj.userInput) { del(parsed_obj.userInput) }
+  if exists(parsed_obj.user_input) { del(parsed_obj.user_input) }
+  .message = encode_json(parsed_obj)
+  .pii_scrub_applied = "drop_userdata"
 }
 '''
 
-# Host metrics → Sentry metrics-style "log" item. Each scrape interval
-# produces N rows (one per metric); each becomes a one-item envelope.
-# Sentry-native "metric" envelopes require a more involved item format; we
-# emit them as structured `event` items (level=info, tag=metric_name) so
-# they show up in Sentry's "Logs" view, queryable by metric name. Trades
-# perfect cardinality for zero new vendor surface area.
-[transforms.envelope_metrics]
+# ---------------- Transform 2/3: structured userId → userIdHash (HMAC) -------
+# Defense-in-depth backstop for ADR-029 (pino formatters.log already renames
+# pre-stdout). Top-level userId / user_id ONLY (matches TS hashUserId scope
+# byte-for-byte for string-typed userId values — workspaceId / nested forms
+# are NOT in scope per SF-P0-3. For non-string types (the pino schema does
+# not emit these): VRL falls back to "" via `to_string ?? ""` while TS uses
+# String() coercion; theoretical divergence with no production occurrence.
+# Reuses SENTRY_USERID_PEPPER per ADR-029 §I4 (single source of truth — no
+# separate VRL_HMAC_KEY). HMAC-SHA256 + encode_base16 matches TS
+# crypto.createHmac("sha256", pepper).update(userId).digest("hex").
+# Fail-safe behavior:
+#   - pepper unset → leave raw line, tag `+skipped_pepper_unset`
+#   - null userId → emit `pepper_unset_null` sentinel (matches TS hashUserIdValue)
+#   - preset userIdHash → don't re-hash (defensive idempotence)
+[transforms.pii_scrub_structured]
+type = "remap"
+inputs = ["pii_scrub_drop_userdata"]
+source = '''
+existing_tag = string!(.pii_scrub_applied)
+parsed, parse_err = parse_json(.message)
+if parse_err == null && is_object(parsed) {
+  parsed_obj = object!(parsed)
+  if !exists(parsed_obj.userIdHash) {
+    raw_key = ""
+    raw_value = null
+    if exists(parsed_obj.userId) {
+      raw_key = "userId"
+      raw_value = parsed_obj.userId
+    } else if exists(parsed_obj.user_id) {
+      raw_key = "user_id"
+      raw_value = parsed_obj.user_id
+    }
+    if raw_key != "" {
+      if raw_value == null {
+        parsed_obj.userIdHash = "pepper_unset_null"
+        if raw_key == "userId" { del(parsed_obj.userId) } else { del(parsed_obj.user_id) }
+        existing_tag = existing_tag + "+structured_null_sentinel"
+        .message = encode_json(parsed_obj)
+      } else {
+        pepper, pepper_err = get_env_var("SENTRY_USERID_PEPPER")
+        if pepper_err != null || pepper == "" {
+          existing_tag = existing_tag + "+skipped_pepper_unset"
+        } else {
+          str_value = to_string(raw_value) ?? ""
+          hashed = hmac(str_value, pepper, algorithm: "SHA-256")
+          parsed_obj.userIdHash = encode_base16(hashed)
+          if raw_key == "userId" { del(parsed_obj.userId) } else { del(parsed_obj.user_id) }
+          existing_tag = existing_tag + "+structured"
+          .message = encode_json(parsed_obj)
+        }
+      }
+    }
+  }
+}
+.pii_scrub_applied = existing_tag
+'''
+
+# ---------------- Transform 3/3: string-level scrub (non-pino branch) --------
+# Runs for kernel oops, OOM-killer, and any raw stderr that did NOT parse
+# as JSON in pii_scrub_structured. Guard: if `pii_scrub_applied` already
+# contains "structured" (parse succeeded), SKIP this stage entirely to
+# avoid corrupting a clean JSON payload by re-running regex over the
+# serialised string (per Arch-F2 ordering fix). Trade-off: a kernel-shaped
+# string that happens to be valid JSON with a top-level userId key has its
+# rename applied but its non-rename payload preserved verbatim — accepted
+# per Arch-F2; pii_scrub_drop_userdata already strips the canonical
+# user-content keys at the top of the pipeline.
+#
+# Substring-stripped: userid=<token>, email-shaped substring, Authorization
+# Bearer/Basic value, line-injection control + Unicode-separator chars.
+# OAuth callback paths (`/api/auth/callback/...`) are NOT redacted (UI-F1) —
+# their callback discriminator is load-bearing for operator debugging of
+# real canary-fired incidents, and the structured branch already strips
+# user content via pii_scrub_drop_userdata.
+[transforms.pii_scrub_string]
+type = "remap"
+inputs = ["pii_scrub_structured"]
+source = '''
+tag = string!(.pii_scrub_applied)
+if contains(tag, "structured") {
+  .pii_scrub_applied = tag + "+string_skipped_already_parsed"
+} else {
+  msg = string!(.message)
+  # Length-bound BEFORE regex (per 2026-04-17-pii-regex-scrubber-three-invariants.md Invariant 1)
+  if length(msg) > 10000 {
+    msg = slice!(msg, 0, 10000)
+  }
+  msg = replace(msg, r'(?i)\b(userid|user_id)=[\w-]+', "$${1}=[redacted]")
+  # OAuth query-param redaction (PR #4293 review F2): the /api/auth/callback/...
+  # path carve-out preserves the discriminator but query params can carry
+  # short-lived OAuth tokens (code, state, access_token, id_token, refresh_token).
+  # The path itself is not touched; only the value following =.
+  msg = replace(msg, r'(?i)([?&](code|state|access_token|id_token|refresh_token)=)[^\s&]+', "$${1}[redacted]")
+  msg = replace(msg, r'\b[\w.+\-]+@[\w\-]+\.[\w.\-]+\b', "[email]")
+  msg = replace(msg, r'(?i)(authorization:\s*)bearer\s+\S+', "$${1}Bearer [redacted]")
+  msg = replace(msg, r'(?i)(authorization:\s*)basic\s+\S+', "$${1}Basic [redacted]")
+  msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
+  .message = msg
+  .pii_scrub_applied = tag + "+string"
+}
+'''
+
+# ---------------- Transform: tag journald events for Better Stack ----------------
+# VRL adds a `source_kind` tag so Better Stack's log search can filter by
+# {inngest, system}. Other journald fields (PRIORITY, _SYSTEMD_UNIT,
+# host, message) flow through unchanged. Inputs chain back through the
+# three pii_scrub_* transforms above so every event reaching Better Stack
+# carries a `pii_scrub_applied` audit tag.
+[transforms.tag_journald]
+type = "remap"
+inputs = ["pii_scrub_string"]
+source = '''
+.source_kind = "journald"
+.shipper = "vector"
+.host_name = "soleur-inngest-prd"
+'''
+
+# ---------------- Transform: host_metrics → flat log shape ----------------
+# Better Stack accepts metrics as logs (its Logs product is metric-aware
+# via tags); this transform flattens the metric event into a single log
+# record per scrape datapoint with a `metric.name` + `metric.value`
+# pair that Better Stack can chart.
+[transforms.tag_metrics]
 type = "remap"
 inputs = ["host_metrics"]
 source = '''
-event_id = uuid_v4()
-event_id = replace(event_id, "-", "")
+.source_kind = "host_metrics"
+.shipper = "vector"
+.host_name = "soleur-inngest-prd"
 
-metric_name = string!(.name) ?? "unknown"
-metric_value = if exists(.gauge.value) { .gauge.value } else if exists(.counter.value) { .counter.value } else { 0.0 }
-tag_struct = .tags ?? {}
-
-sentry_event = {
-    "event_id": event_id,
-    "timestamp": to_unix_timestamp(now()),
-    "platform": "other",
-    "level": "info",
-    "logger": "vector.host_metrics",
-    "message": { "formatted": string!(metric_name) + "=" + to_string!(metric_value) },
-    "tags": merge({
-        "metric_name": metric_name,
-        "source": "vector-host-metrics"
-    }, object!(tag_struct)),
-    "extra": { "value": metric_value }
+metric_name = "unknown"
+if exists(.name) {
+    metric_name = to_string(.name) ?? "unknown"
 }
+.metric.name = metric_name
 
-envelope_header = { "event_id": event_id, "sent_at": format_timestamp!(now(), "%Y-%m-%dT%H:%M:%S%.3fZ") }
-item_body = encode_json(sentry_event)
-item_header = { "type": "event", "length": length(item_body) }
-
-. = {
-    "envelope_body": encode_json(envelope_header) + "\n" + encode_json(item_header) + "\n" + item_body + "\n",
-    "_routing": "sentry_envelope"
+if exists(.gauge.value) {
+    .metric.value = .gauge.value
+} else if exists(.counter.value) {
+    .metric.value = .counter.value
+} else {
+    .metric.value = 0.0
 }
 '''
 
-# ---------------- Sink: Sentry envelope endpoint ----------------
-# URL templated from Doppler-injected env vars. Same shape as
-# cron-daily-triage.ts:329-371's heartbeat URL — the SENTRY_DOMAIN_RE /
-# SENTRY_PROJECT_RE / SENTRY_PUBLIC_KEY_RE validators in observability.ts
-# encode the canonical shape; Doppler-side typo guards apply equally.
-[sinks.sentry]
+# ---------------- Sink: Better Stack Logs via generic http sink ----------------
+# Generic HTTP sink is the canonical vendor-recommended pattern
+# (per https://betterstack.com/docs/logs/vector/). The native
+# `better_stack_logs` sink does NOT exist in any Vector release — Vector
+# PR #19274 closed unmerged 2025-01-27.
+#
+# Per-source ingesting host pin (#4293 FR3 / GDPR Art-44 transfer record):
+#   Source ID: 2457081 (name: soleur-inngest-vector-prd)
+#   Region: EU — Hetzner Falkenstein cluster `eu-fsn-3`
+#   Verified 2026-05-22 via authenticated POST probe (eu-fsn-3 → HTTP 202;
+#     eu-nbg-2 → HTTP 401, confirming token cluster-binding).
+#   Better Stack dashboard: https://uptime.betterstack.com/team/<TEAM-ID>/sources/2457081
+#   Allowlist tightened to (eu-nbg-2|eu-fsn-3) — adversary `eu-foo-99`
+#   typosquats are rejected by AC7 grep.
+[sinks.betterstack]
 type = "http"
-inputs = ["envelope_events", "envelope_metrics"]
-uri = "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/envelope/?sentry_key=${SENTRY_PUBLIC_KEY}&sentry_version=7"
+inputs = ["tag_journald", "tag_metrics"]
+uri = "https://s2457081.eu-fsn-3.betterstackdata.com/"
 method = "post"
-batch.max_events = 1
-encoding.codec = "raw_message"
-framing.method = "newline_delimited"
-[sinks.sentry.request]
+batch.max_events = 10
+encoding.codec = "json"
+[sinks.betterstack.request.headers]
+authorization = "Bearer ${BETTERSTACK_LOGS_TOKEN}"
+content-type = "application/json"
+[sinks.betterstack.request]
 timeout_secs = 10
 retry_attempts = 2
 retry_initial_backoff_secs = 1
 retry_max_duration_secs = 30
-[sinks.sentry.request.headers]
-content-type = "application/x-sentry-envelope"
-user-agent = "soleur-vector-shipper/1.0"
 
-# Internal Vector liveness — exposed on a loopback HTTP endpoint so the
-# inngest-heartbeat.timer can probe Vector itself. Without this, a Vector
-# crash would be invisible until the next Sentry issue volume anomaly.
+# ---------------- Internal liveness sink (stdout → journald) ----------------
+# Vector emits its own internal_metrics every 60s so `cat-deploy-state.sh`'s
+# `vector_journal_tail` can spot crashes or sink failures via the structured
+# JSON. Kept on stdout (journald) rather than shipped to Better Stack — these
+# are debug counters, not operational alerts.
 [sources.vector_internal]
 type = "internal_metrics"
 scrape_interval_secs = 60

@@ -47,6 +47,11 @@ export async function POST(request: Request) {
     .eq("id", user.id);
 
   try {
+    // Solo provisioning: `user.id` doubles as the workspace_id per migration
+    // 053 §1.1.7 N2 invariant (workspaces.id === owner_user_id for backfilled
+    // and trigger-created solo workspaces). Team-invite flows (Phase 5) will
+    // call `resolveWorkspacePathForUser(userId)` to obtain the target workspace_id
+    // before provisioning.
     const workspacePath = await provisionWorkspace(user.id);
 
     // Update user record with workspace path and ready status

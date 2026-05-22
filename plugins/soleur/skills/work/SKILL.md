@@ -336,6 +336,47 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Doppler had the working `DATABASE_URL_POOLER` and applied via
    pg directly — the path it should have taken at step 1.
 
+   **Pre-apply collision check (always, even on first attempt).**
+   Before invoking pg apply (or `supabase migration up`) against any
+   shared env, run `git fetch origin main && git ls-tree origin/main
+   -- apps/web-platform/supabase/migrations/ | awk '{print $4}' |
+   grep -oE '^[0-9]{3}_[^.]+' | sort -u`. For each LOCAL migration
+   file the branch introduces, assert no DIFFERENT filename with the
+   same 3-digit prefix exists in that list. A collision means a
+   sibling PR is landing the same number window; renumber FIRST,
+   then apply under the final filename. **Why:** PR #4225 — applied
+   053–057 in the morning; PR #4251 landed `054_schema_migrations_
+   content_sha.sql` 10 hours later and main's CI drift probe flagged
+   the entire branch; the recovery (renumber 054→058, 055→059, 056→060,
+   057→061 + reconcile `public._schema_migrations` on both dev + prd
+   via `git hash-object` content_sha) took ~30 min and could have been
+   zero-cost if the operator had grepped origin/main first.
+
+   **Tracking row in the SAME transaction as the migration body.**
+   The project's canonical `apps/web-platform/scripts/run-migrations.sh`
+   writes `INSERT INTO public._schema_migrations (filename, content_sha)
+   VALUES ('<basename>', '<git-hash-object>')` in the same transaction
+   as the migration SQL. The Doppler+pg fallback MUST mirror this —
+   bare `BEGIN; <migration>; COMMIT;` produces a phantom-applied state
+   where the schema reflects the migration but `_schema_migrations`
+   does not, and the next deploy attempts re-apply (failing on
+   non-idempotent statements like `CREATE TRIGGER`). The reconciliation
+   pattern (UPSERT with `ON CONFLICT (filename) DO UPDATE SET
+   content_sha = EXCLUDED.content_sha`) is the recovery shape — but
+   doing it inline is cheaper.
+
+   **PostgREST schema cache reload via session-mode pooler does NOT
+   work.** `NOTIFY pgrst, 'reload schema'` over a `:5432` pooler
+   connection does not reach PostgREST's `LISTEN` (PgBouncer
+   multiplexes; LISTEN/NOTIFY channel scope is bound to backend
+   process identity, not session). 90 attempts over 5 minutes
+   returned `PGRST205`. After a direct-pg apply: either wait for the
+   natural ~10-min schema poll cycle, OR use the Supabase Management
+   API to restart PostgREST. The direct DB host
+   (`db.<ref>.supabase.co:5432`) is IPv6-only and typically
+   unreachable from operator networks, so the canonical "NOTIFY via
+   direct connection" workaround documented upstream isn't available.
+
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 
    Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):
@@ -775,4 +816,5 @@ For most features: tests + linting + following patterns is sufficient.
 - **Encoded-blob value sweep** - When removing a value from a file that contains base64, hex, JSON-string-escape, or URL-encoded forms (JWT fixtures, encoded config snapshots, request payloads), source-form `grep` is insufficient. After substitution, decode each blob and grep the **decoded** form for the removed value. **Why:** PR #3054 — `replace_all "ifsccnjhymdmidffkzhl"` returned 0 source hits but `JWT_LOG_INJECT_U2028`'s base64 payload still encoded the dev Supabase ref; the secret scanner would have re-fired. See `knowledge-base/project/learnings/security-issues/2026-04-29-jwt-fixture-reminting-decode-verify.md`.
 - **Local verification without Doppler** - For env-var-reading apps, use a single Bash call: `cd <abs-path> && doppler run -p soleur -c dev -- npm run <script>` (for `apps/web-platform`, `cd apps/web-platform && doppler run -p soleur -c dev -- npm run dev`). Prevents: (a) skipping `doppler run` (missing secrets), (b) invoking transitive binaries under `doppler run` (not on PATH), (c) relying on prior CWD (shell state doesn't persist). If port 3000 is already bound by another dev server (the user may have one running), start on an alternate port via `PORT=3099 doppler run ... npm run dev` rather than killing the existing process. (ex-`cq-for-local-verification-of-apps-doppler`; #2350 hit all three failure modes in sequence; PR #3199 added the alt-port fall-through after the stale `./scripts/dev.sh` reference broke startup)
 - **Closes-after-apply deferral missed in commit messages** - When a plan's `## Risks` (or `## Sharp Edges`) section names an explicit Closes-after-apply deferral (issue stays open until a post-merge PM step proves green — workflow first-run, terraform apply, deploy probe, etc.), commit messages AND PR body MUST default to `Ref #N`, not `Closes #N`, regardless of whether the commit body's `Closes` placement is technically `wg-use-closes-n-in-pr-body-not-title-to`-legal. Auto-close fires at merge time, decoupled from whether the proof artifact actually lands green. Detection: grep the plan for `Closes-after-apply`, `manual close after`, `Ref #N` + `close manually`, `type: ops-remediation`, or any explicit per-PM closure-link instruction. On match, emit `Ref #N` + 1-line WARN. The author manually `gh issue close N --comment "<run URL>"` post-PM. **Why:** PR #3551 — initial commit message used `Closes #3060` against plan §R6's `Ref #3060 + manual close after PM1 confirms first green run` directive; caught pre-push via self-audit, amended. See `knowledge-base/project/learnings/2026-05-11-plan-r6-closes-after-apply-deferral-pattern.md`.
+- **Parallel `gh issue create` scrambles ID-to-title mapping** - When a /work task files N related GitHub issues (e.g., a deferral-issues batch), `gh issue create ... &` + `wait` returns URLs in completion order, not start order. The first `gh` job to FINISH gets `#N`, the next gets `#N+1`, etc. — independently of which title started first. Worse, a transient GraphQL error on one parallel job is easy to misattribute to the wrong title. **Either serialize the calls** (~1.5–3s each is cheap for ≤5 issues), **or write each result to a name-keyed file** (`echo "$url" > "/tmp/issue-$short_name.url"`) so the title→ID mapping is explicit. **Always run `gh issue view <N> --json title` reconciliation before citing IDs in any artifact** (agent body, README, SKILL.md, plan). The cost of catching wrong IDs at PR review is ~30 minutes of recovery (close duplicate, file missing, edit artifacts, force-push); the cost of post-creation reconciliation is N seconds. **Why:** PR #4288 — 5 deferral issues filed in parallel; 3 of 5 IDs ended up inverted in the agent body, 1 was dropped (GraphQL error), 1 was a duplicate retry. See `knowledge-base/project/learnings/2026-05-22-parallel-gh-issue-create-scrambles-id-mapping-and-review-agent-producer-consumer-symmetry.md`.
 - **Relaunching a long-running background bash before verifying it died** - When a `run_in_background: true` task seems unresponsive, do NOT relaunch until ALL three checks confirm death: (1) broad `ps -ef \| grep -E '<substring>' \| grep -v grep` (never `pgrep -fa 'pattern$'` — anchored patterns miss processes wrapped in `doppler run -- bash ...`), (2) cache/output file size stopped growing over a 30+ second window, (3) the harness's `<task-notification>` has fired with a definitive `status` field. Log file `mtime` is NOT a liveness signal — long-running scripts buffer output between API calls. Relaunching prematurely concurrent-runs against the same API key and wastes paid spend. **Why:** PR #4156 — bench 1 was running fine the whole ~75 min, but `pgrep` with anchored pattern + stale log mtime led to two redundant bench launches (extra ~$2-3 Anthropic spend). See `knowledge-base/project/learnings/workflow-issues/2026-05-20-long-running-bench-verify-process-before-relaunch.md`.

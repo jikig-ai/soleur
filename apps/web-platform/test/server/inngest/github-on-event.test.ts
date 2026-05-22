@@ -208,8 +208,10 @@ describe("github-on-event handler", () => {
     it("runWithByokLease invoked exactly once per event", async () => {
       await githubOnEventHandler(makeArgs({}) as never);
       expect(mockRunWithByokLease).toHaveBeenCalledTimes(1);
+      // Phase 3 #4229 — runWithByokLease takes {workspaceContextUserId,
+      // keyOwnerUserId}. Solo (N2): both equal founderId.
       expect(mockRunWithByokLease).toHaveBeenCalledWith(
-        "founder-1",
+        { workspaceContextUserId: "founder-1", keyOwnerUserId: "founder-1" },
         expect.any(Function),
       );
     });

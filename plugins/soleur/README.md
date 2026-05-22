@@ -40,9 +40,9 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 67 |
+| Agents | 68 |
 | Commands | 3 |
-| Skills | 73 |
+| Skills | 74 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -82,7 +82,7 @@ Agents are organized by domain, then by function.
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
-### Engineering (30)
+### Engineering (31)
 
 | Agent | Description |
 |-------|-------------|
@@ -100,6 +100,7 @@ Agents are organized by domain, then by function.
 | `data-migration-expert` | Validate ID mappings match production, check for swapped values |
 | `deployment-verification-agent` | Create Go/No-Go deployment checklists for risky data changes |
 | `dhh-rails-reviewer` | Rails review from DHH's perspective |
+| `identity-rbac-reviewer` | Multi-org / workspace boundary integrity (RLS, JWT claim, attestation owner-check) |
 | `kieran-rails-reviewer` | Rails code review with strict conventions |
 | `legacy-code-expert` | Safely modify untested legacy code using Feathers' dependency-breaking techniques |
 | `pattern-recognition-specialist` | Analyze code for patterns and anti-patterns |

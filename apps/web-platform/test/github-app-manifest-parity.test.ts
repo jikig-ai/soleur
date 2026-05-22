@@ -42,18 +42,23 @@ const EXPECTED_TF_SECRETS = [
 
 // Exact set of permissions in the committed manifest. Reconciled to the live
 // App state at #4169 post-merge attestation (added `secrets: write` which the
-// live App already had but #4115 plan-time snapshot missed). The drift-guard
-// cron is the runtime signal for divergence; this test catches an in-band
-// manifest mutation that adds an unexpected permission via a malicious or
-// sloppy PR.
+// live App already had but #4115 plan-time snapshot missed). Extended again
+// after PR #4226 AC9 enablement granted `issues`, `repository_advisories`,
+// and `secret_scanning_alerts` at `read` so PR-H #3244's `triage.p0p1_issue`
+// and `security.cve_alert` event routes can deliver. The drift-guard cron is
+// the runtime signal for divergence; this test catches an in-band manifest
+// mutation that adds an unexpected permission via a malicious or sloppy PR.
 const EXPECTED_PERMISSION_KEYS = [
   "actions",
   "administration",
   "checks",
   "contents",
+  "issues",
   "members",
   "metadata",
   "pull_requests",
+  "repository_advisories",
+  "secret_scanning_alerts",
   "secrets",
 ];
 

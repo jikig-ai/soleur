@@ -3,7 +3,7 @@ title: "Acceptable Use Policy"
 type: acceptable-use-policy
 jurisdiction: FR, EU
 generated-date: 2026-02-20
-last-updated: 2026-05-18
+last-updated: 2026-05-22
 ---
 
 # Acceptable Use Policy
@@ -12,7 +12,7 @@ last-updated: 2026-05-18
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 18, 2026 -- added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: April 10, 2026)
+**Last Updated:** May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
 
 ---
 
@@ -277,6 +277,10 @@ Attempts to bypass these guardrails are a material breach of Section 4 ("Prohibi
 **Audit and contestation.** Every automated action taken on your behalf is recorded in the `/dashboard/audit` viewer with the action class, tier active at the moment of the event, timestamp, and (for BYOK calls) token + cost data. You may contest any automated action through the inlined "Request human review" affordance on each audit row, or by contacting <legal@jikigai.com>.
 
 **Template-authorization revocation for AUP breaches.** Soleur reserves the right to revoke an individual template authorization (as recorded in the `template_authorizations` ledger introduced by PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP. The revocation is audit-recorded in the same WORM ledger as your founder-initiated revocations and is surfaced in `/dashboard/settings/scope-grants`; you may contest a `policy_violation` revocation through the same channels described above.
+
+### 5.5 Workspace member responsibility
+
+Where the team-workspace feature is enabled for your organization (gated by `FLAG_TEAM_WORKSPACE_INVITE` and the per-organization allowlist `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS`), you are responsible for ensuring every natural person you invite as a Co-Member (as defined in the Terms & Conditions Section 3b) is bound by appropriate confidentiality and intellectual-property assignment terms in your relationship with that person. You may satisfy this responsibility by any means you deem sufficient, including: (a) reliance on the Co-Member's click-through acceptance of these Soleur Terms & Conditions (the canonical click-through anchor for confidentiality and IP-assignment in Web Platform usage); (b) reliance on an existing employment, contractor, or consultancy agreement between you and the Co-Member that already contains equivalent terms; or (c) execution of a separate bilateral instrument such as the optional Soleur Side Letter template (available from Jikigai at <legal@jikigai.com>) as a belt-and-braces reference document. Jikigai does not require a specific instrument; the choice is yours and the residual risk of selecting an insufficient instrument is yours under the Workspace Owner indemnification at Terms & Conditions Section 3b.3.
 
 ---
 

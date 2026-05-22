@@ -102,6 +102,10 @@ async function seedDraftMessage(
       draft_preview: "test draft preview",
       status: "draft",
       action_class: actionClass,
+      // PR-I (#4078, migration 053_template_authorizations.sql) added
+      // template_id NOT NULL with CHECK (template_id ~ '^[a-z][a-z0-9_]*$').
+      // Match the migration's backfill value so the FK shape stays stable.
+      template_id: "default_legacy",
     })
     .select("id")
     .single();

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { TeamSettingsContent } from "@/components/settings/team-settings";
+import { ConversationNamesSettingsContent } from "@/components/settings/conversation-names-settings";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 
 const mockFetch = vi.fn();
@@ -9,12 +9,12 @@ vi.stubGlobal("fetch", mockFetch);
 function renderTeamSettings() {
   return render(
     <TeamNamesProvider>
-      <TeamSettingsContent />
+      <ConversationNamesSettingsContent />
     </TeamNamesProvider>,
   );
 }
 
-describe("TeamSettingsContent", () => {
+describe("ConversationNamesSettingsContent", () => {
   beforeEach(() => {
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({

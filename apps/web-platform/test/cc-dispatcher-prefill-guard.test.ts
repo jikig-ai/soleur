@@ -108,8 +108,19 @@ vi.mock("@/server/byok-lease", async () => {
   return {
     ...actual,
     runWithByokLease: vi.fn(
-      async <T>(_userId: string, body: (lease: { getApiKey: () => string }) => Promise<T>) =>
-        body({ getApiKey: () => "fake-byok-key" }),
+      async <T>(
+        args: { workspaceContextUserId: string; keyOwnerUserId: string },
+        body: (lease: {
+          workspaceContextUserId: string;
+          keyOwnerUserId: string;
+          getApiKey: () => string;
+        }) => Promise<T>,
+      ) =>
+        body({
+          workspaceContextUserId: args.workspaceContextUserId,
+          keyOwnerUserId: args.keyOwnerUserId,
+          getApiKey: () => "fake-byok-key",
+        }),
     ),
   };
 });

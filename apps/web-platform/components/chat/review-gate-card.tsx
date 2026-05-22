@@ -39,7 +39,7 @@ export function ReviewGateCard({
 
   if (resolved && selectedOption) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 px-4 py-2 text-sm text-soleur-text-secondary transition-all duration-300">
+      <div className="flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 px-4 py-2 text-sm text-soleur-text-secondary transition-colors duration-300">
         <svg className="h-4 w-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="20 6 9 17 4 12" />
         </svg>
@@ -60,7 +60,7 @@ export function ReviewGateCard({
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-amber-900/40">
               <div
-                className="h-full rounded-full bg-amber-500 transition-all duration-500"
+                className="h-full rounded-full bg-amber-500 transition-[width] duration-500"
                 style={{ width: `${pct}%` }}
               />
             </div>

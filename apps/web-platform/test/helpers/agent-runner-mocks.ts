@@ -20,6 +20,10 @@ export const DEFAULT_API_KEY_ROW = {
 /**
  * Creates a chainable mock for the `api_keys` table that supports both:
  * - getUserApiKey:  select().eq().eq().eq().limit().single() -> { data, error }
+ * - getUserApiKey:  select().eq().eq().eq().limit().maybeSingle() -> { data, error }
+ *                   (Phase 3 #4229 — byok-lease switched to maybeSingle so
+ *                   `data === null && error === null` triggers
+ *                   MissingByokKeyError vs ByokLeaseError{fetch_failed}).
  * - getUserServiceTokens: await select().eq().eq() -> { data, error }
  */
 export function createApiKeysMock(
@@ -29,7 +33,10 @@ export function createApiKeysMock(
     data: rows,
     error: null,
     eq: () => createChain(),
-    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
+    limit: () => ({
+      single: () => ({ data: rows[0] ?? null, error: null }),
+      maybeSingle: () => ({ data: rows[0] ?? null, error: null }),
+    }),
     then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
   });
   return { select: () => createChain() };

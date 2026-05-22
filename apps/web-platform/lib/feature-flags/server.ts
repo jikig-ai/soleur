@@ -15,6 +15,7 @@ const CACHE_TTL_MS = 30_000;
 // without the other breaks the env-var-fallback fidelity story in ADR §"Fallback semantics".
 const ENV_FLAGS = {
   "dev-signin": "FLAG_DEV_SIGNIN",
+  "team-workspace-invite": "FLAG_TEAM_WORKSPACE_INVITE",
 } as const;
 
 const RUNTIME_FLAGS = {
@@ -124,7 +125,37 @@ export async function getFeatureFlags(
   return { ...envFlags, ...runtime };
 }
 
+// Cache keyed on the raw env-var string. Production sees `process.env`
+// fixed at boot, so the cache hits on every subsequent call. Tests that
+// mutate `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` re-parse without needing a
+// test-only reset hook.
+let cachedAllowlist: { raw: string; set: ReadonlySet<string> } | null = null;
+
+export function getTeamWorkspaceAllowlist(): ReadonlySet<string> {
+  const raw = process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS ?? "";
+  if (cachedAllowlist && cachedAllowlist.raw === raw) return cachedAllowlist.set;
+  const set = new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  cachedAllowlist = { raw, set };
+  return set;
+}
+
+/**
+ * Two-key gate per AC-F: `FLAG_TEAM_WORKSPACE_INVITE=1` AND `orgId`
+ * present in `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS`. Both must hold.
+ */
+export function isTeamWorkspaceInviteEnabled(orgId: string): boolean {
+  if (!getFlag("team-workspace-invite")) return false;
+  if (!orgId) return false;
+  return getTeamWorkspaceAllowlist().has(orgId);
+}
+
 export function __resetFeatureFlagsForTests(): void {
   _client = null;
   _roleCache.clear();
+  cachedAllowlist = null;
 }

@@ -265,9 +265,49 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `gdpr-gate`: Deterministic Art. 9 / RoPA / lawful-basis pattern checks. Output is advisory-only; Critical findings (Art. 9) escalate to operator-acknowledged write to `compliance-posture.md` Active Items + GitHub issue with label `compliance/critical`.
 
-#### Boundary disambiguation — gdpr-gate vs. data-integrity-guardian vs. security-sentinel {#boundaries}
+**If diff touches multi-org / workspace boundary surfaces:**
 
-Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; use `data-integrity-guardian` for migration safety and judgment-based PII review; use `security-sentinel` for OWASP/CWE security-of-processing flaws. The three reviewers complement each other and may all fire on the same PR — gdpr-gate scans for regulatory-design gaps, data-integrity-guardian scans for ID-mapping and value-swap migration risks, security-sentinel scans for OWASP/CWE vulnerabilities. This is the **canonical disambiguation prose**; sibling agent files reference back here as the single source of truth.
+17. Task identity-rbac-reviewer(PR content) — workspace-keyed RLS predicates, JWT current_organization_id claim consumption, write-boundary sentinel (assertWriteScope-class), session invalidation, SECURITY DEFINER search_path pinning, attestation RPC owner-check.
+
+**When to run identity-rbac-reviewer:**
+
+- Diff modifies any of (path patterns): `apps/web-platform/supabase/migrations/.*\.sql$`, `apps/web-platform/lib/supabase/tenant\.ts`, `apps/web-platform/app/api/(workspace|conversations|kb|messages|attachments|scope-grants|account)/`
+- OR diff content contains any of (anchored content patterns): `\bis_workspace_member\b`, `\bcurrent_organization_id\b`, `\bworkspace_members\b`, `\bset_current_organization_id\b`, `\badd_workspace_member_attestation\b`
+
+**What this agent checks:**
+
+- `identity-rbac-reviewer`: 6-item Day-1 checklist (R1-R6) for multi-org/workspace boundary integrity. Surfaces known gaps in #4304/#4305/#4306/#4307/#4318 as `info`-severity findings on every identity-touching PR until closed. Body lives in `plugins/soleur/agents/engineering/review/identity-rbac-reviewer.md`.
+
+#### Boundary disambiguation — gdpr-gate vs. data-integrity-guardian vs. security-sentinel vs. identity-rbac-reviewer {#boundaries}
+
+Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; use `data-integrity-guardian` for migration safety and judgment-based PII review; use `security-sentinel` for OWASP/CWE security-of-processing flaws; use `identity-rbac-reviewer` for multi-org / workspace boundary integrity (RLS routing through `is_workspace_member()`, JWT `current_organization_id` consumption, attestation owner-checks, SECURITY DEFINER `search_path` pinning, write-boundary sentinel on workspace_id-bearing tables). The four reviewers complement each other and may all fire on the same migration PR — each owns a distinct lens. This is the **canonical disambiguation prose**; sibling agent files reference back here as the single source of truth.
+
+### Anti-slop Scanner Hook
+
+**If the diff touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$` OR `plugins/soleur/docs/.*\.(njk|css)$`:**
+
+17. Run the `soleur:frontend-anti-slop` Tier 1 scanner inline (no separate agent spawn — v1 simplification per plan PR #4265). Scope covers both the Next.js platform and the Eleventy marketing site so AI-assisted edits to landing pages or blog posts get the same audit as React component changes.
+
+    ```bash
+    # NUL-delimited path collection + quoted argv expansion — prevents the
+    # shell-metacharacter / newline-in-filename injection class. Never
+    # expand `$CHANGED_FILES` unquoted; never assume git filenames are
+    # whitespace-free.
+    mapfile -d '' -t CHANGED_FILES < <(
+      git diff --name-only -z origin/main...HEAD |
+        grep -zE '(apps/web-platform/(app|components)/.*\.(tsx|jsx|css)|plugins/soleur/docs/.*\.(njk|css))$' || true
+    )
+    if (( ${#CHANGED_FILES[@]} > 0 )); then
+      bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts \
+        --paths "${CHANGED_FILES[@]}" --json
+    fi
+    ```
+
+**What this hook checks:**
+
+- 15 deterministic Tier 1 gates adapted from [Nutlope/hallmark](https://github.com/Nutlope/hallmark) (MIT) — gradient-fill headlines, generic display fonts, purple→blue gradients, `transition-all`, uniform `hover:scale-105`, placeholder names, zero-chroma neutrals, off-scale spacing, prose-width out of range, two-icon-library imports, etc. See [slop-rules.md](../frontend-anti-slop/references/slop-rules.md).
+- Output is **advisory and non-blocking** in v1 (calibration mode). Findings surface in the review output for operator triage; no auto-file to GitHub issues. Promotion to auto-file gates on ≤ 10% FP rate over ≥ 20 findings ≥ 2 weeks (per `soleur:frontend-anti-slop` SKILL.md §"Calibration mode").
+- Findings conform to `finding.schema.json` with `category: "anti-slop"`, `selector: "<file-path>#<RULE-ID>"`. Pretty-print the JSON array directly into the review output as a fenced code block; the reviewing agent narrates which findings look like true positives.
 
 </conditional_agents>
 
@@ -812,6 +852,8 @@ When a review agent reports branch-scope regressions (claims the PR reverts merg
 When a review agent recommends ADDING a field, header, or schema element to a security-relevant surface (wire schema, redaction filter, log scrubber, error envelope), grep the diff scope for `// See #N` provenance comments referencing prior REMOVALS of the same artifact BEFORE applying the fix. A `Pn` rating reflects local severity; it does not auto-override deliberate cross-cutting decisions encoded in code comments. If a prior PR removed the field as a security/privacy mitigation, flip disposition to `contested-design` scope-out with the prior issue # named in the filing — code-simplicity-reviewer reliably co-signs when the threat-model context is surfaced. See `knowledge-base/project/learnings/2026-05-05-agent-native-recommendation-vs-prior-security-removal.md`.
 
 ADRs documenting an *already-chosen-and-shipping* architecture fail `architectural-pivot` — the criterion requires the *fix itself* to change a cross-codebase pattern, and an ADR for the path you're already shipping is documentation work, not pattern-changing work. Inline-absorb ADRs of this shape (~1 markdown file under `knowledge-base/engineering/architecture/decisions/`) rather than scoping them out. Symmetric rule: when `code-simplicity-reviewer` DISSENTs by naming a *different* criterion that fits, re-file under that criterion (fresh concur cycle) rather than absorbing inline — the dissent is on the label, not on the underlying deferral. See `knowledge-base/project/learnings/2026-05-06-scope-out-criterion-misclassification-adr-not-architectural-pivot.md`.
+
+When `code-simplicity-reviewer` DISSENTs by naming a same-PR inline fix that contradicts an invariant declared in an ADR landed in the same PR, the right disposition is **apply the inline fix AND amend the ADR's invariant in the same commit** — not file the contradiction as a follow-up. Plan-time invariants ("workspace_id immutable", "X is append-only") are hypotheses, not facts; post-implementation review can surface valid carve-outs the plan-reviewer missed (e.g., a downstream cascade DELETE blocked by a new ON DELETE RESTRICT FK). The amendment paragraph in the ADR must cite the DISSENT + the interaction that justifies the carve-out so future readers can trace the why. **Why:** PR #4294 — ADR-039's `workspace_id immutable` declaration would have blocked `anonymise_organization_membership` orphan-cleanup; the DISSENT-flip from scope-out to inline-fix amended the invariant to admit `ON DELETE SET NULL` carve-out. See `knowledge-base/project/learnings/2026-05-22-post-implementation-review-can-amend-plan-time-invariants.md`.
 
 When a reviewer prescribes ADDING a defensive wrapper (try/catch around an SDK call, a typeof guard, a validation step, a retry envelope) citing a single in-tree precedent, grep the same file/module for ≥3 sibling unwrapped invocations of the same primitive BEFORE applying. If precedent is consistent and the new code mirrors it, the wrapper recommendation is precedent-contradicting — reject with a one-line disposition citing the unwrapped sites. The cited precedent may be helper-internal (boot-path safety) and not generalize to call-site code. Cost of verification: one grep. Cost of applying a precedent-contradicting wrapper: a commit that future reviewers will roll back when they apply the same heuristic. See `knowledge-base/project/learnings/2026-05-05-phase-1-instrumentation-when-prior-fix-visibly-missed.md` (#3287 review's false-positive P1 on a `Sentry.addBreadcrumb` call that mirrored 5 in-file precedents).
 

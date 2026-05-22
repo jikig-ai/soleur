@@ -1,0 +1,333 @@
+import { describe, test, expect } from "bun:test";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  parseRules,
+  scanFile,
+  disabledRulesInFile,
+  RULES_FILE,
+} from "../../skills/frontend-anti-slop/scripts/tier1-scan";
+import { readFileSync } from "node:fs";
+
+// tier1-scan.test.ts — frontend-anti-slop v1 scanner.
+// 5 representative Tier 1 rules × positive + negative = 10 fixtures (per
+// plan §"Test Strategy"; per-rule exhaustive coverage deferred to v1.5).
+// Plus a calibration baseline against a real project file.
+
+const RULES = parseRules(readFileSync(RULES_FILE, "utf8"));
+
+function ruleById(id: string) {
+  const r = RULES.find((r) => r.id === id);
+  if (!r) throw new Error(`fixture references unknown rule ${id}`);
+  return r;
+}
+
+function withFile(
+  filename: string,
+  content: string,
+  body: (absPath: string) => void,
+): void {
+  const dir = mkdtempSync(join(tmpdir(), "anti-slop-fixture-"));
+  const abs = join(dir, filename);
+  // make sure nested dirs exist if filename contains slashes
+  if (filename.includes("/")) {
+    mkdirSync(join(dir, filename.split("/").slice(0, -1).join("/")), {
+      recursive: true,
+    });
+  }
+  writeFileSync(abs, content, "utf8");
+  try {
+    body(abs);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("frontend-anti-slop tier1-scan: 5 rules × pos + neg fixtures", () => {
+  // 1. GRADIENT-TEXT (high)
+  test("GRADIENT-TEXT POSITIVE: triad present", () => {
+    withFile(
+      "page.tsx",
+      `<h1 className="bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-pink-500">Hi</h1>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("GRADIENT-TEXT")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].selector).toMatch(/#GRADIENT-TEXT$/);
+        expect(findings[0].category).toBe("anti-slop");
+        expect(findings[0].severity).toBe("high");
+      },
+    );
+  });
+
+  test("GRADIENT-TEXT NEGATIVE: solid ink headline", () => {
+    withFile(
+      "page.tsx",
+      `<h1 className="text-5xl font-display tracking-tight">Hi</h1>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("GRADIENT-TEXT")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  // 2. GENERIC-DISPLAY-FONT (medium)
+  test("GENERIC-DISPLAY-FONT POSITIVE: Inter import", () => {
+    withFile(
+      "layout.tsx",
+      `import { Inter } from "next/font/google";\nconst inter = Inter({ subsets: ["latin"] });`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("GENERIC-DISPLAY-FONT")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("GENERIC-DISPLAY-FONT NEGATIVE: distinctive face", () => {
+    withFile(
+      "layout.tsx",
+      `import { Fraunces } from "next/font/google";\nconst f = Fraunces({ subsets: ["latin"] });`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("GENERIC-DISPLAY-FONT")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  // 3. TRANSITION-ALL (low)
+  test("TRANSITION-ALL POSITIVE: literal transition-all", () => {
+    withFile(
+      "btn.tsx",
+      `<button className="transition-all duration-200 hover:opacity-90">x</button>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("TRANSITION-ALL")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("TRANSITION-ALL NEGATIVE: named property transition", () => {
+    withFile(
+      "btn.tsx",
+      `<button className="transition-opacity duration-200 hover:opacity-90">x</button>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("TRANSITION-ALL")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  // 4. UNIFORM-HOVER-SCALE (low, ≥ 4 in same file)
+  test("UNIFORM-HOVER-SCALE POSITIVE: 4 occurrences fire", () => {
+    withFile(
+      "cards.tsx",
+      [
+        `<a className="hover:scale-105">a</a>`,
+        `<a className="hover:scale-105">b</a>`,
+        `<a className="hover:scale-105">c</a>`,
+        `<a className="hover:scale-105">d</a>`,
+      ].join("\n"),
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("UNIFORM-HOVER-SCALE")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("UNIFORM-HOVER-SCALE NEGATIVE: 3 occurrences below threshold", () => {
+    withFile(
+      "cards.tsx",
+      [
+        `<a className="hover:scale-105">a</a>`,
+        `<a className="hover:scale-105">b</a>`,
+        `<a className="hover:scale-105">c</a>`,
+      ].join("\n"),
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("UNIFORM-HOVER-SCALE")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  // 5. PLACEHOLDER-NAMES (low)
+  test("PLACEHOLDER-NAMES POSITIVE: Jane Doe testimonial", () => {
+    withFile(
+      "testimonial.tsx",
+      `<blockquote>"Soleur is great." — Jane Doe, CEO of Acme</blockquote>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PLACEHOLDER-NAMES")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("PLACEHOLDER-NAMES NEGATIVE: real customer name", () => {
+    withFile(
+      "testimonial.tsx",
+      `<blockquote>"Soleur is great." — Sarah Chen, CEO of Linear</blockquote>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PLACEHOLDER-NAMES")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  // 6. PURE-BW-BASE — calibrated 2026-05-21 (issue #4270 v1.1 tightening):
+  // initial regex matched bg-black/bg-white anywhere in a className, producing
+  // 6/6 FP on the prod tree (all hits were buttons, not root wrappers). The
+  // tightened regex requires <html|body|main> elements OR co-occurrence with
+  // a root-layout class (min-h-screen|min-h-dvh|h-screen) so a button's
+  // bg-white never trips it but a page wrapper does.
+  test("PURE-BW-BASE POSITIVE: html element with bg-black", () => {
+    withFile(
+      "layout.tsx",
+      `<html className="bg-black text-white"><body>{children}</body></html>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE POSITIVE: full-screen div wrapper with bg-black", () => {
+    withFile(
+      "page.tsx",
+      `<div className="min-h-screen bg-black"><Hero /></div>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(1);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE NEGATIVE: button with bg-white (the original FP class)", () => {
+    withFile(
+      "login.tsx",
+      `<button className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200">Sign in</button>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  test("PURE-BW-BASE NEGATIVE: icon with bg-white (no layout-class proximity)", () => {
+    withFile(
+      "icon.tsx",
+      `<div className="h-8 w-8 rounded-full bg-white p-2"><Icon /></div>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("PURE-BW-BASE")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: per-file disable comment", () => {
+  test("anti-slop:disable suppresses the named rule", () => {
+    withFile(
+      "intentional-gradient.tsx",
+      `<!-- anti-slop:disable GRADIENT-TEXT reason="brand-mandated marketing hero gradient" -->\n<h1 className="bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-pink-500">Hi</h1>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("GRADIENT-TEXT")]);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+
+  test("disabledRulesInFile parses multiple disable comments", () => {
+    const src = `
+      <!-- anti-slop:disable GRADIENT-TEXT reason="x" -->
+      <!-- anti-slop:disable TRANSITION-ALL reason="y" -->
+    `;
+    const set = disabledRulesInFile(src);
+    expect(set.has("GRADIENT-TEXT")).toBe(true);
+    expect(set.has("TRANSITION-ALL")).toBe(true);
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: calibration baseline", () => {
+  // Calibration fixture: a dedicated test-only file at
+  // `plugins/soleur/test/fixtures/frontend-anti-slop/calibration-baseline.tsx`
+  // that deliberately contains a Tier 1 anti-pattern (`transition-all`).
+  //
+  // Originally pinned to a production file (gold-button.tsx in the plan,
+  // then setting-up-state.tsx in PR #4265). Draining production findings
+  // per the calibration window (#4270) removes the rule-keying token from
+  // production code and invalidates the baseline. Decoupling via a dedicated
+  // fixture lets the scanner's self-test stay green while findings drain.
+  // See `knowledge-base/project/learnings/best-practices/2026-05-21-calibration-fixture-probe-and-markdown-table-pipe-escapes.md`.
+
+  test("scanner emits ≥ 1 anti-slop finding on the calibration baseline file", () => {
+    const repoRoot = resolve(import.meta.dir, "../../../..");
+    const calibFile = resolve(
+      repoRoot,
+      "plugins/soleur/test/fixtures/frontend-anti-slop/calibration-baseline.tsx",
+    );
+    // Precondition: the calibration fixture must still contain a pattern
+    // the rule set actually fires on. If a future refactor strips
+    // `transition-all` from this file the calibration intent is lost — fail
+    // fast here with a diagnostic that points at the fixture, not the
+    // scanner. Update by either restoring the pattern OR picking a new
+    // fixture and updating both this precondition + plan §"Calibration".
+    const content = readFileSync(calibFile, "utf8");
+    expect(
+      content,
+      `calibration fixture ${calibFile} no longer contains the \`transition-all\` token the TRANSITION-ALL rule keys on — refactor invalidated the calibration baseline. Either restore the pattern or pick a new fixture (and update the plan).`,
+    ).toContain("transition-all");
+
+    const findings = scanFile(calibFile, RULES);
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings.every((f) => f.category === "anti-slop")).toBe(true);
+    for (const f of findings) {
+      // selector encodes as `<file>#<RULE-ID>` per the plan's Option (a) overload.
+      expect(f.selector).toMatch(/.+#[A-Z][A-Z0-9-]*$/);
+    }
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: rule parsing", () => {
+  test("parseRules produces exactly 15 Tier 1 rules (binding from plan)", () => {
+    expect(RULES).toHaveLength(15);
+  });
+
+  test("every parsed rule compiles a valid RegExp", () => {
+    for (const r of RULES) {
+      expect(r.pattern).toBeInstanceOf(RegExp);
+      expect(r.severity).toMatch(/^(critical|high|medium|low)$/);
+    }
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: file-filter scope", () => {
+  // Scope was widened to include `.njk` so the Eleventy marketing site
+  // (plugins/soleur/docs/) is audited alongside the Next.js platform.
+  // These tests lock the scope so a future refactor of `expandPaths` /
+  // `listFilesRecursive` can't silently drop `.njk` and break the docs-site
+  // audit path. See the SKILL.md "Scope" table and review/SKILL.md
+  // "Anti-slop Scanner Hook" trigger regex — both share this same file-
+  // extension set.
+
+  test("scanFile on a .njk fixture is well-defined (rule fires when pattern matches)", () => {
+    withFile(
+      "landing.njk",
+      `<a class="bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-blue-500">Try it</a>`,
+      (abs) => {
+        const findings = scanFile(abs, [ruleById("GRADIENT-TEXT")]);
+        expect(findings).toHaveLength(1);
+        expect(findings[0].selector).toMatch(/\.njk#GRADIENT-TEXT$/);
+      },
+    );
+  });
+
+  test("scanFile on a .njk fixture with no slop returns 0 (rule set tolerates non-Tailwind markup)", () => {
+    withFile(
+      "blog-post.njk",
+      `{% extends "base.njk" %}\n{% block content %}<article class="prose">{{ body | safe }}</article>{% endblock %}`,
+      (abs) => {
+        const findings = scanFile(abs, RULES);
+        expect(findings).toHaveLength(0);
+      },
+    );
+  });
+});

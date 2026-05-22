@@ -114,6 +114,49 @@ The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/mig
 
 If no migration files are found (grep rc=1), return **SKIP**.
 
+**Step 1.1b: Detect documented prd-apply deferral (early SKIP).**
+
+If migration files are found, check whether the PR has explicitly
+deferred prd-apply. Two valid signals:
+
+```bash
+# (a) Migration checklist documents prd-apply as pending/deferred.
+ckl=$(git ls-files 'knowledge-base/project/specs/feat-*/migration-checklist.md' | head -1)
+if [[ -n "$ckl" ]] && grep -qiE '^## prd apply\s*[-—]+\s*(pending|deferred|done)' "$ckl"; then
+  defer_signal="checklist:$(basename $(dirname "$ckl"))/migration-checklist.md"
+fi
+
+# (b) PR body has `Tracks #N` companion to a `prd apply`/`prd migration` line
+# with a labeled deferred-automation issue (re-use the operator-step-gate shape).
+pr_body=$(gh pr view --json body --jq .body 2>/dev/null || true)
+if printf '%s' "$pr_body" | grep -qiE '(prd[-_ ]apply|prd[-_ ]migration).*(Tracks|Refs) #[0-9]+'; then
+  defer_signal="pr-body-tracks"
+fi
+```
+
+If `$defer_signal` is non-empty AND the migration-checklist's
+`## prd apply` heading reads **done** (post-apply record), Check 1
+proceeds to Step 1.4 to verify columns actually exist.
+
+If `$defer_signal` is non-empty AND the heading reads **pending** or
+**deferred**, return **SKIP** with note: `"prd apply deferred by
+plan/PR — $defer_signal. Check 1 will re-verify post-merge via the
+release workflow's verify-migrations job."` This closes the
+false-positive FAIL class where a plan explicitly sequences the
+prd apply in lockstep with another in-flight PR (e.g., AC-LEGAL-FLIP
+gate). The signal is documented + auditable — operator cannot
+silently skip Check 1 without leaving a paper trail.
+
+If `$defer_signal` is empty, fall through to Step 1.2 (the original
+unapplied-migration FAIL path is the correct response).
+
+**Why:** PR #4225 (feat-team-workspace-multi-user) — preflight FAIL
+on Check 1 because prd migrations were deferred per
+migration-checklist.md (legal-PR lockstep gate); the headless
+`/ship` halted the pipeline on a known-deferred state. This SKIP
+path honors documented deferrals while keeping the gate active for
+undocumented cases.
+
 **Step 1.2: Parse migration SQL for table/column pairs.**
 
 For each migration file found in Step 1.1, extract table and column names:

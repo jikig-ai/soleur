@@ -1,0 +1,123 @@
+# Standalone PR + push gate for Vector config + VRL fixture tests (#4293 FR5).
+#
+# Separated from apply-web-platform-infra.yml because that workflow triggers
+# only on push: branches: [main] (intentional -- terraform apply must not
+# fire on PR branches). This workflow runs at PR time so AC9 has a green
+# check before merge.
+#
+# Path-filtered to the relevant files; unrelated infra hotfixes do not
+# see this workflow run. No untrusted user input is referenced in any
+# `run:` block -- only the internal `steps.vector_version.outputs.version`
+# which is derived from a `vector.tf` regex match.
+
+name: Validate Vector config + VRL fixtures (#4293 FR5)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web-platform/infra/vector.toml"
+      - "apps/web-platform/infra/vector.tf"
+      - "apps/web-platform/test/infra/**"
+      - ".github/workflows/validate-vector-config.yml"
+  pull_request:
+    paths:
+      - "apps/web-platform/infra/vector.toml"
+      - "apps/web-platform/infra/vector.tf"
+      - "apps/web-platform/test/infra/**"
+      - ".github/workflows/validate-vector-config.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-vector-config:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # Bun is required by the fixture script to compute TS hashUserId
+      # parity (AC4 in the plan -- proves VRL HMAC-SHA256 matches the
+      # TS primitive byte-for-byte; openssl is the secondary backstop).
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version: latest
+
+      # observability.ts imports @sentry/nextjs + @/server/* path aliases --
+      # the fixture script's bun -e parity check needs node_modules to
+      # resolve those. bun install is fast (~5s) against bun.lock.
+      - name: bun install (apps/web-platform)
+        working-directory: apps/web-platform
+        run: bun install --frozen-lockfile
+
+      - name: Parse vector_version from vector.tf
+        id: vector_version
+        # IaC-3 drift safeguard: version is sourced from vector.tf locals at
+        # job-start time. No hardcoded Vector version in this YAML.
+        run: |
+          set -euo pipefail
+          v=$(awk -F'"' '/vector_version[[:space:]]*=/ { print $2; exit }' apps/web-platform/infra/vector.tf)
+          if [[ -z "$v" ]]; then
+            echo "ERROR: could not parse vector_version from vector.tf" >&2
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Vector version pinned: $v"
+
+      - name: Download Vector binary
+        env:
+          V: ${{ steps.vector_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -sLo /tmp/vector.tar.gz "https://packages.timber.io/vector/${V}/vector-${V}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/vector.tar.gz -C /tmp ./vector-x86_64-unknown-linux-gnu/bin/vector
+          sudo mv /tmp/vector-x86_64-unknown-linux-gnu/bin/vector /usr/local/bin/vector
+          vector --version
+
+      - name: Schema validate (vector validate)
+        env:
+          VECTOR_STRICT_ENV_VARS: "false"
+          BETTERSTACK_LOGS_TOKEN: dummy
+          SENTRY_USERID_PEPPER: dummy
+        run: vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml
+
+      - name: VRL fixture tests (BLOCKING -- Arch-F4)
+        env:
+          SENTRY_USERID_PEPPER: fixture-only-do-not-use-in-prod
+        run: bash apps/web-platform/test/infra/vector-pii-scrub.test.sh
+
+      # Better Stack source ID + cluster appear in vector.toml (load-bearing)
+      # AND in 4 disclosure surfaces (legal corpus). Drift between them goes
+      # silent if the source is rotated (e.g. via #4296 60-day re-decision).
+      # Extract the values from vector.toml at job-start and assert each
+      # disclosure surface still references them.
+      - name: Better Stack source/cluster parity (vector.toml vs legal corpus)
+        run: |
+          set -euo pipefail
+          uri=$(awk -F'"' '/^uri = "https:\/\/s[0-9]+\./ { print $2; exit }' apps/web-platform/infra/vector.toml)
+          if [[ -z "$uri" ]]; then
+            echo "ERROR: could not parse sink URI from vector.toml" >&2; exit 1
+          fi
+          # https://s<N>.<cluster>.betterstackdata.com/
+          source_id=$(echo "$uri" | sed -E 's@https://s([0-9]+)\..*@\1@')
+          cluster=$(echo "$uri" | sed -E 's@https://s[0-9]+\.([a-z0-9-]+)\.betterstackdata\.com.*@\1@')
+          echo "Source ID: $source_id  Cluster: $cluster"
+          DISCLOSURE_FILES=(
+            docs/legal/privacy-policy.md
+            docs/legal/data-protection-disclosure.md
+            knowledge-base/legal/article-30-register.md
+            knowledge-base/legal/compliance-posture.md
+            plugins/soleur/docs/pages/legal/privacy-policy.md
+            plugins/soleur/docs/pages/legal/data-protection-disclosure.md
+          )
+          rc=0
+          for f in "${DISCLOSURE_FILES[@]}"; do
+            if ! grep -q "$source_id" "$f"; then
+              echo "DRIFT: source ID $source_id missing from $f" >&2; rc=1
+            fi
+            if ! grep -q "$cluster" "$f"; then
+              echo "DRIFT: cluster $cluster missing from $f" >&2; rc=1
+            fi
+          done
+          exit "$rc"

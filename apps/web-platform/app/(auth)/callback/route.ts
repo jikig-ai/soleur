@@ -296,6 +296,10 @@ async function ensureWorkspaceProvisioned(
     // creating the users row. This fallback fires only if the trigger failed.
     // tc_accepted_at is always NULL — acceptance is recorded server-side via
     // POST /api/accept-terms.
+    //
+    // Workspace identifier === userId per migration 053 §1.1.7 N2 invariant
+    // (the workspace_members backfill makes workspaces.id = owner_user_id;
+    // the handle_new_user trigger preserves this for new signups).
     const workspacePath = await provisionWorkspace(userId);
     const { error: insertError } = await serviceClient
       .from("users")

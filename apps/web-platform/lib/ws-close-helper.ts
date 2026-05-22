@@ -9,6 +9,7 @@ import { warnSilentFallback } from "@/server/observability";
 const CLOSE_CODE_LABELS: Record<number, string> = {
   [WS_CLOSE_CODES.CONCURRENCY_CAP]: "CONCURRENCY_CAP",
   [WS_CLOSE_CODES.TIER_CHANGED]: "TIER_CHANGED",
+  [WS_CLOSE_CODES.MEMBERSHIP_REVOKED]: "MEMBERSHIP_REVOKED",
 };
 
 const PREAMBLE_SIZE_WARN_BYTES = 2048;

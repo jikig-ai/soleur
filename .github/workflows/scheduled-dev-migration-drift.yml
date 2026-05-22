@@ -1,0 +1,53 @@
+# Scheduled dev-Supabase migration drift probe (#4241).
+#
+# Runs the dev-migration-drift-probe composite action on cron so drift is
+# surfaced even when no PR happens to trigger `tenant-integration.yml`.
+# The 2026-05-21 incident sat undetected for ~2 hours between apply
+# (10:38 UTC) and the first failing PR run (10:46 UTC); a 6-hourly probe
+# would have surfaced the residual `_schema_migrations` state independent
+# of PR cadence.
+#
+# Severity is `::warning::` by design (matches the inline probe in
+# `tenant-integration.yml`). This workflow does not fail-loud — it surfaces
+# drift via annotations so operators can revert before drift compounds.
+#
+# Security: only `secrets.DOPPLER_TOKEN_DEV_SCHEDULED` is referenced (mirrors
+# `tenant-integration.yml`'s pattern). No untrusted `github.event.*` inputs
+# are interpolated in any `run:` block; this workflow only triggers on
+# `schedule` (no payload) and `workflow_dispatch` (no inputs accepted).
+
+name: "Scheduled: dev migration drift"
+
+on:
+  schedule:
+    - cron: '15 */6 * * *'   # every 6 hours at HH:15
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-dev-migration-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # depth>1 so origin/main is populated for `git ls-tree` inside the
+          # composite action. The action also does its own `git fetch --depth=1
+          # origin main` as belt-and-braces, but starting from a richer clone
+          # makes the no-network branch usable.
+          fetch-depth: 2
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Detect dev-vs-main migration drift
+        uses: ./.github/actions/dev-migration-drift-probe
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}

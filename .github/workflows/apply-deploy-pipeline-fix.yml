@@ -49,6 +49,11 @@ on:
       - "apps/web-platform/infra/canary-bundle-claim-check.sh"
       - "apps/web-platform/infra/hooks.json.tmpl"
       - "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers"
+      # TR9 PR-5: server.tf carries the terraform_data.deploy_pipeline_fix
+      # remote-exec; new mkdir steps (e.g., for /var/lib/vector + /etc/vector)
+      # must auto-trigger this workflow. Path-only paths filter; no untrusted
+      # input flows into any shell command.
+      - "apps/web-platform/infra/server.tf"
   workflow_dispatch:
     inputs:
       reason:

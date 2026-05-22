@@ -120,6 +120,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           conversation_id: conv.id,
           role: "user",
           content: `Hello ${u.phrase}`,
+          // PR-I (#4078, migration 053_template_authorizations.sql) added
+          // messages.template_id NOT NULL with CHECK ^[a-z][a-z0-9_]*$.
+          template_id: "default_legacy",
         });
 
         // KB share link with the distinctive phrase in the document_path.

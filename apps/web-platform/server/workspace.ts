@@ -53,18 +53,23 @@ const DEFAULT_SETTINGS = {
 };
 
 /**
- * Provisions a workspace directory for a new user.
+ * Provisions a workspace directory.
  *
  * Creates the directory structure, symlinks the Soleur plugin,
  * initializes a git repo, and writes default Claude settings.
  *
+ * @param workspaceId The UUID of the workspace (`workspaces.id`). Solo signup
+ *   passes `user.id` directly because migration 053 §1.1.7 N2 invariant
+ *   guarantees `workspaces.id === user.id` for backfilled and trigger-created
+ *   solo workspaces. Team-invite callers (Phase 5) resolve to the target
+ *   workspace_id via `resolveWorkspacePathForUser` before calling this.
  * @returns The absolute path to the provisioned workspace.
  */
-export async function provisionWorkspace(userId: string): Promise<string> {
-  if (!UUID_RE.test(userId)) {
-    throw new Error(`Invalid userId format: ${userId}`);
+export async function provisionWorkspace(workspaceId: string): Promise<string> {
+  if (!UUID_RE.test(workspaceId)) {
+    throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
-  const workspacePath = join(getWorkspacesRoot(), userId);
+  const workspacePath = join(getWorkspacesRoot(), workspaceId);
 
   // 1. Create workspace root (skip if exists)
   ensureDir(workspacePath);
@@ -85,7 +90,7 @@ export async function provisionWorkspace(userId: string): Promise<string> {
       stdio: "pipe",
     });
   } catch (err) {
-    log.warn({ err, userId }, "Git init failed");
+    log.warn({ err, workspaceId }, "Git init failed");
   }
 
   return workspacePath;
@@ -99,7 +104,8 @@ export async function provisionWorkspace(userId: string): Promise<string> {
  * plugin symlink, creates .claude/settings.json, and scaffolds
  * knowledge-base/ subdirectories if missing.
  *
- * @param userId         User ID (used for workspace path and credential helper naming)
+ * @param workspaceId    Workspace UUID (`workspaces.id`); for solo signup
+ *                       this equals `user.id` per migration 053 N2 invariant.
  * @param repoUrl        HTTPS URL of the repo to clone
  * @param installationId GitHub App installation ID for token generation
  * @param userName       Git user.name for commits
@@ -107,18 +113,18 @@ export async function provisionWorkspace(userId: string): Promise<string> {
  * @returns The absolute path to the provisioned workspace.
  */
 export async function provisionWorkspaceWithRepo(
-  userId: string,
+  workspaceId: string,
   repoUrl: string,
   installationId: number,
   userName?: string,
   userEmail?: string,
   options?: { suppressWelcomeHook?: boolean },
 ): Promise<string> {
-  if (!UUID_RE.test(userId)) {
-    throw new Error(`Invalid userId format: ${userId}`);
+  if (!UUID_RE.test(workspaceId)) {
+    throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
 
-  const workspacePath = join(getWorkspacesRoot(), userId);
+  const workspacePath = join(getWorkspacesRoot(), workspaceId);
 
   // 1. Pre-fetch the installation token so token-generation failures surface
   //    with a distinct "Token generation failed: …" message. The result is
@@ -168,7 +174,7 @@ export async function provisionWorkspaceWithRepo(
       installationId,
       { timeout: 120_000 },
     );
-    log.info({ userId, repoUrl }, "Repository cloned successfully");
+    log.info({ workspaceId, repoUrl }, "Repository cloned successfully");
   } catch (err) {
     const rawStderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
     const stderr = sanitizeGitStderr(rawStderr);
@@ -188,7 +194,7 @@ export async function provisionWorkspaceWithRepo(
         stdio: "pipe",
       });
     } catch (err) {
-      log.warn({ err, userId }, "Failed to set git user.name");
+      log.warn({ err, workspaceId }, "Failed to set git user.name");
     }
   }
   if (userEmail) {
@@ -198,7 +204,7 @@ export async function provisionWorkspaceWithRepo(
         stdio: "pipe",
       });
     } catch (err) {
-      log.warn({ err, userId }, "Failed to set git user.email");
+      log.warn({ err, workspaceId }, "Failed to set git user.email");
     }
   }
 
@@ -215,20 +221,27 @@ export async function provisionWorkspaceWithRepo(
 }
 
 /**
- * Deletes a user's workspace directory.
+ * Deletes a workspace directory.
  *
  * Used during account deletion (GDPR Art. 17) to remove all local files.
- * Uses execFileSync to avoid shell injection via userId.
+ * Uses execFileSync to avoid shell injection via the workspace identifier.
+ *
+ * @param workspaceId Workspace UUID. For solo account deletion this equals
+ *   `user.id` per the N2 invariant; the caller (account-delete.ts) passes
+ *   the userId directly because the user is by definition the sole member
+ *   of their own backfilled workspace. Cross-workspace cleanup (member
+ *   removal, Phase 5.5) does NOT call this path — it only revokes the
+ *   membership row.
  */
-export async function deleteWorkspace(userId: string): Promise<void> {
-  if (!UUID_RE.test(userId)) {
-    throw new Error(`Invalid userId format: ${userId}`);
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+  if (!UUID_RE.test(workspaceId)) {
+    throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
-  const workspacePath = join(getWorkspacesRoot(), userId);
+  const workspacePath = join(getWorkspacesRoot(), workspaceId);
 
   if (existsSync(workspacePath)) {
     removeWorkspaceDir(workspacePath);
-    log.info({ userId }, "Workspace deleted");
+    log.info({ workspaceId }, "Workspace deleted");
   }
 }
 

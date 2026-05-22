@@ -18,6 +18,8 @@ import {
   getFlag,
   getRuntimeFlag,
   getFeatureFlags,
+  getTeamWorkspaceAllowlist,
+  isTeamWorkspaceInviteEnabled,
   ANON_IDENTITY,
   __resetFeatureFlagsForTests,
   type Identity,
@@ -51,6 +53,11 @@ describe("getFlag (env-only, sync)", () => {
       process.env.FLAG_DEV_SIGNIN = v;
       expect(getFlag("dev-signin")).toBe(false);
     }
+  });
+
+  it("includes team-workspace-invite as a registered env flag", () => {
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
+    expect(getFlag("team-workspace-invite")).toBe(true);
   });
 });
 
@@ -137,6 +144,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
   it("merges env-flag values with identity-resolved runtime-flag values", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     process.env.FLAG_DEV_SIGNIN = "1";
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "0";
     process.env.FLAG_KB_CHAT_SIDEBAR = "0";
     mockGetIdentityFlags.mockResolvedValueOnce({
       isFeatureEnabled: (name: string) => name === "kb-chat-sidebar",
@@ -145,6 +153,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
     const flags = await getFeatureFlags(DEV_USER);
     expect(flags).toEqual({
       "dev-signin": true,
+      "team-workspace-invite": false,
       "kb-chat-sidebar": true,
     });
   });
@@ -152,12 +161,104 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
   it("anonymous returns prd snapshot + env-only flags", async () => {
     delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
     process.env.FLAG_DEV_SIGNIN = "0";
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "0";
     process.env.FLAG_KB_CHAT_SIDEBAR = "1";
 
     const flags = await getFeatureFlags(ANON_IDENTITY);
     expect(flags).toEqual({
       "dev-signin": false,
+      "team-workspace-invite": false,
       "kb-chat-sidebar": true,
     });
+  });
+
+  it("returns false for all flags when none are set", async () => {
+    delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+    delete process.env.FLAG_KB_CHAT_SIDEBAR;
+    delete process.env.FLAG_DEV_SIGNIN;
+    delete process.env.FLAG_TEAM_WORKSPACE_INVITE;
+
+    const flags = await getFeatureFlags(ANON_IDENTITY);
+    expect(flags).toEqual({
+      "dev-signin": false,
+      "team-workspace-invite": false,
+      "kb-chat-sidebar": false,
+    });
+  });
+});
+
+describe("getTeamWorkspaceAllowlist", () => {
+  it("returns empty set when env var unset", () => {
+    delete process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS;
+    expect(getTeamWorkspaceAllowlist().size).toBe(0);
+  });
+
+  it("returns empty set when env var is empty string", () => {
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "";
+    expect(getTeamWorkspaceAllowlist().size).toBe(0);
+  });
+
+  it("parses a single org id", () => {
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1";
+    const set = getTeamWorkspaceAllowlist();
+    expect(set.has("org-1")).toBe(true);
+    expect(set.size).toBe(1);
+  });
+
+  it("parses comma-separated org ids and trims whitespace", () => {
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1, org-2 ,  org-3";
+    const set = getTeamWorkspaceAllowlist();
+    expect(set.has("org-1")).toBe(true);
+    expect(set.has("org-2")).toBe(true);
+    expect(set.has("org-3")).toBe(true);
+    expect(set.size).toBe(3);
+  });
+
+  it("filters out empty segments from doubled commas", () => {
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1,,org-2,";
+    const set = getTeamWorkspaceAllowlist();
+    expect(set.size).toBe(2);
+    expect(set.has("")).toBe(false);
+  });
+
+  it("re-parses when the env var value changes (cache keyed on raw value)", () => {
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1";
+    expect(getTeamWorkspaceAllowlist().has("org-1")).toBe(true);
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-2";
+    const set = getTeamWorkspaceAllowlist();
+    expect(set.has("org-2")).toBe(true);
+    expect(set.has("org-1")).toBe(false);
+  });
+});
+
+describe("isTeamWorkspaceInviteEnabled", () => {
+  it("returns false when flag is OFF (even if org is allowlisted) — AC-F", () => {
+    delete process.env.FLAG_TEAM_WORKSPACE_INVITE;
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
+    expect(isTeamWorkspaceInviteEnabled("org-jikigai")).toBe(false);
+  });
+
+  it("returns false when flag is ON but allowlist empty — AC-F", () => {
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "";
+    expect(isTeamWorkspaceInviteEnabled("org-jikigai")).toBe(false);
+  });
+
+  it("returns false when flag is ON but orgId not in allowlist — AC-F", () => {
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai,org-other";
+    expect(isTeamWorkspaceInviteEnabled("org-not-listed")).toBe(false);
+  });
+
+  it("returns true only when BOTH keys evaluate true — AC-F", () => {
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
+    expect(isTeamWorkspaceInviteEnabled("org-jikigai")).toBe(true);
+  });
+
+  it("returns false for empty orgId argument", () => {
+    process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
+    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
+    expect(isTeamWorkspaceInviteEnabled("")).toBe(false);
   });
 });

@@ -32,7 +32,8 @@
         "ia",
         "consistency",
         "responsive",
-        "comprehension"
+        "comprehension",
+        "anti-slop"
       ]
     },
     "severity": {
