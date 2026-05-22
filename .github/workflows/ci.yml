@@ -134,6 +134,16 @@ jobs:
           # not enforced here because the committed artifact lags the
           # aggregator until the first post-merge Sunday run.
 
+  # Regenerates apps/web-platform/package-lock.json under a pinned npm
+  # major and diffs against the committed file. Catches the `bun add`
+  # defect class (package.json changes without lockfile sync) AND the
+  # operator/CI npm-major-skew defect class — recurrence history:
+  #   - #4014 (2026-04, libc-arrays shape facet, operator-side `npx npm@10`)
+  #   - #4331 (2026-05, regression — flagsmith bun-add)
+  #   - #4334 (2026-05, hotfix regenerated under npm 11 but CI was on npm 10)
+  #   - #4337 (2026-05, this PR — codified the pin inside the gate)
+  # The pin step below is the durable fix; see
+  # knowledge-base/project/learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md.
   lockfile-sync:
     runs-on: ubuntu-latest
     steps:
@@ -144,13 +154,14 @@ jobs:
         with:
           node-version: 22
 
-      - name: Pin npm version
-        # The lockfile shape diverges between npm 10 (bundled with node:22.x on
-        # the runner) and npm 11 (the version operators typically have locally
-        # when `bun add` updates package.json without touching package-lock.json
-        # and they run `npm install --package-lock-only` to sync). Pinning to
-        # npm 11 here matches the committed lockfile's shape. See
-        # knowledge-base/project/learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md.
+      - name: Override bundled npm with npm@11
+        # `actions/setup-node@v4.4.0` ships npm 10.9.x with node-version 22 and
+        # has no `npm-version` input — `npm install -g npm@<major>` is the only
+        # available pin mechanism. Operators on Node 23+ or post-`bun add`
+        # flows produce npm 11 lockfiles; pinning here keeps CI and the
+        # committed lockfile on the same major so the regenerate-and-diff
+        # check below is meaningful. The bundled npm 10.x is discarded
+        # (the global install replaces it for the rest of this job only).
         run: npm install -g npm@11
 
       - name: Regenerate package-lock.json

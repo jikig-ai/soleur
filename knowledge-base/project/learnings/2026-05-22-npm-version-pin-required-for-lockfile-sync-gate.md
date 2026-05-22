@@ -11,12 +11,12 @@ tags: [integration-issues, ci, lockfile, npm]
 
 The `lockfile-sync` CI gate (added 2026-04-03) regenerates `apps/web-platform/package-lock.json` under whatever npm version the runner ships, then `git diff --exit-code`s against the committed file. For two months that worked because operators and CI both happened to be on npm 10.
 
-Two PRs flipped this:
+Two PRs flipped this — same `npm-major-skew between operator and CI` class, different shape facets:
 
-- PR #4014 (2026-04 — first recurrence). Patched by operator-side regen under `npx npm@10`. Workaround was not codified in the gate.
-- PR #4331 (2026-05-22 — second recurrence, the regression that prompted #4337). Introduced `flagsmith-nodejs` via `bun add`, which updates `package.json` but not `package-lock.json`. The hotfix PR #4334 ran `npm install --package-lock-only` on an operator-local npm 11 install and committed — correct shape for npm 11, but CI's npm 10 disagreed on regeneration. Three consecutive `main` runs failed with the same 17-line diff: pure `+      "dev": true,` additions on optional transitive entries (`@emnapi/runtime`, `@img/sharp-darwin-*`, `@img/sharp-linux-*`, `@img/sharp-linuxmusl-*`, `@img/sharp-win32-*`, `fsevents`).
+- PR #4014 (2026-04 — first occurrence of this class). Lockfile diverged on the `libc` arrays facet (npm 10 emits no `libc` arrays on platform-specific optional deps where npm 11 emits them, or vice-versa). Patched by operator-side regen under `npx npm@10`. The workaround was not codified in the gate, so future contributors on a different npm major could re-introduce the skew.
+- PR #4331 (2026-05-22 — second occurrence, the regression that prompted #4337). Introduced `flagsmith-nodejs` via `bun add`, which updates `package.json` but not `package-lock.json`. The hotfix PR #4334 ran `npm install --package-lock-only` on an operator-local npm 11 install and committed — correct shape for npm 11, but CI's npm 10 disagreed on regeneration. The diverging facet this time was `"dev": true` on optional transitive packages, not `libc` arrays. Three consecutive `main` runs failed with the same 17-line diff: pure `+      "dev": true,` additions on optional transitive entries (`@emnapi/runtime`, `@img/sharp-darwin-*`, `@img/sharp-linux-*`, `@img/sharp-linuxmusl-*`, `@img/sharp-win32-*`, `fsevents`).
 
-The defect class is recurrence-prone. Every PR's auto-merge was blocked at the gate until #4337 landed.
+The class (operator/CI npm-major skew producing a `git diff --exit-code` failure on the regenerate-and-diff gate) is recurrence-prone; the specific shape facet npm chooses to diverge on can change patch-by-patch. Every PR's auto-merge was blocked at the gate until #4337 landed.
 
 ## Root cause
 
