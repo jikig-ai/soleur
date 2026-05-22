@@ -11,10 +11,11 @@
 //   github_api_http, github_api_invalid_json, github_api_missing_fields,
 //   app_id_mismatch, client_id_mismatch, permission_drift,
 //   permission_unexpected_grant, response_shape_unparseable,
-//   manifest_diff_unknown_mode, installation_api_http,
-//   installation_list_truncated, installation_list_shape_unparseable,
-//   installation_permission_drift, installation_unexpected_grant,
-//   installation_response_shape_unparseable, installation_diff_unknown_mode.
+//   manifest_diff_unknown_mode, manifest_unparseable,
+//   installation_api_http, installation_list_truncated,
+//   installation_list_shape_unparseable, installation_permission_drift,
+//   installation_unexpected_grant, installation_response_shape_unparseable,
+//   installation_diff_unknown_mode.
 //
 // ROUTING TABLE (mode → label):
 //   ci/auth-broken (drift detected, user-impacting):
@@ -33,19 +34,22 @@
 // the existing sentry_cron_monitor.scheduled_github_app_drift_guard
 // Terraform resource is updated in-place).
 
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
   createAppJwtOctokit,
+  createProbeOctokit,
   PROBE_ISSUE_OWNER,
   PROBE_ISSUE_REPO,
 } from "@/server/github/probe-octokit";
+import {
+  diffGithubAppManifest,
+  type AppManifest,
+  type ManifestDiffResult,
+} from "@/server/github/manifest-diff";
 
 const SENTRY_MONITOR_SLUG = "scheduled-github-app-drift-guard";
 const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
@@ -93,6 +97,11 @@ export const LEAK_TRIPWIRE_PEM_REGEX = "BEGIN [A-Z ]*PRIVATE KEY";
 export const LEAK_TRIPWIRE_PEM_B64_REGEX = "LS0tLS1CRUdJTi[A-Za-z0-9+/]";
 export const LEAK_TRIPWIRE_JWT_REGEX = "eyJ[A-Za-z0-9_-]{20,}";
 
+// Hoisted to module scope (P3.1) so assertNoLeak doesn't recompile on each call.
+const LEAK_TRIPWIRE_RE = new RegExp(
+  `${LEAK_TRIPWIRE_PEM_REGEX}|${LEAK_TRIPWIRE_PEM_B64_REGEX}|${LEAK_TRIPWIRE_JWT_REGEX}`,
+);
+
 export class LeakDetectedError extends Error {
   constructor(label: string, matched: string) {
     super(`Leak tripwire fired at '${label}': pattern ${matched}`);
@@ -112,13 +121,32 @@ export class LeakDetectedError extends Error {
  * refactor that adds a new emission path MUST also route through this gate.
  */
 export function assertNoLeak(label: string, s: string): void {
-  const re = new RegExp(
-    `${LEAK_TRIPWIRE_PEM_REGEX}|${LEAK_TRIPWIRE_PEM_B64_REGEX}|${LEAK_TRIPWIRE_JWT_REGEX}`,
-  );
-  const m = s.match(re);
+  const m = s.match(LEAK_TRIPWIRE_RE);
   if (m) {
     throw new LeakDetectedError(label, m[0].slice(0, 16) + "...");
   }
+}
+
+/**
+ * Wrap a raw error before passing it to `reportSilentFallback`. If the
+ * `.message` carries a PEM/JWT shape from an upstream library, replace it
+ * with a redaction marker so Sentry never sees the leaked bytes. The
+ * tripwire branch downstream still flips `leakDetected` separately.
+ *
+ * P2.1: previously every catch fed raw upstream errors through Sentry,
+ * which could leak PEM bytes if @octokit/auth-app's error message ever
+ * included the key body. This is a defensive ban on raw .message
+ * forwarding to the observability pipe.
+ */
+function redactedError(e: unknown): Error {
+  const orig = e instanceof Error ? e : new Error(String(e));
+  const msg = orig.message ?? "";
+  if (LEAK_TRIPWIRE_RE.test(msg)) {
+    const redacted = new Error("[REDACTED — error message contained PEM/JWT shape]");
+    redacted.name = orig.name;
+    return redacted;
+  }
+  return orig;
 }
 
 // =============================================================================
@@ -148,101 +176,58 @@ function makeFailure(
 }
 
 // =============================================================================
-// Manifest-diff spawn helper (AC8)
+// Manifest-diff routing (in-process now, no spawn) — AC8
 // =============================================================================
 
-interface DiffOutcome {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function runManifestDiff(
-  manifestFile: string,
-  responseFile: string,
-): Promise<DiffOutcome> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("bash", ["bin/diff-github-app-manifest.sh"], {
-      env: {
-        ...process.env,
-        MANIFEST_FILE: manifestFile,
-        RESPONSE_FILE: responseFile,
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on?.("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on?.("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", (err: Error) => reject(err));
-    child.on("close", (code: number | null) => {
-      resolve({ exitCode: code ?? -1, stdout, stderr });
-    });
-  });
-}
-
-function routeManifestDiff(
-  outcome: DiffOutcome,
+/**
+ * Map the pure manifest-diff TS module's result to a DriftResult.
+ *
+ * `scopePrefix === "installation_"` causes the failure-mode names to be
+ * prefixed to preserve the existing routing taxonomy (installation_* family).
+ * `installId` decorates the detail string with the installation id for
+ * operator triage.
+ */
+function routeDiffResult(
+  result: ManifestDiffResult,
   scopePrefix: "" | "installation_",
   installId?: string,
 ): DriftResult | null {
-  if (outcome.exitCode === 0) return null;
-  if (outcome.exitCode === 2) {
-    return makeFailure(
-      "manifest_diff_unknown_mode",
-      `diff-github-app-manifest exited 2 stderr: ${outcome.stderr.slice(0, 200)}`,
-      "ci/guard-broken",
-    );
-  }
-  // exit-1: `<mode>:<details>` on stdout. Use indexOf to split at first ":".
-  const out = outcome.stdout.trim();
-  const sep = out.indexOf(":");
-  const mode = sep === -1 ? out : out.slice(0, sep);
-  const detail = sep === -1 ? "" : out.slice(sep + 1);
+  if (result.kind === "ok") return null;
   const installSuffix = installId ? `installation_id=${installId} ` : "";
-  switch (mode) {
+  switch (result.kind) {
     case "permission_drift":
       if (scopePrefix === "installation_") {
         return makeFailure(
           "installation_permission_drift",
-          `${installSuffix}${detail}`,
+          `${installSuffix}${result.detail}`,
           "ci/auth-broken",
         );
       }
-      return makeFailure("permission_drift", detail, "ci/auth-broken");
+      return makeFailure("permission_drift", result.detail, "ci/auth-broken");
     case "permission_unexpected_grant":
       if (scopePrefix === "installation_") {
         return makeFailure(
           "installation_unexpected_grant",
-          `${installSuffix}${detail}`,
+          `${installSuffix}${result.detail}`,
           "ci/guard-broken",
         );
       }
       return makeFailure(
         "permission_unexpected_grant",
-        detail,
+        result.detail,
         "ci/guard-broken",
       );
     case "response_shape_unparseable":
       if (scopePrefix === "installation_") {
         return makeFailure(
           "installation_response_shape_unparseable",
-          `${installSuffix}${detail}`,
+          `${installSuffix}${result.detail}`,
           "ci/guard-broken",
         );
       }
       return makeFailure(
         "response_shape_unparseable",
-        detail,
-        "ci/guard-broken",
-      );
-    default:
-      return makeFailure(
-        `${scopePrefix}manifest_diff_unknown_mode`,
-        `${installSuffix}diff_rc=${outcome.exitCode} out=${out}`,
+        result.detail,
         "ci/guard-broken",
       );
   }
@@ -408,84 +393,96 @@ async function probeDriftGuard(args: {
     );
   }
 
-  // --- Manifest-diff (App-level) ---
+  // --- Manifest-diff (App-level + per-installation) ---
   const suppress = await readSuppression(new Date());
-  if (suppress.warning) logger.warn({ fn: "cron-github-app-drift-guard" }, suppress.warning);
+  if (suppress.warning) {
+    // P2.2: the operator-written suppression-warning string is bounded but
+    // could in theory be tampered with. Gate it through the leak tripwire
+    // so an attacker who lands a PEM into the file can't smuggle it into
+    // the pino log via this code path.
+    assertNoLeak("suppress-warning", suppress.warning);
+    logger.warn({ fn: "cron-github-app-drift-guard" }, suppress.warning);
+  }
 
-  let tempDir: string | null = null;
+  // P3.4: single existsSync read (was twice — wasteful + race-y).
+  const manifestPresent = existsSync(MANIFEST_FILE);
+  if (suppress.active || !manifestPresent) {
+    return EMPTY_RESULT;
+  }
+
+  // Read manifest ONCE. Parse failures are an operator-fixable inventory bug,
+  // not a drift signal — route to ci/guard-broken via a dedicated failure mode.
+  let manifest: AppManifest;
   try {
-    tempDir = await mkdtemp(path.join(tmpdir(), "drift-guard-"));
-    const responseFile = path.join(tempDir, "app-response.json");
-    await writeFile(responseFile, JSON.stringify(appData));
+    const raw = await readFile(MANIFEST_FILE, "utf-8");
+    manifest = JSON.parse(raw) as AppManifest;
+  } catch (err) {
+    const e = err as Error;
+    return makeFailure(
+      "manifest_unparseable",
+      `Could not read/parse ${MANIFEST_FILE}: ${e.name}: ${e.message}`,
+      "ci/guard-broken",
+    );
+  }
 
-    if (!suppress.active && existsSync(MANIFEST_FILE)) {
-      const diff = await runManifestDiff(MANIFEST_FILE, responseFile);
-      const routed = routeManifestDiff(diff, "");
-      if (routed) return routed;
-    }
+  // App-level diff: feed parsed /app body directly to the pure diff module.
+  {
+    const result = diffGithubAppManifest(manifest, {
+      permissions: appData.permissions,
+      events: appData.events,
+    });
+    const routed = routeDiffResult(result, "");
+    if (routed) return routed;
+  }
 
-    // --- Installation iteration (AC10) ---
-    if (!suppress.active && existsSync(MANIFEST_FILE)) {
-      let installRes: {
-        data: unknown;
-        headers: Record<string, string | undefined>;
-      };
-      try {
-        const r = await octokit.request("GET /app/installations", {
-          per_page: 100,
-        });
-        installRes = {
-          data: r.data,
-          headers: (r.headers ?? {}) as Record<string, string | undefined>,
-        };
-      } catch (err) {
-        const e = err as Error & { status?: number };
-        return makeFailure(
-          "installation_api_http",
-          `GET /app/installations -> HTTP ${e.status ?? "network_error"}`,
-          "ci/guard-broken",
-        );
-      }
-      const linkHeader = installRes.headers.link ?? "";
-      if (linkHeader.includes('rel="next"')) {
-        return makeFailure(
-          "installation_list_truncated",
-          'GET /app/installations returned a paginated response (Link: rel="next" present); per-page bump or pagination loop required',
-          "ci/guard-broken",
-        );
-      }
-      if (!Array.isArray(installRes.data)) {
-        return makeFailure(
-          "installation_list_shape_unparseable",
-          "GET /app/installations response root is not an array",
-          "ci/guard-broken",
-        );
-      }
-      for (const install of installRes.data as Array<{
-        id?: number;
-        permissions?: Record<string, string>;
-        events?: string[];
-      }>) {
-        const installId = install.id ? String(install.id) : "unknown";
-        const synth = {
-          permissions: install.permissions ?? {},
-          events: install.events ?? [],
-        };
-        const installFile = path.join(tempDir, `install-${installId}.json`);
-        await writeFile(installFile, JSON.stringify(synth));
-        const diff = await runManifestDiff(MANIFEST_FILE, installFile);
-        const routed = routeManifestDiff(diff, "installation_", installId);
-        if (routed) return routed;
-      }
-    }
-  } finally {
-    if (tempDir) {
-      try {
-        await rm(tempDir, { recursive: true, force: true });
-      } catch {
-        /* best-effort */
-      }
-    }
+  // --- Installation iteration (AC10) ---
+  let installRes: {
+    data: unknown;
+    headers: Record<string, string | undefined>;
+  };
+  try {
+    const r = await octokit.request("GET /app/installations", {
+      per_page: 100,
+    });
+    installRes = {
+      data: r.data,
+      headers: (r.headers ?? {}) as Record<string, string | undefined>,
+    };
+  } catch (err) {
+    const e = err as Error & { status?: number };
+    return makeFailure(
+      "installation_api_http",
+      `GET /app/installations -> HTTP ${e.status ?? "network_error"}`,
+      "ci/guard-broken",
+    );
+  }
+  const linkHeader = installRes.headers.link ?? "";
+  if (linkHeader.includes('rel="next"')) {
+    return makeFailure(
+      "installation_list_truncated",
+      'GET /app/installations returned a paginated response (Link: rel="next" present); per-page bump or pagination loop required',
+      "ci/guard-broken",
+    );
+  }
+  if (!Array.isArray(installRes.data)) {
+    return makeFailure(
+      "installation_list_shape_unparseable",
+      "GET /app/installations response root is not an array",
+      "ci/guard-broken",
+    );
+  }
+  for (const install of installRes.data as Array<{
+    id?: number;
+    permissions?: Record<string, string>;
+    events?: string[];
+  }>) {
+    const installId = install.id ? String(install.id) : "unknown";
+    const result = diffGithubAppManifest(manifest, {
+      permissions: install.permissions ?? {},
+      events: install.events ?? [],
+    });
+    const routed = routeDiffResult(result, "installation_", installId);
+    if (routed) return routed;
   }
 
   return EMPTY_RESULT;
@@ -720,17 +717,13 @@ export async function cronGithubAppDriftGuardHandler({
   leakDetected: boolean;
 }> {
   let leakDetected = false;
-  let leakReason = "";
 
   // Step 1: drift-check (env guards + /app + manifest-diff + install-diff).
+  // App-level JWT Octokit — the only auth that hits GET /app + GET /app/installations.
   let result: DriftResult = EMPTY_RESULT;
   try {
     result = await step.run("drift-check", async (): Promise<DriftResult> => {
-      const { octokit, appJwt } = await createAppJwtOctokit();
-      // Drop the JWT into a guarded path: never emit it. Stored in a const
-      // referenced only inside the probe; assertNoLeak guards downstream
-      // emission sites.
-      void appJwt;
+      const { octokit } = await createAppJwtOctokit();
       return await probeDriftGuard({
         octokit: octokit as unknown as Octokit,
         logger,
@@ -739,15 +732,14 @@ export async function cronGithubAppDriftGuardHandler({
   } catch (err) {
     if (err instanceof LeakDetectedError) {
       leakDetected = true;
-      leakReason = err.message;
     } else {
-      const e = err as Error;
-      reportSilentFallback(e, {
+      reportSilentFallback(redactedError(err), {
         feature: "cron-github-app-drift-guard",
         op: "probeDriftGuard",
         message: "Drift probe threw — converting to github_api_network",
         extra: { fn: "cron-github-app-drift-guard" },
       });
+      const e = err as Error;
       result = makeFailure(
         "github_api_network",
         `probeDriftGuard threw: ${e.name}: ${e.message}`,
@@ -757,14 +749,24 @@ export async function cronGithubAppDriftGuardHandler({
   }
 
   const detectedAtIso = new Date().toISOString();
-  const runUrl = "https://github.com/jikig-ai/soleur/actions";
+  // P2.3: previously a dead GHA actions URL. The drift-guard now lives in
+  // Inngest + Sentry Crons, so point operator triage at the Sentry monitor.
+  const runUrl =
+    "https://de.sentry.io/organizations/jikigai-eu/crons/scheduled-github-app-drift-guard/";
   const runbookUrl =
     "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/ops/runbooks/github-app-drift.md";
 
   // Step 2: issue-handling — failure / leak / recovery paths.
+  //
+  // Sharp-Edge #2 (TR9 PR-4 plan): issue ops MUST use an installation-scoped
+  // Octokit. The app-level JWT (correct for /app + /app/installations) 404s
+  // on /repos/{owner}/{repo}/issues — the JWT has no installation context to
+  // bind a repo write to. `createProbeOctokit()` discovers the installation
+  // for jikig-ai/soleur and returns an installation-scoped client. Mirror of
+  // cron-oauth-probe.ts's same split.
   await step.run("issue-handling", async () => {
     try {
-      const { octokit } = await createAppJwtOctokit();
+      const octokit = await createProbeOctokit();
       if (leakDetected) {
         await handleLeakIssue({
           octokit: octokit as unknown as Octokit,
@@ -784,7 +786,6 @@ export async function cronGithubAppDriftGuardHandler({
           if (innerErr instanceof LeakDetectedError) {
             // assertNoLeak inside handleFailureIssue tripped — file leak issue.
             leakDetected = true;
-            leakReason = innerErr.message;
             await handleLeakIssue({
               octokit: octokit as unknown as Octokit,
               detectedAtIso,
@@ -796,8 +797,7 @@ export async function cronGithubAppDriftGuardHandler({
         }
       }
     } catch (err) {
-      const e = err as Error;
-      reportSilentFallback(e, {
+      reportSilentFallback(redactedError(err), {
         feature: "cron-github-app-drift-guard",
         op: "handleIssue",
         message: "GitHub tracking-issue file/comment/close failed",
@@ -818,10 +818,8 @@ export async function cronGithubAppDriftGuardHandler({
       } catch (err) {
         if (err instanceof LeakDetectedError) {
           leakDetected = true;
-          leakReason = err.message;
         } else {
-          const e = err as Error;
-          reportSilentFallback(e, {
+          reportSilentFallback(redactedError(err), {
             feature: "cron-github-app-drift-guard",
             op: "notifyOpsEmail",
             message: "Resend HTTP POST failed",
@@ -835,7 +833,6 @@ export async function cronGithubAppDriftGuardHandler({
       }
     });
   }
-  void leakReason;
 
   // Step 4: sentry-heartbeat — single end-of-job POST.
   await step.run("sentry-heartbeat", async () => {
@@ -870,15 +867,14 @@ export async function cronGithubAppDriftGuardHandler({
         signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
       });
     } catch (err) {
-      const e = err as Error;
-      reportSilentFallback(e, {
+      reportSilentFallback(redactedError(err), {
         feature: "cron-sentry-heartbeat",
         op: "fetch",
         message: "Sentry Crons heartbeat POST failed",
         extra: {
           fn: "cron-github-app-drift-guard",
           status,
-          aborted: e.name === "TimeoutError",
+          aborted: (err as Error).name === "TimeoutError",
         },
       });
     }
@@ -913,20 +909,12 @@ export const cronGithubAppDriftGuard = inngest.createFunction(
   >[2],
 );
 
-// Test surface — exported only for vitest.
+// Test surface — exported only for vitest. Pruned (P2.6) to the 4 constants
+// + assertNoLeak the tests actually consume; all other helpers are now
+// internal and exercised through the public handler entry point.
 export const __TESTING__ = {
   assertNoLeak,
-  probeDriftGuard,
-  readSuppression,
-  runManifestDiff,
-  routeManifestDiff,
-  handleFailureIssue,
-  handleLeakIssue,
-  notifyOpsEmail,
-  buildFailureIssueBody,
-  buildLeakIssueBody,
-  SENTRY_MONITOR_SLUG,
-  ISSUE_TITLE_AUTH_BROKEN,
-  ISSUE_TITLE_GUARD_BROKEN,
-  ISSUE_TITLE_LEAK_SUSPECTED,
+  LEAK_TRIPWIRE_PEM_REGEX,
+  LEAK_TRIPWIRE_PEM_B64_REGEX,
+  LEAK_TRIPWIRE_JWT_REGEX,
 };

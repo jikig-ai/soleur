@@ -28,8 +28,8 @@
 # apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts:
 # App-declared-vs-manifest (existing block) and installation-grant-vs-manifest
 # (the class that produced #4173 — checked in the same handler, reusing the
-# same App-JWT via createAppJwtOctokit() and the same bin/diff-github-app-manifest.sh
-# contract).
+# same App-JWT via createAppJwtOctokit() and the pure-TS manifest diff at
+# apps/web-platform/server/github/manifest-diff.ts).
 #
 # Why ignore_changes on the 2 operator-supplied secrets: rotation via the
 # Doppler UI is invisible to subsequent `terraform plan` (the provider
