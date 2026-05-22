@@ -57,6 +57,23 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # depth>1 so git diff origin/main...HEAD populates for the
+          # FK-precondition lint (Delta 2 of issue 4325 hardening).
+          fetch-depth: 2
+
+      # FK-precondition lint (Delta 2 of issue 4325 hardening). Static
+      # PR-diff check: every new/modified migration with a cross-file
+      # REFERENCES public.<table> must include a to_regclass precondition
+      # per the schema-vs-ledger drift learning. Runs early (no Doppler /
+      # DB needed) so a malformed migration short-circuits before the
+      # costly dev apply. Pairs with MIGRATION_SCHEMA_PRECONDITION_PROBE
+      # (default-on per Delta 4) — PR-time prevention vs apply-time defense.
+      # No untrusted github.event.* inputs interpolated; safe per
+      # GitHub Actions injection guidance.
+      - name: Lint migration FK preconditions
+        working-directory: apps/web-platform
+        run: bash scripts/lint-migration-fk-preconditions.sh --from-pr-diff
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
