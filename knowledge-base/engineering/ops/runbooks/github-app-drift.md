@@ -198,42 +198,49 @@ needs to be greened.
 
 ### `security/leak-suspected` — credential exposure
 
-The post-step grep matched `BEGIN [A-Z ]*PRIVATE KEY` or
-`eyJ[A-Za-z0-9_-]{20,}` in the captured step output. **Treat as a real
-leak until proven otherwise** — the false-positive rate of these
-anchored patterns is near-zero in practice.
+The handler's `assertNoLeak()` pre-emission scanner matched
+`BEGIN [A-Z ]*PRIVATE KEY`, `LS0tLS1CRUdJTi[A-Za-z0-9+/]`, or
+`eyJ[A-Za-z0-9_-]{20,}` in a string about to be emitted (issue body,
+issue comment, Resend body/subject, or — via `redactedError()` — a
+Sentry breadcrumb). **Treat as a real leak until proven otherwise** —
+the false-positive rate of these anchored patterns is near-zero.
 
-1. **Inspect the run log without re-leaking.** Both paths are
-   equivalent — both go through GitHub's authenticated log API:
+1. **Inspect the Inngest run output without re-leaking.** The handler
+   runs on the self-hosted Inngest VM; the run trace is reachable via
+   the Inngest dashboard OR the journalctl stream:
 
    ```bash
-   # CLI path (agent or operator):
-   gh run view <run-id> --log | \
-     grep -E 'BEGIN [A-Z ]*PRIVATE KEY|LS0tLS1CRUdJTi[A-Za-z0-9+/]|eyJ[A-Za-z0-9_-]{20,}' | \
-     head -n 5
+   # SSH-free path (preferred per hr-no-ssh-fallback-in-runbooks):
+   # query Better Stack for the inngest-server log stream around the
+   # firing timestamp, filtering for the run-id from the Sentry
+   # `?status=error` heartbeat breadcrumb.
+   #
+   # Fallback (operator-with-SSH only, when Better Stack is unavailable):
+   #   journalctl -u inngest-server.service --since "<UTC-timestamp>" \
+   #     | grep -E 'BEGIN [A-Z ]*PRIVATE KEY|LS0tLS1CRUdJTi[A-Za-z0-9+/]|eyJ[A-Za-z0-9_-]{20,}' \
+   #     | head -n 5
    ```
-
-   Or open the GitHub Actions UI for the same run.
 
    **Do NOT paste matched lines into the issue, ticket, PR body, or
    any other persistent surface** — the goal is to identify the leak
    vector, not to re-leak. Snippets in chat (e.g., for triage) are
    acceptable only if scrubbed of the actual key bytes.
 2. **Identify what leaked.** Common modes:
-   - PEM block: the masking step (`::add-mask::` per-line) failed,
-     OR a `set -x`/`-e` was added to the drift-check step.
-   - JWT segment: the `JWT=$(mint_jwt)` capture or the curl auth header
-     bypassed the mask. Less common; usually means a future PR added
-     `echo "$JWT"` somewhere.
-3. **Rule out the self-leak class first.** The drift step's
-   `tee -a step-output.log` captures the workflow's own
-   `::add-mask::<line>` registrations BEFORE the runner consumes them.
-   The tripwire pre-filters lines starting with `::` (runner directives)
-   for exactly this reason — those are mask REGISTRATIONS, not leaks.
-   If the tripwire fires and the `LOG` matches are all
-   `::add-mask::…`-prefixed lines, the pre-filter has been removed or
-   broken. Re-add the `grep -v '^::' "$LOG"` pre-filter and re-run; do
-   NOT rotate the key for a self-leak.
+   - PEM block: a future code change added a `console.log` / `logger.*` /
+     `Sentry.captureMessage` / Resend body interpolation that bypassed
+     `assertNoLeak()` and concatenated the operator's private key into
+     handler-emitted output.
+   - JWT segment: a future change destructured `appJwt` from
+     `@octokit/app`'s internal auth helper and serialized it into an
+     emission path. Less common; the `createAppJwtOctokit()` helper
+     deliberately doesn't expose the JWT to the handler.
+3. **Sentry breadcrumb path.** `reportSilentFallback` routes through
+   `redactedError()` which substitutes any leak-shaped `Error.message`
+   with `[REDACTED — error message contained PEM/JWT shape]`. A leak
+   reaching Sentry implies the redactor was bypassed (e.g., new code
+   called `Sentry.captureException` directly) — grep the diff for
+   `Sentry.capture*` and `reportSilentFallback` and verify every call
+   is gated.
 4. **Rotate the GitHub App private key immediately.** Follow the
    Rotation procedure below. Do not wait for IR triage.
 5. **Patch the leak vector.** Find the offending line in the workflow
