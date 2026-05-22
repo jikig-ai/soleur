@@ -269,11 +269,14 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # are the canonical FK pattern within a single migration; the probe
   # must only catch CROSS-FILE dependencies.
   #
-  # Best-effort: opt-in via MIGRATION_SCHEMA_PRECONDITION_PROBE=1. The
-  # FK parser remains the last line of defense when the env is unset OR
-  # when the probe's regex can't see the dependency (dynamic SQL,
-  # function-body SELECTs, view dependencies, etc.).
-  if [[ "${MIGRATION_SCHEMA_PRECONDITION_PROBE:-0}" == "1" ]]; then
+  # Best-effort: default-on. Opt out with MIGRATION_SCHEMA_PRECONDITION_PROBE=0
+  # to fall back to the FK parser as the only line of defense. The FK
+  # parser remains the last line of defense regardless of probe state for
+  # dependency shapes the regex can't see (dynamic SQL, function-body
+  # SELECTs, view dependencies, etc.). Default-on per #4325 follow-up:
+  # CI was already setting "=1" in tenant-integration.yml; this brings
+  # operator-local invocations to parity.
+  if [[ "${MIGRATION_SCHEMA_PRECONDITION_PROBE:-1}" == "1" ]]; then
     # Regex assumes the codebase convention: uppercase DDL keywords,
     # lowercase + `public.`-qualified relation names. Shapes outside
     # that convention (lowercase `references`, schema-less `<name>`,
