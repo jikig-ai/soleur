@@ -71,6 +71,16 @@ export interface ByokLeaseArgs {
    * not the workspace owner.
    */
   keyOwnerUserId: UserId;
+  /**
+   * BYOK Delegations PR-A (#4232). Optional delegation row id when the
+   * lease is acting on behalf of a grantor. When set, the cost-writer
+   * routes to `check_and_record_byok_delegation_use` (cap + audit RPC)
+   * instead of `write_byok_audit`, and audit rows attribute the cost
+   * to `grantor_user_id` (or to the caller with
+   * `attribution_shift_reason` on post-grace/expired paths). When
+   * undefined, solo behavior is preserved bit-for-bit.
+   */
+  delegationId?: string;
 }
 
 /**
@@ -201,6 +211,12 @@ export interface ByokLease {
   /** The userId whose `api_keys` row backs this lease (Phase 3). */
   readonly keyOwnerUserId: UserId;
   /**
+   * BYOK Delegations PR-A (#4232). Present when the lease is funded by
+   * an active delegation row; consumed by cost-writer to route the
+   * audit RPC and attach `delegation_id` to the WORM audit row.
+   */
+  readonly delegationId?: string;
+  /**
    * Return the plaintext API key as a string. Lazy-decrypts on first
    * call; subsequent calls within the same scope return the cached
    * plaintext.
@@ -224,6 +240,8 @@ interface LeaseSlot {
   apiKeyBuffer: Buffer | null;
   /** Set false on scope exit. Lease.getApiKey() checks this. */
   alive: boolean;
+  /** BYOK Delegations PR-A (#4232). Threaded through to ByokLease. */
+  delegationId?: string;
 }
 
 const als = new AsyncLocalStorage<LeaseSlot>();
@@ -241,6 +259,7 @@ function makeLease(slot: LeaseSlot): ByokLease {
   return {
     workspaceContextUserId: slot.workspaceContextUserId,
     keyOwnerUserId: slot.keyOwnerUserId,
+    delegationId: slot.delegationId,
     getApiKey(): string | Promise<string> {
       // Synchronous escape check (per type-design F3 — escape must be a
       // sync throw so `expect(() => lease.getApiKey()).toThrow(...)`
@@ -342,6 +361,7 @@ export async function runWithByokLease<T>(
   const slot: LeaseSlot = {
     workspaceContextUserId: args.workspaceContextUserId,
     keyOwnerUserId: args.keyOwnerUserId,
+    delegationId: args.delegationId,
     apiKeyBuffer: null,
     alive: true,
   };
