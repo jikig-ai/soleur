@@ -27,6 +27,7 @@
     "@supabase/ssr": "^0.6.0",
     "@supabase/supabase-js": "^2.49.0",
     "archiver": "^8.0.0",
+    "flagsmith-nodejs": "^8.1.0",
     "gray-matter": "^4.0.3",
     "inngest": "^3.54.2",
     "lucide-react": "^1.8.0",
