@@ -220,7 +220,11 @@ export async function middleware(request: NextRequest) {
           op: "revocation_gate.malformed_jwt",
           extra: { userId: user.id },
         });
-        const params = new URLSearchParams({ revoked: "removed" });
+        // Malformed/no-iat JWT is NOT a removal — emit a neutral
+        // `session-error` reason rather than the user-hostile
+        // "workspace owner removed you" copy (review user-impact P1
+        // #4307). The login-form maps `session-error` to neutral copy.
+        const params = new URLSearchParams({ revoked: "session-error" });
         return clearSessionAndRedirect(request, cspValue, "/login", params);
       }
       if (iatSeconds === null) {
@@ -232,7 +236,11 @@ export async function middleware(request: NextRequest) {
             extra: { userId: user.id },
           },
         );
-        const params = new URLSearchParams({ revoked: "removed" });
+        // Malformed/no-iat JWT is NOT a removal — emit a neutral
+        // `session-error` reason rather than the user-hostile
+        // "workspace owner removed you" copy (review user-impact P1
+        // #4307). The login-form maps `session-error` to neutral copy.
+        const params = new URLSearchParams({ revoked: "session-error" });
         return clearSessionAndRedirect(request, cspValue, "/login", params);
       }
 

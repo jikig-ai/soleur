@@ -144,9 +144,14 @@ describe("migration 064_workspace_member_revocation_lookup", () => {
       expect(body).toMatch(/ERRCODE\s*=\s*'42501'/i);
     });
 
-    it("REVOKEs from all roles and GRANTs EXECUTE TO authenticated", () => {
+    it("REVOKEs from PUBLIC + anon + authenticated (NOT service_role; TS wrapper calls via createServiceClient) and GRANTs EXECUTE TO authenticated", () => {
       expect(executable).toMatch(
-        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.update_workspace_member_role\(uuid,\s+uuid,\s+text\)\s+FROM\s+PUBLIC,\s+anon,\s+authenticated,\s+service_role/i,
+        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.update_workspace_member_role\(uuid,\s+uuid,\s+text\)\s+FROM\s+PUBLIC,\s+anon,\s+authenticated;/i,
+      );
+      // Negative-space gate: service_role MUST NOT be in the REVOKE list
+      // (would strip default EXECUTE → wrapper gets 42501).
+      expect(executable).not.toMatch(
+        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.update_workspace_member_role\(uuid,\s+uuid,\s+text\)\s+FROM[^;]*service_role/i,
       );
       expect(executable).toMatch(
         /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.update_workspace_member_role\(uuid,\s+uuid,\s+text\)\s+TO\s+authenticated/i,

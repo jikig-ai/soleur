@@ -176,12 +176,7 @@ describe("middleware #4307 revocation gate", () => {
     );
   });
 
-  test("malformed JWT (no iat) → 302 /login + Sentry mirror", async () => {
-    mockGetSession.mockResolvedValue({
-      data: { session: { access_token: makeJwt(Math.floor(Date.now() / 1000)).replace("signature", "") + "x" } },
-      error: null,
-    });
-    // The above still has 3 segments; force a non-numeric iat shape:
+  test("malformed JWT (no iat) → 302 /login?revoked=session-error + Sentry mirror", async () => {
     const header = btoa(JSON.stringify({ alg: "ES256" })).replace(/=/g, "");
     const payload = btoa(JSON.stringify({ sub: USER_ID })).replace(/=/g, "");
     mockGetSession.mockResolvedValue({
@@ -191,13 +186,15 @@ describe("middleware #4307 revocation gate", () => {
     const res = await middleware(makeRequest("/dashboard"));
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toContain("/login");
+    // Neutral copy — not user-hostile "owner removed you" attribution.
+    expect(res.headers.get("location")).toContain("revoked=session-error");
     expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ op: "revocation_gate.no_iat" }),
     );
   });
 
-  test("malformed JWT (only 2 segments) → 302 /login + malformed_jwt mirror", async () => {
+  test("malformed JWT (only 2 segments) → 302 /login?revoked=session-error + malformed_jwt mirror", async () => {
     mockGetSession.mockResolvedValue({
       data: { session: { access_token: "only.twoparts" } },
       error: null,
@@ -205,6 +202,7 @@ describe("middleware #4307 revocation gate", () => {
     const res = await middleware(makeRequest("/dashboard"));
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toContain("/login");
+    expect(res.headers.get("location")).toContain("revoked=session-error");
     expect(mockReportEdgeSilentFallback).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ op: "revocation_gate.malformed_jwt" }),

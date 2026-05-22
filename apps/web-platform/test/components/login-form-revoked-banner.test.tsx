@@ -44,6 +44,15 @@ describe("LoginForm #4307 revoked banner", () => {
     expect(banner.textContent).toMatch(/role was updated/i);
   });
 
+  it("renders neutral 'session ended' copy when ?revoked=session-error (NOT user-hostile 'owner removed you')", () => {
+    searchParamsHolder.current = new URLSearchParams("revoked=session-error");
+    render(<LoginForm />);
+    const banner = screen.getByTestId("revoked-banner");
+    expect(banner.textContent).toMatch(/session ended/i);
+    // Negative-space: must NOT show the removal copy for a malformed-JWT user.
+    expect(banner.textContent).not.toMatch(/workspace owner removed/i);
+  });
+
   it("renders NO banner when ?revoked is absent", () => {
     searchParamsHolder.current = new URLSearchParams();
     render(<LoginForm />);

@@ -67,6 +67,16 @@ CREATE FUNCTION public.check_my_revocation(p_jwt_iat timestamptz)
   SET search_path = public, pg_temp
 AS $$
 BEGIN
+  -- Defense-in-depth: under SECURITY DEFINER context, a future caller
+  -- invoking us with a forged JWT lacking `sub` (or under service_role
+  -- which sets auth.uid()=NULL) would silently fall-open returning
+  -- revoked=false (predicate `removed_user_id = NULL` matches no rows).
+  -- Fail explicit instead. The middleware passes a user-bound supabase
+  -- client so this branch is unreachable on the happy path.
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'auth.uid() is NULL — caller must be authenticated'
+      USING ERRCODE = '28000';
+  END IF;
   -- User-global predicate (F5): any revocation for auth.uid() with
   -- revoked_after STRICTLY AFTER the JWT's issued-at. Strict `>` absorbs
   -- ±1s clock skew on the safer (deny) side per AC6.
@@ -222,15 +232,11 @@ BEGIN
       USING ERRCODE = '28000';
   END IF;
 
-  -- F2: actor attribution so the PA-20 §(g)(3) audit-trigger writes the
-  -- actor instead of NULL (orphan-audit-row → Sentry alert per PA-20 §(g)(5)).
-  PERFORM set_config('workspace_audit.actor_user_id', v_caller_user_id::text, true);
-
-  IF p_new_role NOT IN ('owner', 'member') THEN
-    RAISE EXCEPTION 'invalid role; must be owner or member'
-      USING ERRCODE = 'P0001';
-  END IF;
-
+  -- Authorize FIRST so unauthenticated/unauthorised callers cannot probe
+  -- the role enum (security-sentinel P3-2 #4307 review). Owner-check
+  -- runs before role-validation; role-validation before any work; F2
+  -- actor-attribution after authorization so the GUC only sets for
+  -- callers who would actually proceed.
   IF NOT EXISTS (
     SELECT 1 FROM public.workspace_members
     WHERE workspace_id = p_workspace_id
@@ -240,6 +246,31 @@ BEGIN
     RAISE EXCEPTION 'caller is not an owner of workspace %', p_workspace_id
       USING ERRCODE = '42501';
   END IF;
+
+  IF p_new_role NOT IN ('owner', 'member') THEN
+    RAISE EXCEPTION 'invalid role; must be owner or member'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- Mirror remove_workspace_member's AC-FLOW4 guards (security-sentinel
+  -- P2-1 #4307 review): owner cannot self-mutate role, and demoting the
+  -- last owner would administratively lock the workspace (every
+  -- owner-gated RPC then returns 42501 for everyone).
+  IF v_caller_user_id = p_user_id THEN
+    RAISE EXCEPTION 'owner cannot change their own role; transfer ownership via add+remove flow'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_new_role = 'member' AND (
+    SELECT count(*) FROM public.workspace_members
+     WHERE workspace_id = p_workspace_id AND role = 'owner'
+  ) <= 1 THEN
+    RAISE EXCEPTION 'cannot demote the last owner of workspace %', p_workspace_id
+      USING ERRCODE = '22023';
+  END IF;
+
+  -- F2: actor attribution so the PA-20 §(g)(3) audit-trigger writes the
+  -- actor instead of NULL (orphan-audit-row → Sentry alert per PA-20 §(g)(5)).
+  PERFORM set_config('workspace_audit.actor_user_id', v_caller_user_id::text, true);
 
   UPDATE public.workspace_members
      SET role = p_new_role
@@ -275,8 +306,15 @@ BEGIN
 END;
 $$;
 
+-- REVOKE matrix MUST omit service_role (matches mig 062's
+-- remove_workspace_member at 062:344). The TS wrapper
+-- `updateWorkspaceMemberRole` in server/workspace-membership.ts calls
+-- via `createServiceClient()`; revoking service_role's default EXECUTE
+-- would yield 42501 at first call. Stripping service_role here is a
+-- self-inflicted production outage (review pattern-recognition + security-
+-- sentinel P1, #4307 review).
 REVOKE ALL ON FUNCTION public.update_workspace_member_role(uuid, uuid, text)
-  FROM PUBLIC, anon, authenticated, service_role;
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.update_workspace_member_role(uuid, uuid, text)
   TO authenticated;
 
