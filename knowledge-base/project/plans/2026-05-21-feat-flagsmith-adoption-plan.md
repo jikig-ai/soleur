@@ -5,7 +5,14 @@ date: 2026-05-21
 branch: feat-flagsmith-adoption
 predecessor: knowledge-base/project/specs/feat-feature-flag-provider/spec.md
 predecessor-brainstorm: knowledge-base/project/brainstorms/2026-04-16-runtime-feature-flags-brainstorm.md
-status: draft (awaiting user approval before code)
+status: SUPERSEDED — see `2026-05-22-feat-flagsmith-adoption-plan-v2.md`
+superseded-by: knowledge-base/project/plans/2026-05-22-feat-flagsmith-adoption-plan-v2.md
+---
+
+# Plan: Adopt Flagsmith SaaS for runtime feature flags (SUPERSEDED)
+
+> **Superseded 2026-05-22.** This plan was written assuming global-boolean flags (one Flagsmith value per flag, same for every user). Implementation surfaced the operator's actual requirement: progressive rollout to a reduced group of testers defined by role. The v2 plan rewrites the API to be identity-aware with per-role segmentation. The plan kept here as historical record of the design that didn't survive contact with the requirement; original body follows for reference.
+
 ---
 
 # Plan: Adopt Flagsmith SaaS for runtime feature flags

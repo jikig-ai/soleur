@@ -4,6 +4,10 @@ import { SwRegister } from "./sw-register";
 import { NoFoucScript } from "@/components/theme/no-fouc-script";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { DynamicThemeColor } from "@/components/theme/dynamic-theme-color";
+import { FeatureFlagProvider } from "@/components/feature-flags/provider";
+import { getFeatureFlags } from "@/lib/feature-flags/server";
+import { resolveIdentity } from "@/lib/feature-flags/identity";
+import { createClient as createSupabaseServerClient } from "@/lib/supabase/server";
 import { sans } from "./fonts";
 import "./globals.css";
 
@@ -40,6 +44,9 @@ export default async function RootLayout({
   // scripts, inline scripts, and styles automatically.
   const headerList = await headers();
   const nonce = headerList.get("x-nonce") ?? undefined;
+  const supabase = await createSupabaseServerClient();
+  const identity = await resolveIdentity(supabase);
+  const flags = await getFeatureFlags(identity);
 
   return (
     // suppressHydrationWarning: the <NoFoucScript> below writes
@@ -62,7 +69,7 @@ export default async function RootLayout({
         <ThemeProvider>
           <DynamicThemeColor />
           <SwRegister />
-          {children}
+          <FeatureFlagProvider flags={flags}>{children}</FeatureFlagProvider>
         </ThemeProvider>
       </body>
     </html>
