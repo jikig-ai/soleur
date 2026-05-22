@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, test, expect } from "vitest";
+import { TC_BUMP_METADATA } from "../lib/legal/tc-version";
 
 // Plan AC8 / FR7 (downgraded per RC2): regression-prevention assertion
 // that both the consent surfaces (signup page checkbox + standalone
@@ -55,5 +56,38 @@ describe("accept-terms/page.tsx middleware-outage banner", () => {
 
   test("renders a non-form banner when the outage param is present", () => {
     expect(src.includes('role="status"')).toBe(true);
+  });
+});
+
+// TC_VERSION update banner — structural Art. 13(3) disclosure surface.
+// Page is only reached when middleware detects a tc_accepted_version
+// mismatch; banner is rendered unconditionally for every visitor. The
+// constant TC_BUMP_METADATA.substantiveChange carries the human-readable
+// label of the current bump; the regex below intentionally accepts any
+// non-empty label so the test does not bake in a per-bump literal.
+describe("accept-terms/page.tsx TC_VERSION update banner", () => {
+  const src = readFileSync(ACCEPT_TERMS_PAGE, "utf8");
+
+  test("consumes TC_BUMP_METADATA.substantiveChange (sentence-shaped, ≥10 chars)", () => {
+    expect(src.includes("TC_BUMP_METADATA.substantiveChange")).toBe(true);
+    // Sentence-shaped label: starts with a capital letter or §, no trailing
+    // period (banner template provides the period), at least 10 chars.
+    // Catches empty/garbage labels AND nonsensical interpolations from a
+    // future banner-template rewrite that would break grammatical parsing.
+    expect(TC_BUMP_METADATA.substantiveChange).toMatch(/^[§A-Z][^.]{9,}$/);
+  });
+
+  test("consumes TC_BUMP_METADATA.lastUpdated (canonical Last-Updated date)", () => {
+    expect(src.includes("TC_BUMP_METADATA.lastUpdated")).toBe(true);
+    expect(TC_BUMP_METADATA.lastUpdated).toMatch(/^[A-Z][a-z]+ \d{1,2}, \d{4}$/);
+  });
+
+  test("consumes TC_BUMP_METADATA.fullTermsUrl (full-text disclosure)", () => {
+    expect(src.includes("TC_BUMP_METADATA.fullTermsUrl")).toBe(true);
+    expect(TC_BUMP_METADATA.fullTermsUrl).toContain("terms-and-conditions.html");
+  });
+
+  test('carries data-testid="tc-version-update-banner" for downstream e2e', () => {
+    expect(src.includes('data-testid="tc-version-update-banner"')).toBe(true);
   });
 });

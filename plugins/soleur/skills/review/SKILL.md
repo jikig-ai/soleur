@@ -265,9 +265,22 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `gdpr-gate`: Deterministic Art. 9 / RoPA / lawful-basis pattern checks. Output is advisory-only; Critical findings (Art. 9) escalate to operator-acknowledged write to `compliance-posture.md` Active Items + GitHub issue with label `compliance/critical`.
 
-#### Boundary disambiguation — gdpr-gate vs. data-integrity-guardian vs. security-sentinel {#boundaries}
+**If diff touches multi-org / workspace boundary surfaces:**
 
-Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; use `data-integrity-guardian` for migration safety and judgment-based PII review; use `security-sentinel` for OWASP/CWE security-of-processing flaws. The three reviewers complement each other and may all fire on the same PR — gdpr-gate scans for regulatory-design gaps, data-integrity-guardian scans for ID-mapping and value-swap migration risks, security-sentinel scans for OWASP/CWE vulnerabilities. This is the **canonical disambiguation prose**; sibling agent files reference back here as the single source of truth.
+17. Task identity-rbac-reviewer(PR content) — workspace-keyed RLS predicates, JWT current_organization_id claim consumption, write-boundary sentinel (assertWriteScope-class), session invalidation, SECURITY DEFINER search_path pinning, attestation RPC owner-check.
+
+**When to run identity-rbac-reviewer:**
+
+- Diff modifies any of (path patterns): `apps/web-platform/supabase/migrations/.*\.sql$`, `apps/web-platform/lib/supabase/tenant\.ts`, `apps/web-platform/app/api/(workspace|conversations|kb|messages|attachments|scope-grants|account)/`
+- OR diff content contains any of (anchored content patterns): `\bis_workspace_member\b`, `\bcurrent_organization_id\b`, `\bworkspace_members\b`, `\bset_current_organization_id\b`, `\badd_workspace_member_attestation\b`
+
+**What this agent checks:**
+
+- `identity-rbac-reviewer`: 6-item Day-1 checklist (R1-R6) for multi-org/workspace boundary integrity. Surfaces known gaps in #4304/#4305/#4306/#4307/#4318 as `info`-severity findings on every identity-touching PR until closed. Body lives in `plugins/soleur/agents/engineering/review/identity-rbac-reviewer.md`.
+
+#### Boundary disambiguation — gdpr-gate vs. data-integrity-guardian vs. security-sentinel vs. identity-rbac-reviewer {#boundaries}
+
+Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; use `data-integrity-guardian` for migration safety and judgment-based PII review; use `security-sentinel` for OWASP/CWE security-of-processing flaws; use `identity-rbac-reviewer` for multi-org / workspace boundary integrity (RLS routing through `is_workspace_member()`, JWT `current_organization_id` consumption, attestation owner-checks, SECURITY DEFINER `search_path` pinning, write-boundary sentinel on workspace_id-bearing tables). The four reviewers complement each other and may all fire on the same migration PR — each owns a distinct lens. This is the **canonical disambiguation prose**; sibling agent files reference back here as the single source of truth.
 
 ### Anti-slop Scanner Hook
 

@@ -3,12 +3,20 @@
 # Co-located with inngest-server.service on the Hetzner VM. Provisioned by
 # inngest-bootstrap.sh (binary install) + vector.tf (version pin) +
 # vector.service systemd unit. Doppler `prd` injects BETTERSTACK_LOGS_TOKEN
-# at ExecStart time.
+# + SENTRY_USERID_PEPPER at ExecStart time.
 #
-# Pivot rationale (TR9 PR-5 follow-up, issue #4273): Vector's native
-# `better_stack_logs` sink consistently ingests; vs. Vector's HTTP sink
-# fighting Sentry's envelope format for ~6 PR cycles. Strategic
-# consolidation question (single observability provider) tracked in #4273.
+# Sink shape (#4293): generic HTTP sink against Better Stack is the canonical
+# vendor-recommended pattern (per https://betterstack.com/docs/logs/vector/).
+# The native `better_stack_logs` sink does NOT exist — Vector PR #19274
+# (proposed sink, opened 2023-11-30) was closed unmerged 2025-01-27.
+# Strategic single-provider consolidation question tracked in #4296 (60-day
+# re-decision).
+#
+# PII redaction (#4293): three VRL transforms run before the sink —
+# pii_scrub_drop_userdata (Art-9 user-content key drop) → pii_scrub_structured
+# (userId → userIdHash via HMAC-SHA256 reusing SENTRY_USERID_PEPPER per
+# ADR-029 §I4) → pii_scrub_string (regex backstop for non-pino / kernel-oops
+# lines, runs ONLY when the structured branch did not parse).
 
 data_dir = "/var/lib/vector"
 
@@ -41,13 +49,147 @@ type = "host_metrics"
 scrape_interval_secs = 30
 collectors = ["cpu", "memory", "disk", "filesystem", "load", "network"]
 
+# ---------------- Transform 1/3: drop user-content keys (Art-9) ----------------
+# Pino consumers may carry user-supplied content via `{body, content, message,
+# userMessage, prompt, chat_message, userInput, user_input}` keys (chat
+# messages, AI prompts, support-ticket bodies — Art-9-class fragments per
+# GDPR-gate Crit-5). Drop these AT THE VECTOR BOUNDARY before any HMAC /
+# regex stage so they never reach Better Stack regardless of downstream
+# transform correctness. Top-level only — nested forms (extra.body,
+# ctx.message) are explicitly out-of-scope per ADR-029 §I2 boundary contract.
+# Non-pino lines (kernel oops, raw stderr) fall through to pii_scrub_string.
+[transforms.pii_scrub_drop_userdata]
+type = "remap"
+inputs = ["inngest_journald", "system_journald"]
+source = '''
+.pii_scrub_applied = ""
+parsed, parse_err = parse_json(.message)
+if parse_err == null && is_object(parsed) {
+  parsed_obj = object!(parsed)
+  if exists(parsed_obj.body) { del(parsed_obj.body) }
+  if exists(parsed_obj.content) { del(parsed_obj.content) }
+  if exists(parsed_obj.message) { del(parsed_obj.message) }
+  if exists(parsed_obj.userMessage) { del(parsed_obj.userMessage) }
+  if exists(parsed_obj.prompt) { del(parsed_obj.prompt) }
+  if exists(parsed_obj.chat_message) { del(parsed_obj.chat_message) }
+  if exists(parsed_obj.userInput) { del(parsed_obj.userInput) }
+  if exists(parsed_obj.user_input) { del(parsed_obj.user_input) }
+  .message = encode_json(parsed_obj)
+  .pii_scrub_applied = "drop_userdata"
+}
+'''
+
+# ---------------- Transform 2/3: structured userId → userIdHash (HMAC) -------
+# Defense-in-depth backstop for ADR-029 (pino formatters.log already renames
+# pre-stdout). Top-level userId / user_id ONLY (matches TS hashUserId scope
+# byte-for-byte for string-typed userId values — workspaceId / nested forms
+# are NOT in scope per SF-P0-3. For non-string types (the pino schema does
+# not emit these): VRL falls back to "" via `to_string ?? ""` while TS uses
+# String() coercion; theoretical divergence with no production occurrence.
+# Reuses SENTRY_USERID_PEPPER per ADR-029 §I4 (single source of truth — no
+# separate VRL_HMAC_KEY). HMAC-SHA256 + encode_base16 matches TS
+# crypto.createHmac("sha256", pepper).update(userId).digest("hex").
+# Fail-safe behavior:
+#   - pepper unset → leave raw line, tag `+skipped_pepper_unset`
+#   - null userId → emit `pepper_unset_null` sentinel (matches TS hashUserIdValue)
+#   - preset userIdHash → don't re-hash (defensive idempotence)
+[transforms.pii_scrub_structured]
+type = "remap"
+inputs = ["pii_scrub_drop_userdata"]
+source = '''
+existing_tag = string!(.pii_scrub_applied)
+parsed, parse_err = parse_json(.message)
+if parse_err == null && is_object(parsed) {
+  parsed_obj = object!(parsed)
+  if !exists(parsed_obj.userIdHash) {
+    raw_key = ""
+    raw_value = null
+    if exists(parsed_obj.userId) {
+      raw_key = "userId"
+      raw_value = parsed_obj.userId
+    } else if exists(parsed_obj.user_id) {
+      raw_key = "user_id"
+      raw_value = parsed_obj.user_id
+    }
+    if raw_key != "" {
+      if raw_value == null {
+        parsed_obj.userIdHash = "pepper_unset_null"
+        if raw_key == "userId" { del(parsed_obj.userId) } else { del(parsed_obj.user_id) }
+        existing_tag = existing_tag + "+structured_null_sentinel"
+        .message = encode_json(parsed_obj)
+      } else {
+        pepper, pepper_err = get_env_var("SENTRY_USERID_PEPPER")
+        if pepper_err != null || pepper == "" {
+          existing_tag = existing_tag + "+skipped_pepper_unset"
+        } else {
+          str_value = to_string(raw_value) ?? ""
+          hashed = hmac(str_value, pepper, algorithm: "SHA-256")
+          parsed_obj.userIdHash = encode_base16(hashed)
+          if raw_key == "userId" { del(parsed_obj.userId) } else { del(parsed_obj.user_id) }
+          existing_tag = existing_tag + "+structured"
+          .message = encode_json(parsed_obj)
+        }
+      }
+    }
+  }
+}
+.pii_scrub_applied = existing_tag
+'''
+
+# ---------------- Transform 3/3: string-level scrub (non-pino branch) --------
+# Runs for kernel oops, OOM-killer, and any raw stderr that did NOT parse
+# as JSON in pii_scrub_structured. Guard: if `pii_scrub_applied` already
+# contains "structured" (parse succeeded), SKIP this stage entirely to
+# avoid corrupting a clean JSON payload by re-running regex over the
+# serialised string (per Arch-F2 ordering fix). Trade-off: a kernel-shaped
+# string that happens to be valid JSON with a top-level userId key has its
+# rename applied but its non-rename payload preserved verbatim — accepted
+# per Arch-F2; pii_scrub_drop_userdata already strips the canonical
+# user-content keys at the top of the pipeline.
+#
+# Substring-stripped: userid=<token>, email-shaped substring, Authorization
+# Bearer/Basic value, line-injection control + Unicode-separator chars.
+# OAuth callback paths (`/api/auth/callback/...`) are NOT redacted (UI-F1) —
+# their callback discriminator is load-bearing for operator debugging of
+# real canary-fired incidents, and the structured branch already strips
+# user content via pii_scrub_drop_userdata.
+[transforms.pii_scrub_string]
+type = "remap"
+inputs = ["pii_scrub_structured"]
+source = '''
+tag = string!(.pii_scrub_applied)
+if contains(tag, "structured") {
+  .pii_scrub_applied = tag + "+string_skipped_already_parsed"
+} else {
+  msg = string!(.message)
+  # Length-bound BEFORE regex (per 2026-04-17-pii-regex-scrubber-three-invariants.md Invariant 1)
+  if length(msg) > 10000 {
+    msg = slice!(msg, 0, 10000)
+  }
+  msg = replace(msg, r'(?i)\b(userid|user_id)=[\w-]+', "$${1}=[redacted]")
+  # OAuth query-param redaction (PR #4293 review F2): the /api/auth/callback/...
+  # path carve-out preserves the discriminator but query params can carry
+  # short-lived OAuth tokens (code, state, access_token, id_token, refresh_token).
+  # The path itself is not touched; only the value following =.
+  msg = replace(msg, r'(?i)([?&](code|state|access_token|id_token|refresh_token)=)[^\s&]+', "$${1}[redacted]")
+  msg = replace(msg, r'\b[\w.+\-]+@[\w\-]+\.[\w.\-]+\b', "[email]")
+  msg = replace(msg, r'(?i)(authorization:\s*)bearer\s+\S+', "$${1}Bearer [redacted]")
+  msg = replace(msg, r'(?i)(authorization:\s*)basic\s+\S+', "$${1}Basic [redacted]")
+  msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
+  .message = msg
+  .pii_scrub_applied = tag + "+string"
+}
+'''
+
 # ---------------- Transform: tag journald events for Better Stack ----------------
 # VRL adds a `source_kind` tag so Better Stack's log search can filter by
 # {inngest, system}. Other journald fields (PRIORITY, _SYSTEMD_UNIT,
-# host, message) flow through unchanged.
+# host, message) flow through unchanged. Inputs chain back through the
+# three pii_scrub_* transforms above so every event reaching Better Stack
+# carries a `pii_scrub_applied` audit tag.
 [transforms.tag_journald]
 type = "remap"
-inputs = ["inngest_journald", "system_journald"]
+inputs = ["pii_scrub_string"]
 source = '''
 .source_kind = "journald"
 .shipper = "vector"
@@ -83,20 +225,23 @@ if exists(.gauge.value) {
 '''
 
 # ---------------- Sink: Better Stack Logs via generic http sink ----------------
-# Vector 0.43.1 does NOT have a `better_stack_logs` sink (added in a
-# later release per its sink registry — confirmed via v1.1.7 deploy
-# diagnostic: the unknown-variant error listed every other sink type).
-# Use the generic `http` sink against Better Stack's `https://in.logs.
-# betterstack.com/` ingest endpoint with Bearer auth — same shape the
-# manual curl probe (HTTP 202) used. Each event posts as a JSON object;
-# Better Stack accepts arbitrary JSON shape.
+# Generic HTTP sink is the canonical vendor-recommended pattern
+# (per https://betterstack.com/docs/logs/vector/). The native
+# `better_stack_logs` sink does NOT exist in any Vector release — Vector
+# PR #19274 closed unmerged 2025-01-27.
 #
-# Bumping Vector to a version with the native sink is a separate
-# concern (#4273 substrate-version review).
+# Per-source ingesting host pin (#4293 FR3 / GDPR Art-44 transfer record):
+#   Source ID: 2457081 (name: soleur-inngest-vector-prd)
+#   Region: EU — Hetzner Falkenstein cluster `eu-fsn-3`
+#   Verified 2026-05-22 via authenticated POST probe (eu-fsn-3 → HTTP 202;
+#     eu-nbg-2 → HTTP 401, confirming token cluster-binding).
+#   Better Stack dashboard: https://uptime.betterstack.com/team/<TEAM-ID>/sources/2457081
+#   Allowlist tightened to (eu-nbg-2|eu-fsn-3) — adversary `eu-foo-99`
+#   typosquats are rejected by AC7 grep.
 [sinks.betterstack]
 type = "http"
 inputs = ["tag_journald", "tag_metrics"]
-uri = "https://in.logs.betterstack.com/"
+uri = "https://s2457081.eu-fsn-3.betterstackdata.com/"
 method = "post"
 batch.max_events = 10
 encoding.codec = "json"

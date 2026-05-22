@@ -32,6 +32,8 @@ const DOCS = [
   "privacy-policy",
   "data-protection-disclosure",
   "gdpr-policy",
+  "acceptable-use-policy",
+  "terms-and-conditions",
 ] as const;
 
 /** Strip YAML frontmatter delimited by `---` at the start of the file. */
