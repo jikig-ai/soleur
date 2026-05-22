@@ -100,14 +100,22 @@ describe("DSAR worker per-row WHERE lint (AC30)", () => {
       if (!spec) continue; // not an allowlisted table — out of lint scope
       if (spec.joinVia) continue; // join-via tables checked in next test
 
-      const expected = new RegExp(`\\.eq\\(\\s*["']${spec.ownerField}["']`);
+      // OR-semantic tables (audit logs with actor + target columns)
+      // declare extra owner columns in `additionalOwnerFields`. Each
+      // chain must carry .eq() on AT LEAST ONE of the declared owner
+      // columns. The worker writes one chain per column and merges
+      // results; this lint accepts any of them on a given chain.
+      const ownerFields = [spec.ownerField, ...(spec.additionalOwnerFields ?? [])];
+      const matched = ownerFields.some((col) =>
+        new RegExp(`\\.eq\\(\\s*["']${col}["']`).test(c.chain),
+      );
       expect(
-        expected.test(c.chain),
+        matched,
         `service.from("${c.table}") chain at offset ${c.offset} is missing ` +
-          `\`.eq("${spec.ownerField}", expectedUserId)\`. Per AC30 every ` +
-          `worker read of an allowlisted table MUST carry a positive ` +
-          `per-row predicate over its owner column. Chain snippet: ` +
-          `${c.chain.slice(0, 200)}…`,
+          `\`.eq("<owner>", expectedUserId)\` for any of: ` +
+          `${ownerFields.join(", ")}. Per AC30 every worker read of an ` +
+          `allowlisted table MUST carry a positive per-row predicate over ` +
+          `at least one owner column. Chain snippet: ${c.chain.slice(0, 200)}…`,
       ).toBe(true);
     }
   });

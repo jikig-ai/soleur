@@ -696,6 +696,59 @@ export async function exportSqlTable(
     });
   }
 
+  // -- workspace_member_actions (migration 062, #4231) ------------------
+  // Art. 15: append-only audit log of membership mutations. The user
+  // can be either the actor (owner who added/removed/role-changed
+  // someone) or the target (the affected member). OR-semantics requires
+  // two separate per-row WHERE chains; each chain carries its own .eq()
+  // for the per-row-where lint (AC30). Results merged + deduped by id
+  // before push so a row where both actor and target are the same user
+  // (structurally impossible for v1 RPCs but defensive) is not double-
+  // counted.
+  {
+    const { data: actorRows, error: actorErr } = await service
+      .from("workspace_member_actions")
+      .select("*")
+      .eq("actor_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (actorErr)
+      throw new Error(
+        `workspace_member_actions (actor) read failed: ${actorErr.message}`,
+      );
+    const actorTyped = (actorRows ?? []) as Record<string, unknown>[];
+    assertReadScope(actorTyped, expectedUserId, "workspace_member_actions", {
+      ownerField: "actor_user_id",
+    });
+
+    const { data: targetRows, error: targetErr } = await service
+      .from("workspace_member_actions")
+      .select("*")
+      .eq("target_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (targetErr)
+      throw new Error(
+        `workspace_member_actions (target) read failed: ${targetErr.message}`,
+      );
+    const targetTyped = (targetRows ?? []) as Record<string, unknown>[];
+    assertReadScope(targetTyped, expectedUserId, "workspace_member_actions", {
+      ownerField: "target_user_id",
+    });
+
+    const seen = new Set<string>();
+    const merged: Record<string, unknown>[] = [];
+    for (const row of [...actorTyped, ...targetTyped]) {
+      const id = row.id;
+      if (typeof id !== "string" || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(row);
+    }
+    results.push({
+      table: "workspace_member_actions",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_member_actions,
+      rows: merged,
+    });
+  }
+
   return results;
 }
 
