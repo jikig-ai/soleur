@@ -322,6 +322,52 @@ fi
 rm -rf "$TMP"; trap - EXIT
 
 # ------------------------------------------------------------------------
+# T13b — custom-domain CNAME fallback resolves the project ref.
+#         Prd uses https://api.soleur.ai (CNAME → <ref>.supabase.co); without
+#         the fallback, the strict regex rejects with exit 2.
+# ------------------------------------------------------------------------
+echo "T13b: custom-domain CNAME fallback (PATH-shimmed dig)"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+make_fake_curl "$TMP"
+cat > "$TMP/dig" <<'FAKE_DIG'
+#!/usr/bin/env bash
+# Shim is query-type-aware: only emits when CNAME is in argv (per cq M2 finding,
+# PR #4320 review). Without this, a future switch to `dig +short A` would
+# silently match the same hostname and the test would pass on a now-incorrect
+# contract.
+saw_cname=0
+saw_host=0
+for arg in "$@"; do
+  case "$arg" in
+    CNAME) saw_cname=1 ;;
+    test-custom-domain.example.com) saw_host=1 ;;
+  esac
+done
+if [[ "$saw_cname" == "1" && "$saw_host" == "1" ]]; then
+  printf '%s\n' 'abcdefghijklmnopqrst.supabase.co.'
+fi
+FAKE_DIG
+chmod +x "$TMP/dig"
+set +e
+out=$(PATH="$TMP:$PATH" \
+        CURL_ARGS_FILE="$TMP/args" \
+        CURL_HTTP_CODE=200 \
+        SUPABASE_PAT="sbp_fake" \
+        NEXT_PUBLIC_SUPABASE_URL="https://test-custom-domain.example.com" \
+        bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "0" ]] \
+   && grep -q '/v1/projects/abcdefghijklmnopqrst/database/query' "$TMP/args"; then
+  pass "custom domain resolved via CNAME to canonical project ref"
+else
+  fail "rc=$rc out=$out"
+  cat "$TMP/args" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
 # T14 — endpoint URL is pinned (no SUPABASE_API_HOST env override leakage).
 #       Verifies the security hardening from PR #4286 review.
 # ------------------------------------------------------------------------
