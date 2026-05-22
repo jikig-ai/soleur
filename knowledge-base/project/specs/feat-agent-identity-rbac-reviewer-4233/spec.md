@@ -21,7 +21,7 @@ requires_adr: false
 
 #4229 (team-workspace multi-user) closed on 2026-05-22 (commit `7a922264`), introducing first-class `organizations`, `workspaces`, `workspace_members` primitives, the `is_workspace_member()` SECURITY DEFINER helper, `runtime_cost_state.workspace_id`, RLS rewrites on seven tables, and a feature-flagged invite UI. The `TEAM_WORKSPACE_INVITE_ENABLED` flag is default OFF in prd but the substrate is live.
 
-No existing review agent in `plugins/soleur/agents/engineering/review/` owns the multi-org boundary surface. `security-sentinel` is the OWASP-generalist; auth/sessions are one of its ten chapters. Multi-org-specific concerns — RLS predicate uses `is_workspace_member()`, write sites pass the workspace-keyed sentinel, JWT `org_id` claim is consumed correctly, session invalidation on member-state change — fall through.
+No existing review agent in `plugins/soleur/agents/engineering/review/` owns the multi-org boundary surface. `security-sentinel` is the OWASP-generalist; auth/sessions are one of its ten chapters. Multi-org-specific concerns — RLS predicate uses `is_workspace_member()`, write sites pass the workspace-keyed sentinel, JWT `current_organization_id` claim is consumed correctly, session invalidation on member-state change — fall through.
 
 This issue (#4233) was carried forward from the 2026-04-27 small-team brainstorm and re-affirmed in #4229's brainstorm (2026-05-21) as a deferred follow-up. Re-eval criteria from the issue body: when Enterprise tier scoping begins OR when a multi-org cross-org permission bug ships. The first hasn't fired; the second hasn't fired either — but the substrate is one Doppler flip away from being load-bearing in prd. Building the reviewer before the flag flips is cheaper than splitting `security-sentinel` under incident pressure later.
 
@@ -45,12 +45,12 @@ This issue (#4233) was carried forward from the 2026-04-27 small-team brainstorm
 
 - **FR1.** Agent file frontmatter declares `name: identity-rbac-reviewer`, `model: inherit`, and a `description:` that names the boundary against `security-sentinel`.
 - **FR2.** Agent body contains a checklist covering:
-  - FR2.1: Every RLS policy on a `workspace_id`-bearing table references `is_workspace_member()` (or documents why not).
+  - FR2.1: Every RLS policy on a table containing `workspace_id` (or cascade-routed via a workspace-scoped parent like `messages → attachments`) must reference `public.is_workspace_member(workspace_id, auth.uid())` or document the cascade. Predicate-based, not table-list-based — table lists drift as new workspace-keyed migrations land.
   - FR2.2: Every `INSERT` / `UPDATE` to a workspace-scoped table passes the write-boundary sentinel (per `hr-write-boundary-sentinel-sweep-all-write-sites`).
-  - FR2.3: JWT `org_id` claim is set on org-switch and consumed in every middleware / route that filters by workspace.
-  - FR2.4: Session invalidation fires on `workspace_member` row delete or role change.
-  - FR2.5: SECURITY DEFINER functions touching org/workspace data have `search_path = pg_temp` pinned (per `cq-pg-security-definer-search-path-pin-pg-temp`).
-  - FR2.6: `workspace_member_attestations` writes verify the attester has owner-or-admin role at write time.
+  - FR2.3: JWT `current_organization_id` claim (canonical name per migration 060 Custom Access Token Hook; injected into `app_metadata`) is set on org-switch and consumed in every middleware / route that filters by workspace.
+  - FR2.4: Forward-looking — no current mechanism invalidates a removed member's existing JWT (members retain access until expiry). Agent surfaces this as `info` severity until session-invalidation primitives land; promote to `high` once foundations exist.
+  - FR2.5: SECURITY DEFINER functions touching org/workspace data have `SET search_path = public, pg_temp` pinned (per `cq-pg-security-definer-search-path-pin-pg-temp`).
+  - FR2.6: `workspace_member_attestations` writes verify the caller has `role = 'owner'` on the target workspace at write time (canonical: `add_workspace_member_attestation` RPC, migration 058 lines 198-207). The schema does not currently define an 'admin' role.
 - **FR3.** Agent body contains an empty `## Future: Enterprise SSO/SAML/SCIM` section with a one-line note pointing to re-eval trigger (a).
 - **FR4.** `plugins/soleur/skills/review/SKILL.md` dispatch table includes a row routing identity-touching diffs to `identity-rbac-reviewer`. Dispatch pattern matches diffs touching: `apps/web-platform/supabase/migrations/`, `lib/supabase/tenant.ts`, `app/api/**/workspace*`, RLS policy file changes.
 - **FR5.** Plugin manifest (`plugins/soleur/plugin.json`) description includes the new agent count.
@@ -82,7 +82,7 @@ The agent itself is internal tooling, but its quality directly governs whether t
 1. **Cross-tenant data read** — mis-written RLS predicate uses `auth.uid()` directly instead of `is_workspace_member()`; org A reads org B's KB/conversations/messages.
 2. **Cross-tenant data write** — write site bypasses the workspace-keyed sentinel; row inserted under wrong `workspace_id`.
 3. **Stale session privilege** — workspace_member removed but their existing JWT still passes `is_workspace_member()` until expiry; unauthorized reads/writes during the window.
-4. **JWT claim impersonation** — org-switch endpoint accepts client-supplied `org_id` without verifying membership; privilege escalation to any org the user names.
+4. **JWT claim impersonation** — org-switch endpoint accepts a client-supplied target org (the canonical claim is `current_organization_id`) without verifying membership via `workspace_members`; privilege escalation to any org the user names.
 
 False-negative review (the agent passes a PR that ships one of these) IS the brand-survival event. The `user-impact-reviewer` agent at PR review remains the load-bearing gate; this agent adds defense-in-depth at the diff-level review.
 
