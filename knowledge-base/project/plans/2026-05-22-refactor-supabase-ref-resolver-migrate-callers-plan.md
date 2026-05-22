@@ -11,6 +11,23 @@ requires_cpo_signoff: false
 
 Closes #4323. Refs PR #4320 (parent extraction).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-22
+**Sections enhanced:** Overview, Acceptance Criteria, Files to Edit, Risks, Test Strategy
+**Research lenses applied:** node:dns API surface (verified `@types/node` v22.x), vitest config (`unit` project `include` pattern), workflow runner shell semantics (`ubuntu-latest` `dnsutils` availability + `dig` flag-set), tsconfig path alias verification, parity-test isolation pattern (PATH-shimmed fake `dig` per `supabase-ref-resolver.test.sh` T5/T6).
+
+### Key Improvements
+1. **Timeout asymmetry surfaced.** Migrating workflow from inline `dig +time=3 +tries=2` (~6s ceiling) to helper's `dig +time=5 +tries=2` (~10s ceiling) relaxes the workflow's DNS wall-clock budget by ~4s. Deliberate trade — added explicit callout under Risks + AC11 verification.
+2. **TS resolver error-code shape pinned.** `dnsPromises.resolveCname` throws `NodeJS.ErrnoException` with `err.code === "ENOTFOUND"` on NXDOMAIN (verified against `@types/node` dns.d.ts comment). The TS helper's catch block returns `null` for ALL error codes (ENOTFOUND, ENODATA, ESERVFAIL, network errors) — matching the bash helper's `2>/dev/null` swallow.
+3. **Test path resolved against vitest `unit` project.** Per `vitest.config.ts:44` the `unit` project's `include: ["test/**/*.test.ts", "lib/**/*.test.ts"]` matches the planned parity test at `test/lib/supabase/resolve-ref-parity.test.ts`. `environment: "node"` (line 43) supports `child_process.spawnSync` for the bash-side invocation. No vitest config edit needed.
+4. **`@/` alias verified.** `tsconfig.json paths: { "@/*": ["./*"] }` resolves `@/lib/supabase/resolve-ref` to `apps/web-platform/lib/supabase/resolve-ref.ts`. Confirmed via `ws-client.ts:4` precedent (`import { createClient } from "@/lib/supabase/client"`).
+5. **Workflow source-path verified for repo-root resolution.** The `reusable-release.yml` callers (`web-platform-release.yml`) check out the full tree; `working-directory:` is not set on the validate step, so `. apps/web-platform/scripts/lib/supabase-ref-resolver.sh` resolves correctly from `$GITHUB_WORKSPACE`.
+
+### New Considerations Discovered
+- `dnsPromises.resolveCname` returns the **CNAME chain** (array of intermediate targets, not just the final A-record host). The bash helper's `dig +short CNAME ... | head -1` mirrors `cnames[0]` semantically — both pick the **first hop**. The TS helper MUST take `cnames[0]` (not `cnames[cnames.length-1]`) for parity. AC4 parity test asserts this; Risks section calls it out explicitly.
+- Per AGENTS.md SE on `dig` flag-pinning: the helper is the single source for timeout/tries; future tuning lives in one place (AC4's parity test catches drift).
+
 ## Overview
 
 PR #4320 extracted the canonical bash helper `apps/web-platform/scripts/lib/supabase-ref-resolver.sh` and wired the new `postgrest-reload-schema.sh` caller through it. The two pre-existing inline forms of the same CNAME-resolution shape were deliberately scoped out as the cross-cutting half (review CONCUR-flow split). This plan migrates them:
@@ -46,6 +63,85 @@ The migration introduces a TypeScript sibling helper at `apps/web-platform/lib/s
 - [ ] **AC8.** TypeScript build passes: `cd apps/web-platform && bun tsc --noEmit` exits 0.
 - [ ] **AC9.** Cross-consumer grep verifies no other inline duplicates linger. Verify: `git grep -nE '\^\[a-z0-9\]\{20\}\\?\.supabase\\?\.co\\?\$' -- ':!apps/web-platform/scripts/lib/supabase-ref-resolver.sh' ':!apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh' ':!apps/web-platform/lib/supabase/resolve-ref.ts' ':!apps/web-platform/test/lib/supabase/resolve-ref-parity.test.ts' ':!plugins/soleur/skills/preflight/SKILL.md' ':!apps/web-platform/lib/supabase/validate-url.ts' ':!apps/web-platform/lib/supabase/validate-anon-key.ts' ':!apps/web-platform/scripts/verify-required-secrets.sh' ':!knowledge-base/' ':!.github/workflows/reusable-release.yml'` returns 0 matches. (The `validate-url.ts` + `validate-anon-key.ts` + `verify-required-secrets.sh` URL-shape guards are intentional siblings — they enforce the canonical URL shape on a different surface and are out of scope per #4323's Acceptance list. Workflow YAML retains the canonical-shape regex `^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$` at line 411 — that's the URL build-arg validator, not the JWT-ref derivation; only the ref-derivation `sed`/`dig` block at lines 483-496 is migrated.)
 - [ ] **AC10.** PR body cites: `Closes #4323`. Refs `PR #4320` (parent extraction).
+- [ ] **AC11.** DNS wall-clock budget delta documented. The migration changes the workflow's DNS timeout from inline `dig +time=3 +tries=2` (~6s ceiling) to the helper's `dig +time=5 +tries=2` (~10s ceiling). This is a deliberate trade — the helper is the single source of truth, and tuning lives in one place. Verify: `grep -nE 'dig.*time=' apps/web-platform/scripts/lib/supabase-ref-resolver.sh` returns exactly `+time=5 +tries=2`; `grep -nE 'dig.*time=' .github/workflows/reusable-release.yml` returns 0 matches (the inline form is gone). Per AGENTS.md SE (`When a plan prescribes 'dig', 'nslookup', 'curl', or any network call inside a CI step, pin a timeout`), the helper's timeout pin is preserved.
+
+### Research Insights
+
+**API surface (verified at deepen-time):**
+
+- `node:dns` `promises.resolveCname(hostname)` returns `Promise<string[]>` — array of CNAME chain hops. On NXDOMAIN throws `NodeJS.ErrnoException` with `err.code === "ENOTFOUND"` (verified at `apps/web-platform/node_modules/@types/node/dns.d.ts` `resolveCname` JSDoc). The TS helper's try/catch returning `null` covers ENOTFOUND + ENODATA + ESERVFAIL + network errors uniformly — matches the bash helper's `dig ... 2>/dev/null` swallow.
+- `node:child_process` `spawnSync` is available in `environment: "node"` (vitest `unit` project, `vitest.config.ts:43`). The parity test uses `spawnSync` (NOT `exec`) — args are passed as an array, no shell-interpretation of the URL fixture. No vitest config edit needed.
+- The bash-side invocation in the parity test passes the URL as `argv[1]` to a bash `-c` invocation that does `resolve_supabase_ref "$1"` — the URL never enters shell-expansion context.
+
+**TS helper sketch (Phase 1):**
+
+```typescript
+// apps/web-platform/lib/supabase/resolve-ref.ts
+import { promises as dnsPromises } from "node:dns";
+
+const CANONICAL_URL_RE = /^https?:\/\/([a-z0-9]{20})\.supabase\.co\/?$/;
+const CANONICAL_HOST_RE = /^([a-z0-9]{20})\.supabase\.co$/;
+
+/**
+ * Mirrors apps/web-platform/scripts/lib/supabase-ref-resolver.sh
+ * (resolve_supabase_ref). Returns the 20-char project ref, or null on
+ * any failure (empty input, non-canonical host, NXDOMAIN, subdomain-bypass
+ * attempt). Security-critical regex `^[a-z0-9]{20}\.supabase\.co$` MUST stay
+ * in sync with the bash form — parity asserted by
+ * test/lib/supabase/resolve-ref-parity.test.ts.
+ */
+export async function resolveSupabaseRef(url: string): Promise<string | null> {
+  if (!url) return null;
+  const fast = CANONICAL_URL_RE.exec(url);
+  if (fast) return fast[1] ?? null;
+
+  // Custom-domain fallback: strip protocol + path, CNAME-resolve, validate.
+  let host = url.replace(/^https?:\/\//, "");
+  host = host.split("/")[0] ?? "";
+  if (!host) return null;
+
+  let cnames: string[];
+  try {
+    cnames = await dnsPromises.resolveCname(host);
+  } catch {
+    return null;
+  }
+  const first = cnames[0];
+  if (!first) return null;
+  const stripped = first.replace(/\.$/, "");
+  const match = CANONICAL_HOST_RE.exec(stripped);
+  return match?.[1] ?? null;
+}
+```
+
+**Workflow `run:` block sketch (Phase 3):**
+
+The replacement block at `.github/workflows/reusable-release.yml` lines 483-496:
+
+```bash
+# Resolve expected_ref via canonical helper (single source for the
+# subdomain-bypass anchored regex + DNS timeout). dig timeout widens
+# from +time=3 to +time=5 (helper-pinned) — see AC11.
+# shellcheck source=apps/web-platform/scripts/lib/supabase-ref-resolver.sh
+. apps/web-platform/scripts/lib/supabase-ref-resolver.sh
+if ! expected_ref=$(resolve_supabase_ref "$SUPABASE_URL" 2>&1); then
+  expected_ref_safe="${expected_ref//[$'\n\r']/}"
+  echo "::error::${expected_ref_safe}"
+  exit 1
+fi
+```
+
+Strict-mode safety: the `if !` guard suppresses the `set -e` auto-exit so the diagnostic on stderr can be captured into `expected_ref` and logged via `::error::` annotation with CR/LF strip. Mirrors `postgrest-reload-schema.sh:103-105`.
+
+**References:**
+
+- `apps/web-platform/scripts/lib/supabase-ref-resolver.sh` (canonical bash form, PR #4320).
+- `apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh` (7-case bash test, T1-T7).
+- `apps/web-platform/scripts/postgrest-reload-schema.sh:99-105` (existing bash consumer pattern).
+- `.github/workflows/scheduled-ruleset-bypass-audit.yml:234-235` (precedent for `source <repo-rel>.sh` from workflow `run:` block).
+- `apps/web-platform/node_modules/@types/node/dns.d.ts` (verified `resolveCname` signature + error semantics).
+- `apps/web-platform/vitest.config.ts:40-54` (`unit` project `include` pattern + `environment: "node"`).
+- `apps/web-platform/tsconfig.json` (verified `@/*` path alias).
 
 ### Post-merge (operator)
 
@@ -220,6 +316,9 @@ discoverability_test:
 - **TS resolver returns null vs. bash exits non-zero.** The bash helper rcs 1 on failure with a diagnostic on stderr; the TS helper returns null. The two callers handle this differently: workflow uses the bash rc semantics; `cron-oauth-probe.ts` uses the `??` fallback to `supabaseProjectRef` (preserved). AC4's parity test treats both null-from-TS and rc=1-from-bash as "rejection" for fairness — neither emits a positive ref.
 - **`node:dns` `promises.resolveCname` exception shape.** On NXDOMAIN, `resolveCname` rejects with a `NodeJS.ErrnoException` (`code: "ENOTFOUND"`). The TS helper wraps in try/catch returning null — verified against `node_modules/@types/node/dns.d.ts` in Phase 0 step 4.
 - **Cross-PR cap coupling** (per `2026-05-06-cap-coupling-between-adjacent-prs.md`): the regex `^[a-z0-9]{20}\.supabase\.co$` is ALSO inlined in `apps/web-platform/lib/supabase/validate-url.ts:20`, `validate-anon-key.ts`, and `apps/web-platform/scripts/verify-required-secrets.sh` (`SUPABASE_URL_RE`). These are intentional sibling shape-validators (different concern: URL build-arg shape vs. ref derivation) and are explicitly excluded from AC9's grep. A future PR widening the canonical (e.g., `.io` support) would need to touch the resolver + all four shape validators — flag this in the resolver's header comment.
+- **DNS timeout widening (CI wall-clock).** Migrating the workflow from inline `dig +time=3 +tries=2` (~6s max) to the helper's `dig +time=5 +tries=2` (~10s max) widens the worst-case wall-clock budget on the `Validate NEXT_PUBLIC_SUPABASE_ANON_KEY build-arg` step by ~4s. The trade is: single-source the timeout tuning (helper-pinned) vs. CI step duration. Justification: this step runs ONCE per release build (not per-PR); 4s on a build is well within the workflow's existing budget. Documented in AC11 + Enhancement Summary.
+- **Parity test working directory.** vitest runs from `apps/web-platform/` (its `package.json` dir). The parity test's bash invocation uses a relative path `scripts/lib/supabase-ref-resolver.sh`, resolved from `process.cwd()`. If a future vitest config edit changes the working directory (unlikely — no current `cwd:` override exists), the parity test breaks at the bash `source` call. Mitigation: the test can hardcode the path via `path.resolve(__dirname, "../../../scripts/lib/supabase-ref-resolver.sh")` if relative-path resolution becomes fragile.
+- **vitest mock hoisting for `node:dns`.** The parity test mocks `node:dns` for the TS-side fixtures. Because the bash invocation runs in a child process via `spawnSync`, the mock does NOT leak across to bash — bash sees the real shell environment with the PATH-shimmed fake `dig`. The two sides are cleanly isolated. Confirmed pattern with `cron-oauth-probe.test.ts:27` (which also mocks `node:dns` for the same module).
 
 ## Sharp Edges
 
@@ -232,12 +331,13 @@ discoverability_test:
 
 ## Test Strategy
 
-- **Unit (TS):** `vitest run test/lib/supabase/resolve-ref-parity.test.ts` — 6 parity fixtures.
+- **Unit (TS):** `vitest run test/lib/supabase/resolve-ref-parity.test.ts` — 6 parity fixtures (vitest `unit` project, `environment: "node"`, matches the project's `include: ["test/**/*.test.ts", "lib/**/*.test.ts"]` pattern).
 - **Unit (bash):** existing `supabase-ref-resolver.test.sh` unchanged — 7/7 pass.
 - **Integration (TS):** existing `cron-oauth-probe.test.ts` updated to mock `@/lib/supabase/resolve-ref` instead of `node:dns`. All existing scenarios continue to pass.
 - **Type check:** `bun tsc --noEmit` on `apps/web-platform`.
 - **Workflow lint:** `actionlint .github/workflows/reusable-release.yml`.
-- **Shell lint:** `shellcheck` on the modified workflow snippet (extract the `run:` block content and run inline).
+- **Shell lint:** `shellcheck` on the modified workflow snippet (extract the `run:` block content and run inline). Note: shellcheck's `source` directive (`# shellcheck source=apps/web-platform/scripts/lib/supabase-ref-resolver.sh`) requires the path be resolvable from the script's location; mirror the form at `scheduled-ruleset-bypass-audit.yml:234` precedent.
+- **Parity-test isolation:** the test mocks `node:dns` for the TS-side fixtures, AND uses a PATH-shimmed fake `dig` for the bash-side child-process invocation. The two mocking surfaces never collide because the bash invocation runs in a separate process via `spawnSync` — confirmed pattern in `supabase-ref-resolver.test.sh` T5/T6.
 
 ## Skill Description Budget
 

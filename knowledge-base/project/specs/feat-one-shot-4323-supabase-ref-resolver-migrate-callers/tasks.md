@@ -67,6 +67,7 @@ lane: cross-domain
 - [ ] 5.5 `bun tsc --noEmit` → clean
 - [ ] 5.6 `actionlint .github/workflows/reusable-release.yml` → clean
 - [ ] 5.7 Update PR body with `Closes #4323` + `Refs PR #4320`
+- [ ] 5.8 Verify AC11 — DNS timeout delta: `grep -nE 'dig.*time=' apps/web-platform/scripts/lib/supabase-ref-resolver.sh` returns `+time=5 +tries=2`; `grep -nE 'dig.*time=' .github/workflows/reusable-release.yml` returns 0 matches
 
 ## Post-merge (operator)
 
