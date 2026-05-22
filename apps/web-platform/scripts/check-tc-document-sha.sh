@@ -1,47 +1,72 @@
 #!/usr/bin/env bash
-# T&C document SHA + mirror drift guardrail.
+# All-9-legal-docs SHA-pin guard + T&C mirror-drift guard.
 #
-# Three invariants:
-#   1. The canonical doc (docs/legal/terms-and-conditions.md) and the
-#      plugin docs-site mirror (plugins/soleur/docs/pages/legal/...) have
-#      the same NORMALISED prose body. Normalisation strips Eleventy
-#      frontmatter, page-hero/content section scaffolding, link form
-#      (`.md` vs `/legal/<name>/`), template-var expressions
-#      ({{ stats.agents }} etc.), and the top-level "# Terms & Conditions"
-#      heading. Either side rendering with a different agent count or a
-#      template-var refactor stays equal; a body content drift fails.
-#   2. apps/web-platform/lib/legal/tc-version.ts declares a 64-char
-#      hex literal TC_DOCUMENT_SHA.
-#   3. TC_DOCUMENT_SHA equals sha256(canonical doc) unless the same PR
-#      also bumped TC_VERSION (bump-policy: a SHA change implies the
-#      operator inspected the diff and either decided "this is
-#      cosmetic, no version bump needed" — in which case CI fails
-#      and they must edit the literal explicitly — OR "this is
-#      material/clarifying" and they bumped TC_VERSION).
+# File name is preserved (was T&C-only originally) because the CI job
+# context `tc-document-sha-guard` is pinned as a Terraform-managed
+# required-status-check at infra/github/ruleset-ci-required.tf per ADR-032;
+# renaming the job/script atomically requires a paired terraform apply that
+# is out of scope for this PR. See plan §OQ1 (knowledge-base/project/plans/
+# 2026-05-22-feat-legal-doc-sha-mirror-guard-plan.md).
 #
-# feat-oauth-tc-consent-3205 (PR #3853). See plan Phase 6.
+# Per-doc invariants for every canonical at docs/legal/*.md:
+#   1. (terms-and-conditions only) Canonical and Eleventy mirror have
+#      identical normalised prose bodies after the doc-agnostic collapse
+#      pipeline. Body-equivalence enforcement for the 8 non-T&C docs is
+#      intentionally deferred — those docs have pre-existing benign drift
+#      (link autolink form, horizontal-rule layout, agent-count phrasing)
+#      that needs a one-off remediation PR before the gate can fire.
+#   2. The corresponding SHA literal is present in the appropriate file:
+#      - terms-and-conditions: TC_DOCUMENT_SHA in
+#        apps/web-platform/lib/legal/tc-version.ts (load-bearing — written
+#        to the WORM consent ledger at app/api/accept-terms/route.ts).
+#      - other 8 docs: LEGAL_DOC_SHAS["<key>"] in
+#        apps/web-platform/lib/legal/legal-doc-shas.ts (drift-only).
+#   3. The literal equals sha256(canonical doc). For T&C only, the same PR
+#      may bump TC_VERSION as a bypass (existing bump-policy contract).
+#
+# Plus T&C seed-script TC_VERSION parity (Step 2.5 from the original
+# script — preserved verbatim, T&C-specific).
+#
+# Failures are accumulated and printed in one pass so the operator can fix
+# every doc in a single edit cycle instead of running-fail-fixing N times.
 
 set -euo pipefail
 
-CANONICAL=docs/legal/terms-and-conditions.md
-MIRROR=plugins/soleur/docs/pages/legal/terms-and-conditions.md
-LITERAL_FILE=apps/web-platform/lib/legal/tc-version.ts
+LITERAL_FILE_TC=apps/web-platform/lib/legal/tc-version.ts
+LITERAL_FILE_OTHERS=apps/web-platform/lib/legal/legal-doc-shas.ts
+CANONICAL_DIR=docs/legal
+MIRROR_DIR=plugins/soleur/docs/pages/legal
 
-if [ ! -f "$CANONICAL" ]; then
-  echo "::error::canonical T&C doc missing: $CANONICAL" >&2
-  exit 1
-fi
-if [ ! -f "$MIRROR" ]; then
-  echo "::error::plugin T&C mirror missing: $MIRROR" >&2
-  exit 1
-fi
-if [ ! -f "$LITERAL_FILE" ]; then
-  echo "::error::tc-version.ts missing: $LITERAL_FILE" >&2
-  exit 1
-fi
+# Sentinel: bump in lockstep when a legal doc is added or removed.
+# A filesystem-glob hit count that disagrees with this constant emits a
+# ::warning:: and continues; an emergency wrong-deletion still gets caught
+# by the per-doc invariants below.
+EXPECTED_COUNT=9
 
 # ----------------------------------------------------------------------
-# Step 1: normalised body equality (mirror drift)
+# Enumerate canonical docs via filesystem glob.
+# ----------------------------------------------------------------------
+
+shopt -s nullglob
+CANONICAL_DOCS=()
+for f in "$CANONICAL_DIR"/*.md; do
+  CANONICAL_DOCS+=("$(basename "$f" .md)")
+done
+
+if [ "${#CANONICAL_DOCS[@]}" -ne "$EXPECTED_COUNT" ]; then
+  echo "::warning::${CANONICAL_DIR}/ glob returned ${#CANONICAL_DOCS[@]} docs; expected ${EXPECTED_COUNT}. Update EXPECTED_COUNT in $(basename "$0") if intentional." >&2
+fi
+
+# Verify literal source files present before per-doc loop.
+for lit in "$LITERAL_FILE_TC" "$LITERAL_FILE_OTHERS"; do
+  if [ ! -f "$lit" ]; then
+    echo "::error::SHA literal source missing: $lit" >&2
+    exit 1
+  fi
+done
+
+# ----------------------------------------------------------------------
+# Normalisation helpers (T&C body-equivalence step only).
 # ----------------------------------------------------------------------
 
 # Strip frontmatter (everything from start through second `---` line) +
@@ -52,8 +77,7 @@ normalize_canonical() {
 }
 
 # Strip frontmatter + Eleventy page-hero / content section scaffolding
-# + template-var expressions from the plugin mirror. Normalise link
-# forms to the canonical `.md` shape so both sides compare equal.
+# + template-var expressions from the plugin mirror.
 normalize_plugin() {
   awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' "$1" \
     | sed -E '
@@ -67,7 +91,7 @@ normalize_plugin() {
 }
 
 # Cross-normalise link forms + template vars + the soleur.ai vs
-# www.soleur.ai display variant so neither side wins on presentation.
+# www.soleur.ai display variant.
 collapse() {
   sed -E '
     s|\(privacy-policy\.md\)|(LINK_PRIVACY)|g
@@ -109,37 +133,134 @@ collapse() {
   | awk 'BEGIN{seen=0} {if(!seen && NF==0) next; seen=1; print}'
 }
 
-CANON_BODY_SHA=$(normalize_canonical "$CANONICAL" | collapse | sha256sum | awk '{print $1}')
-MIRROR_BODY_SHA=$(normalize_plugin "$MIRROR" | collapse | sha256sum | awk '{print $1}')
-
-if [ "$CANON_BODY_SHA" != "$MIRROR_BODY_SHA" ]; then
-  echo "::error::T&C body drift: canonical and plugin mirror diverge after normalisation." >&2
-  echo "    canonical=$CANONICAL" >&2
-  echo "    mirror=$MIRROR" >&2
-  echo "    canonical_body_sha=$CANON_BODY_SHA" >&2
-  echo "    mirror_body_sha=$MIRROR_BODY_SHA" >&2
-  echo "    Diff (canonical → mirror):" >&2
-  diff <(normalize_canonical "$CANONICAL" | collapse) <(normalize_plugin "$MIRROR" | collapse) | head -40 >&2 || true
-  exit 1
-fi
-
 # ----------------------------------------------------------------------
-# Step 2: TC_DOCUMENT_SHA literal exists + valid form
+# SHA literal extractors (bash regex on whole-file content).
 # ----------------------------------------------------------------------
 
-LITERAL_SHA=$(tr -d '\n' < "$LITERAL_FILE" \
-              | grep -oE 'TC_DOCUMENT_SHA[^"]*"[0-9a-f]{64}"' \
-              | grep -oE '[0-9a-f]{64}' \
-              | head -n 1 || true)
+# Read the TC_DOCUMENT_SHA literal from tc-version.ts. The value may sit on
+# the line after the `=` so we slurp the file and use [[:space:]]* across
+# newlines.
+extract_tc_document_sha() {
+  local content
+  content=$(< "$1")
+  local pat='TC_DOCUMENT_SHA[[:space:]]*=[[:space:]]*"([0-9a-f]{64})"'
+  if [[ "$content" =~ $pat ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
 
-if [ -z "$LITERAL_SHA" ]; then
-  echo "::error::TC_DOCUMENT_SHA literal not found in $LITERAL_FILE" >&2
-  echo "    Expected: export const TC_DOCUMENT_SHA = \"<64-char-lowercase-hex>\";" >&2
-  exit 1
-fi
+# Read LEGAL_DOC_SHAS["<key>"] from legal-doc-shas.ts. Entries are
+# typically formatted as a two-line key/value pair (key on one line,
+# value indented on the next), hence [[:space:]]* across newlines.
+extract_legal_doc_sha() {
+  local content
+  content=$(< "$1")
+  local key="$2"
+  local pat="\"${key}\"[[:space:]]*:[[:space:]]*\"([0-9a-f]{64})\""
+  if [[ "$content" =~ $pat ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
 
 # ----------------------------------------------------------------------
-# Step 2.5: seed-script TC_VERSION parity
+# Per-doc loop.
+# ----------------------------------------------------------------------
+
+FAILED=0
+FAILURES=()
+
+for doc in "${CANONICAL_DOCS[@]}"; do
+  canonical_path="$CANONICAL_DIR/$doc.md"
+  mirror_path="$MIRROR_DIR/$doc.md"
+
+  if [ ! -f "$canonical_path" ]; then
+    echo "::error::canonical legal doc missing: $canonical_path" >&2
+    FAILED=$((FAILED+1)); FAILURES+=("$doc: canonical missing"); continue
+  fi
+  if [ ! -f "$mirror_path" ]; then
+    echo "::error::Eleventy mirror missing for $doc: $mirror_path" >&2
+    FAILED=$((FAILED+1)); FAILURES+=("$doc: mirror missing"); continue
+  fi
+
+  # Step 1 (T&C only): normalized body equivalence vs Eleventy mirror.
+  if [ "$doc" = "terms-and-conditions" ]; then
+    canon_body_sha=$(normalize_canonical "$canonical_path" | collapse | sha256sum | awk '{print $1}')
+    mirror_body_sha=$(normalize_plugin "$mirror_path" | collapse | sha256sum | awk '{print $1}')
+
+    if [ "$canon_body_sha" != "$mirror_body_sha" ]; then
+      echo "::error::T&C body drift: canonical and plugin mirror diverge after normalisation." >&2
+      echo "    canonical=$canonical_path" >&2
+      echo "    mirror=$mirror_path" >&2
+      echo "    canonical_body_sha=$canon_body_sha" >&2
+      echo "    mirror_body_sha=$mirror_body_sha" >&2
+      echo "    Diff (canonical → mirror):" >&2
+      diff <(normalize_canonical "$canonical_path" | collapse) <(normalize_plugin "$mirror_path" | collapse) | head -40 >&2 || true
+      FAILED=$((FAILED+1)); FAILURES+=("$doc: body drift"); continue
+    fi
+  fi
+
+  # Step 2: SHA literal exists in the appropriate source file.
+  if [ "$doc" = "terms-and-conditions" ]; then
+    literal_sha=$(extract_tc_document_sha "$LITERAL_FILE_TC")
+  else
+    literal_sha=$(extract_legal_doc_sha "$LITERAL_FILE_OTHERS" "$doc")
+  fi
+
+  if [ -z "$literal_sha" ]; then
+    if [ "$doc" = "terms-and-conditions" ]; then
+      echo "::error::TC_DOCUMENT_SHA literal not found in $LITERAL_FILE_TC" >&2
+      echo "    Expected: export const TC_DOCUMENT_SHA = \"<64-char-lowercase-hex>\";" >&2
+    else
+      echo "::error::LEGAL_DOC_SHAS literal for \"$doc\" not found in $LITERAL_FILE_OTHERS" >&2
+      echo "    Expected: \"$doc\": \"<64-char-lowercase-hex>\"" >&2
+    fi
+    FAILED=$((FAILED+1)); FAILURES+=("$doc: literal missing"); continue
+  fi
+
+  # Step 3: canonical SHA matches literal (T&C: with TC_VERSION-bump bypass).
+  canonical_sha=$(sha256sum "$canonical_path" | awk '{print $1}')
+
+  if [ "$canonical_sha" = "$literal_sha" ]; then
+    continue
+  fi
+
+  if [ "$doc" = "terms-and-conditions" ]; then
+    # Bypass: same PR bumped TC_VERSION.
+    if [ -n "${GITHUB_BASE_REF:-}" ]; then
+      if git diff --unified=0 "origin/${GITHUB_BASE_REF}...HEAD" -- "$LITERAL_FILE_TC" \
+           | grep -qE '^[+-]export const TC_VERSION'; then
+        echo "T&C document SHA changed AND TC_VERSION was bumped — accepted." >&2
+        continue
+      fi
+    fi
+    echo "::error::T&C document content changed but TC_DOCUMENT_SHA literal is stale and TC_VERSION was not bumped." >&2
+    echo "    canonical_sha=$canonical_sha" >&2
+    echo "    literal_sha=$literal_sha" >&2
+    echo "    file=$LITERAL_FILE_TC" >&2
+    echo "    Remediation:" >&2
+    echo "      1. Run: sha256sum $canonical_path" >&2
+    echo "      2. Paste the value into TC_DOCUMENT_SHA in $LITERAL_FILE_TC" >&2
+    echo "      3. If the change is material/clarifying per the bump-policy rubric" >&2
+    echo "         (knowledge-base/legal/tc-version-bump-policy.md), bump TC_VERSION." >&2
+    echo "      4. Commit all three in the same PR." >&2
+    FAILED=$((FAILED+1)); FAILURES+=("$doc: literal stale (no TC_VERSION bump)")
+  else
+    echo "::error::legal doc \"$doc\" content changed but LEGAL_DOC_SHAS[\"$doc\"] is stale." >&2
+    echo "    canonical_sha=$canonical_sha" >&2
+    echo "    literal_sha=$literal_sha" >&2
+    echo "    file=$LITERAL_FILE_OTHERS" >&2
+    echo "    Remediation:" >&2
+    echo "      1. Run: sha256sum $canonical_path" >&2
+    echo "      2. Paste the value into LEGAL_DOC_SHAS[\"$doc\"] in $LITERAL_FILE_OTHERS" >&2
+    echo "      3. Classify the edit per knowledge-base/legal/tc-version-bump-policy.md (§ Non-T&C legal docs)" >&2
+    echo "         and document the Tier in the PR body." >&2
+    echo "      4. Commit both in the same PR." >&2
+    FAILED=$((FAILED+1)); FAILURES+=("$doc: literal stale")
+  fi
+done
+
+# ----------------------------------------------------------------------
+# Step 2.5: T&C seed-script TC_VERSION parity (preserved verbatim).
 # ----------------------------------------------------------------------
 #
 # seed-dev-users.sh and seed-qa-user.sh hardcode TC_VERSION="…" so QA
@@ -149,13 +270,13 @@ fi
 # their next sign-in — silent failure shape that only surfaces during
 # QA cycles, often days after the bump.
 
-CANONICAL_TC_VERSION=$(grep -oE 'TC_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' "$LITERAL_FILE" \
+CANONICAL_TC_VERSION=$(grep -oE 'TC_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' "$LITERAL_FILE_TC" \
                        | head -n 1 \
                        | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [ -z "$CANONICAL_TC_VERSION" ]; then
-  echo "::error::TC_VERSION literal not found in $LITERAL_FILE" >&2
-  exit 1
+  echo "::error::TC_VERSION literal not found in $LITERAL_FILE_TC" >&2
+  FAILED=$((FAILED+1)); FAILURES+=("terms-and-conditions: TC_VERSION missing")
 fi
 
 SEED_SCRIPTS=(
@@ -163,51 +284,36 @@ SEED_SCRIPTS=(
   "apps/web-platform/scripts/seed-qa-user.sh"
 )
 
-for seed in "${SEED_SCRIPTS[@]}"; do
-  if [ ! -f "$seed" ]; then
-    # Seed script absent in this checkout (e.g., docs-only branch) — skip.
-    continue
-  fi
-  SEED_VERSION=$(grep -oE '^TC_VERSION="[^"]+"' "$seed" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
-  if [ -z "$SEED_VERSION" ]; then
-    echo "::error::$seed missing TC_VERSION=\"…\" literal" >&2
-    exit 1
-  fi
-  if [ "$SEED_VERSION" != "$CANONICAL_TC_VERSION" ]; then
-    echo "::error::$seed TC_VERSION=$SEED_VERSION drifted from canonical $CANONICAL_TC_VERSION ($LITERAL_FILE)" >&2
-    echo "    Remediation: update the TC_VERSION literal in the seed script to match." >&2
-    exit 1
-  fi
-done
-
-# ----------------------------------------------------------------------
-# Step 3: canonical SHA matches the literal (unless TC_VERSION was bumped)
-# ----------------------------------------------------------------------
-
-CANON_RAW_SHA=$(sha256sum "$CANONICAL" | awk '{print $1}')
-
-if [ "$CANON_RAW_SHA" = "$LITERAL_SHA" ]; then
-  exit 0
+if [ -n "$CANONICAL_TC_VERSION" ]; then
+  for seed in "${SEED_SCRIPTS[@]}"; do
+    if [ ! -f "$seed" ]; then
+      # Seed script absent in this checkout (e.g., docs-only branch) — skip.
+      continue
+    fi
+    SEED_VERSION=$(grep -oE '^TC_VERSION="[^"]+"' "$seed" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "$SEED_VERSION" ]; then
+      echo "::error::$seed missing TC_VERSION=\"…\" literal" >&2
+      FAILED=$((FAILED+1)); FAILURES+=("$(basename "$seed"): TC_VERSION missing")
+      continue
+    fi
+    if [ "$SEED_VERSION" != "$CANONICAL_TC_VERSION" ]; then
+      echo "::error::$seed TC_VERSION=$SEED_VERSION drifted from canonical $CANONICAL_TC_VERSION ($LITERAL_FILE_TC)" >&2
+      echo "    Remediation: update the TC_VERSION literal in the seed script to match." >&2
+      FAILED=$((FAILED+1)); FAILURES+=("$(basename "$seed"): TC_VERSION drift")
+    fi
+  done
 fi
 
-# Mismatch — allow only if the same PR bumped TC_VERSION (line touching
-# `export const TC_VERSION` in $LITERAL_FILE).
-if [ -n "${GITHUB_BASE_REF:-}" ]; then
-  if git diff --unified=0 "origin/${GITHUB_BASE_REF}...HEAD" -- "$LITERAL_FILE" \
-       | grep -qE '^[+-]export const TC_VERSION'; then
-    echo "T&C document SHA changed AND TC_VERSION was bumped — accepted." >&2
-    exit 0
-  fi
+# ----------------------------------------------------------------------
+# Aggregate exit.
+# ----------------------------------------------------------------------
+
+if [ "$FAILED" -gt 0 ]; then
+  echo "::error::$FAILED legal-doc SHA guard check(s) failed:" >&2
+  for f in "${FAILURES[@]}"; do
+    echo "    - $f" >&2
+  done
+  exit 1
 fi
 
-echo "::error::T&C document content changed but TC_DOCUMENT_SHA literal is stale and TC_VERSION was not bumped." >&2
-echo "    canonical_sha=$CANON_RAW_SHA" >&2
-echo "    literal_sha=$LITERAL_SHA" >&2
-echo "    file=$LITERAL_FILE" >&2
-echo "    Remediation:" >&2
-echo "      1. Run: sha256sum $CANONICAL" >&2
-echo "      2. Paste the value into TC_DOCUMENT_SHA in $LITERAL_FILE" >&2
-echo "      3. If the change is material/clarifying per the bump-policy rubric" >&2
-echo "         (knowledge-base/legal/tc-version-bump-policy.md), bump TC_VERSION." >&2
-echo "      4. Commit all three in the same PR." >&2
-exit 1
+exit 0
