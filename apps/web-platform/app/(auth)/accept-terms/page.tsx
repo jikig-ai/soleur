@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { TC_BUMP_METADATA } from "@/lib/legal/tc-version";
 
 export default function AcceptTermsPage() {
   const router = useRouter();
@@ -75,14 +76,14 @@ export default function AcceptTermsPage() {
           className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 text-sm text-soleur-text-secondary"
         >
           <p className="font-medium text-soleur-text-primary">
-            Updated May 22, 2026
+            Updated {TC_BUMP_METADATA.lastUpdated}
           </p>
           <p className="mt-1">
             We&apos;ve added a new{" "}
-            <strong>§Workspace Members</strong> section governing the
-            team-workspace feature.{" "}
+            <strong>{TC_BUMP_METADATA.substantiveChange}</strong> section
+            governing the team-workspace feature.{" "}
             <a
-              href="https://soleur.ai/pages/legal/terms-and-conditions.html"
+              href={TC_BUMP_METADATA.fullTermsUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-soleur-text-link underline-offset-2 hover:underline"

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, test, expect } from "vitest";
+import { TC_BUMP_METADATA } from "../lib/legal/tc-version";
 
 // Plan AC8 / FR7 (downgraded per RC2): regression-prevention assertion
 // that both the consent surfaces (signup page checkbox + standalone
@@ -62,19 +63,22 @@ describe("accept-terms/page.tsx middleware-outage banner", () => {
 // disclosure banner. Page is only reached when middleware detects a
 // tc_accepted_version mismatch; banner is rendered unconditionally for
 // every visitor.
-describe("accept-terms/page.tsx TC_VERSION 2.2.0 update banner (PR #4289)", () => {
+describe("accept-terms/page.tsx TC_VERSION update banner (PR #4289)", () => {
   const src = readFileSync(ACCEPT_TERMS_PAGE, "utf8");
 
-  test('contains literal "Workspace Members" (§3b cross-reference)', () => {
-    expect(src.includes("Workspace Members")).toBe(true);
+  test("consumes TC_BUMP_METADATA.substantiveChange (§3b cross-reference)", () => {
+    expect(src.includes("TC_BUMP_METADATA.substantiveChange")).toBe(true);
+    expect(TC_BUMP_METADATA.substantiveChange).toMatch(/Workspace Members/);
   });
 
-  test('contains literal "May 22, 2026" (canonical Last-Updated date)', () => {
-    expect(src.includes("May 22, 2026")).toBe(true);
+  test("consumes TC_BUMP_METADATA.lastUpdated (canonical Last-Updated date)", () => {
+    expect(src.includes("TC_BUMP_METADATA.lastUpdated")).toBe(true);
+    expect(TC_BUMP_METADATA.lastUpdated).toMatch(/^[A-Z][a-z]+ \d{1,2}, \d{4}$/);
   });
 
-  test('contains link target "terms-and-conditions.html" (full-text disclosure)', () => {
-    expect(src.includes("terms-and-conditions.html")).toBe(true);
+  test("consumes TC_BUMP_METADATA.fullTermsUrl (full-text disclosure)", () => {
+    expect(src.includes("TC_BUMP_METADATA.fullTermsUrl")).toBe(true);
+    expect(TC_BUMP_METADATA.fullTermsUrl).toContain("terms-and-conditions.html");
   });
 
   test('carries data-testid="tc-version-update-banner" for downstream e2e', () => {

@@ -8,7 +8,7 @@ permalink: legal/terms-and-conditions/
 <section class="page-hero">
   <div class="container">
     <h1>Terms & Conditions</h1>
-    <p>Effective February 20, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated May 22, 2026</p>
   </div>
 </section>
 

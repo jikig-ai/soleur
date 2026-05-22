@@ -3,7 +3,7 @@ title: "Acceptable Use Policy"
 type: acceptable-use-policy
 jurisdiction: FR, EU
 generated-date: 2026-02-20
-last-updated: 2026-05-18
+last-updated: 2026-05-22
 ---
 
 # Acceptable Use Policy
@@ -12,7 +12,7 @@ last-updated: 2026-05-18
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** May 22, 2026 -- added Section 5.5 "Workspace member attestation" governing the team-workspace feature (operator attests each invited co-member is under an employment / contractor / consultancy agreement obligating confidentiality and IP-assignment terms equivalent to the Soleur Side Letter template) gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); previous: May 18, 2026 -- added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: April 10, 2026)
+**Last Updated:** May 22, 2026 -- added Section 5.5 "Workspace member attestation" governing the team-workspace feature (operator attests each invited co-member is under an employment / contractor / consultancy agreement obligating confidentiality and IP-assignment terms equivalent to the Soleur Side Letter template) gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); previous: May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
 
 ---
 
