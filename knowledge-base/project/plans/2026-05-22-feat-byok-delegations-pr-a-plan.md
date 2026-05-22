@@ -1,5 +1,5 @@
 ---
-title: "BYOK Delegations PR-A — Migration 062 + SQL Resolver + Sentinel Sweep + Cap Enforcement + CLI"
+title: "BYOK Delegations PR-A — Migration 063 + SQL Resolver + Sentinel Sweep + Cap Enforcement + CLI"
 status: planned
 issue: 4232
 parent_issue: 4229
@@ -141,14 +141,14 @@ CPO sign-off required. CLO + CTO carry forward from brainstorm. `user-impact-rev
 6. `lib/feature-flags/server.ts` FLAG_VARS + `isTeamWorkspaceInviteEnabled` two-key gate read.
 7. `account-delete.ts:75-300` cascade chain read; phase 5.9 insertion point confirmed.
 8. `workspace-resolver.ts:66` `getDefaultWorkspaceForUser` read.
-9. `audit_byok_use.invocation_id UNIQUE` constraint verified in mig 037 (R4 idempotency). If absent, add to mig 062.
+9. `audit_byok_use.invocation_id UNIQUE` constraint verified in mig 037 (R4 idempotency). If absent, add to mig 063.
 10. `SENTRY_TAG_PEPPER` exists in Doppler dev + prd (SS F6 prereq); if absent, add to operator-runbook Phase 4 prereq.
-11. dev-Supabase shows 053-061 applied; 062 not yet. If 062 already applied with different shape (sibling worktree race), introspect via `mcp__plugin_supabase_supabase__execute_sql` and reconcile before proceeding (DIG F9).
+11. dev-Supabase shows 053-062 applied; 063 not yet. If 063 already applied with different shape (sibling worktree race), introspect via `mcp__plugin_supabase_supabase__execute_sql` and reconcile before proceeding (DIG F9). **Note (rebase reconciliation 2026-05-22):** plan-time slot was 062; rebase onto main showed `062_workspace_member_removals_and_remove_rpc_update.sql` had landed (sibling PR #4341 cluster). Renumbered 062→063 across plan/spec/tasks/brainstorm; line-number citations re-verified post-rebase.
 12. Baseline `bun run typecheck` clean; capture `bun test` baseline pass count.
 
-### Phase 1 — Migration 062: Full Schema (Table + All Triggers + All RPCs)
+### Phase 1 — Migration 063: Full Schema (Table + All Triggers + All RPCs)
 
-**File:** `apps/web-platform/supabase/migrations/062_byok_delegations.sql`
+**File:** `apps/web-platform/supabase/migrations/063_byok_delegations.sql`
 
 Migration header: `LAWFUL_BASIS: Art. 6(1)(b) contract` + `RETENTION: 7 years` + trigger-not-CHECK rationale (Research Reconciliation row 4) + WORM-column-enumeration sentinel reminder.
 
@@ -355,7 +355,7 @@ Shape 1 attribution constraint is satisfied: `OLD.user_id` IS one of `grantor_us
 
 #### Down migration
 
-`apps/web-platform/supabase/migrations/062_byok_delegations.down.sql` — reverse order; restores `audit_byok_use` columns and drops table/triggers/functions cleanly.
+`apps/web-platform/supabase/migrations/063_byok_delegations.down.sql` — reverse order; restores `audit_byok_use` columns and drops table/triggers/functions cleanly.
 
 ### Phase 2 — TS Layer: byok-resolver.ts + Abstract Error Hierarchy + Type Widening + Sentry HMAC
 
@@ -538,7 +538,7 @@ Requires interactive `y` (default N) unless `--yes` flag (for CI / discoverabili
 - Assert every column from #1 appears in #2's body text
 - Fails loudly if a future migration adds a column to `byok_delegations` without updating the WORM trigger
 
-**`test/migration/062_byok_delegations.migration.test.ts`** — apply → down → re-apply cycle.
+**`test/migration/063_byok_delegations.migration.test.ts`** — apply → down → re-apply cycle.
 
 #### ADR
 
@@ -551,7 +551,7 @@ PR body:
 - `Ref #4232` (NOT `Closes` — PR-B pending)
 - Sentinel sweep enumeration (5 sites + `callerUserId` provenance per site)
 - Type widening sweep result
-- Migration 062 LAWFUL_BASIS + RETENTION inline
+- Migration 063 LAWFUL_BASIS + RETENTION inline
 - ADR link
 - "v3 deepen-plan refinements" note (merged atomic RPC, clock_timestamp, hourly+daily caps, $10K ceiling, WORM attribution constraint, Shape 3, TS-layer workspace resolution, HMAC pepper, WORM column-enum smoke)
 
@@ -569,15 +569,15 @@ Verification checklist:
 
 | Path | Purpose | Phase |
 |------|---------|-------|
-| `apps/web-platform/supabase/migrations/062_byok_delegations.sql` | Full schema + RPCs (v3 merged) | 1 |
-| `apps/web-platform/supabase/migrations/062_byok_delegations.down.sql` | Reverse | 1 |
+| `apps/web-platform/supabase/migrations/063_byok_delegations.sql` | Full schema + RPCs (v3 merged) | 1 |
+| `apps/web-platform/supabase/migrations/063_byok_delegations.down.sql` | Reverse | 1 |
 | `apps/web-platform/server/byok-resolver.ts` | TS wrapper + abstract error hierarchy + provenance invariant | 2 |
 | `apps/web-platform/scripts/byok-grant.ts` | CLI grant (consolidated RPC; confirmation prompt) | 4 |
 | `apps/web-platform/scripts/byok-revoke.ts` | CLI revoke | 4 |
 | `apps/web-platform/test/server/byok-delegations.test.ts` | Table-driven RLS/WORM/revoke/cap/anonymise/pg_default_acl | 4 |
 | `apps/web-platform/test/server/byok-resolver.test.ts` | Resolver semantics + multi-workspace regression | 4 |
 | `apps/web-platform/test/server/byok-delegations-worm-column-enum.test.ts` | WORM column-enumeration sentinel (v3 — SS F4) | 4 |
-| `apps/web-platform/test/migration/062_byok_delegations.migration.test.ts` | Migration smoke | 4 |
+| `apps/web-platform/test/migration/063_byok_delegations.migration.test.ts` | Migration smoke | 4 |
 | `knowledge-base/project/adrs/<NN>-byok-delegations-resolver-and-grace.md` | ADR | 4 |
 
 ## Files to Edit
@@ -599,7 +599,7 @@ Verification checklist:
 
 ### Pre-merge (PR)
 
-- [ ] Migration 062 applies cleanly to dev-Supabase via `mcp__plugin_supabase_supabase__apply_migration`
+- [ ] Migration 063 applies cleanly to dev-Supabase via `mcp__plugin_supabase_supabase__apply_migration`
 - [ ] Down migration reverses cleanly
 - [ ] All 5 `runWithByokLease` call sites wrapped; PR body enumerates each + `callerUserId` provenance
 - [ ] Type widening sweep: ByokLeaseArgs.delegationId + ByokLease.delegationId added; consumer grep recorded in PR body
@@ -627,7 +627,7 @@ Verification checklist:
 
 ### Post-merge (operator + auto)
 
-- [ ] Migration 062 applied to prd via `web-platform-release.yml#migrate` (auto-triggered)
+- [ ] Migration 063 applied to prd via `web-platform-release.yml#migrate` (auto-triggered)
 - [ ] PostgREST schema reload (container restart)
 - [ ] Sentry alert rule for `art_33_breach=true` with distinct action shape (one-time)
 - [ ] Release-time assertion: `BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS` parses to UUIDs only, count ≤ N ceiling (SS F8)

@@ -29,7 +29,7 @@ PR #4225 (team-workspace) shipped multi-user organizations and split `byok-lease
 
 ## Goals
 
-- **G1.** Add migration `apps/web-platform/supabase/migrations/062_byok_delegations.sql` with table `public.byok_delegations` per CTO schema sketch (key decision #9 + #11): `id, grantor_user_id, grantee_user_id, workspace_id, daily_usd_cap_cents, created_by_user_id, created_at, expires_at, revoked_at, revoked_by_user_id, revocation_reason`. FKs `ON DELETE RESTRICT`. CHECK `grantor_user_id <> grantee_user_id`. Partial unique index `WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())` on `(grantor_user_id, grantee_user_id, workspace_id)`.
+- **G1.** Add migration `apps/web-platform/supabase/migrations/063_byok_delegations.sql` with table `public.byok_delegations` per CTO schema sketch (key decision #9 + #11): `id, grantor_user_id, grantee_user_id, workspace_id, daily_usd_cap_cents, created_by_user_id, created_at, expires_at, revoked_at, revoked_by_user_id, revocation_reason`. FKs `ON DELETE RESTRICT`. CHECK `grantor_user_id <> grantee_user_id`. Partial unique index `WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())` on `(grantor_user_id, grantee_user_id, workspace_id)`.
 - **G2.** Add WORM trigger on `byok_delegations` following the `scope_grants` (mig 048) **structural-diff bypass pattern**, NOT the GUC+role-gate pattern (per learning `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing`). Allowed UPDATE shapes: (a) revoke flip — `revoked_at`/`revoked_by_user_id`/`revocation_reason` set, all else unchanged; (b) Art. 17 anonymise — `grantor_user_id`/`grantee_user_id`/`created_by_user_id`/`revoked_by_user_id` nullified, all else unchanged. Every other UPDATE rejected.
 - **G3.** Add DB-level CHECK constraint enforcing `same_workspace`: both `grantor_user_id` and `grantee_user_id` belong to `workspace_id` via `is_workspace_member()` (implemented as trigger or `CHECK` calling a stable function). Violation = Sentry error event with severity `error` (NOT silent rescue) — per CLO Art. 33 risk note (cross-tenant grant = 72h breach clock).
 - **G4.** Ship RLS predicates per Decisions #11: INSERT `grantor_user_id = auth.uid() AND created_by_user_id = auth.uid() AND is_workspace_member(workspace_id, grantee_user_id)`; SELECT `grantor_user_id = auth.uid() OR grantee_user_id = auth.uid()`. UPDATE forbidden via tenant client; revoke routed through SECURITY DEFINER RPC `revoke_byok_delegation(p_id uuid, p_reason text)`. Pin `SET search_path = public, pg_temp` per `cq-pg-security-definer-search-path-pin-pg-temp`.
@@ -42,7 +42,7 @@ PR #4225 (team-workspace) shipped multi-user organizations and split `byok-lease
 - **G11.** Add CLI command `pnpm soleur:byok grant --to <user> --workspace <id> --cap-cents <n> [--expires-in <duration>]` and `pnpm soleur:byok revoke --id <delegation-id> --reason <reason>`. Calls SECURITY DEFINER RPCs `grant_byok_delegation` / `revoke_byok_delegation`. This is the v1 grant surface (UI lands in PR-B).
 - **G12.** Add member-departure transactional auto-revoke (CLO requirement). Extend the `workspace_members DELETE` path (or trigger) to mark all `byok_delegations` rows where the departing user is grantor or grantee with `revoked_at = now()`, `revoked_by_user_id = NULL`, `revocation_reason = 'member_departed'` in the same statement. WORM history retained 7 years.
 - **G13.** Add Art. 17 cascade RPC `anonymise_byok_delegations(p_user_id uuid)` called from existing `anonymise_user` pipeline before `auth.admin.deleteUser`. Nullifies both user_id columns + `created_by_user_id` + `revoked_by_user_id` while preserving `id, workspace_id, created_at, expires_at, revoked_at, revocation_reason` for audit chain.
-- **G14.** Migration 062 carries `LAWFUL_BASIS:` header (Art. 6(1)(b) contract — the delegation is a contract between grantor and grantee) + `RETENTION:` block (7y) per `hr-gdpr-gate-on-regulated-data-surfaces` precedent (mig 058 §6-19).
+- **G14.** Migration 063 carries `LAWFUL_BASIS:` header (Art. 6(1)(b) contract — the delegation is a contract between grantor and grantee) + `RETENTION:` block (7y) per `hr-gdpr-gate-on-regulated-data-surfaces` precedent (mig 058 §6-19).
 - **G15.** Add `BYOK_DELEGATIONS_ENABLED` feature flag (Doppler-config keyed). OFF in prd until both PR-A + PR-B + signed Delegation Consent Side Letter land. ON for jikigai org only on day one.
 - **G16.** Test plan (PR-A): (a) RLS deny-test pair distinguishing 42501 (grant) vs 42P17 (policy) per learning `2026-05-16-followthrough-verification-loop-catches-grant-vs-rls-deny-shape`; (b) `pg_default_acl` audit at migration smoke-test per learning `2026-05-06-supabase-default-privileges-defeat-revoke-from-public`; (c) cross-tenant insert test (must reject + emit Sentry); (d) revoke-grace-window timing test (token at +30s debits grantor, token at +90s debits grantee); (e) cap-exceeded test; (f) duplicate-active grant rejection test; (g) member-departure auto-revoke test.
 
@@ -85,7 +85,7 @@ PR #4225 (team-workspace) shipped multi-user organizations and split `byok-lease
 
 ## Technical Requirements
 
-- **TR1.** Migration 062 is the next free slot (verified by `find apps/web-platform/supabase/migrations/06[0-9]_*.sql` returning 060/061 only).
+- **TR1.** Migration 063 is the next free slot (verified by `find apps/web-platform/supabase/migrations/06[0-9]_*.sql` returning 060/061 only).
 - **TR2.** `is_workspace_member(p_workspace_id, p_user_id)` exists as 2-arg signature at `apps/web-platform/supabase/migrations/053_organizations_and_workspace_members.sql:115-140`; RLS predicates reference it directly.
 - **TR3.** All new SECURITY DEFINER functions pin `SET search_path = public, pg_temp` per `cq-pg-security-definer-search-path-pin-pg-temp`.
 - **TR4.** `pg_default_acl` audit at migration smoke-test rejects `EXECUTE TO PUBLIC` on new functions (per learning `2026-05-06-supabase-default-privileges-defeat-revoke-from-public`).
@@ -96,11 +96,11 @@ PR #4225 (team-workspace) shipped multi-user organizations and split `byok-lease
 - **TR9.** Feature flag `BYOK_DELEGATIONS_ENABLED` Doppler-keyed; OFF in prd until PR-A + PR-B + signed Side Letter land.
 - **TR10.** `record_byok_use_and_check_cap` revoke-grace check re-resolves the delegation row by `delegation_id` on every call (not cached); per-write RTT cost accepted for closer grace window.
 - **TR11.** ADR drafted via `/soleur:architecture create "BYOK delegations: per-workspace grantor-funded runs"` before PR-A merges, capturing (a) resolver-in-SQL-not-TS rationale, (b) 60s grace + caller-absorbs billing decision, (c) workspace-scope-not-org-scope rationale.
-- **TR12.** GDPR gate runs on migration 062 review (regulated-data-surface; joint controllership).
+- **TR12.** GDPR gate runs on migration 063 review (regulated-data-surface; joint controllership).
 
 ## Acceptance Criteria
 
-- [ ] Migration 062 applied in dev; manual smoke shows `INSERT` from grantor succeeds; from a third party fails with 42P17; cross-workspace INSERT fails with CHECK violation + Sentry event.
+- [ ] Migration 063 applied in dev; manual smoke shows `INSERT` from grantor succeeds; from a third party fails with 42P17; cross-workspace INSERT fails with CHECK violation + Sentry event.
 - [ ] All 5 `runWithByokLease` call sites updated; PR-A body enumerates sites + rationale.
 - [ ] Type-widening sweep complete; exhaustive switch updated; consumer grep recorded in PR-A body.
 - [ ] CLI grant/revoke works end-to-end against dev Supabase.
