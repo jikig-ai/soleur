@@ -1,0 +1,74 @@
+# Standalone PR + push gate for Vector config + VRL fixture tests (#4293 FR5).
+#
+# Separated from apply-web-platform-infra.yml because that workflow triggers
+# only on push: branches: [main] (intentional -- terraform apply must not
+# fire on PR branches). This workflow runs at PR time so AC9 has a green
+# check before merge.
+#
+# Path-filtered to the relevant files; unrelated infra hotfixes do not
+# see this workflow run. No untrusted user input is referenced in any
+# `run:` block -- only the internal `steps.vector_version.outputs.version`
+# which is derived from a `vector.tf` regex match.
+
+name: Validate Vector config + VRL fixtures (#4293 FR5)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web-platform/infra/vector.toml"
+      - "apps/web-platform/infra/vector.tf"
+      - "apps/web-platform/test/infra/**"
+      - ".github/workflows/validate-vector-config.yml"
+  pull_request:
+    paths:
+      - "apps/web-platform/infra/vector.toml"
+      - "apps/web-platform/infra/vector.tf"
+      - "apps/web-platform/test/infra/**"
+      - ".github/workflows/validate-vector-config.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-vector-config:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Parse vector_version from vector.tf
+        id: vector_version
+        # IaC-3 drift safeguard: version is sourced from vector.tf locals at
+        # job-start time. No hardcoded Vector version in this YAML.
+        run: |
+          set -euo pipefail
+          v=$(awk -F'"' '/vector_version[[:space:]]*=/ { print $2; exit }' apps/web-platform/infra/vector.tf)
+          if [[ -z "$v" ]]; then
+            echo "ERROR: could not parse vector_version from vector.tf" >&2
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Vector version pinned: $v"
+
+      - name: Download Vector binary
+        env:
+          V: ${{ steps.vector_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -sLo /tmp/vector.tar.gz "https://packages.timber.io/vector/${V}/vector-${V}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/vector.tar.gz -C /tmp ./vector-x86_64-unknown-linux-gnu/bin/vector
+          sudo mv /tmp/vector-x86_64-unknown-linux-gnu/bin/vector /usr/local/bin/vector
+          vector --version
+
+      - name: Schema validate (vector validate)
+        env:
+          VECTOR_STRICT_ENV_VARS: "false"
+          BETTERSTACK_LOGS_TOKEN: dummy
+          SENTRY_USERID_PEPPER: dummy
+        run: vector validate --no-environment --config-toml apps/web-platform/infra/vector.toml
+
+      - name: VRL fixture tests (BLOCKING -- Arch-F4)
+        env:
+          SENTRY_USERID_PEPPER: fixture-only-do-not-use-in-prod
+        run: bash apps/web-platform/test/infra/vector-pii-scrub.test.sh
