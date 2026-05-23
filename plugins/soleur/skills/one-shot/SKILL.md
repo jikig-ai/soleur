@@ -18,11 +18,17 @@ If running against a tight budget, run `/soleur:plan` instead and review the pla
 
 If no Linear references match, this step is a no-op and `$ARGUMENTS` flows through unchanged.
 
-**Step 0a.5: Open-issue collision check.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `#[0-9]+` (zero or more GitHub issue references). For each distinct match `#<N>`:
+**Step 0a.5: Open-issue collision check.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `#[0-9]+` (zero or more GitHub issue references).
+
+**File-path target detection (pre-scan).** Before evaluating any `#N` refs, check whether `$ARGUMENTS` contains a token matching `[^\s]+\.(md|json)` that resolves to an existing file on disk (`test -f "$token"`). If a resolvable file path is found, set `FILE_PATH_TARGET=true` — the operator's target is the file, and any `#N` refs in the args are contextual citations, not work targets. In `FILE_PATH_TARGET=true` mode, the closed-issue abort in step 2 is downgraded to an advisory warning; the pipeline continues.
+
+For each distinct `#<N>` match:
 
 1. Run `gh issue view <N> --json state,closedByPullRequestsReferences --jq '{state, closed_by: [.closedByPullRequestsReferences[] | select(.isCrossRepository | not) | .number]}'`. If `gh` exits non-zero (no auth, network failure, issue not found in this repo), warn once on stderr (`WARNING: gh issue view #<N> failed; skipping collision check for this ref`) and continue without aborting — fail open so an infrastructure flake does not silently kill a legitimate run.
 
-2. **If `state == "CLOSED"`:** ABORT one-shot immediately with: `Issue #<N> is already closed (closed by PR #<closed_by[0]> if present). Aborting to avoid duplicate work — the issue's resolution is already in main. If you intend to do follow-on work, pass a plan file path or freeform description instead of #<N>, or re-open the issue first.` This abort fires in BOTH headless and interactive modes — closed-issue is an unambiguous "this work is done" signal and continuing wastes a full plan→work→review→ship cycle. Do NOT create the worktree, do NOT create the draft PR.
+2. **If `state == "CLOSED"` and `FILE_PATH_TARGET=false`:** ABORT one-shot immediately with: `Issue #<N> is already closed (closed by PR #<closed_by[0]> if present). Aborting to avoid duplicate work — the issue's resolution is already in main. If you intend to do follow-on work, pass a plan file path or freeform description instead of #<N>, or re-open the issue first.` This abort fires in BOTH headless and interactive modes — closed-issue is an unambiguous "this work is done" signal and continuing wastes a full plan→work→review→ship cycle. Do NOT create the worktree, do NOT create the draft PR.
+
+   **If `state == "CLOSED"` and `FILE_PATH_TARGET=true`:** Emit an advisory warning on stderr (`WARNING: #<N> is closed — treating as contextual reference, not a work target`) and continue. Do NOT abort.
 
 3. **If `state == "OPEN"`:** also run `gh pr list --search "linked:issue #<N>" --state open --json number,title --jq '.[] | "  #\(.number): \(.title)"'`. If any PRs are returned, surface a multi-line stderr warning naming each, then continue. In **interactive mode**, additionally pause via AskUserQuestion offering (a) continue (operator accepts collision risk — they may be racing intentionally or producing alternate designs), (b) abort (preferred when the listed PR is clearly the same scope). In **headless mode**, log the warning and continue — the operator will see it in the run log.
 
