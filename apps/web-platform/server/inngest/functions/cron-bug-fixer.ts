@@ -29,9 +29,9 @@
 //   (a) claude-code's plugin discovery (cwd-relative) finds the soleur
 //       plugin manifest at plugins/soleur/.claude-plugin/plugin.json;
 //   (b) the fix-issue skill's worktree-manager.sh has a real git repo
-//       to create worktrees against (Sharp Edge #6 resolution: option (c)
-//       in-handler clone fallback, since /mnt/data/repos/jikig-ai-soleur
-//       does NOT exist on Hetzner per Phase 0 verification).
+//       to create worktrees against. Clone is done in-handler (vs.
+//       relying on a pre-seeded repo path) because Hetzner has no
+//       checked-out repo tree at deploy time per Phase 0 verification.
 //
 // GH TOKEN (Q2, AC5) — installation token minted via createProbeOctokit()
 // → installation discovery → generateInstallationToken(installation.id).
@@ -52,6 +52,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
@@ -65,6 +66,12 @@ import { reportSilentFallback } from "@/server/observability";
 
 const SENTRY_MONITOR_SLUG = "scheduled-bug-fixer";
 const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
+const RESEND_TIMEOUT_MS = 10_000;
+
+// Token-lifetime floor passed to generateInstallationToken: claude-eval's
+// 50-min wall-clock budget + 10-min slack for setup + teardown + retry
+// (TR9 PR-5 security HIGH-1 — token expiry race vs. spawn budget).
+const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 
 // Repo coordinates. Aligned with createProbeOctokit's PROBE_ISSUE_OWNER /
 // PROBE_ISSUE_REPO constants (NOT re-exported here to keep this file
@@ -229,11 +236,14 @@ function resolveClaudeBin(): string {
   );
 }
 
-// Spawn-env allowlist. PR-1 shape + GH_TOKEN replaced by the freshly minted
-// installation token (NOT process.env.GH_TOKEN; we deliberately drop any
-// long-lived PAT inherited from the parent env per hr-github-app-auth-not-pat).
-// NEVER pass RESEND_API_KEY here — it is consumed by notify-ops-email OUTSIDE
-// the spawn, and the spawn's Bash tool could `env | curl` if it leaked in.
+// Spawn-env allowlist (NOT a denylist). PR-1 shape + GH_TOKEN replaced by
+// the freshly minted installation token (deliberately dropping any long-
+// lived PAT inherited from the parent env per hr-github-app-auth-not-pat).
+// The keys below are the COMPLETE set the spawned claude is allowed to
+// see; anything not listed (notably RESEND_API_KEY, SENTRY_*, DOPPLER_*,
+// GITHUB_APP_PRIVATE_KEY) is excluded. RESEND_API_KEY in particular is
+// consumed by notify-ops-email OUTSIDE the spawn — leaking it into the
+// child env would let a prompt-injected Bash invocation exfiltrate it.
 function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
@@ -260,15 +270,20 @@ function redactToken(s: string, token: string): string {
   return s.replaceAll(token, "[REDACTED-INSTALLATION-TOKEN]");
 }
 
-// Mint a fresh installation token. Cached 5min via tokenCache in
-// github-app.ts (cross-run cache reuse on warm containers).
+// Mint a fresh installation token with a lifetime floor that exceeds the
+// claude-eval wall-clock budget (TR9 PR-5 security HIGH-1). Without the
+// `minRemainingMs` guard, a warm cache entry minted ~50 min ago could be
+// returned with <14 min remaining, expiring mid-spawn → auth failures
+// inside the agent's gh CLI calls and git push.
 async function mintInstallationToken(): Promise<string> {
   const octokit = await createProbeOctokit();
   const { data: installation } = await octokit.request(
     "GET /repos/{owner}/{repo}/installation",
     { owner: REPO_OWNER, repo: REPO_NAME },
   );
-  return generateInstallationToken(installation.id);
+  return generateInstallationToken(installation.id, {
+    minRemainingMs: TOKEN_MIN_LIFETIME_MS,
+  });
 }
 
 // Spawn a child process and resolve with its exit status. Used for `git
@@ -300,7 +315,7 @@ function spawnSimple(
 async function setupEphemeralWorkspace(
   installationToken: string,
 ): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
-  const ephemeralRoot = await mkdtemp(join(tmpdir(), "cron-bug-fixer-"));
+  const ephemeralRoot = await mkdtemp(join(tmpdir(), "soleur-cron-bug-fixer-"));
   const spawnCwd = join(ephemeralRoot, "repo");
 
   // 1. git clone --depth=1 (token in URL is NEVER logged)
@@ -628,6 +643,24 @@ async function runAutoMergeGate(args: {
     );
     return { queued: true };
   } catch (err) {
+    // Idempotent path: under Inngest replay (step.run re-execution), the
+    // second call to enablePullRequestAutoMerge returns "Pull request Auto
+    // merge is already enabled". Treat as success — the prior call already
+    // enabled it. Match by message substring (case-insensitive) since the
+    // GraphQL response shape doesn't carry a stable error code.
+    const message = ((err as Error).message ?? "").toLowerCase();
+    if (
+      message.includes("auto merge is already enabled") ||
+      message.includes("auto-merge is already enabled") ||
+      message.includes("already enabled auto merge") ||
+      message.includes("already enabled auto-merge")
+    ) {
+      logger.info(
+        { fn: "cron-bug-fixer", prNumber: pr.number },
+        "Auto-merge already enabled (idempotent replay) — treating as queued",
+      );
+      return { queued: true };
+    }
     reportSilentFallback(err, {
       feature: "cron-bug-fixer",
       op: "enable-auto-merge",
@@ -679,7 +712,7 @@ async function notifyOpsEmail(args: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),
     });
     if (!resp.ok) {
       reportSilentFallback(
@@ -744,6 +777,16 @@ async function spawnClaudeEval(args: {
   logger: HandlerArgs["logger"];
 }): Promise<SpawnResult> {
   const { spawnCwd, installationToken, issueNumber, logger } = args;
+  // Defensive re-check: setup-workspace is memoized across Inngest replays,
+  // so the workspace path could be stale if the container restarted between
+  // setup and claude-eval. If it's missing, surface a typed error rather
+  // than letting `spawn` fail with a confusing ENOENT on cwd.
+  if (!existsSync(spawnCwd)) {
+    throw new Error(
+      `spawn cwd ${spawnCwd} no longer exists (container restart between setup-workspace and claude-eval?). ` +
+        `Re-run will re-execute setup-workspace and create a fresh ephemeral root.`,
+    );
+  }
   const claudeBin = resolveClaudeBin();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
@@ -754,16 +797,47 @@ async function spawnClaudeEval(args: {
 
   try {
     return await new Promise<SpawnResult>((resolve) => {
+      // stdio: pipe (NOT inherit) so we can redact the installation token
+      // from any output line BEFORE it reaches the parent's stdout/stderr
+      // and is scraped into centralized logs (TR9 PR-5 security HIGH-2 —
+      // prompt-injected `claude` could `echo $GH_TOKEN` / `env`). PR-1 and
+      // PR-4 use stdio:"inherit" safely because they don't inject a write-
+      // scoped GH_TOKEN into the child's env; PR-5 is the first cron-*
+      // function that does, so the redacting pipe is required here.
       const child = spawn(
         claudeBin,
         [...CLAUDE_CODE_FLAGS, fixIssuePrompt(issueNumber)],
         {
           detached: true,
-          stdio: ["ignore", "inherit", "inherit"],
+          stdio: ["ignore", "pipe", "pipe"],
           cwd: spawnCwd,
           env: buildSpawnEnv(installationToken),
         },
       );
+
+      // Stream stdout/stderr line-by-line through the redactor. Lines are
+      // emitted to logger.info (stdout) / logger.error (stderr) so they
+      // still land in centralized logs — with the token bytes stripped.
+      // readline.createInterface back-pressures naturally; no manual ring
+      // buffer needed since we forward-and-forget.
+      if (child.stdout) {
+        const rlOut = createInterface({ input: child.stdout });
+        rlOut.on("line", (line) => {
+          logger.info(
+            { fn: "cron-bug-fixer", stream: "stdout" },
+            redactToken(line, installationToken),
+          );
+        });
+      }
+      if (child.stderr) {
+        const rlErr = createInterface({ input: child.stderr });
+        rlErr.on("line", (line) => {
+          logger.error(
+            { fn: "cron-bug-fixer", stream: "stderr" },
+            redactToken(line, installationToken),
+          );
+        });
+      }
 
       const finish = (r: SpawnResult) => {
         exited = true;
@@ -1015,99 +1089,118 @@ export async function cronBugFixerHandler({
     };
   }
 
-  // --- Step 5: claude-eval (50-min AbortController) ---
-  const spawnResult = await step.run(
-    "claude-eval",
-    async (): Promise<SpawnResult> => {
-      return spawnClaudeEval({
-        spawnCwd: spawnCwd!,
-        installationToken,
-        issueNumber: selectedIssue,
-        logger,
-      });
-    },
-  );
-
-  if (spawnResult.abortedByTimeout) {
-    reportSilentFallback(
-      new Error(
-        `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
-      ),
-      {
-        feature: "cron-bug-fixer",
-        op: "claude-eval-timeout",
-        message: "claude-eval aborted by AbortController",
-        extra: {
-          fn: "cron-bug-fixer",
-          durationMs: spawnResult.durationMs,
-          maxMs: MAX_TURN_DURATION_MS,
-        },
+  // Wrap the entire post-setup pipeline in try/finally so the ephemeral
+  // workspace is torn down even if claude-eval throws at the Inngest step
+  // boundary (TR9 PR-5 perf MEDIUM + architecture R1 + data-integrity).
+  // The teardown side-effect outside step.run is acceptable because rm
+  // {recursive:true, force:true} is idempotent — a replay re-creates a
+  // fresh ephemeralRoot from setup-workspace's memoization (or the
+  // existsSync guard at the top of spawnClaudeEval rebuilds it).
+  try {
+    // --- Step 5: claude-eval (50-min AbortController) ---
+    const spawnResult = await step.run(
+      "claude-eval",
+      async (): Promise<SpawnResult> => {
+        return spawnClaudeEval({
+          spawnCwd: spawnCwd!,
+          installationToken,
+          issueNumber: selectedIssue,
+          logger,
+        });
       },
     );
-  }
 
-  // Teardown ephemeral workspace (best-effort; runs even if claude failed).
-  await teardownEphemeralWorkspace(ephemeralRoot);
+    if (spawnResult.abortedByTimeout) {
+      reportSilentFallback(
+        new Error(
+          `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
+        ),
+        {
+          feature: "cron-bug-fixer",
+          op: "claude-eval-timeout",
+          message: "claude-eval aborted by AbortController",
+          extra: {
+            fn: "cron-bug-fixer",
+            durationMs: spawnResult.durationMs,
+            maxMs: MAX_TURN_DURATION_MS,
+          },
+        },
+      );
+    }
 
-  // --- Step 6: detect-pr (even on non-zero exit; agent may have opened PR) ---
-  const detectedPr = await step.run("detect-pr", async () => {
-    const octokit = await createProbeOctokit();
-    return detectBotFixPr(octokit as unknown as Octokit, selectedIssue);
-  });
-
-  if (!detectedPr) {
-    logger.warn(
-      { fn: "cron-bug-fixer", selectedIssue },
-      "No bot-fix PR detected after claude-eval",
-    );
-    await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, logger });
+    // --- Step 6: detect-pr (even on non-zero exit; agent may have opened PR) ---
+    const detectedPr = await step.run("detect-pr", async () => {
+      const octokit = await createProbeOctokit();
+      return detectBotFixPr(octokit as unknown as Octokit, selectedIssue);
     });
+
+    if (!detectedPr) {
+      logger.warn(
+        { fn: "cron-bug-fixer", selectedIssue },
+        "No bot-fix PR detected after claude-eval",
+      );
+      await step.run("sentry-heartbeat", async () => {
+        await postSentryHeartbeat({ ok: spawnResult.ok, logger });
+      });
+      return {
+        selectedIssue,
+        prNumber: null,
+        autoMergeQueued: false,
+        ok: spawnResult.ok,
+      };
+    }
+
+    // --- Step 7: auto-merge-gate ---
+    const gateResult = await step.run("auto-merge-gate", async () => {
+      const octokit = await createProbeOctokit();
+      return runAutoMergeGate({
+        octokit: octokit as unknown as Octokit,
+        pr: detectedPr,
+        sourceIssueNumber: selectedIssue,
+        logger,
+      });
+    });
+
+    if (!gateResult.queued) {
+      logger.info(
+        { fn: "cron-bug-fixer", prNumber: detectedPr.number, reason: gateResult.reason },
+        "Auto-merge not queued",
+      );
+    }
+
+    // --- Step 8: notify-ops-email (only if auto-merge queued) ---
+    if (gateResult.queued) {
+      await step.run("notify-ops-email", async () => {
+        await notifyOpsEmail({ prNumber: detectedPr.number, logger });
+      });
+    }
+
+    // --- Step 9: sentry-heartbeat (final POST) ---
+    const overallOk = spawnResult.ok && !!detectedPr;
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({ ok: overallOk, logger });
+    });
+
     return {
       selectedIssue,
-      prNumber: null,
-      autoMergeQueued: false,
-      ok: spawnResult.ok,
+      prNumber: detectedPr.number,
+      autoMergeQueued: gateResult.queued,
+      ok: overallOk,
     };
-  }
-
-  // --- Step 7: auto-merge-gate ---
-  const gateResult = await step.run("auto-merge-gate", async () => {
-    const octokit = await createProbeOctokit();
-    return runAutoMergeGate({
-      octokit: octokit as unknown as Octokit,
-      pr: detectedPr,
-      sourceIssueNumber: selectedIssue,
-      logger,
-    });
-  });
-
-  if (!gateResult.queued) {
-    logger.info(
-      { fn: "cron-bug-fixer", prNumber: detectedPr.number, reason: gateResult.reason },
-      "Auto-merge not queued",
-    );
-  }
-
-  // --- Step 8: notify-ops-email (only if auto-merge queued) ---
-  if (gateResult.queued) {
-    await step.run("notify-ops-email", async () => {
-      await notifyOpsEmail({ prNumber: detectedPr.number, logger });
+  } finally {
+    // Best-effort teardown (idempotent rm -rf with force:true). The
+    // teardown helper already mirrors any failure to Sentry — wrapping
+    // in .catch() here is a paranoid double-net to ensure a teardown
+    // throw can never escape the finally and mask a real upstream error.
+    await teardownEphemeralWorkspace(ephemeralRoot).catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cron-bug-fixer",
+        op: "teardown-ephemeral-workspace-finally",
+        message: "teardownEphemeralWorkspace threw in finally block",
+        extra: { fn: "cron-bug-fixer", ephemeralRoot },
+      });
     });
   }
-
-  // --- Step 9: sentry-heartbeat (final POST) ---
-  const overallOk = spawnResult.ok && !!detectedPr;
-  await step.run("sentry-heartbeat", async () => {
-    await postSentryHeartbeat({ ok: overallOk, logger });
-  });
-
-  return {
-    selectedIssue,
-    prNumber: detectedPr.number,
-    autoMergeQueued: gateResult.queued,
-    ok: overallOk,
-  };
 }
 
 // =============================================================================

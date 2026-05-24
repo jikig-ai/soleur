@@ -143,7 +143,7 @@ beforeEach(() => {
   logger.error.mockReset();
 
   // Default healthy fixtures.
-  mkdtempSpy.mockResolvedValue("/tmp/cron-bug-fixer-XXXX");
+  mkdtempSpy.mockResolvedValue("/tmp/soleur-cron-bug-fixer-XXXX");
   mkdirSpy.mockResolvedValue(undefined);
   rmSpy.mockResolvedValue(undefined);
   symlinkSpy.mockResolvedValue(undefined);
@@ -152,6 +152,10 @@ beforeEach(() => {
     // claude binary + plugin sentinel resolve to true by default.
     if (p.endsWith("/node_modules/.bin/claude")) return true;
     if (p.includes(".claude-plugin/plugin.json")) return true;
+    // Ephemeral workspace cwd guard (added for TR9 PR-5 P2.1 try/finally
+    // refactor — spawnClaudeEval re-checks existsSync(spawnCwd) before
+    // spawning to defend against container-restart-between-steps).
+    if (p.includes("soleur-cron-bug-fixer-") && p.endsWith("/repo")) return true;
     return false;
   });
 
@@ -919,5 +923,355 @@ describe("cron-bug-fixer — manual-trigger override validation", () => {
     expect(result.selectedIssue).toBe(1234);
     // Cascade NOT consulted when override is provided
     expect(issuesCallCount).toBe(0);
+  });
+});
+
+// ===========================================================================
+// (P2.2) Token-redaction sentinel sweep — TR9 PR-5 security HIGH-2
+// ===========================================================================
+//
+// Sentinel: the installation token bytes MUST NEVER reach any observability
+// sink (reportSilentFallback, logger.{info,warn,error}, fetch body). The
+// production code uses redactToken() defensively, but the strongest signal
+// is a "no, really, the bytes never appeared" sweep across all mock calls.
+
+describe("cron-bug-fixer — token-redaction sentinel sweep", () => {
+  const SENTINEL_TOKEN = "ghs_TESTTOKEN_REDACT_ME";
+
+  function assertSentinelAbsent() {
+    // Stringify every mock-call argument list and grep for the sentinel.
+    const allCalls = [
+      ...reportSilentFallbackSpy.mock.calls,
+      ...logger.info.mock.calls,
+      ...logger.warn.mock.calls,
+      ...logger.error.mock.calls,
+      ...(globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls,
+    ];
+    const serialized = JSON.stringify(allCalls);
+    expect(serialized).not.toContain(SENTINEL_TOKEN);
+  }
+
+  it("happy path: sentinel never appears in observability sinks", async () => {
+    const p3Issues = [
+      {
+        number: 1100,
+        title: "fix: redact sweep happy",
+        labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ];
+    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
+      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
+        return { data: [] };
+      }
+      return { data: {} };
+    });
+
+    wireSpawn(0);
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    await cronBugFixerHandler({ step, logger });
+
+    assertSentinelAbsent();
+  });
+
+  it("git-clone failure: sentinel never leaks via error message", async () => {
+    const p3Issues = [
+      {
+        number: 1101,
+        title: "fix: redact sweep clone-fail",
+        labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ];
+    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
+      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
+        return { data: [] };
+      }
+      return { data: {} };
+    });
+
+    // Force git clone to exit non-zero — the resulting Error.message MUST
+    // NOT include the token-bearing clone URL.
+    spawnSpy.mockImplementation((cmd: string) => {
+      const child = makeChild();
+      if (cmd === "git") {
+        queueMicrotask(() => child.emit("exit", 128, null));
+      } else {
+        queueMicrotask(() => child.emit("exit", 0, null));
+      }
+      return child;
+    });
+
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    await cronBugFixerHandler({ step, logger });
+
+    assertSentinelAbsent();
+  });
+});
+
+// ===========================================================================
+// (P2.3) Workspace cleanup — try/finally teardown
+// ===========================================================================
+
+describe("cron-bug-fixer — workspace cleanup (try/finally)", () => {
+  it("happy path: teardown rm called with recursive+force on ephemeral root", async () => {
+    const p3Issues = [
+      {
+        number: 1200,
+        title: "fix: teardown happy",
+        labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ];
+    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
+      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
+        return { data: [] };
+      }
+      return { data: {} };
+    });
+
+    wireSpawn(0);
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    await cronBugFixerHandler({ step, logger });
+
+    // Find the teardown call: rm(ephemeralRoot, {recursive:true, force:true}).
+    // (Other rm calls happen during setupEphemeralWorkspace for the plugin
+    // dir — those target a path containing "plugins/soleur".)
+    const teardownCall = rmSpy.mock.calls.find(([p, opts]) => {
+      const path = p as string;
+      const o = opts as { recursive?: boolean; force?: boolean } | undefined;
+      return (
+        path.includes("soleur-cron-bug-fixer-") &&
+        !path.includes("plugins/soleur") &&
+        o?.recursive === true &&
+        o?.force === true
+      );
+    });
+    expect(teardownCall).toBeDefined();
+  });
+
+  it("claude-eval non-zero exit: teardown still runs (try/finally)", async () => {
+    const p3Issues = [
+      {
+        number: 1201,
+        title: "fix: teardown after claude-fail",
+        labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
+        created_at: "2026-05-01T00:00:00Z",
+      },
+    ];
+    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string }) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
+      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        if (params.labels?.includes("priority/p3-low")) return { data: p3Issues };
+        return { data: [] };
+      }
+      return { data: {} };
+    });
+
+    wireSpawn(1); // claude exits non-zero
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    await cronBugFixerHandler({ step, logger });
+
+    const teardownCall = rmSpy.mock.calls.find(([p, opts]) => {
+      const path = p as string;
+      const o = opts as { recursive?: boolean; force?: boolean } | undefined;
+      return (
+        path.includes("soleur-cron-bug-fixer-") &&
+        !path.includes("plugins/soleur") &&
+        o?.recursive === true &&
+        o?.force === true
+      );
+    });
+    expect(teardownCall).toBeDefined();
+  });
+});
+
+// ===========================================================================
+// (P2.4) Auto-merge gate idempotency under Inngest replay
+// ===========================================================================
+
+describe("cron-bug-fixer — auto-merge gate idempotency", () => {
+  const SOURCE_ISSUE = 1300;
+  const PR_NUMBER = 1301;
+  const PR_NODE_ID = "PR_idempotent";
+
+  function wireOctokitForReplay() {
+    const p3Issue = {
+      number: SOURCE_ISSUE,
+      title: "fix: idempotent replay",
+      labels: [{ name: "priority/p3-low" }, { name: "type/bug" }],
+      created_at: "2026-05-01T00:00:00Z",
+    };
+    // Per-handler-invocation call counter: the skip-list build is the first
+    // /pulls call in each run, detect-pr is the second. Multiple consecutive
+    // handler runs (simulating Inngest replay) reset this via the modulo
+    // pattern below — the bot-fix PR is "already open" on the second run's
+    // skip-list scan too, so selectIssue would return null. Instead we
+    // return the bot-fix PR ONLY on detect-pr calls (odd-indexed within
+    // a 2-call cycle), and an empty list on skip-list scans.
+    let pullsCallCount = 0;
+    octokitRequestSpy.mockImplementation(async (route: string, params: { labels?: string; issue_number?: number }) => {
+      if (route === "GET /repos/{owner}/{repo}/installation") return { data: { id: 12345 } };
+      if (route === "GET /repos/{owner}/{repo}/pulls") {
+        pullsCallCount++;
+        // Even-indexed call (1st of each run) = skip-list scan → empty
+        if (pullsCallCount % 2 === 1) return { data: [] };
+        return {
+          data: [
+            {
+              number: PR_NUMBER,
+              node_id: PR_NODE_ID,
+              head: { ref: `bot-fix/${SOURCE_ISSUE}-fix` },
+              created_at: "2026-05-01T01:00:00Z",
+            },
+          ],
+        };
+      }
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        if (params.labels?.includes("priority/p3-low")) return { data: [p3Issue] };
+        return { data: [] };
+      }
+      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") {
+        return { data: { user: { login: "app/claude" } } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/labels") {
+        if (params.issue_number === SOURCE_ISSUE) {
+          return { data: [{ name: "priority/p3-low" }] };
+        }
+        if (params.issue_number === PR_NUMBER) {
+          return { data: [{ name: "bot-fix/auto-merge-eligible" }] };
+        }
+        return { data: [] };
+      }
+      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
+        return { data: [{ filename: "fix.ts" }] };
+      }
+      return { data: {} };
+    });
+  }
+
+  it("returns queued: true twice when mutation succeeds idempotently (stable enabledAt)", async () => {
+    wireOctokitForReplay();
+    wireSpawn(0);
+
+    // GraphQL returns the same enabledAt on both calls (GitHub's documented
+    // idempotent behavior — repeated enable returns the original timestamp).
+    const stableEnabledAt = "2026-05-24T06:00:00Z";
+    octokitGraphqlSpy.mockResolvedValue({
+      enablePullRequestAutoMerge: {
+        pullRequest: { autoMergeRequest: { enabledAt: stableEnabledAt } },
+      },
+    });
+
+    const { cronBugFixerHandler } = await importHandler();
+    const step1 = makeStep();
+    const r1 = await cronBugFixerHandler({ step: step1, logger });
+    expect(r1.autoMergeQueued).toBe(true);
+
+    // Reset only the run-scoped spies that should drift between runs;
+    // keep the octokit wiring (Inngest replay re-invokes step.run callbacks
+    // against the same external state).
+    const step2 = makeStep();
+    const r2 = await cronBugFixerHandler({ step: step2, logger });
+    expect(r2.autoMergeQueued).toBe(true);
+  });
+
+  it("treats 'auto-merge is already enabled' GraphQL error as queued: true", async () => {
+    wireOctokitForReplay();
+    wireSpawn(0);
+
+    octokitGraphqlSpy.mockRejectedValueOnce(
+      new Error("Pull request Auto merge is already enabled"),
+    );
+
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(true);
+    // The idempotent path MUST NOT emit a Sentry breadcrumb for the
+    // expected-replay error (otherwise replays would inflate noise).
+    const enableAutoMergeErr = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string }).op === "enable-auto-merge",
+    );
+    expect(enableAutoMergeErr).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// SOLEUR_PLUGIN_PATH prefix validation (defense-in-depth, MEDIUM-1)
+// ===========================================================================
+
+describe("plugin-path — SOLEUR_PLUGIN_PATH prefix validation", () => {
+  const ORIG_OVERRIDE = process.env.SOLEUR_PLUGIN_PATH;
+  const ORIG_VITEST = process.env.VITEST;
+  const ORIG_NODE_ENV = process.env.NODE_ENV;
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  // Simulate production env by clearing test markers so the prefix
+  // guard actually engages. (In production, VITEST is unset and
+  // NODE_ENV=production.)
+  beforeEach(() => {
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "production";
+  });
+
+  afterEach(() => {
+    if (ORIG_OVERRIDE === undefined) delete process.env.SOLEUR_PLUGIN_PATH;
+    else process.env.SOLEUR_PLUGIN_PATH = ORIG_OVERRIDE;
+    if (ORIG_VITEST === undefined) delete process.env.VITEST;
+    else process.env.VITEST = ORIG_VITEST;
+    if (ORIG_NODE_ENV === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = ORIG_NODE_ENV;
+    warnSpy.mockClear();
+  });
+
+  it("accepts override starting with /app/", async () => {
+    process.env.SOLEUR_PLUGIN_PATH = "/app/shared/plugins/soleur";
+    vi.resetModules();
+    vi.doUnmock("@/server/plugin-path");
+    const mod = await import("@/server/plugin-path");
+    expect(mod.getPluginPath()).toBe("/app/shared/plugins/soleur");
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects override outside allowlisted prefix and warns (production env)", async () => {
+    process.env.SOLEUR_PLUGIN_PATH = "/tmp/attacker-controlled/plugins/soleur";
+    vi.resetModules();
+    vi.doUnmock("@/server/plugin-path");
+    const mod = await import("@/server/plugin-path");
+    expect(mod.getPluginPath()).toBe("/app/shared/plugins/soleur");
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it("falls back to default when env unset", async () => {
+    delete process.env.SOLEUR_PLUGIN_PATH;
+    vi.resetModules();
+    vi.doUnmock("@/server/plugin-path");
+    const mod = await import("@/server/plugin-path");
+    expect(mod.getPluginPath()).toBe("/app/shared/plugins/soleur");
+  });
+
+  it("test bypass: accepts /tmp override when VITEST set", async () => {
+    process.env.VITEST = "1";
+    process.env.SOLEUR_PLUGIN_PATH = "/tmp/vitest-fixture/plugins/soleur";
+    vi.resetModules();
+    vi.doUnmock("@/server/plugin-path");
+    const mod = await import("@/server/plugin-path");
+    expect(mod.getPluginPath()).toBe("/tmp/vitest-fixture/plugins/soleur");
   });
 });
