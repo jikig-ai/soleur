@@ -51,6 +51,11 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.anonymise_organization_membership(uuid)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.anonymise_organization_membership(uuid)
+  TO service_role;
+
 -- Part 2 inverse: audit_byok_use.founder_id SET NULL → RESTRICT + NOT NULL.
 -- Requires any NULL rows to be removed first (audit rows from Art-17-
 -- anonymised users post-065). DELETE NULL rows to satisfy NOT NULL.

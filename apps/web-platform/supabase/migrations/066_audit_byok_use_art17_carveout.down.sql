@@ -13,6 +13,9 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.audit_byok_use_no_mutate()
+  FROM PUBLIC, anon, authenticated, service_role;
+
 DROP TRIGGER IF EXISTS audit_byok_use_no_update ON public.audit_byok_use;
 CREATE TRIGGER audit_byok_use_no_update
   BEFORE UPDATE ON public.audit_byok_use
