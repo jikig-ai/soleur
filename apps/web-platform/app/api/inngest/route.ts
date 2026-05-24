@@ -21,6 +21,7 @@ import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
+import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
 import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
 import { workspaceReconcileOnPush } from "@/server/inngest/functions/workspace-reconcile-on-push";
@@ -42,6 +43,7 @@ export const { GET, POST, PUT } = serve({
     cfoOnPaymentFailed,
     cronDailyTriage,
     cronFollowThroughMonitor,
+    cronGithubAppDriftGuard,
     cronOauthProbe,
     githubOnEvent,
     workspaceReconcileOnPush,

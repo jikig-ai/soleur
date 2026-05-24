@@ -6,10 +6,12 @@
 #         (prints the 20-char project ref to stdout; exits non-zero on failure)
 #
 # This is the canonical resolver for bash callers. The TypeScript counterpart
-# lives at apps/web-platform/server/inngest/functions/cron-oauth-probe.ts
-# (`resolveCname`) and the YAML inline form at .github/workflows/reusable-release.yml.
-# Migrating those two sites onto this helper is tracked separately (see the
-# follow-up issue referenced from this file's git history / PR #4320 review).
+# lives at apps/web-platform/lib/supabase/resolve-ref.ts (`resolveSupabaseRef`)
+# and is consumed by .github/workflows/reusable-release.yml via `source` of
+# this file. Parity between the bash and TS forms is asserted by
+# apps/web-platform/test/lib/supabase/resolve-ref-parity.test.ts and
+# apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh (T6 covers the
+# subdomain-bypass case).
 #
 # Subdomain-bypass guard: the resolved hostname MUST match
 # `^[a-z0-9]{20}\.supabase\.co$` before the first label is extracted as a
@@ -30,9 +32,13 @@ resolve_supabase_ref() {
   fi
 
   # Fast path: canonical https://<ref>.supabase.co — single sed extract.
+  # The {20} length anchor matches the subdomain-bypass guard on the CNAME
+  # branch (line ~58) and the TS sibling's CANONICAL_URL_RE. Without the
+  # length pin, an off-spec URL like `https://abc.supabase.co` would short-
+  # circuit the guard. Parity is locked by resolve-ref-parity.test.ts.
   local ref
   ref="$(printf '%s' "$url" \
-    | sed -nE 's#^https?://([a-z0-9]+)\.supabase\.co/?$#\1#p')"
+    | sed -nE 's#^https?://([a-z0-9]{20})\.supabase\.co/?$#\1#p')"
   if [[ -n "$ref" ]]; then
     printf '%s' "$ref"
     return 0

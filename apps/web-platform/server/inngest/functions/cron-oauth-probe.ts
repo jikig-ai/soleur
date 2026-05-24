@@ -27,11 +27,11 @@
 // `record_failure` call sites so the existing runbook and tracking issues
 // keep working without remapping. See switch in `probeOauth()` below.
 
-import { promises as dnsPromises } from "node:dns";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { createProbeOctokit } from "@/server/github/probe-octokit";
+import { resolveSupabaseRef } from "@/lib/supabase/resolve-ref";
 import {
   GITHUB_REDIRECT_URI_ERROR_SENTINEL,
   GITHUB_APP_SUSPENDED_SENTINEL,
@@ -274,20 +274,6 @@ async function checkRedirect(
   return null;
 }
 
-// resolveCname — mimics `dig +short CNAME <host>` head -1 with the
-// trailing `.supabase.co.?` stripped. Used to cross-check the static
-// SUPABASE_PROJECT_REF env var against the live custom-domain CNAME.
-async function resolveSupabaseRefFromCname(apiHost: string): Promise<string | null> {
-  try {
-    const cnames = await dnsPromises.resolveCname(apiHost);
-    if (!cnames.length) return null;
-    const first = cnames[0]!;
-    return first.replace(/\.supabase\.co\.?$/, "");
-  } catch {
-    return null;
-  }
-}
-
 // Main probe — translates the deleted scheduled-oauth-probe GHA workflow
 // (lines 71-422) to TS.
 // Returns the first failure encountered (matching the bash workflow's
@@ -348,7 +334,11 @@ async function probeOauth(): Promise<ProbeResult> {
 
   // 3c. SUPABASE_PROJECT_REF integrity (CNAME deref vs. stored secret).
   // CNAME deref failure → fall back to the secret (better than no probe).
-  const cnameRef = (await resolveSupabaseRefFromCname(apiHost)) ?? supabaseProjectRef;
+  // resolveSupabaseRef is the canonical resolver (bash + TS parity); it
+  // expects the URL form `https://<host>` so the fast-path canonical regex
+  // can apply when API_HOST is already canonical.
+  const cnameRef =
+    (await resolveSupabaseRef(`https://${apiHost}`)) ?? supabaseProjectRef;
   if (cnameRef !== supabaseProjectRef) {
     return {
       failureMode: "supabase_project_ref_drift",
@@ -764,7 +754,6 @@ export const __TESTING__ = {
   checkRedirect,
   classifyGithubAuthorizeBody,
   stripLogInjection,
-  resolveSupabaseRefFromCname,
   buildIssueBody,
   handleTrackingIssue,
   notifyOpsEmail,

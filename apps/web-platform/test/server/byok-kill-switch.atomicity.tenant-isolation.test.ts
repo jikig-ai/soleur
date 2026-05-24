@@ -150,6 +150,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           service.rpc("record_byok_use_and_check_cap", {
             p_invocation_id: randomUUID(),
             p_founder_id: founder.id,
+            p_workspace_id: founder.id, // solo-canary per mig 059 backfill
             p_agent_role: "test-atomicity",
             p_token_count: 10,
             p_unit_cost_cents: 10,

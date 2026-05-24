@@ -88,10 +88,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     test("Harry's workspace_members row is visible BEFORE removal (AC10 pre-state)", async () => {
       if (SCHEMA_CACHE_READY === false) return;
       const harry = fixture.members[1];
+      // Scope to the fixture workspace: handle_new_user (mig 053) provisions
+      // a solo backfill row for each synthetic user at workspace_id=user.id,
+      // so the unscoped SELECT returns 2 rows. The DSAR property under test
+      // is the membership in the SHARED workspace.
       const { data } = await service
         .from("workspace_members")
         .select("workspace_id, user_id, role")
-        .eq("user_id", harry.userId);
+        .eq("user_id", harry.userId)
+        .eq("workspace_id", fixture.workspaceId);
       expect(data).toHaveLength(1);
       expect(data![0].workspace_id).toBe(fixture.workspaceId);
       expect(data![0].role).toBe("member");
@@ -99,22 +104,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
     test("After remove_workspace_member, Harry's member row is gone but his founder_id-keyed rows remain (AC10)", async () => {
       if (SCHEMA_CACHE_READY === false) return;
-      const owner = fixture.members[0];
       const harry = fixture.members[1];
 
-      // Owner removes Harry. The migration-054 RPC also marks the
-      // attestation row by adding the actor; here fixture.attestation_id
-      // was NULL so the RPC just DELETEs the membership.
+      // remove_workspace_member is 2-arg (p_workspace_id, p_user_id) per
+      // mig 062:272; the SECURITY DEFINER body reads the actor from
+      // auth.uid(). Service-role contexts have auth.uid() = NULL so the
+      // RPC raises 28000; fallback DELETE is the canonical removal path
+      // here (mirrors workspace-members.test.ts:113-119 precedent).
       const { error: rmErr } = await service.rpc("remove_workspace_member", {
         p_workspace_id: fixture.workspaceId,
         p_user_id: harry.userId,
-        p_actor_user_id: owner.userId,
       });
-      // The RPC may return an error if the actor isn't the owner under
-      // RLS — we used service-role above so the SECURITY DEFINER body
-      // runs. If the RPC signature differs in dev (older overload),
-      // fall back to a direct DELETE to keep the test exercising the
-      // post-removal property.
       if (rmErr) {
         const { error: delErr } = await service
           .from("workspace_members")
@@ -124,11 +124,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(delErr).toBeNull();
       }
 
-      // Harry's membership row is gone.
+      // Harry's membership in the SHARED workspace is gone. (Harry's own
+      // solo backfill row at workspace_id=harry.id is intentionally NOT
+      // touched by remove_workspace_member — DSAR Art-17 cascade is what
+      // tears that down via deleteAccount, exercised in the next test.)
       const { data: afterRows } = await service
         .from("workspace_members")
         .select("workspace_id, user_id")
-        .eq("user_id", harry.userId);
+        .eq("user_id", harry.userId)
+        .eq("workspace_id", fixture.workspaceId);
       expect(afterRows).toHaveLength(0);
 
       // But Harry's identity AS auth.users row still exists — DSAR
