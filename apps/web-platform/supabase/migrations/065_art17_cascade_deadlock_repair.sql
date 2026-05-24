@@ -59,6 +59,39 @@
 --      out of scope for #4356.
 --
 -- =============================================================
+-- Schema preconditions (lint-migration-fk-preconditions gate)
+-- =============================================================
+--
+-- Mig 065 re-declares FKs from public.organizations and public.audit_byok_use
+-- to public.users(id). Both reference tables exist via mig 001 / 053 / 037,
+-- but the migration FK linter requires an explicit to_regclass precondition
+-- for any cross-file FK reference to surface schema-vs-ledger drift early
+-- (knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-
+-- supabase.md). Idempotent: bare existence probe + RAISE EXCEPTION on miss.
+
+DO $$
+BEGIN
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'Migration 065 precondition failed: public.users does not exist.',
+      DETAIL  = '_schema_migrations may claim 001_initial_schema is applied while public.users is absent (schema-vs-ledger drift class #4338).',
+      HINT    = 'Recovery: knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md.';
+  END IF;
+  IF to_regclass('public.organizations') IS NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'Migration 065 precondition failed: public.organizations does not exist.',
+      DETAIL  = '_schema_migrations may claim 053_organizations_and_workspace_members is applied while public.organizations is absent.',
+      HINT    = 'Recovery: knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md.';
+  END IF;
+  IF to_regclass('public.audit_byok_use') IS NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'Migration 065 precondition failed: public.audit_byok_use does not exist.',
+      DETAIL  = '_schema_migrations may claim 037_audit_byok_use is applied while public.audit_byok_use is absent.',
+      HINT    = 'Recovery: knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md.';
+  END IF;
+END $$;
+
+-- =============================================================
 -- Part 1 — organizations.owner_user_id: RESTRICT → SET NULL
 -- =============================================================
 --
