@@ -127,9 +127,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // write_byok_audit RPC (service-role; RLS-bypass for fixture
       // setup only).
       for (const user of [userA, userB]) {
+        // Mig 061 added p_workspace_id (6-arg signature) — solo-canary
+        // workspace per mig 053 handle_new_user.
         const { error } = await service.rpc("write_byok_audit", {
           p_invocation_id: randomUUID(),
           p_founder_id: user.id,
+          p_workspace_id: user.id,
           p_agent_role: "cross-tenant-read-denied",
           p_token_count: 11,
           p_unit_cost_cents: 3,

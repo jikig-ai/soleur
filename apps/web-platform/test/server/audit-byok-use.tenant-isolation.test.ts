@@ -84,9 +84,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       }
 
       // Seed one audit row for userA via the canonical RPC (write_byok_audit).
+      // Mig 061 added p_workspace_id (6-arg signature) — solo-canary workspace
+      // per mig 053 handle_new_user (workspaces.id === users.id per ADR-038 N2).
       const { error: writeError } = await service.rpc("write_byok_audit", {
         p_invocation_id: randomUUID(),
         p_founder_id: userA.id,
+        p_workspace_id: userA.id,
         p_agent_role: "test-worm",
         p_token_count: 42,
         p_unit_cost_cents: 7,
