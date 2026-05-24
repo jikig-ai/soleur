@@ -75,15 +75,22 @@ export type ActionClassCategory =
 //
 // PR-H #3244 rationale: GitHub-sourced classes default to
 // `draft_one_click` (highest-friction tier short of "approve each one").
-// KB-drift is the single exception: it carries no founder-routed PII at
-// all (internal link health) and defaults to `auto`.
+//
+// PR-A #4124 bump: knowledge.kb_drift bumped from `auto` to
+// `draft_one_click` so the KbDriftCard "Fix link" / "Update anchor"
+// click reaches the /send route's non-400 path (the spawn-agent
+// Inngest function then emits a deterministic GitHub label
+// acknowledgment per ADR-039 §PR-A). The producer-side digest emitter
+// remains deferred to PR-I; no current writer assumed the old `auto`
+// value for kb_drift (verified by test/server/scope-grants/
+// kb-drift-tier-bump.test.ts producer-side cascade grep).
 export const ACTION_CLASS_DEFAULTS: Record<ActionClass, ActionClassTier> = {
   "finance.payment_failed": "approve_every_time",
   "engineering.pr_review_pending": "draft_one_click",
   "engineering.ci_failed": "draft_one_click",
   "triage.p0p1_issue": "draft_one_click",
   "security.cve_alert": "approve_every_time",
-  "knowledge.kb_drift": "auto",
+  "knowledge.kb_drift": "draft_one_click",
   "external.low_stakes.customer_status_update": "draft_one_click",
   "external.low_stakes.vendor_support_ticket": "draft_one_click",
   "external.low_stakes.bluesky_reply_personal": "draft_one_click",

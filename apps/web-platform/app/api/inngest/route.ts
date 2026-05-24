@@ -17,6 +17,7 @@
 
 import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
+import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
@@ -38,6 +39,7 @@ if (!IS_BUILD_PHASE && !SIGNING_KEY) {
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [
+    agentOnSpawnRequested,
     cfoOnPaymentFailed,
     cronDailyTriage,
     cronFollowThroughMonitor,

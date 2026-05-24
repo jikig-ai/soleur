@@ -78,6 +78,16 @@ vi.mock("@/server/templates/template-registry", () => ({
   getTemplateHash: vi.fn(() => "template-hash-stub"),
 }));
 
+// PR-A (#4124): /send route now imports `inngest` from
+// @/server/inngest/client, which throws at module load on missing
+// INNGEST_SIGNING_KEY. Mock prevents the env-throw + records calls for
+// any test that wants to assert dispatch (existing matrix does not).
+vi.mock("@/server/inngest/client", () => ({
+  inngest: {
+    send: vi.fn(async () => ({ ids: ["evt-stub"] })),
+  },
+}));
+
 vi.mock("@/server/logger", () => ({
   default: {
     info: vi.fn(),
