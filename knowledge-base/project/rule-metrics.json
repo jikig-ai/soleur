@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-05-17T01:46:08Z",
+  "generated_at": "2026-05-24T01:52:25Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -328,6 +328,19 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-fresh-host-provisioning-reachable-from-terraform-apply",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-gdpr-gate-on-regulated-data-surfaces",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -342,6 +355,19 @@
     },
     {
       "id": "hr-github-api-endpoints-with-enum",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-github-app-auth-not-pat",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -497,7 +523,85 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-no-ssh-fallback-in-runbooks",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-observability-as-plan-quality-gate",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-observability-layer-citation",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-ship-message-no-operator-checklist",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-ssh-diagnosis-verify-firewall",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-tagged-build-workflow-needs-initial-tag-push",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-tf-variable-no-operator-mint-default",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -754,7 +858,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-after-marking-a-pr-ready-run-gh-pr-merge",
@@ -809,7 +913,7 @@
       "rule_text_prefix": " → core"
     },
     {
-      "id": "wg-before-every-commit-run-compound-skill",
+      "id": "wg-block-pr-ready-on-undeferred-operator-steps",
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
@@ -820,6 +924,19 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": " → core"
+    },
+    {
+      "id": "wg-end-of-work-emit-resume-prompt",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-every-feature-listed-in-a-roadmap-phase",
@@ -858,7 +975,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-plan-prescribed-skills-must-run-inline",
@@ -871,7 +988,20 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
+    },
+    {
+      "id": "wg-pm-class-followthrough-for-operator-dogfood",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-ship-push-before-merge",
@@ -949,7 +1079,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-when-deferring-a-capability-create-a",
@@ -975,20 +1105,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "wg-when-moving-github-issues-between",
-      "section": "Workflow Gates",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → core"
+      "rule_text_prefix": " → rest"
     },
     {
       "id": "wg-when-tests-fail-and-are-confirmed-pre",
@@ -1018,8 +1135,8 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 78,
-    "rules_unused_over_8w": 78,
+    "total_rules_tagged": 87,
+    "rules_unused_over_8w": 87,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,
