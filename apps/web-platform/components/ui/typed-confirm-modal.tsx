@@ -34,6 +34,15 @@ export interface TypedConfirmModalProps {
   contentExcerpt: string;
   actionClassLabel: string;
   tierLabel: string;
+  /**
+   * PR-A (#4124) — Optional override for the "Recipient" cell label.
+   * GitHubCard's `approve_every_time` flow (cve_alert, secret-scan-)
+   * passes `actionTargetLabel="PR #<n>"` or `"issue #<n>"` so the modal
+   * names the GitHub target rather than the placeholder
+   * recipientIdentifier. Backwards-compatible default = `recipientExcerpt`.
+   * StripeCard's pre-PR-A behavior is unchanged.
+   */
+  actionTargetLabel?: string;
   onCancel: () => void;
   // confirmedTyped + typedValue are passed back so the parent can POST
   // with the exact values the founder typed.
@@ -48,6 +57,7 @@ export function TypedConfirmModal({
   contentExcerpt,
   actionClassLabel,
   tierLabel,
+  actionTargetLabel,
   onCancel,
   onConfirm,
 }: TypedConfirmModalProps) {
@@ -123,10 +133,10 @@ export function TypedConfirmModal({
 
         <div className="mb-3 rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 p-3">
           <div className="mb-1 text-xs font-medium uppercase tracking-wide text-soleur-text-secondary">
-            Recipient
+            {actionTargetLabel ? "Target" : "Recipient"}
           </div>
           <div className="break-words text-sm text-soleur-text-primary">
-            {recipientExcerpt || "(empty)"}
+            {actionTargetLabel ?? (recipientExcerpt || "(empty)")}
           </div>
         </div>
 

@@ -480,20 +480,19 @@ jobs:
               exit 1
               ;;
           esac
-          host=$(printf '%s' "$SUPABASE_URL" | sed -E 's#^https://##; s#/.*$##')
-          if [[ "$host" =~ ^[a-z0-9]{20}\.supabase\.co$ ]]; then
-            expected_ref="${host%%.*}"
-          else
-            # Bound DNS wall-clock on resolver flake: 3s timeout, 2 tries (max ~6s).
-            cname=$(dig +short +time=3 +tries=2 CNAME "$host" | sed 's/\.$//' | head -1)
-            if [[ "$cname" =~ ^([a-z0-9]{20})\.supabase\.co$ ]]; then
-              expected_ref="${BASH_REMATCH[1]}"
-            else
-              cname_safe="${cname//[$'\n\r']/}"
-              host_safe="${host//[$'\n\r']/}"
-              echo "::error::Cannot resolve canonical ref from URL host $host_safe (CNAME=$cname_safe)"
-              exit 1
-            fi
+          # Derive the canonical 20-char ref from $SUPABASE_URL via the
+          # single-sourced resolver (handles both canonical *.supabase.co
+          # URLs AND custom-domain CNAME fallback, with the subdomain-bypass
+          # anchored regex). Future tuning of the regex / DNS timeout lives
+          # in one place. DNS wall-clock widens from ~6s (was +time=3 +tries=2)
+          # to ~10s (helper-pinned +time=5 +tries=2) — deliberate, per #4323
+          # AC11.
+          # shellcheck source=apps/web-platform/scripts/lib/supabase-ref-resolver.sh
+          . apps/web-platform/scripts/lib/supabase-ref-resolver.sh
+          if ! expected_ref=$(resolve_supabase_ref "$SUPABASE_URL" 2>&1); then
+            expected_ref_safe="${expected_ref//[$'\n\r']/}"
+            echo "::error::${expected_ref_safe}"
+            exit 1
           fi
           if [[ "$ref" != "$expected_ref" ]]; then
             echo "::error::JWT ref=\"$ref_safe\" does not match URL canonical ref=\"$expected_ref\""
