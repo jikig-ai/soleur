@@ -1225,18 +1225,22 @@ describe("plugin-path — SOLEUR_PLUGIN_PATH prefix validation", () => {
   // Simulate production env by clearing test markers so the prefix
   // guard actually engages. (In production, VITEST is unset and
   // NODE_ENV=production.)
+  // CI's TS resolution treats process.env.NODE_ENV as read-only (vitest 3
+  // narrows it via `@types/node` augmentation). Use vi.stubEnv to mutate
+  // safely across environments — also unstubs cleanly.
   beforeEach(() => {
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "production";
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
   });
 
   afterEach(() => {
     if (ORIG_OVERRIDE === undefined) delete process.env.SOLEUR_PLUGIN_PATH;
     else process.env.SOLEUR_PLUGIN_PATH = ORIG_OVERRIDE;
-    if (ORIG_VITEST === undefined) delete process.env.VITEST;
-    else process.env.VITEST = ORIG_VITEST;
-    if (ORIG_NODE_ENV === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = ORIG_NODE_ENV;
+    vi.unstubAllEnvs();
+    // Restore ORIG_VITEST + ORIG_NODE_ENV explicitly when they were set
+    // pre-test (vi.unstubAllEnvs reverts vi.stubEnv writes only).
+    if (ORIG_VITEST !== undefined) vi.stubEnv("VITEST", ORIG_VITEST);
+    if (ORIG_NODE_ENV !== undefined) vi.stubEnv("NODE_ENV", ORIG_NODE_ENV);
     warnSpy.mockClear();
   });
 
