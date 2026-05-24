@@ -43,6 +43,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
 import { isGranted } from "@/server/scope-grants/is-granted";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -142,20 +143,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     afterAll(async () => {
-      // Tear down in FK-safe order: anonymise scope_grants first
-      // (ON DELETE RESTRICT FK on founder_id), then delete the auth
-      // user. audit_byok_use has the same RESTRICT FK + WORM trigger
-      // so userA/userB rows leak per the precedent at
-      // audit-byok-use.tenant-isolation.test.ts — sweeper RPC tracked
-      // as a follow-up scope-out.
+      // Mig 064 + 065: anonymise_scope_grants now NULLs both founder_id
+      // and workspace_id (CHECK constraint mig 059:358); audit_byok_use.
+      // founder_id is now SET NULL on user delete (mig 065 Part 2). The
+      // helper runs the full FK-reverse anonymise sequence including
+      // scope_grants, then auth-delete cascades cleanly.
       for (const user of [userA, userB]) {
         if (!user.id) continue;
         assertSynthetic(user.email);
-        await service.rpc("anonymise_scope_grants", { p_user_id: user.id });
-        // Best-effort deleteUser — may fail if audit_byok_use rows
-        // still hold the FK. Test-runner orphans are acceptable for
-        // closed-preview alpha (see precedent file's afterAll note).
-        await service.auth.admin.deleteUser(user.id);
+        await tearDownTenantUser(service, user);
       }
     });
 

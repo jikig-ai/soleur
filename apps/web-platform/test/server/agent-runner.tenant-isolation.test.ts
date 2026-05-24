@@ -33,6 +33,7 @@ import {
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
 import { registerSharedMintCache } from "@/test/helpers/mint-once";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -193,12 +194,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           );
         }
 
-        const { error } = await service.auth.admin.deleteUser(user.id);
-        if (error && !/not found/i.test(error.message)) {
-          throw new Error(
-            `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-          );
-        }
+        await tearDownTenantUser(service, user);
       }
     }, 30_000);
 
