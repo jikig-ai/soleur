@@ -157,11 +157,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           leader_id: null,
         })
         .select("id");
-      // RLS denies the INSERT; PostgREST returns error code 42501 or
-      // similar. Either way, the row is NOT persisted.
+      // Pin the deny path: spoof MUST surface as RLS denial (PostgREST 42501)
+      // or PostgREST's row-not-found shape — not a 23502 NOT NULL violation,
+      // because that would mean the workspace_id payload was missing and the
+      // test passed for the wrong reason. Loose `expect(error.code).toBeTruthy()`
+      // would have silently regressed if mig 059's NOT NULL constraint were
+      // dropped.
       const succeeded = data && data.length > 0;
       expect(succeeded).toBeFalsy();
-      if (error) expect(error.code).toBeTruthy();
+      expect(error).not.toBeNull();
+      expect(error?.code).toMatch(/^(42501|PGRST)/);
 
       // Verify B's conversation has no spoofed message.
       const { data: msgs } = await service
@@ -175,7 +180,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     test("assistant-message INSERT — same FK-RLS deny on saveAssistantMessage shape", async () => {
-      const { data } = await aClient
+      const { data, error } = await aClient
         .from("messages")
         .insert({
           id: randomUUID(),
@@ -191,6 +196,18 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .select("id");
       const succeeded = data && data.length > 0;
       expect(succeeded).toBeFalsy();
+      expect(error).not.toBeNull();
+      expect(error?.code).toMatch(/^(42501|PGRST)/);
+
+      // Verify B's conversation has no spoofed assistant message.
+      const { data: msgs } = await service
+        .from("messages")
+        .select("content")
+        .eq("conversation_id", bConvId);
+      const spoofed = (msgs ?? []).some(
+        (m: { content: string }) => m.content === "fake assistant text",
+      );
+      expect(spoofed).toBe(false);
     });
   },
 );
