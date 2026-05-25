@@ -159,7 +159,7 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
 
 5. **Persist via PR** (do not push directly to main):
    Run these bash commands:
-   \\\`\\\`\\\`
+   \`\`\`
    git config user.name "github-actions[bot]"
    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
    git add knowledge-base/support/community/
@@ -174,7 +174,7 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
      --base main \\
      --head "$BRANCH"
    gh pr merge "$BRANCH" --squash --auto
-   \\\`\\\`\\\`
+   \`\`\`
 
 6. **Create GitHub Issue** titled "[Scheduled] Community Monitor - YYYY-MM-DD"
    with label "scheduled-community-monitor". Include a condensed summary:
@@ -184,7 +184,7 @@ DEDUP RULE (BEFORE creating the monitor issue): run
   gh issue list --label scheduled-community-monitor --state open --search 'Community Monitor in:title' --json number,title,createdAt
 If any results from within the last 24 hours exist, do NOT create a new issue. Instead, post your findings as a comment on the most recent existing issue and exit. This prevents duplicate issues when a manual trigger fires the same day as the natural 08:00 UTC cron.
 
-CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \\\`git log\\\` for staleness analysis (every file appears "just touched"). Use GitHub Issue/PR \\\`updatedAt\\\` timestamps via \\\`gh api\\\` instead.
+CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log\` for staleness analysis (every file appears "just touched"). Use GitHub Issue/PR \`updatedAt\` timestamps via \`gh api\` instead.
 `;
 
 const DEFAULT_CLAUDE_SETTINGS = {

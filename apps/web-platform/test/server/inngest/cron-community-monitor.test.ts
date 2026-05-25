@@ -133,6 +133,22 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "gh pr merge",
         "Persist-via-PR auto-merge",
       ],
+      [
+        "DEDUP RULE",
+        "duplicate-issue prevention (manual+cron same day)",
+      ],
+      [
+        "within the last 24 hours",
+        "daily cadence dedup window (not 6 days)",
+      ],
+      [
+        "CLONE DEPTH RULE:",
+        "stale git-log misuse on --depth=1 clone",
+      ],
+      [
+        "post your findings as a comment on the most recent existing issue",
+        "dedup fallback behaviour",
+      ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
@@ -198,6 +214,22 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
       ],
       ["STRIPE_SECRET_KEY", "Stripe API; payment surface"],
       ["RESEND_API_KEY", "Resend email; impersonation surface"],
+      [
+        "BYOK_ENCRYPTION_KEY",
+        "Symmetric key for user BYOK secrets; full plaintext recovery",
+      ],
+      [
+        "VAPID_PRIVATE_KEY",
+        "Web Push VAPID signing key; push notification impersonation",
+      ],
+      [
+        "STRIPE_WEBHOOK_SECRET",
+        "Webhook signature verification bypass; event forgery",
+      ],
+      [
+        "CF_API_TOKEN_PURGE",
+        "Cloudflare cache-purge API token; cache-poisoning surface",
+      ],
     ])("allowlist does NOT contain %s (%s)", (key) => {
       expect(buildEnvBody).not.toContain(key);
     });
