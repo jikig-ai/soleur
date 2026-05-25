@@ -9,7 +9,7 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 user_brand_critical: true
 related_adr: ADR-038
-follow_on_adr: ADR-039
+follow_on_adr: ADR-043  # Corrected at plan-time: ADR-039 already taken (departed-member-removal-ledger)
 related_issues: [4229, 4232, 4284, 4365, 4444]
 ---
 
@@ -20,7 +20,7 @@ related_issues: [4229, 4232, 4284, 4365, 4444]
 A multi-PR sequence that:
 
 1. Closes the legal disclosure gap for Flagsmith (sub-processor, DPA, Article 30, Privacy Policy, DPD) so any code PR that increases data egress is preceded by the corresponding disclosure.
-2. Extends ADR-038's Flagsmith integration with **per-org targeting** (ADR-039) — either `org-<id>` segments or a single segment with an `orgId in [...]` rule keyed on a new identity trait.
+2. Extends ADR-038's Flagsmith integration with **per-org targeting** (ADR-043 — note: ADR-039 already taken by `departed-member-removal-ledger.md`, correcting at plan-time) — either `org-<id>` segments or a single segment with an `orgId in [...]` rule keyed on a new identity trait.
 3. Adds a Supabase WORM audit shim for flag-flip operations on tenant-boundary flags.
 4. Migrates `team-workspace-invite` to RUNTIME (Flagsmith) under a **dual-control architecture**: Flagsmith carries the boolean, `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` env-allowlist is **retained as defense-in-depth** (two independent failure domains).
 5. Migrates `byok-delegations` to RUNTIME under the same dual-control architecture, with explicit attention to the sync-fast-path optimization in `byok-resolver.ts`.
@@ -61,14 +61,13 @@ All three domain leaders (CTO, CPO, CLO) independently recommended **not migrati
 
 ## PR Sequence
 
+**Collapsed to 3 PRs at plan-review v2 (2026-05-25)** per DHH + Code Simplicity consensus. v1 6-PR shape (preserved in git history as plan-review-v1 commit) split per-org capability + WORM audit into their own standalone PRs; both reviewers flagged this as YAGNI (zero consumers at standalone merge). Collapsed shape ships capability + audit inline with the consumers in PR-2. See plan `## Plan-Review History` section for full rationale.
+
 | # | Title | Blocking | Scope |
 |---|---|---|---|
-| PR-1 | legal: Flagsmith sub-processor disclosure (DPA, Art. 30, Privacy, DPD) | Yes — blocks PR-4, PR-5 | DPA execution, `compliance-posture.md` vendor row, Article 30 PA-1 + PA-2 recipient column, Privacy Policy + DPD sub-processor list update, Flagsmith data-region / transfer-mechanism pin, tenant DPA flow-down (Art. 28(4)) update |
-| PR-2 | feat(flags): ADR-039 + per-org Flagsmith targeting infrastructure | Yes — blocks PR-4, PR-5 | ADR-039 doc, extend `getRuntimeFlag` to accept `orgId` identity trait, extend `Identity` type, extend Flagsmith bootstrap skill (segments), update `soleur:flag-set-role` → split into `flag-set-role` (per-role) + `flag-set-org` (per-org) or extend with `--org` flag |
-| PR-3 | feat(flags): WORM audit shim for tenant-boundary flag-flips | No (parallel with PR-2) | New `flag_audit_log` Supabase table (insert-only RLS), `soleur:flag-set-*` skills append to ledger, retention policy doc |
-| PR-4 | feat(flags): migrate team-workspace-invite to RUNTIME with dual-control | Blocked by PR-1, PR-2, PR-3 | Move `team-workspace-invite` from `ENV_FLAGS` to `RUNTIME_FLAGS`, await 5 server call sites, KEEP `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` env-allowlist, update `scheduled-membership-health.yml` to HTTP-probe `/api/flags`, expand e2e to cover Flagsmith outage + misconfig cases |
-| PR-5 | feat(flags): migrate byok-delegations to RUNTIME with dual-control | Blocked by PR-1, PR-2, PR-3 | Same shape as PR-4 with hot-path care: introduce async boundary at `resolveKeyOwnerThenLease`, propagate to agent-runner / cc-dispatcher / Inngest call sites, keep `BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS` env-allowlist, add latency regression test |
-| PR-6 | docs(flags): reaffirm dev-signin ENV-stay + ADR-038 partition rule amendment | No (parallel with PR-1 onward) | Comment in `server.ts:16-20`, ADR-038 §"Why these stay ENV" appendix, learning capture |
+| PR-1 | legal: Flagsmith sub-processor disclosure (DPA, Art. 30, Privacy, DPD) | Yes — blocks PR-2 | DPA execution, `compliance-posture.md` vendor row, Article 30 PA-1 + PA-2 recipient column, Privacy Policy + DPD (root + Eleventy mirror) sub-processor list update, Flagsmith data-region / transfer-mechanism pin (§11.2 SCCs), tenant-DPA flow-down (Art. 28(4)) note |
+| PR-2 | feat(flags): migrate both flags + ADR-043 per-org capability + WORM `flag_flip_audit` (combined) | Blocked by PR-1 | ADR-043 doc; extend `Identity` type + `resolveIdentity()` with `orgId`; `getRuntimeFlag(... { role, orgId }, true)`; LRU-bounded `_roleCache`; Flagsmith `org-targeted` segment bootstrap; `flag-set-role --target role\|org` extension; migration 071 `flag_flip_audit` (two triggers, row-state retention bypass, `actor` CHECK); skill-side audit-row append (fail on append-error); move both flags to `RUNTIME_FLAGS`; async propagation to 5 team-workspace sites + 4 byok sites (hot-path async boundary at `resolveKeyOwnerThenLease`, AsyncLocalStorage memo for Inngest); `scheduled-membership-health.yml` HTTP-probe rewrite; `verify-required-secrets.sh` mirror invariant; `byok-delegations-boot.ts` Sentry parity; LIA doc |
+| PR-3 | docs(flags): `dev-signin` stay-ENV inline comment in `server.ts:16-24` | No (parallel-OK) | Single comment block documenting partition rule (DCE tripwire for dev-signin; historic migration of team-workspace-invite + byok-delegations in PR-2). No ADR-038 appendix (cut per Code Simplicity — comment suffices) |
 
 ## Open Questions
 
