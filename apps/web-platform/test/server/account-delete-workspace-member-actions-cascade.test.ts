@@ -70,6 +70,12 @@ vi.mock("@/lib/supabase/server", () => ({
           in: (_col2: string, _vals: unknown[]) => mockTableUpdate(),
         }),
       }),
+      // mig 068 #4318 step 3.901 ordering-guard probe:
+      // service.from("workspace_members").select("workspace_id", {count:"exact",head:true}).eq("user_id", userId)
+      select: (_cols: string, _opts?: unknown) => ({
+        eq: (_col: string, _val: unknown) =>
+          Promise.resolve({ count: 1, data: null, error: null }),
+      }),
     }),
     storage: {
       from: (_bucket: string) => ({

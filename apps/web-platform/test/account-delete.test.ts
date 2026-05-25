@@ -87,6 +87,10 @@ function setupSupabaseMocks(overrides: {
       }),
     }),
     delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+    // mig 068 #4318 step 3.901 ordering-guard probe + Phase 5 storage-purge enum.
+    select: () => ({
+      eq: () => Promise.resolve({ count: 1, data: [], error: null }),
+    }),
   }));
 
   // anonymise_dsar_export_audit_pii RPC default — success.
@@ -156,7 +160,13 @@ describe("deleteAccount", () => {
           }),
         };
       }
-      return { delete: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+      return {
+        delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        // mig 068 #4318 step 3.901 ordering-guard probe on workspace_members.
+        select: () => ({
+          eq: () => Promise.resolve({ count: 1, data: [], error: null }),
+        }),
+      };
     });
     mockRpc.mockImplementation(async (name: string) => {
       if (name === "anonymise_dsar_export_audit_pii") {
@@ -320,7 +330,13 @@ describe("deleteAccount", () => {
           }),
         };
       }
-      return { delete: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+      return {
+        delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        // mig 068 #4318 step 3.901 ordering-guard probe on workspace_members.
+        select: () => ({
+          eq: () => Promise.resolve({ count: 1, data: [], error: null }),
+        }),
+      };
     });
     mockStorageList.mockImplementation(async (folder: string) => {
       if (folder === "user-123") {
