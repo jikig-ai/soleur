@@ -19,24 +19,38 @@ lane: cross-domain
   - [ ] 0.5.2. `git show af7bbb5b -- docs/legal/data-protection-disclosure.md > /tmp/4351-canonical-dpd.diff`
 - [ ] 0.6. Capture mirror-only content: `diff docs/legal/data-protection-disclosure.md plugins/soleur/docs/pages/legal/data-protection-disclosure.md | grep -E "^> " > /tmp/mirror-only-content.txt`.
 
-## Phase 1: Mirror forward-port (canonical → mirror)
+## Phase 1: Mirror forward-port (canonical → mirror) — SIX surgical edits
 
-- [ ] 1.1. Edit `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` §2.3(l) DSAR self-serve export:
-  - Replace short-form bullet with canonical's extended form (sourced from `/tmp/4351-canonical-dpd.diff` AND the canonical's live line 102).
-  - MUST include: `Art. 15(4) author-only redaction (#4319, manifest schema 1.1.0)`, `MESSAGE_REDACT_FIELDS` constant ref, per-bundle salt-scoped pseudonym `member_<hex12>`, attachments cascade allowlist note, CI sentinel test reference `dsar-message-redact-fields-sweep.test.ts`.
-- [ ] 1.2. Edit mirror §5.3 Web Platform Data Subject Rights:
-  - Replace short bullet (a)-(f) with canonical's detailed enumeration.
-  - Add the `## (a)` self-serve hint sentence: `For data processed through the Web Platform ... through either the self-serve flow at /dashboard/settings/privacy (where applicable) or by contacting <legal@jikigai.com>:`.
-  - Add account-profile sub-list under (a) (8 bullets: account profile, conversations + messages, message attachments with co-member visibility note, KB share links, team/agent names, BYOK credentials, BYOK usage audit, workspace files).
-  - Add the exclusion-list sentence.
-- [ ] 1.3. Edit mirror §10.3 Web Platform Account Deletion:
-  - Insert sub-bullets (f) DSAR-job abort, (g) chat-attachments cascade with mig 068 share-asset language including `messages.user_id set to NULL via public.anonymise_departed_user_across_workspaces`, (h) DSAR audit anonymisation with `dsar_export_audit_pii` reference, (i) LinkedIn-published content carve-out (Article 17 limitation, EDPB Guidelines 5/2019).
-- [ ] 1.4. Verify mirror still ends with the Eleventy njk closing scaffold (`</div></div></section>`) and frontmatter is intact.
+- [ ] 1.1. Edit `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` §2.3(l) DSAR self-serve export (mirror line 111):
+  - Replace short-form bullet with canonical's extended form from line 102.
+  - MUST include verbatim: `Art. 15(4) author-only redaction (#4319, manifest schema 1.1.0)`, `MESSAGE_REDACT_FIELDS` constant ref + 13-column list, per-bundle salt-scoped pseudonym `member_<hex12>`, attachments cascade allowlist (orphan / foreign-author parents → fail-closed), `manifest.redactions[]` field, CI sentinel test reference `dsar-message-redact-fields-sweep.test.ts`.
+- [ ] 1.2. INSERT §2.3(p) NEW BLOCK into mirror — full LinkedIn Company Page publication block from canonical line 115. Place between mirror's existing §2.3(o) (line 119) and §2.3(n) (line 120):
+  - Sub-surface (i) Page operation (Community Management API, developer app 229658411, `LINKEDIN_ORG_ACCESS_TOKEN` 60-day OAuth bearer).
+  - Sub-surface (ii) Page Insights aggregate consumption (joint controllers per CJEU C-210/16, EDPB Guidelines 07/2020).
+  - Sub-surface (iii) K-bis business-verification (gérant, Jikigai SARL, RCS Paris 927 585 729, capital structure metadata) to Microsoft Ireland.
+  - Legal bases, retention, sub-processors, Article 30 register PA-15 cross-reference.
+- [ ] 1.3. Edit mirror §2.3(t) Template-authorization ledger (mirror line 126): replace SHORTER form with canonical's EXTENDED form from line 119:
+  - Over-provision rationale: "(vs. cutting to 5) preserves Article 5(2) audit attribution distinguishability for future revocation drivers (three values — `regulator_ordered`, `vendor_tos_revoked`, `policy_violation` — have no v1 producer; `quarantine_retroactive` reserved for PR-I+1 #4216). Cheaper to add at mig 053 than ALTER later."
+  - RLS owner-only policy names: `template_authorizations_owner_select` / `_insert`.
+  - ADR-035 path: `knowledge-base/engineering/architecture/decisions/ADR-035-template-registry-code-static.md`.
+  - ADR-036 fold provenance: "this entry captures the un-revocability + Article 5(2) attribution rationale formerly proposed as ADR-036 (folded here per plan §Phase 10 v2 review)".
+- [ ] 1.4. Edit mirror §5.3 Web Platform Data Subject Rights (mirror lines 219-228):
+  - Replace short bullet (a)-(f) with canonical's detailed form (lines 216-232).
+  - Self-serve hint sentence: `For data processed through the Web Platform ... through either the self-serve flow at /dashboard/settings/privacy (where applicable) or by contacting <legal@jikigai.com>:`.
+  - 8-item account-profile sub-list under (a): account profile, conversations + messages, message attachments (with co-member visibility caveat), KB share links, team/agent display names, BYOK encrypted credentials, BYOK usage audit log, workspace files.
+  - Per-bullet channel labels: (b)/(d)/(f) Email channel; (c) "Self-serve via the Delete Account dialog in `/dashboard/settings` or by email"; (e) self-serve at `/dashboard/settings/privacy` with manifest.json schema details.
+  - Exclusion-list sentence at end of (a): "Excluded from the export, with reason: DSAR-itself audit metadata ..., operational concurrency / rate-limit / revocation / mint-rate tables..., and push notification subscriptions...".
+- [ ] 1.5. Edit mirror §10.3 Web Platform Account Deletion (mirror lines 342-346): insert sub-bullets (f)-(i) from canonical lines 353-356:
+  - (f) Any in-flight DSAR export job is aborted (status flipped to `failed` with reason `account_deleted_during_export`).
+  - (g) Storage objects under `chat-attachments/<your-id>/` and `dsar-exports/<your-id>/` are removed; co-uploader attachments in shared-workspace conversations retained under Article 6(1)(f) shared-asset legitimate interest (#4318, mig 068); `messages.user_id set to NULL via public.anonymise_departed_user_across_workspaces`.
+  - (h) DSAR audit log `dsar_export_audit_pii` PII columns anonymised via security-definer RPC gated by per-transaction GUC.
+  - (i) LinkedIn-published content carve-out (Article 17 limitation, 5-business-day deletion request via Page admin UI, EDPB Guidelines 5/2019 best-effort cascade).
+- [ ] 1.6. Edit mirror Last-Updated chain (line 21): replace the compressed summary with canonical's longer narrative from line 12 (preserves Article 30(1) audit-trail completeness — the migration 064 LAWFUL_BASIS header context, `to_regclass` precondition note, the #4287 AFTER-trigger PA-20 mechanics, `actor_user_id` session GUC, etc.).
+- [ ] 1.7. Verify mirror still ends with the Eleventy njk closing scaffold (`</div></div></section>`) and frontmatter is intact.
 
-## Phase 2: Canonical back-port (mirror → canonical)
+## Phase 2: ~~Canonical back-port~~ **(REMOVED per deepen-pass round-2)**
 
-- [ ] 2.1. Edit `docs/legal/data-protection-disclosure.md` Last-Updated chain entry: prepend the `byok_delegations` (#4290) context block matching the mirror's `**Last Updated:** May 25, 2026 (#4290 — added byok_delegations WORM ledger to DSAR_TABLE_ALLOWLIST...` line; the existing chain entry continues as `previous: May 22, 2026 ...`.
-- [ ] 2.2. Cross-check §2.3 letter ordering in canonical: `grep -nE "^- \*\*\([a-z]\)\*\*" docs/legal/data-protection-disclosure.md` → expect entries (a) through (v) present (allowing gaps where letters were skipped historically). If any of (p), (s), (t), (u), (v) are missing, copy verbatim from mirror.
+Skip — canonical is unchanged by this PR. Deepen-pass round-2 diff inventory confirmed canonical has no surface where the mirror is uniquely ahead (mirror's Last-Updated chain compression is a strict subset of canonical's narrative).
 
 ## Phase 3: Frontmatter + cosmetic reconciliation
 
@@ -73,11 +87,11 @@ lane: cross-domain
 - [ ] 4.2. Re-run `bash apps/web-platform/scripts/check-tc-document-sha.sh; echo "exit=$?"` → expect `exit=0`.
 - [ ] 4.3. If the body-equivalence check fails for DPD with a non-trivial residual diff, inspect the diff and either (a) refine the Phase 1 forward-port to close the gap, or (b) extend `normalize_plugin` / `collapse` with additional doc-agnostic sed rules that the DPD specifically needs. Justify each new sed rule in a comment.
 
-## Phase 5: SHA literal refresh
+## Phase 5: SHA literal verification (no refresh expected)
 
-- [ ] 5.1. Compute new canonical DPD SHA: `sha256sum docs/legal/data-protection-disclosure.md` → record the 64-char hex.
-- [ ] 5.2. Edit `apps/web-platform/lib/legal/legal-doc-shas.ts`: replace the `"data-protection-disclosure": "<old-sha>",` value with the new sha256 from 5.1.
-- [ ] 5.3. Re-run `bash apps/web-platform/scripts/check-tc-document-sha.sh; echo "exit=$?"` → expect `exit=0`.
+- [ ] 5.1. Compute current canonical DPD SHA: `sha256sum docs/legal/data-protection-disclosure.md` → expect `04a2d796aff50f8457451b088c048a3c6cdf7eb84c9dacdbd01d5b42735a1d02` (deepen-time verified — canonical is unchanged by this PR).
+- [ ] 5.2. Verify `apps/web-platform/lib/legal/legal-doc-shas.ts` already contains that literal (no edit needed).
+- [ ] 5.3. Re-run `bash apps/web-platform/scripts/check-tc-document-sha.sh; echo "exit=$?"` → expect `exit=0`. The body-equivalence step now runs for DPD (Phase 4); the canonical-SHA-pin step still passes against the unchanged literal.
 
 ## Phase 6: Regression smoke test (vitest)
 

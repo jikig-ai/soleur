@@ -21,6 +21,47 @@ plan_review_pending:
 
 # Plan: Sync Eleventy Legal Mirror DPD with Canonical (#4447)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-25
+**Sections enhanced:** Overview, Research Reconciliation (RC1 direction-corrected), Acceptance Criteria, Files to Edit, Phases, Risks, Sharp Edges.
+**Gates passed:** Phase 4.5 Network-Outage (skip — no trigger keywords); Phase 4.6 User-Brand Impact (PRESENT, threshold `aggregate pattern`; sensitive-path scan N/A — Files-to-Edit outside canonical regex); Phase 4.7 Observability (skip — Files-to-Edit under `apps/*/scripts/` + `apps/*/lib/` + `apps/*/test/` + `docs/legal/` + `plugins/soleur/docs/pages/legal/`, none of which match the trigger set `apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`); Phase 4.8 PAT-shape grep (no matches); learning-citation existence (1 broken-path corrected: `best-practices/2026-05-22-ci-parity-test...` → `2026-05-22-ci-parity-test...`); AGENTS.md rule citations (3 cited, all active: `rf-review-finding-default-fix-inline`, `wg-after-merging-a-pr-that-adds-or-modifies`, `wg-use-closes-n-in-pr-body-not-title-to`); commit-attribution verification (`b382cee0` PR #4417 and `af7bbb5b` PR #4351 both on `main` and reachable via `git merge-base --is-ancestor`).
+
+### Direction-Corrective Discovery (Critical)
+
+**Round-1 plan asserted: "mirror is mostly AHEAD; canonical is AHEAD on mig 068."**
+**Round-2 verification shows: canonical is AHEAD on EVERY substantive prose surface that diverges; mirror is AHEAD only on the Last-Updated chain SHAPE (compressed wording, not new content).** Full inventory via `diff -u docs/legal/data-protection-disclosure.md plugins/soleur/docs/pages/legal/data-protection-disclosure.md`:
+
+- **Canonical-only blocks (forward-port targets):**
+  - §2.3(l) — Art. 15(4) sub-block (#4351, manifest schema 1.1.0, MESSAGE_REDACT_FIELDS, per-bundle salt-scoped pseudonym, attachments cascade allowlist, CI sentinel test).
+  - §2.3(p) — LinkedIn Company Page publication (3 sub-surfaces: Page operation, Page Insights consumption, K-bis business-verification).
+  - §2.3(t) — Template-authorization ledger EXTENDED form (the over-provision rationale parenthetical, the v1 producer enumeration, the `ADR-035` + `ADR-036 fold` provenance — mirror has the SHORTER form).
+  - §5.3 — Detailed bullet (a)-(f) with self-serve enumeration (8 sub-list items), exclusion list, email-channel labels.
+  - §10.3 — Sub-bullets (f) DSAR-job abort, (g) chat-attachments mig 068 cascade, (h) DSAR audit anonymisation, (i) LinkedIn-published content carve-out.
+  - Last-Updated chain — EXTENDED #4287 detail (the AFTER-trigger description, `actor_user_id` GUC mechanic, `list_workspace_member_actions` RPC, `workspace_member_actions` DSAR-allowlist OR-semantics).
+- **Mirror-only blocks (back-port targets — only one identified):**
+  - The Last-Updated chain SHAPE is more compressed in the mirror (collapses the byok_delegations entry to ~5 lines vs canonical's ~25 lines). The mirror's compression contains a strict subset of facts — no canonical-novel content. Action: keep canonical's longer form; mirror gets canonical's longer form via the same body-equivalence guard.
+- **Strict cosmetic drift (handled by `collapse` sed pipeline, no edits required):**
+  - `https://soleur.ai` vs `https://www.soleur.ai` host form (Definitions §1.8, footers, hyperlinks).
+  - `(privacy-policy.md)` vs `(/legal/privacy-policy/)` link form (sibling-doc cross-references, footer).
+
+This is a one-direction forward-port from canonical to mirror, NOT a bi-directional sync. Plan body and tasks.md amended accordingly. Research Reconciliation row RC1 rewritten (preserving the original wrong assertion as the "issue-body claim" column for traceability).
+
+### Key Improvements Surfaced by Deepen Pass
+
+1. **Direction corrected from bi-directional to single-direction forward-port** (canonical → mirror). The plan v1 over-engineered a back-port phase for canonical that does not need to land; canonical is correct as-is.
+2. **All five forward-port sites enumerated precisely** with line citations in the canonical (§2.3(l) at line 102, §2.3(p) at line 115, §2.3(t) at line 119, §5.3 at lines 216-232, §10.3 sub-bullets at lines 353-356). The /work agent reads each canonical line range and threads it into the corresponding mirror section.
+3. **Phase 2 (canonical back-port) removed; Phase 5 SHA refresh now skips canonical edit** because canonical is unchanged. Only `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` requires editing. The mirror's SHA is not currently tracked by `LEGAL_DOC_SHAS` (only the canonical's is); the mirror's body-equivalence is what the new guard enforces.
+4. **`apps/web-platform/test/legal-doc-shas-guard.test.ts` mutation site corrected** — the test mutates the MIRROR's body (the side that fails equivalence after a future canonical edit + missing mirror-port), not the canonical's body. The mirror is the side that drifts under the failure mode this guard catches.
+5. **Phase 4 `BODY_EQUIVALENCE_DOCS` extension verified empirically buildable** by reading `apps/web-platform/scripts/check-tc-document-sha.sh` lines 191-205 (the T&C-specific conditional block) — the existing `normalize_canonical` + `normalize_plugin` + `collapse` helpers are already doc-agnostic; the only T&C-specific surface left in the script is the `if [ "$doc" = "terms-and-conditions" ]` conditional at line 191 (Step 1 body-equivalence) and the `TC_VERSION` bump bypass at line 248 (Step 3 — kept T&C-specific, since DPD has no consumer-of-version-constant). The widening surface is 8 lines of change.
+
+### New Considerations Discovered
+
+- **Issue #4324 is the umbrella for the all-9-doc body-equivalence widening** (verified via `gh issue view 4324`: state CLOSED, title "review: generalize check-tc-document-sha.sh + mirror-equivalence to all 9 legal docs (Ref #4289)"). The plan at `knowledge-base/project/plans/2026-05-22-feat-legal-doc-sha-mirror-guard-plan.md` is its plan. This PR makes DPD the SECOND doc on body-equivalence after T&C (issue #4324's plan envisions extending to all 9). The two-doc opt-in is the cheapest incremental step toward the 9-doc target without dragging in the 7 sibling drifts.
+- **The mirror's `<section>` HTML scaffolding closing tags appear at the END of the file** (`</div></div></section>`), AFTER all content. The `normalize_plugin` sed pipeline already handles `</section>` and `</div>` cleanup. No additional sed rules needed for DPD.
+- **Verified: the mirror's HEAD hero `<p>` and body `**Last Updated:**` line both already read `May 25, 2026`** — they updated when PR #4417 (which touched the mirror's `**Last Updated:**` line for other reasons) merged 2026-05-25. So Phase 3 (date reconciliation) is a verification-only step; no edit required.
+- **CLO carry-forward note:** `legal-compliance-auditor` agent at AC13 should additionally verify the Last-Updated chain on the mirror (after the forward-port edit) preserves the canonical's chain narrative without summary-loss; the canonical's longer form is the audit-evidence shape.
+
 ## Overview
 
 Pre-existing drift between the canonical `docs/legal/data-protection-disclosure.md` (DPD) and the Eleventy mirror at `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` (published on soleur.ai) surfaced by PR #4417 (mig 068 workspace-shared attachments). PR #4417 edited the canonical DPD §2.3(l) (Art. 15(4) author-only redaction) and §10.3 cascade text; the mirror was NOT updated, leaving the published copy stale on the attachment-cascade language.
@@ -41,7 +82,7 @@ This plan does three things in one PR:
 
 | # | Issue-body claim | Reality on `main` | Plan response |
 |---|---|---|---|
-| RC1 | "Mirror predates the Art. 15(4) author-only redaction block landed by PR #4351 — canonical's enriched DSAR section is absent from the mirror." | Verified inverted: `grep -n "Art. 15(4) author-only redaction" docs/legal/data-protection-disclosure.md plugins/soleur/docs/pages/legal/data-protection-disclosure.md` returns the block ONLY in the canonical (line 102). The MIRROR's §2.3(l) is the SHORTER form that does NOT yet include the Art. 15(4) sub-block. So canonical-AHEAD-on-this is the actual gap, not mirror-behind. `git log -- plugins/soleur/docs/pages/legal/data-protection-disclosure.md` confirms PR #4351 did NOT touch the mirror (it touched `docs/legal/` only). | **Direction flipped:** forward-port canonical's Art. 15(4) block (line 102, PR #4351) AND the mig 068 cascade additions (PR #4417) from canonical → mirror. Then back-port everything ELSE the mirror has that canonical lacks. |
+| RC1 | "Mirror predates the Art. 15(4) author-only redaction block landed by PR #4351 — canonical's enriched DSAR section is absent from the mirror." | Issue body is CORRECT in conclusion (mirror is behind) but UNDER-SPECIFIED in scope. Verified via `diff -u docs/legal/data-protection-disclosure.md plugins/soleur/docs/pages/legal/data-protection-disclosure.md`: canonical is AHEAD on FIVE substantive sites (§2.3(l) Art. 15(4) block, §2.3(p) LinkedIn entire block, §2.3(t) extended template-auth provenance, §5.3 detailed bullets, §10.3 (f)-(i) cascade narrative) AND on the Last-Updated chain length. Mirror has NO canonical-novel content (mirror's Last-Updated chain is a strict-subset compression). `git log -- plugins/soleur/docs/pages/legal/data-protection-disclosure.md` confirms PRs #4351, #4081 (LinkedIn), #4078 (template-auth), #4319 (Art. 15(4)), and parts of #4417 did NOT touch the mirror DPD even though they touched the canonical DPD (and other mirror docs). | **Single-direction forward-port** (canonical → mirror) across ALL FIVE sites + Last-Updated chain narrative. No back-port phase needed. The plan's original "bi-directional" framing (round-1) was wrong; deepen-pass diff inventory corrected it. |
 | RC2 | "Mirror has different frontmatter (`layout: base.njk`, `permalink: legal/...`) wrapping `<section>` blocks vs. plain markdown headings in canonical." | Verified true — and intentional. The mirror is an Eleventy njk-rendered page; the wrappers are required by the site template at `plugins/soleur/docs/_includes/base.njk` (CSP + JSON-LD schema). Every legal doc mirror has the same shape (8/8 surveyed). | **Preserve mirror's frontmatter + section wrappers.** Body-equivalence guard already normalises away these wrappers via `normalize_plugin` in `check-tc-document-sha.sh` (per T&C precedent). Extend the same normalisation to DPD. |
 | RC3 | "Other drifts: URL conventions; the `### 5.3(a)(iv)` message-attachments bullet differs." | DPD does not currently contain a `### 5.3(a)(iv)` heading in either file. The `5.3` section in canonical has detailed bullets (a)-(f) with extensive sub-content (account profile enumeration, BYOK credentials, workspace files); the mirror's `5.3` is the SHORTER form. The "message attachments" content is in canonical's `5.3(a)` bullet sub-list. | **Forward-port canonical's enriched §5.3 enumeration to mirror.** Drop the spec's specific `(a)(iv)` framing in favor of the actual line-by-line diff (the spec author was paraphrasing). |
 | RC4 | Implicit: "this is a one-doc problem." | `for doc in 8 sibling legal docs: diff docs/legal/$doc.md plugins/soleur/docs/pages/legal/$doc.md \| wc -l` returns drift on ALL 9 docs (DPD: 114 lines, Privacy: 119, GDPR: 82, T&C: 87, AUP: 64, etc.). T&C is the ONLY one currently gated by body-equivalence in CI; the 7 others have the same deferred-body-equivalence comment baked into `check-tc-document-sha.sh`. | **Scope-in DPD only** per issue #4447's surface. The 8 sibling drifts are real but each belongs to its own PR; landing all in one diff prevents reviewer-line-by-line audit. Note the surface in Open Questions OQ-3. |
@@ -129,31 +170,34 @@ discoverability_test:
 
   Returns exactly 8.
 
-- **AC4.** Canonical `docs/legal/data-protection-disclosure.md` contains the LinkedIn §2.3(p) block AND the digest-tier §2.3(s) AND the workspace-co-member §2.3(u) AND the workspace_member_removals §2.3(v) AND the byok_delegations Last-Updated chain entry — all of which currently exist ONLY in the mirror. Verified by:
+- **AC4.** Mirror `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` gains the LinkedIn §2.3(p) block (Phase 1.2) AND the extended §2.3(t) form (Phase 1.3). Verified by:
 
   ```bash
-  grep -cE "^- \*\*\([pstuv]\)\*\*" docs/legal/data-protection-disclosure.md
+  grep -F "LinkedIn Company Page publication" plugins/soleur/docs/pages/legal/data-protection-disclosure.md
+  grep -F "RCS Paris 927 585 729" plugins/soleur/docs/pages/legal/data-protection-disclosure.md
+  grep -F "template_authorizations_owner_select" plugins/soleur/docs/pages/legal/data-protection-disclosure.md
+  grep -F "ADR-036 (folded here per plan §Phase 10 v2 review)" plugins/soleur/docs/pages/legal/data-protection-disclosure.md
   ```
 
-  Returns ≥5 (matches canonical's mirror-aligned (p), (s), (t), (u), (v) entries).
+  All four return ≥1 match (the LinkedIn block, the K-bis RCS-Paris identifier inside it, the extended-form template-auth RLS policy names, and the ADR-035+036 fold provenance).
 
-- **AC5.** The `**Last Updated:**` body line in both canonical and mirror reads `**Last Updated:** May 25, 2026` and the mirror's hero `<p>Effective February 20, 2026 | Last Updated May 25, 2026</p>` matches (per learning `2026-03-20-eleventy-mirror-dual-date-locations.md`), verified by:
+- **AC5.** The `**Last Updated:**` body line in both canonical and mirror reads `**Last Updated:** May 25, 2026` and the mirror's hero `<p>Effective February 20, 2026 | Last Updated May 25, 2026</p>` matches (per learning `2026-03-20-eleventy-mirror-dual-date-locations.md`). Verification-only (both files already current):
 
   ```bash
   grep -c "\*\*Last Updated:\*\* May 25, 2026" docs/legal/data-protection-disclosure.md plugins/soleur/docs/pages/legal/data-protection-disclosure.md
   grep -c "Last Updated May 25, 2026" plugins/soleur/docs/pages/legal/data-protection-disclosure.md
   ```
 
-  First returns `2` (one per file); second returns `1` (the hero `<p>`).
+  First returns `1` per file (2 total); second returns `1` (the hero `<p>`).
 
-- **AC6.** `apps/web-platform/lib/legal/legal-doc-shas.ts` `LEGAL_DOC_SHAS["data-protection-disclosure"]` is refreshed to the new canonical SHA (post-sync), verified by:
+- **AC6.** `apps/web-platform/lib/legal/legal-doc-shas.ts` `LEGAL_DOC_SHAS["data-protection-disclosure"]` matches the (UNCHANGED) canonical DPD SHA. Verification-only — canonical is NOT edited in this PR:
 
   ```bash
   expected=$(sha256sum docs/legal/data-protection-disclosure.md | awk '{print $1}')
   grep -A1 '"data-protection-disclosure":' apps/web-platform/lib/legal/legal-doc-shas.ts | grep -F "\"$expected\""
   ```
 
-  Returns 1 match.
+  Returns 1 match. Expected value: `04a2d796aff50f8457451b088c048a3c6cdf7eb84c9dacdbd01d5b42735a1d02` (verified at deepen-pass time).
 
 - **AC7.** `apps/web-platform/scripts/check-tc-document-sha.sh` Step 1 (body equivalence) is extended to include `data-protection-disclosure` in addition to `terms-and-conditions`. The script's existing per-doc loop is extended via a small allowlist (`BODY_EQUIVALENCE_DOCS=("terms-and-conditions" "data-protection-disclosure")`) rather than a hard-coded `if [ "$doc" = "terms-and-conditions" ]`. Verified by:
 
@@ -206,31 +250,34 @@ This PR has zero post-merge operator actions. The CI guard auto-blocks the next 
 
 ## Files to Edit
 
-**Canonical (back-port mirror-only content):**
+**Canonical (no edits — verified canonical is the source of truth):**
 
-- `docs/legal/data-protection-disclosure.md` — add the byok_delegations (#4290) entry to the Last-Updated chain (matching the mirror's current shape); reconcile §2.3 letter ordering. Verify (by ListsAndDiff): no semantic regression, only chain prepends.
+- Deepen-pass round 2 confirmed canonical has NO surface that the mirror is uniquely ahead on (the mirror's Last-Updated chain compression is a strict subset of canonical's narrative; the mirror has zero canonical-novel blocks). Therefore canonical `docs/legal/data-protection-disclosure.md` is **UNCHANGED** by this PR.
 
-**Mirror (forward-port canonical-only content):**
+**Mirror (forward-port from canonical — FIVE surgical inserts, ONE chain extension):**
 
-- `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` — three surgical inserts:
-  1. §2.3(l) DSAR self-serve export: insert the Art. 15(4) sub-block + manifest schema 1.1.0 + MESSAGE_REDACT_FIELDS narrative.
-  2. §5.3 Web Platform Data Subject Rights: replace the short bullet (a)-(f) form with the detailed bullet (a)-(f) form (account profile sub-list, BYOK credentials, workspace files, exclusion list).
-  3. §10.3 Web Platform Account Deletion: insert the (f)-(i) cascade narrative bullets (DSAR-job abort, mig 068 attachment cascade, DSAR audit anonymisation, LinkedIn carve-out).
+- `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`:
+  1. §2.3(l) DSAR self-serve export (mirror line 111): insert the Art. 15(4) sub-block from canonical line 102 — manifest schema 1.1.0, `MESSAGE_REDACT_FIELDS` constant ref, per-bundle salt-scoped pseudonym `member_<hex12>`, attachments cascade allowlist, CI sentinel test reference `dsar-message-redact-fields-sweep.test.ts`.
+  2. §2.3(p) **NEW BLOCK** (insert between current mirror §2.3(o) Inngest at line 119 and §2.3(n) CLA at line 120; canonical reference: line 115): full LinkedIn Company Page publication block — 3 sub-surfaces (Page operation, Page Insights consumption, K-bis business-verification), legal bases, retention, sub-processors, joint-controller arrangement per CJEU C-210/16.
+  3. §2.3(t) Template-authorization ledger (mirror line 126): replace the SHORTER form with the canonical's EXTENDED form (line 119) — over-provision rationale parenthetical, v1 producer enumeration of the 8-value revocation_reason enum, RLS owner-only-select-insert names, ADR-035 path + ADR-036 fold provenance.
+  4. §5.3 Web Platform Data Subject Rights (mirror lines 221-228): replace the short bullet (a)-(f) form with canonical's detailed form (lines 216-232) — self-serve hint sentence, 8-item account-profile sub-list under (a), exclusion-list sentence, per-bullet email/self-serve channel notes.
+  5. §10.3 Web Platform Account Deletion (mirror lines 342-346): insert the (f)-(i) cascade narrative bullets from canonical lines 353-356 — DSAR-job abort, chat-attachments mig 068 cascade with `messages.user_id NULL via public.anonymise_departed_user_across_workspaces`, DSAR audit anonymisation (`dsar_export_audit_pii`), LinkedIn-published content carve-out per EDPB Guidelines 5/2019.
+  6. **Last-Updated chain** (mirror line 21): replace the compressed `(#4290 — ...DSAR worker wired with five per-column .eq() chains for OR-semantics across grantor/grantee/created_by/revoked_by/cap_updated_by; Art. 17 cascade RPC ships in PR-B; previous: May 22, 2026 added Section 2.3(v) ...)` summary with the canonical's longer form (line 12 — includes the migration 064 LAWFUL_BASIS header context, `to_regclass` precondition note, the AFTER-trigger mechanics for #4287's PA-20, etc.). This preserves Article 30(1) audit-trail completeness on the mirror surface.
 
-**Frontmatter / cosmetic reconciliation in mirror:**
+**Frontmatter / cosmetic verification in mirror (verification only, no edit expected):**
 
-- Update mirror's `<p>Effective ... | Last Updated May 25, 2026</p>` hero (already current at May 25, 2026 — verify).
-- Reconcile mirror's `**Last Updated:** May 25, 2026` body line with the canonical (canonical also dated May 25, 2026 — verify).
-- Optionally normalise `www.soleur.ai` ↔ `soleur.ai` link forms across the two files (cosmetic; the existing `collapse` sed pipeline already normalises this for body-equivalence — leave the literal text alone, no AC).
+- Mirror's `<p>Effective ... | Last Updated May 25, 2026</p>` hero — already at May 25, 2026 (verified at deepen time, line 11).
+- Mirror's `**Last Updated:** May 25, 2026` body line — already at May 25, 2026 (verified at deepen time, line 21).
+- `www.soleur.ai` ↔ `soleur.ai` host-form variants — KEEP each file's native literal; the `collapse` sed pipeline already normalises both forms to `LINK_HOME` for body-equivalence. No edits to either file's link literals.
 
 **CI guard + SHA literal:**
 
-- `apps/web-platform/scripts/check-tc-document-sha.sh` — extend Step 1 to loop over `BODY_EQUIVALENCE_DOCS=("terms-and-conditions" "data-protection-disclosure")` rather than the hard-coded `if [ "$doc" = "terms-and-conditions" ]`. The `normalize_canonical` + `normalize_plugin` + `collapse` helpers are already doc-agnostic — only the gating conditional changes.
-- `apps/web-platform/lib/legal/legal-doc-shas.ts` — refresh `LEGAL_DOC_SHAS["data-protection-disclosure"]` to the new sha256 after the canonical edit lands. The literal value is computed at /work time AFTER the canonical sync completes (the current value `04a2d796aff50f8457451b088c048a3c6cdf7eb84c9dacdbd01d5b42735a1d02` is stale).
+- `apps/web-platform/scripts/check-tc-document-sha.sh` — extend Step 1 to loop over `BODY_EQUIVALENCE_DOCS=("terms-and-conditions" "data-protection-disclosure")` rather than the hard-coded `if [ "$doc" = "terms-and-conditions" ]` at line 191. The `normalize_canonical` + `normalize_plugin` + `collapse` helpers are already doc-agnostic — only the gating conditional changes. PRESERVE the Step 3 T&C-specific `TC_VERSION` bump bypass at line 248 (DPD has no consumer of a version constant, so no bypass needed).
+- `apps/web-platform/lib/legal/legal-doc-shas.ts` — **canonical SHA is UNCHANGED** by this PR (canonical DPD is not edited per deepen-pass round-2 finding). The literal `04a2d796aff50f8457451b088c048a3c6cdf7eb84c9dacdbd01d5b42735a1d02` remains current; verify at Phase 5 by running `sha256sum docs/legal/data-protection-disclosure.md` and confirming equality. The body-equivalence guard's load-bearing artifact for DPD is the MIRROR-vs-canonical sed-normalised SHA equality, computed at runtime — no per-mirror SHA literal is stored.
 
 **Test (regression smoke):**
 
-- `apps/web-platform/test/legal-doc-shas-guard.test.ts` — add a new test case under the existing `describe` block: "DPD body drift detected when mirror diverges from canonical". Mutate one mirror body line in the tempdir copy and assert script exits 1 with the expected stderr token.
+- `apps/web-platform/test/legal-doc-shas-guard.test.ts` — add a new test case under the existing `describe` block: "data-protection-disclosure: mirror body drift fails the guard". Mutate ONE line in the MIRROR's tempdir copy (e.g., change "Art. 15(4)" → "Art. 15(5)") and assert the script exits 1 with `data-protection-disclosure: body drift` (or similar) in stderr.
 
 ## Files to Create
 
@@ -283,33 +330,44 @@ Query: `gh issue list --label code-review --state open --json number,title,body 
      | grep -E "^> " > /tmp/mirror-only-content.txt
    ```
 
-### Phase 1: Mirror forward-port (canonical → mirror)
+### Phase 1: Mirror forward-port (canonical → mirror) — six surgical edits
 
-1.1. Edit `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` §2.3(l): replace the short bullet body with the canonical's extended form (Art. 15(4) sub-block, manifest schema 1.1.0, MESSAGE_REDACT_FIELDS constant reference, per-bundle salt-scoped pseudonym, attachments cascade allowlist, CI sentinel test reference).
-1.2. Edit mirror §5.3: replace the short bullet (a)-(f) form with the canonical's detailed enumeration (account profile sub-list, conversations + messages, message attachments with co-member visibility caveat, KB share links, team/agent names, BYOK credentials, BYOK usage audit, workspace files, exclusion list).
-1.3. Edit mirror §10.3: insert sub-bullets (f) DSAR-job abort, (g) chat-attachments cascade with mig 068 share-asset language, (h) DSAR audit anonymisation, (i) LinkedIn-published content carve-out.
+1.1. Edit `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` §2.3(l) (mirror line 111): replace the short bullet body with the canonical's extended form from line 102 (Art. 15(4) sub-block, manifest schema 1.1.0, `MESSAGE_REDACT_FIELDS` constant, `member_<hex12>` pseudonym, attachments cascade allowlist, `dsar-message-redact-fields-sweep.test.ts` CI sentinel reference).
+1.2. Insert §2.3(p) NEW BLOCK into mirror — full LinkedIn Company Page publication block from canonical line 115. Place between mirror's §2.3(o) (Inngest CFO at line 119) and §2.3(n) (CLA evidence archive at line 120). Verify letter ordering in the mirror remains coherent (the mirror currently has gap: skips from (o) to (n) to (r) to (s) — inserting (p) restores partial alphabetical fidelity).
+1.3. Edit mirror §2.3(t) (mirror line 126): replace the SHORTER form with canonical's EXTENDED form from line 119 (over-provision rationale, v1-producer enumeration of revocation_reason enum values, RLS policy names, ADR-035 path + ADR-036 fold provenance).
+1.4. Edit mirror §5.3 (mirror lines 219-228): replace the short bullet (a)-(f) form with canonical's detailed form from lines 216-232 (self-serve hint sentence, 8-item account-profile sub-list under (a), exclusion-list sentence, per-bullet channel notes).
+1.5. Edit mirror §10.3 (mirror lines 342-346): insert sub-bullets (f) DSAR-job abort, (g) chat-attachments mig 068 cascade, (h) DSAR audit anonymisation, (i) LinkedIn-published content carve-out from canonical lines 353-356.
+1.6. Edit mirror Last-Updated chain (mirror line 21): replace the compressed summary with canonical's longer narrative from line 12 (preserves Article 30(1) audit-trail completeness on the mirror surface).
 
-### Phase 2: Canonical back-port (mirror → canonical)
+### Phase 2: ~~Canonical back-port~~ **(removed — canonical is unchanged per deepen-pass round-2 finding)**
 
-2.1. Edit `docs/legal/data-protection-disclosure.md` Last-Updated chain entry: prepend the byok_delegations #4290 context the mirror carries.
-2.2. Verify the §2.3(p) LinkedIn block, §2.3(s) digest-tier, §2.3(u) workspace-co-member, §2.3(v) workspace_member_removals are present in canonical (they should be from prior PRs; cross-check via `grep -cE "^- \*\*\([pstuv]\)\*\*" docs/legal/data-protection-disclosure.md` → expect 5). If any are missing, copy from mirror.
+Skip. Deepen-pass round-2 diff inventory confirmed canonical has no surface where the mirror is uniquely ahead. Plan v1's bi-directional framing was wrong.
 
-### Phase 3: Frontmatter + cosmetic reconciliation
+### Phase 3: Verification of date / hero / cosmetic reconciliation
 
-3.1. Confirm mirror hero `<p>Effective February 20, 2026 | Last Updated May 25, 2026</p>` is current (verify by `grep -n "Last Updated May 25, 2026" plugins/soleur/docs/pages/legal/data-protection-disclosure.md`).
-3.2. Confirm body `**Last Updated:** May 25, 2026` lines in both files are aligned (`grep -c "\*\*Last Updated:\*\* May 25, 2026" docs/legal/data-protection-disclosure.md plugins/soleur/docs/pages/legal/data-protection-disclosure.md` → expect `1` per file).
-3.3. Run `diff <(awk '/^---$/{c++;next} c>=2' docs/legal/data-protection-disclosure.md) <(awk '/^---$/{c++;next} c>=2' plugins/soleur/docs/pages/legal/data-protection-disclosure.md | sed -E '/^<\/?(section|div|h1|p)/d')` and confirm the remaining diff is exclusively (a) link-form differences (`legal/foo.md` vs `/legal/foo/`) which the `collapse` script handles, and (b) the `www.` vs apex host difference which `collapse` also handles. Anything else is a sync gap → return to Phase 1 or 2.
+3.1. Verify mirror hero stays at `<p>Effective February 20, 2026 | Last Updated May 25, 2026</p>` (line 11; already current — no edit).
+3.2. Verify both files' body `**Last Updated:** May 25, 2026` line: `grep -c "\*\*Last Updated:\*\* May 25, 2026" docs/legal/data-protection-disclosure.md plugins/soleur/docs/pages/legal/data-protection-disclosure.md` → expect `1` per file (both already current).
+3.3. Run the residual-diff confirmation after Phase 1 edits:
+
+   ```bash
+   diff \
+     <(awk '/^---$/{c++;next} c>=2' docs/legal/data-protection-disclosure.md) \
+     <(awk '/^---$/{c++;next} c>=2' plugins/soleur/docs/pages/legal/data-protection-disclosure.md \
+       | sed -E '/^<\/?(section|div|h1|p)/d')
+   ```
+
+   Confirm any remaining lines are only (a) link-form differences (`legal/foo.md` vs `/legal/foo/`) and (b) host-form differences (`https://soleur.ai` vs `https://www.soleur.ai`). Anything else is a sync gap → return to Phase 1.
 
 ### Phase 4: Extend the body-equivalence guard
 
 4.1. Edit `apps/web-platform/scripts/check-tc-document-sha.sh` Step 1: replace `if [ "$doc" = "terms-and-conditions" ]; then` with a loop over `BODY_EQUIVALENCE_DOCS=("terms-and-conditions" "data-protection-disclosure")` and check membership. Keep the existing T&C-specific `TC_VERSION` bump-bypass logic (which only fires for `terms-and-conditions`).
 4.2. Re-run `bash apps/web-platform/scripts/check-tc-document-sha.sh` → expect exit 0 (body-equivalence now passes for DPD as well as T&C).
 
-### Phase 5: SHA literal refresh
+### Phase 5: SHA literal verification (no refresh expected)
 
-5.1. Compute the new canonical DPD SHA: `sha256sum docs/legal/data-protection-disclosure.md`.
-5.2. Edit `apps/web-platform/lib/legal/legal-doc-shas.ts`: replace the `"data-protection-disclosure":` value with the new sha256.
-5.3. Re-run the SHA guard → expect exit 0.
+5.1. Compute current canonical DPD SHA: `sha256sum docs/legal/data-protection-disclosure.md`.
+5.2. Verify it equals the literal in `apps/web-platform/lib/legal/legal-doc-shas.ts` (`04a2d796aff50f8457451b088c048a3c6cdf7eb84c9dacdbd01d5b42735a1d02`) — the canonical is UNCHANGED, so the literal is current.
+5.3. Re-run the SHA guard → expect exit 0 (both the canonical-SHA-pin step AND the new body-equivalence step pass).
 
 ### Phase 6: Regression smoke test (extends existing vitest)
 
@@ -397,7 +455,7 @@ Query: `gh issue list --label code-review --state open --json number,title,body 
 - Existing test (heading-sequence + sentinel parity): `apps/web-platform/test/legal-doc-consistency.test.ts`.
 - Existing CI guard (SHA-pin + T&C body equivalence): `apps/web-platform/scripts/check-tc-document-sha.sh` + `apps/web-platform/test/legal-doc-shas-guard.test.ts`.
 - Learning (dual-date locations): `knowledge-base/project/learnings/2026-03-20-eleventy-mirror-dual-date-locations.md`.
-- Learning (DOCS arrays are themselves a drift surface): `knowledge-base/project/learnings/best-practices/2026-05-22-ci-parity-test-docs-arrays-are-themselves-a-drift-surface.md` (filesystem-derived enumeration pattern, not hand-edited).
+- Learning (DOCS arrays are themselves a drift surface): `knowledge-base/project/learnings/2026-05-22-ci-parity-test-docs-arrays-are-themselves-a-drift-surface.md` (filesystem-derived enumeration pattern, not hand-edited).
 - AGENTS rule (legal-doc lockstep): `wg-after-merging-a-pr-that-adds-or-modifies` (workflow-side, not legal-doc-side; the actual legal-doc lockstep is the cross-document-gate workflow + consistency test).
 - Workflow gate (`Closes #N` on own line): `wg-use-closes-n-in-pr-body-not-title-to`.
 - Review-fix-inline preference: `rf-review-finding-default-fix-inline`.
