@@ -21,17 +21,22 @@ import { TC_EXEMPT_PATHS } from "@/lib/routes";
 
 const {
   mockGetUser,
+  mockGetSession,
+  mockRpc,
   mockFrom,
   mockReportSilentFallback,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
+  mockGetSession: vi.fn(),
+  mockRpc: vi.fn(),
   mockFrom: vi.fn(),
   mockReportSilentFallback: vi.fn(),
 }));
 
 vi.mock("@supabase/ssr", () => ({
   createServerClient: vi.fn(() => ({
-    auth: { getUser: mockGetUser },
+    auth: { getUser: mockGetUser, getSession: mockGetSession },
+    rpc: mockRpc,
     from: mockFrom,
   })),
 }));
@@ -59,6 +64,11 @@ beforeEach(() => {
     data: { user: { id: "user-1", email: "u@example.com" } },
     error: null,
   });
+  // No access_token → #4307 revocation gate skips, fail-closed flow tested
+  // by these tests stays untouched. The revocation gate has its own
+  // dedicated suite at test/middleware.revocation-redirect.test.ts.
+  mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+  mockRpc.mockResolvedValue({ data: null, error: null });
 
   // Default: users SELECT returns tcError != null (the "DB incident" shape).
   const single = vi.fn().mockResolvedValue({

@@ -110,6 +110,8 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 
 **Right of access / portability (Articles 15 + 20):** You can request a self-serve export of the data classes enumerated above from `/dashboard/settings/privacy` on the Web Platform; the bundle is delivered by email as a ZIP archive and is bound to the requesting session and network for 7 days. See Section 8.1 below for the full mechanism and the email fallback.
 
+**Art. 15(4) — rights of others (#4319):** When you exercise your right of access under Article 15, we will provide a copy of personal data concerning you. Where your data resides in shared workspace conversations that include contributions from other workspace members, we will redact content authored by those other members to protect their rights and freedoms under Article 15(4) GDPR and Recital 63. The export will indicate the location and count of such redactions via a top-level `redactions[]` field in the bundle manifest; the redacted users are referred to by a pseudonymous identifier (`member_<hex12>`) scoped to your export bundle (a fresh salt is generated per export and never persisted). This minimization applies only to other members' contributions — your own messages and attachments are returned in full.
+
 <!-- 2026-05-12: Article 13(3) prior-disclosure refresh for messages.usage column (PR #3603 / PR-A2 #3648). CC_PERSIST_USAGE=true active in prd. -->
 
 **Purpose:** Providing the Web Platform service, including account management, workspace provisioning, subscription billing, and conversational AI interactions with domain-specific agents.
