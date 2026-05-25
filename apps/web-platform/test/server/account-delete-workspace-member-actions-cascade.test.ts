@@ -24,6 +24,8 @@ const {
   mockLogger,
   mockAbortAllUserSessions,
   mockDeleteWorkspace,
+  mockReportSilentFallback,
+  mockWarnSilentFallback,
 } = vi.hoisted(() => {
   const callOrder: string[] = [];
   return {
@@ -42,6 +44,8 @@ const {
     },
     mockAbortAllUserSessions: vi.fn(),
     mockDeleteWorkspace: vi.fn(),
+    mockReportSilentFallback: vi.fn(),
+    mockWarnSilentFallback: vi.fn(),
   };
 });
 
@@ -87,6 +91,12 @@ vi.mock("@/server/workspace", () => ({
 vi.mock("@/server/logger", () => ({
   default: mockLogger,
   createChildLogger: () => mockLogger,
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: mockWarnSilentFallback,
+  hashUserId: (id: string) => `hash:${id}`,
 }));
 
 import { deleteAccount } from "@/server/account-delete";
@@ -169,6 +179,18 @@ describe("deleteAccount cascade ordering with workspace_member_actions (#4231)",
 
     expect(mockDeleteUser).not.toHaveBeenCalled();
     expect(callOrder).not.toContain("auth.admin.deleteUser");
+
+    // Sentry mirror — failure routes through reportSilentFallback helper.
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "account-delete",
+        op: "anonymise-workspace-member-actions",
+        message: expect.stringContaining("anonymise_workspace_member_actions"),
+        extra: expect.objectContaining({ userId: USER_ID }),
+      }),
+    );
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
   });
 
   test("anonymise_workspace_member_actions throws → cascade aborts, auth-delete NOT called", async () => {
@@ -186,5 +208,16 @@ describe("deleteAccount cascade ordering with workspace_member_actions (#4231)",
 
     expect(mockDeleteUser).not.toHaveBeenCalled();
     expect(callOrder).not.toContain("auth.admin.deleteUser");
+
+    // Sentry mirror — throw path routes through reportSilentFallback helper.
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        feature: "account-delete",
+        op: "anonymise-workspace-member-actions",
+        message: expect.stringContaining("anonymise_workspace_member_actions"),
+        extra: expect.objectContaining({ userId: USER_ID }),
+      }),
+    );
   });
 });

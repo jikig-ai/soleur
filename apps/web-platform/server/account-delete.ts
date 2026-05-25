@@ -3,7 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { abortAllUserSessions } from "@/server/agent-runner";
 import { deleteWorkspace } from "@/server/workspace";
 import { createChildLogger } from "./logger";
-import { hashUserId } from "@/server/observability";
+import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
 const log = createChildLogger("account-delete");
 
@@ -238,17 +238,21 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonAsErr) {
-      log.error(
-        { userId, err: anonAsErr },
-        "anonymise_action_sends failed — aborting deletion to avoid FK-block",
-      );
+      reportSilentFallback(anonAsErr, {
+        feature: "account-delete",
+        op: "anonymise-action-sends",
+        extra: { userId, err: anonAsErr },
+        message: "anonymise_action_sends failed — aborting deletion to avoid FK-block",
+      });
       return { success: false, error: "Account deletion failed. Please try again." };
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_action_sends threw — aborting deletion to avoid FK-block",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-action-sends",
+      extra: { userId },
+      message: "anonymise_action_sends threw — aborting deletion to avoid FK-block",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
@@ -269,20 +273,24 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonTaErr) {
-      log.error(
-        { userId, err: anonTaErr },
-        "anonymise_template_authorizations failed — aborting deletion to avoid Art. 5(2) attribution break",
-      );
+      reportSilentFallback(anonTaErr, {
+        feature: "account-delete",
+        op: "anonymise-template-authorizations",
+        extra: { userId, err: anonTaErr },
+        message: "anonymise_template_authorizations failed — aborting deletion to avoid Art. 5(2) attribution break",
+      });
       return {
         success: false,
         error: "Account deletion failed. Please try again.",
       };
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_template_authorizations threw — aborting deletion to avoid Art. 5(2) attribution break",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-template-authorizations",
+      extra: { userId },
+      message: "anonymise_template_authorizations threw — aborting deletion to avoid Art. 5(2) attribution break",
+    });
     return {
       success: false,
       error: "Account deletion failed. Please try again.",
@@ -302,17 +310,21 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonSgErr) {
-      log.error(
-        { userId, err: anonSgErr },
-        "anonymise_scope_grants failed — aborting deletion to avoid FK-block",
-      );
+      reportSilentFallback(anonSgErr, {
+        feature: "account-delete",
+        op: "anonymise-scope-grants",
+        extra: { userId, err: anonSgErr },
+        message: "anonymise_scope_grants failed — aborting deletion to avoid FK-block",
+      });
       return { success: false, error: "Account deletion failed. Please try again." };
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_scope_grants threw — aborting deletion to avoid FK-block",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-scope-grants",
+      extra: { userId },
+      message: "anonymise_scope_grants threw — aborting deletion to avoid FK-block",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
@@ -328,17 +340,21 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonTcErr) {
-      log.error(
-        { userId, err: anonTcErr },
-        "anonymise_tc_acceptances failed — aborting deletion to avoid FK-block",
-      );
+      reportSilentFallback(anonTcErr, {
+        feature: "account-delete",
+        op: "anonymise-tc-acceptances",
+        extra: { userId, err: anonTcErr },
+        message: "anonymise_tc_acceptances failed — aborting deletion to avoid FK-block",
+      });
       return { success: false, error: "Account deletion failed. Please try again." };
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_tc_acceptances threw — aborting deletion to avoid FK-block",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-tc-acceptances",
+      extra: { userId },
+      message: "anonymise_tc_acceptances threw — aborting deletion to avoid FK-block",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
@@ -355,16 +371,20 @@ export async function deleteAccount(
       { p_founder_id: userId },
     );
     if (anonGhErr) {
-      log.warn(
-        { userId, err: anonGhErr },
-        "anonymise_audit_github_token_use failed — relying on ON DELETE SET NULL cascade (non-fatal)",
-      );
+      warnSilentFallback(anonGhErr, {
+        feature: "account-delete",
+        op: "anonymise-audit-github-token-use",
+        extra: { userId, err: anonGhErr },
+        message: "anonymise_audit_github_token_use failed — relying on ON DELETE SET NULL cascade (non-fatal)",
+      });
     }
   } catch (err) {
-    log.warn(
-      { userId, err },
-      "anonymise_audit_github_token_use threw — relying on ON DELETE SET NULL cascade (non-fatal)",
-    );
+    warnSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-audit-github-token-use",
+      extra: { userId },
+      message: "anonymise_audit_github_token_use threw — relying on ON DELETE SET NULL cascade (non-fatal)",
+    });
   }
 
   // 3.90 Anonymise workspace_member_attestations BEFORE workspace_members
@@ -382,17 +402,21 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonAttErr) {
-      log.error(
-        { userId, err: anonAttErr },
-        "anonymise_workspace_member_attestations failed — aborting deletion",
-      );
+      reportSilentFallback(anonAttErr, {
+        feature: "account-delete",
+        op: "anonymise-workspace-member-attestations",
+        extra: { userId, err: anonAttErr },
+        message: "anonymise_workspace_member_attestations failed — aborting deletion",
+      });
       return { success: false, error: "Account deletion failed. Please try again." };
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_workspace_member_attestations threw — aborting deletion",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-workspace-member-attestations",
+      extra: { userId },
+      message: "anonymise_workspace_member_attestations threw — aborting deletion",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
@@ -412,17 +436,21 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonRemErr) {
-      log.error(
-        { userId, err: anonRemErr },
-        "anonymise_workspace_member_removals failed — aborting deletion",
-      );
+      reportSilentFallback(anonRemErr, {
+        feature: "account-delete",
+        op: "anonymise-workspace-member-removals",
+        extra: { userId, err: anonRemErr },
+        message: "anonymise_workspace_member_removals failed — aborting deletion",
+      });
       return { success: false, error: "Account deletion failed. Please try again." };
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_workspace_member_removals threw — aborting deletion",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-workspace-member-removals",
+      extra: { userId },
+      message: "anonymise_workspace_member_removals threw — aborting deletion",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
@@ -438,17 +466,21 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonMemErr) {
-      log.error(
-        { userId, err: anonMemErr },
-        "anonymise_workspace_members failed — aborting deletion",
-      );
+      reportSilentFallback(anonMemErr, {
+        feature: "account-delete",
+        op: "anonymise-workspace-members",
+        extra: { userId, err: anonMemErr },
+        message: "anonymise_workspace_members failed — aborting deletion",
+      });
       return { success: false, error: "Account deletion failed. Please try again." };
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_workspace_members threw — aborting deletion",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-workspace-members",
+      extra: { userId },
+      message: "anonymise_workspace_members threw — aborting deletion",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
@@ -467,10 +499,12 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonOrgErr) {
-      log.error(
-        { userId, err: anonOrgErr },
-        "anonymise_organization_membership failed — aborting deletion",
-      );
+      reportSilentFallback(anonOrgErr, {
+        feature: "account-delete",
+        op: "anonymise-organization-membership",
+        extra: { userId, err: anonOrgErr },
+        message: "anonymise_organization_membership failed — aborting deletion",
+      });
       return { success: false, error: "Account deletion failed. Please try again." };
     }
     // Surface the reassign count + count of soon-to-be-orphan orgs so a
@@ -502,10 +536,12 @@ export async function deleteAccount(
       );
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_organization_membership threw — aborting deletion",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-organization-membership",
+      extra: { userId },
+      message: "anonymise_organization_membership threw — aborting deletion",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
@@ -526,17 +562,21 @@ export async function deleteAccount(
       { p_user_id: userId },
     );
     if (anonAuditErr) {
-      log.error(
-        { userId, err: anonAuditErr },
-        "anonymise_workspace_member_actions failed — aborting deletion",
-      );
+      reportSilentFallback(anonAuditErr, {
+        feature: "account-delete",
+        op: "anonymise-workspace-member-actions",
+        extra: { userId, err: anonAuditErr },
+        message: "anonymise_workspace_member_actions failed — aborting deletion",
+      });
       return { success: false, error: "Account deletion failed. Please try again." };
     }
   } catch (err) {
-    log.error(
-      { userId, err },
-      "anonymise_workspace_member_actions threw — aborting deletion",
-    );
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-workspace-member-actions",
+      extra: { userId },
+      message: "anonymise_workspace_member_actions threw — aborting deletion",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
@@ -550,7 +590,12 @@ export async function deleteAccount(
   const { error: deleteAuthError } = await service.auth.admin.deleteUser(userId);
 
   if (deleteAuthError) {
-    log.error({ userId, err: deleteAuthError }, "Failed to delete auth record");
+    reportSilentFallback(deleteAuthError, {
+      feature: "account-delete",
+      op: "auth-delete",
+      extra: { userId, err: deleteAuthError },
+      message: "Failed to delete auth record",
+    });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
