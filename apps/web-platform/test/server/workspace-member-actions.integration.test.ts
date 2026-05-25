@@ -129,12 +129,22 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .update({ action_type: "removed" })
         .eq("id", rowId);
       expect(updErr).not.toBeNull();
-      // Supabase surfaces P0001 as `code: 'P0001'` or in the message.
-      const errStr = JSON.stringify(updErr);
-      expect(errStr).toMatch(/P0001|append-only|WORM/);
+      // Defense-in-depth WORM: mig 063 REVOKEs service_role UPDATE/DELETE
+      // AND installs a WORM trigger. The REVOKE fires at the
+      // column-permission layer (42501) BEFORE the trigger gets a chance
+      // to raise P0001. Either rejection shape is a valid WORM enforcement
+      // path; the test asserts the operation was rejected, not which layer
+      // rejected first. (Mig 064 only restored SELECT; UPDATE/DELETE
+      // intentionally stay REVOKEd.) Assertion targets error.code directly
+      // (not a stringify+regex) so `"permission denied for schema …"`
+      // (a different bug class — search_path drift) cannot pass via the
+      // broad `/permission denied/` substring.
+      expect(["P0001", "42501"]).toContain(
+        (updErr as { code?: string } | null)?.code,
+      );
     });
 
-    test("AC4: direct DELETE on workspace_member_actions is rejected with P0001", async () => {
+    test("AC4: direct DELETE on workspace_member_actions is rejected", async () => {
       if (SCHEMA_CACHE_READY === false) return;
       const { data } = await service
         .from("workspace_member_actions")
@@ -149,8 +159,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .delete()
         .eq("id", rowId);
       expect(delErr).not.toBeNull();
-      const errStr = JSON.stringify(delErr);
-      expect(errStr).toMatch(/P0001|append-only|WORM/);
+      // See AC4-UPDATE comment above: REVOKE (42501) or trigger (P0001)
+      // both satisfy WORM enforcement; mig 063 layered both.
+      expect(["P0001", "42501"]).toContain(
+        (delErr as { code?: string } | null)?.code,
+      );
     });
 
     test("AC4a + AC5: anonymise_workspace_member_actions NULL-sets PII and is idempotent", async () => {

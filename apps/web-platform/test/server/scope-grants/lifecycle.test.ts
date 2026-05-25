@@ -250,16 +250,16 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     test("anonymise_scope_grants bypasses WORM trigger and zeros founder_id", async () => {
-      // Snapshot the row count BEFORE anonymise so we can assert the RPC
-      // returned a row count > 0 AND that every row owned by userA was
-      // zeroed.
+      // Snapshot the row IDs BEFORE anonymise so we can re-query them by ID
+      // after — both columns (founder_id + workspace_id) must be NULL to
+      // satisfy mig 059:358-360 CHECK (founder_id NULL ↔ workspace_id NULL).
       const { data: before, error: beforeErr } = await service
         .from("scope_grants")
         .select("id")
         .eq("founder_id", userA.id);
       expect(beforeErr).toBeNull();
-      const beforeCount = before?.length ?? 0;
-      expect(beforeCount).toBeGreaterThan(0);
+      const beforeIds = (before ?? []).map((r) => r.id as string);
+      expect(beforeIds.length).toBeGreaterThan(0);
 
       const { data: anonRows, error: anonErr } = await service.rpc(
         "anonymise_scope_grants",
@@ -277,6 +277,23 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .eq("founder_id", userA.id);
       expect(afterErr).toBeNull();
       expect(after?.length ?? 0).toBe(0);
+
+      // Mig 064 invariant: anonymise_scope_grants must NULL workspace_id
+      // alongside founder_id (mig 059:358-360 CHECK forbids the mixed state
+      // founder_id NULL + workspace_id NOT NULL). Re-query the original rows
+      // by ID and assert both columns are NULL. Without this assertion, a
+      // future regression of mig 050's body (founder_id NULL only) silently
+      // passes the lifecycle test until prd Art. 17 hits CHECK 23514.
+      const { data: anonymised, error: anonymisedErr } = await service
+        .from("scope_grants")
+        .select("id, founder_id, workspace_id")
+        .in("id", beforeIds);
+      expect(anonymisedErr).toBeNull();
+      expect(anonymised?.length ?? 0).toBe(beforeIds.length);
+      for (const row of anonymised ?? []) {
+        expect(row.founder_id, `row ${row.id} founder_id`).toBeNull();
+        expect(row.workspace_id, `row ${row.id} workspace_id`).toBeNull();
+      }
     });
   },
 );
