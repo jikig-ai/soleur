@@ -2,7 +2,7 @@
 title: "feat: Admin revoke_jti RPC + my_revocation_status reader + PostgREST RLS jti-deny predicate (#3930 + #3932)"
 type: feat
 date: 2026-05-25
-status: ready-for-deepen
+status: ready-for-work
 issue: 3930
 co_closes: 3932
 predecessor_pr: 3922
@@ -12,9 +12,34 @@ worktree: .worktrees/feat-one-shot-jti-revoke-rls-3930-3932/
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 lane: cross-domain
+deepened: 2026-05-25
 ---
 
 # feat — Admin revoke_jti RPC + my_revocation_status reader + PostgREST RLS jti-deny predicate (#3930 + #3932)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-25
+**Sections enhanced:** 6 (Frontmatter, Overview, Files to Edit, Implementation Phases, Risks & Mitigations, Sharp Edges)
+**Gates discharged:** Phase 4.4 (precedent-diff), Phase 4.45 (verify-the-negative + post-edit self-audit), Phase 4.6 (User-Brand Impact), Phase 4.7 (Observability schema), Phase 4.8 (PAT-shaped vars — N/A)
+**Research agents used:** local grep/precedent reads; no external WebSearch (codebase precedent + Postgres docs sufficient).
+
+### Key Improvements
+
+1. **Operator-CLI shape corrected to match sibling precedent** (`byok-revoke.ts`). Phase 2 now uses `#!/usr/bin/env bun`, named-flag argv parser (`--jti --founder-id --reason --yes`), `createChildLogger("revoke-jti")` for structured logs, GitHub-Actions `::error::` stderr lines, and `createInterface(node:readline/promises)` confirm prompt — NOT `npx tsx`, NOT `Sentry.addBreadcrumb`, NOT `console.log`.
+2. **Sentry import path corrected.** Codebase uses `import * as Sentry from "@sentry/nextjs"` (no `@/lib/sentry` alias). The operator CLI does NOT need a Sentry breadcrumb — the WORM `denied_jti` row IS the audit trail; the existing PR-E `mirrorWithDebounce` at `tenant.ts` is the runtime-side emitter.
+3. **RESTRICTIVE-policy semantics pinned.** `FOR ALL` + `USING (NOT public.is_jti_denied_from_jwt())` is verified against Postgres docs: when `WITH CHECK` is omitted on a RESTRICTIVE policy, Postgres applies USING as the row-validation expression for INSERT/UPDATE too (single source of truth for both read and write deny). Confirmed against precedent at `016_github_username.sql:13` (RESTRICTIVE policy on `users` for `github_username`). Adding `WITH CHECK (NOT public.is_jti_denied_from_jwt())` belt-and-suspenders to make the symmetry explicit at code-review time.
+4. **Tenant-table count tightened to 19.** The 9 service-role-only tables (`denied_jti`, `mint_rate_window`, `processed_stripe_events`, `_schema_migrations`, `processed_github_events`, `runtime_mint_intent`, `dsar_export_audit_pii`, `tc_acceptances`, `tenant_deploy_audit`) are explicitly EXCLUDED from the RESTRICTIVE-policy sweep — they have zero authenticated policies by design.
+5. **Novel-pattern callout for `request.jwt.claims`.** Verified via `grep -rn "request\.jwt\.claims" apps/web-platform/supabase/migrations/*.sql` — ZERO matches. This is the first RLS predicate in the codebase that reads `current_setting('request.jwt.claims', true)::jsonb->>'jti'`. Per Phase 4.4: precedent does not exist; pattern is novel. Risks section §R1 expanded.
+6. **Sibling-precedent diff added** for the three pattern-bound shapes: (a) SECURITY DEFINER + `auth.uid()` pin via `check_my_revocation` (mig 067) for `my_revocation_status`; (b) `STABLE` marker + `SET search_path = public, pg_temp` via `is_jti_denied` (mig 037) for `is_jti_denied_from_jwt`; (c) REVOKE+GRANT 3-role matrix via `check_my_revocation`'s `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role; GRANT EXECUTE ... TO authenticated` form for the new authenticated-side functions.
+
+### New Considerations Discovered
+
+- **`scripts/revoke-jti.ts` does NOT need a `.service-role-allowlist` entry.** The allowlist is scoped to importers under `apps/web-platform/{server,lib}/` per the file's own header (`# Files in apps/web-platform/{server,lib} that legitimately import createServiceClient`). The `scripts/` directory is out-of-scope; `byok-revoke.ts` confirms this (it imports `createServiceClient` from `@/lib/supabase/service` but is not in the allowlist). AC11 verification is therefore the unchanged `service-role-allowlist-gate.sh` (which passes without our script being listed).
+- **`fdatasync`-style atomicity is N/A.** No atomic-write sequence in this PR. The Phase 4.4 atomic-write precedent gate does not fire.
+- **The operator CLI's dev/prd safety is `doppler run -p soleur -c <config>` choice, not script logic.** The script reads `SUPABASE_URL` at runtime and prints it via the structured logger BEFORE the write — operator can read the URL and abort if it's the wrong env. No `--name-transformer tf-var` needed (the script consumes raw env, not Terraform vars).
+- **No new Sentry breadcrumb needed in the script.** The deny-list row written to `denied_jti` IS the audit artifact per Article 30 PA1 §(g)(10) "audit logging via Supabase + pino." Adding a Sentry breadcrumb would duplicate the trail without adding signal — and Sentry is for ERRORS, not informational ops actions. The runtime-side `mirrorWithDebounce("is_jti_denied.deny")` from PR-E fires when the deny-list HIT happens (in tenant.ts), which IS the operator-visible signal post-revocation.
+- **Migration apply path verified:** `web-platform-release.yml#migrate` runs Supabase migrations against prd automatically post-merge. Confirmed via the most recent example (PR #4287 / PR-I template authorizations) per compliance-posture.md row.
 
 ## Overview
 
@@ -86,7 +111,7 @@ Sibling PRs touching the same surfaces this work touches (verified via grep + br
 
 ## Files to Edit
 
-**New files (4):**
+**New files (6):**
 
 1. `apps/web-platform/supabase/migrations/068_jti_deny_rls_predicate_and_revoke_rpc.sql` — new migration containing:
    - (A) `revoke_jti(p_jti uuid, p_founder_id uuid, p_reason text) RETURNS void` — service-role-only writer for `denied_jti` (issue #3930 admin RPC).
@@ -94,9 +119,11 @@ Sibling PRs touching the same surfaces this work touches (verified via grep + br
    - (C) Per-tenant-table RESTRICTIVE policy `ON public.<table> AS RESTRICTIVE FOR ALL TO authenticated USING (NOT public.is_jti_denied(...))` for each of 19 tables: `conversations`, `messages`, `users`, `api_keys`, `audit_byok_use`, `scope_grants`, `audit_github_token_use`, `kb_share_links`, `push_subscriptions`, `user_concurrency_slots`, `dsar_export_jobs`, `action_sends`, `template_authorizations`, `byok_delegations`, `workspaces`, `workspace_members`, `workspace_member_attestations`, `user_session_state`, `message_attachments`.
    - (D) `GRANT EXECUTE ON FUNCTION public.is_jti_denied(uuid) TO authenticated` — required because the RESTRICTIVE policy is evaluated under the authenticated role; SECURITY DEFINER's outer-call EXECUTE check still applies even when the fn body runs with definer privileges (per learning `2026-05-06-tenant-jwt-rpc-grant-mismatch-vitest-blind.md`).
    - (E) Companion CTE-shaped helper `public.is_jti_denied_from_jwt()` (zero-arg, reads `current_setting('request.jwt.claims', true)::jsonb->>'jti'` internally) — clean macro for the RESTRICTIVE policy body. Reduces 19 verbose policy bodies to one helper call, and lets us isolate the JWT-claim-read failure modes in one place.
-2. `apps/web-platform/supabase/migrations/068_jti_deny_rls_predicate_and_revoke_rpc.down.sql` — rollback (DROP POLICY × 19 + DROP FUNCTION × 3 + REVOKE).
-3. `apps/web-platform/scripts/revoke-jti.ts` — operator CLI for the new `revoke_jti` RPC. Reads `SUPABASE_SERVICE_ROLE_KEY` via Doppler-bound `createServiceClient()`, calls `service.rpc("revoke_jti", {p_jti, p_founder_id, p_reason})`, emits Sentry breadcrumb on success.
-4. `apps/web-platform/test/server/tenant-jwt-rls-deny.tenant-isolation.test.ts` — new tenant-isolation suite. Validates: (a) deny-list row blocks PostgREST-direct reads + writes for the revoked jti's full TTL, (b) un-revoked sessions are unaffected, (c) `my_revocation_status()` returns shape `(false, NULL, NULL)` for un-denied callers + `(true, denied_at, reason)` for denied callers, (d) `revoke_jti` REVOKE+GRANT matrix matches the service-role-only invariant, (e) the dual-shape `{error: { code: '42501' }} | {data: []}` deny-acceptance pattern per learning `2026-05-16-followthrough-verification-loop-catches-grant-vs-rls-deny-shape.md` (the RESTRICTIVE policy denies with `{data: [], error: null}`-shape because RLS-deny is silent zero-rows; ANY downstream column-grant rejection on the same statement returns `42501`).
+2. `apps/web-platform/supabase/migrations/068_jti_deny_rls_predicate_and_revoke_rpc.down.sql` — rollback (DROP POLICY × 19 + DROP FUNCTION × 3 + REVOKE the `is_jti_denied TO authenticated` GRANT added by 068).
+3. `apps/web-platform/supabase/verify/068_jti_deny_rls_predicate_and_revoke_rpc.sql` — post-apply CI sentinel (per `verify-migrations` job in `.github/workflows/web-platform-release.yml`). Shape mirrors `verify/054_users_role_column.sql` precedent. Detail in Phase 1.6.
+4. `apps/web-platform/scripts/revoke-jti.ts` — operator CLI for the new `revoke_jti` RPC. `#!/usr/bin/env bun` shebang, named-flag argv (`--jti --founder-id --reason --yes`), `createChildLogger("revoke-jti")` for structured logs, `createInterface(node:readline/promises)` confirm prompt, Doppler-bound `createServiceClient()`. Mirrors `apps/web-platform/scripts/byok-revoke.ts` precedent exactly. NO Sentry breadcrumb (the `denied_jti` row IS the WORM audit trail; the runtime-side `mirrorWithDebounce("is_jti_denied.deny")` from PR-E fires when the deny-list HIT happens). Detail in Phase 2.2.
+5. `apps/web-platform/test/server/tenant-jwt-rls-deny.tenant-isolation.test.ts` — new tenant-isolation suite. Validates: (a) deny-list row blocks PostgREST-direct reads + writes for the revoked jti's full TTL, (b) un-revoked sessions are unaffected, (c) `my_revocation_status()` returns shape `(false, NULL, NULL)` for un-denied callers + `(true, denied_at, reason)` for denied callers, (d) `revoke_jti` REVOKE+GRANT matrix matches the service-role-only invariant, (e) the dual-shape `{error: { code: '42501' }} | {data: []}` deny-acceptance pattern per learning `2026-05-16-followthrough-verification-loop-catches-grant-vs-rls-deny-shape.md` (the RESTRICTIVE policy denies with `{data: [], error: null}`-shape because RLS-deny is silent zero-rows; ANY downstream column-grant rejection on the same statement returns `42501`).
+6. `apps/web-platform/test/scripts/revoke-jti.test.ts` — new operator-CLI unit test. Uses `spawnSync("bun", [SCRIPT_PATH, ...args])` per `test/scripts/hash-user-id.test.ts:20-46` sibling precedent. Asserts argv validation, RPC invocation, re-read verification, exit codes.
 
 **Modified files (3):**
 
@@ -117,7 +144,7 @@ Sibling PRs touching the same surfaces this work touches (verified via grep + br
 5. **`my_revocation_status()` returns correct shape for both states** — under a tenant client whose jti is NOT in `denied_jti`, returns `(false, NULL, NULL)`; after inserting a deny row, returns `(true, <ts>, <reason>)`.
 6. **`revoke_jti` is service-role-only** — `psql --role=authenticated -c "SELECT public.revoke_jti('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', 'test')"` returns `42501 permission denied`; same call as service_role succeeds.
 7. **`scripts/revoke-jti.ts` invocation against a real founder jti causes that founder's open PostgREST queries to fail with `0 rows` (RLS-deny shape) within 1 round-trip** — integration test in `tenant-jwt-rls-deny.tenant-isolation.test.ts` exercises this path end-to-end with `TENANT_INTEGRATION_TEST=1`.
-8. **No new operator-facing manual step** — `scripts/revoke-jti.ts` is invokable via `npx tsx scripts/revoke-jti.ts <jti> <founder_id> <reason>` and is fully scripted with `--help` for arg validation. NO "operator runs psql" anywhere in the resulting docs.
+8. **No new operator-facing manual step** — `scripts/revoke-jti.ts` is invokable via `doppler run -p soleur -c <env> -- bun run apps/web-platform/scripts/revoke-jti.ts --jti <uuid> --founder-id <uuid> --reason "<text>"` and is fully scripted with named-flag validation. Missing flag → exit 2 with `::error::missing required flag <name>` on stderr (matches `byok-revoke.ts:42`). NO "operator runs psql" anywhere in the resulting docs.
 9. **All existing `*.tenant-isolation.test.ts` suites stay green** — `cd apps/web-platform && doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 ./node_modules/.bin/vitest run test/server/*.tenant-isolation.test.ts` shows 0 failures, 0 unexpected skips. Per learning `2026-05-16-followthrough-verification-loop-catches-grant-vs-rls-deny-shape.md`, any `skipped > 0` is investigated for `beforeAll` crash.
 10. **`npx tsc --noEmit`** in `apps/web-platform` is clean. **`bash scripts/test-all.sh webplat`** has no new pre-existing-regression.
 11. **`bash apps/web-platform/scripts/service-role-allowlist-gate.sh`** passes — no new service-role-importer entries needed (the new script reads `SUPABASE_SERVICE_ROLE_KEY` directly via Doppler env, not via the allowlisted singleton).
@@ -126,8 +153,8 @@ Sibling PRs touching the same surfaces this work touches (verified via grep + br
 
 ### Post-merge (operator — fully automated via existing CI)
 
-14. **Migration 068 applies to prd** via `.github/workflows/web-platform-release.yml#migrate` job (existing automation; no operator action). Verified by the workflow's `verify-migrations` job which runs `select * from public._schema_migrations where version='068'` after apply.
-15. **`gh issue close 3930 --comment "Closed by PR #<N>: <date> — admin revoke_jti RPC + my_revocation_status reader landed via mig 068"`** runs automatically in `web-platform-release.yml#post-deploy` (existing automation already mirrors PR-E's #3887 close pattern). Same for #3932.
+14. **Migration 068 applies to prd** via `.github/workflows/web-platform-release.yml#migrate` job (existing automation; no operator action). Verified by the workflow's `verify-migrations` job which runs migration-specific sentinel + idempotence probes from `apps/web-platform/supabase/verify/068_*.sh`. **Phase 1.6 task:** author the verify-068 sentinel script (mirrors `verify/067_*.sh`'s shape; asserts the 19 RESTRICTIVE policies, 3 new functions, and the `GRANT EXECUTE TO authenticated` on `is_jti_denied` exist post-apply).
+15. **`gh issue close 3930` + `gh issue close 3932` fire automatically** via `web-platform-release.yml#verify-migrations` auto-close (the workflow scans open follow-through issues for references to the verified migration name `068_jti_deny_rls_predicate_and_revoke_rpc` OR `068`; both issue bodies reference PR-E + the deny-list surface but NOT the new migration name). **Therefore:** the PR body MUST include `Closes #3930` AND `Closes #3932` (per `wg-use-closes-n-in-pr-body-not-title-to`) — GitHub's native PR-merge auto-close handles the closure at squash-merge time. Workflow auto-close is the secondary path; PR-body close is primary. Document this explicitly in Phase 4.2.
 16. **Sentry mirror sanity** — `sentry_id` query against `is_jti_denied.error` issue tag returns 0 hits in the first 24h post-merge (no NULL `request.jwt.claims` failures from the RESTRICTIVE policy). Filed as a `web-platform-release.yml#follow-through` gate; deferred re-check at 7d.
 
 ## Infrastructure (IaC)
@@ -219,46 +246,179 @@ These tests FAIL because mig 068 doesn't exist yet.
 
 **1.5 REFACTOR:** Read the 19 RESTRICTIVE policies for DRY — if more than 5 lines of repeating `CREATE POLICY ... USING (NOT public.is_jti_denied_from_jwt())` is exact-duplicate prose, wrap in a `DO $$ ... LOOP ... END $$` block over a hardcoded table-name array.
 
+**1.6 Verify-migration sentinel (`.sql` not `.sh`):** Author `apps/web-platform/supabase/verify/068_jti_deny_rls_predicate_and_revoke_rpc.sql` mirroring the closest existing sibling `apps/web-platform/supabase/verify/054_users_role_column.sql`. Contract per `run-verify.sh`: every row returns `check_name` + `bad`; any `bad > 0` fails the CI `verify-migrations` job. Sentinel SELECT-UNIONs assert:
+- `revoke_jti_fn_present` — `pg_proc` row for `public.revoke_jti(uuid, uuid, text)` exists with `prosecdef = true` (SECURITY DEFINER).
+- `my_revocation_status_fn_present` — same for `public.my_revocation_status()`.
+- `is_jti_denied_from_jwt_fn_present` — same for `public.is_jti_denied_from_jwt()` with `provolatile = 's'` (STABLE).
+- `jti_deny_policies_count_19` — `pg_policies` returns exactly 19 rows where `policyname LIKE '%_jti_not_denied' AND permissive = 'RESTRICTIVE'`.
+- `is_jti_denied_authenticated_grant_present` — `pg_proc.proacl` for `is_jti_denied(uuid)` includes `authenticated=X/` (new GRANT from mig 068).
+- `revoke_jti_authenticated_revoke_present` — `pg_proc.proacl` for `revoke_jti` does NOT include `authenticated=X/` (service-role-only invariant).
+- `my_revocation_status_authenticated_grant_present` — `pg_proc.proacl` for `my_revocation_status` includes `authenticated=X/`.
+- Per-table sentinel: for each of the 19 tenant tables, `<table>_jti_not_denied_policy_present` asserts the row exists in `pg_policies`. Verbose but matches the closest sibling shape (mig 054 has 6 separate UNION arms).
+- Idempotence probe: re-applying mig 068 produces no-op (every `CREATE POLICY` form uses `DROP POLICY IF EXISTS` + `CREATE POLICY` per mig 059:67 precedent; verify by re-running the migration in a test transaction and asserting `pg_policies` shape unchanged).
+
 ### Phase 2 — `revoke-jti.ts` operator CLI (~30 min)
 
-**2.1 RED:** Add a unit test under `apps/web-platform/test/scripts/revoke-jti.test.ts` (NOT `.tenant-isolation.test.ts` suffix — this script does not need the tenant-integration guard) that mocks `createServiceClient()` and asserts: argv validation, RPC invocation with correct args, re-read verification.
+**Pattern source:** Mirror `apps/web-platform/scripts/byok-revoke.ts` exactly (BYOK Delegations PR-A operator CLI, sibling shape and same `denied_jti`-style WORM-audit-via-table-row audit story). Per Phase 4.4 precedent-diff: `byok-revoke.ts` shipped at PR #4232; same env-var sourcing pattern, same shebang, same logger, same exit-code conventions.
 
-**2.2 GREEN:** Author `apps/web-platform/scripts/revoke-jti.ts`:
+**2.1 RED:** Add a unit test under `apps/web-platform/test/scripts/revoke-jti.test.ts` that uses `spawnSync("bun", [SCRIPT_PATH, ...args], { env: ... })` (per `hash-user-id.test.ts:20-46` sibling precedent) and asserts: argv validation (missing `--jti` → exit 2 + `::error::missing required flag --jti` on stderr), RPC invocation with correct args (verify against a real or mocked Supabase — use real dev Supabase if `TENANT_INTEGRATION_TEST=1` is set, else mock with `vi.spyOn`-shape), re-read verification (the post-RPC `SELECT denied_jti WHERE jti = <jti>` returns a row with the expected `founder_id`).
+
+**2.2 GREEN:** Author `apps/web-platform/scripts/revoke-jti.ts` following the `byok-revoke.ts` skeleton:
 
 ```ts
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
+// scripts/revoke-jti.ts
+// Operator CLI to revoke a runtime JWT by its jti claim. Writes a row to
+// public.denied_jti via the SECURITY DEFINER `revoke_jti` RPC (migration
+// 068). The RPC is service-role-only; this script consumes
+// SUPABASE_SERVICE_ROLE_KEY via createServiceClient() (Doppler-bound at
+// invocation time). The denied_jti row IS the audit artifact per Article
+// 30 PA1 §(g)(10); the existing tenant.ts mirrorWithDebounce
+// ("is_jti_denied.deny") fires when the deny-list HIT happens at runtime.
+//
+// Usage:
+//   doppler run -p soleur -c dev -- bun run apps/web-platform/scripts/revoke-jti.ts \
+//     --jti <uuid> --founder-id <uuid> --reason "<text>" [--yes]
+//
+//   doppler run -p soleur -c prd_runtime -- bun run apps/web-platform/scripts/revoke-jti.ts \
+//     --jti <uuid> --founder-id <uuid> --reason "<text>" [--yes]
+//
+// Print the resolved Supabase URL BEFORE the write — operator dev/prd
+// visibility per hr-dev-prd-distinct-supabase-projects.
+
+import { createInterface } from "node:readline/promises";
 import { createServiceClient } from "@/lib/supabase/service";
-import { Sentry } from "@/lib/sentry";
+import { createChildLogger } from "@/server/logger";
 
-const [jti, founderId, ...reasonWords] = process.argv.slice(2);
-if (!jti || !founderId || reasonWords.length === 0) {
-  console.error("Usage: npx tsx scripts/revoke-jti.ts <jti-uuid> <founder-id-uuid> <reason-string>");
-  process.exit(2);
+const log = createChildLogger("revoke-jti");
+
+interface ParsedArgs {
+  jti: string;
+  founderId: string;
+  reason: string;
+  yes: boolean;
 }
-const reason = reasonWords.join(" ");
 
-const supa = createServiceClient();
-const supabaseUrl = process.env.SUPABASE_URL ?? "<not set>";
-console.log(`[revoke-jti] target Supabase: ${supabaseUrl}`);  // dev/prd visibility per hr-dev-prd-distinct-supabase-projects
-const { error } = await supa.rpc("revoke_jti", { p_jti: jti, p_founder_id: founderId, p_reason: reason });
-if (error) {
-  console.error(`[revoke-jti] FAILED: ${error.code} ${error.message}`);
+function parseArgs(argv: string[]): ParsedArgs {
+  const get = (flag: string): string | undefined => {
+    const idx = argv.indexOf(flag);
+    return idx >= 0 && idx + 1 < argv.length ? argv[idx + 1] : undefined;
+  };
+  const required = (flag: string): string => {
+    const v = get(flag);
+    if (!v) {
+      process.stderr.write(`::error::missing required flag ${flag}\n`);
+      process.exit(2);
+    }
+    return v;
+  };
+  return {
+    jti: required("--jti"),
+    founderId: required("--founder-id"),
+    reason: required("--reason"),
+    yes: argv.includes("--yes"),
+  };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function confirm(summary: string): Promise<boolean> {
+  process.stderr.write(summary + "\n");
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = (await rl.question("Confirm revoke? [y/N]: ")).trim().toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+
+  // UUID-shape gate before any DB write — avoids 22P02 invalid_text_representation
+  // emitting from the RPC body's UUID-cast and lets the operator see the
+  // typo cleanly.
+  if (!UUID_RE.test(args.jti)) {
+    process.stderr.write(`::error::--jti must be UUID; got "${args.jti}"\n`);
+    process.exit(2);
+  }
+  if (!UUID_RE.test(args.founderId)) {
+    process.stderr.write(`::error::--founder-id must be UUID; got "${args.founderId}"\n`);
+    process.exit(2);
+  }
+
+  const supabase = createServiceClient();
+  const supabaseUrl = process.env.SUPABASE_URL ?? "<not set>";
+  // dev/prd visibility per hr-dev-prd-distinct-supabase-projects.
+  // Operator-protection signal → stdout (not stderr) so the agent runtime
+  // sees it. (Constitution rule on operator-protection signals → stdout.)
+  process.stdout.write(`[revoke-jti] target Supabase: ${supabaseUrl}\n`);
+
+  const summary = [
+    "Revoking:",
+    `  jti:        ${args.jti}`,
+    `  founder:    ${args.founderId}`,
+    `  reason:     ${args.reason}`,
+    `  target:     ${supabaseUrl}`,
+    "",
+  ].join("\n");
+
+  if (!args.yes) {
+    const ok = await confirm(summary);
+    if (!ok) {
+      process.stderr.write("aborted\n");
+      process.exit(1);
+    }
+  } else {
+    process.stderr.write(summary);
+  }
+
+  log.info(
+    { jti: args.jti, founderId: args.founderId, reason: args.reason },
+    "revoke-jti: invoking revoke_jti",
+  );
+
+  const { error } = await supabase.rpc("revoke_jti", {
+    p_jti: args.jti,
+    p_founder_id: args.founderId,
+    p_reason: args.reason,
+  });
+  if (error) {
+    process.stderr.write(`::error::revoke_jti failed: ${error.code ?? ""} ${error.message}\n`);
+    process.exit(1);
+  }
+
+  // Re-read for founder_id-mismatch sanity (per Observability §failure_modes).
+  const { data: row, error: readErr } = await supabase
+    .from("denied_jti")
+    .select("jti, founder_id, denied_at, reason")
+    .eq("jti", args.jti)
+    .maybeSingle();
+  if (readErr || !row || row.founder_id !== args.founderId) {
+    process.stderr.write(`::error::re-read mismatch: ${JSON.stringify(row)} readErr=${readErr?.message ?? "none"}\n`);
+    process.exit(1);
+  }
+
+  process.stdout.write(`revoke_success: jti=${args.jti} founder=${args.founderId}\n`);
+}
+
+main().catch((err) => {
+  process.stderr.write(`::error::revoke-jti: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
-}
-
-// Re-read for sanity (founder_id-mismatch protection per Observability §failure_modes)
-const { data: row } = await supa.from("denied_jti").select("*").eq("jti", jti).single();
-if (!row || row.founder_id !== founderId) {
-  console.error(`[revoke-jti] re-read mismatch: row=${JSON.stringify(row)}`);
-  process.exit(1);
-}
-
-Sentry.addBreadcrumb({ category: "revoke_jti.issued", level: "warning", data: { jti, founderId, reason } });
-console.log(`[revoke-jti] OK: jti=${jti} founder=${founderId} reason="${reason}"`);
-process.exit(0);
+});
 ```
 
-**2.3** Verify mocks GREEN. Run script against dev Supabase as smoke test (NOT prd).
+**2.3** Run unit test green. Smoke against dev Supabase (NOT prd):
+
+```bash
+doppler run -p soleur -c dev -- bun run apps/web-platform/scripts/revoke-jti.ts \
+  --jti $(uuidgen | tr 'A-Z' 'a-z') \
+  --founder-id <a-real-dev-founder-uuid> \
+  --reason "deepen-plan smoke test" \
+  --yes
+# Verify the row landed: doppler run -p soleur -c dev -- psql "$SUPABASE_DB_URL" -c "SELECT * FROM denied_jti WHERE reason LIKE '%smoke test%' ORDER BY denied_at DESC LIMIT 1"
+```
 
 ### Phase 3 — Node-side wiring + ws-handler discrimination (~30 min)
 
@@ -305,14 +465,22 @@ Per `wg-after-marking-a-pr-ready-run-gh-pr-merge`: after Phase 6 closes, run `/s
 
 ## Risks & Mitigations
 
-### R1 — RESTRICTIVE-policy combination semantics with existing PERMISSIVE policies
+### R1 — RESTRICTIVE-policy combination semantics with existing PERMISSIVE policies (NOVEL PATTERN — no codebase precedent)
 
 Postgres RLS evaluates each row against the AND-combination of all RESTRICTIVE policies AND the OR-combination of all PERMISSIVE policies — i.e., `(any PERMISSIVE matches) AND (all RESTRICTIVE match)`. The new `<table>_jti_not_denied` RESTRICTIVE policy stacks on top of every existing PERMISSIVE policy (workspace-keyed per mig 059 + legacy auth.uid()=user_id where still present). **Risk:** A bug in the RESTRICTIVE policy body (NULL `current_setting`, malformed JWT claim, search_path missing) returns NULL, which Postgres treats as `false` → RESTRICTIVE policy denies → founder loses access to every table at once.
 
+**Phase 4.4 precedent-diff:** `grep -rn "request\.jwt\.claims" apps/web-platform/supabase/migrations/*.sql` returns ZERO matches at HEAD. **This is the first RLS predicate in the codebase that reads `current_setting('request.jwt.claims', true)::jsonb->>'jti'`.** The closest precedent is mig 047 / mig 060's custom-access-token-hooks which WRITE the jti claim during JWT mint — they do not READ it back at RLS time. Per Phase 4.4 deepen rule: pattern is novel; scrutinize heavily at multi-agent review (architecture-strategist + data-integrity-guardian fold this into their evaluation).
+
+**RESTRICTIVE policy semantics — verified against Postgres docs + sibling precedent:**
+- `FOR ALL TO authenticated AS RESTRICTIVE USING (NOT public.is_jti_denied_from_jwt())` — RESTRICTIVE policies are AND-combined; `FOR ALL` covers SELECT (uses USING) + INSERT (uses WITH CHECK, falls back to USING when WITH CHECK is omitted) + UPDATE (uses both) + DELETE (uses USING).
+- Sibling precedent in `apps/web-platform/supabase/migrations/016_github_username.sql:13-21` and `017_project_health_snapshot.sql:14-19` — both use `AS RESTRICTIVE FOR UPDATE TO authenticated USING (...) WITH CHECK (...)` (per-column, on `users`). Pattern is established for per-column-on-users; the cross-tenant-table multi-target sweep is novel.
+- **Belt-and-suspenders:** the new policies will include both `USING (NOT public.is_jti_denied_from_jwt())` AND `WITH CHECK (NOT public.is_jti_denied_from_jwt())` to make the symmetry explicit at code-review time. The functional behavior is identical to USING-only (Postgres falls back); the explicit WITH CHECK is documentation.
+
 **Mitigations:**
 - The `is_jti_denied_from_jwt()` helper handles NULL claims explicitly via `current_setting('request.jwt.claims', true)::jsonb->>'jti'` — the `true` arg to `current_setting` returns NULL instead of raising when the GUC is unset; `->>'jti'` on NULL returns NULL; `(NULL)::uuid` returns NULL; `EXISTS` against `WHERE jti = NULL` is `false`; the outer `NOT public.is_jti_denied_from_jwt()` then returns `NOT false = true` — i.e., access is GRANTED when claim is missing. Service-role contexts (where request.jwt.claims is unset) inherit no deny, matching the existing PR-E semantics.
-- Unit-test the helper directly via `SET LOCAL request.jwt.claims = '{...}'::jsonb::text` inside a TRANSACTION at test time, with both branches (jti present + on deny list; jti present + not on deny list; jti absent).
-- Deepen-plan precedent-diff (Phase 4.4) MUST diff the new policies against the existing precedent (`scope_grants_no_update`, the workspace-keyed sweep from mig 059) — see learning `best-practices/2026-04-23-plan-quality-class-deepen-pass-catches.md`.
+- Unit-test the helper directly via `SET LOCAL request.jwt.claims = '{...}'::jsonb::text` inside a TRANSACTION at test time, with three branches: (a) jti present + on deny list → returns true → policy denies; (b) jti present + not on deny list → returns false → policy permits; (c) jti absent (NULL claim) → returns false → policy permits (fail-open per Postgres convention for service-role bypass).
+- Per learning `2026-05-22-tenant-integration-runtime-failures-post-mig-059.md`: when mig 059 widened tenant-keyed RLS, multiple call sites that worked under the legacy `auth.uid() = user_id` predicate started returning empty rows because the new predicate was `is_workspace_member(workspace_id, auth.uid())` — but the calling code had no `workspace_id` in scope. The new RESTRICTIVE policy adds another deny layer on TOP — any code path that currently fails under workspace-keyed RLS will continue to fail; the new policy is additive. Phase 5.1 integration tests cover this.
+- Multi-agent review at Phase 6 MUST include `data-integrity-guardian` evaluating the AND-combination semantics against every existing PERMISSIVE policy enumerated in `Files to Edit §1 (C)`.
 
 ### R2 — Migration ordering against in-flight worktrees
 
@@ -348,7 +516,7 @@ Issue #3930 explicitly calls out: "Does NOT expose the jti (jti enumeration side
 
 **Mitigations:**
 - The script prints `[revoke-jti] target Supabase: <url>` BEFORE any write (Phase 2.2 code listing).
-- Operator runbook (added inline in `knowledge-base/engineering/ops/runbooks/revoke-jti.md` if needed at /work time) instructs `doppler run -p soleur -c prd_terraform -- npx tsx scripts/revoke-jti.ts …` (note: not `prd` config — the operator's prd-bound service-token config name varies per project precedent; resolve at /work time).
+- Operator runbook (added inline in `knowledge-base/engineering/ops/runbooks/revoke-jti.md` if needed at /work time) instructs `doppler run -p soleur -c prd_runtime -- bun run apps/web-platform/scripts/revoke-jti.ts --jti <uuid> --founder-id <uuid> --reason "<text>" --yes` (resolve the exact prd config name at /work time by reading `apps/web-platform/scripts/byok-revoke.ts` header comment for the canonical sibling form).
 - AC6 + AC11 verify the service-role-only invariant at unit and integration level.
 
 ### R7 — Tests mock the auth boundary, hiding RLS-deny shape

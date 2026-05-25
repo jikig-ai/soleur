@@ -28,17 +28,23 @@ plan: knowledge-base/project/plans/2026-05-25-feat-jti-revoke-rls-3930-3932-plan
 - [ ] 1.3 Verify RED tests now GREEN
 - [ ] 1.4 Author `068_jti_deny_rls_predicate_and_revoke_rpc.down.sql`; apply forward+rollback
 - [ ] 1.5 REFACTOR — DRY the 19 RESTRICTIVE policies via `DO $$ LOOP $$` if pure-duplicate prose
+- [ ] 1.6 Author `apps/web-platform/supabase/verify/068_jti_deny_rls_predicate_and_revoke_rpc.sql` post-apply CI sentinel (mirror `verify/054_*.sql` shape; UNION-ALL of `check_name + bad::int` rows asserting the 3 functions exist + 19 RESTRICTIVE policies + REVOKE/GRANT matrix)
 
-## Phase 2 — Operator CLI
+## Phase 2 — Operator CLI (mirror `byok-revoke.ts` sibling precedent)
 
-- [ ] 2.1 RED — Unit test for `scripts/revoke-jti.ts`
+- [ ] 2.1 RED — Unit test for `scripts/revoke-jti.ts` at `apps/web-platform/test/scripts/revoke-jti.test.ts`, using `spawnSync("bun", [SCRIPT_PATH, ...args])` per `test/scripts/hash-user-id.test.ts:20-46` precedent
 - [ ] 2.2 GREEN — Author `apps/web-platform/scripts/revoke-jti.ts`
-  - [ ] Argv validation + `--help`
-  - [ ] Doppler-bound `createServiceClient()`
-  - [ ] Print target Supabase URL BEFORE write
-  - [ ] Re-read verification post-write
-  - [ ] Sentry `revoke_jti.issued` breadcrumb
-- [ ] 2.3 Smoke against dev Supabase (NOT prd)
+  - [ ] `#!/usr/bin/env bun` shebang (NOT `npx tsx`)
+  - [ ] Named-flag argv: `--jti --founder-id --reason --yes`
+  - [ ] Missing flag → exit 2 with `::error::missing required flag <name>` on stderr (matches `byok-revoke.ts:42`)
+  - [ ] UUID-shape gate on `--jti` and `--founder-id` BEFORE any DB write (avoids 22P02)
+  - [ ] `createServiceClient()` from `@/lib/supabase/service`
+  - [ ] `createChildLogger("revoke-jti")` from `@/server/logger` for structured logs
+  - [ ] Print target Supabase URL to STDOUT (not stderr — operator-protection signal) BEFORE write
+  - [ ] `createInterface(node:readline/promises)` confirm prompt unless `--yes`
+  - [ ] Post-RPC re-read via `from("denied_jti").select(...).eq("jti", args.jti).maybeSingle()`; founder_id mismatch → exit 1
+  - [ ] NO Sentry breadcrumb (the `denied_jti` row IS the WORM audit trail; runtime mirror fires when deny HIT happens at PostgREST-deny time)
+- [ ] 2.3 Smoke against dev Supabase (NOT prd): `doppler run -p soleur -c dev -- bun run apps/web-platform/scripts/revoke-jti.ts --jti <synth-uuid> --founder-id <dev-founder> --reason "deepen-plan smoke" --yes`
 
 ## Phase 3 — Node-side wiring
 
