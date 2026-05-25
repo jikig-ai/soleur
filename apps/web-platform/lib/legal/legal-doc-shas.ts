@@ -37,9 +37,9 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "disclaimer":
     "9a31290a5d691c5ddaecaf073b5db00a6d5b77f560c8c6589e84ce887e3c5384",
   "gdpr-policy":
-    "8e2a81f178cbcb26bf70b589f3138999290660f8abd5c0fea36c7bd0c2adb599",
+    "c4b63abf095ac79ff4506a9b026e29aedf198d75ef1a9f131705c52ade633e3c",
   "individual-cla":
     "8d773e4331fd82e4b27a506eac2f968ad319adcef624d8f6115c0b71deb5e538",
   "privacy-policy":
-    "57e028e7c291f44ea8c17d7b067a0f120ab8c9f9d35c81e9394cce361496fa44",
+    "55c4e9d90ba131280ba2ddefbc67a559b8596767fde983d9c2fa8abfc7df1310",
 };
