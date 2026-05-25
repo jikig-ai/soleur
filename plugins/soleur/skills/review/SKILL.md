@@ -650,7 +650,7 @@ Remove duplicates, prioritize by severity and impact.
        the `pre-existing-unrelated` criterion AND a concrete re-evaluation
        trigger in one of the four forms (date / counter / event-grep /
        dependency — see "Concrete re-evaluation triggers" below and
-       `references/review-todo-structure.md`). Vague phrasings ("post-MVP",
+       [review-todo-structure.md](./references/review-todo-structure.md)). Vague phrasings ("post-MVP",
        "later", "when ready", bare phase labels with no linked
        phase-completion issue) are NOT permitted — they become the backlog
        this rule exists to drain.
