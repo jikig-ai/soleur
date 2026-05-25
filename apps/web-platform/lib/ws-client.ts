@@ -844,6 +844,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "fanout_truncated":
         case "upgrade_pending":
           break;
+        case "revocation_notice": {
+          // #3930 — discriminated revocation toast. Replaces the generic
+          // "Authentication unavailable; retry shortly" surface with a
+          // founder-readable reason from `denied_jti.reason`. The
+          // server-side handler closes the socket immediately after
+          // emitting this frame; we surface via `setLastError` so the
+          // existing toast UX renders the message + Reason text.
+          dispatch({ type: "clear_streams" });
+          clearAllTimeouts();
+          setLastError({
+            code: "session_expired",
+            message: msg.reason
+              ? `Your session was revoked. Reason: ${msg.reason}. Contact support.`
+              : "Your session was revoked. Contact support.",
+          });
+          break;
+        }
         default: {
           // Review F12: compile-time exhaustiveness rail. A new server→client
           // variant added to `WSMessage` without a case here fails build.

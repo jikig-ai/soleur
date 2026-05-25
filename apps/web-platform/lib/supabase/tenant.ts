@@ -38,6 +38,16 @@
  *   - aud=soleur-runtime is structurally distinct on the wire but PostgREST
  *     does not enforce aud by default. Dashboard-replay prevention requires
  *     middleware-level aud filtering. Tracked separately.
+ *
+ * Cross-process JWT-deny (mig 068, #3930+#3932): the RESTRICTIVE policy
+ * `<table>_jti_not_denied` on every tenant table now reads
+ * `current_setting('request.jwt.claims', true)::jsonb->>'jti'` and AND-
+ * combines `NOT is_jti_denied_from_jwt()` with the existing PERMISSIVE
+ * policies. Node-side `denyProbe` below stays as defense-in-depth (cuts
+ * the round-trip cost on cache-hit), but a stolen JWT used DIRECTLY
+ * against PostgREST is now also rejected at the policy boundary.
+ * `getMyRevocationStatus(userId)` exposes the matching founder-readable
+ * reader for ws-handler discrimination.
  */
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -613,6 +623,101 @@ async function denyProbe(jti: string, userId: UserId): Promise<boolean> {
     );
   }
   return denied;
+}
+
+/**
+ * Founder-readable revocation status for a given userId. Wraps the
+ * `my_revocation_status()` SECURITY DEFINER RPC from mig 068. The RPC
+ * returns `(false, NULL, NULL)` for un-denied callers, `(true, denied_at,
+ * reason)` for denied callers. Used by ws-handler to discriminate the
+ * generic "Authentication unavailable; retry shortly" toast into a
+ * `revocation_notice` WS message when the cause is jti-deny.
+ *
+ * Fail-open semantics (per `cq-silent-fallback-must-mirror-to-sentry`):
+ * on RPC error or thrown exception, returns null AND mirrors the error
+ * to Sentry. Caller treats null as "could not determine — use generic
+ * toast" rather than "definitely not revoked", since the truth-value is
+ * unknown.
+ *
+ * The call goes through `getFreshTenantClient(userId)` rather than the
+ * service-role client because the RPC's body uses `auth.uid()` as the
+ * scope key — service-role context produces NULL auth.uid() and the
+ * RPC raises 28000. The tenant client carries the founder's JWT.
+ *
+ * #3930 PR-E follow-up.
+ */
+export interface MyRevocationStatus {
+  revoked: boolean;
+  deniedAt: string | null;
+  reason: string | null;
+}
+
+// Test-only injection point so unit tests can substitute the tenant
+// client without booting the full mint pipeline. Mirrors
+// `_setMintFnForTest` precedent. Default `null` → real path uses
+// `getFreshTenantClient(userId)`. Production code MUST NOT call this.
+let _revocationStatusTenantFn:
+  | ((userId: UserId) => Promise<SupabaseClient>)
+  | null = null;
+
+export function _setRevocationStatusTenantFnForTest(
+  fn: ((userId: UserId) => Promise<SupabaseClient>) | null,
+): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "_setRevocationStatusTenantFnForTest is a test-only seam and must not be called in production",
+    );
+  }
+  _revocationStatusTenantFn = fn;
+}
+
+export async function getMyRevocationStatus(
+  userId: UserId,
+): Promise<MyRevocationStatus | null> {
+  try {
+    const tenant = _revocationStatusTenantFn
+      ? await _revocationStatusTenantFn(userId)
+      : await getFreshTenantClient(userId);
+    const { data, error } = await tenant.rpc("my_revocation_status");
+    if (error) {
+      mirrorWithDebounce(
+        error,
+        {
+          feature: "tenant-jwt",
+          op: "my_revocation_status.error",
+          extra: { userId },
+        },
+        userId,
+        "my_revocation_status.error",
+      );
+      return null;
+    }
+    // RPC returns TABLE(revoked, denied_at, reason) — always a single row.
+    const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
+    if (!row) return null;
+    const typed = row as {
+      revoked: boolean;
+      denied_at: string | null;
+      reason: string | null;
+    };
+    return {
+      revoked: typed.revoked === true,
+      deniedAt: typed.denied_at ?? null,
+      reason: typed.reason ?? null,
+    };
+  } catch (err) {
+    mirrorWithDebounce(
+      err,
+      {
+        feature: "tenant-jwt",
+        op: "my_revocation_status.error",
+        extra: { userId },
+      },
+      userId,
+      "my_revocation_status.error",
+    );
+    return null;
+  }
 }
 
 /**

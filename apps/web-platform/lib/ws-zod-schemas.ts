@@ -334,6 +334,15 @@ const contextResetSchema = z.strictObject({
   conversationId: z.string(),
 });
 const upgradePendingSchema = z.strictObject({ type: z.literal("upgrade_pending") });
+// #3930 — cross-process JWT-deny discriminator. See lib/types.ts WSMessage
+// revocation_notice variant for the full prose. `reason` and `deniedAt` are
+// nullable because the underlying `my_revocation_status()` RPC returns NULL
+// columns when the deny row pre-dates the schema columns (legacy paths).
+const revocationNoticeSchema = z.strictObject({
+  type: z.literal("revocation_notice"),
+  reason: z.string().nullable(),
+  deniedAt: z.string().nullable(),
+});
 const errorSchema = z.strictObject({
   type: z.literal("error"),
   message: z.string(),
@@ -482,6 +491,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   contextResetSchema,
   upgradePendingSchema,
   errorSchema,
+  revocationNoticeSchema,
   subagentSpawnSchema,
   subagentCompleteSchema,
   workflowStartedSchema,
