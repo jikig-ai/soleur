@@ -43,7 +43,7 @@ function defaultStoragePath(): string {
   return resolve(workspace, "tmp/ux-audit/storage-state.json");
 }
 
-interface Session {
+export interface Session {
   access_token: string;
   refresh_token: string;
   expires_in: number;
