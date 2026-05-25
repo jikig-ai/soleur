@@ -89,8 +89,13 @@ describe("installation-id source-of-truth sentinel", () => {
     expect(fnSrc).not.toMatch(/\bnew\s+Octokit\s*\(/);
   });
 
-  it("the function does NOT open a BYOK lease in executable code (PR-A makes zero Anthropic SDK calls)", () => {
-    expect(fnSrc).not.toMatch(/\brunWithByokLease\s*\(/);
+  it("PR-B (#4379) deliberately REVERSES PR-A invariant I4: the function opens runWithByokLease for the Anthropic-SDK leader loop", () => {
+    // Plan §Reality-Check Findings: "Only invariant I4 ('No Anthropic SDK in
+    // PR-A') is deliberately reversed — PR-B introduces the first raw
+    // `@anthropic-ai/sdk` call site inside apps/web-platform/server/." The
+    // byok-audit-writer-sweep lint covers the cost-writer pairing.
+    expect(fnSrc).toMatch(/\brunWithByokLease\s*\(/);
+    expect(fnSrc).toMatch(/persistTurnCostAwaitable\s*\(/);
   });
 
   it("the function reads users.github_installation_id (the source-of-truth column)", () => {
