@@ -101,4 +101,50 @@ describe("scripts/revoke-jti — operator CLI argv validation", () => {
     expect(status).toBe(2);
     expect(stderr).toMatch(/::error::--founder-id must be UUID/);
   });
+
+  // #4440 follow-up to #4418 — `--revoke-session` flag tests. These
+  // assert argv parsing reaches the post-revoke session-termination
+  // branch (which then needs SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
+  // to call the GoTrue admin logout endpoint). The tests do NOT touch
+  // a real DB — they sit at the same argv-validation tier as the
+  // sibling cases above. Smoke against real dev Supabase is documented
+  // in the plan and executed inline at /work time.
+
+  test("--revoke-session flag is accepted by argv parser (no malformed-flag error)", () => {
+    // Pair with a malformed jti so the parser still rejects at the
+    // UUID-shape gate AFTER consuming the new flag — proves the flag
+    // does NOT confuse the positional flag-value lookup. Same exit-2
+    // semantic as the malformed-uuid tests above. If parseArgs treated
+    // `--revoke-session` as a value-taking flag, this would surface
+    // as a "missing required flag" failure instead.
+    const { stderr, status } = runScript([
+      "--jti",
+      "not-a-uuid",
+      "--founder-id",
+      VALID_UUID_B,
+      "--reason",
+      "test",
+      "--revoke-session",
+      "--yes",
+    ]);
+    expect(status).toBe(2);
+    expect(stderr).toMatch(/::error::--jti must be UUID/);
+    // Ensure the parser did NOT swallow --reason's value as
+    // --revoke-session's argument (regression guard).
+    expect(stderr).not.toMatch(/::error::missing required flag --reason/);
+  });
+
+  test("absence of --revoke-session: parser still produces exit 2 on malformed jti (control case)", () => {
+    const { stderr, status } = runScript([
+      "--jti",
+      "still-not-a-uuid",
+      "--founder-id",
+      VALID_UUID_B,
+      "--reason",
+      "test",
+      "--yes",
+    ]);
+    expect(status).toBe(2);
+    expect(stderr).toMatch(/::error::--jti must be UUID/);
+  });
 });
