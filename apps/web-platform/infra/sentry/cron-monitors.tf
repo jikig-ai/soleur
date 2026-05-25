@@ -300,3 +300,24 @@ resource "sentry_cron_monitor" "scheduled_legal_audit" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# TR9 PR-9 (closes #4442): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-agent-native-audit.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-agent-native-audit workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+# Monthly 15th 09:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent. Single-miss alert (failure_issue_threshold=1): a
+# single missed monthly run is noteworthy on a monthly cadence.
+# 55 min mirrors the claude-eval cohort.
+resource "sentry_cron_monitor" "scheduled_agent_native_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-agent-native-audit"
+  schedule                = { crontab = "0 9 15 * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
