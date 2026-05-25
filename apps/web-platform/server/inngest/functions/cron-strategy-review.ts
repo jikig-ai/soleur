@@ -39,7 +39,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Octokit } from "@octokit/core";
@@ -331,10 +331,14 @@ async function collectStrategyFiles(repoRoot: string): Promise<string[]> {
       if (!name.endsWith(".md")) continue;
       const fullPath = join(abs, name);
       try {
-        const s = await stat(fullPath);
+        // lstat (not stat) so symlinks are visible as symlinks; skip them
+        // to prevent a malicious commit on main planting a symlink to
+        // /etc/passwd or similar and triggering readFile follow-through.
+        const s = await lstat(fullPath);
+        if (s.isSymbolicLink()) continue;
         if (s.isFile()) files.push(fullPath);
       } catch {
-        // skip — file disappeared between readdir and stat
+        // skip — file disappeared between readdir and lstat
       }
     }
   }
@@ -350,6 +354,23 @@ function parseISODate(s: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const t = Date.parse(`${s}T00:00:00Z`);
   return Number.isNaN(t) ? null : t;
+}
+
+// gray-matter parses YAML 1.1, which coerces unquoted ISO dates
+// (`last_reviewed: 2026-05-25`) into JavaScript `Date` objects, NOT strings.
+// Every strategy doc in knowledge-base/ uses the unquoted form, so the raw
+// frontmatter value is virtually always a `Date`. Coerce both shapes to a
+// strict `YYYY-MM-DD` string so parseISODate accepts them. Returns undefined
+// for missing/null and the literal raw string for unrecognized shapes (which
+// will then fail parseISODate and route into the "invalid last_reviewed"
+// errors++ branch — matching bash's `date -d` failure path).
+function coerceFrontmatterDate(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (raw instanceof Date) {
+    if (Number.isNaN(raw.getTime())) return undefined;
+    return raw.toISOString().slice(0, 10);
+  }
+  return String(raw);
 }
 
 async function runStrategyReview(args: {
@@ -425,16 +446,13 @@ async function runStrategyReview(args: {
       continue;
     }
 
-    const lastReviewedRaw = parsed.data.last_reviewed;
-    const lastReviewed =
-      lastReviewedRaw === undefined || lastReviewedRaw === null
-        ? undefined
-        : String(lastReviewedRaw);
+    const lastReviewed = coerceFrontmatterDate(parsed.data.last_reviewed);
     let daysUntil: number;
+    let lastEpochMs: number | null = null;
     if (!lastReviewed) {
       daysUntil = -1;
     } else {
-      const lastEpochMs = parseISODate(lastReviewed);
+      lastEpochMs = parseISODate(lastReviewed);
       if (lastEpochMs === null) {
         logger.warn(
           { fn: "cron-strategy-review", filePath, lastReviewed },
@@ -476,11 +494,12 @@ async function runStrategyReview(args: {
         ? undefined
         : String(ownerRaw);
 
-    const reviewDue = lastReviewed
-      ? new Date(parseISODate(lastReviewed)! + cadenceDays * 86400 * 1000)
-          .toISOString()
-          .slice(0, 10)
-      : "immediately (no last_reviewed set)";
+    const reviewDue =
+      lastEpochMs !== null
+        ? new Date(lastEpochMs + cadenceDays * 86400 * 1000)
+            .toISOString()
+            .slice(0, 10)
+        : "immediately (no last_reviewed set)";
 
     const repoUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}`;
     const fileRel = kbIdx >= 0 ? filePath.substring(kbIdx) : filePath;
