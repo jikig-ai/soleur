@@ -218,7 +218,7 @@ For data processed through the Web Platform (app.soleur.ai) where Jikigai acts a
 - **(a)** **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data. Self-serve at `/dashboard/settings/privacy`. The exported bundle contains:
   - Account profile (`users` table: email, workspace status, subscription state, Stripe customer + subscription IDs).
   - Conversations and messages (with partial-turn rows, per Privacy Policy §4.7).
-  - Message attachments (binary files you uploaded, under `chat-attachments/<your-id>/`). When `TEAM_WORKSPACE_INVITE_ENABLED` is ON, co-members of any shared workspace you participate in may upload attachments visible to you under their own user-id-keyed paths; those are NOT bundled in your export today (forward-compatible manifest schema 1.2.0 #4318 reserves `redacted`/`uploader_pseudonym` fields for the follow-up).
+  - Message attachments (binary files you uploaded, under `chat-attachments/<your-id>/`). When `TEAM_WORKSPACE_INVITE_ENABLED` is ON, co-members of any shared workspace you participate in may upload attachments visible to you under their own user-id-keyed paths; those co-uploader files are NOT bundled in your export today (tracked as a separate Art. 15 completeness follow-up gating the flag flip).
   - Knowledge-base share links (`kb_share_links`).
   - Team / agent display names (`team_names`).
   - BYOK encrypted credentials (`api_keys` -- ciphertext is base64-encoded; never decrypted server-side outside the BYOK lease).
