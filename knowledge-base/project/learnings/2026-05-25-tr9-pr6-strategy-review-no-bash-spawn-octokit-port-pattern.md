@@ -174,3 +174,17 @@ Generalize: at deepen-plan time, every plan claim of the form "X is
 configured to do Y automatically" must be backed by a Phase 0
 `grep -nE 'pattern' path/to/file` step that pins the exact line(s)
 making the claim true.
+
+## Session Errors
+
+**1. One-shot picked an already-migrated workflow because the umbrella body was stale.**
+Initial `/soleur:go` routed `/soleur:one-shot` to `scheduled-bug-fixer`, but PR #4377 had merged that migration ~3h earlier and the umbrella #3948 checkbox list still showed `[ ]`. Planning subagent caught the contradiction at first preflight (target YAML missing on main; `cron-bug-fixer.ts` exists). Recovery: closed empty draft PR #4398, removed worktree + branch (local and remote), updated umbrella body to mark PR-5 done, re-routed to `scheduled-strategy-review`.
+**Prevention:** /soleur:one-shot should add a pre-worktree check for TR9-shape migrations: if `apps/web-platform/server/inngest/functions/cron-<workflow-slug>.ts` exists OR `.github/workflows/scheduled-<workflow-slug>.yml` is absent on main, abort with "this workflow is already migrated; pick another from `gh issue view 3948`". Cheap one-grep gate that closes the failure class.
+
+**2. Plan-quoted `-target=` count was stale.** Plan said the allow-list had 11 entries; actual was 10 because PR-5's bug-fixer didn't add itself. Caught at Phase 0 grep, used the corrected 10→11 transition. Confirms the existing "plan-quoted numbers are preconditions to verify" rule fired correctly; no new prevention needed.
+
+**3. `bun test` invocation in plan/tasks; app uses vitest.** `bunfig.toml` has `pathIgnorePatterns = ["**"]` blocking bun test discovery (defense against happy-dom corruption of native APIs; see #1469). Switched to `./node_modules/.bin/vitest run`. **Prevention:** plan/tasks templates that prescribe test commands inside `apps/web-platform` should detect `bunfig.toml` `pathIgnorePatterns = ["**"]` and prescribe vitest, not bun.
+
+**4. P1 gray-matter Date coercion caught only at review (zero TS unit tests had a real `matter(...)` fixture).** See sibling learning `2026-05-25-tr9-pr6-gray-matter-yaml11-date-coercion-trap.md` for the full root-cause + prevention pattern.
+
+**5. Bash CWD does not persist across separate Bash tool calls.** Repeated session-wide gotcha; recovered via single chained `cd <abs-path> && cmd`. Already documented as `2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md` session errors; reproduced here as a reminder. No new prevention proposed.
