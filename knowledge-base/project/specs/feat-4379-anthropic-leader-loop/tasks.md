@@ -99,11 +99,11 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 
 ## Phase 6 — Legal substrate (AC19)
 
-- [ ] **6.1** Append `## Processing Activity 22 — Autonomous AI leader-prompt runtime (Anthropic SDK, PR-B #4124)` to `knowledge-base/legal/article-30-register.md` AFTER PA-21 (line 380). Sections (a)-(g) per existing PA-template; (g) TOMs enumerate the 10 controls listed in AC19.
-- [ ] **6.2** Amend the Anthropic Vendor Mapping row at line 412: add `PA-22 (autonomous leader-prompt runtime under operator BYOK)` to the Activities column.
-- [ ] **6.3** Author `scripts/check-pa-22.sh` (sentinel grep per AC19) and wire to CI.
-- [ ] **6.4** Verify Anthropic Zero-Retention amendment status (AC20 — operator step). Update PA-22 (f) with: SIGNED date OR UNSIGNED gap note + reference to consent-banner Non-Goal #2.
-- [ ] **6.5** Commit + push.
+- [x] **6.1** Append `## Processing Activity 22 — Autonomous AI leader-prompt runtime (Anthropic SDK, PR-B #4379)` to `knowledge-base/legal/article-30-register.md` AFTER PA-21. Sections (b)-(g) per existing PA-template; (g) TOMs enumerate 11 controls (prompt caching, per-class tool allowlist, $2.00 ceiling, per-turn lease, BYOK pre-call gate, PII-scrub, Zero-Retention status, dead-letter Sentry, max-turns ceiling, idempotency under replay, operator kill switches).
+- [x] **6.2** Amend the Anthropic Vendor Mapping row: Activities column now reads "PA-22 (autonomous leader-prompt runtime under operator BYOK)"; Notes column extended to flag the in-scope per-turn `anthropic.messages.create` calls AND the Zero-Retention amendment status pointer to PA-22 (f).
+- [x] **6.3** `scripts/check-pa-22.sh` shipped in Phase 1 alongside `check-adr-ordinals.sh`; both wired to CI in `.github/workflows/ci.yml`. Confirmed passing locally against the post-6.1/6.2 register: `PA-22 substrate checks passed.`
+- [x] **6.4** Anthropic Zero-Retention amendment status: **unsigned at PR-B merge** per PA-22 (f). The post-merge dogfood pass surfaces a one-time dashboard banner noting the 30-day default retention with a link to the Anthropic Console Zero-Retention amendment flow; the consent-banner follow-up is filed as Non-Goal #2. Operator signs the amendment on the Anthropic Console; PA-22 (f) is updated to record the SIGNED date as a follow-up commit replacing "unsigned at PR-B merge".
+- [x] **6.5** Commit + push.
 
 ## Phase 7 — Follow-up issues (Non-Goals 1-14)
 
