@@ -155,12 +155,23 @@ CREATE POLICY "Users write own attachment objects only (delete)"
     AND (storage.foldername(name))[1] = auth.uid()::text
   );
 
-COMMENT ON POLICY "Users read own + co-member attachment objects" ON storage.objects IS
-  'Read-path widened per #4318 / mig 068. Co-member visibility derived from '
-  'conversations.workspace_id via is_attachment_path_workspace_member(). '
-  'Writes are governed by the sibling FOR INSERT/UPDATE/DELETE policies — '
-  'do NOT collapse back to FOR ALL without re-reading '
-  'security-issues/2026-04-18-rls-for-all-using-applies-to-writes.md.';
+-- COMMENT ON POLICY documentation kept as in-body prose. The runner's
+-- service-role account is NOT the owner of storage.objects in Supabase
+-- prd (the table is owned by `supabase_storage_admin`), and COMMENT ON
+-- POLICY requires table ownership — failed mig 068 v1 apply at prd
+-- 2026-05-25 with "must be owner of relation objects". The DROP POLICY
+-- and CREATE POLICY statements ARE permitted (Supabase platform grants
+-- those specifically), but COMMENT ON POLICY is not. Future maintainers
+-- read this prose via the migration file; `\dp+ storage.objects` won't
+-- surface the text. See knowledge-base/project/learnings/build-errors/
+-- 2026-05-25-supabase-storage-objects-comment-on-policy-ownership.md.
+--
+-- Policy "Users read own + co-member attachment objects":
+--   Read-path widened per #4318 / mig 068. Co-member visibility derived
+--   from conversations.workspace_id via is_attachment_path_workspace_member().
+--   Writes are governed by the sibling FOR INSERT/UPDATE/DELETE policies —
+--   do NOT collapse back to FOR ALL without re-reading
+--   security-issues/2026-04-18-rls-for-all-using-applies-to-writes.md.
 
 -- =====================================================================
 -- 3. Private internal helper for cascade pseudonymisation. Sets
