@@ -9,11 +9,11 @@
 --           boundary) cannot read/write tenant tables after its jti
 --           lands in `public.denied_jti`.
 --
--- Surfaces (3 functions + 19 RESTRICTIVE policies + 1 GRANT):
+-- Surfaces (3 functions + 21 RESTRICTIVE policies + 1 GRANT):
 --   (A) public.revoke_jti(uuid, uuid, text)        — service-role-only writer.
 --   (B) public.my_revocation_status()              — authenticated reader.
 --   (C) public.is_jti_denied_from_jwt()            — STABLE helper used by RLS.
---   (D) <table>_jti_not_denied RESTRICTIVE policies on 19 tenant tables.
+--   (D) <table>_jti_not_denied RESTRICTIVE policies on 21 tenant tables.
 --   (E) GRANT EXECUTE ON public.is_jti_denied(uuid) TO authenticated
 --       (the wrapped reader from mig 037; required because the new helper
 --        SECURITY DEFINERs into it).
@@ -62,8 +62,14 @@ CREATE OR REPLACE FUNCTION public.revoke_jti(
   SECURITY DEFINER
   SET search_path = public, pg_temp
 AS $$
+  -- ON CONFLICT DO NOTHING — operator may double-revoke the same jti
+  -- (typo-retry, drift between two operators). 23505 unique_violation
+  -- would surface as a confusing CLI error instead of a no-op. The
+  -- denied_jti table's PK is `jti`, so duplicate inserts hit the same
+  -- conflict target deterministically.
   INSERT INTO public.denied_jti (jti, founder_id, denied_at, reason)
-  VALUES (p_jti, p_founder_id, now(), p_reason);
+  VALUES (p_jti, p_founder_id, now(), p_reason)
+  ON CONFLICT (jti) DO NOTHING;
 $$;
 
 -- Explicit revoke from anon + authenticated is load-bearing per the
@@ -160,29 +166,50 @@ COMMENT ON FUNCTION public.is_jti_denied_from_jwt() IS
 -- =====================================================================
 -- 4. GRANT EXECUTE on the wrapped reader to authenticated
 -- =====================================================================
--- is_jti_denied_from_jwt is SECURITY DEFINER and calls is_jti_denied
--- (defined in mig 037 as service-role-only). Because the outer wrapper
--- is SECURITY DEFINER, its body executes with the wrapper's owner
--- privileges — BUT Postgres still performs an outer-call EXECUTE check
--- on the wrapped function when invoked transitively. Per learning
--- 2026-05-06-tenant-jwt-rpc-grant-mismatch-vitest-blind.md: without this
--- GRANT, every PostgREST query under authenticated returns
--- "42501 permission denied for function is_jti_denied" instead of
--- evaluating the policy. Granting EXECUTE TO authenticated is safe:
--- the function body is `EXISTS (SELECT 1 FROM public.denied_jti WHERE
--- jti = p_jti)`, returning ONLY a boolean — the underlying table stays
--- service-role-only (denied_jti has zero RLS policies per mig 037).
+-- The RLS predicate `NOT public.is_jti_denied_from_jwt()` is evaluated
+-- in the AUTHENTICATED role's context BEFORE the SECURITY DEFINER body
+-- enters its definer scope. Postgres performs the outer-call EXECUTE
+-- check on `is_jti_denied_from_jwt()` (and on `is_jti_denied(uuid)` if
+-- the wrapper ever direct-calls it transitively in a non-DEFINER path)
+-- against the AUTHENTICATED role. Without this GRANT, every PostgREST
+-- query under authenticated returns "42501 permission denied for
+-- function is_jti_denied" instead of evaluating the policy. See
+-- learning 2026-05-06-tenant-jwt-rpc-grant-mismatch-vitest-blind.md.
+--
+-- ACKNOWLEDGED SECURITY NOTE — JTI-ORACLE ENUMERATION SURFACE:
+-- An authenticated caller could invoke `is_jti_denied('<arbitrary-uuid>')`
+-- directly via PostgREST and receive a boolean. This is acknowledged
+-- as acceptable: (i) the function returns ONLY a boolean (never the
+-- row); (ii) `jti` is a random UUID with 2^128 unguessable search
+-- space, making practical enumeration of the deny list infeasible
+-- without first stealing a JWT; (iii) the `denied_jti` table itself
+-- has ZERO RLS policies and is service-role-only per mig 037, so the
+-- row contents (founder_id, denied_at, reason) remain hidden. Three
+-- review agents flagged this surface; security-sentinel's argument
+-- (UUID space + boolean-only return) carried. If the boolean leak ever
+-- becomes load-bearing for a future attack, the mitigation is to drop
+-- the GRANT on `is_jti_denied(uuid)` and refactor the wrapper to
+-- inline the EXISTS check under a stricter DEFINER body that does NOT
+-- accept an arbitrary uuid argument.
 
 GRANT EXECUTE ON FUNCTION public.is_jti_denied(uuid) TO authenticated;
 
 -- =====================================================================
--- 5. RESTRICTIVE policies — one per tenant table (19 total)
+-- 5. RESTRICTIVE policies — one per tenant table (21 total)
 -- =====================================================================
--- The 19 tenant tables enumerated by the plan §"Files to Edit §1 (C)".
--- Excluded: the 9 service-role-only tables (denied_jti, mint_rate_window,
--- processed_stripe_events, _schema_migrations, processed_github_events,
--- runtime_mint_intent, dsar_export_audit_pii, tc_acceptances,
--- tenant_deploy_audit) which have zero authenticated policies by design.
+-- The 21 tenant tables holding authenticated-reachable policies.
+-- Derived empirically (grep CREATE POLICY + FOR ... TO authenticated +
+-- legacy `FOR ALL`/`FOR INSERT` without explicit role which defaults to
+-- PUBLIC). Excluded: the 9 service-role-only tables (denied_jti,
+-- mint_rate_window, processed_stripe_events, _schema_migrations,
+-- processed_github_events, runtime_mint_intent, dsar_export_audit_pii,
+-- tc_acceptances, tenant_deploy_audit) which have zero authenticated
+-- policies by design.
+-- Note: the previous 19-table list (pre-review) MISSED `organizations`
+-- (mig 053:159) and `workspace_member_removals` (mig 062:128) — both
+-- carry `TO authenticated` PERMISSIVE policies, so the RESTRICTIVE
+-- jti-deny predicate would silently NOT apply there without inclusion.
+-- Added back in this fix; verify-068 count assertion bumped to 21.
 --
 -- Each policy:
 --   - AS RESTRICTIVE — AND-combined with existing PERMISSIVE policies.
@@ -216,7 +243,9 @@ DECLARE
     'workspace_members',
     'workspace_member_attestations',
     'user_session_state',
-    'message_attachments'
+    'message_attachments',
+    'organizations',
+    'workspace_member_removals'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

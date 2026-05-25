@@ -2,7 +2,7 @@
 -- Rollback for 068_jti_deny_rls_predicate_and_revoke_rpc.sql.
 --
 -- Order (reverse of forward apply):
---   1. DROP the 19 RESTRICTIVE policies.
+--   1. DROP the 21 RESTRICTIVE policies.
 --   2. REVOKE EXECUTE on public.is_jti_denied(uuid) FROM authenticated
 --      (restore the mig 037 baseline of service-role-only).
 --   3. DROP the 3 SECURITY DEFINER functions.
@@ -29,7 +29,9 @@ DECLARE
     'workspace_members',
     'workspace_member_attestations',
     'user_session_state',
-    'message_attachments'
+    'message_attachments',
+    'organizations',
+    'workspace_member_removals'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP
