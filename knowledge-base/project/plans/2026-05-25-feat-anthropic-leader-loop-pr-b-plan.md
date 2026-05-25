@@ -743,6 +743,65 @@ erDiagram
     }
 ```
 
+## Observability
+
+Added in Phase 8.3 per `hr-observability-as-plan-quality-gate` after multi-agent review flagged this section missing. The leader-loop introduces 11 new `failure_reason` taxonomy values that need named alert routes.
+
+### failure_modes
+
+| failure_reason | When it fires | Alert route (layer) |
+|---|---|---|
+| `anthropic_rate_limited` | 429 from Anthropic API | Inngest sentry-correlation middleware tags `feature=spawn-agent`, `extra.failureReason`. Sentry default project rule emails on new issue group; this reason will recur and group. **Acceptable for v1 dogfood; revisit if cohort > 1 operator.** |
+| `anthropic_timeout` | SDK call exceeds per-turn budget | Same as above. |
+| `byok_cap_exceeded` | Pre-call gate (`byok-cap-rpc.ts`) returns insufficient cap | `reportSilentFallback` (server/observability) → Sentry, `feature=spawn-agent`, `extra.failureReason`. |
+| `cost_ceiling_exceeded` | Per-spawn cap ($2.00 from `leader-prompts/constants.ts`) crossed | Same. |
+| `byok_lease_unavailable` | All 4 lease slots held when turn starts | Same. |
+| `leader_max_turns_exceeded` | 8 turns completed without `end_turn` | Same. **High-signal:** indicates task-shape mismatch (prompt or class scope). |
+| `leader_response_truncated` | Anthropic returns `stop_reason="max_tokens"` | Same. **High-signal:** prompt or maxTokens budget issue. |
+| `leader_tool_invalid` | SDK emitted a tool name outside per-class allowlist | Same. **Trust-surface signal:** indicates registry drift or model misalignment. |
+| `leader_class_disabled` | `LEADER_CLASSES_DISABLED` kill switch hit | Same. **Operator-initiated, low-noise.** |
+| `cancelled_by_operator` | Stop button POST `/cancel` landed before next turn boundary | Not paged — expected operator action. Logged via `reportSilentFallback` for forensics only. |
+| `malformed_source_ref` (PR-A) | `source_ref` shape unparseable for the action class | Pre-PR-B; carry-forward routing same as above. |
+
+### metrics
+
+- **Inngest function:** `agent-on-spawn-requested` run-id correlated to Sentry via middleware.
+- **Per-turn cost:** `audit_byok_use` rows tagged with `agent_role = "agent.spawn.requested:<action_class>"` + `unit_cost_cents` + `cache_read_input_tokens` + `cache_creation_input_tokens` (PR-B extension).
+- **Today card cost badge:** `/api/dashboard/today/[id]/cost` polled on every Realtime UPDATE.
+- **Client-side observability:** `LeaderLoopStatus` mirrors `fetchRow` / `refreshCost` failures to Sentry via `@/lib/client-observability` (`reportSilentFallback`); sustained Supabase outage or `/cost` 5xx surfaces as a client-side Sentry breadcrumb.
+
+### dashboards
+
+- **Inngest dashboard:** `https://app.inngest.com` → function `agent-on-spawn-requested` → Run timeline. Operator-accessible; no SSH.
+- **Sentry:** project `soleur-web-platform` → search `feature:spawn-agent`. Filter by `extra.failureReason` for per-reason grouping.
+- **Anthropic Console:** workspace cost dashboard for per-day spend; reconcile against `audit_byok_use` cumulative cents on dogfood.
+
+### discoverability_test
+
+```bash
+# All artifacts are queryable without SSH per hr-no-ssh-fallback-in-runbooks.
+gh workflow view agent-spawn  # surfaces the Inngest function ID if registered there
+curl -fsSL "https://api.inngest.com/v1/apps/<app-id>/functions" | jq '.data[] | select(.slug | contains("spawn"))'
+doppler run -p soleur -c dev -- bun -e "import {Client} from 'pg'; const c=new Client(process.env.DATABASE_URL_POOLER.replace(':6543/',':5432/')); await c.connect(); const r=await c.query(\"SELECT failure_reason,count(*) FROM action_sends WHERE failure_reason IS NOT NULL GROUP BY 1 ORDER BY 2 DESC\"); console.log(r.rows); await c.end();"
+```
+
+### runbook
+
+- **Sustained `anthropic_rate_limited`:** raise Anthropic workspace cap (operator action via Anthropic Console).
+- **Sustained `byok_cap_exceeded`:** raise the per-founder BYOK cap via the existing `/api/admin/byok-cap` route or Doppler config.
+- **Single `leader_tool_invalid` event:** drop into Sentry breadcrumb, inspect the emitted tool name; usually means the registry needs a new tool added.
+- **Cluster of `leader_max_turns_exceeded` on one action_class:** the per-class prompt or `maxTurns` budget needs tuning (tracked in #4428).
+- **Realtime delivery missing for action_sends:** verify `070_action_sends_realtime_publication.sql` applied (added Phase 8.3); falls back to 2s polling otherwise (FR3).
+
+### Sentry alert rule (Phase 9 dogfood action)
+
+**Operator action after merge:** Add Sentry project alert rule:
+- Conditions: `tags.feature = spawn-agent` AND `extra.failureReason IN (anthropic_rate_limited, leader_response_truncated, leader_tool_invalid, leader_max_turns_exceeded, byok_cap_exceeded, cost_ceiling_exceeded)`.
+- Action: email operator (single-recipient cohort; revisit when team > 1).
+- Frequency: every event for first 7 days of dogfood; degrade to issue-grouping default after.
+
+Tracked as Phase 9 dogfood step §9.6.
+
 ## Rollout & Risk
 
 ### Rollout

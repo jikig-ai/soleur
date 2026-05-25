@@ -39,6 +39,8 @@ interface ActionSendRow {
   action_class: string;
   created_at: string;
   acknowledged_at: string | null;
+  undone_at: string | null;
+  failure_reason: string | null;
 }
 
 export async function GET(
@@ -84,7 +86,9 @@ export async function GET(
   // already proved ownership; this read is bounded to one row by id.
   const { data: rawSend, error: sendErr } = await service
     .from("action_sends")
-    .select("id,message_id,user_id,action_class,created_at,acknowledged_at")
+    .select(
+      "id,message_id,user_id,action_class,created_at,acknowledged_at,undone_at,failure_reason",
+    )
     .eq("message_id", messageId)
     .maybeSingle();
   if (sendErr || !rawSend) {
@@ -106,7 +110,28 @@ export async function GET(
   }
 
   const agentRole = `agent.spawn.requested:${send.action_class}`;
-  const upper = send.acknowledged_at ?? new Date().toISOString();
+  // Cap the upper bound at the loop's terminal moment so unrelated future
+  // spawns of the same (founder_id, agent_role) don't accumulate into this
+  // row's cost.
+  //   - acknowledged_at  → loop finished happy
+  //   - undone_at        → loop finished + operator-undone
+  //   - failure_reason   → loop terminated mid-flight; cap at created_at +
+  //                        11 minutes (leader function timeout is 10m per AC7,
+  //                        so no audit_byok_use rows from THIS loop can land
+  //                        after that — anything later is sibling-spawn noise)
+  //   - else (in-flight) → now()
+  const LEADER_LOOP_MAX_DURATION_MS = 11 * 60 * 1000;
+  let upper: string;
+  if (send.acknowledged_at) {
+    upper = send.acknowledged_at;
+  } else if (send.undone_at) {
+    upper = send.undone_at;
+  } else if (send.failure_reason) {
+    const createdMs = new Date(send.created_at).getTime();
+    upper = new Date(createdMs + LEADER_LOOP_MAX_DURATION_MS).toISOString();
+  } else {
+    upper = new Date().toISOString();
+  }
 
   const { data: auditRows, error: auditErr } = await service
     .from("audit_byok_use")

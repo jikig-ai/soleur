@@ -486,6 +486,90 @@ describe("LeaderLoopStatus — Cost badge (AC15)", () => {
   });
 });
 
+describe("LeaderLoopStatus — FR3 polling fallback on terminal subscribe status", () => {
+  it("CHANNEL_ERROR triggers 2s polling (calls fetchRow + refreshCost beyond the initial pull)", async () => {
+    vi.useFakeTimers();
+    try {
+      const row: FakeRow = {
+        failure_reason: null,
+        reversal_handles: null,
+        undone_at: null,
+        acknowledged_at: null,
+        artifact_url: null,
+        cancellation_requested_at: null,
+        current_turn: 1,
+      };
+
+      // Build a channel that reports CHANNEL_ERROR via the subscribe callback
+      // so the component installs the 2s polling interval.
+      let updateHandler: ((p: { new: FakeRow }) => void) | null = null;
+      const ch: FakeChannel = {
+        on: ((_event: string, _filter: unknown, handler: (p: { new: FakeRow }) => void) => {
+          updateHandler = handler;
+          return ch;
+        }) as FakeChannel["on"],
+        subscribe: ((cb: (status: string) => void) => {
+          ch._statusCallback = cb;
+          queueMicrotask(() => cb("CHANNEL_ERROR"));
+          return ch;
+        }) as FakeChannel["subscribe"],
+        _emit: (r: FakeRow) => {
+          if (updateHandler) updateHandler({ new: r });
+        },
+        _statusCallback: null,
+      };
+
+      let fetchRowCalls = 0;
+      let fetchCostCalls = 0;
+      fetchMock.mockImplementation(async (input: string) => {
+        if (input.endsWith("/cost")) {
+          fetchCostCalls++;
+          return new Response(
+            JSON.stringify({ cumulativeCents: 0, turnCount: 0 }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      });
+
+      const fromChain: Record<string, unknown> = {};
+      Object.assign(fromChain, {
+        select: vi.fn(() => fromChain),
+        eq: vi.fn(() => fromChain),
+        maybeSingle: vi.fn(() => {
+          fetchRowCalls++;
+          return Promise.resolve({ data: row, error: null });
+        }),
+      });
+      createClientMock.mockImplementation(() => ({
+        from: vi.fn(() => fromChain),
+        channel: vi.fn(() => ch),
+        removeChannel: vi.fn(),
+      }));
+
+      const { LeaderLoopStatus } = await import(
+        "@/components/dashboard/leader-loop-status"
+      );
+
+      render(<LeaderLoopStatus messageId="msg-1" />);
+
+      // Initial mount: 1 fetchRow + 1 /cost. Let microtasks settle.
+      await Promise.resolve();
+      await Promise.resolve();
+      const initialFetchRowCalls = fetchRowCalls;
+      const initialCostCalls = fetchCostCalls;
+
+      // Advance 4 seconds → 2 polling ticks should have fired.
+      await vi.advanceTimersByTimeAsync(4500);
+
+      expect(fetchRowCalls).toBeGreaterThan(initialFetchRowCalls);
+      expect(fetchCostCalls).toBeGreaterThan(initialCostCalls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("LeaderLoopStatus — Realtime UPDATE drives state transitions", () => {
   it("transitions working → done when payload sets acknowledged_at + reversal_handles", async () => {
     const startRow: FakeRow = {

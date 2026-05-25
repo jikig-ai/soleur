@@ -99,9 +99,11 @@ function setupServiceChain(state: ServiceState) {
     update: vi.fn((patch: Record<string, unknown>) => {
       const u = { patch };
       captured.updates.push(u);
-      return {
-        eq: vi.fn(() => Promise.resolve({ error: null })),
+      const eqChain = {
+        eq: vi.fn(() => eqChain),
+        is: vi.fn(() => Promise.resolve({ error: null })),
       };
+      return eqChain;
     }),
   };
   const usersChain = {

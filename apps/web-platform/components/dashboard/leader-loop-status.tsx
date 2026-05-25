@@ -29,6 +29,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 
 import { AcknowledgedPill } from "@/components/dashboard/acknowledged-pill";
 import { createClient } from "@/lib/supabase/client";
+import { reportSilentFallback } from "@/lib/client-observability";
 import {
   deriveTodayCardState,
   type TodayCardActionSendInput,
@@ -52,11 +53,19 @@ interface CostJson {
   turnCount: number;
 }
 
-interface UndoElement {
+// Shared shape between the /undo route's 207 response and the consumer
+// here. Drift between the two surfaces is masked by the route's
+// JSON.stringify boundary; cross-typing closes the gap.
+export interface UndoElement {
   index: number;
   kind: string;
   status: string;
   error?: string;
+}
+
+export interface UndoResponseBody {
+  allSucceeded: boolean;
+  elements: UndoElement[];
 }
 
 type UndoState =
@@ -102,8 +111,14 @@ export function LeaderLoopStatus({
         .eq("message_id", messageId)
         .maybeSingle();
       if (data) setRow(data as TodayCardActionSendInput);
-    } catch {
-      // Polling fallback exists; one missed read is non-fatal.
+    } catch (err) {
+      // Polling fallback exists; one missed read is non-fatal. Mirror to
+      // Sentry per cq-silent-fallback-must-mirror-to-sentry so a
+      // sustained Supabase outage or RLS misconfig becomes visible.
+      reportSilentFallback(err, {
+        feature: "leader-loop-status",
+        op: "fetch-row",
+      });
     }
   }, [messageId]);
 
@@ -114,9 +129,14 @@ export function LeaderLoopStatus({
         const json = (await res.json()) as CostJson;
         setCost(json);
       }
-    } catch {
-      // Cost refresh is best-effort; the row UPDATE still drives the
-      // state matrix even if the badge stays stale for one tick.
+    } catch (err) {
+      // Cost refresh is best-effort; server-side enforces the actual
+      // ceiling. Mirror to Sentry per cq-silent-fallback-must-mirror-to-
+      // sentry so a sustained /cost outage during a real spawn is visible.
+      reportSilentFallback(err, {
+        feature: "leader-loop-status",
+        op: "refresh-cost",
+      });
     }
   }, [messageId]);
 
@@ -178,6 +198,25 @@ export function LeaderLoopStatus({
     };
   }, [messageId, fetchRow, refreshCost]);
 
+  // Auto-clear optimisticStopping when the row reaches a definitive
+  // terminal state OR the server has acknowledged the cancellation
+  // request. Without this reconciliation, a /cancel POST that returned
+  // 200 but for any reason did NOT land the cancellation_requested_at
+  // write would leave the card stuck in "Stopping" forever; the row's
+  // own state takes over once it's definitive.
+  useEffect(() => {
+    if (!optimisticStopping) return;
+    if (!row) return;
+    if (
+      row.cancellation_requested_at ||
+      row.acknowledged_at ||
+      row.failure_reason ||
+      row.undone_at
+    ) {
+      setOptimisticStopping(false);
+    }
+  }, [row, optimisticStopping]);
+
   async function onStop() {
     setCancelError(null);
     setOptimisticStopping(true);
@@ -210,7 +249,7 @@ export function LeaderLoopStatus({
         return;
       }
       if (res.status === 207) {
-        const json = (await res.json()) as { elements: UndoElement[] };
+        const json = (await res.json()) as UndoResponseBody;
         setUndoState({ kind: "partial", elements: json.elements ?? [] });
         fetchRow();
         return;
@@ -265,6 +304,9 @@ export function LeaderLoopStatus({
     );
   }
 
+  // Synthesize cancellation_requested_at so deriveTodayCardState yields
+  // "stopping" before the Realtime UPDATE lands. Reusing the matrix's
+  // single source of truth avoids a parallel "stopping?" predicate.
   const effectiveRow: TodayCardActionSendInput = optimisticStopping
     ? { ...row, cancellation_requested_at: row.cancellation_requested_at ?? new Date().toISOString() }
     : row;

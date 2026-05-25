@@ -210,14 +210,28 @@ export async function POST(
 
   // Persist: full success → undone_at + clear reversal_handles. Partial →
   // rewrite reversal_handles with only the still-failing subset.
+  //
+  // Both UPDATEs scope `.is("undone_at", null)` so a second concurrent
+  // Undo (double-click / two-tab race) lands as 0-rows-affected if the
+  // first writer already finished. The state-matrix already gives
+  // undone_at precedence; this predicate keeps the row consistent if the
+  // second writer's stillFailing set is shorter than the first's.
+  //
+  // Full success also clears failure_reason — the per-spawn failure
+  // (e.g., leader_response_truncated mid-loop with partial artifact)
+  // has been operator-acknowledged via the Undo flow; without the clear,
+  // the state-matrix's row-1/row-2 precedence would render "Failed"
+  // forever on a row that the operator successfully undid.
   if (allSucceeded) {
     const { error: updErr } = await service
       .from("action_sends")
       .update({
         undone_at: new Date().toISOString(),
         reversal_handles: null,
+        failure_reason: null,
       })
-      .eq("id", send.id);
+      .eq("id", send.id)
+      .is("undone_at", null);
     if (updErr) {
       reportSilentFallback(updErr, {
         feature: "dashboard-undo",
@@ -232,7 +246,8 @@ export async function POST(
   const { error: rewriteErr } = await service
     .from("action_sends")
     .update({ reversal_handles: stillFailing })
-    .eq("id", send.id);
+    .eq("id", send.id)
+    .is("undone_at", null);
   if (rewriteErr) {
     reportSilentFallback(rewriteErr, {
       feature: "dashboard-undo",
