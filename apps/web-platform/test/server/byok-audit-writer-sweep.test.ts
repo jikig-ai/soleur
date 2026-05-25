@@ -127,7 +127,11 @@ describe("BYOK audit writer sweep", () => {
   for (const file of sweepable) {
     it(`${file}: emits persistTurnCost OR carries out-of-scope marker`, () => {
       const src = readFileSync(file, "utf8");
-      const hasWriter = /\bpersistTurnCost\s*\(/.test(src);
+      // Accept both the void-returning `persistTurnCost(` (cc-soleur-go +
+      // legacy path) AND the awaitable variant `persistTurnCostAwaitable(`
+      // introduced for the PR-B (#4379) Anthropic-SDK leader loop. Both
+      // fan out to `write_byok_audit` per `cost-writer.ts:116/199`.
+      const hasWriter = /\bpersistTurnCost\w*\s*\(/.test(src);
       const hasMarker = src.includes(OUT_OF_SCOPE_MARKER);
       expect(
         hasWriter || hasMarker,

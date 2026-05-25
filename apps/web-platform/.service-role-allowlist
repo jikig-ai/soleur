@@ -168,6 +168,18 @@ apps/web-platform/server/workspace-resolver.ts
 # PR-A → PR-B because the SELECT + UPDATE surface is unchanged.
 apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts
 
+# PERMANENT — Layer 1 BYOK cap gate wrapper for the autonomous-AI leader
+# loop (PR-B #4379 ADR-041). Wraps the 6-arg record_byok_use_and_check_cap
+# RPC at supabase/migrations/061_byok_audit_workspace_id_rpcs.sql:81-148.
+# Service-role is required because (a) the wrapper is called from the
+# Inngest function body whose event was signed by INNGEST_SIGNING_KEY (no
+# user JWT in scope), and (b) the cap RPC is the gatekeeper for the BYOK
+# write boundary — a tenant JWT mint would create a circular-trust
+# dependency (the cap-check would itself require a valid JWT issued under
+# the same operator whose cap is being checked). Fail-closed semantics:
+# any RPC error THROWS rather than returning killTripped=false.
+apps/web-platform/server/byok-cap-rpc.ts
+
 # ── feat-byok-delegations (#4232, PR-A) ──────────────────────────────
 #
 # PERMANENT — byok-resolver.ts looks up workspace + organization
