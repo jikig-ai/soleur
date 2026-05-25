@@ -469,14 +469,45 @@ Each finding's default action is to FIX IT INLINE on the PR branch: make the edi
 commit with a message `review: <summary> (P<N>)`, and push. Apply to P1, P2, P3
 equally.
 
-**Cost-of-filing gate (apply BEFORE the four scope-out criteria below):** If the
-fix is ≤30 lines of code AND touches ≤2 files AND no reviewer agent independently
-dissents on technical grounds (e.g., contested-design with named alternatives),
-fix inline. The bookkeeping cost of `gh issue create + scope-out justification +
-future triage + closure + follow-up PR` averages ~30 minutes of cumulative
-human attention; a ≤30-line code edit averages ~5 minutes. Filing the issue is
-NET-NEGATIVE work for the team. This gate is load-bearing: a PR that opens
-more issues than it closes is a workflow failure, not a normal review outcome.
+**Cost-of-filing gate (FIRST FILTER — apply BEFORE invoking the CONCUR
+second-reviewer gate AND BEFORE evaluating the four scope-out criteria below):**
+If the fix is ≤30 lines of code AND touches ≤2 files AND no reviewer agent
+independently dissents on technical grounds (e.g., contested-design with named
+alternatives), fix inline. The bookkeeping cost of `gh issue create + scope-out
+justification + future triage + closure + follow-up PR` averages ~30 minutes of
+cumulative human attention; a ≤30-line code edit averages ~5 minutes. Filing
+the issue is NET-NEGATIVE work for the team. This gate is load-bearing: a PR
+that opens more issues than it closes is a workflow failure, not a normal
+review outcome.
+
+**Mechanical pre-CONCUR auto-flip (MUST run before `code-simplicity-reviewer`
+is invoked for any scope-out candidate):**
+
+1. Size-assess the proposed fix. Use ONE of these methods:
+   - **Worktree diff:** Apply the proposed fix to a scratch worktree branch
+     and run `git diff --stat origin/main...HEAD -- <touched-paths>`. Sum the
+     `insertions + deletions` and count distinct files.
+   - **Estimate:** Run `wc -l` against the surface(s) the fix would edit and
+     reason about how many of those lines would be touched.
+2. If the assessed fix is ≤30 lines AND touches ≤2 files:
+   - **BYPASS the CONCUR gate entirely** — do NOT invoke `code-simplicity-reviewer`.
+   - Disposition auto-flips to **fix-inline**.
+   - No `gh issue create --label deferred-scope-out` call may run for this finding.
+   - Write the inline fix, commit, push.
+3. If the assessed fix is >30 lines OR touches >2 files:
+   - Proceed to evaluate the four scope-out criteria below and (if any match)
+     invoke the CONCUR gate.
+4. **Unknown-size → treat as >30 lines.** If the operator cannot confidently
+   bound the fix without writing it, default to running CONCUR — the gate is
+   designed to catch mistakes in this direction, not in the opposite direction.
+   Self-attestation is operator-side; the agent gate exists for the residual.
+
+This auto-flip is the canonical mechanism that drives "Filed as scope-out: 0"
+on a normal PR. Reviewers historically treated the cost-of-filing prose as
+*descriptive* ("fix inline if small") and still spawned CONCUR for everything
+because the test for "small" was buried inside the criterion-evaluation flow.
+The auto-flip lifts the size test to a strict precondition: CONCUR only runs
+on candidates that have already cleared the size threshold.
 
 The gate fails (fix-inline is required) when:
 
