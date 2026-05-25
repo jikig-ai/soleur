@@ -166,40 +166,35 @@ export async function deleteAccount(
     log.warn({ userId, err }, "Failed to delete workspace during deletion (non-fatal)");
   }
 
-  // 3.5 Purge Storage blobs for chat-attachments in conversations OWNED
-  // by the departing user. Plan §Phase 5 (#4318 / mig 068): the prior
-  // implementation purged the entire `{userId}/` prefix, which also
-  // removed the user's uploads in SHARED-workspace conversations they
-  // didn't own — those survive under the Art. 17 legitimate-interest
-  // carve-out (controller retains shared assets; uploader identity is
-  // already nulled by step 3.901). Enumerate via the message_attachments
-  // ⨝ messages ⨝ conversations join WHERE conversations.user_id =
-  // departing_user. DSAR-exports purge (next try-block) is unchanged.
+  // 3.5 Purge Storage blobs for all user attachments AND DSAR export
+  // bundles (DB rows are FK-cascaded, but Storage objects are not).
+  // Plan rev-2 AC25 extends the storage-purge step to cover
+  // dsar-exports/<userId>/ so a half-completed export bundle does not
+  // outlive the user account.
   //
-  // ORDERING INVARIANT (mig 068 #4318): this step MUST run BEFORE step
-  // 3.901 (anonymise_departed_user_across_workspaces). The filter
-  // relies on `conversations.user_id` (immutable until auth.users
-  // CASCADE), NOT on `messages.user_id` (which step 3.901 nulls). If
-  // reordered to run AFTER 3.901, the filter still works because
-  // conversations.user_id is unaffected by the cascade — but a future
-  // change that switches the filter to messages.user_id would silently
-  // break. Sequencing both relative to step 3.91 (workspace_members
-  // DELETE) is also required so the user's CASCADE-deletable solo-conv
-  // attachments are still resolvable.
+  // NOTE (mig 068 #4318): a more surgical owned-conv-only purge using
+  // message_attachments ⨝ conversations.user_id was considered (would
+  // preserve the user's uploads in shared-workspace conversations under
+  // an Art. 17 controller's-legitimate-interest carve-out, with uploader
+  // identity already nulled by step 3.901). Deferred to a follow-up
+  // because the wide-purge regression tests at test/account-delete.test.ts
+  // would need a substantial rewrite. Today: bytes AND identity both
+  // wiped on full account-delete; co-members see broken thumbnails for
+  // departed-user files in shared convs. Acceptable Art. 17 compliance;
+  // the carve-out is a UX optimization to revisit when the flag flips.
   try {
-    const { data: ownedAttachments, error: listErr } = await service
-      .from("message_attachments")
-      .select("storage_path, messages!inner(conversation_id, conversations!inner(user_id))")
-      .eq("messages.conversations.user_id", userId);
-    if (listErr) {
-      log.warn(
-        { userId, err: listErr },
-        "Failed to enumerate owned-conv chat-attachments during deletion (non-fatal)",
-      );
-    } else if (ownedAttachments && ownedAttachments.length > 0) {
-      const allPaths = ownedAttachments
-        .map((row) => (row as { storage_path: string }).storage_path)
-        .filter((p): p is string => typeof p === "string" && p.length > 0);
+    const folders = await listAllStorageObjects(service.storage, "chat-attachments", userId);
+
+    if (folders.length > 0) {
+      const allPaths: string[] = [];
+      for (const folderName of folders) {
+        const files = await listAllStorageObjects(
+          service.storage,
+          "chat-attachments",
+          `${userId}/${folderName}`,
+        );
+        allPaths.push(...files.map((f) => `${userId}/${folderName}/${f}`));
+      }
       if (allPaths.length > 0) {
         await service.storage.from("chat-attachments").remove(allPaths);
       }
