@@ -164,12 +164,20 @@ function getAnonKey(): string {
 /**
  * Decode a JWT's middle (payload) segment WITHOUT signature verification.
  *
- * Used only to extract claims (`jti`, `exp`) the cache layer needs. The
- * "Unsafe" suffix is load-bearing — a reader sees immediately that this is
- * NOT a JWT verifier. PostgREST verifies the signature on the server side
- * via the JWKS endpoint (Supabase-managed asymmetric keys).
+ * Used only to extract claims (`jti`, `exp`, `iat`) the cache layer AND the
+ * middleware revocation gate (#4307) need. The "Unsafe" suffix is load-
+ * bearing — a reader sees immediately that this is NOT a JWT verifier.
+ * PostgREST verifies the signature on the server side via the JWKS endpoint
+ * (Supabase-managed asymmetric keys).
+ *
+ * THROWS `RuntimeAuthError("jwt_mint", ...)` on:
+ *   - JWT does not have exactly 3 dot-separated segments
+ *   - Middle segment is not valid base64url-encoded JSON
+ * Callers MUST wrap in try/catch (the middleware revocation gate at
+ * `middleware.ts` does this explicitly to translate the throw into a
+ * 401 + Sentry capture; see #4307 plan §2.2).
  */
-function decodeJwtPayloadUnsafe(jwt: string): Record<string, unknown> {
+export function decodeJwtPayloadUnsafe(jwt: string): Record<string, unknown> {
   const parts = jwt.split(".");
   if (parts.length !== 3) {
     throw new RuntimeAuthError(
