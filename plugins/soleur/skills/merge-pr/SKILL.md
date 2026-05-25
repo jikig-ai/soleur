@@ -272,14 +272,22 @@ This queues the merge. GitHub waits for all branch protection requirements (CI c
 
 ### 5.2 Poll for Merge
 
-Use the **Monitor tool** with the same state-machine loop as `/soleur:ship` Phase 7 (state-change + heartbeat, max 15 iterations = 15 minutes, with BEHIND auto-sync, required-check failure exit, and DIRTY exit). Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
+Use the **Monitor tool** with the same state-machine loop as `/soleur:ship` Phase 7. The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). Max 15 iterations × 60s sleep = 15-minute wall-clock cap. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
+
+**Mirror invariant:** the block below is a derived mirror of `plugins/soleur/skills/ship/SKILL.md` Phase 7 (the canonical site). If you edit one, edit both — the canonical site carries the full prose rationale for fail-open required-check fetch, BEHIND budget, and DIRTY semantics. The `ship-phase-7-poll-fixtures.sh` fixture exercises ship's block; this mirror is not directly tested, so cross-grep both blocks before pushing.
 
 ```bash
+# <!-- phase-7-poll-block:start --> mirror of ship/SKILL.md Phase 7
 prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-REQUIRED_CHECKS=$(gh api 'repos/{owner}/{repo}/rules/branches/main' \
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled" >&2
+fi
+# REQUIRED_CHECKS is fetched once, fail-open: empty array → no-op scan
+# (see ship/SKILL.md Phase 7 for the full rationale; do NOT harden).
+mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
   --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
-  2>/dev/null || echo "")
+  2>/dev/null || true)
 while true; do
   i=$((i+1))
   s=$(gh pr view <number> --json state,mergeStateStatus \
@@ -291,25 +299,25 @@ while true; do
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
 
-  if [[ -n "$REQUIRED_CHECKS" ]]; then
-    failed_names=$(gh pr checks <number> --json name,bucket \
-      --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || echo "")
-    if [[ -n "$failed_names" ]]; then
+  if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
+    mapfile -t failed_names < <(gh pr checks <number> --json name,bucket \
+      --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || true)
+    if (( ${#failed_names[@]} > 0 )); then
       required_failed=""
-      for n in $failed_names; do
-        for r in $REQUIRED_CHECKS; do
+      for n in "${failed_names[@]}"; do
+        for r in "${REQUIRED_CHECKS[@]}"; do
           [[ "$n" == "$r" ]] && { required_failed="$n"; break 2; }
         done
       done
       if [[ -n "$required_failed" ]]; then
-        echo "$(date +%H:%M:%S) [${i}/15] required check '${required_failed}' FAILED — exiting poll" >&2
+        echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
         break
       fi
     fi
   fi
 
-  if [[ "$s" == *" DIRTY" ]]; then
-    echo "$(date +%H:%M:%S) [${i}/15] PR is DIRTY (merge conflict) — exiting poll" >&2
+  if [[ "$s" == *DIRTY* ]]; then
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
     git diff --name-only --diff-filter=U >&2 || true
     break
   fi
@@ -320,6 +328,10 @@ while true; do
         && git merge origin/main --no-edit 2>&1 | tail -5 \
         && git push 2>&1 | tail -2; then
       echo "$(date +%H:%M:%S) [${i}/15] auto-sync ${behind_syncs}/${MAX_BEHIND_SYNCS} pushed"
+      s=$(gh pr view <number> --json state,mergeStateStatus \
+          --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
+        || s="fetch-error: $s"
+      echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
     else
       git merge --abort 2>/dev/null
       echo "auto-sync failed — stopping poll. Manual resolution required on $BRANCH." >&2
@@ -327,7 +339,7 @@ while true; do
     fi
   elif [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
     elapsed=$((i * 60))
-    echo "BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI. Recommendation: retry in a quieter window." >&2
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: stop ship pipeline; merge during a quieter window." >&2
     behind_warned=1
   fi
 
@@ -337,6 +349,7 @@ while true; do
   fi
   sleep 60
 done
+# <!-- phase-7-poll-block:end -->
 ```
 
 If the loop exits with state `CLOSED` (not `MERGED`), auto-merge was cancelled — check for CI failures:

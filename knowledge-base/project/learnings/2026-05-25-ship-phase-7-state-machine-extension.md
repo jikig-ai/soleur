@@ -35,7 +35,7 @@ The issue body proposed extracting the state machine into a new `soleur:pr-watch
 
 1. **Total bash diff < 200 LoC.** A skill carries `~50 LoC of YAML frontmatter + description-budget cost + token cost on every session start`. The state machine fits inline in the three call sites; the duplication cost is < 100 lines.
 2. **No invocation surface beyond the three sites.** Skills are valuable when reusable. The three current consumers all invoke from inside a parent skill that already owns the merge intent — extracting the state-machine as a separate skill adds an indirection layer with no parallel consumer.
-3. **Description budget headroom.** Cumulative skill description word count was at ~1799/1800 in the most recent audit; adding a new skill description would force a sibling trim. In-place extension is zero description-budget cost.
+3. **Description budget headroom.** Cumulative skill description word count is enforced at 1950 words by `plugins/soleur/test/components.test.ts` (the tokenizer is `desc.split(/\s+/).filter(Boolean).length` against YAML values only — the AGENTS.md `grep -h 'description:' | wc -w` form inflates counts by ~5 words per skill via YAML framing and is NOT the authoritative budget; see `knowledge-base/project/learnings/2026-04-19-skill-description-word-budget-tokenizer.md`). Adding a new skill description would consume the remaining headroom and force a sibling trim. In-place extension is zero description-budget cost.
 
 The issue body also referenced a `ScheduleWakeup` primitive that does not exist in this codebase (grep returns zero hits in `plugins/`, `.claude/hooks/`, `apps/web-platform/`). The actual polling primitive is the **Monitor tool** + bash loop, which Phase 7 already uses.
 

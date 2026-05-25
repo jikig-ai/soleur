@@ -969,8 +969,19 @@ After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now o
 Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured "main moving faster than CI" warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
 ```bash
+# <!-- phase-7-poll-block:start --> (do NOT edit without updating the
+# mirror in plugins/soleur/skills/merge-pr/SKILL.md §5.2 and the fixture
+# at plugins/soleur/test/ship-phase-7-poll-fixtures.sh; the fixture's awk
+# extractor anchors on this fence + the variable-set fingerprint below.)
 prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Worktree precondition: the BEHIND auto-sync calls `git merge origin/main`
+# + `git push` which require a checked-out work tree. Bare-repo invocation
+# would silently corrupt state or fail mid-sync. /soleur:ship always runs
+# from a worktree (Step 0b creates one); the guard is defense-in-depth.
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled" >&2
+fi
 # Required-check name set — fetched ONCE at loop entry (branch-protection
 # rules change only via operator action; per-tick fetches cost rate-limit
 # headroom for no value). Fail-open by design: if the API call fails (no
@@ -978,9 +989,12 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # per-tick failure scan becomes a no-op. The existing CLOSED-on-CI-failure
 # fallback below still catches the terminal case. Do NOT "harden" to
 # fail-closed — that breaks the loop for repos without branch protection.
-REQUIRED_CHECKS=$(gh api 'repos/{owner}/{repo}/rules/branches/main' \
+# Read into an array so check names with whitespace (e.g. "skill-security-scan
+# PR gate") survive iteration intact — a `for r in $REQUIRED_CHECKS` would
+# word-split on spaces and silently miss multi-word required checks.
+mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
   --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
-  2>/dev/null || echo "")
+  2>/dev/null || true)
 while true; do
   i=$((i+1))
   s=$(gh pr view <number> --json state,mergeStateStatus \
@@ -996,18 +1010,20 @@ while true; do
   # bucket == "fail", exit immediately with the failing check name instead
   # of heartbeating to the 15-minute cap. Tolerates absent checks (CI not
   # yet registered) — only bucket="fail" produces an intersection match.
-  if [[ -n "$REQUIRED_CHECKS" ]]; then
-    failed_names=$(gh pr checks <number> --json name,bucket \
-      --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || echo "")
-    if [[ -n "$failed_names" ]]; then
+  # Same fail-open rationale as the once-fetch above: transient `gh pr
+  # checks` 5xx → empty failure set → no-op for this tick.
+  if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
+    mapfile -t failed_names < <(gh pr checks <number> --json name,bucket \
+      --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || true)
+    if (( ${#failed_names[@]} > 0 )); then
       required_failed=""
-      for n in $failed_names; do
-        for r in $REQUIRED_CHECKS; do
+      for n in "${failed_names[@]}"; do
+        for r in "${REQUIRED_CHECKS[@]}"; do
           [[ "$n" == "$r" ]] && { required_failed="$n"; break 2; }
         done
       done
       if [[ -n "$required_failed" ]]; then
-        echo "$(date +%H:%M:%S) [${i}/15] required check '${required_failed}' FAILED — exiting poll" >&2
+        echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
         echo "Inspect: gh pr checks <number> ; gh run view --log-failed (pick the failing workflow run)" >&2
         break
       fi
@@ -1016,9 +1032,11 @@ while true; do
 
   # DIRTY exit (server-side merge conflict): GitHub computed a conflict that
   # may or may not be local to this worktree. Exit and surface — looping
-  # produces no progress; the operator must resolve.
-  if [[ "$s" == *" DIRTY" ]]; then
-    echo "$(date +%H:%M:%S) [${i}/15] PR is DIRTY (merge conflict) — exiting poll" >&2
+  # produces no progress; the operator must resolve. Glob `*DIRTY*` (not
+  # `*" DIRTY"`) tolerates leading-whitespace and trailing-whitespace variants
+  # that future `--jq` template tweaks could introduce.
+  if [[ "$s" == *DIRTY* ]]; then
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
     echo "Conflicted paths (local view; may be empty for server-side conflicts):" >&2
     git diff --name-only --diff-filter=U >&2 || true
     echo "Server-side conflicts may not appear locally. Run: git fetch origin && git merge origin/main" >&2
@@ -1046,6 +1064,14 @@ while true; do
       break
     else
       echo "$(date +%H:%M:%S) [${i}/15] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
+      # Re-fetch state immediately after a successful sync. GitHub may
+      # have already cleared OPEN BEHIND → OPEN CLEAN → MERGED in the time
+      # the sync took (~5-30s); without this re-fetch, we'd burn a 60s
+      # `sleep` waiting on state we already know has progressed.
+      s=$(gh pr view <number> --json state,mergeStateStatus \
+          --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
+        || s="fetch-error: $s"
+      echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
     fi
   elif [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
     # BEHIND cap exhausted: emit structured operator signal exactly once at
@@ -1053,7 +1079,7 @@ while true; do
     # to heartbeat. PR may still merge if main calms down — but the
     # operator now has the diagnosis without log-archaeology.
     elapsed=$((i * 60))
-    echo "BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: stop ship pipeline; merge during a quieter window." >&2
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: stop ship pipeline; merge during a quieter window." >&2
     behind_warned=1
   fi
 
@@ -1063,6 +1089,7 @@ while true; do
   fi
   sleep 60
 done
+# <!-- phase-7-poll-block:end -->
 ```
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
