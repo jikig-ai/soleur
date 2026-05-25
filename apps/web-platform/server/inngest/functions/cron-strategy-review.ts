@@ -317,7 +317,9 @@ async function listExistingReviewIssueTitles(
 }
 
 // Script: find <dir> -maxdepth 1 -name '*.md' -type f
-async function collectStrategyFiles(repoRoot: string): Promise<string[]> {
+export async function collectStrategyFiles(
+  repoRoot: string,
+): Promise<string[]> {
   const files: string[] = [];
   for (const rel of STRATEGY_DIRS) {
     const abs = join(repoRoot, rel);
@@ -350,7 +352,7 @@ async function collectStrategyFiles(repoRoot: string): Promise<string[]> {
 // date, treat as malformed (script's "invalid last_reviewed" branch).
 // Use Date.parse for the strict shape since YYYY-MM-DD parses
 // unambiguously as UTC midnight.
-function parseISODate(s: string): number | null {
+export function parseISODate(s: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const t = Date.parse(`${s}T00:00:00Z`);
   return Number.isNaN(t) ? null : t;
@@ -364,7 +366,7 @@ function parseISODate(s: string): number | null {
 // for missing/null and the literal raw string for unrecognized shapes (which
 // will then fail parseISODate and route into the "invalid last_reviewed"
 // errors++ branch — matching bash's `date -d` failure path).
-function coerceFrontmatterDate(raw: unknown): string | undefined {
+export function coerceFrontmatterDate(raw: unknown): string | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (raw instanceof Date) {
     if (Number.isNaN(raw.getTime())) return undefined;
