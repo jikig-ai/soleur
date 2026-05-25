@@ -480,34 +480,11 @@ the issue is NET-NEGATIVE work for the team. This gate is load-bearing: a PR
 that opens more issues than it closes is a workflow failure, not a normal
 review outcome.
 
-**Mechanical pre-CONCUR auto-flip (MUST run before `code-simplicity-reviewer`
-is invoked for any scope-out candidate):**
+**Mechanical pre-CONCUR auto-flip:**
 
-1. Size-assess the proposed fix. Use ONE of these methods:
-   - **Worktree diff:** Apply the proposed fix to a scratch worktree branch
-     and run `git diff --stat origin/main...HEAD -- <touched-paths>`. Sum the
-     `insertions + deletions` and count distinct files.
-   - **Estimate:** Run `wc -l` against the surface(s) the fix would edit and
-     reason about how many of those lines would be touched.
-2. If the assessed fix is ≤30 lines AND touches ≤2 files:
-   - **BYPASS the CONCUR gate entirely** — do NOT invoke `code-simplicity-reviewer`.
-   - Disposition auto-flips to **fix-inline**.
-   - No `gh issue create --label deferred-scope-out` call may run for this finding.
-   - Write the inline fix, commit, push.
-3. If the assessed fix is >30 lines OR touches >2 files:
-   - Proceed to evaluate the four scope-out criteria below and (if any match)
-     invoke the CONCUR gate.
-4. **Unknown-size → treat as >30 lines.** If the operator cannot confidently
-   bound the fix without writing it, default to running CONCUR — the gate is
-   designed to catch mistakes in this direction, not in the opposite direction.
-   Self-attestation is operator-side; the agent gate exists for the residual.
+Before invoking `code-simplicity-reviewer`, self-assess fix size. If ≤30 lines AND ≤2 files, BYPASS the CONCUR gate — the disposition is auto-flipped to fix-inline. Apply the fix; do not file.
 
-This auto-flip is the canonical mechanism that drives "Filed as scope-out: 0"
-on a normal PR. Reviewers historically treated the cost-of-filing prose as
-*descriptive* ("fix inline if small") and still spawned CONCUR for everything
-because the test for "small" was buried inside the criterion-evaluation flow.
-The auto-flip lifts the size test to a strict precondition: CONCUR only runs
-on candidates that have already cleared the size threshold.
+If the fix size cannot be confidently bounded without writing it, write a 5-minute spike. If the spike exceeds 30 lines, run CONCUR; if it doesn't, commit the spike. Do NOT run CONCUR on a fix you've already written and verified to be small.
 
 The gate fails (fix-inline is required) when:
 
@@ -575,44 +552,7 @@ Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
 
-**Pre-CONCUR bundling check (operator-side, runs BEFORE invoking
-`code-simplicity-reviewer`):** Before filing N separate scope-out issues —
-and before spending N CONCUR invocations — collapse items that share a
-re-evaluation trigger into a single issue with a sub-task checklist.
-
-For each pair of proposed scope-out items, ask: do they share a single
-re-evaluation trigger? A trigger is shared when ANY of the following match:
-
-- **Same event:** Both re-evaluate on the same observable signal (e.g., the
-  same migration landing, the same Sentry tag firing, the same feature
-  shipping).
-- **Same threshold:** Both gate on the same counter crossing the same
-  threshold (e.g., both wait until `count(distinct authenticated founders) >= 2`).
-- **Same architectural pivot:** Both block on the same design decision or
-  cross-cutting refactor landing in a future PR.
-
-If ≥2 items share a trigger, file ONE issue with that trigger and a
-sub-task checklist enumerating the bundled items. CONCUR is invoked once on
-the bundled issue, not N times on the individuals. Each sub-task in the
-checklist still names its own location and proposed fix so the bundled
-issue is actionable when the trigger fires.
-
-**Example:**
-
-> Item A: "admin-role design cycle — current implementation hardcodes
-> founder-only check; defer until admin role lands."
-> Item B: "RPC signature evolution for admin role — `is_admin()` needs to
-> accept role hierarchy; defer until admin role lands."
->
-> Both trigger when admin role lands (same event). File ONE issue titled
-> `review: admin-role landing follow-ups` with a `## Sub-Tasks` checklist:
->
-> ```markdown
-> - [ ] A: replace hardcoded founder-only check at <file>:<line>
-> - [ ] B: extend `is_admin()` signature at <file>:<line>
-> ```
->
-> Single CONCUR call, single open issue, single closure when admin role lands.
+**Bundle scope-outs by trigger.** Before filing, group candidates by trigger-equality (same date OR same counter threshold OR same `#N` dependency OR same human-review gate). File ONE issue per group with a sub-task checklist of the bundled items. CONCUR runs once per group, not per item. See `plugins/soleur/skills/review/references/review-todo-structure.md` §Bundling example.
 
 The bundling check is operator-side because `code-simplicity-reviewer` only
 sees one finding at a time and cannot recognize trigger-sharing across the
@@ -634,9 +574,7 @@ via Task. The prompt MUST include:
    unrelated). Do not rely on the agent's prior knowledge of the criteria —
    pass the definitions literally.
 4. The criterion being claimed and a 1-3-sentence rationale.
-5. The proposed **re-evaluation trigger** in one of the four concrete forms
-   (date, counter, event-grep, dependency — see "Concrete re-evaluation
-   triggers" below).
+5. The proposed **re-evaluation trigger** in one of the four concrete trigger shapes (see plugins/soleur/skills/review/references/review-todo-structure.md §Re-evaluation Trigger). Human-review gates route through the dependency trigger shape (file a reminder issue assigned to the human, then dep-trigger on that issue).
 6. This instruction: "Default to rejecting the scope-out filing. Only co-sign
    when the claimed criterion is concretely and obviously correct against the
    four definitions above AND the proposed re-evaluation trigger matches one
@@ -647,42 +585,7 @@ via Task. The prompt MUST include:
    filing) or `DISSENT: <one-sentence reason>` (to flip to fix-inline).
    Everything after the first line is advisory context."
 
-**Concrete re-evaluation triggers (REQUIRED on every scope-out filing).**
-The `Re-eval by:` field MUST take exactly one of these four shapes — any
-other phrasing is a protocol violation and MUST be DISSENTed at the CONCUR
-gate:
-
-1. **Date trigger** — `Re-evaluate by YYYY-MM-DD`. The operator commits to a
-   calendar review on that date. Use when the deferral is time-boxed
-   (probation period, post-launch window, scheduled audit).
-2. **Counter trigger** — `Re-evaluate when <observable counter> exceeds
-   <threshold>`. The counter MUST be queryable via SQL against the prod
-   database, the `gh` API, or another deterministic data source. Example:
-   "Re-evaluate when count of distinct authenticated founders in
-   `auth.users.last_sign_in_at > now() - 30 days` >= 2."
-3. **Event-grep trigger** — `Re-evaluate when <grep pattern> matches in
-   <log/issue/PR scope>`. The pattern MUST be a literal regex or substring
-   runnable against a defined corpus (Sentry tags, GitHub issue bodies,
-   workflow logs). Example: "Re-evaluate when Sentry issue tag
-   `tenant-jwt op=is_jti_denied.deny` co-occurs with `internal_error` for
-   the same userId within a ±60s window."
-4. **Dependency trigger** — `Re-evaluate when [linked issue/PR #N] lands`.
-   The reference MUST be a concrete open issue or PR number whose merge
-   unblocks the deferred work.
-
-**REJECTED phrasings (DISSENT-on-sight at the CONCUR gate):**
-
-- "when it feels right" / "when ready"
-- "when we have more users" (un-counted; convert to a counter trigger)
-- "post-MVP" / "later" / "eventually" (un-dated; convert to date or dependency)
-- "when this is a problem" (un-observable; convert to counter or event-grep)
-- bare phase labels with no defined exit criterion (e.g., "Phase 4" without a
-  linked phase-completion issue) — convert to dependency trigger pointing at
-  the phase-completion issue.
-
-The `code-simplicity-reviewer` agent SHOULD DISSENT on any scope-out filing
-whose re-eval trigger does not match one of the four concrete forms above,
-regardless of how legitimate the underlying scope-out criterion appears.
+**Concrete re-evaluation triggers.** Every scope-out filing's `Re-eval by:` field MUST take exactly one of four shapes: date / counter / event-grep / dependency (the last subsumes human-review gates via a reminder issue). The canonical definitions, examples, and rejected phrasings live in `plugins/soleur/skills/review/references/review-todo-structure.md` §Re-evaluation Trigger — `code-simplicity-reviewer` MUST DISSENT on any filing whose trigger does not match one of those four shapes.
 
 If the first line of the agent's reply begins with `DISSENT`, the disposition
 flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
