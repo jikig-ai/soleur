@@ -634,12 +634,55 @@ via Task. The prompt MUST include:
    unrelated). Do not rely on the agent's prior knowledge of the criteria —
    pass the definitions literally.
 4. The criterion being claimed and a 1-3-sentence rationale.
-5. This instruction: "Default to rejecting the scope-out filing. Only co-sign
+5. The proposed **re-evaluation trigger** in one of the four concrete forms
+   (date, counter, event-grep, dependency — see "Concrete re-evaluation
+   triggers" below).
+6. This instruction: "Default to rejecting the scope-out filing. Only co-sign
    when the claimed criterion is concretely and obviously correct against the
-   four definitions above. Reply with a single line as the first line of your
-   output: `CONCUR` (to co-sign the filing) or `DISSENT: <one-sentence
-   reason>` (to flip to fix-inline). Everything after the first line is
-   advisory context."
+   four definitions above AND the proposed re-evaluation trigger matches one
+   of the four concrete forms (date / counter / event-grep / dependency).
+   DISSENT on any vague re-eval trigger ('when it feels right', 'when we have
+   more users', 'post-MVP', 'later', 'when this is a problem'). Reply with a
+   single line as the first line of your output: `CONCUR` (to co-sign the
+   filing) or `DISSENT: <one-sentence reason>` (to flip to fix-inline).
+   Everything after the first line is advisory context."
+
+**Concrete re-evaluation triggers (REQUIRED on every scope-out filing).**
+The `Re-eval by:` field MUST take exactly one of these four shapes — any
+other phrasing is a protocol violation and MUST be DISSENTed at the CONCUR
+gate:
+
+1. **Date trigger** — `Re-evaluate by YYYY-MM-DD`. The operator commits to a
+   calendar review on that date. Use when the deferral is time-boxed
+   (probation period, post-launch window, scheduled audit).
+2. **Counter trigger** — `Re-evaluate when <observable counter> exceeds
+   <threshold>`. The counter MUST be queryable via SQL against the prod
+   database, the `gh` API, or another deterministic data source. Example:
+   "Re-evaluate when count of distinct authenticated founders in
+   `auth.users.last_sign_in_at > now() - 30 days` >= 2."
+3. **Event-grep trigger** — `Re-evaluate when <grep pattern> matches in
+   <log/issue/PR scope>`. The pattern MUST be a literal regex or substring
+   runnable against a defined corpus (Sentry tags, GitHub issue bodies,
+   workflow logs). Example: "Re-evaluate when Sentry issue tag
+   `tenant-jwt op=is_jti_denied.deny` co-occurs with `internal_error` for
+   the same userId within a ±60s window."
+4. **Dependency trigger** — `Re-evaluate when [linked issue/PR #N] lands`.
+   The reference MUST be a concrete open issue or PR number whose merge
+   unblocks the deferred work.
+
+**REJECTED phrasings (DISSENT-on-sight at the CONCUR gate):**
+
+- "when it feels right" / "when ready"
+- "when we have more users" (un-counted; convert to a counter trigger)
+- "post-MVP" / "later" / "eventually" (un-dated; convert to date or dependency)
+- "when this is a problem" (un-observable; convert to counter or event-grep)
+- bare phase labels with no defined exit criterion (e.g., "Phase 4" without a
+  linked phase-completion issue) — convert to dependency trigger pointing at
+  the phase-completion issue.
+
+The `code-simplicity-reviewer` agent SHOULD DISSENT on any scope-out filing
+whose re-eval trigger does not match one of the four concrete forms above,
+regardless of how legitimate the underlying scope-out criterion appears.
 
 If the first line of the agent's reply begins with `DISSENT`, the disposition
 flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
@@ -701,11 +744,13 @@ Remove duplicates, prioritize by severity and impact.
     1. **Fix inline** — small, load-bearing, cheap to include. Default for
        sub-20-line fixes on files the PR already touches.
     2. **File as scope-out** — legitimately needs its own cycle. MUST carry
-       the `pre-existing-unrelated` criterion AND a re-evaluation deadline
-       (a target phase milestone such as `Phase 4`, or a concrete trigger
-       condition such as "revisit when syncWorkspace lands in #2244").
-       Open-ended scope-outs with no deadline are NOT permitted — they become
-       the backlog this rule exists to drain.
+       the `pre-existing-unrelated` criterion AND a concrete re-evaluation
+       trigger in one of the four forms (date / counter / event-grep /
+       dependency — see "Concrete re-evaluation triggers" below and
+       `references/review-todo-structure.md`). Vague phrasings ("post-MVP",
+       "later", "when ready", bare phase labels with no linked
+       phase-completion issue) are NOT permitted — they become the backlog
+       this rule exists to drain.
     3. **Close as wontfix** — polish-only, low-value noise, or concern already
        covered by existing code. Close immediately (do not file) with a
        1-sentence rationale in the summary report.
