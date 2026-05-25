@@ -30,7 +30,10 @@ BEGIN
     false,
     10485760,
     ARRAY['image/png', 'application/json']
-  );
+  )
+  ON CONFLICT (id) DO NOTHING;
+
+  EXECUTE 'DROP POLICY IF EXISTS "ux-audit-bot tenant read/write" ON storage.objects';
 
   EXECUTE format(
     'CREATE POLICY "ux-audit-bot tenant read/write"
