@@ -346,6 +346,18 @@ export type WSMessage =
       runnerRunawayReason?: "idle_window" | "max_turn_duration";
       runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
       runnerRunawayLastBlockToolName?: string | null;
+    }
+  // #3930 — cross-process JWT revocation discriminator. Emitted when
+  // ws-handler's `tenantFor` catch site sees a RuntimeAuthError with
+  // cause='denied_jti' AND the founder-side `my_revocation_status()`
+  // confirms a deny-list row. Replaces the generic
+  // "Authentication unavailable; retry shortly" toast with a discriminated
+  // message so the founder understands WHY the session ended.
+  // `reason` is the operator-supplied free-text from `denied_jti.reason`.
+  | {
+      type: "revocation_notice";
+      reason: string | null;
+      deniedAt: string | null;
     };
 
 /**

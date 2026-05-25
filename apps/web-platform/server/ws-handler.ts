@@ -10,6 +10,7 @@ import { validateConversationContext } from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   getFreshTenantClient,
+  getMyRevocationStatus,
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { getCurrentRepoUrl } from "@/server/current-repo-url";
@@ -130,9 +131,55 @@ async function tenantFor(
         op: `tenant-mint.${op}`,
         extra: { userId },
       });
+      // #3930 — when the cause is `denied_jti`, emit a discriminated
+      // `revocation_notice` WS frame to the client BEFORE the caller
+      // closes the socket with INTERNAL_ERROR. The client toast surface
+      // then renders the founder-readable reason ("Your session was
+      // revoked. Reason: <reason>") instead of the generic "Authentication
+      // unavailable; retry shortly". Fire-and-forget — if
+      // `getMyRevocationStatus` fails or returns null, the caller still
+      // closes the socket the same way; this is a UX upgrade, not a
+      // gate. Service-role probe is impossible here (auth.uid() would be
+      // NULL); we call via the per-user tenant client which carries the
+      // founder's JWT (the very JWT whose jti is now denied — but
+      // `my_revocation_status()` joins on `founder_id = auth.uid()`,
+      // not on the JWT's jti, so the row lookup succeeds even when the
+      // jti is denied).
+      if (err.cause === "denied_jti") {
+        void emitRevocationNotice(userId);
+      }
       return null;
     }
     throw err;
+  }
+}
+
+/**
+ * Best-effort emit of a `revocation_notice` WS frame. Wrapped so the
+ * sync `tenantFor` doesn't await an extra RPC on its hot path; the
+ * caller (`tenantFor`) returns null immediately and the close-socket
+ * branch fires in the same microtask. The 5-10 ms RPC round-trip
+ * happens BEFORE the WS_CLOSE frame because the WebSocket send queue
+ * is FIFO and the `revocation_notice` frame is enqueued before any
+ * subsequent INTERNAL_ERROR close.
+ *
+ * Fail-open: if the RPC fails (404, network, RLS-deny because the
+ * RESTRICTIVE policy applies to my_revocation_status too — which it
+ * doesn't, because the RPC is SECURITY DEFINER and bypasses RLS),
+ * we silently skip the emit. The mirror is already handled inside
+ * `getMyRevocationStatus`.
+ */
+async function emitRevocationNotice(userId: string): Promise<void> {
+  try {
+    const status = await getMyRevocationStatus(userId);
+    if (!status || !status.revoked) return;
+    sendToClient(userId, {
+      type: "revocation_notice",
+      reason: status.reason ?? null,
+      deniedAt: status.deniedAt ?? null,
+    });
+  } catch {
+    // Already mirrored inside getMyRevocationStatus; nothing to add here.
   }
 }
 
@@ -1990,7 +2037,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "subagent_complete":
     case "workflow_started":
     case "workflow_ended":
-    case "error": {
+    case "error":
+    case "revocation_notice": {
       sendToClient(userId, {
         type: "error",
         message: "This message type is server-to-client only.",
