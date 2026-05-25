@@ -99,6 +99,23 @@ resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
   timezone                = "UTC"
 }
 
+# TR9 PR-5 (closes #4376): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-bug-fixer workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+resource "sentry_cron_monitor" "scheduled_bug_fixer" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-bug-fixer"
+  schedule                = { crontab = "0 6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 resource "sentry_cron_monitor" "scheduled_daily_triage" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug

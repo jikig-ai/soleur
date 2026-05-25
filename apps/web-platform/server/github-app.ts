@@ -437,13 +437,29 @@ const TOKEN_SAFETY_MARGIN_MS = 5 * 60 * 1000; // Refresh 5 minutes early
 /**
  * Exchange a GitHub App JWT for an installation access token.
  * Tokens are cached in memory and refreshed 5 minutes before expiry.
+ *
+ * @param installationId GitHub App installation id.
+ * @param opts.minRemainingMs Minimum remaining lifetime (ms) the returned
+ *   token MUST have. Callers that spawn long-running children (e.g. the
+ *   cron-bug-fixer's 50-min claude-eval) pass a floor that exceeds their
+ *   wall-clock budget to avoid mid-spawn auth failures when the cache is
+ *   warm with a token whose lifetime is less than the budget remaining
+ *   (TR9 PR-5 security HIGH-1).
  */
 export async function generateInstallationToken(
   installationId: number,
+  opts: { minRemainingMs?: number } = {},
 ): Promise<string> {
+  const minRemainingMs = opts.minRemainingMs ?? TOKEN_SAFETY_MARGIN_MS;
   const cached = tokenCache.get(installationId);
-  if (cached && cached.expiresAt > Date.now() + TOKEN_SAFETY_MARGIN_MS) {
+  if (cached && cached.expiresAt > Date.now() + minRemainingMs) {
     return cached.token;
+  }
+  // Drop a cached-but-too-short-lived token so we always re-mint when the
+  // floor is not met (otherwise the same stale entry would be reconsidered
+  // by re-entrant callers).
+  if (cached) {
+    tokenCache.delete(installationId);
   }
 
   const jwt = createAppJwt();
