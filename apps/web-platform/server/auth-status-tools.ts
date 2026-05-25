@@ -20,6 +20,7 @@
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { getMyRevocationStatus } from "@/lib/supabase/tenant";
+import { sanitizeReason } from "./revocation-emit";
 
 interface BuildAuthStatusToolsOpts {
   /** Captured in closure — prevents cross-user lookups. */
@@ -55,9 +56,18 @@ export function buildAuthStatusTools(opts: BuildAuthStatusToolsOpts) {
       {},
       async () => {
         const status = await getMyRevocationStatus(userId);
-        // `status` is `MyRevocationStatus | null` — JSON-serialize directly
-        // so the wire shape mirrors the helper's typed return value.
-        return textResponse(status);
+        // `status` is `MyRevocationStatus | null` — sanitize the operator-
+        // supplied `reason` at the MCP boundary BEFORE serializing into the
+        // tool result. The value flows into agent prompt context here
+        // (prompt-injection surface) so we strip control chars + cap length
+        // via the shared `sanitizeReason` helper. Defense-in-depth: the
+        // operator IS trusted at write time (service-role-only revoke_jti),
+        // but a pathological reason should not be able to smuggle
+        // directives into the model. See `server/revocation-emit.ts`.
+        const sanitized = status
+          ? { ...status, reason: sanitizeReason(status.reason) }
+          : null;
+        return textResponse(sanitized);
       },
     ),
   ];
