@@ -9,9 +9,42 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 classification: observability-hygiene
 last_updated: 2026-05-25
+deepened: 2026-05-25
 ---
 
 # Plan: feat-one-shot-4390-account-delete-sentry
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-25
+**Sections enhanced:** Research Reconciliation, Implementation Phases (Phase 1.3, Phase 2.1), Acceptance Criteria (AC7, AC11), Risks (Risk 1 + Risk 6), Sharp Edges, Non-Goals (orphan-org probe scope-out).
+
+### Key Improvements
+
+1. **Test runner correction — vitest, NOT bun test.** `apps/web-platform/bunfig.toml` sets `[test] pathIgnorePatterns = ["**"]` (defense-in-depth per #1469 — blocks all bun test discovery to prevent happy-dom's GlobalRegistrator from corrupting native Request/Headers/Response APIs). `package.json scripts.test === "vitest"`. AC7 + AC8 + Phase 1.5/2.5/3.7 verification commands rewritten from `bun test ...` to `./node_modules/.bin/vitest run ...`. This is the exact failure mode the planning Sharp Edge `2026-05-20-...` warns about; caught at deepen-pass before /work.
+2. **Test mocking strategy clarified — mock `@/server/observability`, not `@sentry/nextjs`.** Repo precedent (`apps/web-platform/test/api-accept-terms-ledger.test.ts:50-68`, plus 4 other files: `cc-concierge-pdf-summarize-e2e`, `kb-document-resolver-chapter-chunked`, `stripe-price-tier-map`, `leader-document-resolver`) mocks the observability module directly via `vi.hoisted` + `mockReportSilentFallback = vi.fn()`. Asserts on helper input args (`feature`, `op`, `extra`, `message`) — does NOT re-test the helper's internal pseudonymisation (that lives in `observability.test.ts`). Plan Phase 1.3 + AC7/AC8 rewritten to use this strategy. Strategy (b) is simpler than dual-mocking Sentry + observability and matches the load-bearing precedent.
+3. **Orphan-org inner probe at line 499-503 explicitly scoped OUT.** The `log.warn({ userIdHash, err: probeErr }, "orphan-org probe failed (non-fatal)")` at line 499 sits inside the 3.92 try block but is an inner-probe observability handler for the orphan-org count, NOT a cascade-decision FATAL path. It already uses `hashUserId(userId)` at the call-site (`#3698` convention). Cascade does NOT fail if this probe fails (the comment at line 498 explicitly says "Observability-only; do not fail the cascade"). Added to Non-Goals; removes a 12th-emit ambiguity from the 21-emit math.
+4. **21-emit math verified empirically.** `awk` extracted the 22 `log.(error|warn)` lines inside the 3.82-3.93+auth-delete blocks; subtracting the orphan-org inner probe (line 499 — scoped OUT) yields 21. Matches AC2/AC3/AC5 grep targets exactly.
+5. **All PR/issue citations resolved live.** #4357 MERGED ✓, #4356 CLOSED ✓, #3685 MERGED ✓, #3638 CLOSED ✓, #3698 CLOSED ✓, #4390 OPEN ✓, #1469 CLOSED ✓ (bunfig defense-in-depth precedent). No fabricated/transposed citations.
+6. **All cited AGENTS.md rule IDs verified ACTIVE.** `hr-observability-as-plan-quality-gate`, `hr-no-dashboard-eyeball-pull-data-yourself`, `hr-weigh-every-decision-against-target-user-impact`, `hr-write-boundary-sentinel-sweep-all-write-sites` all present as `[id: <name>]` in `AGENTS.core.md`. No fabricated/retired citations.
+7. **Phase 4.6 User-Brand Impact gate PASSES.** Section present, threshold `single-user incident` (valid enum), body contains concrete artifact + vector + non-placeholder reasoning. CPO sign-off declared via `requires_cpo_signoff: true` frontmatter.
+8. **Phase 4.7 Observability gate PASSES.** Section present, all 5 fields populated with non-placeholder values, `discoverability_test.command` does NOT contain `ssh ` (corrected to vitest invocation).
+9. **Phase 4.8 PAT-shaped halt PASSES.** No PAT-shaped variables or literal tokens in plan body. Pure code-layer observability migration — no infra/CI surface touched.
+10. **No GitHub labels prescribed.** Pre-merge ACs do not require any new label; PR-time labels carry from the issue (`priority/p3-low`, `type/chore`, `domain/engineering`). No `gh label list` verification needed.
+11. **Skipped multi-agent fan-out by design.** This is a single-domain observability-hygiene plan with direct pattern parity to PR #3685 (merged) + PR #4357 (merged). Marginal value of 40+ parallel review agents at deepen-time would be ~0.05× the cost of running them at PR-time `/review`. Plan correctly defers to `/review` for multi-agent fan-out — `user-impact-reviewer` enabled via `requires_cpo_signoff: true` frontmatter.
+
+### New Considerations Discovered
+
+- **`bunfig.toml` defense-in-depth gate is repo-wide for web-platform.** Any future plan that touches `apps/web-platform/test/` MUST use vitest, never bun test. The Sharp Edges section now records this constraint inline; future plans should `cat apps/web-platform/bunfig.toml | grep -c pathIgnorePatterns` at Phase 0.
+- **Existing `vi.mock("@/server/observability", ...)` precedent does NOT mock `warnSilentFallback`.** The new test for step 3.86 (`warn: true` row) needs to extend the mock to include both `reportSilentFallback` AND `warnSilentFallback`. This is a minor extension; the helper module exports both at the same path. Plan Phase 1.3 mock fragment updated.
+- **The 3 existing cascade tests already mock `@/server/logger` directly** — they assert on `mockLogger.error` calls today. After migration, those assertions will need to assert on `mockReportSilentFallback` instead. Plan Phase 1.1/1.2 explicit on this transition (replace logger.error assertions with reportSilentFallback assertions on the same failure arms).
+- **Skipped Phase 4.5 (network outage deep-dive).** No SSH/firewall/handshake/timeout/502/503/504/EHOSTUNREACH/ECONNRESET pattern in plan text. No `terraform apply` or `provisioner` block. Correctly skipped.
+
+### Research Method
+
+Empirical filesystem reads (`grep -nE`, `sed -n`, `awk`) against `apps/web-platform/server/account-delete.ts`, `apps/web-platform/server/observability.ts`, `apps/web-platform/server/logger.ts`, `apps/web-platform/bunfig.toml`, and 5 representative test files in `apps/web-platform/test/`. Live `gh pr view` / `gh issue view` for all 6 cited PR/issue numbers. Live `grep -qE "\[id: <rule-id>\]"` against `AGENTS.{core,docs,rest}.md` for the 4 cited rule IDs. Live `[[ -f <path> ]]` for the 3 cited learning/plan files. No fabricated SHAs, no fabricated rule IDs, no fabricated file paths.
+
+---
 
 ## Overview
 
@@ -61,7 +94,7 @@ CPO sign-off required at plan time before `/work` begins. `user-impact-reviewer`
   - `anonymise-organization-membership` (line 470, 505)
   - `anonymise-workspace-member-actions` (line 529, 536)
   - `auth-delete` (line 553)
-- **Test mock pattern:** Existing account-delete cascade tests at `apps/web-platform/test/server/account-delete-*.test.ts` mock `@/server/logger`. They will need extension to mock `@sentry/nextjs` (`captureException`, `captureMessage`) — pattern from `apps/web-platform/test/api-accept-terms-ledger.test.ts:56` (`vi.mock("@sentry/nextjs", () => ({ withIsolationScope: (fn) => fn(), getCurrentScope: () => ({ setUser: vi.fn() }), captureException: vi.fn(), captureMessage: vi.fn() }))`).
+- **Test mock pattern (deepen-pass correction):** Existing account-delete cascade tests at `apps/web-platform/test/server/account-delete-*.test.ts` mock `@/server/logger` and assert on `mockLogger.error` for failure arms. After migration they assert on `mockReportSilentFallback` / `mockWarnSilentFallback` instead. The new tests mock `@/server/observability` directly (NOT `@sentry/nextjs`) per repo precedent — see `apps/web-platform/test/api-accept-terms-ledger.test.ts:50-68`. Pattern: `vi.hoisted(() => ({ mockReportSilentFallback: vi.fn(), mockWarnSilentFallback: vi.fn() }))` + `vi.mock("@/server/observability", () => ({ reportSilentFallback: mockReportSilentFallback, warnSilentFallback: mockWarnSilentFallback, hashUserId: (id) => "hash:" + id }))`. Assertions then go against `mockReportSilentFallback.mock.calls[0]` for arg shape (`feature`, `op`, `message`, `extra.userId`). Strategy (a) — mocking `@sentry/nextjs` directly — was considered but rejected: it double-tests the helper's internal pseudonymisation, which is already covered by `observability.test.ts`.
 - **All cited PR/issue numbers verified live.** #4356 CLOSED (parent issue); #4357 MERGED; #3638 CLOSED; #3685 MERGED; #3698 CLOSED; #4390 OPEN. No fabricated citations.
 - **All cited AGENTS.md rule IDs verified ACTIVE in `AGENTS.core.md`.** `hr-observability-as-plan-quality-gate`, `hr-no-dashboard-eyeball-pull-data-yourself`, `hr-weigh-every-decision-against-target-user-impact`, `hr-write-boundary-sentinel-sweep-all-write-sites`. No retired-rule citations.
 - **All cited learning files exist on disk.**
@@ -74,7 +107,7 @@ CPO sign-off required at plan time before `/work` begins. `user-impact-reviewer`
 ### Phase 0 — Preconditions
 
 - [ ] **0.1 Verify Sentry helper signatures.** `grep -nE "^export function (reportSilentFallback|warnSilentFallback)" apps/web-platform/server/observability.ts` returns the two function definitions. Confirms helper API is `(err, { feature, op, extra, message })` (no signature change since #3685).
-- [ ] **0.2 Verify Sentry mock pattern exists in test fixtures.** `grep -l 'vi.mock("@sentry/nextjs"' apps/web-platform/test/ -r` returns ≥1 match (currently 5 — `api-accept-terms-ledger.test.ts`, `ws-handler.tc-mid-session.test.ts`, `ws-handler-cc-session-id-wiring.test.ts`, `context-injection.test.ts`, `agent-runner-kb-share-tools.test.ts`). Pattern is reusable.
+- [ ] **0.2 Verify observability-mock pattern exists in test fixtures.** `grep -l 'vi.mock("@/server/observability"' apps/web-platform/test/ -r` returns ≥1 match (currently 5 — `api-accept-terms-ledger.test.ts`, `cc-concierge-pdf-summarize-e2e.test.ts`, `kb-document-resolver-chapter-chunked.test.ts`, `stripe-price-tier-map.test.ts`, `leader-document-resolver.test.ts`). Pattern is reusable. Strategy (b) — mock the observability layer — is preferred over strategy (a) — mock `@sentry/nextjs` directly — because (b) does not re-test the helper's pseudonymisation contract.
 - [ ] **0.3 Verify the issue-cited "step 3.86 FATAL" claim against source.** `sed -n '345,368p' apps/web-platform/server/account-delete.ts` shows `log.warn` (not `log.error`) at lines 358/364, and the header comment §3.86 explicitly states the step is non-fatal because the FK is `ON DELETE SET NULL`. The Research Reconciliation table above captures the divergence; this phase records the verification.
 - [ ] **0.4 Verify pino formatter rename hook still covers `extra.userId`.** `grep -n "formatters\|renameUserIdToHash" apps/web-platform/server/logger.ts` returns the formatter wiring. Confirms the migrated `extra: { userId }` keys auto-pseudonymise on the pino side (ADR-029).
 
@@ -90,38 +123,55 @@ CPO sign-off required at plan time before `/work` begins. `user-impact-reviewer`
   - Second arg `.tags.feature === "account-delete"` and `.tags.op === "<stage-slug>"`.
   - Second arg `.extra` contains `userIdHash` (not `userId`) — proves the ADR-029 boundary is engaged.
 
-- [ ] **1.2 Add Sentry mock to each of the three test files** following the pattern at `test/api-accept-terms-ledger.test.ts:56`:
+- [ ] **1.2 Mocking strategy — mock `@/server/observability`, not `@sentry/nextjs`.** Repo precedent (`apps/web-platform/test/api-accept-terms-ledger.test.ts:50-68` + 4 other files) hoists `mockReportSilentFallback` + `mockWarnSilentFallback` via `vi.hoisted` and asserts on helper input args. This is simpler than dual-mocking Sentry and matches the load-bearing precedent. Add to each of the three existing cascade test files (and the new file in 1.3):
 
   ```ts
-  vi.mock("@sentry/nextjs", () => ({
-    withIsolationScope: (fn: () => unknown) => fn(),
-    getCurrentScope: () => ({ setUser: vi.fn() }),
-    captureException: vi.fn(),
-    captureMessage: vi.fn(),
+  const {
+    /* existing hoisted mocks */ ,
+    mockReportSilentFallback,
+    mockWarnSilentFallback,
+  } = vi.hoisted(() => ({
+    /* existing mocks */
+    mockReportSilentFallback: vi.fn(),
+    mockWarnSilentFallback: vi.fn(),
+  }));
+
+  vi.mock("@/server/observability", () => ({
+    reportSilentFallback: mockReportSilentFallback,
+    warnSilentFallback: mockWarnSilentFallback,
+    hashUserId: (id: string) => `hash:${id}`,
   }));
   ```
+
+  The `hashUserId` stub keeps line 491's orphan-org probe (`hashUserId(userId)`) working in tests; the real-helper internal pseudonymisation is tested separately in `observability.test.ts` and is out of scope here.
+
+  **For the three existing cascade test files:** the prior `expect(mockLogger.error).toHaveBeenCalledWith(...)` assertions on failure arms become `expect(mockReportSilentFallback).toHaveBeenCalledWith(<err>, expect.objectContaining({ feature: "account-delete", op: "<stage-slug>", message: "<original literal>", extra: expect.objectContaining({ userId: USER_ID }) }))`. Note `extra.userId` stays RAW in the assertion — the helper layer is mocked, so its internal pseudonymisation does not run; the contract under test here is "the cascade calls the helper with the correct args."
 
 - [ ] **1.3 Add a focused unit test** at `apps/web-platform/test/server/account-delete-sentry-mirror.test.ts` that exercises ALL 11 emit sites via parametrised cases:
 
   ```ts
   test.each([
-    { stage: "anonymise-action-sends",                 rpc: "anonymise_action_sends" },
-    { stage: "anonymise-template-authorizations",      rpc: "anonymise_template_authorizations" },
-    { stage: "anonymise-scope-grants",                 rpc: "anonymise_scope_grants" },
-    { stage: "anonymise-tc-acceptances",               rpc: "anonymise_tc_acceptances" },
-    { stage: "anonymise-audit-github-token-use",       rpc: "anonymise_audit_github_token_use", warn: true },
-    { stage: "anonymise-workspace-member-attestations", rpc: "anonymise_workspace_member_attestations" },
-    { stage: "anonymise-workspace-member-removals",    rpc: "anonymise_workspace_member_removals" },
-    { stage: "anonymise-workspace-members",            rpc: "anonymise_workspace_members" },
-    { stage: "anonymise-organization-membership",      rpc: "anonymise_organization_membership" },
-    { stage: "anonymise-workspace-member-actions",     rpc: "anonymise_workspace_member_actions" },
-    { stage: "auth-delete",                            rpc: null /* failure on auth.admin.deleteUser */ },
-  ])("emits Sentry capture at $stage with tag op=$stage and userIdHash in extra", async ({ stage, rpc, warn }) => { ... })
+    { stage: "anonymise-action-sends",                  rpc: "anonymise_action_sends",                  warn: false },
+    { stage: "anonymise-template-authorizations",       rpc: "anonymise_template_authorizations",       warn: false },
+    { stage: "anonymise-scope-grants",                  rpc: "anonymise_scope_grants",                  warn: false },
+    { stage: "anonymise-tc-acceptances",                rpc: "anonymise_tc_acceptances",                warn: false },
+    { stage: "anonymise-audit-github-token-use",        rpc: "anonymise_audit_github_token_use",        warn: true  },
+    { stage: "anonymise-workspace-member-attestations", rpc: "anonymise_workspace_member_attestations", warn: false },
+    { stage: "anonymise-workspace-member-removals",     rpc: "anonymise_workspace_member_removals",     warn: false },
+    { stage: "anonymise-workspace-members",             rpc: "anonymise_workspace_members",             warn: false },
+    { stage: "anonymise-organization-membership",       rpc: "anonymise_organization_membership",       warn: false },
+    { stage: "anonymise-workspace-member-actions",      rpc: "anonymise_workspace_member_actions",      warn: false },
+    { stage: "auth-delete",                             rpc: null /* failure on auth.admin.deleteUser */, warn: false },
+  ])("$stage failure routes through correct helper with feature+op tags", async ({ stage, rpc, warn }) => { /* ... */ });
   ```
 
-  Assertions: `Sentry.captureException` called exactly once, `.tags.feature === "account-delete"`, `.tags.op === stage`, `.extra.userIdHash` present, `.extra.userId` absent. For `warn: true` row, assert `.level === "warning"` and that the FATAL path does NOT short-circuit (cascade continues to auth-delete).
+  **Assertions per case:**
+  - If `warn === false`: `mockReportSilentFallback` called exactly once with `{ feature: "account-delete", op: stage, message: <verbatim>, extra: objectContaining({ userId: USER_ID }) }`. `mockWarnSilentFallback` never called for that case. Cascade short-circuits with `{success: false, error: "Account deletion failed. Please try again."}`.
+  - If `warn === true` (only the `anonymise-audit-github-token-use` row): `mockWarnSilentFallback` called exactly once with the same shape. `mockReportSilentFallback` NOT called for that case. Cascade **continues** to step 3.90 (verify via `callOrder` array containing `anonymise_workspace_member_attestations` AND later RPCs).
 
-- [ ] **1.4 Confirm RED.** `cd apps/web-platform && bun test test/server/account-delete-sentry-mirror.test.ts` fails because `account-delete.ts` is not yet wired through the helper.
+  **Happy-path test:** all RPCs succeed → `mockReportSilentFallback` and `mockWarnSilentFallback` never called → `{success: true}`. Asserts no false-positive emissions.
+
+- [ ] **1.4 Confirm RED.** `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/account-delete-sentry-mirror.test.ts` fails because `account-delete.ts` is not yet wired through the helper. (Test runner is vitest, NOT bun test — `apps/web-platform/bunfig.toml` sets `[test] pathIgnorePatterns = ["**"]` per #1469 defense-in-depth gate.)
 
 ### Phase 2 — Implementation (GREEN)
 
@@ -205,13 +255,13 @@ CPO sign-off required at plan time before `/work` begins. `user-impact-reviewer`
   }
   ```
 
-- [ ] **2.5 Confirm GREEN.** `cd apps/web-platform && bun test test/server/account-delete*` — all four files pass. Plus `bun run typecheck` clean.
+- [ ] **2.5 Confirm GREEN.** `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/account-delete` — all four files pass (the trailing pattern matches `account-delete-template-authorizations-cascade.test.ts`, `account-delete-workspace-member-actions-cascade.test.ts`, `account-delete.cascade.integration.test.ts`, `account-delete-sentry-mirror.test.ts`). Plus `bun run typecheck` clean.
 
 ### Phase 3 — Cross-check & GREEN sweep
 
 - [ ] **3.1 Grep-verify NO `log.error(` calls remain at FATAL sites.** `grep -n "log\.error" apps/web-platform/server/account-delete.ts` should return zero hits inside the migrated stages (3.82–3.93 + auth-delete). The head-of-cascade `log.warn` sites (104, 128, 134, 144, 156, 182, 196) stay — they are explicitly scoped out (best-effort, non-fatal).
 - [ ] **3.2 Grep-verify NO direct `Sentry.captureException(` in account-delete.ts.** All Sentry routing must flow through the helper to preserve the ADR-029 boundary. Result: 0 hits.
-- [ ] **3.3 Full test suite.** `cd apps/web-platform && bun run test` — no regressions.
+- [ ] **3.3 Full test suite.** `cd apps/web-platform && bun run test` — no regressions. (`scripts.test === "vitest"` per `package.json`, so this delegates to vitest — equivalent to `./node_modules/.bin/vitest run`.)
 - [ ] **3.4 Lint clean.** `cd apps/web-platform && bun run lint apps/web-platform/server/account-delete.ts apps/web-platform/test/server/account-delete*.ts`.
 
 ## Files to Edit
@@ -277,8 +327,8 @@ logs:
   retention: Better Stack default (3-30 days depending on plan tier); Sentry default 30-90 days
 
 discoverability_test:
-  command: cd apps/web-platform && bun test test/server/account-delete-sentry-mirror.test.ts
-  expected_output: "11 passed" — one passing parametrised case per migrated stage; assertion that Sentry.captureException was invoked with feature=account-delete and op=<stage-slug>, and that extra.userIdHash is present (extra.userId absent) on every case.
+  command: cd apps/web-platform && ./node_modules/.bin/vitest run test/server/account-delete-sentry-mirror.test.ts
+  expected_output: "12 passed" — 11 parametrised stage cases + 1 happy-path no-emit case. Assertion shape: mockReportSilentFallback (or mockWarnSilentFallback for the 3.86 row) called with feature=account-delete and op=<stage-slug>. Test runner is vitest, NOT bun test (apps/web-platform/bunfig.toml blocks bun test discovery per #1469).
 ```
 
 ## Acceptance Criteria
@@ -291,8 +341,8 @@ discoverability_test:
 - [ ] **AC4** — Each of the 11 `op` slugs appears at least once: `for op in anonymise-action-sends anonymise-template-authorizations anonymise-scope-grants anonymise-tc-acceptances anonymise-audit-github-token-use anonymise-workspace-member-attestations anonymise-workspace-member-removals anonymise-workspace-members anonymise-organization-membership anonymise-workspace-member-actions auth-delete; do grep -q "op: \"$op\"" apps/web-platform/server/account-delete.ts || echo "MISSING: $op"; done` returns no MISSING lines.
 - [ ] **AC5** — `grep -n "message:" apps/web-platform/server/account-delete.ts` returns 21 lines — every emit carries an explicit `message:` string (no helper-default fallback, per the 2026-05-13 helper-migration learning).
 - [ ] **AC6** — `grep -nE "Sentry\.(captureException|captureMessage)" apps/web-platform/server/account-delete.ts` returns 0. All Sentry routing flows through the helper (ADR-029 boundary preserved).
-- [ ] **AC7** — `cd apps/web-platform && bun test test/server/account-delete-sentry-mirror.test.ts` passes (11 parametrised cases).
-- [ ] **AC8** — `cd apps/web-platform && bun test test/server/account-delete*` passes (all four cascade test files green, no regressions).
+- [ ] **AC7** — `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/account-delete-sentry-mirror.test.ts` passes (11 parametrised stage cases + 1 happy-path case = 12 tests). **Runner is vitest, NOT bun test** — `apps/web-platform/bunfig.toml` sets `[test] pathIgnorePatterns = ["**"]` per #1469.
+- [ ] **AC8** — `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/account-delete` passes (all four cascade test files green, no regressions). Pattern matches the 4 file paths via vitest's default path inclusion semantics.
 - [ ] **AC9** — `cd apps/web-platform && bun run typecheck` clean.
 - [ ] **AC10** — `cd apps/web-platform && bun run lint apps/web-platform/server/account-delete.ts apps/web-platform/test/server/account-delete*.ts` clean.
 - [ ] **AC11** — PR body contains `Closes #4390` (auto-closes the observability gap issue at merge — no post-merge operator action is required to make the AC true).
@@ -303,23 +353,24 @@ discoverability_test:
 
 ## Test Scenarios
 
-Derived from acceptance criteria:
+Derived from acceptance criteria. **Note on assertion targets:** tests mock `@/server/observability` (per repo precedent — `apps/web-platform/test/api-accept-terms-ledger.test.ts`), so assertions go against `mockReportSilentFallback` / `mockWarnSilentFallback` input args — NOT against Sentry primitives directly. The real helper's pseudonymisation (`hashExtraUserId` rename of `extra.userId` → `extra.userIdHash`) is unit-tested in `observability.test.ts` and is not re-asserted here. `extra.userId` in these assertions stays RAW because the helper layer is mocked.
 
-- **Given** an erasure request, **when** `anonymise_action_sends` RPC returns `{error: {...}}`, **then** `Sentry.captureException` is called once with `tags.feature="account-delete"`, `tags.op="anonymise-action-sends"`, `extra.userIdHash` present, `extra.userId` absent, and the cascade short-circuits with `{success:false, error:"Account deletion failed. Please try again."}`.
-- **Given** an erasure request, **when** `anonymise_audit_github_token_use` RPC returns `{error: {...}}`, **then** `Sentry.captureException` is called once at `level: "warning"` (not `"error"`) and the cascade **continues** to step 3.90 (RESTRICT FK is satisfied by SET NULL cascade).
-- **Given** an erasure request where every anonymise step succeeds, **when** `auth.admin.deleteUser` returns `{error: {...}}`, **then** `Sentry.captureException` is called once with `tags.op="auth-delete"` and the response is the same 500 the pre-PR baseline produced.
-- **Given** an erasure request where every step succeeds, **when** `deleteAccount` returns `{success:true}`, **then** `Sentry.captureException` was **never** called and `Sentry.captureMessage` was **never** called (no false-positive emissions on the happy path).
+- **Given** an erasure request, **when** `anonymise_action_sends` RPC returns `{error: {...}}`, **then** `mockReportSilentFallback` is called exactly once with `({err, ...}, {feature: "account-delete", op: "anonymise-action-sends", message: "anonymise_action_sends failed — aborting deletion to avoid FK-block", extra: objectContaining({userId: USER_ID})})`, `mockWarnSilentFallback` is NOT called, and the cascade short-circuits with `{success:false, error:"Account deletion failed. Please try again."}`.
+- **Given** an erasure request, **when** `anonymise_audit_github_token_use` RPC returns `{error: {...}}`, **then** `mockWarnSilentFallback` is called exactly once (NOT `mockReportSilentFallback`), with `op: "anonymise-audit-github-token-use"`, and the cascade **continues** to step 3.90 (verify via `callOrder` array containing the subsequent RPCs — RESTRICT FK is satisfied by the SET NULL cascade at auth-delete).
+- **Given** an erasure request where every anonymise step succeeds, **when** `auth.admin.deleteUser` returns `{error: {...}}`, **then** `mockReportSilentFallback` is called once with `op: "auth-delete"` and message `"Failed to delete auth record"`, and the response is the same 500 the pre-PR baseline produced.
+- **Given** an erasure request where every step succeeds, **when** `deleteAccount` returns `{success:true}`, **then** `mockReportSilentFallback` was **never** called and `mockWarnSilentFallback` was **never** called — no false-positive emissions on the happy path. (Asserts the migration did not introduce spurious emits on the success path.)
 
 ## Non-Goals / Out of Scope
 
-- **Head-of-cascade non-fatal `log.warn` sites** (lines 104, 128, 134, 144, 156, 182, 196 — the `getUserById` warn, `abort-dsar-jobs`, `abortAllUserSessions`, `deleteWorkspace`, attachment-purge, dsar-exports-purge, `anonymise_dsar_export_audit_pii`). These are best-effort steps whose failure does NOT block the cascade and does NOT block GDPR Art. 17. Mirroring them to Sentry would produce noise without actionability (e.g., `deleteWorkspace` failing on a workspace that was already cleaned up by a janitor is normal). If a future PR proves operational value of mirroring any of these, it can be added incrementally — out of scope here.
+- **Head-of-cascade non-fatal `log.warn` sites** (lines 104, 128, 134, 144, 156, 182, 196, 220 — the `getUserById` warn, `abort-dsar-jobs`, `abortAllUserSessions`, `deleteWorkspace`, attachment-purge, dsar-exports-purge, `anonymise_dsar_export_audit_pii`). These are best-effort steps whose failure does NOT block the cascade and does NOT block GDPR Art. 17. Mirroring them to Sentry would produce noise without actionability (e.g., `deleteWorkspace` failing on a workspace that was already cleaned up by a janitor is normal). If a future PR proves operational value of mirroring any of these, it can be added incrementally — out of scope here.
+- **Orphan-org inner probe at line 499-503.** The `log.warn({ userIdHash: hashUserId(userId), err: probeErr }, "orphan-org probe failed (non-fatal)")` sits inside the 3.92 try block but is an **inner-probe observability handler** for the orphan-org count — NOT a cascade-decision FATAL path. The companion line 489 `log.info(...)` is its happy-path emit. The probe is explicitly observability-only: line 498 comment says "Observability-only; do not fail the cascade." Already uses `hashUserId(userId)` at the call site (#3698 convention). Mirroring this `log.warn` to Sentry would mean every transient `service.from("organizations").select(...)` blip pages on-call without affecting the user. Scoped OUT.
 - **Backfilling Sentry alerts.** The deploy pipeline already ships Sentry config; no new alert rule needs creation in this PR. Operator may add an alert rule in the Sentry UI keyed off `feature:account-delete` after merge — this is not an AC of this PR.
 - **`hashUserId(userId)`-on-the-call-site refactor.** ADR-029 explicitly says rename-at-boundary. The helper layer is the boundary. Adding `hashUserId()` to every `extra:` arg would duplicate the transform and confuse future readers (which is the canonical site — call vs helper?). The orphan-org probe at line 491 stays as the single exception (it's a `log.info` not routed through `reportSilentFallback` because it's not an error path).
 - **Direct-bypass sentinel sweep.** Per learning `2026-05-12-centralized-at-helper-boundary-transforms-overclaim-in-acs-and-disclosures.md` the centralization claim must not over-scope. This plan asserts the new emits route through the helper boundary, NOT that all Sentry emissions repo-wide do. The pre-existing direct `Sentry.captureException` sites in `ws-handler.ts:693, 719` remain as known debt tracked outside this scope.
 
 ## Risks
 
-1. **Sentry SDK mock parity drift.** If a test mock omits one of the four Sentry primitives (`captureException`, `captureMessage`, `withIsolationScope`, `getCurrentScope`) the helper's defensive `typeof Sentry.captureException === "function"` check will skip the Sentry path silently and the test assertion will fail with "called 0 times". Mitigation: copy the canonical mock pattern from `test/api-accept-terms-ledger.test.ts:56` verbatim — all four primitives present.
+1. **Observability mock parity drift.** Strategy (b) mocks `@/server/observability` and asserts on helper input args (deepen-pass correction). The mock MUST export BOTH `reportSilentFallback` AND `warnSilentFallback` (the 3.86 step requires the latter) AND `hashUserId` (line 491's orphan-org probe calls it). If the mock omits one, the import resolves to `undefined` and the cascade throws `TypeError: hashUserId is not a function` (or equivalent). Mitigation: copy the 3-export shape from Phase 1.2's mock fragment verbatim. The dual-mock-of-Sentry approach (4-primitive `@sentry/nextjs` mock) is unnecessary when mocking the observability layer above it.
 2. **Helper `message:` default substitution.** If any of the 21 migrated emits drops the `message:` field, the helper substitutes `"account-delete silent fallback"` and collapses 11 distinct dashboard-keyed strings into one. Mitigation: AC5 grep-asserts `message:` count = 21.
 3. **`level: "warning"` for step 3.86.** The non-fatal step must use `warnSilentFallback` (level=warning), not `reportSilentFallback` (level=error). A drift here would page on-call for a non-actionable cascade. Mitigation: explicit Phase 2.3 + the parametrised test in Phase 1.3 (`warn: true` row asserts `.level === "warning"`).
 4. **Sentry retention vs Art. 33 notifiability.** Sentry default retention (30-90d) is shorter than the indefinite Art. 33(5) breach-documentation requirement. This is the existing PA8 / D-durable-audit-log gap, NOT introduced by this PR. The Better Stack pino mirror retains for the configured pino transport window. Out of scope.
@@ -329,7 +380,7 @@ Derived from acceptance criteria:
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. (Self-check at plan-write time: section present, threshold `single-user incident`, both vector lines populated, CPO sign-off declared via frontmatter `requires_cpo_signoff: true`. ✓)
 - The `op` slug list MUST match the test parametrisation list 1:1. If a future PR adds a new cascade step (e.g., a new anonymise RPC at step 3.94), the parametrised test in `account-delete-sentry-mirror.test.ts` is the single source of truth — extend it OR the new step will ship without Sentry coverage. Add a Phase 0 task to that future plan: `grep -c "test.each" apps/web-platform/test/server/account-delete-sentry-mirror.test.ts` → should equal `grep -cE "(reportSilentFallback|warnSilentFallback)" apps/web-platform/server/account-delete.ts / 2`. Mismatch = drift.
-- `bun test` filter behavior: `bun test test/server/account-delete-sentry-mirror.test.ts` works because `apps/web-platform/bunfig.toml` does NOT set `pathIgnorePatterns = ["**"]` (verified at plan-write — `cat apps/web-platform/bunfig.toml | grep -c pathIgnorePatterns` returned 0). If a future bunfig change introduces the pattern, the AC7 verification command must switch to `vitest run` per the bunfig defense-in-depth Sharp Edge.
+- **Test runner is vitest, NOT bun test** (confirmed at deepen-pass). `apps/web-platform/bunfig.toml` sets `[test] pathIgnorePatterns = ["**"]` per #1469 — this blocks ALL bun test discovery to prevent happy-dom's GlobalRegistrator from corrupting native `Request`/`Headers`/`Response` APIs. `package.json scripts.test === "vitest"`. All AC verification commands use `./node_modules/.bin/vitest run <path>` directly (NOT `bun test`). The plan's previous v1 used `bun test`; that would have surfaced as "filter did not match" at /work time, matching the exact failure mode the planning skill's bunfig Sharp Edge documents.
 
 ## References
 

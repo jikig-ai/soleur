@@ -19,11 +19,13 @@ last_updated: 2026-05-25
 
 ## Phase 1 — Tests First (RED)
 
-- 1.1 Extend `apps/web-platform/test/server/account-delete-template-authorizations-cascade.test.ts` with Sentry mock + per-failure-arm assertion.
+Mocking strategy (deepen-pass correction): mock `@/server/observability` to capture helper invocations directly. Hoisted mocks: `mockReportSilentFallback`, `mockWarnSilentFallback`, plus a `hashUserId: (id) => "hash:" + id` stub for the orphan-org probe. Pattern matches `apps/web-platform/test/api-accept-terms-ledger.test.ts:50-68`. Do NOT mock `@sentry/nextjs` directly — that strategy double-asserts the helper's pseudonymisation behavior, which lives in `observability.test.ts`.
+
+- 1.1 Extend `apps/web-platform/test/server/account-delete-template-authorizations-cascade.test.ts` with `vi.mock("@/server/observability", ...)` + per-failure-arm assertion on `mockReportSilentFallback`.
 - 1.2 Extend `apps/web-platform/test/server/account-delete-workspace-member-actions-cascade.test.ts` likewise.
 - 1.3 Extend `apps/web-platform/test/server/account-delete.cascade.integration.test.ts` likewise.
-- 1.4 Add `apps/web-platform/test/server/account-delete-sentry-mirror.test.ts` — parametrised over all 11 stages.
-- 1.5 Confirm RED: `cd apps/web-platform && bun test test/server/account-delete-sentry-mirror.test.ts` fails.
+- 1.4 Add `apps/web-platform/test/server/account-delete-sentry-mirror.test.ts` — `test.each([...])` parametrised over all 11 stages (10 reportSilentFallback + 1 warnSilentFallback for step 3.86) + 1 happy-path case = 12 tests.
+- 1.5 Confirm RED: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/account-delete-sentry-mirror.test.ts` fails. **Test runner is vitest** — `bunfig.toml` blocks `bun test` discovery per #1469.
 
 ## Phase 2 — Implementation (GREEN)
 
@@ -31,7 +33,7 @@ last_updated: 2026-05-25
 - 2.2 Migrate 9 FATAL anonymise steps (3.82, 3.83, 3.84, 3.85, 3.90, 3.905, 3.91, 3.92, 3.93) — 18 emit arms total. Each preserves the original message string verbatim.
 - 2.3 Migrate step 3.86 (`anonymise-audit-github-token-use`) to `warnSilentFallback` — 2 emit arms.
 - 2.4 Migrate the terminal `auth-delete` failure on line 553 to `reportSilentFallback`.
-- 2.5 Confirm GREEN: `cd apps/web-platform && bun test test/server/account-delete*` all pass.
+- 2.5 Confirm GREEN: `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/account-delete` — all four files pass.
 
 ## Phase 3 — Cross-check & sweeps
 

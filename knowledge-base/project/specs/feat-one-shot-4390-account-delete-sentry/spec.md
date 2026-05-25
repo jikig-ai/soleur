@@ -28,9 +28,10 @@ Route every FATAL anonymise step + the terminal `auth-delete` failure path in `a
 
 ## Test Strategy
 
-- Extend three existing cascade tests with `vi.mock("@sentry/nextjs", ...)` and per-failure-arm assertions on `Sentry.captureException` args.
-- New parametrised test `account-delete-sentry-mirror.test.ts` covering all 11 emit stages.
-- Mock parity with `apps/web-platform/test/api-accept-terms-ledger.test.ts:56` pattern (4 primitives mocked).
+- Mock `@/server/observability` (not `@sentry/nextjs`) per repo precedent — assert on helper-input args (`feature`, `op`, `message`, `extra`). The helper's internal pseudonymisation lives in `observability.test.ts` and is not re-asserted here. Pattern: `apps/web-platform/test/api-accept-terms-ledger.test.ts:50-68`.
+- Extend three existing cascade tests with `vi.mock("@/server/observability", { reportSilentFallback, warnSilentFallback, hashUserId })` and per-failure-arm assertions on `mockReportSilentFallback` / `mockWarnSilentFallback`.
+- New parametrised test `account-delete-sentry-mirror.test.ts` covering all 11 emit stages + 1 happy-path case (12 tests total).
+- Test runner: **vitest**, not bun test (`apps/web-platform/bunfig.toml` sets `pathIgnorePatterns = ["**"]` per #1469). All verification commands use `./node_modules/.bin/vitest run <path>`.
 
 ## Risks
 
