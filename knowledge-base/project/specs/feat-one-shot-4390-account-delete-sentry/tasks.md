@@ -38,7 +38,7 @@ Mocking strategy (deepen-pass correction): mock `@/server/observability` to capt
 ## Phase 3 — Cross-check & sweeps
 
 - 3.1 Grep AC1: `grep -nE "log\.(error|warn)" apps/web-platform/server/account-delete.ts | grep -cE "anonymise|auth-delete|Failed to delete auth"` returns 0.
-- 3.2 Grep AC2: `grep -cE "reportSilentFallback|warnSilentFallback" apps/web-platform/server/account-delete.ts` returns 21.
+- 3.2 Grep AC2: `grep -cE '^\s*(report|warn)SilentFallback\(' apps/web-platform/server/account-delete.ts` returns 21 (call-sites only; excludes import line at L6).
 - 3.3 Grep AC3: `grep -cE 'feature: "account-delete"' apps/web-platform/server/account-delete.ts` returns 21.
 - 3.4 Grep AC4: all 11 op slugs present.
 - 3.5 Grep AC5: `grep -cE "^\s*message:" apps/web-platform/server/account-delete.ts` returns 21.

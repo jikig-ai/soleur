@@ -241,7 +241,7 @@ export async function deleteAccount(
       reportSilentFallback(anonAsErr, {
         feature: "account-delete",
         op: "anonymise-action-sends",
-        extra: { userId, err: anonAsErr },
+        extra: { userId },
         message: "anonymise_action_sends failed — aborting deletion to avoid FK-block",
       });
       return { success: false, error: "Account deletion failed. Please try again." };
@@ -276,7 +276,7 @@ export async function deleteAccount(
       reportSilentFallback(anonTaErr, {
         feature: "account-delete",
         op: "anonymise-template-authorizations",
-        extra: { userId, err: anonTaErr },
+        extra: { userId },
         message: "anonymise_template_authorizations failed — aborting deletion to avoid Art. 5(2) attribution break",
       });
       return {
@@ -313,7 +313,7 @@ export async function deleteAccount(
       reportSilentFallback(anonSgErr, {
         feature: "account-delete",
         op: "anonymise-scope-grants",
-        extra: { userId, err: anonSgErr },
+        extra: { userId },
         message: "anonymise_scope_grants failed — aborting deletion to avoid FK-block",
       });
       return { success: false, error: "Account deletion failed. Please try again." };
@@ -343,7 +343,7 @@ export async function deleteAccount(
       reportSilentFallback(anonTcErr, {
         feature: "account-delete",
         op: "anonymise-tc-acceptances",
-        extra: { userId, err: anonTcErr },
+        extra: { userId },
         message: "anonymise_tc_acceptances failed — aborting deletion to avoid FK-block",
       });
       return { success: false, error: "Account deletion failed. Please try again." };
@@ -374,7 +374,7 @@ export async function deleteAccount(
       warnSilentFallback(anonGhErr, {
         feature: "account-delete",
         op: "anonymise-audit-github-token-use",
-        extra: { userId, err: anonGhErr },
+        extra: { userId },
         message: "anonymise_audit_github_token_use failed — relying on ON DELETE SET NULL cascade (non-fatal)",
       });
     }
@@ -405,7 +405,7 @@ export async function deleteAccount(
       reportSilentFallback(anonAttErr, {
         feature: "account-delete",
         op: "anonymise-workspace-member-attestations",
-        extra: { userId, err: anonAttErr },
+        extra: { userId },
         message: "anonymise_workspace_member_attestations failed — aborting deletion",
       });
       return { success: false, error: "Account deletion failed. Please try again." };
@@ -439,7 +439,7 @@ export async function deleteAccount(
       reportSilentFallback(anonRemErr, {
         feature: "account-delete",
         op: "anonymise-workspace-member-removals",
-        extra: { userId, err: anonRemErr },
+        extra: { userId },
         message: "anonymise_workspace_member_removals failed — aborting deletion",
       });
       return { success: false, error: "Account deletion failed. Please try again." };
@@ -469,7 +469,7 @@ export async function deleteAccount(
       reportSilentFallback(anonMemErr, {
         feature: "account-delete",
         op: "anonymise-workspace-members",
-        extra: { userId, err: anonMemErr },
+        extra: { userId },
         message: "anonymise_workspace_members failed — aborting deletion",
       });
       return { success: false, error: "Account deletion failed. Please try again." };
@@ -502,7 +502,7 @@ export async function deleteAccount(
       reportSilentFallback(anonOrgErr, {
         feature: "account-delete",
         op: "anonymise-organization-membership",
-        extra: { userId, err: anonOrgErr },
+        extra: { userId },
         message: "anonymise_organization_membership failed — aborting deletion",
       });
       return { success: false, error: "Account deletion failed. Please try again." };
@@ -565,7 +565,7 @@ export async function deleteAccount(
       reportSilentFallback(anonAuditErr, {
         feature: "account-delete",
         op: "anonymise-workspace-member-actions",
-        extra: { userId, err: anonAuditErr },
+        extra: { userId },
         message: "anonymise_workspace_member_actions failed — aborting deletion",
       });
       return { success: false, error: "Account deletion failed. Please try again." };
@@ -593,7 +593,7 @@ export async function deleteAccount(
     reportSilentFallback(deleteAuthError, {
       feature: "account-delete",
       op: "auth-delete",
-      extra: { userId, err: deleteAuthError },
+      extra: { userId },
       message: "Failed to delete auth record",
     });
     return { success: false, error: "Account deletion failed. Please try again." };
