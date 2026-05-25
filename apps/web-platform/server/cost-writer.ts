@@ -248,3 +248,95 @@ export function persistTurnCost(
     cacheCreationInputTokens: usage.cache_creation_input_tokens,
   });
 }
+
+/**
+ * Awaitable variant of `persistTurnCost` for the PR-B (#4379) Anthropic-SDK
+ * leader loop. Resolves AFTER both the `increment_conversation_cost` RPC and
+ * the `write_byok_audit` RPC settle (success or fail). Per AC12, the loop's
+ * `step.run("turn-${n}-claude", ...)` MUST await this BEFORE the step
+ * returns so the next `step.run("turn-${n}-progress-write", ...)` (which
+ * triggers the Supabase Realtime fanout) reads a deterministically-updated
+ * `audit_byok_use` row.
+ *
+ * Failure mode parity with `persistTurnCost`: errors are mirrored to
+ * Sentry via `reportSilentFallback` (same `feature` / `op` tags) and
+ * SWALLOWED — the lease scope must close cleanly even if the cost
+ * write trips a transient DB error, otherwise Inngest would retry the
+ * whole leader turn and re-issue the Anthropic call.
+ */
+export async function persistTurnCostAwaitable(
+  userId: string,
+  conversationId: string,
+  leaderId: string,
+  workspaceId: string,
+  input: TurnCostInput,
+): Promise<void> {
+  const costDelta = Number.isFinite(input.totalCostUsd) ? input.totalCostUsd : 0;
+  const usage = input.usage;
+
+  const incrementResult = supabase().rpc("increment_conversation_cost", {
+    conv_id: conversationId,
+    cost_delta: costDelta,
+    input_delta: usage.input_tokens,
+    output_delta: usage.output_tokens,
+    cache_read_delta: usage.cache_read_input_tokens,
+    cache_creation_delta: usage.cache_creation_input_tokens,
+  });
+
+  const totalTokens =
+    usage.input_tokens +
+    usage.output_tokens +
+    usage.cache_read_input_tokens +
+    usage.cache_creation_input_tokens;
+
+  const auditResult = supabase().rpc("write_byok_audit", {
+    p_invocation_id: randomUUID(),
+    p_founder_id: userId,
+    p_workspace_id: workspaceId,
+    p_agent_role: leaderId,
+    p_token_count: totalTokens,
+    p_unit_cost_cents: Math.round(costDelta * 100),
+  });
+
+  const [incr, audit] = await Promise.all([incrementResult, auditResult]);
+  if (incr.error) {
+    log.error(
+      { err: incr.error, conversationId },
+      "Failed to increment conversation cost",
+    );
+    reportSilentFallback(incr.error, {
+      feature: "agent-cost-tracking",
+      op: "increment",
+      extra: {
+        conversationId,
+        costDelta,
+        inputDelta: usage.input_tokens,
+        outputDelta: usage.output_tokens,
+        cacheReadDelta: usage.cache_read_input_tokens,
+        cacheCreationDelta: usage.cache_creation_input_tokens,
+      },
+    });
+  }
+  if (audit.error) {
+    log.error(
+      { err: audit.error, conversationId, userId },
+      "Failed to write byok audit row",
+    );
+    reportSilentFallback(audit.error, {
+      feature: "agent-cost-tracking",
+      op: "audit-write",
+      extra: { conversationId, totalTokens, costCents: Math.round(costDelta * 100) },
+    });
+  }
+
+  sendToClient(userId, {
+    type: "usage_update",
+    conversationId,
+    workspaceId,
+    totalCostUsd: costDelta,
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    cacheReadInputTokens: usage.cache_read_input_tokens,
+    cacheCreationInputTokens: usage.cache_creation_input_tokens,
+  });
+}
