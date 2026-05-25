@@ -564,6 +564,13 @@ async function loadConversationHistory(
   // we mirror DB errors and return [] on any fetch error per the prior
   // contract.
   const tenant = await getFreshTenantClient(userId);
+  // mig 068 #4318 service-role-sweep AC13: metadata-only today (filename,
+  // content_type, size_bytes). If this transition to a byte-fetch path
+  // (e.g., embed image bytes for LLM replay), insert an explicit
+  // assertReaderMayAccessAttachment(...) call before the fetch — same
+  // shape as the url-route Phase 3 widening (conv lookup → is_workspace_
+  // member → reportSilentFallback on cutover-deny). Tenant-scope alone
+  // is insufficient as defense-in-depth for byte reads.
   const { data, error } = await tenant
     .from("messages")
     .select("role, content, created_at, message_attachments(filename, content_type, size_bytes)")
