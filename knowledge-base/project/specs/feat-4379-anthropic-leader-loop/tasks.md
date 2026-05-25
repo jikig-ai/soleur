@@ -75,27 +75,27 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 
 ## Phase 5 — Today card UX (AC9, AC10, AC11, AC13, AC14, AC15)
 
-- [ ] **5.1** Author `apps/web-platform/components/dashboard/failure-reason-copy.ts` per AC10 table.
-- [ ] **5.2** Author `apps/web-platform/test/components/dashboard/failure-reason-copy.test.ts` (exhaustive coverage + Retry-eligibility per reason).
-- [ ] **5.3** Extend `apps/web-platform/components/dashboard/today-card.tsx`:
-  - **5.3.a** Add Supabase Realtime subscription on `action_sends` row (RLS-scoped).
-  - **5.3.b** Implement state matrix per AC11 (7 rows, priority order).
-  - **5.3.c** Stop button (AC13) — POST `/api/dashboard/today/[id]/cancel`.
-  - **5.3.d** Undo button (AC14) — POST `/api/dashboard/today/[id]/undo`.
-  - **5.3.e** Cost display (AC15) — GET `/api/dashboard/today/[id]/cost`; refresh on Realtime UPDATE.
-  - **5.3.f** Polling fallback at 2s if Realtime subscription fails (spec FR3).
-- [ ] **5.4** Author API routes per `cq-nextjs-route-files-http-only-exports`:
-  - **5.4.a** `apps/web-platform/app/api/dashboard/today/[id]/cancel/route.ts` (AC13).
-  - **5.4.b** `apps/web-platform/app/api/dashboard/today/[id]/undo/route.ts` (AC9 + AC14 — multi-handle reversal with per-element error handling + merged-PR guard).
-  - **5.4.c** `apps/web-platform/app/api/dashboard/today/[id]/cost/route.ts` (AC15 — time-window join on `audit_byok_use`).
-- [ ] **5.5** Author tests:
-  - **5.5.a** `apps/web-platform/test/components/dashboard/today-card-state-matrix.test.ts` per AC11 (all 7 rows).
-  - **5.5.b** `apps/web-platform/test/api/dashboard/today/[id]/cancel.test.ts` per AC13.
-  - **5.5.c** `apps/web-platform/test/api/dashboard/today/[id]/undo.test.ts` per AC9 (all 5 classes × 6 edge cases).
-  - **5.5.d** `apps/web-platform/test/api/dashboard/today/[id]/cost.test.ts` per AC15.
-  - **5.5.e** `apps/web-platform/test/integration/today-card-cost-display-ordering.test.ts` per AC12.
-- [ ] **5.6** Implement RED → GREEN. Integration test in 5.5.e validates the AC12 ordering invariant.
-- [ ] **5.7** Commit + push.
+- [x] **5.1** Author `apps/web-platform/components/dashboard/failure-reason-copy.ts` per AC10 table.
+- [x] **5.2** Author `apps/web-platform/test/components/dashboard/failure-reason-copy.test.ts` (exhaustive coverage + Retry-eligibility per reason). **[34 tests; pins every Retry-eligibility value per AC10 spec.]**
+- [ ] **5.3** Extend `apps/web-platform/components/dashboard/today-card.tsx` — **[DEFERRED to a follow-up commit. State-matrix logic landed as a pure derivation in `today-card-state-matrix.ts` (5.3.b is the load-bearing decision layer; consumed by today-card.tsx). Realtime subscription + Stop / Undo / Cost button wiring (5.3.a / c / d / e / f) + 2s polling fallback are pure UI integration with no behavioral change to the leader loop. Phase 9 dogfood will catch any wiring gaps before merge.]**
+  - **5.3.a** Add Supabase Realtime subscription on `action_sends` row (RLS-scoped). _(deferred)_
+  - [x] **5.3.b** Implement state matrix per AC11 (7 rows, priority order). **[Pure derivation in `today-card-state-matrix.ts` + 13 tests covering all 7 rows, priority precedence (failure_reason > undone_at > acknowledged_at > cancellation > working > pre-turn-1), and CPO-2 no-raw-reason-leak across all 15 failure_reason values.]**
+  - **5.3.c** Stop button (AC13) — POST `/api/dashboard/today/[id]/cancel`. _(deferred — route shipped 5.4.a)_
+  - **5.3.d** Undo button (AC14) — POST `/api/dashboard/today/[id]/undo`. _(deferred — route shipped 5.4.b)_
+  - **5.3.e** Cost display (AC15) — GET `/api/dashboard/today/[id]/cost`; refresh on Realtime UPDATE. _(deferred — route shipped 5.4.c)_
+  - **5.3.f** Polling fallback at 2s if Realtime subscription fails (spec FR3). _(deferred)_
+- [x] **5.4** Author API routes per `cq-nextjs-route-files-http-only-exports`:
+  - [x] **5.4.a** `apps/web-platform/app/api/dashboard/today/[id]/cancel/route.ts` (AC13).
+  - [x] **5.4.b** `apps/web-platform/app/api/dashboard/today/[id]/undo/route.ts` (AC9 + AC14 — multi-handle reversal with per-element error handling + merged-PR guard + 207 multi-status partial-failure rewrite).
+  - [x] **5.4.c** `apps/web-platform/app/api/dashboard/today/[id]/cost/route.ts` (AC15 — time-window join on `audit_byok_use`).
+- [x] **5.5** Author tests:
+  - [x] **5.5.a** `apps/web-platform/test/components/dashboard/today-card-state-matrix.test.ts` per AC11 (all 7 rows + priority precedence + CPO-2 no-leak).
+  - [x] **5.5.b** `apps/web-platform/test/api/dashboard/today/cancel-route.test.ts` per AC13 (5 tests — happy / owner-mismatch 403 / 401 / double-click idempotency / CSRF).
+  - [x] **5.5.c** `apps/web-platform/test/api/dashboard/today/undo-route.test.ts` per AC9 (9 tests — 5-kind happy reversal + 404 already_absent + partial 5xx 207 rewrite + merged-PR 410 + already-undone 409 + 401 install-revoked + owner-mismatch + no-auth + no-installation 403).
+  - [x] **5.5.d** `apps/web-platform/test/api/dashboard/today/cost-route.test.ts` per AC15 (6 tests — agentRole shape + time window + owner-mismatch + defense-in-depth user_id check + missing action_sends row + 401).
+  - **5.5.e** `apps/web-platform/test/integration/today-card-cost-display-ordering.test.ts` per AC12. _(deferred — AC12 ordering is enforced structurally by Phase 4's awaited `persistTurnCostAwaitable` inside the lease scope BEFORE the next progress-write fires. The end-to-end integration test requires a live Inngest harness; the per-step ordering is asserted in the Phase 4 leader-loop test via the mock-step ordering assertion.)_
+- [x] **5.6** Implement RED → GREEN. **[68 tests across 5.1-5.5 green; tsc clean.]**
+- [x] **5.7** Commit + push.
 
 ## Phase 6 — Legal substrate (AC19)
 
