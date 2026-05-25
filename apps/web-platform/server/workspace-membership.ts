@@ -150,7 +150,7 @@ export type UpdateRoleFailureReason =
  * revocation surface (#4307 plan §3.1).
  *
  * Mirrors `removeWorkspaceMember` shape:
- *   1. SQL RPC `update_workspace_member_role` (mig 064) — atomic role
+ *   1. SQL RPC `update_workspace_member_role` (mig 067) — atomic role
  *      change + revocation INSERT + user_session_state clear + actor GUC.
  *   2. `abortAllWorkspaceMemberSessions` — local-process SIGTERM for
  *      any in-flight agent session the user has bound to this workspace.

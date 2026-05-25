@@ -2,12 +2,12 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-// Migration-shape test for 064_workspace_member_revocation_lookup.sql
+// Migration-shape test for 067_workspace_member_revocation_lookup.sql
 // (issue #4307, feat-rls-known-gaps-4233-bundle PR-1). Offline lint —
 // runs without a live database.
 //
 // Enforces the F1 / F2 / F6 invariants from the v2 plan-review:
-//   F1: EXACTLY TWO `CREATE OR REPLACE FUNCTION` bodies in mig 064
+//   F1: EXACTLY TWO `CREATE OR REPLACE FUNCTION` bodies in mig 067
 //       contain `INSERT INTO public.workspace_member_removals` —
 //       `remove_workspace_member` (revocation_reason='removed') AND
 //       `update_workspace_member_role` (revocation_reason='role-changed').
@@ -19,11 +19,11 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/064_workspace_member_revocation_lookup.sql",
+  "../../supabase/migrations/067_workspace_member_revocation_lookup.sql",
 );
 const DOWN_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/064_workspace_member_revocation_lookup.down.sql",
+  "../../supabase/migrations/067_workspace_member_revocation_lookup.down.sql",
 );
 
 const sql = readFileSync(MIGRATION_PATH, "utf8");
@@ -47,7 +47,7 @@ function extractFunctionBodies(src: string): Map<string, string> {
 
 const fnBodies = extractFunctionBodies(executable);
 
-describe("migration 064_workspace_member_revocation_lookup", () => {
+describe("migration 067_workspace_member_revocation_lookup", () => {
   describe("schema additions", () => {
     it("ALTERs workspace_member_removals to ADD revoked_after timestamptz NULL", () => {
       expect(executable).toMatch(

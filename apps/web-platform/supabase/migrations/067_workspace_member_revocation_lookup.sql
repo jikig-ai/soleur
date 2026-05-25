@@ -1,4 +1,4 @@
--- 064_workspace_member_revocation_lookup.sql
+-- 067_workspace_member_revocation_lookup.sql
 -- feat-rls-known-gaps-4233-bundle PR-1 (#4307) — middleware revocation
 -- lookup for workspace-member removal AND role-change. Extends mig 062's
 -- workspace_member_removals WORM ledger with revoked_after + revocation_reason
@@ -16,7 +16,7 @@
 -- file INSERT into public.workspace_member_removals — `remove_workspace_member`
 -- (revocation_reason='removed') and `update_workspace_member_role`
 -- (revocation_reason='role-changed'). Enforced by the migration-shape lint
--- at apps/web-platform/test/supabase-migrations/064-workspace-member-
+-- at apps/web-platform/test/supabase-migrations/067-workspace-member-
 -- revocation-lookup.test.ts. The RPC-only-writer invariant from mig 062
 -- §1 (column-level REVOKE INSERT/UPDATE/DELETE on the table) protects the
 -- new columns at the same boundary as the legacy ones — no WORM trigger

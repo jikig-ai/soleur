@@ -2,7 +2,7 @@
  * Workspace-member revocation lookup — DB-layer integration test
  * (#4307, feat-rls-known-gaps-4233-bundle PR-1, plan §3.2).
  *
- * Verifies the migration-064 surface end-to-end against a real dev
+ * Verifies the migration-067 surface end-to-end against a real dev
  * Supabase project:
  *   - 3.2.1 Positive control + service-role re-read poison check
  *   - 3.2.2 Multi-workspace user-global predicate (F5)

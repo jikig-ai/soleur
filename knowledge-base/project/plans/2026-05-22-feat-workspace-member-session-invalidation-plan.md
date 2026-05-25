@@ -22,7 +22,7 @@ Closes #4307. The only `priority/p2-medium` deferral from #4233's bundle; the lo
 
 PR-1 ships, after 5-agent plan-review consolidation:
 
-1. **Migration 064:** `revoked_after timestamptz` + `revocation_reason text` columns on `workspace_member_removals` (mig 062); `public.check_my_revocation(p_jwt_iat) → (revoked boolean, workspace_id uuid, reason text)` SECURITY DEFINER helper using a **user-global predicate** (any revocation post-iat for the calling user, regardless of `current_organization_id`); `public.update_workspace_member_role(p_workspace_id, p_user_id, p_new_role)` SECURITY DEFINER RPC; existing `public.remove_workspace_member` RPC updated to populate the new columns AND clear `user_session_state.current_organization_id` when it points to the affected workspace. WORM trigger LEFT UNCHANGED (the new columns are protected by the existing PA-19 §(g)(2) "RPC-only writer" invariant).
+1. **Migration 067:** `revoked_after timestamptz` + `revocation_reason text` columns on `workspace_member_removals` (mig 062); `public.check_my_revocation(p_jwt_iat) → (revoked boolean, workspace_id uuid, reason text)` SECURITY DEFINER helper using a **user-global predicate** (any revocation post-iat for the calling user, regardless of `current_organization_id`); `public.update_workspace_member_role(p_workspace_id, p_user_id, p_new_role)` SECURITY DEFINER RPC; existing `public.remove_workspace_member` RPC updated to populate the new columns AND clear `user_session_state.current_organization_id` when it points to the affected workspace. WORM trigger LEFT UNCHANGED (the new columns are protected by the existing PA-19 §(g)(2) "RPC-only writer" invariant).
 2. **Middleware revocation lookup:** new server-side check at `apps/web-platform/middleware.ts` immediately after `await supabase.auth.getUser()`. Per-request DB call to `public.check_my_revocation`. No cache. Fail-closed (503) on DB unavailability. iat extraction inlined with explicit try/catch on `decodeJwtPayloadUnsafe`. On revoked: clear Supabase auth cookies (both `Domain`-less AND `Domain=<NEXT_PUBLIC_COOKIE_DOMAIN>` variants) + 302 to `/auth/signin?revoked={reason}` with `Cache-Control: no-store, no-cache`.
 3. **Signin page query-param handling:** `/auth/signin` page reads `?revoked=removed|role-changed` and renders a banner. No new standalone `/membership-revoked` route — reuses an existing PUBLIC_PATHS entry.
 4. **WS fan-out:** the new `update_workspace_member_role` TS wrapper fan-outs a `MEMBERSHIP_REVOKED` (4012) close to active websockets for the affected user, mirroring the existing `remove_workspace_member` site at `server/workspace-membership.ts:187-192`. WS preamble `reason` field is NOT added in PR-1; existing screen handles both cases identically.
@@ -46,8 +46,8 @@ PR-1 ships, after 5-agent plan-review consolidation:
 
 | Spec claim | Codebase reality | Plan response |
 |---|---|---|
-| FR1.5 references `revocation_reason='role-changed'` | No `revocation_reason` column on `workspace_member_removals` (mig 062:89-109). | ADD COLUMN `revocation_reason text NULL` in mig 064. No WORM extension (cut C3); column protected by RPC-only-writer invariant. |
-| FR1.5 says role-change path writes a revocation row | No `update_workspace_member_role` RPC exists; no TS site UPDATEs `workspace_members.role`. | ADD `update_workspace_member_role` SECURITY DEFINER RPC in mig 064 (operator chose option B). |
+| FR1.5 references `revocation_reason='role-changed'` | No `revocation_reason` column on `workspace_member_removals` (mig 062:89-109). | ADD COLUMN `revocation_reason text NULL` in mig 067. No WORM extension (cut C3); column protected by RPC-only-writer invariant. |
+| FR1.5 says role-change path writes a revocation row | No `update_workspace_member_role` RPC exists; no TS site UPDATEs `workspace_members.role`. | ADD `update_workspace_member_role` SECURITY DEFINER RPC in mig 067 (operator chose option B). |
 | FR1.4 wires a 5-10s cache | No short-TTL cache primitive exists; Vercel multi-isolate → cache non-coherent. | No cache. Per-request `check_my_revocation` call. p99 budget ≤50ms. Fail-closed (503). |
 | FR1.4 redirects to `/membership-revoked` | No middleware redirect exists; existing path is WS-only. | Redirect to `/auth/signin?revoked={reason}` — reuses PUBLIC_PATHS, no new route file, no exempt-list ceremony (cut C4). Existing WS path preserved. |
 | FR3.2 / AC10 names "the flag-set skill" gate | Skill is bypass-trivial; `doppler secrets set` directly skips it. | **Cut C5.** Replaced with Flagsmith prd-segment default hardcoded OFF + operator gesture documented in #4307 close ceremony. The skill remains a workflow-nudge only. |
@@ -65,21 +65,21 @@ PR-1 ships, after 5-agent plan-review consolidation:
 - `apps/web-platform/server/team-workspace-boot.ts` — no change in PR-1 (the Flagsmith default-OFF + breadcrumb at line 7-19 is sufficient).
 - `apps/web-platform/components/dashboard/membership-revoked-screen.tsx` — no change in PR-1 (component used only by the WS-driven in-flight terminal screen; copy is acceptable for both reasons).
 - `knowledge-base/legal/article-30-register.md` — PA-19 §(g)(2) prose amended to "EXACTLY TWO SECURITY DEFINER bodies INSERT" (F1); PA-19 §(g) gains TOM (10) describing the revocation lookup; PA-20 §(b) Purposes amendment for role-change event class.
-- `apps/web-platform/test/supabase-migrations/064-workspace-member-revocation-lookup.test.ts` — new migration-shape lint test (file path under "Files to Create").
+- `apps/web-platform/test/supabase-migrations/067-workspace-member-revocation-lookup.test.ts` — new migration-shape lint test (file path under "Files to Create").
 - **NOT EDITED:** `plugins/soleur/skills/flag-set-role/SKILL.md`, `plugins/soleur/skills/flag-set-role/scripts/flip.sh` (cut C5).
 - **NOT EDITED:** `apps/web-platform/lib/types.ts`, `apps/web-platform/lib/ws-client.ts` (cut C6 — WS preamble `reason` field deferred).
 - **NOT EDITED:** `apps/web-platform/supabase/migrations/062_workspace_member_removals_and_remove_rpc_update.sql` (no WORM trigger rewrite).
 
 ## Files to Create
 
-- `apps/web-platform/supabase/migrations/064_workspace_member_revocation_lookup.sql` — adds 2 columns + backfill; creates `check_my_revocation` + `update_workspace_member_role` SECURITY DEFINER functions; updates `remove_workspace_member` body to populate new columns AND clear `user_session_state`. NO WORM trigger replacement.
-- `apps/web-platform/supabase/migrations/064_workspace_member_revocation_lookup.down.sql` — `DROP FUNCTION check_my_revocation; DROP FUNCTION update_workspace_member_role; ALTER TABLE workspace_member_removals DROP COLUMN revoked_after, DROP COLUMN revocation_reason;`. ~15 lines (slimmed per C7+code-simplicity-7).
+- `apps/web-platform/supabase/migrations/067_workspace_member_revocation_lookup.sql` — adds 2 columns + backfill; creates `check_my_revocation` + `update_workspace_member_role` SECURITY DEFINER functions; updates `remove_workspace_member` body to populate new columns AND clear `user_session_state`. NO WORM trigger replacement.
+- `apps/web-platform/supabase/migrations/067_workspace_member_revocation_lookup.down.sql` — `DROP FUNCTION check_my_revocation; DROP FUNCTION update_workspace_member_role; ALTER TABLE workspace_member_removals DROP COLUMN revoked_after, DROP COLUMN revocation_reason;`. ~15 lines (slimmed per C7+code-simplicity-7).
 - `apps/web-platform/test/server/workspace-member-revocation.tenant-isolation.test.ts` — dual-shape RLS deny + positive control + service-role re-read poison + multi-workspace user-global predicate + clock-skew tolerance + middleware redirect smoke.
-- `apps/web-platform/test/supabase-migrations/064-workspace-member-revocation-lookup.test.ts` — migration-shape lint asserting column types, function signatures, GRANT/REVOKE pattern, search_path pin, AND "exactly two SECURITY DEFINER bodies INSERT into workspace_member_removals" per F1.
+- `apps/web-platform/test/supabase-migrations/067-workspace-member-revocation-lookup.test.ts` — migration-shape lint asserting column types, function signatures, GRANT/REVOKE pattern, search_path pin, AND "exactly two SECURITY DEFINER bodies INSERT into workspace_member_removals" per F1.
 
 ## Implementation Phases (consolidated to 4)
 
-### Phase 1 — Migration 064 + Art. 30 + migration-shape lint
+### Phase 1 — Migration 067 + Art. 30 + migration-shape lint
 
 1.1. **Schema drift + parity check** (precondition):
 ```bash
@@ -95,7 +95,7 @@ ALTER TABLE public.workspace_member_removals
   ADD COLUMN IF NOT EXISTS revoked_after     timestamptz NULL,
   ADD COLUMN IF NOT EXISTS revocation_reason text         NULL;
 
--- Backfill legacy rows so any pre-064 removal also blocks stale JWTs whose
+-- Backfill legacy rows so any pre-067 removal also blocks stale JWTs whose
 -- iat predates the removal. Set revoked_after = removed_at. UPDATE passes
 -- the existing WORM trigger because NEW.id = OLD.id and NEW.removed_at =
 -- OLD.removed_at (trigger only checks those + PII NULL-transition).
@@ -243,15 +243,15 @@ GRANT EXECUTE ON FUNCTION public.update_workspace_member_role(uuid, uuid, text) 
 ```
 
 1.6. **Art. 30 amendments** co-edited in this commit set:
-- **PA-19 §(g)(2)** prose changes from "All inserts route through `remove_workspace_member` SECURITY DEFINER RPC" to: **"All inserts route through EXACTLY TWO SECURITY DEFINER bodies: `remove_workspace_member` (revocation_reason='removed') AND `update_workspace_member_role` (revocation_reason='role-changed'); verified by `grep "INSERT.*workspace_member_removals" apps/web-platform/server/` AND the migration-shape lint at `test/supabase-migrations/064-workspace-member-revocation-lookup.test.ts` enforcing exactly two CREATE OR REPLACE FUNCTION bodies contain that INSERT."** (F1)
+- **PA-19 §(g)(2)** prose changes from "All inserts route through `remove_workspace_member` SECURITY DEFINER RPC" to: **"All inserts route through EXACTLY TWO SECURITY DEFINER bodies: `remove_workspace_member` (revocation_reason='removed') AND `update_workspace_member_role` (revocation_reason='role-changed'); verified by `grep "INSERT.*workspace_member_removals" apps/web-platform/server/` AND the migration-shape lint at `test/supabase-migrations/067-workspace-member-revocation-lookup.test.ts` enforcing exactly two CREATE OR REPLACE FUNCTION bodies contain that INSERT."** (F1)
 - **PA-19 §(g)** appends TOM (10):
   > (10) **Revocation lookup at middleware.** `revoked_after timestamptz` + `revocation_reason text` columns populated by `remove_workspace_member` and `update_workspace_member_role` RPCs at INSERT-time. Middleware at `apps/web-platform/middleware.ts` calls `public.check_my_revocation(jwt_iat)` on every authenticated request (no cache; per-request lookup; fail-closed 503 on DB unavailability). User-global predicate (no `current_organization_id` dependency) closes the multi-workspace cross-leak vector documented in #4307 plan-review F5. Together with the Custom Access Token Hook's natural-refresh re-evaluation (mig 060) AND the same RPCs' atomic clear of `user_session_state.current_organization_id`, this closes the Art. 6 lawful-basis termination window AND the Art. 32 entitlement-change confidentiality TOM gap noted at #4307.
 - **PA-20 §(b)** Purposes: append "Role-change events via `update_workspace_member_role` RPC (#4307 PR-1). The RPC issues `PERFORM set_config('workspace_audit.actor_user_id', auth.uid()::text, true)` at body top so the existing PA-20 §(g)(3) trigger-driven writer captures the actor instead of NULL."
 
-1.7. **Migration-shape lint.** New file `test/supabase-migrations/064-workspace-member-revocation-lookup.test.ts` asserts:
+1.7. **Migration-shape lint.** New file `test/supabase-migrations/067-workspace-member-revocation-lookup.test.ts` asserts:
 - Column types + NULL semantics.
 - `check_my_revocation` + `update_workspace_member_role` function signatures, search_path pin, REVOKE/GRANT pattern.
-- **EXACTLY TWO `CREATE OR REPLACE FUNCTION` bodies in `apps/web-platform/supabase/migrations/064*.sql` contain `INSERT INTO public.workspace_member_removals`** (F1 invariant).
+- **EXACTLY TWO `CREATE OR REPLACE FUNCTION` bodies in `apps/web-platform/supabase/migrations/067_workspace_member_revocation_lookup.sql` contain `INSERT INTO public.workspace_member_removals`** (F1 invariant).
 - `update_workspace_member_role` body contains `PERFORM set_config('workspace_audit.actor_user_id'` (F2).
 - Both RPCs contain the user_session_state UPDATE clearing `current_organization_id` (F6).
 
@@ -361,7 +361,7 @@ export async function updateWorkspaceMemberRole(
 
 4.2. Pre-merge: `tsc --noEmit` passes; `./node_modules/.bin/vitest run` passes for new tests; `bash scripts/test-all.sh` passes; full identity-rbac-reviewer sweep on the diff confirms no R4 finding remains.
 
-4.3. Post-merge: per `hr-menu-option-ack-not-prod-write-auth`, apply mig 064 via `web-platform-release.yml#migrate` (dev → prd ack-gated). `gh issue close 4307 -r completed -c "Closed by PR-N (mig 064 + middleware revocation lookup)."` AFTER prd migration succeeds.
+4.3. Post-merge: per `hr-menu-option-ack-not-prod-write-auth`, apply mig 067 via `web-platform-release.yml#migrate` (dev → prd ack-gated). `gh issue close 4307 -r completed -c "Closed by PR-N (mig 067 + middleware revocation lookup)."` AFTER prd migration succeeds.
 
 4.4. Document in #4307 close ceremony: "Flagsmith `team-workspace-invite` prd-segment may now be flipped ON (cut C5 — no skill-side gate)."
 
@@ -394,8 +394,8 @@ export async function updateWorkspaceMemberRole(
 
 ### Post-merge (operator)
 
-- **AC16.** Apply mig 064 via `web-platform-release.yml#migrate` job (dev first; prd via `hr-menu-option-ack-not-prod-write-auth` ack-gated `supabase db push`). Verify with `gh workflow run web-platform-release.yml --ref main` + `gh run watch`.
-- **AC17.** `gh issue close 4307 -r completed -c "Closed by PR-N (mig 064 + middleware revocation lookup)."` AFTER prd migration succeeds.
+- **AC16.** Apply mig 067 via `web-platform-release.yml#migrate` job (dev first; prd via `hr-menu-option-ack-not-prod-write-auth` ack-gated `supabase db push`). Verify with `gh workflow run web-platform-release.yml --ref main` + `gh run watch`.
+- **AC17.** `gh issue close 4307 -r completed -c "Closed by PR-N (mig 067 + middleware revocation lookup)."` AFTER prd migration succeeds.
 - **AC18.** Re-run identity-rbac-reviewer manually against any open identity-touching PR to confirm R4 info-finding (session invalidation) is silenced.
 - **AC19.** Verify boot breadcrumb at `team-workspace-boot.ts` continues to fire correctly (no regression on existing Sentry tag).
 - **AC20 (new — follow-up filing).** File two follow-up GitHub issues after merge:
@@ -508,7 +508,7 @@ p99 latency budget: 50ms added. p99 RPC concurrency budget: 200/sec sustained (F
 ## Risks & Sharp Edges
 
 1. **Fail-closed 503 cascade on Supabase outage.** Adds one DB call to middleware. Today's `getUser()` failure already bails — topology unchanged. Vercel function timeout (default 10s) bounds the wait. Arch-strategist's quantitative concern (50ms × N concurrent) is addressed by AC14 + Observability rate gauge.
-2. **PostgREST schema cache reload latency.** Per learning `2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md`: after applying mig 064, `NOTIFY pgrst` does NOT propagate through session-mode pooler. Deploy app code AFTER migration propagates; verify with manual RPC probe before deploy.
+2. **PostgREST schema cache reload latency.** Per learning `2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md`: after applying mig 067, `NOTIFY pgrst` does NOT propagate through session-mode pooler. Deploy app code AFTER migration propagates; verify with manual RPC probe before deploy.
 3. **WORM trigger CURRENT_USER trap.** Per learning `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md`: `current_user='service_role'` bypasses fire FALSE under PostgREST. The new RPCs do NOT add such checks (cut C3 means no new trigger logic). Existing PII NULL-transition rule remains in effect.
 4. **pg_cron retention sweep + new columns.** Existing sweep on `removed_at` < now() - 36 months DELETEs rows; new columns are dropped along with the row.
 5. **F6 is best-effort.** `user_session_state` clear is in the same SECURITY DEFINER body as the removal/role-change INSERT. If the UPDATE fails for any reason (FK violation, NOT NULL constraint), the whole transaction rolls back — safe. The follow-up (AC20-1) hardens by validating at JWT mint time.

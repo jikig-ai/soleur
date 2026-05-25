@@ -12,17 +12,17 @@ status: ready-for-work
 
 Derived from the v2 plan after 5-agent plan-review (7 cuts + 8 fixes applied). Tasks numbered by plan phase.
 
-## Phase 1 — Migration 064 + Art. 30 + migration-shape lint
+## Phase 1 — Migration 067 + Art. 30 + migration-shape lint
 
 - 1.1 Run schema-vs-ledger parity probe on dev Supabase against `workspace_member_removals`. Halt if drift.
-- 1.2 Write `apps/web-platform/supabase/migrations/064_workspace_member_revocation_lookup.sql` ADD COLUMNs (revoked_after timestamptz, revocation_reason text) + backfill (`UPDATE ... SET revoked_after = removed_at, revocation_reason = 'removed' WHERE revoked_after IS NULL`) + index `workspace_member_removals_revocation_lookup_idx` on `(removed_user_id, revoked_after)`.
+- 1.2 Write `apps/web-platform/supabase/migrations/067_workspace_member_revocation_lookup.sql` ADD COLUMNs (revoked_after timestamptz, revocation_reason text) + backfill (`UPDATE ... SET revoked_after = removed_at, revocation_reason = 'removed' WHERE revoked_after IS NULL`) + index `workspace_member_removals_revocation_lookup_idx` on `(removed_user_id, revoked_after)`.
 - 1.3 Add `public.check_my_revocation(p_jwt_iat timestamptz)` SECURITY DEFINER returning `(revoked, workspace_id, reason)`. User-global predicate (F5). Pin `search_path = public, pg_temp`. REVOKE all + GRANT EXECUTE to authenticated.
 - 1.4 Update `public.remove_workspace_member` body to populate `revoked_after = now()` + `revocation_reason = 'removed'` on INSERT AND UPDATE `user_session_state.current_organization_id = NULL` when org matches affected workspace AND no remaining same-org membership (F6).
 - 1.5 Create `public.update_workspace_member_role(p_workspace_id, p_user_id, p_new_role)` SECURITY DEFINER. Start body with `PERFORM set_config('workspace_audit.actor_user_id', auth.uid()::text, true)` (F2). Owner-check (42501). UPDATE role. INSERT revocation row (revocation_reason='role-changed'). UPDATE user_session_state if matching org. REVOKE all + GRANT EXECUTE to authenticated.
-- 1.6 Write `064_workspace_member_revocation_lookup.down.sql` — minimal DROP FUNCTION + DROP COLUMN (~15 lines).
+- 1.6 Write `067_workspace_member_revocation_lookup.down.sql` — minimal DROP FUNCTION + DROP COLUMN (~15 lines).
 - 1.7 Amend `knowledge-base/legal/article-30-register.md` PA-19 §(g)(2) prose to "EXACTLY TWO SECURITY DEFINER bodies INSERT" (F1). Append PA-19 §(g) TOM (10) describing revocation lookup. Amend PA-20 §(b) Purposes to cover role-change events via `update_workspace_member_role`.
-- 1.8 Write `apps/web-platform/test/supabase-migrations/064-workspace-member-revocation-lookup.test.ts` migration-shape lint. Assertions: column types; function signatures + search_path pins; GRANT/REVOKE; EXACTLY TWO `CREATE OR REPLACE FUNCTION` bodies contain `INSERT INTO public.workspace_member_removals` (F1); role-change body contains `PERFORM set_config('workspace_audit.actor_user_id'` (F2); both RPCs contain `UPDATE public.user_session_state` (F6).
-- 1.9 Apply mig 064 to dev Supabase locally. Verify PostgREST schema-cache reload via manual RPC probe.
+- 1.8 Write `apps/web-platform/test/supabase-migrations/067-workspace-member-revocation-lookup.test.ts` migration-shape lint. Assertions: column types; function signatures + search_path pins; GRANT/REVOKE; EXACTLY TWO `CREATE OR REPLACE FUNCTION` bodies contain `INSERT INTO public.workspace_member_removals` (F1); role-change body contains `PERFORM set_config('workspace_audit.actor_user_id'` (F2); both RPCs contain `UPDATE public.user_session_state` (F6).
+- 1.9 Apply mig 067 to dev Supabase locally. Verify PostgREST schema-cache reload via manual RPC probe.
 
 ## Phase 2 — Middleware revocation lookup + signin banner
 
@@ -54,7 +54,7 @@ Derived from the v2 plan after 5-agent plan-review (7 cuts + 8 fixes applied). T
 - 4.5 Measure baseline auth-middleware RPS from Vercel + Sentry; record in PR body for AC14.
 - 4.6 Push commits; mark PR #4345 ready (`gh pr ready 4345`). PR body MUST contain `Closes #4307` on its own body line (F3 / AC12).
 - 4.7 Pass review (5-agent /soleur:review at single-user-incident threshold including `user-impact-reviewer`).
-- 4.8 Squash-merge. Apply mig 064 via `web-platform-release.yml#migrate` (dev → prd ack-gated).
+- 4.8 Squash-merge. Apply mig 067 via `web-platform-release.yml#migrate` (dev → prd ack-gated).
 - 4.9 `gh issue close 4307 -r completed -c "Closed by PR #N..."`.
 - 4.10 File follow-up issues per AC20: (1) mig 060 hook-side membership validation; (2) WS preamble `reason` field.
 - 4.11 Run `/soleur:compound` to capture session learnings (e.g., 5-agent panel mechanics, RPC-collapse pattern).
