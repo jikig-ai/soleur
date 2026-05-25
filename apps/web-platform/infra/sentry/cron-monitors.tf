@@ -373,6 +373,26 @@ resource "sentry_cron_monitor" "scheduled_stale_deferred_scope_outs" {
   timezone                = "UTC"
 }
 
+# TR9 PR-11 (Refs #3948): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`.
+# NEW monitor — the GHA scheduled-compound-promote workflow ran on GHA's
+# runner pool with no Sentry check-in. The GHA workflow was deleted in
+# the same commit per TR9 I-13 hygiene.
+# Weekly Sunday 00:00 UTC. Inngest-fired (not GHA) — 30-min margin per
+# the Inngest-fired precedent. Single-miss alert. 10 min mirrors the
+# small-cron cohort (pure-TS handler, no claude-eval spawn).
+resource "sentry_cron_monitor" "scheduled_compound_promote" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-compound-promote"
+  schedule                = { crontab = "0 0 * * 0" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # TR9 PR-11 (#4464): Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-ux-audit.ts`. NEW
 # monitor — the GHA scheduled-ux-audit workflow had no Sentry check-in.

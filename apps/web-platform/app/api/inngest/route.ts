@@ -23,6 +23,7 @@ import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-nati
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
 import { cronCommunityMonitor } from "@/server/inngest/functions/cron-community-monitor";
 import { cronCompetitiveAnalysis } from "@/server/inngest/functions/cron-competitive-analysis";
+import { cronCompoundPromote } from "@/server/inngest/functions/cron-compound-promote";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
@@ -54,6 +55,7 @@ export const { GET, POST, PUT } = serve({
     cronBugFixer,
     cronCommunityMonitor,
     cronCompetitiveAnalysis,
+    cronCompoundPromote,
     cronDailyTriage,
     cronFollowThroughMonitor,
     cronGithubAppDriftGuard,
