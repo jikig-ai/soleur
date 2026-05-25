@@ -128,3 +128,68 @@ mechanical updates (Class C: add `p_workspace_id`; Class D: add
 SELECTs by `workspace_id = fixture.workspaceId`; Class F: drop the
 phantom 3rd arg). No application code changes — the API surface of
 `grant_action_class` is preserved.
+
+## Follow-up: #4356 expanded scope
+
+PR #4343 merged but main's `tenant-integration.yml` stayed broadly red
+because the deepen-pass sweep was scoped too narrowly. Four additional
+failure classes (G–J) tracked in #4356 share the same root cause class
+documented above — NOT NULL constraint added in mig 059 + writer not
+re-issued — but the deepen-pass sweep that gated #4343 used the file
+filter `*.tenant-isolation.test.ts$` and missed:
+
+- **Class G — worm-test seedDraftMessage helper.** Two helper functions
+  (`template-authorizations-worm.test.ts:77`, `action-sends-worm.test.ts:83`)
+  insert into `conversations` + `messages` without `workspace_id`. Same
+  Class D shape as #4343 (add `workspace_id: userId` to the insert
+  payload, solo-canary convention) but the file filter excluded
+  `*-worm.test.ts`. The sweep tightened from `*.tenant-isolation.test.ts$`
+  to `*.test.ts` surfaces both worm files immediately.
+- **Class H — `anonymise_scope_grants` RPC contract pair.** Mig 059
+  added `scope_grants_workspace_id_check` (both columns NULL or both
+  NOT NULL) but mig 050's `anonymise_scope_grants` body still NULLs
+  only `founder_id`. Every Art. 17 erasure call now violates the CHECK
+  with `23514`. Same shape as #4343 Class A (`grant_action_class`):
+  a constraint added; the writer-side function is the contract pair.
+  This is the residual `anonymise_scope_grants` failure that #4249
+  flagged on 2026-05-22 and #4343 left unfixed.
+- **Class I — `workspace_member_actions` table GRANT.** Mig 063_*
+  (added by #4231) explicitly REVOKEs service_role SELECT on the new
+  WORM table; the SAME PR's integration test reads the table directly
+  via service-role for trigger-emission verification. Internal
+  contradiction within mig 063 itself. Sibling WORM tables
+  (`audit_byok_use` mig 037, `audit_github_token_use` mig 036) never
+  REVOKE service_role SELECT — the design-intent outlier was mig 063,
+  not the test. Fix: additive `GRANT SELECT TO service_role` (INSERT/
+  UPDATE/DELETE remain blocked by both the explicit REVOKE in mig 063:80
+  and the WORM triggers).
+- **Class J — `deleteAccount(harry).success = false` cascade.**
+  `account-delete.ts:300` invokes `anonymise_scope_grants` as step 3.82.
+  Class H propagates as `success: false`. Strictly downstream of H —
+  no independent fix; resolved by the Class H migration.
+
+The grep-scope failure mode generalises:
+
+- **Future sweeps:** drop the `*.tenant-isolation.test.ts$` filter
+  entirely. The canonical sweep for "tests that insert into a workspace-
+  keyed table" is `*.test.ts` under `apps/web-platform/test/server/`.
+  Both `*-worm.test.ts` and `*.integration.test.ts` are common siblings
+  that share the defect pattern but were excluded by the narrow filter.
+- **Anonymise RPCs are contract pairs too.** Any `anonymise_*` sibling
+  RPC for a table that gains a NOT NULL or CHECK constraint MUST be
+  enumerated alongside the primary writer. The `anonymise_*` family is
+  reached only by Art. 17 erasure (rare path) — the test surface for
+  this family is narrower than the production writer family, so a
+  CHECK constraint can ship undetected for weeks until a real erasure
+  request hits prd.
+- **Sibling-table design parity.** When adding a new WORM table, audit
+  privileges against existing sibling WORM tables (`audit_byok_use`,
+  `audit_github_token_use`) before issuing an explicit REVOKE. Diverging
+  from the canonical pattern requires same-PR documentation AND
+  same-PR test alignment.
+
+PR #4356 is one migration (064) repairing Class H + Class I, plus per-
+file `workspace_id: user.id` adds for 8 test files (the 2 worm helpers
++ 6 tenant-isolation files #4343's narrow grep also missed:
+`agent-runner`, `api-messages`, `attachment-pipeline`, `cc-dispatcher`,
+`conversation-writer`, `conversations-tools`). Class J is downstream.
