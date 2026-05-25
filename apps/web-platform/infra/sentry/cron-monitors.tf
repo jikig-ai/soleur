@@ -260,11 +260,11 @@ resource "sentry_cron_monitor" "scheduled_strategy_review" {
 # minimal jitter. Single-miss alert (failure_issue_threshold=1): a single
 # missed Monday is noteworthy on a weekly cadence.
 resource "sentry_cron_monitor" "scheduled_roadmap_review" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-roadmap-review"
-  schedule                = { crontab = "0 9 * * 1" }
-  checkin_margin_minutes  = 30
+  organization           = var.sentry_org
+  project                = data.sentry_project.web_platform.slug
+  name                   = "scheduled-roadmap-review"
+  schedule               = { crontab = "0 9 * * 1" }
+  checkin_margin_minutes = 30
   # 55 min mirrors scheduled_bug_fixer (the only other claude-eval-spawning
   # cron — both budget 50 min for MAX_TURN_DURATION_MS plus slack). NOT 10
   # like scheduled_strategy_review, which is pure-TS with a 10-min outer
@@ -335,6 +335,30 @@ resource "sentry_cron_monitor" "scheduled_competitive_analysis" {
   schedule                = { crontab = "0 9 1 * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# PR #4457: Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-stale-deferred-scope-outs.ts`.
+# Migrated from the GHA scheduled-stale-deferred-scope-outs workflow (deleted
+# in the same PR). NEW monitor — no GHA-era predecessor (the GHA workflow
+# shipped in PR #4452 with no Sentry check-in and was migrated before its
+# first natural fire).
+# Daily @ 12:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through,
+# scheduled_bug_fixer cohort). Single-miss alert (failure_issue_threshold=1):
+# a single missed daily fire is noteworthy. 10 min mirrors the small-cron
+# cohort (scheduled_oauth_probe, scheduled_github_app_drift_guard,
+# scheduled_community_monitor) — pure-TS sweep with no claude-eval spawn.
+resource "sentry_cron_monitor" "scheduled_stale_deferred_scope_outs" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-stale-deferred-scope-outs"
+  schedule                = { crontab = "0 12 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
