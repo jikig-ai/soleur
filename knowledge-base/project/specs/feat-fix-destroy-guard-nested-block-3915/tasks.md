@@ -11,49 +11,49 @@ Hierarchical task breakdown derived from `2026-05-25-fix-destroy-guard-nested-bl
 
 ## 1. Preconditions
 
-- [ ] 1.1 Confirm worktree CWD = `.worktrees/feat-fix-destroy-guard-nested-block-3915` (bare repo from `pwd` would clobber working state)
-- [ ] 1.2 Tooling probe: `command -v jq actionlint shellcheck terraform` returns all four
-- [ ] 1.3 Read `.github/workflows/apply-github-infra.yml:234-251` to lift exact byte boundaries of the inline destroy-guard
-- [ ] 1.4 Read `.github/workflows/apply-github-infra.yml:244` for the `[ack-destroy]` regex (must be preserved byte-identical)
-- [ ] 1.5 Confirm `.github/CODEOWNERS:74` still routes `/infra/github/` to `@deruelle` (no edit required)
+- [x] 1.1 Confirm worktree CWD = `.worktrees/feat-fix-destroy-guard-nested-block-3915` (bare repo from `pwd` would clobber working state)
+- [x] 1.2 Tooling probe: `command -v jq actionlint shellcheck terraform` returns all four
+- [x] 1.3 Read `.github/workflows/apply-github-infra.yml:234-251` to lift exact byte boundaries of the inline destroy-guard
+- [x] 1.4 Read `.github/workflows/apply-github-infra.yml:244` for the `[ack-destroy]` regex (must be preserved byte-identical)
+- [x] 1.5 Confirm `.github/CODEOWNERS:74` still routes `/infra/github/` to `@deruelle` (no edit required)
 
 ## 2. RED — failing tests + fixtures
 
-- [ ] 2.1 Create `tests/scripts/fixtures/` directory
-- [ ] 2.2 Synthesize `tfplan-nested-block-removal.json` — `github_repository_ruleset.ci_required`, `actions:["update"]`, `required_check[]` length 15 → 14
-- [ ] 2.3 Synthesize `tfplan-no-changes.json` — empty `resource_changes`
-- [ ] 2.4 Synthesize `tfplan-resource-delete.json` — resource with `actions:["delete"]`, `before` populated, `after:null`
-- [ ] 2.5 Capture `tfplan-real-ruleset-baseline.json`:
-  - [ ] 2.5.1 `cd infra/github && terraform init -backend=false && terraform plan -refresh=false -out=tfplan`
-  - [ ] 2.5.2 `terraform show -json tfplan > /tmp/raw.json`
-  - [ ] 2.5.3 Redact via `jq 'del(.. | .bypass_actors? | .[]?.actor_id?)' /tmp/raw.json > tests/scripts/fixtures/tfplan-real-ruleset-baseline.json`
-  - [ ] 2.5.4 Manual scan: no actor_id integers, no token-shaped strings
-- [ ] 2.6 Create `tests/scripts/test-destroy-guard-counter.sh` with 4 cases (per Test Scenarios table in plan)
-- [ ] 2.7 Run test: must FAIL on missing `tests/scripts/lib/destroy-guard-filter.jq` — this is the RED state
+- [x] 2.1 Create `tests/scripts/fixtures/` directory
+- [x] 2.2 Synthesize `tfplan-nested-block-removal.json` — `github_repository_ruleset.ci_required`, `actions:["update"]`, `required_check[]` length 15 → 14
+- [x] 2.3 Synthesize `tfplan-no-changes.json` — empty `resource_changes`
+- [x] 2.4 Synthesize `tfplan-resource-delete.json` — resource with `actions:["delete"]`, `before` populated, `after:null`
+- [x] 2.5 Capture `tfplan-real-ruleset-baseline.json`:
+  - [x] 2.5.1 `cd infra/github && terraform init -backend=false && terraform plan -refresh=false -out=tfplan`
+  - [x] 2.5.2 `terraform show -json tfplan > /tmp/raw.json`
+  - [x] 2.5.3 Redact via `jq 'del(.. | .bypass_actors? | .[]?.actor_id?)' /tmp/raw.json > tests/scripts/fixtures/tfplan-real-ruleset-baseline.json`
+  - [x] 2.5.4 Manual scan: no actor_id integers, no token-shaped strings
+- [x] 2.6 Create `tests/scripts/test-destroy-guard-counter.sh` with 4 cases (per Test Scenarios table in plan)
+- [x] 2.7 Run test: must FAIL on missing `tests/scripts/lib/destroy-guard-filter.jq` — this is the RED state
 
 ## 3. GREEN — filter + workflow edit
 
-- [ ] 3.1 Create `tests/scripts/lib/destroy-guard-filter.jq` with the path-specific filter from plan §Phase 2.1
+- [x] 3.1 Create `tests/scripts/lib/destroy-guard-filter.jq` with the path-specific filter from plan §Phase 2.1
   - Uses `$side` value-arg (NOT `(before; after)` filter-arg — that's Kieran's P0-1)
   - No recursion (path-specific to `github_repository_ruleset.*.rules[].required_status_checks[].required_check[]`)
   - Returns `{resource_deletes, nested_deletes}` object
-- [ ] 3.2 Edit `.github/workflows/apply-github-infra.yml` "Destroy guard" step with the new body (plan §Phase 2.2)
+- [x] 3.2 Edit `.github/workflows/apply-github-infra.yml` "Destroy guard" step with the new body (plan §Phase 2.2)
   - Preserve `working-directory: ${{ env.INFRA_DIR }}`
   - Preserve `env: HEAD_MSG: ${{ github.event.head_commit.message }}`
   - Use `jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter.jq"`
   - Sum `destroy_count = resource_deletes + nested_deletes` before gate
   - Preserve `[ack-destroy]` regex byte-identical from line 244
   - Preserve `"on github infra"` literal in error message
-- [ ] 3.3 Run `bash tests/scripts/test-destroy-guard-counter.sh` — must exit 0 (GREEN)
-- [ ] 3.4 Run `shellcheck -x tests/scripts/test-destroy-guard-counter.sh` — must exit 0
-- [ ] 3.5 Run `actionlint .github/workflows/apply-github-infra.yml` — must exit 0
+- [x] 3.3 Run `bash tests/scripts/test-destroy-guard-counter.sh` — must exit 0 (GREEN)
+- [x] 3.4 Run `shellcheck -x tests/scripts/test-destroy-guard-counter.sh` — must exit 0
+- [x] 3.5 Run `actionlint .github/workflows/apply-github-infra.yml` — must exit 0
 
 ## 4. Pre-ship sanity
 
-- [ ] 4.1 `git grep -nE 'resource_changes\[\?\]\?.*delete.*length' .github/workflows/apply-github-infra.yml` returns zero matches (AC5 part 1 — old filter gone)
-- [ ] 4.2 `git grep -nE 'destroy_count=\$\(' .github/workflows/apply-github-infra.yml` returns exactly one match (AC5 part 2 — new assignment present)
-- [ ] 4.3 `diff` against pre-edit file confirms `[ack-destroy]` regex byte-identical (AC6)
-- [ ] 4.4 Draft PR body includes `Closes #3915` line + Test Plan section enumerating the 4 AC2 cases
+- [x] 4.1 `git grep -nE 'resource_changes\[\?\]\?.*delete.*length' .github/workflows/apply-github-infra.yml` returns zero matches (AC5 part 1 — old filter gone)
+- [x] 4.2 `git grep -nE 'destroy_count=\$\(' .github/workflows/apply-github-infra.yml` returns exactly one match (AC5 part 2 — new assignment present)
+- [x] 4.3 `diff` against pre-edit file confirms `[ack-destroy]` regex byte-identical (AC6)
+- [x] 4.4 Draft PR body includes `Closes #3915` line + Test Plan section enumerating the 4 AC2 cases
 
 ## 5. Ship
 

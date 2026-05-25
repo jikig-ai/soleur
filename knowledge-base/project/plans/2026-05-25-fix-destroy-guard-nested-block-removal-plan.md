@@ -32,6 +32,8 @@ CODEOWNERS protection on `/infra/github/` is **already present** at `.github/COD
 
 **Brand-survival threshold:** `single-user-incident` — the chain this defends is `silent un-requiring of a required_check → next PR with a broken status-check merges past CI → broken behavior deployed → user-impact`. The #4333 incident already exercised this chain; closed by #4353. CPO sign-off required at plan time per the brainstorm framing carried forward into this plan.
 
+**Residual sibling-workflow gap (carried by AC10 follow-up):** `apply-sentry-infra.yml` and `apply-web-platform-infra.yml` retain the pre-fix resource-only counter until the AC10 follow-up issue lands; a hypothetical `cloudflare_ruleset`-shaped nested-block removal there is still un-gated. This PR scopes only `apply-github-infra.yml` per the plan-review iteration; it does not regress the siblings, but the class is not fully closed.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 The user's original input prescribed two layers and three workflow edits. Reconciliation against the live repo collapses scope:
@@ -45,13 +47,13 @@ The user's original input prescribed two layers and three workflow edits. Reconc
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Widened filter inline in workflow.** `.github/workflows/apply-github-infra.yml` "Destroy guard" step uses the path-specific jq filter (specified in Phase 2). The filter MUST emit `{resource_deletes, nested_deletes}`; the script then sums to `destroy_count = resource_deletes + nested_deletes` before the `[ack-destroy]` gate. Error message preserves the existing `"on github infra"` literal at line 248 (byte-identical phrasing).
-- [ ] **AC2 — Unit tests pass.** `bash tests/scripts/test-destroy-guard-counter.sh` exits 0. Four cases cover: (a) resource-level delete trips guard, (b) nested `required_check` removal on `github_repository_ruleset` trips guard, (c) no-changes plan passes, (d) `HEAD_MSG` containing line-anchored `[ack-destroy]` allows a destructive plan through.
-- [ ] **AC3 — Captured real-CI fixture exists.** `tests/scripts/fixtures/tfplan-real-ruleset-baseline.json` is generated via `terraform plan` against `infra/github/` HEAD, then `terraform show -json tfplan`, redacted (`bypass_actors[].actor_id` and any token fields scrubbed), committed. Test asserts `destroy_count == 0` on this fixture (it's a baseline plan with zero destructive changes).
-- [ ] **AC4 — `shellcheck` passes.** `shellcheck -x tests/scripts/test-destroy-guard-counter.sh` exits 0. The workflow's inline jq filter is also lint-clean (yaml-extracted; verified via `actionlint`).
-- [ ] **AC5 — Inline old filter fully replaced.** `git grep -nE 'resource_changes\[\?\]\?.*delete.*length' .github/workflows/apply-github-infra.yml` returns zero matches. Also verify `git grep -nE 'destroy_count=\$\(' .github/workflows/apply-github-infra.yml` returns exactly one match (the new assignment). Old single-line filter is gone, not commented out.
-- [ ] **AC6 — `[ack-destroy]` regex byte-identical.** The bash regex `(^|$'\n')\[ack-destroy\]($|$'\n')` is preserved character-for-character from `apply-github-infra.yml:244`. Verified via `diff` against the pre-edit file.
-- [ ] **AC7 — `actionlint` passes** on the modified workflow. `actionlint .github/workflows/apply-github-infra.yml` exits 0.
+- [x] **AC1 — Widened filter inline in workflow.** `.github/workflows/apply-github-infra.yml` "Destroy guard" step uses the path-specific jq filter (specified in Phase 2). The filter MUST emit `{resource_deletes, nested_deletes}`; the script then sums to `destroy_count = resource_deletes + nested_deletes` before the `[ack-destroy]` gate. Error message preserves the existing `"on github infra"` literal at line 248 (byte-identical phrasing).
+- [x] **AC2 — Unit tests pass.** `bash tests/scripts/test-destroy-guard-counter.sh` exits 0. Four cases cover: (a) resource-level delete trips guard, (b) nested `required_check` removal on `github_repository_ruleset` trips guard, (c) no-changes plan passes, (d) `HEAD_MSG` containing line-anchored `[ack-destroy]` allows a destructive plan through.
+- [x] **AC3 — Captured real-CI fixture exists.** `tests/scripts/fixtures/tfplan-real-ruleset-baseline.json` is generated via `terraform plan` against `infra/github/` HEAD, then `terraform show -json tfplan`, redacted (`bypass_actors[].actor_id` and any token fields scrubbed), committed. Test asserts `destroy_count == 0` on this fixture (it's a baseline plan with zero destructive changes).
+- [x] **AC4 — `shellcheck` passes.** `shellcheck -x tests/scripts/test-destroy-guard-counter.sh` exits 0. The workflow's inline jq filter is also lint-clean (yaml-extracted; verified via `actionlint`).
+- [x] **AC5 — Inline old filter fully replaced.** `git grep -nE 'resource_changes\[\?\]\?.*delete.*length' .github/workflows/apply-github-infra.yml` returns zero matches. Also verify `git grep -nE 'destroy_count=\$\(' .github/workflows/apply-github-infra.yml` returns exactly one match (the new assignment). Old single-line filter is gone, not commented out.
+- [x] **AC6 — `[ack-destroy]` regex byte-identical.** The bash regex `(^|$'\n')\[ack-destroy\]($|$'\n')` is preserved character-for-character from `apply-github-infra.yml:244`. Verified via `diff` against the pre-edit file.
+- [x] **AC7 — `actionlint` passes** on the modified workflow. `actionlint .github/workflows/apply-github-infra.yml` exits 0.
 
 ### Post-merge (operator / automation)
 
