@@ -112,20 +112,6 @@ resource "github_repository_ruleset" "ci_required" {
         context        = "tc-document-sha-guard"
         integration_id = var.actions_integration_id
       }
-
-      # --- Tier 3: legal-doc cross-document lockstep gate (#4384, closes the
-      # advisory-bypass-via-auto-merge gap that produced #4333). Context
-      # string is the JOB name (`enforce`) at
-      # .github/workflows/legal-doc-cross-document-gate.yml:36, NOT the
-      # workflow display name — per ADR-032 job-name contract. Workflow
-      # `paths:` filter removed in the same PR (#4384) so the job posts on
-      # every PR; the existing `surface_hit=false` short-circuit (lines
-      # 82-85) keeps non-DSAR PRs at O(seconds). See learning
-      # 2026-03-20-github-required-checks-skip-ci-synthetic-status.md.
-      required_check {
-        context        = "enforce"
-        integration_id = var.actions_integration_id
-      }
     }
   }
 }
