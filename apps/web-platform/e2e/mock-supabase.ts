@@ -152,6 +152,22 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         return;
       }
 
+      // ---- RPC endpoints ----
+
+      // #4307 revocation gate: middleware calls this on every authenticated
+      // request and fail-CLOSES with 503 on any error. Return a not-revoked
+      // row so the gate passes for the synthetic e2e user. The RPC's real
+      // SECURITY DEFINER body lives in mig 067_workspace_member_revocation_lookup.
+      if (url.pathname === "/rest/v1/rpc/check_my_revocation") {
+        res.writeHead(200);
+        res.end(
+          JSON.stringify([
+            { revoked: false, workspace_id: null, reason: null },
+          ]),
+        );
+        return;
+      }
+
       // ---- Realtime (WebSocket upgrade attempt — reject gracefully) ----
 
       if (url.pathname.startsWith("/realtime/")) {
