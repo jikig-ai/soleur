@@ -175,6 +175,17 @@ export async function deleteAccount(
   // already nulled by step 3.901). Enumerate via the message_attachments
   // ⨝ messages ⨝ conversations join WHERE conversations.user_id =
   // departing_user. DSAR-exports purge (next try-block) is unchanged.
+  //
+  // ORDERING INVARIANT (mig 068 #4318): this step MUST run BEFORE step
+  // 3.901 (anonymise_departed_user_across_workspaces). The filter
+  // relies on `conversations.user_id` (immutable until auth.users
+  // CASCADE), NOT on `messages.user_id` (which step 3.901 nulls). If
+  // reordered to run AFTER 3.901, the filter still works because
+  // conversations.user_id is unaffected by the cascade — but a future
+  // change that switches the filter to messages.user_id would silently
+  // break. Sequencing both relative to step 3.91 (workspace_members
+  // DELETE) is also required so the user's CASCADE-deletable solo-conv
+  // attachments are still resolvable.
   try {
     const { data: ownedAttachments, error: listErr } = await service
       .from("message_attachments")

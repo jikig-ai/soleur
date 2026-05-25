@@ -4,11 +4,19 @@
 -- the mig 045 single FOR ALL policy and the mig 067 remove_workspace_member
 -- body verbatim. Idempotent (DROP ... IF EXISTS; CREATE OR REPLACE).
 --
--- Down-only invariant: the restored remove_workspace_member body is BYTE-
--- EQUAL to mig 067:117-206. Drift would silently invert AC-FLOW4 guards
--- on rollback. The migration-shape lint asserts equality.
-
-BEGIN;
+-- Down-only invariant: the restored remove_workspace_member body's
+-- executable SQL (whitespace-normalised, comment-stripped) matches
+-- mig 067:117-206. Drift would silently invert AC-FLOW4 guards on
+-- rollback. The migration-shape lint asserts this equivalence.
+--
+-- Transaction wrapping: this body has NO top-level BEGIN/COMMIT — see
+-- the matching note in the up-migration. Recovery semantics: a partial
+-- failure of the down-apply (e.g., DROP FUNCTION fails because a sibling
+-- depends on it) rolls back via psql --single-transaction. Note that
+-- rolling back to mig 045's FOR ALL USING policy re-collapses reads
+-- AND writes under one policy (per security-issues/2026-04-18-rls-for-
+-- all-using-applies-to-writes.md). This is the pre-mig-068 baseline
+-- semantics and is the correct rollback target.
 
 -- 1. Drop the four new storage.objects policies and restore mig 045 FOR ALL.
 DROP POLICY IF EXISTS "Users read own + co-member attachment objects" ON storage.objects;
@@ -119,5 +127,3 @@ GRANT EXECUTE ON FUNCTION public.remove_workspace_member(uuid, uuid)
 DROP FUNCTION IF EXISTS public.anonymise_departed_user_across_workspaces(uuid);
 DROP FUNCTION IF EXISTS public._anonymise_authored_messages_internal(uuid, uuid);
 DROP FUNCTION IF EXISTS public.is_attachment_path_workspace_member(uuid, uuid);
-
-COMMIT;

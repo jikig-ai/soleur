@@ -512,12 +512,14 @@ Lockstep:
 
 **PA-2-vs-mig-068-body drift check (architecture-flagged operationalisation of `2026-05-23-legal-disclosure-prose-must-be-grep-validated-against-actual-migration.md`):** `grep -E 'is_attachment_path_workspace_member|conversations\.workspace_id|\(foldername\)\[2\]' apps/web-platform/supabase/migrations/068_*.sql` returns at least one match per technical claim made in PA-2 §(g)(10). AC10 enforces.
 
-### Phase 7 — Ack-gated apply
+### Phase 7 — Apply
+
+**Plan-vs-workflow reality (corrected from initial plan draft):** `.github/workflows/web-platform-release.yml#migrate` uses `doppler run -c prd -- bash run-migrations.sh` — there is **no dev-stage migration**; the release workflow applies mig 068 directly to prd on push to main with no separate operator ack between merge and apply. The plan's earlier "auto-apply to dev, ack-gated prd" framing did NOT match the workflow shape. Recorded here for downstream readers; the underlying gap (no dev rehearsal stage in the release pipeline) is filed as a separate follow-up against `web-platform-release.yml`.
 
 - Single PR. Squash-merge.
-- Apply mig 068 to dev via `web-platform-release.yml#migrate` (auto on push to main).
-- Apply to prd via explicit ack-gated invocation per `hr-menu-option-ack-not-prod-write-auth`: operator confirms with the full mig 068 SQL text (including `BEGIN; ... COMMIT;` boundaries) quoted in the ack prompt, NOT a menu letter. Ack prompt also surfaces `has_function_privilege` verification queries for the helper + both public RPCs.
-- Post-apply, run the orphan-path audit (OQ5 query) on prd. Non-zero blocks `gh issue close 4318`.
+- On merge: mig 068 auto-applies to prd via `web-platform-release.yml#migrate`.
+- Post-apply verification runs automatically via `web-platform-release.yml#verify-migrations` (executes `run-verify.sh`). A `supabase/verify/068_*.sql` sentinel file (Phase 7.5) asserts the four new policies are present and the four new functions exist.
+- Post-apply, run the orphan-path audit (OQ5 query) on prd. Non-zero opens a `compliance/critical` follow-up (does not retroactively block the merge but blocks `gh issue close 4318`).
 
 ## Files to Edit
 

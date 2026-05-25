@@ -80,15 +80,36 @@ const fnBodies = extractFunctionBodies(executable);
 const policies = extractPolicyClauses(executable);
 
 describe("migration 068_attachments_workspace_shared", () => {
-  describe("AC1(g): transaction boundary", () => {
-    it("body wraps in BEGIN; ... COMMIT;", () => {
-      expect(sql).toMatch(/^\s*(?:--[^\n]*\n)*BEGIN\s*;/m);
-      expect(sql).toMatch(/COMMIT\s*;\s*$/m);
+  describe("AC1(g): transaction wrapping (delegated to migration runner)", () => {
+    // The canonical migration runner pipes the body + ledger INSERT to
+    // psql --single-transaction. An explicit top-level BEGIN/COMMIT in the
+    // body collides with that wrapper: the inner COMMIT prematurely closes
+    // psql's implicit txn, leaving the trailing _schema_migrations INSERT
+    // in autocommit. Partial-failure of that INSERT would leave the DDL
+    // committed but the ledger absent — forcing operator recovery on
+    // retry (CREATE POLICY collisions). Assert ABSENCE here.
+    //
+    // Note: function bodies legitimately use BEGIN/END as plpgsql block
+    // delimiters — those are NOT top-level transaction control. The
+    // assertion below uses ^BEGIN; / ^COMMIT; anchored at line start
+    // outside dollar-quoted bodies, which excludes plpgsql BEGIN keyword.
+
+    function topLevelBeginCommits(src: string): number {
+      // Strip dollar-quoted function bodies before counting top-level
+      // BEGIN;/COMMIT; statements. Match line-anchored BEGIN; / COMMIT;
+      // case-insensitively.
+      const stripped = src.replace(/\$\$[\s\S]*?\$\$/g, "");
+      const beginMatches = stripped.match(/^\s*BEGIN\s*;/gim) ?? [];
+      const commitMatches = stripped.match(/^\s*COMMIT\s*;/gim) ?? [];
+      return beginMatches.length + commitMatches.length;
+    }
+
+    it("body has NO top-level BEGIN; or COMMIT; (delegated to psql --single-transaction)", () => {
+      expect(topLevelBeginCommits(sql)).toBe(0);
     });
 
-    it("down.sql also wraps in BEGIN; ... COMMIT;", () => {
-      expect(downSql).toMatch(/^\s*(?:--[^\n]*\n)*BEGIN\s*;/m);
-      expect(downSql).toMatch(/COMMIT\s*;\s*$/m);
+    it("down.sql also has NO top-level BEGIN; or COMMIT;", () => {
+      expect(topLevelBeginCommits(downSql)).toBe(0);
     });
   });
 

@@ -22,10 +22,20 @@
 --      member" rows is reconstructed via the workspace_member_removals
 --      ledger join. Phase 0 emergent finding E-1 (worklog 2026-05-25).
 --   F2 (cascade ordering): in remove_workspace_member, the internal
---      pseudonymisation call MUST run BEFORE the DELETE FROM workspace_members
---      so is_workspace_member(p_workspace_id, p_user_id) still returns true
---      inside the predicate. The cascade-RPC ordering (account-delete step
---      3.901 before 3.91) enforces the same invariant via the TS pipeline.
+--      pseudonymisation call MUST run BEFORE the DELETE FROM workspace_members.
+--      The predicate inside _anonymise_authored_messages_internal is
+--      `m.user_id = p_departing_user AND m.workspace_id = p_workspace_id
+--      AND EXISTS(message_attachments) AND EXISTS(conversations c WHERE
+--      c.id = m.conversation_id AND c.user_id <> p_departing_user)` — it
+--      does NOT read workspace_members. Ordering is required not because
+--      a membership check would fail, but because step 3.901 of account-
+--      delete.ts (which calls anonymise_departed_user_across_workspaces)
+--      runs BEFORE step 3.91 (anonymise_workspace_members), and the
+--      cascade-RPC must complete before the departing user's auth.users
+--      row is deleted — otherwise messages.user_id ON DELETE CASCADE
+--      cascade-deletes the rows we wanted to preserve. Any future helper
+--      that DOES consult is_workspace_member must also be sequenced before
+--      the DELETE FROM workspace_members within this RPC body.
 --   F3 (write narrowing): the mig 045 FOR ALL policy is split into a widened
 --      SELECT (own OR co-member) and three narrow INSERT/UPDATE/DELETE
 --      policies (own-folder only). FOR ALL USING governs both reads AND
@@ -36,8 +46,16 @@
 --      via the R-9 spike (Phase 0 worklog). The helper resolves correctly
 --      under `SET LOCAL ROLE authenticated; SET LOCAL request.jwt.claims =
 --      '{"sub":"<uuid>"}'` simulated tenant contexts.
-
-BEGIN;
+--
+-- Transaction wrapping: this body has NO top-level BEGIN/COMMIT. The
+-- canonical migration runner (apps/web-platform/scripts/run-migrations.sh)
+-- pipes the body + a trailing INSERT INTO public._schema_migrations to
+-- psql --single-transaction, which wraps the whole stream in an implicit
+-- transaction. An explicit BEGIN here would emit a warning, and an
+-- explicit COMMIT would prematurely close psql's wrapping txn, leaving
+-- the ledger INSERT in autocommit — a partial-failure of that INSERT
+-- (PK collision on retry, etc.) would leave the DDL committed but the
+-- ledger row absent, forcing manual operator recovery.
 
 -- =====================================================================
 -- 1. Helper: derive workspace_id from a conversation-id path segment and
@@ -312,9 +330,13 @@ BEGIN
   SELECT organization_id INTO v_org_id
     FROM public.workspaces WHERE id = p_workspace_id;
 
-  -- mig 068 #4318 — cascade-pseudonymise authored messages-with-attachments
-  -- BEFORE deleting the membership row; the internal helper's predicate
-  -- relies on is_workspace_member(p_workspace_id, p_user_id) = true (F2).
+  -- mig 068 #4318 — cascade-pseudonymise authored messages-with-attachments.
+  -- The internal helper's predicate filters on `conversations.user_id <>
+  -- p_departing_user` (NOT on workspace_members), so positionally this call
+  -- could run after the DELETE below. We sequence it BEFORE the DELETE as
+  -- defense-in-depth: any future helper variant that DOES consult
+  -- is_workspace_member would silently mis-fire if the membership row was
+  -- already gone. See header §F2 for the full rationale.
   v_anon_count := public._anonymise_authored_messages_internal(p_user_id, p_workspace_id);
 
   -- Append WORM revocation row with the new columns populated. The INSERT
@@ -372,5 +394,3 @@ COMMENT ON FUNCTION public.remove_workspace_member(uuid, uuid) IS
   '(mig 068 #4318); (5) INSERT workspace_member_removals WORM row with '
   'revocation_reason=removed (mig 067 #4307); (6) DELETE workspace_members '
   'row; (7) clear user_session_state.current_organization_id (F6).';
-
-COMMIT;

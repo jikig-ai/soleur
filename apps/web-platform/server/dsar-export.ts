@@ -1222,9 +1222,6 @@ type AttachmentEntry =
       sizeBytes: number;
     };
 
-/** @deprecated use AttachmentEntry. Kept for backward-compat in case external callers reference. */
-type AttachmentBinary = Extract<AttachmentEntry, { kind: "included" }>;
-
 async function enumerateChatAttachments(
   expectedUserId: string,
   signal: AbortSignal,
@@ -1350,42 +1347,72 @@ async function enumerateChatAttachments(
   // Each unique storage_path produces a manifest-only entry with the
   // uploader's pseudonym; bytes are NOT downloaded.
   // ---------------------------------------------------------------
+  // Batch the conversation-id IN-list. Postgres' `bind_param` cap and
+  // PostgREST URL-length limits both punish a single unbounded `.in()`.
+  // 500 ids per batch keeps each query plan deterministic without
+  // perceptibly affecting bundle generation time (the dominant cost is
+  // streaming bytes from Storage, not these metadata reads).
+  const CO_UPLOADER_BATCH_SIZE = 500;
+  const seen = new Set<string>();
+  // PostgREST types embedded one-to-one relationships as either an
+  // object or an array (the .select() schema cannot disambiguate
+  // cardinality at compile time). Accept both shapes at runtime.
+  type CoUploaderRow = {
+    storage_path: string | null;
+    filename: string | null;
+    content_type: string | null;
+    size_bytes: number | null;
+    messages:
+      | { user_id: string | null; conversation_id: string | null }
+      | { user_id: string | null; conversation_id: string | null }[]
+      | null;
+  };
+  const coUploaderBatches: CoUploaderRow[][] = [];
   if (participatedConvs.size > 0) {
-    const { data: coUploaderRows, error: coErr } = await service
-      .from("message_attachments")
-      .select(
-        "storage_path, filename, content_type, size_bytes, messages!inner(user_id, conversation_id)",
-      )
-      .in("messages.conversation_id", Array.from(participatedConvs))
-      .neq("messages.user_id", expectedUserId);
-    if (signal.aborted) throw new Error("aborted");
-    if (coErr) {
-      throw new Error(
-        `chat-attachments co-uploader enumeration failed: ${coErr.message}`,
-      );
+    const allConvIds = Array.from(participatedConvs);
+    for (let i = 0; i < allConvIds.length; i += CO_UPLOADER_BATCH_SIZE) {
+      if (signal.aborted) throw new Error("aborted");
+      const batch = allConvIds.slice(i, i + CO_UPLOADER_BATCH_SIZE);
+      // Post-cascade NULL `messages.user_id` rows ARE included here: the
+      // co-member subject can see those files in chat UI (the mig 068
+      // storage SELECT policy admits them via co-membership), so omitting
+      // them from the export creates a UI-vs-export Art. 15 completeness
+      // gap. We render them with a `former-member` sentinel pseudonym
+      // below. Filtering `.neq("messages.user_id", expectedUserId)` would
+      // exclude NULLs (3-valued logic), so we use a manual id-comparison
+      // post-fetch instead.
+      const { data: batchRows, error: coErr } = await service
+        .from("message_attachments")
+        .select(
+          "storage_path, filename, content_type, size_bytes, messages!inner(user_id, conversation_id)",
+        )
+        .in("messages.conversation_id", batch);
+      if (signal.aborted) throw new Error("aborted");
+      if (coErr) {
+        throw new Error(
+          `chat-attachments co-uploader enumeration failed (batch ${i}-${i + batch.length}): ${coErr.message}`,
+        );
+      }
+      coUploaderBatches.push((batchRows ?? []) as unknown as CoUploaderRow[]);
     }
-    const seen = new Set<string>();
-    // PostgREST types embedded one-to-one relationships as either an
-    // object or an array (the .select() schema cannot disambiguate
-    // cardinality at compile time). Accept both shapes at runtime.
-    type CoUploaderRow = {
-      storage_path: string | null;
-      filename: string | null;
-      content_type: string | null;
-      size_bytes: number | null;
-      messages:
-        | { user_id: string | null; conversation_id: string | null }
-        | { user_id: string | null; conversation_id: string | null }[]
-        | null;
-    };
-    for (const row of (coUploaderRows ?? []) as unknown as CoUploaderRow[]) {
+  }
+
+  for (const batchRows of coUploaderBatches) {
+    for (const row of batchRows) {
       const storagePath = row.storage_path;
       const msg = Array.isArray(row.messages) ? row.messages[0] : row.messages;
       const uploaderId = msg?.user_id ?? null;
-      if (!storagePath || !uploaderId) continue;
+      if (!storagePath) continue;
+      // Skip the requester's own uploads — those are covered by Pass 1
+      // (own-folder enumeration with byte inclusion). The DB-side
+      // `.neq("messages.user_id", expectedUserId)` was removed because
+      // NULL `messages.user_id` (post-cascade) would slip past 3-valued
+      // logic; we filter exactly here.
+      if (uploaderId === expectedUserId) continue;
       // Hoisted nested-select can return multiple rows for the same
       // storage_path (one message_attachment per join; rare but possible
-      // if attachments were duplicated). De-dupe on storage_path.
+      // if attachments were duplicated). De-dupe on storage_path across
+      // all batches.
       if (seen.has(storagePath)) continue;
       seen.add(storagePath);
       // Path-shape sanity: segment-2 must be in participatedConvs.
@@ -1396,11 +1423,22 @@ async function enumerateChatAttachments(
       const segments = storagePath.split("/");
       const convSegment = segments[1];
       if (!convSegment || !participatedConvs.has(convSegment)) continue;
+      // Uploader pseudonym: salt-scoped hex for identified co-uploaders;
+      // `former-member` sentinel for post-cascade NULL rows where the
+      // uploader's account/membership ended (mig 068 #4318 nulled
+      // messages.user_id). The subject can already see these files in
+      // chat UI via the storage co-member SELECT policy — Art. 15
+      // completeness requires we surface them in the export with a
+      // recognizable redaction marker.
+      const uploaderPseudonym =
+        uploaderId === null
+          ? "former-member"
+          : pseudonymiseUserId(uploaderId, coUploaderSalt);
       results.push({
         kind: "redacted-co-uploader",
         storagePath,
         archivePath: `attachments/${convSegment}/${segments[2] ?? "redacted"}`,
-        uploaderPseudonym: pseudonymiseUserId(uploaderId, coUploaderSalt),
+        uploaderPseudonym,
         filename: row.filename ?? "(unknown)",
         contentType: row.content_type ?? "application/octet-stream",
         sizeBytes: row.size_bytes ?? 0,
