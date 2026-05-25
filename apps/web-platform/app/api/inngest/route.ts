@@ -28,6 +28,7 @@ import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-
 import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
 import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";
 import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-review";
+import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
 import { workspaceReconcileOnPush } from "@/server/inngest/functions/workspace-reconcile-on-push";
@@ -56,6 +57,7 @@ export const { GET, POST, PUT } = serve({
     cronLegalAudit,
     cronOauthProbe,
     cronRoadmapReview,
+    cronStaleDeferredScopeOuts,
     cronStrategyReview,
     githubOnEvent,
     workspaceReconcileOnPush,
