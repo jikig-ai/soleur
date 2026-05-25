@@ -276,3 +276,28 @@ resource "sentry_cron_monitor" "scheduled_roadmap_review" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# TR9 PR-9 (closes #4442): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-agent-native-audit.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-agent-native-audit workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+# Monthly 15th 09:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through,
+# scheduled_bug_fixer, scheduled_roadmap_review); tighter than the GHA-era
+# 240-min margin (cf. scheduled_gh_pages_cert_state) because Inngest has
+# minimal jitter. Single-miss alert (failure_issue_threshold=1): a single
+# missed monthly run is noteworthy on a monthly cadence.
+resource "sentry_cron_monitor" "scheduled_agent_native_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-agent-native-audit"
+  schedule                = { crontab = "0 9 15 * *" }
+  checkin_margin_minutes  = 30
+  # 55 min mirrors scheduled_bug_fixer / scheduled_roadmap_review — the
+  # claude-eval cohort budgets 50 min for MAX_TURN_DURATION_MS plus slack.
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
