@@ -18,10 +18,10 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 
 ## Phase 1 — ADRs (must land BEFORE any SDK call, AC18)
 
-- [ ] **1.1** Author `knowledge-base/engineering/architecture/decisions/ADR-040-anthropic-sdk-inside-inngest-leader-loop.md` per plan Phase 1 commit 1 spec (Context / Decision / Consequences / Alternatives sections).
-- [ ] **1.2** Author `knowledge-base/engineering/architecture/decisions/ADR-041-byok-cap-enforcement-model.md` per plan Phase 1 commit 2 spec.
-- [ ] **1.3** Create `scripts/check-adr-ordinals.sh` per AC18 script body. Make executable. Test locally — should pass against post-1.1/1.2 repo state.
-- [ ] **1.4** Wire `scripts/check-adr-ordinals.sh` into the lint/test workflow.
+- [x] **1.1** Author `knowledge-base/engineering/architecture/decisions/ADR-040-anthropic-sdk-inside-inngest-leader-loop.md` per plan Phase 1 commit 1 spec (Context / Decision / Consequences / Alternatives sections).
+- [x] **1.2** Author `knowledge-base/engineering/architecture/decisions/ADR-041-byok-cap-enforcement-model.md` per plan Phase 1 commit 2 spec.
+- [x] **1.3** Create `scripts/check-adr-ordinals.sh` per AC18 script body. Make executable. Test locally — should pass against post-1.1/1.2 repo state. **[Done — pre-existing collisions on ADR-027/030/031/033/038 allowlisted in script; cleanup follow-up filed in Phase 7.]** Also created `scripts/check-pa-22.sh` for use in Phase 6.
+- [x] **1.4** Wire `scripts/check-adr-ordinals.sh` into the lint/test workflow. **[Done — added `adr-ordinals` job to `.github/workflows/ci.yml`.]**
 - [ ] **1.5** Commit ADRs + script in two commits (ADRs in one, script + CI wire in another for atomic revert).
 - [ ] **1.6** Push to `feat-4379-anthropic-leader-loop` (`rf-before-spawning-review-agents-push-the` — push before any review or downstream work).
 
