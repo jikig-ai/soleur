@@ -156,14 +156,14 @@ export const oneshotGdprGate50dEval = inngest.createFunction(
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `tsc --noEmit` passes with no new errors
-- [ ] AC2: `oneshot-gdpr-gate-50d-eval.ts` registered on `{ event: "oneshot/gdpr-gate-50d-eval.fire" }` — no `{ cron }` trigger
-- [ ] AC3: `route.ts` imports and lists the function
-- [ ] AC4: `.github/workflows/scheduled-gdpr-gate-preflight-eval-50d.yml` deleted
-- [ ] AC5: D3 reads `event.data.expected_date`, not a hardcoded string. Unit test asserts abort on date mismatch.
-- [ ] AC6: Author check asserts `user.login === "deruelle"`. Unit test asserts abort on mismatch.
-- [ ] AC7: `cron-no-byok-lease-sweep.test.ts` glob widened to `{cron,oneshot}-*.ts` and passes
-- [ ] AC8: `reportSilentFallback` called on every error path (D3 abort, author-check abort, Octokit failures)
+- [x] AC1: `tsc --noEmit` passes with no new errors
+- [x] AC2: `oneshot-gdpr-gate-50d-eval.ts` registered on `{ event: "oneshot/gdpr-gate-50d-eval.fire" }` — no `{ cron }` trigger
+- [x] AC3: `route.ts` imports and lists the function
+- [x] AC4: `.github/workflows/scheduled-gdpr-gate-preflight-eval-50d.yml` deleted (never existed — vacuously satisfied; Inngest handler replaces it)
+- [x] AC5: D3 reads `event.data.expected_date`, not a hardcoded string. Unit test asserts abort on date mismatch.
+- [x] AC6: Author check asserts `user.login === "deruelle"`. Unit test asserts abort on mismatch.
+- [x] AC7: `cron-no-byok-lease-sweep.test.ts` glob widened to `{cron,oneshot}-*.ts` and passes
+- [x] AC8: `reportSilentFallback` called on every error path (D3 abort, author-check abort, Octokit failures)
 - [ ] AC9: PR body contains arming runbook with `ts: 1782723600000` (2026-06-29T09:00Z) and Phase 0 resolution
 
 ### Post-merge (operator)
