@@ -43,6 +43,29 @@ export function assertDevCleanupEnv(env = process.env) {
   }
 }
 
+// FK-reverse anonymise sequence — must run BEFORE raw auth.admin.deleteUser
+// so the cascade doesn't hit a RESTRICT FK from one of the public.* PII
+// tables (mig 053 workspace_members, 048 scope_grants, 051 action_sends,
+// 053b template_authorizations, 044 tc_acceptances, 058 workspace_member_
+// attestations, 062 workspace_member_removals, 063 workspace_member_
+// actions). Pre-#4356, raw deleteUser worked because handle_new_user (mig
+// 053) hadn't yet created the workspace_members row; post-053 the cascade
+// is blocked without the anonymise step. organizations.owner_user_id +
+// audit_byok_use.founder_id are handled by mig 065 SET NULL cascade.
+//
+// Mirrors test/helpers/tenant-isolation-teardown.ts; this script is the
+// production-shaped equivalent for the MU1 integration test sweep.
+const ANONYMISE_RPCS = [
+  "anonymise_action_sends",
+  "anonymise_template_authorizations",
+  "anonymise_scope_grants",
+  "anonymise_tc_acceptances",
+  "anonymise_workspace_member_attestations",
+  "anonymise_workspace_member_removals",
+  "anonymise_workspace_members",
+  "anonymise_workspace_member_actions",
+];
+
 export async function sweep() {
   const { createClient } = await import("@supabase/supabase-js");
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -54,7 +77,24 @@ export async function sweep() {
   const synth = (data?.users ?? []).filter((u) => SYNTH.test(u.email || ""));
   for (const u of synth) {
     console.log("deleting", u.email);
-    await c.auth.admin.deleteUser(u.id);
+    for (const rpc of ANONYMISE_RPCS) {
+      const { error } = await c.rpc(rpc, { p_user_id: u.id });
+      if (error) {
+        // Best-effort; surface for visibility but don't abort the sweep —
+        // a stuck cascade row from a half-broken prior run shouldn't block
+        // every subsequent cleanup.
+        console.warn(
+          `mu1-cleanup-guard: ${rpc} for ${u.email} returned ` +
+            `code=${error.code ?? "?"} message=${error.message}`,
+        );
+      }
+    }
+    const { error: delErr } = await c.auth.admin.deleteUser(u.id);
+    if (delErr && !/not found/i.test(delErr.message)) {
+      console.warn(
+        `mu1-cleanup-guard: deleteUser(${u.email}) failed: ${delErr.message}`,
+      );
+    }
   }
   console.log(`cleanup complete: ${synth.length} synthetic user(s) deleted`);
 }

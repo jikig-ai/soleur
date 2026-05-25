@@ -82,7 +82,9 @@ async function seedDraftMessage(
   // messages.conversation_id is NOT NULL — seed a parent conversation first.
   const { data: conv, error: convErr } = await service
     .from("conversations")
-    .insert({ user_id: userId })
+    // mig 059 made conversations.workspace_id NOT NULL; solo-canary
+    // convention (workspace_id = user_id) per mig 059 backfill predicate.
+    .insert({ user_id: userId, workspace_id: userId })
     .select("id")
     .single();
   if (convErr) {
@@ -95,6 +97,8 @@ async function seedDraftMessage(
       role: "assistant",
       content: "synthetic draft for action_sends WORM test",
       user_id: userId,
+      // mig 059 made messages.workspace_id NOT NULL; same solo-canary.
+      workspace_id: userId,
       conversation_id: conv!.id,
       tier: "external_low_stakes",
       source: "test",

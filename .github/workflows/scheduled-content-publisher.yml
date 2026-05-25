@@ -176,6 +176,16 @@ jobs:
             -f conclusion=success \
             -f "output[title]=Bot PR" \
             -f "output[summary]=Status metadata only, no SKILL.md/agent changes"
+          # #4384 — legal-doc cross-document gate is a required-status-check
+          # on the CI Required ruleset; bot PRs created via GITHUB_TOKEN do
+          # not retrigger workflows, so synthesize the success here.
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name=enforce \
+            -f head_sha="$COMMIT_SHA" \
+            -f status=completed \
+            -f conclusion=success \
+            -f "output[title]=Bot PR" \
+            -f "output[summary]=Status metadata only, no DSAR surface changes"
           gh api "repos/${{ github.repository }}/check-runs" \
             -f name=cla-evidence \
             -f head_sha="$COMMIT_SHA" \

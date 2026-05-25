@@ -94,6 +94,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .from("conversations")
           .insert({
             user_id: user.id,
+            workspace_id: user.id, // solo-canary per mig 059 backfill
             session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
             repo_url: repoUrl,
             status: "active",
