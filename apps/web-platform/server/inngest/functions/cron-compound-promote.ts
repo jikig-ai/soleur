@@ -147,6 +147,16 @@ function spawnGit(
   });
 }
 
+async function spawnGitChecked(
+  args: string[],
+  opts?: { cwd?: string },
+): Promise<void> {
+  const result = await spawnGit(args, opts);
+  if (result.exitCode !== 0) {
+    throw new Error(`git ${args[0]} failed (exit ${result.exitCode})`);
+  }
+}
+
 function spawnGitCapture(
   args: string[],
   opts?: { cwd?: string },
@@ -265,6 +275,21 @@ export function diffRemovesHardRule(diff: string): boolean {
   });
 }
 
+// I3: wall-clock guard via Promise.race. Wraps heavy step callbacks
+// so a hung fetch/spawn terminates before Inngest's global timeout.
+function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    fn(),
+    new Promise<never>((_, reject) => {
+      const id = setTimeout(
+        () => reject(new Error(`wall-clock exceeded (${ms}ms)`)),
+        ms,
+      );
+      if (typeof id === "object" && "unref" in id) id.unref();
+    }),
+  ]);
+}
+
 function computeClusterHash(sourceLearnings: string[]): string {
   const sorted = [...sourceLearnings].sort();
   return createHash("sha256").update(sorted.join("\n") + "\n").digest("hex");
@@ -297,9 +322,10 @@ export async function cronCompoundPromoteHandler({
   logger,
 }: HandlerArgs): Promise<HandlerResult> {
   let ephemeralRoot: string | null = null;
+  let installationToken = "";
 
   try {
-    const installationToken = await step.run(
+    installationToken = await step.run(
       "mint-installation-token",
       async () => mintInstallationToken(),
     );
@@ -432,8 +458,8 @@ export async function cronCompoundPromoteHandler({
       return { ok: true, status: "empty-corpus" };
     }
 
-    // FR7/FR8: Anthropic cluster call
-    const clusterResult = await step.run("anthropic-cluster", async () => {
+    // FR7/FR8: Anthropic cluster call (I3: wall-clock guard)
+    const clusterResult = await step.run("anthropic-cluster", () => withTimeout(async () => {
       const apiKey = process.env.ANTHROPIC_API_KEY;
       if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
@@ -512,7 +538,7 @@ export async function cronCompoundPromoteHandler({
       }
 
       return { clusters: (parsed as Cluster[]).slice(0, weekCapResult.remaining), truncated: false };
-    });
+    }, MAX_RUN_DURATION_MS));
 
     if (clusterResult.clusters.length === 0 || clusterResult.truncated) {
       await step.run("sentry-heartbeat-ok-no-clusters", () =>
@@ -619,10 +645,10 @@ export async function cronCompoundPromoteHandler({
           await writeFile(logPath, existing + row);
         }
 
-        await spawnGit(["add", cluster.target_path, "knowledge-base/project/learnings/promotion-log.md"], { cwd: repoRoot });
-        await spawnGit(["config", "user.name", "github-actions[bot]"], { cwd: repoRoot });
-        await spawnGit(["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], { cwd: repoRoot });
-        await spawnGit(["checkout", "-b", branchName], { cwd: repoRoot });
+        await spawnGitChecked(["add", cluster.target_path, "knowledge-base/project/learnings/promotion-log.md"], { cwd: repoRoot });
+        await spawnGitChecked(["config", "user.name", "github-actions[bot]"], { cwd: repoRoot });
+        await spawnGitChecked(["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], { cwd: repoRoot });
+        await spawnGitChecked(["checkout", "-b", branchName], { cwd: repoRoot });
 
         const titleLine = `chore(self-healing): promote cluster ${clusterHash} to ${cluster.target_path}`;
         const trailer = [
@@ -632,8 +658,8 @@ export async function cronCompoundPromoteHandler({
           `Cluster-Hash: ${clusterHash}`,
           `Tier: ${cluster.tier}`,
         ].join("\n");
-        await spawnGit(["commit", "-m", titleLine, "-m", trailer], { cwd: repoRoot });
-        await spawnGit(["push", "-u", "origin", branchName], { cwd: repoRoot });
+        await spawnGitChecked(["commit", "-m", titleLine, "-m", trailer], { cwd: repoRoot });
+        await spawnGitChecked(["push", "-u", "origin", branchName], { cwd: repoRoot });
 
         const prBody =
           `Promoted by compound-promotion-loop. Source learnings: ${cluster.source_learnings.join(" ")}. ` +
@@ -672,10 +698,13 @@ export async function cronCompoundPromoteHandler({
     return { ok: true, status: "completed", clustersOpened };
   } catch (err) {
     const e = err as Error;
+    const safeMessage = installationToken
+      ? redactToken(e.message, installationToken)
+      : e.message;
     reportSilentFallback(e, {
       feature: "cron-compound-promote",
       op: "handler-top-level",
-      message: e.message,
+      message: safeMessage,
     });
     try {
       await postSentryHeartbeat({ ok: false, logger });
