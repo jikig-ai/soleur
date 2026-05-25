@@ -38,6 +38,8 @@ Run `pwd`. If the path contains `.worktrees/`, extract the feature name and ment
 
 If the user wants to continue the current feature, delegate to `soleur:work` via the **Skill tool** with the user input as arguments. Then stop.
 
+**Bare-repo CWD guard.** If `pwd` is NOT inside `.worktrees/` AND `git rev-parse --is-bare-repository` returns `true`, the CWD is a bare-repo root with no working tree. Any Edit/Write to files visible at this path lands on stray untracked content not on any branch, and `node_modules` is not hydrated so typecheck/dev-server commands fail. For file-touching intents (the `fix`/`drain`/`review` rows in Step 2), do NOT edit in place — route through `/soleur:one-shot` so a proper worktree is created via `worktree-manager.sh`. For read-only intents (questions, exploration, `clo-attestation`, `legal-threshold`), proceed without worktree creation. See `knowledge-base/project/learnings/2026-05-19-bare-repo-grep-and-subagent-infra-claim-verification.md`.
+
 ## Step 2: Classify and Route
 
 Analyze the user input and classify intent using semantic assessment:

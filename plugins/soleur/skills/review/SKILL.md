@@ -431,6 +431,8 @@ Flag any unverified CLI invocation as **P1 (docs-trust)** — NOT P3 polish. A
 fabricated CLI command on a high-intent landing page breaks first-touch
 trust (#1810/#2550).
 
+**Workspaces-flag precondition:** When the diff documents an `npm run -w <workspace> <script>` invocation, grep the repo-root `package.json` for `"workspaces"` and refuse the documented form if the field is absent. Without a root `workspaces:` declaration, `npm` aborts with "No workspaces found". The grep is one line; the false-negative cost is an operator runbook that returns the error on first use. **Why:** PR #3751 — see `knowledge-base/project/learnings/2026-05-13-npm-workspaces-flag-fails-without-root-workspaces-declaration.md`.
+
 ### 4.6. Build-step Gate Claim Verification
 
 When a review agent claims that a build-step CI gate (e.g., post-Eleventy
@@ -449,6 +451,7 @@ The verification command order is non-negotiable:
 ```
 
 Examples:
+
 - Eleventy: `npx @11ty/eleventy --quiet && grep -rEn '<regex>' _site/`
 - Next.js: `bun run build && grep -rEn '<regex>' .next/`
 
@@ -476,15 +479,28 @@ NET-NEGATIVE work for the team. This gate is load-bearing: a PR that opens
 more issues than it closes is a workflow failure, not a normal review outcome.
 
 The gate fails (fix-inline is required) when:
-  - Fix is ≤30 lines AND ≤2 files, regardless of "feels like a follow-up" framing.
-  - The only objection to fixing inline is bookkeeping/scope discipline (vs. a
+
+- Fix is ≤30 lines AND ≤2 files, regardless of "feels like a follow-up" framing.
+- The only objection to fixing inline is bookkeeping/scope discipline (vs. a
     concrete technical contest the agent named).
-  - The finding is `pr-introduced` (per Step 1 provenance triage) — these always
+- The finding is `pr-introduced` (per Step 1 provenance triage) — these always
     fix inline.
+- The finding is "X is missing from sibling artifact Y" AND this PR's diff is the
+    surface that introduces `X` into the sibling set for the first time — the
+    asymmetry is `pr-introduced` regardless of when X's underlying capability
+    shipped. Mechanical test: `git diff origin/main --name-only | xargs grep -l
+    "<X>"` against the sibling set on `main`. If `main` had zero `X` mentions
+    across {A, B, C} and this PR adds `X` to A only, the asymmetry between
+    A-present and (B, C)-silent is created by this PR. The `pre-existing-unrelated`
+    scope-out criterion fails; fix inline. **Why:** PR #3755 (#3708) tried to file
+    gdpr-policy/privacy-policy Sentry-gap as `pre-existing-unrelated`;
+    `code-simplicity-reviewer` DISSENTed precisely on this rule. See
+    `knowledge-base/project/learnings/2026-05-14-discrete-enumeration-relockstep-and-pr-introduced-asymmetry.md`.
 
 The gate may pass (proceed to evaluate the four scope-out criteria) when:
-  - Fix is >30 lines OR touches >2 files, AND
-  - The fix demonstrably matches at least one of the four criteria below.
+
+- Fix is >30 lines OR touches >2 files, AND
+- The fix demonstrably matches at least one of the four criteria below.
 
 Filing a GitHub issue instead of fixing is allowed ONLY when both the cost-of-
 filing gate above AND one of these four scope-out criteria are satisfied:
@@ -638,11 +654,11 @@ this really cross-cutting?") for findings the PR itself introduced.
 candidate "Filed as scope-out" list from your synthesis. For each candidate,
 re-apply the cost-of-filing gate from §5:
 
-  - Is the fix ≤30 lines AND ≤2 files? → Remove from the scope-out list; fix
+- Is the fix ≤30 lines AND ≤2 files? → Remove from the scope-out list; fix
     inline and add to "Fixed inline" instead.
-  - Is the only objection bookkeeping ("feels like a follow-up", "not core to
+- Is the only objection bookkeeping ("feels like a follow-up", "not core to
     this PR") rather than a concrete technical contest? → Remove; fix inline.
-  - Did `code-simplicity-reviewer` actually CONCUR on this specific item (not
+- Did `code-simplicity-reviewer` actually CONCUR on this specific item (not
     just on the batch)? Required even in pipeline mode. → If no CONCUR, fix
     inline.
 
@@ -851,6 +867,8 @@ When a PR introduces a shell wrapper (`with_lock`, `with_lease`, `flock --`, etc
 When reviewing a Dockerfile + `--entrypoint` invocation pair where the entrypoint script invokes host-management commands (`systemctl`, `journalctl`, `dbus-send`, `mount`, `mkfs`, `apparmor_parser`, `useradd`, etc.), cross-check the base-image package manifest against the script's command invocations. The script's `command -v <cmd>` set OR hard-coded paths (`/usr/bin/systemctl`, etc.) must each appear in either (a) the base image's default package set, (b) an explicit `apk add` / `apt-get install` line in the Dockerfile, OR (c) a bind-mount entry in the container's `docker run` flags. Alpine's `bash curl tar coreutils` baseline does NOT include `systemctl` — it uses OpenRC. A bind-mount of the host's systemd unit directory (etc/systemd/system) to the container DOES NOT install `systemctl` either; only the host's filesystem gets touched, and the script fails at the binary lookup. If the script needs systemd tooling, the canonical fix is content-carrier-only: pull the image, `docker create + docker cp` the script + read pinned ENV via `docker inspect`, `docker rm`, then `sudo -E env ... bash <script>` ON THE HOST. **Why:** PR #3973 — Alpine 3.20 OCI image bundled `inngest-bootstrap.sh`; running it in-container would have failed at `systemctl daemon-reload`. Caught at multi-agent review post-implementation. Full pattern + recovery flow at [`2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md`](../../../../knowledge-base/project/learnings/2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md).
 
 When invoking the `cross-cutting-refactor` scope-out CONCUR gate, quote the criterion's literal text and demonstrate that the proposed filing matches it word-for-word. The criterion is **directory-scoped** (`core change = files named in the PR's linked issue, OR files in the same top-level directory ... as the primary changed file`), not feature-surface-scoped. Three files under `apps/web-platform/e2e/` are RELATED by the criterion's own definition, regardless of whether they cover different user-facing features (onboarding vs. conversations-rail vs. bubble net). Code-simplicity-reviewer reliably DISSENTs on feature-surface framings, but cheaper to catch in the filing pass — quote the directory anchor explicitly, count files per anchor, and either justify "materially unrelated" with a concrete out-of-directory file list or fix inline. **Why:** PR #3743 PR-A — proposed scope-out filing for a 3-file e2e helper extraction framed unrelatedness as feature-surface (cc-soleur-go vs start-fresh); DISSENT flipped to fix-inline (-184 lines duplicated, +60 lines helper, landed in same PR). See `knowledge-base/project/learnings/2026-05-14-plan-prescribed-runtime-shapes-must-be-grepped-against-installed-version.md` §Session Errors.
+
+**Pipeline-mode rationalization trap.** When all signals appear to align (criterion documented in plan, both reviewers recommend scope-out, finding clearly predates the PR), the temptation to skip the `code-simplicity-reviewer` CONCUR and file directly is exactly the rationalization the gate was designed to prevent. The gate is a hard precondition, not a confidence check — invoke `code-simplicity-reviewer` BEFORE `gh issue create --label deferred-scope-out` regardless of how obvious the criterion seems. See `knowledge-base/project/learnings/2026-05-06-scope-out-second-reviewer-gate-must-precede-filing.md`.
 
 ### Important: P1 Findings Block Merge
 

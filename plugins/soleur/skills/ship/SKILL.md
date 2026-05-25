@@ -34,6 +34,30 @@ pwd
 
 **Branch safety check (defense-in-depth):** If the branch from the command above is `main` or `master`, abort immediately with: "Error: ship cannot run on main/master. Checkout a feature branch first." This is defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
 
+**Trailer-parse verification gate (defense-in-depth for [hr-always-read-a-file-before-editing-it]).** For every commit on this branch since `origin/main`, parse any `Key: value`-shaped lines in the body and confirm `git interpret-trailers` recognises each as a trailer. The modal failure is a blank line between an `Allowlist-Widened-By:`/`Reviewed-by:`/`Signed-off-by:` line and `Co-Authored-By:`, which silently demotes the upstream trailer into body prose and breaks downstream consumers parsing via `git log --format='%(trailers:key=NAME,valueonly)'`:
+
+```bash
+RC=0
+for sha in $(git rev-list origin/main..HEAD); do
+  BODY=$(git log -1 --format=%B "$sha")
+  declare -a CANDIDATES=()
+  while IFS= read -r line; do
+    [[ "$line" =~ ^([A-Z][A-Za-z-]+):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
+  done <<< "$BODY"
+  for key in "${CANDIDATES[@]}"; do
+    val=$(git log -1 --format="%(trailers:key=${key},valueonly)" "$sha")
+    if [[ -z "$val" ]]; then
+      echo "[FAIL] ${sha:0:8}: '${key}:' is in the body but does not parse as a trailer." >&2
+      echo "       Fix: git rebase -i, reword the commit to make the final paragraph a contiguous Key: value block." >&2
+      RC=1
+    fi
+  done
+done
+exit $RC
+```
+
+If the gate fails, do NOT proceed — reword the offending commit(s) via `git rebase -i` (or `git commit --amend` if the failing commit is HEAD AND has not been pushed) so the final paragraph is a pure contiguous `Key: value` block. See `knowledge-base/project/learnings/2026-05-16-git-trailer-parser-requires-contiguous-key-value-block.md` and PR #4106.
+
 Load project conventions:
 
 ```bash
@@ -307,7 +331,6 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   emit_incident rf-review-finding-default-fix-inline applied \
   "Review findings default to fix-inline on the PR bra"
 ```
-
 
 **Detection:** Resolve the current PR number, then query for open, unresolved
 review-origin issues that cross-reference this PR via body regex
@@ -1107,6 +1130,7 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological c
 **DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge.
 
 Two failure paths exit early instead of looping:
+
 - **Merge conflicts** — `git diff --name-only --diff-filter=U` lists conflicted paths and the operator must resolve. Looping with `--abort` only buys time on a fundamentally non-automatic resolution.
 - **Push failure** — usually means a concurrent push raced this one (force-push, branch protection, or a sibling session). Stop and surface; the operator decides whether to fetch + retry.
 
@@ -1291,9 +1315,9 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
    3. The byte count of the GitHub App's Callback URL textarea contents (e.g., `wc -c <<<"$contents"`) — forensic anchor for future drift comparisons.
 
    A close attempt without all three fields is workflow non-compliance per `wg-when-fixing-a-workflow-gates-detection` (the gap that allowed #1784 to recur). When closing the issue manually, verify the closing comment contains:
-   - Each registered callback URL listed verbatim (substring grep against the comment body).
-   - A run-URL of the form `actions/runs/[0-9]+` whose conclusion is `success` (verify via `gh run view <id> --json conclusion --jq .conclusion`).
-   - A byte-count line matching `bytes:\s*[0-9]+`.
+  - Each registered callback URL listed verbatim (substring grep against the comment body).
+  - A run-URL of the form `actions/runs/[0-9]+` whose conclusion is `success` (verify via `gh run view <id> --json conclusion --jq .conclusion`).
+  - A byte-count line matching `bytes:\s*[0-9]+`.
 
    If any field is missing, comment on the issue requesting it and leave the issue open. Do NOT close.
 
