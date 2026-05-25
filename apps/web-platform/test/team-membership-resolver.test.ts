@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
+import { __resetFeatureFlagsForTests } from "@/lib/feature-flags/server";
 
 // Mock the 2-key gate (FLAG_TEAM_WORKSPACE_INVITE + TEAM_WORKSPACE_ALLOWLIST_ORG_IDS).
 // Tests stub via env vars so resolver exercises the real gate logic.
@@ -77,6 +78,8 @@ describe("resolveTeamMembershipPageData", () => {
     vi.unstubAllEnvs();
     vi.stubEnv("FLAG_TEAM_WORKSPACE_INVITE", "");
     vi.stubEnv("TEAM_WORKSPACE_ALLOWLIST_ORG_IDS", "");
+    vi.stubEnv("FLAGSMITH_ENVIRONMENT_KEY", "");
+    __resetFeatureFlagsForTests();
   });
 
   it("AC-A: returns not-found when feature flag is OFF", async () => {
