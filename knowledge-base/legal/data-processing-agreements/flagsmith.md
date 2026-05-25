@@ -22,8 +22,9 @@ the umbrella plan §"Implementation Phases" PR sequencing constraint.
 | Field | Value |
 |---|---|
 | **Legal entity** | Bullet Train Limited (trading as Flagsmith) |
-| **Companies House registration** | 12353266 (England and Wales) |
-| **Registered office** | 4th Floor, 86-90 Paul Street, London, England, EC2A 4NE (Privacy Policy; ToS shows "3rd Floor" — recent floor reassignment, same building) |
+| **Companies House registration** | 12353266 (England and Wales) — register lookup: `https://find-and-update.company-information.service.gov.uk/company/12353266` |
+| **Registered office (per Companies House — authoritative)** | 66 Paul Street, London, England, EC2A 4NA |
+| **Operating / customer-facing address** | 86-90 Paul Street, London, EC2A 4NE (4th Floor per Flagsmith Privacy Policy; 3rd Floor per Flagsmith ToS — floor disagreement acknowledged by vendor). Operating address differs from the Companies House registered office. |
 | **Governing law** | English law; exclusive jurisdiction of the courts of England and Wales (Flagsmith ToS) |
 
 ## DPA + transfer mechanisms
@@ -69,13 +70,36 @@ Flagsmith call. The call shape is
 - **`orgId`** — workspace UUID (workspace metadata; not itself a direct
   identifier of a natural person; cross-referenced via Supabase
   `workspace_members` for membership).
-- **`transient: true`** — MANDATORY data-minimisation lever. Opts out of
-  Flagsmith server-side **identity persistence**. The flag-evaluation
-  request still transits Flagsmith; only the persisted-identity record on
-  Flagsmith's side is suppressed. Verified against the Flagsmith Node SDK
-  signature at `node_modules/flagsmith-nodejs/build/cjs/sdk/index.d.ts:89`
+- **`transient: true`** — MANDATORY data-minimisation lever (effective on
+  PR-2 of umbrella #4456 merge). Opts out of Flagsmith server-side
+  **identity persistence**. The flag-evaluation request still transits
+  Flagsmith; only the persisted-identity record on Flagsmith's side is
+  suppressed. Verified against the Flagsmith Node SDK signature at
+  `apps/web-platform/node_modules/flagsmith-nodejs/build/cjs/sdk/index.d.ts:89`
   (third arg `transient?: boolean`). All `getIdentityFlags(...)` call sites
-  in the codebase MUST pass `transient: true`.
+  in the codebase MUST pass `transient: true` after PR-2 lands the CI grep
+  sentinel that enforces it (mirror of the
+  `apps/web-platform/test/dsar-message-redact-fields-sweep.test.ts` shape).
+- **Single-member workspace linkability note** — `orgId` is workspace
+  metadata and not itself a direct identifier of a natural person; however,
+  for single-member workspaces (one user, one organisation) `orgId` and
+  the underlying `user_id` are 1:1 and `orgId` becomes effectively a
+  pseudonymous identifier of that single natural person under Article 4(5)
+  GDPR. Re-identification from `orgId` alone requires the Soleur-side
+  `organizations` table join (Flagsmith holds neither side of that join),
+  preserving the Article 4(5) pseudonymisation property at the Flagsmith
+  boundary.
+
+**Current code-side state at PR-1 merge (before PR-2):** the single
+existing call site at `apps/web-platform/lib/feature-flags/server.ts`
+calls `getIdentityFlags(\`role:${role}\`, { role })` — third positional
+`transient` argument is omitted (defaults to `undefined`/`false` on the
+Flagsmith SDK side), and the trait map carries only `role` (no `orgId`).
+The role-bucket key has cardinality ≤ 5 (`{anon, user, admin, dev, prd}`)
+and is not per-user identity. PR-1 lands the Article 13(3) prior-disclosure
+of the post-PR-2 data envelope so the customer-facing Privacy Policy /
+DPD / GDPR Policy / Article 30 register surfaces are stable before any
+per-user-identity trait egresses to Flagsmith.
 
 ## §6.1 30-day notification clock state
 
@@ -124,11 +148,14 @@ Soleur's TOMs that bound Flagsmith-side risk under PA-1 + PA-2:
   the sub-processor list (snapshot date above goes stale).
 - Operator promotes to the Flagsmith Private Cloud tier (region pinning
   becomes available; transfer mechanism narrows).
-- The UK loses its EC adequacy decision (currently Commission
-  Implementing Decision (EU) 2021/1772; expires June 2025 with a
-  6-month extension granted; review-pending) — at that point UK IDTA
-  becomes the load-bearing transfer instrument and §11.2 reclassifies
-  accordingly.
+- The UK loses its EC adequacy decision (the original Commission
+  Implementing Decision (EU) 2021/1772 of 28 June 2021 carried a
+  4-year sunset to June 2025; the Commission extended adequacy
+  via a renewed decision in late 2025 covering 2025-2031 —
+  re-verify the renewed decision text at PR-2 plan-cycle time
+  per the plan's "premise probes" workflow) — at that point UK
+  IDTA becomes the load-bearing transfer instrument and §11.2
+  reclassifies accordingly.
 - The Web Platform begins sending any identity trait beyond `role` +
   `orgId` (e.g., raw `userId`, email, IP) — data-min posture must be
   re-assessed.
@@ -144,7 +171,7 @@ Soleur's TOMs that bound Flagsmith-side risk under PA-1 + PA-2:
   + §11.2 SCCs classification.
 - `knowledge-base/legal/tenant-dpa-register.md` — §6.1 clock state
   baseline.
-- `docs/legal/privacy-policy.md` §5.x (PR-1).
+- `docs/legal/privacy-policy.md` §5.15 (PR-1).
 - `docs/legal/data-protection-disclosure.md` §4.2 + Eleventy mirror at
   `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` (PR-1).
 - `docs/legal/gdpr-policy.md` §2.2 (PR-1).
