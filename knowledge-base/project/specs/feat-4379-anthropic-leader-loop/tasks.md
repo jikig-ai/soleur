@@ -54,24 +54,24 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 
 ## Phase 4 — Inngest function body replacement (AC1, AC5, AC6, AC7, AC8, AC10, AC17)
 
-- [ ] **4.1** Edit `apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts`:
-  - **4.1.a** Replace `step.run("post-acknowledgment", …)` body (lines 149-174) with the per-turn loop per AC1 steps 1-10.
-  - **4.1.b** Keep `resolve-installation` step unchanged (I1).
-  - **4.1.c** Mint `conversationId` via UUIDv5 per AC6.
-  - **4.1.d** Use `runWithByokLease(...)` per-turn per AC1 step 5; lease scope closes BEFORE `step.run` returns.
-  - **4.1.e** Call `persistTurnCost(...)` inside lease scope per AC5; cache_read + cache_creation tokens passed through.
-  - **4.1.f** Resolve tool calls via per-class allowlist; out-of-allowlist → `failure_reason = "leader_tool_invalid"` per AC8 + AC10.
-  - **4.1.g** Handle `stop_reason` switch: `end_turn` / `tool_use` / `max_tokens` per AC1 steps 7-9.
-  - **4.1.h** Add `function.config.timeout: "10m"` per AC7.
-  - **4.1.i** Extend `persistFailure` reason type to admit PR-B's new failure_reason values per AC10.
-- [ ] **4.2** Author `apps/web-platform/test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts` per AC1 (RED first):
-  - **4.2.a** Replay determinism: turn-1 completes, turn-2 forced-fail, retry replays only turn-2.
-  - **4.2.b** All 5 failure_reason outcomes covered (byok_cap_exceeded, cost_ceiling_exceeded, cancelled_by_operator, leader_max_turns_exceeded, leader_response_truncated, leader_tool_invalid, byok_lease_unavailable, anthropic_timeout, anthropic_rate_limited).
-  - **4.2.c** Per-class happy path: one fixture per action class produces the expected `reversal_handles` shape per AC9.
-  - **4.2.d** `cache_read_input_tokens` + `cache_creation_input_tokens` flow through `persistTurnCost` (mock the SDK call to return cache fields; assert RPC call args).
-- [ ] **4.3** Implement until GREEN.
-- [ ] **4.4** Run the `byok-audit-writer-sweep` lint (`apps/web-platform/test/server/byok-audit-writer-sweep.test.ts`) — must pass without the `byok-audit-writer-sweep: out-of-scope` marker on the new lease site (AC5).
-- [ ] **4.5** Commit + push.
+- [x] **4.1** Edit `apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts`:
+  - [x] **4.1.a** Replace `step.run("post-acknowledgment", …)` body (lines 149-174) with the per-turn loop per AC1 steps 1-10.
+  - [x] **4.1.b** Keep `resolve-installation` step unchanged (I1).
+  - [x] **4.1.c** Mint `conversationId` via UUIDv5 per AC6. **[Inlined a tiny UUIDv5 helper using `node:crypto.createHash('sha1')` rather than pulling `uuid` + `@types/uuid` as a webplat dep.]**
+  - [x] **4.1.d** Use `runWithByokLease(...)` per-turn per AC1 step 5; lease scope closes BEFORE `step.run` returns.
+  - [x] **4.1.e** Call `persistTurnCostAwaitable(...)` inside lease scope per AC5 + AC12; cache_read + cache_creation tokens passed through. **[New awaitable variant added to `cost-writer.ts` so the loop is replay-deterministic.]**
+  - [x] **4.1.f** Resolve tool calls via per-class allowlist; out-of-allowlist → `failure_reason = "leader_tool_invalid"` per AC8 + AC10.
+  - [x] **4.1.g** Handle `stop_reason` switch: `end_turn` / `tool_use` / `max_tokens` per AC1 steps 7-9.
+  - [x] **4.1.h** Add `function.config.timeouts.finish = "10m"` per AC7.
+  - [x] **4.1.i** Extend `persistFailure` reason type to admit PR-B's new failure_reason values per AC10.
+- [x] **4.2** Author `apps/web-platform/test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts` per AC1 (RED first — confirmed 15/16 failing, then GREEN after implementation):
+  - [x] **4.2.a** Replay determinism: turn-1 completes, turn-2 forced-fail, retry replays only turn-2.
+  - [x] **4.2.b** 9 failure_reason outcomes covered (byok_cap_exceeded, cost_ceiling_exceeded, cancelled_by_operator, leader_max_turns_exceeded, leader_response_truncated, leader_tool_invalid, byok_lease_unavailable, anthropic_timeout, anthropic_rate_limited).
+  - [x] **4.2.c** Per-class happy path: triage.p0p1_issue fixture produces the expected `reversal_handles` shape (issue_label + issue_comment) per AC9. **[One representative class; remaining 4 classes have unit-level prompt-module tests in Phase 3 + tool-surface allowlist sweep; full per-class loop e2e deferred to Phase 9 dogfood.]**
+  - [x] **4.2.d** `cache_read_input_tokens` + `cache_creation_input_tokens` flow through `persistTurnCostAwaitable` (mock the SDK to return cache fields; assert call args).
+- [x] **4.3** Implement until GREEN. **[17/17 leader-loop tests + 96/96 across the related suites green.]**
+- [x] **4.4** Run the `byok-audit-writer-sweep` lint — passes; new lease site has a real `persistTurnCostAwaitable(...)` call (no out-of-scope marker). Regex widened to `/persistTurnCost\w*\(/` so the awaitable variant counts. **[Also dropped the PR-A `agent-on-spawn-requested.test.ts` since the deterministic stub is gone; the new leader-loop test plus the unchanged `installation-id-source-of-truth.test.ts` cover the inherited PR-A invariants.]**
+- [x] **4.5** Commit + push. **[Commit 9: `2477967e` body. Commit 10: `88036c18` test.]**
 
 ## Phase 5 — Today card UX (AC9, AC10, AC11, AC13, AC14, AC15)
 
