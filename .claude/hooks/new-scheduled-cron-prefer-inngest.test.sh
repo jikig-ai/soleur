@@ -6,6 +6,9 @@
 #   (b) Edit-existing scheduled YAML passes (file is on origin/main).
 #   (c) override-marker (HTML comment) passes.
 #   (d) non-scheduled YAML (e.g., pr-checks.yml) passes.
+#   (e) new `scheduled-XXX.yml` WITHOUT `schedule:` directive → allow
+#       (false-positive: filename pattern alone is not grounds to block).
+#   (f) new `scheduled-XXX.yml` with only `workflow_dispatch:` trigger → allow.
 
 set -euo pipefail
 
@@ -80,8 +83,16 @@ assert_decision "override-marker comment allows" "allow" \
 assert_decision "non-scheduled workflow path allows (pr-checks.yml)" "allow" \
   "$(mk_write_payload ".github/workflows/pr-checks.yml" "name: PR\non:\n  pull_request:\njobs: {}")"
 
-assert_decision "release workflow allows" "allow" \
-  "$(mk_write_payload ".github/workflows/release.yml" "name: Release\non:\n  push:\n    tags: ['v*']\njobs: {}")"
+# --- (e) scheduled-*.yml WITHOUT schedule: directive allows ---------------
+# Filename pattern alone is insufficient grounds; the gate fires on content.
+
+assert_decision "scheduled-*.yml without schedule: directive allows (e)" "allow" \
+  "$(mk_write_payload ".github/workflows/scheduled-release-notes.yml" "name: Release notes\non:\n  push:\n    tags: ['v*']\njobs:\n  notes:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo notes")"
+
+# --- (f) scheduled-*.yml with only workflow_dispatch: trigger allows ------
+
+assert_decision "scheduled-*.yml with only workflow_dispatch: allows (f)" "allow" \
+  "$(mk_write_payload ".github/workflows/scheduled-manual.yml" "name: Manual\non:\n  workflow_dispatch:\njobs:\n  run:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo manual")"
 
 # --- Sanity: non-Write/Edit tool calls pass through -----------------------
 

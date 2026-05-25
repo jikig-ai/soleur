@@ -8,15 +8,18 @@
 #
 # Detection logic:
 #   (1) Write of a new `.github/workflows/scheduled-*.yml` that does NOT
-#       exist on origin/main → DENY.
-#   (2) Edit of an existing scheduled workflow that ADDS a `schedule:` /
+#       exist on origin/main AND contains a `schedule:` or `cron:` directive
+#       in its body → DENY.
+#   (2) New `.github/workflows/scheduled-*.yml` with only `workflow_dispatch:`
+#       or other non-schedule triggers → ALLOW (filename pattern alone is
+#       insufficient grounds; the gate fires on actual cron content).
+#   (3) Edit of an existing scheduled workflow that ADDS a `schedule:` /
 #       `cron:` directive → soft warn (still allow).
 #
-# Override hatch: include `[skip-inngest-cron-check]` in the commit message
-# (operator-supplied at commit time; not inspectable from a Write payload)
-# OR add the literal HTML comment
+# Override hatch: add the literal HTML comment
 # `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` near the top
-# of the workflow YAML being written.
+# of the workflow YAML being written. (PreToolUse fires before any commit
+# exists, so commit-message overrides are structurally unreachable here.)
 #
 # Hook stdin: JSON payload from Claude Code with tool_name + tool_input.
 # Hook stdout: JSON {hookSpecificOutput: {permissionDecision, ...}}.
@@ -94,6 +97,17 @@ if [ "$exists_on_main" -eq 1 ]; then
   allow
 fi
 
+# Content scan: only deny if the YAML body declares a schedule/cron directive.
+# A file named `scheduled-release-notes.yml` that only triggers on
+# `workflow_dispatch:` is NOT a scheduled cron — filename pattern alone is
+# insufficient grounds to block. Match `schedule:` (workflow trigger block) or
+# `cron:` (the cron-expression key inside it) as a YAML key (preceded by
+# whitespace, escaped newline, or start-of-string; followed by newline,
+# escaped newline, end-of-string, or whitespace).
+if ! echo "$content" | grep -Eq '(^|[[:space:]]|\\n)(schedule|cron):([[:space:]]|\\n|$)'; then
+  allow
+fi
+
 # Compose the deny reason — verbatim per PR #4457 plan spec.
 reason="[new-scheduled-cron-prefer-inngest] New GH Actions scheduled workflow \`$rel_path\` is being created.
 
@@ -106,7 +120,7 @@ To proceed in Inngest:
   2. Register it in apps/web-platform/app/api/inngest/route.ts
 
 To override this gate (rare — pure-GH ops like Dependabot, CodeQL, or release-only workflows):
-  Include \`[skip-inngest-cron-check]\` in your commit message OR add the literal HTML comment
+  Add the literal HTML comment
   <!-- gate-override: new-scheduled-cron-prefer-inngest --> at the top of the workflow YAML."
 
 deny "$reason"
