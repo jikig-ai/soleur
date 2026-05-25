@@ -187,6 +187,9 @@ jobs:
             -target=sentry_cron_monitor.scheduled_follow_through \
             -target=sentry_cron_monitor.scheduled_strategy_review \
             -target=sentry_cron_monitor.scheduled_roadmap_review \
+            -target=sentry_cron_monitor.scheduled_legal_audit \
+            -target=sentry_cron_monitor.scheduled_agent_native_audit \
+            -target=sentry_cron_monitor.scheduled_competitive_analysis \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
