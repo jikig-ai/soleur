@@ -12,7 +12,7 @@ related_specs:
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-040: Anthropic SDK inside Inngest function bodies — leader-loop topology
+# ADR-042: Anthropic SDK inside Inngest function bodies — leader-loop topology
 
 ## Status
 

@@ -12,13 +12,13 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 ## Phase 0 — Pre-implementation reality check
 
 - [ ] **0.1** Re-confirm next free migration ordinal: `ls apps/web-platform/supabase/migrations/ | grep -oE "^[0-9]{3}" | sort -u | tail -3` should still show `065 066 067` (067 is next free). If `067_*` already exists in `origin/main`, abort and re-plan.
-- [ ] **0.2** Re-confirm next free ADR ordinals: `ls knowledge-base/engineering/architecture/decisions/ | grep -oE "^ADR-[0-9]{3}" | sort -u | tail -3` should still show through `ADR-039`. If `ADR-040-*` or `ADR-041-*` already exists, abort and re-plan.
+- [ ] **0.2** Re-confirm next free ADR ordinals: `ls knowledge-base/engineering/architecture/decisions/ | grep -oE "^ADR-[0-9]{3}" | sort -u | tail -3` should still show through `ADR-039`. If `ADR-042-*` or `ADR-041-*` already exists, abort and re-plan.
 - [ ] **0.3** Reality-check sentinel (AC21): capture `git log --oneline --since="2026-05-25" origin/main -- apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts apps/web-platform/components/dashboard/today-card.tsx apps/web-platform/supabase/migrations/` for PR body. Already-known sibling: #4357.
 - [ ] **0.4** Confirm Inngest function timeout cap on current tier supports 10min (AC7). Read `apps/web-platform/server/inngest/client.ts` for current `createFunction` defaults; raise to `"10m"` in commit 9.
 
 ## Phase 1 — ADRs (must land BEFORE any SDK call, AC18)
 
-- [x] **1.1** Author `knowledge-base/engineering/architecture/decisions/ADR-040-anthropic-sdk-inside-inngest-leader-loop.md` per plan Phase 1 commit 1 spec (Context / Decision / Consequences / Alternatives sections).
+- [x] **1.1** Author `knowledge-base/engineering/architecture/decisions/ADR-042-anthropic-sdk-inside-inngest-leader-loop.md` per plan Phase 1 commit 1 spec (Context / Decision / Consequences / Alternatives sections).
 - [x] **1.2** Author `knowledge-base/engineering/architecture/decisions/ADR-041-byok-cap-enforcement-model.md` per plan Phase 1 commit 2 spec.
 - [x] **1.3** Create `scripts/check-adr-ordinals.sh` per AC18 script body. Make executable. Test locally — should pass against post-1.1/1.2 repo state. **[Done — pre-existing collisions on ADR-027/030/031/033/038 allowlisted in script; cleanup follow-up filed in Phase 7.]** Also created `scripts/check-pa-22.sh` for use in Phase 6.
 - [x] **1.4** Wire `scripts/check-adr-ordinals.sh` into the lint/test workflow. **[Done — added `adr-ordinals` job to `.github/workflows/ci.yml`.]**
@@ -140,7 +140,7 @@ Per `wg-when-deferring-a-capability-create-a` + new `wg-defer-only-after-inline-
 - [ ] **8.1** Run full pre-merge sentinel sweep per plan "Pre-merge sentinel sweep" section.
 - [ ] **8.2** Run review agents (PR-time): `data-integrity-guardian`, `security-sentinel`, `observability-coverage-reviewer`, `user-impact-reviewer`, `architecture-strategist`. `user-impact-reviewer` must explicitly affirm AC22 CPO-1..5.
 - [ ] **8.3** Resolve all review findings inline per `rf-review-finding-default-fix-inline`.
-- [ ] **8.4** Update PR body: Closes #4379 + reality-check sentinel output (AC21) + Zero-Retention checkbox (AC20) + ADR-040/041/PA-22 cross-references + Non-Goal issue list.
+- [ ] **8.4** Update PR body: Closes #4379 + reality-check sentinel output (AC21) + Zero-Retention checkbox (AC20) + ADR-042/041/PA-22 cross-references + Non-Goal issue list.
 - [ ] **8.5** Run `skill: soleur:ship` — enforces Phase 5.5 + lifecycle checklist.
 - [ ] **8.6** Mark Ready for review only after all Non-Goal issues are filed (per Phase 7) and operator has verified Zero-Retention (AC20).
 

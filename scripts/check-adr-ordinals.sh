@@ -10,7 +10,7 @@
 #
 # Three layers (per AC18 in 2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md):
 #   1. Exact-ordinal collision: two files named ADR-NNN-*.md for the same NNN.
-#   2. Required files exist with non-empty content: ADR-040 + ADR-041 (PR-B).
+#   2. Required files exist with non-empty content: ADR-042 + ADR-041 (PR-B).
 #   3. Required-heading completeness: each file has ## Status / ## Context /
 #      ## Decision / ## Consequences (rules out stub-shaped ADRs).
 #
@@ -51,7 +51,7 @@ if [ -n "$all_dups" ]; then
 fi
 
 # (2) + (3) Required files exist with non-empty content + required headings.
-for required in ADR-040 ADR-041; do
+for required in ADR-042 ADR-041; do
   matches=$(ls "$ADR_DIR" | grep "^${required}-" || true)
   if [ -z "$matches" ]; then
     echo "Expected exactly 1 file matching ${required}-*, found 0" >&2

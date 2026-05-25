@@ -4,7 +4,7 @@ title: BYOK cap enforcement model for autonomous-AI leader loops
 status: accepted
 date: 2026-05-25
 related: [4379, 4124, 4378]
-related_adrs: [ADR-040, ADR-030]
+related_adrs: [ADR-042, ADR-030]
 related_plans:
   - knowledge-base/project/plans/2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md
 related_specs:
@@ -18,7 +18,7 @@ brand_survival_threshold: single-user incident
 
 **Accepted** (2026-05-25, PR #4379).
 
-Lands in the same PR as ADR-040 and migration 069. ADR-040 documents the loop topology that this ADR's cap-enforcement model plugs into; the two ADRs are deliberately split for **cleaner reversibility** — a future cap-policy change (e.g., raising the per-spawn ceiling, swapping pre-call → post-call gating, or adding a new failure mode) is isolated to ADR-041 without re-opening the loop-topology decision in ADR-040.
+Lands in the same PR as ADR-042 and migration 069. ADR-042 documents the loop topology that this ADR's cap-enforcement model plugs into; the two ADRs are deliberately split for **cleaner reversibility** — a future cap-policy change (e.g., raising the per-spawn ceiling, swapping pre-call → post-call gating, or adding a new failure mode) is isolated to ADR-041 without re-opening the loop-topology decision in ADR-042.
 
 ## Context
 
@@ -32,13 +32,13 @@ The PR-B brainstorm Key Decisions table locks: per-spawn $2.00 ceiling is the **
 
 **Brand-survival threshold: single-user incident.** A runaway leader-loop draining the operator's BYOK balance during dogfood is brand-survival-relevant. The operator IS the brand at this stage.
 
-### Why this needs an ADR (separate from ADR-040)
+### Why this needs an ADR (separate from ADR-042)
 
-Cap-policy is high-churn. The per-spawn ceiling, the kill-tripped semantics, and the failure_reason taxonomy are likely to evolve as PR-B's per-class behavior matures in dogfood. Pinning the *current* model in ADR-041 — separate from ADR-040's loop topology — means:
+Cap-policy is high-churn. The per-spawn ceiling, the kill-tripped semantics, and the failure_reason taxonomy are likely to evolve as PR-B's per-class behavior matures in dogfood. Pinning the *current* model in ADR-041 — separate from ADR-042's loop topology — means:
 
 - Future "raise the cap to $5" PRs amend ADR-041 only.
 - Future "switch to post-call gating" PRs (e.g., if a new accounting story makes pre-call infeasible) amend ADR-041 only.
-- ADR-040's invariants (per-turn `step.run`, lease scope, tool allowlist, prompt versioning) stay frozen across cap-policy churn.
+- ADR-042's invariants (per-turn `step.run`, lease scope, tool allowlist, prompt versioning) stay frozen across cap-policy churn.
 
 ## Decision
 
@@ -74,7 +74,7 @@ it("throws on RPC error rather than returning killTripped=false", async () => {
 });
 ```
 
-**Pre-call, NOT post-call**: the cap check fires BEFORE the Anthropic call, with `tokenCount: 0` (the call hasn't happened yet). The PURPOSE is to gate the next call — not to record the just-completed call's cost. Cost recording happens separately in `persistTurnCost` AFTER the call returns. The two paths converge: `record_byok_use_and_check_cap` reads cumulative spend from `audit_byok_use` rows; `persistTurnCost` writes new `audit_byok_use` rows post-call. The next turn's pre-call check therefore sees the prior turn's cost (because `persistTurnCost` is awaited per ADR-040 I5).
+**Pre-call, NOT post-call**: the cap check fires BEFORE the Anthropic call, with `tokenCount: 0` (the call hasn't happened yet). The PURPOSE is to gate the next call — not to record the just-completed call's cost. Cost recording happens separately in `persistTurnCost` AFTER the call returns. The two paths converge: `record_byok_use_and_check_cap` reads cumulative spend from `audit_byok_use` rows; `persistTurnCost` writes new `audit_byok_use` rows post-call. The next turn's pre-call check therefore sees the prior turn's cost (because `persistTurnCost` is awaited per ADR-042 I5).
 
 ### Layer 2 — Pre-call per-spawn cost ceiling
 
@@ -116,7 +116,7 @@ At max-turns: → Layer 3 → "leader_max_turns_exceeded"
 - **Composable, predictable failure modes**: three layers, three failure_reasons, no overlap.
 - **Operator wallet-safe**: BYOK daily/monthly cap is the outermost gate; runaway can't drain it past hard cap.
 - **Per-spawn-safe**: $2.00 ceiling bounds worst-case single-click spend, even on a misbehaving Haiku-routed class that doesn't converge.
-- **Audit-correct**: every Anthropic call is preceded by a fail-closed pre-call gate; every Anthropic call result is followed by an awaited `persistTurnCost` (ADR-040 I5).
+- **Audit-correct**: every Anthropic call is preceded by a fail-closed pre-call gate; every Anthropic call result is followed by an awaited `persistTurnCost` (ADR-042 I5).
 - **Reversibility**: ADR-041 is the cap-policy ADR. Future "raise to $5" or "switch to post-call" amendments touch this file only.
 
 ### Negative / accepted trade-offs
@@ -127,7 +127,7 @@ At max-turns: → Layer 3 → "leader_max_turns_exceeded"
   - Layer 3 (max-turns): physical loop bound; covers the case where layer-2 cost arithmetic is below ceiling but the model never converges (Haiku classes especially).
   - Removing Layer 2 was explicitly rejected in the brainstorm Key Decisions table.
 - **One extra `step.run` per turn for the cap-check**. Adds ~30ms per turn. Acceptable: per-turn budget is ~60s; cap-check is ~0.05% of the budget.
-- **`persistTurnCost` must be awaited inside the lease scope** (ADR-040 I5). This was a Kieran review finding (B2); the awaited shape closes the cost-vs-Realtime ordering race.
+- **`persistTurnCost` must be awaited inside the lease scope** (ADR-042 I5). This was a Kieran review finding (B2); the awaited shape closes the cost-vs-Realtime ordering race.
 - **No soft-warning mode** (e.g., "you're at 80% of cap"). Cap-hit is fail-closed; the operator must raise the cap via Settings → BYOK → Raise Cap and re-click Spawn. Soft-warning UX is a follow-up (Non-Goal in PR-B plan).
 
 ### Sentinel tests
@@ -147,12 +147,12 @@ At max-turns: → Layer 3 → "leader_max_turns_exceeded"
 2. **Soft warning at 80% cap** — rejected for v1; the operator dogfood threshold is "no surprises", and a soft warn that then auto-continues introduces an ambiguous "I clicked through that" failure mode. Filed as PR-B Non-Goal #15 if dogfood signal warrants.
 3. **Drop Layer 2 (per-spawn ceiling)** — rejected; brainstorm-locked. Layer 1's daily cap alone is too coarse for the operator's per-spawn UX promise.
 4. **Drop Layer 3 (max-turns)** — rejected; physical bound is necessary for Haiku classes where token cost arithmetic under-counts model convergence failures.
-5. **Fold cap-enforcement into ADR-040** — rejected; cap-policy churn would force re-opening loop-topology decisions every cap-policy change.
+5. **Fold cap-enforcement into ADR-042** — rejected; cap-policy churn would force re-opening loop-topology decisions every cap-policy change.
 
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md`
-- ADR-040: loop-topology dependency.
+- ADR-042: loop-topology dependency.
 - BYOK cap RPC: `apps/web-platform/supabase/migrations/061_byok_audit_workspace_id_rpcs.sql:81-148`
 - BYOK lease: `apps/web-platform/server/byok-lease.ts:338`
 - Cost writer: `apps/web-platform/server/cost-writer.ts:72-160`
@@ -160,4 +160,4 @@ At max-turns: → Layer 3 → "leader_max_turns_exceeded"
 - Critical learnings:
   - `2026-05-06-cap-coupling-between-adjacent-prs.md` (Layer 2 SSOT constant)
   - `2026-05-12-stub-handlers-as-silent-undercount-vectors.md` (cache token persistence)
-  - `2026-05-24-token-cache-margin-vs-consumer-budget-envelope.md` (BYOK lease envelope inequality referenced from ADR-040 I2)
+  - `2026-05-24-token-cache-margin-vs-consumer-budget-envelope.md` (BYOK lease envelope inequality referenced from ADR-042 I2)

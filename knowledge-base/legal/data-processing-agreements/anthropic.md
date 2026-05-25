@@ -80,6 +80,6 @@ Soleur's TOMs that bound Anthropic-side risk under PA-22:
 
 - `knowledge-base/legal/article-30-register.md` — PA-22 entry + Vendor
   Mapping row.
-- ADR-040 — Anthropic-SDK inside Inngest leader loop topology.
+- ADR-042 — Anthropic-SDK inside Inngest leader loop topology.
 - ADR-041 — BYOK cap enforcement model.
 - PR #4379 — PR-B Anthropic leader loop (PA-22 substrate).

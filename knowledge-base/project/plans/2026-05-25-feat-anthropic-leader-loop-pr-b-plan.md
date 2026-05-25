@@ -37,8 +37,8 @@ Run per `hr-when-in-a-worktree-never-read-from-bare`, `2026-05-20-plan-vs-shippe
 | 1 | "Migration 065 adding `reversal_handle jsonb` / `current_turn` …" | **`065_art17_cascade_deadlock_repair.sql` + `066_audit_byok_use_art17_carveout.sql` already taken** (PR #4357, merged 2026-05-25 same day). Next free ordinal: **067**. | Renumber all migration refs to **067**. New filename: `apps/web-platform/supabase/migrations/069_action_sends_leader_loop.sql`. Update test filename to `069-action-sends-leader-loop.test.ts`. |
 | 2 | "Extend WORM trigger admit-list to admit UPDATEs on these new columns." | Mig 064's WORM trigger uses `BEFORE UPDATE OF <pre-064 immutable column list>` (`064_action_sends_acknowledgment.sql:62-78`) — the trigger fires ONLY when a *listed* column is in the SET list. **UPDATEs on any non-listed column are admitted by default**, no admit-list extension needed. | Mig 069 only `ADD COLUMN IF NOT EXISTS` × 6. The trigger needs no change. **Plan-time test addition:** AC-WORM-NEW (a) UPDATE setting only new columns succeeds, (b) UPDATE setting any pre-064 column still rejects. This is a behavioral test of the existing trigger, not a trigger reshape. |
 | 3 | Brainstorm Open Q #5: "Realtime subscription RLS-respect (fallback to polling if not)." | Functional-discovery surfaced **Inngest Realtime** (`step.realtime.publish()` + `useRealtime` hook) as the canonical Inngest-native progress channel — purpose-built for streaming in-flight function progress; no Supabase Realtime RLS-respect question to answer. | **Decision locked in brainstorm**: Supabase Realtime stays as the chosen channel. **Plan-time advisory** [Updated 2026-05-25]: file follow-up issue tracking *"Reconsider Supabase Realtime → Inngest Realtime swap after PR-B dogfood"* for after-merge cost/latency evaluation. Do NOT swap mid-PR. |
-| 4 | "ADR-039 (Anthropic-SDK-inside-Inngest pattern)" — issue #4379 cites | **ADR-039 is taken** by `ADR-039-departed-member-removal-ledger.md` (landed in #4294). Next free ordinals: **040, 041**. | Authoring **ADR-040** (Anthropic-SDK-inside-Inngest pattern) + **ADR-041** (BYOK cap enforcement model). Brainstorm correctly flagged this; plan inherits. Pre-merge guard `scripts/check-adr-ordinals.sh` scans filenames (NOT `INDEX.md` — that file does not exist in the decisions directory). |
-| 5 | "Reference Inngest impls: `cfo-on-payment-failed.ts:199`" | Confirmed at `cfo-on-payment-failed.ts:198-217`. **Important detail**: the reference impl currently uses the `byok-audit-writer-sweep: out-of-scope` marker because it returns `{tokenCount:0, unitCostCents:0}` stub values. PR-B's Anthropic-SDK call DOES real work, so PR-B's lease-opening site **REMOVES the marker** and adds a real `persistTurnCost(...)` call paired in the same `step.run`. | Document in ADR-040 §Decision and ensure the `byok-audit-writer-sweep` lint passes against the new site (no marker; real `persistTurnCost` call). |
+| 4 | "ADR-039 (Anthropic-SDK-inside-Inngest pattern)" — issue #4379 cites | **ADR-039 is taken** by `ADR-039-departed-member-removal-ledger.md` (landed in #4294). Next free ordinals: **040, 041**. | Authoring **ADR-042** (Anthropic-SDK-inside-Inngest pattern) + **ADR-041** (BYOK cap enforcement model). Brainstorm correctly flagged this; plan inherits. Pre-merge guard `scripts/check-adr-ordinals.sh` scans filenames (NOT `INDEX.md` — that file does not exist in the decisions directory). |
+| 5 | "Reference Inngest impls: `cfo-on-payment-failed.ts:199`" | Confirmed at `cfo-on-payment-failed.ts:198-217`. **Important detail**: the reference impl currently uses the `byok-audit-writer-sweep: out-of-scope` marker because it returns `{tokenCount:0, unitCostCents:0}` stub values. PR-B's Anthropic-SDK call DOES real work, so PR-B's lease-opening site **REMOVES the marker** and adds a real `persistTurnCost(...)` call paired in the same `step.run`. | Document in ADR-042 §Decision and ensure the `byok-audit-writer-sweep` lint passes against the new site (no marker; real `persistTurnCost` call). |
 
 ## Goals
 
@@ -46,7 +46,7 @@ Run per `hr-when-in-a-worktree-never-read-from-bare`, `2026-05-20-plan-vs-shippe
 
 1. Replace `step.run("post-acknowledgment", …)` body in `agent-on-spawn-requested.ts:149-174` with a per-turn leader-prompt loop calling `anthropic.messages.create`.
 2. Ship 5 per-action-class leader prompt modules in `apps/web-platform/server/inngest/leader-prompts/` (greenfield directory).
-3. Author **ADR-040** (Anthropic-SDK-inside-Inngest pattern) + **ADR-041** (BYOK cap enforcement model) **BEFORE** any Anthropic SDK call lands. Pre-merge guard `scripts/check-adr-ordinals.sh` greps `knowledge-base/engineering/architecture/decisions/` for filename collisions.
+3. Author **ADR-042** (Anthropic-SDK-inside-Inngest pattern) + **ADR-041** (BYOK cap enforcement model) **BEFORE** any Anthropic SDK call lands. Pre-merge guard `scripts/check-adr-ordinals.sh` greps `knowledge-base/engineering/architecture/decisions/` for filename collisions.
 4. Wire BYOK lease + cap enforcement: per-turn `runWithByokLease` + pre-call `record_byok_use_and_check_cap` check + `persistTurnCost` after each call. Build the `recordByokUseAndCheckCap` TS wrapper at `apps/web-platform/server/byok-cap-rpc.ts` (greenfield).
 5. Ship migration **067** (renumbered from spec's "065") adding 6 nullable columns + COMMENTs on `action_sends`. Test asserts WORM trigger's default-admit behavior holds.
 6. Ship Today card operator UX: in-flight progress (Supabase Realtime), cancellation (Stop), per-output undo (Undo), per-spawn cost (Cost: $X.XX), per-failure-reason copy.
@@ -86,7 +86,7 @@ The Inngest function `agent-on-spawn-requested` body for `step.run("post-acknowl
 2. `step.run("turn-${n}-precheck-cost-ceiling", …)` reads cumulative cost from `byok_audit` rows joined on `actionSendId`; if ≥ $2.00, persist `failure_reason = "cost_ceiling_exceeded"` and exit.
 3. `step.run("turn-${n}-cancel-check", …)` reads `action_sends.cancellation_requested_at`; if NOT NULL, persist `failure_reason = "cancelled_by_operator"` and exit.
 4. `step.run("turn-${n}-progress-write", …)` UPDATEs `action_sends` SET `current_turn = ${n}`, `current_turn_started_at = now()`.
-5. `step.run("turn-${n}-claude", …)` opens `runWithByokLease(...)` (workspaceContextUserId === keyOwnerUserId === founderId per N2) and calls `anthropic.messages.create({ model, system, messages, tools, max_tokens, cache_control: ephemeral })`; the lease scope CLOSES BEFORE `step.run` returns (ALS cannot escape — per `cfo-on-payment-failed.ts:198-217` precedent and ADR-040). **Inside the lease scope, `await persistTurnCostAwaitable(...)` resolves before the step returns** (B2 fix; see AC12).
+5. `step.run("turn-${n}-claude", …)` opens `runWithByokLease(...)` (workspaceContextUserId === keyOwnerUserId === founderId per N2) and calls `anthropic.messages.create({ model, system, messages, tools, max_tokens, cache_control: ephemeral })`; the lease scope CLOSES BEFORE `step.run` returns (ALS cannot escape — per `cfo-on-payment-failed.ts:198-217` precedent and ADR-042). **Inside the lease scope, `await persistTurnCostAwaitable(...)` resolves before the step returns** (B2 fix; see AC12).
 6. For each `content_block.type === "tool_use"`: `step.run("turn-${n}-tool-${i}", …)` invokes the tool via `createGitHubAppClient(installationId, founderId)` Octokit.
 7. If `stop_reason === "end_turn"`: write `artifact_url` + `reversal_handles` (NOTE: plural — see AC9) + `acknowledged_at`; exit.
 8. If `stop_reason === "tool_use"`: append `tool_result` blocks to next-turn messages.
@@ -265,14 +265,14 @@ Stable across Inngest replays (Inngest's deterministic step replay relies on sta
 
 `function.config.timeout` raised to **10 minutes** (8 turns × 60s + 2 min overhead for step replay + DB writes). Confirmed against Inngest tier limits (≥10min on current tier).
 
-### AC8 — Tool surface allowlist (ADR-040)
+### AC8 — Tool surface allowlist (ADR-042)
 
 Each leader-prompt module enumerates its tools at module-load. The Inngest function's tool-dispatcher resolves tool names against the per-class allowlist; an out-of-allowlist tool call from the model is rejected with `failure_reason = "leader_tool_invalid"`. All Octokit calls route through `createGitHubAppClient(installationId, founderId)` — NEVER `probeOctokit`, NEVER raw `new Octokit()`.
 
 **Sentinel test:** `apps/web-platform/test/server/inngest/leader-prompts/tool-surface.test.ts` asserts:
 
 - `grep -nE "probeOctokit\(|new Octokit\(" apps/web-platform/server/inngest/leader-prompts/ apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts` returns 0.
-- Each module's tools array is a strict subset of the per-class allowlist documented in ADR-040.
+- Each module's tools array is a strict subset of the per-class allowlist documented in ADR-042.
 
 ### AC9 — Multi-artifact reversal handles (RESOLVES SpecFlow gap)
 
@@ -399,9 +399,9 @@ WHERE agent_role = $1   -- TS: `agent.spawn.requested:${actionClass}` precompute
 
 All Anthropic calls use `cache_control: { type: "ephemeral" }` markers on the system prompt + tool definitions. The `cache_read_input_tokens` + `cache_creation_input_tokens` fields MUST flow through `persistTurnCost` (AC5). Post-merge CFO follow-up: verify cumulative input cost reduction empirically against `byok_audit` rows.
 
-### AC18 — ADR-040 + ADR-041 land BEFORE Anthropic SDK call (M2 fix)
+### AC18 — ADR-042 + ADR-041 land BEFORE Anthropic SDK call (M2 fix)
 
-`knowledge-base/engineering/architecture/decisions/ADR-040-anthropic-sdk-inside-inngest-leader-loop.md` + `ADR-041-byok-cap-enforcement-model.md` are committed in commits 1-2 of this PR (BEFORE the Inngest function body change in commit 9). Pre-merge guard: `bash scripts/check-adr-ordinals.sh` (greenfield script) scans `knowledge-base/engineering/architecture/decisions/` for ordinal collisions AND content-stub conditions; CI fails if any check trips.
+`knowledge-base/engineering/architecture/decisions/ADR-042-anthropic-sdk-inside-inngest-leader-loop.md` + `ADR-041-byok-cap-enforcement-model.md` are committed in commits 1-2 of this PR (BEFORE the Inngest function body change in commit 9). Pre-merge guard: `bash scripts/check-adr-ordinals.sh` (greenfield script) scans `knowledge-base/engineering/architecture/decisions/` for ordinal collisions AND content-stub conditions; CI fails if any check trips.
 
 **Script shape** (`scripts/check-adr-ordinals.sh`):
 
@@ -411,7 +411,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 ADR_DIR=knowledge-base/engineering/architecture/decisions
 
-# 1. Exact-ordinal collision (e.g., two files named ADR-040-*.md)
+# 1. Exact-ordinal collision (e.g., two files named ADR-042-*.md)
 dups=$(ls "$ADR_DIR" | grep -oE '^ADR-[0-9]{3}' | sort | uniq -d)
 if [ -n "$dups" ]; then
   echo "ADR ordinal collision: $dups" >&2
@@ -419,7 +419,7 @@ if [ -n "$dups" ]; then
 fi
 
 # 2. Required files exist with non-empty content + structural completeness.
-for required in ADR-040 ADR-041; do
+for required in ADR-042 ADR-041; do
   matches=$(ls "$ADR_DIR" | grep "^${required}-" || true)
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -ne 1 ]; then
@@ -532,7 +532,7 @@ ls knowledge-base/engineering/architecture/decisions/ | grep -oE "^ADR-[0-9]{3}"
 
 ### Phase 1 — ADRs (lands FIRST, no SDK call yet)
 
-Commit 1: `knowledge-base/engineering/architecture/decisions/ADR-040-anthropic-sdk-inside-inngest-leader-loop.md`
+Commit 1: `knowledge-base/engineering/architecture/decisions/ADR-042-anthropic-sdk-inside-inngest-leader-loop.md`
 
 Sections:
 
@@ -611,7 +611,7 @@ Per AC20 + AC21:
    - Closes #4379.
    - Reality-check sentinel evidence (output of the `git log --since` command from AC21).
    - Confirmation checklist for Zero-Retention verification (AC20).
-   - Cross-reference to ADR-040 / ADR-041 / PA-22.
+   - Cross-reference to ADR-042 / ADR-041 / PA-22.
 3. Follow-up issues (Non-Goals 1-14) filed BEFORE the PR is marked "Ready for review" per `wg-block-pr-ready-on-undeferred-operator-steps`.
 
 ## Test Plan
@@ -831,7 +831,7 @@ PR-B is **NOT** behind a feature flag for the substrate (the loop replaces the s
 ### Engineering
 
 **Status:** reviewed (carry-forward from brainstorm)
-**Assessment:** CTO confirmed PR-A's invariant scaffolding is reusable; ADR-040 must lock loop topology + BYOK lease scope + tool-surface allowlist before any code lands. Reference impls: `cfo-on-payment-failed.ts:198-217` (lease-per-step), `github-on-event.ts:208`. `recordByokUseAndCheckCap` TS wrapper is greenfield. Critical: `cache_read_input_tokens` + `cache_creation_input_tokens` MUST flow through `persistTurnCost` or dashboard understates ~90% per `2026-05-12-stub-handlers-as-silent-undercount-vectors.md`. ADR-039 taken (departed-member-removal-ledger); next free ordinals: 040, 041. **Plan-time addition:** Migration 065 + 066 also taken (#4357); shift to **067**.
+**Assessment:** CTO confirmed PR-A's invariant scaffolding is reusable; ADR-042 must lock loop topology + BYOK lease scope + tool-surface allowlist before any code lands. Reference impls: `cfo-on-payment-failed.ts:198-217` (lease-per-step), `github-on-event.ts:208`. `recordByokUseAndCheckCap` TS wrapper is greenfield. Critical: `cache_read_input_tokens` + `cache_creation_input_tokens` MUST flow through `persistTurnCost` or dashboard understates ~90% per `2026-05-12-stub-handlers-as-silent-undercount-vectors.md`. ADR-039 taken (departed-member-removal-ledger); next free ordinals: 040, 041. **Plan-time addition:** Migration 065 + 066 also taken (#4357); shift to **067**.
 
 ### Product
 
@@ -862,10 +862,10 @@ SpecFlow analyzer surfaced 11 distinct gaps in the operator UX flows; all 11 are
 
 ## Sharp Edges (carry from brainstorm + plan-time additions)
 
-- **ADR-039 stale:** issue #4379 cites this; ADR-040 + ADR-041 are the real ordinals (brainstorm caught).
+- **ADR-039 stale:** issue #4379 cites this; ADR-042 + ADR-041 are the real ordinals (brainstorm caught).
 - **No raw `@anthropic-ai/sdk` calls in `apps/web-platform/server/` today:** PR-B introduces the first.
 - **Stub handlers = silent telemetry undercount:** `cache_read_input_tokens` + `cache_creation_input_tokens` MUST persist (AC5 + AC17).
-- **Per-turn lease re-acquisition is counterintuitive:** the lease CANNOT span turns. ADR-040 documents.
+- **Per-turn lease re-acquisition is counterintuitive:** the lease CANNOT span turns. ADR-042 documents.
 - **Cap enforcement: pre-call, NOT post-call.** ADR-041 documents.
 - **`onText` is cumulative, not delta** (if PR-B streams partial-turn output). Per `2026-05-12-pr-a1-implementation-and-multi-reviewer-convergence.md` — treat as replace-not-append.
 - **Baseline prompt MUST enumerate available tools** per `2026-05-05-baseline-prompt-must-declare-capabilities-or-model-fabricates-missing-tools.md` — AC2 sentinel test.
@@ -894,7 +894,7 @@ All 5 carried from spec resolved at plan-time:
 
 - **Operator** (`ops@jikigai.com`) — sole dogfooder; brand-survival threshold gate.
 - **CPO** — sign-off encoded as AC22 (CPO-1..5); user-impact-reviewer at PR review.
-- **CTO** — ADR-040 author; technical-strategist at PR review.
+- **CTO** — ADR-042 author; technical-strategist at PR review.
 - **CLO** — PA-22 author; Vendor Mapping amendment; Zero-Retention verification (AC20).
 - **CFO** — per-spawn unit economics post-merge audit; BYOK cap calibration.
 - **PR-review-time agents**: `data-integrity-guardian`, `security-sentinel`, `observability-coverage-reviewer`, `user-impact-reviewer`, `architecture-strategist`.
@@ -928,7 +928,7 @@ These reviewer recommendations were REJECTED because they revert decisions locke
 - **Code-simplicity: drop AC16 PII-scrub.** Brainstorm row "Legal lift scope" records "User override on PII-scrub (added to PR-B vs deferred)". Stays.
 - **Code-simplicity: drop AC19 PA-22 register update.** Brainstorm row "Legal lift scope" lists PA-22 as a pre-merge blocker. Stays.
 - **Code-simplicity: drop AC15 cost visibility + collapse AC11 to 4 rows.** Brainstorm row "Per-spawn cost visibility" + Product domain-assessment "ALL four operator UX gaps go in PR-B per user choice" lock the full UX surface. Stays.
-- **Code-simplicity: drop ADR-041 (fold cap-model into ADR-040).** Brainstorm row "ADRs" locks two-ADR shape with rationale "cleaner reversibility for cap-policy changes". Stays.
+- **Code-simplicity: drop ADR-041 (fold cap-model into ADR-042).** Brainstorm row "ADRs" locks two-ADR shape with rationale "cleaner reversibility for cap-policy changes". Stays.
 - **DHH: collapse Phases 0-9 into 3 phases.** The plan's "phases" are commit sequences (with phase-boundary review checkpoints), not a Rube Goldberg machine — Phase 1 (ADRs) MUST land before Phase 4 (SDK call) per AC18 ordering. The phase structure stays; it maps to the natural commit sequence.
 
 ### NOT applied — judgment calls

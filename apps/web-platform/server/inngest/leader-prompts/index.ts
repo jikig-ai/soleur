@@ -5,7 +5,7 @@
 // loop start from `action_sends.action_class` and uses it to assemble the
 // system prompt, user prompt, tool surface, and model selection.
 //
-// Load-bearing invariants (per ADR-040):
+// Load-bearing invariants (per ADR-042):
 //   - tools: per-class enumerated allowlist; the dispatcher rejects any
 //     out-of-allowlist tool call from the model with
 //     `failure_reason = "leader_tool_invalid"`.

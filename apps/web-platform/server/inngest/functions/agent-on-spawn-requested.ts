@@ -7,7 +7,7 @@
 // PR-A (#4124, merged #4378 commit 7d5620a5) shipped a deterministic
 // acknowledgment stub. PR-B replaces the body of `post-acknowledgment`
 // with a per-turn Anthropic-SDK leader-prompt loop driven by
-// `anthropic.messages.create` with tool-use rounds (per ADR-040).
+// `anthropic.messages.create` with tool-use rounds (per ADR-042).
 //
 // LOAD-BEARING INVARIANTS (PR-A I1/I2/I3/I5 inherited; I4 deliberately
 // REVERSED — this is the first raw `@anthropic-ai/sdk` site in
@@ -439,7 +439,7 @@ export async function agentOnSpawnRequestedHandler({
     });
 
     // Step: turn-n-claude — opens the BYOK lease inside the step so ALS
-    // cannot escape and idempotency under replay is preserved (ADR-040).
+    // cannot escape and idempotency under replay is preserved (ADR-042).
     let turnResult: AnthropicTurnResult;
     try {
       turnResult = (await step.run(`turn-${n}-claude`, async () => {

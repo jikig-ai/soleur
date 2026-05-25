@@ -24,7 +24,7 @@ PR-B replaces the deterministic stub with an Anthropic-SDK leader-prompt loop th
 
 1. Replace `agent-on-spawn-requested.ts` step `post-acknowledgment` body with a leader-prompt loop driving `anthropic.messages.create` with tool-use rounds.
 2. Ship 5 per-action-class leader prompts: `engineering.pr_review_pending`, `engineering.ci_failed`, `triage.p0p1_issue`, `security.cve_alert`, `knowledge.kb_drift`.
-3. Author ADR-040 (Anthropic-SDK-inside-Inngest pattern) + ADR-041 (BYOK cap enforcement model) BEFORE any Anthropic SDK call lands.
+3. Author ADR-042 (Anthropic-SDK-inside-Inngest pattern) + ADR-041 (BYOK cap enforcement model) BEFORE any Anthropic SDK call lands.
 4. Wire BYOK lease + cap enforcement: per-turn `runWithByokLease` + pre-call `record_byok_use_and_check_cap` check + `persistTurnCost` after each call. Build the `recordByokUseAndCheckCap` TS wrapper (greenfield).
 5. Ship migration 065 adding `reversal_handle jsonb` / `current_turn smallint` / `current_turn_started_at timestamptz` / `cancellation_requested_at timestamptz` / `prompt_version text` columns on `action_sends`. Extend WORM trigger admit-list to admit UPDATEs on these new columns.
 6. Ship Today-card operator UX suite: in-flight progress (Supabase Realtime on `action_sends`), cancellation (Stop button → `cancellation_requested_at`), per-output undo (Today-card Undo button → reverse via `reversal_handle`), per-spawn cost visibility (cumulative cost from `byok_audit` rows).
@@ -121,11 +121,11 @@ Per-spawn cost ceiling = $2.00 USD. Enforced at the start of each turn (`turn-${
 
 ## Technical Requirements
 
-### TR1 — ADR-040 + ADR-041
+### TR1 — ADR-042 + ADR-041
 
 Pre-merge ADRs:
 
-- **ADR-040** "Anthropic SDK inside Inngest function bodies — leader-loop topology" — covers loop topology (per-turn `step.run`), BYOK lease scope (per-turn re-acquisition, AsyncLocalStorage cannot escape step boundaries), tool-surface allowlist (per-class enumerated Octokit endpoints), prompt versioning (sha256 of `system + user + tools`; pinned to `action_sends.prompt_version` at loop start).
+- **ADR-042** "Anthropic SDK inside Inngest function bodies — leader-loop topology" — covers loop topology (per-turn `step.run`), BYOK lease scope (per-turn re-acquisition, AsyncLocalStorage cannot escape step boundaries), tool-surface allowlist (per-class enumerated Octokit endpoints), prompt versioning (sha256 of `system + user + tools`; pinned to `action_sends.prompt_version` at loop start).
 - **ADR-041** "BYOK cap enforcement model" — covers pre-call `record_byok_use_and_check_cap` check vs post-call (pre-call chosen; fail-closed), per-spawn cost ceiling (primary gate) vs max-turns (secondary backstop), `kill_tripped` return-value semantics (no raise; `users.runtime_paused_at` flip), per-turn `persistTurnCost` pairing requirement (enforced by `byok-audit-writer-sweep` lint).
 
 Pre-merge guard: `bash scripts/check-adr-ordinals.sh` (new) greps `knowledge-base/engineering/architecture/decisions/INDEX.md` for next free ordinal; fails CI if a collision exists.
@@ -233,7 +233,7 @@ Carried from brainstorm:
 
 - **Operator** (`ops@jikigai.com`) — sole dogfooder; brand-survival threshold gate.
 - **CPO** — sign-off encoded as ACs; user-impact-reviewer at PR review.
-- **CTO** — ADR-040 author; technical-strategist at PR review.
+- **CTO** — ADR-042 author; technical-strategist at PR review.
 - **CLO** — PA-22 author; Vendor Mapping amendment; Zero-Retention verification.
 - **CFO** — per-spawn unit economics post-merge audit; BYOK cap calibration.
 - **Review-time agents**: `data-integrity-guardian`, `security-sentinel`, `observability-coverage-reviewer`, `user-impact-reviewer`, `architecture-strategist`.

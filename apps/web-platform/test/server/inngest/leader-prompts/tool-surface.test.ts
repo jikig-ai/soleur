@@ -1,5 +1,5 @@
 /**
- * Tool surface allowlist sentinel (PR-B #4379 AC8 + ADR-040 I3).
+ * Tool surface allowlist sentinel (PR-B #4379 AC8 + ADR-042 I3).
  *
  * Asserts:
  *   - No raw `new Octokit(` or `probeOctokit(` calls anywhere in the
@@ -7,7 +7,7 @@
  *     access MUST route through `createGitHubAppClient(installationId,
  *     founderId)` (per PR-A I2 — inherited).
  *   - Each class's tools array is a strict subset of the documented
- *     per-class allowlist in ADR-040.
+ *     per-class allowlist in ADR-042.
  */
 
 import { describe, it, expect } from "vitest";
@@ -27,7 +27,7 @@ const SCAN_TARGETS = [
   "server/inngest/functions/agent-on-spawn-requested.ts",
 ];
 
-/** ADR-040-documented per-class tool allowlist. */
+/** ADR-042-documented per-class tool allowlist. */
 const ALLOWED_TOOLS: Record<LeaderActionClass, readonly string[]> = {
   "engineering.pr_review_pending": [
     "createPullRequestReviewComment",
@@ -73,7 +73,7 @@ describe("tool surface — AC8 sentinels", () => {
   });
 
   for (const cls of Object.keys(ALLOWED_TOOLS) as LeaderActionClass[]) {
-    it(`${cls} — tools array is a strict subset of the ADR-040 allowlist`, () => {
+    it(`${cls} — tools array is a strict subset of the ADR-042 allowlist`, () => {
       const m = LEADER_PROMPTS[cls];
       const actual = m.tools.map((t) => t.name).sort();
       const expected = [...ALLOWED_TOOLS[cls]].sort();
