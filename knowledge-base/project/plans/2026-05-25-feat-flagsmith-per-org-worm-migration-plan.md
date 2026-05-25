@@ -17,6 +17,26 @@ brainstorm: knowledge-base/project/brainstorms/2026-05-25-audit-env-flags-flagsm
 
 # feat: migrate both flags to Flagsmith + per-org capability + WORM audit
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** 6 (Capability Layer, WORM Migration, Hot-Path, CI, Precedent-Diff, SDK Verification)
+**Research passes:** Precedent-diff gate, verify-the-negative, SDK type verification, learnings cross-reference
+
+### Key Improvements
+1. **SDK signature confirmed** — `getIdentityFlags(identifier, traits, transient?: boolean)` at `index.d.ts:89-91`; third-arg `transient: true` opts out entire identity from server-side persistence (strongest data-min form)
+2. **Trait format clarified** — traits dict accepts both `{ role: "prd" }` (plain value) and `{ orgId: { value: "org-123", transient: true } }` (per-trait config); plan uses third-arg form for blanket opt-out
+3. **resolveKeyOwnerThenLease already async** — confirmed at `byok-resolver.ts:117` (`export async function`); callers already await; change is INSIDE the function only
+4. **Retention heartbeat canonical path** — Inngest cron (not GH Actions) per ADR-033; 5+ existing `cron-*.ts` functions confirm pattern; plan Phase 5 retention heartbeat (deferred per umbrella plan scope control) should use Inngest when shipped
+5. **WORM trigger pattern divergence documented** — mig 043 uses ONE shared function with two triggers; PR-2 uses TWO separate functions (simpler: no Art. 17 GUC bypass needed since flag_flip_audit has no FK to users)
+
+### New Considerations Discovered
+- `envOnly()` at byok-resolver.ts:125 is called BEFORE `isByokDelegationsEnabled()` at line 150 — both checks exist; deletion of `envOnly` must not skip the `isByokDelegationsEnabled` check that follows
+- `team-workspace-boot.ts:13` calls `getFlag()` directly (not the composite `isTeamWorkspaceInviteEnabled`) — needs different conversion than other consumer sites
+- pg_cron retention heartbeat is explicitly deferred in the umbrella plan ("Defers retention-sweep heartbeat table to a Phase-2 sub-task if scope creeps; otherwise inline") — plan correctly omits it to control scope
+
+---
+
 **PR-2 of umbrella #4456.** This is the load-bearing PR: builds the per-org Flagsmith capability (ADR-043), ships the WORM `flag_flip_audit` ledger (migration 071), and migrates both tenant-boundary flags (`team-workspace-invite`, `byok-delegations`) to `RUNTIME_FLAGS` under dual-control architecture.
 
 ## Overview
@@ -538,6 +558,76 @@ discoverability_test:
 | Doppler env baked at docker run | Flagsmith SDK resolves at request time; E2E verifies | learning `2026-05-19-doppler-env-hot-reload-limitation.md` |
 | Customer DPA signing during PR lag | Pre-merge tenant-dpa-register grep guard | GDPR-gate LC-04 |
 | Cross-tenant billing breach | Dual-control + E2E truth table | brainstorm User-Brand Impact |
+
+## Precedent-Diff (Phase 4.4)
+
+### SECURITY DEFINER Writer RPC
+
+**Precedent:** migrations 033, 037, 042, 050, 051, 053 all use `SECURITY DEFINER` + `SET search_path = public, pg_temp`.
+
+**Plan alignment:** `audit_flag_flip()` follows this pattern exactly. No divergence.
+
+### WORM Trigger Pattern
+
+**Precedent (mig 043):** Single function `tenant_deploy_audit_no_mutate()` → TWO triggers (BEFORE UPDATE, BEFORE DELETE). Function handles both operations with internal `IF TG_OP =` branching. Includes Art. 17 GUC bypass (`app.tenant_deploy_anonymise_in_progress`).
+
+**Plan divergence (intentional):** PR-2 uses TWO separate functions (`flag_flip_audit_no_update()`, `flag_flip_audit_no_delete()`) → TWO triggers. Rationale: `flag_flip_audit` has NO FK to `users` (actor is operator email, not user UUID), so no Art. 17 anonymisation bypass is needed. Simpler functions = less surface area. The UPDATE function unconditionally raises; the DELETE function has only the row-state bypass.
+
+**Risk acceptance:** Divergence from mig 043's shared-function pattern is explicitly justified by the absence of the Art. 17 use case. If a future requirement adds an FK (unlikely per design), a new migration adds the GUC bypass at that time.
+
+### REVOKE/GRANT Matrix
+
+**Precedent (mig 043:175,227-228,278-279):** `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role` + selective `GRANT EXECUTE ... TO service_role`.
+
+**Plan alignment:** Exact match. Additionally REVOKEs from `service_role` on trigger functions (triggers execute in the caller's context; no role should be able to call them directly).
+
+### Scheduled-Work Pattern
+
+**Precedent:** 5+ Inngest cron functions (`cron-agent-native-audit.ts`, `cron-bug-fixer.ts`, etc.) vs 30 GH Actions scheduled workflows.
+
+**Plan note:** The pg_cron retention heartbeat (umbrella plan task 2.E.5) is explicitly deferred per scope control. When it ships, the ALERT mechanism should be an Inngest cron function (canonical per ADR-033), NOT a GH Actions workflow. The pg_cron sweep itself stays in Postgres (it's a SQL-native DELETE, not application logic).
+
+## SDK Type Verification (deepen-plan Phase 4.45)
+
+### getIdentityFlags Signature
+
+Verified at `node_modules/flagsmith-nodejs/build/cjs/sdk/index.d.ts:89-91`:
+
+```typescript
+getIdentityFlags(identifier: string, traits?: {
+    [key: string]: FlagsmithTraitValue | TraitConfig;
+}, transient?: boolean): Promise<Flags>;
+```
+
+**Key findings:**
+- Third arg `transient?: boolean` — when `true`, the entire identity evaluation is not persisted server-side (strongest data-minimization form)
+- `TraitConfig` (at `types.d.ts:122-125`) allows per-trait transient: `{ value: FlagsmithTraitValue, transient?: boolean }`
+- Plan uses third-arg blanket `true` (correct: we never want any trait persisted)
+
+### Trait Format
+
+Current code at `server.ts:99`:
+```typescript
+const flags = await c.getIdentityFlags(`role:${role}`, { role });
+```
+
+Traits dict accepts simple values (`{ role: "prd" }`) — they are auto-wrapped as `FlagsmithTraitValue`. Plan extends to:
+```typescript
+const flags = await c.getIdentityFlags(
+  orgId ? `org:${orgId}:${role}` : `role:${role}`,
+  { role, ...(orgId ? { orgId } : {}) },
+  true // transient: never persist identity server-side
+);
+```
+
+### resolveKeyOwnerThenLease Async Status
+
+Verified at `byok-resolver.ts:117`:
+```typescript
+export async function resolveKeyOwnerThenLease<T>(
+```
+
+Function is already async. Callers at `agent-runner.ts:902,2468` and `cc-dispatcher.ts:908` already use `await`/`return` (which propagates the Promise). The change is purely INSIDE the function body: adding the `isByokDelegationsEnabled` flag check at entry.
 
 ## Sharp Edges
 
