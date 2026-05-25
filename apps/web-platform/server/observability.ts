@@ -38,6 +38,32 @@ export function hashUserId(userId: string, pepper = SENTRY_USERID_PEPPER): strin
   return createHmac("sha256", pepper).update(userId).digest("hex");
 }
 
+const SENTRY_TAG_PEPPER = process.env.SENTRY_TAG_PEPPER;
+
+/**
+ * BYOK Delegations PR-A (#4232) SS F6: domain-scoped HMAC pepper for
+ * Sentry tags that carry delegation / workspace / actor identifiers
+ * (`delegation_id_hash`, `workspace_id_hash`, `grantor_user_id_hash`,
+ * `grantee_user_id_hash`). Returns a 16-hex prefix — long enough for
+ * uniqueness inside the per-delegation alert routes, short enough to
+ * fit Sentry's tag-value length comfortably.
+ *
+ * Separate from `hashUserId` (which uses `SENTRY_USERID_PEPPER`) so
+ * pepper rotation for the delegations domain doesn't reshuffle the
+ * org-wide userId hash space. Falls back to `"pepper_unset"` sentinel
+ * when the env var is missing — same fail-closed pattern as
+ * `hashUserId`. The boot warning is intentionally NOT emitted here
+ * because the delegations surface is feature-flagged and many envs
+ * legitimately run without the pepper until the flag is flipped on.
+ */
+export function hashUserIdForSentryTag(
+  input: string,
+  pepper = SENTRY_TAG_PEPPER,
+): string {
+  if (!pepper) return "pepper_unset";
+  return createHmac("sha256", pepper).update(input).digest("hex").slice(0, 16);
+}
+
 /**
  * Rename `userId` → `userIdHash` on an emit `extra` payload. Delegates to
  * the shared `renameUserIdToHash` walker in `./userid-pseudonymize` so the

@@ -12,12 +12,17 @@ import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/ty
 import { persistAndDownloadAttachments } from "./attachment-pipeline";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import {
-  runWithByokLease,
   ByokLeaseError,
   MissingByokKeyError,
   reportMissingByokKey,
   mapByokLeaseCauseToErrorCode,
 } from "./byok-lease";
+// BYOK Delegations PR-A (#4232): the 5 prod sentinel sites wrap with
+// resolveKeyOwnerThenLease so the resolver can route to a grantor's
+// key when the caller has no own api_keys row. The N2 invariant
+// (workspaceContextUserId === keyOwnerUserId for solo) is preserved
+// inside the resolver's flag-OFF fast path.
+import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { sendToClient } from "./ws-handler";
 import { notifyOfflineUser, type NotificationPayload } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
@@ -879,8 +884,12 @@ export async function startAgentSession(
     // workspaces both equal `userId` (N2 invariant — workspaces.id =
     // owner_user_id for backfilled solo); team workspaces will diverge
     // when Phase 4 invite flow ships.
-    await runWithByokLease(
-      { workspaceContextUserId: userId, keyOwnerUserId: userId },
+    // Sentinel sweep site #1 (#4232 PR-A). callerUserId = userId (server-
+    // derived per agent-runner JWT contract; provenance enumerated in PR
+    // body). N2 solo invariant kept: callerUserId === workspaceContextUserId.
+    await resolveKeyOwnerThenLease(
+      userId,
+      userId,
       async (lease) => {
     // Get user's decrypted API key and service tokens
     const [apiKey, serviceTokens] = await Promise.all([
@@ -1899,15 +1908,33 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // = owner_user_id for backfilled solo workspaces; see migration
           // 053 §1.1.7). Future non-solo callers will resolve via
           // `workspace-resolver.getDefaultWorkspaceForUser`.
-          persistTurnCost(userId, conversationId, streamLeaderId, userId, {
-            totalCostUsd: costDelta,
-            usage: {
-              input_tokens: inputDelta,
-              output_tokens: outputDelta,
-              cache_read_input_tokens: cacheReadDelta,
-              cache_creation_input_tokens: cacheCreationDelta,
+          // BYOK Delegations PR-A (#4232). When `lease.delegationId` is
+          // set (resolver routed to a grantor's key), thread the
+          // delegation context so the audit RPC routes to the merged
+          // atomic check_and_record_byok_delegation_use. Solo + flag-
+          // OFF cases leave `delegation` undefined and the cost-writer
+          // takes the legacy write_byok_audit branch unchanged.
+          persistTurnCost(
+            userId,
+            conversationId,
+            streamLeaderId,
+            userId,
+            {
+              totalCostUsd: costDelta,
+              usage: {
+                input_tokens: inputDelta,
+                output_tokens: outputDelta,
+                cache_read_input_tokens: cacheReadDelta,
+                cache_creation_input_tokens: cacheCreationDelta,
+              },
             },
-          });
+            lease.delegationId
+              ? {
+                  delegationId: lease.delegationId,
+                  callerUserId: lease.workspaceContextUserId,
+                }
+              : undefined,
+          );
 
           // Sync: push changes to remote after session (connected repos only)
           if (user.repo_status === "ready") {
@@ -2398,8 +2425,11 @@ export async function sendUserMessage(
   // bounds the in-process heap window for that call too.
   if (!conv.domain_leader) {
     try {
-      await runWithByokLease(
-        { workspaceContextUserId: userId, keyOwnerUserId: userId },
+      // Sentinel sweep site #2 (#4232 PR-A). Routing-side BYOK fetch;
+      // same N2 solo invariant + server-derived `userId` provenance.
+      await resolveKeyOwnerThenLease(
+        userId,
+        userId,
         async (lease) => {
         const apiKey = await lease.getApiKey();
 

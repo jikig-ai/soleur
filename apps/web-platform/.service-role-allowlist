@@ -167,3 +167,24 @@ apps/web-platform/server/workspace-resolver.ts
 # leader-prompt loop; the service-role-allowlist entry persists across
 # PR-A → PR-B because the SELECT + UPDATE surface is unchanged.
 apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts
+
+# ── feat-byok-delegations (#4232, PR-A) ──────────────────────────────
+#
+# PERMANENT — byok-resolver.ts looks up workspace + organization
+# context BEFORE the BYOK lease opens, in a path where the caller's
+# tenant JWT is not yet established (the resolver runs from Inngest
+# functions and other server-derived call sites where the founder/
+# grantor user_id is server-trusted, not request-controlled). Two
+# service-role uses:
+#   - getDefaultWorkspaceForUser: read the caller's workspace_id from
+#     workspace_members. Tenant-JWT would require pre-minting a JWT
+#     for the resolver step which is downstream of the lease scope.
+#   - resolve_byok_key_owner RPC (SECURITY DEFINER, search_path-pinned
+#     per cq-pg-security-definer-search-path-pin-pg-temp): the RPC
+#     itself enforces grantor/grantee membership + active-delegation
+#     checks. Service-role bypass at the supabase-js layer is paired
+#     with definer-enforced authorization at the SQL boundary.
+# `callerUserId` is server-derived from authenticated session/JWT per
+# the SS F3 invariant in byok-resolver.ts; user-controlled input is
+# never accepted into this path.
+apps/web-platform/server/byok-resolver.ts

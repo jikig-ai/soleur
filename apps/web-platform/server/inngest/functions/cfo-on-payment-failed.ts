@@ -35,7 +35,8 @@
 import { inngest } from "@/server/inngest/client";
 import { getStripe } from "@/lib/stripe";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
-import { runWithByokLease } from "@/server/byok-lease";
+// BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
+import { resolveKeyOwnerThenLease } from "@/server/byok-resolver";
 import { reportSilentFallback } from "@/server/observability";
 import {
   MESSAGE_TIER_EXTERNAL_BRAND_CRITICAL,
@@ -196,8 +197,12 @@ export async function cfoHandler({
   // cohort onboarding lands. Until then there is no real token cost to
   // record; the stub returns tokenCount=0 / unitCostCents=0 deterministically.
   const _draft = await step.run("draft-customer-response", async () => {
-    return runWithByokLease(
-      { workspaceContextUserId: founderId, keyOwnerUserId: founderId },
+    // Sentinel sweep site #4 (#4232 PR-A). callerUserId = founderId
+    // (Inngest event payload, server-emitted from cfo-on-payment-failed
+    // Stripe webhook handler — never request-body-derived).
+    return resolveKeyOwnerThenLease(
+      founderId,
+      founderId,
       async (_lease) => {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);

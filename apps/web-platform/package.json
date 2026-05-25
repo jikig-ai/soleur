@@ -16,7 +16,9 @@
     "test:ci": "vitest run",
     "test:e2e": "npx playwright test",
     "typecheck": "tsc --noEmit",
-    "hash-user-id": "bun scripts/hash-user-id.ts"
+    "hash-user-id": "bun scripts/hash-user-id.ts",
+    "byok-grant": "bun scripts/byok-grant.ts",
+    "byok-revoke": "bun scripts/byok-revoke.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.85",
@@ -80,6 +82,7 @@
   "overrides": {
     "vite": "^7.3.2",
     "brace-expansion": "^5.0.6",
-    "ws": "^8.20.1"
+    "ws": "^8.20.1",
+    "qs": "^6.15.2"
   }
 }

@@ -16,6 +16,7 @@ const CACHE_TTL_MS = 30_000;
 const ENV_FLAGS = {
   "dev-signin": "FLAG_DEV_SIGNIN",
   "team-workspace-invite": "FLAG_TEAM_WORKSPACE_INVITE",
+  "byok-delegations": "FLAG_BYOK_DELEGATIONS",
 } as const;
 
 const RUNTIME_FLAGS = {
@@ -154,8 +155,36 @@ export function isTeamWorkspaceInviteEnabled(orgId: string): boolean {
   return getTeamWorkspaceAllowlist().has(orgId);
 }
 
+// BYOK Delegations PR-A (#4232). Two-key gate mirrors the team-workspace-
+// invite shape: FLAG_BYOK_DELEGATIONS=1 AND orgId present in
+// BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS. Both must hold. orgId-absent path
+// is a hard FALSE — the resolver fast-paths to direct lease when off.
+let cachedByokDelegationsAllowlist: { raw: string; set: ReadonlySet<string> } | null = null;
+
+export function getByokDelegationsAllowlist(): ReadonlySet<string> {
+  const raw = process.env.BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS ?? "";
+  if (cachedByokDelegationsAllowlist && cachedByokDelegationsAllowlist.raw === raw) {
+    return cachedByokDelegationsAllowlist.set;
+  }
+  const set = new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  cachedByokDelegationsAllowlist = { raw, set };
+  return set;
+}
+
+export function isByokDelegationsEnabled(orgId: string | null | undefined): boolean {
+  if (!getFlag("byok-delegations")) return false;
+  if (!orgId) return false;
+  return getByokDelegationsAllowlist().has(orgId);
+}
+
 export function __resetFeatureFlagsForTests(): void {
   _client = null;
   _roleCache.clear();
   cachedAllowlist = null;
+  cachedByokDelegationsAllowlist = null;
 }
