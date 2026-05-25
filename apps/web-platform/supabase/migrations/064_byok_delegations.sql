@@ -41,6 +41,30 @@
 BEGIN;
 
 -- =====================================================================
+-- 0. Schema-vs-ledger drift preconditions (#4338, see
+--    knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md).
+--    Cross-file FK targets are checked via to_regclass; if the ledger
+--    claims an upstream migration applied while the table is absent,
+--    raise loudly rather than failing later on the FK declaration.
+-- =====================================================================
+
+DO $$
+BEGIN
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'Migration 064 precondition failed: public.users does not exist.',
+      DETAIL  = '_schema_migrations may claim 001_initial_schema is applied while public.users is absent (schema-vs-ledger drift class #4338).',
+      HINT    = 'Recovery: knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md.';
+  END IF;
+  IF to_regclass('public.workspaces') IS NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'Migration 064 precondition failed: public.workspaces does not exist.',
+      DETAIL  = '_schema_migrations may claim 053_organizations_and_workspace_members is applied while the workspaces table is absent (schema-vs-ledger drift class #4338).',
+      HINT    = 'Recovery: knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md (delete the stale ledger rows; the runner re-applies 053-061 on the next CI run).';
+  END IF;
+END $$;
+
+-- =====================================================================
 -- 1. byok_delegations table
 -- =====================================================================
 
