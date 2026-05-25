@@ -843,6 +843,111 @@ export async function exportSqlTable(
     });
   }
 
+  // -- byok_delegations (migration 064, #4232) --------------------------
+  // Art. 15+20: WORM ledger of BYOK funding delegations. A given user
+  // can appear in any of five actor columns — grantor (funder), grantee
+  // (beneficiary), created_by/revoked_by/cap_updated_by (administrative
+  // actors). OR-semantics requires one per-row WHERE chain per column
+  // (per-row-where lint AC30 — the lint parses literal .eq() calls so
+  // the five reads are spelled out explicitly rather than iterated).
+  // Rows merged + deduped by id so a single row in which the user
+  // appears in multiple positions (e.g. grantor == created_by) is not
+  // double-counted.
+  {
+    const seen = new Set<string>();
+    const merged: Record<string, unknown>[] = [];
+    const accumulate = (
+      rows: Record<string, unknown>[],
+      ownerField: string,
+    ) => {
+      assertReadScope(rows, expectedUserId, "byok_delegations", {
+        ownerField,
+      });
+      for (const row of rows) {
+        const id = row.id;
+        if (typeof id !== "string" || seen.has(id)) continue;
+        seen.add(id);
+        merged.push(row);
+      }
+    };
+
+    const { data: grantorRows, error: grantorErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("grantor_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (grantorErr)
+      throw new Error(
+        `byok_delegations (grantor) read failed: ${grantorErr.message}`,
+      );
+    accumulate(
+      (grantorRows ?? []) as Record<string, unknown>[],
+      "grantor_user_id",
+    );
+
+    const { data: granteeRows, error: granteeErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("grantee_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (granteeErr)
+      throw new Error(
+        `byok_delegations (grantee) read failed: ${granteeErr.message}`,
+      );
+    accumulate(
+      (granteeRows ?? []) as Record<string, unknown>[],
+      "grantee_user_id",
+    );
+
+    const { data: createdByRows, error: createdByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("created_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (createdByErr)
+      throw new Error(
+        `byok_delegations (created_by) read failed: ${createdByErr.message}`,
+      );
+    accumulate(
+      (createdByRows ?? []) as Record<string, unknown>[],
+      "created_by_user_id",
+    );
+
+    const { data: revokedByRows, error: revokedByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("revoked_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (revokedByErr)
+      throw new Error(
+        `byok_delegations (revoked_by) read failed: ${revokedByErr.message}`,
+      );
+    accumulate(
+      (revokedByRows ?? []) as Record<string, unknown>[],
+      "revoked_by_user_id",
+    );
+
+    const { data: capUpdatedByRows, error: capUpdatedByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("cap_updated_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (capUpdatedByErr)
+      throw new Error(
+        `byok_delegations (cap_updated_by) read failed: ${capUpdatedByErr.message}`,
+      );
+    accumulate(
+      (capUpdatedByRows ?? []) as Record<string, unknown>[],
+      "cap_updated_by_user_id",
+    );
+
+    results.push({
+      table: "byok_delegations",
+      spec: DSAR_TABLE_ALLOWLIST.byok_delegations,
+      rows: merged,
+    });
+  }
+
   return results;
 }
 
