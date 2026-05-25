@@ -112,7 +112,7 @@ describe("check-tc-document-sha.sh: drift-class smoke", () => {
 
     const r = runGuard(tmp);
     expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
-    expect(r.stderr).toMatch(/T&C body drift/);
+    expect(r.stderr).toMatch(/terms-and-conditions body drift/);
   });
 
   test("stale SHA literal on a non-T&C doc is detected", () => {
@@ -157,7 +157,7 @@ describe("check-tc-document-sha.sh: drift-class smoke", () => {
     // accidentally trips body-equivalence (e.g., if a new `collapse` sed
     // rule matches the sentinel literal) — the failure should be SHA-
     // stale, not body drift.
-    expect(r.stderr).not.toMatch(/T&C body drift/);
+    expect(r.stderr).not.toMatch(/terms-and-conditions body drift/);
   });
 
   test("missing LEGAL_DOC_SHAS literal for a doc is detected", () => {
