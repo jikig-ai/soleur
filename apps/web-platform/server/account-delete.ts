@@ -166,24 +166,29 @@ export async function deleteAccount(
     log.warn({ userId, err }, "Failed to delete workspace during deletion (non-fatal)");
   }
 
-  // 3.5 Purge Storage blobs for all user attachments AND DSAR export
-  // bundles (DB rows are FK-cascaded, but Storage objects are not).
-  // Plan rev-2 AC25 extends the storage-purge step to cover
-  // dsar-exports/<userId>/ so a half-completed export bundle does not
-  // outlive the user account.
+  // 3.5 Purge Storage blobs for chat-attachments in conversations OWNED
+  // by the departing user. Plan §Phase 5 (#4318 / mig 068): the prior
+  // implementation purged the entire `{userId}/` prefix, which also
+  // removed the user's uploads in SHARED-workspace conversations they
+  // didn't own — those survive under the Art. 17 legitimate-interest
+  // carve-out (controller retains shared assets; uploader identity is
+  // already nulled by step 3.901). Enumerate via the message_attachments
+  // ⨝ messages ⨝ conversations join WHERE conversations.user_id =
+  // departing_user. DSAR-exports purge (next try-block) is unchanged.
   try {
-    const folders = await listAllStorageObjects(service.storage, "chat-attachments", userId);
-
-    if (folders.length > 0) {
-      const allPaths: string[] = [];
-      for (const folderName of folders) {
-        const files = await listAllStorageObjects(
-          service.storage,
-          "chat-attachments",
-          `${userId}/${folderName}`,
-        );
-        allPaths.push(...files.map((f) => `${userId}/${folderName}/${f}`));
-      }
+    const { data: ownedAttachments, error: listErr } = await service
+      .from("message_attachments")
+      .select("storage_path, messages!inner(conversation_id, conversations!inner(user_id))")
+      .eq("messages.conversations.user_id", userId);
+    if (listErr) {
+      log.warn(
+        { userId, err: listErr },
+        "Failed to enumerate owned-conv chat-attachments during deletion (non-fatal)",
+      );
+    } else if (ownedAttachments && ownedAttachments.length > 0) {
+      const allPaths = ownedAttachments
+        .map((row) => (row as { storage_path: string }).storage_path)
+        .filter((p): p is string => typeof p === "string" && p.length > 0);
       if (allPaths.length > 0) {
         await service.storage.from("chat-attachments").remove(allPaths);
       }
@@ -426,6 +431,77 @@ export async function deleteAccount(
       op: "anonymise-workspace-member-attestations",
       extra: { userId },
       message: "anonymise_workspace_member_attestations threw — aborting deletion",
+    });
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.901 Cascade-pseudonymise messages.user_id on shared-workspace
+  //       conversations the departing user authored attachments in
+  //       (migration 068, #4318). Sets messages.user_id = NULL on
+  //       authored-with-attachments rows in conversations the
+  //       departing user does NOT own — preserves the message body
+  //       for surviving co-members while severing PII linkage. Runs
+  //       BEFORE 3.905 (workspace_member_removals anonymise) so the
+  //       cascade RPC iterates workspaces while membership rows are
+  //       still resolvable. Runs BEFORE 3.91 (workspace_members
+  //       DELETE) so is_workspace_member predicates inside the RPC
+  //       still return true. Phase 0 emergent finding E-1: pseudonym
+  //       is NULL (not 'member_<hex>') because messages.user_id has
+  //       an FK to auth.users(id) ON DELETE CASCADE.
+  //
+  //       Runtime ordering guard (architecture P1-3): if no
+  //       workspace_members row exists for this user at invocation
+  //       time, a sibling step already ran out-of-order and the
+  //       cascade would silently skip. Sentry-warn but do not abort.
+  try {
+    const { count: memberCount, error: memberCountErr } = await service
+      .from("workspace_members")
+      .select("workspace_id", { count: "exact", head: true })
+      .eq("user_id", userId);
+    if (memberCountErr) {
+      reportSilentFallback(memberCountErr, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message: "ordering-guard probe failed — proceeding to RPC",
+      });
+    } else if ((memberCount ?? 0) === 0) {
+      // Cascade-order regression detector: a sibling step already
+      // emptied workspace_members. The RPC will return 0 affected
+      // rows; Sentry-warn at structured P1.
+      reportSilentFallback(null, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message:
+          "ordering-guard tripped: workspace_members empty before cascade — sibling step ran out of order",
+      });
+    }
+    const { data: anonCount, error: anonErr } = await service.rpc(
+      "anonymise_departed_user_across_workspaces",
+      { p_departing_user: userId },
+    );
+    if (anonErr) {
+      reportSilentFallback(anonErr, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message:
+          "anonymise_departed_user_across_workspaces failed — aborting deletion",
+      });
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+    log.info(
+      { userId, anonymisedMessageCount: anonCount ?? 0 },
+      "anonymise_departed_user_across_workspaces completed",
+    );
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-authored-messages-shared-workspaces",
+      extra: { userId },
+      message:
+        "anonymise_departed_user_across_workspaces threw — aborting deletion",
     });
     return { success: false, error: "Account deletion failed. Please try again." };
   }

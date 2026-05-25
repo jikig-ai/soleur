@@ -225,6 +225,13 @@ export async function updateWorkspaceMemberRole(
  * Order:
  *  1. SQL RPC `remove_workspace_member` — atomic delete of workspace_members
  *     row + RAISE on AC-FLOW4 (owner cannot remove self).
+ *     **mig 068 #4318 (E-1)**: the RPC body ALSO calls the internal helper
+ *     `_anonymise_authored_messages_internal(p_user_id, p_workspace_id)`
+ *     BEFORE the DELETE FROM workspace_members. This nulls the departing
+ *     member's `messages.user_id` for their authored-with-attachments rows
+ *     in shared-workspace conversations (i.e., conversations they do NOT
+ *     own). No TS-side cascade step is needed here — atomicity lives
+ *     inside the SECURITY DEFINER RPC.
  *  2. `abortAllWorkspaceMemberSessions` — local-process agent SIGTERM.
  *  3. WS close with `MEMBERSHIP_REVOKED` preamble — drives the terminal
  *     screen on the removed user's client.

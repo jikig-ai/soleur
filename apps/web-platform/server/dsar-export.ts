@@ -190,7 +190,15 @@ const STORAGE_BUCKET = "dsar-exports";
 // Bumped to 1.1.0 by #4319 — adds top-level `redactions[]` field
 // disclosing Art. 15(4) author-only redactions to the subject (EDPB
 // Guidelines 01/2022 §176). Paired bump in dsar-export-oversize.sh:130.
-const MANIFEST_SCHEMA_VERSION = "1.1.0";
+//
+// Bumped to 1.2.0 by #4318 (mig 068) — adds optional per-entry
+// `redacted` / `redaction_reason` / `uploader_pseudonym` fields on
+// `ManifestFileEntry` so co-uploader files in workspace-shared
+// conversations can be disclosed via Art. 15 with bytes redacted.
+// Forward-compatible invariant (architecture P1-4): absence of
+// `redacted` MEANS "not redacted"; 1.1.0 readers transparently ignore
+// unknown fields. Paired bump in dsar-export-oversize.sh:130.
+const MANIFEST_SCHEMA_VERSION = "1.2.0";
 const SIZE_CAP_BYTES =
   (Number(process.env.DSAR_EXPORT_SIZE_CAP_MB) || 1024) * 1024 * 1024;
 
@@ -220,6 +228,12 @@ interface ManifestFileEntry {
   sha256?: string;
   bytes?: number;
   reason?: string;
+  // Schema 1.2.0 (#4318): co-uploader byte-redaction fields. Absence
+  // means "not redacted" (forward-compatible invariant; 1.1.0 readers
+  // ignore unknown fields per architecture P1-4).
+  redacted?: boolean;
+  redaction_reason?: "art-15-co-uploader";
+  uploader_pseudonym?: string;
 }
 
 interface ManifestRoot {
@@ -1194,9 +1208,42 @@ async function enumerateChatAttachments(
   expectedUserId: string,
   signal: AbortSignal,
 ): Promise<AttachmentBinary[]> {
+  // SCOPE NOTE (#4318 / mig 068): this function enumerates Storage
+  // objects under `<expectedUserId>/...` only. Co-uploader files in
+  // shared-workspace conversations the requester participated in (paths
+  // shaped `<otherUserId>/<sharedConvId>/...`) are NOT yet included.
+  // The manifest schema is bumped to 1.2.0 with forward-compatible
+  // `redacted` fields so a follow-up PR can add the co-uploader
+  // enumeration without re-bumping. The scope cut is bounded: prd has
+  // zero multi-user workspaces today (TEAM_WORKSPACE_INVITE_ENABLED
+  // OFF), so no co-uploader files exist to enumerate. The follow-up
+  // gates the flag flip — same pattern as OQ#3 (workspace-deletion
+  // orphan paths). See follow-up issue filed at the OQ#3-class label.
   const service = createServiceClient();
   const bucket = service.storage.from("chat-attachments");
   const results: AttachmentBinary[] = [];
+
+  // Pre-compute the set of conversation IDs the requester participated
+  // in (authored at least one message). Architecture P1-5 final-defense
+  // layer (#4318 / mig 068): before each byte download, the convId
+  // segment of the path MUST resolve to a conv in this set. This is
+  // defense-in-depth against a join bug leaking bytes from convs the
+  // requester never touched. The set is read-once + held in closure
+  // (typical bundle has O(10) convs; no streaming required).
+  const { data: participatedRows, error: convErr } = await service
+    .from("messages")
+    .select("conversation_id")
+    .eq("user_id", expectedUserId);
+  if (convErr) {
+    throw new Error(
+      `chat-attachments pre-download participation probe failed: ${convErr.message}`,
+    );
+  }
+  const participatedConvs = new Set<string>(
+    (participatedRows ?? [])
+      .map((r) => (r as { conversation_id: string }).conversation_id)
+      .filter((id): id is string => typeof id === "string"),
+  );
 
   // Two-level listing: <userId>/<convId>/<file>. The convId folders
   // are discovered by listing under the user's prefix.
@@ -1230,6 +1277,12 @@ async function enumerateChatAttachments(
       for (const file of inner ?? []) {
         const storagePath = `${subPrefix}/${file.name}`;
         assertSafeStoragePath(storagePath, expectedUserId);
+        // P1-5 pre-download seam: the convId segment MUST be in the
+        // requester's participation set. The path-prefix guard above
+        // already binds segment-1 to expectedUserId, so the only way
+        // segment-2 could be foreign is a join bug in this function.
+        // Fail-job-loud to surface the regression.
+        assertConvIdParticipation(folder.name, expectedUserId, participatedConvs);
         const buf = await downloadAttachment(bucket, storagePath, signal);
         results.push({
           storagePath,
@@ -1240,6 +1293,8 @@ async function enumerateChatAttachments(
     } else {
       const storagePath = subPrefix;
       assertSafeStoragePath(storagePath, expectedUserId);
+      // Bare file directly under <userId>/ has no convId segment to
+      // verify; the path-prefix guard alone gates this case.
       const buf = await downloadAttachment(bucket, storagePath, signal);
       results.push({
         storagePath,
@@ -1250,6 +1305,27 @@ async function enumerateChatAttachments(
   }
 
   return results;
+}
+
+function assertConvIdParticipation(
+  convIdSegment: string,
+  expectedUserId: string,
+  participatedConvs: Set<string>,
+): void {
+  // Path-shape check (segment must look like a uuid; segments that are
+  // not uuids are accepted only if the participation set explicitly
+  // includes them — the legacy schema places attachments at
+  // <userId>/<convId>/, but a defensive caller may pass a non-uuid
+  // folder name).
+  if (!participatedConvs.has(convIdSegment)) {
+    const err = new CrossTenantViolation(
+      "chat-attachments",
+      expectedUserId,
+      null,
+    );
+    mirrorCrossTenantViolation(null, expectedUserId, "chat-attachments", err);
+    throw err;
+  }
 }
 
 function assertSafeStoragePath(
