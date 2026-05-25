@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { SettingsShell } from "@/components/settings/settings-shell";
-import { isTeamWorkspaceInviteEnabled } from "@/lib/feature-flags/server";
+import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 import { getCurrentOrganizationId } from "@/server/workspace-resolver";
 
 // Server-side flag evaluation. AC-A requires the "Members" link href
@@ -19,7 +19,8 @@ async function resolveMembersTab(): Promise<{ href: string; label: string } | nu
   const orgId = getCurrentOrganizationId(session);
   if (!orgId) return null;
 
-  if (!isTeamWorkspaceInviteEnabled(orgId)) return null;
+  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) return null;
   return { href: "/dashboard/settings/team", label: "Members" };
 }
 
