@@ -10,8 +10,8 @@
 --   * is_jti_denied(uuid) is now GRANTed EXECUTE TO authenticated.
 --   * revoke_jti is NOT granted to authenticated (service-role-only).
 --   * my_revocation_status is granted TO authenticated.
---   * Exactly 19 RESTRICTIVE policies named *_jti_not_denied exist.
---   * Each of the 19 tenant tables has its own policy.
+--   * Exactly 21 RESTRICTIVE policies named *_jti_not_denied exist.
+--   * Each of the 21 tenant tables has its own policy.
 
 -- (1) revoke_jti present + SECURITY DEFINER
 SELECT 'revoke_jti_fn_present' AS check_name,
@@ -65,15 +65,15 @@ SELECT 'my_revocation_status_authenticated_grant_present',
               'EXECUTE'
             ) THEN 0 ELSE 1 END::int
 UNION ALL
--- (7) Exactly 19 RESTRICTIVE jti_not_denied policies
-SELECT 'jti_deny_policies_count_19',
-       CASE WHEN count(*) = 19 THEN 0 ELSE 1 END::int
+-- (7) Exactly 21 RESTRICTIVE jti_not_denied policies
+SELECT 'jti_deny_policies_count_21',
+       CASE WHEN count(*) = 21 THEN 0 ELSE 1 END::int
   FROM pg_policies
  WHERE schemaname = 'public'
    AND policyname LIKE '%_jti_not_denied'
    AND permissive = 'RESTRICTIVE'
 UNION ALL
--- (8-26) Per-table presence assertions (one row per tenant table)
+-- (8-28) Per-table presence assertions (one row per tenant table)
 SELECT 'conversations_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='conversations'
@@ -167,4 +167,39 @@ UNION ALL
 SELECT 'message_attachments_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='message_attachments'
-   AND policyname='message_attachments_jti_not_denied' AND permissive='RESTRICTIVE';
+   AND policyname='message_attachments_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
+SELECT 'organizations_jti_not_denied_policy_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_policies WHERE schemaname='public' AND tablename='organizations'
+   AND policyname='organizations_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
+SELECT 'workspace_member_removals_jti_not_denied_policy_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_policies WHERE schemaname='public' AND tablename='workspace_member_removals'
+   AND policyname='workspace_member_removals_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
+-- (29-31) anon-role REVOKE matrix: none of the three 068 functions
+-- must be EXECUTE-able by anon. Pre-fix, the sentinel asserted only
+-- the authenticated REVOKE matrix; an accidental future GRANT TO anon
+-- (e.g. via PUBLIC) would slip past CI unobserved.
+SELECT 'revoke_jti_anon_revoke_present',
+       CASE WHEN has_function_privilege(
+              'anon',
+              'public.revoke_jti(uuid, uuid, text)',
+              'EXECUTE'
+            ) THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'my_revocation_status_anon_revoke_present',
+       CASE WHEN has_function_privilege(
+              'anon',
+              'public.my_revocation_status()',
+              'EXECUTE'
+            ) THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'is_jti_denied_from_jwt_anon_revoke_present',
+       CASE WHEN has_function_privilege(
+              'anon',
+              'public.is_jti_denied_from_jwt()',
+              'EXECUTE'
+            ) THEN 1 ELSE 0 END::int;
