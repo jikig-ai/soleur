@@ -77,3 +77,7 @@ Future TR9 children using `claude-code-action` (group-(c) agent-loop crons remai
 7. `git rm` the GHA YAML in the same commit.
 
 The "reviewer's burden reduces to: does each named diff match the workflow's documented semantics?" observation from the plan (§6.5) holds: with two precedent shapes in tree, every remaining `scheduled-*` migration is a precedent-diff exercise rather than a fresh architectural decision.
+
+## Session Errors
+
+PR-8 (#4439) reused this pattern verbatim — 5 helpers + handler shape unchanged; only opus-4-7 model + cap-enforcement-already-in-prompt differ from PR-7.
