@@ -7,7 +7,7 @@ plan: knowledge-base/project/plans/2026-05-25-feat-anthropic-leader-loop-pr-b-pl
 
 # Tasks — PR-B Anthropic SDK leader-prompt loop
 
-Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (AC18); mig 067 BEFORE function-body change (AC3 columns must exist); wrappers BEFORE Inngest body (AC4/AC5 must be importable); Today card UX AFTER Inngest function (AC11 reads from the new columns).
+Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (AC18); mig 069 BEFORE function-body change (AC3 columns must exist); wrappers BEFORE Inngest body (AC4/AC5 must be importable); Today card UX AFTER Inngest function (AC11 reads from the new columns).
 
 ## Phase 0 — Pre-implementation reality check
 
@@ -25,13 +25,13 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 - [ ] **1.5** Commit ADRs + script in two commits (ADRs in one, script + CI wire in another for atomic revert).
 - [ ] **1.6** Push to `feat-4379-anthropic-leader-loop` (`rf-before-spawning-review-agents-push-the` — push before any review or downstream work).
 
-## Phase 2 — Migration 067 (AC3)
+## Phase 2 — Migration 069 (AC3) — renumbered from plan-time 067 after Phase 8.1 collision check found origin/main had taken 067 + 068
 
-- [x] **2.1** Author `apps/web-platform/supabase/migrations/067_action_sends_leader_loop.sql` (up) per AC3 SQL body. NO outer BEGIN/COMMIT (Supabase runner wraps).
-- [x] **2.2** Author `apps/web-platform/supabase/migrations/067_action_sends_leader_loop.down.sql` (down — drop 6 columns).
-- [x] **2.3** Author `apps/web-platform/test/supabase-migrations/067-action-sends-leader-loop.test.ts` per AC3 (a-e) test specs. **[Done — 13 shape assertions, all green. Tests are static-shape (read SQL as text), not live-DB integration. Live-DB integration deferred to Phase 8 (TENANT_INTEGRATION_TEST).]**
-- [ ] **2.4** Run `TENANT_INTEGRATION_TEST=1 npm test -- 067-action-sends-leader-loop.test.ts` against dev Supabase per `hr-dev-prd-distinct-supabase-projects`. RED first (test passes only after up-migration runs). **[Deferred to Phase 8 pre-merge — current test is static shape; live DB roundtrip is its own task.]**
-- [ ] **2.5** Apply migration to dev Supabase via the standard runner. Verify schema diff against an existing dev row. **[Deferred to Phase 8 pre-merge.]**
+- [x] **2.1** Author `apps/web-platform/supabase/migrations/069_action_sends_leader_loop.sql` (up) per AC3 SQL body. NO outer BEGIN/COMMIT (Supabase runner wraps).
+- [x] **2.2** Author `apps/web-platform/supabase/migrations/069_action_sends_leader_loop.down.sql` (down — drop 6 columns).
+- [x] **2.3** Author `apps/web-platform/test/supabase-migrations/069-action-sends-leader-loop.test.ts` per AC3 (a-e) test specs. **[Done — 13 shape assertions, all green. Tests are static-shape (read SQL as text), not live-DB integration. Live-DB integration deferred to Phase 8 (TENANT_INTEGRATION_TEST).]**
+- [x] **2.4** Run `npm test -- 069-action-sends-leader-loop.test.ts` against the static-shape harness — **[Done — 13/13 pass post-rename.]** Live `TENANT_INTEGRATION_TEST=1` round-trip is its own task and remains deferred per the existing infra gap (no live-DB harness in repo yet).
+- [x] **2.5** Apply migration 069 to dev Supabase via Doppler `DATABASE_URL_POOLER` (pooler URL :6543→:5432 session mode for multi-statement DDL) per the hr-dev-prd-distinct-supabase-projects fallback chain. Schema verified — 6 columns present, types match AC3 spec. content_sha tracker row written. Evidence: `knowledge-base/project/specs/feat-4379-anthropic-leader-loop/migration-checklist.md`.
 - [x] **2.6** Commit + push.
 
 ## Phase 3 — Greenfield wrappers (AC4 / AC16 / AC2)
@@ -77,13 +77,13 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 
 - [x] **5.1** Author `apps/web-platform/components/dashboard/failure-reason-copy.ts` per AC10 table.
 - [x] **5.2** Author `apps/web-platform/test/components/dashboard/failure-reason-copy.test.ts` (exhaustive coverage + Retry-eligibility per reason). **[34 tests; pins every Retry-eligibility value per AC10 spec.]**
-- [ ] **5.3** Extend `apps/web-platform/components/dashboard/today-card.tsx` — **[DEFERRED to a follow-up commit. State-matrix logic landed as a pure derivation in `today-card-state-matrix.ts` (5.3.b is the load-bearing decision layer; consumed by today-card.tsx). Realtime subscription + Stop / Undo / Cost button wiring (5.3.a / c / d / e / f) + 2s polling fallback are pure UI integration with no behavioral change to the leader loop. Phase 9 dogfood will catch any wiring gaps before merge.]**
-  - **5.3.a** Add Supabase Realtime subscription on `action_sends` row (RLS-scoped). _(deferred)_
-  - [x] **5.3.b** Implement state matrix per AC11 (7 rows, priority order). **[Pure derivation in `today-card-state-matrix.ts` + 13 tests covering all 7 rows, priority precedence (failure_reason > undone_at > acknowledged_at > cancellation > working > pre-turn-1), and CPO-2 no-raw-reason-leak across all 15 failure_reason values.]**
-  - **5.3.c** Stop button (AC13) — POST `/api/dashboard/today/[id]/cancel`. _(deferred — route shipped 5.4.a)_
-  - **5.3.d** Undo button (AC14) — POST `/api/dashboard/today/[id]/undo`. _(deferred — route shipped 5.4.b)_
-  - **5.3.e** Cost display (AC15) — GET `/api/dashboard/today/[id]/cost`; refresh on Realtime UPDATE. _(deferred — route shipped 5.4.c)_
-  - **5.3.f** Polling fallback at 2s if Realtime subscription fails (spec FR3). _(deferred)_
+- [x] **5.3** Extend `apps/web-platform/components/dashboard/today-card.tsx` — wiring landed via new shared `LeaderLoopStatus` component (`components/dashboard/leader-loop-status.tsx`) + extracted `AcknowledgedPill` (`components/dashboard/acknowledged-pill.tsx`). Both `KbDriftCard` and `GitHubCard` render `<LeaderLoopStatus>` after non-degraded acknowledgment; the degraded paths (`enqueue_failed`, `no_artifact_in_pr_a`) preserve the inline pill for backwards-compat.
+  - [x] **5.3.a** Supabase Realtime subscription on `action_sends` row keyed by `message_id=eq.<id>` (RLS-scoped via tenant client).
+  - [x] **5.3.b** State matrix per AC11 — `LeaderLoopStatus` consumes `deriveTodayCardState(...)` from `today-card-state-matrix.ts`.
+  - [x] **5.3.c** Stop button (AC13) — POST `/cancel` with optimistic UI flip to "stopping".
+  - [x] **5.3.d** Undo button (AC14) — POST `/undo`; 207 renders the per-element ledger; 409 renders "Already undone".
+  - [x] **5.3.e** Cost badge (AC15) — GET `/cost` on mount + on every Realtime UPDATE; format `Cost: $X.XX (N turn(s))`.
+  - [x] **5.3.f** 2s polling fallback when subscription state transitions to CLOSED / CHANNEL_ERROR / TIMED_OUT (spec FR3).
 - [x] **5.4** Author API routes per `cq-nextjs-route-files-http-only-exports`:
   - [x] **5.4.a** `apps/web-platform/app/api/dashboard/today/[id]/cancel/route.ts` (AC13).
   - [x] **5.4.b** `apps/web-platform/app/api/dashboard/today/[id]/undo/route.ts` (AC9 + AC14 — multi-handle reversal with per-element error handling + merged-PR guard + 207 multi-status partial-failure rewrite).
@@ -158,7 +158,7 @@ Per `wg-when-deferring-a-capability-create-a` + new `wg-defer-only-after-inline-
 ```mermaid
 flowchart TD
   P0[Phase 0 reality-check] --> P1[Phase 1 ADRs]
-  P1 --> P2[Phase 2 Mig 067]
+  P1 --> P2[Phase 2 Mig 069]
   P2 --> P3[Phase 3 Wrappers + Registry]
   P3 --> P4[Phase 4 Inngest function body]
   P4 --> P5[Phase 5 Today card UX]

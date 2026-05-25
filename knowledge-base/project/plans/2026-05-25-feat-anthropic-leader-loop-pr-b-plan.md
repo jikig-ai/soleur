@@ -34,8 +34,8 @@ Run per `hr-when-in-a-worktree-never-read-from-bare`, `2026-05-20-plan-vs-shippe
 
 | # | Spec says | Reality on `main` (post-#4357) | Plan resolution |
 |---|---|---|---|
-| 1 | "Migration 065 adding `reversal_handle jsonb` / `current_turn` …" | **`065_art17_cascade_deadlock_repair.sql` + `066_audit_byok_use_art17_carveout.sql` already taken** (PR #4357, merged 2026-05-25 same day). Next free ordinal: **067**. | Renumber all migration refs to **067**. New filename: `apps/web-platform/supabase/migrations/067_action_sends_leader_loop.sql`. Update test filename to `067-action-sends-leader-loop.test.ts`. |
-| 2 | "Extend WORM trigger admit-list to admit UPDATEs on these new columns." | Mig 064's WORM trigger uses `BEFORE UPDATE OF <pre-064 immutable column list>` (`064_action_sends_acknowledgment.sql:62-78`) — the trigger fires ONLY when a *listed* column is in the SET list. **UPDATEs on any non-listed column are admitted by default**, no admit-list extension needed. | Mig 067 only `ADD COLUMN IF NOT EXISTS` × 6. The trigger needs no change. **Plan-time test addition:** AC-WORM-NEW (a) UPDATE setting only new columns succeeds, (b) UPDATE setting any pre-064 column still rejects. This is a behavioral test of the existing trigger, not a trigger reshape. |
+| 1 | "Migration 065 adding `reversal_handle jsonb` / `current_turn` …" | **`065_art17_cascade_deadlock_repair.sql` + `066_audit_byok_use_art17_carveout.sql` already taken** (PR #4357, merged 2026-05-25 same day). Next free ordinal: **067**. | Renumber all migration refs to **067**. New filename: `apps/web-platform/supabase/migrations/069_action_sends_leader_loop.sql`. Update test filename to `069-action-sends-leader-loop.test.ts`. |
+| 2 | "Extend WORM trigger admit-list to admit UPDATEs on these new columns." | Mig 064's WORM trigger uses `BEFORE UPDATE OF <pre-064 immutable column list>` (`064_action_sends_acknowledgment.sql:62-78`) — the trigger fires ONLY when a *listed* column is in the SET list. **UPDATEs on any non-listed column are admitted by default**, no admit-list extension needed. | Mig 069 only `ADD COLUMN IF NOT EXISTS` × 6. The trigger needs no change. **Plan-time test addition:** AC-WORM-NEW (a) UPDATE setting only new columns succeeds, (b) UPDATE setting any pre-064 column still rejects. This is a behavioral test of the existing trigger, not a trigger reshape. |
 | 3 | Brainstorm Open Q #5: "Realtime subscription RLS-respect (fallback to polling if not)." | Functional-discovery surfaced **Inngest Realtime** (`step.realtime.publish()` + `useRealtime` hook) as the canonical Inngest-native progress channel — purpose-built for streaming in-flight function progress; no Supabase Realtime RLS-respect question to answer. | **Decision locked in brainstorm**: Supabase Realtime stays as the chosen channel. **Plan-time advisory** [Updated 2026-05-25]: file follow-up issue tracking *"Reconsider Supabase Realtime → Inngest Realtime swap after PR-B dogfood"* for after-merge cost/latency evaluation. Do NOT swap mid-PR. |
 | 4 | "ADR-039 (Anthropic-SDK-inside-Inngest pattern)" — issue #4379 cites | **ADR-039 is taken** by `ADR-039-departed-member-removal-ledger.md` (landed in #4294). Next free ordinals: **040, 041**. | Authoring **ADR-040** (Anthropic-SDK-inside-Inngest pattern) + **ADR-041** (BYOK cap enforcement model). Brainstorm correctly flagged this; plan inherits. Pre-merge guard `scripts/check-adr-ordinals.sh` scans filenames (NOT `INDEX.md` — that file does not exist in the decisions directory). |
 | 5 | "Reference Inngest impls: `cfo-on-payment-failed.ts:199`" | Confirmed at `cfo-on-payment-failed.ts:198-217`. **Important detail**: the reference impl currently uses the `byok-audit-writer-sweep: out-of-scope` marker because it returns `{tokenCount:0, unitCostCents:0}` stub values. PR-B's Anthropic-SDK call DOES real work, so PR-B's lease-opening site **REMOVES the marker** and adds a real `persistTurnCost(...)` call paired in the same `step.run`. | Document in ADR-040 §Decision and ensure the `byok-audit-writer-sweep` lint passes against the new site (no marker; real `persistTurnCost` call). |
@@ -132,7 +132,7 @@ export interface LeaderPromptModule {
 
 ### AC3 — Migration 067 (renumbered from spec's "065")
 
-`apps/web-platform/supabase/migrations/067_action_sends_leader_loop.sql`:
+`apps/web-platform/supabase/migrations/069_action_sends_leader_loop.sql`:
 
 ```sql
 ALTER TABLE public.action_sends
@@ -171,7 +171,7 @@ ALTER TABLE public.action_sends
   DROP COLUMN IF EXISTS undone_at;
 ```
 
-**Test:** `apps/web-platform/test/supabase-migrations/067-action-sends-leader-loop.test.ts` asserts:
+**Test:** `apps/web-platform/test/supabase-migrations/069-action-sends-leader-loop.test.ts` asserts:
 
 - (a) 6 new columns exist NULL-defaulting.
 - (b) UPDATE setting only any subset of {`reversal_handles`, `current_turn`, `current_turn_started_at`, `cancellation_requested_at`, `prompt_version`, `undone_at`} succeeds (trigger does not fire).
@@ -556,11 +556,11 @@ Commit 3: `scripts/check-adr-ordinals.sh` (per AC18) + add to CI workflow. **Tes
 
 ### Phase 2 — Migration 067 (lands SECOND)
 
-Commit 4: `apps/web-platform/supabase/migrations/067_action_sends_leader_loop.sql` (and `.down.sql`) per AC3.
+Commit 4: `apps/web-platform/supabase/migrations/069_action_sends_leader_loop.sql` (and `.down.sql`) per AC3.
 
-Commit 5: `apps/web-platform/test/supabase-migrations/067-action-sends-leader-loop.test.ts` per AC3 test specs (a-e).
+Commit 5: `apps/web-platform/test/supabase-migrations/069-action-sends-leader-loop.test.ts` per AC3 test specs (a-e).
 
-Run `TENANT_INTEGRATION_TEST=1 npm test -- 067-action-sends-leader-loop.test.ts` against dev Supabase per `hr-dev-prd-distinct-supabase-projects`.
+Run `TENANT_INTEGRATION_TEST=1 npm test -- 069-action-sends-leader-loop.test.ts` against dev Supabase per `hr-dev-prd-distinct-supabase-projects`.
 
 ### Phase 3 — Greenfield wrappers (lands THIRD, no Inngest body change yet)
 
@@ -620,7 +620,7 @@ Per AC20 + AC21:
 
 | Test | Path | Asserts |
 |---|---|---|
-| Mig 067 schema + WORM default-admit | `apps/web-platform/test/supabase-migrations/067-*.test.ts` | AC3 (a-e) |
+| Mig 069 schema + WORM default-admit | `apps/web-platform/test/supabase-migrations/067-*.test.ts` | AC3 (a-e) |
 | BYOK cap RPC wrapper | `apps/web-platform/test/server/byok-cap-rpc.test.ts` | AC4 (a-d) |
 | Leader prompt registry | `apps/web-platform/test/server/inngest/leader-prompts/prompt-version-stability.test.ts` | AC2 + tool enumeration |
 | Tool surface allowlist | `apps/web-platform/test/server/inngest/leader-prompts/tool-surface.test.ts` | AC8 (probeOctokit grep + per-class subset) |
@@ -719,7 +719,7 @@ sequenceDiagram
     Inn->>DB: (if n==8) UPDATE failure_reason="leader_max_turns_exceeded"
 ```
 
-### Action_sends column extensions (mig 067)
+### Action_sends column extensions (mig 069)
 
 ```mermaid
 erDiagram
@@ -734,12 +734,12 @@ erDiagram
         timestamptz acknowledged_at "mig 064"
         text artifact_url "mig 064"
         text failure_reason "mig 064"
-        jsonb reversal_handles "NEW mig 067 — JSONB array of per-artifact reversal records"
-        smallint current_turn "NEW mig 067 — 1..8 in-flight"
-        timestamptz current_turn_started_at "NEW mig 067"
-        timestamptz cancellation_requested_at "NEW mig 067 — Stop button"
-        text prompt_version "NEW mig 067 — sha256 pinned at loop start"
-        timestamptz undone_at "NEW mig 067 — Undo button success"
+        jsonb reversal_handles "NEW mig 069 — JSONB array of per-artifact reversal records"
+        smallint current_turn "NEW mig 069 — 1..8 in-flight"
+        timestamptz current_turn_started_at "NEW mig 069"
+        timestamptz cancellation_requested_at "NEW mig 069 — Stop button"
+        text prompt_version "NEW mig 069 — sha256 pinned at loop start"
+        timestamptz undone_at "NEW mig 069 — Undo button success"
     }
 ```
 
@@ -747,7 +747,7 @@ erDiagram
 
 ### Rollout
 
-PR-B is **NOT** behind a feature flag for the substrate (the loop replaces the stub body wholesale; reverting is `git revert` of the function-body commit + mig 067 down-migration). The 5 per-class leader prompts can be individually disabled in dogfood by editing the registry to throw `failure_reason = "leader_class_disabled"` for a specific class — but this is operator-side, not a runtime flag.
+PR-B is **NOT** behind a feature flag for the substrate (the loop replaces the stub body wholesale; reverting is `git revert` of the function-body commit + mig 069 down-migration). The 5 per-class leader prompts can be individually disabled in dogfood by editing the registry to throw `failure_reason = "leader_class_disabled"` for a specific class — but this is operator-side, not a runtime flag.
 
 ### Risk register
 

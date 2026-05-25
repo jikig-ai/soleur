@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-// Migration-shape test for 067_action_sends_leader_loop.sql (#4379, PR-B).
+// Migration-shape test for 069_action_sends_leader_loop.sql (#4379, PR-B).
 //
 // Adds 6 nullable columns to public.action_sends for the leader-prompt
 // loop: reversal_handles (JSONB ARRAY — multi-tool classes per AC9),
@@ -18,11 +18,11 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/067_action_sends_leader_loop.sql",
+  "../../supabase/migrations/069_action_sends_leader_loop.sql",
 );
 const DOWN_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/067_action_sends_leader_loop.down.sql",
+  "../../supabase/migrations/069_action_sends_leader_loop.down.sql",
 );
 
 const NEW_COLUMNS = [
@@ -34,7 +34,7 @@ const NEW_COLUMNS = [
   "undone_at",
 ] as const;
 
-describe("migration 067_action_sends_leader_loop", () => {
+describe("migration 069_action_sends_leader_loop", () => {
   const sql = readFileSync(MIGRATION_PATH, "utf8");
   const down = readFileSync(DOWN_PATH, "utf8");
   const executable = sql.replace(/--[^\n]*/g, "");
@@ -95,7 +95,7 @@ describe("migration 067_action_sends_leader_loop", () => {
   it("does NOT reshape the action_sends_no_update trigger (no DROP TRIGGER)", () => {
     // Plan Reality-Check Findings row 2: mig 064's trigger uses
     // BEFORE UPDATE OF <pre-064 columns> form; UPDATEs touching only the
-    // new columns are admitted by default. Mig 067 must NOT alter the
+    // new columns are admitted by default. Mig 069 must NOT alter the
     // trigger — doing so would risk breaking the existing admit-list for
     // mig-064's three columns.
     expect(executable).not.toMatch(

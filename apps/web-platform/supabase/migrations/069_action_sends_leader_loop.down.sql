@@ -1,8 +1,8 @@
--- 067_action_sends_leader_loop.down.sql (#4379 PR-B)
+-- 069_action_sends_leader_loop.down.sql (#4379 PR-B)
 --
 -- Restores the pre-067 schema: drop the 6 nullable leader-loop columns.
 --
--- No WORM trigger work in the down (symmetric to the up — mig 067 did not
+-- No WORM trigger work in the down (symmetric to the up — mig 069 did not
 -- alter the action_sends_no_update trigger because the BEFORE UPDATE OF
 -- form admits UPDATEs on non-listed columns by default).
 --

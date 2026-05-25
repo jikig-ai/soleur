@@ -1,4 +1,4 @@
--- 067_action_sends_leader_loop.sql (#4379 PR-B — Anthropic SDK leader loop)
+-- 069_action_sends_leader_loop.sql (#4379 PR-B — Anthropic SDK leader loop)
 --
 -- Adds 6 nullable columns to public.action_sends for the per-turn leader-
 -- prompt loop. The Inngest function `agent-on-spawn-requested` (PR-B body

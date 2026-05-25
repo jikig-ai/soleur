@@ -18,7 +18,7 @@ brand_survival_threshold: single-user incident
 
 **Accepted** (2026-05-25, PR #4379).
 
-Lands in the same PR as ADR-041 and migration 067 per `requires_adr: true` in the PR-B plan frontmatter. This ADR is the load-bearing precondition for the first raw `@anthropic-ai/sdk` `messages.create` site to land inside `apps/web-platform/server/` — until this ADR is accepted, the deferred-stub shape from PR-A (#4378) stands.
+Lands in the same PR as ADR-041 and migration 069 per `requires_adr: true` in the PR-B plan frontmatter. This ADR is the load-bearing precondition for the first raw `@anthropic-ai/sdk` `messages.create` site to land inside `apps/web-platform/server/` — until this ADR is accepted, the deferred-stub shape from PR-A (#4378) stands.
 
 ## Context
 

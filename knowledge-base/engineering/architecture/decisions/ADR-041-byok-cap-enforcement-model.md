@@ -18,7 +18,7 @@ brand_survival_threshold: single-user incident
 
 **Accepted** (2026-05-25, PR #4379).
 
-Lands in the same PR as ADR-040 and migration 067. ADR-040 documents the loop topology that this ADR's cap-enforcement model plugs into; the two ADRs are deliberately split for **cleaner reversibility** — a future cap-policy change (e.g., raising the per-spawn ceiling, swapping pre-call → post-call gating, or adding a new failure mode) is isolated to ADR-041 without re-opening the loop-topology decision in ADR-040.
+Lands in the same PR as ADR-040 and migration 069. ADR-040 documents the loop topology that this ADR's cap-enforcement model plugs into; the two ADRs are deliberately split for **cleaner reversibility** — a future cap-policy change (e.g., raising the per-spawn ceiling, swapping pre-call → post-call gating, or adding a new failure mode) is isolated to ADR-041 without re-opening the loop-topology decision in ADR-040.
 
 ## Context
 
