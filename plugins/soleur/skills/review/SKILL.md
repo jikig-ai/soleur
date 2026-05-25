@@ -575,9 +575,56 @@ Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
 
+**Pre-CONCUR bundling check (operator-side, runs BEFORE invoking
+`code-simplicity-reviewer`):** Before filing N separate scope-out issues —
+and before spending N CONCUR invocations — collapse items that share a
+re-evaluation trigger into a single issue with a sub-task checklist.
+
+For each pair of proposed scope-out items, ask: do they share a single
+re-evaluation trigger? A trigger is shared when ANY of the following match:
+
+- **Same event:** Both re-evaluate on the same observable signal (e.g., the
+  same migration landing, the same Sentry tag firing, the same feature
+  shipping).
+- **Same threshold:** Both gate on the same counter crossing the same
+  threshold (e.g., both wait until `count(distinct authenticated founders) >= 2`).
+- **Same architectural pivot:** Both block on the same design decision or
+  cross-cutting refactor landing in a future PR.
+
+If ≥2 items share a trigger, file ONE issue with that trigger and a
+sub-task checklist enumerating the bundled items. CONCUR is invoked once on
+the bundled issue, not N times on the individuals. Each sub-task in the
+checklist still names its own location and proposed fix so the bundled
+issue is actionable when the trigger fires.
+
+**Example:**
+
+> Item A: "admin-role design cycle — current implementation hardcodes
+> founder-only check; defer until admin role lands."
+> Item B: "RPC signature evolution for admin role — `is_admin()` needs to
+> accept role hierarchy; defer until admin role lands."
+>
+> Both trigger when admin role lands (same event). File ONE issue titled
+> `review: admin-role landing follow-ups` with a `## Sub-Tasks` checklist:
+>
+> ```markdown
+> - [ ] A: replace hardcoded founder-only check at <file>:<line>
+> - [ ] B: extend `is_admin()` signature at <file>:<line>
+> ```
+>
+> Single CONCUR call, single open issue, single closure when admin role lands.
+
+The bundling check is operator-side because `code-simplicity-reviewer` only
+sees one finding at a time and cannot recognize trigger-sharing across the
+batch. Run the check on the synthesized candidate list before any CONCUR
+invocation. If the operator misses a bundling opportunity and CONCUR is
+invoked on items that obviously share a trigger, `code-simplicity-reviewer`
+SHOULD DISSENT with `DISSENT: bundle with #<sibling-finding>` so the
+operator collapses the filings.
+
 **Second-reviewer confirmation gate:** Before creating a scope-out issue under
-any criterion, invoke `code-simplicity-reviewer` via Task. The prompt MUST
-include:
+any criterion (including a bundled issue), invoke `code-simplicity-reviewer`
+via Task. The prompt MUST include:
 
 1. The finding (location, description).
 2. The proposed fix.
