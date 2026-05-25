@@ -27,12 +27,12 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 
 ## Phase 2 — Migration 067 (AC3)
 
-- [ ] **2.1** Author `apps/web-platform/supabase/migrations/067_action_sends_leader_loop.sql` (up) per AC3 SQL body. NO outer BEGIN/COMMIT (Supabase runner wraps).
-- [ ] **2.2** Author `apps/web-platform/supabase/migrations/067_action_sends_leader_loop.down.sql` (down — drop 6 columns).
-- [ ] **2.3** Author `apps/web-platform/test/supabase-migrations/067-action-sends-leader-loop.test.ts` per AC3 (a-e) test specs.
-- [ ] **2.4** Run `TENANT_INTEGRATION_TEST=1 npm test -- 067-action-sends-leader-loop.test.ts` against dev Supabase per `hr-dev-prd-distinct-supabase-projects`. RED first (test passes only after up-migration runs).
-- [ ] **2.5** Apply migration to dev Supabase via the standard runner. Verify schema diff against an existing dev row.
-- [ ] **2.6** Commit + push.
+- [x] **2.1** Author `apps/web-platform/supabase/migrations/067_action_sends_leader_loop.sql` (up) per AC3 SQL body. NO outer BEGIN/COMMIT (Supabase runner wraps).
+- [x] **2.2** Author `apps/web-platform/supabase/migrations/067_action_sends_leader_loop.down.sql` (down — drop 6 columns).
+- [x] **2.3** Author `apps/web-platform/test/supabase-migrations/067-action-sends-leader-loop.test.ts` per AC3 (a-e) test specs. **[Done — 13 shape assertions, all green. Tests are static-shape (read SQL as text), not live-DB integration. Live-DB integration deferred to Phase 8 (TENANT_INTEGRATION_TEST).]**
+- [ ] **2.4** Run `TENANT_INTEGRATION_TEST=1 npm test -- 067-action-sends-leader-loop.test.ts` against dev Supabase per `hr-dev-prd-distinct-supabase-projects`. RED first (test passes only after up-migration runs). **[Deferred to Phase 8 pre-merge — current test is static shape; live DB roundtrip is its own task.]**
+- [ ] **2.5** Apply migration to dev Supabase via the standard runner. Verify schema diff against an existing dev row. **[Deferred to Phase 8 pre-merge.]**
+- [x] **2.6** Commit + push.
 
 ## Phase 3 — Greenfield wrappers (AC4 / AC16 / AC2)
 
