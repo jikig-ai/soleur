@@ -22,6 +22,15 @@
 # .settings[0], .email_integration, and .include all index identically
 # via `[.<path>[]?] | length`.
 #
+# SHARP EDGE: `["forget"]` actions (Terraform 1.7+ `removed { lifecycle {
+# destroy = false } }` blocks) will trip nested_deletes against this filter
+# because `change.actions = ["forget"]` is excluded only from resource_deletes
+# (the `index("delete")` check) but `before.rules` is populated while `after`
+# is null → positive count. Currently no `removed` blocks in
+# apps/web-platform/infra/; if you add one, acknowledge with `[ack-destroy]`
+# (operator intent matches) or widen the nested-clause guard to
+# `index("delete") + index("forget")`.
+#
 # PROVIDER PIN: cloudflare/cloudflare ~> 4.0 (currently 4.52.7). Two of
 # the five clauses are at risk on a v5 upgrade
 # (`ingress_rule` → `ingress` rename; `cloudflare_zone_settings_override`

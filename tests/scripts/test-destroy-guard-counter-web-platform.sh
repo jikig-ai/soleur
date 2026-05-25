@@ -19,23 +19,58 @@
 # (separate AWS_* exports + --name-transformer tf-var) per
 # 2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md:
 #   cd apps/web-platform/infra
+#   ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # ephemeral; HCL file() at plan time
 #   doppler run -p soleur -c prd_terraform -- terraform init -input=false
+#   # Targets are the source-of-truth in apply-web-platform-infra.yml.
+#   # Extract via:
+#   TARGETS=$(awk '/^[[:space:]]*-target=/ { gsub(/\\$/, ""); gsub(/^[[:space:]]+/, ""); print }' \
+#               ../../../.github/workflows/apply-web-platform-infra.yml | tr '\n' ' ')
 #   AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain) \
 #   AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain) \
 #     doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
 #       terraform plan -no-color -input=false -out=/tmp/tfplan \
-#         # ... apply-web-platform-infra.yml's full -target= allow-list
+#         -var="ssh_key_path=/tmp/ci_ssh_key.pub" $TARGETS
 #   terraform show -json /tmp/tfplan > /tmp/raw.json
-#   # MUST strip .variables AND provider-sensitive scalars (see R5 in plan).
-#   jq 'del(.variables) | del(.. | .secret_b64?) | del(.. | .private_key_pem?)' /tmp/raw.json \
+#   # MANDATORY redaction. Three secret-leak surfaces past `.variables`:
+#   #   (1) .output_changes[*].before/after when .{before,after}_sensitive=true
+#   #       — Cloudflare Access service-token client_secret (bare hex, no prefix),
+#   #         Cloudflare Tunnel connector token (base64 of {a,t,s} JSON),
+#   #         BetterStack heartbeat URL with path-segment auth, etc. The sentinel
+#   #         regex below is BLIND to bespoke unprefixed token shapes; the only
+#   #         reliable scrub is by Terraform's own sensitive-flag.
+#   #   (2) .resource_changes[].change.{before,after} for sensitive-type
+#   #         resources (doppler_secret.value, tls_private_key.private_key_pem,
+#   #         random_id.{b64_*,hex}, github_actions_secret.plaintext_value).
+#   #   (3) .planned_values / .prior_state mirror the same fields.
+#   # The filter only consumes .resource_changes[].change.actions and the
+#   # path-specific nested counts on the 5 vulnerable Cloudflare types — every
+#   # other key is dead weight.
+#   jq 'del(.variables, .planned_values, .prior_state, .configuration,
+#          .relevant_attributes)
+#       | (.output_changes // {}) |= with_entries(
+#           if (.value.before_sensitive == true or .value.after_sensitive == true)
+#           then .value.before = null | .value.after = null | .value.after_unknown = false
+#           else . end)
+#       | .resource_changes |= map(
+#           if (.type | IN("doppler_secret","tls_private_key","random_id",
+#                          "github_actions_secret","doppler_service_token",
+#                          "cloudflare_zero_trust_access_service_token",
+#                          "cloudflare_zero_trust_tunnel_cloudflared",
+#                          "betteruptime_heartbeat"))
+#           then .change.before = null | .change.after = null
+#                | .change.after_unknown = {}
+#                | .change.before_sensitive = false | .change.after_sensitive = false
+#           else . end)' /tmp/raw.json \
 #     > tests/scripts/fixtures/tfplan-web-platform-real-baseline.json
-#   # Verify no secret bytes survive:
-#   ! grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}' \
+#   # Verify no secret bytes survive (extended sentinel covers Cloudflare /
+#   # Doppler / Resend / Sentry bespoke shapes beyond the pre-#4419 set;
+#   # MUST still hand-review the resulting JSON for tenancy identifiers the
+#   # operator wants stripped — zone_id, account_id, tunnel_id):
+#   ! grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}' \
 #       tests/scripts/fixtures/tfplan-web-platform-real-baseline.json
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FILTER="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
 pass=0; fail=0

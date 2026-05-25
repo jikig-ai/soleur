@@ -61,6 +61,10 @@ on:
     paths:
       - "apps/web-platform/infra/**"
       - ".github/workflows/apply-web-platform-infra.yml"
+      # Defense-in-depth: re-fire on filter mutations so a PR that mutates
+      # the destroy-guard filter without touching infra still runs the
+      # apply step against `main`'s captured baseline (#4419).
+      - "tests/scripts/lib/destroy-guard-filter-web-platform.jq"
   workflow_dispatch:
     inputs:
       reason:

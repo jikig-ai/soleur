@@ -26,16 +26,23 @@
 #         -target=sentry_cron_monitor.scheduled_follow_through \
 #         -target=sentry_cron_monitor.scheduled_strategy_review
 #   terraform show -json /tmp/tfplan > /tmp/raw.json
-#   # MUST strip .variables — see hr-tfplan-fixture-redaction-mandatory.
-#   jq 'del(.variables)' /tmp/raw.json \
+#   # MANDATORY redaction: drop .variables (TF_VAR_*-sourced Doppler tokens),
+#   # planned_values/prior_state/configuration (carry resolved provider tokens
+#   # at plan time), and Sentry's per-output blocks (applyable/checks/etc.).
+#   # The filter only consumes .resource_changes and .output_changes — every
+#   # other key is dead weight AND a forward-looking secret-leak surface (a
+#   # future schema bump could expose auth_token / DSN bytes in prior_state).
+#   jq 'del(.variables, .planned_values, .prior_state, .configuration,
+#          .relevant_attributes, .applyable, .complete, .errored, .checks,
+#          .timestamp)' /tmp/raw.json \
 #     > tests/scripts/fixtures/tfplan-sentry-real-baseline.json
-#   # Verify no token bytes survive:
-#   ! grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}' \
+#   # Verify no token bytes survive (extended sentinel covers Cloudflare /
+#   # Doppler / Resend / Sentry bespoke shapes beyond the pre-#4419 set):
+#   ! grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}' \
 #       tests/scripts/fixtures/tfplan-sentry-real-baseline.json
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FILTER="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-sentry.jq"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
 pass=0; fail=0

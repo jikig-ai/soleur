@@ -37,6 +37,10 @@ on:
     branches: [main]
     paths:
       - "apps/web-platform/infra/sentry/cron-monitors.tf"
+      # Defense-in-depth: re-fire on filter mutations so a PR that mutates
+      # the destroy-guard filter without touching infra still runs the
+      # apply step against `main`'s captured baseline (#4419).
+      - "tests/scripts/lib/destroy-guard-filter-sentry.jq"
   workflow_dispatch:
     inputs:
       reason:
@@ -164,6 +168,11 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
+          # `-e` is intentionally omitted so we can capture terraform plan's
+          # exit code in $rc — plan exits non-zero on legitimate failures we
+          # want to surface, not abort silently. Re-enabled with `set -e`
+          # after the rc-capture window per
+          # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
           set -uo pipefail
           terraform plan \
             -target=sentry_cron_monitor.scheduled_terraform_drift \
@@ -183,6 +192,7 @@ jobs:
             echo "::error::terraform plan failed (exit $rc)"
             exit $rc
           fi
+          set -e
           terraform show -no-color tfplan > tfplan.txt
           # Authoritative destroy count via the structured plan, not the
           # `Plan: …` summary line. The summary-line grep is brittle and

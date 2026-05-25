@@ -88,6 +88,8 @@
 /tests/scripts/lib/destroy-guard-filter-web-platform.jq  @deruelle
 /tests/scripts/test-destroy-guard-counter-sentry.sh      @deruelle
 /tests/scripts/test-destroy-guard-counter-web-platform.sh @deruelle
+/tests/scripts/test-destroy-guard-regex-parity.sh        @deruelle
+/tests/scripts/test-destroy-guard-sentry-scope-guard.sh  @deruelle
 
 # R15 follow-up D2 — CodeQL coverage audit (#3545). Same false-pass
 # attack surface as #3544: mutating classify_codeql() to accept
