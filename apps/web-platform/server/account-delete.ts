@@ -451,15 +451,17 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
-  // 3.92 Anonymise organization membership (migration 058). For every
-  //      organization where the deleted user was owner: if no members
-  //      remain across its workspaces, the RPC DELETEs workspaces +
-  //      organization (orphan cleanup); otherwise it reassigns
-  //      owner_user_id to the oldest remaining member. Either way the
-  //      RESTRICT FK from organizations.owner_user_id → public.users(id)
-  //      is broken before the auth-delete cascade fires.
+  // 3.92 Anonymise organization membership (migration 058, simplified by
+  //      migration 065 Part 3). For every organization where the deleted
+  //      user was owner with other members remaining, the RPC reassigns
+  //      owner_user_id to the oldest remaining member. Orphan orgs (no
+  //      other members) are NOT hard-deleted here; mig 065 Part 1 changed
+  //      organizations.owner_user_id from RESTRICT to SET NULL, so the
+  //      cascade-induced auth.users delete naturally NULLs the owner. The
+  //      orphan org survives as a record-of-existence with NULL owner,
+  //      reachable by no live user via RLS, eventually purged by a janitor.
   try {
-    const { error: anonOrgErr } = await service.rpc(
+    const { data: orgsReassigned, error: anonOrgErr } = await service.rpc(
       "anonymise_organization_membership",
       { p_user_id: userId },
     );
@@ -469,6 +471,28 @@ export async function deleteAccount(
         "anonymise_organization_membership failed — aborting deletion",
       );
       return { success: false, error: "Account deletion failed. Please try again." };
+    }
+    // Surface the reassign count + count of soon-to-be-orphan orgs so a
+    // janitor / dashboard can detect runaway null-owner growth.
+    // `anonymise_organization_membership` returns the reassign count; an
+    // orphan org count is the live count of orgs owned by this user before
+    // the SET NULL cascade fires at auth-delete.
+    try {
+      const { data: orphanRows } = await service
+        .from("organizations")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_user_id", userId);
+      log.info(
+        {
+          userId,
+          orgsReassigned: orgsReassigned ?? 0,
+          orphanOrgsPendingSetNull: orphanRows ?? 0,
+        },
+        "Art-17 cascade: organization-membership state",
+      );
+    } catch (probeErr) {
+      // Observability-only; do not fail the cascade.
+      log.warn({ userId, err: probeErr }, "orphan-org probe failed (non-fatal)");
     }
   } catch (err) {
     log.error(

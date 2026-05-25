@@ -135,9 +135,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // to raise P0001. Either rejection shape is a valid WORM enforcement
       // path; the test asserts the operation was rejected, not which layer
       // rejected first. (Mig 064 only restored SELECT; UPDATE/DELETE
-      // intentionally stay REVOKEd.)
-      const errStr = JSON.stringify(updErr);
-      expect(errStr).toMatch(/P0001|append-only|WORM|42501|permission denied/);
+      // intentionally stay REVOKEd.) Assertion targets error.code directly
+      // (not a stringify+regex) so `"permission denied for schema …"`
+      // (a different bug class — search_path drift) cannot pass via the
+      // broad `/permission denied/` substring.
+      expect(["P0001", "42501"]).toContain(
+        (updErr as { code?: string } | null)?.code,
+      );
     });
 
     test("AC4: direct DELETE on workspace_member_actions is rejected", async () => {
@@ -157,8 +161,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(delErr).not.toBeNull();
       // See AC4-UPDATE comment above: REVOKE (42501) or trigger (P0001)
       // both satisfy WORM enforcement; mig 063 layered both.
-      const errStr = JSON.stringify(delErr);
-      expect(errStr).toMatch(/P0001|append-only|WORM|42501|permission denied/);
+      expect(["P0001", "42501"]).toContain(
+        (delErr as { code?: string } | null)?.code,
+      );
     });
 
     test("AC4a + AC5: anonymise_workspace_member_actions NULL-sets PII and is idempotent", async () => {

@@ -1,6 +1,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
+ * Synthetic-only allowlist gate for tenant-isolation test users.
+ *
+ * Boundary sentinel (per `hr-write-boundary-sentinel-sweep-all-write-sites`):
+ * the helper refuses to run against any email that doesn't match the
+ * canonical tenant-isolation synthetic pattern. Mirrors the call-site
+ * `assertSynthetic` guards but pulls the check into the helper itself so
+ * a future caller copying the pattern cannot accidentally drop the guard.
+ */
+const SYNTHETIC_EMAIL_PATTERN =
+  /^tenant-isolation-[a-f0-9]{16}@soleur\.test$/;
+
+/**
  * FK-reverse cleanup for synthetic tenant-isolation users.
  *
  * Mig 053's `handle_new_user` trigger backfills every new `auth.users` row
@@ -20,20 +32,33 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * owner_user_id, audit_byok_use.founder_id) via ON DELETE SET NULL — the
  * cascade succeeds without explicit anonymise steps for those tables.
  *
- * Pattern source: `tearDownSharedWorkspace` in workspace-members-fixtures.ts
- * (which targets a multi-member fixture); this helper covers the solo-
- * canary case used in `*tenant-isolation.test.ts`.
+ * Pattern source: `tearDownSharedWorkspace` (apps/web-platform/test/
+ * helpers/workspace-members-fixtures.ts:142). That helper targets a
+ * multi-member fixture; this one covers the solo-canary case used in
+ * `*tenant-isolation.test.ts`.
  *
- * Errors are best-effort — anonymise RPCs are idempotent and may legitimately
- * no-op when the user has no rows in the target table. The final auth-delete
- * is the load-bearing step; its error (other than "not found") is surfaced
- * to the caller.
+ * Anonymise-RPC errors are NOT silently swallowed. Per
+ * `cq-silent-fallback-must-mirror-to-sentry`: a real RPC error (GRANT
+ * inversion, REVOKE drift, PGRST202 from a future signature change, P0001
+ * from a WORM-trigger regression) is exactly the class of regression that
+ * tenant-integration is designed to catch. The helper continues to the
+ * auth-delete step (cleanup must complete) but emits a structured warning
+ * with the error code so the CI signal is visible.
  */
 export async function tearDownTenantUser(
   service: SupabaseClient,
   user: { id: string | undefined; email: string },
 ): Promise<void> {
   if (!user.id) return;
+
+  // Boundary sentinel: refuse non-synthetic emails. The 7 current call
+  // sites also assertSynthetic at the call point; this in-helper check
+  // is the canonical guard.
+  if (!SYNTHETIC_EMAIL_PATTERN.test(user.email)) {
+    throw new Error(
+      `tearDownTenantUser: refusing non-synthetic email ${user.email}`,
+    );
+  }
 
   // FK-reverse anonymise sequence. Order mirrors account-delete.ts
   // steps 3.82–3.93. Each RPC is idempotent (SECURITY DEFINER + UPDATE
@@ -50,13 +75,19 @@ export async function tearDownTenantUser(
   ];
 
   for (const [rpc, args] of anonymiseSequence) {
-    try {
-      await service.rpc(rpc, args);
-    } catch {
-      // best-effort — RPCs are idempotent; a failure here usually means
-      // the user had no rows in that table (RPC returned 0). If a real
-      // permission error fires, the subsequent auth-delete will surface
-      // the cascade block.
+    const { error } = await service.rpc(rpc, args);
+    if (error) {
+      // A no-row RPC returns { data: 0, error: null } — it does not error.
+      // An error here means a real failure: REVOKE/GRANT drift, search_path
+      // inversion, schema-cache miss (PGRST202), or a WORM trigger regression.
+      // Continue with the cascade (cleanup must finish) but make the failure
+      // visible via stderr so CI captures it.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `tearDownTenantUser: ${rpc} failed for ${user.email}: ` +
+          `code=${(error as { code?: string }).code ?? "?"} ` +
+          `message=${error.message}`,
+      );
     }
   }
 

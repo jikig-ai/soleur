@@ -16,9 +16,9 @@
 -- and the entire auth.admin.deleteUser call fails with the opaque
 -- "Database error deleting user" message.
 --
--- Verified via:
---   DELETE FROM auth.users WHERE id = '<test-user-id>';
---   ERROR: audit_byok_use is append-only (WORM)
+-- Reproduction (informational; PG error strings can drift):
+-- run a synthetic auth.users delete against dev pre-066 and observe the
+-- WORM trigger RAISE on the FK SET NULL cascade UPDATE path.
 --
 -- =============================================================
 -- Repair
@@ -28,15 +28,28 @@
 -- single carve-out: allow UPDATEs whose ONLY effect is setting
 -- founder_id NOT NULL → NULL while leaving every other column unchanged.
 -- This is the Art. 17 anonymization shape — semantically a one-shot
--- transition, never reversible (no UPDATE can transition NULL → non-NULL
--- because INSERT requires NOT NULL at the application layer, only the
--- column constraint allows NULL).
+-- transition only invoked by the FK SET NULL cascade from public.users
+-- delete. Production INSERT path (`write_byok_audit`, mig 061) requires
+-- non-NULL p_founder_id and is unaffected.
 --
--- Production write_byok_audit (mig 061) is INSERT-only; mig 066 does not
--- affect it. Defense-in-depth: REVOKE ALL on the table for non-service-role
+-- DRIFT-PROOF SHAPE: rather than enumerate every non-founder_id column
+-- in an `IS NOT DISTINCT FROM` chain (which silently widens the carve-out
+-- when a future migration adds a column to audit_byok_use — a forgotten
+-- column would be implicitly allowed to mutate alongside the founder_id
+-- anonymization), compare the JSONB projections of OLD and NEW with
+-- founder_id stripped. Any added column flows through the comparison
+-- automatically and a mid-anonymization mutation of any other column
+-- breaks the equality.
+--
+-- to_jsonb(record) - 'founder_id' returns a JSONB object with the key
+-- removed. JSONB equality is deep + NULL-safe. The carve-out is exactly:
+-- "founder_id transitioned non-NULL → NULL AND every other column is
+-- structurally unchanged".
+--
+-- Defense-in-depth: REVOKE ALL on the table for non-service-role
 -- (mig 037) + WORM trigger together. The trigger no longer raises on the
--- specific anonymization UPDATE shape; all other UPDATE shapes still RAISE.
--- DELETE remains universally blocked.
+-- specific anonymization UPDATE shape; all other UPDATE shapes still
+-- RAISE. DELETE remains universally blocked.
 
 CREATE OR REPLACE FUNCTION public.audit_byok_use_no_mutate() RETURNS trigger
   LANGUAGE plpgsql
@@ -50,20 +63,12 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
-  -- UPDATE: allow only the Art-17 anonymization transition (founder_id
-  -- non-NULL → NULL with every other column unchanged). Mig 065 SET NULL
-  -- cascade produces exactly this shape; any other UPDATE shape RAISEs.
+  -- UPDATE: allow only the Art-17 anonymization transition. Drift-proof
+  -- check — see comment block above.
   IF TG_OP = 'UPDATE' THEN
     IF OLD.founder_id IS NOT NULL
        AND NEW.founder_id IS NULL
-       AND NEW.id              IS NOT DISTINCT FROM OLD.id
-       AND NEW.invocation_id   IS NOT DISTINCT FROM OLD.invocation_id
-       AND NEW.workspace_id    IS NOT DISTINCT FROM OLD.workspace_id
-       AND NEW.agent_role      IS NOT DISTINCT FROM OLD.agent_role
-       AND NEW.ts              IS NOT DISTINCT FROM OLD.ts
-       AND NEW.token_count     IS NOT DISTINCT FROM OLD.token_count
-       AND NEW.unit_cost_cents IS NOT DISTINCT FROM OLD.unit_cost_cents
-       AND NEW.created_at      IS NOT DISTINCT FROM OLD.created_at
+       AND (to_jsonb(NEW) - 'founder_id') = (to_jsonb(OLD) - 'founder_id')
     THEN
       RETURN NEW;  -- Art-17 anonymization carve-out
     END IF;
@@ -91,3 +96,13 @@ CREATE TRIGGER audit_byok_use_no_delete
   BEFORE DELETE ON public.audit_byok_use
   FOR EACH ROW
   EXECUTE FUNCTION public.audit_byok_use_no_mutate();
+
+-- Document the Art-17 NULL semantics on the column so a future maintainer
+-- doesn't introduce a `JOIN users ON audit_byok_use.founder_id = users.id`
+-- analytics query that silently drops anonymised rows.
+COMMENT ON COLUMN public.audit_byok_use.founder_id IS
+  'Owner of the BYOK invocation. NULL after Art. 17 anonymisation '
+  '(SET NULL cascade from public.users delete, mig 065 Part 2). '
+  'Analytics that need full historical cost coverage MUST aggregate on '
+  'workspace_id, not founder_id — NULL-founder rows are still present in '
+  'the WORM ledger but have no live user FK.';

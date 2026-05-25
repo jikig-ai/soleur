@@ -166,7 +166,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const succeeded = data && data.length > 0;
       expect(succeeded).toBeFalsy();
       expect(error).not.toBeNull();
-      expect(error?.code).toMatch(/^(42501|PGRST)/);
+      // Specific codes only — bare `^PGRST` would match parse errors
+      // (PGRST100) and JWT-expired (PGRST301) and silently pass an
+      // unrelated regression. 42501 = RLS-denied INSERT engine-level;
+      // PGRST116 = PostgREST row-not-found after RLS-filtered .select().
+      expect(error?.code).toMatch(/^(42501|PGRST116)$/);
 
       // Verify B's conversation has no spoofed message.
       const { data: msgs } = await service
@@ -197,7 +201,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const succeeded = data && data.length > 0;
       expect(succeeded).toBeFalsy();
       expect(error).not.toBeNull();
-      expect(error?.code).toMatch(/^(42501|PGRST)/);
+      // Specific codes only — bare `^PGRST` would match parse errors
+      // (PGRST100) and JWT-expired (PGRST301) and silently pass an
+      // unrelated regression. 42501 = RLS-denied INSERT engine-level;
+      // PGRST116 = PostgREST row-not-found after RLS-filtered .select().
+      expect(error?.code).toMatch(/^(42501|PGRST116)$/);
 
       // Verify B's conversation has no spoofed assistant message.
       const { data: msgs } = await service

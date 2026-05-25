@@ -59,7 +59,22 @@ GRANT EXECUTE ON FUNCTION public.anonymise_organization_membership(uuid)
 -- Part 2 inverse: audit_byok_use.founder_id SET NULL → RESTRICT + NOT NULL.
 -- Requires any NULL rows to be removed first (audit rows from Art-17-
 -- anonymised users post-065). DELETE NULL rows to satisfy NOT NULL.
+--
+-- WORM ENFORCEMENT BRACKET: The WORM triggers (mig 037 or mig 066, whichever
+-- is currently installed) block any DELETE on audit_byok_use. Disable them
+-- around the DELETE, then re-enable. session_replication_role='replica' is
+-- the canonical pattern (matches anonymise_workspace_members at mig 058 and
+-- anonymise_workspace_member_actions at mig 063). LOCAL scope so the
+-- bracket cannot leak past this migration's transaction.
+--
+-- COMPLIANCE NOTE: deleting Art-17 anonymised audit rows on a forced
+-- rollback DOES erase the "record-of-erasure" itself (the row that proves
+-- the cascade ran). For an emergency revert, this is acceptable if the
+-- forward-fix lands in the same window; Art. 30 register addendum should
+-- record the rollback if used in prd.
+SET LOCAL session_replication_role = 'replica';
 DELETE FROM public.audit_byok_use WHERE founder_id IS NULL;
+SET LOCAL session_replication_role = 'origin';
 
 ALTER TABLE public.audit_byok_use
   DROP CONSTRAINT IF EXISTS audit_byok_use_founder_id_fkey;

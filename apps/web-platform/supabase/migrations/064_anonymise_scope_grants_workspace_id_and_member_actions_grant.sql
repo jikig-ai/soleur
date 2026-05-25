@@ -21,7 +21,8 @@
 -- The constraint comment ("Allow NULL when founder_id IS NULL") signals
 -- design intent: an Art. 17-anonymised row SHOULD have BOTH NULL.
 --
--- Mig 050's `anonymise_scope_grants` (`050:74-92`) only NULLs `founder_id`,
+-- Mig 050_fix_scope_grants_trigger_bypass's `anonymise_scope_grants`
+-- (`050_fix_scope_grants_trigger_bypass:74-92`) only NULLs `founder_id`,
 -- leaving `workspace_id` populated. Every call against a row with a non-NULL
 -- workspace_id now fails CHECK with SQLSTATE 23514, aborting the Art. 17
 -- erasure chain at step 3.82 (`account-delete.ts:300-313`) and leaving the
@@ -33,10 +34,10 @@
 -- was added in mig 059 but the sibling anonymise writer was missed by the
 -- deepen-pass sweep (the grep was scoped to `*.tenant-isolation.test.ts$`).
 --
--- Fix shape: lift the function body verbatim from mig 050 and add a single
+-- Fix shape: lift the function body verbatim from mig 050_fix_scope_grants_trigger_bypass and add a single
 -- column to the UPDATE SET clause. NO trigger change required:
 --
---   - `scope_grants_no_mutate` Shape 2 (mig 050:42-52) checks for the
+--   - `scope_grants_no_mutate` Shape 2 (mig 050_fix_scope_grants_trigger_bypass:42-52) checks for the
 --     founder_id transition + 6 named columns unchanged (action_class,
 --     tier, granted_at, created_at, revoked_at, revoked_reason).
 --     `workspace_id` is NOT in that list, so a workspace_id change to NULL
@@ -45,9 +46,9 @@
 --     guard.
 --
 --   - This implicit permission is documented here so a future maintainer
---     reading mig 050's Shape 2 alone doesn't misread it as blocking the
+--     reading mig 050_fix_scope_grants_trigger_bypass's Shape 2 alone doesn't misread it as blocking the
 --     workspace_id NULL transition. The Shape 2 trigger comment at mig
---     050:38-41 says "with every other column unchanged" — but
+--     050_fix_scope_grants_trigger_bypass:38-41 says "with every other column unchanged" — but
 --     `workspace_id` IS another column and the trigger silently allows it
 --     to change. The CHECK at row level enforces the both-NULL invariant.
 --
@@ -107,7 +108,7 @@ BEGIN
 END;
 $$;
 
--- REVOKE + GRANT are idempotent and identical to mig 050:94-97; restated
+-- REVOKE + GRANT are idempotent and identical to mig 050_fix_scope_grants_trigger_bypass:94-97; restated
 -- here so a reader sees the complete invocation contract without cross-
 -- referencing the predecessor migration.
 REVOKE ALL ON FUNCTION public.anonymise_scope_grants(uuid)

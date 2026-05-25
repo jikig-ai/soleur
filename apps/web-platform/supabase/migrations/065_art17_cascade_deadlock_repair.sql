@@ -16,7 +16,7 @@
 --
 --   1. auth.users delete → CASCADE to public.users (mig 001:7).
 --   2. public.users delete is BLOCKED by RESTRICT FKs:
---      - organizations.owner_user_id RESTRICT (mig 053:330)
+--      - organizations.owner_user_id RESTRICT (mig 053:51)
 --      - audit_byok_use.founder_id RESTRICT (mig 037:34)
 --   3. account-delete.ts step 3.92 tries to resolve organizations by
 --      hard-deleting the orphan org (DELETE FROM workspaces; DELETE
@@ -45,9 +45,11 @@
 --      - SET NULL on organizations.owner_user_id (FK no longer blocks)
 --      - SET NULL on audit_byok_use.founder_id (audit row stays, PII
 --        column NULLed)
---      - CASCADE to {conversations, messages, kb_share_links,
---        push_subscriptions, user_concurrency_slots, runtime_cost_state,
---        ...} via their existing user_id ON DELETE CASCADE FKs
+--      - CASCADE to every public.* table whose user_id FK declares
+--        ON DELETE CASCADE (current set per `pg_constraint` includes
+--        conversations, messages, kb_share_links, push_subscriptions,
+--        user_concurrency_slots, runtime_cost_state — list will rot, do
+--        not maintain inline; query pg_constraint for current truth).
 --   3. The CASCADE deletes naturally remove rows whose workspace_id
 --      RESTRICT FK was the secondary block.
 --   4. The orphan workspace itself remains, owned by NULL. Its WORM
@@ -66,8 +68,9 @@
 -- to public.users(id). Both reference tables exist via mig 001 / 053 / 037,
 -- but the migration FK linter requires an explicit to_regclass precondition
 -- for any cross-file FK reference to surface schema-vs-ledger drift early
--- (knowledge-base/project/learnings/2026-05-22-schema-vs-ledger-drift-on-dev-
--- supabase.md). Idempotent: bare existence probe + RAISE EXCEPTION on miss.
+-- (see `2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md` under
+-- knowledge-base/project/learnings/). Idempotent: existence probe + RAISE
+-- EXCEPTION on miss.
 
 DO $$
 BEGIN
@@ -95,7 +98,7 @@ END $$;
 -- Part 1 — organizations.owner_user_id: RESTRICT → SET NULL
 -- =============================================================
 --
--- mig 053:329 declared `owner_user_id uuid NOT NULL REFERENCES public.users(id)
+-- mig 053:51 declared `owner_user_id uuid NOT NULL REFERENCES public.users(id)
 --                       ON DELETE RESTRICT`.
 --
 -- Drop the NOT NULL constraint AND the FK; re-add with SET NULL. After
@@ -151,9 +154,8 @@ ALTER TABLE public.audit_byok_use
 -- DELETE FROM organizations. With Part 1, organizations.owner_user_id
 -- naturally transitions to NULL via the SET NULL cascade; the explicit
 -- orphan-delete is no longer needed (and is the chain that produced
--- the cascade failure documented in the dsar-export AC-GDPR-17-CALLER
--- failure log: `ERROR: anonymise_organization_membership failed —
--- aborting deletion`).
+-- the cascade failure observed in the dsar-export AC-GDPR-17-CALLER
+-- run logs pre-065).
 --
 -- The reassign-ownership path remains for live multi-tenant orgs: when
 -- p_user_id is removed but other members exist, ownership is reassigned
@@ -187,7 +189,10 @@ BEGIN
        JOIN public.workspaces w ON w.id = m.workspace_id
        WHERE w.organization_id = o.id
          AND m.user_id != p_user_id
-       ORDER BY m.created_at ASC
+       -- Deterministic tiebreak on user_id when created_at ties so two
+       -- workers cannot pick different replacement owners for the same
+       -- org in a multi-tenant race window.
+       ORDER BY m.created_at ASC, m.user_id ASC
        LIMIT 1
      )
    WHERE o.owner_user_id = p_user_id

@@ -327,10 +327,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         p_unit_cost_cents: 1,
       });
       // PostgREST returns 42501 (insufficient_privilege) when role lacks EXECUTE.
+      // Pin to code only — the message-regex was broad enough to match
+      // "permission denied for schema …" (a different bug class).
       expect(error).not.toBeNull();
-      expect(error!.code === "42501" || /permission/i.test(error!.message)).toBe(
-        true,
-      );
+      expect(error!.code).toBe("42501");
     });
 
     test("precheck_jwt_mint under tenant client is rejected (RPC is service-role only)", async () => {
@@ -339,9 +339,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         p_ttl_sec: 600,
       });
       expect(error).not.toBeNull();
-      expect(error!.code === "42501" || /permission/i.test(error!.message)).toBe(
-        true,
-      );
+      expect(error!.code).toBe("42501");
     });
   },
 );
