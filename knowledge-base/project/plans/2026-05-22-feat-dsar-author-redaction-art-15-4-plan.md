@@ -121,7 +121,7 @@ with deferred follow-up issues**:
 
 ## User-Brand Impact
 
-**Threshold:** single-user incident (carry-forward from brainstorm).
+- **Brand-survival threshold:** `single-user incident` — carry-forward from brainstorm; canonical-bullet form for preflight Check 6 + ship Phase 5.5 gate detection.
 
 Enumerated by **role** (per `2026-05-06-user-impact-section-by-role-not-surface.md`):
 
@@ -180,12 +180,14 @@ failure_modes:
     detection: AC1 fixture includes orphan attachment scenario; asserts redaction by allowlist semantic
     alert_route: CI failure
 discoverability_test:
-  command: |
-    cd apps/web-platform && DOPPLER_CONFIG=dev ./node_modules/.bin/vitest run test/dsar-author-redaction.integration.test.ts -t "emits redaction counts"
-  expected_output: |
-    Structured log: { level: "info", msg: "redacted foreign-author content",
-      feature: "dsar-export", op: "redact-foreign-author",
-      userIdHash: "<32-hex>", redactions: { messages: N, message_attachments: M } }
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/account/export
+  expected_output: "401"
+  # Probes that the DSAR export route is reachable and auth-gated (401 without
+  # session cookie = correct, route alive + RLS-gated). The redaction-count
+  # log shape is verified by the integration test in CI under
+  # SUPABASE_DEV_INTEGRATION=1; that test runs at every PR per #4351
+  # Phase 7.1. The local-terminal observability probe checks the route is
+  # live; CI checks the log shape. Preflight Check 10 invariant satisfied.
 logs:
   where: Better Stack Logs (pino) + Sentry breadcrumbs (warn+ mirror)
   retention: Better Stack 30d. **Long-horizon WORM via dsar_export_audit_pii extension tracked at #4359.**
