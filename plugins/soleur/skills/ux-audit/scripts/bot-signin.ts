@@ -63,7 +63,7 @@ function isSession(x: unknown): x is Session {
   );
 }
 
-async function signIn(): Promise<Session> {
+export async function signIn(): Promise<Session> {
   const supabaseUrl = env("SUPABASE_URL");
   const anonKey = env("NEXT_PUBLIC_SUPABASE_ANON_KEY");
   const email = env("UX_AUDIT_BOT_EMAIL");
@@ -93,11 +93,14 @@ async function signIn(): Promise<Session> {
   return body;
 }
 
-async function main() {
-  const session = await signIn();
-
-  const ref = projectRef(env("SUPABASE_URL"));
-  const domain = cookieDomain(env("NEXT_PUBLIC_APP_URL"));
+export function writeStorageState(
+  session: Session,
+  outPath: string,
+  supabaseUrl: string,
+  siteUrl: string,
+): void {
+  const ref = projectRef(supabaseUrl);
+  const domain = cookieDomain(siteUrl);
   const cookieName = `sb-${ref}-auth-token`;
 
   const storageState = {
@@ -116,11 +119,15 @@ async function main() {
     origins: [],
   };
 
-  const outPath = process.env.UX_AUDIT_STORAGE_STATE ?? defaultStoragePath();
-  // 0700 dir + 0600 file: storageState contains a long-lived refresh_token.
   mkdirSync(dirname(outPath), { recursive: true, mode: 0o700 });
   writeFileSync(outPath, JSON.stringify(storageState, null, 2), { mode: 0o600 });
   console.log(`[signin] wrote storageState to ${outPath} (cookie ${cookieName} for ${domain})`);
+}
+
+async function main() {
+  const session = await signIn();
+  const outPath = process.env.UX_AUDIT_STORAGE_STATE ?? defaultStoragePath();
+  writeStorageState(session, outPath, env("SUPABASE_URL"), env("NEXT_PUBLIC_APP_URL"));
 }
 
 if (import.meta.main) {
