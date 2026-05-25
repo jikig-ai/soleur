@@ -46,6 +46,7 @@ import { MAX_BINARY_SIZE } from "./kb-limits";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
+import { buildAuthStatusTools } from "./auth-status-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -1398,6 +1399,16 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const conversationsTools = buildConversationsTools({ userId });
     platformTools.push(...conversationsTools);
     platformToolNames.push("mcp__soleur_platform__conversations_lookup");
+
+    // Auth revocation status tool (#4440 follow-up to #4418): registered
+    // unconditionally — agents need self-diagnosis on every authenticated
+    // session, not just those with a connected repo or service tokens.
+    // Wraps `getMyRevocationStatus(userId)` from `lib/supabase/tenant.ts`
+    // (founder-readable `my_revocation_status()` RPC, fail-open). Auto-
+    // approve tier per `tool-tiers.ts` — read-only, no side effects.
+    const authStatusTools = buildAuthStatusTools({ userId });
+    platformTools.push(...authStatusTools);
+    platformToolNames.push("mcp__soleur_platform__auth_revocation_status");
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
