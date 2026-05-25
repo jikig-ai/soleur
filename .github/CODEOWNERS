@@ -73,6 +73,12 @@
 # to apply ruleset changes without first landing a CODEOWNER-approved PR.
 /infra/github/                                          @deruelle
 /.github/workflows/apply-github-infra.yml               @deruelle
+# Destroy-guard counter — load-bearing input to the apply-github-infra gate
+# (#3915). A PR that mutates these silently neutralises the [ack-destroy]
+# gate, so they carry the same review scope as the workflow itself.
+/tests/scripts/lib/destroy-guard-filter.jq              @deruelle
+/tests/scripts/test-destroy-guard-counter.sh            @deruelle
+/tests/scripts/fixtures/tfplan-*.json                   @deruelle
 
 # R15 follow-up D2 — CodeQL coverage audit (#3545). Same false-pass
 # attack surface as #3544: mutating classify_codeql() to accept

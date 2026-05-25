@@ -1,0 +1,1515 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "planned_values": {
+    "outputs": {
+      "ruleset_id": {
+        "sensitive": false,
+        "type": "number",
+        "value": 14145388
+      },
+      "ruleset_url": {
+        "sensitive": false,
+        "type": "string",
+        "value": "https://github.com/jikig-ai/soleur/rules/14145388"
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "github_repository_ruleset.ci_required",
+          "mode": "managed",
+          "type": "github_repository_ruleset",
+          "name": "ci_required",
+          "provider_name": "registry.terraform.io/integrations/github",
+          "schema_version": 1,
+          "values": {
+            "bypass_actors": [
+              {
+                "actor_type": "OrganizationAdmin",
+                "bypass_mode": "pull_request"
+              },
+              {
+                "actor_type": "RepositoryRole",
+                "bypass_mode": "pull_request"
+              }
+            ],
+            "conditions": [
+              {
+                "ref_name": [
+                  {
+                    "exclude": [],
+                    "include": [
+                      "~DEFAULT_BRANCH"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "enforcement": "active",
+            "etag": "W/\"6b1841a3526c6e39dbcd6dd73bf7d8a68a1460c1b14d0ff5f2af9bb7994d7dc8\"",
+            "id": "14145388",
+            "name": "CI Required",
+            "node_id": "RRS_lACqUmVwb3NpdG9yec5EKSVFzgDX12w",
+            "repository": "soleur",
+            "rules": [
+              {
+                "branch_name_pattern": [],
+                "commit_author_email_pattern": [],
+                "commit_message_pattern": [],
+                "committer_email_pattern": [],
+                "copilot_code_review": [],
+                "creation": false,
+                "deletion": false,
+                "file_extension_restriction": [],
+                "file_path_restriction": [],
+                "max_file_path_length": [],
+                "max_file_size": [],
+                "merge_queue": [],
+                "non_fast_forward": false,
+                "pull_request": [],
+                "required_code_scanning": [],
+                "required_deployments": [],
+                "required_linear_history": false,
+                "required_signatures": false,
+                "required_status_checks": [
+                  {
+                    "do_not_enforce_on_create": false,
+                    "required_check": [
+                      {
+                        "context": "Bash fixture tests for guard scripts",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "CodeQL",
+                        "integration_id": 57789
+                      },
+                      {
+                        "context": "allowlist-diff (.gitleaks.toml paths surface)",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "dependency-review",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "e2e",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "enforce",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "gitleaks scan",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "lint fixture content",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "lockfile-sync",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "rename-guard (allowlist destinations)",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "service-role-allowlist-gate",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "skill-security-scan PR gate",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "tc-document-sha-guard",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "test",
+                        "integration_id": 15368
+                      },
+                      {
+                        "context": "waiver discipline (issue:#NNN trailer)",
+                        "integration_id": 15368
+                      }
+                    ],
+                    "strict_required_status_checks_policy": true
+                  }
+                ],
+                "tag_name_pattern": [],
+                "update": false,
+                "update_allows_fetch_and_merge": false
+              }
+            ],
+            "ruleset_id": 14145388,
+            "target": "branch"
+          },
+          "sensitive_values": {
+            "bypass_actors": [
+              {},
+              {}
+            ],
+            "conditions": [
+              {
+                "ref_name": [
+                  {
+                    "exclude": [],
+                    "include": [
+                      false
+                    ]
+                  }
+                ]
+              }
+            ],
+            "rules": [
+              {
+                "branch_name_pattern": [],
+                "commit_author_email_pattern": [],
+                "commit_message_pattern": [],
+                "committer_email_pattern": [],
+                "copilot_code_review": [],
+                "file_extension_restriction": [],
+                "file_path_restriction": [],
+                "max_file_path_length": [],
+                "max_file_size": [],
+                "merge_queue": [],
+                "pull_request": [],
+                "required_code_scanning": [],
+                "required_deployments": [],
+                "required_status_checks": [
+                  {
+                    "required_check": [
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {},
+                      {}
+                    ]
+                  }
+                ],
+                "tag_name_pattern": []
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "resource_drift": [
+    {
+      "address": "github_repository_ruleset.ci_required",
+      "mode": "managed",
+      "type": "github_repository_ruleset",
+      "name": "ci_required",
+      "provider_name": "registry.terraform.io/integrations/github",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "bypass_actors": [
+            {
+              "actor_type": "OrganizationAdmin",
+              "bypass_mode": "pull_request"
+            },
+            {
+              "actor_type": "RepositoryRole",
+              "bypass_mode": "pull_request"
+            }
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    "~DEFAULT_BRANCH"
+                  ]
+                }
+              ]
+            }
+          ],
+          "enforcement": "active",
+          "etag": "W/\"9c9664976c84c0b8e6e6798ba3fce7b7d494ead83338c5d714dda4c2923e3d6d\"",
+          "id": "14145388",
+          "name": "CI Required",
+          "node_id": "RRS_lACqUmVwb3NpdG9yec5EKSVFzgDX12w",
+          "repository": "soleur",
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "creation": false,
+              "deletion": false,
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "non_fast_forward": false,
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_linear_history": false,
+              "required_signatures": false,
+              "required_status_checks": [
+                {
+                  "do_not_enforce_on_create": false,
+                  "required_check": [
+                    {
+                      "context": "Bash fixture tests for guard scripts",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "CodeQL",
+                      "integration_id": 57789
+                    },
+                    {
+                      "context": "allowlist-diff (.gitleaks.toml paths surface)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "dependency-review",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "e2e",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "enforce",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "gitleaks scan",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lint fixture content",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lockfile-sync",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "rename-guard (allowlist destinations)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "service-role-allowlist-gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "skill-security-scan PR gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "tc-document-sha-guard",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "test",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "waiver discipline (issue:#NNN trailer)",
+                      "integration_id": 15368
+                    }
+                  ],
+                  "strict_required_status_checks_policy": true
+                }
+              ],
+              "tag_name_pattern": [],
+              "update": false,
+              "update_allows_fetch_and_merge": false
+            }
+          ],
+          "ruleset_id": 14145388,
+          "target": "branch"
+        },
+        "after": {
+          "bypass_actors": [
+            {
+              "actor_type": "OrganizationAdmin",
+              "bypass_mode": "pull_request"
+            },
+            {
+              "actor_type": "RepositoryRole",
+              "bypass_mode": "pull_request"
+            }
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    "~DEFAULT_BRANCH"
+                  ]
+                }
+              ]
+            }
+          ],
+          "enforcement": "active",
+          "etag": "W/\"6b1841a3526c6e39dbcd6dd73bf7d8a68a1460c1b14d0ff5f2af9bb7994d7dc8\"",
+          "id": "14145388",
+          "name": "CI Required",
+          "node_id": "RRS_lACqUmVwb3NpdG9yec5EKSVFzgDX12w",
+          "repository": "soleur",
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "creation": false,
+              "deletion": false,
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "non_fast_forward": false,
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_linear_history": false,
+              "required_signatures": false,
+              "required_status_checks": [
+                {
+                  "do_not_enforce_on_create": false,
+                  "required_check": [
+                    {
+                      "context": "Bash fixture tests for guard scripts",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "CodeQL",
+                      "integration_id": 57789
+                    },
+                    {
+                      "context": "allowlist-diff (.gitleaks.toml paths surface)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "dependency-review",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "e2e",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "enforce",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "gitleaks scan",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lint fixture content",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lockfile-sync",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "rename-guard (allowlist destinations)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "service-role-allowlist-gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "skill-security-scan PR gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "tc-document-sha-guard",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "test",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "waiver discipline (issue:#NNN trailer)",
+                      "integration_id": 15368
+                    }
+                  ],
+                  "strict_required_status_checks_policy": true
+                }
+              ],
+              "tag_name_pattern": [],
+              "update": false,
+              "update_allows_fetch_and_merge": false
+            }
+          ],
+          "ruleset_id": 14145388,
+          "target": "branch"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "bypass_actors": [
+            {},
+            {}
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    false
+                  ]
+                }
+              ]
+            }
+          ],
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_status_checks": [
+                {
+                  "required_check": [
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {}
+                  ]
+                }
+              ],
+              "tag_name_pattern": []
+            }
+          ]
+        },
+        "after_sensitive": {
+          "bypass_actors": [
+            {},
+            {}
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    false
+                  ]
+                }
+              ]
+            }
+          ],
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_status_checks": [
+                {
+                  "required_check": [
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {}
+                  ]
+                }
+              ],
+              "tag_name_pattern": []
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "resource_changes": [
+    {
+      "address": "github_repository_ruleset.ci_required",
+      "mode": "managed",
+      "type": "github_repository_ruleset",
+      "name": "ci_required",
+      "provider_name": "registry.terraform.io/integrations/github",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "bypass_actors": [
+            {
+              "actor_type": "OrganizationAdmin",
+              "bypass_mode": "pull_request"
+            },
+            {
+              "actor_type": "RepositoryRole",
+              "bypass_mode": "pull_request"
+            }
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    "~DEFAULT_BRANCH"
+                  ]
+                }
+              ]
+            }
+          ],
+          "enforcement": "active",
+          "etag": "W/\"6b1841a3526c6e39dbcd6dd73bf7d8a68a1460c1b14d0ff5f2af9bb7994d7dc8\"",
+          "id": "14145388",
+          "name": "CI Required",
+          "node_id": "RRS_lACqUmVwb3NpdG9yec5EKSVFzgDX12w",
+          "repository": "soleur",
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "creation": false,
+              "deletion": false,
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "non_fast_forward": false,
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_linear_history": false,
+              "required_signatures": false,
+              "required_status_checks": [
+                {
+                  "do_not_enforce_on_create": false,
+                  "required_check": [
+                    {
+                      "context": "Bash fixture tests for guard scripts",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "CodeQL",
+                      "integration_id": 57789
+                    },
+                    {
+                      "context": "allowlist-diff (.gitleaks.toml paths surface)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "dependency-review",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "e2e",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "enforce",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "gitleaks scan",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lint fixture content",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lockfile-sync",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "rename-guard (allowlist destinations)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "service-role-allowlist-gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "skill-security-scan PR gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "tc-document-sha-guard",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "test",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "waiver discipline (issue:#NNN trailer)",
+                      "integration_id": 15368
+                    }
+                  ],
+                  "strict_required_status_checks_policy": true
+                }
+              ],
+              "tag_name_pattern": [],
+              "update": false,
+              "update_allows_fetch_and_merge": false
+            }
+          ],
+          "ruleset_id": 14145388,
+          "target": "branch"
+        },
+        "after": {
+          "bypass_actors": [
+            {
+              "actor_type": "OrganizationAdmin",
+              "bypass_mode": "pull_request"
+            },
+            {
+              "actor_type": "RepositoryRole",
+              "bypass_mode": "pull_request"
+            }
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    "~DEFAULT_BRANCH"
+                  ]
+                }
+              ]
+            }
+          ],
+          "enforcement": "active",
+          "etag": "W/\"6b1841a3526c6e39dbcd6dd73bf7d8a68a1460c1b14d0ff5f2af9bb7994d7dc8\"",
+          "id": "14145388",
+          "name": "CI Required",
+          "node_id": "RRS_lACqUmVwb3NpdG9yec5EKSVFzgDX12w",
+          "repository": "soleur",
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "creation": false,
+              "deletion": false,
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "non_fast_forward": false,
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_linear_history": false,
+              "required_signatures": false,
+              "required_status_checks": [
+                {
+                  "do_not_enforce_on_create": false,
+                  "required_check": [
+                    {
+                      "context": "Bash fixture tests for guard scripts",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "CodeQL",
+                      "integration_id": 57789
+                    },
+                    {
+                      "context": "allowlist-diff (.gitleaks.toml paths surface)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "dependency-review",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "e2e",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "enforce",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "gitleaks scan",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lint fixture content",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lockfile-sync",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "rename-guard (allowlist destinations)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "service-role-allowlist-gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "skill-security-scan PR gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "tc-document-sha-guard",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "test",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "waiver discipline (issue:#NNN trailer)",
+                      "integration_id": 15368
+                    }
+                  ],
+                  "strict_required_status_checks_policy": true
+                }
+              ],
+              "tag_name_pattern": [],
+              "update": false,
+              "update_allows_fetch_and_merge": false
+            }
+          ],
+          "ruleset_id": 14145388,
+          "target": "branch"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "bypass_actors": [
+            {},
+            {}
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    false
+                  ]
+                }
+              ]
+            }
+          ],
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_status_checks": [
+                {
+                  "required_check": [
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {}
+                  ]
+                }
+              ],
+              "tag_name_pattern": []
+            }
+          ]
+        },
+        "after_sensitive": {
+          "bypass_actors": [
+            {},
+            {}
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    false
+                  ]
+                }
+              ]
+            }
+          ],
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_status_checks": [
+                {
+                  "required_check": [
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    {}
+                  ]
+                }
+              ],
+              "tag_name_pattern": []
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "output_changes": {
+    "ruleset_id": {
+      "actions": [
+        "no-op"
+      ],
+      "before": 14145388,
+      "after": 14145388,
+      "after_unknown": false,
+      "before_sensitive": false,
+      "after_sensitive": false
+    },
+    "ruleset_url": {
+      "actions": [
+        "no-op"
+      ],
+      "before": "https://github.com/jikig-ai/soleur/rules/14145388",
+      "after": "https://github.com/jikig-ai/soleur/rules/14145388",
+      "after_unknown": false,
+      "before_sensitive": false,
+      "after_sensitive": false
+    }
+  },
+  "prior_state": {
+    "format_version": "1.0",
+    "terraform_version": "1.10.5",
+    "values": {
+      "outputs": {
+        "ruleset_id": {
+          "sensitive": false,
+          "value": 14145388,
+          "type": "number"
+        },
+        "ruleset_url": {
+          "sensitive": false,
+          "value": "https://github.com/jikig-ai/soleur/rules/14145388",
+          "type": "string"
+        }
+      },
+      "root_module": {
+        "resources": [
+          {
+            "address": "github_repository_ruleset.ci_required",
+            "mode": "managed",
+            "type": "github_repository_ruleset",
+            "name": "ci_required",
+            "provider_name": "registry.terraform.io/integrations/github",
+            "schema_version": 1,
+            "values": {
+              "bypass_actors": [
+                {
+                  "actor_type": "OrganizationAdmin",
+                  "bypass_mode": "pull_request"
+                },
+                {
+                  "actor_type": "RepositoryRole",
+                  "bypass_mode": "pull_request"
+                }
+              ],
+              "conditions": [
+                {
+                  "ref_name": [
+                    {
+                      "exclude": [],
+                      "include": [
+                        "~DEFAULT_BRANCH"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "enforcement": "active",
+              "etag": "W/\"6b1841a3526c6e39dbcd6dd73bf7d8a68a1460c1b14d0ff5f2af9bb7994d7dc8\"",
+              "id": "14145388",
+              "name": "CI Required",
+              "node_id": "RRS_lACqUmVwb3NpdG9yec5EKSVFzgDX12w",
+              "repository": "soleur",
+              "rules": [
+                {
+                  "branch_name_pattern": [],
+                  "commit_author_email_pattern": [],
+                  "commit_message_pattern": [],
+                  "committer_email_pattern": [],
+                  "copilot_code_review": [],
+                  "creation": false,
+                  "deletion": false,
+                  "file_extension_restriction": [],
+                  "file_path_restriction": [],
+                  "max_file_path_length": [],
+                  "max_file_size": [],
+                  "merge_queue": [],
+                  "non_fast_forward": false,
+                  "pull_request": [],
+                  "required_code_scanning": [],
+                  "required_deployments": [],
+                  "required_linear_history": false,
+                  "required_signatures": false,
+                  "required_status_checks": [
+                    {
+                      "do_not_enforce_on_create": false,
+                      "required_check": [
+                        {
+                          "context": "Bash fixture tests for guard scripts",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "CodeQL",
+                          "integration_id": 57789
+                        },
+                        {
+                          "context": "allowlist-diff (.gitleaks.toml paths surface)",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "dependency-review",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "e2e",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "enforce",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "gitleaks scan",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "lint fixture content",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "lockfile-sync",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "rename-guard (allowlist destinations)",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "service-role-allowlist-gate",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "skill-security-scan PR gate",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "tc-document-sha-guard",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "test",
+                          "integration_id": 15368
+                        },
+                        {
+                          "context": "waiver discipline (issue:#NNN trailer)",
+                          "integration_id": 15368
+                        }
+                      ],
+                      "strict_required_status_checks_policy": true
+                    }
+                  ],
+                  "tag_name_pattern": [],
+                  "update": false,
+                  "update_allows_fetch_and_merge": false
+                }
+              ],
+              "ruleset_id": 14145388,
+              "target": "branch"
+            },
+            "sensitive_values": {
+              "bypass_actors": [
+                {},
+                {}
+              ],
+              "conditions": [
+                {
+                  "ref_name": [
+                    {
+                      "exclude": [],
+                      "include": [
+                        false
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "rules": [
+                {
+                  "branch_name_pattern": [],
+                  "commit_author_email_pattern": [],
+                  "commit_message_pattern": [],
+                  "committer_email_pattern": [],
+                  "copilot_code_review": [],
+                  "file_extension_restriction": [],
+                  "file_path_restriction": [],
+                  "max_file_path_length": [],
+                  "max_file_size": [],
+                  "merge_queue": [],
+                  "pull_request": [],
+                  "required_code_scanning": [],
+                  "required_deployments": [],
+                  "required_status_checks": [
+                    {
+                      "required_check": [
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {},
+                        {}
+                      ]
+                    }
+                  ],
+                  "tag_name_pattern": []
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "configuration": {
+    "provider_config": {
+      "github": {
+        "name": "github",
+        "full_name": "registry.terraform.io/integrations/github",
+        "version_constraint": "~> 6.10",
+        "expressions": {
+          "app_auth": [
+            {
+              "id": {
+                "references": [
+                  "var.github_app_id"
+                ]
+              },
+              "installation_id": {
+                "constant_value": "122213433"
+              },
+              "pem_file": {
+                "references": [
+                  "var.github_app_private_key"
+                ]
+              }
+            }
+          ],
+          "owner": {
+            "constant_value": "jikig-ai"
+          }
+        }
+      }
+    },
+    "root_module": {
+      "outputs": {
+        "ruleset_id": {
+          "expression": {
+            "references": [
+              "github_repository_ruleset.ci_required.ruleset_id",
+              "github_repository_ruleset.ci_required"
+            ]
+          },
+          "description": "GitHub repository ruleset ID (stable post-import)."
+        },
+        "ruleset_url": {
+          "expression": {
+            "references": [
+              "var.gh_owner",
+              "var.gh_repo",
+              "github_repository_ruleset.ci_required.ruleset_id",
+              "github_repository_ruleset.ci_required"
+            ]
+          },
+          "description": "Browser URL for the ruleset (operator-facing)."
+        }
+      },
+      "resources": [
+        {
+          "address": "github_repository_ruleset.ci_required",
+          "mode": "managed",
+          "type": "github_repository_ruleset",
+          "name": "ci_required",
+          "provider_config_key": "github",
+          "expressions": {
+            "bypass_actors": [
+              {
+                "actor_type": {
+                  "constant_value": "OrganizationAdmin"
+                },
+                "bypass_mode": {
+                  "constant_value": "pull_request"
+                }
+              },
+              {
+                "actor_type": {
+                  "constant_value": "RepositoryRole"
+                },
+                "bypass_mode": {
+                  "constant_value": "pull_request"
+                }
+              }
+            ],
+            "conditions": [
+              {
+                "ref_name": [
+                  {
+                    "exclude": {
+                      "constant_value": []
+                    },
+                    "include": {
+                      "constant_value": [
+                        "~DEFAULT_BRANCH"
+                      ]
+                    }
+                  }
+                ]
+              }
+            ],
+            "enforcement": {
+              "constant_value": "active"
+            },
+            "name": {
+              "constant_value": "CI Required"
+            },
+            "repository": {
+              "references": [
+                "var.gh_repo"
+              ]
+            },
+            "rules": [
+              {
+                "required_status_checks": [
+                  {
+                    "do_not_enforce_on_create": {
+                      "constant_value": false
+                    },
+                    "required_check": [
+                      {
+                        "context": {
+                          "constant_value": "test"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "dependency-review"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "e2e"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "CodeQL"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.codeql_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "skill-security-scan PR gate"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "gitleaks scan"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "lint fixture content"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "allowlist-diff (.gitleaks.toml paths surface)"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "rename-guard (allowlist destinations)"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "waiver discipline (issue:#NNN trailer)"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "Bash fixture tests for guard scripts"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "lockfile-sync"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "service-role-allowlist-gate"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "tc-document-sha-guard"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      },
+                      {
+                        "context": {
+                          "constant_value": "enforce"
+                        },
+                        "integration_id": {
+                          "references": [
+                            "var.actions_integration_id"
+                          ]
+                        }
+                      }
+                    ],
+                    "strict_required_status_checks_policy": {
+                      "constant_value": true
+                    }
+                  }
+                ]
+              }
+            ],
+            "target": {
+              "constant_value": "branch"
+            }
+          },
+          "schema_version": 1
+        }
+      ],
+      "variables": {
+        "actions_integration_id": {
+          "default": 15368,
+          "description": "GitHub Actions integration_id. Verified 15368 via `gh api repos/jikig-ai/soleur/rulesets/14145388 | jq '.rules[0].parameters.required_status_checks[].integration_id' | sort -u`."
+        },
+        "codeql_integration_id": {
+          "default": 57789,
+          "description": "CodeQL integration_id. Verified 57789 via the same API capture; appears only on the CodeQL rollup check."
+        },
+        "gh_owner": {
+          "default": "jikig-ai",
+          "description": "GitHub org owning the repo."
+        },
+        "gh_repo": {
+          "default": "soleur",
+          "description": "Repository slug under the org."
+        },
+        "github_app_id": {
+          "description": "GitHub App ID for soleur-ai (id 3261325). Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf). Migrated from `gh_token` PAT auth in #4384 per AGENTS.core.md hr-github-app-auth-not-pat.",
+          "sensitive": true
+        },
+        "github_app_private_key": {
+          "description": "PEM-encoded RSA private key for the soleur-ai GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded. Migrated from `gh_token` PAT auth in #4384.",
+          "sensitive": true
+        }
+      }
+    }
+  },
+  "timestamp": "2026-05-25T11:07:49Z",
+  "applyable": false,
+  "complete": true,
+  "errored": false
+}
