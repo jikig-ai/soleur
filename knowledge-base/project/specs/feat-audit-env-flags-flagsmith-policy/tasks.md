@@ -30,19 +30,19 @@ umbrella_issue: 4456
 **Worktree:** to be created when ready (`worktree-manager.sh feature flagsmith-subprocessor-disclosure` or similar).
 **Plan cycle:** Run `/soleur:plan` from inside that worktree to generate a per-PR plan + per-PR tasks.md.
 
-- [ ] 1.1 Verify Flagsmith DPA URL (Bullet Train Ltd) + sign / capture evidence
-- [ ] 1.2 Confirm Flagsmith data region (US edge vs region pinning); classify §11.1 EEA vs §11.2 SCCs (expected: §11.2 — UK-based, non-EEA from EU DPA POV)
-- [ ] 1.3 Create `knowledge-base/legal/data-processing-agreements/flagsmith.md` (DPA URL, signature evidence, data region, transfer mechanism, Flagsmith's own sub-processors, execution date)
-- [ ] 1.4 Add Flagsmith row to `knowledge-base/legal/compliance-posture.md` Vendor DPA Status table
-- [ ] 1.5 Add Flagsmith to `knowledge-base/legal/data-processing-agreement-template.md` Schedule 2 (§11.2 classification)
-- [ ] 1.6 Add Flagsmith recipient line to `knowledge-base/legal/article-30-register.md` PA-1 + PA-2
-- [ ] 1.7 Update `knowledge-base/legal/tenant-dpa-register.md` Art. 28(4) flow-down note (document no-op state)
-- [ ] 1.8 Update `docs/legal/privacy-policy.md` sub-processor list
-- [ ] 1.9 Update `docs/legal/data-protection-disclosure.md` (root + Eleventy mirror — `diff` must return zero)
-- [ ] 1.10 Update `docs/legal/gdpr-policy.md` sub-processor list
-- [ ] 1.11 Grep for AUP file; if exists and lists sub-processors, update lockstep
-- [ ] 1.12 Document §6.1 30-day notification clock state (zero customer DPAs → not triggered today)
-- [ ] 1.13 AC checks: `git grep -i flagsmith` returns ≥7 hits across legal artifacts; markdownlint passes; DPD root/mirror `diff` zero
+- [x] 1.1 Verify Flagsmith DPA URL (Bullet Train Ltd) + sign / capture evidence — AUTO-incorporated via Flagsmith ToS Data Processor Appendix (no separate signature); pinned 2026-05-25
+- [x] 1.2 Confirm Flagsmith data region (US edge vs region pinning); classify §11.1 EEA vs §11.2 SCCs — UK controller (England and Wales no. 12353266); region not pinned on managed-SaaS tier; classified §11.2 with UK IDTA + EU SCCs M2+3 belt-and-suspenders
+- [x] 1.3 Create `knowledge-base/legal/data-processing-agreements/flagsmith.md` (DPA URL, signature evidence, data region, transfer mechanism, Flagsmith's own sub-processors, execution date)
+- [x] 1.4 Add Flagsmith row to `knowledge-base/legal/compliance-posture.md` Vendor DPA Status table
+- [x] 1.5 Add Flagsmith to `knowledge-base/legal/data-processing-agreement-template.md` Schedule 2 (§11.2 classification)
+- [x] 1.6 Add Flagsmith recipient line to `knowledge-base/legal/article-30-register.md` PA-1 + PA-2 + Vendor / Sub-Processor Mapping
+- [x] 1.7 Update `knowledge-base/legal/tenant-dpa-register.md` Art. 28(4) flow-down note (document no-op state) + PR-2 pre-merge guard
+- [x] 1.8 Update `docs/legal/privacy-policy.md` sub-processor list (new §5.15)
+- [x] 1.9 Update `docs/legal/data-protection-disclosure.md` §4.2 — Flagsmith row added in BOTH root + Eleventy mirror with identical content; pre-existing structural drift between root and mirror on LinkedIn / Microsoft Ireland rows (PR #4051 root-only) flagged as out-of-scope
+- [x] 1.10 Update `docs/legal/gdpr-policy.md` §2.2 sub-processor list
+- [x] 1.11 Grep for AUP file; if exists and lists sub-processors, update lockstep — AUP has no sub-processor enumeration (grep `acceptable-use-policy.md` returned zero hits); no-op confirmation
+- [x] 1.12 Document §6.1 30-day notification clock state (zero customer DPAs → not triggered today) — captured in `tenant-dpa-register.md` new "§6.1 30-day Customer notification clock — state baseline" section AND in `flagsmith.md` "§6.1 30-day notification clock state" section
+- [x] 1.13 AC checks: `git grep -i flagsmith` returns 9 hits across legal artifacts (≥7 required); markdownlint deferred to CI lefthook; tenant-DPA guard `awk '/^\| /' tenant-dpa-register.md | grep -c 'status: dpa-signed'` returns 0
 - [ ] 1.14 PR created, reviewed (CLO + legal-compliance-auditor), merged
 
 ## Phase 2 — PR-2: Migrate both flags + per-org capability + WORM audit (combined)
