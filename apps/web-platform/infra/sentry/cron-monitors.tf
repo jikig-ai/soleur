@@ -190,13 +190,22 @@ resource "sentry_cron_monitor" "scheduled_content_vendor_drift" {
   timezone                = "UTC"
 }
 
+# TR9 PR-11: Inngest-fired via
+# apps/web-platform/server/inngest/functions/cron-community-monitor.ts.
+# Migrated from the GHA scheduled-community-monitor workflow (deleted in
+# the same PR per TR9 I-13 hygiene). The Sentry monitor resource pre-
+# existed (it tracked the GHA-era external heartbeat); this PR updates
+# fields in place: tightens checkin_margin (60→30 min, Inngest-fired
+# precedent) and raises max_runtime (10→55 min, claude-eval cohort budget
+# mirroring scheduled_bug_fixer/scheduled_roadmap_review/scheduled_legal_audit/
+# scheduled_agent_native_audit/scheduled_competitive_analysis).
 resource "sentry_cron_monitor" "scheduled_community_monitor" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-community-monitor"
   schedule                = { crontab = "0 8 * * *" }
-  checkin_margin_minutes  = 60
-  max_runtime_minutes     = 10
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
@@ -359,6 +368,27 @@ resource "sentry_cron_monitor" "scheduled_stale_deferred_scope_outs" {
   schedule                = { crontab = "0 12 * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# TR9 PR-11 (#4464): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-ux-audit.ts`. NEW
+# monitor — the GHA scheduled-ux-audit workflow had no Sentry check-in.
+# Monthly 1st @ 09:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent. Single-miss alert (failure_issue_threshold=1):
+# a single missed monthly fire is noteworthy on a monthly cadence.
+# 55 min mirrors the claude-eval cohort (scheduled_bug_fixer,
+# scheduled_roadmap_review, scheduled_legal_audit) — 50-min
+# MAX_TURN_DURATION_MS budget plus slack.
+resource "sentry_cron_monitor" "scheduled_ux_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-ux-audit"
+  schedule                = { crontab = "0 9 1 * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

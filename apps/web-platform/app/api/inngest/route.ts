@@ -21,6 +21,7 @@ import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
+import { cronCommunityMonitor } from "@/server/inngest/functions/cron-community-monitor";
 import { cronCompetitiveAnalysis } from "@/server/inngest/functions/cron-competitive-analysis";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
@@ -31,6 +32,7 @@ import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-revie
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
+import { oneshotGdprGate50dEval } from "@/server/inngest/functions/oneshot-gdpr-gate-50d-eval";
 import { workspaceReconcileOnPush } from "@/server/inngest/functions/workspace-reconcile-on-push";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
@@ -50,6 +52,7 @@ export const { GET, POST, PUT } = serve({
     cfoOnPaymentFailed,
     cronAgentNativeAudit,
     cronBugFixer,
+    cronCommunityMonitor,
     cronCompetitiveAnalysis,
     cronDailyTriage,
     cronFollowThroughMonitor,
@@ -60,6 +63,7 @@ export const { GET, POST, PUT } = serve({
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
     githubOnEvent,
+    oneshotGdprGate50dEval,
     workspaceReconcileOnPush,
   ],
   signingKey: SIGNING_KEY ?? "build-phase-placeholder",

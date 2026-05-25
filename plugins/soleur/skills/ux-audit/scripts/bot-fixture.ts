@@ -192,7 +192,7 @@ async function insertMessages(
   }
 }
 
-async function seed(): Promise<void> {
+export async function seed(): Promise<void> {
   const botId = await getBotUserId();
   console.log(`[seed] bot user id: ${botId}`);
 
@@ -225,7 +225,7 @@ async function seed(): Promise<void> {
   console.log("[seed] done");
 }
 
-async function reset(): Promise<void> {
+export async function reset(): Promise<void> {
   const botId = await getBotUserId();
   console.log(`[reset] bot user id: ${botId}`);
 
