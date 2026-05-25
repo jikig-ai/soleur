@@ -36,21 +36,21 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 
 ## Phase 3 — Greenfield wrappers (AC4 / AC16 / AC2)
 
-- [ ] **3.1** Author `apps/web-platform/server/byok-cap-rpc.ts` per AC4 signature + implementation (service-role + N2 invariant assertion).
-- [ ] **3.2** Author `apps/web-platform/test/server/byok-cap-rpc.test.ts` per AC4 (a-d).
-- [ ] **3.3** Run tests RED first; implement until GREEN.
-- [ ] **3.4** Author `apps/web-platform/server/inngest/leader-prompts/prompt-assembly.ts` (PII-scrub + sanitization-parity sweep per AC16). Export `assemblePrompt(input: ClassInput, allowlistEmail: string | null): string`.
-- [ ] **3.5** Author `apps/web-platform/test/server/inngest/leader-prompts/prompt-assembly-pii-scrub.test.ts` per AC16 sentinel.
-- [ ] **3.6** Author `apps/web-platform/server/inngest/leader-prompts/index.ts` exporting `LeaderPromptModule` type + `PER_SPAWN_COST_CEILING_CENTS = 200` constant + 5 per-class registry imports.
-- [ ] **3.7** Author the 5 per-class prompt modules per AC2 table:
-  - **3.7.a** `engineering.pr_review_pending.ts` — Sonnet, tools `[createPullRequestReviewComment, createComment]`, system prompt enumerating both tools (AC2 sentinel requirement).
-  - **3.7.b** `engineering.ci_failed.ts` — Sonnet, tools `[createComment]`.
-  - **3.7.c** `triage.p0p1_issue.ts` — Haiku, tools `[addLabels, createComment]`.
-  - **3.7.d** `security.cve_alert.ts` — Sonnet, tools `[createBranch, createBlob, createCommit, createPullRequest, createComment]`.
-  - **3.7.e** `knowledge.kb_drift.ts` — Haiku, tools `[createBranch, createBlob, createCommit]`.
-- [ ] **3.8** Author `apps/web-platform/test/server/inngest/leader-prompts/prompt-version-stability.test.ts` per AC2 sentinel (registry covers exactly 5 classes + each system prompt enumerates its tools).
-- [ ] **3.9** Author `apps/web-platform/test/server/inngest/leader-prompts/tool-surface.test.ts` per AC8 sentinel (probeOctokit/new Octokit grep + per-class allowlist subset).
-- [ ] **3.10** Commit + push.
+- [x] **3.1** Author `apps/web-platform/server/byok-cap-rpc.ts` per AC4 signature + implementation (service-role + N2 invariant assertion). **[Done; 5 tests pass.]** Added to `.service-role-allowlist`.
+- [x] **3.2** Author `apps/web-platform/test/server/byok-cap-rpc.test.ts` per AC4 (a-d).
+- [x] **3.3** Run tests RED first; implement until GREEN. **[All RED→GREEN transitions confirmed.]**
+- [x] **3.4** Author `apps/web-platform/server/inngest/leader-prompts/prompt-assembly.ts` (PII-scrub + sanitization-parity sweep per AC16). **[Done; 13 tests pass.]**
+- [x] **3.5** Author `apps/web-platform/test/server/inngest/leader-prompts/prompt-assembly-pii-scrub.test.ts` per AC16 sentinel.
+- [x] **3.6** Author `apps/web-platform/server/inngest/leader-prompts/index.ts` exporting `LeaderPromptModule` type + `PER_SPAWN_COST_CEILING_CENTS = 200` constant + 5 per-class registry imports. **[Constants extracted to `./constants` to break circular-import cycle.]**
+- [x] **3.7** Author the 5 per-class prompt modules per AC2 table:
+  - [x] **3.7.a** `engineering.pr_review_pending.ts` — Sonnet, tools `[createPullRequestReviewComment, createComment]`, system prompt enumerating both tools (AC2 sentinel requirement).
+  - [x] **3.7.b** `engineering.ci_failed.ts` — Sonnet, tools `[createComment]`.
+  - [x] **3.7.c** `triage.p0p1_issue.ts` — Haiku, tools `[addLabels, createComment]`.
+  - [x] **3.7.d** `security.cve_alert.ts` — Sonnet, tools `[createBranch, createBlob, createCommit, createPullRequest, createComment]`.
+  - [x] **3.7.e** `knowledge.kb_drift.ts` — Haiku, tools `[createBranch, createBlob, createCommit]`.
+- [x] **3.8** Author `apps/web-platform/test/server/inngest/leader-prompts/prompt-version-stability.test.ts` per AC2 sentinel (registry covers exactly 5 classes + each system prompt enumerates its tools). **[Done; 30 tests pass.]**
+- [x] **3.9** Author `apps/web-platform/test/server/inngest/leader-prompts/tool-surface.test.ts` per AC8 sentinel (probeOctokit/new Octokit grep + per-class allowlist subset). **[Done; 6 tests pass. Comment-strip pre-grep added to avoid PR-A's I2 documentation false-positive.]**
+- [x] **3.10** Commit + push.
 
 ## Phase 4 — Inngest function body replacement (AC1, AC5, AC6, AC7, AC8, AC10, AC17)
 
