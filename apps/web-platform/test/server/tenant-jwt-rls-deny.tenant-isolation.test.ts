@@ -174,6 +174,33 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const cachedA = mintCache.get(userA.id);
       if (!cachedA) throw new Error("no cached jti for userA");
 
+      // Positive control: seed a conversations row for userA BEFORE
+      // revoke so that the post-revoke empty-result assertion below
+      // can only be explained by RLS deny (not "no rows exist").
+      // workspace_id: userA.id — solo-canary per mig 059 backfill.
+      // Cleanup in-test below (service-role bypasses RLS so DELETE
+      // succeeds even after deny is in effect).
+      const seededConvId = randomUUID();
+      const { error: seedErr } = await service.from("conversations").insert({
+        id: seededConvId,
+        user_id: userA.id,
+        workspace_id: userA.id,
+        repo_url: "https://github.com/example/jti-rls-deny-test",
+        status: "active",
+        last_active: new Date().toISOString(),
+      });
+      expect(seedErr, `seed conversations insert failed: ${JSON.stringify(seedErr)}`).toBeNull();
+
+      // Confirm userA's aClient CAN read the seeded row BEFORE revoke.
+      const aClientPre = tenantClient(userA.id);
+      const { data: preRows, error: preErr } = await aClientPre
+        .from("conversations")
+        .select("id")
+        .eq("id", seededConvId)
+        .limit(1);
+      expect(preErr).toBeNull();
+      expect((preRows ?? []).length).toBe(1);
+
       // Insert the deny row for userA's actual jti.
       const { error: revErr } = await service.rpc("revoke_jti", {
         p_jti: cachedA.jti,
@@ -189,15 +216,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // 2026-05-16-rls-deny-tests-payload-must-type-validate-or-they-pass-for-wrong-reason:
       // RESTRICTIVE policy denies silently as zero rows, OR a column-grant
       // intersection raises 42501. Either is acceptable; neither permits
-      // userA to read their own conversations.
+      // userA to read their own (seeded) conversations.
       const { data: aRows, error: aErr } = await aClient
         .from("conversations")
         .select("id")
-        .eq("user_id", userA.id)
-        .limit(5);
+        .eq("id", seededConvId)
+        .limit(1);
       const denied =
         aErr?.code === "42501" || (aErr === null && (aRows ?? []).length === 0);
-      expect(denied, `expected deny shape, got data=${JSON.stringify(aRows)} err=${JSON.stringify(aErr)}`).toBe(true);
+      expect(denied, `expected deny shape on seeded row, got data=${JSON.stringify(aRows)} err=${JSON.stringify(aErr)}`).toBe(true);
 
       // userB's un-revoked jti is unaffected — no error from RLS predicate.
       const { error: bErr } = await bClient
@@ -206,13 +233,40 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .eq("user_id", userB.id)
         .limit(5);
       expect(bErr).toBeNull();
+
+      // R5 jti-omission invariant: my_revocation_status MUST NOT
+      // surface jti in its returned columns (jti-enumeration mitigation
+      // per #3930). Asserted here while userA's jti is denied.
+      const { data: statusData } = await aClient.rpc("my_revocation_status");
+      const statusRow = (statusData as Array<Record<string, unknown>> | null)?.[0];
+      expect(statusRow).toBeTruthy();
+      expect(Object.keys(statusRow!).sort()).toEqual([
+        "denied_at",
+        "reason",
+        "revoked",
+      ]);
+
+      // Cleanup the seeded conversation row.
+      await service.from("conversations").delete().eq("id", seededConvId);
     });
 
     test("my_revocation_status returns (true, denied_at, reason) for a denied caller", async () => {
-      // userA's jti is denied from the previous test; calling under userA
-      // should return revoked=true. Note: the helper SECURITY DEFINER body
-      // joins denied_jti via founder_id (auth.uid()), not jti, so this
-      // works even though the JWT's jti is in the deny list.
+      const cachedA = mintCache.get(userA.id);
+      if (!cachedA) throw new Error("no cached jti for userA");
+
+      // Decouple from Test 4: re-revoke userA's jti inline so this test
+      // does not piggyback on cross-test state. ON CONFLICT DO NOTHING
+      // makes a duplicate-jti revoke a no-op (FIX 5 idempotency).
+      const { error: revErr } = await service.rpc("revoke_jti", {
+        p_jti: cachedA.jti,
+        p_founder_id: userA.id,
+        p_reason: "test-rls-restrictive-policy",
+      });
+      expect(revErr).toBeNull();
+
+      // Note: the helper SECURITY DEFINER body joins denied_jti via
+      // founder_id (auth.uid()), not jti, so this works even though
+      // the JWT's jti is in the deny list.
       const aClient = tenantClient(userA.id);
       const { data, error } = await aClient.rpc("my_revocation_status");
       expect(error).toBeNull();
@@ -222,6 +276,43 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(row.revoked).toBe(true);
       expect(row.denied_at).not.toBeNull();
       expect(row.reason).toBe("test-rls-restrictive-policy");
+
+      // R5 jti-omission invariant — pinned here too as belt-and-suspenders.
+      expect(Object.keys(row as unknown as Record<string, unknown>).sort()).toEqual([
+        "denied_at",
+        "reason",
+        "revoked",
+      ]);
+    });
+
+    test("revoke_jti is idempotent — duplicate jti revoke is a no-op (ON CONFLICT DO NOTHING)", async () => {
+      const jti = randomUUID();
+
+      // First revoke — happy path.
+      const { error: err1 } = await service.rpc("revoke_jti", {
+        p_jti: jti,
+        p_founder_id: userB.id,
+        p_reason: "idempotency-test-first",
+      });
+      expect(err1).toBeNull();
+
+      // Second revoke with same jti — must NOT raise 23505. The
+      // operator-CLI typo-retry path depends on this.
+      const { error: err2 } = await service.rpc("revoke_jti", {
+        p_jti: jti,
+        p_founder_id: userB.id,
+        p_reason: "idempotency-test-duplicate",
+      });
+      expect(err2).toBeNull();
+
+      // Assert exactly 1 row exists with this jti (PK enforces uniqueness;
+      // ON CONFLICT DO NOTHING means the second call did not overwrite).
+      const { count, error: cntErr } = await service
+        .from("denied_jti")
+        .select("*", { count: "exact", head: true })
+        .eq("jti", jti);
+      expect(cntErr).toBeNull();
+      expect(count).toBe(1);
     });
   },
 );

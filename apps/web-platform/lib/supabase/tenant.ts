@@ -663,6 +663,11 @@ let _revocationStatusTenantFn:
 export function _setRevocationStatusTenantFnForTest(
   fn: ((userId: UserId) => Promise<SupabaseClient>) | null,
 ): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "_setRevocationStatusTenantFnForTest is a test-only seam and must not be called in production",
+    );
+  }
   _revocationStatusTenantFn = fn;
 }
 
