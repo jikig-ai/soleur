@@ -17,6 +17,14 @@
 //
 // Print the resolved Supabase URL BEFORE the write — operator dev/prd
 // visibility per hr-dev-prd-distinct-supabase-projects.
+//
+// SCOPE: This revokes a specific JTI (one JWT instance), NOT the
+// underlying Supabase auth session. A founder whose magiclink session
+// is still valid can re-mint a fresh JWT with a new jti and resume
+// access. For full session termination, ALSO call:
+//   service.auth.admin.signOut(userId, { scope: 'global' })
+// A follow-up `--revoke-session` flag for one-step revoke+signOut is
+// tracked as deferred-scope-out (see compliance-posture row PR #4418).
 
 import { createInterface } from "node:readline/promises";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -68,9 +76,8 @@ async function confirm(summary: string): Promise<boolean> {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  // UUID-shape gate before any DB write — avoids 22P02 invalid_text_representation
-  // emitting from the RPC body's UUID-cast and lets the operator see the
-  // typo cleanly.
+  // UUID-shape gate before any DB write — RPC body's UUID-cast would
+  // otherwise emit 22P02 invalid_text_representation.
   if (!UUID_RE.test(args.jti)) {
     process.stderr.write(`::error::--jti must be UUID; got "${args.jti}"\n`);
     process.exit(2);
@@ -82,9 +89,8 @@ async function main(): Promise<void> {
 
   const supabase = createServiceClient();
   const supabaseUrl = process.env.SUPABASE_URL ?? "<not set>";
-  // dev/prd visibility per hr-dev-prd-distinct-supabase-projects.
-  // Operator-protection signal → stdout (not stderr) so the agent runtime
-  // sees it.
+  // dev/prd visibility per hr-dev-prd-distinct-supabase-projects — stdout
+  // (not stderr) so the agent runtime captures it.
   process.stdout.write(`[revoke-jti] target Supabase: ${supabaseUrl}\n`);
 
   const summary = [
