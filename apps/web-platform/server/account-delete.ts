@@ -171,6 +171,17 @@ export async function deleteAccount(
   // Plan rev-2 AC25 extends the storage-purge step to cover
   // dsar-exports/<userId>/ so a half-completed export bundle does not
   // outlive the user account.
+  //
+  // NOTE (mig 068 #4318): a more surgical owned-conv-only purge using
+  // message_attachments ⨝ conversations.user_id was considered (would
+  // preserve the user's uploads in shared-workspace conversations under
+  // an Art. 17 controller's-legitimate-interest carve-out, with uploader
+  // identity already nulled by step 3.901). Deferred to a follow-up
+  // because the wide-purge regression tests at test/account-delete.test.ts
+  // would need a substantial rewrite. Today: bytes AND identity both
+  // wiped on full account-delete; co-members see broken thumbnails for
+  // departed-user files in shared convs. Acceptable Art. 17 compliance;
+  // the carve-out is a UX optimization to revisit when the flag flips.
   try {
     const folders = await listAllStorageObjects(service.storage, "chat-attachments", userId);
 
@@ -426,6 +437,77 @@ export async function deleteAccount(
       op: "anonymise-workspace-member-attestations",
       extra: { userId },
       message: "anonymise_workspace_member_attestations threw — aborting deletion",
+    });
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.901 Cascade-pseudonymise messages.user_id on shared-workspace
+  //       conversations the departing user authored attachments in
+  //       (migration 068, #4318). Sets messages.user_id = NULL on
+  //       authored-with-attachments rows in conversations the
+  //       departing user does NOT own — preserves the message body
+  //       for surviving co-members while severing PII linkage. Runs
+  //       BEFORE 3.905 (workspace_member_removals anonymise) so the
+  //       cascade RPC iterates workspaces while membership rows are
+  //       still resolvable. Runs BEFORE 3.91 (workspace_members
+  //       DELETE) so is_workspace_member predicates inside the RPC
+  //       still return true. Phase 0 emergent finding E-1: pseudonym
+  //       is NULL (not 'member_<hex>') because messages.user_id has
+  //       an FK to auth.users(id) ON DELETE CASCADE.
+  //
+  //       Runtime ordering guard (architecture P1-3): if no
+  //       workspace_members row exists for this user at invocation
+  //       time, a sibling step already ran out-of-order and the
+  //       cascade would silently skip. Sentry-warn but do not abort.
+  try {
+    const { count: memberCount, error: memberCountErr } = await service
+      .from("workspace_members")
+      .select("workspace_id", { count: "exact", head: true })
+      .eq("user_id", userId);
+    if (memberCountErr) {
+      reportSilentFallback(memberCountErr, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message: "ordering-guard probe failed — proceeding to RPC",
+      });
+    } else if ((memberCount ?? 0) === 0) {
+      // Cascade-order regression detector: a sibling step already
+      // emptied workspace_members. The RPC will return 0 affected
+      // rows; Sentry-warn at structured P1.
+      reportSilentFallback(null, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message:
+          "ordering-guard tripped: workspace_members empty before cascade — sibling step ran out of order",
+      });
+    }
+    const { data: anonCount, error: anonErr } = await service.rpc(
+      "anonymise_departed_user_across_workspaces",
+      { p_departing_user: userId },
+    );
+    if (anonErr) {
+      reportSilentFallback(anonErr, {
+        feature: "account-delete",
+        op: "anonymise-authored-messages-shared-workspaces",
+        extra: { userId },
+        message:
+          "anonymise_departed_user_across_workspaces failed — aborting deletion",
+      });
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+    log.info(
+      { userId, anonymisedMessageCount: anonCount ?? 0 },
+      "anonymise_departed_user_across_workspaces completed",
+    );
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-authored-messages-shared-workspaces",
+      extra: { userId },
+      message:
+        "anonymise_departed_user_across_workspaces threw — aborting deletion",
     });
     return { success: false, error: "Account deletion failed. Please try again." };
   }
