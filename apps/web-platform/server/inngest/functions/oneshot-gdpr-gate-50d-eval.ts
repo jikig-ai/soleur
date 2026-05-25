@@ -49,6 +49,7 @@ interface EventData {
   expected_date: string;
   expectedAuthor: string;
   date_override?: string;
+  actor?: "platform";
 }
 
 interface HandlerArgs {
@@ -122,7 +123,9 @@ function buildCommentBody(args: {
   const { telemetryCount, escapedCount, recommendation, expectedDate } = args;
   const now = new Date().toISOString();
   let action: string;
-  if (recommendation === "re-schedule-90d") {
+  if (recommendation === "data-incomplete") {
+    action = "**Data incomplete** — escaped PR count failed (API error). Manual review required.";
+  } else if (recommendation === "re-schedule-90d") {
     action = "Re-arm 90-day checkpoint. Zero escapes detected.";
   } else if (recommendation === "re-schedule-90d-with-cases") {
     action = `Re-arm 90-day checkpoint. ${escapedCount} escape(s) detected — review individually.`;
@@ -158,6 +161,21 @@ export async function oneshotGdprGate50dEvalHandler({
   const { data } = event;
 
   // --- D3 date guard ---------------------------------------------------------
+  if (data.date_override !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(data.date_override)) {
+    const err = new Error(
+      `Invalid date_override format: ${JSON.stringify(data.date_override)}`,
+    );
+    reportSilentFallback(err, {
+      feature: SENTRY_MONITOR_SLUG,
+      op: "date-override-validation",
+      message: "date_override must be YYYY-MM-DD",
+      extra: { fn: SENTRY_MONITOR_SLUG, raw: String(data.date_override) },
+    });
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({ ok: false, logger });
+    });
+    return { ok: false, reason: "invalid-date-override" };
+  }
   const today = data.date_override ?? new Date().toISOString().slice(0, 10);
   if (today !== data.expected_date) {
     const err = new Error(
@@ -269,7 +287,8 @@ export async function oneshotGdprGate50dEvalHandler({
 
         for (const pr of pulls) {
           if (!pr.merged_at) continue;
-          if (pr.merged_at < startDate || pr.merged_at > endDate) continue;
+          const mergedDate = pr.merged_at.slice(0, 10);
+          if (mergedDate < startDate || mergedDate > endDate) continue;
           const labels: string[] = (pr.labels || []).map((l: any) => l.name || "");
           if (labels.some((l) => ESCAPED_PR_LABELS_RE.test(l))) {
             escapedCount++;
@@ -285,11 +304,14 @@ export async function oneshotGdprGate50dEvalHandler({
         message: "Failed to count escaped PRs via Pulls API",
         extra: { fn: SENTRY_MONITOR_SLUG },
       });
+      escapedCount = -1;
     }
 
     // Step (c): outcome matrix
     let recommendation: string;
-    if (escapedCount === 0) {
+    if (escapedCount === -1) {
+      recommendation = "data-incomplete";
+    } else if (escapedCount === 0) {
       recommendation = "re-schedule-90d";
     } else if (escapedCount <= 2) {
       recommendation = "re-schedule-90d-with-cases";
@@ -304,15 +326,25 @@ export async function oneshotGdprGate50dEvalHandler({
       recommendation,
       expectedDate: data.expected_date,
     });
-    await octokit.request(
-      "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-      {
-        owner: REPO_OWNER,
-        repo: REPO_NAME,
-        issue_number: data.issue,
-        body,
-      },
-    );
+    try {
+      await octokit.request(
+        "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+        {
+          owner: REPO_OWNER,
+          repo: REPO_NAME,
+          issue_number: data.issue,
+          body,
+        },
+      );
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: SENTRY_MONITOR_SLUG,
+        op: "post-comment",
+        message: "Failed to post eval comment on issue",
+        extra: { fn: SENTRY_MONITOR_SLUG, issue: data.issue },
+      });
+      return { ok: false as const, reason: "comment-post-failed" };
+    }
 
     return { ok: true as const, telemetryCount, escapedCount, recommendation };
   });
@@ -330,18 +362,21 @@ export async function oneshotGdprGate50dEvalHandler({
     await postSentryHeartbeat({ ok: true, logger });
   });
 
-  // --- Conditional re-arm: 90-day checkpoint ---------------------------------
+  // --- Conditional re-arm: 90-day checkpoint (inside step.run for replay safety) ---
   if (result.recommendation.startsWith("re-schedule")) {
-    await inngest.send({
-      name: "oneshot/gdpr-gate-50d-eval.fire",
-      id: "gdpr-gate-90d-eval-2026-08-10-v1",
-      ts: new Date("2026-08-10T09:00:00Z").getTime(),
-      data: {
-        issue: data.issue,
-        comment_id: data.comment_id,
-        expected_date: "2026-08-10",
-        expectedAuthor: data.expectedAuthor,
-      },
+    await step.run("re-arm-90d-checkpoint", async () => {
+      await inngest.send({
+        name: "oneshot/gdpr-gate-50d-eval.fire",
+        id: "gdpr-gate-90d-eval-2026-08-10-v1",
+        ts: new Date("2026-08-10T09:00:00Z").getTime(),
+        data: {
+          issue: data.issue,
+          comment_id: data.comment_id,
+          expected_date: "2026-08-10",
+          expectedAuthor: data.expectedAuthor,
+          actor: "platform" as const,
+        },
+      });
     });
     logger.info(
       { fn: SENTRY_MONITOR_SLUG },

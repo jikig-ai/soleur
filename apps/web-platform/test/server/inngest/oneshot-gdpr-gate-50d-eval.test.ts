@@ -145,6 +145,16 @@ describe("oneshot-gdpr-gate-50d-eval", () => {
       });
 
       expect(result.ok).toBe(true);
+      expect(inngestSendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "oneshot/gdpr-gate-50d-eval.fire",
+          id: "gdpr-gate-90d-eval-2026-08-10-v1",
+          data: expect.objectContaining({
+            expected_date: "2026-08-10",
+            actor: "platform",
+          }),
+        }),
+      );
     });
   });
 
