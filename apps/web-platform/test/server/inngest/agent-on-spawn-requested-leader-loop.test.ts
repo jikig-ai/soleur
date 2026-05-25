@@ -797,6 +797,56 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(createGitHubAppClientSpy).not.toHaveBeenCalled();
   });
 
+  it("LEADER_CLASSES_DISABLED kill switch: configured class deadletters with leader_class_disabled, no Anthropic call", async () => {
+    const original = process.env.LEADER_CLASSES_DISABLED;
+    process.env.LEADER_CLASSES_DISABLED = "engineering.pr_review_pending";
+    try {
+      const { agentOnSpawnRequestedHandler } = await import(
+        "@/server/inngest/functions/agent-on-spawn-requested"
+      );
+      const result = await agentOnSpawnRequestedHandler({
+        event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+        step: makeStep(),
+        logger,
+      });
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "leader_class_disabled",
+      });
+      expect(anthropicCreateSpy).not.toHaveBeenCalled();
+    } finally {
+      if (original === undefined) {
+        delete process.env.LEADER_CLASSES_DISABLED;
+      } else {
+        process.env.LEADER_CLASSES_DISABLED = original;
+      }
+    }
+  });
+
+  it("LEADER_CLASSES_DISABLED kill switch: classes NOT in the list still run", async () => {
+    const original = process.env.LEADER_CLASSES_DISABLED;
+    process.env.LEADER_CLASSES_DISABLED = "engineering.ci_failed,triage.p0p1_issue";
+    anthropicCreateSpy.mockResolvedValueOnce(endTurnResponse());
+    try {
+      const { agentOnSpawnRequestedHandler } = await import(
+        "@/server/inngest/functions/agent-on-spawn-requested"
+      );
+      const result = await agentOnSpawnRequestedHandler({
+        event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+        step: makeStep(),
+        logger,
+      });
+      expect(result).toMatchObject({ acknowledged: true });
+      expect(anthropicCreateSpy).toHaveBeenCalled();
+    } finally {
+      if (original === undefined) {
+        delete process.env.LEADER_CLASSES_DISABLED;
+      } else {
+        process.env.LEADER_CLASSES_DISABLED = original;
+      }
+    }
+  });
+
   it("AC5: persistTurnCostAwaitable called with leaderId scoped to actionClass", async () => {
     anthropicCreateSpy.mockResolvedValueOnce(endTurnResponse());
     const { agentOnSpawnRequestedHandler } = await import(

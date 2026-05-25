@@ -245,16 +245,31 @@ export async function agentOnSpawnRequestedHandler({
     });
   }
 
-  // Resolve the leader prompt module for this class. Unknown class →
-  // fail-closed (no leader registered).
+  // Resolve the leader prompt module for this class. Unknown class OR
+  // operator/CTO-disabled class → fail-closed via `leader_class_disabled`.
+  //
+  // Runtime kill switch (per-class dogfood escape hatch): `LEADER_CLASSES_DISABLED`
+  // is a comma-separated list of `LeaderActionClass` values that the loop
+  // refuses to run. Set via Doppler (`prd`) to short-circuit a misbehaving
+  // class without redeploy. The operator-facing copy in
+  // `failure-reason-copy.ts` ("Autonomous agent for this card class is not
+  // enabled yet. CTO has been notified.") is already shipped.
+  const disabledClasses = (process.env.LEADER_CLASSES_DISABLED ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
   const leaderModule = LEADER_PROMPTS[actionClass as LeaderActionClass] as
     | LeaderPromptModule
     | undefined;
-  if (!leaderModule) {
+  if (!leaderModule || disabledClasses.includes(actionClass)) {
     return persistFailure(step, {
       actionSendId,
       reason: "leader_class_disabled",
-      err: new Error(`no leader module for class ${actionClass}`),
+      err: new Error(
+        leaderModule
+          ? `class ${actionClass} disabled via LEADER_CLASSES_DISABLED`
+          : `no leader module for class ${actionClass}`,
+      ),
       founderId,
       messageId,
       actionClass,
