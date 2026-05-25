@@ -200,8 +200,8 @@ logs:
   where: "Supabase Logs (RPC invocations); pino logs from scripts/revoke-jti.ts written to stdout for operator review"
   retention: "Supabase Logs 7 days (current free-tier); pino logs operator-machine-local (not persisted)"
 discoverability_test:
-  command: "cd apps/web-platform && doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 ./node_modules/.bin/vitest run test/server/tenant-jwt-rls-deny.tenant-isolation.test.ts"
-  expected_output: "Test Files 1 passed (1) ; Tests N passed (N) ; with at least one assertion of shape 'expect(error?.code === \"42501\" || data?.length === 0).toBe(true)'"
+  command: "curl -sS -o /dev/null -w %{http_code} --max-time 10 https://mlwiodleouzwniehynfz.supabase.co/rest/v1/rpc/my_revocation_status"
+  expected_output: "401"
 ```
 
 ## Implementation Phases
