@@ -45,4 +45,18 @@ SELECT 'is_jti_denied_from_jwt_authenticated_grant_present',
               'authenticated',
               'public.is_jti_denied_from_jwt()',
               'EXECUTE'
-            ) THEN 0 ELSE 1 END::int;
+            ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (5) is_jti_denied(uuid): PUBLIC does NOT have EXECUTE.
+--     Postgres exposes PUBLIC as the literal lowercase role name
+--     `'public'` in has_function_privilege. The migration prose claims
+--     PUBLIC is revoked alongside anon + authenticated; pin it with a
+--     sentinel so a future GRANT TO PUBLIC (or a CREATE FUNCTION that
+--     re-grants PUBLIC by default) is caught by CI verify-migrations
+--     rather than silently re-opening the runtime EXECUTE matrix.
+SELECT 'is_jti_denied_public_revoked',
+       CASE WHEN has_function_privilege(
+              'public',
+              'public.is_jti_denied(uuid)',
+              'EXECUTE'
+            ) THEN 1 ELSE 0 END::int;
