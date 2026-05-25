@@ -73,10 +73,10 @@ done
 # ----------------------------------------------------------------------
 
 # Strip frontmatter (everything from start through second `---` line) +
-# top-level "# Terms & Conditions" heading from canonical.
+# the first top-level heading from canonical.
 normalize_canonical() {
   awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' "$1" \
-    | sed -E '/^# Terms & Conditions[[:space:]]*$/d'
+    | sed -E '/^# [A-Z][^#]*[[:space:]]*$/d'
 }
 
 # Strip frontmatter + Eleventy page-hero / content section scaffolding
@@ -121,8 +121,13 @@ collapse() {
     s|\(data-protection-disclosure\.md\)|(LINK_DPD)|g
     s|\(\./data-protection-disclosure\.md\)|(LINK_DPD)|g
     s|\(/legal/data-protection-disclosure/\)|(LINK_DPD)|g
+    s|\(terms-and-conditions\.md\)|(LINK_TC)|g
+    s|\(\./terms-and-conditions\.md\)|(LINK_TC)|g
+    s|\(/legal/terms-and-conditions/\)|(LINK_TC)|g
     s|\(https://soleur\.ai\)|(LINK_HOME)|g
     s|\(https://www\.soleur\.ai\)|(LINK_HOME)|g
+    s|\[https://soleur\.ai\]|[LINK_HOME_TEXT]|g
+    s|\[https://www\.soleur\.ai\]|[LINK_HOME_TEXT]|g
     s/[0-9]+ AI agents/__AGENT_COUNT__ AI agents/g
     s/\{\{ stats\.agents \}\} AI agents/__AGENT_COUNT__ AI agents/g
     s/[0-9]+ skills/__SKILL_COUNT__ skills/g
@@ -169,6 +174,8 @@ extract_legal_doc_sha() {
 # Per-doc loop.
 # ----------------------------------------------------------------------
 
+BODY_EQUIVALENCE_DOCS=("terms-and-conditions" "data-protection-disclosure")
+
 FAILED=0
 FAILURES=()
 
@@ -185,13 +192,13 @@ for doc in "${CANONICAL_DOCS[@]}"; do
     FAILED=$((FAILED+1)); FAILURES+=("$doc: mirror missing"); continue
   fi
 
-  # Step 1 (T&C only): normalized body equivalence vs Eleventy mirror.
-  if [ "$doc" = "terms-and-conditions" ]; then
+  # Step 1: normalized body equivalence vs Eleventy mirror (opt-in per BODY_EQUIVALENCE_DOCS).
+  if printf '%s\n' "${BODY_EQUIVALENCE_DOCS[@]}" | grep -Fxq "$doc"; then
     canon_body_sha=$(normalize_canonical "$canonical_path" | collapse | sha256sum | awk '{print $1}')
     mirror_body_sha=$(normalize_plugin "$mirror_path" | collapse | sha256sum | awk '{print $1}')
 
     if [ "$canon_body_sha" != "$mirror_body_sha" ]; then
-      echo "::error::T&C body drift: canonical and plugin mirror diverge after normalisation." >&2
+      echo "::error::$doc body drift: canonical and plugin mirror diverge after normalisation." >&2
       echo "    canonical=$canonical_path" >&2
       echo "    mirror=$mirror_path" >&2
       echo "    canonical_body_sha=$canon_body_sha" >&2
