@@ -32,6 +32,8 @@ const {
   mockLogger,
   mockAbortAllUserSessions,
   mockDeleteWorkspace,
+  mockReportSilentFallback,
+  mockWarnSilentFallback,
 } = vi.hoisted(() => {
   const callOrder: string[] = [];
   return {
@@ -50,6 +52,8 @@ const {
     },
     mockAbortAllUserSessions: vi.fn(),
     mockDeleteWorkspace: vi.fn(),
+    mockReportSilentFallback: vi.fn(),
+    mockWarnSilentFallback: vi.fn(),
   };
 });
 
@@ -95,6 +99,12 @@ vi.mock("@/server/workspace", () => ({
 vi.mock("@/server/logger", () => ({
   default: mockLogger,
   createChildLogger: () => mockLogger,
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: mockWarnSilentFallback,
+  hashUserId: (id: string) => `hash:${id}`,
 }));
 
 import { deleteAccount } from "@/server/account-delete";
@@ -176,6 +186,19 @@ describe("deleteAccount cascade ordering with template_authorizations (PR-I TR7)
 
     expect(mockDeleteUser).not.toHaveBeenCalled();
     expect(callOrder).not.toContain("auth.admin.deleteUser");
+
+    // Sentry mirror — failure routes through reportSilentFallback helper
+    // (ADR-029 boundary: helper pseudonymises extra.userId before emit).
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "account-delete",
+        op: "anonymise-template-authorizations",
+        message: expect.stringContaining("anonymise_template_authorizations"),
+        extra: expect.objectContaining({ userId: USER_ID }),
+      }),
+    );
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
   });
 
   test("anonymise_template_authorizations throws → cascade aborts, scope_grants/tc/auth NOT called", async () => {
@@ -195,5 +218,16 @@ describe("deleteAccount cascade ordering with template_authorizations (PR-I TR7)
     expect(rpcNames).toContain("anonymise_template_authorizations");
     expect(rpcNames).not.toContain("anonymise_scope_grants");
     expect(mockDeleteUser).not.toHaveBeenCalled();
+
+    // Sentry mirror — throw path routes through reportSilentFallback helper.
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        feature: "account-delete",
+        op: "anonymise-template-authorizations",
+        message: expect.stringContaining("anonymise_template_authorizations"),
+        extra: expect.objectContaining({ userId: USER_ID }),
+      }),
+    );
   });
 });
