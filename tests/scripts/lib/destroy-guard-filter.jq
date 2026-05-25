@@ -1,8 +1,11 @@
 # Destroy-guard counter for apply-github-infra.yml. Path-specific to the
 # only nested-block surface that has shipped destructively in this repo:
 # `github_repository_ruleset.*.rules[].required_status_checks[].required_check[]`
-# (PR #4395 shape; closes #3915). Sibling apply workflows are tracked as a
-# follow-up — do NOT generalize this filter without re-running plan review.
+# (PR #4395 shape; closes #3915). Sibling apply workflows now have their own
+# path-specific filters per #4419: `destroy-guard-filter-sentry.jq` and
+# `destroy-guard-filter-web-platform.jq`. Do NOT generalize this filter; a
+# future apply-* workflow gets its own sibling per the cap-coupling
+# convention documented in destroy-guard-filter-web-platform.jq.
 #
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int}. Caller sums to

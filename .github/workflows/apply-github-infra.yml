@@ -39,6 +39,10 @@ on:
     paths:
       - "infra/github/*.tf"
       - "infra/github/.terraform.lock.hcl"
+      # Defense-in-depth: re-fire on filter mutations so a PR that mutates
+      # the destroy-guard filter without touching infra still runs the
+      # apply step against `main`'s captured baseline (#4419).
+      - "tests/scripts/lib/destroy-guard-filter.jq"
   workflow_dispatch:
     inputs:
       reason:
