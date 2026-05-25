@@ -224,3 +224,26 @@ resource "sentry_cron_monitor" "scheduled_gh_pages_cert_state" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# TR9 PR-6 (closes #4416): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-strategy-review.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-strategy-review workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+# Weekly Monday 08:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through,
+# scheduled_bug_fixer); tighter than the GHA-era 240-min margin
+# (cf. scheduled_gh_pages_cert_state) because Inngest has minimal jitter.
+# Single-miss alert (failure_issue_threshold=1): a single missed Monday is
+# noteworthy on a weekly cadence.
+resource "sentry_cron_monitor" "scheduled_strategy_review" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-strategy-review"
+  schedule                = { crontab = "0 8 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

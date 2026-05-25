@@ -176,6 +176,7 @@ jobs:
             -target=sentry_cron_monitor.scheduled_community_monitor \
             -target=sentry_cron_monitor.scheduled_gh_pages_cert_state \
             -target=sentry_cron_monitor.scheduled_follow_through \
+            -target=sentry_cron_monitor.scheduled_strategy_review \
             -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
