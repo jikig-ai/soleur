@@ -181,13 +181,15 @@ failure_modes:
     alert_route: CI failure
 discoverability_test:
   command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/account/export
-  expected_output: "401"
-  # Probes that the DSAR export route is reachable and auth-gated (401 without
-  # session cookie = correct, route alive + RLS-gated). The redaction-count
-  # log shape is verified by the integration test in CI under
-  # SUPABASE_DEV_INTEGRATION=1; that test runs at every PR per #4351
-  # Phase 7.1. The local-terminal observability probe checks the route is
-  # live; CI checks the log shape. Preflight Check 10 invariant satisfied.
+  expected_output: "307 or 401"
+  # Probes that the DSAR export route is reachable and auth-gated. Without a
+  # session cookie the route either returns 401 (route asserts auth itself)
+  # OR 307 redirects to /login (middleware-enforced auth). Both prove the
+  # route is alive + RLS/middleware-gated. The redaction-count log shape is
+  # verified by the integration test in CI under SUPABASE_DEV_INTEGRATION=1;
+  # that test runs at every PR per #4351 Phase 7.1. The local-terminal
+  # observability probe checks the route is live; CI checks the log shape.
+  # Preflight Check 10 invariant satisfied.
 logs:
   where: Better Stack Logs (pino) + Sentry breadcrumbs (warn+ mirror)
   retention: Better Stack 30d. **Long-horizon WORM via dsar_export_audit_pii extension tracked at #4359.**
