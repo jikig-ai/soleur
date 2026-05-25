@@ -8,8 +8,8 @@ import { createServiceClient } from "@/lib/supabase/service";
 import {
   getFreshTenantClient,
   RuntimeAuthError,
-  getMyRevocationStatus,
 } from "@/lib/supabase/tenant";
+import { tryEmitRevocationNotice } from "./revocation-emit";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
@@ -2395,7 +2395,7 @@ export async function sendUserMessage(
   const activeSession = getSession(userId, conversationId);
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
-  const handleSessionError = (err: unknown) => {
+  const handleSessionError = async (err: unknown): Promise<void> => {
     // Phase 3.2 AC-D: MissingByokKeyError fires the info-level breadcrumb
     // BEFORE the generic captureException so the workspace context lands
     // on the trail. Returns; we still surface the WS error event below.
@@ -2409,20 +2409,17 @@ export async function sendUserMessage(
     // mid-session `RuntimeAuthError("denied_jti")` BEFORE the generic
     // error frame fires so agents/API consumers receive the same
     // discriminated `revocation_notice` frame the ws-handler.tenantFor
-    // path emits at handshake time. Best-effort RPC: a null status
-    // here just leaves reason/deniedAt null (the helper already
-    // mirrored any RPC failure to Sentry). Fire-and-forget — the
-    // surrounding fail-open semantics of this catch must not block
-    // on a second RPC roundtrip.
+    // path emits at handshake time. AWAIT the helper so the
+    // revocation_notice lands before the generic error frame — the
+    // prior fire-and-forget IIFE raced with the synchronous error-frame
+    // emit below and could deliver the frames out of order. The helper
+    // is fail-open (returns null on RPC error, Sentry-mirrors per
+    // cq-silent-fallback-must-mirror-to-sentry) so awaiting it does
+    // not introduce a new throw surface.
     if (err instanceof RuntimeAuthError && err.cause === "denied_jti") {
-      void (async () => {
-        const status = await getMyRevocationStatus(userId);
-        sendToClient(userId, {
-          type: "revocation_notice",
-          reason: status?.reason ?? null,
-          deniedAt: status?.deniedAt ?? null,
-        });
-      })();
+      await tryEmitRevocationNotice(userId, (frame) =>
+        sendToClient(userId, frame),
+      );
     }
     const message = sanitizeErrorForClient(err);
     sendToClient(userId, {
@@ -2490,7 +2487,7 @@ export async function sendUserMessage(
           .catch(handleSessionError);
       });
     } catch (err) {
-      handleSessionError(err);
+      await handleSessionError(err);
     }
     return;
   }

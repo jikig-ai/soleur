@@ -84,8 +84,8 @@ import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import {
   getFreshTenantClient,
   RuntimeAuthError,
-  getMyRevocationStatus,
 } from "@/lib/supabase/tenant";
+import { tryEmitRevocationNotice } from "./revocation-emit";
 import {
   fetchUserWorkspacePath,
   resolveConciergeDocumentContext,
@@ -1855,23 +1855,15 @@ export async function dispatchSoleurGo(
       // own WorkflowEnd. Synthesize a `session_revoked` WS frame so
       // agents/API consumers observing this turn receive the same
       // terminal discriminator the runner-level catch would have emitted
-      // for a mid-stream throw. Best-effort lookup of the operator-
-      // supplied reason via the founder-readable RPC; null fields are
-      // expected for legacy deny rows. Mirrors the `session_ended`
-      // terminal-status routing used by the runner's onWorkflowEnded
-      // path above (TERMINAL_WORKFLOW_END_STATUSES includes
-      // `session_revoked`).
-      const status = await getMyRevocationStatus(userId);
-      // Surface the discriminated revocation_notice frame — same shape
-      // ws-handler.tenantFor emits for the WS-handshake path — so the
-      // client's existing `revocation_notice` case arm fires (renders
-      // operator-supplied `denied_jti.reason` instead of the generic
-      // `WORKFLOW_END_USER_MESSAGES.session_revoked` fallback).
-      sendToClient(userId, {
-        type: "revocation_notice",
-        reason: status?.reason ?? null,
-        deniedAt: status?.deniedAt ?? null,
-      });
+      // for a mid-stream throw.
+      //
+      // Routes through `tryEmitRevocationNotice` (server/revocation-emit.ts)
+      // so the lookup+sanitize logic stays shared with agent-runner and
+      // soleur-go-runner. Helper returns the looked-up status if a caller
+      // needs the raw fields; this site only needs the emit side effect.
+      await tryEmitRevocationNotice(userId, (frame) =>
+        sendToClient(userId, frame),
+      );
       // Pair with the terminal session_ended frame so the client
       // reducer clears streamState (`clear_streams` in ws-client.ts).
       // Disambiguator `conversationId` lets multi-tab clients route

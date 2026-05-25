@@ -61,11 +61,12 @@ import { reportSilentFallback, mirrorWithDebounce } from "./observability";
 // #4440 follow-up to #4418 — `RuntimeAuthError` discriminator + the
 // founder-readable revocation status RPC. Used by `consumeStream`'s
 // catch to detect mid-stream JWT-deny and surface `session_revoked`
-// rather than the generic `internal_error`.
-import {
-  RuntimeAuthError,
-  getMyRevocationStatus,
-} from "@/lib/supabase/tenant";
+// rather than the generic `internal_error`. Lookup goes through the
+// shared `lookupRevocationStatusSafe` helper so reason sanitization +
+// fail-open mirroring stays aligned across the three deny-jti catch
+// sites (cc-dispatcher, agent-runner, here).
+import { RuntimeAuthError } from "@/lib/supabase/tenant";
+import { lookupRevocationStatusSafe } from "./revocation-emit";
 import { sanitizeDocumentBody } from "./sanitize-document";
 
 /**
@@ -2000,7 +2001,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           err instanceof RuntimeAuthError &&
           err.cause === "denied_jti"
         ) {
-          const status = await getMyRevocationStatus(state.userId);
+          const status = await lookupRevocationStatusSafe(state.userId);
           emitWorkflowEnded(state, {
             status: "session_revoked",
             reason: status?.reason ?? null,
