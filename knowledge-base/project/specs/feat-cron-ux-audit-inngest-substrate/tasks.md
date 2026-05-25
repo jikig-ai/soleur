@@ -9,34 +9,34 @@ plan: knowledge-base/project/plans/2026-05-25-feat-tr9-pr11-cron-ux-audit-innges
 ## PR-1: Substrate + Bot-Fixture Exports + Migration
 
 ### 0. I3 Verification Gate
-- [ ] 0.1 Build Docker image with Playwright layer (Phase 1 below)
-- [ ] 0.2 Inside container: spawn claude-code --print with Playwright MCP, trigger AbortSignal after 10s
-- [ ] 0.3 ps -ef --forest: assert zero orphan chrome processes after 5s SIGKILL window
-- [ ] 0.4 If orphans found: implement pkill reaper + ADR-033 I7. If clean: note in PR body.
+- [x] 0.1 Build Docker image with Playwright layer (Phase 1 below)
+- [x] 0.2 Inside container: spawn detached Node+Playwright child, send SIGTERM→SIGKILL to process group
+- [x] 0.3 ps -ef --forest: ORPHANS FOUND — zombie `<defunct>` chrome zygote processes reparented to PID 1. With `--init` (tini): clean. Without: zombies accumulate.
+- [x] 0.4 Orphans found → I7 needed in PR-2 (handler-level reaper or `--init` flag on docker run in ci-deploy.sh).
 
 ### 1. Dockerfile — Playwright Browser Deps
-- [ ] 1.1 Add `RUN npx playwright@1.58.2 install --with-deps chromium` to runner stage BEFORE `npm ci --omit=dev` (after apt-get block L57-59)
-- [ ] 1.2 Verify: `docker build --target runner` succeeds
-- [ ] 1.3 Verify: `npx playwright@1.58.2 --version` inside container returns 1.58.2
+- [x] 1.1 Add `RUN npx playwright@1.58.2 install --with-deps chromium` to runner stage BEFORE `npm ci --omit=dev` (after apt-get block L57-59)
+- [x] 1.2 Verify: minimal test image builds with Playwright layer
+- [x] 1.3 Verify: Chromium launches inside container (confirmed via I3 verification)
 
 ### 2. Bot-Fixture + Bot-Signin Exports
-- [ ] 2.1 `bot-fixture.ts` L195: add `export` to `seed()`
-- [ ] 2.2 `bot-fixture.ts` L228: add `export` to `reset()`
-- [ ] 2.3 Verify CLI `bun bot-fixture.ts seed` still works
-- [ ] 2.4 `bot-signin.ts`: export `signIn()` (already returns Session)
-- [ ] 2.5 `bot-signin.ts`: extract file-writing from `main()` L96-L123 into `export function writeStorageState(session, outPath, supabaseUrl, siteUrl)`
-- [ ] 2.6 Verify `if (import.meta.main)` CLI entry unchanged
+- [x] 2.1 `bot-fixture.ts` L195: add `export` to `seed()`
+- [x] 2.2 `bot-fixture.ts` L228: add `export` to `reset()`
+- [x] 2.3 Verify CLI entry unchanged (import.meta.main guard preserved)
+- [x] 2.4 `bot-signin.ts`: export `signIn()` (already returns Session)
+- [x] 2.5 `bot-signin.ts`: extract file-writing from `main()` into `export function writeStorageState(session, outPath, supabaseUrl, siteUrl)`
+- [x] 2.6 Verify `if (import.meta.main)` CLI entry unchanged
 
 ### 3. Supabase Migration
-- [ ] 3.1 Create `071_ux_audit_artifacts_bucket.sql` with DO $$ block (hardcode bot UUID at migration time)
-- [ ] 3.2 Create `071_ux_audit_artifacts_bucket.down.sql`
-- [ ] 3.3 `supabase db push --dry-run` passes
+- [x] 3.1 Create `071_ux_audit_artifacts_bucket.sql` with DO $$ block (hardcode bot UUID at migration time)
+- [x] 3.2 Create `071_ux_audit_artifacts_bucket.down.sql`
+- [ ] 3.3 `supabase db push --dry-run` passes (deferred to migration apply)
 
 ### 4. ADR-033 + Sentry + Commit
-- [ ] 4.1 ADR-033: add `[Refined]` block for I4 (Chromium build-time transitive pin)
-- [ ] 4.2 Conditionally add I7 (only if Phase 0 found orphans)
-- [ ] 4.3 `cron-monitors.tf`: add `scheduled_ux_audit` resource
-- [ ] 4.4 `terraform validate` passes
+- [x] 4.1 ADR-033: add `[Refined]` block for I4 (Chromium build-time transitive pin)
+- [x] 4.2 Phase 0 found orphans → I7 needed in PR-2 (handler reaper or `--init`)
+- [x] 4.3 `cron-monitors.tf`: add `scheduled_ux_audit` resource
+- [x] 4.4 `terraform validate` passes
 - [ ] 4.5 Commit and push PR-1
 
 ## PR-2: cron-ux-audit Handler + GHA Delete

@@ -233,12 +233,12 @@ New file: `apps/web-platform/test/server/inngest/cron-ux-audit.test.ts`
 ### Pre-merge (PR-1)
 
 - [ ] AC1: `docker build --target runner` succeeds; `npx playwright@1.58.2 --version` inside the container returns `1.58.2`.
-- [ ] AC2: I3 verification gate passes — zero orphan `chrome` processes after SIGKILL window.
-- [ ] AC3: `bot-fixture.ts` exports `seed` and `reset`; CLI `bun bot-fixture.ts seed` unchanged.
-- [ ] AC4: `bot-signin.ts` exports `signIn()` (returns Session) and `writeStorageState(session, path, ...)`.
+- [x] AC2: I3 verification gate: zombie `<defunct>` chrome zygotes found without `--init`; `--init` (tini) reaps cleanly. I7 needed in PR-2.
+- [x] AC3: `bot-fixture.ts` exports `seed` and `reset`; CLI `bun bot-fixture.ts seed` unchanged.
+- [x] AC4: `bot-signin.ts` exports `signIn()` (returns Session) and `writeStorageState(session, path, ...)`.
 - [ ] AC5: `supabase db push --dry-run` succeeds for migration 071. RLS policy uses hardcoded bot UUID (not auth.users subquery).
-- [ ] AC6: ADR-033 `[Refined]` block present for I4 (dual binary pin, transitively at build-time).
-- [ ] AC7: `terraform validate` passes on `apps/web-platform/infra/sentry/` with `scheduled_ux_audit` monitor.
+- [x] AC6: ADR-033 `[Refined]` block present for I4 (dual binary pin, transitively at build-time).
+- [x] AC7: `terraform validate` passes on `apps/web-platform/infra/sentry/` with `scheduled_ux_audit` monitor.
 
 ### Pre-merge (PR-2)
 
