@@ -36,41 +36,44 @@ Manual escape hatch: `gh workflow run apply-github-infra.yml -f reason='...'`
 for the first apply post-Phase-0 (when no `infra/github/*.tf` files have
 changed yet) or for re-runs after a transient failure.
 
-## Phase 0 -- Doppler setup (one-time)
+## Phase 0 -- Doppler setup (one-time, App-auth)
 
-1. Mint a fine-grained PAT at
-   <https://github.com/settings/personal-access-tokens/new>:
-   - Resource owner: `jikig-ai`
-   - Repository access: select `jikig-ai/soleur` ONLY
-   - Permissions: `Administration: Read+Write` (Metadata: Read auto-granted)
-   - Expiration: 90 days
-   - Name: `terraform-infra-github-rulesets`
+The provider authenticates as the `soleur-ai` GitHub App (id `3261325`,
+org-wide installation `122213433` on `jikig-ai`) per
+AGENTS.core.md `hr-github-app-auth-not-pat`. App credentials are already
+mirrored from `prd` to `prd_terraform` by the `apps/web-platform/infra/`
+root's `doppler_secret` resources (PR #4150), so no fresh mint is needed.
 
-2. Stash in Doppler `prd_terraform`:
-
-   ```bash
-   doppler secrets set GH_RULESET_PAT='<token>' -p soleur -c prd_terraform
-   ```
-
-3. Verify:
-
-   ```bash
-   GH_TOKEN=$(doppler secrets get GH_RULESET_PAT -p soleur -c prd_terraform --plain) \
-     gh api repos/jikig-ai/soleur/rulesets/14145388 | jq '.id'
-   # Expected: 14145388
-   ```
-
-## Phase 1 -- First apply (one-time, post-Phase-0)
-
-After Phase 0 lands the PAT in Doppler, kick the first apply via the manual
-escape hatch (no `infra/github/*.tf` files have changed yet, so the path-filter
-push trigger will not fire):
+Verify Doppler has both secrets:
 
 ```bash
-gh workflow run apply-github-infra.yml \
-  -f reason='first-apply-post-PAT-mint'
-gh run watch
+doppler secrets get GITHUB_APP_ID -p soleur -c prd_terraform --plain | wc -c
+doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd_terraform --plain | wc -c
+# Both must be non-zero. PEM is ~1.7KB.
 ```
+
+If either is empty, mirror from the source `prd` config:
+
+```bash
+doppler secrets set GITHUB_APP_ID="$(doppler secrets get GITHUB_APP_ID -p soleur -c prd --plain)" \
+  -p soleur -c prd_terraform
+doppler secrets set GITHUB_APP_PRIVATE_KEY="$(doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd --plain)" \
+  -p soleur -c prd_terraform
+```
+
+The App MUST have `Administration: Write` permission on `jikig-ai/soleur`
+(required for ruleset writes). Verify at
+<https://github.com/organizations/jikig-ai/settings/installations/122213433>
+if `terraform plan` errors with `401 "Resource not accessible by integration"`.
+
+## Phase 1 -- First apply (one-time)
+
+Merging a PR that touches `infra/github/*.tf` (e.g. this one, #4384) triggers
+`apply-github-infra.yml` automatically — no manual `workflow_dispatch` needed.
+The first apply is a **5 → 15 transition** (5 baseline imported + 9 from
+PR #3891 Tier-1/Tier-2 widening + 1 from PR #4384 `enforce`). The 9 #3891
+additions land in the same apply because the import-then-plan flow reconciles
+the configured set against the live state.
 
 The workflow performs:
 
@@ -85,9 +88,9 @@ The workflow performs:
 5. **Post-apply verify**: `gh api .../rulesets/14145388` count probe,
    recorded in the workflow run summary.
 
-If you want to reproduce the local-terminal Phase 2 plan-diff probe before
-the first apply (sanity check that the diff is exactly the 9 additions),
-the canonical sequence is:
+If you want to reproduce the local-terminal plan-diff probe before merge
+(sanity check that the diff is the expected set of additions), the
+canonical sequence is:
 
 ```bash
 cd infra/github/
@@ -104,7 +107,8 @@ doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
 
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform plan
-# Expected (first apply): 9 required_check additions, no destroys.
+# Expected (first apply): 10 required_check additions (9 from #3891 + 1
+# from #4384), no destroys.
 # Expected (post-apply, idle): no changes.
 ```
 
@@ -143,13 +147,14 @@ gh api repos/jikig-ai/soleur/rulesets/14145388 \
   | sort
 ```
 
-## Phase 4 -- Rotation (every 90 days)
+## Phase 4 -- Rotation (App credentials -- none required operator-side)
 
-1. Mint new PAT (same scope as Phase 0).
-2. `doppler secrets set GH_RULESET_PAT='<new-token>' -p soleur -c prd_terraform`
-3. Revoke old PAT at <https://github.com/settings/personal-access-tokens>.
-
-Calendar reminder: schedule for +75 days from mint to leave a 15-day window.
+The provider authenticates as the `soleur-ai` GitHub App. App credentials do
+not rotate operator-side -- the App PEM lives in Doppler indefinitely.
+Rotation cadence is the GitHub App admin UI (`Settings > Developer settings >
+GitHub Apps > soleur-ai > Private keys`), with re-mirror to Doppler when a
+new PEM is generated. The 90-day PAT rotation cadence documented prior to
+PR #4384 is obsolete.
 
 ## Phase 5 -- Rollback
 

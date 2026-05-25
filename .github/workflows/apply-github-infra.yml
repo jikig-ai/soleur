@@ -6,7 +6,9 @@
 #
 # Mirrors `apply-sentry-infra.yml` (ADR-031) with adjustments for the
 # `infra/github/` root:
-#   - Auth: GH_RULESET_PAT from Doppler `prd_terraform` (replaces SENTRY_AUTH_TOKEN).
+#   - Auth: GitHub App credentials (GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY)
+#     from Doppler `prd_terraform`. Migrated from GH_RULESET_PAT in #4384 per
+#     AGENTS.core.md hr-github-app-auth-not-pat.
 #   - First-apply import: if state does not yet contain
 #     github_repository_ruleset.ci_required, the workflow imports it before
 #     plan. Idempotent — subsequent runs no-op the import.
@@ -20,10 +22,10 @@
 # Kill switch: include `[skip-github-apply]` on its own line in the merge
 # commit message to skip auto-apply for that merge.
 #
-# Manual escape hatch: `workflow_dispatch` is kept for the FIRST apply
-# post-PAT-mint (no infra/github/ files change in that flow — operator runs
-# `gh workflow run apply-github-infra.yml` once after Phase 0 of
-# infra/github/README.md), and for re-runs after a transient failure.
+# Manual escape hatch: `workflow_dispatch` is kept for re-runs after a
+# transient failure. The first apply now triggers automatically when a PR
+# that touches `infra/github/*.tf` merges to main (App credentials live
+# permanently in Doppler — no PAT mint flow gates the first apply per #4384).
 #
 # Untrusted-input handling: HEAD_MSG and REASON are routed through env vars
 # (never interpolated directly into run: blocks) per the github.blog
@@ -40,7 +42,7 @@ on:
   workflow_dispatch:
     inputs:
       reason:
-        description: "Why are you applying? (manual re-run only — e.g. first-apply post-PAT-mint)"
+        description: "Why are you applying? (manual re-run only — e.g. retry-after-transient-failure)"
         required: true
         type: string
 
@@ -101,23 +103,50 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch GH_RULESET_PAT from Doppler
+      - name: Fetch GitHub App credentials from Doppler
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          PAT=$(doppler secrets get GH_RULESET_PAT --plain 2>/dev/null) || {
-            echo "::error::GH_RULESET_PAT not found in Doppler prd_terraform. Mint PAT per infra/github/README.md Phase 0 (one-time setup)."
+          # #4384 — migrated from GH_RULESET_PAT to App-installation auth per
+          # AGENTS.core.md hr-github-app-auth-not-pat. App credentials are
+          # mirrored from prd to prd_terraform by apps/web-platform/infra/'s
+          # doppler_secret resources (#4150), so no separate mint step exists.
+          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
+            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform. Mirror from prd via apps/web-platform/infra/ apply."
             exit 1
           }
-          if [[ -z "$PAT" ]]; then
-            echo "::error::GH_RULESET_PAT is empty in Doppler prd_terraform."
+          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
+            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform. One-shot download at App creation; cannot be re-downloaded — recover from password manager or App admin UI."
+            exit 1
+          }
+          if [[ -z "$APP_ID" || -z "$PEM" ]]; then
+            echo "::error::GitHub App credentials are empty in Doppler prd_terraform."
             exit 1
           fi
-          printf '::add-mask::%s\n' "$PAT"
-          printf 'GITHUB_TOKEN_PAT=%s\n' "$PAT" >> "$GITHUB_ENV"
+          # APP_ID is short and non-secret-like; masking still cheap defence.
+          printf '::add-mask::%s\n' "$APP_ID"
+          # Multi-line PEM must use the GitHub Actions multiline env-var form.
+          # Single-line `printf '%s\n' "$PEM" >> $GITHUB_ENV` corrupts newlines.
+          printf 'TF_VAR_github_app_id=%s\n' "$APP_ID" >> "$GITHUB_ENV"
+          {
+            echo 'TF_VAR_github_app_private_key<<__SOLEUR_PEM_EOF__'
+            printf '%s\n' "$PEM"
+            echo '__SOLEUR_PEM_EOF__'
+          } >> "$GITHUB_ENV"
+          # Also stash the PEM to a runner-temp file (chmod 600) so the post-
+          # apply verify step can mint an App-JWT for `gh api .../rulesets/N`
+          # (rulesets read requires Administration:Read, which the default
+          # secrets.GITHUB_TOKEN does NOT carry). Per Risk R10 in the #4384
+          # plan: this replaces the deleted GITHUB_TOKEN_PAT line.
+          umask 077
+          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
+          printf '%s\n' "$PEM" > "$APP_PEM_FILE"
+          chmod 600 "$APP_PEM_FILE"
+          printf 'APP_ID=%s\n' "$APP_ID" >> "$GITHUB_ENV"
+          printf 'APP_PEM_FILE=%s\n' "$APP_PEM_FILE" >> "$GITHUB_ENV"
 
       - name: Extract backend credentials
         env:
@@ -217,14 +246,56 @@ jobs:
       - name: Post-apply verify (ruleset 14145388 required check count)
         id: verify
         env:
-          # Doppler PAT, NOT the default workflow GITHUB_TOKEN — the rulesets
-          # API requires Administration:Read scope which the default token
-          # does not carry.
-          GH_TOKEN: ${{ env.GITHUB_TOKEN_PAT }}
+          # Mint a short-lived App-installation token from the soleur-ai App
+          # credentials already loaded into env by the Fetch step. The
+          # rulesets API requires `Administration: Read` scope which the
+          # default `secrets.GITHUB_TOKEN` does NOT carry — but the App
+          # installation does (the same scope it uses to write the ruleset).
+          # Migrated from PAT auth (the deleted GITHUB_TOKEN_PAT) per #4384.
+          APP_ID: ${{ env.APP_ID }}
+          APP_PEM_FILE: ${{ env.APP_PEM_FILE }}
+          INSTALLATION_ID: "122213433"
         run: |
           set -euo pipefail
-          RULESET_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/14145388" 2>&1) || {
-            echo "::error::gh api rulesets/14145388 failed — PAT lacks Administration:Read or ruleset deleted. Response: ${RULESET_JSON}"
+
+          b64url() {
+            base64 -w 0 | tr '+/' '-_' | tr -d '=\n'
+          }
+
+          # ---- Step 1: mint App-JWT (RS256, lifetime 540s, backdate 60s) ----
+          now=$(date +%s)
+          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+          payload=$(jq -nc \
+            --argjson iss "$APP_ID" \
+            --argjson iat "$((now - 60))" \
+            --argjson exp "$((now + 540))" \
+            '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+          unsigned="${header}.${payload}"
+          signature=$(printf '%s' "$unsigned" | \
+            openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
+          JWT="${unsigned}.${signature}"
+          if [[ -z "$JWT" ]]; then
+            echo "::error::App-JWT mint produced empty output."
+            exit 1
+          fi
+          echo "::add-mask::$JWT"
+
+          # ---- Step 2: exchange App-JWT for installation access token ----
+          INSTALL_TOKEN=$(curl -sS -X POST \
+            -H "Authorization: Bearer $JWT" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
+            | jq -r '.token // empty')
+          if [[ -z "$INSTALL_TOKEN" ]]; then
+            echo "::error::Installation-token exchange returned empty token. App may lack permission or installation_id mismatch."
+            exit 1
+          fi
+          echo "::add-mask::$INSTALL_TOKEN"
+
+          # ---- Step 3: ruleset count probe ----
+          RULESET_JSON=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/rulesets/14145388" 2>&1) || {
+            echo "::error::gh api rulesets/14145388 failed — App lacks Administration:Read or ruleset deleted. Response: ${RULESET_JSON}"
             exit 1
           }
           ACTUAL=$(echo "$RULESET_JSON" | jq '.rules[0].parameters.required_status_checks | length')
@@ -232,6 +303,10 @@ jobs:
             echo "::error::Unexpected jq result for required_status_checks count: ${ACTUAL}."
             exit 1
           fi
+
+          # One-shot use; shred the PEM file before the next step runs.
+          rm -f "$APP_PEM_FILE" || true
+
           echo "actual_count=$ACTUAL" >> "$GITHUB_OUTPUT"
           echo "Ruleset 14145388: required_status_checks count = ${ACTUAL}."
 
