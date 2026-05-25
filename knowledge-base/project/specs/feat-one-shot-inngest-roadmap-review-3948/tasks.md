@@ -10,50 +10,50 @@ pr: 4423
 
 ## Phase 0 — Preconditions (verify-before-code)
 
-- [ ] 0.1 `wc -l apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` returns 1226
-- [ ] 0.2 `grep -nE 'claude|npm install.*@anthropic' apps/web-platform/Dockerfile` includes claude-code@2.1.79
-- [ ] 0.3 `grep -cE '^\s*-target=sentry_cron_monitor' .github/workflows/apply-sentry-infra.yml` returns 11 (baseline)
-- [ ] 0.4 `gh issue view 4425` resolves to filed child issue
-- [ ] 0.5 `ls apps/web-platform/test/server/inngest/cron-bug-fixer.test.ts` exists (reference test)
-- [ ] 0.6 `command -v claude` and vitest runner available
+- [x] 0.1 `wc -l apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` returns 1226
+- [x] 0.2 `grep -nE 'claude|npm install.*@anthropic' apps/web-platform/Dockerfile` includes claude-code@2.1.79
+- [x] 0.3 `grep -cE '^\s*-target=sentry_cron_monitor' .github/workflows/apply-sentry-infra.yml` returns 11 (baseline)
+- [x] 0.4 `gh issue view 4425` resolves to filed child issue
+- [x] 0.5 `ls apps/web-platform/test/server/inngest/cron-bug-fixer.test.ts` exists (reference test)
+- [x] 0.6 `command -v claude` and vitest runner available
 
 ## Phase 1 — Handler skeleton (cron-roadmap-review.ts)
 
-- [ ] 1.1 Copy `cron-bug-fixer.ts` as starting template; save as `cron-roadmap-review.ts`
-- [ ] 1.2 Strip auto-merge gate (`runAutoMergeGate`, `detectBotFixPr`, `listOpenBotFixIssueNumbers`, `BOT_FIX_LABELS`, `PRIORITY_CASCADE`, `SKIP_LABELS`, `TITLE_SKIP_RE`, `precreateLabels`, `selectIssue`)
-- [ ] 1.3 Strip ops-email notification (`notifyOpsEmail`, `RESEND_API_KEY` usage)
-- [ ] 1.4 Strip manual-trigger override parsing
-- [ ] 1.5 Rename SENTRY_MONITOR_SLUG, mkdtemp prefix, feature tag, handler/function exports, function id, cron trigger, manual-trigger event
-- [ ] 1.6 Update `CLAUDE_CODE_FLAGS`: `--max-turns 40` + `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch`
-- [ ] 1.7 Inline `ROADMAP_REVIEW_PROMPT` template literal — extract verbatim from `.github/workflows/scheduled-roadmap-review.yml` lines 56-110
+- [x] 1.1 Copy `cron-bug-fixer.ts` as starting template; save as `cron-roadmap-review.ts`
+- [x] 1.2 Strip auto-merge gate (`runAutoMergeGate`, `detectBotFixPr`, `listOpenBotFixIssueNumbers`, `BOT_FIX_LABELS`, `PRIORITY_CASCADE`, `SKIP_LABELS`, `TITLE_SKIP_RE`, `precreateLabels`, `selectIssue`)
+- [x] 1.3 Strip ops-email notification (`notifyOpsEmail`, `RESEND_API_KEY` usage)
+- [x] 1.4 Strip manual-trigger override parsing
+- [x] 1.5 Rename SENTRY_MONITOR_SLUG, mkdtemp prefix, feature tag, handler/function exports, function id, cron trigger, manual-trigger event
+- [x] 1.6 Update `CLAUDE_CODE_FLAGS`: `--max-turns 40` + `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch`
+- [x] 1.7 Inline `ROADMAP_REVIEW_PROMPT` template literal — extract verbatim from `.github/workflows/scheduled-roadmap-review.yml` lines 61-108 (12-space YAML dedent)
 
 ## Phase 2 — Ephemeral workspace (reuse PR-5 shape)
 
-- [ ] 2.1 `setupEphemeralWorkspace(installationToken)` — verbatim with mkdtemp prefix rename
-- [ ] 2.2 `teardownEphemeralWorkspace(ephemeralRoot)` — verbatim with feature-tag rename
-- [ ] 2.3 `buildAuthenticatedCloneUrl(token)`, `redactToken(s, token)`, `mintInstallationToken()` — verbatim
+- [x] 2.1 `setupEphemeralWorkspace(installationToken)` — verbatim with mkdtemp prefix rename
+- [x] 2.2 `teardownEphemeralWorkspace(ephemeralRoot)` — verbatim with feature-tag rename
+- [x] 2.3 `buildAuthenticatedCloneUrl(token)`, `redactToken(s, token)`, `mintInstallationToken()` — verbatim
 
 ## Phase 3 — Spawn + Sentry heartbeat
 
-- [ ] 3.1 `spawnClaudeEval({ spawnCwd, installationToken, logger })` — drop `issueNumber` arg
-- [ ] 3.2 Prompt arg = `ROADMAP_REVIEW_PROMPT`
-- [ ] 3.3 `postSentryHeartbeat({ ok, logger })` — verbatim with SENTRY_MONITOR_SLUG rename
-- [ ] 3.4 Handler shape: mint-token → setup-workspace → claude-eval → sentry-heartbeat (4 step.run)
-- [ ] 3.5 Return `{ ok: boolean }`
+- [x] 3.1 `spawnClaudeEval({ spawnCwd, installationToken, logger })` — drop `issueNumber` arg
+- [x] 3.2 Prompt arg = `ROADMAP_REVIEW_PROMPT`
+- [x] 3.3 `postSentryHeartbeat({ ok, logger })` — verbatim with SENTRY_MONITOR_SLUG rename
+- [x] 3.4 Handler shape: mint-token → setup-workspace → claude-eval → sentry-heartbeat (4 step.run)
+- [x] 3.5 Return `{ ok: boolean }`
 
 ## Phase 4 — Inngest registration + route binding
 
-- [ ] 4.1 `cronRoadmapReview` registered with concurrency + retries:1 + cron + manual-trigger
-- [ ] 4.2 `apps/web-platform/app/api/inngest/route.ts` — add import + register in functions array
+- [x] 4.1 `cronRoadmapReview` registered with concurrency + retries:1 + cron + manual-trigger
+- [x] 4.2 `apps/web-platform/app/api/inngest/route.ts` — add import + register in functions array
 
 ## Phase 5 — Sentry cron monitor (TF + apply gate)
 
-- [ ] 5.1 `apps/web-platform/infra/sentry/cron-monitors.tf` — append `sentry_cron_monitor.scheduled_roadmap_review`
-- [ ] 5.2 `.github/workflows/apply-sentry-infra.yml` — append `-target=sentry_cron_monitor.scheduled_roadmap_review` (count 11 → 12)
+- [x] 5.1 `apps/web-platform/infra/sentry/cron-monitors.tf` — append `sentry_cron_monitor.scheduled_roadmap_review`
+- [x] 5.2 `.github/workflows/apply-sentry-infra.yml` — append `-target=sentry_cron_monitor.scheduled_roadmap_review` (count 11 → 12)
 
 ## Phase 6 — Delete GHA workflow
 
-- [ ] 6.1 `git rm .github/workflows/scheduled-roadmap-review.yml` (same commit as handler)
+- [x] 6.1 `git rm .github/workflows/scheduled-roadmap-review.yml` (same commit as handler)
 
 ## Phase 7 — Unit tests
 
