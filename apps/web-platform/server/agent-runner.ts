@@ -5,7 +5,11 @@ import { readFile } from "node:fs/promises";
 import path from "path";
 
 import { createServiceClient } from "@/lib/supabase/service";
-import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+  getMyRevocationStatus,
+} from "@/lib/supabase/tenant";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
@@ -2401,6 +2405,25 @@ export async function sendUserMessage(
       { err, userId, conversationId },
       "sendUserMessage session error",
     );
+    // #4440 follow-up to #4418 — JWT-deny propagation. Detect a
+    // mid-session `RuntimeAuthError("denied_jti")` BEFORE the generic
+    // error frame fires so agents/API consumers receive the same
+    // discriminated `revocation_notice` frame the ws-handler.tenantFor
+    // path emits at handshake time. Best-effort RPC: a null status
+    // here just leaves reason/deniedAt null (the helper already
+    // mirrored any RPC failure to Sentry). Fire-and-forget — the
+    // surrounding fail-open semantics of this catch must not block
+    // on a second RPC roundtrip.
+    if (err instanceof RuntimeAuthError && err.cause === "denied_jti") {
+      void (async () => {
+        const status = await getMyRevocationStatus(userId);
+        sendToClient(userId, {
+          type: "revocation_notice",
+          reason: status?.reason ?? null,
+          deniedAt: status?.deniedAt ?? null,
+        });
+      })();
+    }
     const message = sanitizeErrorForClient(err);
     sendToClient(userId, {
       type: "error",
