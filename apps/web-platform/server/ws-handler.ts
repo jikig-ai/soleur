@@ -131,22 +131,19 @@ async function tenantFor(
         op: `tenant-mint.${op}`,
         extra: { userId },
       });
-      // #3930 — when the cause is `denied_jti`, emit a discriminated
-      // `revocation_notice` WS frame to the client BEFORE the caller
-      // closes the socket with INTERNAL_ERROR. The client toast surface
-      // then renders the founder-readable reason ("Your session was
-      // revoked. Reason: <reason>") instead of the generic "Authentication
-      // unavailable; retry shortly". Fire-and-forget — if
-      // `getMyRevocationStatus` fails or returns null, the caller still
-      // closes the socket the same way; this is a UX upgrade, not a
-      // gate. Service-role probe is impossible here (auth.uid() would be
-      // NULL); we call via the per-user tenant client which carries the
-      // founder's JWT (the very JWT whose jti is now denied — but
-      // `my_revocation_status()` joins on `founder_id = auth.uid()`,
-      // not on the JWT's jti, so the row lookup succeeds even when the
-      // jti is denied).
+      // #3930 — emit a discriminated `revocation_notice` WS frame
+      // BEFORE returning null so the caller's `ws.close(INTERNAL_ERROR)`
+      // runs AFTER the send completes. The await is load-bearing:
+      // without it, `void emitRevocationNotice(...)` races `ws.close()`
+      // and the close usually wins, swallowing the notice. Reachability
+      // (Option A): this is the POST-MINT deny race only — the
+      // CACHE-HIT deny path inside `tenant.ts` self-heals via silent
+      // re-mint (no throw, hence no notice). `my_revocation_status()`
+      // is the founder-readable inspection API for support-driven
+      // inquiry on that flow. ~750ms p95 RPC latency is accepted on
+      // the deny path only (one-shot per revoke).
       if (err.cause === "denied_jti") {
-        void emitRevocationNotice(userId);
+        await emitRevocationNotice(userId);
       }
       return null;
     }
@@ -155,21 +152,21 @@ async function tenantFor(
 }
 
 /**
- * Best-effort emit of a `revocation_notice` WS frame. Wrapped so the
- * sync `tenantFor` doesn't await an extra RPC on its hot path; the
- * caller (`tenantFor`) returns null immediately and the close-socket
- * branch fires in the same microtask. The 5-10 ms RPC round-trip
- * happens BEFORE the WS_CLOSE frame because the WebSocket send queue
- * is FIFO and the `revocation_notice` frame is enqueued before any
- * subsequent INTERNAL_ERROR close.
- *
- * Fail-open: if the RPC fails (404, network, RLS-deny because the
- * RESTRICTIVE policy applies to my_revocation_status too — which it
- * doesn't, because the RPC is SECURITY DEFINER and bypasses RLS),
- * we silently skip the emit. The mirror is already handled inside
- * `getMyRevocationStatus`.
+ * Best-effort emit of a `revocation_notice` WS frame. Awaited by the
+ * caller so `ws.close()` runs strictly AFTER the send completes.
+ * Fail-open: any error inside the RPC or send is swallowed (already
+ * mirrored to Sentry inside `getMyRevocationStatus`). The readyState
+ * gate below short-circuits when the client is no longer listening,
+ * which both (i) avoids a wasted ~750ms RPC roundtrip on dead sockets
+ * and (ii) closes a DoS amplification surface where an attacker
+ * hammering a revoked JWT could drain GoTrue rate-limit slots via
+ * re-entrant `getFreshTenantClient` mints.
  */
 async function emitRevocationNotice(userId: string): Promise<void> {
+  // ReadyState gate — see docblock. Both no-session and not-OPEN cases
+  // short-circuit before the RPC roundtrip.
+  const session = sessions.get(userId);
+  if (!session || session.ws.readyState !== WebSocket.OPEN) return;
   try {
     const status = await getMyRevocationStatus(userId);
     if (!status || !status.revoked) return;
