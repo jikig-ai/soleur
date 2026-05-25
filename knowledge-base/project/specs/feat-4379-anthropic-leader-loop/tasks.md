@@ -107,22 +107,30 @@ Sequenced for `/work`. Phase order is load-bearing: ADRs land BEFORE SDK call (A
 
 ## Phase 7 — Follow-up issues (Non-Goals 1-14)
 
-Per `wg-block-pr-ready-on-undeferred-operator-steps` + `wg-when-deferring-a-capability-create-a`: file each Non-Goal as a separate GitHub issue BEFORE marking the PR Ready.
+Per `wg-when-deferring-a-capability-create-a` + new `wg-defer-only-after-inline-triage` (added in this PR): triage each Non-Goal as inline-vs-issue BEFORE filing. Mid-stream user redirect: "let's not file 14 issues for one we just fixed". 3 inlined; 10 filed.
 
-- [ ] **7.1** Non-Goal 1: full DPIA on PA-22.
-- [ ] **7.2** Non-Goal 2: consent banner + ToS clause update.
-- [ ] **7.3** Non-Goal 3: GDPR Art. 22 automated-decisioning analysis.
-- [ ] **7.4** Non-Goal 4: per-class max-turns caps.
-- [ ] **7.5** Non-Goal 5: per-class brand-survival tiering.
-- [ ] **7.6** Non-Goal 6: cross-installation spawn.
-- [ ] **7.7** Non-Goal 7: per-founder spawn quota / rate-limit.
-- [ ] **7.8** Non-Goal 8: transactional outbox between `action_sends` INSERT and `inngest.send`.
-- [ ] **7.9** Non-Goal 9: WS-push channel.
-- [ ] **7.10** Non-Goal 10: prompt fixture/regression infrastructure.
-- [ ] **7.11** Non-Goal 11: per-vendor DPA file scaffolding.
-- [ ] **7.12** Non-Goal 12: CVSS classification source-of-truth.
-- [ ] **7.13** Non-Goal 13 (plan-time): Inngest Realtime swap evaluation.
-- [ ] **7.14** Non-Goal 14 (plan-time): prompt fixture regression suite (golden-file tests).
+### Inlined in PR-B (no issue)
+
+- [x] **7.3** Non-Goal 3: GDPR Art. 22 automated-decisioning analysis. **[Inlined as `knowledge-base/legal/art-22-assessments/PA-22.md` — brief assessment. Conclusion: Art. 22 does NOT apply under operator-as-controller-on-own-repo shape (decision not solely automated; effects on third-party data subjects not legally significant). Re-evaluation triggers documented. Cross-referenced from PA-22 in the Article 30 register.]**
+- [x] **7.5** Non-Goal 5: per-class brand-survival tiering. **[Inlined as `LEADER_CLASSES_DISABLED` Doppler-config kill switch in `agent-on-spawn-requested.ts`. Operator copy already shipped (`failure-reason-copy.ts:leader_class_disabled`). 2 tests in `agent-on-spawn-requested-leader-loop.test.ts`.]**
+- [x] **7.11** Non-Goal 11: per-vendor DPA file scaffolding. **[Inlined as `knowledge-base/legal/data-processing-agreements/anthropic.md` (single vendor — Anthropic). Zero-Retention amendment status tracked in frontmatter. Cross-referenced from PA-22.]**
+
+### Filed as GitHub issues
+
+- [x] **7.1** Non-Goal 1: full DPIA on PA-22. → #4426
+- [x] **7.2** Non-Goal 2: consent banner + ToS clause update. → #4427
+- [x] **7.4** Non-Goal 4: per-class max-turns caps tuning from dogfood data. → #4428
+- [x] **7.6** Non-Goal 6: cross-installation spawn. → #4429
+- [x] **7.7** Non-Goal 7: per-founder spawn quota / rate-limit. → #4430
+- [x] **7.8** Non-Goal 8: transactional outbox between `action_sends` INSERT and `inngest.send`. → #4431
+- [x] **7.9** Non-Goal 9: WS-push channel. → #4432
+- [x] **7.10 / 7.14** Non-Goals 10 + 14 (consolidated): prompt fixture / golden-file regression suite. → #4433
+- [x] **7.12** Non-Goal 12: CVSS classification source-of-truth. → #4434
+- [x] **7.13** Non-Goal 13: Inngest Realtime swap evaluation. → #4435
+
+### Workflow improvement landed in same phase
+
+`wg-defer-only-after-inline-triage` added to `AGENTS.core.md` (cross-linked in `AGENTS.md` pointer index). Future deferrals must answer "could this land in <30 min as a single file or 10-line code change?" before filing an issue. Triggered by the mid-stream user redirect in this phase — 3 of 14 candidates were single-file or kill-switch changes that landed inline cheaper than they would have filed as issues.
 
 ## Phase 8 — Pre-merge gates & review
 
