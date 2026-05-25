@@ -128,6 +128,14 @@ jobs:
           fi
           # APP_ID is short and non-secret-like; masking still cheap defence.
           printf '::add-mask::%s\n' "$APP_ID"
+          # Per-line ::add-mask:: for every non-empty PEM line BEFORE writing
+          # to $GITHUB_ENV. GitHub Actions does NOT auto-mask values written
+          # to $GITHUB_ENV via heredoc (only `secrets.*`-sourced env vars are
+          # masked); a downstream `TF_LOG=DEBUG` or `set -x` could otherwise
+          # echo the full PEM. (review: PR #4384 — security-sentinel F1.)
+          while IFS= read -r pem_line; do
+            [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
+          done <<< "$PEM"
           # Multi-line PEM must use the GitHub Actions multiline env-var form.
           # Single-line `printf '%s\n' "$PEM" >> $GITHUB_ENV` corrupts newlines.
           printf 'TF_VAR_github_app_id=%s\n' "$APP_ID" >> "$GITHUB_ENV"
@@ -145,6 +153,15 @@ jobs:
           APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
           printf '%s\n' "$PEM" > "$APP_PEM_FILE"
           chmod 600 "$APP_PEM_FILE"
+          # PEM-shape pre-flight: catch a corrupted PEM in Doppler (literal
+          # `\n` instead of newlines, BOM, partial paste) HERE with a
+          # routable error, rather than later at `openssl dgst -sign` with a
+          # generic `unable to load Private Key`. (review: PR #4384 —
+          # code-quality Q3 / pattern-recognition Item 3.)
+          if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
+            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is not a valid RSA PEM. One-shot download at App creation; recover from password manager or App admin UI."
+            exit 1
+          fi
           printf 'APP_ID=%s\n' "$APP_ID" >> "$GITHUB_ENV"
           printf 'APP_PEM_FILE=%s\n' "$APP_PEM_FILE" >> "$GITHUB_ENV"
 
@@ -257,6 +274,11 @@ jobs:
           INSTALLATION_ID: "122213433"
         run: |
           set -euo pipefail
+          # Trap-based cleanup so the PEM file is shredded on BOTH success
+          # and any failure exit (open/jq/curl/gh failures, set -e tripping
+          # mid-step). The `|| true` keeps the trap idempotent if the file
+          # was already removed. (review: PR #4384 — security-sentinel F2.)
+          trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
 
           b64url() {
             base64 -w 0 | tr '+/' '-_' | tr -d '=\n'
@@ -304,8 +326,8 @@ jobs:
             exit 1
           fi
 
-          # One-shot use; shred the PEM file before the next step runs.
-          rm -f "$APP_PEM_FILE" || true
+          # PEM file shred is handled by the EXIT trap at the top of this
+          # step (covers both success and failure paths).
 
           echo "actual_count=$ACTUAL" >> "$GITHUB_OUTPUT"
           echo "Ruleset 14145388: required_status_checks count = ${ACTUAL}."

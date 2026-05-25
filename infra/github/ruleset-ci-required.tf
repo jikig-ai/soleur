@@ -120,7 +120,7 @@ resource "github_repository_ruleset" "ci_required" {
       # workflow display name — per ADR-032 job-name contract. Workflow
       # `paths:` filter removed in the same PR (#4384) so the job posts on
       # every PR; the existing `surface_hit=false` short-circuit (lines
-      # 85-88) keeps non-DSAR PRs at O(seconds). See learning
+      # 82-85) keeps non-DSAR PRs at O(seconds). See learning
       # 2026-03-20-github-required-checks-skip-ci-synthetic-status.md.
       required_check {
         context        = "enforce"

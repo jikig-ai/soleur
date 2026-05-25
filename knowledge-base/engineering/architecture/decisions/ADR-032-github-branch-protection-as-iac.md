@@ -75,14 +75,21 @@ the shared `soleur-terraform-state` bucket.
 
 ### Authentication
 
-Fine-grained PAT named `terraform-infra-github-rulesets`, scoped to the
-single repo `jikig-ai/soleur` with `Administration: Read+Write` only.
-Stored in Doppler `prd_terraform/GH_RULESET_PAT` (NOT `GITHUB_TOKEN` —
-that name collides with the magic variable Actions populates). At apply
-time, `doppler run --name-transformer tf-var --` rewrites the env to
-`TF_VAR_gh_token`, which the provider consumes via the sensitive
-`gh_token` variable. The provider marks `token` sensitive, so the value
-never lands in state plaintext.
+**Revised 2026-05-25 (PR #4384):** migrated from PAT auth to App-installation
+auth per `hr-github-app-auth-not-pat`. The current model uses the `soleur-ai`
+App (id `3261325`, installation `122213433`) — see §"Required-check
+inventory" below and `infra/github/main.tf`.
+
+The original PAT framing (kept for audit):
+
+> Fine-grained PAT named `terraform-infra-github-rulesets`, scoped to the
+> single repo `jikig-ai/soleur` with `Administration: Read+Write` only.
+> Was stored in Doppler `prd_terraform/GH_RULESET_PAT` (NOT `GITHUB_TOKEN` —
+> that name collides with the magic variable Actions populates). At apply
+> time, `doppler run --name-transformer tf-var --` rewrote the env to
+> `TF_VAR_gh_token`, which the provider consumed via the sensitive
+> `gh_token` variable. The provider marked `token` sensitive, so the value
+> never landed in state plaintext.
 
 ### Apply discipline
 

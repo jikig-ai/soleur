@@ -2,10 +2,10 @@
 
 Companion to `apps/web-platform/infra/sentry/` — same auto-apply-on-merge
 boundary per ADR-031 (revised in ADR-032 for this root). Structured as a
-phased runbook for the one-time PAT + import bootstrap; the sibling Sentry
-README is structured as a reference doc because cron-monitors + issue-alerts
-have parallel lifecycles. State key: `github/terraform.tfstate` in R2 bucket
-`soleur-terraform-state`.
+phased runbook for the one-time App-credential verification + import
+bootstrap; the sibling Sentry README is structured as a reference doc
+because cron-monitors + issue-alerts have parallel lifecycles. State key:
+`github/terraform.tfstate` in R2 bucket `soleur-terraform-state`.
 
 Managed resource: ruleset 14145388 ("CI Required") on the `main` branch of
 `jikig-ai/soleur`. Adopted via `terraform import` (idempotent, runs in CI on
