@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-18
+last_updated: 2026-05-25
 ---
 
 # Campaign Calendar
@@ -17,6 +17,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Skill Libraries vs. Workflow Plugins: Two Shapes of Claude Code Extension | pillar | 2026-05-15 | discord, x, bluesky, linkedin-company | draft |
 | Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | | discord, x, bluesky, linkedin-company | draft |
 | The One-Person Billion-Dollar Company: Why It's an Engineering Problem | pillar | 2026-04-21 | discord, x, bluesky, linkedin-company | stale |
+| What Is Company-as-a-Service? | pillar | 2026-05-12 | discord, x, bluesky, linkedin-company | stale |
 
 ## Published
 

@@ -1,0 +1,60 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_ruleset.seo_response_headers",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "seo_response_headers",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "ruleset-headers-id",
+          "name": "soleur_seo_response_headers",
+          "kind": "zone",
+          "phase": "http_response_headers_transform",
+          "rules": [
+            {"id": "h1", "expression": "(http.request.uri.path matches \".*\")", "action": "rewrite", "enabled": true},
+            {"id": "h2", "expression": "(http.request.uri.path eq \"/sitemap.xml\")", "action": "rewrite", "enabled": true},
+            {"id": "h3", "expression": "(http.request.uri.path eq \"/robots.txt\")", "action": "rewrite", "enabled": true},
+            {"id": "h4", "expression": "(http.request.uri.path eq \"/feed.xml\")", "action": "rewrite", "enabled": true},
+            {"id": "h5", "expression": "(http.request.uri.path eq \"/llms.txt\")", "action": "rewrite", "enabled": true},
+            {"id": "h6", "expression": "(http.request.uri.path eq \"/manifest.json\")", "action": "rewrite", "enabled": true},
+            {"id": "h7", "expression": "(http.request.uri.path eq \"/.well-known/security.txt\")", "action": "rewrite", "enabled": true},
+            {"id": "h8", "expression": "(http.request.uri.path eq \"/favicon.ico\")", "action": "rewrite", "enabled": true},
+            {"id": "h9", "expression": "(http.request.uri.path eq \"/healthz\")", "action": "rewrite", "enabled": true},
+            {"id": "h10", "expression": "(http.request.uri.path eq \"/api/health\")", "action": "rewrite", "enabled": true},
+            {"id": "h11", "expression": "(http.request.uri.path eq \"/legal/privacy\")", "action": "rewrite", "enabled": true},
+            {"id": "h12", "expression": "(http.request.uri.path eq \"/legal/terms\")", "action": "rewrite", "enabled": true}
+          ]
+        },
+        "after": {
+          "id": "ruleset-headers-id",
+          "name": "soleur_seo_response_headers",
+          "kind": "zone",
+          "phase": "http_response_headers_transform",
+          "rules": [
+            {"id": "h1", "expression": "(http.request.uri.path matches \".*\")", "action": "rewrite", "enabled": true},
+            {"id": "h2", "expression": "(http.request.uri.path eq \"/sitemap.xml\")", "action": "rewrite", "enabled": true},
+            {"id": "h3", "expression": "(http.request.uri.path eq \"/robots.txt\")", "action": "rewrite", "enabled": true},
+            {"id": "h4", "expression": "(http.request.uri.path eq \"/feed.xml\")", "action": "rewrite", "enabled": true},
+            {"id": "h5", "expression": "(http.request.uri.path eq \"/llms.txt\")", "action": "rewrite", "enabled": true},
+            {"id": "h6", "expression": "(http.request.uri.path eq \"/manifest.json\")", "action": "rewrite", "enabled": true},
+            {"id": "h7", "expression": "(http.request.uri.path eq \"/.well-known/security.txt\")", "action": "rewrite", "enabled": true},
+            {"id": "h8", "expression": "(http.request.uri.path eq \"/favicon.ico\")", "action": "rewrite", "enabled": true},
+            {"id": "h9", "expression": "(http.request.uri.path eq \"/healthz\")", "action": "rewrite", "enabled": true},
+            {"id": "h10", "expression": "(http.request.uri.path eq \"/api/health\")", "action": "rewrite", "enabled": true},
+            {"id": "h11", "expression": "(http.request.uri.path eq \"/legal/privacy\")", "action": "rewrite", "enabled": true},
+            {"id": "h12", "expression": "(http.request.uri.path eq \"/legal/terms\")", "action": "rewrite", "enabled": true},
+            {"id": "h13", "expression": "(http.request.uri.path eq \"/legal/dpa\")", "action": "rewrite", "enabled": true}
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

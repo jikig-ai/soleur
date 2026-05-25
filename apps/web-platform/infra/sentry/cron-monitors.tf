@@ -224,3 +224,118 @@ resource "sentry_cron_monitor" "scheduled_gh_pages_cert_state" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# TR9 PR-6 (closes #4416): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-strategy-review.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-strategy-review workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+# Weekly Monday 08:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through,
+# scheduled_bug_fixer); tighter than the GHA-era 240-min margin
+# (cf. scheduled_gh_pages_cert_state) because Inngest has minimal jitter.
+# Single-miss alert (failure_issue_threshold=1): a single missed Monday is
+# noteworthy on a weekly cadence.
+resource "sentry_cron_monitor" "scheduled_strategy_review" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-strategy-review"
+  schedule                = { crontab = "0 8 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# TR9 PR-7 (closes #4425): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-roadmap-review.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-roadmap-review workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+# Weekly Monday 09:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through,
+# scheduled_bug_fixer, scheduled_strategy_review); tighter than the GHA-era
+# 240-min margin (cf. scheduled_gh_pages_cert_state) because Inngest has
+# minimal jitter. Single-miss alert (failure_issue_threshold=1): a single
+# missed Monday is noteworthy on a weekly cadence.
+resource "sentry_cron_monitor" "scheduled_roadmap_review" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-roadmap-review"
+  schedule                = { crontab = "0 9 * * 1" }
+  checkin_margin_minutes  = 30
+  # 55 min mirrors scheduled_bug_fixer (the only other claude-eval-spawning
+  # cron — both budget 50 min for MAX_TURN_DURATION_MS plus slack). NOT 10
+  # like scheduled_strategy_review, which is pure-TS with a 10-min outer
+  # wall-clock. Field is decorative under single-heartbeat pattern (see
+  # header lines 37-46) but maintained for sibling consistency with the
+  # claude-eval cohort.
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# TR9 PR-8 (closes #4439): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-legal-audit.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-legal-audit workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+# Quarterly Jan/Apr/Jul/Oct 1 @ 11:00 UTC. Inngest-fired (not GHA) — 30-min
+# margin per the Inngest-fired precedent (scheduled_daily_triage,
+# scheduled_follow_through, scheduled_bug_fixer, scheduled_strategy_review,
+# scheduled_roadmap_review). Single-miss alert (failure_issue_threshold=1):
+# a single missed quarter is highly noteworthy on a quarterly cadence.
+# 55 min mirrors the claude-eval cohort (scheduled_bug_fixer,
+# scheduled_roadmap_review) — 50-min MAX_TURN_DURATION_MS budget plus slack.
+resource "sentry_cron_monitor" "scheduled_legal_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-legal-audit"
+  schedule                = { crontab = "0 11 1 1,4,7,10 *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# TR9 PR-9 (closes #4442): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-agent-native-audit.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-agent-native-audit workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+# Monthly 15th 09:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent. Single-miss alert (failure_issue_threshold=1): a
+# single missed monthly run is noteworthy on a monthly cadence.
+# 55 min mirrors the claude-eval cohort.
+resource "sentry_cron_monitor" "scheduled_agent_native_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-agent-native-audit"
+  schedule                = { crontab = "0 9 15 * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# TR9 PR-10 (closes #4448): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-competitive-analysis.ts`.
+# NEW monitor — no GHA-era predecessor.
+# Monthly 1st @ 09:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent. Single-miss alert. 55 min mirrors the claude-eval
+# cohort.
+resource "sentry_cron_monitor" "scheduled_competitive_analysis" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-competitive-analysis"
+  schedule                = { crontab = "0 9 1 * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

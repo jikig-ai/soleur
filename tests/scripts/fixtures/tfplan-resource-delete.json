@@ -1,0 +1,23 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "github_repository_ruleset.legacy",
+      "mode": "managed",
+      "type": "github_repository_ruleset",
+      "name": "legacy",
+      "provider_name": "registry.terraform.io/integrations/github",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "id": 99999999,
+          "name": "Legacy ruleset",
+          "enforcement": "active",
+          "rules": []
+        },
+        "after": null
+      }
+    }
+  ]
+}

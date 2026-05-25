@@ -39,6 +39,10 @@ on:
     paths:
       - "infra/github/*.tf"
       - "infra/github/.terraform.lock.hcl"
+      # Defense-in-depth: re-fire on filter mutations so a PR that mutates
+      # the destroy-guard filter without touching infra still runs the
+      # apply step against `main`'s captured baseline (#4419).
+      - "tests/scripts/lib/destroy-guard-filter.jq"
   workflow_dispatch:
     inputs:
       reason:
@@ -231,21 +235,34 @@ jobs:
           fi
           set -e
           terraform show -no-color tfplan > tfplan.txt
-          destroy_count=$(terraform show -json tfplan | \
-            jq '[.resource_changes[]? | select(.change.actions? | index("delete"))] | length')
-          # Validate destroy_count parsed correctly — an empty value from a jq
-          # failure would silently evaluate false in the `-gt 0` test and let
-          # destructive plans slip past the guard.
-          if [[ ! "$destroy_count" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy_count parse failed (jq returned: '${destroy_count}')."
+          # Destroy guard — counts BOTH resource-level deletes AND nested
+          # `required_check` block removals on `github_repository_ruleset`
+          # (closes #3915 / unblocks AC20 of #4392). The pre-existing
+          # resource-only counter missed the PR #4395 shape:
+          # `Plan: 0 to add, 1 to change, 0 to destroy` that silently
+          # un-required the `enforce` status check. Filter is path-specific
+          # to one nested-block surface; sibling apply workflows tracked
+          # at a follow-up issue. Source of truth:
+          # tests/scripts/lib/destroy-guard-filter.jq (also exercised by
+          # tests/scripts/test-destroy-guard-counter.sh).
+          counts=$(terraform show -json tfplan | \
+            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter.jq")
+          resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
+          nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
+          # Validate counters parsed correctly — empty values from a jq
+          # failure would silently evaluate false in the `-gt 0` test and
+          # let destructive plans slip past the guard.
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}')."
             exit 1
           fi
+          destroy_count=$((resource_deletes + nested_deletes))
           ack_destroy=false
           if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
-            echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on github infra."
+            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on github infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s))."
             echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1

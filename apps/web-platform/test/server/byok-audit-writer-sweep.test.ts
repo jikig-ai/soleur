@@ -28,9 +28,13 @@ import { sync as globSync } from "fast-glob";
 const SERVER_DIR = "server";
 const OUT_OF_SCOPE_MARKER = "byok-audit-writer-sweep: out-of-scope";
 
-// Direct call site: file invokes `runWithByokLease(...)` literally.
+// Direct call site: file invokes `runWithByokLease(...)` OR
+// `resolveKeyOwnerThenLease(...)` literally. The resolver wraps the
+// lease primitive for BYOK Delegations PR-A (#4232); both shapes open
+// an ALS-scoped lease and therefore both are sweepable.
 // Exported for re-use by cron-no-byok-lease-sweep.test.ts (TR9 PR-1, Architecture F6).
-export const LEASE_CALL_RE = /\brunWithByokLease\s*\(/;
+export const LEASE_CALL_RE =
+  /\b(?:runWithByokLease|resolveKeyOwnerThenLease)\s*\(/;
 
 // PR-F (#3244) RV17: alias-rename bypass detection. A file importing
 // the lease primitive under an alias (e.g.,
@@ -40,7 +44,10 @@ export const LEASE_CALL_RE = /\brunWithByokLease\s*\(/;
 // any file matching this regex is sweepable regardless of whether
 // the alias-call appears literally in source. Mitigates the
 // 2026-05-15 ci-sentinel-paren-safety class for the BYOK boundary.
-export const ALIAS_IMPORT_RE = /import\s*\{[^}]*\brunWithByokLease\s+as\s+\w+/;
+// PR-A #4232: extended to also catch `resolveKeyOwnerThenLease` alias
+// imports since that wrapper now opens the canonical lease scope.
+export const ALIAS_IMPORT_RE =
+  /import\s*\{[^}]*\b(?:runWithByokLease|resolveKeyOwnerThenLease)\s+as\s+\w+/;
 
 // TR9 PR-1 (#3948) Architecture F6: bare named import without immediate call.
 // Catches the shape `import { runWithByokLease } from "..."; const fn = runWithByokLease; fn(...);`
@@ -69,6 +76,12 @@ export const DYNAMIC_IMPORT_RE = /import\s*\(\s*["'`][^"'`]*byok-lease/;
  */
 const SWEEP_ALLOWLIST = new Set<string>([
   "server/byok-lease.ts",
+  // BYOK Delegations PR-A (#4232): byok-resolver.ts is the canonical
+  // wrapper that re-enters `runWithByokLease(...)`. Cost-writing
+  // happens in the resolver's `fn` callback (executed by the sentinel
+  // sites: agent-runner.ts, cc-dispatcher.ts, etc.), not in the
+  // resolver file itself. Same allowlist semantics as byok-lease.ts.
+  "server/byok-resolver.ts",
 ]);
 
 describe("BYOK audit writer sweep", () => {

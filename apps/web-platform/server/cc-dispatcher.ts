@@ -76,11 +76,16 @@ import {
 // (which returns a bare string) to `lease.getApiKey()` inside
 // `runWithByokLease`. Closes #3392 (cc-dispatcher BYOK item).
 import {
-  runWithByokLease,
   MissingByokKeyError,
   reportMissingByokKey,
 } from "./byok-lease";
-import { getFreshTenantClient } from "@/lib/supabase/tenant";
+// BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
+import { resolveKeyOwnerThenLease } from "./byok-resolver";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
+import { tryEmitRevocationNotice } from "./revocation-emit";
 import {
   fetchUserWorkspacePath,
   resolveConciergeDocumentContext,
@@ -227,6 +232,11 @@ const TERMINAL_WORKFLOW_END_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
   "idle_timeout",
   "plugin_load_failure",
   "internal_error",
+  // #4440 follow-up to #4418 — JWT-deny is terminal: the session is
+  // gone, retry is impossible without a fresh login. Routes to the
+  // terminal `session_ended` WS event via the same branch as the
+  // other terminal statuses below.
+  "session_revoked",
 ]);
 
 // #3603 W2 — statuses that trigger the assistant-text abort flush. Mirrors
@@ -246,6 +256,10 @@ const ABORT_FLUSH_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
   "idle_timeout",
   "plugin_load_failure",
   "internal_error",
+  // #4440 follow-up to #4418 — flush any partial assistant text as
+  // `aborted` BEFORE the terminal session_ended emit. Matches the
+  // semantic of every other non-completed terminal status.
+  "session_revoked",
 ]);
 
 // Compile-time exhaustiveness rail for `ABORT_FLUSH_STATUSES`.
@@ -259,6 +273,7 @@ const _abortFlushExhaustive: Record<AbortFlushStatus, true> = {
   idle_timeout: true,
   plugin_load_failure: true,
   internal_error: true,
+  session_revoked: true,
 };
 void _abortFlushExhaustive;
 
@@ -887,9 +902,28 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Phase 3 (feat-team-workspace-multi-user): N2 invariant pins
   // workspaceContextUserId === keyOwnerUserId for solo workspaces;
   // team workspaces will diverge when Phase 4 invite flow ships.
-  return runWithByokLease(
-    { workspaceContextUserId: args.userId, keyOwnerUserId: args.userId },
+  // Sentinel sweep site #3 (#4232 PR-A). callerUserId = args.userId
+  // (server-derived per cc-dispatcher contract; provenance in PR body).
+  // N2 solo invariant kept: callerUserId === workspaceContextUserId.
+  return resolveKeyOwnerThenLease(
+    args.userId,
+    args.userId,
     async (lease): Promise<Query> => {
+    // BYOK Delegations PR-A (#4232) closure-capture: publish the lease
+    // context to the dispatcher before the lease scope closes. The
+    // Query iterator is consumed by the runner ASYNC AFTER this factory
+    // returns — by then `slot.alive = false` and `lease.delegationId`
+    // is unreachable. The dispatcher's onResult callback reads from
+    // the closure variable that the sink writes here.
+    args.setDelegationContext?.(
+      lease.delegationId !== undefined
+        ? {
+            delegationId: lease.delegationId,
+            callerUserId: lease.workspaceContextUserId,
+          }
+        : undefined,
+    );
+
     // Plan §2.11 canonical pattern (mirrors agent-runner.ts:2361):
     // hoist `await lease.getApiKey()` OUT of `Promise.all` so the
     // `string | Promise<string>` union in `getApiKey`'s return type
@@ -1486,6 +1520,21 @@ export async function dispatchSoleurGo(
   // method contract.
   const state = new TurnPersistenceState();
 
+  // BYOK Delegations PR-A (#4232) closure-capture. The lease opens
+  // inside realSdkQueryFactory and closes before onResult fires.
+  // realSdkQueryFactory writes to this variable via the
+  // `setDelegationContext` sink threaded through DispatchArgs →
+  // QueryFactoryArgs; onResult reads it to route persistTurnCost
+  // through the merged atomic RPC when a delegation is active.
+  let leaseDelegationCtx:
+    | { delegationId: string; callerUserId: string }
+    | undefined;
+  const setDelegationContext = (
+    ctx: { delegationId: string; callerUserId: string } | undefined,
+  ): void => {
+    leaseDelegationCtx = ctx;
+  };
+
   // #3603 W4 — cc-path narrows the type-wide `Message.usage` shape to
   // cost-only on `'complete'` turns (Art. 5(1)(c) data-minimization). The
   // legacy agent-runner path emits the full `UsageSnapshot` (input_tokens,
@@ -1713,7 +1762,23 @@ export async function dispatchSoleurGo(
       // try/catch covers the residual synchronous-throw surface.
       // Phase 3 (feat-team-workspace-multi-user) — workspaceId from
       // userId under N2 invariant; see agent-runner.ts:1884 comment.
-      persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, userId, result);
+      //
+      // BYOK Delegations PR-A (#4232) closure-capture: read the
+      // delegationContext that realSdkQueryFactory wrote inside its
+      // lease body. The lease scope is closed by the time this
+      // callback fires; the value here was captured before scope-close
+      // via the `setDelegationContext` sink. Undefined under
+      // flag-OFF / solo callers / resolver fall-through; routes the
+      // audit through the merged atomic RPC under flag-ON +
+      // delegated runs.
+      persistTurnCost(
+        userId,
+        conversationId,
+        CC_ROUTER_LEADER_ID,
+        userId,
+        result,
+        leaseDelegationCtx,
+      );
     },
     onSessionIdCaptured: (capturedSessionId) => {
       // #3266 — fire-and-forget DB persist + synchronous in-process cache
@@ -1747,6 +1812,11 @@ export async function dispatchSoleurGo(
       documentContent,
       documentExtractError,
       documentExtractMeta,
+      // BYOK Delegations PR-A (#4232) closure-capture: bridge the
+      // lease body in realSdkQueryFactory to this dispatchSoleurGo
+      // scope so onResult can read leaseDelegationCtx and route
+      // persistTurnCost through the merged atomic RPC.
+      setDelegationContext,
       // 2026-05-06 Bug A1 fix — thread workspacePath through so the
       // runner builds the system prompt with workspace-absolute Read
       // instructions. Falls back to the locally-resolved value (set by
@@ -1775,7 +1845,36 @@ export async function dispatchSoleurGo(
     // errorCode: "key_invalid" branch in agent-runner.ts
     // handleSessionError. All other failures fall back to the generic
     // router-unavailable message without an errorCode.
-    if (err instanceof MissingByokKeyError) {
+    if (
+      err instanceof RuntimeAuthError &&
+      err.cause === "denied_jti"
+    ) {
+      // #4440 follow-up to #4418 — JWT-deny propagation. A persistUserMessage
+      // mint or any other tenant-RPC inside the dispatch surfaced
+      // `RuntimeAuthError("denied_jti")` before the runner emitted its
+      // own WorkflowEnd. Synthesize a `session_revoked` WS frame so
+      // agents/API consumers observing this turn receive the same
+      // terminal discriminator the runner-level catch would have emitted
+      // for a mid-stream throw.
+      //
+      // Routes through `tryEmitRevocationNotice` (server/revocation-emit.ts)
+      // so the lookup+sanitize logic stays shared with agent-runner and
+      // soleur-go-runner. Helper returns the looked-up status if a caller
+      // needs the raw fields; this site only needs the emit side effect.
+      await tryEmitRevocationNotice(userId, (frame) =>
+        sendToClient(userId, frame),
+      );
+      // Pair with the terminal session_ended frame so the client
+      // reducer clears streamState (`clear_streams` in ws-client.ts).
+      // Disambiguator `conversationId` lets multi-tab clients route
+      // this to the correct tab; matches the pre-existing
+      // session_ended emit-site shape elsewhere in this dispatcher.
+      sendToClient(userId, {
+        type: "session_ended",
+        reason: "session_revoked",
+        conversationId,
+      });
+    } else if (err instanceof MissingByokKeyError) {
       // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
       // key. Info-level breadcrumb captures workspace context;
       // `byok_key_missing` errorCode tells the client to render the

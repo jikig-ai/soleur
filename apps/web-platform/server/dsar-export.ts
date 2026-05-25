@@ -38,14 +38,27 @@ import {
 import { mkdir, rm, stat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix as posixPath } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Readable, PassThrough } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import archiver from "archiver";
+// archiver@8 is ESM-only with NO default export (breaking change from v7);
+// `import archiver from "archiver"` synthesizes an `undefined` default under
+// Node's `require(esm)` interop, so `archiver("zip", ...)` throws
+// `(0, default) is not a function` under vitest (and would throw in any
+// caller path that actually reaches `buildArchiveToDisk`). @types/archiver
+// is still pinned at v7 (factory `export =` shape), so we cast the v8
+// runtime namespace to the v7-aware `Archiver` instance type. Pattern
+// matches `scripts/spike/dsar-streaming-upload.ts:53-58`.
+import type { Archiver } from "archiver";
+import * as ArchiverRuntime from "archiver";
+type ZipArchiveCtor = new (opts: { zlib?: { level?: number } }) => Archiver;
+const ZipArchive = (
+  ArchiverRuntime as unknown as { ZipArchive: ZipArchiveCtor }
+).ZipArchive;
 import { createWriteStream } from "node:fs";
 
 import { createServiceClient, serverUrl } from "@/lib/supabase/service";
-import { mirrorCrossTenantViolation } from "./observability";
+import { mirrorCrossTenantViolation, hashUserId } from "./observability";
 import {
   sendDsarExportReadyEmail,
   sendDsarExportFailedEmail,
@@ -123,6 +136,50 @@ export function assertReadScope<T extends Record<string, unknown>>(
 }
 
 // ---------------------------------------------------------------------------
+// Art. 15(4) author-only redaction primitives (#4319).
+//
+// Per the plan's TR1: helpers live inside dsar-export.ts (NOT a separate
+// module). Pure, side-effect-free, in-place mutation; returns `true` if
+// redaction was applied so the call site can count.
+//
+// Field list is closed (`content`, `tool_calls`, `usage`, `draft_preview`,
+// `action_class`). Any future migration that adds a free-text personal-
+// data column to `messages` MUST sweep this file per
+// `hr-write-boundary-sentinel-sweep-all-write-sites`.
+// ---------------------------------------------------------------------------
+
+export function redactRow<T extends Record<string, unknown>>(
+  row: T,
+  shouldRedact: boolean,
+  fieldsToNull: readonly (keyof T)[],
+  pseudonymCol?: keyof T,
+  pseudonym?: string,
+): boolean {
+  if (!shouldRedact) return false;
+  for (const f of fieldsToNull) {
+    (row as Record<string, unknown>)[f as string] = null;
+  }
+  if (pseudonymCol && pseudonym !== undefined) {
+    (row as Record<string, unknown>)[pseudonymCol as string] = pseudonym;
+  }
+  return true;
+}
+
+/**
+ * Per-bundle pseudonymous identifier for a non-subject author.
+ * `salt` is minted via crypto.randomBytes(32) at exportSqlTable entry
+ * and held in closure — NEVER persisted to manifest / audit / log.
+ * Returns `member_<hex12>` (48-bit collision space; birthday-safe past
+ * ~10^6 distinct authors per bundle).
+ */
+export function pseudonymiseUserId(rawUserId: string, salt: Buffer): string {
+  const h = createHash("sha256");
+  h.update(salt);
+  h.update(rawUserId);
+  return `member_${h.digest("hex").slice(0, 12)}`;
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -130,7 +187,10 @@ const JOB_HARD_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
 const POLLER_INTERVAL_MS = 5 * 1000;
 const SIGNED_URL_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const STORAGE_BUCKET = "dsar-exports";
-const MANIFEST_SCHEMA_VERSION = "1.0.0";
+// Bumped to 1.1.0 by #4319 — adds top-level `redactions[]` field
+// disclosing Art. 15(4) author-only redactions to the subject (EDPB
+// Guidelines 01/2022 §176). Paired bump in dsar-export-oversize.sh:130.
+const MANIFEST_SCHEMA_VERSION = "1.1.0";
 const SIZE_CAP_BYTES =
   (Number(process.env.DSAR_EXPORT_SIZE_CAP_MB) || 1024) * 1024 * 1024;
 
@@ -175,6 +235,12 @@ interface ManifestRoot {
   };
   files: ManifestFileEntry[];
   excluded_files: ManifestFileEntry[];
+  /**
+   * Art. 15(4) author-only redactions applied to this bundle.
+   * Disclosed to the subject per EDPB Guidelines 01/2022 §176.
+   * One entry per table that had at least one redacted row.
+   */
+  redactions: { path: string; reason: string; count: number }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +318,93 @@ interface TableExportResult {
   // the entire job loud rather than silently skipping a table (Art. 15
   // completeness).
   error?: Error;
+  // Art. 15(4) author-only redaction count for this table (#4319).
+  // Surfaced into manifest.redactions[] by buildArchiveToDisk.
+  redactionCount?: number;
 }
+
+// Post-mig 059 audit (#4319 Phase 0.3): the messages_workspace_member_insert
+// RLS policy gates INSERT on is_workspace_member(workspace_id, auth.uid())
+// — NOT on user_id matching conversation owner — and every server INSERT
+// path (cc-dispatcher.ts, agent-runner.ts, kb-drift-ingest, cfo-on-payment-
+// failed, github-on-event) omits `user_id` (defaults to NULL). A non-
+// subject CAN write `user_id IS NULL` rows into a foreign-owned
+// conversation. Fail-closed default: REDACT legacy NULL rows.
+const LEGACY_NULL_IS_SUBJECT = false;
+
+// Field list redacted on foreign-author messages. Closed set — any
+// future migration adding a free-text or namespace-leaking column to
+// `messages` MUST sweep this list per
+// `hr-write-boundary-sentinel-sweep-all-write-sites`. The companion
+// sentinel test at apps/web-platform/test/dsar-message-redact-fields-
+// sweep.test.ts enforces this gate at CI time by parsing migration
+// files for ALTER TABLE messages ADD COLUMN of text/jsonb shapes and
+// asserting each new column appears here or in MESSAGE_NON_REDACT_
+// ALLOWLIST below.
+//
+// Field rationale per column (Art. 15(4) review #4351 cross-reconcile):
+//   content           — free-text body (M1 leak vector)
+//   tool_calls        — jsonb — tool args + results (free-text PII)
+//   usage             — jsonb (mig 040) — input_summary / result_summary
+//                       embed conversation context
+//   draft_preview     — text (mig 046) — pre-send free-text snippet
+//   action_class      — text (mig 051) — open namespace, can encode
+//                       Art. 9 special-category indicators
+//   tier              — text (mig 046) — business tier signal about the
+//                       third party (e.g., "external_brand_critical")
+//   source            — text (mig 046) — pipeline source identifier
+//   owning_domain     — text (mig 046) — third party's product surface
+//                       (e.g., "cfo", "github", "legal")
+//   urgency           — text (mig 046) — free-text urgency phrase
+//                       ("client breach Tuesday")
+//   trust_tier        — text (mig 046) — third party's trust band
+//   source_ref        — text (mig 052) — namespace-id pattern such as
+//                       `pr-<org>:<repo>:<number>` or `cve-<id>`; leaks
+//                       third-party GitHub orgs / repos / CVE refs
+//   leader_id         — text (mig 010) — domain leader identifier; may
+//                       carry email-shaped or name-shaped values
+//   template_id       — text (mig 053) — template identifier; usage
+//                       pattern signal about the third party
+const MESSAGE_REDACT_FIELDS = [
+  "content",
+  "tool_calls",
+  "usage",
+  "draft_preview",
+  "action_class",
+  "tier",
+  "source",
+  "owning_domain",
+  "urgency",
+  "trust_tier",
+  "source_ref",
+  "leader_id",
+  "template_id",
+] as const;
+
+// Companion allowlist consumed by the migration-sweep sentinel test —
+// every column on `public.messages` that is NEITHER in
+// MESSAGE_REDACT_FIELDS NOR in this allowlist trips CI. Structural
+// columns are safe to surface on a foreign-author row because they
+// describe the bundle's own shape (thread position, the subject's
+// workspace, timestamps, cache token counts) rather than the third
+// party's content or namespace.
+export const MESSAGE_NON_REDACT_ALLOWLIST = [
+  "id",
+  "conversation_id",
+  "workspace_id",
+  "user_id",
+  "role",
+  "status",
+  "created_at",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+] as const;
+
+export { MESSAGE_REDACT_FIELDS };
+
+const ATTACHMENT_REDACT_FIELDS = ["storage_path", "filename"] as const;
+
+export const REDACTION_REASON = "art-15-4-rights-of-others";
 
 /**
  * Exported for the cross-tenant integration test (Phase 10).
@@ -269,6 +421,11 @@ export async function exportSqlTable(
 ): Promise<TableExportResult[]> {
   const service = createServiceClient();
   const results: TableExportResult[] = [];
+
+  // Per-bundle salt for Art. 15(4) author pseudonymisation (#4319).
+  // Memory-only, closure-scoped — NEVER passed to manifest, audit, or
+  // log emission. AC5 enforces salt isolation via grep.
+  const pseudonymSalt = randomBytes(32);
 
   // -- users -------------------------------------------------------------
   {
@@ -326,7 +483,17 @@ export async function exportSqlTable(
   }
 
   // -- messages (joinVia conversations) ----------------------------------
+  // Per-row Art. 15(4) redaction predicate (#4319): messages authored
+  // by a non-subject within a subject-owned conversation are returned
+  // as structural shells (content + namespace columns nulled, raw
+  // user_id replaced with a per-bundle salt-scoped pseudonym).
+  // CrossTenantViolation runs BEFORE the redaction predicate (TR3
+  // invariant) so the violation surface is unchanged.
   let messageIds: string[] = [];
+  // Allowlist (#4319): IDs of messages authored by the subject. The
+  // attachments block redacts any attachment whose message_id is NOT
+  // in this set (orphan / foreign-author parents → fail-closed).
+  const subjectAuthoredMessageIds = new Set<string>();
   if (conversationIds.length > 0) {
     const { data, error } = await service
       .from("messages")
@@ -354,20 +521,54 @@ export async function exportSqlTable(
     messageIds = rows
       .map((r) => r.id)
       .filter((v): v is string => typeof v === "string");
+
+    // Art. 15(4) per-row predicate. Runs AFTER cross-tenant assertion.
+    let messagesRedactionCount = 0;
+    for (const row of rows) {
+      const rawUserId = row.user_id;
+      const isSubjectAuthored =
+        rawUserId === expectedUserId ||
+        (rawUserId === null && LEGACY_NULL_IS_SUBJECT);
+      if (isSubjectAuthored && typeof row.id === "string") {
+        subjectAuthoredMessageIds.add(row.id);
+      }
+      const pseudonym = isSubjectAuthored
+        ? undefined
+        : typeof rawUserId === "string"
+          ? pseudonymiseUserId(rawUserId, pseudonymSalt)
+          : // Legacy NULL under fail-closed: redact content, leave user_id
+            // as the actual NULL (no pseudonym needed for a NULL source).
+            undefined;
+      const applied = redactRow(
+        row,
+        !isSubjectAuthored,
+        MESSAGE_REDACT_FIELDS,
+        pseudonym !== undefined ? "user_id" : undefined,
+        pseudonym,
+      );
+      if (applied) messagesRedactionCount += 1;
+    }
+
     results.push({
       table: "messages",
       spec: DSAR_TABLE_ALLOWLIST.messages,
       rows,
+      redactionCount: messagesRedactionCount,
     });
   } else {
     results.push({
       table: "messages",
       spec: DSAR_TABLE_ALLOWLIST.messages,
       rows: [],
+      redactionCount: 0,
     });
   }
 
   // -- message_attachments (joinVia messages) ----------------------------
+  // Art. 15(4) allowlist semantic (#4319): an attachment is preserved
+  // ONLY when its parent message_id is in `subjectAuthoredMessageIds`.
+  // Foreign-author parents and any parent we couldn't classify (orphan
+  // shape) → redact storage_path + filename. Fail-closed.
   if (messageIds.length > 0) {
     const { data, error } = await service
       .from("message_attachments")
@@ -394,16 +595,33 @@ export async function exportSqlTable(
         throw err;
       }
     }
+
+    // Allowlist predicate. Runs AFTER cross-tenant assertion.
+    let attachmentRedactionCount = 0;
+    for (const row of rows) {
+      const parentId =
+        typeof row.message_id === "string" ? row.message_id : "";
+      const shouldRedact = !subjectAuthoredMessageIds.has(parentId);
+      const applied = redactRow(
+        row,
+        shouldRedact,
+        ATTACHMENT_REDACT_FIELDS,
+      );
+      if (applied) attachmentRedactionCount += 1;
+    }
+
     results.push({
       table: "message_attachments",
       spec: DSAR_TABLE_ALLOWLIST.message_attachments,
       rows,
+      redactionCount: attachmentRedactionCount,
     });
   } else {
     results.push({
       table: "message_attachments",
       spec: DSAR_TABLE_ALLOWLIST.message_attachments,
       rows: [],
+      redactionCount: 0,
     });
   }
 
@@ -843,6 +1061,111 @@ export async function exportSqlTable(
     });
   }
 
+  // -- byok_delegations (migration 064, #4232) --------------------------
+  // Art. 15+20: WORM ledger of BYOK funding delegations. A given user
+  // can appear in any of five actor columns — grantor (funder), grantee
+  // (beneficiary), created_by/revoked_by/cap_updated_by (administrative
+  // actors). OR-semantics requires one per-row WHERE chain per column
+  // (per-row-where lint AC30 — the lint parses literal .eq() calls so
+  // the five reads are spelled out explicitly rather than iterated).
+  // Rows merged + deduped by id so a single row in which the user
+  // appears in multiple positions (e.g. grantor == created_by) is not
+  // double-counted.
+  {
+    const seen = new Set<string>();
+    const merged: Record<string, unknown>[] = [];
+    const accumulate = (
+      rows: Record<string, unknown>[],
+      ownerField: string,
+    ) => {
+      assertReadScope(rows, expectedUserId, "byok_delegations", {
+        ownerField,
+      });
+      for (const row of rows) {
+        const id = row.id;
+        if (typeof id !== "string" || seen.has(id)) continue;
+        seen.add(id);
+        merged.push(row);
+      }
+    };
+
+    const { data: grantorRows, error: grantorErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("grantor_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (grantorErr)
+      throw new Error(
+        `byok_delegations (grantor) read failed: ${grantorErr.message}`,
+      );
+    accumulate(
+      (grantorRows ?? []) as Record<string, unknown>[],
+      "grantor_user_id",
+    );
+
+    const { data: granteeRows, error: granteeErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("grantee_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (granteeErr)
+      throw new Error(
+        `byok_delegations (grantee) read failed: ${granteeErr.message}`,
+      );
+    accumulate(
+      (granteeRows ?? []) as Record<string, unknown>[],
+      "grantee_user_id",
+    );
+
+    const { data: createdByRows, error: createdByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("created_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (createdByErr)
+      throw new Error(
+        `byok_delegations (created_by) read failed: ${createdByErr.message}`,
+      );
+    accumulate(
+      (createdByRows ?? []) as Record<string, unknown>[],
+      "created_by_user_id",
+    );
+
+    const { data: revokedByRows, error: revokedByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("revoked_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (revokedByErr)
+      throw new Error(
+        `byok_delegations (revoked_by) read failed: ${revokedByErr.message}`,
+      );
+    accumulate(
+      (revokedByRows ?? []) as Record<string, unknown>[],
+      "revoked_by_user_id",
+    );
+
+    const { data: capUpdatedByRows, error: capUpdatedByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("cap_updated_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (capUpdatedByErr)
+      throw new Error(
+        `byok_delegations (cap_updated_by) read failed: ${capUpdatedByErr.message}`,
+      );
+    accumulate(
+      (capUpdatedByRows ?? []) as Record<string, unknown>[],
+      "cap_updated_by_user_id",
+    );
+
+    results.push({
+      table: "byok_delegations",
+      spec: DSAR_TABLE_ALLOWLIST.byok_delegations,
+      rows: merged,
+    });
+  }
+
   return results;
 }
 
@@ -1132,7 +1455,11 @@ interface BuildArchiveResult {
   manifest: ManifestRoot;
 }
 
-async function buildArchiveToDisk(
+/**
+ * Exported (#4319 Phase 7 integration test). Not part of the public
+ * worker API — callers should go through `runExport`.
+ */
+export async function buildArchiveToDisk(
   jobId: string,
   userId: string,
   tables: TableExportResult[],
@@ -1147,7 +1474,7 @@ async function buildArchiveToDisk(
   const excluded: ManifestFileEntry[] = [];
 
   const out = createWriteStream(localPath);
-  const archive = archiver("zip", { zlib: { level: 6 } });
+  const archive = new ZipArchive({ zlib: { level: 6 } });
   const archiveDone = new Promise<void>((resolve, reject) => {
     out.on("close", () => resolve());
     out.on("error", reject);
@@ -1229,6 +1556,31 @@ async function buildArchiveToDisk(
     });
   }
 
+  // Art. 15(4) redaction disclosure (#4319). Builds one entry per
+  // table that had at least one redacted row; tables with count=0 are
+  // omitted so the manifest stays empty in single-user-workspace
+  // exports. Counts flow from exportSqlTable via the per-table
+  // `redactionCount` channel on TableExportResult.
+  const redactions: ManifestRoot["redactions"] = [];
+  const messagesTable = tables.find((t) => t.table === "messages");
+  if (messagesTable && (messagesTable.redactionCount ?? 0) > 0) {
+    redactions.push({
+      path: "tables/messages.json",
+      reason: REDACTION_REASON,
+      count: messagesTable.redactionCount!,
+    });
+  }
+  const attachmentsTable = tables.find(
+    (t) => t.table === "message_attachments",
+  );
+  if (attachmentsTable && (attachmentsTable.redactionCount ?? 0) > 0) {
+    redactions.push({
+      path: "tables/message_attachments.json",
+      reason: REDACTION_REASON,
+      count: attachmentsTable.redactionCount!,
+    });
+  }
+
   // Manifest LAST per spec FR4 step 8.
   const manifest: ManifestRoot = {
     schema_version: MANIFEST_SCHEMA_VERSION,
@@ -1243,6 +1595,7 @@ async function buildArchiveToDisk(
     },
     files,
     excluded_files: excluded,
+    redactions,
   };
   const manifestJson = dsarStringify(manifest);
   archive.append(Buffer.from(manifestJson, "utf-8"), {
@@ -1279,6 +1632,27 @@ async function buildArchiveToDisk(
     new PassThrough(),
   );
   const bundleSha256 = bundleHash.digest("hex");
+
+  // Art. 15(4) observability emission (#4319 Phase 6). Info-level →
+  // pino-only (no Sentry over-paging at SENTRY_BREADCRUMB_MIN_LEVEL=warn).
+  // Counts only; no raw user_id, content, salt, or row IDs in the
+  // payload. Long-horizon WORM trail tracked at #4359.
+  const messagesRedactCount = messagesTable?.redactionCount ?? 0;
+  const attachmentsRedactCount = attachmentsTable?.redactionCount ?? 0;
+  if (messagesRedactCount > 0 || attachmentsRedactCount > 0) {
+    log.info(
+      {
+        feature: "dsar-export",
+        op: "redact-foreign-author",
+        userIdHash: hashUserId(userId),
+        redactions: {
+          messages: messagesRedactCount,
+          message_attachments: attachmentsRedactCount,
+        },
+      },
+      "redacted foreign-author content",
+    );
+  }
 
   return { localPath, sha256: bundleSha256, bytes: fileStat.size, manifest };
 }
