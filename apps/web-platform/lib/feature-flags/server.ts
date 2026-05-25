@@ -13,6 +13,19 @@ const CACHE_TTL_MS = 30_000;
 // INVARIANT (enforced by soleur:flag-set-role in PR #2): every FLAG_* env var
 // below mirrors the flag's prd-segment Flagsmith state. Editing one side
 // without the other breaks the env-var-fallback fidelity story in ADR §"Fallback semantics".
+//
+// dev-signin stays ENV by design. It pairs with the DCE tripwire
+// `apps/web-platform/scripts/assert-dev-signin-eliminated.sh` which fails the
+// prd build if "dev-signin", isDevSignInEnabled, or dev-sign-in-panel tokens
+// leak into client bundles. Sync getFlag() + `process.env.NODE_ENV !== "development"`
+// literals are what SWC/Terser need to eliminate the panel.
+//
+// team-workspace-invite and byok-delegations were historically ENV (per-org
+// allowlist gate) and migrated to RUNTIME_FLAGS in PR #TBD (umbrella #4456)
+// under dual-control (Flagsmith boolean + env-allowlist as defense-in-depth).
+//
+// New flags: if the call-site needs DCE elimination → ENV. Otherwise → RUNTIME.
+// See ADR-038 + ADR-043.
 const ENV_FLAGS = {
   "dev-signin": "FLAG_DEV_SIGNIN",
   "team-workspace-invite": "FLAG_TEAM_WORKSPACE_INVITE",

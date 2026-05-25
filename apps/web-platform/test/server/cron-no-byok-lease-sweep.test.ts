@@ -34,13 +34,13 @@ import {
 const stripComments = (src: string): string =>
   src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-describe("cron-*.ts MUST NOT import or call runWithByokLease (ADR-033 I2)", () => {
-  const cronFiles = globSync("server/inngest/functions/cron-*.ts", {
+describe("{cron,oneshot}-*.ts MUST NOT import or call runWithByokLease (ADR-033 I2)", () => {
+  const cronFiles = globSync("server/inngest/functions/{cron,oneshot}-*.ts", {
     ignore: ["**/*.test.ts", "**/*.d.ts"],
   });
 
-  it("at least one cron-* function exists (sentinel sanity)", () => {
-    // Zero cron-* files means either (a) all cron migrations were reverted —
+  it("at least one {cron,oneshot}-* function exists (sentinel sanity)", () => {
+    // Zero files means either (a) all cron/oneshot migrations were reverted —
     // in which case this sentinel can be deleted, or (b) the glob regressed
     // silently. Treat zero as a hard fail so the sweep cannot vacuously pass.
     expect(cronFiles.length).toBeGreaterThan(0);
