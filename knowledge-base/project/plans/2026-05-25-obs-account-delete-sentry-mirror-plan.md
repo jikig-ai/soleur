@@ -327,8 +327,8 @@ logs:
   retention: Better Stack default (3-30 days depending on plan tier); Sentry default 30-90 days
 
 discoverability_test:
-  command: cd apps/web-platform && ./node_modules/.bin/vitest run test/server/account-delete-sentry-mirror.test.ts
-  expected_output: "12 passed" — 11 parametrised stage cases + 1 happy-path no-emit case. Assertion shape: mockReportSilentFallback (or mockWarnSilentFallback for the 3.86 row) called with feature=account-delete and op=<stage-slug>. Test runner is vitest, NOT bun test (apps/web-platform/bunfig.toml blocks bun test discovery per #1469).
+  command: apps/web-platform/node_modules/.bin/vitest --root apps/web-platform run test/server/account-delete-sentry-mirror.test.ts
+  expected_output: "12 passed" — 11 parametrised stage cases + 1 happy-path no-emit case. Assertion shape mockReportSilentFallback (or mockWarnSilentFallback for the 3.86 row) called with feature=account-delete and op=<stage-slug>. Test runner is vitest, NOT bun test (apps/web-platform/bunfig.toml blocks bun test discovery per #1469).
 ```
 
 ## Acceptance Criteria
