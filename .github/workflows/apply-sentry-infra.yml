@@ -185,12 +185,26 @@ jobs:
           fi
           terraform show -no-color tfplan > tfplan.txt
           # Authoritative destroy count via the structured plan, not the
-          # `Plan: …` summary line. The summary-line grep is brittle (it
-          # returns 0 or 1, never the real count) and can be silently
-          # bypassed by Terraform's formatting changes. `terraform show
-          # -json` is documented as stable.
-          destroy_count=$(terraform show -json tfplan | \
-            jq '[.resource_changes[]? | select(.change.actions? | index("delete"))] | length')
+          # `Plan: …` summary line. The summary-line grep is brittle and
+          # can be silently bypassed by Terraform formatting changes;
+          # `terraform show -json` is the documented stable contract.
+          # Sibling of apply-github-infra.yml's destroy-guard (closes #4419
+          # — extends the #4420 widening to apply-sentry-infra). Filter is
+          # path-specific per the #4420 plan-review iteration. Source of
+          # truth: tests/scripts/lib/destroy-guard-filter-sentry.jq (also
+          # exercised by tests/scripts/test-destroy-guard-counter-sentry.sh).
+          counts=$(terraform show -json tfplan | \
+            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-sentry.jq")
+          resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
+          nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
+          # Validate counters parsed correctly — empty values from a jq
+          # failure would silently evaluate false in the `-gt 0` test and
+          # let destructive plans slip past the guard.
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}')."
+            exit 1
+          fi
+          destroy_count=$((resource_deletes + nested_deletes))
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
           # the token cannot fire from a quoted block, code fence, or
@@ -200,7 +214,7 @@ jobs:
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
-            echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on cron monitors."
+            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s))."
             echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1

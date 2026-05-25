@@ -1,0 +1,33 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_zero_trust_access_policy.ci_ssh_service_token",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_policy",
+      "name": "ci_ssh_service_token",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "account_id": "acct-id",
+          "name": "ci-ssh-service-token",
+          "decision": "non_identity",
+          "include": [
+            {"service_token": [{"token_id": "token-uuid"}]}
+          ]
+        },
+        "after": {
+          "account_id": "acct-id",
+          "name": "ci-ssh-service-token",
+          "decision": "non_identity",
+          "include": []
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}
