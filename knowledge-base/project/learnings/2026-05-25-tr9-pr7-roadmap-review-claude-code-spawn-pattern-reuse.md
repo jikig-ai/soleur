@@ -81,3 +81,5 @@ The "reviewer's burden reduces to: does each named diff match the workflow's doc
 ## Session Errors
 
 PR-8 (#4439) reused this pattern verbatim — 5 helpers + handler shape unchanged; only opus-4-7 model + cap-enforcement-already-in-prompt differ from PR-7.
+
+PR-10 (#4448) — 5th handler. Adds WebSearch+WebFetch+Task tools cohort sibling to PR-7; bridges to the cohort that also creates follow-up PRs (vs PR-8/PR-9 issue-only).

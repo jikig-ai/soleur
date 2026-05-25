@@ -20,6 +20,7 @@ import { inngest } from "@/server/inngest/client";
 import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
+import { cronCompetitiveAnalysis } from "@/server/inngest/functions/cron-competitive-analysis";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
@@ -46,6 +47,7 @@ export const { GET, POST, PUT } = serve({
     agentOnSpawnRequested,
     cfoOnPaymentFailed,
     cronBugFixer,
+    cronCompetitiveAnalysis,
     cronDailyTriage,
     cronFollowThroughMonitor,
     cronGithubAppDriftGuard,
