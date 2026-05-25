@@ -1,5 +1,11 @@
-variable "gh_token" {
-  description = "Fine-grained PAT for ruleset CRUD. Sourced from Doppler prd_terraform/GH_RULESET_PAT via the tf-var name transformer."
+variable "github_app_id" {
+  description = "GitHub App ID for soleur-ai (id 3261325). Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf). Migrated from `gh_token` PAT auth in #4384 per AGENTS.core.md hr-github-app-auth-not-pat."
+  type        = string
+  sensitive   = true
+}
+
+variable "github_app_private_key" {
+  description = "PEM-encoded RSA private key for the soleur-ai GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded. Migrated from `gh_token` PAT auth in #4384."
   type        = string
   sensitive   = true
 }
