@@ -200,7 +200,7 @@ Present an output summary listing the document path, milestones created, issues 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
 2. Use `/ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
 3. After the PR is created, queue auto-merge under the merge-main lock: `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge <number> --squash --auto`. The `--` separator is required (terminates `with_lock`'s positional args). If the wrapper returns rc=99, the lock was contended for >600s and the merge was NOT queued — surface to the operator and retry rather than assuming success.
-4. Poll `gh pr view <number> --json state --jq .state` until MERGED.
+4. Poll the PR using the Monitor tool with the same state machine as `/soleur:ship` Phase 7 (state+`mergeStateStatus`, BEHIND auto-sync capped at 6, required-check failure exit, DIRTY exit). Naive `gh pr view <number> --json state` is insufficient — it heartbeats silently through BEHIND / BLOCKED-with-CI-failure / DIRTY states. Reuse the loop body from `plugins/soleur/skills/ship/SKILL.md` Phase 7. **Precondition:** must run from inside a worktree (`git rev-parse --is-inside-work-tree`) — the BEHIND auto-sync uses `git merge origin/main && git push`.
 5. Run `cleanup-merged` to remove the worktree.
 
 Do not stop at "PR created" or "waiting for CI." The roadmap is not shipped until it is merged to main.
