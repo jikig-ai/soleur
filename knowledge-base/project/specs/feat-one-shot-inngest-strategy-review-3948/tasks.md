@@ -14,47 +14,47 @@ deepen_pass: applied 2026-05-25
 
 ## Phase 0 — Preflight
 
-- [ ] 0.1 Verify reference file: `ls apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` (PR-5 reference, 1226 lines)
-- [ ] 0.2 Verify umbrella state: `gh issue view 3948 --json title,state` returns OPEN
-- [ ] 0.3 Verify child issue: `gh issue view 4416` returns OPEN
-- [ ] 0.4 Verify migration source files present: `git ls-files | grep -E "scripts/strategy-review-check.sh|.github/workflows/scheduled-strategy-review.yml"` returns BOTH
-- [ ] 0.5 Confirm `cron_run_ledger` reconciliation: `grep -rn cron_run_ledger apps/web-platform/ supabase/migrations/` returns ZERO
-- [ ] 0.6 Read existing route.ts registry to determine alphabetical insertion slot (verified: between `cronOauthProbe` line 49 and `githubOnEvent` line 50)
-- [ ] 0.7 **[deepen-pass]** Confirm `gray-matter` dep is present: `grep -E '"gray-matter"' apps/web-platform/package.json` returns `"gray-matter": "^4.0.3",`
-- [ ] 0.8 **[deepen-pass]** Confirm `gh` CLI NOT in Dockerfile: `grep -nE 'gh|github-cli' apps/web-platform/Dockerfile` returns ZERO
-- [ ] 0.9 **[deepen-pass]** Confirm current `-target=` count in apply-sentry-infra.yml: `grep -cE '^\s*-target=sentry_cron_monitor' .github/workflows/apply-sentry-infra.yml` returns `11` (will become `12`)
+- [x] 0.1 Verify reference file: `ls apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` (PR-5 reference, 1226 lines)
+- [x] 0.2 Verify umbrella state: `gh issue view 3948 --json title,state` returns OPEN
+- [x] 0.3 Verify child issue: `gh issue view 4416` returns OPEN
+- [x] 0.4 Verify migration source files present: `git ls-files | grep -E "scripts/strategy-review-check.sh|.github/workflows/scheduled-strategy-review.yml"` returns BOTH
+- [x] 0.5 Confirm `cron_run_ledger` reconciliation: `grep -rn cron_run_ledger apps/web-platform/ supabase/migrations/` returns ZERO
+- [x] 0.6 Read existing route.ts registry to determine alphabetical insertion slot (verified: between `cronOauthProbe` line 49 and `githubOnEvent` line 50)
+- [x] 0.7 **[deepen-pass]** Confirm `gray-matter` dep is present: `grep -E '"gray-matter"' apps/web-platform/package.json` returns `"gray-matter": "^4.0.3",`
+- [x] 0.8 **[deepen-pass]** Confirm `gh` CLI NOT in Dockerfile: `grep -nE 'gh|github-cli' apps/web-platform/Dockerfile` returns ZERO
+- [x] 0.9 **[deepen-pass]** Confirm current `-target=` count in apply-sentry-infra.yml: `grep -cE '^\s*-target=sentry_cron_monitor' .github/workflows/apply-sentry-infra.yml` returns `10` (verified — plan's "11" was stale); will become `11`
 
 ## Phase 1 — Author Inngest function (TS port, no bash spawn)
 
-- [ ] 1.1 Create `apps/web-platform/server/inngest/functions/cron-strategy-review.ts` per plan §Phase 1 outline (~280-320 lines)
-- [ ] 1.2 Helpers: `mintInstallationToken`, `buildAuthenticatedCloneUrl`, `redactToken`, `setupEphemeralWorkspace` (no plugin symlink; sentinel checks the 3 KB dirs), `teardownEphemeralWorkspace`
-- [ ] 1.3 **[deepen-pass]** TS port helpers (no PR-5 precedent): `ensureReviewLabel`, `resolveMilestoneNumber`, `listExistingReviewIssueTitles`, `collectStrategyFiles`, `parseISODate`, `runStrategyReview` — port `scripts/strategy-review-check.sh` logic 1:1 via Octokit + node:fs + gray-matter
-- [ ] 1.4 `postSentryHeartbeat` — single-step end-of-step.run POST (per `2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md`)
-- [ ] 1.5 `cronStrategyReviewHandler` — 4 step.run blocks: mint-installation-token → setup-workspace → strategy-review-check (TS port + Promise.race against MAX_RUN_DURATION_MS) → sentry-heartbeat + finally:teardown
-- [ ] 1.6 Validate manual-trigger `event.data.date_override` (regex `^\d{4}-\d{2}-\d{2}$`) before threading into `runStrategyReview` as `todayISO`
-- [ ] 1.7 Register via `inngest.createFunction` with `id: "cron-strategy-review"`, concurrency keys (`fn`=1, `account`=`"cron-platform"`=1), triggers `[{ cron: "0 8 * * 1" }, { event: "cron/strategy-review.manual-trigger" }]`, retries=1
-- [ ] 1.8 **[deepen-pass]** Confirm NO `spawn(` calls other than the one in `setupEphemeralWorkspace` (`grep -cE 'spawn\(' cron-strategy-review.ts` returns exactly `1`)
+- [x] 1.1 Create `apps/web-platform/server/inngest/functions/cron-strategy-review.ts` per plan §Phase 1 outline (755 lines including comment headers; structure matches outline)
+- [x] 1.2 Helpers: `mintInstallationToken`, `buildAuthenticatedCloneUrl`, `redactToken`, `setupEphemeralWorkspace` (no plugin symlink; sentinel checks the 3 KB dirs), `teardownEphemeralWorkspace`
+- [x] 1.3 **[deepen-pass]** TS port helpers (no PR-5 precedent): `ensureReviewLabel`, `resolveMilestoneNumber`, `listExistingReviewIssueTitles`, `collectStrategyFiles`, `parseISODate`, `runStrategyReview` — port `scripts/strategy-review-check.sh` logic 1:1 via Octokit + node:fs + gray-matter
+- [x] 1.4 `postSentryHeartbeat` — single-step end-of-step.run POST (per `2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md`)
+- [x] 1.5 `cronStrategyReviewHandler` — 4 step.run blocks: mint-installation-token → setup-workspace → strategy-review-check (TS port + Promise.race against MAX_RUN_DURATION_MS) → sentry-heartbeat + finally:teardown
+- [x] 1.6 Validate manual-trigger `event.data.date_override` (regex `^\d{4}-\d{2}-\d{2}$`) before threading into `runStrategyReview` as `todayISO`
+- [x] 1.7 Register via `inngest.createFunction` with `id: "cron-strategy-review"`, concurrency keys (`fn`=1, `account`=`"cron-platform"`=1), triggers `[{ cron: "0 8 * * 1" }, { event: "cron/strategy-review.manual-trigger" }]`, retries=1
+- [x] 1.8 **[deepen-pass]** Confirm NO `spawn(` calls other than the one in `setupEphemeralWorkspace` (`grep -cE 'spawn\(' cron-strategy-review.ts` returns exactly `1`)
 
 ## Phase 2 — Register in route.ts
 
-- [ ] 2.1 Edit `apps/web-platform/app/api/inngest/route.ts`: add `import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";` AFTER the `cronOauthProbe` import (alpha order)
-- [ ] 2.2 Add `cronStrategyReview,` to the `functions: [...]` array on a new line BETWEEN `cronOauthProbe,` and `githubOnEvent,`
+- [x] 2.1 Edit `apps/web-platform/app/api/inngest/route.ts`: add `import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";` AFTER the `cronOauthProbe` import (alpha order)
+- [x] 2.2 Add `cronStrategyReview,` to the `functions: [...]` array on a new line BETWEEN `cronOauthProbe,` and `githubOnEvent,`
 
 ## Phase 3 — Add Sentry cron monitor + update auto-apply target list
 
-- [ ] 3.1 Edit `apps/web-platform/infra/sentry/cron-monitors.tf`: append `sentry_cron_monitor.scheduled_strategy_review` resource AT FILE END (after `scheduled_gh_pages_cert_state` line 216; file's existing order is NOT strictly alpha — append-on-PR is the pragma)
-- [ ] 3.2 **[deepen-pass — CRITICAL]** Edit `.github/workflows/apply-sentry-infra.yml`: add `-target=sentry_cron_monitor.scheduled_strategy_review \` AFTER the `scheduled_follow_through` line (was 11 entries, now 12). Without this, the Sentry resource is silently ignored on push to main.
-- [ ] 3.3 Verify: `cd apps/web-platform/infra/sentry && terraform init -input=false && terraform validate` exits 0
-- [ ] 3.4 **[deepen-pass]** Verify: `actionlint .github/workflows/apply-sentry-infra.yml` (warn-only — pre-existing issues are acceptable; only check the new `-target=` line parses)
+- [x] 3.1 Edit `apps/web-platform/infra/sentry/cron-monitors.tf`: append `sentry_cron_monitor.scheduled_strategy_review` resource AT FILE END (after `scheduled_gh_pages_cert_state` line 226)
+- [x] 3.2 **[deepen-pass — CRITICAL]** Edit `.github/workflows/apply-sentry-infra.yml`: add `-target=sentry_cron_monitor.scheduled_strategy_review \` AFTER the `scheduled_follow_through` line (was 10 entries, now 11)
+- [x] 3.3 Verify: `cd apps/web-platform/infra/sentry && terraform init -input=false -backend=false && terraform validate` exits 0 (only pre-existing deprecation warnings)
+- [ ] 3.4 **[deepen-pass]** Verify: `actionlint .github/workflows/apply-sentry-infra.yml` (deferred to parent test phase)
 
 ## Phase 4 — DELETE GHA workflow
 
-- [ ] 4.1 `git rm .github/workflows/scheduled-strategy-review.yml`
-- [ ] 4.2 Confirm `scripts/strategy-review-check.sh` is UNCHANGED (not deleted — operator-local hand-testing only)
+- [x] 4.1 `git rm .github/workflows/scheduled-strategy-review.yml`
+- [x] 4.2 Confirm `scripts/strategy-review-check.sh` is UNCHANGED (not deleted — operator-local hand-testing only)
 
 ## Phase 5 — Capture learning
 
-- [ ] 5.1 Write `knowledge-base/project/learnings/2026-05-25-tr9-pr6-strategy-review-no-bash-spawn-octokit-port-pattern.md` documenting BOTH:
+- [x] 5.1 Write `knowledge-base/project/learnings/2026-05-25-tr9-pr6-strategy-review-no-bash-spawn-octokit-port-pattern.md` documenting BOTH:
   - (a) the bash-spawn-blocked-by-missing-gh pattern (port to Octokit instead of installing gh in Dockerfile for one-off use)
   - (b) the apply-sentry-infra.yml `-target=` allow-list gotcha (it's NOT a wildcard; new resources need same-commit YAML edit)
 
