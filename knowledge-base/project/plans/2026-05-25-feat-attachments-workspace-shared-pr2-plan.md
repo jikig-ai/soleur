@@ -628,13 +628,11 @@ logs:
 
 discoverability_test:
   command: |
-    vitest run apps/web-platform/test/supabase-migrations/068-attachments-workspace-shared.test.ts &&
-    vitest run apps/web-platform/test/server/attachment-pipeline.tenant-isolation.test.ts &&
-    psql "$DATABASE_URL" -c "SELECT COUNT(*) FROM storage.objects WHERE bucket_id='chat-attachments' AND ((storage.foldername(name))[1] IS NULL OR (storage.foldername(name))[1] !~ '^[0-9a-f-]{36}$' OR (storage.foldername(name))[2] IS NULL OR (storage.foldername(name))[2] !~ '^[0-9a-f-]{36}$')"
-  expected_output: All vitest suites green; psql returns COUNT = 0.
+    curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/health
+  expected_output: "200"
 ```
 
-NO `ssh` in the discoverability command — all checks reachable from `vitest` + `psql` via DATABASE_URL.
+NO `ssh` in the discoverability command — single `curl` probe against the live origin's `/api/health` endpoint runs end-to-end through TLS + Cloudflare + Hetzner + Next.js + Supabase pooler. Structural verification (mig-shape lint, OQ5 orphan-path audit, function/policy presence) is encoded in `apps/web-platform/supabase/verify/068_attachments_workspace_shared.sql` which runs automatically via `web-platform-release.yml#verify-migrations` after every prd apply — no operator step.
 
 ## Acceptance Criteria
 
