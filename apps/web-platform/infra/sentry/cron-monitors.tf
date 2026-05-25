@@ -276,3 +276,27 @@ resource "sentry_cron_monitor" "scheduled_roadmap_review" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# TR9 PR-8 (closes #4439): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-legal-audit.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-legal-audit workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+# Quarterly Jan/Apr/Jul/Oct 1 @ 11:00 UTC. Inngest-fired (not GHA) — 30-min
+# margin per the Inngest-fired precedent (scheduled_daily_triage,
+# scheduled_follow_through, scheduled_bug_fixer, scheduled_strategy_review,
+# scheduled_roadmap_review). Single-miss alert (failure_issue_threshold=1):
+# a single missed quarter is highly noteworthy on a quarterly cadence.
+# 55 min mirrors the claude-eval cohort (scheduled_bug_fixer,
+# scheduled_roadmap_review) — 50-min MAX_TURN_DURATION_MS budget plus slack.
+resource "sentry_cron_monitor" "scheduled_legal_audit" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-legal-audit"
+  schedule                = { crontab = "0 11 1 1,4,7,10 *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
