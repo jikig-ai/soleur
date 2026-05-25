@@ -1,0 +1,35 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_notification_policy.service_token_expiry",
+      "mode": "managed",
+      "type": "cloudflare_notification_policy",
+      "name": "service_token_expiry",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "account_id": "acct-id",
+          "name": "Service-token expiry 7-day warning",
+          "alert_type": "access_custom_certificate_expiration_type",
+          "enabled": true,
+          "email_integration": [
+            {"id": "ops@jikigai.com", "name": "ops@jikigai.com"}
+          ]
+        },
+        "after": {
+          "account_id": "acct-id",
+          "name": "Service-token expiry 7-day warning",
+          "alert_type": "access_custom_certificate_expiration_type",
+          "enabled": true,
+          "email_integration": []
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

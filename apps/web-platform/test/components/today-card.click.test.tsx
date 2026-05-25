@@ -5,16 +5,44 @@ import { userEvent } from "@testing-library/user-event";
 import { TodayCard } from "@/components/dashboard/today-card";
 
 // PR-A (#4124) — Component-level click test for GitHubCard + KbDriftCard.
-//
-// First component-level click test for today-card. Drives the happy and
-// degraded paths through the shared `useActionSend()` hook by mocking
-// `fetch` and asserting (a) the request body, (b) the resulting
-// "Acknowledged" pill state.
+// PR-B (#4379) — Updated to mock supabase/client because TodayCard now
+// renders <LeaderLoopStatus> after non-degraded acknowledgment; that
+// component subscribes to Realtime + polls the action_sends row. The
+// pill assertion now keys off LeaderLoopStatus' state-matrix "done"
+// branch when artifact + reversal_handles exist, or on the inline
+// AcknowledgedPill when degraded is set.
 //
 // Mock policy: method-aware `vi.fn` fetch mock (no MSW) per
 // 2026-05-20-happy-dom-ws-fetch-blockade.md. Assertions key off public
 // DOM contract (`data-testid` + label text) per
 // 2026-05-06-test-public-dom-contract-not-setstate-side-effects.md.
+
+const { createClientMock } = vi.hoisted(() => ({
+  createClientMock: vi.fn(),
+}));
+
+vi.mock("@/lib/supabase/client", () => ({
+  createClient: createClientMock,
+}));
+
+function buildNoOpSupabaseClient() {
+  const fromChain: Record<string, unknown> = {};
+  Object.assign(fromChain, {
+    select: vi.fn(() => fromChain),
+    eq: vi.fn(() => fromChain),
+    maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
+  });
+  const channel: Record<string, unknown> = {};
+  Object.assign(channel, {
+    on: vi.fn(() => channel),
+    subscribe: vi.fn(() => channel),
+  });
+  return {
+    from: vi.fn(() => fromChain),
+    channel: vi.fn(() => channel),
+    removeChannel: vi.fn(),
+  };
+}
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -26,7 +54,19 @@ interface MockResponse {
 let nextResponse: MockResponse = { status: 200, body: {} };
 
 beforeEach(() => {
-  globalThis.fetch = vi.fn(async () => {
+  createClientMock.mockReset();
+  createClientMock.mockImplementation(buildNoOpSupabaseClient);
+  globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input.toString();
+    // LeaderLoopStatus pulls /cost on mount + on every Realtime UPDATE.
+    // Keep it harmless so the pill / state-matrix assertions key off the
+    // /send response only.
+    if (url.endsWith("/cost")) {
+      return new Response(
+        JSON.stringify({ cumulativeCents: 0, turnCount: 0 }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     return new Response(JSON.stringify(nextResponse.body), {
       status: nextResponse.status,
       headers: { "Content-Type": "application/json" },
@@ -39,7 +79,11 @@ afterEach(() => {
 });
 
 describe("GitHubCard onClick (PR-A)", () => {
-  it("happy-path: click 'Spawn review agent' → POST /send → 200 → Acknowledged pill with GitHub link", async () => {
+  it("happy-path: click 'Spawn review agent' → POST /send → 200 → LeaderLoopStatus mounts (acknowledged_starting)", async () => {
+    // PR-B: with PR-A's pill replaced by LeaderLoopStatus on non-degraded
+    // sends, the immediate 200 response renders the panel in
+    // "acknowledged_starting" state; the action_sends row drives further
+    // transitions (covered in leader-loop-status.test.tsx).
     nextResponse = {
       status: 200,
       body: {
@@ -66,20 +110,20 @@ describe("GitHubCard onClick (PR-A)", () => {
     await user.click(screen.getByLabelText(/Let CTO spawn a PR-review agent/));
 
     await waitFor(() => {
-      const pill = screen.getByTestId("acknowledged-pill");
-      expect(pill).toBeInTheDocument();
-      expect(pill.getAttribute("data-pill-state")).toBe("ack");
-      expect(pill.getAttribute("href")).toBe(
-        "https://github.com/acme/repo/pull/7",
+      const panel = screen.getByTestId("leader-loop-status");
+      expect(panel).toBeInTheDocument();
+      expect(panel.getAttribute("data-state-kind")).toBe(
+        "acknowledged_starting",
       );
     });
 
-    // POST body is empty for draft_one_click (no typed-confirm payload).
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const callArgs = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
-      .calls[0];
-    expect(callArgs[0]).toBe("/api/dashboard/today/msg-1/send");
-    expect((callArgs[1] as RequestInit).method).toBe("POST");
+    // /send POST is the first call; subsequent /cost calls are LeaderLoopStatus
+    // pull on mount + Realtime UPDATE refreshes.
+    const sendCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => String(c[0]).endsWith("/send"),
+    );
+    expect(sendCalls).toHaveLength(1);
+    expect((sendCalls[0][1] as RequestInit).method).toBe("POST");
   });
 
   it("403 no_active_grant → renders scope-grant copy", async () => {
@@ -115,7 +159,9 @@ describe("GitHubCard onClick (PR-A)", () => {
     expect(screen.queryByTestId("acknowledged-pill")).toBeNull();
   });
 
-  it("409 already_sent → renders Acknowledged pill (soft success)", async () => {
+  it("409 already_sent → soft-success mounts LeaderLoopStatus (acknowledged_starting)", async () => {
+    // PR-B: 409 still flips acknowledged=true and (since degraded is unset)
+    // renders LeaderLoopStatus instead of the inline pending pill.
     nextResponse = {
       status: 409,
       body: { error: "already_sent", message_id: "msg-1" },
@@ -136,10 +182,11 @@ describe("GitHubCard onClick (PR-A)", () => {
     await user.click(screen.getByLabelText(/Let CTO spawn a PR-review agent/));
 
     await waitFor(() => {
-      const pill = screen.getByTestId("acknowledged-pill");
-      expect(pill).toBeInTheDocument();
-      // No artifact URL available on already_sent, so pill state is pending.
-      expect(pill.getAttribute("data-pill-state")).toBe("pending");
+      const panel = screen.getByTestId("leader-loop-status");
+      expect(panel).toBeInTheDocument();
+      expect(panel.getAttribute("data-state-kind")).toBe(
+        "acknowledged_starting",
+      );
     });
   });
 

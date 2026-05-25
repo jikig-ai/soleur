@@ -1,70 +1,106 @@
-// PR-A (#4124) — Inngest function `agent-on-spawn-requested`.
+// PR-B (#4379) — Inngest function `agent-on-spawn-requested`.
 //
 // Consumes `agent.spawn.requested` events emitted by the dashboard /send
 // route AFTER `writeActionSend` and BEFORE the `messages.status` archive
-// flip. PR-A's deterministic stub handles ONLY the source-ref shapes
-// that carry (owner, repo, number) per github-on-event.ts:deriveSourceRef:
-//   - `pr-<owner>:<repo>:<n>`         → PR comment via createComment
-//   - `issue-<owner>:<repo>:<n>`      → issue label `soleur/acknowledged`
-//   - `secret-scan-<owner>:<repo>:<n>`→ issue label `soleur/acknowledged`
+// flip.
 //
-// Source-ref shapes that have NO per-class GitHub target — `ci-<run_id>`
-// (no repo binding), `cve-GHSA-...` (global advisory), `link-<hash>` /
-// `anchor-<hash>` (kb_drift) — are intercepted at the /send route BEFORE
-// the Inngest event is enqueued (route returns 200 with `degraded:
-// "no_artifact_in_pr_a"`). The Inngest function therefore never receives
-// these shapes in steady state; should one slip through (e.g., dev
-// replay), `parseSourceRef` throws `malformed_source_ref` and persist-
-// failure writes the row.
+// PR-A (#4124, merged #4378 commit 7d5620a5) shipped a deterministic
+// acknowledgment stub. PR-B replaces the body of `post-acknowledgment`
+// with a per-turn Anthropic-SDK leader-prompt loop driven by
+// `anthropic.messages.create` with tool-use rounds (per ADR-042).
 //
-// PR-B (#4360, ADR-040+ — next free ordinal; ADR-039 already taken by
-// the departed-member-removal-ledger landed in #4294) replaces the
-// deterministic stub body with the Anthropic SDK leader-prompt loop
-// and adds per-class resolution for the deferred shapes.
-//
-// LOAD-BEARING INVARIANTS:
+// LOAD-BEARING INVARIANTS (PR-A I1/I2/I3/I5 inherited; I4 deliberately
+// REVERSED — this is the first raw `@anthropic-ai/sdk` site in
+// apps/web-platform/server/):
 //   I1 — `installationId` is server-resolved INSIDE step 1 from
 //        `users.github_installation_id` keyed by the SERVER-DERIVED
-//        `founderId` (the event was signed by INNGEST_SIGNING_KEY and the
-//        founderId comes from the cookie-scoped Supabase auth at the
-//        webhook predicate / dashboard send route). The event payload
-//        type OMITS `installationId`; any consumer reading
-//        `event.data.installationId` fails `tsc`. The runtime sentinel
-//        test (`installation-id-source-of-truth.test.ts`) enforces the
-//        negative grep as belt-and-suspenders.
+//        `founderId`. The event payload type OMITS `installationId`;
+//        any consumer reading `event.data.installationId` fails `tsc`.
 //   I2 — Every Octokit call routes through `createGitHubAppClient(
-//        installationId, founderId)` (PA-16 / PR-H+1 #4098 factory hook).
-//        NEVER `probeOctokit` (audit-skipping) or raw `new Octokit(...)`.
-//        The per-call audit row in `audit_github_token_use` is the only
-//        durable record of the API call surface.
-//   I3 — Idempotency key = `event.data.actionSendId`. Duplicate event
-//        fires produce exactly one updated `action_sends` row and exactly
-//        one artifact (GitHub-side natural idempotency for labels + Inngest
-//        step memoization for the createComment cache).
-//   I4 — No Anthropic SDK call in PR-A. `byok-audit-writer-sweep` lint
-//        asserts no new `runWithByokLease(` site is added under this path.
-//   I5 — UPDATE on `action_sends` uses the service-role client because
-//        the table's RLS has owner-INSERT + owner-SELECT policies only;
-//        UPDATE has no permissive policy (default-deny). The WORM trigger
-//        reshape in mig 064 admits UPDATEs that touch ONLY
-//        acknowledged_at / artifact_url / failure_reason; any drift
-//        toward writing a pre-064 column will fail at the trigger.
+//        installationId, founderId)` (PA-16 factory hook).
+//   I3 — Idempotency key = `event.data.actionSendId`. Inngest's
+//        `step.run` memoization makes the loop replay-safe: re-runs
+//        return cached step results without re-invoking the SDK or
+//        the cost-writer.
+//   I5 — UPDATE on `action_sends` uses the service-role client.
+//        Mig 067's columns (current_turn, reversal_handles,
+//        cancellation_requested_at, prompt_version, undone_at,
+//        current_turn_started_at) are admitted by the WORM trigger
+//        because the trigger's BEFORE UPDATE OF list excludes them
+//        (default-admit on non-listed columns).
+
+import { createHash } from "node:crypto";
+
+import Anthropic from "@anthropic-ai/sdk";
 
 import { inngest } from "@/server/inngest/client";
 import { getServiceClient } from "@/lib/supabase/service";
 import { createGitHubAppClient } from "@/server/github/app-client";
 import { reportSilentFallback } from "@/server/observability";
+import { runWithByokLease } from "@/server/byok-lease";
+import { recordByokUseAndCheckCap } from "@/server/byok-cap-rpc";
+import { persistTurnCostAwaitable } from "@/server/cost-writer";
 import type { ActionClass } from "@/server/scope-grants/action-class-map";
 import {
-  ACK_LABEL,
-  ACK_PR_COMMENT_TEMPLATE,
-  parseSourceRef,
-} from "@/server/inngest/agent-acknowledgment-templates";
+  LEADER_MAX_TURNS,
+  LEADER_MAX_TOKENS,
+  PER_SPAWN_COST_CEILING_CENTS,
+  type LeaderActionClass,
+  type LeaderPromptModule,
+} from "@/server/inngest/leader-prompts";
+import { LEADER_PROMPTS } from "@/server/inngest/leader-prompts";
 
-// The event payload type EXPLICITLY OMITS `installationId`. A future
-// event-author who tries to thread `installationId` from the event
-// envelope fails `tsc` at consumption time. This is the TypeScript-level
-// counterpart to AC2's runtime grep sentinel.
+// UUIDv5 namespace for the per-spawn conversationId (AC6). LOAD-BEARING —
+// regenerating this constant silently shifts every in-flight loop's
+// conversationId and breaks cumulative-cost queries that filter by
+// derived `conversation_id`. Pinned verbatim by
+// `conversation-namespace-stability.test.ts`.
+const CONVERSATION_NAMESPACE = "9b6dc8f1-3a7e-4c2b-8d4f-5a2e9c1b7d3e";
+
+/**
+ * UUIDv5 (sha1-namespace) per RFC 4122 §4.3. Inlined to avoid pulling
+ * `uuid` + `@types/uuid` as a webplat dep — the algorithm is small and
+ * the namespace is pinned at module-load (no test-only branches).
+ */
+function uuidv5(name: string, namespace: string): string {
+  const hex = namespace.replace(/-/g, "");
+  const nsBytes = Buffer.from(hex, "hex");
+  const hash = createHash("sha1")
+    .update(nsBytes)
+    .update(Buffer.from(name, "utf8"))
+    .digest();
+  const bytes = Buffer.from(hash.subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x50; // version 5
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant RFC 4122
+  const h = bytes.toString("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+// Per-model unit pricing in USD per token. Cache-read tokens bill at
+// ~10% of input; cache-creation tokens at ~125% of input. Pulled from
+// Anthropic public pricing pages 2026-05-25; CFO refreshes via cap
+// follow-through.
+interface ModelPricing {
+  inputPerToken: number;
+  outputPerToken: number;
+  cacheReadPerToken: number;
+  cacheCreatePerToken: number;
+}
+const MODEL_PRICING: Record<string, ModelPricing> = {
+  "claude-sonnet-4-6": {
+    inputPerToken: 3 / 1_000_000,
+    outputPerToken: 15 / 1_000_000,
+    cacheReadPerToken: 0.3 / 1_000_000,
+    cacheCreatePerToken: 3.75 / 1_000_000,
+  },
+  "claude-haiku-4-5-20251001": {
+    inputPerToken: 0.8 / 1_000_000,
+    outputPerToken: 4 / 1_000_000,
+    cacheReadPerToken: 0.08 / 1_000_000,
+    cacheCreatePerToken: 1 / 1_000_000,
+  },
+};
+
 interface AgentSpawnRequestedEvent {
   name: "agent.spawn.requested";
   data: {
@@ -73,8 +109,7 @@ interface AgentSpawnRequestedEvent {
     actionClass: ActionClass;
     sourceRef: string;
     actionSendId: string;
-    // NO installationId — server-resolved inside step 1 from
-    // users.github_installation_id keyed by founderId.
+    // NO installationId — server-resolved inside step 1.
   };
 }
 
@@ -90,6 +125,79 @@ interface HandlerArgs {
   };
 }
 
+// AC10 — the failure-reason taxonomy admitted on `action_sends.failure_reason`.
+// PR-A's set ({github_installation_unauthorized, github_target_not_found,
+// github_api_error, malformed_source_ref, acknowledgment_persist_failed})
+// is preserved; PR-B extends with the leader-loop reasons.
+type FailureReason =
+  | "github_installation_unauthorized"
+  | "github_target_not_found"
+  | "github_api_error"
+  | "malformed_source_ref"
+  | "acknowledgment_persist_failed"
+  | "byok_cap_exceeded"
+  | "cost_ceiling_exceeded"
+  | "cancelled_by_operator"
+  | "byok_lease_unavailable"
+  | "anthropic_timeout"
+  | "anthropic_rate_limited"
+  | "leader_max_turns_exceeded"
+  | "leader_response_truncated"
+  | "leader_tool_invalid"
+  | "leader_class_disabled";
+
+interface ReversalHandle {
+  kind:
+    | "pr_review_comment"
+    | "pr_comment"
+    | "issue_label"
+    | "issue_comment"
+    | "branch"
+    | "pr";
+  owner: string;
+  repo: string;
+  // Per-kind identifying fields. Optional union — the dashboard's undo
+  // route enforces the per-kind discriminated shape.
+  commentId?: number;
+  prNumber?: number;
+  issueNumber?: number;
+  labelName?: string;
+  branchRef?: string;
+}
+
+interface ToolUseBlock {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+interface MessageContentText {
+  type: "text";
+  text: string;
+}
+
+type AnthropicContentBlock = ToolUseBlock | MessageContentText | { type: string };
+
+interface AnthropicTurnResult {
+  id: string;
+  stop_reason: "end_turn" | "tool_use" | "max_tokens" | string;
+  content: AnthropicContentBlock[];
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens?: number | null;
+    cache_creation_input_tokens?: number | null;
+  };
+}
+
+interface ToolResult {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string;
+  is_error?: boolean;
+}
+
 export async function agentOnSpawnRequestedHandler({
   event,
   step,
@@ -101,8 +209,7 @@ export async function agentOnSpawnRequestedHandler({
   const { founderId, messageId, actionClass, sourceRef, actionSendId } =
     event.data;
 
-  // Step 1: resolve installation_id from users (SERVER-DERIVED, never
-  // from the event payload). I1.
+  // Step 1: resolve installation_id (I1).
   let installationId: number;
   try {
     installationId = await step.run("resolve-installation", async () => {
@@ -126,7 +233,7 @@ export async function agentOnSpawnRequestedHandler({
       return row.github_installation_id;
     });
   } catch (err) {
-    return await persistFailure(step, {
+    return persistFailure(step, {
       actionSendId,
       reason: "github_installation_unauthorized",
       err,
@@ -138,45 +245,31 @@ export async function agentOnSpawnRequestedHandler({
     });
   }
 
-  // Step 2: route through createGitHubAppClient (audit hook attaches per
-  // PR-H+1 #4098 factory; one audit_github_token_use row per Octokit
-  // response). I2.
-  // Step 3: deterministic acknowledgment — 2 paths only (PR comment vs
-  // issue label). I3 (step memoization keeps re-fires from creating
-  // duplicate comments; GitHub-side label add is naturally idempotent).
-  let artifactUrl: string;
-  try {
-    artifactUrl = await step.run("post-acknowledgment", async () => {
-      const parsed = parseSourceRef(sourceRef);
-      const octokit = await createGitHubAppClient(installationId, founderId);
-      if (parsed.isPr) {
-        const { data } = await octokit.request(
-          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
-          {
-            owner: parsed.owner,
-            repo: parsed.repo,
-            issue_number: parsed.number,
-            body: ACK_PR_COMMENT_TEMPLATE,
-          },
-        );
-        return (data as { html_url: string }).html_url;
-      }
-      await octokit.request(
-        "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
-        {
-          owner: parsed.owner,
-          repo: parsed.repo,
-          issue_number: parsed.number,
-          labels: [ACK_LABEL],
-        },
-      );
-      return `https://github.com/${parsed.owner}/${parsed.repo}/issues/${parsed.number}`;
-    });
-  } catch (err) {
-    return await persistFailure(step, {
+  // Resolve the leader prompt module for this class. Unknown class OR
+  // operator/CTO-disabled class → fail-closed via `leader_class_disabled`.
+  //
+  // Runtime kill switch (per-class dogfood escape hatch): `LEADER_CLASSES_DISABLED`
+  // is a comma-separated list of `LeaderActionClass` values that the loop
+  // refuses to run. Set via Doppler (`prd`) to short-circuit a misbehaving
+  // class without redeploy. The operator-facing copy in
+  // `failure-reason-copy.ts` ("Autonomous agent for this card class is not
+  // enabled yet. CTO has been notified.") is already shipped.
+  const disabledClasses = (process.env.LEADER_CLASSES_DISABLED ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const leaderModule = LEADER_PROMPTS[actionClass as LeaderActionClass] as
+    | LeaderPromptModule
+    | undefined;
+  if (!leaderModule || disabledClasses.includes(actionClass)) {
+    return persistFailure(step, {
       actionSendId,
-      reason: classifyGithubError(err),
-      err,
+      reason: "leader_class_disabled",
+      err: new Error(
+        leaderModule
+          ? `class ${actionClass} disabled via LEADER_CLASSES_DISABLED`
+          : `no leader module for class ${actionClass}`,
+      ),
       founderId,
       messageId,
       actionClass,
@@ -185,53 +278,633 @@ export async function agentOnSpawnRequestedHandler({
     });
   }
 
-  // Step 4: UPDATE action_sends with acknowledgment columns. I5.
-  // WORM trigger (mig 064) admits this UPDATE because the SET list
-  // touches ONLY acknowledged_at + artifact_url; any drift toward a
-  // pre-064 column trips the trigger.
-  //
-  // Failure shape: the artifact is already on GitHub at this point (the
-  // canonical operator-visible record), so a row-UPDATE failure is
-  // degraded-not-broken. We DO NOT throw — throwing here would cause
-  // Inngest to retry the whole function (resolve-installation, post-
-  // acknowledgment re-runs from step memoization), which would re-fire
-  // `reportSilentFallback` once per retry attempt and spam Sentry. The
-  // single mirror + persist-failure write below is the terminal state.
-  try {
-    await step.run("mark-acknowledged", async () => {
+  // Mint conversationId deterministically (AC6) — stable across replays
+  // and reproducible from `actionSendId`. Not persisted.
+  const conversationId = uuidv5(actionSendId, CONVERSATION_NAMESPACE);
+  const leaderId = `agent.spawn.requested:${actionClass}`;
+
+  // Parse the source ref into (owner, repo, number) when applicable. For
+  // kb_drift/cve shapes that carry no GitHub target, omit — the leader
+  // prompt assembles a synthetic context from sourceRef alone.
+  const parsed = tryParseSourceRef(sourceRef);
+  const userPrompt = leaderModule.userPromptTemplate({
+    actionClass: actionClass as LeaderActionClass,
+    sourceRef,
+    owner: parsed?.owner,
+    repo: parsed?.repo,
+    number: parsed?.number,
+  });
+
+  // Initial messages array — the assistant turn appends per loop iteration.
+  const messages: Array<{
+    role: "user" | "assistant";
+    content: string | AnthropicContentBlock[] | ToolResult[];
+  }> = [{ role: "user", content: userPrompt }];
+
+  // Tool surface allowlist (AC8) — per-class enumerated. Out-of-allowlist
+  // tool calls short-circuit with `failure_reason = "leader_tool_invalid"`.
+  const allowedTools = new Set(leaderModule.tools.map((t) => t.name));
+
+  // Per-spawn reversal handles ledger (AC9 — multi-artifact array).
+  const reversalHandles: ReversalHandle[] = [];
+
+  // The leader prompt loop. Layer-3 backstop (LEADER_MAX_TURNS = 8 turns,
+  // per ADR-041); the primary gates are the Layer-1 cap-check + Layer-2
+  // cost ceiling.
+  for (let n = 1; n <= LEADER_MAX_TURNS; n++) {
+    // Step: turn-n-cap-check (Layer 1, AC4).
+    let capResult: { cumulativeCents: number; killTripped: boolean };
+    try {
+      capResult = await step.run(`turn-${n}-cap-check`, async () => {
+        return recordByokUseAndCheckCap({
+          invocationId: `${actionSendId}-turn-${n}`,
+          founderId,
+          workspaceId: founderId,
+          agentRole: "agent.spawn.requested",
+          tokenCount: 0,
+          unitCostCents: 0,
+        });
+      });
+    } catch (err) {
+      return persistFailure(step, {
+        actionSendId,
+        reason: "byok_cap_exceeded",
+        err,
+        founderId,
+        messageId,
+        actionClass,
+        sourceRef,
+        logger,
+      });
+    }
+    if (capResult.killTripped) {
+      return persistFailure(step, {
+        actionSendId,
+        reason: "byok_cap_exceeded",
+        err: new Error("BYOK cap kill-trip"),
+        founderId,
+        messageId,
+        actionClass,
+        sourceRef,
+        logger,
+      });
+    }
+
+    // Step: turn-n-precheck-cost-ceiling (Layer 2, AC15).
+    const cumulativeCents = await step.run(
+      `turn-${n}-precheck-cost-ceiling`,
+      async () => {
+        const sb = getServiceClient();
+        const result = (await sb
+          .from("audit_byok_use")
+          .select("unit_cost_cents")
+          .eq("founder_id", founderId)
+          .eq("agent_role", leaderId)) as {
+          data: { unit_cost_cents: number | null }[] | null;
+          error: { message: string } | null;
+        };
+        if (result.error) {
+          // Fail-closed on cumulative cost read error.
+          throw new Error(
+            `agent-on-spawn: audit_byok_use sum failed: ${result.error.message}`,
+          );
+        }
+        return (result.data ?? []).reduce(
+          (sum, row) => sum + (row.unit_cost_cents ?? 0),
+          0,
+        );
+      },
+    );
+    if (cumulativeCents >= PER_SPAWN_COST_CEILING_CENTS) {
+      return persistFailure(step, {
+        actionSendId,
+        reason: "cost_ceiling_exceeded",
+        err: new Error(
+          `per-spawn cost ceiling reached at turn ${n} (${cumulativeCents}¢)`,
+        ),
+        founderId,
+        messageId,
+        actionClass,
+        sourceRef,
+        logger,
+      });
+    }
+
+    // Step: turn-n-cancel-check (AC13).
+    const cancelled = await step.run(
+      `turn-${n}-cancel-check`,
+      async () => {
+        const sb = getServiceClient();
+        const { data } = await sb
+          .from("action_sends")
+          .select("cancellation_requested_at")
+          .eq("id", actionSendId)
+          .maybeSingle();
+        const row = data as
+          | { cancellation_requested_at: string | null }
+          | null;
+        return Boolean(row?.cancellation_requested_at);
+      },
+    );
+    if (cancelled) {
+      return persistFailure(step, {
+        actionSendId,
+        reason: "cancelled_by_operator",
+        err: new Error("operator clicked Stop"),
+        founderId,
+        messageId,
+        actionClass,
+        sourceRef,
+        logger,
+      });
+    }
+
+    // Step: turn-n-progress-write (Realtime fanout source).
+    await step.run(`turn-${n}-progress-write`, async () => {
       const sb = getServiceClient();
+      const patch: Record<string, unknown> = {
+        current_turn: n,
+        current_turn_started_at: new Date().toISOString(),
+      };
+      if (n === 1) {
+        patch.prompt_version = leaderModule.promptVersion;
+      }
       const { error } = await sb
         .from("action_sends")
-        .update({
-          acknowledged_at: new Date().toISOString(),
-          artifact_url: artifactUrl,
-        })
+        .update(patch)
         .eq("id", actionSendId);
       if (error) {
         throw error;
       }
     });
-  } catch (err) {
-    return await persistFailure(step, {
-      actionSendId,
-      reason: "acknowledgment_persist_failed",
-      err,
-      founderId,
-      messageId,
-      actionClass,
-      sourceRef,
-      logger,
+
+    // Step: turn-n-claude — opens the BYOK lease inside the step so ALS
+    // cannot escape and idempotency under replay is preserved (ADR-042).
+    let turnResult: AnthropicTurnResult;
+    try {
+      turnResult = (await step.run(`turn-${n}-claude`, async () => {
+        return runWithByokLease(
+          {
+            workspaceContextUserId: founderId,
+            keyOwnerUserId: founderId,
+          },
+          async (lease) => {
+            const apiKey = await lease.getApiKey();
+            const client = new Anthropic({ apiKey });
+            const sdkResult = (await client.messages.create({
+              model: leaderModule.model,
+              max_tokens: LEADER_MAX_TOKENS,
+              system: [
+                {
+                  type: "text",
+                  text: leaderModule.systemPrompt,
+                  cache_control: { type: "ephemeral" },
+                },
+              ],
+              tools: leaderModule.tools.map((t) => ({
+                ...t,
+                cache_control: { type: "ephemeral" },
+              })) as never,
+              messages: messages as never,
+            })) as unknown as AnthropicTurnResult;
+
+            const usage = sdkResult.usage;
+            const pricing = MODEL_PRICING[leaderModule.model] ?? {
+              inputPerToken: 0,
+              outputPerToken: 0,
+              cacheReadPerToken: 0,
+              cacheCreatePerToken: 0,
+            };
+            const cacheRead = usage.cache_read_input_tokens ?? 0;
+            const cacheCreate = usage.cache_creation_input_tokens ?? 0;
+            const totalCostUsd =
+              usage.input_tokens * pricing.inputPerToken +
+              usage.output_tokens * pricing.outputPerToken +
+              cacheRead * pricing.cacheReadPerToken +
+              cacheCreate * pricing.cacheCreatePerToken;
+
+            await persistTurnCostAwaitable(
+              founderId,
+              conversationId,
+              leaderId,
+              founderId,
+              {
+                totalCostUsd,
+                usage: {
+                  input_tokens: usage.input_tokens,
+                  output_tokens: usage.output_tokens,
+                  cache_read_input_tokens: cacheRead,
+                  cache_creation_input_tokens: cacheCreate,
+                },
+              },
+            );
+            return sdkResult;
+          },
+        );
+      })) as AnthropicTurnResult;
+    } catch (err) {
+      const reason = classifyAnthropicOrLeaseError(err);
+      return persistFailure(step, {
+        actionSendId,
+        reason,
+        err,
+        founderId,
+        messageId,
+        actionClass,
+        sourceRef,
+        logger,
+      });
+    }
+
+    // Handle stop_reason: max_tokens / end_turn / tool_use.
+    if (turnResult.stop_reason === "max_tokens") {
+      return persistFailure(step, {
+        actionSendId,
+        reason: "leader_response_truncated",
+        err: new Error(`stop_reason=max_tokens on turn ${n}`),
+        founderId,
+        messageId,
+        actionClass,
+        sourceRef,
+        logger,
+      });
+    }
+
+    // Collect tool-use blocks and validate against the per-class allowlist.
+    const toolUseBlocks: ToolUseBlock[] = [];
+    for (const block of turnResult.content) {
+      if (block.type === "tool_use") {
+        const tu = block as ToolUseBlock;
+        if (!allowedTools.has(tu.name)) {
+          return persistFailure(step, {
+            actionSendId,
+            reason: "leader_tool_invalid",
+            err: new Error(
+              `tool ${tu.name} not in allowlist for ${actionClass}`,
+            ),
+            founderId,
+            messageId,
+            actionClass,
+            sourceRef,
+            logger,
+          });
+        }
+        toolUseBlocks.push(tu);
+      }
+    }
+
+    // Execute tool calls via createGitHubAppClient (I2).
+    const toolResults: ToolResult[] = [];
+    for (let i = 0; i < toolUseBlocks.length; i++) {
+      const tu = toolUseBlocks[i];
+      const result = await step.run(`turn-${n}-tool-${i}`, async () => {
+        return executeTool(
+          installationId,
+          founderId,
+          tu,
+          actionClass as LeaderActionClass,
+        );
+      });
+      toolResults.push({
+        type: "tool_result",
+        tool_use_id: tu.id,
+        content: result.content,
+        is_error: result.isError,
+      });
+      if (result.handle) {
+        reversalHandles.push(result.handle);
+      }
+    }
+
+    // Loop control: end_turn → write artifact + ack. tool_use → next turn.
+    if (turnResult.stop_reason === "end_turn") {
+      const artifactUrl =
+        reversalHandles.length > 0
+          ? deriveArtifactUrl(reversalHandles[0])
+          : "";
+      try {
+        await step.run("mark-acknowledged", async () => {
+          const sb = getServiceClient();
+          const { error } = await sb
+            .from("action_sends")
+            .update({
+              acknowledged_at: new Date().toISOString(),
+              artifact_url: artifactUrl,
+              reversal_handles: reversalHandles,
+            })
+            .eq("id", actionSendId);
+          if (error) {
+            throw error;
+          }
+        });
+      } catch (err) {
+        return persistFailure(step, {
+          actionSendId,
+          reason: "acknowledgment_persist_failed",
+          err,
+          founderId,
+          messageId,
+          actionClass,
+          sourceRef,
+          logger,
+        });
+      }
+      return { acknowledged: true, artifactUrl };
+    }
+
+    // tool_use → append assistant content + tool_result blocks for next turn.
+    messages.push({
+      role: "assistant",
+      content: turnResult.content,
     });
+    if (toolResults.length > 0) {
+      messages.push({
+        role: "user",
+        content: toolResults,
+      });
+    }
   }
 
-  return { acknowledged: true, artifactUrl };
+  // Loop exhausted without end_turn → max-turns failure.
+  return persistFailure(step, {
+    actionSendId,
+    reason: "leader_max_turns_exceeded",
+    err: new Error(`leader loop exhausted ${LEADER_MAX_TURNS} turns`),
+    founderId,
+    messageId,
+    actionClass,
+    sourceRef,
+    logger,
+  });
+}
+
+// --- Helpers ----------------------------------------------------------------
+
+interface ToolExecResult {
+  content: string;
+  isError: boolean;
+  handle?: ReversalHandle;
+}
+
+async function executeTool(
+  installationId: number,
+  founderId: string,
+  tu: ToolUseBlock,
+  actionClass: LeaderActionClass,
+): Promise<ToolExecResult> {
+  const octokit = await createGitHubAppClient(installationId, founderId);
+  const input = tu.input;
+  try {
+    switch (tu.name) {
+      case "createComment": {
+        const { owner, repo, issue_number, body } = input as {
+          owner: string;
+          repo: string;
+          issue_number: number;
+          body: string;
+        };
+        const { data } = (await octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+          { owner, repo, issue_number, body },
+        )) as { data: { id: number; html_url: string } };
+        // Per AC9: issue-targeted classes (triage.p0p1_issue,
+        // knowledge.kb_drift) emit `issue_comment` handles; PR-targeted
+        // classes (engineering.{pr_review_pending,ci_failed},
+        // security.cve_alert) emit `pr_comment` handles. The GitHub API
+        // endpoint is the same; the kind distinguishes the reversal verb
+        // path the dashboard undo route uses.
+        const isIssueClass =
+          actionClass === "triage.p0p1_issue" ||
+          actionClass === "knowledge.kb_drift";
+        return {
+          content: JSON.stringify({ id: data.id, html_url: data.html_url }),
+          isError: false,
+          handle: {
+            kind: isIssueClass ? "issue_comment" : "pr_comment",
+            owner,
+            repo,
+            commentId: data.id,
+            issueNumber: issue_number,
+          },
+        };
+      }
+      case "createPullRequestReviewComment": {
+        const { owner, repo, pull_number, body, path, line, side, commit_id } =
+          input as {
+            owner: string;
+            repo: string;
+            pull_number: number;
+            body: string;
+            path: string;
+            line: number;
+            side?: string;
+            commit_id?: string;
+          };
+        const { data } = (await octokit.request(
+          "POST /repos/{owner}/{repo}/pulls/{pull_number}/comments",
+          {
+            owner,
+            repo,
+            pull_number,
+            body,
+            path,
+            line,
+            commit_id: commit_id ?? "",
+            side: (side === "LEFT" || side === "RIGHT" ? side : "RIGHT") as
+              | "LEFT"
+              | "RIGHT",
+          },
+        )) as { data: { id: number; html_url: string } };
+        return {
+          content: JSON.stringify({ id: data.id, html_url: data.html_url }),
+          isError: false,
+          handle: {
+            kind: "pr_review_comment",
+            owner,
+            repo,
+            commentId: data.id,
+            prNumber: pull_number,
+          },
+        };
+      }
+      case "addLabels": {
+        const { owner, repo, issue_number, labels } = input as {
+          owner: string;
+          repo: string;
+          issue_number: number;
+          labels: string[];
+        };
+        const { data } = (await octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
+          { owner, repo, issue_number, labels },
+        )) as { data: { name: string }[] };
+        return {
+          content: JSON.stringify({ added: data.map((l) => l.name) }),
+          isError: false,
+          handle: {
+            kind: "issue_label",
+            owner,
+            repo,
+            issueNumber: issue_number,
+            labelName: labels[0],
+          },
+        };
+      }
+      case "createBranch": {
+        const { owner, repo, branch_name, sha } = input as {
+          owner: string;
+          repo: string;
+          branch_name: string;
+          sha: string;
+        };
+        const { data } = (await octokit.request(
+          "POST /repos/{owner}/{repo}/git/refs",
+          { owner, repo, ref: `refs/heads/${branch_name}`, sha },
+        )) as { data: { ref: string } };
+        return {
+          content: JSON.stringify({ ref: data.ref }),
+          isError: false,
+          handle: { kind: "branch", owner, repo, branchRef: branch_name },
+        };
+      }
+      case "createBlob": {
+        const { owner, repo, content, encoding } = input as {
+          owner: string;
+          repo: string;
+          content: string;
+          encoding?: string;
+        };
+        const { data } = (await octokit.request(
+          "POST /repos/{owner}/{repo}/git/blobs",
+          { owner, repo, content, encoding: encoding ?? "utf-8" },
+        )) as { data: { sha: string } };
+        return {
+          content: JSON.stringify({ sha: data.sha }),
+          isError: false,
+        };
+      }
+      case "createCommit": {
+        const params = input as {
+          owner: string;
+          repo: string;
+          message: string;
+          tree: string;
+          parents?: string[];
+        };
+        const { data } = (await octokit.request(
+          "POST /repos/{owner}/{repo}/git/commits",
+          params,
+        )) as { data: { sha: string } };
+        return {
+          content: JSON.stringify({ sha: data.sha }),
+          isError: false,
+        };
+      }
+      case "createPullRequest": {
+        const params = input as {
+          owner: string;
+          repo: string;
+          title?: string;
+          head: string;
+          base: string;
+          body?: string;
+          draft?: boolean;
+        };
+        const { owner, repo } = params;
+        const { data } = (await octokit.request(
+          "POST /repos/{owner}/{repo}/pulls",
+          params,
+        )) as {
+          data: {
+            number: number;
+            html_url: string;
+            head: { ref: string };
+          };
+        };
+        return {
+          content: JSON.stringify({
+            number: data.number,
+            html_url: data.html_url,
+          }),
+          isError: false,
+          handle: {
+            kind: "pr",
+            owner,
+            repo,
+            prNumber: data.number,
+            branchRef: data.head.ref,
+          },
+        };
+      }
+      default:
+        return {
+          content: JSON.stringify({ error: `unknown tool ${tu.name}` }),
+          isError: true,
+        };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = (err as { status?: number } | null)?.status;
+    return {
+      content: JSON.stringify({ error: message, status }),
+      isError: true,
+    };
+  }
+}
+
+function deriveArtifactUrl(handle: ReversalHandle): string {
+  switch (handle.kind) {
+    case "pr_review_comment":
+    case "pr_comment":
+    case "issue_comment":
+      return `https://github.com/${handle.owner}/${handle.repo}/issues/${handle.issueNumber ?? handle.prNumber ?? 0}#issuecomment-${handle.commentId ?? 0}`;
+    case "issue_label":
+      return `https://github.com/${handle.owner}/${handle.repo}/issues/${handle.issueNumber ?? 0}`;
+    case "branch":
+      return `https://github.com/${handle.owner}/${handle.repo}/tree/${handle.branchRef ?? ""}`;
+    case "pr":
+      return `https://github.com/${handle.owner}/${handle.repo}/pull/${handle.prNumber ?? 0}`;
+  }
+}
+
+interface ParsedSourceRef {
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+function tryParseSourceRef(sourceRef: string): ParsedSourceRef | null {
+  const m = sourceRef.match(/^(?:pr|issue|secret-scan)-([^:]+):([^:]+):(\d+)$/);
+  if (!m) return null;
+  return { owner: m[1], repo: m[2], number: parseInt(m[3], 10) };
+}
+
+function classifyAnthropicOrLeaseError(err: unknown): FailureReason {
+  const name = (err as { name?: string } | null)?.name ?? "";
+  const cause = (err as { cause?: string } | null)?.cause ?? "";
+  const status = (err as { status?: number } | null)?.status;
+  if (name === "ByokLeaseError" || cause === "fetch_failed" || cause === "decrypt_failed" || cause === "escape") {
+    return "byok_lease_unavailable";
+  }
+  if (name === "MissingByokKeyError") {
+    return "byok_lease_unavailable";
+  }
+  if (status === 429) return "anthropic_rate_limited";
+  if (
+    name === "APIConnectionTimeoutError" ||
+    name === "APIConnectionError" ||
+    /timeout/i.test(String((err as Error | null)?.message ?? ""))
+  ) {
+    return "anthropic_timeout";
+  }
+  return "anthropic_timeout";
 }
 
 async function persistFailure(
   step: HandlerArgs["step"],
   args: {
     actionSendId: string;
-    reason: string;
+    reason: FailureReason;
     err: unknown;
     founderId: string;
     messageId: string;
@@ -253,14 +926,6 @@ async function persistFailure(
       actionSendId,
     },
   });
-  // Wrap the persist UPDATE in try/catch so a transient row-UPDATE error
-  // on the deadletter path does NOT throw out of the function and force
-  // an Inngest retry of the whole handler (which would re-fire
-  // `reportSilentFallback` above + spam Sentry once per retry). If the
-  // failure_reason write itself fails, the Sentry mirror above carries
-  // the operator-actionable evidence; the row remains acknowledged_at
-  // IS NULL + failure_reason IS NULL, which the dashboard can render
-  // as "in flight" rather than producing a runaway retry loop.
   try {
     await step.run("persist-failure", async () => {
       const sb = getServiceClient();
@@ -286,23 +951,18 @@ async function persistFailure(
   return { acknowledged: false, failureReason: reason };
 }
 
-function classifyGithubError(err: unknown): string {
-  if (err instanceof Error && /^agent-on-spawn: malformed/i.test(err.message)) {
-    return "malformed_source_ref";
-  }
-  const status = (err as { status?: number } | null)?.status;
-  if (status === 401 || status === 403) return "github_installation_unauthorized";
-  if (status === 404) return "github_target_not_found";
-  return "github_api_error";
-}
-
 export const agentOnSpawnRequested = inngest.createFunction(
   {
     id: "agent-on-spawn-requested",
     idempotency: "event.data.actionSendId",
     retries: 3,
-  },
-  { event: "agent.spawn.requested" },
+    // AC7 — 10-minute timeout. 8 turns × 60s per-turn budget + 2 min
+    // for step replay + DB writes.
+    timeouts: { finish: "10m" },
+  } as unknown as Parameters<typeof inngest.createFunction>[0],
+  { event: "agent.spawn.requested" } as unknown as Parameters<
+    typeof inngest.createFunction
+  >[1],
   agentOnSpawnRequestedHandler as unknown as Parameters<
     typeof inngest.createFunction
   >[2],

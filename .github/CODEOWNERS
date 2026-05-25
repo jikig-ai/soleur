@@ -73,6 +73,23 @@
 # to apply ruleset changes without first landing a CODEOWNER-approved PR.
 /infra/github/                                          @deruelle
 /.github/workflows/apply-github-infra.yml               @deruelle
+# Destroy-guard counter — load-bearing input to the apply-github-infra gate
+# (#3915). A PR that mutates these silently neutralises the [ack-destroy]
+# gate, so they carry the same review scope as the workflow itself.
+/tests/scripts/lib/destroy-guard-filter.jq              @deruelle
+/tests/scripts/test-destroy-guard-counter.sh            @deruelle
+/tests/scripts/fixtures/tfplan-*.json                   @deruelle
+
+# Destroy-guard counters for apply-sentry-infra + apply-web-platform-infra
+# (#4419 — sibling extension of #4420). Same review scope as the .jq /
+# .sh / fixture files above: mutating these silently neutralises the
+# [ack-destroy] gate on the corresponding workflow.
+/tests/scripts/lib/destroy-guard-filter-sentry.jq        @deruelle
+/tests/scripts/lib/destroy-guard-filter-web-platform.jq  @deruelle
+/tests/scripts/test-destroy-guard-counter-sentry.sh      @deruelle
+/tests/scripts/test-destroy-guard-counter-web-platform.sh @deruelle
+/tests/scripts/test-destroy-guard-regex-parity.sh        @deruelle
+/tests/scripts/test-destroy-guard-sentry-scope-guard.sh  @deruelle
 
 # R15 follow-up D2 — CodeQL coverage audit (#3545). Same false-pass
 # attack surface as #3544: mutating classify_codeql() to accept

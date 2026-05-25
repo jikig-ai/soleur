@@ -10,6 +10,7 @@ import { validateConversationContext } from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   getFreshTenantClient,
+  getMyRevocationStatus,
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { getCurrentRepoUrl } from "@/server/current-repo-url";
@@ -130,9 +131,52 @@ async function tenantFor(
         op: `tenant-mint.${op}`,
         extra: { userId },
       });
+      // #3930 — emit a discriminated `revocation_notice` WS frame
+      // BEFORE returning null so the caller's `ws.close(INTERNAL_ERROR)`
+      // runs AFTER the send completes. The await is load-bearing:
+      // without it, `void emitRevocationNotice(...)` races `ws.close()`
+      // and the close usually wins, swallowing the notice. Reachability
+      // (Option A): this is the POST-MINT deny race only — the
+      // CACHE-HIT deny path inside `tenant.ts` self-heals via silent
+      // re-mint (no throw, hence no notice). `my_revocation_status()`
+      // is the founder-readable inspection API for support-driven
+      // inquiry on that flow. ~750ms p95 RPC latency is accepted on
+      // the deny path only (one-shot per revoke).
+      if (err.cause === "denied_jti") {
+        await emitRevocationNotice(userId);
+      }
       return null;
     }
     throw err;
+  }
+}
+
+/**
+ * Best-effort emit of a `revocation_notice` WS frame. Awaited by the
+ * caller so `ws.close()` runs strictly AFTER the send completes.
+ * Fail-open: any error inside the RPC or send is swallowed (already
+ * mirrored to Sentry inside `getMyRevocationStatus`). The readyState
+ * gate below short-circuits when the client is no longer listening,
+ * which both (i) avoids a wasted ~750ms RPC roundtrip on dead sockets
+ * and (ii) closes a DoS amplification surface where an attacker
+ * hammering a revoked JWT could drain GoTrue rate-limit slots via
+ * re-entrant `getFreshTenantClient` mints.
+ */
+async function emitRevocationNotice(userId: string): Promise<void> {
+  // ReadyState gate — see docblock. Both no-session and not-OPEN cases
+  // short-circuit before the RPC roundtrip.
+  const session = sessions.get(userId);
+  if (!session || session.ws.readyState !== WebSocket.OPEN) return;
+  try {
+    const status = await getMyRevocationStatus(userId);
+    if (!status || !status.revoked) return;
+    sendToClient(userId, {
+      type: "revocation_notice",
+      reason: status.reason ?? null,
+      deniedAt: status.deniedAt ?? null,
+    });
+  } catch {
+    // Already mirrored inside getMyRevocationStatus; nothing to add here.
   }
 }
 
@@ -1990,7 +2034,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "subagent_complete":
     case "workflow_started":
     case "workflow_ended":
-    case "error": {
+    case "error":
+    case "revocation_notice": {
       sendToClient(userId, {
         type: "error",
         message: "This message type is server-to-client only.",

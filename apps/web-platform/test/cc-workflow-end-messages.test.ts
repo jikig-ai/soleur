@@ -22,6 +22,10 @@ describe("WORKFLOW_END_USER_MESSAGES", () => {
       "idle_timeout",
       "plugin_load_failure",
       "internal_error",
+      // #4440 follow-up to #4418 — cross-process JWT-deny propagation.
+      // Routes to the terminal session_ended family via
+      // TERMINAL_WORKFLOW_END_STATUSES in cc-dispatcher.ts.
+      "session_revoked",
     ];
     const actualKeys = Object.keys(WORKFLOW_END_USER_MESSAGES).sort();
     expect(actualKeys).toEqual([...expectedKeys].sort());
@@ -41,6 +45,9 @@ describe("WORKFLOW_END_USER_MESSAGES", () => {
     );
     expect(WORKFLOW_END_USER_MESSAGES.internal_error).toContain(
       "Something went wrong",
+    );
+    expect(WORKFLOW_END_USER_MESSAGES.session_revoked).toContain(
+      "revoked",
     );
 
     // Defense-in-depth: NO entry should leak the status token verbatim

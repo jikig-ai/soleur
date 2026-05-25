@@ -1,0 +1,30 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "sentry_cron_monitor.scheduled_terraform_drift",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_terraform_drift",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "id": "abc123",
+          "name": "scheduled-terraform-drift",
+          "slug": "scheduled-terraform-drift",
+          "project_slug": "soleur",
+          "schedule": {"crontab": "0 6,18 * * *"},
+          "checkin_margin": 5,
+          "max_runtime": 30,
+          "timezone": "UTC"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

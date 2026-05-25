@@ -58,6 +58,15 @@ import {
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
 import { reportSilentFallback, mirrorWithDebounce } from "./observability";
+// #4440 follow-up to #4418 — `RuntimeAuthError` discriminator + the
+// founder-readable revocation status RPC. Used by `consumeStream`'s
+// catch to detect mid-stream JWT-deny and surface `session_revoked`
+// rather than the generic `internal_error`. Lookup goes through the
+// shared `lookupRevocationStatusSafe` helper so reason sanitization +
+// fail-open mirroring stays aligned across the three deny-jti catch
+// sites (cc-dispatcher, agent-runner, here).
+import { RuntimeAuthError } from "@/lib/supabase/tenant";
+import { lookupRevocationStatusSafe } from "./revocation-emit";
 import { sanitizeDocumentBody } from "./sanitize-document";
 
 /**
@@ -654,7 +663,17 @@ export type WorkflowEnd =
   | { status: "user_aborted" }
   | { status: "idle_timeout" }
   | { status: "plugin_load_failure"; error: string }
-  | { status: "internal_error"; error: string };
+  | { status: "internal_error"; error: string }
+  // #4440 follow-up to #4418 — cross-process JWT-deny propagation.
+  // Emitted when `RuntimeAuthError` with `cause === "denied_jti"` is
+  // caught by the runner's `consumeStream` catch (mid-stream auth
+  // failure) or by `cc-dispatcher` / `agent-runner` callers before the
+  // dispatch starts. `reason` and `deniedAt` mirror the
+  // `revocation_notice` WS frame fields (`denied_jti.reason` text,
+  // `denied_jti.denied_at` timestamp), populated by a best-effort
+  // `getMyRevocationStatus(userId)` lookup at emit time. Both nullable
+  // because legacy deny rows pre-date the schema columns.
+  | { status: "session_revoked"; reason: string | null; deniedAt: string | null };
 
 // Cardinality assert (#3827 + ADR-031 amendment 2026-05-15): the runner's
 // `WorkflowEnd["status"]` union MUST equal the wire-protocol
@@ -1968,10 +1987,32 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       }
     } catch (err) {
       if (!state.closed) {
-        emitWorkflowEnded(state, {
-          status: "internal_error",
-          error: err instanceof Error ? err.message : String(err),
-        });
+        // #4440 follow-up to #4418 — JWT-deny propagation. The SDK
+        // iterator surfaces any mid-stream tenant-RPC `RuntimeAuthError`
+        // by throwing through the for-await. When `cause === "denied_jti"`
+        // the session is irrecoverably revoked; emit the discriminated
+        // `session_revoked` terminal status so cc-dispatcher routes it
+        // through the terminal `session_ended` family and agent/API
+        // consumers receive the operator-supplied reason instead of a
+        // generic "Something went wrong". Best-effort RPC: a null status
+        // here just leaves reason/deniedAt null (the helper already
+        // mirrored any RPC failure to Sentry).
+        if (
+          err instanceof RuntimeAuthError &&
+          err.cause === "denied_jti"
+        ) {
+          const status = await lookupRevocationStatusSafe(state.userId);
+          emitWorkflowEnded(state, {
+            status: "session_revoked",
+            reason: status?.reason ?? null,
+            deniedAt: status?.deniedAt ?? null,
+          });
+        } else {
+          emitWorkflowEnded(state, {
+            status: "internal_error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
       reportSilentFallback(err, {
         feature: "soleur-go-runner",

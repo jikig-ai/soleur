@@ -136,6 +136,7 @@ export function supabaseServiceFactory(opts: {
  */
 export function supabaseTenantFactory(opts: {
   mockMessagesInsert: Mock;
+  mockGetMyRevocationStatus?: Mock;
 }): Record<string, unknown> {
   return {
     getFreshTenantClient: vi.fn(async () => ({
@@ -147,6 +148,27 @@ export function supabaseTenantFactory(opts: {
       },
     })),
     mintFounderJwt: vi.fn(),
-    RuntimeAuthError: class RuntimeAuthError extends Error {},
+    // #4440 follow-up to #4418 — mirrors the real RuntimeAuthError surface
+    // (`cause` discriminant) so cc-dispatcher's `denied_jti` branch can
+    // narrow correctly when a test stages it via `mockResolvedValueOnce`
+    // / `mockRejectedValueOnce`. The runtime structure mirrors
+    // `lib/supabase/tenant.ts:RuntimeAuthError` exactly.
+    RuntimeAuthError: class RuntimeAuthError extends Error {
+      public readonly cause: "jwt_mint" | "rotation" | "denied_jti";
+      constructor(
+        cause: "jwt_mint" | "rotation" | "denied_jti",
+        message: string,
+      ) {
+        super(message);
+        this.cause = cause;
+        this.name = "RuntimeAuthError";
+      }
+    },
+    // #4440 follow-up to #4418 — agents/dispatcher catch sites call this
+    // best-effort RPC to populate the discriminated `revocation_notice`
+    // / session_revoked WorkflowEnd reason+deniedAt. Default stub
+    // returns null (fail-open); tests override per case via the opt.
+    getMyRevocationStatus:
+      opts.mockGetMyRevocationStatus ?? vi.fn(async () => null),
   };
 }

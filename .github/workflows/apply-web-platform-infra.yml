@@ -61,6 +61,10 @@ on:
     paths:
       - "apps/web-platform/infra/**"
       - ".github/workflows/apply-web-platform-infra.yml"
+      # Defense-in-depth: re-fire on filter mutations so a PR that mutates
+      # the destroy-guard filter without touching infra still runs the
+      # apply step against `main`'s captured baseline (#4419).
+      - "tests/scripts/lib/destroy-guard-filter-web-platform.jq"
   workflow_dispatch:
     inputs:
       reason:
@@ -314,16 +318,27 @@ jobs:
           set -e
           terraform show -no-color tfplan > tfplan.txt
           # Authoritative destroy count via the structured plan, not the
-          # `Plan: …` summary line.
-          destroy_count=$(terraform show -json tfplan | \
-            jq '[.resource_changes[]? | select(.change.actions? | index("delete"))] | length')
-          # Validate destroy_count parsed correctly — an empty value from a jq
-          # failure would silently evaluate false in the `-gt 0` test and let
-          # destructive plans slip past the guard.
-          if [[ ! "$destroy_count" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy_count parse failed (jq returned: '${destroy_count}')."
+          # `Plan: …` summary line. Sibling of apply-github-infra.yml's
+          # destroy-guard (closes #4419 — extends the #4420 widening to
+          # apply-web-platform-infra). Filter is path-specific per the
+          # #4420 plan-review iteration; covers 5 vulnerable Cloudflare
+          # resource types (ruleset.rules, tunnel.ingress_rule,
+          # zone_settings.security_header, notification.email_integration,
+          # access_policy.include). Source of truth:
+          # tests/scripts/lib/destroy-guard-filter-web-platform.jq (also
+          # exercised by tests/scripts/test-destroy-guard-counter-web-platform.sh).
+          counts=$(terraform show -json tfplan | \
+            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq")
+          resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
+          nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
+          # Validate counters parsed correctly — empty values from a jq
+          # failure would silently evaluate false in the `-gt 0` test and
+          # let destructive plans slip past the guard.
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}')."
             exit 1
           fi
+          destroy_count=$((resource_deletes + nested_deletes))
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
           # the token cannot fire from a quoted block, code fence, or
@@ -333,7 +348,7 @@ jobs:
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
-            echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on web-platform infra."
+            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on web-platform infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s))."
             echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1
