@@ -6,6 +6,13 @@
 # Brainstorm: knowledge-base/project/brainstorms/2026-05-19-learnings-retrieval-bench-brainstorm.md
 # Precedent:  scripts/compound-promote.sh:124-200 (Anthropic curl + jq pattern, ADR-021)
 #
+# Schema versions for knowledge-base/project/learning-retrieval-metrics-<date>.json:
+#   schema: 1 — initial (#4043).
+#   schema: 2 — Stage 2 (#4176): adds top-level r5_identity / r5_light /
+#               r5_heavy for the kbsearch retriever (split from the
+#               combined r5 object) so ladder triage can read R@5 per
+#               bucket without re-aggregating.
+#
 # Closes #4043 once committed alongside output learning + sibling JSON.
 #
 # Usage:
@@ -34,6 +41,7 @@ CONFIRM=0
 SELF_TEST=0
 CORPUS_COUNT_OVERRIDE=""
 CACHE_PARAPHRASES=""
+NO_PARAPHRASE="${NO_PARAPHRASE:-0}"
 MODEL_ID="claude-haiku-4-5-20251001"
 ANTHROPIC_VERSION="2023-06-01"
 ANTHROPIC_ENDPOINT="https://api.anthropic.com/v1/messages"
@@ -65,6 +73,9 @@ Flags:
   --cache-paraphrases <path>      Write/read paraphrases NDJSON at <path>. Survives EXIT-trap rm.
                                   Cache-hit rerun (full corpus coverage in <path>) skips Phase 2
                                   entirely — no Anthropic key required and no spend.
+  --no-paraphrase                 Skip Stage 2 query-paraphrase union (#4176). Equivalent to
+                                  exporting NO_PARAPHRASE=1. Forces every kbsearch_rank invocation
+                                  to use only the baseline two-tier grep.
   --help, -h                      This text.
 
 Closes #4043 once committed alongside output learning + sibling JSON.
@@ -82,6 +93,7 @@ while (( $# > 0 )); do
     --self-test)                  SELF_TEST=1 ;;
     --corpus-count-override)      CORPUS_COUNT_OVERRIDE="$2"; shift ;;
     --cache-paraphrases)          CACHE_PARAPHRASES="$2"; shift ;;
+    --no-paraphrase)              NO_PARAPHRASE=1 ;;
     --help|-h)                    print_help; exit 0 ;;
     *)
       echo "error: unknown arg: $1" >&2
@@ -319,6 +331,11 @@ build_corpus_index() {
 # ─── Phase 2: paraphrase generation (light + heavy) ─────────────────────────
 PROMPT_LIGHT='You are a paraphrase generator. Given a learning-summary passage from a software engineering knowledge base, produce a SHORT (1-2 sentence) paraphrase that preserves the technical terms verbatim but substitutes synonyms for surrounding verbs and connectors. Output ONLY the paraphrase as a single line of plain text — no preamble, no quotes, no markdown.'
 PROMPT_HEAVY='You are a paraphrase generator. Given a learning-summary passage from a software engineering knowledge base, produce a SHORT (1-2 sentence) reformulation in a DIFFERENT framing: change sentence shape, swap nouns for verbs where natural, and avoid reusing the same technical terms unless the term IS the canonical name (e.g., "Postgres", "RLS", a file path). Output ONLY the reformulation as a single line of plain text — no preamble, no quotes, no markdown.'
+# stage-2-paraphrase-union-v1 (#4176): query-side paraphrase pre-pass.
+# Mirrored verbatim in plugins/soleur/skills/kb-search/SKILL.md; the
+# plugins/soleur/test/kb-search-lockstep.test.sh CI assertion fails when
+# the token appears in only one of the two files (TR2 lockstep contract).
+PROMPT_QUERY_PARAPHRASE='You are a query paraphrase generator. Given a search query against a software engineering knowledge base, produce a SHORT (1 sentence or less) reformulation in a DIFFERENT vocabulary: swap verbs for nouns where natural, substitute domain-canonical synonyms (e.g., "saturating workers" → "connection pool exhaustion"), and keep the query terse. Output ONLY the reformulation as a single line of plain text — no preamble, no quotes, no markdown.'
 
 # Returns: paraphrase text (newlines stripped). On API failure twice in a row,
 # returns the literal string "(API_ERROR)" so downstream lookup yields 0 hits.
@@ -487,10 +504,38 @@ rank_paths_min_rank() {
   echo "${min_rank:-}"
 }
 
+# Sensitive-query regex (#4176). Value-shape-anchored AND prefix-anchored —
+# refuses paraphrase forward when the query carries a credential-looking
+# literal: assignment-operator + base64 blob, vendor key prefixes (Anthropic,
+# OpenAI, GitHub, AWS, Stripe, Slack), JWT triple-blob, postgres dsn= prefix.
+# Bare topic-keyword queries like "JWT token refresh" or "keypress event" do
+# NOT match — the prefix anchors and assignment shape avoid blocking
+# legitimate developer vocabulary. Mirrors plugins/soleur/skills/kb-search/SKILL.md
+# §Phase 2.5 guard; the kb-search-lockstep.test.sh asserts byte-equality of
+# the regex literal across both files.
+SENSITIVE_QUERY_REGEX='((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-(ant-)?[a-zA-Z0-9_-]{20,}|sk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,}|rk_live_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{40,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[abprs]-[a-zA-Z0-9-]{10,}|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_.+/=-]{15,}|dsn=)'
+
+# query_is_sensitive: returns 0 (match) when the query carries a credential-
+# shaped literal, 1 otherwise. Case-insensitive.
+query_is_sensitive() {
+  local q="$1"
+  printf '%s' "$q" | grep -iEq "$SENSITIVE_QUERY_REGEX"
+}
+
 # kbsearch_rank: two-tier (INDEX.md title-match + corpus content-match) with
 # token-overlap scoring. Tier-1 scoped to /learnings/ paths and capped at 8;
 # tier-2 scoped to learnings-only and capped at 12. Total bounded by tier
 # caps (8+12); no outer head -20 needed. See #4119 brainstorm/spec/plan.
+#
+# Stage 2 (#4176): when the combined tier-1+tier-2 unique-path count is < 5
+# AND NO_PARAPHRASE != 1 AND the query is not sensitive-value-shaped, fan
+# out 3 paraphrase variants via PROMPT_QUERY_PARAPHRASE and union-rank by
+# the count of paraphrase-variants that hit each path. The 4 strings
+# (original + 3 variants) each run the baseline two-tier path under their
+# own per-tier 8+12 caps; the per-variant ranked lists are then merged into
+# a single flat hit-count rerank capped at 20 (the cap-split metadata is
+# lost at merge time — per-tier identity does not survive the union, by
+# design — and 20 is the absolute ceiling on what kb-search returns).
 kbsearch_rank() {
   local query="$1" source_path="$2" synced_paths_json="$3"
   if [[ -z "$query" ]]; then echo ""; return; fi
@@ -505,6 +550,56 @@ kbsearch_rank() {
   tier2=$(rank_paths_by_token_overlap_corpus "$tokens" learnings-only | head -12)
   combined=$({ printf '%s\n' "$tier1"; printf '%s\n' "$tier2"; } \
     | awk 'NF && !seen[$0]++')
+
+  # stage-2-paraphrase-union-v1: adaptive paraphrase pre-pass.
+  local baseline_count
+  baseline_count=$(printf '%s\n' "$combined" | awk 'NF' | wc -l | tr -d ' ')
+  if (( baseline_count < 5 )) \
+    && [[ "${NO_PARAPHRASE:-0}" != "1" ]] \
+    && [[ -n "${ANTHROPIC_API_KEY:-}" ]] \
+    && ! query_is_sensitive "$query"; then
+    local variants v vtokens vtier1 vtier2 vcomb merged_paths
+    variants=()
+    local i
+    for i in 1 2 3; do
+      v=$(anthropic_paraphrase "$PROMPT_QUERY_PARAPHRASE" "$query")
+      if [[ -n "$v" && "$v" != "(API_ERROR)" ]]; then
+        # Dedupe variants by exact-string-match.
+        local seen_var=0 existing
+        for existing in "${variants[@]}"; do
+          [[ "$existing" == "$v" ]] && { seen_var=1; break; }
+        done
+        (( seen_var == 0 )) && variants+=("$v")
+      fi
+    done
+    if (( ${#variants[@]} == 0 )); then
+      echo "kb-search: WARN — paraphrase generation failed: all 3 variants returned (API_ERROR) — falling back to baseline grep" >&2
+    else
+      merged_paths=$(mktemp)
+      # Original query's combined hits + each variant's combined hits, one
+      # path per line. uniq -c gives hit-count per path; sort -rn ranks.
+      printf '%s\n' "$combined" | awk 'NF' >> "$merged_paths"
+      for v in "${variants[@]}"; do
+        vtokens=$(extract_keywords "$v" 3)
+        [[ -z "$vtokens" ]] && continue
+        vtier1=$(rank_indexmd_by_token_overlap "$vtokens" \
+          | awk '$0 ~ "(^|/)knowledge-base/project/learnings/"' \
+          | head -8)
+        vtier2=$(rank_paths_by_token_overlap_corpus "$vtokens" learnings-only | head -12)
+        vcomb=$({ printf '%s\n' "$vtier1"; printf '%s\n' "$vtier2"; } \
+          | awk 'NF && !seen[$0]++')
+        printf '%s\n' "$vcomb" | awk 'NF' >> "$merged_paths"
+      done
+      # Re-rank: count hits per path across original + variants, sort by
+      # hit-count desc then lexicographic. Flat cap at 20 (per-tier 8/12
+      # identity is lost at merge time — see comment above kbsearch_rank;
+      # union-by-hit-count is the new ranking signal).
+      combined=$(sort "$merged_paths" | uniq -c | sort -rn -k1,1 -k2,2 \
+        | awk '{ $1=""; sub(/^ +/, ""); print }' | head -20)
+      rm -f "$merged_paths"
+    fi
+  fi
+
   rank_paths_min_rank "$combined" "$source_path" "$synced_paths_json"
 }
 
@@ -667,6 +762,117 @@ self_test_flooding_pathology() {
     SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
     echo "  FAIL: flood-pathology: kbsearch_rank lost target (rank=${rk:-null})"
   fi
+  REPO_ROOT="$prev_repo"; INDEX_PATH="$prev_idx"
+}
+
+# self_test_paraphrase_prepass: synthesized fixture for Stage 2 (#4176).
+# Target learning uses canonical engineering vocabulary; query uses zero
+# lexical overlap. Baseline kbsearch_rank MUST return null (negative
+# control). Stage 2's union-of-paraphrases rank MUST recover the target
+# at rank ≤ 8. Until PROMPT_QUERY_PARAPHRASE + union logic ship, assertion
+# 2 fails by design (this is the RED state). cq-test-fixtures-synthesized-only.
+self_test_paraphrase_prepass() {
+  local KB_ROOT="$TMP_ROOT/kb-paraphrase"
+  mkdir -p "$KB_ROOT/knowledge-base/project/learnings"
+  st_write "$KB_ROOT/knowledge-base/project/learnings/orm-target.md" \
+    '---' 'category: performance-issues' 'tags: [n+1]' '---' \
+    '' '# ORM N+1 query under burst load' '' \
+    'database connection pool exhaustion under burst load occurs when transaction allocation rate exceeds the configured maximum, producing TimeoutError on subsequent queries.'
+  {
+    echo '# Knowledge Base Index'; echo
+    echo '- [ORM N+1 query under burst load](project/learnings/orm-target.md)'
+  } > "$KB_ROOT/knowledge-base/INDEX.md"
+  (cd "$KB_ROOT" && git init -q && git add -A \
+    && git -c user.email=t@t -c user.name=t commit -q -m fixture)
+  local prev_repo="$REPO_ROOT" prev_idx="$INDEX_PATH"
+  REPO_ROOT="$KB_ROOT"; INDEX_PATH="$KB_ROOT/knowledge-base/INDEX.md"
+
+  # Query has zero lexical overlap with content tokens. extract_keywords
+  # drops <4-char tokens and stopwords; remaining tokens (saturating, workers)
+  # do NOT appear in the corpus content (which uses "pool", "connection",
+  # "exhaustion", "burst", "load", "transaction", "allocation"). Stage 2
+  # paraphrase variants are required to bridge.
+  local query="ORM saturating workers"
+  local target="knowledge-base/project/learnings/orm-target.md"
+
+  # Assertion 1 (negative control): kbsearch_rank with paraphrase explicitly
+  # disabled via NO_PARAPHRASE=1 MUST return rank=null on this zero-overlap
+  # query. At Phase 1 (no Stage 2 logic) this trivially passes because the
+  # function has no paraphrase path. At Phase 2 GREEN, NO_PARAPHRASE=1 must
+  # short-circuit Stage 2 and preserve the null baseline. This anchors the
+  # `--no-paraphrase` opt-out behavior in CI.
+  local rk_base
+  rk_base=$(NO_PARAPHRASE=1 kbsearch_rank "$query" "$target" "[]")
+  SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1))
+  if [[ -z "$rk_base" ]]; then
+    SELF_TEST_PASS=$((SELF_TEST_PASS+1))
+    echo "  PASS: paraphrase-prepass: NO_PARAPHRASE=1 baseline returns null on zero-overlap query (negative control)"
+  else
+    SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
+    echo "  FAIL: paraphrase-prepass: NO_PARAPHRASE=1 baseline unexpectedly hit (rank=$rk_base); fixture is not zero-overlap"
+  fi
+
+  # Assertion 2: Stage 2 union-of-paraphrases MUST recover the target at
+  # rank ≤ 8. At Phase 1 (no Stage 2 logic) this fails by design — the
+  # function returns null. At Phase 2 GREEN, the < 5 baseline-hits trigger
+  # fires, 3 paraphrase variants are generated via PROMPT_QUERY_PARAPHRASE,
+  # and the union-by-path rank recovers the target.
+  #
+  # CURL_BIN is overridden by a stub that returns THREE DISTINCT paraphrases
+  # (cycled via a tmp counter file) so the dedupe-by-exact-string-match branch
+  # in kbsearch_rank's variant loop is actually exercised — three different
+  # canonical phrasings, each lexically overlapping the orm-target.md corpus
+  # content. ANTHROPIC_API_KEY is supplied locally for the kbsearch_rank
+  # `[[ -n "${ANTHROPIC_API_KEY:-}" ]]` gate; restored to its prior state
+  # post-test even when the operator had a real key set (the previous
+  # `export` shape would have forwarded a real key into subsequent self-test
+  # cases). cq-test-fixtures-synthesized-only.
+  local stub_curl="$KB_ROOT/stub-curl.sh"
+  local stub_counter="$KB_ROOT/stub-curl-counter"
+  cat > "$stub_curl" <<STUB
+#!/usr/bin/env bash
+# Cycles through three distinct paraphrases (lexically overlap with corpus).
+# Each call increments the counter file. The bench's anthropic_paraphrase
+# strips newlines + writes the __HTTP_STATUS__ trailer; we mimic the shape.
+COUNTER_FILE="${stub_counter}"
+[[ -f "\$COUNTER_FILE" ]] || echo 0 > "\$COUNTER_FILE"
+idx=\$(cat "\$COUNTER_FILE")
+echo \$((idx + 1)) > "\$COUNTER_FILE"
+case \$((idx % 3)) in
+  0) phrase='database connection pool exhaustion under burst load' ;;
+  1) phrase='transaction allocation timeout when concurrency exceeds maximum' ;;
+  2) phrase='TimeoutError on queries during pool saturation' ;;
+esac
+printf '{"content":[{"text":"%s"}],"stop_reason":"end_turn"}\n' "\$phrase"
+printf '__HTTP_STATUS__:200\n'
+STUB
+  chmod +x "$stub_curl"
+
+  local rk_stage2 prev_curl_bin="$CURL_BIN"
+  local prev_api_key_was_set=0 prev_api_key=""
+  if [[ -n "${ANTHROPIC_API_KEY+x}" ]]; then
+    prev_api_key_was_set=1
+    prev_api_key="$ANTHROPIC_API_KEY"
+  fi
+  CURL_BIN="$stub_curl"
+  ANTHROPIC_API_KEY="stub-key-self-test"
+  rk_stage2=$(kbsearch_rank "$query" "$target" "[]")
+  CURL_BIN="$prev_curl_bin"
+  if (( prev_api_key_was_set == 1 )); then
+    ANTHROPIC_API_KEY="$prev_api_key"
+  else
+    unset ANTHROPIC_API_KEY
+  fi
+
+  SELF_TEST_TOTAL=$((SELF_TEST_TOTAL+1))
+  if [[ -n "$rk_stage2" && "$rk_stage2" -le 8 ]]; then
+    SELF_TEST_PASS=$((SELF_TEST_PASS+1))
+    echo "  PASS: paraphrase-prepass: Stage 2 union-of-paraphrases recovers target (rank=$rk_stage2)"
+  else
+    SELF_TEST_FAIL=$((SELF_TEST_FAIL+1))
+    echo "  FAIL: paraphrase-prepass: Stage 2 union-of-paraphrases lost target (rank=${rk_stage2:-null})"
+  fi
+
   REPO_ROOT="$prev_repo"; INDEX_PATH="$prev_idx"
 }
 
@@ -1004,6 +1210,9 @@ self_test() {
   # ── Flooding-pathology regression (#4119): cap-20 displacement under noise ──
   self_test_flooding_pathology
 
+  # ── Paraphrase pre-pass (#4176 Stage 2): union-of-paraphrases recovers zero-overlap target ──
+  self_test_paraphrase_prepass
+
   echo
   echo "== summary: PASS=$SELF_TEST_PASS  FAIL=$SELF_TEST_FAIL  TOTAL=$SELF_TEST_TOTAL =="
   if (( SELF_TEST_FAIL > 0 )); then
@@ -1322,7 +1531,7 @@ jq -n \
   --argjson worst_n "$WORST_N_WITH_CAUSE" \
   --arg bucket "$BUCKET" \
   '{
-    schema: 1,
+    schema: 2,
     generated_at: $generated_at,
     corpus_count: $corpus_count,
     model_id: $model_id,
@@ -1350,7 +1559,10 @@ jq -n \
     gap_skill_roi:  ($gap_s | tonumber),
     fixture_seeds:  $fixture_seeds,
     worst_n:        $worst_n,
-    bucket:         $bucket
+    bucket:         $bucket,
+    r5_identity:    $r5_ikb,
+    r5_light:       $r5_lkb,
+    r5_heavy:       $r5_hkb
   }' > "$JSON_TMP"
 mv "$JSON_TMP" "$REPO_ROOT/$JSON_PATH"
 echo "  wrote $JSON_PATH"

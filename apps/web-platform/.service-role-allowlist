@@ -117,3 +117,53 @@ apps/web-platform/server/dsar-export.ts
 # RLS still owner-gates the read path (cookie-scoped query at
 # /dashboard/audit/github).
 apps/web-platform/server/github/audit-writer.ts
+
+# ── feat-team-workspace-multi-user pre-stage (#4229, PR #4225) ───────
+#
+# Two new files added in Phase 2 + Phase 5.5 use service-role for the
+# membership-mutation SECURITY DEFINER RPC chain. Pre-staged at Phase 0.4
+# so the gate doesn't fail when the files land in subsequent commits.
+
+# PERMANENT — workspace-membership.ts wraps `invite_workspace_member`
+# and `remove_workspace_member` SECURITY DEFINER RPCs (migration 058).
+# Both RPCs are `REVOKE FROM PUBLIC, anon`; only service-role can call
+# them. The wrapper also invokes `abortAllWorkspaceMemberSessions` on
+# the agent-session-registry after removal returns, which is process-
+# scoped infrastructure with no per-tenant JWT path.
+apps/web-platform/server/workspace-membership.ts
+
+# PERMANENT — workspace-resolver.ts reads the JWT `current_organization_id`
+# claim and resolves the default workspace for single-membership users
+# (AC-FLOW1). The default-org resolver MAY query workspace_members
+# pre-claim-injection (e.g., during initial sign-in before the first
+# JWT refresh) where the tenant JWT does not yet carry the claim. The
+# `set_current_organization_id` RPC is SECURITY DEFINER + membership-
+# checked so tenant-JWT escalation is structurally blocked at the RPC
+# boundary, but the lookup path uses service-role for the
+# pre-JWT-refresh window only.
+apps/web-platform/server/workspace-resolver.ts
+
+# ── feat-wire-today-card-spawn-agent-buttons (#4124, PR-A) ──────────
+#
+# PERMANENT — agent-on-spawn-requested.ts is the Inngest function that
+# consumes `agent.spawn.requested` events, resolves the operator's
+# `users.github_installation_id` (read), then UPDATEs the three new
+# acknowledgment columns on `action_sends` (write). Both surfaces need
+# service-role:
+#   - users.github_installation_id read: the operator's own row, but
+#     the Inngest function runs with no cookie context (the event was
+#     signed by INNGEST_SIGNING_KEY; founderId is server-derived from
+#     the dashboard /send route's auth.getUser()). Tenant-JWT path
+#     would require synthesizing a JWT for the founder, which the
+#     factory hook already does for the GitHub App client; layering
+#     another JWT mint for a single column SELECT is over-engineered.
+#   - action_sends UPDATE: the table's RLS substrate has owner-INSERT
+#     and owner-SELECT policies only; UPDATE has no permissive policy
+#     (default-deny). Migration 064's WORM-trigger reshape admits
+#     UPDATEs that touch ONLY acknowledged_at + artifact_url +
+#     failure_reason; service-role bypass is required to reach the
+#     trigger gate.
+# PR-B replaces the deterministic stub body with the Anthropic SDK
+# leader-prompt loop; the service-role-allowlist entry persists across
+# PR-A → PR-B because the SELECT + UPDATE surface is unchanged.
+apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts

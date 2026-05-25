@@ -15,6 +15,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-never-label-any-step-as-manual-without] → core
 - [id: hr-multi-step-post-merge-bootstrap-script] → core
 - [id: hr-tagged-build-workflow-needs-initial-tag-push] → core
+- [id: hr-ship-message-no-operator-checklist] → core
 - [id: hr-when-triaging-a-batch-of-issues-never] → core
 - [id: hr-all-infrastructure-provisioning-servers] → core
 - [id: hr-fresh-host-provisioning-reachable-from-terraform-apply] → core
@@ -40,6 +41,8 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: hr-write-boundary-sentinel-sweep-all-write-sites] → core
 - [id: hr-no-dashboard-eyeball-pull-data-yourself] → core
 - [id: hr-observability-as-plan-quality-gate] → core
+- [id: hr-no-ssh-fallback-in-runbooks] → core
+- [id: hr-observability-layer-citation] → core
 - [id: hr-github-app-auth-not-pat] → core
 
 ## Workflow Gates
@@ -65,6 +68,7 @@ Pointer index. Bodies live in `AGENTS.{core,docs,rest}.md`; SessionStart hook in
 - [id: wg-plan-prescribed-skills-must-run-inline] → rest
 - [id: wg-end-of-work-emit-resume-prompt] → rest
 - [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
+- [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
 
 ## Code Quality
 

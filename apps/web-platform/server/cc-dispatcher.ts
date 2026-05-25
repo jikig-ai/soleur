@@ -75,7 +75,11 @@ import {
 // plaintext API key fetch surface moves from `getUserApiKey(userId)`
 // (which returns a bare string) to `lease.getApiKey()` inside
 // `runWithByokLease`. Closes #3392 (cc-dispatcher BYOK item).
-import { runWithByokLease } from "./byok-lease";
+import {
+  runWithByokLease,
+  MissingByokKeyError,
+  reportMissingByokKey,
+} from "./byok-lease";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import {
   fetchUserWorkspacePath,
@@ -880,7 +884,12 @@ export const realSdkQueryFactory: QueryFactory = async (
   // `sdkQuery({apiKey, ...})` below has already passed the key into the
   // SDK's internal state — the lease's finally-zeroize fires after the
   // SDK has captured what it needs.
-  return runWithByokLease(args.userId, async (lease): Promise<Query> => {
+  // Phase 3 (feat-team-workspace-multi-user): N2 invariant pins
+  // workspaceContextUserId === keyOwnerUserId for solo workspaces;
+  // team workspaces will diverge when Phase 4 invite flow ships.
+  return runWithByokLease(
+    { workspaceContextUserId: args.userId, keyOwnerUserId: args.userId },
+    async (lease): Promise<Query> => {
     // Plan §2.11 canonical pattern (mirrors agent-runner.ts:2361):
     // hoist `await lease.getApiKey()` OUT of `Promise.all` so the
     // `string | Promise<string>` union in `getApiKey`'s return type
@@ -1702,7 +1711,9 @@ export async function dispatchSoleurGo(
       // not block on DB writes — `persistTurnCost` chains `.then()` for
       // error mirroring rather than awaiting; soleur-go-runner's onResult
       // try/catch covers the residual synchronous-throw surface.
-      persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, result);
+      // Phase 3 (feat-team-workspace-multi-user) — workspaceId from
+      // userId under N2 invariant; see agent-runner.ts:1884 comment.
+      persistTurnCost(userId, conversationId, CC_ROUTER_LEADER_ID, userId, result);
     },
     onSessionIdCaptured: (capturedSessionId) => {
       // #3266 — fire-and-forget DB persist + synchronous in-process cache
@@ -1764,7 +1775,20 @@ export async function dispatchSoleurGo(
     // errorCode: "key_invalid" branch in agent-runner.ts
     // handleSessionError. All other failures fall back to the generic
     // router-unavailable message without an errorCode.
-    if (err instanceof KeyInvalidError) {
+    if (err instanceof MissingByokKeyError) {
+      // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
+      // key. Info-level breadcrumb captures workspace context;
+      // `byok_key_missing` errorCode tells the client to render the
+      // configure-banner linking to /dashboard/settings/byok rather
+      // than the key-invalid prompt.
+      reportMissingByokKey(err);
+      sendToClient(userId, {
+        type: "error",
+        message:
+          "Configure your BYOK key to run agents in this workspace.",
+        errorCode: "byok_key_missing",
+      });
+    } else if (err instanceof KeyInvalidError) {
       sendToClient(userId, {
         type: "error",
         message: "Your API key is invalid — set up a fresh key to continue.",

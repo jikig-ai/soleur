@@ -25,6 +25,7 @@ import {
   type ActionClassCategory,
   type ActionClassTier,
 } from "@/server/scope-grants/action-class-map";
+import { ACTION_CLASS_COPY } from "@/lib/messages/action-class-copy";
 
 // (a) Parity gates — compile-time. If a new ActionClass is added without
 //     an ACTION_CLASS_DEFAULTS or ACTION_CLASS_CATEGORY entry, `tsc
@@ -92,6 +93,12 @@ describe("action-class registry — runtime gates", () => {
     for (const c of ACTION_CLASSES) {
       expect(ACTION_CLASS_DEFAULTS).toHaveProperty(c);
       expect(ACTION_CLASS_CATEGORY).toHaveProperty(c);
+    }
+  });
+
+  test("(d2) ACTION_CLASS_COPY registry parity at runtime", () => {
+    for (const c of ACTION_CLASSES) {
+      expect(ACTION_CLASS_COPY).toHaveProperty(c);
     }
   });
 

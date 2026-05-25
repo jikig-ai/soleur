@@ -26,6 +26,7 @@ import {
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
 import { registerSharedMintCache } from "@/test/helpers/mint-once";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -96,6 +97,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .from("conversations")
           .insert({
             user_id: user.id,
+            workspace_id: user.id, // solo-canary per mig 059 backfill
             session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           })
           .select("id")
@@ -108,8 +110,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .from("messages")
           .insert({
             conversation_id: convRow!.id,
+            workspace_id: user.id, // solo-canary; mig 059 made this NOT NULL
             role: "user",
             content: `synthesized message for ${user.email}`,
+            // PR-I (#4078, migration 053_template_authorizations.sql) added
+            // messages.template_id NOT NULL with CHECK ^[a-z][a-z0-9_]*$.
+            template_id: "default_legacy",
           })
           .select("id")
           .single();
@@ -148,12 +154,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
               `does not match synthetic email ${user.email}`,
           );
         }
-        const { error } = await service.auth.admin.deleteUser(user.id);
-        if (error && !/not found/i.test(error.message)) {
-          throw new Error(
-            `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-          );
-        }
+        // mig 053 trigger creates org/workspace/workspace_members on signup;
+        // raw deleteUser cascade is blocked by their RESTRICT FKs. The helper
+        // runs the FK-reverse anonymise sequence first, then the auth delete.
+        await tearDownTenantUser(service, user);
       }
     }, 30_000);
 

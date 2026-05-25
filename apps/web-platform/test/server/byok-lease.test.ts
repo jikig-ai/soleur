@@ -52,7 +52,8 @@ vi.mock("@/lib/supabase/tenant", () => ({
           eq: () => ({
             eq: () => ({
               limit: () => ({
-                single: async () => {
+                // Phase 3 uses maybeSingle (data=null on no rows, no error).
+                maybeSingle: async () => {
                   if (mocks.getFetchError()) {
                     return { data: null, error: mocks.getFetchError() };
                   }
@@ -73,11 +74,13 @@ import {
   runWithByokLease,
   getCurrentByokLease,
   ByokLeaseError,
+  MissingByokKeyError,
   type ByokLease,
 } from "@/server/byok-lease";
 import { encryptKey } from "@/server/byok";
 
 const TEST_USER = "550e8400-e29b-41d4-a716-446655440000";
+const TEST_OWNER = "660e8400-e29b-41d4-a716-446655440111";
 const TEST_PLAINTEXT = "sk-ant-api03-byok-lease-test-1234567890";
 
 function seedApiKey() {
@@ -101,10 +104,13 @@ describe("runWithByokLease — ALS scope invariants", () => {
   it("inside fn: lease.getApiKey() returns the decrypted plaintext", async () => {
     seedApiKey();
 
-    const result = await runWithByokLease(TEST_USER, async (lease) => {
-      // First call: lazy fetch — Promise<string>.
-      return await lease.getApiKey();
-    });
+    const result = await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async (lease) => {
+        // First call: lazy fetch — Promise<string>.
+        return await lease.getApiKey();
+      },
+    );
 
     expect(result).toBe(TEST_PLAINTEXT);
   });
@@ -112,26 +118,32 @@ describe("runWithByokLease — ALS scope invariants", () => {
   it("inside fn: cache hit returns sync string after first call", async () => {
     seedApiKey();
 
-    await runWithByokLease(TEST_USER, async (lease) => {
-      // Prime the cache.
-      await lease.getApiKey();
-      // Second call: cache hit — synchronous string return.
-      const second = lease.getApiKey();
-      expect(typeof second).toBe("string");
-      expect(second).toBe(TEST_PLAINTEXT);
-    });
+    await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async (lease) => {
+        // Prime the cache.
+        await lease.getApiKey();
+        // Second call: cache hit — synchronous string return.
+        const second = lease.getApiKey();
+        expect(typeof second).toBe("string");
+        expect(second).toBe(TEST_PLAINTEXT);
+      },
+    );
   });
 
   it("inside fn: getCurrentByokLease() returns a lease that resolves to the same plaintext", async () => {
     seedApiKey();
 
-    await runWithByokLease(TEST_USER, async (lease) => {
-      const current = getCurrentByokLease();
-      expect(current).not.toBeNull();
-      const a = await lease.getApiKey();
-      const b = await current!.getApiKey();
-      expect(b).toBe(a);
-    });
+    await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async (lease) => {
+        const current = getCurrentByokLease();
+        expect(current).not.toBeNull();
+        const a = await lease.getApiKey();
+        const b = await current!.getApiKey();
+        expect(b).toBe(a);
+      },
+    );
   });
 
   it("inside fn: getApiKey() across nested awaits still works (ALS propagation)", async () => {
@@ -142,9 +154,12 @@ describe("runWithByokLease — ALS scope invariants", () => {
       return await l.getApiKey();
     };
 
-    const result = await runWithByokLease(TEST_USER, async (lease) => {
-      return inner(lease);
-    });
+    const result = await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async (lease) => {
+        return inner(lease);
+      },
+    );
 
     expect(result).toBe(TEST_PLAINTEXT);
   });
@@ -159,11 +174,14 @@ describe("runWithByokLease — zeroize-on-finally", () => {
     seedApiKey();
 
     let captured: ByokLease | null = null;
-    await runWithByokLease(TEST_USER, async (lease) => {
-      captured = lease;
-      // Prime the buffer so we can tell wipe-completed from no-buffer.
-      expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
-    });
+    await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async (lease) => {
+        captured = lease;
+        // Prime the buffer so we can tell wipe-completed from no-buffer.
+        expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
+      },
+    );
 
     expect(captured).not.toBeNull();
     expect(() => captured!.getApiKey()).toThrowError(ByokLeaseError);
@@ -179,11 +197,14 @@ describe("runWithByokLease — zeroize-on-finally", () => {
 
     let captured: ByokLease | null = null;
     await expect(
-      runWithByokLease(TEST_USER, async (lease) => {
-        captured = lease;
-        expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
-        throw new Error("fn-internal-failure");
-      }),
+      runWithByokLease(
+        { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+        async (lease) => {
+          captured = lease;
+          expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
+          throw new Error("fn-internal-failure");
+        },
+      ),
     ).rejects.toThrow("fn-internal-failure");
 
     expect(captured).not.toBeNull();
@@ -194,18 +215,24 @@ describe("runWithByokLease — zeroize-on-finally", () => {
     seedApiKey();
     let firstLease: ByokLease | null = null;
 
-    await runWithByokLease(TEST_USER, async (lease) => {
-      firstLease = lease;
-      await lease.getApiKey();
-    });
+    await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async (lease) => {
+        firstLease = lease;
+        await lease.getApiKey();
+      },
+    );
 
     // Open a SECOND scope. The first lease's slot is dead; calling
     // getApiKey on the captured first-lease must NOT silently return
     // the second scope's plaintext.
-    await runWithByokLease(TEST_USER, async (lease) => {
-      expect(() => firstLease!.getApiKey()).toThrowError(ByokLeaseError);
-      expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
-    });
+    await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async (lease) => {
+        expect(() => firstLease!.getApiKey()).toThrowError(ByokLeaseError);
+        expect(await lease.getApiKey()).toBe(TEST_PLAINTEXT);
+      },
+    );
   });
 });
 
@@ -215,9 +242,12 @@ describe("runWithByokLease — error paths", () => {
     const sentinel = new Error("from-inside-fn");
 
     await expect(
-      runWithByokLease(TEST_USER, async () => {
-        throw sentinel;
-      }),
+      runWithByokLease(
+        { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+        async () => {
+          throw sentinel;
+        },
+      ),
     ).rejects.toBe(sentinel);
   });
 
@@ -226,13 +256,63 @@ describe("runWithByokLease — error paths", () => {
     mocks.setApiKeyRow(null);
 
     await expect(
-      runWithByokLease(TEST_USER, async (lease) => {
-        return await lease.getApiKey();
-      }),
+      runWithByokLease(
+        { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+        async (lease) => {
+          return await lease.getApiKey();
+        },
+      ),
     ).rejects.toMatchObject({
       name: "ByokLeaseError",
       cause: "fetch_failed",
     });
+  });
+
+  // Phase 3.2 (AC-D): missing api_keys row throws MissingByokKeyError, NOT
+  // ByokLeaseError{cause:fetch_failed}. The two paths are distinct: the
+  // former is "member hasn't onboarded BYOK" (fail-closed; UI surfaces a
+  // configure-banner); the latter is "DB error / RLS deny" (key-invalid
+  // signal). Without splitting, the UI cannot tell the configure-banner
+  // case from the key-prompt case — see plan §Phase 3.2.
+  it("missing api_keys row: getApiKey() throws MissingByokKeyError with workspace context", async () => {
+    mocks.setApiKeyRow(null);
+    mocks.setFetchError(null);
+
+    let caught: unknown = null;
+    await expect(
+      runWithByokLease(
+        { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_OWNER },
+        async (lease) => {
+          try {
+            return await lease.getApiKey();
+          } catch (err) {
+            caught = err;
+            throw err;
+          }
+        },
+      ),
+    ).rejects.toThrow(MissingByokKeyError);
+
+    expect(caught).toBeInstanceOf(MissingByokKeyError);
+    const e = caught as MissingByokKeyError;
+    // Workspace context required for Sentry breadcrumb (Kieran N4). userIdHash,
+    // never raw userId — the test asserts hash-shape (no '-' UUID separators).
+    expect(e.workspaceContextUserId).toBe(TEST_USER);
+    expect(e.keyOwnerUserIdHash).toMatch(/^[0-9a-f]{12,}$/);
+    expect(e.keyOwnerUserIdHash).not.toContain(TEST_OWNER);
+  });
+});
+
+describe("runWithByokLease — context surfacing for cost-writer", () => {
+  it("lease exposes workspaceContextUserId and keyOwnerUserId for downstream writers", async () => {
+    seedApiKey();
+    await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_OWNER },
+      async (lease) => {
+        expect(lease.workspaceContextUserId).toBe(TEST_USER);
+        expect(lease.keyOwnerUserId).toBe(TEST_OWNER);
+      },
+    );
   });
 });
 
@@ -240,21 +320,27 @@ describe("runWithByokLease — no plaintext leak surfaces", () => {
   it("plaintext does NOT appear in JSON serialization of the lease object", async () => {
     seedApiKey();
     let leaseSnapshot = "";
-    await runWithByokLease(TEST_USER, async (lease) => {
-      await lease.getApiKey();
-      // Stringify the lease — anyone who logs `{ lease }` should not see
-      // the plaintext or the buffer contents.
-      leaseSnapshot = JSON.stringify(lease);
-    });
+    await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async (lease) => {
+        await lease.getApiKey();
+        // Stringify the lease — anyone who logs `{ lease }` should not see
+        // the plaintext or the buffer contents.
+        leaseSnapshot = JSON.stringify(lease);
+      },
+    );
     expect(leaseSnapshot).not.toContain(TEST_PLAINTEXT);
   });
 
   it("plaintext does NOT appear in JSON serialization of getCurrentByokLease() output", async () => {
     seedApiKey();
-    await runWithByokLease(TEST_USER, async () => {
-      const current = getCurrentByokLease();
-      const snapshot = JSON.stringify(current);
-      expect(snapshot).not.toContain(TEST_PLAINTEXT);
-    });
+    await runWithByokLease(
+      { workspaceContextUserId: TEST_USER, keyOwnerUserId: TEST_USER },
+      async () => {
+        const current = getCurrentByokLease();
+        const snapshot = JSON.stringify(current);
+        expect(snapshot).not.toContain(TEST_PLAINTEXT);
+      },
+    );
   });
 });

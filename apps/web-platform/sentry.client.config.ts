@@ -76,9 +76,22 @@ export function stripUserContextFromEvent<T extends Sentry.ErrorEvent>(
   return event;
 }
 
+// release: ties client-side events to the deployed build. BUILD_VERSION /
+// BUILD_SHA reach the client bundle via next.config.ts `env:` (webpack
+// inline-substitution at build time); same shape as
+// sentry.server.config.ts. Falls back to undefined when unset (local dev,
+// vitest) so Sentry doesn't shard local errors under a phantom release.
+const sentryRelease = (() => {
+  const v = process.env.BUILD_VERSION ?? "dev";
+  const sha = process.env.BUILD_SHA ?? "dev";
+  if (v === "dev" && sha === "dev") return undefined;
+  return `web-platform@${v}+${sha}`;
+})();
+
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
   environment: process.env.NODE_ENV,
+  release: sentryRelease,
   tracesSampleRate: 0,
   beforeSend(event) {
     // Sentry's `beforeSend` permits returning `null` to drop the event.

@@ -43,6 +43,12 @@ terraform {
       source  = "integrations/github"
       version = "~> 6.0"
     }
+    # CI SSH keypair generation (see ci-ssh-key.tf) — closes the L7 gap
+    # left by PR #4181's L3-only CF Tunnel SSH bridge.
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
   required_version = ">= 1.6"
 }

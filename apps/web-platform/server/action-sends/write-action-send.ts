@@ -18,6 +18,8 @@ import type {
 } from "@/server/scope-grants/action-class-map";
 import type { ActiveGrant } from "@/server/scope-grants/is-granted";
 import { reportSilentFallback } from "@/server/observability";
+import { getTemplateHash } from "@/server/templates/template-registry";
+import type { TemplateId } from "@/server/templates/template-registry";
 
 export interface WriteActionSendArgs {
   supabase: SupabaseClient;
@@ -26,6 +28,14 @@ export interface WriteActionSendArgs {
     id: string;
     action_class: ActionClass;
     draft_preview: string | null;
+    // PR-I (#4078): drives `getTemplateHash` via the shared registry at
+    // `@/server/templates/template-registry`. Producers SELECT this
+    // column when reading `messages`; the field is NOT NULL at the DB
+    // layer (mig 053 Part A backfills to 'default_legacy'). Null /
+    // undefined here is treated by the registry as a fall-through to
+    // `default_legacy` + a `warnSilentFallback` emit — a producer-side
+    // bug, but does not block the WORM write.
+    template_id?: TemplateId | string | null;
   };
   grant: ActiveGrant;
   tier: ActionClassTier;
@@ -39,11 +49,6 @@ export interface WriteActionSendArgs {
   // (no producer integration yet); the body is still hashed so PR-I
   // wire-ups don't change the table-write contract.
   bodyContent: string;
-  // The template_hash represents the canonical pre-personalisation
-  // template (E&O bounds in PR-I will reference this). For PR-H without
-  // a template registry, pass a stable hash of the action_class +
-  // owning_domain + tier combination.
-  templateHash: string;
 }
 
 export interface ActionSendRecord {
@@ -114,8 +119,14 @@ export async function writeActionSend(
     typedValue,
     recipientIdentifier,
     bodyContent,
-    templateHash,
   } = args;
+
+  // PR-I (#4078): the canonical template hash is derived from the
+  // code-static template registry, not from a route-local concatenation
+  // of (action_class, owning_domain, tier). The hash keys
+  // `template_authorizations` (mig 053) so producers + consumers must
+  // route through the same module. See ADR-035.
+  const templateHash = getTemplateHash({ template_id: message.template_id });
 
   const perSendBodyHash = sha256(bodyContent);
   const recipientHash = sha256(recipientIdentifier);

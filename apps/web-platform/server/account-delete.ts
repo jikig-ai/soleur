@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { abortAllUserSessions } from "@/server/agent-runner";
 import { deleteWorkspace } from "@/server/workspace";
 import { createChildLogger } from "./logger";
+import { hashUserId } from "@/server/observability";
 
 const log = createChildLogger("account-delete");
 
@@ -62,6 +63,26 @@ export interface DeleteAccountResult {
  *                             MUST come before auth-delete: tc_acceptances.user_id
  *                             has ON DELETE RESTRICT, so the auth cascade to
  *                             public.users would abort without prior anonymisation.
+ *   5.6 anonymise-workspace-attestations — anonymise_workspace_member_attestations
+ *                             RPC (migration 058). FK-reverse: attestations
+ *                             reference users via inviter_user_id +
+ *                             invitee_user_id (RESTRICT).
+ *   5.7 anonymise-workspace-members — anonymise_workspace_members RPC
+ *                             (migration 058). DELETEs membership rows
+ *                             (workspace_id RESTRICT to workspaces).
+ *   5.8 anonymise-organization-membership — anonymise_organization_membership
+ *                             RPC (migration 058). Orphan-cleanup or reassign-
+ *                             owner; breaks the RESTRICT FK to public.users.
+ *   5.9 anonymise-workspace-member-actions — anonymise_workspace_member_actions
+ *                             RPC (migration 063, #4231). NULL-sets actor_user_id
+ *                             + target_user_id on the audit log; lineage
+ *                             (workspace_id, action_type, role, created_at,
+ *                             attestation_id) preserved. Cascade DELETEs from
+ *                             3.91 do NOT create new audit rows because
+ *                             anonymise_workspace_members SET LOCAL
+ *                             session_replication_role='replica' suppresses
+ *                             the AFTER trigger — this step only anonymises
+ *                             rows from prior legitimate invite/remove RPC calls.
  *   6. auth             — auth.admin.deleteUser(); FK cascade handles
  *                         public.users and all children atomically.
  *
@@ -123,7 +144,12 @@ export async function deleteAccount(
     log.warn({ userId, err }, "Failed to abort session during deletion (non-fatal)");
   }
 
-  // 3. Delete workspace directory
+  // 3. Delete workspace directory.
+  //
+  // The deleted user is, by the GDPR Art. 17 contract, the sole member of
+  // their own workspace at this point (Phase 7 anonymise_workspace_members
+  // strips any team memberships earlier in the cascade). `userId` ===
+  // `workspaces.id` per migration 053 §1.1.7 N2 invariant.
   try {
     await deleteWorkspace(userId);
   } catch (err) {
@@ -226,6 +252,43 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed. Please try again." };
   }
 
+  // 3.83 Anonymise template_authorizations rows for this user BETWEEN
+  //      anonymise_action_sends and anonymise_scope_grants (migration 053,
+  //      PR-I #4078). SEMANTIC ordering, NOT FK-driven: anonymise_* is
+  //      UPDATE, so scope_grants FK ON DELETE RESTRICT does not fire. The
+  //      required invariant is that `dsr_erasure` reason MUST be set on
+  //      child rows BEFORE the parent scope_grant's user_id is nulled —
+  //      otherwise Art. 5(2) audit-trail attribution breaks. SECURITY
+  //      DEFINER RPC, idempotent (UPDATE … WHERE founder_id = p_user_id
+  //      is a no-op on already-anonymised rows; COALESCE preserves any
+  //      prior revocation_reason). Failure here is FATAL on the same
+  //      reasoning as 3.85.
+  try {
+    const { error: anonTaErr } = await service.rpc(
+      "anonymise_template_authorizations",
+      { p_user_id: userId },
+    );
+    if (anonTaErr) {
+      log.error(
+        { userId, err: anonTaErr },
+        "anonymise_template_authorizations failed — aborting deletion to avoid Art. 5(2) attribution break",
+      );
+      return {
+        success: false,
+        error: "Account deletion failed. Please try again.",
+      };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_template_authorizations threw — aborting deletion to avoid Art. 5(2) attribution break",
+    );
+    return {
+      success: false,
+      error: "Account deletion failed. Please try again.",
+    };
+  }
+
   // 3.84 Anonymise scope_grants rows for this user BEFORE the tc_acceptances
   //      cascade (migration 048, PR-G #3947). FK is ON DELETE RESTRICT — the
   //      auth.admin.deleteUser call would abort without this. Runs BEFORE
@@ -302,6 +365,179 @@ export async function deleteAccount(
       { userId, err },
       "anonymise_audit_github_token_use threw — relying on ON DELETE SET NULL cascade (non-fatal)",
     );
+  }
+
+  // 3.90 Anonymise workspace_member_attestations BEFORE workspace_members
+  //      (migration 058, feat-team-workspace-multi-user). FK-reverse
+  //      order per Phase 7.4 AC-GDPR-17-CALLER:
+  //        attestations → workspace_members → organizations → auth.users
+  //      attestations.invitee_user_id + .inviter_user_id are both ON
+  //      DELETE RESTRICT, so they MUST be NULLed before the auth-delete
+  //      cascade reaches them. SECURITY DEFINER + idempotent.
+  //      FATAL: skipping guarantees auth-delete fails on the RESTRICT FK,
+  //      leaving a half-deleted user (GDPR Art. 17 violation).
+  try {
+    const { error: anonAttErr } = await service.rpc(
+      "anonymise_workspace_member_attestations",
+      { p_user_id: userId },
+    );
+    if (anonAttErr) {
+      log.error(
+        { userId, err: anonAttErr },
+        "anonymise_workspace_member_attestations failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_workspace_member_attestations threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.905 Anonymise workspace_member_removals (migration 063, #4230).
+  //      NULLs removed_user_id + removed_by_user_id for every removal
+  //      row where the deleted user appears on either side. Mirrors
+  //      3.90's pattern: lineage (id, workspace_id, removed_at) is
+  //      preserved (WORM); PII columns transition NOT NULL → NULL via
+  //      the SECURITY DEFINER RPC. Both FK columns are ON DELETE
+  //      RESTRICT — skipping this step would leave the auth-delete
+  //      cascade unable to clear users(id), same failure mode as 3.90.
+  //      Runs AFTER attestations to preserve the 058-cascade convention
+  //      (each ledger anonymise step covers its own table's user-FK).
+  try {
+    const { error: anonRemErr } = await service.rpc(
+      "anonymise_workspace_member_removals",
+      { p_user_id: userId },
+    );
+    if (anonRemErr) {
+      log.error(
+        { userId, err: anonRemErr },
+        "anonymise_workspace_member_removals failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_workspace_member_removals threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.91 Anonymise workspace_members rows (migration 058). DELETEs every
+  //      membership row keyed on user_id, including the user's solo
+  //      backfill owner row. FK workspace_members.workspace_id +
+  //      .attestation_id are RESTRICT — attestations were already
+  //      NULLed in 3.90, and workspaces stay live (they're cleaned up by
+  //      anonymise_organization_membership in 3.92 if they orphan).
+  try {
+    const { error: anonMemErr } = await service.rpc(
+      "anonymise_workspace_members",
+      { p_user_id: userId },
+    );
+    if (anonMemErr) {
+      log.error(
+        { userId, err: anonMemErr },
+        "anonymise_workspace_members failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_workspace_members threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.92 Anonymise organization membership (migration 058, simplified by
+  //      migration 065 Part 3). For every organization where the deleted
+  //      user was owner with other members remaining, the RPC reassigns
+  //      owner_user_id to the oldest remaining member. Orphan orgs (no
+  //      other members) are NOT hard-deleted here; mig 065 Part 1 changed
+  //      organizations.owner_user_id from RESTRICT to SET NULL, so the
+  //      cascade-induced auth.users delete naturally NULLs the owner. The
+  //      orphan org survives as a record-of-existence with NULL owner,
+  //      reachable by no live user via RLS, eventually purged by a janitor.
+  try {
+    const { data: orgsReassigned, error: anonOrgErr } = await service.rpc(
+      "anonymise_organization_membership",
+      { p_user_id: userId },
+    );
+    if (anonOrgErr) {
+      log.error(
+        { userId, err: anonOrgErr },
+        "anonymise_organization_membership failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+    // Surface the reassign count + count of soon-to-be-orphan orgs so a
+    // janitor / dashboard can detect runaway null-owner growth.
+    // `anonymise_organization_membership` returns the reassign count; an
+    // orphan org count is the live count of orgs owned by this user before
+    // the SET NULL cascade fires at auth-delete.
+    try {
+      const { data: orphanRows } = await service
+        .from("organizations")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_user_id", userId);
+      // Use userIdHash directly per the userid-bypass-lint convention
+      // (#3698) — the pino formatter rename hook covers grandfathered
+      // sites but new emits must compute the hash at the call site.
+      log.info(
+        {
+          userIdHash: hashUserId(userId),
+          orgsReassigned: orgsReassigned ?? 0,
+          orphanOrgsPendingSetNull: orphanRows ?? 0,
+        },
+        "Art-17 cascade: organization-membership state",
+      );
+    } catch (probeErr) {
+      // Observability-only; do not fail the cascade.
+      log.warn(
+        { userIdHash: hashUserId(userId), err: probeErr },
+        "orphan-org probe failed (non-fatal)",
+      );
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_organization_membership threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
+  }
+
+  // 3.93 Anonymise workspace_member_actions audit rows (migration 063, #4231).
+  //      NULL-sets actor_user_id + target_user_id for every row referencing
+  //      the departing user. Lineage columns (workspace_id, action_type,
+  //      old_role, new_role, created_at, attestation_id) preserved. Idempotent
+  //      (re-run's WHERE matches zero already-NULLed rows). MUST run BEFORE
+  //      auth.admin.deleteUser — public.users FK is RESTRICT, so the auth
+  //      cascade aborts without prior anonymisation. Cascade DELETEs at
+  //      step 3.91 do NOT create new audit rows because anonymise_workspace_
+  //      members SET LOCAL session_replication_role='replica' suppresses the
+  //      AFTER trigger; step 3.93 only anonymises rows from prior legitimate
+  //      invite/remove RPC calls.
+  try {
+    const { error: anonAuditErr } = await service.rpc(
+      "anonymise_workspace_member_actions",
+      { p_user_id: userId },
+    );
+    if (anonAuditErr) {
+      log.error(
+        { userId, err: anonAuditErr },
+        "anonymise_workspace_member_actions failed — aborting deletion",
+      );
+      return { success: false, error: "Account deletion failed. Please try again." };
+    }
+  } catch (err) {
+    log.error(
+      { userId, err },
+      "anonymise_workspace_member_actions threw — aborting deletion",
+    );
+    return { success: false, error: "Account deletion failed. Please try again." };
   }
 
   // 4. Delete auth record — FK cascade handles public.users and all children

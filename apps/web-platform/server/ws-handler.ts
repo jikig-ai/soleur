@@ -38,6 +38,15 @@ import {
   logRateLimitRejection,
 } from "./rate-limiter";
 import { validateContextPath } from "./validate-context-path";
+import {
+  setUserWorkspace,
+  clearUserWorkspace,
+} from "./agent-session-registry";
+import {
+  getCurrentOrganizationId,
+  getDefaultWorkspaceForUser,
+  getWorkspaceForUserInOrganization,
+} from "./workspace-resolver";
 import { effectiveCap, nextTier } from "@/lib/plan-limits";
 import { closeWithPreamble } from "@/lib/ws-close-helper";
 import { retrieveSubscriptionTier } from "@/lib/stripe";
@@ -2173,6 +2182,56 @@ export function setupWebSocket(server: HTTPServer) {
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);
+
+        // Phase 5.5 / Kieran C5: bind userId → current workspace_id so
+        // workspace-membership.ts:removeWorkspaceMember can SIGTERM only the
+        // sessions running against the workspace being revoked (and not
+        // sibling sessions in the user's other workspaces). The JWT custom
+        // claim `current_organization_id` (migration 060) is the source of
+        // truth; the lookup translates org_id → workspace_id once at WS open.
+        try {
+          const orgId = getCurrentOrganizationId({
+            user: {
+              id: user.id,
+              app_metadata: user.app_metadata as never,
+            },
+          });
+          let workspaceId: string | null = null;
+          if (orgId) {
+            workspaceId = await getWorkspaceForUserInOrganization(
+              user.id,
+              orgId,
+              tenantBootstrap as never,
+            );
+          }
+          // Fallback to default workspace (oldest by created_at — collapses
+          // to N2 invariant `workspace_id === user_id` for solo users).
+          if (!workspaceId) {
+            try {
+              workspaceId = await getDefaultWorkspaceForUser(
+                user.id,
+                tenantBootstrap as never,
+              );
+            } catch {
+              // Pre-Phase-1 migration users (no workspace_members row yet)
+              // fall through with no binding — abortAllWorkspaceMemberSessions
+              // becomes a no-op for them which is the safe pre-multi-tenant
+              // behavior.
+              workspaceId = null;
+            }
+          }
+          if (workspaceId) setUserWorkspace(user.id, workspaceId);
+        } catch (workspaceBindErr) {
+          // Silent fallback per cq-silent-fallback-must-mirror-to-sentry: the
+          // session still opens (the binding is for SIGTERM precision, not
+          // auth). Mirror so the on-call sees the drift.
+          reportSilentFallback(workspaceBindErr, {
+            feature: "ws-handler",
+            op: "bind-user-workspace",
+            extra: { userId: user.id },
+          });
+        }
+
         for (const [key, timer] of pendingDisconnects) {
           if (key.startsWith(`${userId}:`)) {
             clearTimeout(timer);
@@ -2236,6 +2295,10 @@ export function setupWebSocket(server: HTTPServer) {
             clearInterval(current.subscriptionRefreshTimer);
           }
           sessions.delete(userId);
+          // Phase 5.5: drop the workspace binding so a future reconnect
+          // re-resolves from the JWT (handles the org-switch + reconnect
+          // sequence cleanly — see AC-FLOW3 multi-tab race coverage).
+          clearUserWorkspace(userId);
           // Grace period: defer abort to allow reconnection
           if (current.conversationId) {
             const convId = current.conversationId;

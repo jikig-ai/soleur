@@ -185,6 +185,65 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     expect(result.stdout + result.stderr).toMatch(FS_DENY_RE);
   });
 
+  test("AC7-positive: two users in the SAME workspace see the same files (shared-workspace happy path)", () => {
+    // feat-team-workspace-multi-user AC7 positive case: when Jean and
+    // Harry are both members of the same workspace (workspace_members
+    // rows pointing at the same workspace_id), they share a single fs
+    // tree. We model "user-1 writes, user-2 reads" by running two
+    // sequential bwrap invocations against the SAME rootA — the second
+    // invocation sees the marker the first wrote.
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+
+    const sharedToken = `SHARED_${randomBytes(6).toString("hex")}`;
+    const sharedFile = path.join(pair.rootA, "shared.md");
+
+    // user-1 writes inside rootA
+    const writeRes = spawnBwrap(
+      pair.rootA,
+      `printf '%s' '${sharedToken}' > ${shellQuote(sharedFile)} && echo WROTE`,
+      { pair, timeoutMs: 5_000 },
+    );
+    expect(writeRes.setupFailed, `bwrap setup failed: ${writeRes.stderr}`).toBe(false);
+    expect(writeRes.status).toBe(0);
+    expect(writeRes.stdout).toContain("WROTE");
+
+    // user-2 reads inside the SAME rootA
+    const readRes = spawnBwrap(
+      pair.rootA,
+      `cat ${shellQuote(sharedFile)}`,
+      { pair, timeoutMs: 5_000 },
+    );
+    expect(readRes.setupFailed, `bwrap setup failed: ${readRes.stderr}`).toBe(false);
+    expect(readRes.status).toBe(0);
+    expect(readRes.stdout).toContain(sharedToken);
+  });
+
+  test("AC7-negative: two users in DIFFERENT workspaces see nothing (cross-workspace deny)", () => {
+    // feat-team-workspace-multi-user AC7 negative case: when Jean and
+    // Harry belong to different workspaces, the sandbox must deny any
+    // cross-read attempt. This mirrors FR2 (root-level cross-workspace
+    // deny) but the framing here is "user-2-in-workspace-B reading
+    // user-1-in-workspace-A". Under N2 + the workspace-keyed sandbox
+    // contract, bwrap only mounts the caller's own workspace path; the
+    // other workspace is tmpfs'd out.
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const { token } = seedMarker(pair.rootB, "harry-private.md");
+
+    // user-2 (in rootA / Jean's workspace) attempts to read Harry's row
+    // in the other workspace.
+    const result = spawnBwrap(
+      pair.rootA,
+      `cat ${shellQuote(pair.rootB + "/harry-private.md")}`,
+      { pair, timeoutMs: 5_000 },
+    );
+    expect(result.setupFailed, `bwrap setup failed: ${result.stderr}`).toBe(false);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain(token);
+    expect(result.stderr).toMatch(FS_DENY_RE);
+  });
+
   test("FR5: symlink escape from rootA to rootB/secret.md is blocked by tmpfs overlay", () => {
     const pair = createWorkspacePair();
     pairs.push(pair);

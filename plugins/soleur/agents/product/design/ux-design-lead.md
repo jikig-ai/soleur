@@ -82,7 +82,7 @@ The invoker passes:
 - `targets`: array of `{path, auth, fixture_prereqs, screenshot_path}` objects. Each entry zips a single route's metadata with its absolute screenshot PNG path, so screenshot↔route skew is structurally impossible. If a route's capture failed upstream, it is **absent** from `targets` — never passed as a null or placeholder.
 - `viewport`: the capture viewport, e.g. `{w: 1440, h: 900}`
 
-### 5-category rubric
+### 6-category rubric
 
 For each screenshot, evaluate against these categories (in priority order). Do NOT invent additional categories — the dedup hash is keyed on this exact set.
 
@@ -91,6 +91,7 @@ For each screenshot, evaluate against these categories (in priority order). Do N
 3. **consistency** — Same-level elements styled differently without reason (buttons, spacing, typography, card/list mix); visual treatment diverges across sections of the same page. Example: primary buttons are rounded on `/dashboard` but square on `/dashboard/settings`.
 4. **responsive** — Layout breaks between viewport widths in a way visible even at the single captured size (overflow, clipped text, horizontal scroll, elements pushed below the fold that shouldn't be). Note: only flag what's visible in the 1440×900 capture; do NOT speculate about other viewport sizes.
 5. **comprehension** — A first-time user cannot understand what the page is for within 30 seconds. Missing headline, unclear primary CTA, ambiguous iconography without labels, empty state without explanation.
+6. **anti-slop** — Source-code findings from `soleur:frontend-anti-slop` (deterministic scanner over `apps/web-platform/{app,components}/**/*.{tsx,jsx,css}`). Findings encode `selector` as `<file-path>#<rule-id>` (e.g. `apps/web-platform/components/ui/gold-button.tsx#GRADIENT-TEXT`). This category is **not screenshot-derived** — when invoked in `mode: audit`, the agent does not emit `anti-slop` findings; the scanner does.
 
 **Excluded:** error states, empty states, and loading states. Happy-path bot fixtures do not reliably produce these, so flagging them produces low-quality findings.
 
@@ -109,6 +110,16 @@ Return a JSON array. **No prose, no markdown, no code fences around the array.**
     "description": "On 1440×900, the left sidebar takes ~320px. The primary content column is narrower than the nav column — uncommon for a dashboard surface. No toggle button is present to collapse the nav into an icon rail.",
     "fix_hint": "Add a collapse toggle that reduces the sidebar to ~64px (icon-only) while preserving active route indication.",
     "screenshot_ref": "/tmp/ux-audit/dashboard.png"
+  },
+  {
+    "route": "/",
+    "selector": "apps/web-platform/components/ui/gold-button.tsx#GRADIENT-TEXT",
+    "category": "anti-slop",
+    "severity": "high",
+    "title": "Gradient-fill headline (rule GRADIENT-TEXT)",
+    "description": "bg-clip-text + text-transparent + bg-gradient-to-* triad detected — gradient-fill headline reads as AI default per Hallmark gate 5.",
+    "fix_hint": "Solid ink. Reach for weight, italic, or a display face for emphasis.",
+    "screenshot_ref": "/tmp/ux-audit/no-screenshot.png"
   }
 ]
 ```
@@ -117,7 +128,7 @@ Field rules:
 
 - `route` must match a `targets[].path` from the invocation.
 - `selector` is a CSS selector (CSS only — no XPath, no text-match syntax; must be syntactically valid CSS) targeting the primary flagged element. If the finding is page-level (e.g., a comprehension finding about the entire page), emit `""` (empty string) — the skill will coarsen this to `*` for dedup purposes.
-- `category` must be exactly one of: `real-estate | ia | consistency | responsive | comprehension`.
+- `category` must be exactly one of: `real-estate | ia | consistency | responsive | comprehension | anti-slop`. The `anti-slop` category is reserved for the `soleur:frontend-anti-slop` scanner — the screenshot audit path never emits it.
 - `severity` must be exactly one of: `critical | high | medium | low`. Reserve `critical` for findings that block primary user tasks.
 - `title` ≤ 100 chars, declarative (not a question), no emojis.
 - `description` names the visible evidence — a reviewer should be able to verify from the screenshot alone.

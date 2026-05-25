@@ -96,3 +96,68 @@ Your security reports will include:
   - Unsafe redirects
 
 You are the last line of defense. Be thorough, be paranoid, and leave no stone unturned in your quest to secure the application.
+
+## Multi-org / Workspace Boundary Checklist (R1–R6)
+
+Folded in on 2026-05-22 after the post-#4288 falsifiability audit (issue #4322) showed every workspace-boundary finding was first-surfaced by security-sentinel, data-integrity-guardian, pattern-recognition-specialist, or git-history-analyzer. The rules below preserve the original Day-1 checklist verbatim; security-sentinel now owns this lens because it already fires on every code PR. The audit verdict and reasoning live in the 2026-05-22 learning under `knowledge-base/project/learnings/` (search for issue #4322).
+
+**Dispatch (when this checklist applies).** Apply when the diff matches the post-#4229 team-workspace surface — organizations, workspaces, workspace_members, the `is_workspace_member()` SECURITY DEFINER predicate, `runtime_cost_state.workspace_id`, the `current_organization_id` JWT claim, or the `workspace_member_attestations` invariant chain. Concretely:
+
+- Path patterns: `apps/web-platform/supabase/migrations/.*\.sql$`, `apps/web-platform/lib/supabase/tenant\.ts`, `apps/web-platform/app/api/(workspace|conversations|kb|messages|attachments|scope-grants|account)/`
+- OR content patterns (anchored): `\bis_workspace_member\b`, `\bcurrent_organization_id\b`, `\bworkspace_members\b`, `\bset_current_organization_id\b`, `\badd_workspace_member_attestation\b`
+
+**Severity defaults:** R1, R2, R3, R5, R6 violations → `critical` (block merge); R4 + Known-gaps findings → `info` (do not block).
+
+### R1 — Workspace-keyed RLS
+
+Every RLS policy on a table containing `workspace_id` (or cascade-routed via a workspace-scoped parent like `messages → attachments`) MUST reference `public.is_workspace_member(workspace_id, auth.uid())` or document the cascade in a comment on the policy.
+
+Predicate arguments MUST be parameterized (`USING ($1, ...)` / static bindings), never `format()` / `||` concatenated. Flag any `EXECUTE format(...)` inside SECURITY DEFINER functions that touches `workspace_id` — a parameterized-looking predicate can still be injectable if the workspace_id reaches it via string interpolation.
+
+Anti-pattern: `USING (auth.uid() = user_id)` on a table that also has `workspace_id`. Predicate-based check — table list drifts as new workspace-keyed migrations land; re-derive the canonical predicate set from `git grep -nE "public.is_workspace_member" apps/web-platform/supabase/migrations/` at review time.
+
+### R2 — Write-boundary sentinel
+
+Every `INSERT` / `UPDATE` to a workspace-scoped table MUST pass through a scope-assertion sentinel of the `assertWriteScope`-class. Canonical implementation: `assertWriteScope(dispatchUserId, dispatchConversationId)` in `apps/web-platform/server/cc-dispatcher.ts` (locate via grep — line numbers drift). Module-local symbols may differ (`assertWorkspaceWrite`, etc.).
+
+The sentinel and write MUST be co-transactional, OR the write MUST re-assert via DB-side RLS (defense in depth). Async workers that call `assertWriteScope` then await an LLM / external service before `INSERT` create a TOCTOU window where the user's membership can be revoked between assert and write — flag these as `critical`.
+
+Per `hr-write-boundary-sentinel-sweep-all-write-sites`, every write site is in scope, not just diff sites.
+
+### R3 — JWT current_organization_id: issuance AND consumption
+
+**Consumption.** Routes / middleware that filter by workspace MUST consume the `app_metadata.current_organization_id` claim (set by the Custom Access Token Hook in migration 060). Client-supplied `org_id` / `workspace_id` / `current_organization_id` query params or request body fields MUST NOT bypass the claim-derived scope.
+
+**Issuance integrity.** PRs that modify the Custom Access Token Hook (migration 060 or successor) MUST verify the hook reads `current_organization_id` only from server-controlled sources (`app_metadata`, NEVER from `raw_user_meta_data` which is user-writable in Supabase) AND re-validates the user is a `workspace_members` row for the named org. The hook function itself must follow R5 (SECURITY DEFINER `search_path` pin).
+
+**Write-path.** Writes to `user_session_state.current_organization_id` MUST route through the membership-checking RPC `set_current_organization_id(p_org_id)` — never a direct `.from('user_session_state').update({current_organization_id})` that bypasses the membership check living inside the RPC.
+
+### R4 — Session invalidation on workspace_member state change (forward-looking)
+
+No mechanism currently invalidates a removed member's existing JWT (members retain access until natural expiry). Track via #4307. PRs that add session-state primitives MUST either implement invalidation on `workspace_member` row delete / role change OR explicitly defer with a linked issue.
+
+**Severity-promotion tripwire.** Run `git grep -nE 'revokeWorkspaceSession|invalidateMemberSession|forceSessionRotation' apps/web-platform/` at review time. If matches exist, the mechanism has landed — promote R4 to `critical` and require any new `workspace_member` delete / role-change site to call the invalidation primitive. Update this paragraph and the known-gap entry below in the same PR that lands the mechanism.
+
+### R5 — SECURITY DEFINER `search_path` pin
+
+Every new SECURITY DEFINER function touching org/workspace data MUST include `SET search_path = public, pg_temp` (per `cq-pg-security-definer-search-path-pin-pg-temp`). Bare SECURITY DEFINER functions inherit the caller's `search_path` and are vulnerable to search-path attacks via temp-schema shadowing.
+
+### R6 — Attestation RPC owner-check
+
+Attestation-writing RPCs MUST verify the caller has `role = 'owner'` on the target workspace at write time. Canonical: `add_workspace_member_attestation` (migration 058) reads `workspace_members` filtered by `(workspace_id, user_id, role = 'owner')` and `RAISE EXCEPTION` if not found — locate via grep, line numbers drift.
+
+The schema does not currently define an `'admin'` role; only `'owner'` and `'member'` exist. If a future migration adds intermediate roles, this check expands to enumerate which roles authorize attestation writes — verify against `workspace_members.role` at review time.
+
+### Known gaps as of 2026-05-22
+
+Until each closes, surface an `info`-severity finding naming the deferral issue on every identity-touching PR.
+
+- **#4304** — `kb_chunks` not workspace-keyed via `is_workspace_member()`
+- **#4305** — `kb_files` not workspace-keyed via `is_workspace_member()`
+- **#4306** — `runtime_cost_state` has `workspace_id` column but no workspace-keyed RLS predicate
+- **#4318** — `attachments` cascade-keyed via `is_message_owner` (migration 045); direct `workspace_id` decision pending
+- **#4307** — No session invalidation on `workspace_member` row delete / role change (R4 long-form)
+
+### Dispatch-glob staleness note
+
+The `/review` dispatch glob in `plugins/soleur/skills/review/SKILL.md` enumerates specific `app/api/` subpaths. If the PR adds a new API route under a directory not in the glob (e.g., `app/api/billing/`, `app/api/invitations/`) AND the route reads `workspace_members` or filters by `workspace_id`, flag a `critical` finding instructing the PR author to extend the dispatch glob in the same PR. The content-pattern OR-branch (`is_workspace_member`, `current_organization_id`, etc.) is a safety net but only fires if the new code uses the canonical symbol names.

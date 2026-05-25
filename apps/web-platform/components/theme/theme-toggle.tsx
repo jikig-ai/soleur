@@ -123,7 +123,7 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
       aria-label="Theme"
       onKeyDown={handleKeyDown}
       className={[
-        "flex h-8 w-full items-stretch p-[3px]",
+        "flex h-8 w-full items-stretch p-1",
         "rounded-full border border-soleur-border-default",
         "bg-soleur-bg-surface-2",
       ].join(" ")}

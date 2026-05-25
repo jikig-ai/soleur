@@ -59,6 +59,23 @@ This is the FIRST step of the deferred `/soleur:sentry-residency-check` skill (i
 
 2. **API probe 403'd on both clusters** — token scope too narrow for `/organizations/{org}/`, `/projects/`, `/customers/`. **Recovery:** pivoted to DSN cluster-substring (this learning). **Prevention:** in any future Sentry residency probe, attempt the DSN substring first; reach for the API only when the DSN isn't readable.
 
+## Update — 2026-05-21: three orthogonal axes, not a single residency signal
+
+This learning is correct for the **residency** question (DSN cluster substring
+is the authoritative database-cluster signal). But the 2026-05-19 reframe
+under #3861 (see learnings `2026-05-19-sentry-url-routing-three-orthogonal-dimensions.md`
+and `2026-05-19-sentry-401-is-not-unowned-verify-token-scope-first.md`)
+established that Sentry's host topology splits along **three orthogonal axes**,
+not one: (a) URL slug — which dashboard/API subdomain you reach, (b) database
+cluster — which physical EU ingest cluster serves DSN POSTs, (c) token-membership
+scope — which orgs the `SENTRY_AUTH_TOKEN` can read or write.
+
+DSN cluster substring resolves only axis (b). A 401 against
+`<slug>.sentry.io/api/0/organizations/<slug>/` is not evidence that the slug
+names an unowned org — it could equally mean the token has no membership in
+that slug. Cross-link: ADR-031 §Cluster/Host Glossary for the three-axis
+framing in operational use.
+
 ## Tags
 
 category: integration-issues

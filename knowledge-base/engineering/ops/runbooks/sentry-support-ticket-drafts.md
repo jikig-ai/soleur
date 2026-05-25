@@ -119,6 +119,8 @@ jean.deruelle@jikigai.com
 
 ## Human-response capture (post-async)
 
+> **[2026-05-19 UPDATE: Gate 3 resolved as 3b on 2026-05-19 — twelve days before T+14d expiry — via two unsolicited Sentry support replies (billing + Rodolfo forensics). 2026-05-21 follow-up: Sentry support canceled the duplicate `jikigai` org and transferred $29 credit to `jikigai-eu`. The capture flow below describes options that were never selected; it is preserved for audit-trail integrity. The load-bearing record now lives at PIR §Phase 9 Gate-3b Correction (`knowledge-base/engineering/ops/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md`) and Article 30 PA8 §(d) UPDATE block.]**
+
 When Sentry's Foundations team responds (via email to `jean.deruelle@jikigai.com`), update the PIR `## Phase 8 — Recovery Completeness` section in-place with the following steps in order:
 
 0. **Inbox query (Gmail).** Search the operator inbox for the Foundations-team reply with the query: `from:(intercom-mail.com OR notifications.intercom.com OR sentry.io) to:jean.deruelle@jikigai.com after:2026/05/17 before:2026/06/01`. The Intercom email-reply-from address may render as `notifications@intercom-mail.com` or as a per-conversation alias; both should be picked up by the OR clause. If zero results show at or after 2026-05-31T19:19Z UTC, select Gate 3 branch `3d` (T+14d timeout). If results exist with a `Date:` header ≤ 2026-05-31T19:19Z UTC, select from response content per step 3 below regardless of when the operator reads it (tie-breaker per PIR Phase 8 Gate 3d note).

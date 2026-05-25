@@ -88,12 +88,6 @@ variable "app_domain" {
   default     = "app.soleur.ai"
 }
 
-variable "deploy_ssh_public_key" {
-  description = "SSH public key for the deploy user (legacy, kept for migration period)"
-  type        = string
-  default     = ""
-}
-
 variable "cf_account_id" {
   description = "Cloudflare account ID (required for Zero Trust tunnel resources)"
   type        = string

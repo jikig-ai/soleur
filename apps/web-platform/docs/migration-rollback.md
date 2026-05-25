@@ -75,6 +75,24 @@ The deploy job depends on the migrate job succeeding
 (`needs.migrate.result == 'success'`), so a failing migration automatically
 blocks deployment.
 
+## Schema-Cache Reload (PGRST205 after apply)
+
+If supabase-js calls return `PGRST205: Could not find the table '…' in the
+schema cache` shortly after a migration apply, PostgREST's schema cache hasn't
+re-read yet. Causes: a direct-pg apply path (bypassing `run-migrations.sh`),
+or a transient failure in the post-apply Management-API NOTIFY.
+
+```bash
+doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
+doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh --help
+```
+
+The script POSTs `NOTIFY pgrst, 'reload schema'` to the Supabase Management
+API; PostgREST picks up the change in ~1 s. Requires `SUPABASE_PAT` in
+Doppler. Without it, PostgREST's natural ~10-minute schema poll handles the
+reload on its own. Context: learning
+`2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md` §1.
+
 ## Prevention Patterns
 
 - Use `IF EXISTS` / `IF NOT EXISTS` guards on all DDL statements.

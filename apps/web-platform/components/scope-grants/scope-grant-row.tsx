@@ -15,6 +15,7 @@ import {
   TRUST_TIER_COPY,
   type TrustTier,
 } from "@/lib/messages/trust-tier-copy";
+import { ACTION_CLASS_COPY } from "@/lib/messages/action-class-copy";
 import type {
   ActionClass,
   ActionClassTier,
@@ -121,13 +122,16 @@ export function ScopeGrantRow({
     });
   }
 
+  const copy = ACTION_CLASS_COPY[actionClass];
+
   return (
     <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-5">
-      <header className="mb-4 flex items-center justify-between">
-        <div>
-          <h2 className="font-medium text-soleur-text-primary">
-            {actionClass}
-          </h2>
+      <header className="mb-4 flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <h3 className="font-medium text-soleur-text-primary">{copy.title}</h3>
+          <p className="mt-1 text-sm text-soleur-text-secondary">
+            {copy.description}
+          </p>
           {committedTier && grantedAt ? (
             <p className="mt-1 text-xs text-soleur-text-muted">
               Active at {TRUST_TIER_COPY[committedTier].label} since{" "}
@@ -138,6 +142,9 @@ export function ScopeGrantRow({
               Not authorized — Soleur will not act on this class.
             </p>
           )}
+          <code className="mt-2 block text-xs text-soleur-text-muted">
+            {actionClass}
+          </code>
         </div>
         {committedTier ? (
           <button
@@ -156,7 +163,7 @@ export function ScopeGrantRow({
         disabled={isPending}
         aria-describedby={`${actionClass}-error`}
       >
-        <legend className="sr-only">Trust tier for {actionClass}</legend>
+        <legend className="sr-only">Trust tier for {copy.title}</legend>
         {TIER_ORDER.map((t) => {
           const copy = TRUST_TIER_COPY[t];
           const checked = selectedTier === t;

@@ -336,6 +336,47 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Doppler had the working `DATABASE_URL_POOLER` and applied via
    pg directly — the path it should have taken at step 1.
 
+   **Pre-apply collision check (always, even on first attempt).**
+   Before invoking pg apply (or `supabase migration up`) against any
+   shared env, run `git fetch origin main && git ls-tree origin/main
+   -- apps/web-platform/supabase/migrations/ | awk '{print $4}' |
+   grep -oE '^[0-9]{3}_[^.]+' | sort -u`. For each LOCAL migration
+   file the branch introduces, assert no DIFFERENT filename with the
+   same 3-digit prefix exists in that list. A collision means a
+   sibling PR is landing the same number window; renumber FIRST,
+   then apply under the final filename. **Why:** PR #4225 — applied
+   053–057 in the morning; PR #4251 landed `054_schema_migrations_
+   content_sha.sql` 10 hours later and main's CI drift probe flagged
+   the entire branch; the recovery (renumber 054→058, 055→059, 056→060,
+   057→061 + reconcile `public._schema_migrations` on both dev + prd
+   via `git hash-object` content_sha) took ~30 min and could have been
+   zero-cost if the operator had grepped origin/main first.
+
+   **Tracking row in the SAME transaction as the migration body.**
+   The project's canonical `apps/web-platform/scripts/run-migrations.sh`
+   writes `INSERT INTO public._schema_migrations (filename, content_sha)
+   VALUES ('<basename>', '<git-hash-object>')` in the same transaction
+   as the migration SQL. The Doppler+pg fallback MUST mirror this —
+   bare `BEGIN; <migration>; COMMIT;` produces a phantom-applied state
+   where the schema reflects the migration but `_schema_migrations`
+   does not, and the next deploy attempts re-apply (failing on
+   non-idempotent statements like `CREATE TRIGGER`). The reconciliation
+   pattern (UPSERT with `ON CONFLICT (filename) DO UPDATE SET
+   content_sha = EXCLUDED.content_sha`) is the recovery shape — but
+   doing it inline is cheaper.
+
+   **PostgREST schema cache reload via session-mode pooler does NOT
+   work.** `NOTIFY pgrst, 'reload schema'` over a `:5432` pooler
+   connection does not reach PostgREST's `LISTEN` (PgBouncer
+   multiplexes; LISTEN/NOTIFY channel scope is bound to backend
+   process identity, not session). 90 attempts over 5 minutes
+   returned `PGRST205`. After a direct-pg apply: either wait for the
+   natural ~10-min schema poll cycle, OR use the Supabase Management
+   API to restart PostgREST. The direct DB host
+   (`db.<ref>.supabase.co:5432`) is IPv6-only and typically
+   unreachable from operator networks, so the canonical "NOTIFY via
+   direct connection" workaround documented upstream isn't available.
+
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 
    Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):
@@ -440,6 +481,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Follow project coding standards (see CLAUDE.md)
    - When in doubt, grep for similar implementations
    - **Before writing a new format, date, or util helper in any app, `ls` + grep the app's canonical `lib/` directory (e.g., `apps/web-platform/lib/`) for equivalents.** Canonical helpers are often single-purpose small files named by verb (`relative-time.ts`, `format-currency.ts`); typecheck and tests will not catch duplicated logic. See `knowledge-base/project/learnings/2026-04-17-grep-lib-before-writing-format-helpers.md`.
+   - **When the plan's specified path is wrong and you correct it during implementation, immediately `git grep` the corrected path's basename across the diff scope and fix EVERY secondary citation in the same edit cycle.** The plan often appears as an authoritative path source in multiple secondary artifacts (Article 30 register entries, runbooks, ADRs, README references); fixing only the primary landing site leaves a silent drift the reviewer must catch. The plan is authoritative for intent, never for paths (`hr-when-a-plan-specifies-relative-paths-e-g`). **Why:** PR #4287 — plan §6.2 named `knowledge-base/engineering/runbooks/cron-retention-monitor.md`; runbook landed at the correct `engineering/ops/runbooks/...` but the PA-20 Article 30 entry cited the plan's wrong path; caught at multi-agent review by `git-history-analyzer`. See `knowledge-base/project/learnings/2026-05-22-or-semantics-allowlist-inverse-lint-and-keyset-cursor-tiebreak.md`.
    - **Before writing data-layer tests that use new PostgREST operators, read the shared mock helper (e.g., `apps/web-platform/test/helpers/mock-supabase.ts`) to confirm it covers every operator the code under test uses.** If not, extend it at the START of Phase 2, not after the first cryptic test failure.
    - **When extending a Supabase wrapper module (e.g., `apps/web-platform/server/conversation-writer.ts`) with a new chained method (`.eq`, `.select`, `.in`, `.maybeSingle`, etc.), grep `apps/web-platform/test/` for every supabase mock chain — both shared helpers (`test/helpers/*-mocks.ts`) AND inline `vi.mock("@supabase/supabase-js", ...)` setups — and extend each one in the same edit cycle.** `tsc` is silent on chain-shape drift; only the full vitest suite catches it. Recursive-by-default mock chains (every chained call returns the same chain object) survive future extensions transparently. Same class as `cq-raf-batching-sweep-test-helpers` and `cq-preflight-fetch-sweep-test-mocks` but for the data-layer fluent API. See `knowledge-base/project/learnings/best-practices/2026-04-27-wrapper-extension-test-mock-chain-sweep.md`.
    - **Before writing fixture-setup mutations (`upsert`/`insert`) in integration tests for a table whose parent has an `ON INSERT` trigger, grep migrations for `after insert on auth.users` (or equivalent) and replace the mutation with a SELECT assertion.** Redundant mutations mask trigger regressions — production signup silently breaks while the test keeps passing. Turn the setup step into a canary: read the row the trigger should have created, assert it exists. See `knowledge-base/project/learnings/security-issues/2026-04-18-rls-for-all-using-applies-to-writes.md`.
@@ -655,6 +697,23 @@ Before emitting `## Work Phase Complete` (one-shot mode) or chaining into the po
 
 **Form rationale.** `git rev-parse --abbrev-ref HEAD` matches `ship/SKILL.md:619` precedent and returns the literal `HEAD` on detached state (vs. `git branch --show-current` which returns empty), so the detached-HEAD guard catches both shapes. `git rev-list ... --count` returns a clean integer ready for `[[ "$N" == "0" ]]`; the `wc -l` shape requires a `tr -d` strip and is whitespace-padded. Precedent: `plugins/soleur/skills/ship/SKILL.md:619`, `.claude/hooks/ship-unpushed-commits-gate.sh`. **Distinct exit codes** (`2 = pause-and-commit`, `1 = halt-and-investigate`) let one-shot orchestrators distinguish the two recovery paths rather than treating both as opaque non-zero failures.
 
+#### Post-Merge Section Self-Audit (HARD GATE)
+
+After drafting the PR body and BEFORE `gh pr ready` / `gh pr merge --auto`, scan every line under headings matching `^##\s+(Post-?merge|Operator|Follow-?ups?)` (case-insensitive). For each bullet, classify and resolve **before** marking ready:
+
+| Pattern | Action |
+|---|---|
+| Doppler/env-var verification | Inline-execute via `doppler secrets get <KEY> -p soleur -c <env> --plain`; if missing, set from a known source via `doppler secrets set` or update the handler to read the existing canonical name. |
+| `Within Nh of merge: file <issue>` | File the issue NOW via `gh issue create` using the template the bullet describes; replace the bullet with `Done: #<num>`. |
+| `gh issue close` / `gh issue comment` on existing issues | Run NOW via `gh` CLI. |
+| Sentry / Better Stack / monitor verification | Replace with the monitor's own auto-page mechanism (`failure_issue_threshold = 1` is the verification — no operator gaze required per `hr-no-dashboard-eyeball-pull-data-yourself`). If active verification is still wanted, create a one-time scheduled workflow via `/soleur:schedule create --once --at <date>` with a self-disabling `verify-and-close-or-file-issue` body. |
+| Genuinely operator-only (CAPTCHA, SSO consent, payment-card entry, hardware MFA, K-bis-style first-onboarding) | File a `type/chore` issue carrying the literal `deferred-automation` sentinel via `gh issue create --label type/chore --body "deferred-automation backlog item; re-evaluate when: <criterion>" ...`, then add `Tracks #N` to the bullet in the PR body. |
+| Anything else | Inline-execute. Default-deny on "operator should later …" phrasing. |
+
+After resolution, re-scan; the section MUST contain zero unaccompanied operator/manual bullets. The `ship-operator-step-gate.sh` PreToolUse hook enforces this mechanically at `gh pr ready` / `gh pr merge --auto` — the gate's deny message lists each undeferred match. Override via `SOLEUR_SKIP_OPERATOR_STEP_GATE=1` is reserved for the rare attestation case.
+
+**Why:** PR #4227 (TR9 PR-3) shipped with a "Post-merge" section listing four operator items (Doppler secrets check, T+90 min Sentry verify, T+24h auto-resolve verify, file follow-up issue within 48h) — all four were inline-automatable; the agent had hard rules forbidding the deferral (`hr-exhaust-all-automated-options-before`, `hr-never-label-any-step-as-manual-without`, `wg-block-pr-ready-on-undeferred-operator-steps`) and still wrote the bullets. The gate existed at `/ship` Phase 5.5 but the agent reached `gh pr ready` directly. This self-audit + the hook close both halves of that bypass. See `knowledge-base/project/learnings/best-practices/2026-05-21-post-merge-section-self-audit.md`.
+
 #### Invocation Mode
 
 **If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Output exactly `## Work Phase Complete` and then **immediately invoke** `skill: soleur:review` (step 4 of the one-shot sequence). Do NOT end your turn after outputting the marker — you ARE the orchestrator, so you must continue executing one-shot steps 4 through 10 in order. The marker is a progress signal, not a stopping point.
@@ -758,4 +817,5 @@ For most features: tests + linting + following patterns is sufficient.
 - **Encoded-blob value sweep** - When removing a value from a file that contains base64, hex, JSON-string-escape, or URL-encoded forms (JWT fixtures, encoded config snapshots, request payloads), source-form `grep` is insufficient. After substitution, decode each blob and grep the **decoded** form for the removed value. **Why:** PR #3054 — `replace_all "ifsccnjhymdmidffkzhl"` returned 0 source hits but `JWT_LOG_INJECT_U2028`'s base64 payload still encoded the dev Supabase ref; the secret scanner would have re-fired. See `knowledge-base/project/learnings/security-issues/2026-04-29-jwt-fixture-reminting-decode-verify.md`.
 - **Local verification without Doppler** - For env-var-reading apps, use a single Bash call: `cd <abs-path> && doppler run -p soleur -c dev -- npm run <script>` (for `apps/web-platform`, `cd apps/web-platform && doppler run -p soleur -c dev -- npm run dev`). Prevents: (a) skipping `doppler run` (missing secrets), (b) invoking transitive binaries under `doppler run` (not on PATH), (c) relying on prior CWD (shell state doesn't persist). If port 3000 is already bound by another dev server (the user may have one running), start on an alternate port via `PORT=3099 doppler run ... npm run dev` rather than killing the existing process. (ex-`cq-for-local-verification-of-apps-doppler`; #2350 hit all three failure modes in sequence; PR #3199 added the alt-port fall-through after the stale `./scripts/dev.sh` reference broke startup)
 - **Closes-after-apply deferral missed in commit messages** - When a plan's `## Risks` (or `## Sharp Edges`) section names an explicit Closes-after-apply deferral (issue stays open until a post-merge PM step proves green — workflow first-run, terraform apply, deploy probe, etc.), commit messages AND PR body MUST default to `Ref #N`, not `Closes #N`, regardless of whether the commit body's `Closes` placement is technically `wg-use-closes-n-in-pr-body-not-title-to`-legal. Auto-close fires at merge time, decoupled from whether the proof artifact actually lands green. Detection: grep the plan for `Closes-after-apply`, `manual close after`, `Ref #N` + `close manually`, `type: ops-remediation`, or any explicit per-PM closure-link instruction. On match, emit `Ref #N` + 1-line WARN. The author manually `gh issue close N --comment "<run URL>"` post-PM. **Why:** PR #3551 — initial commit message used `Closes #3060` against plan §R6's `Ref #3060 + manual close after PM1 confirms first green run` directive; caught pre-push via self-audit, amended. See `knowledge-base/project/learnings/2026-05-11-plan-r6-closes-after-apply-deferral-pattern.md`.
+- **Parallel `gh issue create` scrambles ID-to-title mapping** - When a /work task files N related GitHub issues (e.g., a deferral-issues batch), `gh issue create ... &` + `wait` returns URLs in completion order, not start order. The first `gh` job to FINISH gets `#N`, the next gets `#N+1`, etc. — independently of which title started first. Worse, a transient GraphQL error on one parallel job is easy to misattribute to the wrong title. **Either serialize the calls** (~1.5–3s each is cheap for ≤5 issues), **or write each result to a name-keyed file** (`echo "$url" > "/tmp/issue-$short_name.url"`) so the title→ID mapping is explicit. **Always run `gh issue view <N> --json title` reconciliation before citing IDs in any artifact** (agent body, README, SKILL.md, plan). The cost of catching wrong IDs at PR review is ~30 minutes of recovery (close duplicate, file missing, edit artifacts, force-push); the cost of post-creation reconciliation is N seconds. **Why:** PR #4288 — 5 deferral issues filed in parallel; 3 of 5 IDs ended up inverted in the agent body, 1 was dropped (GraphQL error), 1 was a duplicate retry. See `knowledge-base/project/learnings/2026-05-22-parallel-gh-issue-create-scrambles-id-mapping-and-review-agent-producer-consumer-symmetry.md`.
 - **Relaunching a long-running background bash before verifying it died** - When a `run_in_background: true` task seems unresponsive, do NOT relaunch until ALL three checks confirm death: (1) broad `ps -ef \| grep -E '<substring>' \| grep -v grep` (never `pgrep -fa 'pattern$'` — anchored patterns miss processes wrapped in `doppler run -- bash ...`), (2) cache/output file size stopped growing over a 30+ second window, (3) the harness's `<task-notification>` has fired with a definitive `status` field. Log file `mtime` is NOT a liveness signal — long-running scripts buffer output between API calls. Relaunching prematurely concurrent-runs against the same API key and wastes paid spend. **Why:** PR #4156 — bench 1 was running fine the whole ~75 min, but `pgrep` with anchored pattern + stale log mtime led to two redundant bench launches (extra ~$2-3 Anthropic spend). See `knowledge-base/project/learnings/workflow-issues/2026-05-20-long-running-bench-verify-process-before-relaunch.md`.

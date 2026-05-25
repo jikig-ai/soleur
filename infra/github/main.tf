@@ -17,11 +17,22 @@ terraform {
   }
 }
 
-# Provider auth: GH_RULESET_PAT (Doppler prd_terraform) becomes TF_VAR_gh_token
-# via `doppler run --name-transformer tf-var --`. Fine-grained PAT scoped to
-# jikig-ai/soleur with Administration: Read+Write only. Rotation cadence
-# (90 days) documented in README.md Phase 4.
+# Provider auth: App-installation auth via the soleur-ai App (id 3261325,
+# org-wide installation 122213433 on jikig-ai). The integrations/github
+# provider exchanges App credentials for a short-lived installation token at
+# each `terraform plan/apply`. Migrated from PAT auth (the eliminated
+# `gh_token` variable) in #4384 per AGENTS.core.md hr-github-app-auth-not-pat,
+# mirroring the apps/web-platform/infra/main.tf:72-79 pattern landed by #4144.
+# App credentials live in Doppler `prd_terraform` as GITHUB_APP_ID +
+# GITHUB_APP_PRIVATE_KEY; rotation is App-side only. The App MUST have
+# Administration:Write permission (required for ruleset writes); verify at
+# https://github.com/organizations/jikig-ai/settings/installations/122213433
+# if a plan errors with 401 "Resource not accessible by integration".
 provider "github" {
-  owner = var.gh_owner
-  token = var.gh_token
+  owner = "jikig-ai"
+  app_auth {
+    id              = var.github_app_id
+    installation_id = "122213433"
+    pem_file        = var.github_app_private_key
+  }
 }

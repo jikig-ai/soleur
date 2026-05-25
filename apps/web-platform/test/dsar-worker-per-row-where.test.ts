@@ -94,21 +94,73 @@ describe("DSAR worker per-row WHERE lint (AC30)", () => {
     }
   });
 
-  it("every direct-owner table read carries .eq(<ownerField>, ...)", () => {
+  it("every direct-owner table read carries .eq(<ownerField>, ...) OR .or(...<ownerField>.eq....)", () => {
+    // .or() syntax allowed for tables with symmetric owner columns
+    // (e.g., workspace_member_attestations needs both invitee_user_id
+    // AND inviter_user_id to recover a departed-member's full row set
+    // — Kieran P1-1 / #4230). The lint contract is "the owner column
+    // is constrained per-row", satisfied equivalently by .eq(C, X) or
+    // by .or("C.eq.X,...") — both are positive predicates over C.
     for (const c of chains) {
       const spec = DSAR_TABLE_ALLOWLIST[c.table];
       if (!spec) continue; // not an allowlisted table — out of lint scope
       if (spec.joinVia) continue; // join-via tables checked in next test
 
-      const expected = new RegExp(`\\.eq\\(\\s*["']${spec.ownerField}["']`);
+      // OR-semantic tables (audit logs with actor + target columns)
+      // declare extra owner columns in `additionalOwnerFields`. Each
+      // chain must carry .eq() OR PostgREST `.or(...col.eq....)` on AT
+      // LEAST ONE of the declared owner columns. The worker writes one
+      // chain per column and merges results; this lint accepts either
+      // shape on any column.
+      const ownerFields = [spec.ownerField, ...(spec.additionalOwnerFields ?? [])];
+      const matched = ownerFields.some((col) => {
+        const eqShape = new RegExp(`\\.eq\\(\\s*["']${col}["']`);
+        // PostgREST `.or()` string: column.eq.value tokens joined by `,`.
+        // Match `<col>.eq.` (any case for the value side).
+        const orShape = new RegExp(`\\.or\\([^)]*?\\b${col}\\.eq\\.`);
+        return eqShape.test(c.chain) || orShape.test(c.chain);
+      });
       expect(
-        expected.test(c.chain),
+        matched,
         `service.from("${c.table}") chain at offset ${c.offset} is missing ` +
-          `\`.eq("${spec.ownerField}", expectedUserId)\`. Per AC30 every ` +
-          `worker read of an allowlisted table MUST carry a positive ` +
-          `per-row predicate over its owner column. Chain snippet: ` +
-          `${c.chain.slice(0, 200)}…`,
+          `\`.eq("<owner>", expectedUserId)\` or \`.or("...<owner>.eq.X,...")\` ` +
+          `for any of: ${ownerFields.join(", ")}. Per AC30 every worker read ` +
+          `of an allowlisted table MUST carry a positive per-row predicate ` +
+          `over at least one owner column. Chain snippet: ${c.chain.slice(0, 200)}…`,
       ).toBe(true);
+    }
+  });
+
+  it("every declared owner column has at least one .eq(<col>, ...) chain in the worker (inverse lint)", () => {
+    // Symmetric to the previous lint. The forward lint ensures every chain
+    // carries .eq() on AT LEAST ONE declared column; the inverse ensures
+    // every declared column has AT LEAST ONE chain — otherwise a future
+    // refactor that drops the `target_user_id` chain leaves the actor chain
+    // satisfying the forward lint alone, and Art. 15 silently loses the
+    // target-side rows. Same failure class as the FAQ-parity drift the
+    // pattern-recognition Sharp Edges document warns about.
+    for (const [tableName, spec] of Object.entries(DSAR_TABLE_ALLOWLIST)) {
+      if (spec.joinVia) continue; // join-via tables have their own scope check
+      const ownerFields = [spec.ownerField, ...(spec.additionalOwnerFields ?? [])];
+      if (ownerFields.length < 2) continue; // single-column tables covered by the chain-presence test above
+      const tableChains = chains.filter((c) => c.table === tableName);
+      for (const col of ownerFields) {
+        const eqShape = new RegExp(`\\.eq\\(\\s*["']${col}["']`);
+        const orShape = new RegExp(`\\.or\\([^)]*?\\b${col}\\.eq\\.`);
+        const covered = tableChains.some(
+          (c) => eqShape.test(c.chain) || orShape.test(c.chain),
+        );
+        expect(
+          covered,
+          `Allowlisted table "${tableName}" declares owner column "${col}" ` +
+            `(via ownerField or additionalOwnerFields) but NO service.from("${tableName}") ` +
+            `chain in dsar-export.ts carries \`.eq("${col}", expectedUserId)\` or ` +
+            `\`.or("...${col}.eq.X,...")\`. Art. 15 completeness REQUIRES one read ` +
+            `chain per declared owner column; silent omission would drop rows where ` +
+            `the user appears via this column only. Add a per-column chain or remove ` +
+            `the column from additionalOwnerFields with a documented rationale.`,
+        ).toBe(true);
+      }
     }
   });
 

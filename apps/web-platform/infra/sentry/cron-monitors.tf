@@ -22,19 +22,17 @@
 # convention.
 #
 # `failure_issue_threshold` default is 1 (single missed check-in opens an
-# issue). The two exceptions (oauth-probe and github-app-drift-guard, set
-# to 2) both fire hourly, where a single transient network hiccup is more
-# likely than a real failure — requiring two consecutive misses raises
-# the noise floor without losing the signal. All other monitors fire
-# daily/weekly where a single miss is itself noteworthy.
+# issue). All hourly Inngest-fired monitors use 1; daily/weekly monitors
+# use 1 because a single miss on a daily monitor is itself noteworthy.
 #
-# `checkin_margin_minutes` is sized to observed GitHub Actions cron
-# behavior, not the workflow's `cron:` expression. Sub-hourly schedules
-# routinely degrade to ~60 min under runner-pool load; hourly schedules
-# observe ~10-30 min daytime jitter and longer overnight gaps. Margins
-# are intentionally generous enough to absorb daytime jitter while still
-# treating a deep overnight gap (paired with `failure_issue_threshold = 2`)
-# as real signal.
+# `checkin_margin_minutes` is sized per-substrate. All hourly cron monitors
+# are now Inngest-fired (`scheduled_oauth_probe`, `scheduled_github_app_drift_guard`)
+# and use a 30-min margin — Inngest fires deterministically with ≤2-min
+# jitter, so 30 is honest. Daily/weekly monitors use 30-240 min as their
+# observed jitter dictates. The TR9 substrate-migration sequence completed
+# the move off GHA hourly cron: PR-1 #3985 (daily-triage), PR-2 #4062
+# (follow-through), PR-3 #4227 closing issue #4211 (oauth-probe), PR-4
+# closing issue #4235 (github-app-drift-guard).
 #
 # `max_runtime_minutes` only matters for two-step (in_progress -> ok/error)
 # check-ins where Sentry can detect a job exceeding its declared budget.
@@ -59,6 +57,11 @@ resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   timezone                = "UTC"
 }
 
+# TR9 PR-3 (closes #4211): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-oauth-probe.ts`. The GHA
+# scheduled-oauth-probe workflow was deleted in the same commit per TR9 I-13
+# hygiene. Resource id, `name`, and Sentry monitor slug UNCHANGED —
+# historical check-in continuity preserved.
 resource "sentry_cron_monitor" "scheduled_oauth_probe" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
@@ -66,7 +69,7 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
   schedule                = { crontab = "0 * * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
-  failure_issue_threshold = 2
+  failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
 }
@@ -79,14 +82,36 @@ resource "sentry_cron_monitor" "scheduled_oauth_probe" {
 # workflow's schedule line lands in `.github/workflows/scheduled-cf-token-
 # expiry-check.yml` lines 13-15.
 
+# TR9 PR-4 (closes #4235): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts`.
+# The GHA scheduled-github-app-drift-guard workflow was deleted in the same
+# commit per TR9 I-13 hygiene. Resource id, `name`, and Sentry monitor slug
+# UNCHANGED — historical check-in continuity preserved.
 resource "sentry_cron_monitor" "scheduled_github_app_drift_guard" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-github-app-drift-guard"
   schedule                = { crontab = "0 * * * *" }
-  checkin_margin_minutes  = 180
+  checkin_margin_minutes  = 30
   max_runtime_minutes     = 10
-  failure_issue_threshold = 2
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# TR9 PR-5 (closes #4376): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts`. NEW
+# monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
+# with no Sentry check-in). The GHA scheduled-bug-fixer workflow was
+# deleted in the same commit per TR9 I-13 hygiene.
+resource "sentry_cron_monitor" "scheduled_bug_fixer" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-bug-fixer"
+  schedule                = { crontab = "0 6 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
 }

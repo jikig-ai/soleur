@@ -548,6 +548,301 @@ export async function exportSqlTable(
     });
   }
 
+  // -- template_authorizations (per-template authorization ledger; migration 053, PR-I #4078) --
+  // Art. 15+20: the founder explicitly authorised each template via the
+  // first-send-IS-authorization pattern (the Send click on a labeled
+  // draft_one_click button IS the Art. 7(3) "specific" + "informed"
+  // consent act). The ledger captures (template_hash, action_class,
+  // authorized_at, expires_at, soft_reconfirm_at, max_sends, revoked_at,
+  // revocation_reason, grant_id). Pure-template-hash + bounds are
+  // user-generated context — Art. 20 portability applies alongside
+  // Art. 15 access. WORM trigger + anonymise_template_authorizations
+  // RPC handle erasure separately.
+  {
+    const { data, error } = await service
+      .from("template_authorizations")
+      .select("*")
+      .eq("founder_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) {
+      throw new Error(`template_authorizations read failed: ${error.message}`);
+    }
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "template_authorizations", {
+      ownerField: "founder_id",
+    });
+    results.push({
+      table: "template_authorizations",
+      spec: DSAR_TABLE_ALLOWLIST.template_authorizations,
+      rows,
+    });
+  }
+
+  // -- organizations (migration 053, feat-team-workspace-multi-user) ----
+  // Art. 15: every organization the user owns (1:1 today, N:1 future
+  // when an operator-managed org adopts existing user as owner). Direct
+  // ownerField = owner_user_id; no JOIN required.
+  {
+    const { data, error } = await service
+      .from("organizations")
+      .select("*")
+      .eq("owner_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`organizations read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "organizations", {
+      ownerField: "owner_user_id",
+    });
+    results.push({
+      table: "organizations",
+      spec: DSAR_TABLE_ALLOWLIST.organizations,
+      rows,
+    });
+  }
+
+  // -- workspace_members (migration 053) --------------------------------
+  // Art. 15+20: every membership row the user holds. Direct
+  // ownerField = user_id; the row is user-provided (they clicked accept
+  // on the invite) so portability applies. After a member is removed
+  // via remove_workspace_member (058+062), their workspace_members row
+  // is gone — the historical-attestations UNION below recovers
+  // workspaceIds so the workspaces export still includes the workspace
+  // they left.
+  let workspaceIds: string[] = [];
+  {
+    const { data, error } = await service
+      .from("workspace_members")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(`workspace_members read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "workspace_members", {
+      ownerField: "user_id",
+    });
+    workspaceIds = rows
+      .map((r) => r.workspace_id)
+      .filter((v): v is string => typeof v === "string");
+    results.push({
+      table: "workspace_members",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_members,
+      rows,
+    });
+  }
+
+  // -- workspaceIds historical UNION (Approach A — #4230) ---------------
+  // Add workspace_id values from workspace_member_attestations rows
+  // where the user is the invitee — recovers workspaces the user has
+  // since left (their workspace_members row was DELETEd by
+  // remove_workspace_member, but the attestation row is WORM and
+  // survives). Without this UNION a departed member's DSAR bundle
+  // silently omits any workspace they left, which fails Art. 15
+  // completeness for the workspaces export block below.
+  {
+    const { data, error } = await service
+      .from("workspace_member_attestations")
+      .select("workspace_id")
+      .eq("invitee_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_member_attestations (workspaceIds UNION) read failed: ${error.message}`,
+      );
+    const historicalIds = ((data ?? []) as { workspace_id?: unknown }[])
+      .map((r) => r.workspace_id)
+      .filter((v): v is string => typeof v === "string");
+    workspaceIds = Array.from(new Set([...workspaceIds, ...historicalIds]));
+  }
+
+  // -- workspaces (joinVia workspace_members) ---------------------------
+  // Art. 15: the workspace rows the user belongs to, reached through
+  // the workspace_members JOIN above (no direct user_id column on
+  // workspaces). Cross-tenant scope: every returned row's id MUST
+  // appear in the owner-scoped workspaceIds set (otherwise raise
+  // CrossTenantViolation, mirroring the messages-via-conversations
+  // shape).
+  if (workspaceIds.length > 0) {
+    const { data, error } = await service
+      .from("workspaces")
+      .select("*")
+      .in("id", workspaceIds);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`workspaces read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    const ownedSet = new Set(workspaceIds);
+    for (const row of rows) {
+      if (typeof row.id !== "string" || !ownedSet.has(row.id)) {
+        const err = new CrossTenantViolation(
+          "workspaces",
+          expectedUserId,
+          null,
+        );
+        mirrorCrossTenantViolation(null, expectedUserId, "workspaces", err);
+        throw err;
+      }
+    }
+    results.push({
+      table: "workspaces",
+      spec: DSAR_TABLE_ALLOWLIST.workspaces,
+      rows,
+    });
+  } else {
+    results.push({
+      table: "workspaces",
+      spec: DSAR_TABLE_ALLOWLIST.workspaces,
+      rows: [],
+    });
+  }
+
+  // -- workspace_member_attestations (migration 058) --------------------
+  // Art. 15: WORM consent records the user clicked-accept on. Both the
+  // INVITEE side (rows where the user clicked accept) and the INVITER
+  // side (rows where the user invited someone) are personal data the
+  // user has the right to access — once removed from the workspace,
+  // a one-sided `.eq("invitee_user_id", X)` would miss every inviter-
+  // side row, especially for ex-members whose workspace_members linkage
+  // is gone (#4230 Kieran P1-1).
+  //
+  // The `.or()` filter recovers BOTH sides under one query. The inlined
+  // two-arm scope check below (NOT assertReadScope — which is single-
+  // ownerField) asserts each returned row's owner column matches
+  // expectedUserId on EITHER invitee_user_id OR inviter_user_id.
+  {
+    const { data, error } = await service
+      .from("workspace_member_attestations")
+      .select("*")
+      .or(
+        `invitee_user_id.eq.${expectedUserId},inviter_user_id.eq.${expectedUserId}`,
+      );
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_member_attestations read failed: ${error.message}`,
+      );
+    const rows = (data ?? []) as Record<string, unknown>[];
+    // Two-arm scope check: row belongs to expectedUserId iff EITHER
+    // invitee_user_id OR inviter_user_id matches. Anonymised (post-
+    // Art-17) rows where both columns are NULL are surfaced via the
+    // .or() because the row's anonymise transition is the cascade
+    // signal; but the response set must not contain rows where NEITHER
+    // column matches the user (PostgREST .or() shape never returns
+    // those, but we re-assert defensively).
+    for (const row of rows) {
+      const inv = (row as { invitee_user_id?: unknown }).invitee_user_id;
+      const inr = (row as { inviter_user_id?: unknown }).inviter_user_id;
+      const ok = inv === expectedUserId || inr === expectedUserId;
+      if (!ok) {
+        const offending =
+          typeof inv === "string"
+            ? inv
+            : typeof inr === "string"
+            ? inr
+            : null;
+        const err = new CrossTenantViolation(
+          "workspace_member_attestations",
+          expectedUserId,
+          offending,
+        );
+        mirrorCrossTenantViolation(
+          offending,
+          expectedUserId,
+          "workspace_member_attestations",
+          err,
+        );
+        throw err;
+      }
+    }
+    results.push({
+      table: "workspace_member_attestations",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_member_attestations,
+      rows,
+    });
+  }
+
+  // -- workspace_member_removals (migration 062, #4230) -----------------
+  // Art. 15: WORM ledger of removal events. ownerField =
+  // removed_user_id; assertReadScope single-arm because the row's
+  // identity-of-record is the removed user. The actor (removed_by_user_id)
+  // sees their own outgoing removals when they file their own DSAR via
+  // a separate sibling query — but the Art. 15 owner here is the
+  // removed party. After Art. 17 anonymise both PII columns are NULL;
+  // the row stays for the 36-mo retention window and falls out of
+  // every owner-scoped SELECT (NULL never matches `.eq(<owner>, X)`).
+  {
+    const { data, error } = await service
+      .from("workspace_member_removals")
+      .select("*")
+      .eq("removed_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_member_removals read failed: ${error.message}`,
+      );
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "workspace_member_removals", {
+      ownerField: "removed_user_id",
+    });
+    results.push({
+      table: "workspace_member_removals",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_member_removals,
+      rows,
+    });
+  }
+
+  // -- workspace_member_actions (migration 063, #4231) ------------------
+  // Art. 15: append-only audit log of membership mutations. The user
+  // can be either the actor (owner who added/removed/role-changed
+  // someone) or the target (the affected member). OR-semantics requires
+  // two separate per-row WHERE chains; each chain carries its own .eq()
+  // for the per-row-where lint (AC30). Results merged + deduped by id
+  // before push so a row where both actor and target are the same user
+  // (structurally impossible for v1 RPCs but defensive) is not double-
+  // counted.
+  {
+    const { data: actorRows, error: actorErr } = await service
+      .from("workspace_member_actions")
+      .select("*")
+      .eq("actor_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (actorErr)
+      throw new Error(
+        `workspace_member_actions (actor) read failed: ${actorErr.message}`,
+      );
+    const actorTyped = (actorRows ?? []) as Record<string, unknown>[];
+    assertReadScope(actorTyped, expectedUserId, "workspace_member_actions", {
+      ownerField: "actor_user_id",
+    });
+
+    const { data: targetRows, error: targetErr } = await service
+      .from("workspace_member_actions")
+      .select("*")
+      .eq("target_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (targetErr)
+      throw new Error(
+        `workspace_member_actions (target) read failed: ${targetErr.message}`,
+      );
+    const targetTyped = (targetRows ?? []) as Record<string, unknown>[];
+    assertReadScope(targetTyped, expectedUserId, "workspace_member_actions", {
+      ownerField: "target_user_id",
+    });
+
+    const seen = new Set<string>();
+    const merged: Record<string, unknown>[] = [];
+    for (const row of [...actorTyped, ...targetTyped]) {
+      const id = row.id;
+      if (typeof id !== "string" || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(row);
+    }
+    results.push({
+      table: "workspace_member_actions",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_member_actions,
+      rows: merged,
+    });
+  }
+
   return results;
 }
 

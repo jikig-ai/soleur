@@ -98,18 +98,22 @@ jobs:
       - name: Service-role allowlist gate self-test
         run: bash apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
 
-  # T&C document SHA + mirror drift guardrail (feat-oauth-tc-consent-3205).
-  # Asserts (a) canonical doc and plugin docs-site mirror have identical
-  # normalised prose bodies and (b) TC_DOCUMENT_SHA literal in
-  # apps/web-platform/lib/legal/tc-version.ts matches sha256(canonical)
-  # unless the same PR also bumped TC_VERSION. See plan AC7 + Phase 6.
+  # Legal-doc SHA-pin guard (all 9 docs) + T&C mirror-drift guard
+  # (feat-oauth-tc-consent-3205, extended #4324). Job name preserved
+  # because infra/github/ruleset-ci-required.tf pins this context per
+  # ADR-032; rename requires a paired terraform apply (out of scope).
+  # Asserts every canonical at docs/legal/*.md has a matching SHA
+  # literal (TC_DOCUMENT_SHA in tc-version.ts for T&C; LEGAL_DOC_SHAS
+  # in legal-doc-shas.ts for the other 8) and, for T&C only, that the
+  # Eleventy mirror prose body is identical after normalisation. The
+  # T&C SHA bypass via TC_VERSION bump is preserved.
   tc-document-sha-guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
-      - name: Verify T&C document SHA pinned in tc-version.ts
+      - name: Verify all 9 legal-doc SHAs pinned
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
         run: bash apps/web-platform/scripts/check-tc-document-sha.sh
@@ -134,6 +138,16 @@ jobs:
           # not enforced here because the committed artifact lags the
           # aggregator until the first post-merge Sunday run.
 
+  # Regenerates apps/web-platform/package-lock.json under a pinned npm
+  # major and diffs against the committed file. Catches the `bun add`
+  # defect class (package.json changes without lockfile sync) AND the
+  # operator/CI npm-major-skew defect class — recurrence history:
+  #   - #4014 (2026-04, libc-arrays shape facet, operator-side `npx npm@10`)
+  #   - #4331 (2026-05, regression — flagsmith bun-add)
+  #   - #4334 (2026-05, hotfix regenerated under npm 11 but CI was on npm 10)
+  #   - #4337 (2026-05, this PR — codified the pin inside the gate)
+  # The pin step below is the durable fix; see
+  # knowledge-base/project/learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md.
   lockfile-sync:
     runs-on: ubuntu-latest
     steps:
@@ -144,6 +158,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Override bundled npm with npm@11
+        # `actions/setup-node@v4.4.0` ships npm 10.9.x with node-version 22 and
+        # has no `npm-version` input — `npm install -g npm@<major>` is the only
+        # available pin mechanism. Operators on Node 23+ or post-`bun add`
+        # flows produce npm 11 lockfiles; pinning here keeps CI and the
+        # committed lockfile on the same major so the regenerate-and-diff
+        # check below is meaningful. The bundled npm 10.x is discarded
+        # (the global install replaces it for the rest of this job only).
+        run: npm install -g npm@11
+
       - name: Regenerate package-lock.json
         working-directory: apps/web-platform
         run: npm install --package-lock-only
@@ -152,7 +176,7 @@ jobs:
         run: |
           if ! git diff --exit-code apps/web-platform/package-lock.json; then
             echo "::error::package-lock.json is out of sync with package.json in apps/web-platform/."
-            echo "::error::Run 'npm install' in apps/web-platform/ and commit the updated package-lock.json."
+            echo "::error::Run 'npx --yes npm@11 install --package-lock-only' in apps/web-platform/ and commit the updated package-lock.json. (CI pins npm@11 — using a different npm version locally will produce a divergent lockfile shape.)"
             exit 1
           fi
 

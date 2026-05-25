@@ -101,6 +101,9 @@ export async function POST(request: Request) {
 
   const isStartFresh = body.source === "start_fresh";
 
+  // Solo provisioning: `user.id` is the workspace_id (N2 invariant —
+  // migration 053 §1.1.7). Team-invite repo-setup flows (Phase 5) will
+  // resolve the target workspace_id first.
   provisionWorkspaceWithRepo(
     user.id,
     repoUrl,

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 // Legal-doc consistency guard (per plan Phase 6, TS19, learning #16):
@@ -23,16 +23,31 @@ import { resolve } from "node:path";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 
-// Phase 6 touches these five docs in both source and mirror. Other legal
-// docs (cookie-policy, disclaimer, etc.) are out of scope for this PR;
-// adding them later is a one-line extension here.
-const DOCS = [
+// DOCS is derived from the filesystem to eliminate the hand-edited-list
+// drift surface that produced #4324. Per learning
+// 2026-05-22-ci-parity-test-docs-arrays-are-themselves-a-drift-surface.md,
+// adding a new legal doc only requires a single filesystem write to
+// docs/legal/ — the test picks it up automatically. The meta-assertion
+// below catches an accidental deletion or a glob miss.
+const DOCS = readdirSync(resolve(REPO_ROOT, "docs/legal"))
+  .filter((f) => f.endsWith(".md"))
+  .map((f) => f.replace(/\.md$/, ""))
+  .sort();
+
+// Docs that legitimately lack a body `**Last Updated:**` line. The
+// Last-Updated date test below skips body-line assertions for these
+// (mirror-hero-date assertions still apply where the hero exists).
+//
+// - individual-cla / corporate-cla: by design (CLAs use Git tags +
+//   the in-file `**Version:**` line for versioning).
+// - cookie-policy: historical pattern — only the Eleventy hero <p>
+//   carries the date; canonical uses `**Last updated:**` (lowercase u)
+//   which the body regex below intentionally does not match.
+const NO_BODY_LAST_UPDATED: ReadonlySet<string> = new Set([
   "individual-cla",
   "corporate-cla",
-  "privacy-policy",
-  "data-protection-disclosure",
-  "gdpr-policy",
-] as const;
+  "cookie-policy",
+]);
 
 /** Strip YAML frontmatter delimited by `---` at the start of the file. */
 function stripFrontmatter(s: string): string {
@@ -68,6 +83,26 @@ function loadMirror(doc: string): string {
 }
 
 describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
+  test("DOCS covers all expected legal documents", () => {
+    // Sentinel guard against a glob miss or accidental doc deletion. If a
+    // new doc lands the count grows naturally; if a doc is removed by
+    // mistake (or the glob silently fails to pick one up), this fails.
+    expect(DOCS.length).toBeGreaterThanOrEqual(9);
+    expect(DOCS).toEqual(
+      expect.arrayContaining([
+        "acceptable-use-policy",
+        "cookie-policy",
+        "corporate-cla",
+        "data-protection-disclosure",
+        "disclaimer",
+        "gdpr-policy",
+        "individual-cla",
+        "privacy-policy",
+        "terms-and-conditions",
+      ]),
+    );
+  });
+
   test.each(DOCS)(
     "%s: section-heading sequence matches between source and mirror",
     (doc) => {
@@ -116,14 +151,25 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
     // The hero <p> and the body **Last Updated:** line both carry the
     // date; we only assert the *date* matches the source body's date.
     // The "previous:" history fragment is allowed to drift (legacy).
+    //
+    // Docs in NO_BODY_LAST_UPDATED skip the body-line assertion; the
+    // mirror-hero-date assertion still applies if the mirror has a hero
+    // Last-Updated.
     for (const doc of DOCS) {
       const source = loadSource(doc);
       const mirror = loadMirror(doc);
       const sourceDate = source.match(/\*\*Last Updated:\*\*\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})/);
       const mirrorBodyDate = mirror.match(/\*\*Last Updated:\*\*\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})/);
       const mirrorHeroDate = mirror.match(/Last Updated\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})/);
-      // The CLA docs have no Last Updated -- skip them.
+      if (NO_BODY_LAST_UPDATED.has(doc)) {
+        // Allowlisted — no body-line assertion. Skip mirror-hero check
+        // too because docs in this set use a different date discipline
+        // (CLAs: Git tags + Version; cookie-policy: hero-only, with
+        // lowercase "updated" intentionally not matched by the regex).
+        continue;
+      }
       if (!sourceDate) {
+        // Source legitimately has no body Last Updated. Mirror must match.
         expect(mirrorBodyDate, `${doc}: source has no Last Updated, mirror should match`).toBeNull();
         continue;
       }

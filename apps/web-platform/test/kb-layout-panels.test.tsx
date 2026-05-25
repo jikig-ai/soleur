@@ -113,10 +113,15 @@ describe("KbLayout — resizable panels", () => {
     const { default: KbLayout } = await import(
       "@/app/(dashboard)/dashboard/kb/layout"
     );
+    const { FeatureFlagProvider } = await import(
+      "@/components/feature-flags/provider"
+    );
     return render(
-      <KbLayout>
-        <div data-testid="content-page">File content</div>
-      </KbLayout>,
+      <FeatureFlagProvider flags={{ "kb-chat-sidebar": true, "dev-signin": false, "team-workspace-invite": false }}>
+        <KbLayout>
+          <div data-testid="content-page">File content</div>
+        </KbLayout>
+      </FeatureFlagProvider>,
     );
   }
 

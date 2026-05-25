@@ -61,15 +61,25 @@ done
 
 log() { printf '[inngest-bootstrap] %s\n' "$*" >&2; }
 
-# Idempotency short-circuit: skip everything if the service is active AND
-# the recorded version matches the requested version. Second invocation of
-# the same vX.Y.Z is a no-op (~50ms).
+# Idempotency short-circuit: when the server is already active AND the recorded
+# version matches, skip the binary download/install + server unit write — but
+# ALWAYS fall through to reconcile heartbeat units, env file, and daemon-reload.
+# Without this, a bootstrap-script fix (e.g. PR #4123's doppler-run heartbeat
+# wrap) stays masked indefinitely: the version match short-circuits before the
+# unit writes, so the host runs the OLD unit shape even though the deployed
+# image embeds the new script. Surfaced 2026-05-20 during the #4144 cascade —
+# v1.0.1 image carried the heartbeat fix but every no-op redeploy skipped the
+# unit reconcile, leaving inngest-heartbeat.service in `failed` with
+# `curl: (3) URL rejected: Malformed input to a URL function`.
+SKIP_BINARY_INSTALL=
 if [[ -f "$VERSION_FILE" ]] && [[ "$(cat "$VERSION_FILE" 2>/dev/null || true)" == "$INNGEST_CLI_VERSION" ]]; then
   if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
-    log "inngest-server.service already active at $INNGEST_CLI_VERSION — no-op"
-    exit 0
+    log "inngest-server.service already active at $INNGEST_CLI_VERSION — skipping binary install, reconciling units"
+    SKIP_BINARY_INSTALL=1
   fi
 fi
+
+if [[ -z "$SKIP_BINARY_INSTALL" ]]; then
 
 # Detect in-place version upgrade (existing service running an older version).
 # Pause the server so the in-memory queue drains to the SQLite store before
@@ -156,6 +166,8 @@ TimeoutStopSec=180
 WantedBy=multi-user.target
 UNITEOF
 
+fi  # end SKIP_BINARY_INSTALL guard — heartbeat reconcile below always runs
+
 # Heartbeat ping script + service + 60s timer.
 # The URL lives in $INNGEST_HEARTBEAT_URL — resolved at ExecStart time via
 # `doppler run --project soleur --config prd` (same pattern as
@@ -195,6 +207,13 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+User=deploy
+Group=deploy
+# Doppler CLI calls os.UserHomeDir() during init even when DOPPLER_CONFIG_DIR
+# is set in the env file. Running as root with no HOME triggers
+# "Doppler Error: \$HOME is not defined". User=deploy gets HOME=/home/deploy
+# automatically, matching inngest-server.service's hardening pattern.
+# Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
 ExecStart=${DOPPLER_BIN} run --project soleur --config prd -- ${HEARTBEAT_SCRIPT}
 HEARTBEATEOF
@@ -259,12 +278,137 @@ echo "$INNGEST_CLI_VERSION" > "$VERSION_FILE"
 systemctl daemon-reload
 systemctl enable --now inngest-server.service
 systemctl enable --now inngest-heartbeat.timer
+# Force one heartbeat tick now so a unit-shape change (e.g. ExecStart) takes
+# effect immediately rather than waiting up to 60s for the next timer fire.
+# Oneshot in `failed` state: restart re-runs ExecStart with the new unit.
+systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-zero (timer will retry in 60s)"
 
 # Resume from upgrade pause (if any).
-if [[ -n "$UPGRADE_FROM" ]]; then
+if [[ -n "${UPGRADE_FROM:-}" ]]; then
   sleep 2  # let the new server bind loopback before resume
   "$INSTALL_PATH" resume >/dev/null 2>&1 || log "warn: resume command failed (server is still running)"
   log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"
 fi
 
 log "bootstrap complete: inngest-server $INNGEST_CLI_VERSION active on 127.0.0.1:8288"
+
+# ----------------------------------------------------------------------
+# Vector observability shipper — ships journald + host_metrics to Better
+# Stack Logs via Vector's native `better_stack_logs` sink (#4273 pivot
+# from the original Sentry envelope target). ci-deploy.sh still captures
+# stderr at the sudo boundary into /tmp/inngest-bootstrap-stderr.log so
+# any future failure surfaces via the deploy-status endpoint without
+# needing SSH (permanent diagnostic kept post-pivot).
+# envelope endpoint. Same Doppler-injected envs as inngest-heartbeat
+# (SENTRY_INGEST_DOMAIN / SENTRY_PROJECT_ID / SENTRY_PUBLIC_KEY); no new
+# secrets minted.
+#
+# Idempotency: matches the inngest path — version file at
+# `/var/lib/vector/version`, sha256-verify on download, skip-install when
+# version matches.
+# ----------------------------------------------------------------------
+
+VECTOR_CLI_VERSION="${VECTOR_CLI_VERSION:-}"
+VECTOR_CLI_SHA256="${VECTOR_CLI_SHA256:-}"
+
+if [[ -z "$VECTOR_CLI_VERSION" || -z "$VECTOR_CLI_SHA256" ]]; then
+  log "warn: VECTOR_CLI_VERSION + VECTOR_CLI_SHA256 unset — skipping Vector install (observability shipper deferred until next bootstrap)"
+else
+  readonly VECTOR_INSTALL_PATH="/usr/local/bin/vector"
+  readonly VECTOR_VERSION_FILE="/var/lib/vector/version"
+  readonly VECTOR_CONFIG_DIR="/etc/vector"
+  readonly VECTOR_CONFIG="$VECTOR_CONFIG_DIR/vector.toml"
+  readonly VECTOR_UNIT="/etc/systemd/system/vector.service"
+  readonly VECTOR_DOWNLOAD_URL="https://packages.timber.io/vector/${VECTOR_CLI_VERSION}/vector-${VECTOR_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+
+  install_vector_binary() {
+    local current=""
+    [[ -f "$VECTOR_VERSION_FILE" ]] && current="$(cat "$VECTOR_VERSION_FILE")"
+    if [[ "$current" == "$VECTOR_CLI_VERSION" && -x "$VECTOR_INSTALL_PATH" ]]; then
+      log "vector $VECTOR_CLI_VERSION already installed; skipping download"
+      return 0
+    fi
+    log "downloading vector $VECTOR_CLI_VERSION"
+    local tmp
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' RETURN
+    curl -fsSL --max-time 120 -o "$tmp/vector.tar.gz" "$VECTOR_DOWNLOAD_URL"
+    local actual_sha
+    actual_sha="$(sha256sum "$tmp/vector.tar.gz" | awk '{print $1}')"
+    if [[ "$actual_sha" != "$VECTOR_CLI_SHA256" ]]; then
+      log "error: vector sha256 mismatch: expected $VECTOR_CLI_SHA256 actual $actual_sha"
+      return 1
+    fi
+    tar -xzf "$tmp/vector.tar.gz" -C "$tmp"
+    install -m 0755 "$tmp"/vector-x86_64-unknown-linux-musl/bin/vector "$VECTOR_INSTALL_PATH"
+    mkdir -p "$(dirname "$VECTOR_VERSION_FILE")"
+    echo "$VECTOR_CLI_VERSION" > "$VECTOR_VERSION_FILE"
+  }
+
+  install_vector_binary || { log "warn: vector install failed; skipping rest of observability bootstrap"; }
+
+  if [[ -x "$VECTOR_INSTALL_PATH" ]]; then
+    # The config file content is templated by the OCI build (same delivery
+    # as the systemd-unit heredoc above). The bootstrap script's caller
+    # is responsible for ensuring vector.toml exists at /tmp/vector.toml
+    # before invocation; if missing, we skip the rest gracefully.
+    if [[ -f /tmp/vector.toml ]]; then
+      mkdir -p "$VECTOR_CONFIG_DIR" /var/lib/vector
+      install -m 0644 /tmp/vector.toml "$VECTOR_CONFIG"
+      chown -R deploy:deploy /var/lib/vector
+      # Log the sha256 of the installed config so cat-deploy-state's
+      # journal tail proves what content actually reached disk. Bitten
+      # 2026-05-21 by the stale `/tmp/vector.toml` reuse path; the hash
+      # comparison surfaces drift between the OCI-bundled config and
+      # what vector.service is actually reading.
+      log "vector config installed: sha256=$(sha256sum "$VECTOR_CONFIG" | awk '{print $1}')"
+    fi
+
+    if [[ -f "$VECTOR_CONFIG" ]]; then
+      cat > "$VECTOR_UNIT" <<'VECTOREOF'
+[Unit]
+Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
+After=network-online.target inngest-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/inngest-server
+# Vector needs Doppler-injected BETTERSTACK_LOGS_TOKEN (and any other
+# secrets the config references). doppler run resolves them at
+# ExecStart time.
+ExecStart=/usr/bin/doppler run --project soleur --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml
+Restart=on-failure
+RestartSec=10
+User=deploy
+Group=deploy
+SupplementaryGroups=systemd-journal
+MemoryMax=256M
+CPUQuota=50%
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/vector
+ReadOnlyPaths=/etc/vector
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+VECTOREOF
+
+      systemctl daemon-reload
+      # `enable --now` is a no-op when the unit is already running; the
+      # new config would never be picked up by an already-running vector
+      # process. Replace with explicit enable + restart so each deploy
+      # gives Vector a clean reload (it reads /etc/vector/vector.toml
+      # only at start, not on SIGHUP without explicit reload mapping).
+      # Surfaced 2026-05-21: v1.1.7 deploy reported "active" but kept
+      # running the v1.1.6 Sentry-sink config.
+      systemctl enable vector.service 2>/dev/null || true
+      systemctl restart vector.service || log "warn: vector.service failed to (re)start; check journalctl -u vector.service"
+      log "vector observability shipper restarted"
+    else
+      log "warn: $VECTOR_CONFIG missing — vector installed but not started"
+    fi
+  fi
+fi

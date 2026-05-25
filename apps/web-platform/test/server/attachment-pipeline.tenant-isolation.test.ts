@@ -100,6 +100,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userA.id,
+          workspace_id: userA.id, // solo-canary per mig 059 backfill
           session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           status: "active",
         })
@@ -111,6 +112,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id,
+          workspace_id: userB.id, // solo-canary per mig 059 backfill
           session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           status: "active",
         })
@@ -127,10 +129,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { error: msgErr } = await service.from("messages").insert({
         id: messageB,
         conversation_id: convB,
+        workspace_id: userB.id, // solo-canary; mig 059 made this NOT NULL
         role: "user",
         content: "tenant-isolation attachment seed",
         tool_calls: null,
         leader_id: null,
+        // PR-I (#4078, migration 053_template_authorizations.sql) added
+        // messages.template_id NOT NULL with CHECK ^[a-z][a-z0-9_]*$.
+        template_id: "default_legacy",
       });
       expect(msgErr).toBeNull();
 

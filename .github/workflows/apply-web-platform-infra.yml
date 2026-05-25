@@ -13,7 +13,7 @@
 # Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
 #   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
 #      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
-#   2. `-target=`-scoped apply (70 explicit targets). server.tf SSH-provisioned
+#   2. `-target=`-scoped apply (74 explicit targets). server.tf SSH-provisioned
 #      `terraform_data.*` resources are EXCLUDED — the GitHub runner egress IP is
 #      not in `var.admin_ips`, so any SSH connection from the runner fails with
 #      `ssh: handshake failed: connection reset by peer`. Those 7 resources land
@@ -21,6 +21,10 @@
 #      pattern). `hcloud_server.web`, `hcloud_volume.workspaces`,
 #      `hcloud_volume_attachment.workspaces`, and `hcloud_ssh_key.default` are
 #      also excluded — managed by initial-apply + drift detector, not per-PR.
+#      `terraform_data.root_authorized_keys` (ci-ssh-key.tf) is ALSO excluded
+#      for the same SSH-from-runner reason — applied operator-locally on the
+#      first bootstrap; subsequent rotations re-fire via `triggers_replace`
+#      from a future operator-local `terraform apply -replace=tls_private_key.ci_ssh`.
 #
 # Destroy-guard shape: copies `apply-github-infra.yml` (post-#3903) — numeric-regex
 # validation of `destroy_count` + `set -e` re-enable after `rc=$?` capture.
@@ -29,10 +33,12 @@
 # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
 #
 # Authorization model: the PR merge IS the human authorization
-# (`hr-menu-option-ack-not-prod-write-auth`), AND the `environment:` gate forces
-# an explicit reviewer-click before apply runs. Defense-in-depth: a leaked PAT with
-# `contents:write` would have to bypass BOTH CODEOWNERS review on `.github/workflows/`
-# AND the environment reviewer click.
+# (`hr-menu-option-ack-not-prod-write-auth`). PR #4220 dropped the
+# `environment:` reviewer-click gate after measuring its real-world cost
+# (apply runs sitting in `waiting` for up to 13h, blocking sibling
+# applies via the concurrency group). The merge-time gate (CODEOWNERS
+# on `.github/workflows/` + branch protection on `main`) is the load-
+# bearing control; the env-reviewer click was duplicative.
 #
 # Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
 # commit message to skip auto-apply for that merge.
@@ -98,6 +104,11 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Vector config + VRL fixture validation lives in its own workflow at
+  # .github/workflows/validate-vector-config.yml (#4293 FR5) so it can trigger
+  # on pull_request -- this workflow only triggers on push to main, which is
+  # the apply gate. Branch protection requires the validate workflow's check
+  # before merge.
   apply:
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
@@ -107,18 +118,17 @@ jobs:
     # in ~3-5 min. 15 min is the operator-tolerance ceiling that matches
     # `apply-deploy-pipeline-fix.yml`.
     timeout-minutes: 15
-    # Required-reviewer gate. Configured at the repo level
-    # (Settings → Environments → web-platform-infra-apply) with @deruelle as
-    # the sole required reviewer and a custom branch policy restricting
-    # deployments to `main`. Defense layer paired with `.github/CODEOWNERS`
-    # for PR-time review — a leaked PAT with `contents:write` would have to
-    # bypass BOTH (the PR can't merge without code-owner review AND the
-    # apply can't run without manual approval click). Diverges from
-    # `apply-github-infra.yml` (which skips the gate) because the
-    # web-platform root rotates broader secret surface (Inngest signing
-    # keys, GitHub App webhook secret, R2 creds) than the rulesets-only
-    # github root.
-    environment: web-platform-infra-apply
+    # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
+    # reviewer click was duplicative friction on top of the PR-merge gate
+    # (CODEOWNERS review + branch protection on main), and was blocking
+    # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
+    # human authorization per `hr-menu-option-ack-not-prod-write-auth`.
+    # `apply-github-infra.yml` already omits the gate without incident.
+    # The "broader secret surface" rationale below was the original
+    # justification for diverging from apply-github-infra.yml; in
+    # practice the divergence produced friction without measurable
+    # security benefit (a leaked PAT with `contents:write` can also
+    # bypass the env gate by submitting a workflow change).
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -140,6 +150,24 @@ jobs:
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
           printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
 
+      # TWO-TOKEN MODEL (post-#4195). This workflow consumes two distinct
+      # Doppler service tokens via separate GH Actions secrets:
+      #
+      #   - `secrets.DOPPLER_TOKEN`        — `prd_terraform` READ-only.
+      #                                       Used by every step that only
+      #                                       READS Doppler secrets (init,
+      #                                       plan, apply).
+      #   - `secrets.DOPPLER_TOKEN_WRITE`  — `prd_terraform` READ/WRITE.
+      #                                       Used by the post-apply sync
+      #                                       step that WRITES the
+      #                                       CI_SSH_ACCESS_TOKEN_*
+      #                                       outputs back into Doppler.
+      #
+      # New steps that need write access MUST use `DOPPLER_TOKEN_WRITE`;
+      # do NOT copy the `secrets.DOPPLER_TOKEN` line below without
+      # confirming the step only reads. The `--silent` + `add-mask`
+      # discipline in the sync step (~line 367-368) is the leak-defense
+      # for the write-scoped token.
       - name: Verify required secrets present
         env:
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
@@ -259,6 +287,10 @@ jobs:
               -target=doppler_secret.kb_drift_ingest_url \
               -target=doppler_service_token.kb_drift \
               -target=github_actions_secret.doppler_token_kb_drift \
+              -target=doppler_service_token.write \
+              -target=github_actions_secret.doppler_token_write \
+              -target=tls_private_key.ci_ssh \
+              -target=doppler_secret.deploy_ssh_private_key \
               -target=betteruptime_monitor.soleur_apex \
               -target=betteruptime_policy.uptime \
               -target=random_id.inngest_signing_key_prd \
@@ -316,6 +348,31 @@ jobs:
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
+      # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
+      # `github_actions_secret.doppler_token_write`, the runner started
+      # before the secret existed — interpolation returns empty for
+      # that one run because GH Actions resolves secrets at job-start,
+      # not step-start. The warning is non-fatal; the operator re-fires
+      # the workflow once after first merge via `gh workflow run
+      # apply-web-platform-infra.yml --ref main -F reason='bootstrap'`.
+      # The local-fallback script
+      # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
+      # remains available as backup. Operator follow-through obligation
+      # is tracked separately as a `follow-through` GH issue per
+      # `wg-block-pr-ready-on-undeferred-operator-steps`.
+      - name: Verify DOPPLER_TOKEN_WRITE present
+        id: doppler_write_check
+        env:
+          DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_WRITE_CHECK" ]]; then
+            echo "::warning::DOPPLER_TOKEN_WRITE not yet present — this is expected on the first apply that creates it. Subsequent applies will use the synced token. If you see this on the second+ run, manually trigger one more apply via gh workflow run."
+            echo "skip_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Sync CF Access CI-SSH service token to Doppler
         # Reads the new sensitive outputs produced by the
         # `cloudflare_zero_trust_access_service_token.ci_ssh` resource
@@ -323,9 +380,14 @@ jobs:
         # `apply-deploy-pipeline-fix.yml` workflow can pull them at run
         # time without an operator handoff step (closes #4177 P1).
         # Idempotent — doppler-secrets-set overwrites in place.
+        # Uses the in-band-minted write-capable service token (post-#4195
+        # — see apps/web-platform/infra/doppler-write-token.tf) — every
+        # other step in this workflow consumes the existing read-only
+        # token.
+        if: steps.doppler_write_check.outputs.skip_sync != 'true'
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
         run: |
           set -euo pipefail
           CLIENT_ID=$(terraform output -raw ci_ssh_access_service_token_client_id 2>/dev/null || true)
@@ -336,10 +398,15 @@ jobs:
           fi
           printf '::add-mask::%s\n' "$CLIENT_ID"
           printf '::add-mask::%s\n' "$CLIENT_SECRET"
+          # `--silent` suppresses doppler's success-path value-echo;
+          # stderr is intentionally NOT redirected so permission-denied
+          # / quota / network errors surface in the GH Actions log (the
+          # original #4195 failure was masked by a `>/dev/null 2>&1`
+          # redirect on these two lines).
           printf '%s' "$CLIENT_ID" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform
           printf '%s' "$CLIENT_SECRET" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform
           unset CLIENT_ID CLIENT_SECRET
           echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 

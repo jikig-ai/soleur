@@ -11,7 +11,13 @@ import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
 import { persistAndDownloadAttachments } from "./attachment-pipeline";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
-import { runWithByokLease, ByokLeaseError, mapByokLeaseCauseToErrorCode } from "./byok-lease";
+import {
+  runWithByokLease,
+  ByokLeaseError,
+  MissingByokKeyError,
+  reportMissingByokKey,
+  mapByokLeaseCauseToErrorCode,
+} from "./byok-lease";
 import { sendToClient } from "./ws-handler";
 import { notifyOfflineUser, type NotificationPayload } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
@@ -77,9 +83,16 @@ function supabase() { return _supabase ??= createServiceClient(); }
  * future widening of `ByokLeaseError.cause` is a TS build break here
  * via the helper's `: never` rail.
  */
-function resolveSessionErrorCode(err: unknown): "key_invalid" | undefined {
+function resolveSessionErrorCode(
+  err: unknown,
+): "key_invalid" | "byok_key_missing" | undefined {
   if (err instanceof KeyInvalidError) return "key_invalid";
   if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
+  // Phase 3.2 AC-D: MissingByokKeyError carries its own client-facing
+  // signal so the UI can render the configure-banner rather than the
+  // key-prompt. `reportMissingByokKey` is fired at the catch site, not
+  // here — this function maps to a stable WS errorCode only.
+  if (err instanceof MissingByokKeyError) return "byok_key_missing";
   return undefined;
 }
 
@@ -860,7 +873,15 @@ export async function startAgentSession(
     // The implicit JWT mint at session start (per §1.5.4) is the first
     // `getFreshTenantClient(userId)` call inside the lease body — surfaces
     // RuntimeAuthError synchronously rather than mid-tool-call.
-    await runWithByokLease(userId, async (lease) => {
+    // Phase 3 (feat-team-workspace-multi-user): split userId into
+    // workspaceContextUserId (whose workspace the agent acts upon) vs
+    // keyOwnerUserId (whose api_keys row backs the BYOK key). For solo
+    // workspaces both equal `userId` (N2 invariant — workspaces.id =
+    // owner_user_id for backfilled solo); team workspaces will diverge
+    // when Phase 4 invite flow ships.
+    await runWithByokLease(
+      { workspaceContextUserId: userId, keyOwnerUserId: userId },
+      async (lease) => {
     // Get user's decrypted API key and service tokens
     const [apiKey, serviceTokens] = await Promise.all([
       lease.getApiKey(),
@@ -1873,7 +1894,12 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // side-effects: atomic RPC v2 (5 deltas), forensic
           // `write_byok_audit` row, widened `usage_update` WS event,
           // Sentry mirror per `cq-silent-fallback-must-mirror-to-sentry`.
-          persistTurnCost(userId, conversationId, streamLeaderId, {
+          // Phase 3 (feat-team-workspace-multi-user) — workspaceId is
+          // sourced from `userId` under the N2 invariant (workspaces.id
+          // = owner_user_id for backfilled solo workspaces; see migration
+          // 053 §1.1.7). Future non-solo callers will resolve via
+          // `workspace-resolver.getDefaultWorkspaceForUser`.
+          persistTurnCost(userId, conversationId, streamLeaderId, userId, {
             totalCostUsd: costDelta,
             usage: {
               input_tokens: inputDelta,
@@ -2141,6 +2167,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           op: "sdk-startup",
           extra: { userId, conversationId, leaderId },
         });
+      } else if (err instanceof MissingByokKeyError) {
+        // Phase 3.2 AC-D (Kieran N4): info-level breadcrumb with the
+        // workspace context. Does not replace the generic
+        // captureException; the breadcrumb adorns the trail so the
+        // first hard error in the same Sentry transaction carries the
+        // workspace context.
+        reportMissingByokKey(err);
+        Sentry.captureException(err);
       } else {
         Sentry.captureException(err);
       }
@@ -2320,6 +2354,10 @@ export async function sendUserMessage(
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
   const handleSessionError = (err: unknown) => {
+    // Phase 3.2 AC-D: MissingByokKeyError fires the info-level breadcrumb
+    // BEFORE the generic captureException so the workspace context lands
+    // on the trail. Returns; we still surface the WS error event below.
+    if (err instanceof MissingByokKeyError) reportMissingByokKey(err);
     Sentry.captureException(err);
     log.error(
       { err, userId, conversationId },
@@ -2360,7 +2398,9 @@ export async function sendUserMessage(
   // bounds the in-process heap window for that call too.
   if (!conv.domain_leader) {
     try {
-      await runWithByokLease(userId, async (lease) => {
+      await runWithByokLease(
+        { workspaceContextUserId: userId, keyOwnerUserId: userId },
+        async (lease) => {
         const apiKey = await lease.getApiKey();
 
         // tenant-scoped read of team_names. RLS enforces auth.uid() = user_id.

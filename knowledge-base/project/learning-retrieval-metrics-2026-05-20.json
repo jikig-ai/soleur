@@ -1,64 +1,64 @@
 {
-  "schema": 1,
-  "generated_at": "2026-05-20T13:46:01Z",
-  "corpus_count": 1147,
+  "schema": 2,
+  "generated_at": "2026-05-20T18:27:21Z",
+  "corpus_count": 1163,
   "model_id": "claude-haiku-4-5-20251001",
   "prompts": {
     "light": "You are a paraphrase generator. Given a learning-summary passage from a software engineering knowledge base, produce a SHORT (1-2 sentence) paraphrase that preserves the technical terms verbatim but substitutes synonyms for surrounding verbs and connectors. Output ONLY the paraphrase as a single line of plain text — no preamble, no quotes, no markdown.",
     "heavy": "You are a paraphrase generator. Given a learning-summary passage from a software engineering knowledge base, produce a SHORT (1-2 sentence) reformulation in a DIFFERENT framing: change sentence shape, swap nouns for verbs where natural, and avoid reusing the same technical terms unless the term IS the canonical name (e.g., \"Postgres\", \"RLS\", a file path). Output ONLY the reformulation as a single line of plain text — no preamble, no quotes, no markdown."
   },
   "extraction_stats": {
-    "has_frontmatter_pct": 0.9730,
-    "has_problem_section_pct": 0.9189,
+    "has_frontmatter_pct": 0.9716,
+    "has_problem_section_pct": 0.9175,
     "fallback_distribution": {
-      "description": 53,
-      "problem_section": 1007,
-      "title_paragraph": 86,
+      "description": 56,
+      "problem_section": 1018,
+      "title_paragraph": 88,
       "first_500": 1
     }
   },
   "api_stats": {
-    "calls_made": 2294,
+    "calls_made": 2326,
     "retries": 0,
     "errors": 0
   },
-  "cost_estimate_usd": 3.1543,
+  "cost_estimate_usd": 3.1983,
   "r5": {
-    "identity_kbsearch": 0.8020924149956408,
-    "light_kbsearch": 0.6748038360941587,
-    "heavy_kbsearch": 0.2946817785527463,
-    "identity_grep": 0.948561464690497,
-    "light_grep": 0.7489102005231038,
-    "heavy_grep": 0.3025283347863993
+    "identity_kbsearch": 0.7747205503009458,
+    "light_kbsearch": 0.6362854686156492,
+    "heavy_kbsearch": 0.2708512467755804,
+    "identity_grep": 0.9475494411006019,
+    "light_grep": 0.7489251934651763,
+    "heavy_grep": 0.29664660361135
   },
   "r10": {
-    "identity_kbsearch": 0.95640802092415,
-    "light_kbsearch": 0.7768090671316478,
-    "heavy_kbsearch": 0.3714036617262424,
-    "identity_grep": 0.9616390584132519,
-    "light_grep": 0.7855274629468177,
-    "heavy_grep": 0.3548387096774194
+    "identity_kbsearch": 0.9346517626827171,
+    "light_kbsearch": 0.7480653482373173,
+    "heavy_kbsearch": 0.35081685296646603,
+    "identity_grep": 0.9604471195184867,
+    "light_grep": 0.7833190025795357,
+    "heavy_grep": 0.3482373172828891
   },
   "mrr": {
-    "identity_kbsearch": 0.6219426154485571,
-    "light_kbsearch": 0.5231546074288004,
-    "heavy_kbsearch": 0.1992720644997684,
-    "identity_grep": 0.9085851448754674,
-    "light_grep": 0.6662435127530506,
-    "heavy_grep": 0.243965789314336
+    "identity_kbsearch": 0.5862617882088178,
+    "light_kbsearch": 0.47136211027869135,
+    "heavy_kbsearch": 0.18253995953467397,
+    "identity_grep": 0.9069848251490554,
+    "light_grep": 0.6616809729665419,
+    "heavy_grep": 0.23641531308452418
   },
-  "gap_honesty": 0.5074,
-  "gap_skill_roi": -0.0078,
+  "gap_honesty": 0.5039,
+  "gap_skill_roi": -0.0258,
   "fixture_seeds": [
     {
       "path": "knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md",
-      "rank_heavy_kbsearch": 6,
-      "rank_heavy_grep": 3
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null
     },
     {
       "path": "knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md",
-      "rank_heavy_kbsearch": 11,
-      "rank_heavy_grep": 10
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null
     },
     {
       "path": "knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md",
@@ -77,13 +77,13 @@
     },
     {
       "path": "knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md",
-      "rank_heavy_kbsearch": 6,
-      "rank_heavy_grep": 13
+      "rank_heavy_kbsearch": 8,
+      "rank_heavy_grep": null
     },
     {
       "path": "knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md",
-      "rank_heavy_kbsearch": 1,
-      "rank_heavy_grep": 3
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null
     }
   ],
   "worst_n": [
@@ -104,18 +104,6 @@
       "rank_heavy_kbsearch": null,
       "rank_heavy_grep": null,
       "cause": "content-shape"
-    },
-    {
-      "path": "knowledge-base/project/learnings/2026-02-09-parallel-subagent-fan-out-in-work-command.md",
-      "rank_heavy_kbsearch": null,
-      "rank_heavy_grep": null,
-      "cause": "unknown"
-    },
-    {
-      "path": "knowledge-base/project/learnings/2026-02-09-plugin-staleness-audit-patterns.md",
-      "rank_heavy_kbsearch": null,
-      "rank_heavy_grep": null,
-      "cause": "unknown"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md",
@@ -142,13 +130,19 @@
       "cause": "unknown"
     },
     {
-      "path": "knowledge-base/project/learnings/2026-02-12-review-compound-before-commit-workflow.md",
+      "path": "knowledge-base/project/learnings/2026-02-12-command-vs-skill-selection-criteria.md",
       "rank_heavy_kbsearch": null,
       "rank_heavy_grep": null,
       "cause": "unknown"
     },
     {
-      "path": "knowledge-base/project/learnings/2026-02-12-ship-integration-pattern-for-post-merge-steps.md",
+      "path": "knowledge-base/project/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-12-review-compound-before-commit-workflow.md",
       "rank_heavy_kbsearch": null,
       "rank_heavy_grep": null,
       "cause": "unknown"
@@ -166,12 +160,6 @@
       "cause": "unknown"
     },
     {
-      "path": "knowledge-base/project/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md",
-      "rank_heavy_kbsearch": null,
-      "rank_heavy_grep": null,
-      "cause": "unknown"
-    },
-    {
       "path": "knowledge-base/project/learnings/2026-02-13-static-docs-site-from-brand-guide.md",
       "rank_heavy_kbsearch": null,
       "rank_heavy_grep": null,
@@ -182,12 +170,6 @@
       "rank_heavy_kbsearch": null,
       "rank_heavy_grep": null,
       "cause": "content-shape"
-    },
-    {
-      "path": "knowledge-base/project/learnings/2026-02-14-google-fonts-variable-font-deduplication.md",
-      "rank_heavy_kbsearch": null,
-      "rank_heavy_grep": 15,
-      "cause": "retriever-miss"
     },
     {
       "path": "knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md",
@@ -202,11 +184,32 @@
       "cause": "unknown"
     },
     {
+      "path": "knowledge-base/project/learnings/2026-02-17-backdrop-filter-breaks-fixed-positioning.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
+      "cause": "unknown"
+    },
+    {
       "path": "knowledge-base/project/learnings/2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md",
+      "rank_heavy_kbsearch": null,
+      "rank_heavy_grep": null,
+      "cause": "unknown"
+    },
+    {
+      "path": "knowledge-base/project/learnings/2026-02-17-worktree-not-enforced-for-new-work.md",
       "rank_heavy_kbsearch": null,
       "rank_heavy_grep": null,
       "cause": "unknown"
     }
   ],
-  "bucket": "reopen-rag"
+  "bucket": "reopen-rag",
+  "r5_identity": 0.7747205503009458,
+  "r5_light": 0.6362854686156492,
+  "r5_heavy": 0.2708512467755804
 }

@@ -114,6 +114,10 @@ void _exhaustiveResponseKindCheck;
 // Typed error codes for structured error handling over WebSocket
 export type WSErrorCode =
   | "key_invalid"
+  // Phase 3.2 AC-D (feat-team-workspace-multi-user) — member-without-BYOK
+  // fail-closed path. Client renders the configure-banner linking to
+  // /dashboard/settings/byok rather than the `key_invalid` key-prompt.
+  | "byok_key_missing"
   | "session_expired"
   | "session_resumed"
   | "rate_limited"
@@ -142,6 +146,10 @@ export const WS_CLOSE_CODES = {
   IDLE_TIMEOUT: 4009,
   CONCURRENCY_CAP: 4010,
   TIER_CHANGED: 4011,
+  /** AC-FLOW2 — workspace owner removed this user's membership. The server
+   *  sends a `workspace_removed` preamble (with `organizationName`) before
+   *  closing so the client can render the terminal screen. */
+  MEMBERSHIP_REVOKED: 4012,
   SERVER_GOING_AWAY: 1001,
 } as const;
 
@@ -170,7 +178,23 @@ export interface TierChangedPreamble {
   newTier?: PlanTier;
 }
 
-export type ClosePreamble = ConcurrencyCapHitPreamble | TierChangedPreamble;
+/**
+ * Preamble written before `ws.close(4012)` when a workspace owner removes
+ * this user's membership. The client renders a terminal screen using
+ * `organizationName` so the user understands which workspace they were
+ * removed from.
+ */
+export interface MembershipRevokedPreamble {
+  type: "membership_revoked";
+  organizationName: string | null;
+  /** Optional workspace_id for client-side reconciliation / audit. */
+  workspaceId?: string;
+}
+
+export type ClosePreamble =
+  | ConcurrencyCapHitPreamble
+  | TierChangedPreamble
+  | MembershipRevokedPreamble;
 
 export class KeyInvalidError extends Error {
   constructor() {
@@ -271,6 +295,13 @@ export type WSMessage =
   | {
       type: "usage_update";
       conversationId: string;
+      /**
+       * Phase 3 (feat-team-workspace-multi-user) — workspace_id for
+       * workspace-grain cost attribution at the client. Optional for
+       * one release cycle to absorb rolling prd deploys; tighten in a
+       * follow-up after the old build ages out.
+       */
+      workspaceId?: string;
       totalCostUsd: number;
       inputTokens: number;
       outputTokens: number;

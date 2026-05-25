@@ -966,11 +966,35 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
-Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The `BEHIND` handler auto-syncs main into the branch when the queued auto-merge is stuck because origin/main moved ahead — see "Auto-sync on BEHIND" below:
+Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured "main moving faster than CI" warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
 ```bash
-prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=3
+# <!-- phase-7-poll-block:start --> (do NOT edit without updating the
+# mirror in plugins/soleur/skills/merge-pr/SKILL.md §5.2 and the fixture
+# at plugins/soleur/test/ship-phase-7-poll-fixtures.sh; the fixture's awk
+# extractor anchors on this fence + the variable-set fingerprint below.)
+prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Worktree precondition: the BEHIND auto-sync calls `git merge origin/main`
+# + `git push` which require a checked-out work tree. Bare-repo invocation
+# would silently corrupt state or fail mid-sync. /soleur:ship always runs
+# from a worktree (Step 0b creates one); the guard is defense-in-depth.
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "[ship.phase7.precondition] not inside a worktree — BEHIND auto-sync disabled" >&2
+fi
+# Required-check name set — fetched ONCE at loop entry (branch-protection
+# rules change only via operator action; per-tick fetches cost rate-limit
+# headroom for no value). Fail-open by design: if the API call fails (no
+# auth, no ruleset, archived repo, 5xx), REQUIRED_CHECKS is empty and the
+# per-tick failure scan becomes a no-op. The existing CLOSED-on-CI-failure
+# fallback below still catches the terminal case. Do NOT "harden" to
+# fail-closed — that breaks the loop for repos without branch protection.
+# Read into an array so check names with whitespace (e.g. "skill-security-scan
+# PR gate") survive iteration intact — a `for r in $REQUIRED_CHECKS` would
+# word-split on spaces and silently miss multi-word required checks.
+mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
+  --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
+  2>/dev/null || true)
 while true; do
   i=$((i+1))
   s=$(gh pr view <number> --json state,mergeStateStatus \
@@ -982,11 +1006,48 @@ while true; do
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
 
+  # Required-check failure scan: if a required check has transitioned to
+  # bucket == "fail", exit immediately with the failing check name instead
+  # of heartbeating to the 15-minute cap. Tolerates absent checks (CI not
+  # yet registered) — only bucket="fail" produces an intersection match.
+  # Same fail-open rationale as the once-fetch above: transient `gh pr
+  # checks` 5xx → empty failure set → no-op for this tick.
+  if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
+    mapfile -t failed_names < <(gh pr checks <number> --json name,bucket \
+      --jq '.[] | select(.bucket == "fail") | .name' 2>/dev/null || true)
+    if (( ${#failed_names[@]} > 0 )); then
+      required_failed=""
+      for n in "${failed_names[@]}"; do
+        for r in "${REQUIRED_CHECKS[@]}"; do
+          [[ "$n" == "$r" ]] && { required_failed="$n"; break 2; }
+        done
+      done
+      if [[ -n "$required_failed" ]]; then
+        echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
+        echo "Inspect: gh pr checks <number> ; gh run view --log-failed (pick the failing workflow run)" >&2
+        break
+      fi
+    fi
+  fi
+
+  # DIRTY exit (server-side merge conflict): GitHub computed a conflict that
+  # may or may not be local to this worktree. Exit and surface — looping
+  # produces no progress; the operator must resolve. Glob `*DIRTY*` (not
+  # `*" DIRTY"`) tolerates leading-whitespace and trailing-whitespace variants
+  # that future `--jq` template tweaks could introduce.
+  if [[ "$s" == *DIRTY* ]]; then
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
+    echo "Conflicted paths (local view; may be empty for server-side conflicts):" >&2
+    git diff --name-only --diff-filter=U >&2 || true
+    echo "Server-side conflicts may not appear locally. Run: git fetch origin && git merge origin/main" >&2
+    break
+  fi
+
   # Auto-sync on BEHIND: GitHub auto-merge will not fire while the head
   # ref is behind base. Merge origin/main into the branch and push so the
   # queued auto-merge can re-evaluate. Capped at MAX_BEHIND_SYNCS so a
   # pathological merge-loop (every sync produces a fresh BEHIND) does not
-  # consume the whole poll budget — fall through to timeout instead.
+  # consume the whole poll budget — fall through to a structured warning.
   if [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/15] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
@@ -1003,7 +1064,23 @@ while true; do
       break
     else
       echo "$(date +%H:%M:%S) [${i}/15] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
+      # Re-fetch state immediately after a successful sync. GitHub may
+      # have already cleared OPEN BEHIND → OPEN CLEAN → MERGED in the time
+      # the sync took (~5-30s); without this re-fetch, we'd burn a 60s
+      # `sleep` waiting on state we already know has progressed.
+      s=$(gh pr view <number> --json state,mergeStateStatus \
+          --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
+        || s="fetch-error: $s"
+      echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
     fi
+  elif [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -ge "$MAX_BEHIND_SYNCS" && "$behind_warned" -eq 0 ]]; then
+    # BEHIND cap exhausted: emit structured operator signal exactly once at
+    # the inflection point (sync #${MAX_BEHIND_SYNCS}+1), then fall through
+    # to heartbeat. PR may still merge if main calms down — but the
+    # operator now has the diagnosis without log-archaeology.
+    elapsed=$((i * 60))
+    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: stop ship pipeline; merge during a quieter window." >&2
+    behind_warned=1
   fi
 
   if [ "$i" -ge 15 ]; then
@@ -1012,6 +1089,7 @@ while true; do
   fi
   sleep 60
 done
+# <!-- phase-7-poll-block:end -->
 ```
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
@@ -1022,7 +1100,11 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 2. Merging origin/main into the branch with `--no-edit`. If conflicts arise (`--diff-filter=U` returns paths), the loop aborts the merge and stops polling — manual resolution is required and continuing would mask the conflict.
 3. Pushing the merge commit. This bumps the PR head ref, GitHub re-evaluates the queued auto-merge, and (assuming CI passes) the merge fires.
 
-The sync is capped at `MAX_BEHIND_SYNCS=3` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 3 syncs, fall through to the heartbeat path; the timeout warning will surface that the operator needs to investigate (likely: main is moving faster than this PR's CI can keep up; merge into a quiet window).
+The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological case — every sync triggers a new commit on main (parallel-active-repo class) — would otherwise consume the full 15-minute budget on BEHIND→BEHIND→BEHIND with no progress. After 6 syncs, the loop emits a structured `BEHIND budget exhausted` warning naming the elapsed time and recommendation to merge during a quieter window, then falls through to heartbeat — the PR may still merge if main calms down, but the operator now has the diagnosis at the inflection point instead of at the 15-minute timeout.
+
+**Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
+
+**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge.
 
 Two failure paths exit early instead of looping:
 - **Merge conflicts** — `git diff --name-only --diff-filter=U` lists conflicted paths and the operator must resolve. Looping with `--abort` only buys time on a fundamentally non-automatic resolution.
@@ -1260,60 +1342,135 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
 
    ## Verification
 
-   ```yaml
-   type: manual
-   sla_business_days: 5
+   ```html
+   <!-- soleur:followthrough
+     script=scripts/followthroughs/<feature-name>-<ISSUE_NUM>.sh
+     earliest=<ISO-8601-UTC>
+     secrets=<comma-separated-secret-names-or-omit>
+   -->
    ```
 
-   Per `hr-no-dashboard-eyeball-pull-data-yourself`, default to automated verification — `type: manual` should be the exception, not the rule. Before emitting `type: manual`, check whether the verification can be expressed as a query against a credentialed API.
-
-   **Types currently implemented by `scheduled-follow-through.yml`** (the daily monitor):
-
-   - `http-200` — add `url: https://example.com`
-   - `dns-txt` — add `domain: example.com` and `expected: verification-string`
-   - `dns-a` — add `domain: example.com` and `expected: 1.2.3.4`
-
-   **Types in the prescriptive spec but not yet implemented by the daily monitor** (the monitor lacks Doppler secret access; widening that scope is a separate PR). When `/ship` Phase 7 Step 3.5 would otherwise emit `type: manual` for one of these, instead scaffold a dedicated `--once` GitHub Actions workflow via `/soleur:schedule --once` with the verdict baked in (the workflow brings its own Doppler env without widening the monitor's blast radius):
-
-   - `sql-query` — `doppler_token_secret: DOPPLER_TOKEN_PRD`, `project: soleur`, `config: prd`, `supabase_ref: <REF>`, `query: |` (multi-line SQL — read-only `SELECT` only), `verdict: |` (single jq expression returning `"PASS"` or `"FAIL: <detail>"` against the `/database/query` JSON response). Example:
-
-     ```yaml
-     type: sql-query
-     doppler_token_secret: DOPPLER_TOKEN_PRD
-     project: soleur
-     config: prd
-     supabase_ref: ifsccnjhymdmidffkzhl
-     query: |
-       SELECT SUM(reads + writes + extends + fsyncs) AS iops FROM pg_stat_io
-     verdict: |
-       if (.[0].iops | tonumber) < 1000 then "PASS" else "FAIL: iops=\(.[0].iops)" end
-     ```
-
-   - `api-curl` — `url:`, `headers_from_doppler:` (map of header → Doppler secret), `verdict:` (jq expression). For Sentry rate, Vercel deployment status, Cloudflare zone settings. HTTPS-only; host allow-list enforced at scaffold time.
-
-   When emitting `type: manual`, include a one-line `manual_because:` justification (`captcha-gated`, `oauth-consent-screen`, `subjective-design-call`, etc.). Bare `type: manual` without justification trips the review-time gate that enforces `hr-no-dashboard-eyeball-pull-data-yourself` — "the operator can read the gauge" is not a valid justification when the gauge value is API-accessible.
-
-   **`clo_routable: true` field (auto-emit when `manual_because: subjective-design-call` AND the issue concerns legal-source attestation).** When the verification asks the operator to compare a drafted legal-doc (AUP, Privacy Policy, GDPR Policy, DPD, Article 30 register, T&C) against external statutory text (EUR-Lex, leginfo.legislature.ca.gov, congress.gov, federalregister.gov, legislation.gov.uk, laws-lois.justice.gc.ca, or any cited `Art.\s*\d+` / `§\s*\d+` regulation/code section), append `clo_routable: true` and a short instruction line. The `clo_routable: true` field is the structured signal that `/soleur:go`'s classification table reads to auto-route the issue to the `clo` agent instead of asking the human operator — most Soleur users are not lawyers and cannot reliably verify statutory text.
-
-   Example verification block for a legal-source attestation follow-through:
-
-   ```yaml
-   type: manual
-   manual_because: subjective-design-call
-   clo_routable: true
-   sla_business_days: 14
-   ```
-
-   Followed by a one-line operator instruction: `Run /soleur:go #<this issue> to invoke the CLO agent for verification — faster and more accurate than manual attestation.` See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
+   Canonical convention: `knowledge-base/engineering/ops/runbooks/followthrough-convention.md`.
+   The directive is parsed daily by `.github/workflows/scheduled-followthrough-sweeper.yml`
+   via [scripts/sweep-followthroughs.sh](../../../../scripts/sweep-followthroughs.sh) — exit 0 PASS / exit 1 FAIL / other TRANSIENT.
 
    ## Status
 
-   Awaiting verification. The daily follow-through monitor will check this issue.
+   Awaiting verification. The follow-through sweeper will check this issue once `earliest` is reached.
    ````
+
+   **Step 3.5.A — Generate the stub script.** For each item, scaffold a stub under
+   [scripts/followthroughs/](../../../../scripts/followthroughs/) named
+   `<feature-name>-<ISSUE_NUM>.sh` by copying
+   [./references/followthrough-stub-template.sh](./references/followthrough-stub-template.sh)
+   and customizing the TODO block. Make the script executable (`chmod +x`). Mirror the structure of
+   [scripts/followthroughs/sentry-checkins-3859.sh](../../../../scripts/followthroughs/sentry-checkins-3859.sh) (the canonical reference).
+
+   **Step 3.5.B — Choose a verification pattern.** Default to automated per
+   `hr-no-dashboard-eyeball-pull-data-yourself`:
+
+   - **HTTP probe** (canary, status page): `curl -sS -o /dev/null -w '%{http_code}' "$URL" | grep -q '^200$' && exit 0 || exit 1`
+   - **DNS probe**: `dig +short +time=5 +tries=2 TXT example.com | grep -qF "$EXPECTED" && exit 0 || exit 1`
+   - **SQL probe** (Supabase prd): scaffold via `/soleur:schedule --once` so the workflow brings its own Doppler env; the follow-through script then queries the workflow run status via `gh run list --workflow <name>.yml --status success`.
+   - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
+   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script runs `gh issue view <N> --comments --json comments | jq -re '.comments[].body' | grep -qE '^RESULT: PASS$'` — the operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
+
+   Bare "operator manually checks" with NO scripted gate is non-compliant with
+   `hr-no-dashboard-eyeball-pull-data-yourself` AND `wg-pm-class-followthrough-for-operator-dogfood`
+   (#4188). If the operator-confirmed pattern is unsuitable, the verification is not
+   follow-through-shaped — file a regular GitHub issue without the `follow-through` label.
+
+   **Step 3.5.C — Declare needed secrets.** If the script reads any `$X` value beyond
+   `GH_TOKEN` / `GH_REPO` / `HOME` / `PATH`, declare them as a comma-separated list in
+   the directive's `secrets=` clause AND add each secret to
+   `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block (the sweeper
+   passes ONLY allowlisted vars into the script's environment per the directive's
+   `secrets=` clause). Omit the `secrets=` line entirely if no secrets are needed.
+
+   **Step 3.5.D — Choose `earliest`.** ISO-8601 UTC, formatted `YYYY-MM-DDTHH:MM:SSZ`.
+   Default `now + 24h` for HTTP/DNS probes; `now + 48h` for cron-triggered probes
+   (allows ≥2 cron windows to fire); `now + 5 business days` for operator-confirmed
+   patterns. The sweeper skips the issue until `now >= earliest`.
+
+   **Step 3.5.E — Precondition gate.** Before `gh issue create`, the agent MUST self-test
+   the body it composed by piping the proposed body through the same awk parser the
+   sweeper uses (extracted verbatim from [scripts/sweep-followthroughs.sh](../../../../scripts/sweep-followthroughs.sh) lines 36-48):
+
+   ```bash
+   awk '
+     /^<!-- *soleur:followthrough/, /-->/ {
+       gsub(/^<!-- *soleur:followthrough/, "")
+       gsub(/-->/, "")
+       for (i = 1; i <= NF; i++) {
+         if ($i ~ /^script=/)   { sub(/^script=/, "", $i);   print "script "   $i }
+         if ($i ~ /^earliest=/) { sub(/^earliest=/, "", $i); print "earliest " $i }
+         if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
+       }
+     }
+   ' /tmp/follow-through-body.md
+   ```
+
+   Assert that:
+   1. `script` extracted is non-empty AND, after `realpath -m --relative-to=$REPO_ROOT`
+      canonicalization, points under the [scripts/followthroughs/](../../../../scripts/followthroughs/)
+      root. Use realpath rather than a bare prefix-match — a path that uses `..` traversal
+      under the followthroughs root (e.g. one pointing at `../../bin/sh` via the
+      followthroughs directory) satisfies a naïve `case` prefix match but is rejected
+      after canonicalization. Concrete check:
+
+      ```bash
+      canon=$(realpath -m --relative-to="$REPO_ROOT" "$script_path" 2>/dev/null)
+      case "$canon" in
+        scripts/followthroughs/*) : ;;
+        *) fail "script '$script_path' escapes scripts/followthroughs/ root" ;;
+      esac
+      ```
+   2. `earliest` extracted parses cleanly via `date -u -d "$earliest" +%s`,
+   3. The referenced script path exists on disk and is executable.
+
+   If any assertion fails, warn the operator, do NOT create the issue, and offer to
+   scaffold the missing pieces. **Why:** PR #4178 was filed with the OLD-convention
+   YAML and rotted open for ~24h until #4186 retrofitted it. The precondition gate
+   is the cheapest forward defense; the contract is asserted at PR time by
+   `plugins/soleur/test/ship-followthrough-directive.test.sh`.
+
+   **Mechanical backstop** (defense-in-depth on top of this honor-system gate):
+   the PreToolUse hook [`.claude/hooks/follow-through-directive-gate.sh`](../../../../.claude/hooks/follow-through-directive-gate.sh)
+   intercepts every `gh issue create --label follow-through` call at the Bash-tool
+   boundary and re-runs the same awk parser against the resolved `--body-file` or
+   inline `--body`. The agent step above MUST still run — the hook is the second
+   net, not the first. The hook denies the tool call with a structured error if the
+   directive is absent, malformed, or references a missing/non-executable script.
+   See `.claude/hooks/follow-through-directive-gate.test.sh` for the cases the hook
+   enforces.
+
+   **Step 3.5.E.2 — Post-create re-validation.** After `gh issue create` succeeds,
+   re-fetch the just-created issue body via `gh issue view <N> --json body --jq .body`
+   and re-run the same awk parser against it. The on-create body MUST extract the
+   same `script`/`earliest` tokens as the proposed body. This catches the rare class
+   where GitHub's API silently truncates or mangles a body whose markdown collides
+   with one of GitHub's own template processors (the `<!-- ... -->` shape is
+   markdown-suppressed but mishandled by some legacy edit-path-validators). If the
+   post-create parse diverges from the proposed parse, fail the step: the issue
+   exists on GitHub but is sweeper-invisible — close it with a comment naming the
+   divergence and retry the create.
+
+   **Step 3.5.F — Operator-only ack.** When the chosen pattern is operator-confirmed
+   (Step 3.5.B), append a `## Operator instructions` block to the issue body explaining
+   the `RESULT: PASS` / `RESULT: FAIL` comment sentinel the script greps for.
+
+   **Legal-attestation follow-throughs** (replaces former `clo_routable: true` field):
+   for legal-source verification (AUP, Privacy Policy, GDPR Policy, DPD, Article 30
+   register, T&C against EUR-Lex / leginfo.legislature.ca.gov / congress.gov /
+   federalregister.gov / legislation.gov.uk / laws-lois.justice.gc.ca, or any cited
+   `Art.\s*\d+` / `§\s*\d+` regulation/code section), use the operator-confirmed pattern
+   (Step 3.5.B) with body instruction `Run /soleur:go #<this issue> to invoke the CLO
+   agent for verification`. The script reads the operator's `RESULT: PASS` comment after
+   CLO completes. See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
 
    **Step 4:** Report: "Created N follow-through issue(s): #X, #Y, #Z"
 
-   **Why this matters:** PR #1398 (Google OAuth brand verification) had no tracking mechanism after the session ended. External dependencies that outlive a session — DNS propagation, app store reviews, certificate issuance, brand verification — get forgotten without automated tracking. See [#1433](https://github.com/jikig-ai/soleur/issues/1433).
+   **Why this matters:** PR #1398 (Google OAuth brand verification) had no tracking mechanism after the session ended. External dependencies that outlive a session — DNS propagation, app store reviews, certificate issuance, brand verification — get forgotten without automated tracking. See [#1433](https://github.com/jikig-ai/soleur/issues/1433). PR #4178 was filed via the OLD-convention YAML emitter and rotted open for ~24h until PR #4186 retrofitted it; this directive shape (PR for #4190) prevents the regression class. See `knowledge-base/project/learnings/2026-05-20-test-stubs-env-and-csp-gates-miss-runtime-bugs.md`.
 
 3.6. **Post-merge Supabase migration verification.** If the PR includes database migration files (`supabase/migrations/`), verify each migration was applied to production before proceeding to cleanup.
 
