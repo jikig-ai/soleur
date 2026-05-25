@@ -469,14 +469,22 @@ Each finding's default action is to FIX IT INLINE on the PR branch: make the edi
 commit with a message `review: <summary> (P<N>)`, and push. Apply to P1, P2, P3
 equally.
 
-**Cost-of-filing gate (apply BEFORE the four scope-out criteria below):** If the
-fix is ≤30 lines of code AND touches ≤2 files AND no reviewer agent independently
-dissents on technical grounds (e.g., contested-design with named alternatives),
-fix inline. The bookkeeping cost of `gh issue create + scope-out justification +
-future triage + closure + follow-up PR` averages ~30 minutes of cumulative
-human attention; a ≤30-line code edit averages ~5 minutes. Filing the issue is
-NET-NEGATIVE work for the team. This gate is load-bearing: a PR that opens
-more issues than it closes is a workflow failure, not a normal review outcome.
+**Cost-of-filing gate (FIRST FILTER — apply BEFORE invoking the CONCUR
+second-reviewer gate AND BEFORE evaluating the four scope-out criteria below):**
+If the fix is ≤30 lines of code AND touches ≤2 files AND no reviewer agent
+independently dissents on technical grounds (e.g., contested-design with named
+alternatives), fix inline. The bookkeeping cost of `gh issue create + scope-out
+justification + future triage + closure + follow-up PR` averages ~30 minutes of
+cumulative human attention; a ≤30-line code edit averages ~5 minutes. Filing
+the issue is NET-NEGATIVE work for the team. This gate is load-bearing: a PR
+that opens more issues than it closes is a workflow failure, not a normal
+review outcome.
+
+**Mechanical pre-CONCUR auto-flip:**
+
+Before invoking `code-simplicity-reviewer`, self-assess fix size. If ≤30 lines AND ≤2 files, BYPASS the CONCUR gate — the disposition is auto-flipped to fix-inline. Apply the fix; do not file.
+
+If the fix size cannot be confidently bounded without writing it, write a 5-minute spike. If the spike exceeds 30 lines, run CONCUR; if it doesn't, commit the spike. Do NOT run CONCUR on a fix you've already written and verified to be small.
 
 The gate fails (fix-inline is required) when:
 
@@ -544,9 +552,19 @@ Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
 
+**Bundle scope-outs by trigger.** Before filing, group candidates by trigger-equality (same date OR same counter threshold OR same `#N` dependency OR same human-review gate). File ONE issue per group with a sub-task checklist of the bundled items. CONCUR runs once per group, not per item. See `plugins/soleur/skills/review/references/review-todo-structure.md` §Bundling example.
+
+The bundling check is operator-side because `code-simplicity-reviewer` only
+sees one finding at a time and cannot recognize trigger-sharing across the
+batch. Run the check on the synthesized candidate list before any CONCUR
+invocation. If the operator misses a bundling opportunity and CONCUR is
+invoked on items that obviously share a trigger, `code-simplicity-reviewer`
+SHOULD DISSENT with `DISSENT: bundle with #<sibling-finding>` so the
+operator collapses the filings.
+
 **Second-reviewer confirmation gate:** Before creating a scope-out issue under
-any criterion, invoke `code-simplicity-reviewer` via Task. The prompt MUST
-include:
+any criterion (including a bundled issue), invoke `code-simplicity-reviewer`
+via Task. The prompt MUST include:
 
 1. The finding (location, description).
 2. The proposed fix.
@@ -556,12 +574,18 @@ include:
    unrelated). Do not rely on the agent's prior knowledge of the criteria —
    pass the definitions literally.
 4. The criterion being claimed and a 1-3-sentence rationale.
-5. This instruction: "Default to rejecting the scope-out filing. Only co-sign
+5. The proposed **re-evaluation trigger** in one of the four concrete trigger shapes (see plugins/soleur/skills/review/references/review-todo-structure.md §Re-evaluation Trigger). Human-review gates route through the dependency trigger shape (file a reminder issue assigned to the human, then dep-trigger on that issue).
+6. This instruction: "Default to rejecting the scope-out filing. Only co-sign
    when the claimed criterion is concretely and obviously correct against the
-   four definitions above. Reply with a single line as the first line of your
-   output: `CONCUR` (to co-sign the filing) or `DISSENT: <one-sentence
-   reason>` (to flip to fix-inline). Everything after the first line is
-   advisory context."
+   four definitions above AND the proposed re-evaluation trigger matches one
+   of the four concrete forms (date / counter / event-grep / dependency).
+   DISSENT on any vague re-eval trigger ('when it feels right', 'when we have
+   more users', 'post-MVP', 'later', 'when this is a problem'). Reply with a
+   single line as the first line of your output: `CONCUR` (to co-sign the
+   filing) or `DISSENT: <one-sentence reason>` (to flip to fix-inline).
+   Everything after the first line is advisory context."
+
+**Concrete re-evaluation triggers.** Every scope-out filing's `Re-eval by:` field MUST take exactly one of four shapes: date / counter / event-grep / dependency (the last subsumes human-review gates via a reminder issue). The canonical definitions, examples, and rejected phrasings live in `plugins/soleur/skills/review/references/review-todo-structure.md` §Re-evaluation Trigger — `code-simplicity-reviewer` MUST DISSENT on any filing whose trigger does not match one of those four shapes.
 
 If the first line of the agent's reply begins with `DISSENT`, the disposition
 flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
@@ -623,11 +647,13 @@ Remove duplicates, prioritize by severity and impact.
     1. **Fix inline** — small, load-bearing, cheap to include. Default for
        sub-20-line fixes on files the PR already touches.
     2. **File as scope-out** — legitimately needs its own cycle. MUST carry
-       the `pre-existing-unrelated` criterion AND a re-evaluation deadline
-       (a target phase milestone such as `Phase 4`, or a concrete trigger
-       condition such as "revisit when syncWorkspace lands in #2244").
-       Open-ended scope-outs with no deadline are NOT permitted — they become
-       the backlog this rule exists to drain.
+       the `pre-existing-unrelated` criterion AND a concrete re-evaluation
+       trigger in one of the four forms (date / counter / event-grep /
+       dependency — see "Concrete re-evaluation triggers" below and
+       [review-todo-structure.md](./references/review-todo-structure.md)). Vague phrasings ("post-MVP",
+       "later", "when ready", bare phase labels with no linked
+       phase-completion issue) are NOT permitted — they become the backlog
+       this rule exists to drain.
     3. **Close as wontfix** — polish-only, low-value noise, or concern already
        covered by existing code. Close immediately (do not file) with a
        1-sentence rationale in the summary report.
