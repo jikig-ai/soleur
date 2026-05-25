@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { abortAllUserSessions } from "@/server/agent-runner";
 import { deleteWorkspace } from "@/server/workspace";
 import { createChildLogger } from "./logger";
+import { hashUserId } from "@/server/observability";
 
 const log = createChildLogger("account-delete");
 
@@ -482,9 +483,12 @@ export async function deleteAccount(
         .from("organizations")
         .select("id", { count: "exact", head: true })
         .eq("owner_user_id", userId);
+      // Use userIdHash directly per the userid-bypass-lint convention
+      // (#3698) — the pino formatter rename hook covers grandfathered
+      // sites but new emits must compute the hash at the call site.
       log.info(
         {
-          userId,
+          userIdHash: hashUserId(userId),
           orgsReassigned: orgsReassigned ?? 0,
           orphanOrgsPendingSetNull: orphanRows ?? 0,
         },
@@ -492,7 +496,10 @@ export async function deleteAccount(
       );
     } catch (probeErr) {
       // Observability-only; do not fail the cascade.
-      log.warn({ userId, err: probeErr }, "orphan-org probe failed (non-fatal)");
+      log.warn(
+        { userIdHash: hashUserId(userId), err: probeErr },
+        "orphan-org probe failed (non-fatal)",
+      );
     }
   } catch (err) {
     log.error(
