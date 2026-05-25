@@ -1,0 +1,131 @@
+# Daily sweep that auto-closes `deferred-scope-out` issues with no activity
+# in 90+ days. Rationale (PR #4452): the Soleur review skill files
+# `deferred-scope-out` issues for findings the operator can't fix inline.
+# Two recent PRs (#4418, #4440) were on track to file 6 such issues
+# combined; the operator manually walked the count back to 1. The backlog
+# math (close N, file M, net +K) is invisible per-PR and accumulates issues
+# that go stale.
+#
+# This workflow drains the long tail: any deferred-scope-out issue with no
+# activity in 90 days is auto-closed with a comment instructing the
+# operator to re-file with a refreshed re-evaluation trigger if the
+# concern is still relevant.
+#
+# Kill switch: apply the `do-not-auto-close` label to any issue that must
+# stay open past 90 days without activity (e.g., a legitimate long-horizon
+# dependency on an unscheduled upstream).
+#
+# Dry-run: trigger via `workflow_dispatch` with `dry_run=true` to list
+# candidates without closing.
+#
+# Cron `0 12 * * *` (daily 12:00 UTC) — aligns with most operator working
+# hours so the auto-close comments are visible during a normal review
+# session.
+#
+# Injection safety: the workflow never interpolates GitHub event payload
+# fields (issue title/body, PR title/body, etc.) into `run:` blocks.
+# All untrusted text (issue titles surfaced in logs) is read from
+# `gh issue list --json` and parsed via `jq`, then echoed via `printf`-style
+# shell variables — never via `${{ ... }}` template expansion into the
+# shell context. See:
+# https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+name: "Scheduled: Stale Deferred-Scope-Out Auto-Close"
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'If true, list stale candidates but do not comment or close'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: schedule-stale-deferred-scope-outs
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Auto-close stale deferred-scope-out issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: |
+          set -euo pipefail
+
+          CUTOFF=$(date -u -d '90 days ago' +%Y-%m-%d)
+          echo "Cutoff date (no activity since): ${CUTOFF}"
+          echo "Dry-run mode: ${DRY_RUN}"
+
+          # Query open deferred-scope-out issues with no updates since cutoff.
+          # Sort oldest-first so the sweep makes steady progress on the tail.
+          CANDIDATES=$(gh issue list \
+            --label deferred-scope-out \
+            --state open \
+            --search "updated:<${CUTOFF} sort:updated-asc" \
+            --limit 200 \
+            --json number,title,updatedAt,labels)
+
+          TOTAL=$(echo "$CANDIDATES" | jq 'length')
+          echo "Stale candidates found: ${TOTAL}"
+
+          if [[ "$TOTAL" -eq 0 ]]; then
+            echo "Auto-closed 0 stale deferred-scope-out issues (0 skipped via do-not-auto-close label)"
+            exit 0
+          fi
+
+          CLOSED=0
+          SKIPPED=0
+
+          # Iterate via jq -c so each issue is one JSON line; avoids
+          # word-splitting on titles. NUMBER is digit-validated before use
+          # in `gh issue comment` / `gh issue close` so a hypothetical
+          # injection via a tampered issue number is foreclosed.
+          while IFS= read -r issue; do
+            NUMBER=$(echo "$issue" | jq -r '.number')
+            TITLE=$(echo "$issue" | jq -r '.title')
+            UPDATED=$(echo "$issue" | jq -r '.updatedAt')
+            HAS_KILLSWITCH=$(echo "$issue" | jq -r '[.labels[].name] | any(. == "do-not-auto-close")')
+
+            if [[ ! "$NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "SKIP malformed issue number: ${NUMBER}"
+              continue
+            fi
+
+            if [[ "$HAS_KILLSWITCH" == "true" ]]; then
+              # Title is logged but never re-injected into a shell command.
+              echo "SKIP #${NUMBER} (do-not-auto-close): ${TITLE}"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            echo "CANDIDATE #${NUMBER} (updated ${UPDATED}): ${TITLE}"
+
+            if [[ "$DRY_RUN" == "1" ]]; then
+              continue
+            fi
+
+            COMMENT_BODY="Auto-closing: this issue has been open with no activity for 90+ days.
+
+          If the concern is still relevant, re-file with an updated re-evaluation trigger (date / counter / event-grep / dependency — see \`plugins/soleur/skills/review/references/review-todo-structure.md\`). Open-ended scope-outs accumulate into the backlog this auto-close exists to drain.
+
+          See PR #4452 for the rationale and kill-switch (apply the \`do-not-auto-close\` label to exempt an issue from this sweep)."
+            gh issue comment "$NUMBER" --body "$COMMENT_BODY"
+            gh issue close "$NUMBER" --reason "not planned"
+            CLOSED=$((CLOSED + 1))
+          done < <(echo "$CANDIDATES" | jq -c '.[]')
+
+          echo "Auto-closed ${CLOSED} stale deferred-scope-out issues (${SKIPPED} skipped via do-not-auto-close label)"
