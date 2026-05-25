@@ -55,7 +55,15 @@ interface ParsedArgs {
 function parseArgs(argv: string[]): ParsedArgs {
   const get = (flag: string): string | undefined => {
     const idx = argv.indexOf(flag);
-    return idx >= 0 && idx + 1 < argv.length ? argv[idx + 1] : undefined;
+    if (idx < 0 || idx + 1 >= argv.length) return undefined;
+    const v = argv[idx + 1];
+    // Reject value-tokens that are themselves flags. Pre-fix, an invocation
+    // like `--reason --jti <uuid>` set reason="--jti" and silently bound
+    // the jti to the operator's reason text — UUID validation downstream
+    // would flag it, but the diagnostic was misleading. With this guard
+    // `required()` raises the clean `::error::missing required flag --reason`.
+    if (v.startsWith("--")) return undefined;
+    return v;
   };
   const required = (flag: string): string => {
     const v = get(flag);
@@ -109,10 +117,11 @@ async function main(): Promise<void> {
 
   const summary = [
     "Revoking:",
-    `  jti:        ${args.jti}`,
-    `  founder:    ${args.founderId}`,
-    `  reason:     ${args.reason}`,
-    `  target:     ${supabaseUrl}`,
+    `  jti:             ${args.jti}`,
+    `  founder:         ${args.founderId}`,
+    `  reason:          ${args.reason}`,
+    `  target:          ${supabaseUrl}`,
+    `  revoke-session:  ${args.revokeSession}`,
     "",
   ].join("\n");
 
