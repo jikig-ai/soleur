@@ -397,6 +397,81 @@ findings were filed but never resolved before ship. This gate enforces the
 fix-inline default at the merge boundary. See rule
 `rf-review-finding-default-fix-inline`.
 
+### Net-Issue-Flow Surfacing (advisory)
+
+Before queueing auto-merge, compute and display the per-PR net-issue-flow:
+how many issues this PR **closes** vs. how many `deferred-scope-out` issues
+it **files**. The display is advisory — it does NOT block merge — but it
+makes the backlog math visible at the last moment when the operator can
+still pivot a filed issue back to inline.
+
+**Why this surface exists.** PR #4452 introduced the cost-of-filing
+auto-flip and concrete-trigger rules; this metric is the observability
+layer that catches regressions in those rules. PRs #4418 and #4440 were on
+track to file 6 deferred-scope-out issues combined; the operator manually
+walked them back to 1 — but only because the math was visible during
+synthesis. Once outside review synthesis, the per-PR delta becomes
+invisible and the backlog accretes silently.
+
+**Detection:**
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq .number)
+[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "Error: PR_NUMBER is not a positive integer: $PR_NUMBER"; exit 1; }
+
+# N: issues this PR closes via `Closes #X` / `Fixes #X` / `Resolves #X`.
+# Body-keyword detection matches /ship Phase 6 issue detection conventions.
+PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
+CLOSING=$(printf '%s\n' "$PR_BODY" \
+  | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
+  | grep -oE '#[0-9]+' \
+  | sort -u \
+  | wc -l)
+
+# M: deferred-scope-out issues opened that cross-reference this PR via
+# `Ref|Closes|Fixes #<N>` in the body. Matches Phase 5.5 detection regex.
+FILED=$(gh issue list \
+  --label deferred-scope-out \
+  --state open \
+  --json number,body \
+  --jq '[.[] | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))] | length')
+
+NET=$(( FILED - CLOSING ))
+```
+
+**Display (always emit, never block):**
+
+```text
+PR net-issue-flow:
+  Closing: <CLOSING> (extracted from `Closes #X` keywords in body)
+  Filing:  <FILED> (count of deferred-scope-out issues created during this PR cycle that Ref #<PR>)
+  Net:     <signed NET> (positive = backlog growth)
+```
+
+**If `NET > 0`** (net-positive backlog growth), print a warning ABOVE the
+PR body in the ship checklist:
+
+```text
+⚠ Net-positive backlog flow: this PR adds +<NET> issues to the deferred-scope-out queue.
+  Before merging, consider whether any of the <FILED> filed issues could be done inline instead.
+  Cost-of-filing gate: ≤30 lines AND ≤2 files → auto-flip to fix-inline (see
+  plugins/soleur/skills/review/SKILL.md "Mechanical pre-CONCUR auto-flip").
+```
+
+The warning is advisory — it does NOT block auto-merge. The pipeline
+continues into Phase 6 immediately after emitting the warning. The point
+is to surface the math at the moment when the operator can still pivot,
+not to add a new merge-blocker (the Review-Findings Exit Gate above
+already covers the "unjustified filing" case).
+
+**Why advisory (not blocking).** Legitimate deferrals exist — e.g., a
+single architectural-pivot scope-out filed on a 2000-line refactor PR is
+net-positive but correct. Blocking on `NET > 0` would either generate
+false-positive blocks or push operators to game the metric (close
+unrelated issues to balance the math). The advisory surface preserves the
+"observable, not enforced" character of net-flow while making the trend
+impossible to miss.
+
 ### Pre-Ship Domain Review (conditional)
 
 Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs three conditional gates in parallel.
