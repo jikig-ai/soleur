@@ -155,6 +155,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "dev-signin": true,
       "team-workspace-invite": false,
       "kb-chat-sidebar": true,
+      "byok-delegations": false,
     });
   });
 
@@ -169,6 +170,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "dev-signin": false,
       "team-workspace-invite": false,
       "kb-chat-sidebar": true,
+      "byok-delegations": false,
     });
   });
 
@@ -183,6 +185,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "dev-signin": false,
       "team-workspace-invite": false,
       "kb-chat-sidebar": false,
+      "byok-delegations": false,
     });
   });
 });
