@@ -7,7 +7,9 @@
 --   * revoke_jti(uuid, uuid, text) exists, SECURITY DEFINER.
 --   * my_revocation_status() exists, SECURITY DEFINER.
 --   * is_jti_denied_from_jwt() exists, SECURITY DEFINER, STABLE.
---   * is_jti_denied(uuid) is now GRANTed EXECUTE TO authenticated.
+--   * is_jti_denied(uuid) GRANT-state superseded by mig 069 — see
+--     verify/069_jti_deny_grant_restore.sql for the post-069 assertion
+--     (REVOKED FROM authenticated, service_role only).
 --   * revoke_jti is NOT granted to authenticated (service-role-only).
 --   * my_revocation_status is granted TO authenticated.
 --   * Exactly 21 RESTRICTIVE policies named *_jti_not_denied exist.
@@ -41,13 +43,20 @@ SELECT 'is_jti_denied_from_jwt_fn_present',
    AND p.prosecdef = true
    AND p.provolatile = 's'
 UNION ALL
--- (4) is_jti_denied(uuid) is now GRANTed EXECUTE TO authenticated
-SELECT 'is_jti_denied_authenticated_grant_present',
-       CASE WHEN has_function_privilege(
-              'authenticated',
-              'public.is_jti_denied(uuid)',
-              'EXECUTE'
-            ) THEN 0 ELSE 1 END::int
+-- (4) is_jti_denied(uuid) EXECUTE grant — REMOVED at mig 069 time.
+--     The original mig 068 check asserted authenticated had EXECUTE
+--     (speculative belief that PostgREST evaluated RLS in the caller
+--     role even through SECURITY DEFINER wrappers). Empirical testing
+--     at #4440 follow-up time proved that wrong: revoking the GRANT
+--     left tenant-jwt-rls-deny.tenant-isolation.test.ts green. Mig 069
+--     drops the GRANT and verify/069_jti_deny_grant_restore.sql owns
+--     the post-069 assertion (REVOKED FROM authenticated + anon,
+--     service_role retained). This check intentionally elided rather
+--     than inverted here so the verify file's check-count remains
+--     compatible with any external test harness counting rows; the
+--     inverted assertion lives in 069's verify file by design.
+SELECT 'is_jti_denied_grant_state_superseded_by_mig_069',
+       0::int AS bad
 UNION ALL
 -- (5) revoke_jti is NOT granted to authenticated
 SELECT 'revoke_jti_authenticated_revoke_present',
