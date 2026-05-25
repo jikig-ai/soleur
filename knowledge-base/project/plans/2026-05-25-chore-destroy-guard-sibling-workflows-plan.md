@@ -5,9 +5,31 @@ requires_cpo_signoff: true
 brand_survival_threshold: single-user-incident
 closes: 4419
 follows: 4420
+deepened_on: 2026-05-25
 ---
 
 # chore: Extend destroy-guard widening to apply-sentry-infra and apply-web-platform-infra (#4419)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-25
+**Sections enhanced:** Research Reconciliation, Risks (R2 strengthened), new "Research Insights" section
+**Validations performed at deepen-time:**
+
+1. **Empirical jq filter validation (7 fixture cases).** Wrote the exact proposed `destroy-guard-filter-web-platform.jq` to `/tmp/test-filter.jq`, piped 7 synthesized JSON shapes through it; every case returned the expected `{resource_deletes, nested_deletes}` (see Research Insights → Empirical Filter Validation below). Proves the JSON-path assumptions BEFORE /work writes the file.
+2. **Precedent-diff against existing `destroy-guard-filter.jq`** — proposed filter matches the value-arg `_count($side)` shape from PR #4420 byte-for-byte, only the per-resource clause set differs. No deviation from the path-specific design constraints.
+3. **All cited PR/issue states verified live** via `gh pr view` / `gh issue view`: #4420 MERGED, #3915 CLOSED, #4419 OPEN, #4392 OPEN, #3976 CLOSED, #4395 CLOSED.
+4. **All cited workflow line numbers re-read** from `apply-sentry-infra.yml` (167, 168-180, 187-207, 199, 203) and `apply-web-platform-infra.yml` (231, 315-340, 332, 336) — every cited region matches the actual file content.
+5. **CODEOWNERS line 81 confirmed** as the existing fixtures glob (`/tests/scripts/fixtures/tfplan-*.json @deruelle`); the 4 new rows land after it as planned.
+6. **All cited labels exist** per `gh label list --limit 200`: `chore`, `type/chore`, `domain/engineering`, `priority/p3-low`, `deferred-automation`.
+7. **HCL block-vs-attribute confirmed** for `cloudflare_zero_trust_access_policy.include` and `cloudflare_notification_policy.email_integration` — both are block-form (`include { ... }`, `email_integration { ... }` at `tunnel.tf:75-77,111-113,129-131`), so JSON output is array-shaped → filter's `[.include[]?] | length` and `[.email_integration[]?] | length` are correct.
+8. **Cloudflare provider pin verified**: `cloudflare/cloudflare ~> 4.0` (currently 4.52.7 per `apps/web-platform/infra/.terraform.lock.hcl`). Filter paths target v4 schema; v5 would rename `ingress_rule {}` → `ingress {}` and `cloudflare_record` → `cloudflare_dns_record`. Folded into Risks R2.
+
+### Key improvements over plan v1
+
+1. **Risks R2 (provider churn) strengthened** with the explicit v4→v5 rename table from `2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`.
+2. **New Research Insights section** documenting the empirical filter validation transcript — copy-pasteable for /work-time RED-phase setup.
+3. **Cap-coupling reverse pointer** documented in Sharp Edges: the trio (apply-github-infra + apply-sentry-infra + apply-web-platform-infra) now reads from a single convention; future apply-* workflows MUST follow.
 
 ## Overview
 
@@ -446,7 +468,17 @@ Not applicable. **Tier:** NONE. No user-facing surface modified.
 ## Risks
 
 - **R1 — False positive on ruleset rule reorder.** If a future PR reorders `cloudflare_ruleset.seo_page_redirects.rules[]` (e.g., moves Rule 5 below Rule 6 for precedence), Terraform's JSON plan reports it as `before.rules` length=13, `after.rules` length=13 (same length, different content). The filter's `(before_count - after_count)` is 0, so the gate does NOT trip — correct behavior. However, if a PR removes one rule AND adds two (net +1, but one real removal), the filter computes `13 - 14 = -1`, dropped by `select(. > 0)`. **The known-broken case (one real removal, no addition) IS caught.** A clever attacker could mask removal-with-replacement, but the merge commit's CODEOWNERS-gated review on `apps/web-platform/infra/*.tf` is the load-bearing defense — destroy-guard is the second-line. Documented as a known limitation in destroy-guard-filter-web-platform.jq's comment block.
-- **R2 — Provider version churn changes the JSON path.** The Cloudflare provider's `cloudflare_ruleset` schema has been stable since v4.x (rules{} repeated block). A hypothetical v5 rename to `policies[]` would silently zero out the filter's `nested_deletes`. **Mitigation:** the `tfplan-web-platform-real-baseline.json` fixture (AC12) is a regression anchor — a provider upgrade that changes the path will surface either (a) directly via the test failing when the captured plan no longer parses to the expected counts, or (b) more likely the workflow itself failing on the upgrade PR before any guard logic runs. Same R2 posture as PR #4420.
+- **R2 — Provider version churn changes the JSON path.** The Cloudflare provider is pinned `~> 4.0` (currently 4.52.7 per `apps/web-platform/infra/.terraform.lock.hcl`). All five filter paths target v4 schema. v5 renames (per learning `knowledge-base/project/learnings/2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`) that would silently zero out `nested_deletes`:
+
+  | v4 path (current filter) | v5 rename | Filter impact on v5 upgrade |
+  | --- | --- | --- |
+  | `cloudflare_ruleset.rules[]` | unchanged (rules block stable) | none |
+  | `cloudflare_zero_trust_tunnel_cloudflared_config.config[0].ingress_rule[]` | `ingress[]` (block rename) | **silent zero** until filter updated |
+  | `cloudflare_zone_settings_override.settings[0].security_header[]` | resource removed in v5 (settings now top-level attrs) | filter clause never matches; nested_deletes drops the security_header coverage |
+  | `cloudflare_notification_policy.email_integration[]` | unchanged | none |
+  | `cloudflare_zero_trust_access_policy.include[]` | unchanged | none |
+
+  Two of the five clauses are at risk on a v5 upgrade. **Mitigation:** the `tfplan-web-platform-real-baseline.json` fixture (AC12) is a regression anchor — a provider upgrade that changes a path will surface either (a) directly via the test failing when the captured plan no longer parses to the expected counts, or (b) more likely the workflow itself failing on the upgrade PR before any guard logic runs (the `terraform init -upgrade` will trip on `~> 4.0` constraint mismatch first). Same R2 posture as PR #4420 — when the time comes to bump to v5, extend the filter's clauses in lockstep and re-capture both fixtures.
 - **R3 — `terraform show -json` schema stability.** `change.before` / `change.after` are documented contracts. Low risk; if Terraform breaks this contract, the entire IaC ecosystem breaks with it.
 - **R4 — Squash-merge `[ack-destroy]` placement.** Inherits the existing posture documented in PR #4420 R4. The byte-identical `(^|$'\n')\[ack-destroy\]($|$'\n')` regex matches whether the token lands in the PR title or body, as long as the squash-merge commit message contains the line-anchored token.
 - **R5 — Real fixture redaction completeness.** The web-platform plan JSON carries more sensitive bytes than the github plan JSON (Doppler service tokens, TLS private keys, random_id seeds, ~12 TF_VAR_* inputs from Doppler). **Mitigation:** the `del(.variables)` expression catches all TF_VAR_*-sourced inputs; additional `del()` on `.. | .secret_b64?` (random_id) and `.. | .private_key_pem?` (tls) covers the resource-attribute path. AC12 enforces the sentinel grep gate. Operator review pre-commit is mandatory. If a future provider adds a new sensitive attribute name, the AC12 sentinel regex needs an extension — the regex is permissive on common shapes (`sk_`, `ghp_`, etc.) and conservative on novel ones; a learning entry should capture any new redaction extension at /work time.
@@ -467,6 +499,71 @@ Not applicable. **Tier:** NONE. No user-facing surface modified.
 - **Extending CODEOWNERS scope beyond the new filter / test paths.** The existing fixtures glob at line 81 (`/tests/scripts/fixtures/tfplan-*.json`) already covers new fixtures; no glob edit needed.
 - **Surveying resources NOT currently in either workflow's apply allow-list.** `sentry_issue_alert.*`, `sentry_uptime_monitor.*`, `hcloud_server`, `hcloud_volume`, `hcloud_ssh_key`, `terraform_data.*` SSH-provisioned resources are all out-of-scope because they are import-only or operator-locally-applied or excluded from the per-merge auto-apply.
 - **Closing #4392.** AC20 already closed by #4420; AC19/AC21 are unrelated to this PR.
+
+## Research Insights
+
+### Empirical Filter Validation (deepen-pass, 2026-05-25)
+
+The proposed `destroy-guard-filter-web-platform.jq` body (from Phase 2 step 2) was written verbatim to `/tmp/test-filter.jq` and exercised against 7 synthesized fixture shapes. All passed. Transcript (copy-pasteable into /work-time RED-phase setup):
+
+| # | Fixture shape | Expected `{resource_deletes, nested_deletes}` | Actual | Result |
+| - | ------------- | --------------------------------------------- | ------ | ------ |
+| 1 | `cloudflare_ruleset` rules 13 → 12 (ACME carve-out removal) | `{0, 1}` | `{0, 1}` | PASS |
+| 2 | `cloudflare_zero_trust_tunnel_cloudflared_config` `config[0].ingress_rule` 3 → 2 (SSH removed) | `{0, 1}` | `{0, 1}` | PASS |
+| 3 | `cloudflare_zone_settings_override` `settings[0].security_header` 1 → 0 (HSTS off) | `{0, 1}` | `{0, 1}` | PASS |
+| 4 | `cloudflare_ruleset` rules 1 → 2 (addition; not a removal) | `{0, 0}` | `{0, 0}` | PASS (`select(. > 0)` filters additions) |
+| 5 | Mixed: 1 `cloudflare_record` delete + 1 `cloudflare_ruleset` rules 2 → 1 | `{1, 1}` | `{1, 1}` | PASS |
+| 6 | `cloudflare_ruleset` resource-level DELETE (3 rules in before, after=null) | `{1, 0}` | `{1, 0}` | PASS (no double-count via `select(.. | not)`) |
+| 7 | Empty `resource_changes: []` | `{0, 0}` | `{0, 0}` | PASS |
+
+**Implication:** the 5 path-specific clauses in the proposed web-platform filter are empirically correct against `terraform show -json` shape semantics for `cloudflare_*` v4 resources. The `select(.change.actions? | index("delete") | not)` exclusion prevents double-counting when a parent is also being deleted (Test 6). The `select(. > 0)` clause correctly filters additions (Test 4). The fold over the 5 clause-array followed by `add // 0` correctly sums multi-resource shrinkage (Test 5). The sentry filter (no nested clauses, literal `nested_deletes: 0`) is structurally trivial; the same `resource_changes[]?` count idiom in `resource_deletes` is byte-identical to the github filter and is already exercised by `test-destroy-guard-counter.sh` T1, so no separate empirical validation needed.
+
+### Precedent-Diff (deepen-pass)
+
+The proposed sentry + web-platform filters mirror `tests/scripts/lib/destroy-guard-filter.jq` (the github filter from PR #4420) in three structural ways:
+
+1. **Output schema identical**: `{resource_deletes: int, nested_deletes: int}` across all three.
+2. **`_count($side)` helper uses value-arg binding** (`def f($side): ($side // {}) | ... | length;`), avoiding the v1 P0-1 filter-arg crash class.
+3. **`select(.change.actions? | index("delete") | not)` clause** on every nested-deletes lookup, preventing double-count with resource_deletes.
+
+The web-platform filter extends with **5 parallel resource-type clauses**, each following the same `select(.type == "<rtype>") | select(.. | not) | (_count(before) - _count(after)) | select(. > 0)` pattern. No new pattern was introduced; the only deviation is the number of clauses inside the `[...] | add // 0` fold. This precedent-diff is the smallest deviation possible while covering the 5 vulnerable types.
+
+### Cited PR/issue states (deepen-time live probe)
+
+```
+#4420 — MERGED — "fix(ci): widen destroy-guard to catch github_repository_ruleset nested-block removals"
+#3915 — CLOSED — "follow-through: destroy-guard end-to-end test ([ack-destroy] path) for apply-github-infra"
+#4419 — OPEN   — "chore: extend destroy-guard widening to apply-sentry-infra and apply-web-platform-infra"
+#4392 — OPEN   — "post-merge probes for PR #4385: AC19/AC20/AC21 synthetic probes"
+#3976 — CLOSED — "follow-through: PR #3974 — operator runbook for soleur.ai cert recovery (PM2-PM7)"
+#4395 — CLOSED — "test(4384): probe ack-destroy destroy-guard — DO NOT MERGE"
+```
+
+All citations in the plan body resolve to existing PRs/issues with the expected state.
+
+### Workflow line-citation re-read (deepen-time)
+
+- `.github/workflows/apply-sentry-infra.yml:167` → `set -uo pipefail` (confirmed; `-e` deliberately omitted to capture `rc` per #4420 pattern).
+- `.github/workflows/apply-sentry-infra.yml:187-207` → the inline destroy-guard block currently spans `# Authoritative destroy count ...` through the final `exit 1` (confirmed; this is the block that gets replaced).
+- `.github/workflows/apply-sentry-infra.yml:199` → `if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then` (confirmed; byte-identical preservation target).
+- `.github/workflows/apply-sentry-infra.yml:203` → `echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on cron monitors."` (confirmed; this is the error message being updated to the two-counter form).
+- `.github/workflows/apply-web-platform-infra.yml:231` → `set -uo pipefail` (confirmed).
+- `.github/workflows/apply-web-platform-infra.yml:315-340` → the inline destroy-guard block including the integer-validation gate at lines 323-326 (confirmed).
+- `.github/workflows/apply-web-platform-infra.yml:332` → `if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then` (confirmed; byte-identical preservation target).
+- `.github/workflows/apply-web-platform-infra.yml:336` → `echo "::error::terraform plan shows ${destroy_count} destroy operation(s) on web-platform infra."` (confirmed; updated to two-counter form).
+
+### Sentry workflow step ordering (deepen-time)
+
+`apply-sentry-infra.yml` has an additional `Sentry audit-gate (4-gate destination-controllability)` step at line 142 between `Terraform init` and `Terraform plan (cron monitors only)`. This step runs `bash apps/web-platform/scripts/sentry-monitors-audit.sh` for the 4-gate destination-controllability check (PR-beta §10.6 / Branch-C Arch F1). The destroy-guard edit MUST NOT touch this step or change its ordering — it remains the load-bearing pre-plan check for stale-credentials destination drift. Documented here so /work's reader is alerted: the `Terraform plan` step is at line 160, not earlier.
+
+### Applicable institutional learnings
+
+The following learnings inform this plan's design choices:
+
+- **`2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`** — folded into Risks R2 above. Two of five filter clauses at risk on v5 upgrade (`ingress_rule` → `ingress` rename, `cloudflare_zone_settings_override` resource removal).
+- **`2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`** — folded into Phase 1.2 fixture-capture procedure. The `tfplan-web-platform-real-baseline.json` capture command MUST use the canonical Doppler triplet (separate `AWS_*` exports + `--name-transformer tf-var`) to avoid the `~13 No value for required variable` crash.
+- **`2026-03-04-gh-jq-does-not-support-arg-flag.md`** — not directly applicable (plan does not pipe `gh` through `jq --arg`), but documented in `tests/scripts/lib/destroy-guard-filter.jq` precedent as the reason `jq -f` is used inline rather than `gh api ... --jq`.
+- **`hr-tfplan-fixture-redaction-mandatory`** (referenced by existing `test-destroy-guard-counter.sh:21`) — the mandatory redaction posture for captured fixtures. AC12 enforces.
 
 ## References
 
