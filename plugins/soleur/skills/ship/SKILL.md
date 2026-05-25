@@ -428,11 +428,16 @@ CLOSING=$(printf '%s\n' "$PR_BODY" \
   | sort -u \
   | wc -l)
 
-# M: deferred-scope-out issues opened that cross-reference this PR via
-# `Ref|Closes|Fixes #<N>` in the body. Matches Phase 5.5 detection regex.
+# M: deferred-scope-out issues opened AFTER the PR was created that cross-reference
+# this PR via `Ref|Closes|Fixes #<N>` in the body. The `created:>=<PR-opened-date>`
+# filter scopes the count to issues filed during THIS PR cycle (not pre-existing
+# scope-outs that merely cross-reference the PR for context). Matches Phase 5.5
+# detection regex.
+PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq .createdAt | cut -c1-10)
 FILED=$(gh issue list \
   --label deferred-scope-out \
   --state open \
+  --search "created:>=${PR_CREATED_AT}" \
   --json number,body \
   --jq '[.[] | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))] | length')
 
@@ -464,13 +469,7 @@ is to surface the math at the moment when the operator can still pivot,
 not to add a new merge-blocker (the Review-Findings Exit Gate above
 already covers the "unjustified filing" case).
 
-**Why advisory (not blocking).** Legitimate deferrals exist — e.g., a
-single architectural-pivot scope-out filed on a 2000-line refactor PR is
-net-positive but correct. Blocking on `NET > 0` would either generate
-false-positive blocks or push operators to game the metric (close
-unrelated issues to balance the math). The advisory surface preserves the
-"observable, not enforced" character of net-flow while making the trend
-impossible to miss.
+**Why advisory (not blocking).** Advisory only — legitimate architectural-pivot deferrals can be net-positive and correct.
 
 ### Pre-Ship Domain Review (conditional)
 
