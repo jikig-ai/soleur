@@ -1196,32 +1196,62 @@ export async function exportSqlTable(
 
 const STORAGE_LIST_PAGE_SIZE = 1000;
 
-interface AttachmentBinary {
-  /** storage path relative to bucket root (e.g. "<userId>/conv-1/foo.png"). */
-  storagePath: string;
-  /** archive path inside the ZIP (e.g. "attachments/conv-1/foo.png"). */
-  archivePath: string;
-  buffer: Buffer;
-}
+type AttachmentEntry =
+  | {
+      kind: "included";
+      /** storage path relative to bucket root (e.g. "<userId>/conv-1/foo.png"). */
+      storagePath: string;
+      /** archive path inside the ZIP (e.g. "attachments/conv-1/foo.png"). */
+      archivePath: string;
+      buffer: Buffer;
+    }
+  | {
+      /**
+       * Co-uploader entry: a file uploaded by another member in a shared-
+       * workspace conversation the requester participated in. The byte
+       * payload is NOT included in the archive (Art. 15(4) rights of
+       * others), only a manifest entry with the uploader pseudonym is
+       * surfaced. Schema 1.2.0 fields.
+       */
+      kind: "redacted-co-uploader";
+      storagePath: string;
+      archivePath: string;
+      uploaderPseudonym: string;
+      filename: string;
+      contentType: string;
+      sizeBytes: number;
+    };
+
+/** @deprecated use AttachmentEntry. Kept for backward-compat in case external callers reference. */
+type AttachmentBinary = Extract<AttachmentEntry, { kind: "included" }>;
 
 async function enumerateChatAttachments(
   expectedUserId: string,
   signal: AbortSignal,
-): Promise<AttachmentBinary[]> {
-  // SCOPE NOTE (#4318 / mig 068): this function enumerates Storage
-  // objects under `<expectedUserId>/...` only. Co-uploader files in
-  // shared-workspace conversations the requester participated in (paths
-  // shaped `<otherUserId>/<sharedConvId>/...`) are NOT yet included.
-  // The manifest schema is bumped to 1.2.0 with forward-compatible
-  // `redacted` fields so a follow-up PR can add the co-uploader
-  // enumeration without re-bumping. The scope cut is bounded: prd has
-  // zero multi-user workspaces today (TEAM_WORKSPACE_INVITE_ENABLED
-  // OFF), so no co-uploader files exist to enumerate. The follow-up
-  // gates the flag flip — same pattern as OQ#3 (workspace-deletion
-  // orphan paths). See follow-up issue filed at the OQ#3-class label.
+): Promise<AttachmentEntry[]> {
+  // Two-pass enumeration (mig 068 #4318):
+  //   (1) Own-folder pass — walks <expectedUserId>/... and downloads bytes.
+  //       Defended by both segment-1 path-prefix guard (assertSafeStoragePath)
+  //       AND segment-2 convId-in-participation-set check (assertConvIdParticipation).
+  //   (2) Co-uploader pass — queries message_attachments ⨝ messages ⨝
+  //       conversations for rows in participated convs WHERE the message's
+  //       user_id ≠ requester (i.e., co-uploaded by another workspace member).
+  //       Bytes are NOT downloaded. A manifest-only entry is surfaced with
+  //       redacted:true, redaction_reason:"art-15-co-uploader", and a
+  //       uploader_pseudonym minted from a per-bundle salt.
+  //
+  // Salt isolation: the co-uploader pseudonyms use a NEW per-call salt,
+  // not the salt used by exportSqlTable for SQL-row pseudonyms. Pseudonyms
+  // in the Storage manifest will therefore NOT match pseudonyms in the
+  // SQL tables for the same user within the same bundle — that
+  // cross-reference was never part of the schema contract. Each salt is
+  // memory-only, never persisted (AC5 grep enforces).
   const service = createServiceClient();
   const bucket = service.storage.from("chat-attachments");
-  const results: AttachmentBinary[] = [];
+  const results: AttachmentEntry[] = [];
+
+  // Co-uploader pass salt — per-call, memory-only, never persisted.
+  const coUploaderSalt = randomBytes(32);
 
   // Pre-compute the set of conversation IDs the requester participated
   // in (authored at least one message). Architecture P1-5 final-defense
@@ -1285,6 +1315,7 @@ async function enumerateChatAttachments(
         assertConvIdParticipation(folder.name, expectedUserId, participatedConvs);
         const buf = await downloadAttachment(bucket, storagePath, signal);
         results.push({
+          kind: "included",
           storagePath,
           archivePath: `attachments/${folder.name}/${file.name}`,
           buffer: buf,
@@ -1297,9 +1328,82 @@ async function enumerateChatAttachments(
       // verify; the path-prefix guard alone gates this case.
       const buf = await downloadAttachment(bucket, storagePath, signal);
       results.push({
+        kind: "included",
         storagePath,
         archivePath: `attachments/${folder.name}`,
         buffer: buf,
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Pass 2: co-uploader rows. Query message_attachments joined to
+  // messages joined to conversations. Filter to rows where:
+  //   - conversation_id is in participatedConvs (requester authored
+  //     at least one message in the conv — direct evidence of
+  //     participation, stronger than mere workspace membership)
+  //   - messages.user_id IS NOT NULL (NULL means the uploader was
+  //     already pseudonymised via the mig 068 cascade; no identity
+  //     left to disclose)
+  //   - messages.user_id != expectedUserId (the requester's own
+  //     uploads were already covered by Pass 1)
+  // Each unique storage_path produces a manifest-only entry with the
+  // uploader's pseudonym; bytes are NOT downloaded.
+  // ---------------------------------------------------------------
+  if (participatedConvs.size > 0) {
+    const { data: coUploaderRows, error: coErr } = await service
+      .from("message_attachments")
+      .select(
+        "storage_path, filename, content_type, size_bytes, messages!inner(user_id, conversation_id)",
+      )
+      .in("messages.conversation_id", Array.from(participatedConvs))
+      .neq("messages.user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (coErr) {
+      throw new Error(
+        `chat-attachments co-uploader enumeration failed: ${coErr.message}`,
+      );
+    }
+    const seen = new Set<string>();
+    // PostgREST types embedded one-to-one relationships as either an
+    // object or an array (the .select() schema cannot disambiguate
+    // cardinality at compile time). Accept both shapes at runtime.
+    type CoUploaderRow = {
+      storage_path: string | null;
+      filename: string | null;
+      content_type: string | null;
+      size_bytes: number | null;
+      messages:
+        | { user_id: string | null; conversation_id: string | null }
+        | { user_id: string | null; conversation_id: string | null }[]
+        | null;
+    };
+    for (const row of (coUploaderRows ?? []) as unknown as CoUploaderRow[]) {
+      const storagePath = row.storage_path;
+      const msg = Array.isArray(row.messages) ? row.messages[0] : row.messages;
+      const uploaderId = msg?.user_id ?? null;
+      if (!storagePath || !uploaderId) continue;
+      // Hoisted nested-select can return multiple rows for the same
+      // storage_path (one message_attachment per join; rare but possible
+      // if attachments were duplicated). De-dupe on storage_path.
+      if (seen.has(storagePath)) continue;
+      seen.add(storagePath);
+      // Path-shape sanity: segment-2 must be in participatedConvs.
+      // This is belt-and-suspenders against the join — the .in()
+      // already filters to participatedConvs, but a malformed/stale
+      // row could slip a foreign convId through if the DB row's
+      // FK was orphaned. Treat as defensive defense-in-depth.
+      const segments = storagePath.split("/");
+      const convSegment = segments[1];
+      if (!convSegment || !participatedConvs.has(convSegment)) continue;
+      results.push({
+        kind: "redacted-co-uploader",
+        storagePath,
+        archivePath: `attachments/${convSegment}/${segments[2] ?? "redacted"}`,
+        uploaderPseudonym: pseudonymiseUserId(uploaderId, coUploaderSalt),
+        filename: row.filename ?? "(unknown)",
+        contentType: row.content_type ?? "application/octet-stream",
+        sizeBytes: row.size_bytes ?? 0,
       });
     }
   }
@@ -1587,22 +1691,41 @@ export async function buildArchiveToDisk(
     });
   }
 
-  // Storage attachments (chat-attachments bucket). Path-prefix guard
-  // fail-job-loud per AC26 is inside `enumerateChatAttachments`.
+  // Storage attachments (chat-attachments bucket). Two variants:
+  //   - kind:"included" — bytes archived, manifest entry carries
+  //     sha256 + bytes (Art. 15+20 disclosure).
+  //   - kind:"redacted-co-uploader" — no bytes in the archive; manifest
+  //     entry carries redacted:true + redaction_reason + uploader_pseudonym
+  //     per schema 1.2.0 (Art. 15(4) rights-of-others narrowing for
+  //     co-uploaded files in shared workspaces).
   const attachments = await enumerateChatAttachments(userId, signal);
   for (const a of attachments) {
     if (signal.aborted) {
       archive.abort();
       throw new Error("aborted");
     }
-    archive.append(a.buffer, { name: a.archivePath });
-    files.push({
-      path: a.archivePath,
-      included: true,
-      article: "15+20",
-      sha256: sha256Hex(a.buffer),
-      bytes: a.buffer.length,
-    });
+    if (a.kind === "included") {
+      archive.append(a.buffer, { name: a.archivePath });
+      files.push({
+        path: a.archivePath,
+        included: true,
+        article: "15+20",
+        sha256: sha256Hex(a.buffer),
+        bytes: a.buffer.length,
+      });
+    } else {
+      // redacted-co-uploader: manifest entry only.
+      files.push({
+        path: a.archivePath,
+        included: false,
+        article: "15",
+        bytes: a.sizeBytes,
+        redacted: true,
+        redaction_reason: "art-15-co-uploader",
+        uploader_pseudonym: a.uploaderPseudonym,
+        reason: `Co-uploader file in shared workspace conversation; bytes withheld per Art. 15(4) rights of others. filename=${a.filename}, content_type=${a.contentType}`,
+      });
+    }
   }
 
   // Workspace files (`/workspaces/<userId>/*`). O_NOFOLLOW + fstat ino
