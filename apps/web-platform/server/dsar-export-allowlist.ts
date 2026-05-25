@@ -116,6 +116,26 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // trigger + anonymise_scope_grants RPC handle erasure separately.
   scope_grants: { ownerField: "founder_id", article: "15+20" },
 
+  // BYOK delegations ledger (migration 064, PR-A #4232).
+  // Art. 15+20: the grantor explicitly authorised a workspace member
+  // (the grantee) to fund their BYOK runs under a per-day/per-month
+  // cap. The row is the grantor's consent record under Art. 7; the
+  // grantee also has access because they are the data subject on the
+  // other side of the funding contract. additionalOwnerFields handles
+  // the OR-semantics (grantor OR grantee OR created_by OR revoked_by
+  // OR cap_updated_by). The WORM trigger + art_17_anonymise RPC
+  // handle erasure separately.
+  byok_delegations: {
+    ownerField: "grantor_user_id",
+    additionalOwnerFields: [
+      "grantee_user_id",
+      "created_by_user_id",
+      "revoked_by_user_id",
+      "cap_updated_by_user_id",
+    ],
+    article: "15+20",
+  },
+
   // GitHub App installation-token use audit (migration 052, PR-H #3244).
   // Art. 15: controller-collected, not user-provided. RLS owner-select
   // already exposes these rows to the founder via the dashboard; the

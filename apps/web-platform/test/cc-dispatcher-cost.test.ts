@@ -172,6 +172,7 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
           cache_creation_input_tokens: 800,
         },
       },
+      undefined,
     );
   });
 

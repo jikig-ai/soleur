@@ -16,7 +16,9 @@
     "test:ci": "vitest run",
     "test:e2e": "npx playwright test",
     "typecheck": "tsc --noEmit",
-    "hash-user-id": "bun scripts/hash-user-id.ts"
+    "hash-user-id": "bun scripts/hash-user-id.ts",
+    "byok-grant": "bun scripts/byok-grant.ts",
+    "byok-revoke": "bun scripts/byok-revoke.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.85",
