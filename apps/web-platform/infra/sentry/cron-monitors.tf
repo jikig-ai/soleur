@@ -321,3 +321,21 @@ resource "sentry_cron_monitor" "scheduled_agent_native_audit" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# TR9 PR-10 (closes #4448): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-competitive-analysis.ts`.
+# NEW monitor — no GHA-era predecessor.
+# Monthly 1st @ 09:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
+# Inngest-fired precedent. Single-miss alert. 55 min mirrors the claude-eval
+# cohort.
+resource "sentry_cron_monitor" "scheduled_competitive_analysis" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-competitive-analysis"
+  schedule                = { crontab = "0 9 1 * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 55
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
