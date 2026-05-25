@@ -597,9 +597,12 @@ export async function cronCompoundPromoteHandler({
           });
           if (openPRs.total_count > 0) {
             const firstPR = openPRs.items[0];
+            const diffBody = PII_REGEX.test(cluster.proposed_diff_unified)
+              ? "[diff redacted — PII pattern detected in LLM output]"
+              : `\`\`\`diff\n${cluster.proposed_diff_unified}\n\`\`\``;
             await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
               owner: REPO_OWNER, repo: REPO_NAME, issue_number: firstPR.number,
-              body: `Compound-promote cluster \`${clusterHash}\` proposes edits to \`${cluster.target_path}\` but this PR already touches skill files. Posting diff here instead of opening a conflicting branch.\n\n\`\`\`diff\n${cluster.proposed_diff_unified}\n\`\`\``,
+              body: `Compound-promote cluster \`${clusterHash}\` proposes edits to \`${cluster.target_path}\` but this PR already touches skill files. Posting diff here instead of opening a conflicting branch.\n\n${diffBody}`,
             });
             logger.info({ fn: "cron-compound-promote", pr: firstPR.number }, "skill-conflict-guard-comment-posted");
             return;
@@ -698,13 +701,13 @@ export async function cronCompoundPromoteHandler({
     return { ok: true, status: "completed", clustersOpened };
   } catch (err) {
     const e = err as Error;
-    const safeMessage = installationToken
-      ? redactToken(e.message, installationToken)
-      : e.message;
+    if (installationToken) {
+      e.message = redactToken(e.message, installationToken);
+    }
     reportSilentFallback(e, {
       feature: "cron-compound-promote",
       op: "handler-top-level",
-      message: safeMessage,
+      message: e.message,
     });
     try {
       await postSentryHeartbeat({ ok: false, logger });
