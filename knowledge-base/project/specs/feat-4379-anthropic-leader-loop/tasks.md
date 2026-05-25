@@ -111,26 +111,29 @@ Per `wg-when-deferring-a-capability-create-a` + new `wg-defer-only-after-inline-
 
 ### Inlined in PR-B (no issue)
 
-- [x] **7.3** Non-Goal 3: GDPR Art. 22 automated-decisioning analysis. **[Inlined as `knowledge-base/legal/art-22-assessments/PA-22.md` — brief assessment. Conclusion: Art. 22 does NOT apply under operator-as-controller-on-own-repo shape (decision not solely automated; effects on third-party data subjects not legally significant). Re-evaluation triggers documented. Cross-referenced from PA-22 in the Article 30 register.]**
-- [x] **7.5** Non-Goal 5: per-class brand-survival tiering. **[Inlined as `LEADER_CLASSES_DISABLED` Doppler-config kill switch in `agent-on-spawn-requested.ts`. Operator copy already shipped (`failure-reason-copy.ts:leader_class_disabled`). 2 tests in `agent-on-spawn-requested-leader-loop.test.ts`.]**
+- [x] **7.2** Non-Goal 2 (engineering portion): dashboard AI disclosure banner. **[Inlined as `RUNTIME_AI_DISCLOSURE` constant in `lib/legal/disclosures.ts` + render alongside `RUNTIME_COST_DISCLOSURE` in `runtime-explainer-banner.tsx`. ToS clause update is operator/legal scope (website content) and does not need engineering tracking. #4427 closed as inlined.]**
+- [x] **7.3** Non-Goal 3: GDPR Art. 22 automated-decisioning analysis. **[Inlined as `knowledge-base/legal/art-22-assessments/PA-22.md` — brief assessment. Conclusion: Art. 22 does NOT apply under operator-as-controller-on-own-repo shape. Cross-referenced from PA-22 in the Article 30 register.]**
+- [x] **7.5** Non-Goal 5: per-class brand-survival tiering. **[Inlined as `LEADER_CLASSES_DISABLED` Doppler-config kill switch in `agent-on-spawn-requested.ts`. Operator copy already shipped (`failure-reason-copy.ts:leader_class_disabled`). 2 tests added.]**
 - [x] **7.11** Non-Goal 11: per-vendor DPA file scaffolding. **[Inlined as `knowledge-base/legal/data-processing-agreements/anthropic.md` (single vendor — Anthropic). Zero-Retention amendment status tracked in frontmatter. Cross-referenced from PA-22.]**
 
-### Filed as GitHub issues
+### Filed as GitHub issues + retained (kept after triple-test audit)
 
-- [x] **7.1** Non-Goal 1: full DPIA on PA-22. → #4426
-- [x] **7.2** Non-Goal 2: consent banner + ToS clause update. → #4427
-- [x] **7.4** Non-Goal 4: per-class max-turns caps tuning from dogfood data. → #4428
-- [x] **7.6** Non-Goal 6: cross-installation spawn. → #4429
-- [x] **7.7** Non-Goal 7: per-founder spawn quota / rate-limit. → #4430
-- [x] **7.8** Non-Goal 8: transactional outbox between `action_sends` INSERT and `inngest.send`. → #4431
-- [x] **7.9** Non-Goal 9: WS-push channel. → #4432
-- [x] **7.10 / 7.14** Non-Goals 10 + 14 (consolidated): prompt fixture / golden-file regression suite. → #4433
-- [x] **7.12** Non-Goal 12: CVSS classification source-of-truth. → #4434
-- [x] **7.13** Non-Goal 13: Inngest Realtime swap evaluation. → #4435
+- [x] **7.4** Non-Goal 4: per-class max-turns caps tuning from dogfood data. → #4428 — **kept** (concrete trigger: 30 dogfood spawns; plausible within 6mo).
+- [x] **7.8** Non-Goal 8: transactional outbox between `action_sends` INSERT and `inngest.send`. → #4431 — **kept** (concrete trigger: first observed `enqueue_failed` in Sentry; lightweight tracking).
+- [x] **7.13** Non-Goal 13: Inngest Realtime swap evaluation. → #4435 — **kept** (concrete trigger: post-merge latency measurement; plausible within 6mo).
+
+### Closed after triple-test audit (documented in-place; no concrete-trigger-within-6mo)
+
+- [x] **7.1** Non-Goal 1: full DPIA on PA-22. → #4426 **closed** (re-file on cohort onboarding).
+- [x] **7.6** Non-Goal 6: cross-installation spawn. → #4429 **closed** (re-file when operator/cohort has 2+ installations).
+- [x] **7.7** Non-Goal 7: per-founder spawn quota / rate-limit. → #4430 **closed** (re-file on runaway-click pattern).
+- [x] **7.9** Non-Goal 9: WS-push channel. → #4432 **closed** (Supabase Realtime is the chosen channel; #4435 is the kept evaluation).
+- [x] **7.10 / 7.14** Non-Goals 10 + 14 (consolidated): prompt fixture regression suite. → #4433 **closed** (AC2/AC8 sentinels cover static shape; re-file if drift caught at dogfood).
+- [x] **7.12** Non-Goal 12: CVSS classification source-of-truth. → #4434 **closed** (re-file when first real cve-* source-ref hits operator repos AND auto-action is wrong for the tier).
 
 ### Workflow improvement landed in same phase
 
-`wg-defer-only-after-inline-triage` added to `AGENTS.core.md` (cross-linked in `AGENTS.md` pointer index). Future deferrals must answer "could this land in <30 min as a single file or 10-line code change?" before filing an issue. Triggered by the mid-stream user redirect in this phase — 3 of 14 candidates were single-file or kill-switch changes that landed inline cheaper than they would have filed as issues.
+`wg-when-deferring-a-capability-create-a` tightened + `wg-defer-only-after-inline-triage` added to `AGENTS.core.md` (cross-linked in `AGENTS.md` pointer index). New default: **document Non-Goals in-place; file an issue ONLY when the triple test passes** — (1) not inline-fixable in <30 min, (2) concrete observable trigger, (3) trigger plausibly fires within ~6 months. Triggered by the PR #4379 Phase 7 backlog explosion (10 issues filed for 1 PR) — audit reduced to 4 kept + 6 closed, net = 4 new open issues for the PR.
 
 ## Phase 8 — Pre-merge gates & review
 
