@@ -418,9 +418,8 @@ logs:
   where: GitHub Actions workflow run logs (per-step)
   retention: 90 days (GitHub default)
 discoverability_test:
-  command: |
-    cat tests/scripts/fixtures/tfplan-cf-ruleset-rule-removal.json | jq -f tests/scripts/lib/destroy-guard-filter-web-platform.jq
-  expected_output: '{"resource_deletes":0,"nested_deletes":1}'
+  command: jq -f tests/scripts/lib/destroy-guard-filter-web-platform.jq tests/scripts/fixtures/tfplan-cf-ruleset-rule-removal.json
+  expected_output: '"nested_deletes": 1'
 ```
 
 ## Domain Review
