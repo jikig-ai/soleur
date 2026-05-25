@@ -145,6 +145,20 @@ describe.skipIf(!INTEGRATION_ENABLED)(
             draft_preview: `draft-${s.key}`,
             action_class: `infra.test_${s.key.toLowerCase()}`,
             template_id: "default_legacy",
+            // Expanded MESSAGE_REDACT_FIELDS coverage (#4351 P1 review
+            // cross-reconcile): seed every column that must be nulled on
+            // a foreign-author row so the AC1 assertions can verify each
+            // leak vector closed. `tier` is kept off the `external_*`
+            // band to avoid the mig 046 `messages_external_tier_status_
+            // check` (external_* tiers require status IN
+            // ('draft','archived'); default status is 'complete' here).
+            tier: "internal_routing",
+            source: `src-${s.key}`,
+            owning_domain: "cto",
+            urgency: `urgent-${s.key}-phrase`,
+            trust_tier: `trust-${s.key}`,
+            source_ref: `pr-acme:repo:${s.key}`,
+            leader_id: `leader-${s.key}`,
           })
           .select("id")
           .single();
@@ -230,12 +244,25 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(m1.user_id).toBe(alice.id);
 
         // M2 — Bob authored, redacted; user_id pseudonymised.
+        // Coverage spans the expanded MESSAGE_REDACT_FIELDS set (#4351
+        // P1 cross-reconcile): tier / source / owning_domain / urgency
+        // / trust_tier / source_ref / leader_id / template_id were
+        // re-classified from "structural" (plan Reconciliation #2) to
+        // "redact" by orthogonal data-integrity + security review.
         const m2 = byId.get(messageIds.M2)!;
         expect(m2.content).toBeNull();
         expect(m2.tool_calls).toBeNull();
         expect(m2.usage).toBeNull();
         expect(m2.draft_preview).toBeNull();
         expect(m2.action_class).toBeNull();
+        expect(m2.tier).toBeNull();
+        expect(m2.source).toBeNull();
+        expect(m2.owning_domain).toBeNull();
+        expect(m2.urgency).toBeNull();
+        expect(m2.trust_tier).toBeNull();
+        expect(m2.source_ref).toBeNull();
+        expect(m2.leader_id).toBeNull();
+        expect(m2.template_id).toBeNull();
         expect(String(m2.user_id)).toMatch(PSEUDONYM_RE);
 
         // M3 — legacy NULL, fail-closed: content nulled, user_id stays null.
@@ -447,23 +474,18 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     );
 
     test(
-      "regression: CrossTenantViolation raises BEFORE redaction predicate runs",
+      "scope-sanity: subject viewing own messages is not pseudonymised, and CrossTenantViolation class is exported",
       async () => {
+        // Renamed (#4351 review — code-quality #7, test-design #1) to
+        // match what this test actually exercises: a subject-scope
+        // sanity check + an exported-class probe. The TR3 ordering
+        // invariant (assertReadScope BEFORE redaction) is properly
+        // exercised by dsar-export-cross-tenant.integration.test.ts;
+        // duplicating its service-role-glitch fixture here would not
+        // add coverage.
         const { exportSqlTable, CrossTenantViolation } = await import(
           "../server/dsar-export"
         );
-
-        // Seed a foreign conversation owned by Bob, plus a Bob-authored
-        // message in it. Then ask exportSqlTable to run for Bob's id —
-        // the per-row WHERE constrains by conversation owner, so this
-        // path normally won't fire. To exercise the ordering invariant
-        // we inject a message whose conversation_id points to Bob's
-        // foreign conversation but is reachable through Alice's owned
-        // set ONLY if a service-role glitch returned it. Practically,
-        // we assert here on the unit-level invariant: the violation
-        // class exists and `assertReadScope` raises before any redact
-        // call. (The deeper service-role-glitch shape is covered by
-        // dsar-export-cross-tenant.integration.test.ts.)
         const controller = new AbortController();
         const tablesForBob = await exportSqlTable.call(null, bob.id, controller.signal);
         // Bob's own messages block should NOT pseudonymise Bob's user_id

@@ -335,18 +335,76 @@ const LEGACY_NULL_IS_SUBJECT = false;
 // Field list redacted on foreign-author messages. Closed set — any
 // future migration adding a free-text or namespace-leaking column to
 // `messages` MUST sweep this list per
-// `hr-write-boundary-sentinel-sweep-all-write-sites`.
+// `hr-write-boundary-sentinel-sweep-all-write-sites`. The companion
+// sentinel test at apps/web-platform/test/dsar-message-redact-fields-
+// sweep.test.ts enforces this gate at CI time by parsing migration
+// files for ALTER TABLE messages ADD COLUMN of text/jsonb shapes and
+// asserting each new column appears here or in MESSAGE_NON_REDACT_
+// ALLOWLIST below.
+//
+// Field rationale per column (Art. 15(4) review #4351 cross-reconcile):
+//   content           — free-text body (M1 leak vector)
+//   tool_calls        — jsonb — tool args + results (free-text PII)
+//   usage             — jsonb (mig 040) — input_summary / result_summary
+//                       embed conversation context
+//   draft_preview     — text (mig 046) — pre-send free-text snippet
+//   action_class      — text (mig 051) — open namespace, can encode
+//                       Art. 9 special-category indicators
+//   tier              — text (mig 046) — business tier signal about the
+//                       third party (e.g., "external_brand_critical")
+//   source            — text (mig 046) — pipeline source identifier
+//   owning_domain     — text (mig 046) — third party's product surface
+//                       (e.g., "cfo", "github", "legal")
+//   urgency           — text (mig 046) — free-text urgency phrase
+//                       ("client breach Tuesday")
+//   trust_tier        — text (mig 046) — third party's trust band
+//   source_ref        — text (mig 052) — namespace-id pattern such as
+//                       `pr-<org>:<repo>:<number>` or `cve-<id>`; leaks
+//                       third-party GitHub orgs / repos / CVE refs
+//   leader_id         — text (mig 010) — domain leader identifier; may
+//                       carry email-shaped or name-shaped values
+//   template_id       — text (mig 053) — template identifier; usage
+//                       pattern signal about the third party
 const MESSAGE_REDACT_FIELDS = [
   "content",
   "tool_calls",
   "usage",
   "draft_preview",
   "action_class",
+  "tier",
+  "source",
+  "owning_domain",
+  "urgency",
+  "trust_tier",
+  "source_ref",
+  "leader_id",
+  "template_id",
 ] as const;
+
+// Companion allowlist consumed by the migration-sweep sentinel test —
+// every column on `public.messages` that is NEITHER in
+// MESSAGE_REDACT_FIELDS NOR in this allowlist trips CI. Structural
+// columns are safe to surface on a foreign-author row because they
+// describe the bundle's own shape (thread position, the subject's
+// workspace, timestamps, cache token counts) rather than the third
+// party's content or namespace.
+export const MESSAGE_NON_REDACT_ALLOWLIST = [
+  "id",
+  "conversation_id",
+  "workspace_id",
+  "user_id",
+  "role",
+  "status",
+  "created_at",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+] as const;
+
+export { MESSAGE_REDACT_FIELDS };
 
 const ATTACHMENT_REDACT_FIELDS = ["storage_path", "filename"] as const;
 
-const REDACTION_REASON = "art-15-4-rights-of-others";
+export const REDACTION_REASON = "art-15-4-rights-of-others";
 
 /**
  * Exported for the cross-tenant integration test (Phase 10).

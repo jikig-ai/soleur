@@ -102,7 +102,7 @@ deferred_followups: [4358, 4359]
 - [x] **10.1** AC1: integration test passes (Phase 7.1).
 - [x] **10.2** AC2: `grep -nE 'schema_version[^=]*"1\.0\.0"' apps/web-platform/server/dsar-export.ts apps/web-platform/scripts/dsar-export-oversize.sh` → zero matches; `grep -nE 'schema_version[^=]*"1\.1\.0"' …` → 2 matches.
 - [x] **10.3** AC3: cross-tenant regression test passes including new ordering-invariant case (Phase 7.5 in plan, Phase 1.7 here).
-- [x] **10.4** AC4: `grep -lE 'Art\.\s*15\(4\)' docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-processing-description.md knowledge-base/legal/article-30-register.md` → 4 paths.
+- [x] **10.4** AC4: `grep -lE 'Art\.\s*15\(4\)' docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md knowledge-base/legal/article-30-register.md` → 4 paths. (Plan §Files-to-Edit cited `data-processing-description.md`; actual on-disk filename is `data-protection-disclosure.md` — user-impact review CONCERN resolved by updating the grep target.)
 - [x] **10.5** AC5: salt isolation grep — `grep -nE 'pseudonymSalt|crypto\.randomBytes' apps/web-platform/server/dsar-export.ts` shows one mint site + N use sites, zero appearances in manifest emission (L1232-1250) or in any `logger.*` / `Sentry.*` call.
 - [ ] **10.6** AC6: record CPO sign-off as a checkbox in PR #4351 body before `gh pr ready`.
 - [x] **10.7** AC7: `dsar-allowlist-completeness.test.ts` + `dsar-worker-per-row-where.test.ts` regression tests pass.
