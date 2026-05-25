@@ -6,23 +6,21 @@
 // replays) and the rest of the cron substrate (Sentry tagging via the
 // inngest sentry-correlation middleware, reportSilentFallback mirroring).
 //
-// ADR-033 invariants:
-//   I1 — N/A (no claude binary; this is a non-agent cron, same shape as
-//        cron-github-app-drift-guard.ts).
-//   I2 — N/A (no Anthropic API; no BYOK surface).
-//   I3 — N/A (no Claude spawn → no AbortSignal-based 60-min cap).
-//   I4 — N/A (no claude-code package dependency for this function).
+// ADR-033 invariants (only load-bearing entries cited; sibling
+// cron-github-app-drift-guard.ts uses the same convention):
 //   I5 — Deterministic step.run return shape: {closed, skipped, total}.
 //        Per-issue side effects (gh issue comment / close) live inside the
 //        sweep step so replays memoize the aggregate counters; the per-call
 //        gh-API write idempotency comes from GitHub's "already closed" tolerance.
-//   I6 — Event payloads emitted by this function carry actor: "platform"
-//        (currently emits none; forward-looking).
+//   I7 — Replay-safety: GH search `is:open` filter + close-is-no-op
+//        semantics on retry + in-loop `state === "closed"` defensive guard
+//        (GH Search has a ~30s eventual-consistency window where just-closed
+//        issues may still surface; the guard short-circuits the comment/close
+//        sequence in that window).
 //
 // POLICY CARRIED VERBATIM FROM THE GHA WORKFLOW:
 //   - Cutoff: 90 days since last issue activity.
 //   - Kill switch: `do-not-autoclose` label exempts an issue.
-//   - Digit validation: issue numbers must match /^[1-9][0-9]*$/ before use.
 //   - Comment body: references PR #4452 (the original scope-out drain PR)
 //     and the review-todo-structure runbook for re-evaluation triggers.
 //
@@ -54,13 +52,20 @@ const KILLSWITCH_LABEL = "do-not-autoclose";
 // Search caps — bash workflow used `--limit 200`, mirrored here. Sorted
 // oldest-first via `sort:updated-asc` so each daily fire makes steady
 // progress on the tail of the backlog.
+// GH's /search/issues caps at 100 items/page, so reaching the 200-item
+// ceiling REQUIRES two requests (page=1, page=2). The bash precedent's
+// `gh ... --limit 200` opaquely paginated under the hood.
 const SEARCH_PER_PAGE = 100;
 const SEARCH_MAX_RESULTS = 200;
 
-// Digit-validation regex — port of the bash `[[ "$NUMBER" =~ ^[0-9]+$ ]]` gate.
-// `^[1-9][0-9]*$` is strict-positive: forecloses leading-zero injection
-// shapes that the original `^[0-9]+$` accidentally admitted.
-const ISSUE_NUMBER_RE = /^[1-9][0-9]*$/;
+// Sentry Crons heartbeat — mirrors cron-github-app-drift-guard substrate.
+// Slug matches the Terraform sentry_cron_monitor.scheduled_stale_deferred_scope_outs
+// resource `name` field for historical/check-in continuity.
+const SENTRY_MONITOR_SLUG = "scheduled-stale-deferred-scope-outs";
+const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
+const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
+const SENTRY_PROJECT_RE = /^\d+$/;
+const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 /**
  * Auto-close comment body — heredoc verbatim from the GHA workflow. Refers
@@ -86,7 +91,6 @@ interface SweepResult {
   total: number;
   closed: number;
   skipped: number;
-  malformed: number;
   dryRun: boolean;
 }
 
@@ -94,6 +98,7 @@ interface SweepCandidate {
   number: number;
   title: string;
   updatedAt: string;
+  state: string;
   labels: Array<{ name: string }>;
 }
 
@@ -101,6 +106,7 @@ interface SearchResponseItem {
   number?: number;
   title?: string;
   updated_at?: string;
+  state?: string;
   labels?: Array<{ name?: string }>;
 }
 
@@ -109,9 +115,9 @@ async function fetchCandidates(args: {
   cutoffIso: string;
 }): Promise<SweepCandidate[]> {
   const { octokit, cutoffIso } = args;
-  // GitHub's search API caps at 1000 results — we cap at 200 (matches the
-  // gh-CLI `--limit 200` upper bound from the bash workflow). One-page-only
-  // suffices for SEARCH_PER_PAGE=100; we walk up to 2 pages defensively.
+  // GH /search/issues caps at 100 items/page; reaching the 200-item ceiling
+  // requires two requests. Loop short-circuits on either the cap (return)
+  // or a short page (break).
   const owner = PROBE_ISSUE_OWNER;
   const repo = PROBE_ISSUE_REPO;
   const q = `repo:${owner}/${repo} is:issue is:open label:"${TARGET_LABEL}" updated:<${cutoffIso} sort:updated-asc`;
@@ -129,6 +135,7 @@ async function fetchCandidates(args: {
         number: item.number,
         title: typeof item.title === "string" ? item.title : "",
         updatedAt: typeof item.updated_at === "string" ? item.updated_at : "",
+        state: typeof item.state === "string" ? item.state : "open",
         labels: Array.isArray(item.labels)
           ? item.labels
               .filter((l): l is { name: string } => typeof l?.name === "string")
@@ -179,23 +186,15 @@ export async function sweepStaleScopeOuts(args: {
   const candidates = await fetchCandidates({ octokit, cutoffIso });
   let closed = 0;
   let skipped = 0;
-  let malformed = 0;
 
   for (const candidate of candidates) {
     const num = candidate.number;
-    const numStr = String(num);
 
-    if (!ISSUE_NUMBER_RE.test(numStr)) {
-      logger.warn(
-        {
-          fn: "cron-stale-deferred-scope-outs",
-          number: numStr,
-        },
-        "SKIP malformed issue number",
-      );
-      malformed += 1;
-      continue;
-    }
+    // Replay-safety (I7): the search `is:open` filter is eventually
+    // consistent (~30s lag); on Inngest retry, a just-closed issue may
+    // briefly resurface. Short-circuit here so we never re-comment a
+    // closed issue.
+    if (candidate.state === "closed") continue;
 
     const hasKillSwitch = candidate.labels.some(
       (l) => l.name === KILLSWITCH_LABEL,
@@ -265,7 +264,6 @@ export async function sweepStaleScopeOuts(args: {
     total: candidates.length,
     closed,
     skipped,
-    malformed,
     dryRun,
   };
 }
@@ -299,9 +297,9 @@ export async function cronStaleDeferredScopeOutsHandler({
     total: 0,
     closed: 0,
     skipped: 0,
-    malformed: 0,
     dryRun,
   };
+  let sweepFailed = false;
 
   try {
     result = await step.run(
@@ -317,13 +315,66 @@ export async function cronStaleDeferredScopeOutsHandler({
       },
     );
   } catch (err) {
+    sweepFailed = true;
     reportSilentFallback(err as Error, {
       feature: "cron-stale-deferred-scope-outs",
       op: "sweep",
       message: "stale-deferred-scope-out sweep threw",
       extra: { fn: "cron-stale-deferred-scope-outs", dryRun },
     });
-    throw err;
+    // Heartbeat below routes status="error"; we do NOT rethrow yet.
+  }
+
+  // Sentry heartbeat — single end-of-job POST mirroring drift-guard substrate.
+  // Env-unset / malformed → graceful skip (heartbeat is OPTIONAL second-net;
+  // missing it must not stop the function from completing).
+  await step.run("sentry-heartbeat", async () => {
+    const domain = process.env.SENTRY_INGEST_DOMAIN;
+    const projectId = process.env.SENTRY_PROJECT_ID;
+    const publicKey = process.env.SENTRY_PUBLIC_KEY;
+    if (!domain || !projectId || !publicKey) {
+      logger.info(
+        { fn: "cron-stale-deferred-scope-outs" },
+        "Sentry env unset — skipping heartbeat",
+      );
+      return;
+    }
+    if (
+      !SENTRY_DOMAIN_RE.test(domain) ||
+      !SENTRY_PROJECT_RE.test(projectId) ||
+      !SENTRY_PUBLIC_KEY_RE.test(publicKey)
+    ) {
+      logger.warn(
+        { fn: "cron-stale-deferred-scope-outs" },
+        "Sentry env malformed — skipping heartbeat",
+      );
+      return;
+    }
+    const status = sweepFailed ? "error" : "ok";
+    const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
+    try {
+      await fetch(url, {
+        method: "POST",
+        signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
+      });
+    } catch (err) {
+      reportSilentFallback(err as Error, {
+        feature: "cron-sentry-heartbeat",
+        op: "fetch",
+        message: "Sentry Crons heartbeat POST failed",
+        extra: {
+          fn: "cron-stale-deferred-scope-outs",
+          status,
+          aborted: (err as Error).name === "TimeoutError",
+        },
+      });
+    }
+  });
+
+  if (sweepFailed) {
+    // Surface the sweep failure to the operator AFTER the heartbeat has
+    // reported status=error. Throwing here triggers Inngest's retry policy.
+    throw new Error("stale-deferred-scope-out sweep failed; see Sentry");
   }
 
   logger.info(
@@ -331,7 +382,7 @@ export async function cronStaleDeferredScopeOutsHandler({
       fn: "cron-stale-deferred-scope-outs",
       ...result,
     },
-    `Auto-closed ${result.closed} stale ${TARGET_LABEL} issues (${result.skipped} skipped via ${KILLSWITCH_LABEL} label, ${result.malformed} malformed)`,
+    `Auto-closed ${result.closed} stale ${TARGET_LABEL} issues (${result.skipped} skipped via ${KILLSWITCH_LABEL} label)`,
   );
 
   return result;
@@ -365,10 +416,7 @@ export const cronStaleDeferredScopeOuts = inngest.createFunction(
 
 // Test surface — exported only for vitest.
 export const __TESTING__ = {
-  STALE_WINDOW_MS,
   TARGET_LABEL,
   KILLSWITCH_LABEL,
-  ISSUE_NUMBER_RE,
-  COMMENT_BODY,
   sweepStaleScopeOuts,
 };

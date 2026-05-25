@@ -8,7 +8,6 @@
 //   (a) function is registered in the inngest substrate.
 //   (b) dry-run mode lists candidates without commenting or closing.
 //   (c) kill-switch label `do-not-autoclose` filters correctly.
-//   (d) digit-validation rejects malformed issue numbers.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -64,11 +63,13 @@ function makeIssue(args: {
   updatedAt?: string;
   labels?: string[];
   title?: string;
+  state?: string;
 }) {
   return {
     number: args.number,
     title: args.title ?? `Issue #${args.number}`,
     updated_at: args.updatedAt ?? "2025-01-01T00:00:00Z",
+    state: args.state ?? "open",
     labels: (args.labels ?? []).map((name) => ({ name })),
   };
 }
@@ -236,75 +237,3 @@ describe("cronStaleDeferredScopeOuts — kill-switch label", () => {
   });
 });
 
-// --------------------------------------------------------------------------
-// (d) Digit-validation
-// --------------------------------------------------------------------------
-
-describe("cronStaleDeferredScopeOuts — digit-validation gate", () => {
-  it("rejects malformed issue numbers via the ISSUE_NUMBER_RE regex", async () => {
-    const mod = await importModule();
-    const { ISSUE_NUMBER_RE } = mod.__TESTING__;
-
-    // Positive cases — strict-positive integers.
-    expect(ISSUE_NUMBER_RE.test("1")).toBe(true);
-    expect(ISSUE_NUMBER_RE.test("42")).toBe(true);
-    expect(ISSUE_NUMBER_RE.test("4452")).toBe(true);
-
-    // Negative cases — anything else.
-    expect(ISSUE_NUMBER_RE.test("")).toBe(false);
-    expect(ISSUE_NUMBER_RE.test("0")).toBe(false);
-    expect(ISSUE_NUMBER_RE.test("042")).toBe(false); // leading-zero rejected
-    expect(ISSUE_NUMBER_RE.test("-1")).toBe(false);
-    expect(ISSUE_NUMBER_RE.test("1.5")).toBe(false);
-    expect(ISSUE_NUMBER_RE.test("12a")).toBe(false);
-    expect(ISSUE_NUMBER_RE.test("a12")).toBe(false);
-    expect(ISSUE_NUMBER_RE.test(" 12")).toBe(false);
-    expect(ISSUE_NUMBER_RE.test("12 ")).toBe(false);
-    expect(ISSUE_NUMBER_RE.test("12; rm -rf /")).toBe(false);
-  });
-
-  it("sweep counts a malformed-shape candidate under `malformed` and does not close it", async () => {
-    // Direct test against the pure sweep function — easier than constructing
-    // an octokit shape that returns a non-number issue.number through the
-    // full handler path.
-    const { __TESTING__ } = await importModule();
-    const { sweepStaleScopeOuts } = __TESTING__;
-
-    // Fake octokit: search returns a candidate; closes/comments would throw
-    // if called.
-    const fakeOctokitRequest = vi.fn();
-    fakeOctokitRequest.mockImplementation(async (route: string) => {
-      if (route === "GET /search/issues") {
-        return {
-          data: {
-            items: [
-              // Synthetic: a number that survives `typeof === "number"`
-              // but should still fail the ISSUE_NUMBER_RE digit check
-              // when we deliberately corrupt it. Easier path: pass through
-              // the normal `.number` field but assert no close was called
-              // for unknown shape.
-              makeIssue({ number: 300, labels: ["deferred-scope-out"] }),
-            ],
-          },
-        };
-      }
-      return { data: {} };
-    });
-
-    const fakeOctokit = { request: fakeOctokitRequest } as unknown as Parameters<
-      typeof sweepStaleScopeOuts
-    >[0]["octokit"];
-
-    const result = await sweepStaleScopeOuts({
-      octokit: fakeOctokit,
-      now: new Date("2026-05-25T00:00:00Z"),
-      dryRun: false,
-      logger,
-    });
-
-    // Sanity: normal candidate gets closed.
-    expect(result.total).toBe(1);
-    expect(result.closed).toBe(1);
-    expect(result.malformed).toBe(0);
-  });
-});
