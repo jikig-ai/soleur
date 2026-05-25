@@ -10,21 +10,27 @@
 //
 // Usage:
 //   doppler run -p soleur -c dev -- bun run apps/web-platform/scripts/revoke-jti.ts \
-//     --jti <uuid> --founder-id <uuid> --reason "<text>" [--yes]
+//     --jti <uuid> --founder-id <uuid> --reason "<text>" [--revoke-session] [--yes]
 //
 //   doppler run -p soleur -c prd_runtime -- bun run apps/web-platform/scripts/revoke-jti.ts \
-//     --jti <uuid> --founder-id <uuid> --reason "<text>" [--yes]
+//     --jti <uuid> --founder-id <uuid> --reason "<text>" [--revoke-session] [--yes]
 //
 // Print the resolved Supabase URL BEFORE the write — operator dev/prd
 // visibility per hr-dev-prd-distinct-supabase-projects.
 //
-// SCOPE: This revokes a specific JTI (one JWT instance), NOT the
-// underlying Supabase auth session. A founder whose magiclink session
+// SCOPE: Default behavior revokes a specific JTI (one JWT instance), NOT
+// the underlying Supabase auth session. A founder whose magiclink session
 // is still valid can re-mint a fresh JWT with a new jti and resume
-// access. For full session termination, ALSO call:
-//   service.auth.admin.signOut(userId, { scope: 'global' })
-// A follow-up `--revoke-session` flag for one-step revoke+signOut is
-// tracked as deferred-scope-out (see compliance-posture row PR #4418).
+// access. Pass `--revoke-session` to ALSO kill the underlying Supabase
+// session in the same operator action — combining the JTI deny-list
+// write with `service.auth.admin.signOut(userId, { scope: 'global' })`.
+//
+// The session-revoke is invoked AFTER the revoke_jti RPC + re-read
+// sanity check succeed; a failure of the auth.admin.signOut surfaces
+// as a separate `::error::` line and exit code 1 — the JTI is already
+// on the deny-list (the audit artifact has landed) so the operator
+// can retry the session-revoke step idempotently without re-running
+// revoke_jti.
 
 import { createInterface } from "node:readline/promises";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -37,12 +43,27 @@ interface ParsedArgs {
   founderId: string;
   reason: string;
   yes: boolean;
+  // #4440 follow-up to #4418 — pair the JTI deny-list write with a
+  // Supabase auth.admin.signOut(scope:'global') so the founder cannot
+  // re-mint a fresh JWT from a still-valid magiclink session. Default
+  // false preserves the original JTI-only semantic; opt-in flag keeps
+  // the lower-blast-radius default for the common "rotate one stolen
+  // JWT" operator workflow.
+  revokeSession: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const get = (flag: string): string | undefined => {
     const idx = argv.indexOf(flag);
-    return idx >= 0 && idx + 1 < argv.length ? argv[idx + 1] : undefined;
+    if (idx < 0 || idx + 1 >= argv.length) return undefined;
+    const v = argv[idx + 1];
+    // Reject value-tokens that are themselves flags. Pre-fix, an invocation
+    // like `--reason --jti <uuid>` set reason="--jti" and silently bound
+    // the jti to the operator's reason text — UUID validation downstream
+    // would flag it, but the diagnostic was misleading. With this guard
+    // `required()` raises the clean `::error::missing required flag --reason`.
+    if (v.startsWith("--")) return undefined;
+    return v;
   };
   const required = (flag: string): string => {
     const v = get(flag);
@@ -57,6 +78,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     founderId: required("--founder-id"),
     reason: required("--reason"),
     yes: argv.includes("--yes"),
+    revokeSession: argv.includes("--revoke-session"),
   };
 }
 
@@ -95,10 +117,11 @@ async function main(): Promise<void> {
 
   const summary = [
     "Revoking:",
-    `  jti:        ${args.jti}`,
-    `  founder:    ${args.founderId}`,
-    `  reason:     ${args.reason}`,
-    `  target:     ${supabaseUrl}`,
+    `  jti:             ${args.jti}`,
+    `  founder:         ${args.founderId}`,
+    `  reason:          ${args.reason}`,
+    `  target:          ${supabaseUrl}`,
+    `  revoke-session:  ${args.revokeSession}`,
     "",
   ].join("\n");
 
@@ -139,6 +162,62 @@ async function main(): Promise<void> {
   }
 
   process.stdout.write(`revoke_success: jti=${args.jti} founder=${args.founderId}\n`);
+
+  // #4440 follow-up to #4418 — optional Supabase session termination.
+  // The denied_jti.founder_id column IS the auth.users.id (FK
+  // documented in migration 037), so args.founderId can be passed
+  // directly to auth.admin.signOut.
+  //
+  // scope: 'global' kills every refresh token bound to the user across
+  // every device — the strongest invalidation Supabase exposes. A
+  // partial 'local' or 'others' is intentionally NOT offered here: the
+  // operator who invoked --revoke-session has already decided the
+  // session is compromised, and a half-revoked session is the worst
+  // outcome (founder thinks they're logged out but a stale browser tab
+  // keeps minting).
+  //
+  // Idempotency: the JTI deny-list row above is the audit artifact and
+  // it has already landed by this point. A signOut failure here is
+  // operator-retryable without re-running revoke_jti.
+  if (args.revokeSession) {
+    log.info(
+      { founderId: args.founderId },
+      "revoke-jti: invoking GoTrue admin user-logout (scope=global)",
+    );
+    // The supabase-js admin.signOut(jwt) API takes a JWT, not a user id.
+    // For user-id-keyed session termination we call the GoTrue admin
+    // REST endpoint directly: POST /auth/v1/admin/users/{user_id}/logout
+    // with the service-role bearer. `scope=global` invalidates every
+    // refresh token bound to the user across every device.
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !serviceRoleKey) {
+      process.stderr.write(
+        "::error::SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY unset; cannot call admin signOut\n",
+      );
+      process.exit(1);
+    }
+    const logoutUrl = `${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(args.founderId)}/logout`;
+    const res = await fetch(logoutUrl, {
+      method: "POST",
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ scope: "global" }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "<unreadable>");
+      process.stderr.write(
+        `::error::admin signOut failed: ${res.status} ${res.statusText} body=${body}\n`,
+      );
+      process.exit(1);
+    }
+    process.stdout.write(
+      `session_revoke_success: founder=${args.founderId} scope=global\n`,
+    );
+  }
 }
 
 main().catch((err) => {

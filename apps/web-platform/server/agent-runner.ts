@@ -5,7 +5,11 @@ import { readFile } from "node:fs/promises";
 import path from "path";
 
 import { createServiceClient } from "@/lib/supabase/service";
-import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
+import { tryEmitRevocationNotice } from "./revocation-emit";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
@@ -46,6 +50,7 @@ import { MAX_BINARY_SIZE } from "./kb-limits";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
+import { buildAuthStatusTools } from "./auth-status-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -1399,6 +1404,16 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     platformTools.push(...conversationsTools);
     platformToolNames.push("mcp__soleur_platform__conversations_lookup");
 
+    // Auth revocation status tool (#4440 follow-up to #4418): registered
+    // unconditionally — agents need self-diagnosis on every authenticated
+    // session, not just those with a connected repo or service tokens.
+    // Wraps `getMyRevocationStatus(userId)` from `lib/supabase/tenant.ts`
+    // (founder-readable `my_revocation_status()` RPC, fail-open). Auto-
+    // approve tier per `tool-tiers.ts` — read-only, no side effects.
+    const authStatusTools = buildAuthStatusTools({ userId });
+    platformTools.push(...authStatusTools);
+    platformToolNames.push("mcp__soleur_platform__auth_revocation_status");
+
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
       const toolServer = createSdkMcpServer({
@@ -2380,7 +2395,7 @@ export async function sendUserMessage(
   const activeSession = getSession(userId, conversationId);
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
-  const handleSessionError = (err: unknown) => {
+  const handleSessionError = async (err: unknown): Promise<void> => {
     // Phase 3.2 AC-D: MissingByokKeyError fires the info-level breadcrumb
     // BEFORE the generic captureException so the workspace context lands
     // on the trail. Returns; we still surface the WS error event below.
@@ -2390,6 +2405,22 @@ export async function sendUserMessage(
       { err, userId, conversationId },
       "sendUserMessage session error",
     );
+    // #4440 follow-up to #4418 — JWT-deny propagation. Detect a
+    // mid-session `RuntimeAuthError("denied_jti")` BEFORE the generic
+    // error frame fires so agents/API consumers receive the same
+    // discriminated `revocation_notice` frame the ws-handler.tenantFor
+    // path emits at handshake time. AWAIT the helper so the
+    // revocation_notice lands before the generic error frame — the
+    // prior fire-and-forget IIFE raced with the synchronous error-frame
+    // emit below and could deliver the frames out of order. The helper
+    // is fail-open (returns null on RPC error, Sentry-mirrors per
+    // cq-silent-fallback-must-mirror-to-sentry) so awaiting it does
+    // not introduce a new throw surface.
+    if (err instanceof RuntimeAuthError && err.cause === "denied_jti") {
+      await tryEmitRevocationNotice(userId, (frame) =>
+        sendToClient(userId, frame),
+      );
+    }
     const message = sanitizeErrorForClient(err);
     sendToClient(userId, {
       type: "error",
@@ -2456,7 +2487,7 @@ export async function sendUserMessage(
           .catch(handleSessionError);
       });
     } catch (err) {
-      handleSessionError(err);
+      await handleSessionError(err);
     }
     return;
   }
