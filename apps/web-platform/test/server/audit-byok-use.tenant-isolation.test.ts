@@ -27,6 +27,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { type MintedJwt, type UserId } from "@/lib/supabase/tenant";
 import { installSharedMintCache } from "@/test/helpers/mint-once";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -84,9 +85,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       }
 
       // Seed one audit row for userA via the canonical RPC (write_byok_audit).
+      // Mig 061 added p_workspace_id (6-arg signature) — solo-canary workspace
+      // per mig 053 handle_new_user (workspaces.id === users.id per ADR-038 N2).
       const { error: writeError } = await service.rpc("write_byok_audit", {
         p_invocation_id: randomUUID(),
         p_founder_id: userA.id,
+        p_workspace_id: userA.id,
         p_agent_role: "test-worm",
         p_token_count: 42,
         p_unit_cost_cents: 7,
@@ -113,22 +117,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     afterAll(async () => {
-      // userB was provisioned for the RLS scope test but never had an
-      // audit_byok_use row written for it, so its `users` row has no
-      // dependent rows under the ON DELETE RESTRICT FK. Clean it.
-      if (userB.id) {
-        assertSynthetic(userB.email);
-        await service.auth.admin.deleteUser(userB.id);
+      // Mig 065 Part 2 downgraded audit_byok_use.founder_id from RESTRICT
+      // to SET NULL on public.users delete. The previous scope-out
+      // (userA's seeded test-worm audit row blocking the user delete)
+      // is resolved natively: the audit row stays with founder_id NULL
+      // (audit-anonymised) and the user cascade succeeds. tearDownTenantUser
+      // also runs the FK-reverse anonymise sequence for completeness.
+      for (const user of [userA, userB]) {
+        if (!user.id) continue;
+        assertSynthetic(user.email);
+        await tearDownTenantUser(service, user);
       }
-      // userA holds the seeded test-worm audit row. The WORM trigger
-      // blocks DELETE on `audit_byok_use`, and the founder_id FK is
-      // ON DELETE RESTRICT, so userA cannot be removed without first
-      // disabling the trigger inside a transaction. That maintenance
-      // path is a synthetic-fixture sweeper RPC tracked as a follow-up
-      // scope-out (see the PR-E review log / `denied_jti` cleanup
-      // follow-up). For the closed-preview alpha the single per-run
-      // orphan is acceptable; long-running CI nightlies should adopt the
-      // sweeper before promotion.
     });
 
     test("UPDATE on audit_byok_use raises P0001 (service-role)", async () => {

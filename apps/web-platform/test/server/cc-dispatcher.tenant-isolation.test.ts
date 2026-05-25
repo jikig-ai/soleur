@@ -95,6 +95,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id,
+          workspace_id: userB.id, // solo-canary per mig 059 backfill
           session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           status: "active",
         })
@@ -145,17 +146,31 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .insert({
           id: randomUUID(),
           conversation_id: bConvId,
+          // mig 059 made messages.workspace_id NOT NULL. The spoof targets
+          // B's workspace; RLS messages_workspace_member_insert WITH CHECK
+          // (is_workspace_member(workspace_id, auth.uid())) denies A's JWT
+          // because A is not a member of B's workspace.
+          workspace_id: userB.id,
           role: "user",
           content: "spoofed by A",
           tool_calls: null,
           leader_id: null,
         })
         .select("id");
-      // RLS denies the INSERT; PostgREST returns error code 42501 or
-      // similar. Either way, the row is NOT persisted.
+      // Pin the deny path: spoof MUST surface as RLS denial (PostgREST 42501)
+      // or PostgREST's row-not-found shape — not a 23502 NOT NULL violation,
+      // because that would mean the workspace_id payload was missing and the
+      // test passed for the wrong reason. Loose `expect(error.code).toBeTruthy()`
+      // would have silently regressed if mig 059's NOT NULL constraint were
+      // dropped.
       const succeeded = data && data.length > 0;
       expect(succeeded).toBeFalsy();
-      if (error) expect(error.code).toBeTruthy();
+      expect(error).not.toBeNull();
+      // Specific codes only — bare `^PGRST` would match parse errors
+      // (PGRST100) and JWT-expired (PGRST301) and silently pass an
+      // unrelated regression. 42501 = RLS-denied INSERT engine-level;
+      // PGRST116 = PostgREST row-not-found after RLS-filtered .select().
+      expect(error?.code).toMatch(/^(42501|PGRST116)$/);
 
       // Verify B's conversation has no spoofed message.
       const { data: msgs } = await service
@@ -169,11 +184,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     test("assistant-message INSERT — same FK-RLS deny on saveAssistantMessage shape", async () => {
-      const { data } = await aClient
+      const { data, error } = await aClient
         .from("messages")
         .insert({
           id: randomUUID(),
           conversation_id: bConvId,
+          // Same shape as the user-role spoof above; RLS denies A's JWT
+          // because A is not a member of B's workspace.
+          workspace_id: userB.id,
           role: "assistant",
           content: "fake assistant text",
           tool_calls: null,
@@ -182,6 +200,22 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .select("id");
       const succeeded = data && data.length > 0;
       expect(succeeded).toBeFalsy();
+      expect(error).not.toBeNull();
+      // Specific codes only — bare `^PGRST` would match parse errors
+      // (PGRST100) and JWT-expired (PGRST301) and silently pass an
+      // unrelated regression. 42501 = RLS-denied INSERT engine-level;
+      // PGRST116 = PostgREST row-not-found after RLS-filtered .select().
+      expect(error?.code).toMatch(/^(42501|PGRST116)$/);
+
+      // Verify B's conversation has no spoofed assistant message.
+      const { data: msgs } = await service
+        .from("messages")
+        .select("content")
+        .eq("conversation_id", bConvId);
+      const spoofed = (msgs ?? []).some(
+        (m: { content: string }) => m.content === "fake assistant text",
+      );
+      expect(spoofed).toBe(false);
     });
   },
 );
