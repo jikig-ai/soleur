@@ -20,16 +20,16 @@
 
 ## 3. Claude-code-spawn Crons (blocked on #4472)
 
-- [ ] C1 `cron-campaign-calendar.ts` ← `scheduled-campaign-calendar.yml` (Mon 16:00)
-- [ ] C2 `cron-content-generator.ts` ← `scheduled-content-generator.yml` (Tue/Thu 10:00) **— cascade target for T2**
-- [ ] C3 `cron-growth-audit.ts` ← `scheduled-growth-audit.yml` (Mon 07:00, staggered from 09:00)
-- [ ] C4 `cron-growth-execution.ts` ← `scheduled-growth-execution.yml` (biweekly 10:00) **— cascade target for T2**
-- [ ] C5 `cron-seo-aeo-audit.ts` ← `scheduled-seo-aeo-audit.yml` (Mon 11:00, staggered from 10:00) **— cascade target for T2**
+- [x] C1 `cron-campaign-calendar.ts` ← `scheduled-campaign-calendar.yml` (Mon 16:00)
+- [x] C2 `cron-content-generator.ts` ← `scheduled-content-generator.yml` (Tue/Thu 10:00) **— cascade target for T2**
+- [x] C3 `cron-growth-audit.ts` ← `scheduled-growth-audit.yml` (Mon 07:00, staggered from 09:00)
+- [x] C4 `cron-growth-execution.ts` ← `scheduled-growth-execution.yml` (biweekly 10:00) **— cascade target for T2**
+- [x] C5 `cron-seo-aeo-audit.ts` ← `scheduled-seo-aeo-audit.yml` (Mon 11:00, staggered from 10:00) **— cascade target for T2**
 
 ## 4. Pure-TS Port Crons (independent of #4472)
 
 - [x] T1 `cron-membership-health.ts` ← `scheduled-membership-health.yml` (hourly :17)
-- [ ] T2 `cron-weekly-analytics.ts` ← `scheduled-weekly-analytics.yml` (Mon 06:00) **— AFTER C2, C4, C5.** Convert cascade to `inngest.send()`.
+- [x] T2 `cron-weekly-analytics.ts` ← `scheduled-weekly-analytics.yml` (Mon 06:00) **— AFTER C2, C4, C5.** Cascade converted to `inngest.send()`.
 - [x] T3 `cron-ruleset-bypass-audit.ts` ← `scheduled-ruleset-bypass-audit.yml` (daily 06:13). GH App auth.
 - [x] T4 `cron-gh-pages-cert-state.ts` ← `scheduled-gh-pages-cert-state.yml` (daily 03:00). Tighten Sentry margin 240→30.
 - [x] T5 `cron-cloud-task-heartbeat.ts` ← `scheduled-cloud-task-heartbeat.yml` (daily 09:30)
@@ -44,7 +44,7 @@
 
 ## 5. Cleanup
 
-- [ ] 5.1 Verify `ls .github/workflows/scheduled-*.yml | wc -l` returns exactly 4
+- [x] 5.1 Verify `ls .github/workflows/scheduled-*.yml | wc -l` returns exactly 4 ✓
 - [ ] 5.2 GHA secret audit: list remaining secrets vs remaining workflow consumers, file pruning issue for orphaned secrets
 - [ ] 5.3 File follow-up issue: KPI-miss alerting replacement (Discord webhook or Sentry custom metric)
 - [ ] 5.4 Update #3948 issue body with completion status. Promote milestone.

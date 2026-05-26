@@ -21,9 +21,11 @@ import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
+import { cronCampaignCalendar } from "@/server/inngest/functions/cron-campaign-calendar";
 import { cronCloudTaskHeartbeat } from "@/server/inngest/functions/cron-cloud-task-heartbeat";
 import { cronCommunityMonitor } from "@/server/inngest/functions/cron-community-monitor";
 import { cronCompetitiveAnalysis } from "@/server/inngest/functions/cron-competitive-analysis";
+import { cronContentGenerator } from "@/server/inngest/functions/cron-content-generator";
 import { cronContentPublisher } from "@/server/inngest/functions/cron-content-publisher";
 import { cronContentVendorDrift } from "@/server/inngest/functions/cron-content-vendor-drift";
 import { cronCompoundPromote } from "@/server/inngest/functions/cron-compound-promote";
@@ -31,6 +33,8 @@ import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
+import { cronGrowthAudit } from "@/server/inngest/functions/cron-growth-audit";
+import { cronGrowthExecution } from "@/server/inngest/functions/cron-growth-execution";
 import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
 import { cronLinkedinTokenCheck } from "@/server/inngest/functions/cron-linkedin-token-check";
 import { cronMembershipHealth } from "@/server/inngest/functions/cron-membership-health";
@@ -42,8 +46,10 @@ import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-revie
 import { cronRulePrune } from "@/server/inngest/functions/cron-rule-prune";
 import { cronRulesetBypassAudit } from "@/server/inngest/functions/cron-ruleset-bypass-audit";
 import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
+import { cronSeoAeoAudit } from "@/server/inngest/functions/cron-seo-aeo-audit";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
+import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
 import { eventCfTokenExpiryCheck } from "@/server/inngest/functions/event-cf-token-expiry-check";
 import { eventShipMerge } from "@/server/inngest/functions/event-ship-merge";
 import { githubOnEvent } from "@/server/inngest/functions/github-on-event";
@@ -69,9 +75,11 @@ export const { GET, POST, PUT } = serve({
     cfoOnPaymentFailed,
     cronAgentNativeAudit,
     cronBugFixer,
+    cronCampaignCalendar,
     cronCloudTaskHeartbeat,
     cronCommunityMonitor,
     cronCompetitiveAnalysis,
+    cronContentGenerator,
     cronContentPublisher,
     cronContentVendorDrift,
     cronCompoundPromote,
@@ -79,6 +87,8 @@ export const { GET, POST, PUT } = serve({
     cronFollowThroughMonitor,
     cronGhPagesCertState,
     cronGithubAppDriftGuard,
+    cronGrowthAudit,
+    cronGrowthExecution,
     cronLegalAudit,
     cronLinkedinTokenCheck,
     cronMembershipHealth,
@@ -88,10 +98,12 @@ export const { GET, POST, PUT } = serve({
     cronRoadmapReview,
     cronRulePrune,
     cronRulesetBypassAudit,
+    cronSeoAeoAudit,
     cronSkillFreshness,
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
     cronUxAudit,
+    cronWeeklyAnalytics,
     eventCfTokenExpiryCheck,
     eventShipMerge,
     githubOnEvent,
