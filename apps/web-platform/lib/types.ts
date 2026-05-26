@@ -146,7 +146,12 @@ export type WSErrorCode =
   // SDK CLI's text-editor markers leaked into `text/plain` paste data;
   // image bytes were never attached. Client renders a non-blocking
   // banner asking the user to re-attach the image directly.
-  | "image_paste_lost";
+  | "image_paste_lost"
+  | "delegation_revoked_post_grace"
+  | "delegation_expired"
+  | "delegation_hourly_cap_exceeded"
+  | "delegation_daily_cap_exceeded"
+  | "delegation_cross_tenant";
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
