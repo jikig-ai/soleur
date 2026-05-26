@@ -29,24 +29,22 @@
 //   - Upload findings to Supabase ux-audit-artifacts bucket.
 //   - Monthly cron 0 9 1 * * (vs quarterly).
 
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import {
+  redactToken,
+  mintInstallationToken,
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
+import {
+  setupEphemeralWorkspace,
+  teardownEphemeralWorkspace,
+  spawnClaudeEval,
+  type SpawnResult,
+} from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
-import { createProbeOctokit } from "@/server/github/probe-octokit";
-import { generateInstallationToken } from "@/server/github-app";
 import { getPluginPath } from "@/server/plugin-path";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -55,19 +53,13 @@ import { reportSilentFallback } from "@/server/observability";
 // =============================================================================
 
 const SENTRY_MONITOR_SLUG = "scheduled-ux-audit";
-const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
 
 const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 
-const REPO_OWNER = "jikig-ai";
-const REPO_NAME = "soleur";
 
 export const MAX_TURN_DURATION_MS = 50 * 60 * 1000;
-export const KILL_ESCALATION_MS = 5_000;
+export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 const CLAUDE_CODE_FLAGS = [
   "--print",
@@ -106,56 +98,6 @@ written to files or env vars before \`gh issue create\` — never
 interpolate agent output into bash \`run:\` commands directly.
 `;
 
-const DEFAULT_CLAUDE_SETTINGS = {
-  permissions: {
-    allow: [] as string[],
-  },
-  sandbox: {
-    enabled: true,
-  },
-};
-
-// =============================================================================
-// Types
-// =============================================================================
-
-interface SpawnResult {
-  ok: boolean;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  abortedByTimeout: boolean;
-  durationMs: number;
-}
-
-interface HandlerArgs {
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
-  };
-}
-
-// =============================================================================
-// Helpers (shared with cron-legal-audit.ts — not extracted to avoid coupling)
-// =============================================================================
-
-function resolveClaudeBin(): string {
-  const override = process.env.CLAUDE_BIN;
-  if (override && existsSync(override)) return override;
-  const candidates = [
-    "/app/node_modules/.bin/claude",
-    join(process.cwd(), "node_modules/.bin/claude"),
-    join(process.cwd(), "apps/web-platform/node_modules/.bin/claude"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(
-    `claude binary not found in any known location: ${candidates.join(", ")}. ` +
-      "Set CLAUDE_BIN env var to override.",
-  );
-}
 
 function buildSpawnEnv(
   installationToken: string,
@@ -171,311 +113,6 @@ function buildSpawnEnv(
   };
 }
 
-function buildAuthenticatedCloneUrl(token: string): string {
-  return `https://x-access-token:${token}@github.com/${REPO_OWNER}/${REPO_NAME}.git`;
-}
-
-function redactToken(s: string, token: string): string {
-  if (!token) return s;
-  return s.replaceAll(token, "[REDACTED-INSTALLATION-TOKEN]");
-}
-
-async function mintInstallationToken(): Promise<string> {
-  const octokit = await createProbeOctokit();
-  const { data: installation } = await octokit.request(
-    "GET /repos/{owner}/{repo}/installation",
-    { owner: REPO_OWNER, repo: REPO_NAME },
-  );
-  return generateInstallationToken(installation.id, {
-    minRemainingMs: TOKEN_MIN_LIFETIME_MS,
-  });
-}
-
-function spawnSimple(
-  cmd: string,
-  args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
-      stdio: "ignore",
-      cwd: opts.cwd,
-      env: opts.env ?? process.env,
-    });
-    child.on("exit", (exitCode: number | null, signal: NodeJS.Signals | null) => {
-      resolve({ exitCode, signal });
-    });
-    child.on("error", () => {
-      resolve({ exitCode: -1, signal: null });
-    });
-  });
-}
-
-// =============================================================================
-// Workspace setup (extended for Playwright MCP overlay)
-// =============================================================================
-
-async function setupEphemeralWorkspace(
-  installationToken: string,
-): Promise<{ ephemeralRoot: string; spawnCwd: string; workspaceDir: string }> {
-  const ephemeralRoot = await mkdtemp(join(tmpdir(), "soleur-cron-ux-audit-"));
-  const spawnCwd = join(ephemeralRoot, "repo");
-  const workspaceDir = join(ephemeralRoot, "workspace");
-
-  // 1. git clone --depth=1
-  const cloneUrl = buildAuthenticatedCloneUrl(installationToken);
-  const cloneResult = await spawnSimple("git", [
-    "clone",
-    "--depth=1",
-    cloneUrl,
-    spawnCwd,
-  ]);
-  if (cloneResult.exitCode !== 0) {
-    throw new Error(
-      `git clone failed (exit ${cloneResult.exitCode}, signal ${cloneResult.signal}) for ${REPO_OWNER}/${REPO_NAME}`,
-    );
-  }
-
-  // 2. plugin symlink
-  const pluginsDir = join(spawnCwd, "plugins");
-  const symlinkTarget = join(pluginsDir, "soleur");
-  await rm(symlinkTarget, { recursive: true, force: true });
-  await mkdir(pluginsDir, { recursive: true });
-  await symlink(getPluginPath(), symlinkTarget);
-
-  // 3. .claude/settings.json overlay
-  const claudeDir = join(spawnCwd, ".claude");
-  await mkdir(claudeDir, { recursive: true });
-  await writeFile(
-    join(claudeDir, "settings.json"),
-    JSON.stringify(DEFAULT_CLAUDE_SETTINGS, null, 2) + "\n",
-    "utf-8",
-  );
-
-  // 4. Per-fire .mcp.json overlay for Playwright MCP
-  const playwrightProfileDir = join(workspaceDir, "playwright-mcp-profile");
-  await mkdir(playwrightProfileDir, { recursive: true });
-  const mcpConfig = {
-    mcpServers: {
-      playwright: {
-        command: "npx",
-        args: [
-          "@playwright/mcp@latest",
-          `--user-data-dir=${playwrightProfileDir}`,
-        ],
-      },
-    },
-  };
-  await writeFile(
-    join(spawnCwd, ".mcp.json"),
-    JSON.stringify(mcpConfig, null, 2) + "\n",
-    "utf-8",
-  );
-
-  // 5. Sentinel check
-  const manifestPath = join(symlinkTarget, ".claude-plugin", "plugin.json");
-  if (!existsSync(manifestPath)) {
-    throw new Error(
-      `Plugin sentinel check failed: ${manifestPath} does not exist (symlink target empty or wrong path)`,
-    );
-  }
-
-  // 6. Workspace dir for storageState + findings output
-  await mkdir(workspaceDir, { recursive: true, mode: 0o700 });
-
-  return { ephemeralRoot, spawnCwd, workspaceDir };
-}
-
-async function teardownEphemeralWorkspace(
-  ephemeralRoot: string | null,
-): Promise<void> {
-  if (!ephemeralRoot) return;
-  try {
-    await rm(ephemeralRoot, { recursive: true, force: true });
-  } catch (err) {
-    reportSilentFallback(err, {
-      feature: "cron-ux-audit",
-      op: "teardown-ephemeral-workspace",
-      message: "Failed to remove ephemeral workspace",
-      extra: { fn: "cron-ux-audit", ephemeralRoot },
-    });
-  }
-}
-
-// =============================================================================
-// Claude-eval spawn
-// =============================================================================
-
-async function spawnClaudeEval(args: {
-  spawnCwd: string;
-  installationToken: string;
-  workspaceDir: string;
-  logger: HandlerArgs["logger"];
-}): Promise<SpawnResult> {
-  const { spawnCwd, installationToken, workspaceDir, logger } = args;
-  if (!existsSync(spawnCwd)) {
-    throw new Error(
-      `spawn cwd ${spawnCwd} no longer exists (container restart between setup-workspace and claude-eval?). ` +
-        `Re-run will re-execute setup-workspace and create a fresh ephemeral root.`,
-    );
-  }
-  const claudeBin = resolveClaudeBin();
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
-  const startedAt = Date.now();
-  let abortedByTimeout = false;
-  let exited = false;
-  let escalationTimer: NodeJS.Timeout | null = null;
-
-  const storageStatePath = join(workspaceDir, "storage-state.json");
-
-  try {
-    return await new Promise<SpawnResult>((resolve) => {
-      const child = spawn(
-        claudeBin,
-        [...CLAUDE_CODE_FLAGS, UX_AUDIT_PROMPT],
-        {
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-          cwd: spawnCwd,
-          env: buildSpawnEnv(installationToken, {
-            UX_AUDIT_DRY_RUN: "true",
-            UX_AUDIT_STORAGE_STATE: storageStatePath,
-          }),
-        },
-      );
-
-      if (child.stdout) {
-        const rlOut = createInterface({ input: child.stdout });
-        rlOut.on("line", (line) => {
-          logger.info(
-            { fn: "cron-ux-audit", stream: "stdout" },
-            redactToken(line, installationToken),
-          );
-        });
-      }
-      if (child.stderr) {
-        const rlErr = createInterface({ input: child.stderr });
-        rlErr.on("line", (line) => {
-          logger.error(
-            { fn: "cron-ux-audit", stream: "stderr" },
-            redactToken(line, installationToken),
-          );
-        });
-      }
-
-      const finish = (r: SpawnResult) => {
-        exited = true;
-        if (escalationTimer) clearTimeout(escalationTimer);
-        resolve(r);
-      };
-
-      ac.signal.addEventListener(
-        "abort",
-        () => {
-          abortedByTimeout = true;
-          if (!child.pid) return;
-          const pid = child.pid;
-          try {
-            process.kill(-pid, "SIGTERM");
-          } catch {
-            // process group already gone
-          }
-          escalationTimer = setTimeout(() => {
-            if (exited) return;
-            try {
-              process.kill(-pid, "SIGKILL");
-            } catch {
-              // already exited
-            }
-          }, KILL_ESCALATION_MS);
-        },
-        { once: true },
-      );
-
-      child.on("exit", (exitCode, signal) => {
-        finish({
-          ok: exitCode === 0,
-          exitCode,
-          signal,
-          abortedByTimeout,
-          durationMs: Date.now() - startedAt,
-        });
-      });
-      child.on("error", (err) => {
-        const redactedMsg = redactToken(err.message ?? "", installationToken);
-        const redacted = new Error(redactedMsg);
-        redacted.name = err.name;
-        reportSilentFallback(redacted, {
-          feature: "cron-claude-eval",
-          op: "child_process.spawn",
-          message: "claude-code spawn failed",
-          extra: { fn: "cron-ux-audit" },
-        });
-        finish({
-          ok: false,
-          exitCode: -1,
-          signal: null,
-          abortedByTimeout,
-          durationMs: Date.now() - startedAt,
-        });
-      });
-
-      logger.info(
-        { fn: "cron-ux-audit", spawnCwd, pid: child.pid },
-        "claude-eval spawned",
-      );
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// =============================================================================
-// Sentry heartbeat
-// =============================================================================
-
-async function postSentryHeartbeat(args: {
-  ok: boolean;
-  logger: HandlerArgs["logger"];
-}): Promise<void> {
-  const { ok, logger } = args;
-  const domain = process.env.SENTRY_INGEST_DOMAIN;
-  const projectId = process.env.SENTRY_PROJECT_ID;
-  const publicKey = process.env.SENTRY_PUBLIC_KEY;
-  if (!domain || !projectId || !publicKey) {
-    logger.info({ fn: "cron-ux-audit" }, "Sentry env unset — skipping heartbeat");
-    return;
-  }
-  if (
-    !SENTRY_DOMAIN_RE.test(domain) ||
-    !SENTRY_PROJECT_RE.test(projectId) ||
-    !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-  ) {
-    logger.warn({ fn: "cron-ux-audit" }, "Sentry env malformed — skipping heartbeat");
-    return;
-  }
-  const status = ok ? "ok" : "error";
-  const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const e = err as Error;
-    reportSilentFallback(e, {
-      feature: "cron-sentry-heartbeat",
-      op: "fetch",
-      message: "Sentry Crons heartbeat POST failed",
-      extra: { fn: "cron-ux-audit", status, aborted: e.name === "TimeoutError" },
-    });
-  }
-}
-
-// =============================================================================
-// Upload findings to Supabase ux-audit-artifacts bucket
-// =============================================================================
 
 async function uploadFindings(args: {
   workspaceDir: string;
@@ -564,7 +201,7 @@ export async function cronUxAuditHandler({
   // --- Step 1: mint installation token ---
   const installationToken = await step.run(
     "mint-installation-token",
-    async () => mintInstallationToken(),
+    async () => mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
   );
 
   // --- Step 2: bot-fixture-seed ---
@@ -582,7 +219,33 @@ export async function cronUxAuditHandler({
   try {
     // --- Step 4: setup ephemeral workspace ---
     const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace(installationToken);
+      const base = await setupEphemeralWorkspace({ installationToken, cronName: "cron-ux-audit" });
+      const wDir = join(base.ephemeralRoot, "workspace");
+
+      // Per-fire .mcp.json overlay for Playwright MCP
+      const playwrightProfileDir = join(wDir, "playwright-mcp-profile");
+      await mkdir(playwrightProfileDir, { recursive: true });
+      const mcpConfig = {
+        mcpServers: {
+          playwright: {
+            command: "npx",
+            args: [
+              "@playwright/mcp@latest",
+              `--user-data-dir=${playwrightProfileDir}`,
+            ],
+          },
+        },
+      };
+      await writeFile(
+        join(base.spawnCwd, ".mcp.json"),
+        JSON.stringify(mcpConfig, null, 2) + "\n",
+        "utf-8",
+      );
+
+      // Workspace dir for storageState + findings output
+      await mkdir(wDir, { recursive: true, mode: 0o700 });
+
+      return { ...base, workspaceDir: wDir };
     });
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
@@ -610,10 +273,18 @@ export async function cronUxAuditHandler({
     const spawnResult = await step.run(
       "claude-eval",
       async (): Promise<SpawnResult> => {
+        const storageStatePath = join(workspaceDir!, "storage-state.json");
         return spawnClaudeEval({
           spawnCwd: spawnCwd!,
           installationToken,
-          workspaceDir: workspaceDir!,
+          flags: CLAUDE_CODE_FLAGS,
+          prompt: UX_AUDIT_PROMPT,
+          maxTurnDurationMs: MAX_TURN_DURATION_MS,
+          cronName: "cron-ux-audit",
+          buildSpawnEnv: (token) => buildSpawnEnv(token, {
+            UX_AUDIT_DRY_RUN: "true",
+            UX_AUDIT_STORAGE_STATE: storageStatePath,
+          }),
           logger,
         });
       },
@@ -655,7 +326,7 @@ export async function cronUxAuditHandler({
 
     // --- Step 9: sentry heartbeat ---
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, logger });
+      await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-ux-audit", logger });
     });
 
     return { ok: spawnResult.ok };
@@ -671,11 +342,11 @@ export async function cronUxAuditHandler({
       extra: { fn: "cron-ux-audit" },
     });
     await step.run("sentry-heartbeat-error", async () => {
-      await postSentryHeartbeat({ ok: false, logger });
+      await postSentryHeartbeat({ ok: false, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-ux-audit", logger });
     });
     return { ok: false };
   } finally {
-    await teardownEphemeralWorkspace(ephemeralRoot).catch((err) => {
+    await teardownEphemeralWorkspace(ephemeralRoot, "cron-ux-audit").catch((err) => {
       reportSilentFallback(err, {
         feature: "cron-ux-audit",
         op: "teardown-ephemeral-workspace-finally",
