@@ -19,12 +19,12 @@ export const resolveIdentity = cache(async (
 
   const { data: memberData } = await supabase
     .from("workspace_members")
-    .select("organization_id")
+    .select("workspace_id, workspaces!inner(organization_id)")
     .eq("user_id", userId)
     .limit(1)
-    .single<{ organization_id: string }>();
+    .single<{ workspace_id: string; workspaces: { organization_id: string } }>();
 
-  const orgId = memberData?.organization_id ?? null;
+  const orgId = memberData?.workspaces?.organization_id ?? null;
 
   return { userId, role, orgId };
 });
