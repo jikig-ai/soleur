@@ -56,11 +56,14 @@ lane: single-domain
 
 ## Phase 5: Migrate 5 pure-TS handlers
 
-- [ ] 5.1 cron-strategy-review.ts: import from `_cron-shared.ts`, delete local definitions
-- [ ] 5.2 cron-compound-promote.ts: import from `_cron-shared.ts`, delete local definitions
-- [ ] 5.3 cron-oauth-probe.ts: import from `_cron-shared.ts`, delete local definitions
-- [ ] 5.4 cron-stale-deferred-scope-outs.ts: import from `_cron-shared.ts`, delete local definitions
-- [ ] 5.5 cron-github-app-drift-guard.ts: import from `_cron-shared.ts`, delete local definitions
+### Tier C (full shared set): strategy-review, compound-promote
+- [ ] 5.1 cron-strategy-review.ts: import `mintInstallationToken`, `buildAuthenticatedCloneUrl`, `redactToken`, `postSentryHeartbeat`, Sentry regexes, `REPO_OWNER`, `REPO_NAME`, `HandlerArgs` from `_cron-shared.ts`; delete local definitions
+- [ ] 5.2 cron-compound-promote.ts: same import set as 5.1; delete local definitions
+
+### Tier D (Sentry-only shared set): oauth-probe, stale-deferred-scope-outs, github-app-drift-guard
+- [ ] 5.3 cron-oauth-probe.ts: import `postSentryHeartbeat`, Sentry regexes, `HandlerArgs` from `_cron-shared.ts`; refactor inline heartbeat to use shared function; delete local definitions
+- [ ] 5.4 cron-stale-deferred-scope-outs.ts: same import set as 5.3; refactor inline heartbeat; delete local definitions
+- [ ] 5.5 cron-github-app-drift-guard.ts: same import set as 5.3; refactor inline heartbeat; delete local definitions
 - [ ] 5.6 Verify `tsc --noEmit` passes
 
 ## Phase 6: Delete stale GHA workflow

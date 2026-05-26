@@ -13,6 +13,19 @@ semver: patch
 
 Mechanical extraction of duplicated helpers across 14 cron-\*.ts Inngest handlers into two shared modules. No behavior change.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-26
+**Sections enhanced:** Research Insights, Implementation Phases, Risks
+**Research agents used:** repo-research-analyst, learnings-researcher, verify-the-negative
+
+### Key Improvements
+
+1. Precise symbol-count verification: all 14 cron-\*.ts files confirmed to have Sentry regexes (14/14), HandlerArgs (14/14), REPO_OWNER (9/14), SpawnResult (9/14), resolveClaudeBin (9/14).
+2. Verified glob exclusion claim: `_cron-shared.ts` does NOT match the `{cron,oneshot}-*.ts` glob in the byok-lease-sweep test.
+3. Confirmed 3 new pure-TS handlers (oauth-probe, stale-deferred-scope-outs, github-app-drift-guard) share ONLY Sentry regexes + inline heartbeat (no mintInstallationToken, buildAuthenticatedCloneUrl, or redactToken) -- import surface is smaller than strategy-review/compound-promote.
+4. Learning `2026-05-25-tr9-pr7-roadmap-review-claude-code-spawn-pattern-reuse.md` directly confirms the duplication pattern and enumerates the per-helper reuse table.
+
 ## Overview
 
 The TR9 migration (umbrella #3948) ported 10+ GHA cron workflows to Inngest handlers. Each handler was ported independently (PR-1 through PR-11), copy-pasting the same substrate helpers. Now that all handlers are on main, the duplication is pure tech debt:
@@ -150,6 +163,47 @@ Key variations that the shared module must accommodate:
 10. **`SENTRY_DOMAIN_RE`**, **`SENTRY_PROJECT_RE`**, **`SENTRY_PUBLIC_KEY_RE`**: Identical across all 14 handlers. No parameters needed.
 
 11. **`REPO_OWNER`**, **`REPO_NAME`**: Identical across 8 handlers (all except daily-triage and follow-through-monitor which don't use them).
+
+### Deepen-pass: Precise Symbol Counts (verified 2026-05-26)
+
+| Symbol | Definition count | Files |
+|--------|-----------------|-------|
+| `SENTRY_DOMAIN_RE` | 14 | all cron-\*.ts |
+| `SENTRY_PROJECT_RE` | 14 | all cron-\*.ts |
+| `SENTRY_PUBLIC_KEY_RE` | 14 | all cron-\*.ts |
+| `HandlerArgs` interface | 14 | all cron-\*.ts |
+| `resolveClaudeBin` | 9 | 9 claude-eval handlers |
+| `SpawnResult` interface | 9 | 9 claude-eval handlers |
+| `REPO_OWNER` | 9 | 9 handlers (all except daily-triage, follow-through-monitor, oauth-probe, stale-deferred-scope-outs, github-app-drift-guard) |
+| `mintInstallationToken` | 9 | 9 handlers (same set as REPO_OWNER) |
+| `buildAuthenticatedCloneUrl` | 9 | 9 handlers (same set) |
+| `redactToken` | 9 | 9 handlers (same set) |
+| `postSentryHeartbeat` (named fn) | 9 | 6 claude-eval + 2 pure-TS + cron-ux-audit; 5 others have inline heartbeat |
+| `spawnSimple` | 7 | 7 claude-eval handlers with ephemeral workspace |
+| `setupEphemeralWorkspace` | 9 | 7 claude-eval + 2 pure-TS (different shapes) |
+| `teardownEphemeralWorkspace` | 9 | 7 claude-eval + 2 pure-TS |
+| `spawnClaudeEval` | 7 | 7 claude-eval handlers with ephemeral workspace |
+| `KILL_ESCALATION_MS` | 9 (def + use) | 9 claude-eval handlers |
+
+### Deepen-pass: Three-Tier Handler Classification
+
+After verification, the 14 handlers break into 3 tiers for extraction purposes:
+
+**Tier A -- Full claude-eval with ephemeral workspace (7 handlers):**
+cron-roadmap-review, cron-competitive-analysis, cron-bug-fixer, cron-agent-native-audit, cron-legal-audit, cron-community-monitor, cron-ux-audit.
+Import from BOTH `_cron-shared.ts` and `_cron-claude-eval-substrate.ts`.
+
+**Tier B -- Claude-eval without ephemeral workspace (2 handlers):**
+cron-daily-triage, cron-follow-through-monitor.
+Import `resolveClaudeBin`, `SpawnResult`, `KILL_ESCALATION_MS` from `_cron-claude-eval-substrate.ts`. Import Sentry regexes, `HandlerArgs`, `postSentryHeartbeat` from `_cron-shared.ts`. Refactor inline heartbeat to shared function.
+
+**Tier C -- Pure-TS with full shared set (2 handlers):**
+cron-strategy-review, cron-compound-promote.
+Import `mintInstallationToken`, `buildAuthenticatedCloneUrl`, `redactToken`, `postSentryHeartbeat`, Sentry regexes, `REPO_OWNER`, `REPO_NAME`, `HandlerArgs` from `_cron-shared.ts`.
+
+**Tier D -- Pure-TS with Sentry-only shared set (3 handlers):**
+cron-oauth-probe, cron-stale-deferred-scope-outs, cron-github-app-drift-guard.
+Import `postSentryHeartbeat`, Sentry regexes, `HandlerArgs` from `_cron-shared.ts`. Do NOT use `mintInstallationToken`, `buildAuthenticatedCloneUrl`, `redactToken`, `REPO_OWNER`, `REPO_NAME` (these handlers have their own auth patterns or no clone).
 
 ### Handlers NOT using ephemeral workspace
 
@@ -333,7 +387,9 @@ Via Octokit `PATCH /repos/{owner}/{repo}/issues/{issue_number}` to update the bo
 | `_cron-*.ts` files accidentally matched by `cron-no-byok-lease-sweep.test.ts` glob | The glob is `{cron,oneshot}-*.ts`, which does NOT match `_cron-*.ts`. Verified by reading the test file. |
 | Parameterized `spawnClaudeEval` signature change introduces subtle behavior diff | Each handler passes its existing constants unchanged; the substrate function body is a verbatim copy of the current `spawnClaudeEval` from cron-roadmap-review.ts (the canonical shape). |
 | `buildSpawnEnv` extracted despite security sensitivity | Explicitly NOT extracted (AC11). Per-handler allowlist remains the only acceptable pattern. |
-| Pure-TS handlers' `setupEphemeralWorkspace` has different return shape | NOT extracted for pure-TS handlers. Only the claude-eval shape (6 handlers) is extracted. |
+| Pure-TS handlers' `setupEphemeralWorkspace` has different return shape | NOT extracted for pure-TS handlers. Only the claude-eval shape (7 handlers) is extracted. |
+| Tier D handlers (oauth-probe, stale-deferred-scope-outs, github-app-drift-guard) have inline heartbeat, not a named `postSentryHeartbeat` function | Phase 5 refactors them to call the shared `postSentryHeartbeat` (same pattern as Phase 4 for daily-triage/follow-through-monitor). The inline code is identical modulo the monitor slug and function name strings. |
+| `_cron-shared.ts` imports `createProbeOctokit` and `generateInstallationToken` -- Tier D handlers that do NOT use `mintInstallationToken` would have an unused transitive dependency | Tree-shaking handles this at bundle time. The import is in `_cron-shared.ts`, not in the handler. Handlers that do not call `mintInstallationToken` never invoke the code path. No runtime cost. |
 
 ## Domain Review
 
