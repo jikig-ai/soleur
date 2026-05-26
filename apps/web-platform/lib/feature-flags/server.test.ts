@@ -18,7 +18,6 @@ import {
   getFlag,
   getRuntimeFlag,
   getFeatureFlags,
-  getTeamWorkspaceAllowlist,
   isTeamWorkspaceInviteEnabled,
   isByokDelegationsEnabled,
   ANON_IDENTITY,
@@ -188,121 +187,53 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
   });
 });
 
-describe("getTeamWorkspaceAllowlist", () => {
-  it("returns empty set when env var unset", () => {
-    delete process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS;
-    expect(getTeamWorkspaceAllowlist().size).toBe(0);
-  });
-
-  it("returns empty set when env var is empty string", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "";
-    expect(getTeamWorkspaceAllowlist().size).toBe(0);
-  });
-
-  it("parses a single org id", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1";
-    const set = getTeamWorkspaceAllowlist();
-    expect(set.has("org-1")).toBe(true);
-    expect(set.size).toBe(1);
-  });
-
-  it("parses comma-separated org ids and trims whitespace", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1, org-2 ,  org-3";
-    const set = getTeamWorkspaceAllowlist();
-    expect(set.has("org-1")).toBe(true);
-    expect(set.has("org-2")).toBe(true);
-    expect(set.has("org-3")).toBe(true);
-    expect(set.size).toBe(3);
-  });
-
-  it("filters out empty segments from doubled commas", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1,,org-2,";
-    const set = getTeamWorkspaceAllowlist();
-    expect(set.size).toBe(2);
-    expect(set.has("")).toBe(false);
-  });
-
-  it("re-parses when the env var value changes (cache keyed on raw value)", () => {
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-1";
-    expect(getTeamWorkspaceAllowlist().has("org-1")).toBe(true);
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-2";
-    const set = getTeamWorkspaceAllowlist();
-    expect(set.has("org-2")).toBe(true);
-    expect(set.has("org-1")).toBe(false);
-  });
-});
-
-describe("isTeamWorkspaceInviteEnabled (async, dual-control)", () => {
-  it("returns false when Flagsmith=OFF (even if allowlisted) — dual-control", async () => {
+describe("isTeamWorkspaceInviteEnabled (async, single-control)", () => {
+  it("returns true when Flagsmith=ON", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
-    mockGetIdentityFlags.mockResolvedValue({
-      isFeatureEnabled: () => false,
-    });
-    await expect(isTeamWorkspaceInviteEnabled("org-jikigai", ORG_USER)).resolves.toBe(false);
-  });
-
-  it("returns false when Flagsmith=ON but not allowlisted — dual-control", async () => {
-    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-other";
-    mockGetIdentityFlags.mockResolvedValue({
-      isFeatureEnabled: (n: string) => n === "team-workspace-invite",
-    });
-    await expect(isTeamWorkspaceInviteEnabled("org-jikigai", ORG_USER)).resolves.toBe(false);
-  });
-
-  it("returns true when BOTH Flagsmith=ON AND allowlisted — dual-control", async () => {
-    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
     mockGetIdentityFlags.mockResolvedValue({
       isFeatureEnabled: (n: string) => n === "team-workspace-invite",
     });
     await expect(isTeamWorkspaceInviteEnabled("org-jikigai", ORG_USER)).resolves.toBe(true);
   });
 
-  it("Flagsmith outage → env-fallback still satisfies dual-control", async () => {
+  it("returns false when Flagsmith=OFF", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({
+      isFeatureEnabled: () => false,
+    });
+    await expect(isTeamWorkspaceInviteEnabled("org-jikigai", ORG_USER)).resolves.toBe(false);
+  });
+
+  it("returns false when orgId is empty", async () => {
+    await expect(isTeamWorkspaceInviteEnabled("", ORG_USER)).resolves.toBe(false);
+  });
+
+  it("Flagsmith outage → env-fallback", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     process.env.FLAG_TEAM_WORKSPACE_INVITE = "1";
-    process.env.TEAM_WORKSPACE_ALLOWLIST_ORG_IDS = "org-jikigai";
     mockGetIdentityFlags.mockRejectedValue(new Error("outage"));
     await expect(isTeamWorkspaceInviteEnabled("org-jikigai", ORG_USER)).resolves.toBe(true);
   });
 });
 
-describe("isByokDelegationsEnabled (async, dual-control)", () => {
-  it("returns false when Flagsmith=OFF — dual-control", async () => {
+describe("isByokDelegationsEnabled (async, single-control)", () => {
+  it("returns true when Flagsmith=ON", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
-    process.env.BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS = "org-123";
-    mockGetIdentityFlags.mockResolvedValue({
-      isFeatureEnabled: () => false,
-    });
-    await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(false);
-  });
-
-  it("returns false when Flagsmith=ON but not allowlisted — dual-control", async () => {
-    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
-    process.env.BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS = "org-other";
-    mockGetIdentityFlags.mockResolvedValue({
-      isFeatureEnabled: (n: string) => n === "byok-delegations",
-    });
-    await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(false);
-  });
-
-  it("returns true when BOTH Flagsmith=ON AND allowlisted — dual-control", async () => {
-    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
-    process.env.BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS = "org-123";
     mockGetIdentityFlags.mockResolvedValue({
       isFeatureEnabled: (n: string) => n === "byok-delegations",
     });
     await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(true);
   });
 
-  it("returns false when orgId is null", async () => {
+  it("returns false when Flagsmith=OFF", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
-    process.env.BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS = "org-123";
     mockGetIdentityFlags.mockResolvedValue({
-      isFeatureEnabled: (n: string) => n === "byok-delegations",
+      isFeatureEnabled: () => false,
     });
+    await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(false);
+  });
+
+  it("returns false when orgId is null", async () => {
     await expect(isByokDelegationsEnabled(null, PRD_USER)).resolves.toBe(false);
   });
 });

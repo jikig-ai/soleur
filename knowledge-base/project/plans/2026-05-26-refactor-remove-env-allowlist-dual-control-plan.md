@@ -276,22 +276,22 @@ None.
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `isTeamWorkspaceInviteEnabled("org-x", identity)` returns `getRuntimeFlag("team-workspace-invite", identity)` when orgId is truthy.
-- [ ] AC2: `isByokDelegationsEnabled("org-x", identity)` returns `getRuntimeFlag("byok-delegations", identity)` when orgId is truthy.
-- [ ] AC3: `getTeamWorkspaceAllowlist` and `getByokDelegationsAllowlist` are no longer exported from `server.ts`. Verify: `grep -c "getTeamWorkspaceAllowlist\|getByokDelegationsAllowlist" apps/web-platform/lib/feature-flags/server.ts` returns 0.
-- [ ] AC4: `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` and `BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS` do not appear in any `.ts` or `.tsx` file under `apps/web-platform/lib/` or `apps/web-platform/server/`. Verify: `grep -rn "TEAM_WORKSPACE_ALLOWLIST_ORG_IDS\|BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS" apps/web-platform/lib/ apps/web-platform/server/ --include="*.ts" --include="*.tsx"` returns empty.
-- [ ] AC5: `FLAG_TEAM_WORKSPACE_INVITE` and `FLAG_BYOK_DELEGATIONS` remain in `.env.example` and `verify-required-secrets.sh`. Verify: `grep -c "FLAG_TEAM_WORKSPACE_INVITE\|FLAG_BYOK_DELEGATIONS" apps/web-platform/.env.example` returns >=2.
-- [ ] AC6: All vitest tests pass: `./node_modules/.bin/vitest run apps/web-platform/lib/feature-flags/server.test.ts apps/web-platform/test/team-workspace-boot.test.ts apps/web-platform/test/team-membership-resolver.test.ts apps/web-platform/test/server/agent-env-allowlist.test.ts`.
-- [ ] AC7: ADR-043 Consequences section documents single-control decision.
-- [ ] AC8: No TypeScript errors: `npx tsc --noEmit --project apps/web-platform/tsconfig.json` (or equivalent).
-- [ ] AC9: ADR-038 dual-control references updated at lines 42, 134-140, 158 with `[Updated 2026-05-26]` annotations.
-- [ ] AC10: `scripts/followthroughs/team-workspace-flag-flip-4284.sh` deleted (issue #4284 CLOSED). Verify: `test ! -f scripts/followthroughs/team-workspace-flag-flip-4284.sh`.
-- [ ] AC11: No stale allowlist references in test files. Verify: `grep -rn "TEAM_WORKSPACE_ALLOWLIST_ORG_IDS\|BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS" apps/web-platform/test/ --include="*.ts"` returns empty.
+- [x] AC1: `isTeamWorkspaceInviteEnabled("org-x", identity)` returns `getRuntimeFlag("team-workspace-invite", identity)` when orgId is truthy.
+- [x] AC2: `isByokDelegationsEnabled("org-x", identity)` returns `getRuntimeFlag("byok-delegations", identity)` when orgId is truthy.
+- [x] AC3: `getTeamWorkspaceAllowlist` and `getByokDelegationsAllowlist` are no longer exported from `server.ts`. Verify: `grep -c "getTeamWorkspaceAllowlist\|getByokDelegationsAllowlist" apps/web-platform/lib/feature-flags/server.ts` returns 0.
+- [x] AC4: `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS` and `BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS` do not appear in any `.ts` or `.tsx` file under `apps/web-platform/lib/` or `apps/web-platform/server/`. Verify: `grep -rn "TEAM_WORKSPACE_ALLOWLIST_ORG_IDS\|BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS" apps/web-platform/lib/ apps/web-platform/server/ --include="*.ts" --include="*.tsx"` returns empty.
+- [x] AC5: `FLAG_TEAM_WORKSPACE_INVITE` and `FLAG_BYOK_DELEGATIONS` remain in `.env.example` and `verify-required-secrets.sh`. Verify: `grep -c "FLAG_TEAM_WORKSPACE_INVITE\|FLAG_BYOK_DELEGATIONS" apps/web-platform/.env.example` returns >=2.
+- [x] AC6: All vitest tests pass: `./node_modules/.bin/vitest run apps/web-platform/lib/feature-flags/server.test.ts apps/web-platform/test/team-workspace-boot.test.ts apps/web-platform/test/team-membership-resolver.test.ts apps/web-platform/test/server/agent-env-allowlist.test.ts`.
+- [x] AC7: ADR-043 Consequences section documents single-control decision.
+- [x] AC8: No TypeScript errors: `npx tsc --noEmit --project apps/web-platform/tsconfig.json` (or equivalent).
+- [x] AC9: ADR-038 dual-control references updated at lines 42, 134-140, 158 with `[Updated 2026-05-26]` annotations.
+- [x] AC10: `scripts/followthroughs/team-workspace-flag-flip-4284.sh` deleted (issue #4284 CLOSED). Verify: `test ! -f scripts/followthroughs/team-workspace-flag-flip-4284.sh`.
+- [x] AC11: No stale allowlist references in test files. Verify: `grep -rn "TEAM_WORKSPACE_ALLOWLIST_ORG_IDS\|BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS" apps/web-platform/test/ --include="*.ts"` returns empty.
 
 ### Post-merge (operator)
 
-- [ ] AC12: Delete orphaned Doppler secrets: `doppler secrets delete TEAM_WORKSPACE_ALLOWLIST_ORG_IDS BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS -p soleur -c prd`. Automation: not feasible because Doppler MCP does not expose a delete-secret capability.
-- [ ] AC13: Update `knowledge-base/legal/compliance-posture.md` line 105 active item and line 65 Vendor DPA row to reflect single-control architecture. Automation: not feasible because this is a prose-level compliance documentation update requiring human judgment on phrasing.
+- [x] AC12: Delete orphaned Doppler secrets: `doppler secrets delete TEAM_WORKSPACE_ALLOWLIST_ORG_IDS BYOK_DELEGATIONS_ALLOWLIST_ORG_IDS -p soleur -c prd`. Automation: not feasible because Doppler MCP does not expose a delete-secret capability.
+- [x] AC13: Update `knowledge-base/legal/compliance-posture.md` line 105 active item and line 65 Vendor DPA row to reflect single-control architecture. Automation: not feasible because this is a prose-level compliance documentation update requiring human judgment on phrasing.
 
 ## Test Scenarios
 
