@@ -11,7 +11,7 @@ tags: [migration, ci, tenant-integration, bot-fixture, seed-data]
 ## Problem
 
 Migration `071_ux_audit_artifacts_bucket.sql` used `RAISE EXCEPTION` when
-`ux-audit-bot@jikigai.com` was not found in `auth.users`. This caused the
+`ux-audit-bot@example.test` was not found in `auth.users`. This caused the
 `tenant-integration` CI workflow to fail on EVERY PR that touched migrations,
 because the CI env applies migrations to dev-Supabase where the bot user
 may not have been seeded yet.
