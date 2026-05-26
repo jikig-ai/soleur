@@ -46,17 +46,17 @@ Also add a row to the Quick Reference table at the top of the file.
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `knowledge-base/engineering/ops/runbooks/inngest-server.md` contains a `## Cron bug-fixer` section with subsections for: event name/payload, override semantics, concurrency, how to fire, how to observe, common failure modes.
-- [ ] AC2 — Quick Reference table includes a row linking to the new section.
-- [ ] AC3 — Event name matches source: `cron/bug-fixer.manual-trigger`.
-- [ ] AC4 — Payload shape documented as `{ "issue_number": <positive integer> }` (optional).
-- [ ] AC5 — Override semantics document that override bypasses the priority cascade and operator owns ensuring issue compatibility.
-- [ ] AC6 — Concurrency section documents dual-scope (fn limit 1 + account `cron-platform` limit 1) and that manual triggers queue behind in-flight runs.
-- [ ] AC7 — "How to fire" section shows `inngest send` CLI invocation form.
-- [ ] AC8 — "How to observe" section references Sentry monitor `scheduled-bug-fixer` and `bot-fix/*` PR branch prefix.
-- [ ] AC9 — "Common failure modes" section lists at least 5 modes documented in the handler (override rejection, empty cascade, timeout, workspace failure, no PR detected, auto-merge gate rejection).
-- [ ] AC10 — No `ssh ` commands appear in the new section (per `hr-no-ssh-fallback-in-runbooks`).
-- [ ] AC11 — PR body uses `Closes #4383` to auto-close the issue on merge.
+- [x] AC1 — `knowledge-base/engineering/ops/runbooks/inngest-server.md` contains a `## Cron bug-fixer` section with subsections for: event name/payload, override semantics, concurrency, how to fire, how to observe, common failure modes.
+- [x] AC2 — Quick Reference table includes a row linking to the new section.
+- [x] AC3 — Event name matches source: `cron/bug-fixer.manual-trigger`.
+- [x] AC4 — Payload shape documented as `{ "issue_number": <positive integer> }` (optional).
+- [x] AC5 — Override semantics document that override bypasses the priority cascade and operator owns ensuring issue compatibility.
+- [x] AC6 — Concurrency section documents dual-scope (fn limit 1 + account `cron-platform` limit 1) and that manual triggers queue behind in-flight runs.
+- [x] AC7 — "How to fire" section shows `inngest send` CLI invocation form.
+- [x] AC8 — "How to observe" section references Sentry monitor `scheduled-bug-fixer` and `bot-fix/*` PR branch prefix.
+- [x] AC9 — "Common failure modes" section lists at least 5 modes documented in the handler (override rejection, empty cascade, timeout, workspace failure, no PR detected, auto-merge gate rejection).
+- [x] AC10 — No `ssh ` commands appear in the new section (per `hr-no-ssh-fallback-in-runbooks`).
+- [x] AC11 — PR body uses `Closes #4383` to auto-close the issue on merge.
 
 ## Test Scenarios
 

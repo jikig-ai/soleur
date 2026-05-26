@@ -14,6 +14,7 @@ Per ADR-030 the Inngest server runs as a single-host SQLite-backed durable trigg
 | Inngest CLI version bump | [§ Version bump](#cli-version-bump) |
 | FR5 flag flip | [§ FR5 flip](#fr5-flag-flip) |
 | Unpause heartbeat after first ping | [§ Unpause heartbeat](#unpause-heartbeat) |
+| Cron bug-fixer manual trigger | [§ Cron bug-fixer](#cron-bug-fixer) |
 
 ## Fresh-host bootstrap
 
@@ -168,6 +169,65 @@ Stopping inngest-server before VACUUM is required (SQLite write lock). Downtime 
 
 - **One `terraform apply` at a time.** The R2 backend has `use_lockfile = false` (R2 does not support S3 conditional writes). Concurrent applies race silently. R7 in the plan documents this.
 - **`inngest-bootstrap.sh` is idempotent** — second invocation against the same version is a ~50ms no-op via `systemctl is-active` + version-file match. Safe to re-run.
+
+## Cron bug-fixer
+
+The cron-bug-fixer Inngest function (`apps/web-platform/server/inngest/functions/cron-bug-fixer.ts`) runs daily at `0 6 * * *` UTC, selecting a qualifying `type/bug` issue and spawning `claude-code` to fix it. It also accepts a manual-trigger event for operator-initiated runs.
+
+### Event name and payload
+
+- **Event:** `cron/bug-fixer.manual-trigger`
+- **Payload:** `{ "issue_number": <positive integer> }` (optional)
+- **Validation:** If `issue_number` is present, it must be a positive integer (`typeof === "number"`, `Number.isInteger()`, `> 0`). Invalid values are rejected with a Sentry fallback report and the function returns `ok: false` without selecting any issue.
+
+When `issue_number` is omitted, the function falls through to the priority cascade (see Override semantics).
+
+### Override semantics
+
+- **Without override:** The handler runs the priority cascade, selecting the first qualifying issue in order: `priority/p3-low` → `priority/p2-medium` → `priority/p1-high`. Issues matching the title skip-regex (`/^\[Content Publisher\]|flaky|flake|test-flake|test/i`) or carrying skip-labels (`bot-fix/attempted`, `ux-audit`, `synthetic-test`) are excluded.
+- **With override:** The `issue_number` bypasses the cascade entirely. The operator owns ensuring the target issue is fix-issue-compatible (has `type/bug` label, is open, is not in the skip-list). The handler does not re-validate these constraints on override.
+
+### Concurrency
+
+- **fn-scoped limit 1:** Only one `cron-bug-fixer` invocation runs at a time.
+- **account-scoped `cron-platform` limit 1:** Shared across all `cron-*` functions using the `cron-platform` key. A manual trigger queues behind any in-flight cron run (daily-triage, follow-through-monitor, etc.).
+- **Retries:** 1 (Inngest retries once on non-terminal failure).
+
+Manual triggers do NOT preempt scheduled runs — they queue behind them.
+
+### How to fire
+
+**CLI (preferred):**
+```bash
+inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{"issue_number":4383}}'
+```
+
+Without `issue_number` (runs the default cascade):
+```bash
+inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{}}'
+```
+
+**Inngest dashboard:** Navigate to the Events tab → Send Event → paste the JSON body above.
+
+### How to observe results
+
+1. **Sentry cron monitor:** `scheduled-bug-fixer` — shows `ok` / `error` heartbeat status per run.
+2. **GitHub PRs:** Filter by `bot-fix/*` branch prefix — `gh pr list --search "head:bot-fix/"`.
+3. **Inngest dashboard:** Run history for `cron-bug-fixer` shows step-by-step execution (mint-installation-token → precreate-labels → select-issue → setup-workspace → claude-eval → detect-pr → auto-merge-gate → sentry-heartbeat).
+
+### Common failure modes
+
+| Mode | Symptom | Resolution |
+|------|---------|------------|
+| Invalid override | Sentry fallback: "Manual-trigger issue_number must be a positive integer" | Re-send with a valid positive integer |
+| Empty cascade | Function returns `ok: true`, `selectedIssue: null` — no qualifying issue at any priority level | Expected when no open `type/bug` issues exist; no action needed |
+| claude-eval timeout | Sentry fallback: "claude-eval aborted by timeout (3000000ms budget exceeded)" | The 50-minute AbortController fired; check Anthropic usage for the aborted run |
+| Workspace setup failure | Sentry fallback: "Failed to scaffold ephemeral cron workspace" | Check GitHub App installation token minting, repo clone permissions |
+| No PR detected | Warning log: "No bot-fix PR detected after claude-eval" | The agent did not produce a PR — review the claude-eval step output in Inngest dashboard |
+| Auto-merge gate: non-bot author | Gate returns "author is not a recognized bot" | PR was opened by a human or unrecognized bot account |
+| Auto-merge gate: missing label | Gate returns "missing bot-fix/auto-merge-eligible label" | Agent did not add the eligibility label; review PR manually |
+| Auto-merge gate: multi-file diff | Gate strips eligibility label, adds `bot-fix/review-required` | PR touches >1 file; requires human review before merge |
+| Auto-merge gate: non-p3-low source | Gate strips eligibility label, adds `bot-fix/review-required` | Source issue priority is not `priority/p3-low`; requires human review |
 
 ## Plan deviations from `2026-05-18-feat-pr-f-inngest-iac-plan.md`
 
