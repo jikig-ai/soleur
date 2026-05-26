@@ -236,6 +236,13 @@ describe("isByokDelegationsEnabled (async, single-control)", () => {
   it("returns false when orgId is null", async () => {
     await expect(isByokDelegationsEnabled(null, PRD_USER)).resolves.toBe(false);
   });
+
+  it("Flagsmith outage → env-fallback", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    process.env.FLAG_BYOK_DELEGATIONS = "1";
+    mockGetIdentityFlags.mockRejectedValue(new Error("outage"));
+    await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(true);
+  });
 });
 
 describe("getRuntimeFlag — orgId trait forwarding + LRU", () => {
