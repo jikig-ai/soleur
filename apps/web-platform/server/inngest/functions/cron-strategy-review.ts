@@ -45,16 +45,22 @@ import { join } from "node:path";
 import type { Octokit } from "@octokit/core";
 import matter from "gray-matter";
 import { inngest } from "@/server/inngest/client";
-import { createProbeOctokit } from "@/server/github/probe-octokit";
-import { generateInstallationToken } from "@/server/github-app";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  REPO_OWNER,
+  REPO_NAME,
+  redactToken,
+  buildAuthenticatedCloneUrl,
+  mintInstallationToken,
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
 
 // =============================================================================
 // Constants
 // =============================================================================
 
 const SENTRY_MONITOR_SLUG = "scheduled-strategy-review";
-const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
 
 // 10 min outer wall-clock budget. GHA's timeout-minutes was 5; 10 doubles
 // it for safety against transient GitHub API retries. Past runs complete
@@ -65,20 +71,6 @@ export const MAX_RUN_DURATION_MS = 10 * 60 * 1000;
 // Installation-token lifetime floor: 10-min outer budget + 5-min headroom.
 // Smaller than PR-5's 60-min floor because there is no claude-eval spawn.
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
-
-// Repo coordinates. Aligned with createProbeOctokit's PROBE_ISSUE_OWNER /
-// PROBE_ISSUE_REPO constants (NOT re-exported here to keep this file
-// self-contained against probe-octokit module shape).
-const REPO_OWNER = "jikig-ai";
-const REPO_NAME = "soleur";
-
-// Sentry URL component validators (PR-1 / PR-4 / PR-5 shape). A typo in
-// Doppler (e.g., SENTRY_INGEST_DOMAIN="ingest.sentry.io/x?leak=") would
-// otherwise produce a partially-attacker-controllable URL since the
-// components are interpolated raw into the heartbeat fetch.
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 // Strategy-review-check.sh contract constants (1:1 port).
 const REVIEW_LABEL = "scheduled-strategy-review";
@@ -107,49 +99,9 @@ interface ReviewResult {
   errors: number;
 }
 
-interface HandlerArgs {
-  event?: { data?: { date_override?: unknown } };
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
-  };
-}
-
 // =============================================================================
-// Helpers — token mint, clone URL, redaction, workspace lifecycle
+// Helpers — workspace lifecycle
 // =============================================================================
-
-// Mint a fresh installation token with a lifetime floor that exceeds the
-// outer wall-clock budget. Mirrors PR-5's mintInstallationToken shape with
-// a smaller TOKEN_MIN_LIFETIME_MS (no claude-eval to budget against).
-async function mintInstallationToken(): Promise<string> {
-  const octokit = await createProbeOctokit();
-  const { data: installation } = await octokit.request(
-    "GET /repos/{owner}/{repo}/installation",
-    { owner: REPO_OWNER, repo: REPO_NAME },
-  );
-  return generateInstallationToken(installation.id, {
-    minRemainingMs: TOKEN_MIN_LIFETIME_MS,
-  });
-}
-
-// Build the authenticated clone URL. NEVER log this string — it contains
-// the installation token inline. Mask via the helper below for any
-// diagnostic emission.
-function buildAuthenticatedCloneUrl(token: string): string {
-  return `https://x-access-token:${token}@github.com/${REPO_OWNER}/${REPO_NAME}.git`;
-}
-
-// Redact the installation token from a string before emitting it to
-// observability sinks. Defense-in-depth: runStrategyReview doesn't log
-// GH_TOKEN (Octokit-internal auth never surfaces it), but the redaction is
-// cheap insurance against future regressions.
-function redactToken(s: string, token: string): string {
-  if (!token) return s;
-  return s.replaceAll(token, "[REDACTED-INSTALLATION-TOKEN]");
-}
 
 // Scaffold the ephemeral workspace: `git clone --depth=1` into a tmp dir
 // and sentinel-check at least one of the strategy-doc directories exists.
@@ -552,59 +504,6 @@ async function runStrategyReview(args: {
 }
 
 // =============================================================================
-// Sentry heartbeat — single-step end-of-step.run POST (per
-// 2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md)
-// =============================================================================
-
-async function postSentryHeartbeat(args: {
-  ok: boolean;
-  logger: HandlerArgs["logger"];
-}): Promise<void> {
-  const { ok, logger } = args;
-  const domain = process.env.SENTRY_INGEST_DOMAIN;
-  const projectId = process.env.SENTRY_PROJECT_ID;
-  const publicKey = process.env.SENTRY_PUBLIC_KEY;
-  if (!domain || !projectId || !publicKey) {
-    logger.info(
-      { fn: "cron-strategy-review" },
-      "Sentry env unset — skipping heartbeat",
-    );
-    return;
-  }
-  if (
-    !SENTRY_DOMAIN_RE.test(domain) ||
-    !SENTRY_PROJECT_RE.test(projectId) ||
-    !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-  ) {
-    logger.warn(
-      { fn: "cron-strategy-review" },
-      "Sentry env malformed — skipping heartbeat",
-    );
-    return;
-  }
-  const status = ok ? "ok" : "error";
-  const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const e = err as Error;
-    reportSilentFallback(e, {
-      feature: "cron-sentry-heartbeat",
-      op: "fetch",
-      message: "Sentry Crons heartbeat POST failed",
-      extra: {
-        fn: "cron-strategy-review",
-        status,
-        aborted: e.name === "TimeoutError",
-      },
-    });
-  }
-}
-
-// =============================================================================
 // Handler — 4 step.run blocks: mint-installation-token → setup-workspace
 // → strategy-review-check → sentry-heartbeat (+ finally:teardown)
 // =============================================================================
@@ -643,7 +542,7 @@ export async function cronStrategyReviewHandler({
         },
       );
       await step.run("sentry-heartbeat", async () => {
-        await postSentryHeartbeat({ ok: false, logger });
+        await postSentryHeartbeat({ ok: false, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-strategy-review", logger });
       });
       return { ok: false, created: 0, skipped: 0, upToDate: 0, errors: 1 };
     }
@@ -655,7 +554,7 @@ export async function cronStrategyReviewHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken();
+      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
     },
   );
 
@@ -681,7 +580,7 @@ export async function cronStrategyReviewHandler({
       extra: { fn: "cron-strategy-review" },
     });
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: false, logger });
+      await postSentryHeartbeat({ ok: false, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-strategy-review", logger });
     });
     return { ok: false, created: 0, skipped: 0, upToDate: 0, errors: 1 };
   }
@@ -730,7 +629,7 @@ export async function cronStrategyReviewHandler({
     );
 
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: result.ok, logger });
+      await postSentryHeartbeat({ ok: result.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-strategy-review", logger });
     });
     return result;
   } finally {

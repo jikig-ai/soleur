@@ -24,26 +24,25 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
-import { createProbeOctokit } from "@/server/github/probe-octokit";
-import { generateInstallationToken } from "@/server/github-app";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  REPO_OWNER,
+  REPO_NAME,
+  redactToken,
+  buildAuthenticatedCloneUrl,
+  mintInstallationToken,
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
 
 // =============================================================================
 // Constants
 // =============================================================================
 
 const SENTRY_MONITOR_SLUG = "scheduled-compound-promote";
-const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
 
 export const MAX_RUN_DURATION_MS = 10 * 60 * 1000;
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
-
-const REPO_OWNER = "jikig-ai";
-const REPO_NAME = "soleur";
-
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 const WEEK_CAP_DEFAULT = 2;
 export const MAX_DIFF_BYTES = 16384;
@@ -96,16 +95,6 @@ interface Cluster {
   byte_impact: { before: number; after: number; delta: number };
 }
 
-interface HandlerArgs {
-  event?: { data?: Record<string, unknown> };
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
-  };
-}
-
 interface HandlerResult {
   ok: boolean;
   status: string;
@@ -115,26 +104,6 @@ interface HandlerResult {
 // =============================================================================
 // Helpers
 // =============================================================================
-
-async function mintInstallationToken(): Promise<string> {
-  const octokit = await createProbeOctokit();
-  const { data: installation } = await octokit.request(
-    "GET /repos/{owner}/{repo}/installation",
-    { owner: REPO_OWNER, repo: REPO_NAME },
-  );
-  return generateInstallationToken(installation.id, {
-    minRemainingMs: TOKEN_MIN_LIFETIME_MS,
-  });
-}
-
-function buildAuthenticatedCloneUrl(token: string): string {
-  return `https://x-access-token:${token}@github.com/${REPO_OWNER}/${REPO_NAME}.git`;
-}
-
-function redactToken(s: string, token: string): string {
-  if (!token) return s;
-  return s.replaceAll(token, "[REDACTED-INSTALLATION-TOKEN]");
-}
 
 function spawnGit(
   args: string[],
@@ -220,54 +189,6 @@ export function extractEnabledFlag(raw: string): boolean {
   return val === "true" || val === "yes" || val === "1";
 }
 
-async function postSentryHeartbeat(args: {
-  ok: boolean;
-  logger: HandlerArgs["logger"];
-}): Promise<void> {
-  const { ok, logger } = args;
-  const domain = process.env.SENTRY_INGEST_DOMAIN;
-  const projectId = process.env.SENTRY_PROJECT_ID;
-  const publicKey = process.env.SENTRY_PUBLIC_KEY;
-  if (!domain || !projectId || !publicKey) {
-    logger.info(
-      { fn: "cron-compound-promote" },
-      "Sentry env unset — skipping heartbeat",
-    );
-    return;
-  }
-  if (
-    !SENTRY_DOMAIN_RE.test(domain) ||
-    !SENTRY_PROJECT_RE.test(projectId) ||
-    !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-  ) {
-    logger.warn(
-      { fn: "cron-compound-promote" },
-      "Sentry env malformed — skipping heartbeat",
-    );
-    return;
-  }
-  const status = ok ? "ok" : "error";
-  const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const e = err as Error;
-    reportSilentFallback(e, {
-      feature: "cron-sentry-heartbeat",
-      op: "fetch",
-      message: "Sentry Crons heartbeat POST failed",
-      extra: {
-        fn: "cron-compound-promote",
-        status,
-        aborted: e.name === "TimeoutError",
-      },
-    });
-  }
-}
-
 // FR10: refuse any cluster whose diff removes a line containing `[id: hr-`
 export function diffRemovesHardRule(diff: string): boolean {
   return diff.split("\n").some((line) => {
@@ -327,7 +248,7 @@ export async function cronCompoundPromoteHandler({
   try {
     installationToken = await step.run(
       "mint-installation-token",
-      async () => mintInstallationToken(),
+      async () => mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
     );
 
     const config = await step.run("read-config", async () => {
@@ -353,7 +274,7 @@ export async function cronCompoundPromoteHandler({
 
     if (!config.enabled) {
       await step.run("sentry-heartbeat-ok-disabled", () =>
-        postSentryHeartbeat({ ok: true, logger }),
+        postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
       return { ok: true, status: "disabled" };
     }
@@ -380,7 +301,7 @@ export async function cronCompoundPromoteHandler({
 
     if (dedupResult.deduped) {
       await step.run("sentry-heartbeat-ok-dedup", () =>
-        postSentryHeartbeat({ ok: true, logger }),
+        postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
       return { ok: true, status: "deduped" };
     }
@@ -398,7 +319,7 @@ export async function cronCompoundPromoteHandler({
 
     if (weekCapResult.remaining <= 0) {
       await step.run("sentry-heartbeat-ok-week-cap", () =>
-        postSentryHeartbeat({ ok: true, logger }),
+        postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
       return { ok: true, status: "week-cap-reached" };
     }
@@ -453,7 +374,7 @@ export async function cronCompoundPromoteHandler({
 
     if (corpus.entries.length === 0) {
       await step.run("sentry-heartbeat-ok-empty", () =>
-        postSentryHeartbeat({ ok: true, logger }),
+        postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
       return { ok: true, status: "empty-corpus" };
     }
@@ -542,7 +463,7 @@ export async function cronCompoundPromoteHandler({
 
     if (clusterResult.clusters.length === 0 || clusterResult.truncated) {
       await step.run("sentry-heartbeat-ok-no-clusters", () =>
-        postSentryHeartbeat({ ok: true, logger }),
+        postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
       return { ok: true, status: clusterResult.truncated ? "anthropic-truncated" : "no-qualifying-clusters" };
     }
@@ -697,7 +618,7 @@ export async function cronCompoundPromoteHandler({
       });
     }
 
-    await step.run("sentry-heartbeat", () => postSentryHeartbeat({ ok: true, logger }));
+    await step.run("sentry-heartbeat", () => postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }));
     return { ok: true, status: "completed", clustersOpened };
   } catch (err) {
     const e = err as Error;
@@ -710,7 +631,7 @@ export async function cronCompoundPromoteHandler({
       message: e.message,
     });
     try {
-      await postSentryHeartbeat({ ok: false, logger });
+      await postSentryHeartbeat({ ok: false, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger });
     } catch {
       // best-effort
     }

@@ -51,16 +51,19 @@
 // Injected as GH_TOKEN so the spawned claude can run `gh api ...`,
 // `gh issue create`, `gh pr create`, `gh label create`, `git push`.
 
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createInterface } from "node:readline";
+import {
+  redactToken,
+  mintInstallationToken,
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
+import {
+  setupEphemeralWorkspace,
+  teardownEphemeralWorkspace,
+  spawnClaudeEval,
+  type SpawnResult,
+} from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
-import { createProbeOctokit } from "@/server/github/probe-octokit";
-import { generateInstallationToken } from "@/server/github-app";
-import { getPluginPath } from "@/server/plugin-path";
 import { reportSilentFallback } from "@/server/observability";
 
 // =============================================================================
@@ -68,19 +71,13 @@ import { reportSilentFallback } from "@/server/observability";
 // =============================================================================
 
 const SENTRY_MONITOR_SLUG = "scheduled-community-monitor";
-const SENTRY_HEARTBEAT_TIMEOUT_MS = 10_000;
 
 const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 
-const REPO_OWNER = "jikig-ai";
-const REPO_NAME = "soleur";
 
 export const MAX_TURN_DURATION_MS = 50 * 60 * 1000;
-export const KILL_ESCALATION_MS = 5_000;
+export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 // claude-code spawn argv. `--` is load-bearing per #4017 bug 8/8.
 // Mirrors .github/workflows/scheduled-community-monitor.yml `claude_args`:
@@ -187,58 +184,6 @@ If any results from within the last 24 hours exist, do NOT create a new issue. I
 CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log\` for staleness analysis (every file appears "just touched"). Use GitHub Issue/PR \`updatedAt\` timestamps via \`gh api\` instead.
 `;
 
-const DEFAULT_CLAUDE_SETTINGS = {
-  permissions: {
-    allow: [] as string[],
-  },
-  sandbox: {
-    enabled: true,
-  },
-};
-
-// =============================================================================
-// Types
-// =============================================================================
-
-interface SpawnResult {
-  ok: boolean;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  abortedByTimeout: boolean;
-  durationMs: number;
-}
-
-interface HandlerArgs {
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
-  };
-}
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-function resolveClaudeBin(): string {
-  const override = process.env.CLAUDE_BIN;
-  if (override && existsSync(override)) return override;
-
-  const candidates = [
-    "/app/node_modules/.bin/claude",
-    join(process.cwd(), "node_modules/.bin/claude"),
-    join(process.cwd(), "apps/web-platform/node_modules/.bin/claude"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(
-    `claude binary not found in any known location: ${candidates.join(", ")}. ` +
-      "Set CLAUDE_BIN env var to override.",
-  );
-}
-
 // Spawn-env allowlist (NOT a denylist). PR-5 base shape + PR-11 community-
 // monitor additions. The keys below are the COMPLETE set the spawned claude
 // is allowed to see; anything not listed (notably RESEND_API_KEY, SENTRY_*,
@@ -268,286 +213,6 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
   };
 }
 
-function buildAuthenticatedCloneUrl(token: string): string {
-  return `https://x-access-token:${token}@github.com/${REPO_OWNER}/${REPO_NAME}.git`;
-}
-
-function redactToken(s: string, token: string): string {
-  if (!token) return s;
-  return s.replaceAll(token, "[REDACTED-INSTALLATION-TOKEN]");
-}
-
-async function mintInstallationToken(): Promise<string> {
-  const octokit = await createProbeOctokit();
-  const { data: installation } = await octokit.request(
-    "GET /repos/{owner}/{repo}/installation",
-    { owner: REPO_OWNER, repo: REPO_NAME },
-  );
-  return generateInstallationToken(installation.id, {
-    minRemainingMs: TOKEN_MIN_LIFETIME_MS,
-  });
-}
-
-function spawnSimple(
-  cmd: string,
-  args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
-      stdio: "ignore",
-      cwd: opts.cwd,
-      env: opts.env ?? process.env,
-    });
-    child.on("exit", (exitCode: number | null, signal: NodeJS.Signals | null) => {
-      resolve({ exitCode, signal });
-    });
-    child.on("error", () => {
-      resolve({ exitCode: -1, signal: null });
-    });
-  });
-}
-
-async function setupEphemeralWorkspace(
-  installationToken: string,
-): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
-  const ephemeralRoot = await mkdtemp(
-    join(tmpdir(), "soleur-cron-community-monitor-"),
-  );
-  const spawnCwd = join(ephemeralRoot, "repo");
-
-  const cloneUrl = buildAuthenticatedCloneUrl(installationToken);
-  const cloneResult = await spawnSimple("git", [
-    "clone",
-    "--depth=1",
-    cloneUrl,
-    spawnCwd,
-  ]);
-  if (cloneResult.exitCode !== 0) {
-    throw new Error(
-      `git clone failed (exit ${cloneResult.exitCode}, signal ${cloneResult.signal}) for ${REPO_OWNER}/${REPO_NAME}`,
-    );
-  }
-
-  const pluginsDir = join(spawnCwd, "plugins");
-  const symlinkTarget = join(pluginsDir, "soleur");
-  await rm(symlinkTarget, { recursive: true, force: true });
-  await mkdir(pluginsDir, { recursive: true });
-  await symlink(getPluginPath(), symlinkTarget);
-
-  const claudeDir = join(spawnCwd, ".claude");
-  await mkdir(claudeDir, { recursive: true });
-  await writeFile(
-    join(claudeDir, "settings.json"),
-    JSON.stringify(DEFAULT_CLAUDE_SETTINGS, null, 2) + "\n",
-    "utf-8",
-  );
-
-  const manifestPath = join(symlinkTarget, ".claude-plugin", "plugin.json");
-  if (!existsSync(manifestPath)) {
-    throw new Error(
-      `Plugin sentinel check failed: ${manifestPath} does not exist (symlink target empty or wrong path)`,
-    );
-  }
-
-  return { ephemeralRoot, spawnCwd };
-}
-
-async function teardownEphemeralWorkspace(
-  ephemeralRoot: string | null,
-): Promise<void> {
-  if (!ephemeralRoot) return;
-  try {
-    await rm(ephemeralRoot, { recursive: true, force: true });
-  } catch (err) {
-    reportSilentFallback(err, {
-      feature: "cron-community-monitor",
-      op: "teardown-ephemeral-workspace",
-      message: "Failed to remove ephemeral workspace",
-      extra: { fn: "cron-community-monitor", ephemeralRoot },
-    });
-  }
-}
-
-// =============================================================================
-// Claude-eval spawn (50-min AbortController + SIGTERM→SIGKILL escalation)
-// =============================================================================
-
-async function spawnClaudeEval(args: {
-  spawnCwd: string;
-  installationToken: string;
-  logger: HandlerArgs["logger"];
-}): Promise<SpawnResult> {
-  const { spawnCwd, installationToken, logger } = args;
-  if (!existsSync(spawnCwd)) {
-    throw new Error(
-      `spawn cwd ${spawnCwd} no longer exists (container restart between setup-workspace and claude-eval?). ` +
-        `Re-run will re-execute setup-workspace and create a fresh ephemeral root.`,
-    );
-  }
-  const claudeBin = resolveClaudeBin();
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), MAX_TURN_DURATION_MS);
-  const startedAt = Date.now();
-  let abortedByTimeout = false;
-  let exited = false;
-  let escalationTimer: NodeJS.Timeout | null = null;
-
-  try {
-    return await new Promise<SpawnResult>((resolve) => {
-      const child = spawn(
-        claudeBin,
-        [...CLAUDE_CODE_FLAGS, COMMUNITY_MONITOR_PROMPT],
-        {
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-          cwd: spawnCwd,
-          env: buildSpawnEnv(installationToken),
-        },
-      );
-
-      if (child.stdout) {
-        const rlOut = createInterface({ input: child.stdout });
-        rlOut.on("line", (line) => {
-          logger.info(
-            { fn: "cron-community-monitor", stream: "stdout" },
-            redactToken(line, installationToken),
-          );
-        });
-      }
-      if (child.stderr) {
-        const rlErr = createInterface({ input: child.stderr });
-        rlErr.on("line", (line) => {
-          logger.error(
-            { fn: "cron-community-monitor", stream: "stderr" },
-            redactToken(line, installationToken),
-          );
-        });
-      }
-
-      const finish = (r: SpawnResult) => {
-        exited = true;
-        if (escalationTimer) clearTimeout(escalationTimer);
-        resolve(r);
-      };
-
-      ac.signal.addEventListener(
-        "abort",
-        () => {
-          abortedByTimeout = true;
-          if (!child.pid) return;
-          const pid = child.pid;
-          try {
-            process.kill(-pid, "SIGTERM");
-          } catch {
-            // process group already gone
-          }
-          escalationTimer = setTimeout(() => {
-            if (exited) return;
-            try {
-              process.kill(-pid, "SIGKILL");
-            } catch {
-              // already exited between SIGTERM and the 5s escalation
-            }
-          }, KILL_ESCALATION_MS);
-        },
-        { once: true },
-      );
-
-      child.on("exit", (exitCode, signal) => {
-        finish({
-          ok: exitCode === 0,
-          exitCode,
-          signal,
-          abortedByTimeout,
-          durationMs: Date.now() - startedAt,
-        });
-      });
-      child.on("error", (err) => {
-        const redactedMsg = redactToken(err.message ?? "", installationToken);
-        const redacted = new Error(redactedMsg);
-        redacted.name = err.name;
-        reportSilentFallback(redacted, {
-          feature: "cron-claude-eval",
-          op: "child_process.spawn",
-          message: "claude-code spawn failed",
-          extra: { fn: "cron-community-monitor" },
-        });
-        finish({
-          ok: false,
-          exitCode: -1,
-          signal: null,
-          abortedByTimeout,
-          durationMs: Date.now() - startedAt,
-        });
-      });
-
-      logger.info(
-        {
-          fn: "cron-community-monitor",
-          spawnCwd,
-          pid: child.pid,
-        },
-        "claude-eval spawned",
-      );
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// =============================================================================
-// Sentry heartbeat
-// =============================================================================
-
-async function postSentryHeartbeat(args: {
-  ok: boolean;
-  logger: HandlerArgs["logger"];
-}): Promise<void> {
-  const { ok, logger } = args;
-  const domain = process.env.SENTRY_INGEST_DOMAIN;
-  const projectId = process.env.SENTRY_PROJECT_ID;
-  const publicKey = process.env.SENTRY_PUBLIC_KEY;
-  if (!domain || !projectId || !publicKey) {
-    logger.info(
-      { fn: "cron-community-monitor" },
-      "Sentry env unset — skipping heartbeat",
-    );
-    return;
-  }
-  if (
-    !SENTRY_DOMAIN_RE.test(domain) ||
-    !SENTRY_PROJECT_RE.test(projectId) ||
-    !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-  ) {
-    logger.warn(
-      { fn: "cron-community-monitor" },
-      "Sentry env malformed — skipping heartbeat",
-    );
-    return;
-  }
-  const status = ok ? "ok" : "error";
-  const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      signal: AbortSignal.timeout(SENTRY_HEARTBEAT_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const e = err as Error;
-    reportSilentFallback(e, {
-      feature: "cron-sentry-heartbeat",
-      op: "fetch",
-      message: "Sentry Crons heartbeat POST failed",
-      extra: {
-        fn: "cron-community-monitor",
-        status,
-        aborted: e.name === "TimeoutError",
-      },
-    });
-  }
-}
-
 // =============================================================================
 // Handler
 // =============================================================================
@@ -559,7 +224,7 @@ export async function cronCommunityMonitorHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () => {
-      return mintInstallationToken();
+      return mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS });
     },
   );
 
@@ -567,7 +232,7 @@ export async function cronCommunityMonitorHandler({
   let spawnCwd: string | null = null;
   try {
     const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace(installationToken);
+      return setupEphemeralWorkspace({ installationToken, cronName: "cron-community-monitor" });
     });
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
@@ -583,7 +248,7 @@ export async function cronCommunityMonitorHandler({
       extra: { fn: "cron-community-monitor" },
     });
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: false, logger });
+      await postSentryHeartbeat({ ok: false, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-community-monitor", logger });
     });
     return { ok: false };
   }
@@ -595,6 +260,11 @@ export async function cronCommunityMonitorHandler({
         return spawnClaudeEval({
           spawnCwd: spawnCwd!,
           installationToken,
+          flags: CLAUDE_CODE_FLAGS,
+          prompt: COMMUNITY_MONITOR_PROMPT,
+          maxTurnDurationMs: MAX_TURN_DURATION_MS,
+          cronName: "cron-community-monitor",
+          buildSpawnEnv,
           logger,
         });
       },
@@ -619,12 +289,12 @@ export async function cronCommunityMonitorHandler({
     }
 
     await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: spawnResult.ok, logger });
+      await postSentryHeartbeat({ ok: spawnResult.ok, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-community-monitor", logger });
     });
 
     return { ok: spawnResult.ok };
   } finally {
-    await teardownEphemeralWorkspace(ephemeralRoot).catch((err) => {
+    await teardownEphemeralWorkspace(ephemeralRoot, "cron-community-monitor").catch((err) => {
       reportSilentFallback(err, {
         feature: "cron-community-monitor",
         op: "teardown-ephemeral-workspace-finally",

@@ -69,39 +69,19 @@
 // See ADR-033 [Refined 2026-05-19 post PR-2 plan review] for details.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
-
-// Resolve the `claude` binary lazily inside the spawning step.run (NOT at
-// module load) so a missing/corrupt @anthropic-ai/claude-code install fails
-// at spawn time → reportSilentFallback → Sentry status=error, instead of
-// throwing at /api/inngest route registration which would silently disable
-// the entire Inngest worker with no operator-visible Sentry signal.
-//
-// IMPLEMENTATION NOTE (#4017): the original `createRequire(import.meta.url)
-// + require.resolve(...)` shape works in dev but produces `TypeError: path
-// argument must be of type string (received number 32798)` in the Next.js
-// standalone bundle — webpack rewrites `require.resolve()` to module-id
-// integers. Use filesystem `existsSync` checks against known paths instead.
-function resolveClaudeBin(): string {
-  const override = process.env.CLAUDE_BIN;
-  if (override && existsSync(override)) return override;
-
-  const candidates = [
-    "/app/node_modules/.bin/claude",
-    join(process.cwd(), "node_modules/.bin/claude"),
-    join(process.cwd(), "apps/web-platform/node_modules/.bin/claude"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(
-    `claude binary not found in any known location: ${candidates.join(", ")}. ` +
-      "Set CLAUDE_BIN env var to override.",
-  );
-}
+import {
+  postSentryHeartbeat,
+  type HandlerArgs,
+} from "./_cron-shared";
+import {
+  resolveClaudeBin,
+  type SpawnResult,
+  KILL_ESCALATION_MS,
+} from "./_cron-claude-eval-substrate";
+// Re-export for test parity (cron-follow-through-monitor.test.ts imports via this module).
+export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 
 // Inlined verbatim from .github/workflows/scheduled-follow-through.yml lines
 // 73-145, with three idempotency guards (A/B/C) added for Inngest replay
@@ -255,16 +235,10 @@ const CLAUDE_CODE_FLAGS = [
 // test parity (cron-follow-through-monitor.test.ts imports to avoid
 // hard-coded timing drift).
 export const MAX_TURN_DURATION_MS = 15 * 60 * 1000;
-export const KILL_ESCALATION_MS = 5_000;
 
 // Sentry slug — NEW resource added in apps/web-platform/infra/sentry/cron-monitors.tf
 // at this PR. Function id and slug naming match (no continuity rename hazard).
 const SENTRY_MONITOR_SLUG = "scheduled-follow-through";
-
-// Validators for env-var-sourced URL components — reused verbatim from PR-1.
-const SENTRY_DOMAIN_RE = /^[a-z0-9.-]+\.sentry\.io$/i;
-const SENTRY_PROJECT_RE = /^\d+$/;
-const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 // Spawn-env allowlist. Same shape as PR-1: only PATH, HOME, NODE_ENV,
 // ANTHROPIC_API_KEY, GH_TOKEN reach the subprocess. Caps SSRF + secret-
@@ -277,23 +251,6 @@ function buildSpawnEnv(): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
-  };
-}
-
-interface SpawnResult {
-  ok: boolean;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  abortedByTimeout: boolean;
-  durationMs: number;
-}
-
-interface HandlerArgs {
-  step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
-  logger: {
-    info: (...a: unknown[]) => void;
-    warn: (...a: unknown[]) => void;
-    error: (...a: unknown[]) => void;
   };
 }
 
@@ -517,47 +474,12 @@ export async function cronFollowThroughMonitorHandler({
   // 2026-05-18-vendor-cron-heartbeat-silent-fail-pattern.md. Sentry slug
   // matches the new monitor resource (Phase 4).
   await step.run("sentry-heartbeat", async () => {
-    const domain = process.env.SENTRY_INGEST_DOMAIN;
-    const projectId = process.env.SENTRY_PROJECT_ID;
-    const publicKey = process.env.SENTRY_PUBLIC_KEY;
-    if (!domain || !projectId || !publicKey) {
-      logger.info(
-        { fn: "cron-follow-through-monitor" },
-        "Sentry env unset — skipping heartbeat",
-      );
-      return;
-    }
-    if (
-      !SENTRY_DOMAIN_RE.test(domain) ||
-      !SENTRY_PROJECT_RE.test(projectId) ||
-      !SENTRY_PUBLIC_KEY_RE.test(publicKey)
-    ) {
-      logger.warn(
-        { fn: "cron-follow-through-monitor" },
-        "Sentry env malformed — skipping heartbeat",
-      );
-      return;
-    }
-    const status = result.ok ? "ok" : "error";
-    const url = `https://${domain}/api/${projectId}/cron/${SENTRY_MONITOR_SLUG}/${publicKey}/?status=${status}`;
-    try {
-      await fetch(url, {
-        method: "POST",
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch (err) {
-      const e = err as Error;
-      reportSilentFallback(e, {
-        feature: "cron-sentry-heartbeat",
-        op: "fetch",
-        message: "Sentry Crons heartbeat POST failed",
-        extra: {
-          fn: "cron-follow-through-monitor",
-          status,
-          aborted: e.name === "TimeoutError",
-        },
-      });
-    }
+    await postSentryHeartbeat({
+      ok: result.ok,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-follow-through-monitor",
+      logger,
+    });
   });
 
   return {
