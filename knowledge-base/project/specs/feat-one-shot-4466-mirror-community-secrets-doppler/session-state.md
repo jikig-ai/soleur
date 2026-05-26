@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-4466-mirror-community-secrets-doppler/knowledge-base/project/plans/2026-05-26-chore-mirror-community-secrets-doppler-plan.md
+- Plan file: knowledge-base/project/plans/2026-05-26-chore-mirror-community-secrets-doppler-plan.md
 - Status: complete
 
 ### Errors
