@@ -52,6 +52,12 @@ vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: getFreshTenantClientSpy,
 }));
 
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    from: () => ({ select: () => ({ eq: () => ({ limit: () => ({ single: () => Promise.resolve({ data: null, error: null }) }), maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }),
+  }),
+}));
+
 const runWithByokLeaseSpy = vi.fn(
   async <T,>(
     args: { workspaceContextUserId: string; keyOwnerUserId: string },
