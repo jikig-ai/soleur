@@ -312,6 +312,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Done |
 | MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Done |
 | MU4 | Team workspaces — multi-user invite/remove + workspace co-membership + JWT-claim org switching + Art 15/17/20 DSAR over workspace tables + WORM attestations + workspace-scoped sandbox + BYOK split | [#4229](https://github.com/jikig-ai/soleur/issues/4229) In-progress (PR [#4225](https://github.com/jikig-ai/soleur/pull/4225)) — rollback: `knowledge-base/project/specs/feat-team-workspace-multi-user/rollback.md`. Blocked on parallel legal-PR (Phase 10 `feat-team-workspace-legal-scaffolding`) before `FLAG_TEAM_WORKSPACE_INVITE=1` may flip ON. |
+| MU4.1 | BYOK delegations — owner-funded co-member runs + UI surfaces + legal docs + consent gate | [#4232](https://github.com/jikig-ai/soleur/issues/4232) PR-A merged ([#4290](https://github.com/jikig-ai/soleur/pull/4290)); PR-B ([#4508](https://github.com/jikig-ai/soleur/pull/4508)) adds UI surfaces + legal scaffolding. Gated by `BYOK_DELEGATIONS_ENABLED` (default OFF). Flag flip after Side Letter signed. |
 
 **Gate:** All three must pass before any recruitment outreach.
 
