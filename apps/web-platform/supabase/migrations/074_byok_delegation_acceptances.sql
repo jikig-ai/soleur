@@ -16,6 +16,15 @@
 -- explicit GRANT to authenticated on table (grantee inserts own row via
 -- RLS user_id = auth.uid()).
 
+DO $$ BEGIN
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION '074: public.users must exist before this migration';
+  END IF;
+  IF to_regclass('public.byok_delegations') IS NULL THEN
+    RAISE EXCEPTION '074: public.byok_delegations must exist before this migration (run 064 first)';
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS public.byok_delegation_acceptances (
   id              uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id         uuid         NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
