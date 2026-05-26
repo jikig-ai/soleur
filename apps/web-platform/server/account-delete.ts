@@ -524,20 +524,31 @@ export async function deleteAccount(
       .eq("user_id", userId);
     const ownedConvIds = (ownedConvs ?? []).map((r) => r.id).filter(Boolean);
     if (ownedConvIds.length > 0) {
-      const { data: coMemberMsgs } = await service
-        .from("messages")
-        .select("id")
-        .in("conversation_id", ownedConvIds)
-        .neq("user_id", userId);
-      const coMemberMsgIds = (coMemberMsgs ?? []).map((r) => r.id).filter(Boolean);
+      let coMemberMsgIds: string[] = [];
+      for (let i = 0; i < ownedConvIds.length; i += 500) {
+        const convBatch = ownedConvIds.slice(i, i + 500);
+        const { data: coMemberMsgs } = await service
+          .from("messages")
+          .select("id")
+          .in("conversation_id", convBatch)
+          .neq("user_id", userId)
+          .not("user_id", "is", null);
+        coMemberMsgIds = coMemberMsgIds.concat(
+          (coMemberMsgs ?? []).map((r) => r.id).filter(Boolean),
+        );
+      }
       if (coMemberMsgIds.length > 0) {
-        const { data: attachRows } = await service
-          .from("message_attachments")
-          .select("storage_path")
-          .in("message_id", coMemberMsgIds);
-        const storagePaths = (attachRows ?? [])
-          .map((r) => r.storage_path)
-          .filter(Boolean);
+        let storagePaths: string[] = [];
+        for (let i = 0; i < coMemberMsgIds.length; i += 500) {
+          const msgBatch = coMemberMsgIds.slice(i, i + 500);
+          const { data: attachRows } = await service
+            .from("message_attachments")
+            .select("storage_path")
+            .in("message_id", msgBatch);
+          storagePaths = storagePaths.concat(
+            (attachRows ?? []).map((r) => r.storage_path).filter(Boolean),
+          );
+        }
         for (let i = 0; i < storagePaths.length; i += 1000) {
           const batch = storagePaths.slice(i, i + 1000);
           await service.storage.from("chat-attachments").remove(batch);

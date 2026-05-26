@@ -57,7 +57,8 @@ export async function enumerateCoUploaderAttachments(
     const { data: msgRows } = await service
       .from("messages")
       .select("id, user_id")
-      .in("conversation_id", batch);
+      .in("conversation_id", batch)
+      .limit(10000);
     if (signal.aborted) throw new Error("aborted");
     for (const row of msgRows ?? []) {
       if (row.user_id && row.user_id !== expectedUserId) {
@@ -80,7 +81,8 @@ export async function enumerateCoUploaderAttachments(
     const { data: attachRows } = await service
       .from("message_attachments")
       .select("message_id, storage_path, size_bytes, filename, content_type")
-      .in("message_id", batch);
+      .in("message_id", batch)
+      .limit(10000);
     if (signal.aborted) throw new Error("aborted");
     allAttachments = allAttachments.concat(attachRows ?? []);
   }
@@ -88,12 +90,19 @@ export async function enumerateCoUploaderAttachments(
   for (const att of allAttachments) {
     const uploaderUserId = msgUserIdMap.get(att.message_id);
     if (!uploaderUserId) continue;
+    const rawPath = att.storage_path || att.filename;
+    if (!rawPath) continue;
+    const pseudonym = pseudonymiseUserId(uploaderUserId, pseudonymSalt);
+    const pathParts = rawPath.split("/");
+    if (pathParts.length >= 2) {
+      pathParts[0] = pseudonym;
+    }
     entries.push({
-      path: `attachments/co-uploader/${att.storage_path ?? att.filename}`,
+      path: `attachments/co-uploader/${pathParts.join("/")}`,
       included: false,
       redacted: true,
       redaction_reason: "art-15-co-uploader",
-      uploader_pseudonym: pseudonymiseUserId(uploaderUserId, pseudonymSalt),
+      uploader_pseudonym: pseudonym,
       article: "15",
       bytes: att.size_bytes ?? 0,
     });
