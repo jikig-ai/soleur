@@ -37,6 +37,8 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/canary-bundle-claim-check.sh",
   "apps/web-platform/infra/hooks.json.tmpl",
   "apps/web-platform/infra/deploy-inngest-bootstrap.sudoers",
+  "apps/web-platform/infra/infra-config-apply.sh",
+  "apps/web-platform/infra/push-infra-config.sh",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {

@@ -15,3 +15,9 @@
 Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
 Defaults!INNGEST_BOOTSTRAP env_keep += "INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256"
 deploy ALL=(root) NOPASSWD: INNGEST_BOOTSTRAP
+
+# #3756 — permits infra-config-apply.sh to schedule a delayed webhook restart
+# via systemd-run. The handler runs as the deploy user inside webhook.service's
+# mount namespace; systemctl restart requires root.
+Cmnd_Alias WEBHOOK_SELF_RESTART = /usr/bin/systemd-run --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook
+deploy ALL=(root) NOPASSWD: WEBHOOK_SELF_RESTART
