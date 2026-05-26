@@ -290,19 +290,19 @@ Legal amendments (ToS research delta, PA-10 amendment, LIA delta) are documentat
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `provision-doppler --dry-run` prints correct TF plan + Doppler API curl commands for OIDC
-- [ ] AC2: `provision-cloudflare --dry-run` prints TF plan without `User Details:Read` + smoke-test pipeline
-- [ ] AC3: `provision-hetzner --dry-run` prints Console guidance + smoke-test with trap handler
-- [ ] AC4: `provision-github --dry-run` prints TF plan with `token` auth block + install URL with numeric org-id
-- [ ] AC5: All 4 skills enforce DPA gate with `test -f` + status-column validation (not raw substring grep)
-- [ ] AC6: All 4 skills use credential quarantine: `read -s` + subshell + `unset`. Emitted TF commands use the re-entry pattern.
-- [ ] AC7: All 4 SKILL.md files include Art. 32 pre-condition
-- [ ] AC8: All 4 skills print teardown commands on ANY non-zero exit (not just success)
-- [ ] AC9: All 4 skills have idempotency pre-checks (warn if resources already exist)
-- [ ] AC10: `bun test plugins/soleur/test/components.test.ts` passes (descriptions: 12+12+13+12=49 words; 1894+49=1943/1950)
-- [ ] AC11: Runbook Steps 1-4+7 reference the corresponding skill
-- [ ] AC12: `.gitignore` includes `provisioning/` entry
-- [ ] AC13: Hetzner probe uses deterministic name + trap handler
+- [x] AC1: `provision-doppler --dry-run` prints correct TF plan + Doppler API curl commands for OIDC
+- [x] AC2: `provision-cloudflare --dry-run` prints TF plan without `User Details:Read` + smoke-test pipeline
+- [x] AC3: `provision-hetzner --dry-run` prints Console guidance + smoke-test with trap handler
+- [x] AC4: `provision-github --dry-run` prints TF plan with `token` auth block + install URL with numeric org-id
+- [x] AC5: All 4 skills enforce DPA gate with `test -f` + status-column validation (not raw substring grep)
+- [x] AC6: All 4 skills use credential quarantine: `read -s` + subshell + `unset`. Emitted TF commands use the re-entry pattern.
+- [x] AC7: All 4 SKILL.md files include Art. 32 pre-condition
+- [x] AC8: All 4 skills print teardown commands on ANY non-zero exit (not just success)
+- [x] AC9: All 4 skills have idempotency pre-checks (warn if resources already exist)
+- [x] AC10: `bun test plugins/soleur/test/components.test.ts` passes (actual: 1950/1950)
+- [x] AC11: Runbook Steps 1-4+7 reference the corresponding skill
+- [x] AC12: `.gitignore` includes `provisioning/` entry
+- [x] AC13: Hetzner probe uses deterministic name + trap handler
 
 ### Post-merge (operator)
 
