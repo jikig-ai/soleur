@@ -9,6 +9,7 @@ import {
   type AttachmentRef,
   type ConcurrencyCapHitPreamble,
   type TierChangedPreamble,
+  type MembershipRevokedPreamble,
 } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import {
@@ -171,7 +172,20 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
     reason:
       "You've reached your concurrent-conversation limit. Archive an active or completed conversation from the dashboard to free a slot. If a conversation appears stuck Executing, the server will automatically reclaim it within ~3 minutes.",
   },
+  // AC-FLOW2: workspace owner revoked this user's membership. Terminal screen
+  // rendered by the dashboard layout via OPEN_MEMBERSHIP_REVOKED_TERMINAL_EVENT.
+  // No reconnect (the JWT claim still encodes the now-removed workspace; the
+  // user must sign out or switch orgs).
+  [WS_CLOSE_CODES.MEMBERSHIP_REVOKED]: {
+    reason: "Workspace access revoked",
+  },
 };
+
+/** Window-event name dispatched on `ws.close(4012)` so a top-level listener
+ *  can render the membership-revoked terminal screen. Payload is the
+ *  `MembershipRevokedPreamble`. */
+export const OPEN_MEMBERSHIP_REVOKED_TERMINAL_EVENT =
+  "soleur:membership-revoked";
 
 /** Combined chat state: messages and activeStreams update atomically via useReducer
  *  so StrictMode double-invocation cannot observe a partially-updated ref.
@@ -413,7 +427,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   /** Most-recent close preamble carried on `ws.message` before `ws.close` fires.
    *  Populated by onmessage for `concurrency_cap_hit` / `tier_changed` types;
    *  consumed + cleared in onclose. */
-  const pendingPreambleRef = useRef<ConcurrencyCapHitPreamble | TierChangedPreamble | null>(null);
+  const pendingPreambleRef = useRef<
+    | ConcurrencyCapHitPreamble
+    | TierChangedPreamble
+    | MembershipRevokedPreamble
+    | null
+  >(null);
 
   /** Map of per-leader timeout timers for stuck THINKING/TOOL_USE states (STUCK_TIMEOUT_MS) */
   const timeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -560,14 +579,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         return;
       }
 
-      // Close preambles are sent immediately before ws.close(4010/4011). Cache
-      // the payload so onclose can dispatch the modal with tier/count context.
+      // Close preambles are sent immediately before ws.close(4010/4011/4012). Cache
+      // the payload so onclose can dispatch the modal with tier/count/org context.
       if (parsed && typeof parsed === "object" && "type" in parsed) {
         const t = (parsed as { type: string }).type;
-        if (t === "concurrency_cap_hit" || t === "tier_changed") {
+        if (
+          t === "concurrency_cap_hit" ||
+          t === "tier_changed" ||
+          t === "membership_revoked"
+        ) {
           pendingPreambleRef.current = parsed as
             | ConcurrencyCapHitPreamble
-            | TierChangedPreamble;
+            | TierChangedPreamble
+            | MembershipRevokedPreamble;
           return;
         }
       }
@@ -820,6 +844,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "fanout_truncated":
         case "upgrade_pending":
           break;
+        case "revocation_notice": {
+          // #3930 — discriminated revocation toast. Replaces the generic
+          // "Authentication unavailable; retry shortly" surface with a
+          // founder-readable reason from `denied_jti.reason`. The
+          // server-side handler closes the socket immediately after
+          // emitting this frame; we surface via `setLastError` so the
+          // existing toast UX renders the message + Reason text.
+          dispatch({ type: "clear_streams" });
+          clearAllTimeouts();
+          setLastError({
+            code: "session_expired",
+            message: msg.reason
+              ? `Your session was revoked. Reason: ${msg.reason}. Contact support.`
+              : "Your session was revoked. Contact support.",
+          });
+          break;
+        }
         default: {
           // Review F12: compile-time exhaustiveness rail. A new server→client
           // variant added to `WSMessage` without a case here fails build.
@@ -841,6 +882,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         if (typeof window !== "undefined") {
           window.dispatchEvent(
             new CustomEvent(OPEN_UPGRADE_MODAL_EVENT, { detail: preamble ?? null }),
+          );
+        }
+      }
+
+      // 4012 MEMBERSHIP_REVOKED — workspace owner removed this user. Dispatch
+      // the terminal-screen event with the preamble (org name) and fall through
+      // to the standard non-transient teardown path (no reconnect).
+      if (event.code === WS_CLOSE_CODES.MEMBERSHIP_REVOKED) {
+        const preamble = pendingPreambleRef.current as
+          | MembershipRevokedPreamble
+          | null;
+        pendingPreambleRef.current = null;
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent(OPEN_MEMBERSHIP_REVOKED_TERMINAL_EVENT, {
+              detail: preamble ?? null,
+            }),
           );
         }
       }

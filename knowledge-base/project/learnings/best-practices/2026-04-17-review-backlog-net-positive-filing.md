@@ -1,22 +1,15 @@
 ---
-module: "review workflow / scope-out filing pipeline"
+title: Review backlog grew faster than it drained because four upstream leaks bypassed the fix-inline default
 date: 2026-04-17
-problem_type: workflow_gap
+category: engineering
+tags: [workflow, code-review, scope-out, backlog, skill-instruction]
+symptoms: [3-PR window filed 6 scope-outs while closing 3 — net +3 backlog growth, Pre-existing debt re-surfaced at review-time as new scope-outs instead of triaged inline, `cross-cutting-refactor` criterion invoked whenever a fix would grow the PR by 2+ files, No programmatic cadence to drain the existing backlog]
+module: review workflow / scope-out filing pipeline
+synced_to: []
 component: pipeline_skills
-symptoms:
-  - "3-PR window filed 6 scope-outs while closing 3 — net +3 backlog growth"
-  - "Pre-existing debt re-surfaced at review-time as new scope-outs instead of triaged inline"
-  - "`cross-cutting-refactor` criterion invoked whenever a fix would grow the PR by 2+ files"
-  - "No programmatic cadence to drain the existing backlog"
+problem_type: workflow_gap
 root_cause: four_leaks_upstream_of_the_fix-inline_default
 severity: medium
-tags:
-  - workflow
-  - code-review
-  - scope-out
-  - backlog
-  - skill-instruction
-synced_to: []
 ---
 
 # Review backlog grew faster than it drained because four upstream leaks bypassed the fix-inline default

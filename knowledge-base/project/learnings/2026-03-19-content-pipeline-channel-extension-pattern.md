@@ -1,3 +1,10 @@
+---
+title: Content Pipeline Channel Extension Pattern
+date: 2026-03-19
+category: engineering
+tags: [integration-issues, content-publisher]
+---
+
 # Learning: Content Pipeline Channel Extension Pattern
 
 ## Problem

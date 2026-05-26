@@ -1,22 +1,15 @@
 ---
-module: "KB binary response + hash gate"
+title: Streaming refactor split the fd used for hashing from the fd used for serving — inode identity must be pinned across the gap
 date: 2026-04-17
-problem_type: security_issue
+category: engineering
+tags: [toctou, fd-lifetime, streaming, nextjs, inode-identity, code-review]
+symptoms: [Hash-then-serve refactor opened a rename/link TOCTOU window, Verdict cache keyed only on (mtimeMs, size) could be fooled by same-second same-size swaps, openBinaryStream errors mapped EVERY failure to 404 (incl. EMFILE)]
+module: KB binary response + hash gate
+synced_to: []
 component: nextjs_route
-symptoms:
-  - "Hash-then-serve refactor opened a rename/link TOCTOU window"
-  - "Verdict cache keyed only on (mtimeMs, size) could be fooled by same-second same-size swaps"
-  - "openBinaryStream errors mapped EVERY failure to 404 (incl. EMFILE)"
+problem_type: security_issue
 root_cause: buffer-to-stream_refactor_split_the_hash_and_serve_fds
 severity: high
-tags:
-  - toctou
-  - fd-lifetime
-  - streaming
-  - nextjs
-  - inode-identity
-  - code-review
-synced_to: []
 ---
 
 # Streaming refactor split the fd used for hashing from the fd used for serving — inode identity must be pinned across the gap

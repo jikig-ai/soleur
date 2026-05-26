@@ -21,7 +21,7 @@ version: "0.1.0"
 semgrep_min_version: "1.0.0"  # advisory pin; semgrep is not at runtime path today
 files:
   - path: rules/code-exec.yaml
-    sha256: 8916f73418515fcb7f257a0ecee0146ae1df2da5ea63b2d7cfc73161894283e8
+    sha256: 2ac40b571a091bd287b82daf8e400e993db7d4eda6ff07df455d8b2f39f512d9
   - path: rules/filesystem-boundary.yaml
     sha256: 745630fd4daee1f3f3100da8f99c2de65b59da18c72ce36d5c4316c86ba4929f
   - path: rules/supply-chain.yaml

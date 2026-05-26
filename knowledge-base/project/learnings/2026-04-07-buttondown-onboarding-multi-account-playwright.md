@@ -1,27 +1,27 @@
 ---
-module: System
+title: Buttondown Multi-Account Confusion During Playwright Automation
 date: 2026-04-07
-problem_type: integration_issue
-component: service_object
-symptoms:
-  - "Google OAuth Playwright login landed on wrong Buttondown account (personal vs business)"
-  - "Doppler auth token expired mid-session requiring manual re-authentication"
-root_cause: config_error
-resolution_type: config_change
-severity: medium
+category: engineering
 tags: [buttondown, playwright, oauth, multi-account, doppler]
+symptoms: [Google OAuth Playwright login landed on wrong Buttondown account (personal vs business), Doppler auth token expired mid-session requiring manual re-authentication]
+module: System
+component: service_object
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: medium
 ---
 
 # Learning: Buttondown Multi-Account Confusion During Playwright Automation
 
 ## Problem
 
-When automating Buttondown dashboard tasks via Playwright, Google OAuth login with `jean.deruelle@jikigai.com` landed on a personal Buttondown account (username: `deruelle`) instead of the Soleur Newsletter business account (username: `soleur`, email: `ops@jikigai.com`). The API key in Doppler was for the business account, creating a mismatch between API operations (correct account) and Playwright operations (wrong account).
+When automating Buttondown dashboard tasks via Playwright, Google OAuth login with `jean.deruelle@example.com` landed on a personal Buttondown account (username: `deruelle`) instead of the Soleur Newsletter business account (username: `soleur`, email: `ops@example.com`). The API key in Doppler was for the business account, creating a mismatch between API operations (correct account) and Playwright operations (wrong account).
 
 ## Solution
 
 1. **Verify account identity before Playwright operations:** Query the API first to confirm which account the API key belongs to: `curl -s -H "Authorization: Token $KEY" https://api.buttondown.com/v1/newsletters | jq '.results[0] | {name, username, email_address}'`
-2. **The Soleur Newsletter account uses `ops@jikigai.com`** — it was created with a different email than the founder's personal Google account
+2. **The Soleur Newsletter account uses `ops@example.com`** — it was created with a different email than the founder's personal Google account
 3. User manually logged into the correct account after the mismatch was caught
 
 ## Key Insight

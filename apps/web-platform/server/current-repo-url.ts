@@ -1,4 +1,7 @@
-import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -21,8 +24,28 @@ import { reportSilentFallback } from "@/server/observability";
  * callers treat both identically (disconnect semantics fail-closed).
  */
 export async function getCurrentRepoUrl(userId: string): Promise<string | null> {
-  const service = createServiceClient();
-  const { data, error } = await service
+  // PR-C §2.6 (#3244): tenant client. RLS on `users` enforces
+  // `auth.uid() = id`. Auth probe is the `.maybeSingle()` SELECT itself
+  // — this function reads ONLY the caller's own row, no other table is
+  // touched, so a separate probe would be redundant. RuntimeAuthError
+  // from `getFreshTenantClient` is the load-bearing distinction
+  // between "no row" and "JWT-mint failed."
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(userId);
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      reportSilentFallback(err, {
+        feature: "repo-scope",
+        op: "read-current-repo-url.tenant-mint",
+        extra: { userId },
+      });
+      return null;
+    }
+    throw err;
+  }
+
+  const { data, error } = await tenant
     .from("users")
     .select("repo_url")
     .eq("id", userId)

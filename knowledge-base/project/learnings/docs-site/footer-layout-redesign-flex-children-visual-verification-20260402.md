@@ -1,16 +1,15 @@
 ---
 title: Footer layout redesign -- flex children and visual verification
-module: docs-site
 date: 2026-04-02
-problem_type: ui_bug
+category: engineering
+tags: [css, flex, footer, responsive, eleventy, visual-verification]
+symptoms: [Footer with 5 flex children cramped on single row at tablet widths, Link text clipped at right edge on mobile without flex-wrap]
+module: docs-site
+synced_to: []
 component: css_layout
-symptoms:
-  - "Footer with 5 flex children cramped on single row at tablet widths"
-  - "Link text clipped at right edge on mobile without flex-wrap"
+problem_type: ui_bug
 root_cause: missing_flex_wrap
 severity: low
-tags: [css, flex, footer, responsive, eleventy, visual-verification]
-synced_to: []
 ---
 
 # Footer Layout Redesign -- Flex Children and Visual Verification

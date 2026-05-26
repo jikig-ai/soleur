@@ -1,11 +1,15 @@
 ---
+title: Trace the call-graph from the entry-point when placing a defensive guard, not just from the chosen call-site outward
 date: 2026-05-05
 category: best-practices
+tags: [planning, call-graph-trace, multi-agent-review, sentry-deferral-gate, test-mock-sweep]
 module: cc-dispatcher / agent-runner / ws-handler
 issue: 3250
 pr: 3263
-related_issues: [3266, 3269, 3270]
-tags: [planning, call-graph-trace, multi-agent-review, sentry-deferral-gate, test-mock-sweep]
+related_issues:
+  - 3266
+  - 3269
+  - 3270
 ---
 
 # Trace the call-graph from the entry-point when placing a defensive guard, not just from the chosen call-site outward
@@ -133,4 +137,4 @@ Integration coverage: `apps/web-platform/test/cc-dispatcher-prefill-guard.test.t
 - Helper: `apps/web-platform/server/agent-prefill-guard.ts`
 - Related learning: `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` — this session is another instance of the multi-agent review pattern catching a class of bug that unit tests cannot reach (production-effective dormancy of a guard whose tests pass)
 - AGENTS.md `cq-silent-fallback-must-mirror-to-sentry` — observability contract this guard satisfies
-- AGENTS.md `hr-weigh-every-decision-against-target-user-impact` — single-user-incident threshold satisfied by the legacy fold-in
+- AGENTS.md `hr-weigh-every-decision-against-target-user-impact` — single-user incident threshold satisfied by the legacy fold-in

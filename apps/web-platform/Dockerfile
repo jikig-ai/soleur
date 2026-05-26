@@ -22,6 +22,11 @@ ARG NEXT_PUBLIC_VAPID_PUBLIC_KEY
 ARG SENTRY_AUTH_TOKEN
 ARG SENTRY_ORG
 ARG SENTRY_PROJECT
+# SENTRY_URL targets the org-subdomain so sentry-cli source-map upload
+# hits the new DE org (Branch C). `eu.sentry.io` is NOT correct here —
+# its slug-parser rewrites org slugs ending in `-eu` per learning
+# `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`.
+ENV SENTRY_URL=https://jikigai-eu.sentry.io/
 
 RUN npm run build
 # R3 (feat-dev-signin-bypass): post-build tripwire that fails the prd
@@ -52,6 +57,13 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.79
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git bubblewrap socat qpdf \
     && rm -rf /var/lib/apt/lists/*
+
+# Playwright Chromium system deps + browser binary (TR9 PR-11).
+# Baked at image-build time — bwrap sandbox blocks apt at handler runtime.
+# Version pinned to apps/web-platform/package.json @playwright/test devDep.
+# The @playwright/test package itself is a devDep (omitted from runner's
+# npm ci --omit=dev); only the browser binary + system libs persist.
+RUN npx playwright@1.58.2 install --with-deps chromium
 
 WORKDIR /app
 ENV NODE_ENV=production

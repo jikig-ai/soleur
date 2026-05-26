@@ -122,7 +122,7 @@ t3_merge_conflict() {
   local tmp; tmp=$(mktemp -d)
   local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
-  git init -q --bare "$origin"
+  git init -q --bare -b main "$origin"
 
   init_git_repo "$work"
   echo "base" > "$work/file.txt"
@@ -162,7 +162,7 @@ t4_push_failure() {
   local tmp; tmp=$(mktemp -d)
   local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
-  git init -q --bare "$origin"
+  git init -q --bare -b main "$origin"
 
   init_git_repo "$work"
   echo "base" > "$work/file.txt"

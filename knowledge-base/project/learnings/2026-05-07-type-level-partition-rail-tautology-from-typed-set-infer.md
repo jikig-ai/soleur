@@ -1,17 +1,16 @@
 ---
-module: KB Concierge / Type System
+title: 'Type-level partition rails must derive from `as const satisfies` literal tuples — `infer T` on a typed `Set` collapses to a tautology'
 date: 2026-05-07
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Compile-time `_AssertPartitionTotal` rail using `typeof <Set> extends ReadonlySet<infer T> ? T : never` compiled clean with members missing from either set"
-  - "Adding a new union member without partition coverage produced a vacuously-true assignment instead of a build failure"
-  - "Tests passed; the bug was caught only via independent multi-agent review (architecture-strategist + pattern-recognition-specialist) running their own TS probes"
-root_cause: type_widening
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [typescript, exhaustiveness-rail, infer-T, as-const-satisfies, multi-agent-review, partition-types, compile-time-guarantee]
+symptoms: [Compile-time `_AssertPartitionTotal` rail using `typeof <Set> extends ReadonlySet<infer T> ? T : never` compiled clean with members missing from either set, Adding a new union member without partition coverage produced a vacuously-true assignment instead of a build failure, Tests passed; the bug was caught only via independent multi-agent review (architecture-strategist + pattern-recognition-specialist) running their own TS probes]
+module: KB Concierge / Type System
 synced_to: []
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: type_widening
+severity: high
 ---
 
 # Learning: Type-level partition rails must derive from `as const satisfies` literal tuples — `infer T` on a typed `Set` collapses to a tautology

@@ -1,14 +1,14 @@
 ---
+title: 'In-isolation synthetic probes miss combined-parameter shapes; scope-out as `pre-existing-unrelated` is invalid when the PR amplifies the pattern'
 date: 2026-05-04
-problem_type: integration_issue
+category: shell-scripting
+tags: [oauth, synthetic-probe, code-review, scope-out, gate-detection-gap]
+symptoms: [User reported `redirect_uri is not associated` 4h after PR #3181 shipped a 3-URL synthetic probe that ran every 15 min and was green at user-report time, Reviewer attempted scope-out as `pre-existing-unrelated`, second-reviewer DISSENTed because the PR was *adding* a second instance of the brittle pattern]
+synced_to: [review]
 component: github_actions_workflow
-symptoms:
-  - "User reported `redirect_uri is not associated` 4h after PR #3181 shipped a 3-URL synthetic probe that ran every 15 min and was green at user-report time"
-  - "Reviewer attempted scope-out as `pre-existing-unrelated`, second-reviewer DISSENTed because the PR was *adding* a second instance of the brittle pattern"
+problem_type: integration_issue
 root_cause: in_isolation_probe_misses_combined_parameter_shape_and_scope_out_criterion_misapplied
 severity: high
-tags: [oauth, synthetic-probe, code-review, scope-out, gate-detection-gap]
-synced_to: [review]
 ---
 
 # In-isolation synthetic probes miss combined-parameter shapes; scope-out as `pre-existing-unrelated` is invalid when the PR amplifies the pattern

@@ -1,15 +1,15 @@
 ---
-module: System
+title: pre-merge hook false positive in bare repo worktree setups
 date: 2026-04-02
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "BLOCKED: Uncommitted changes detected. Commit before merging."
-  - "gh pr merge blocked in bare repo worktree setups even when working tree is clean"
-root_cause: logic_error
-resolution_type: code_fix
-severity: high
+category: workflow-patterns
 tags: [bare-repo, pre-merge-hook, git-diff, false-positive, worktree]
+symptoms: [BLOCKED: Uncommitted changes detected. Commit before merging., gh pr merge blocked in bare repo worktree setups even when working tree is clean]
+module: System
+component: tooling
+problem_type: workflow_issue
+resolution_type: code_fix
+root_cause: logic_error
+severity: high
 ---
 
 # Troubleshooting: pre-merge hook false positive in bare repo worktree setups
@@ -45,7 +45,7 @@ The `pre-merge-rebase.sh` PreToolUse hook blocks `gh pr merge` with "Uncommitted
 
 **Test setup failed: missing git user config in bare repo**
 
-- **Recovery:** Added `-c user.email=test@test.com -c user.name=Test` flags to bare repo git commands
+- **Recovery:** Added `-c user.email=test@example.com -c user.name=Test` flags to bare repo git commands
 - **Prevention:** When creating git commits in test fixtures with `GIT_CONFIG_GLOBAL=/dev/null`, always provide user identity via `-c` flags or env vars.
 
 **Test passed vacuously (false green) -- Guard 6 denied before diff check**

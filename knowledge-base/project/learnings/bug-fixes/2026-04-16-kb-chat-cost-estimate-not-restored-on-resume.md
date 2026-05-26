@@ -1,17 +1,16 @@
 ---
-module: KB Chat
+title: KB chat cost estimate not restored on conversation resume
 date: 2026-04-16
-problem_type: ui_bug
-component: frontend_stimulus
-symptoms:
-  - "Cost estimate not displayed when resuming a KB chat conversation"
-  - "Messages load correctly on resume but usageData remains null"
-  - "Both resume paths (sidebar and direct) missing cost data"
-root_cause: logic_error
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [kb-chat, cost-estimate, resume, supabase-numeric, functional-updater]
+symptoms: [Cost estimate not displayed when resuming a KB chat conversation, Messages load correctly on resume but usageData remains null, Both resume paths (sidebar and direct) missing cost data]
+module: KB Chat
 synced_to: []
+component: frontend_stimulus
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: logic_error
+severity: medium
 ---
 
 # Learning: KB chat cost estimate not restored on conversation resume

@@ -1,9 +1,10 @@
 ---
+title: 'Hostname-Prefix Guards Accept Subdomain Bypass; Command-Substitution Pipes Under `set -euo pipefail` Abort the Outer Script'
+date: 2026-04-23
 category: security-issues
 tags: [url-validation, bash, strict-mode, pipefail, guards]
-date: 2026-04-23
-pr: "#2840"
-issues: ["#2839", "#2837"]
+issues: [#2839, #2837]
+pr: '#2840'
 ---
 
 # Learning: Hostname-Prefix Guards Accept Subdomain Bypass; Command-Substitution Pipes Under `set -euo pipefail` Abort the Outer Script
@@ -21,7 +22,7 @@ While bundling three MU1 ops fixes (#2837 / #2838 / #2839), two subtle defects w
    if (actualRef !== DEV_PROJECT_REF) throw new Error(...);
    ```
 
-   That accepts `https://ifsccnjhymdmidffkzhl.supabase.co.evil.com` — the
+   That accepts `https://<PRD_REF>.supabase.co.evil.com` — the
    first DNS label equals `DEV_PROJECT_REF`, so the guard passes. An
    attacker who controls `NEXT_PUBLIC_SUPABASE_URL` at cleanup time (and
    can register a DNS suffix) exfiltrates the dev service-role key to an

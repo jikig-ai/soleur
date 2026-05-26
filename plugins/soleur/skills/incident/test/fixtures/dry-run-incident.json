@@ -1,0 +1,14 @@
+{
+  "title": "Synthetic dashboard outage for dry-run",
+  "detected_at": "2026-05-14T10:00:00Z",
+  "symptom": "Synthetic incident: dashboard error.tsx renders blank for authenticated app users after deploy",
+  "suspected_change": "PR #9999 (synthetic)",
+  "affected_user_count": 1,
+  "brand_survival_threshold": "single-user incident",
+  "art_33": {
+    "data_categories_breached": [],
+    "risk_to_subjects": "none"
+  },
+  "triggers": ["dashboard error boundary", "module-load throw"],
+  "status": "open"
+}

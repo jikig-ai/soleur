@@ -1,3 +1,10 @@
+---
+title: Claude API Advisor Tool Cannot Work at Plugin Level
+date: 2026-04-13
+category: plugin-architecture
+tags: [integration-issues, plugin-architecture]
+---
+
 # Learning: Claude API Advisor Tool Cannot Work at Plugin Level
 
 ## Problem

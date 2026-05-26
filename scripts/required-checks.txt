@@ -39,6 +39,10 @@ test
 dependency-review
 e2e
 skill-security-scan PR gate
+# #4384 — legal-doc-cross-document-gate.yml jobs.enforce. Always-runs (no
+# path filter post-#4384) — synthetic needed for bot PRs only.
+enforce
 
 # CLA Required ruleset
 cla-check
+cla-evidence

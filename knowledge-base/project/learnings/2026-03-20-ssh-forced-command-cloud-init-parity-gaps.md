@@ -1,3 +1,10 @@
+---
+title: SSH forced command and cloud-init parity gaps break CI deploys
+date: 2026-03-20
+category: plugin-architecture
+tags: [integration-issues, infrastructure]
+---
+
 # Learning: SSH forced command and cloud-init parity gaps break CI deploys
 
 ## Problem

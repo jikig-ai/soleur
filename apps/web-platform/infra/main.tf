@@ -14,20 +14,68 @@ terraform {
   }
 
   required_providers {
-    hcloud = {
-      source  = "hetznercloud/hcloud"
-      version = "~> 1.49"
-    }
     cloudflare = {
       source  = "cloudflare/cloudflare"
       version = "~> 4.0"
+    }
+    hcloud = {
+      source  = "hetznercloud/hcloud"
+      version = "~> 1.49"
     }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.0"
     }
+    # Phase 0.3-resolved exact versions (see inngest.tf comment). Bump via
+    # `terraform init -upgrade` + commit the lockfile diff.
+    doppler = {
+      source  = "DopplerHQ/doppler"
+      version = "~> 1.21"
+    }
+    betteruptime = {
+      source  = "BetterStackHQ/better-uptime"
+      version = "~> 0.20"
+    }
+    # PR-H (#3244) — github_actions_secret resource for the kb-drift cron
+    # workflow's DOPPLER_TOKEN_KB_DRIFT publish. Provider write surface is
+    # limited to that one resource type in this root.
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.0"
+    }
+    # CI SSH keypair generation (see ci-ssh-key.tf) — closes the L7 gap
+    # left by PR #4181's L3-only CF Tunnel SSH bridge.
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
   required_version = ">= 1.6"
+}
+
+provider "doppler" {
+  doppler_token = var.doppler_token_tf
+}
+
+provider "betteruptime" {
+  api_token = var.betterstack_api_token
+}
+
+# PR-H (#3244) — GitHub provider for Actions-secret publishing (kb-drift).
+# #4150 + #4144 — switched from PAT auth (var.github_actions_token, deleted) to
+# App-installation auth. The soleur-ai App (id 3261325, org-wide installation
+# 122213433 on jikig-ai) declares `secrets:write` in its permissions; the
+# integrations/github provider exchanges App-credentials for a short-lived
+# installation token at each `terraform plan/apply`. Net narrowing vs.
+# long-lived PAT. See AGENTS.core.md hr-github-app-auth-not-pat.
+# autonomy-considered: reuse-applied (App credentials already in prd_terraform).
+provider "github" {
+  owner = "jikig-ai"
+  app_auth {
+    id              = var.github_app_id
+    installation_id = "122213433"
+    pem_file        = var.github_app_private_key
+  }
 }
 
 provider "hcloud" {
@@ -48,11 +96,14 @@ provider "cloudflare" {
 }
 
 # Separate provider for Cloudflare Rulesets APIs (cache rules, firewall
-# custom rules). The default cf_api_token lacks Cache Rules:Edit and
-# Zone WAF:Edit; this alias uses a narrow token scoped to both on
+# custom rules, dynamic redirects). The default cf_api_token lacks
+# Cache Rules:Edit, Zone WAF:Edit, Single Redirect Rules:Edit, and
+# Transform Rules:Edit; this alias uses a narrow token scoped to all on
 # soleur.ai. Current consumers:
-#   - cache.tf                 (http_request_cache_settings)  — #2542
-#   - bot-allowlist.tf         (http_request_firewall_custom) — #2662
+#   - cache.tf                    (http_request_cache_settings)  — #2542
+#   - bot-allowlist.tf            (http_request_firewall_custom) — #2662
+#   - seo-rulesets.tf             (http_request_dynamic_redirect) — #3296
+#   - acme-challenge-ruleset.tf   (http_request_dynamic_redirect) — 2026-05-18 incident
 provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets

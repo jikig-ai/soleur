@@ -16,7 +16,10 @@ import { readFile } from "fs/promises";
 import path from "path";
 
 import * as Sentry from "@sentry/nextjs";
-import { createServiceClient } from "@/lib/supabase/service";
+import {
+  getFreshTenantClient,
+  RuntimeAuthError,
+} from "@/lib/supabase/tenant";
 import { reportSilentFallback, mirrorWithDebounce } from "./observability";
 import { isPathInWorkspace } from "./sandbox";
 import {
@@ -55,11 +58,10 @@ export const CONCIERGE_INLINE_CAP_BYTES = 50_000;
  *  extracted text) without trying to fit a full library. */
 export const FULL_TEXT_CAP_BYTES = 5 * 1024 * 1024;
 
-let _supabase: ReturnType<typeof createServiceClient> | null = null;
-function supabase() {
-  if (!_supabase) _supabase = createServiceClient();
-  return _supabase;
-}
+// PR-C §2.7 (#3244): module-level service-role lazy singleton retired;
+// `getFreshTenantClient(userId)` has its own per-userId TTL cache, so
+// per-call mint cost is bounded. The workspace_path cache below is
+// orthogonal — it memoizes the VALUE, not the client.
 
 // Per-process memo for `users.workspace_path`. The workspace path is
 // immutable per user lifetime — without this, every Concierge turn re-hits
@@ -70,7 +72,23 @@ const _workspacePathCache = new Map<string, string>();
 export async function fetchUserWorkspacePath(userId: string): Promise<string> {
   const cached = _workspacePathCache.get(userId);
   if (cached) return cached;
-  const { data, error } = await supabase()
+  // PR-C §2.7 (#3244): tenant client. RLS on `users` enforces
+  // `auth.uid() = id`. The `.single()` SELECT IS the auth probe (reads
+  // only the caller's own row); RuntimeAuthError from
+  // `getFreshTenantClient` is the load-bearing distinction from
+  // "workspace not provisioned". Surface JWT-mint failure as the same
+  // contract ("Workspace not provisioned") since the caller catches and
+  // mirrors via `reportSilentFallback` in `resolveConciergeDocumentContext`.
+  let tenant;
+  try {
+    tenant = await getFreshTenantClient(userId);
+  } catch (err) {
+    if (err instanceof RuntimeAuthError) {
+      throw new Error("Workspace not provisioned", { cause: err });
+    }
+    throw err;
+  }
+  const { data, error } = await tenant
     .from("users")
     .select("workspace_path")
     .eq("id", userId)

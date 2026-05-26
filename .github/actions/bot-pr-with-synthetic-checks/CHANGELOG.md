@@ -4,6 +4,29 @@ Composite-action behavior log. No test runner exists for composites in this
 repo, so backward-compat is asserted by reading existing callers and verifying
 their input set is unchanged. See `action.yml` for the live contract.
 
+## v2.1 (2026-05-17)
+
+Issue: #3916 / #3923 / #3927. PR #3201 added `cla-evidence` to the "CLA
+Required" ruleset via `scripts/required-checks.txt`, but synthetic-posting
+sites (this action and two inline-posting bot workflows) were not updated.
+Bot PRs from composite-action consumers (`scheduled-skill-freshness`,
+`scheduled-weekly-analytics`, `rule-metrics-aggregate`,
+`scheduled-content-vendor-drift`, `scheduled-rule-prune`) would deadlock
+on the new required check at next firing.
+
+Adds a 6th synthetic check-run after the existing `cla-check` post:
+
+- `cla-evidence` — auto-success, fixed `"Bot-authored PR — no CLA-signed
+  contributions to attest."` summary in this composite. Matches the
+  `cla-check` shape; no caller input is consumed. (The two inline-posting
+  workflows — `scheduled-compound-promote.yml` and
+  `scheduled-content-publisher.yml` — use a `"Bot-authored content PR — …"`
+  variant since they're both content-emitting; this composite serves
+  generic bot PRs and keeps the unqualified phrasing.)
+
+**No input contract change.** Existing v2 callers are forward-compatible —
+the new synthetic is posted unconditionally, like `cla-check`.
+
 ## v2 (2026-05-11)
 
 Issue: #2720. Plan: `knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md`.

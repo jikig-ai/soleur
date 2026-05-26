@@ -6,7 +6,7 @@ pr: 3662
 branch: feat-cc-transcript-hardening-prc-3603
 worktree: .worktrees/feat-cc-transcript-hardening-prc-3603
 classification: regulated-data-document-refresh
-brand_survival_threshold: single-user-incident
+brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 gdpr_gate_required: true
 created: 2026-05-12
@@ -236,7 +236,7 @@ Docs-only PR. Strategy is parity verification + auditor cycle.
 - **`Ref #3603`, not `Closes #3603`** per the ops-remediation sharp-edge rule. Umbrella closes after OP1-OP3 verification, not at merge.
 - **Doppler state verification at plan time** confirmed `CC_PERSIST_USAGE=true` in both `prd` and `prd_scheduled`. Operator confirmed this is deliberate. Plan handles the disclosure side; flip state is not gated by PR-C.
 - **No new dependencies, no migrations, no security headers, no lockfile changes.** Preflight expects PASS/SKIP on all checks except the legal-document sensitive-path gate (Check 6 fires on `docs/legal/**` + `knowledge-base/legal/**`).
-- **Labels prescribed:** `domain/legal`, `priority/p1-high`, `compliance/critical` (single-user-incident threshold), `semver:patch`. All four verified to exist via `gh label list --limit 200`.
+- **Labels prescribed:** `domain/legal`, `priority/p1-high`, `compliance/critical` (single-user incident threshold), `semver:patch`. All four verified to exist via `gh label list --limit 200`.
 
 ## GDPR-Gate Plan Phase 2.7 Outcome
 

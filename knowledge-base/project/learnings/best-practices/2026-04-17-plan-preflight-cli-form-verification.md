@@ -1,11 +1,13 @@
 ---
-name: Plan preflight must verify CLI invocation form, not just availability
-description: --version proves installability, not usability. Preflight must exercise the exact flags/pipe form the plan depends on.
-type: best-practice
-category: plan
+title: Plan preflight must verify CLI invocation form, not just availability
 date: 2026-04-17
-pr: 2457
+category: plan
+tags: [best-practices, plan]
+description: --version proves installability, not usability. Preflight must exercise the exact flags/pipe form the plan depends on.
 issue: 2456
+name: Plan preflight must verify CLI invocation form, not just availability
+pr: 2457
+type: best-practice
 ---
 
 # Plan preflight must verify CLI invocation form, not just availability

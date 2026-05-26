@@ -1,3 +1,10 @@
+---
+title: Insights-driven workflow improvements from usage analytics
+date: 2026-03-28
+category: engineering
+tags: [workflow, insights, agents-md, skills]
+---
+
 # Learning: Insights-driven workflow improvements from usage analytics
 
 ## Problem

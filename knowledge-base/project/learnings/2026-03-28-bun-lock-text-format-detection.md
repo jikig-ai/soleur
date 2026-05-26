@@ -1,3 +1,10 @@
+---
+title: bun.lock text format requires explicit detection alongside bun.lockb
+date: 2026-03-28
+category: engineering
+tags: [build-errors, git-worktree]
+---
+
 # Learning: bun.lock text format requires explicit detection alongside bun.lockb
 
 ## Problem

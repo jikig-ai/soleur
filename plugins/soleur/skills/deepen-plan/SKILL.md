@@ -297,6 +297,34 @@ mcp__plugin_soleur_context7__query-docs: Query documentation for specific patter
 
 Search for recent (2024-2026) articles, blog posts, and documentation on topics in the plan.
 
+### 4.4. Precedent-Diff Gate (Pattern-bound Behaviors)
+
+When the plan section prescribes **pattern-bound behaviors** with sibling-precedent files in the same repo — (a) SQL function definitions with `SECURITY DEFINER`/`INVOKER`, (b) atomic write sequences (open/write/rename/fsync), (c) lock acquisition or mutex patterns, (d) RPC permissioning, (e) connection-pool tuning, (f) circuit-breaker shapes, or (g) any other shape where the codebase has established a canonical form — `git grep` for the precedent and produce a side-by-side diff in the plan's "Risks & Mitigations" section. If no precedent exists, the plan must explicitly note "no precedent; pattern is novel" so reviewers know to scrutinize. **Why:** PR #2954 — initial plan prescribed `SECURITY INVOKER` for a v1→v2 BYOK migration RPC; deepen-plan caught and corrected to `SECURITY DEFINER` via precedent migration 027. Same PR: atomic-write missing `fdatasync` between write and close; deepen-plan added it after grepping for prior atomic-write call sites. See `knowledge-base/project/learnings/best-practices/2026-05-05-trace-callgraph-from-entrypoint-when-placing-guards.md`. Plan-skill counterpart: `precedent-diff is enforced at deepen-plan` (forward-pointer).
+
+#### Scheduled-work pattern check
+
+When the plan introduces a new scheduled job (recurring task, cron, polling loop), check the canonical pattern BEFORE proposing the trigger mechanism. Run:
+
+```bash
+git ls-files | grep -E "apps/web-platform/server/inngest/functions/cron-" | head -3
+git ls-files | grep -E "^\.github/workflows/scheduled-" | wc -l
+```
+
+If the Inngest cron functions count is > 0, propose the scheduled job as an Inngest function under `apps/web-platform/server/inngest/functions/cron-*.ts` — NOT as a `.github/workflows/scheduled-*.yml` workflow. The Inngest path is canonical per ADR-033.
+
+GH Actions cron is acceptable ONLY when (a) the work is purely git/repo-scoped (no app context, no app secrets, no Sentry integration) AND (b) the work could not benefit from `step.run` memoization / Inngest replay. When in doubt, prefer Inngest.
+
+**Why:** PR #4452 shipped `scheduled-stale-deferred-scope-outs.yml` as GH Actions cron and was immediately migrated to Inngest in PR #4457 because the work properly belongs in Inngest. The precedent-check at plan time would have caught this; the post-implementation review almost missed it. The `.claude/hooks/new-scheduled-cron-prefer-inngest.sh` PreToolUse hook is the mechanical second-net.
+
+### 4.45. Round-1 Implementation-Realism Passes
+
+After Phase 4 spawns per-section research agents, fan out two additional agent passes in the same parallel batch:
+
+1. **Verify-the-negative pass.** For every negative security claim in the plan body (regex: `NEVER|MUST NOT|does not reach|cannot leak|is not exposed`), spawn a targeted agent task: "grep the named/implied implementation file for the constrained behavior; report `contradicts | confirms | not-applicable` with file:line citation." This catches "the field is not exposed to clients" claims that contradict a `process.env.NEXT_PUBLIC_*` site one grep away.
+2. **Post-edit self-audit pass.** After round-1 edits drop or rename infrastructure (tables, columns, modules), spawn a re-read pass that greps the plan body for references to dropped symbols. Every hit is a candidate for a downstream rewrite that round 1 missed (e.g., `tenant_cost_window` ON CONFLICT after the table was dropped).
+
+**Why:** PR #3240 deepen-pass for `feat-agent-runtime-platform` showed two round-1 misses (BYOK process.env contradiction; `tenant_cost_window` ON CONFLICT after table-drop) that round 2 caught only because the user re-invoked the skill. Folding both passes into round 1 closes the loop without requiring a second user invocation. See `knowledge-base/project/learnings/best-practices/2026-05-05-deepen-pass-round-2-implementation-realism-vs-round-1-structural.md`.
+
 ### 4.5. Network-Outage Deep-Dive (Conditional)
 
 If the plan's Overview, Problem Statement, or Hypotheses contain any of the trigger patterns `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case-insensitive), read `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` and spawn a dedicated "Network-Outage Deep-Dive" research agent in parallel with the other deepen agents.
@@ -337,7 +365,7 @@ If the heading is absent, HALT with:
 > must answer the user-impact framing question before deepen-plan can proceed.
 > Re-run `/soleur:plan` (or edit the plan directly) to add the section, then re-run deepen-plan.
 
-**Step 2 — Validate the body.** If the heading exists, extract the section body (everything between `^## User-Brand Impact` and the next `^## ` heading). Reject the section as non-compliant if ANY of:
+**Step 2 — Validate the body.** If the heading exists, extract the section body (everything between `^## User-Brand Impact` and the next `^##` heading). Reject the section as non-compliant if ANY of:
 
 - The body is empty (only whitespace between headings).
 - Every bullet contains only `TBD`, `TODO`, `N/A`, `<placeholder>`, or single-word stubs.
@@ -363,6 +391,97 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 **Step 4 — Pass-through.** If the section is present, non-empty, has a valid threshold, and (when `none`) has a scope-out line for sensitive-path diffs, deepen-plan proceeds normally. No telemetry is emitted on pass — the gate only records when it activates.
 
 **Why:** The framing layer (brainstorm Phase 0.1) and the template layer (plan Phase 2.6) can both be skipped or filled with placeholders. This phase is the load-bearing pre-implementation gate that catches both — a plan with an empty section cannot pass deepen-plan, which means it cannot proceed to `/work`. Combined with preflight Check 6 (ship-time gate) and the `user-impact-reviewer` conditional agent (review-time gate), this closes the workflow loop introduced for #2887.
+
+### 4.7. Observability Gate Verification (Always)
+
+Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan whose Files-to-Edit touches production code/infra (per plan Phase 2.9 trigger set) MUST contain a `## Observability` section with the 5-field schema. Symmetric to Phase 4.6 above; this gate is what makes plan Phase 2.9 load-bearing.
+
+**Step 1 — Detect trigger.** Inspect the plan's `## Files to Edit` (or equivalent) list. If every path matches one of:
+
+- `^knowledge-base/`
+- `^docs/`
+- `^README\.md$`
+- `^CHANGELOG\.md$`
+- `\.md$` outside `plugins/*/skills/` and `apps/*/`
+
+then the plan is pure-docs — skip silently (no further checks).
+
+Otherwise the gate applies; proceed to Step 2.
+
+**Step 2 — Locate the section.** Grep the target plan file:
+
+```bash
+grep -q '^## Observability' <plan-file>
+```
+
+If absent, HALT with:
+
+> Error: Plan touches production code/infra but is missing `## Observability` section.
+> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the schema.
+> Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan that ships production
+> code or infrastructure must declare its observability surface before deepen-plan proceeds.
+
+**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required top-level fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if ANY of:
+
+- **Field key absent** — `grep -qE "^\s*<field>:" <body>` returns no match.
+- **Field value is a placeholder** — the field-value line (case-insensitive) matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\s*$` (anchored — distinguish "field is exactly this string" from "prose contains this string"). Also reject `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\b` — trailing whitespace + extra text still counts as a placeholder.
+- **Field is empty / has no children** — for fields that template as a YAML block (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), the line immediately following `<field>:` MUST be either a continuation (indented sub-field starting with whitespace + non-`#` content) OR an inline scalar value on the same line as the key. A bare `<field>:` followed by a blank line or another top-level key fails the gate. This is the empty-key case (#4116 review). Detect with: locate the `<field>:` line; if `awk "NR==<n>+1 {print}"` returns a blank line OR a line matching `^[^[:space:]]`, reject.
+- **`discoverability_test.command` requires SSH** — extract the `command:` sub-field's value and reject if it matches `(^|\s|/)ssh(\s|$)` (word-boundary `ssh` followed by whitespace, end-of-string, or a path-style `/usr/bin/ssh`). Distinguishes the verb from `ssh-free` / `xssh` / `ssh.md` prose.
+
+On rejection, HALT with a message naming the specific field and its failure mode (e.g., `"Phase 4.7 reject: liveness_signal is empty (no sub-fields and no inline value)"`).
+
+**Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-observability-as-plan-quality-gate applied \
+  "Every plan touching production code/infra MUST declar"
+```
+
+**Step 5 — Pass-through.** If the section is present, all 5 fields exist with non-placeholder values, no field is empty, and `discoverability_test.command` does not require SSH, deepen-plan proceeds normally. No telemetry on pass.
+
+**Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours because the substrate (introduced in #4085) declared no observability surface and the operator never had a non-SSH way to verify the heartbeat. Combined with plan Phase 2.9 (template-time gate), this phase is the load-bearing pre-implementation gate. The empty-key reject was added per the PR #4123 review — the most common drift mode is `liveness_signal:` with no children, which earlier regex-only forms allowed through.
+
+### 4.8. PAT-Shaped Variable Halt (Always)
+
+Per AGENTS.md `hr-github-app-auth-not-pat`, plans that introduce or reference a PAT-shaped TF variable, env var, or literal-format token for infra-time GitHub writes MUST be halted at deepen-plan time. App auth (App ID + installation_id + PEM) supersedes PAT across the board — Apps don't expire, don't require per-operator minting, and survive operator handoff.
+
+**Step 1 — Trigger.** Always runs. The detection only fires on match; no opt-out.
+
+**Step 2 — Grep the plan.** Run the following regex sweep against the plan file (case-insensitive):
+
+```bash
+PLAN="<plan-file>"
+HITS=$(grep -niE '\bvar\.(github_actions_token|github_token|gh_token|gh_pat|github_pat|actions_token|installation_token|repo_token)\b|\bTF_VAR_(GITHUB|GH)_(TOKEN|PAT|AUTH)\b|\bvar\.[a-z_]*_(pat|token)\b|\b(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82,})\b' "$PLAN" || true)
+```
+
+The four patterns target distinct PAT shapes:
+
+- Named `var.*_token`/`var.*_pat` Terraform variables — covers the specific name eliminated in #4144 plus common rename shapes (`github_token`, `gh_pat`, `installation_token`, etc.).
+- `TF_VAR_(GITHUB|GH)_(TOKEN|PAT|AUTH)` (case-insensitive) — the env-var form Doppler `--name-transformer tf-var` produces.
+- `var.*_(pat|token)` — any plan variable suffixed `_pat` or `_token` (catches `var.gh_pat`, `var.org_token`, etc.).
+- Literal token shapes — classic 40-char `ghp_<40>` and fine-grained `github_pat_<82+>`. The placeholder form `ghp_XXX...` is allowed; only literal-shape tokens reject.
+
+**Step 3 — HALT on match.** If `HITS` is non-empty, emit:
+
+> Error: Plan references PAT-shaped variable or literal. Use GitHub App auth (App ID + installation_id + pem_file via the `integrations/github` provider's `app_auth` block) per AGENTS.md `hr-github-app-auth-not-pat`. The `soleur-ai` GitHub App (App ID `3261325`) is provisioned and the discovery script is at `apps/web-platform/infra/scripts/get-app-installation-id.sh`. Apps don't expire, don't require per-operator minting, and survive operator handoff.
+>
+> Matches:
+> $HITS
+
+Halt deepen-plan; do NOT proceed to Phase 5.
+
+**Step 4 — Emit telemetry.** When the halt fires, emit:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-github-app-auth-not-pat applied \
+  "Infra/CI GitHub writes auth via GitHub App, never PAT"
+```
+
+**Step 5 — Pass-through.** If no PAT-shaped patterns match, deepen-plan proceeds normally. No telemetry on pass.
+
+**Why:** #4144 — PR-H #4066 added `var.github_actions_token` as a required TF variable, then never populated it in Doppler. Every `Apply deploy-pipeline-fix.yml` run since 2026-05-19T21:41Z failed before `terraform plan` could evaluate, blocking the entire deploy pipeline for ~14h (sudoers entry never refreshed → deploy webhook errored at `sudo: deploy : command not allowed` → Inngest heartbeat went silently red). The first defense is at plan-write time: catch PAT-shaped variables before they reach a workflow YAML.
 
 ### 5. Discover and Run ALL Review Agents
 
@@ -550,20 +669,25 @@ Before finalizing:
 - [ ] No contradictions between sections
 - [ ] Explicit string literals (error messages, log strings, Sentry messages, feature flags) match across Helper Contract / Acceptance Criteria / Test Scenarios / Test Implementation Sketch. Verbatim-preserved strings (e.g., for dashboard/alert continuity) are the highest-risk drift class — grep the whole plan for each quoted literal and confirm one canonical value.
 - [ ] Every cited external SHA, tag, release version, or commit reference has been **resolved live** via `gh api` or an equivalent authoritative source in the same deepen pass — never cite SHAs from memory or training data. Show the command + output in a fenced block next to the claim. **Why:** In the #2540 plan, the fallback SHA for `claude-code-action@v1.0.100` was cited as `8a953ded...` (actually the `v1` floating tag), and `scheduled-roadmap-review.yml` was described as using `@v1` floating ref when it's actually a pinned SHA `@ff9acae5... # v1`. Both errors survived into the plan and were caught only in review.
+- [ ] When a plan asserts "SHA pin X is in active use across N workflows" as evidence for adopting that pin, verify with **exact-match-and-count** (length-pinned), NOT `git grep -l '<sha>'` alone. `git grep -l` matches by literal substring, so a truncated SHA appears as a hit for any full-length SHA sharing the prefix — the verification is structurally blind to truncation of the value being verified. Cheapest gate: `git grep -hE 'uses: <action>@[0-9a-f]+' <scope> | awk -F@ '{print $2}' | awk '{print $1}' | sort -u` and assert every entry is exactly 40 chars. Plans citing SHAs MUST also quote the expected length (`# v4, 40-char SHA`). **Why:** PR #3893 — plan body shipped `DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c` (37 chars, missing trailing `47c`) in both AC9 and Reference Implementation; deepen "5 in active use" check used `git grep -l` and prefix-matched the canonical 40-char pin, false-passing the verification. Three review agents (git-history-analyzer, pattern-recognition-specialist, security-sentinel) independently flagged P1 post-implementation. See `knowledge-base/project/learnings/2026-05-16-sha-pin-prefix-match-false-positive-in-plan-verification.md`.
 - [ ] For any bash test scenario that claims "bad input is caught by \<operator\>", verify the operator's behavior under `set -euo pipefail`. Common operators that CRASH instead of catch under strict mode: `-gt`/`-lt`/`-eq` on non-numeric RHS, `$(( ))` on non-numeric, `${var?}` when var is unset. If the claim depends on catching, the plan must prescribe a preceding regex/emptiness guard. **Why:** PR #2716 T10 asserted "malformed TASKS row caught by threshold comparison" — under `set -e`, `[[ $n -gt $malformed ]]` crashed the whole step; caught in QA, fixed with explicit `[[ "$max_gap_days" =~ ^[0-9]+$ ]]` guard. See `knowledge-base/project/learnings/2026-04-21-cloud-task-silence-watchdog-pattern.md`.
 - [ ] Every cited PR or issue number (`#N` in plan prose, frontmatter `related_prs:`, learning Related sections) is verified live via `gh pr view N --json state,title` (or `gh issue view N --json state,title`) AND `git log --grep="#N"` confirms the cited work touches the files/areas claimed — never cite numbers from memory or training data. SHA/tag verification (above) does not cover plain PR-number citations whose narrative claim ("PR #N introduced X") can be wrong even when the PR exists. **Why:** PR #3295 plan attributed archive-trigger slot-release work to #3219; `git log --grep="#3219"` showed zero commits touching slot/sweep logic — actual precedent was #3217 (commit `d4858aba`, migration 036). Caught only at multi-agent review; corrected across plan + learning + frontmatter. See `knowledge-base/project/learnings/bug-fixes/2026-05-05-cc-stuck-active-conversation-leaks-slot.md` Session Error #1.
+- [ ] Every plan-body **attribution claim** (cited commit hash, "X was reverted/added by PR #N", "current `<file>` contains/lacks `<pattern>`") is probed against `main`: `git rev-parse <hash>` + `git merge-base --is-ancestor <hash> main` for hashes; `git show main:<file> | grep -E '<pattern>'` for content claims; `gh pr view N --json files` for "PR added/removed file" claims. PR/issue STATE checks (above bullet) do NOT cover ATTRIBUTION; an attribution claim can be wrong while the cited PR is genuinely MERGED. **Why:** PR #3850 plan Sharp Edge claimed "PR #2734 reverted the seeding-corpus row" and cited commit `e91e7bf6` — actual: row added by #2697 and still on main; `e91e7bf6` was internal to #2734's branch, unreachable from main. Caught at multi-agent review by `git-history-analyzer`. See `knowledge-base/project/learnings/2026-05-15-deepen-plan-must-grep-cited-attribution-on-main.md`.
 - [ ] Every claim about SDK / library / framework runtime semantics ("the SDK rejects X", "the parser refuses Y", "passing flag Z restricts...") cites the exact docstring verbatim — copy the relevant lines from `node_modules/<pkg>/*.d.ts` (or the equivalent type-def file) into the plan and pin the line range. Claims paraphrased from training data or sibling fields routinely shift semantics. **Why:** PR #3338 plan deepen-pass cited `sdk.d.ts:1230` for the load-bearing claim "model literally cannot emit Bash" via `allowedTools` — but `sdk.d.ts:1230` is in the `settings/settingSources` section, and the actual `allowedTools` doc at `sdk.d.ts:858-862` says "auto-allowed without prompting for permission ... To restrict which tools are available, use the `tools` option instead." Three of eight review agents independently caught the misread; a single-author review would have shipped a non-load-bearing fix. See `knowledge-base/project/learnings/2026-05-06-cc-concierge-pdf-summary-cascade-structural-fix.md` Insight #2.
 - [ ] Every GitHub label prescribed in Acceptance Criteria (for tracking issues created post-merge, drain-labeled-backlog targets, or any `gh issue create --label` site) is verified to exist via `gh label list --limit 200 | grep -E "^<label>\b"`. If a label doesn't exist, either substitute the closest existing label (with a note in the AC) or add a Phase 0 step to `gh label create` it. Generalizes the plan SKILL Sharp Edges entry. (Note: the AGENTS.md rule formerly tagged `cq-gh-issue-label-verify-name` was retired 2026-04-23 because `gh` rejects invalid `--label` values with a clear error at create-time; the planning skills still need this AC-time check because the plan ships before any `gh issue create` runs.) **Why:** PR #3378 — plan prescribed `infrastructure` and `seo` labels that didn't exist; substituted with `domain/engineering`, `chore`, `priority/p3-low` at issue-creation time. See `knowledge-base/project/learnings/2026-05-06-plan-prescribed-labels-must-be-verified.md`.
 - [ ] Every cited AGENTS.md rule ID (any token matching `\b(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]+\b` in the plan body, frontmatter, or Research Insights) is verified to **exist as an active rule** via `grep -qE "\[id: <id>\]" AGENTS.md`. Cross-check the retired-rule registry at the repo root (`retired-rule-ids` under the top-level scripts directory) — citing a retired ID as if it were active is a fabrication-class bug (the behavior the rule encoded may still be valid, but the citation is dead). For each fabricated/retired ID: replace with the real load-bearing rule (e.g., the auto-close-keywords rule `wg-use-closes-n-in-pr-body-not-title-to` is the real source for "use `gh issue close` post-apply, not `Closes #N` in PR body") or drop the citation and inline the rationale. **Why:** PR #3486 — the deepen-plan pass on the #3485 runbook cited `cq-when-a-pr-has-post-merge-operator-actions` (fabricated, never existed) and `cq-gh-issue-label-verify-name` (retired) 5x across the plan; both citations were structurally indistinguishable from real ones and only caught by the multi-agent review's `code-quality-analyst` grep. See [llm-authored-plans-cite-fabricated-and-retired-rule-ids.md](../../../../knowledge-base/project/learnings/2026-05-09-llm-authored-plans-cite-fabricated-and-retired-rule-ids.md).
 <!-- mirror: plan/SKILL.md loader-class-fit bullet — keep in sync; trim both together -->
 - [ ] When a plan proposes any AGENTS.md `core→rest` demotion (`wg-*` only — `hr-*` may not be demoted per CPO sign-off PR #3496 condition 3), verify **loader-class fit**: `sed -n '88,115p' .claude/hooks/session-rules-loader.sh` to read the `DOCS_RE`/`CODE_RE`/`INFRA_RE` regex block AND the class-selection branch (`docs-only` fires when `HAS_DOCS=1 && HAS_CODE=0 && HAS_INFRA=0` → loads `core+docs-only` only; `code` or `infra` triggers `core+rest`). For each demotion candidate, classify its trigger surface: does it fire on plan/learning/spec edits (docs-only), or only on code/infra? If `docs-only` is in the trigger surface but `AGENTS.rest.md` does NOT load on docs-only, KEEP in core (body-trim instead). Cite the `sed` output + the class-fit determination in the plan body. **Why:** PR #3681 — `wg-plan-prescribed-skills-must-run-inline` was demoted core→rest before pattern-recognition reviewer caught the gap; `/work` runs on docs-only PRs and `AGENTS.rest.md` does not load there. See [agents-md-trim-loader-class-fit-verification.md](../../../../knowledge-base/project/learnings/2026-05-12-agents-md-trim-loader-class-fit-verification.md) (lands with #3681).
 - [ ] When a plan prescribes ≥2 workflow constants that must satisfy an equality invariant across distinct step `env:` blocks (poll windows, retry counts, timeout ceilings), reject comment-only cross-links — prescribe a **shared source** (job-level or workflow-level `env:`) AND a **runtime arithmetic assertion** at the first step that uses them. Comments are review-detectable but not load-bearing; the same drift pattern caused #3398. **Why:** PR #3421 — plan deliberately scoped to comment-only coupling for `IN_FLIGHT_CEILING_S` vs `STATUS_POLL_MAX_ATTEMPTS * STATUS_POLL_INTERVAL_S` vs `HEALTH_POLL_MAX_ATTEMPTS * HEALTH_POLL_INTERVAL_S`; architecture-strategist + code-quality-analyst both flagged P2 at review. See `knowledge-base/project/learnings/best-practices/2026-05-07-comment-coupled-workflow-invariants-need-runtime-assertion.md`.
+- [ ] When deepen-pass introduces a load-bearing correction (e.g., reduces a `-target=` allow-list count, narrows an AC grep predicate, shifts a bootstrap path from CI to operator-local), **propagate the correction to `knowledge-base/project/specs/feat-<name>/tasks.md` in the same pass** — `tasks.md` is the contract the `work` skill executes against, and stale tasks survive plan-body-only corrections. Also derive AC verification grep expectations from the as-written workflow shape (saved-plan vs inline-apply changes `-target=` placement: saved-plan has `-target=` in plan step only; inline-apply has it in both plan and apply). **Why:** PR #4201 — plan deepen-pass corrected the apply-web-platform-infra.yml allow-list from 3 to 2 -target entries but left tasks.md Phase 4.1 at 3; AC9 grep expected ≥4 matches assuming inline-apply when the workflow uses saved-plan (apply consumes `tfplan` without re-listing -target). Both required mid-implementation reconciliation. See `knowledge-base/project/learnings/2026-05-20-l3-network-fix-vs-l7-credential-fix-on-ssh-provisioner-chain.md` Session Errors §1-2.
 - [ ] Every plan-prescribed pathspec→regex translation (`git diff -- '<glob>'` → `grep -E '<re>'` against a cached path-set) verifies equivalence with fixture inputs covering all three shapes: top-level path (no parent dir), single-ancestor path (`<dir>/<target>/<file>`), and deep-nested path (`<dir>/<target>/<sub>/<file>`). Git pathspec `*` crosses `/` (fnmatch with PATHNAME=0); regex `*` does not. The `diff -u <(git diff --name-only -- '<glob>') <(grep -E '<re>' cache)` recipe is necessary but only catches drift when the test repo contains divergent shapes. **Why:** PR #3492 — plan prescribed `/supabase/migrations/[^/]+\.sql$` which under-matched both top-level and nested paths the pathspec `*/supabase/migrations/*.sql` covered; three review agents independently caught it. See `knowledge-base/project/learnings/2026-05-09-pathspec-regex-translation-and-classifier-piggyback.md`.
 - [ ] When a plan introduces a new routing predicate that reduces the number of review agents (or any downstream gate's coverage) for matching diffs, the plan MUST include an explicit threat-model subsection per class enumerating: (a) what diff shape scores high on the predicate, (b) what malicious payload could ride on that shape, (c) which agent on the full path would catch it, (d) how the predicate excludes that case. Borrow exclusion guards from sibling classes when symmetric (e.g., a `$has_source` empty guard on a deletion-shape class mirroring a lockfile-shape class). **Why:** PR #3492 — `deletion-dominated` initially routed to 2 agents even with new source files; piggyback class caught at multi-agent review. Same learning file as above.
 - [ ] When a plan's risk section justifies dropping a positive assertion (or any test coverage) by claiming "the orthogonal test still covers it", verify the cited orthogonal test exercises **the same code path**, not a sibling predicate that happens to share a field name. Field-level overlap is not coverage-level overlap. **Why:** PR #3510 — plan claimed T2's `summary.rules_unused_over_8w` aggregator-side predicate covered T4's dropped positive arm because both touch `fire_count`, but T2 runs in `rule-metrics-aggregate.sh` while T4 runs in `rule-prune.sh` — different scripts, same field. test-design-reviewer caught the gap as P1; fix added T4b with directly-crafted `rule-metrics.json` to bypass the aggregator's `event→first_seen` coupling. See `knowledge-base/project/learnings/2026-05-10-rule-prune-null-first-seen-skip-invalidates-positive-prune-candidate-fixture.md`.
 - [ ] When an Acceptance Criterion prescribes a verification grep (`git grep -E '<pattern>' <file>` returns nothing/N) against a file that contains **multiple top-level targets** (a workflow with N jobs, a config with N stanzas, a schema with N tables, a router with N routes), AND the plan's Out-of-Scope section excludes any of those targets, the AC's grep MUST be section-scoped to the target under change (e.g., `awk '/^  <target-key>:/,0' <file> | grep ...`). Whole-file grep silently fails when the excluded target legitimately retains the matched pattern — the AC's intent contradicts itself by construction. **Why:** PR #3654 — plan AC #4.3 prescribed `git grep -E 'ms-playwright|playwright-cache|install-deps chromium' .github/workflows/{ci,deploy-docs}.yml` returns nothing, but the `e2e` job in `ci.yml` (explicitly out of scope per the same plan) still uses all three patterns. See `knowledge-base/project/learnings/best-practices/2026-05-12-ci-playwright-container-replaces-cache-and-install-deps.md` Session Errors §2.
 - [ ] When a plan migrates a CI job to a vendor-supplied container image (`mcr.microsoft.com/playwright:*`, `cypress/included:*`, language-specific images, etc.), enumerate every existing step's `uses:` action AND every `run:` shell-out dependency, then `docker run <image> which <tool>` each one empirically. Vendor base images are scoped to their primary tool (Playwright Jammy = Node + Chromium; Cypress = Node + Cypress browsers); generic CLI tooling (`unzip`, `git`, `jq`, `make`, `gcc`, `tar`, `gzip`, `xz-utils`) may be absent. Failure mode is the action failing fast at setup — e.g., `oven-sh/setup-bun` shelling out to `unzip` and emitting `error: unzip is required to install bun` (open issue oven-sh/setup-bun#55). Plan-time mitigation: add a one-line `apt-get update -qq && apt-get install -y -qq --no-install-recommends <pkgs>` step BEFORE the dependent action, AND document why in the workflow comment. **Why:** PR #3664 — `setup-bun` inside `mcr.microsoft.com/playwright:v1.58.2-jammy` failed because unzip is absent; deepen-plan caught it empirically pre-push. See `knowledge-base/project/learnings/best-practices/2026-05-12-ci-playwright-container-replaces-cache-and-install-deps.md` "Follow-up: when the consumer uses bun instead of npm".
 - [ ] When a plan binds an Acceptance Criterion to a specific shell primitive whose behavior depends on **process-group / session / signal-defer semantics** (`kill 0` / `kill -- -$$` / `set -m` / `setsid` / signal traps + foreground commands), write a 10-line `parent.sh`/`child.sh` repro and run it before committing the AC to text. Man-page and "verified in tooling" lookups frequently miss the runtime context that matters: e.g., `set -m` puts CHILDREN in new PGIDs but does NOT move bash itself out of its parent's PGID, so `kill -TERM 0` from a fork-exec'd child reaches the parent. Plan v1 of #3704 prescribed `kill -TERM 0` on this incorrect assumption; the repro at /work confirmed the bug pre-merge. Same class for `wait` vs foreground-defer: bash dispatches TERM traps only between commands or in `wait $!`, never during a hung `docker pull`. **Why:** PR #3704 — see `knowledge-base/project/learnings/2026-05-12-pgid-inheritance-and-bash-trap-defer-on-foreground-commands.md`.
+- [ ] When a plan verifies a multi-clause SQL predicate (`IF A AND B THEN ... flag := true; END IF`, `CASE WHEN A AND B`, `OR ... AND ...` n-ary, idempotent-update guards) by citing line numbers, the plan body MUST literally restate EVERY operand of the predicate alongside the line citation — never paraphrase a predicate by its most-discussed clause alone. A predicate of shape `IF v_paused_at IS NULL AND v_total > v_cap THEN v_flag := true` requires restating both `v_paused_at IS NULL` (when true, when false, when it flips) AND `v_total > v_cap` AND the conjunction (`v_flag` true iff BOTH clauses fire, not either alone). Same rule for migration triggers, plpgsql functions, and any boolean predicate with ≥2 operands. **Why:** PR #3987 — deepen-pass on migration `046_runtime_cost_state.sql:227` extracted `v_total > v_cap` but missed the `v_paused_at IS NULL` co-condition; plan documented "calls 6-10 return kill_tripped=true" while the actual invariant (stronger atomicity: exactly one call wins the flip) was discovered only at /work time when live-DB test failed. Same defect class as `2026-05-12-plan-precondition-and-3-value-enum-gate-drift.md` (TS union enumeration) extended to SQL boolean predicates. See `knowledge-base/project/learnings/2026-05-18-premise-validation-and-multi-clause-predicate-reading.md`.
+- [ ] Every grep-based Acceptance Criterion whose scope contains the plan or its paired `tasks.md` includes `--exclude-dir=<spec-dir>` and `--exclude=<plan-basename>.md` flags. Plans that quote the search pattern in prose ("rename `X` to `Y`", "no remaining `X` references") cause whole-scope greps to match the plan itself post-edit. AND: every backticked identifier the plan cites with a file:line attribution (Terraform variable, function, schema column, env-var, RPC name) is re-read from the declaration line — not copied from the issue body — and the plan quotes the declaration form (e.g., `variable "app_domain" { ... }`), not the default value alone. Treat upstream identifiers (issue prose, sibling PR text) as hypotheses, not facts. **Why:** PR #4160 — plan AC1 claimed `grep -rE 'web-platform.soleur.ai' knowledge-base/` returns 0 lines but the plan + tasks.md retained the literal string in prose; same plan cited the Terraform variable as `app_subdomain` 4x (actual: `app_domain` at `variables.tf:85-89`). Both caught at work + review. See `knowledge-base/project/learnings/best-practices/2026-05-20-plan-acs-self-grep-scope-and-identifier-source-verification.md`.
 - [ ] Enhancement summary accurately reflects changes
 
 ## Post-Enhancement Options

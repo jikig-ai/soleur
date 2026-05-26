@@ -1,3 +1,10 @@
+---
+title: Enabling Proton Mail on a Cloudflare-managed zone (Terraform)
+date: 2026-04-28
+category: infrastructure
+tags: [infrastructure, web-platform/infra/dns]
+---
+
 # Learning: Enabling Proton Mail on a Cloudflare-managed zone (Terraform)
 
 ## Problem
@@ -65,7 +72,7 @@ silently breaks DKIM signing).
 **Existing strict DMARC (`p=reject`) is intentionally retained.** Proton's
 suggested `p=quarantine` is laxer; with proper SPF + DKIM in place,
 `p=reject` is the correct posture and was kept untouched. Caveat: the
-`rua=mailto:dmarc-reports@soleur.ai` mailbox is a future-Proton mailbox --
+`rua=mailto:dmarc-reports@example.com` mailbox is a future-Proton mailbox --
 DMARC reports will silently bounce until that mailbox is provisioned in the
 Proton panel.
 

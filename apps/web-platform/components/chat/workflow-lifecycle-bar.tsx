@@ -68,6 +68,7 @@ export function WorkflowLifecycleBar({
       return (
         <div
           data-lifecycle-state="ended"
+          data-lifecycle-status={lifecycle.status}
           className="flex flex-col gap-2 border-b border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3"
         >
           <div className="flex items-center gap-2">

@@ -15,6 +15,12 @@ Drain a labeled-issue backlog by batching issues that touch the same code area i
 
 Use `/soleur:review` to file new scope-outs. Use this skill to close existing labeled issues.
 
+<decision_gate>
+**API budget.** This skill delegates each selected cluster to `/soleur:one-shot`, which runs a full plan→work→review→ship pipeline (30–90 min wall-clock per cluster; non-trivial Anthropic credit per run scaling with plan complexity and review-cycle count). With `--top-n N`, the cost multiplies by N. The `--dry-run` flag previews scope without delegating. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
+Confirm cluster scope (size, `--top-n`, milestone) before allowing the skill to fan out.
+</decision_gate>
+
 ## Prerequisites
 
 - `gh` authenticated, `jq` and `python3` available.

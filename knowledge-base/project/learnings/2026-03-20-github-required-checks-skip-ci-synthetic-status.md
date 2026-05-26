@@ -1,3 +1,10 @@
+---
+title: 'GitHub required status checks block PRs when bot workflows use [skip ci]'
+date: 2026-03-20
+category: ci-cd
+tags: [integration-issues, ci-cd]
+---
+
 # Learning: GitHub required status checks block PRs when bot workflows use [skip ci]
 
 ## Problem

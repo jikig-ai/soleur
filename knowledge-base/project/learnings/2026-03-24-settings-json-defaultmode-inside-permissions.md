@@ -1,3 +1,10 @@
+---
+title: defaultMode lives inside permissions, not at top level
+date: 2026-03-24
+category: engineering
+tags: [build-errors, claude-code-settings]
+---
+
 # Learning: defaultMode lives inside permissions, not at top level
 
 ## Problem

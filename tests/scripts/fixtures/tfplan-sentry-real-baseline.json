@@ -1,0 +1,633 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "sentry_cron_monitor.scheduled_community_monitor",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_community_monitor",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 60,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214787",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-community-monitor",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 8 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 60,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214787",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-community-monitor",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 8 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_content_vendor_drift",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_content_vendor_drift",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 90,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214782",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-content-vendor-drift",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "17 11 * * MON",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 90,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214782",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-content-vendor-drift",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "17 11 * * MON",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_daily_triage",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_daily_triage",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214784",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-daily-triage",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 4 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214784",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-daily-triage",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 4 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_follow_through",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_follow_through",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1229213",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-follow-through",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 9 * * 1-5",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1229213",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-follow-through",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 9 * * 1-5",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_gh_pages_cert_state",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_gh_pages_cert_state",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 240,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1227831",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-gh-pages-cert-state",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 3 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 240,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1227831",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-gh-pages-cert-state",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 3 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_github_app_drift_guard",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_github_app_drift_guard",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214785",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-github-app-drift-guard",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 * * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214785",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-github-app-drift-guard",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 * * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_oauth_probe",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_oauth_probe",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214789",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-oauth-probe",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 * * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214789",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-oauth-probe",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 * * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_realtime_probe",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_realtime_probe",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 180,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214786",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-realtime-probe",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 7 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 180,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214786",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-realtime-probe",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 7 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_skill_freshness",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_skill_freshness",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 60,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214788",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-skill-freshness",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 2 1 * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 60,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214788",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-skill-freshness",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 2 1 * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_strategy_review",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_strategy_review",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1258965",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-strategy-review",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 8 * * 1",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 30,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1258965",
+          "max_runtime_minutes": 10,
+          "name": "scheduled-strategy-review",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 8 * * 1",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    },
+    {
+      "address": "sentry_cron_monitor.scheduled_terraform_drift",
+      "mode": "managed",
+      "type": "sentry_cron_monitor",
+      "name": "scheduled_terraform_drift",
+      "provider_name": "registry.terraform.io/jianyuan/sentry",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "checkin_margin_minutes": 180,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214783",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-terraform-drift",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 6,18 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after": {
+          "checkin_margin_minutes": 180,
+          "description": null,
+          "enabled": true,
+          "failure_issue_threshold": 1,
+          "id": "1214783",
+          "max_runtime_minutes": 15,
+          "name": "scheduled-terraform-drift",
+          "organization": "jikigai-eu",
+          "owner": null,
+          "project": "web-platform",
+          "recovery_threshold": 1,
+          "schedule": {
+            "crontab": "0 6,18 * * *",
+            "interval_unit": null,
+            "interval_value": null
+          },
+          "timezone": "UTC"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "schedule": {}
+        },
+        "after_sensitive": {
+          "schedule": {}
+        }
+      }
+    }
+  ]
+}

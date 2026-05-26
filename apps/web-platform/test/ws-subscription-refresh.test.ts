@@ -42,6 +42,14 @@ vi.mock("@/lib/supabase/service", () => ({
   serverUrl: "https://test.supabase.co",
 }));
 
+// PR-C §2.10 (#3244): refreshSubscriptionStatus + cap-drift count both
+// now route through `getFreshTenantClient`. Reuse `mockFrom` so the
+// existing predicate-aware setups continue to drive both reads.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 // Stub agent-runner to avoid loading @anthropic-ai/claude-agent-sdk.
 vi.mock("../server/agent-runner", () => ({
   startAgentSession: vi.fn(),

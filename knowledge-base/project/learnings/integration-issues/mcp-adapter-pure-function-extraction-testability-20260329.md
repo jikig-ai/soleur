@@ -1,16 +1,16 @@
 ---
-module: Pencil MCP Adapter
+title: MCP Adapter Pure Functions Untestable via Direct Import
 date: 2026-03-29
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Cannot find module '@modelcontextprotocol/sdk/server/mcp.js' when importing adapter in tests"
-  - "MCP adapter functions untestable due to transitive SDK dependency chain"
-root_cause: missing_workflow_step
-resolution_type: code_fix
-severity: medium
+category: infrastructure
 tags: [mcp-adapter, testability, pure-function-extraction, pencil]
+symptoms: [Cannot find module '@modelcontextprotocol/sdk/server/mcp.js' when importing adapter in tests, MCP adapter functions untestable due to transitive SDK dependency chain]
+module: Pencil MCP Adapter
 synced_to: []
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: missing_workflow_step
+severity: medium
 ---
 
 # Troubleshooting: MCP Adapter Pure Functions Untestable via Direct Import

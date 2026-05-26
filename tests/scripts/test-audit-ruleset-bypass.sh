@@ -247,6 +247,9 @@ t_number_vs_string_actor_id() {
 }
 
 # T12: live missing bypass_actors key -> guard-broken
+# Fixture deliberately lacks `enforcement` so the new token-scope sentinel
+# (T12c) does NOT match and the legacy `live_missing_bypass_actors` path
+# remains the routed failure mode for true-delete-shaped responses.
 t_live_missing_bypass_actors() {
   local live='{"id":14145388,"name":"CI Required"}'
   local r; r=$(_run "$live" "$CANONICAL")
@@ -259,6 +262,76 @@ t_live_missing_bypass_actors() {
     _report "T12 live missing bypass_actors -> guard-broken" ok
   else
     _report "T12 live missing bypass_actors -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T12b: live looks healthy (id+enforcement sentinel matches) but bypass_actors
+# is missing AND the test override opts into the new sentinel via
+# AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE=enabled -> token_scope_insufficient.
+# Models the production GitHub-API redaction shape where a non-admin token
+# gets HTTP 200 but bypass_actors is stripped from the response payload.
+t_token_scope_insufficient() {
+  local live='{"id":14145388,"name":"CI Required","enforcement":"active","rules":[]}'
+  local tmp; tmp=$(mktemp -d)
+  printf '%s' "$live" > "$tmp/live.json"
+  printf '%s' "$CANONICAL" > "$tmp/canonical.json"
+  : > "$tmp/output"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$tmp/live.json" \
+  AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE="enabled" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canonical.json" \
+  GITHUB_OUTPUT="$tmp/output" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "token_scope_insufficient" && "$label" == "ci/guard-broken" ]]; then
+    _report "T12b token_scope_insufficient (sentinel match + probe enabled) -> guard-broken" ok
+  else
+    _report "T12b token_scope_insufficient (sentinel match + probe enabled) -> guard-broken" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T12c: same id+enforcement-sentinel-matching fixture as T12b but WITHOUT
+# AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE -> still routes to legacy
+# live_missing_bypass_actors. Proves the test-override gate is load-bearing
+# and existing override-driven tests don't accidentally regress to the new
+# failure mode.
+t_token_scope_probe_override_gated() {
+  local live='{"id":14145388,"name":"CI Required","enforcement":"active","rules":[]}'
+  local r; r=$(_run "$live" "$CANONICAL")
+  local tmp="${r%:*}"
+  local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
+  if [[ "$mode" == "live_missing_bypass_actors" && "$label" == "ci/guard-broken" ]]; then
+    _report "T12c sentinel-matching fixture without probe override -> live_missing_bypass_actors (legacy path)" ok
+  else
+    _report "T12c sentinel-matching fixture without probe override -> live_missing_bypass_actors (legacy path)" fail "mode='$mode' label='$label'"
+  fi
+  rm -rf "$tmp"
+}
+
+# T12d: ruleset id matches but enforcement was paused (e.g., "disabled" or
+# "evaluate"). bypass_actors guarantee is gone — the operator triage path
+# must be "re-enable", not "recreate". Routes to ruleset_enforcement_disabled
+# / ci/auth-broken (auth surface widened, not guard malfunction).
+t_ruleset_enforcement_disabled() {
+  local live='{"id":14145388,"name":"CI Required","enforcement":"disabled","rules":[]}'
+  local tmp; tmp=$(mktemp -d)
+  printf '%s' "$live" > "$tmp/live.json"
+  printf '%s' "$CANONICAL" > "$tmp/canonical.json"
+  : > "$tmp/output"
+  local rc=0
+  AUDIT_FETCH_OVERRIDE="$tmp/live.json" \
+  AUDIT_TOKEN_SCOPE_PROBE_OVERRIDE="enabled" \
+  AUDIT_CANONICAL_FILE_OVERRIDE="$tmp/canonical.json" \
+  GITHUB_OUTPUT="$tmp/output" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+  local mode label detail; mode=$(_mode "$tmp"); label=$(_label "$tmp"); detail=$(_detail "$tmp")
+  if [[ "$mode" == "ruleset_enforcement_disabled" && "$label" == "ci/auth-broken" ]] \
+     && grep -qF "enforcement='disabled'" <<<"$detail"; then
+    _report "T12d ruleset enforcement disabled -> ruleset_enforcement_disabled / ci/auth-broken" ok
+  else
+    _report "T12d ruleset enforcement disabled -> ruleset_enforcement_disabled / ci/auth-broken" fail "mode='$mode' label='$label' detail='${detail:0:120}'"
   fi
   rm -rf "$tmp"
 }
@@ -610,6 +683,9 @@ t_log_injection_strip
 t_unknown_actor_type
 t_number_vs_string_actor_id
 t_live_missing_bypass_actors
+t_token_scope_insufficient
+t_token_scope_probe_override_gated
+t_ruleset_enforcement_disabled
 t_missing_gh_token
 t_live_network_error
 t_canonical_invalid_schema

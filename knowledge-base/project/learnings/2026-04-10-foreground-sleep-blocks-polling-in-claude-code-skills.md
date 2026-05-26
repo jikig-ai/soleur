@@ -1,3 +1,10 @@
+---
+title: Foreground sleep blocks polling in Claude Code skills
+date: 2026-04-10
+category: plugin-architecture
+tags: [workflow-issues, soleur, plugins/soleur/skills/ship, plugins/soleur/skills/postmerge, agents.md, high]
+---
+
 # Learning: Foreground sleep blocks polling in Claude Code skills
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Blog citation verification before publish
+date: 2026-03-06
+category: engineering
+tags: [content-accuracy, marketing]
+---
+
 # Learning: Blog citation verification before publish
 
 ## Problem

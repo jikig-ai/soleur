@@ -1,3 +1,10 @@
+---
+title: 'GitHub App installation tokens cannot call `POST /user/repos`'
+date: 2026-05-07
+category: engineering
+tags: [github, app, user, installation, cannot, post, user, repos]
+---
+
 # Learning: GitHub App installation tokens cannot call `POST /user/repos`
 
 **Date:** 2026-05-07
@@ -101,6 +108,6 @@ acts as the user; it always acts as the installation).
   endpoint accepts the auth class, not just URL routing.
 - AGENTS.md `hr-weigh-every-decision-against-target-user-impact` —
   template-generate trades UAT-credential-surface for public-template
-  attribution surface; both single-user-incident class.
+  attribution surface; both single-user incident class.
 - 2026-04-13 learning on `fetchWithRetry` and undici error codes — the
   new helper reuses the same `githubFetch` pattern.

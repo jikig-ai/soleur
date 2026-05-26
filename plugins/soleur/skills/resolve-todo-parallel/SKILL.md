@@ -10,6 +10,12 @@ description: "This skill should be used when resolving all pending CLI todos fro
 
 Resolve all TODO items from the /todos/*.md directory using parallel processing.
 
+<decision_gate>
+**API budget.** This skill spawns one `pr-comment-resolver` agent in parallel per unresolved TODO (N TODOs = N agents). Each agent runs an independent task with its own context window and token cost; parallel fan-out compresses wall-clock but not aggregate token consumption. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+
+Confirm the TODO count before allowing the fan-out. A pending backlog of 30 TODOs spawns 30 parallel agents.
+</decision_gate>
+
 ## Workflow
 
 ### 1. Analyze

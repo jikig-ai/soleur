@@ -1,3 +1,10 @@
+---
+title: Supabase Management REST API bypasses MCP OAuth for read-only diagnostics
+date: 2026-05-06
+category: infrastructure
+tags: [categoryintegration-issues, modulesupabase, vendorsupabase, toolmcp]
+---
+
 # Learning: Supabase Management REST API bypasses MCP OAuth for read-only diagnostics
 
 **Date:** 2026-05-06

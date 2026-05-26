@@ -11,7 +11,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** April 10, 2026 -- added Section 8.1c Shared Content terms.
+**Last Updated:** May 22, 2026 -- softened Section 3b.4 (Side Letter and customer-DPA roadmap): the per-Co-Member Side Letter is no longer required; Workspace Owners may satisfy the Section 3b.1-3b.3 responsibility framework by any sufficient means, including reliance on the Co-Member's click-through acceptance of these Terms; the Side Letter remains available as an optional belt-and-braces instrument; refreshed Section 3b.3(d) indemnification trigger to align with the new responsibility framing in Acceptable Use Policy Section 5.5; previously same-day added Section 3b "Workspace Members" governing the team-workspace feature (workspace owner is controller; co-members access under the owner's account; owner indemnifies including co-member access to the workspace send-audit ledger) gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 19, 2026 -- extended Section 3a.2 to add the fourth tier `Auto with daily digest` for `infra.*` action classes and to clarify that the typed-SEND verbatim acknowledgement applies to the brand-critical classes under the `Approve every time` tier; refreshed the "drafts everywhere, sends nowhere" invariant to admit both autonomous tiers (PR-H #4077); May 18, 2026 -- added Section 3a "Agent Command Authority" governing per-action-class scope grants and per-grant deny-by-default authorization for automated Web Platform actions; tightened Section 9 cross-reference; April 10, 2026 -- added Section 8.1c Shared Content terms.
 
 ---
 
@@ -39,6 +39,61 @@ These Terms apply to all Users globally, with specific provisions for Users in t
 You must be at least 18 years of age (or the age of majority in your jurisdiction) to use the Plugin or the Web Platform. By using Soleur, you represent and warrant that you meet this requirement.
 
 If you are using the Plugin or the Web Platform on behalf of an organization, you represent and warrant that you have the authority to bind that organization to these Terms.
+
+## 3a. Agent Command Authority
+
+The Web Platform includes agent-runtime features that can act on your behalf in response to external events (for example, a Stripe `invoice.payment_failed` webhook) without your live presence at the moment the event fires. This section governs the scope, limits, and revocation of that authority.
+
+### 3a.1 Per-action-class scope grants
+
+The Web Platform performs no automated action on your behalf for an action class (for example, `finance.payment_failed`) unless you have explicitly granted authorization for that class via the `/dashboard/settings/scope-grants` interface. Authorization is opt-in per action class; the absence of a grant is a denial. The Web Platform's per-tenant scope grants ledger is the source of truth for this authorization, recorded as an append-only WORM record at the moment of grant and at the moment of revocation.
+
+### 3a.2 Default tier and "drafts everywhere, sends nowhere"
+
+Each grant carries one of four tiers:
+
+- **Approve every time** -- the agent proposes; you authorize each instance before any external effect is produced. For brand-critical action classes (marketing email blasts, public X threads, enterprise-tier Slack DMs, Soleur-handle Bluesky replies), you type `SEND` verbatim at click-time as the explicit consent primitive. This is the safest tier and the default for any new action class.
+- **Draft, one click** -- the agent prepares a draft; you approve with one click before any external effect is produced.
+- **Auto** -- the agent executes the action without a per-instance approval step. This tier is consequential; selecting it requires an explicit second-click acknowledgement on the grant page.
+- **Auto with daily digest** -- the agent executes infrastructure-class actions (`infra.*` -- for example, `infra.dependency_bump`, `infra.log_rotate`) without per-instance approval; you review the actions in a next-business-day digest in the Today section. Designed for action classes where per-instance oversight is uneconomic but a review window is still required.
+
+Regardless of tier, the Web Platform's binding invariant is "drafts everywhere, sends nowhere": no external message, payment instruction, or third-party transmission is produced unless either (a) you authorize that specific draft through the Web Platform user interface, or (b) you have granted the `Auto` or `Auto with daily digest` tier for the specific action class triggering the event. Any send produced from a draft you authorize is your action, performed through Soleur as your instrument.
+
+### 3a.3 Revocation
+
+You may revoke a scope grant at any time via the same `/dashboard/settings/scope-grants` interface. Revocation takes effect for the next trigger of the action class; runs already in flight when the revocation is recorded may complete according to the tier active at the moment the trigger fired. The grant ledger records both the original grant and the revocation, with the tier that was active at the moment of each recorded event preserved for audit purposes (the `/dashboard/audit` viewer renders this history).
+
+### 3a.4 Soleur is not an agent-in-fact for third parties
+
+Soleur executes the actions you authorize within the Web Platform's user interface and the action classes you grant. Soleur is not your legal agent, attorney-in-fact, or authorized representative for any third party. No grant made via the Web Platform creates an agency relationship between Jikigai and any third party. Any obligation owed to a third party that results from an action you authorize through Soleur remains your obligation.
+
+### 3a.5 BYOK cost ceiling
+
+Where the Web Platform performs automated actions on your behalf, those actions consume API credits on your Anthropic API key (Bring-Your-Own-Key, "BYOK"). The Web Platform records the per-call token count and unit cost in the audit ledger; you control the spending cap on your own key directly with Anthropic. Jikigai does not bill, proxy, or guarantee any cost incurred against your BYOK key. The Web Platform does not include a Jikigai-provided cost ceiling beyond the cap you set on your own key.
+
+### 3a.6 Right to human review (GDPR Article 22(3))
+
+Where the Web Platform produces a decision concerning you through automated processing (including any action under the `Auto` tier), you have the right to obtain human intervention, to express your point of view, and to contest the decision. The `/dashboard/audit` viewer surfaces a "Request human review" affordance on each automated run; you may also contact us at <legal@jikigai.com> at any time to request human review of any automated action.
+
+## 3b. Workspace Members
+
+The Web Platform supports team workspaces in which a natural person or legal entity (the "Workspace Owner") may invite additional natural persons (each a "Co-Member") to access the same workspace under the Owner's account. This section governs the controllership, visibility, and indemnification arrangement among Jikigai, the Workspace Owner, and Co-Members when the team-workspace feature is enabled for the Owner's organization (gated by `FLAG_TEAM_WORKSPACE_INVITE` and the per-organization allowlist `TEAM_WORKSPACE_ALLOWLIST_ORG_IDS`).
+
+### 3b.1 Workspace Owner is the data controller
+
+The Workspace Owner is the controller, within the meaning of Article 4(7) GDPR, of all personal data processed by the Web Platform on behalf of the workspace -- including conversation content, knowledge-base queries, BYOK API-key usage, and the per-(founder, action_class) scope grants and per-send signature ledger records produced by the workspace. Co-Members access the workspace under the Owner's account; their use of the Web Platform constitutes use by the Owner's organisation for purposes of these Terms, and their actions are attributable to the Owner under the "authorized users" framework of the Anthropic Commercial Terms §C. Soleur acts as a processor (Article 4(8) GDPR) for the Workspace Owner with respect to all such data; the Data Protection Disclosure Section 2.3(u) records the categories and the lawful-basis cross-reference.
+
+### 3b.2 Co-Member visibility scope
+
+Co-Members of a shared workspace are recipients (within the meaning of Article 13(1)(e) GDPR) of one another's workspace-scoped metadata for the in-workspace conversations and operations they participate in -- including conversation participation records, knowledge-base query identifiers, scope-grant ledger rows, send-audit ledger rows (`action_sends`, including recipient identifier hashes (`recipient_id_hash`), per-send body hashes (`per_send_body_sha256`), and template hashes (`template_hash`)), and template-authorization rows. Each Co-Member retains, against Jikigai, the independent rights of access, rectification, erasure, restriction, portability, and objection conferred by Articles 15 through 22 GDPR over rows that are identifiable to that Co-Member. The Web Platform's row-level security predicates and the `is_workspace_member(workspace_id, user_id)` helper enforce cross-member visibility scope as the load-bearing technical measure under Article 32 GDPR; the Privacy Policy Section 4.11 records this disclosure in user-facing form.
+
+### 3b.3 Workspace Owner indemnification
+
+The Workspace Owner agrees to defend, indemnify, and hold harmless Jikigai, its officers, employees, and affiliates from any and all third-party claims, damages, fines, regulatory orders, and reasonable legal fees arising from or related to: (a) any Co-Member's use of the Web Platform under the Owner's account; (b) any Co-Member's access to, retention of, exfiltration of, or onward disclosure of workspace-scoped data visible to that Co-Member under Section 3b.2, **including without limitation access to and any use of the workspace's send-audit ledger** (the `action_sends` and `template_authorizations` records and, where the Web Platform records cross-member action provenance via the `workspace_member_actions` audit ledger, those rows); (c) any claim by one Co-Member against another Co-Member arising from in-workspace activity; and (d) any breach by the Workspace Owner of the responsibility in the Acceptable Use Policy Section 5.5 (the Owner must ensure each invited Co-Member is bound by appropriate confidentiality and intellectual-property assignment terms, by any means the Owner deems sufficient including reliance on these Terms). This indemnification survives termination of these Terms and is in addition to, not in lieu of, the general indemnification in Section 12.
+
+### 3b.4 Side Letter and customer-DPA roadmap
+
+The Workspace Owner is responsible for ensuring Co-Members they invite are bound by appropriate confidentiality, intellectual-property assignment, and workspace-activity-logged acknowledgement terms covering the obligations that flow from Section 3b.1 through Section 3b.3. The Owner may satisfy this responsibility by any means the Owner deems sufficient, including reliance on the Co-Member's click-through acceptance of these Terms (the canonical click-through anchor for the Section 3b obligations applicable to all users of the Web Platform), reliance on an existing employment/contractor/consultancy agreement between the Owner and the Co-Member, or execution of the optional Soleur Side Letter (template available from Jikigai at <legal@jikigai.com>) as a separate bilateral instrument. **IP-assignment note:** the Co-Member's click-through acceptance of these Terms is sufficient for confidentiality reliance but does NOT by itself effect intellectual-property assignment from the Co-Member to the Workspace Owner; Owners who require enforceable IP assignment from a Co-Member should rely on an instrument (an existing engagement or the Soleur Side Letter) that names the Workspace Owner as the assignee. The Soleur Side Letter is offered as a belt-and-braces reference document; Jikigai does not require its execution. If executed, the Side Letter remains a bilateral document between the Workspace Owner and the Co-Member -- Jikigai is not a party. Once Jikigai publishes a customer-facing Data Processing Agreement for organizational tenants, that instrument supersedes the per-Co-Member responsibility framework at the organizational level; the supersession will be announced in writing to the Workspace Owner and recorded as an update to this Section 3b.4.
 
 ## 4. Description of the Service
 
@@ -213,6 +268,7 @@ You agree to use the Plugin and the Web Platform only for lawful purposes and in
 - Introduce malware, viruses, or other harmful code
 - Circumvent, disable, or interfere with security features of the Plugin or connected services
 - Use the Plugin for automated decision-making that produces legal effects on individuals without appropriate human oversight, as required under GDPR Article 22
+- Circumvent, disable, or interfere with the human-in-the-loop boundary established by the `draft / Send / Edit / Discard` flow or the per-action-class scope grants ledger described in Section 3a (Agent Command Authority); attempting to send messages or trigger external effects without a grant or without an authorized draft is a material breach of these Terms
 
 ## 10. Disclaimer of Warranties
 

@@ -1,13 +1,15 @@
 ---
+title: 'Drift-remediation runbooks must (a) prescribe the canonical Doppler+Terraform invocation triplet AND (b) re-run `terraform plan` against live state before publishing'
 date: 2026-05-09
-problem_type: integration_issue
-component: terraform_runbook
-module: web-platform
-severity: medium
+category: engineering
 tags: [terraform, drift-remediation, doppler, prd_terraform, runbook-authoring, tf-var]
-issue: "#3371"
-followup: "#3485"
+module: web-platform
 synced_to: [plan]
+component: terraform_runbook
+followup: '#3485'
+issue: '#3371'
+problem_type: integration_issue
+severity: medium
 ---
 
 # Learning: Drift-remediation runbooks must (a) prescribe the canonical Doppler+Terraform invocation triplet AND (b) re-run `terraform plan` against live state before publishing

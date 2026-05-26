@@ -1,3 +1,10 @@
+---
+title: Plan review catches over-engineered gate design before implementation
+date: 2026-03-25
+category: engineering
+tags: [engineering, plan, work, workflow-patterns]
+---
+
 # Learning: Plan review catches over-engineered gate design before implementation
 
 ## Problem

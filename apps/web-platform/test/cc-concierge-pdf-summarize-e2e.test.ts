@@ -47,6 +47,21 @@ vi.mock("@/lib/supabase/service", () => ({
   }),
 }));
 
+// PR-C §2.7 (#3244): kb-document-resolver now reads workspace_path via
+// `@/lib/supabase/tenant`. Mirror the chain.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: async () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          single: async () => fetchUserWorkspacePathSpy(),
+        }),
+      }),
+    }),
+  }),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: vi.fn(),

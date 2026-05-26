@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import {
+  injectFakeSupabaseSession,
+  mockSupabaseAuth,
+} from "./helpers/supabase-mocks";
 
 // E2E Phase 5a for plan 2026-04-29-feat-command-center-conversation-nav.
 //
@@ -68,70 +72,9 @@ const SEEDED_MESSAGES = [
 ];
 
 async function setupRailMocks(page: Page) {
-  // Authenticated session in localStorage so the JS client doesn't
-  // short-circuit auth.getUser() before page.route() fires.
-  await page.addInitScript(() => {
-    const fakeSession = {
-      access_token: "test-access-token",
-      token_type: "bearer",
-      expires_in: 86400,
-      expires_at: Math.floor(Date.now() / 1000) + 86400,
-      refresh_token: "test-refresh-token",
-      user: {
-        id: "test-user-id",
-        aud: "authenticated",
-        role: "authenticated",
-        email: "test@e2e.com",
-        email_confirmed_at: "2024-01-01T00:00:00Z",
-        phone: "",
-        confirmed_at: "2024-01-01T00:00:00Z",
-        app_metadata: { provider: "email", providers: ["email"] },
-        user_metadata: {},
-        identities: [],
-        created_at: "2024-01-01T00:00:00Z",
-        updated_at: "2024-01-01T00:00:00Z",
-      },
-    };
-    localStorage.setItem(
-      "sb-localhost-auth-token",
-      JSON.stringify(fakeSession),
-    );
-  });
-
-  await page.route("**/auth/v1/user", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        id: "test-user-id",
-        aud: "authenticated",
-        role: "authenticated",
-        email: "test@e2e.com",
-        email_confirmed_at: "2024-01-01T00:00:00Z",
-        phone: "",
-        confirmed_at: "2024-01-01T00:00:00Z",
-        app_metadata: { provider: "email", providers: ["email"] },
-        user_metadata: {},
-        identities: [],
-        created_at: "2024-01-01T00:00:00Z",
-        updated_at: "2024-01-01T00:00:00Z",
-      }),
-    });
-  });
-
-  await page.route("**/auth/v1/token*", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        access_token: "test-access-token",
-        token_type: "bearer",
-        expires_in: 86400,
-        expires_at: Math.floor(Date.now() / 1000) + 86400,
-        refresh_token: "test-refresh-token",
-      }),
-    });
-  });
+  // Shared auth + session + realtime stubs (see e2e/helpers/supabase-mocks.ts).
+  await injectFakeSupabaseSession(page);
+  await mockSupabaseAuth(page);
 
   // The hook reads users.repo_url to scope the conversation list.
   // All three select variants below are called via .single() / .maybeSingle()
@@ -161,12 +104,16 @@ async function setupRailMocks(page: Page) {
       return;
     }
     if (select.includes("onboarding_completed_at")) {
+      // PR-G (#3947) widened useOnboarding's .select() with
+      // runtime_explainer_dismissed_at — mirror the mock-supabase.ts
+      // shape so the banner stays dismissed in tests.
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           onboarding_completed_at: "2024-01-01T00:00:00Z",
           pwa_banner_dismissed_at: "2024-01-01T00:00:00Z",
+          runtime_explainer_dismissed_at: "2024-01-01T00:00:00Z",
         }),
       });
       return;
@@ -191,14 +138,6 @@ async function setupRailMocks(page: Page) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(SEEDED_MESSAGES),
-    });
-  });
-
-  await page.route("**/realtime/**", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "text/plain",
-      body: "",
     });
   });
 

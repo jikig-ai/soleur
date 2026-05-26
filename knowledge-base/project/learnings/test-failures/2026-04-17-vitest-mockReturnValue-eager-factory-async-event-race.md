@@ -1,16 +1,15 @@
 ---
-module: web-platform
+title: vi.fn().mockReturnValue(factory(...)) eagerly evaluates the factory — async-event test doubles must use mockImplementation
 date: 2026-04-17
-problem_type: test_failure
+category: engineering
+tags: [vitest, mocking, async-events, event-emitter, child_process, queueMicrotask]
+symptoms: [Tests see empty event data even though fake child explicitly writes it, Tests time out with 'unhandled error' thrown outside any listener, Non-deterministic failures that only reproduce with specific test ordering]
+module: web-platform
+synced_to: [work]
 component: vitest_mock
-symptoms:
-  - "Tests see empty event data even though fake child explicitly writes it"
-  - "Tests time out with 'unhandled error' thrown outside any listener"
-  - "Non-deterministic failures that only reproduce with specific test ordering"
+problem_type: test_failure
 root_cause: mock_return_value_captures_eager_value
 severity: high
-tags: [vitest, mocking, async-events, event-emitter, child_process, queueMicrotask]
-synced_to: [work]
 ---
 
 # vi.fn().mockReturnValue(factory(...)) eagerly evaluates the factory — async-event test doubles must use mockImplementation

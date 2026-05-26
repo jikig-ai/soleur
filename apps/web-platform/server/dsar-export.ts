@@ -38,14 +38,27 @@ import {
 import { mkdir, rm, stat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix as posixPath } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Readable, PassThrough } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import archiver from "archiver";
+// archiver@8 is ESM-only with NO default export (breaking change from v7);
+// `import archiver from "archiver"` synthesizes an `undefined` default under
+// Node's `require(esm)` interop, so `archiver("zip", ...)` throws
+// `(0, default) is not a function` under vitest (and would throw in any
+// caller path that actually reaches `buildArchiveToDisk`). @types/archiver
+// is still pinned at v7 (factory `export =` shape), so we cast the v8
+// runtime namespace to the v7-aware `Archiver` instance type. Pattern
+// matches `scripts/spike/dsar-streaming-upload.ts:53-58`.
+import type { Archiver } from "archiver";
+import * as ArchiverRuntime from "archiver";
+type ZipArchiveCtor = new (opts: { zlib?: { level?: number } }) => Archiver;
+const ZipArchive = (
+  ArchiverRuntime as unknown as { ZipArchive: ZipArchiveCtor }
+).ZipArchive;
 import { createWriteStream } from "node:fs";
 
 import { createServiceClient, serverUrl } from "@/lib/supabase/service";
-import { mirrorCrossTenantViolation } from "./observability";
+import { mirrorCrossTenantViolation, hashUserId } from "./observability";
 import {
   sendDsarExportReadyEmail,
   sendDsarExportFailedEmail,
@@ -55,6 +68,7 @@ import {
   DSAR_TABLE_ALLOWLIST,
   type DsarTableSpec,
 } from "./dsar-export-allowlist";
+import { enumerateCoUploaderAttachments } from "./dsar-export-co-uploader";
 
 const log = createChildLogger("dsar-export");
 
@@ -123,6 +137,50 @@ export function assertReadScope<T extends Record<string, unknown>>(
 }
 
 // ---------------------------------------------------------------------------
+// Art. 15(4) author-only redaction primitives (#4319).
+//
+// Per the plan's TR1: helpers live inside dsar-export.ts (NOT a separate
+// module). Pure, side-effect-free, in-place mutation; returns `true` if
+// redaction was applied so the call site can count.
+//
+// Field list is closed (`content`, `tool_calls`, `usage`, `draft_preview`,
+// `action_class`). Any future migration that adds a free-text personal-
+// data column to `messages` MUST sweep this file per
+// `hr-write-boundary-sentinel-sweep-all-write-sites`.
+// ---------------------------------------------------------------------------
+
+export function redactRow<T extends Record<string, unknown>>(
+  row: T,
+  shouldRedact: boolean,
+  fieldsToNull: readonly (keyof T)[],
+  pseudonymCol?: keyof T,
+  pseudonym?: string,
+): boolean {
+  if (!shouldRedact) return false;
+  for (const f of fieldsToNull) {
+    (row as Record<string, unknown>)[f as string] = null;
+  }
+  if (pseudonymCol && pseudonym !== undefined) {
+    (row as Record<string, unknown>)[pseudonymCol as string] = pseudonym;
+  }
+  return true;
+}
+
+/**
+ * Per-bundle pseudonymous identifier for a non-subject author.
+ * `salt` is minted via crypto.randomBytes(32) at exportSqlTable entry
+ * and held in closure — NEVER persisted to manifest / audit / log.
+ * Returns `member_<hex12>` (48-bit collision space; birthday-safe past
+ * ~10^6 distinct authors per bundle).
+ */
+export function pseudonymiseUserId(rawUserId: string, salt: Buffer): string {
+  const h = createHash("sha256");
+  h.update(salt);
+  h.update(rawUserId);
+  return `member_${h.digest("hex").slice(0, 12)}`;
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -130,7 +188,10 @@ const JOB_HARD_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
 const POLLER_INTERVAL_MS = 5 * 1000;
 const SIGNED_URL_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const STORAGE_BUCKET = "dsar-exports";
-const MANIFEST_SCHEMA_VERSION = "1.0.0";
+// Bumped to 1.1.0 by #4319 — adds top-level `redactions[]` field
+// disclosing Art. 15(4) author-only redactions to the subject (EDPB
+// Guidelines 01/2022 §176). Paired bump in dsar-export-oversize.sh:130.
+const MANIFEST_SCHEMA_VERSION = "1.2.0";
 const SIZE_CAP_BYTES =
   (Number(process.env.DSAR_EXPORT_SIZE_CAP_MB) || 1024) * 1024 * 1024;
 
@@ -160,6 +221,9 @@ interface ManifestFileEntry {
   sha256?: string;
   bytes?: number;
   reason?: string;
+  redacted?: boolean;
+  redaction_reason?: string;
+  uploader_pseudonym?: string;
 }
 
 interface ManifestRoot {
@@ -175,6 +239,12 @@ interface ManifestRoot {
   };
   files: ManifestFileEntry[];
   excluded_files: ManifestFileEntry[];
+  /**
+   * Art. 15(4) author-only redactions applied to this bundle.
+   * Disclosed to the subject per EDPB Guidelines 01/2022 §176.
+   * One entry per table that had at least one redacted row.
+   */
+  redactions: { path: string; reason: string; count: number }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +322,93 @@ interface TableExportResult {
   // the entire job loud rather than silently skipping a table (Art. 15
   // completeness).
   error?: Error;
+  // Art. 15(4) author-only redaction count for this table (#4319).
+  // Surfaced into manifest.redactions[] by buildArchiveToDisk.
+  redactionCount?: number;
 }
+
+// Post-mig 059 audit (#4319 Phase 0.3): the messages_workspace_member_insert
+// RLS policy gates INSERT on is_workspace_member(workspace_id, auth.uid())
+// — NOT on user_id matching conversation owner — and every server INSERT
+// path (cc-dispatcher.ts, agent-runner.ts, kb-drift-ingest, cfo-on-payment-
+// failed, github-on-event) omits `user_id` (defaults to NULL). A non-
+// subject CAN write `user_id IS NULL` rows into a foreign-owned
+// conversation. Fail-closed default: REDACT legacy NULL rows.
+const LEGACY_NULL_IS_SUBJECT = false;
+
+// Field list redacted on foreign-author messages. Closed set — any
+// future migration adding a free-text or namespace-leaking column to
+// `messages` MUST sweep this list per
+// `hr-write-boundary-sentinel-sweep-all-write-sites`. The companion
+// sentinel test at apps/web-platform/test/dsar-message-redact-fields-
+// sweep.test.ts enforces this gate at CI time by parsing migration
+// files for ALTER TABLE messages ADD COLUMN of text/jsonb shapes and
+// asserting each new column appears here or in MESSAGE_NON_REDACT_
+// ALLOWLIST below.
+//
+// Field rationale per column (Art. 15(4) review #4351 cross-reconcile):
+//   content           — free-text body (M1 leak vector)
+//   tool_calls        — jsonb — tool args + results (free-text PII)
+//   usage             — jsonb (mig 040) — input_summary / result_summary
+//                       embed conversation context
+//   draft_preview     — text (mig 046) — pre-send free-text snippet
+//   action_class      — text (mig 051) — open namespace, can encode
+//                       Art. 9 special-category indicators
+//   tier              — text (mig 046) — business tier signal about the
+//                       third party (e.g., "external_brand_critical")
+//   source            — text (mig 046) — pipeline source identifier
+//   owning_domain     — text (mig 046) — third party's product surface
+//                       (e.g., "cfo", "github", "legal")
+//   urgency           — text (mig 046) — free-text urgency phrase
+//                       ("client breach Tuesday")
+//   trust_tier        — text (mig 046) — third party's trust band
+//   source_ref        — text (mig 052) — namespace-id pattern such as
+//                       `pr-<org>:<repo>:<number>` or `cve-<id>`; leaks
+//                       third-party GitHub orgs / repos / CVE refs
+//   leader_id         — text (mig 010) — domain leader identifier; may
+//                       carry email-shaped or name-shaped values
+//   template_id       — text (mig 053) — template identifier; usage
+//                       pattern signal about the third party
+const MESSAGE_REDACT_FIELDS = [
+  "content",
+  "tool_calls",
+  "usage",
+  "draft_preview",
+  "action_class",
+  "tier",
+  "source",
+  "owning_domain",
+  "urgency",
+  "trust_tier",
+  "source_ref",
+  "leader_id",
+  "template_id",
+] as const;
+
+// Companion allowlist consumed by the migration-sweep sentinel test —
+// every column on `public.messages` that is NEITHER in
+// MESSAGE_REDACT_FIELDS NOR in this allowlist trips CI. Structural
+// columns are safe to surface on a foreign-author row because they
+// describe the bundle's own shape (thread position, the subject's
+// workspace, timestamps, cache token counts) rather than the third
+// party's content or namespace.
+export const MESSAGE_NON_REDACT_ALLOWLIST = [
+  "id",
+  "conversation_id",
+  "workspace_id",
+  "user_id",
+  "role",
+  "status",
+  "created_at",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+] as const;
+
+export { MESSAGE_REDACT_FIELDS };
+
+const ATTACHMENT_REDACT_FIELDS = ["storage_path", "filename"] as const;
+
+export const REDACTION_REASON = "art-15-4-rights-of-others";
 
 /**
  * Exported for the cross-tenant integration test (Phase 10).
@@ -265,6 +421,7 @@ export async function exportSqlTable(
   // site. The worker enumerates each allowlisted table EXPLICITLY
   // below so the lint can pattern-match.
   expectedUserId: string,
+  pseudonymSalt: Buffer,
   signal: AbortSignal,
 ): Promise<TableExportResult[]> {
   const service = createServiceClient();
@@ -302,19 +459,82 @@ export async function exportSqlTable(
     });
   }
 
-  // -- conversations -----------------------------------------------------
-  let conversationIds: string[] = [];
+  // -- workspace ID prefetch (for conversations UNION, #4358) -----------
+  // Lightweight prefetch of workspace_ids the subject is a member of,
+  // used to widen the conversations query below. The full
+  // workspace_members export (`select("*")`) still runs in its own
+  // section later; this prefetch only pulls the FK column needed for
+  // the PostgREST `.or()` predicate.
+  let prefetchWorkspaceIds: string[] = [];
   {
     const { data, error } = await service
-      .from("conversations")
-      .select("*")
+      .from("workspace_members")
+      .select("workspace_id")
       .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_members (conversations prefetch) read failed: ${error.message}`,
+      );
+    prefetchWorkspaceIds = ((data ?? []) as { workspace_id?: unknown }[])
+      .map((r) => r.workspace_id)
+      .filter((v): v is string => typeof v === "string");
+  }
+
+  // -- conversations -----------------------------------------------------
+  // Art. 15 completeness (#4358): UNION of subject-owned conversations
+  // (user_id = expectedUserId) AND conversations the subject participates
+  // in via workspace membership (workspace_id IN prefetchWorkspaceIds).
+  // This captures messages the subject authored in co-member-owned
+  // conversations within shared workspaces. When prefetchWorkspaceIds is
+  // empty (no workspace memberships), falls back to the direct-owner
+  // predicate only.
+  let conversationIds: string[] = [];
+  {
+    // Per-row WHERE lint (AC30) requires the predicate (`.or()` or
+    // `.eq()`) to appear in the same chain as the `.from()` call. The
+    // ternary below keeps both paths in the single statement the lint
+    // parses.
+    const { data, error } =
+      prefetchWorkspaceIds.length > 0
+        ? await service
+            .from("conversations")
+            .select("*")
+            .or(
+              `user_id.eq.${expectedUserId},workspace_id.in.(${prefetchWorkspaceIds.join(",")})`,
+            )
+        : await service
+            .from("conversations")
+            .select("*")
+            .eq("user_id", expectedUserId);
     if (signal.aborted) throw new Error("aborted");
     if (error) throw new Error(`conversations read failed: ${error.message}`);
     const rows = (data ?? []) as Record<string, unknown>[];
-    assertReadScope(rows, expectedUserId, "conversations", {
-      ownerField: "user_id",
-    });
+    // Two-arm cross-tenant assertion (#4358): every returned row MUST
+    // satisfy (user_id = expectedUserId) OR (workspace_id is in the
+    // subject's prefetched workspace set). Fail-closed via
+    // CrossTenantViolation if neither arm holds.
+    const wsSet = new Set(prefetchWorkspaceIds);
+    for (const row of rows) {
+      const isOwned =
+        typeof row.user_id === "string" && row.user_id === expectedUserId;
+      const isParticipated =
+        typeof row.workspace_id === "string" && wsSet.has(row.workspace_id);
+      if (!isOwned && !isParticipated) {
+        const err = new CrossTenantViolation(
+          "conversations",
+          expectedUserId,
+          typeof row.user_id === "string" ? row.user_id : null,
+        );
+        mirrorCrossTenantViolation(
+          typeof row.user_id === "string" ? row.user_id : null,
+          expectedUserId,
+          "conversations",
+          err,
+        );
+        throw err;
+      }
+    }
     conversationIds = rows
       .map((r) => r.id)
       .filter((v): v is string => typeof v === "string");
@@ -326,7 +546,19 @@ export async function exportSqlTable(
   }
 
   // -- messages (joinVia conversations) ----------------------------------
+  // Per-row Art. 15(4) redaction predicate (#4319): messages authored
+  // by a non-subject within a subject-accessible conversation are returned
+  // as structural shells (content + namespace columns nulled, raw
+  // user_id replaced with a per-bundle salt-scoped pseudonym).
+  // CrossTenantViolation runs BEFORE the redaction predicate (TR3
+  // invariant) so the violation surface is unchanged.
+  // #4358: conversationIds now includes both subject-owned AND
+  // workspace-participated conversations (via the UNION above).
   let messageIds: string[] = [];
+  // Allowlist (#4319): IDs of messages authored by the subject. The
+  // attachments block redacts any attachment whose message_id is NOT
+  // in this set (orphan / foreign-author parents → fail-closed).
+  const subjectAuthoredMessageIds = new Set<string>();
   if (conversationIds.length > 0) {
     const { data, error } = await service
       .from("messages")
@@ -336,12 +568,13 @@ export async function exportSqlTable(
     if (error) throw new Error(`messages read failed: ${error.message}`);
     const rows = (data ?? []) as Record<string, unknown>[];
     // No direct owner_id; verify every message's conversation_id is in
-    // the set we already proved is owner-scoped. If a service-role
-    // glitch returned a row whose conversation_id is NOT in our owner-
-    // scoped set, raise CrossTenantViolation.
-    const ownedConvSet = new Set(conversationIds);
+    // the set we already proved is scope-verified (owned OR workspace-
+    // participated, #4358). If a service-role glitch returned a row
+    // whose conversation_id is NOT in our scope-verified set, raise
+    // CrossTenantViolation.
+    const scopedConvSet = new Set(conversationIds);
     for (const row of rows) {
-      if (typeof row.conversation_id !== "string" || !ownedConvSet.has(row.conversation_id)) {
+      if (typeof row.conversation_id !== "string" || !scopedConvSet.has(row.conversation_id)) {
         const err = new CrossTenantViolation(
           "messages",
           expectedUserId,
@@ -354,20 +587,54 @@ export async function exportSqlTable(
     messageIds = rows
       .map((r) => r.id)
       .filter((v): v is string => typeof v === "string");
+
+    // Art. 15(4) per-row predicate. Runs AFTER cross-tenant assertion.
+    let messagesRedactionCount = 0;
+    for (const row of rows) {
+      const rawUserId = row.user_id;
+      const isSubjectAuthored =
+        rawUserId === expectedUserId ||
+        (rawUserId === null && LEGACY_NULL_IS_SUBJECT);
+      if (isSubjectAuthored && typeof row.id === "string") {
+        subjectAuthoredMessageIds.add(row.id);
+      }
+      const pseudonym = isSubjectAuthored
+        ? undefined
+        : typeof rawUserId === "string"
+          ? pseudonymiseUserId(rawUserId, pseudonymSalt)
+          : // Legacy NULL under fail-closed: redact content, leave user_id
+            // as the actual NULL (no pseudonym needed for a NULL source).
+            undefined;
+      const applied = redactRow(
+        row,
+        !isSubjectAuthored,
+        MESSAGE_REDACT_FIELDS,
+        pseudonym !== undefined ? "user_id" : undefined,
+        pseudonym,
+      );
+      if (applied) messagesRedactionCount += 1;
+    }
+
     results.push({
       table: "messages",
       spec: DSAR_TABLE_ALLOWLIST.messages,
       rows,
+      redactionCount: messagesRedactionCount,
     });
   } else {
     results.push({
       table: "messages",
       spec: DSAR_TABLE_ALLOWLIST.messages,
       rows: [],
+      redactionCount: 0,
     });
   }
 
   // -- message_attachments (joinVia messages) ----------------------------
+  // Art. 15(4) allowlist semantic (#4319): an attachment is preserved
+  // ONLY when its parent message_id is in `subjectAuthoredMessageIds`.
+  // Foreign-author parents and any parent we couldn't classify (orphan
+  // shape) → redact storage_path + filename. Fail-closed.
   if (messageIds.length > 0) {
     const { data, error } = await service
       .from("message_attachments")
@@ -394,16 +661,33 @@ export async function exportSqlTable(
         throw err;
       }
     }
+
+    // Allowlist predicate. Runs AFTER cross-tenant assertion.
+    let attachmentRedactionCount = 0;
+    for (const row of rows) {
+      const parentId =
+        typeof row.message_id === "string" ? row.message_id : "";
+      const shouldRedact = !subjectAuthoredMessageIds.has(parentId);
+      const applied = redactRow(
+        row,
+        shouldRedact,
+        ATTACHMENT_REDACT_FIELDS,
+      );
+      if (applied) attachmentRedactionCount += 1;
+    }
+
     results.push({
       table: "message_attachments",
       spec: DSAR_TABLE_ALLOWLIST.message_attachments,
       rows,
+      redactionCount: attachmentRedactionCount,
     });
   } else {
     results.push({
       table: "message_attachments",
       spec: DSAR_TABLE_ALLOWLIST.message_attachments,
       rows: [],
+      redactionCount: 0,
     });
   }
 
@@ -461,6 +745,490 @@ export async function exportSqlTable(
       table: "audit_byok_use",
       spec: DSAR_TABLE_ALLOWLIST.audit_byok_use,
       rows,
+    });
+  }
+
+  // -- tc_acceptances (T&C consent ledger; migration 044, AC15) ----------
+  {
+    const { data, error } = await service
+      .from("tc_acceptances")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`tc_acceptances read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "tc_acceptances", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "tc_acceptances",
+      spec: DSAR_TABLE_ALLOWLIST.tc_acceptances,
+      rows,
+    });
+  }
+
+  // -- scope_grants (per-action-class consent ledger; migration 048, PR-G #3947) --
+  {
+    const { data, error } = await service
+      .from("scope_grants")
+      .select("*")
+      .eq("founder_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`scope_grants read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "scope_grants", {
+      ownerField: "founder_id",
+    });
+    results.push({
+      table: "scope_grants",
+      spec: DSAR_TABLE_ALLOWLIST.scope_grants,
+      rows,
+    });
+  }
+
+  // -- audit_github_token_use (GitHub App token use audit; migration 052, PR-H #3244) --
+  {
+    const { data, error } = await service
+      .from("audit_github_token_use")
+      .select("*")
+      .eq("founder_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`audit_github_token_use read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "audit_github_token_use", {
+      ownerField: "founder_id",
+    });
+    results.push({
+      table: "audit_github_token_use",
+      spec: DSAR_TABLE_ALLOWLIST.audit_github_token_use,
+      rows,
+    });
+  }
+
+  // -- action_sends (per-send WORM signature ledger; migration 051, PR-H #4077) --
+  // Art. 15 right of access: the founder is entitled to a copy of every
+  // signature row the platform recorded under their authorization. Body
+  // and recipient are persisted as SHA-256 hashes only — the raw values
+  // never enter the table — but the founder still has access to the
+  // metadata (action_class, tier_at_send, clicked_at, confirmed_typed,
+  // approval_signature_sha256, grant_id). Marked Art. 15-only because
+  // the row is platform-generated evidence of the click, not founder-
+  // provided content; portability (Art. 20) does not apply.
+  {
+    const { data, error } = await service
+      .from("action_sends")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`action_sends read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "action_sends", {
+      ownerField: "user_id",
+    });
+    results.push({
+      table: "action_sends",
+      spec: DSAR_TABLE_ALLOWLIST.action_sends,
+      rows,
+    });
+  }
+
+  // -- template_authorizations (per-template authorization ledger; migration 053, PR-I #4078) --
+  // Art. 15+20: the founder explicitly authorised each template via the
+  // first-send-IS-authorization pattern (the Send click on a labeled
+  // draft_one_click button IS the Art. 7(3) "specific" + "informed"
+  // consent act). The ledger captures (template_hash, action_class,
+  // authorized_at, expires_at, soft_reconfirm_at, max_sends, revoked_at,
+  // revocation_reason, grant_id). Pure-template-hash + bounds are
+  // user-generated context — Art. 20 portability applies alongside
+  // Art. 15 access. WORM trigger + anonymise_template_authorizations
+  // RPC handle erasure separately.
+  {
+    const { data, error } = await service
+      .from("template_authorizations")
+      .select("*")
+      .eq("founder_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) {
+      throw new Error(`template_authorizations read failed: ${error.message}`);
+    }
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "template_authorizations", {
+      ownerField: "founder_id",
+    });
+    results.push({
+      table: "template_authorizations",
+      spec: DSAR_TABLE_ALLOWLIST.template_authorizations,
+      rows,
+    });
+  }
+
+  // -- organizations (migration 053, feat-team-workspace-multi-user) ----
+  // Art. 15: every organization the user owns (1:1 today, N:1 future
+  // when an operator-managed org adopts existing user as owner). Direct
+  // ownerField = owner_user_id; no JOIN required.
+  {
+    const { data, error } = await service
+      .from("organizations")
+      .select("*")
+      .eq("owner_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`organizations read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "organizations", {
+      ownerField: "owner_user_id",
+    });
+    results.push({
+      table: "organizations",
+      spec: DSAR_TABLE_ALLOWLIST.organizations,
+      rows,
+    });
+  }
+
+  // -- workspace_members (migration 053) --------------------------------
+  // Art. 15+20: every membership row the user holds. Direct
+  // ownerField = user_id; the row is user-provided (they clicked accept
+  // on the invite) so portability applies. After a member is removed
+  // via remove_workspace_member (058+062), their workspace_members row
+  // is gone — the historical-attestations UNION below recovers
+  // workspaceIds so the workspaces export still includes the workspace
+  // they left.
+  let workspaceIds: string[] = [];
+  {
+    const { data, error } = await service
+      .from("workspace_members")
+      .select("*")
+      .eq("user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(`workspace_members read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "workspace_members", {
+      ownerField: "user_id",
+    });
+    workspaceIds = rows
+      .map((r) => r.workspace_id)
+      .filter((v): v is string => typeof v === "string");
+    results.push({
+      table: "workspace_members",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_members,
+      rows,
+    });
+  }
+
+  // -- workspaceIds historical UNION (Approach A — #4230) ---------------
+  // Add workspace_id values from workspace_member_attestations rows
+  // where the user is the invitee — recovers workspaces the user has
+  // since left (their workspace_members row was DELETEd by
+  // remove_workspace_member, but the attestation row is WORM and
+  // survives). Without this UNION a departed member's DSAR bundle
+  // silently omits any workspace they left, which fails Art. 15
+  // completeness for the workspaces export block below.
+  {
+    const { data, error } = await service
+      .from("workspace_member_attestations")
+      .select("workspace_id")
+      .eq("invitee_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_member_attestations (workspaceIds UNION) read failed: ${error.message}`,
+      );
+    const historicalIds = ((data ?? []) as { workspace_id?: unknown }[])
+      .map((r) => r.workspace_id)
+      .filter((v): v is string => typeof v === "string");
+    workspaceIds = Array.from(new Set([...workspaceIds, ...historicalIds]));
+  }
+
+  // -- workspaces (joinVia workspace_members) ---------------------------
+  // Art. 15: the workspace rows the user belongs to, reached through
+  // the workspace_members JOIN above (no direct user_id column on
+  // workspaces). Cross-tenant scope: every returned row's id MUST
+  // appear in the owner-scoped workspaceIds set (otherwise raise
+  // CrossTenantViolation, mirroring the messages-via-conversations
+  // shape).
+  if (workspaceIds.length > 0) {
+    const { data, error } = await service
+      .from("workspaces")
+      .select("*")
+      .in("id", workspaceIds);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`workspaces read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    const ownedSet = new Set(workspaceIds);
+    for (const row of rows) {
+      if (typeof row.id !== "string" || !ownedSet.has(row.id)) {
+        const err = new CrossTenantViolation(
+          "workspaces",
+          expectedUserId,
+          null,
+        );
+        mirrorCrossTenantViolation(null, expectedUserId, "workspaces", err);
+        throw err;
+      }
+    }
+    results.push({
+      table: "workspaces",
+      spec: DSAR_TABLE_ALLOWLIST.workspaces,
+      rows,
+    });
+  } else {
+    results.push({
+      table: "workspaces",
+      spec: DSAR_TABLE_ALLOWLIST.workspaces,
+      rows: [],
+    });
+  }
+
+  // -- workspace_member_attestations (migration 058) --------------------
+  // Art. 15: WORM consent records the user clicked-accept on. Both the
+  // INVITEE side (rows where the user clicked accept) and the INVITER
+  // side (rows where the user invited someone) are personal data the
+  // user has the right to access — once removed from the workspace,
+  // a one-sided `.eq("invitee_user_id", X)` would miss every inviter-
+  // side row, especially for ex-members whose workspace_members linkage
+  // is gone (#4230 Kieran P1-1).
+  //
+  // The `.or()` filter recovers BOTH sides under one query. The inlined
+  // two-arm scope check below (NOT assertReadScope — which is single-
+  // ownerField) asserts each returned row's owner column matches
+  // expectedUserId on EITHER invitee_user_id OR inviter_user_id.
+  {
+    const { data, error } = await service
+      .from("workspace_member_attestations")
+      .select("*")
+      .or(
+        `invitee_user_id.eq.${expectedUserId},inviter_user_id.eq.${expectedUserId}`,
+      );
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_member_attestations read failed: ${error.message}`,
+      );
+    const rows = (data ?? []) as Record<string, unknown>[];
+    // Two-arm scope check: row belongs to expectedUserId iff EITHER
+    // invitee_user_id OR inviter_user_id matches. Anonymised (post-
+    // Art-17) rows where both columns are NULL are surfaced via the
+    // .or() because the row's anonymise transition is the cascade
+    // signal; but the response set must not contain rows where NEITHER
+    // column matches the user (PostgREST .or() shape never returns
+    // those, but we re-assert defensively).
+    for (const row of rows) {
+      const inv = (row as { invitee_user_id?: unknown }).invitee_user_id;
+      const inr = (row as { inviter_user_id?: unknown }).inviter_user_id;
+      const ok = inv === expectedUserId || inr === expectedUserId;
+      if (!ok) {
+        const offending =
+          typeof inv === "string"
+            ? inv
+            : typeof inr === "string"
+            ? inr
+            : null;
+        const err = new CrossTenantViolation(
+          "workspace_member_attestations",
+          expectedUserId,
+          offending,
+        );
+        mirrorCrossTenantViolation(
+          offending,
+          expectedUserId,
+          "workspace_member_attestations",
+          err,
+        );
+        throw err;
+      }
+    }
+    results.push({
+      table: "workspace_member_attestations",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_member_attestations,
+      rows,
+    });
+  }
+
+  // -- workspace_member_removals (migration 062, #4230) -----------------
+  // Art. 15: WORM ledger of removal events. ownerField =
+  // removed_user_id; assertReadScope single-arm because the row's
+  // identity-of-record is the removed user. The actor (removed_by_user_id)
+  // sees their own outgoing removals when they file their own DSAR via
+  // a separate sibling query — but the Art. 15 owner here is the
+  // removed party. After Art. 17 anonymise both PII columns are NULL;
+  // the row stays for the 36-mo retention window and falls out of
+  // every owner-scoped SELECT (NULL never matches `.eq(<owner>, X)`).
+  {
+    const { data, error } = await service
+      .from("workspace_member_removals")
+      .select("*")
+      .eq("removed_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error)
+      throw new Error(
+        `workspace_member_removals read failed: ${error.message}`,
+      );
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "workspace_member_removals", {
+      ownerField: "removed_user_id",
+    });
+    results.push({
+      table: "workspace_member_removals",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_member_removals,
+      rows,
+    });
+  }
+
+  // -- workspace_member_actions (migration 063, #4231) ------------------
+  // Art. 15: append-only audit log of membership mutations. The user
+  // can be either the actor (owner who added/removed/role-changed
+  // someone) or the target (the affected member). OR-semantics requires
+  // two separate per-row WHERE chains; each chain carries its own .eq()
+  // for the per-row-where lint (AC30). Results merged + deduped by id
+  // before push so a row where both actor and target are the same user
+  // (structurally impossible for v1 RPCs but defensive) is not double-
+  // counted.
+  {
+    const { data: actorRows, error: actorErr } = await service
+      .from("workspace_member_actions")
+      .select("*")
+      .eq("actor_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (actorErr)
+      throw new Error(
+        `workspace_member_actions (actor) read failed: ${actorErr.message}`,
+      );
+    const actorTyped = (actorRows ?? []) as Record<string, unknown>[];
+    assertReadScope(actorTyped, expectedUserId, "workspace_member_actions", {
+      ownerField: "actor_user_id",
+    });
+
+    const { data: targetRows, error: targetErr } = await service
+      .from("workspace_member_actions")
+      .select("*")
+      .eq("target_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (targetErr)
+      throw new Error(
+        `workspace_member_actions (target) read failed: ${targetErr.message}`,
+      );
+    const targetTyped = (targetRows ?? []) as Record<string, unknown>[];
+    assertReadScope(targetTyped, expectedUserId, "workspace_member_actions", {
+      ownerField: "target_user_id",
+    });
+
+    const seen = new Set<string>();
+    const merged: Record<string, unknown>[] = [];
+    for (const row of [...actorTyped, ...targetTyped]) {
+      const id = row.id;
+      if (typeof id !== "string" || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(row);
+    }
+    results.push({
+      table: "workspace_member_actions",
+      spec: DSAR_TABLE_ALLOWLIST.workspace_member_actions,
+      rows: merged,
+    });
+  }
+
+  // -- byok_delegations (migration 064, #4232) --------------------------
+  // Art. 15+20: WORM ledger of BYOK funding delegations. A given user
+  // can appear in any of five actor columns — grantor (funder), grantee
+  // (beneficiary), created_by/revoked_by/cap_updated_by (administrative
+  // actors). OR-semantics requires one per-row WHERE chain per column
+  // (per-row-where lint AC30 — the lint parses literal .eq() calls so
+  // the five reads are spelled out explicitly rather than iterated).
+  // Rows merged + deduped by id so a single row in which the user
+  // appears in multiple positions (e.g. grantor == created_by) is not
+  // double-counted.
+  {
+    const seen = new Set<string>();
+    const merged: Record<string, unknown>[] = [];
+    const accumulate = (
+      rows: Record<string, unknown>[],
+      ownerField: string,
+    ) => {
+      assertReadScope(rows, expectedUserId, "byok_delegations", {
+        ownerField,
+      });
+      for (const row of rows) {
+        const id = row.id;
+        if (typeof id !== "string" || seen.has(id)) continue;
+        seen.add(id);
+        merged.push(row);
+      }
+    };
+
+    const { data: grantorRows, error: grantorErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("grantor_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (grantorErr)
+      throw new Error(
+        `byok_delegations (grantor) read failed: ${grantorErr.message}`,
+      );
+    accumulate(
+      (grantorRows ?? []) as Record<string, unknown>[],
+      "grantor_user_id",
+    );
+
+    const { data: granteeRows, error: granteeErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("grantee_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (granteeErr)
+      throw new Error(
+        `byok_delegations (grantee) read failed: ${granteeErr.message}`,
+      );
+    accumulate(
+      (granteeRows ?? []) as Record<string, unknown>[],
+      "grantee_user_id",
+    );
+
+    const { data: createdByRows, error: createdByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("created_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (createdByErr)
+      throw new Error(
+        `byok_delegations (created_by) read failed: ${createdByErr.message}`,
+      );
+    accumulate(
+      (createdByRows ?? []) as Record<string, unknown>[],
+      "created_by_user_id",
+    );
+
+    const { data: revokedByRows, error: revokedByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("revoked_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (revokedByErr)
+      throw new Error(
+        `byok_delegations (revoked_by) read failed: ${revokedByErr.message}`,
+      );
+    accumulate(
+      (revokedByRows ?? []) as Record<string, unknown>[],
+      "revoked_by_user_id",
+    );
+
+    const { data: capUpdatedByRows, error: capUpdatedByErr } = await service
+      .from("byok_delegations")
+      .select("*")
+      .eq("cap_updated_by_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (capUpdatedByErr)
+      throw new Error(
+        `byok_delegations (cap_updated_by) read failed: ${capUpdatedByErr.message}`,
+      );
+    accumulate(
+      (capUpdatedByRows ?? []) as Record<string, unknown>[],
+      "cap_updated_by_user_id",
+    );
+
+    results.push({
+      table: "byok_delegations",
+      spec: DSAR_TABLE_ALLOWLIST.byok_delegations,
+      rows: merged,
     });
   }
 
@@ -753,11 +1521,16 @@ interface BuildArchiveResult {
   manifest: ManifestRoot;
 }
 
-async function buildArchiveToDisk(
+/**
+ * Exported (#4319 Phase 7 integration test). Not part of the public
+ * worker API — callers should go through `runExport`.
+ */
+export async function buildArchiveToDisk(
   jobId: string,
   userId: string,
   tables: TableExportResult[],
   workspacePath: string | null,
+  pseudonymSalt: Buffer,
   signal: AbortSignal,
 ): Promise<BuildArchiveResult> {
   const tmpRoot = join(tmpdir(), "dsar-exports");
@@ -768,7 +1541,7 @@ async function buildArchiveToDisk(
   const excluded: ManifestFileEntry[] = [];
 
   const out = createWriteStream(localPath);
-  const archive = archiver("zip", { zlib: { level: 6 } });
+  const archive = new ZipArchive({ zlib: { level: 6 } });
   const archiveDone = new Promise<void>((resolve, reject) => {
     out.on("close", () => resolve());
     out.on("error", reject);
@@ -823,6 +1596,18 @@ async function buildArchiveToDisk(
     });
   }
 
+  // Co-uploader attachments (#4445 Art. 15 completeness). Manifest-only
+  // metadata entries (bytes NOT included in ZIP). Same pseudonymSalt as
+  // exportSqlTable so cross-table pseudonym consistency is maintained.
+  const coUploaderEntries = await enumerateCoUploaderAttachments(
+    userId,
+    pseudonymSalt,
+    signal,
+  );
+  for (const entry of coUploaderEntries) {
+    files.push(entry);
+  }
+
   // Workspace files (`/workspaces/<userId>/*`). O_NOFOLLOW + fstat ino
   // verify per AC17 + AC18. Per-file errors land in `excluded_files[]`
   // per AC26.
@@ -850,6 +1635,39 @@ async function buildArchiveToDisk(
     });
   }
 
+  // Art. 15(4) redaction disclosure (#4319). Builds one entry per
+  // table that had at least one redacted row; tables with count=0 are
+  // omitted so the manifest stays empty in single-user-workspace
+  // exports. Counts flow from exportSqlTable via the per-table
+  // `redactionCount` channel on TableExportResult.
+  const redactions: ManifestRoot["redactions"] = [];
+  const messagesTable = tables.find((t) => t.table === "messages");
+  if (messagesTable && (messagesTable.redactionCount ?? 0) > 0) {
+    redactions.push({
+      path: "tables/messages.json",
+      reason: REDACTION_REASON,
+      count: messagesTable.redactionCount!,
+    });
+  }
+  const attachmentsTable = tables.find(
+    (t) => t.table === "message_attachments",
+  );
+  if (attachmentsTable && (attachmentsTable.redactionCount ?? 0) > 0) {
+    redactions.push({
+      path: "tables/message_attachments.json",
+      reason: REDACTION_REASON,
+      count: attachmentsTable.redactionCount!,
+    });
+  }
+
+  if (coUploaderEntries.length > 0) {
+    redactions.push({
+      path: "attachments/co-uploader/",
+      reason: "art-15-co-uploader",
+      count: coUploaderEntries.length,
+    });
+  }
+
   // Manifest LAST per spec FR4 step 8.
   const manifest: ManifestRoot = {
     schema_version: MANIFEST_SCHEMA_VERSION,
@@ -864,6 +1682,7 @@ async function buildArchiveToDisk(
     },
     files,
     excluded_files: excluded,
+    redactions,
   };
   const manifestJson = dsarStringify(manifest);
   archive.append(Buffer.from(manifestJson, "utf-8"), {
@@ -900,6 +1719,27 @@ async function buildArchiveToDisk(
     new PassThrough(),
   );
   const bundleSha256 = bundleHash.digest("hex");
+
+  // Art. 15(4) observability emission (#4319 Phase 6). Info-level →
+  // pino-only (no Sentry over-paging at SENTRY_BREADCRUMB_MIN_LEVEL=warn).
+  // Counts only; no raw user_id, content, salt, or row IDs in the
+  // payload. Long-horizon WORM trail tracked at #4359.
+  const messagesRedactCount = messagesTable?.redactionCount ?? 0;
+  const attachmentsRedactCount = attachmentsTable?.redactionCount ?? 0;
+  if (messagesRedactCount > 0 || attachmentsRedactCount > 0) {
+    log.info(
+      {
+        feature: "dsar-export",
+        op: "redact-foreign-author",
+        userIdHash: hashUserId(userId),
+        redactions: {
+          messages: messagesRedactCount,
+          message_attachments: attachmentsRedactCount,
+        },
+      },
+      "redacted foreign-author content",
+    );
+  }
 
   return { localPath, sha256: bundleSha256, bytes: fileStat.size, manifest };
 }
@@ -1027,7 +1867,8 @@ async function runExport(job: {
   let localPath: string | null = null;
 
   try {
-    const tables = await exportSqlTable(expectedUserId, controller.signal);
+    const pseudonymSalt = randomBytes(32);
+    const tables = await exportSqlTable(expectedUserId, pseudonymSalt, controller.signal);
     // Locate the user's workspace path for the workspace-files
     // enumerator. Pulled from the `users` row already fetched by
     // exportSqlTable — single source of truth.
@@ -1043,6 +1884,7 @@ async function runExport(job: {
       expectedUserId,
       tables,
       workspacePath,
+      pseudonymSalt,
       controller.signal,
     );
     localPath = archive.localPath;

@@ -1,3 +1,10 @@
+---
+title: copy_adapter.sh skipped npm-ci because it never copies package.json
+date: 2026-05-05
+category: infrastructure
+tags: [integration-issues, plugins/soleur/skills/pencil-setup]
+---
+
 # Learning: copy_adapter.sh skipped npm-ci because it never copies package.json
 
 ## Problem

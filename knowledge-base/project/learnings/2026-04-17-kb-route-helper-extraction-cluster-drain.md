@@ -1,11 +1,13 @@
 ---
-name: KB Route-Helper Extraction — 4-Issue Cluster Drain
-description: Patterns for draining a cluster of review-origin issues (error-shape symmetry, server-declared kind, perf query collapse) against /api/shared/[token] in one PR.
-type: reference
+title: KB Route-Helper Extraction Cluster Drain
 date: 2026-04-17
-branch: feat-kb-route-helper-extraction
-issues: ["#2304", "#2305", "#2308", "#2328"]
+category: engineering
 tags: [kb, routes, refactor, code-review]
+branch: feat-kb-route-helper-extraction
+description: 'Patterns for draining a cluster of review-origin issues (error-shape symmetry, server-declared kind, perf query collapse) against /api/shared/[token] in one PR.'
+issues: [#2304, #2305, #2308, #2328]
+name: KB Route-Helper Extraction — 4-Issue Cluster Drain
+type: reference
 ---
 
 # Learning: KB Route-Helper Extraction Cluster Drain

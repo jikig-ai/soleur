@@ -14,6 +14,30 @@ vi.mock("@/lib/supabase/service", () => ({
   }),
 }));
 
+// PR-C §2.2 (#3244): conversations + messages SELECTs go through
+// tenant client. Route `users` (auth probe) → probeOk; pass through
+// other tables to `mockFrom`.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: (table: string) => {
+      if (table === "users") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { id: "user-1" },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+      return mockFrom(table);
+    },
+  })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 const { mockReportSilentFallback } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
 }));

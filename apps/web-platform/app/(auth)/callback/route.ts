@@ -9,8 +9,13 @@ import {
 import { provisionWorkspace } from "@/server/workspace";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse, type NextRequest } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
-import { reportSilentFallback } from "@/server/observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+} from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // Matches both the canonical verifier cookie and the hypothetical chunked
 // variant (`@supabase/ssr` chunks `sb-<ref>-auth-token` once it exceeds ~4KB;
@@ -77,7 +82,7 @@ export async function GET(request: NextRequest) {
     const providerErrorCode = isKnownProviderErrorCode(rawErrorCode)
       ? rawErrorCode
       : "unknown";
-    reportSilentFallback(null, {
+    warnSilentFallback(null, {
       feature: "auth",
       op: "callback_provider_error",
       message: `OAuth provider returned error=${providerErrorCode}`,
@@ -294,6 +299,10 @@ async function ensureWorkspaceProvisioned(
     // creating the users row. This fallback fires only if the trigger failed.
     // tc_accepted_at is always NULL — acceptance is recorded server-side via
     // POST /api/accept-terms.
+    //
+    // Workspace identifier === userId per migration 053 §1.1.7 N2 invariant
+    // (the workspace_members backfill makes workspaces.id = owner_user_id;
+    // the handle_new_user trigger preserves this for new signups).
     const workspacePath = await provisionWorkspace(userId);
     const { error: insertError } = await serviceClient
       .from("users")
@@ -307,7 +316,15 @@ async function ensureWorkspaceProvisioned(
         { onConflict: "id", ignoreDuplicates: true },
       );
     if (insertError) {
-      logger.error({ err: insertError, userId }, "Fallback user upsert failed");
+      Sentry.withIsolationScope(() => {
+        Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
+        reportSilentFallback(insertError, {
+          feature: "auth-callback",
+          op: "user-upsert",
+          message: "Fallback user upsert failed",
+          extra: { userId },
+        });
+      });
     }
     return null;
   }
@@ -320,7 +337,15 @@ async function ensureWorkspaceProvisioned(
         .update({ workspace_path: workspacePath, workspace_status: "ready" })
         .eq("id", userId);
     } catch (err) {
-      logger.error({ err, userId }, "Workspace provisioning failed");
+      Sentry.withIsolationScope(() => {
+        Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
+        reportSilentFallback(err, {
+          feature: "auth-callback",
+          op: "workspace-provisioning",
+          message: "Workspace provisioning failed",
+          extra: { userId },
+        });
+      });
     }
   }
 

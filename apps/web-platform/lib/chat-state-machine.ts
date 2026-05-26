@@ -241,7 +241,7 @@ export interface StreamEventResult {
  * `interactive_prompt_response` is intentionally excluded — it's a
  * client→server event and never reaches the reducer.
  */
-type StreamEvent = Extract<
+export type StreamEvent = Extract<
   WSMessage,
   | { type: "stream_start" }
   | { type: "stream" }
@@ -594,6 +594,20 @@ export function applyStreamEvent(
     // -----------------------------------------------------------------
 
     case "subagent_spawn": {
+      // #3775 — idempotent on `spawnId`. The wire protocol guarantees spawnId
+      // uniqueness server-side, but a WS reconnect / supabase realtime retry
+      // / regressed runner could re-emit. Duplicate-key state would corrupt
+      // `spawnIndex` (the second insert overwrites the first, breaking the
+      // subsequent `subagent_complete` lookup at line 668). Mirror the
+      // `interactive_prompt` arm's dedup shape (line 751-770).
+      if (priorSpawnIndex.has(event.spawnId)) {
+        return {
+          messages: prev,
+          activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+        };
+      }
       // Find an existing subagent_group in `prev` matching `parentId`.
       let groupIdx = -1;
       for (let i = prev.length - 1; i >= 0; i--) {

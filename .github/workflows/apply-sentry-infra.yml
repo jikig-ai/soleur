@@ -1,0 +1,264 @@
+# Auto-apply `sentry_cron_monitor` resources whenever a PR that touches
+# apps/web-platform/infra/sentry/cron-monitors.tf merges to main. Closes the
+# window between the per-workflow check-in steps shipping (Phase 4 of #3814)
+# and the monitors existing in Sentry. See:
+#   knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md
+#
+# Authorization model: the PR merge IS the human authorization. Issue-alert
+# resources are excluded from this auto-apply (they are import-only per the
+# operator AC13 step in the plan); only cron-monitor changes trigger an apply.
+#
+# Kill switch: include `[skip-sentry-apply]` in the merge commit message to
+# skip auto-apply for that merge.
+#
+# Manual escape hatch: `workflow_dispatch` is kept for re-runs after a
+# transient failure or for ad-hoc applies (still scoped to cron monitors).
+#
+# Authentication divergence from apps/web-platform/infra/ root:
+#   - SENTRY_IAC_AUTH_TOKEN (the GitHub repo secret) is dedicated to this
+#     IaC pipeline. It maps to the Internal Integration `iac-terraform-prd`
+#     on `jikigai-eu` (see ADR-031 §Authentication). The env var passed to
+#     terraform/audit scripts is still named `SENTRY_AUTH_TOKEN` because that
+#     is the canonical env var the Sentry terraform provider and audit
+#     tooling expect.
+#   - SENTRY_IAC_AUTH_TOKEN comes from a GitHub repo secret (NOT Doppler) per
+#     ADR-031 secret-store-divergence.
+#   - R2 backend creds (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) come from
+#     Doppler `prd_terraform` via `doppler secrets get --plain`.
+#
+# All untrusted inputs (commit messages, workflow_dispatch inputs) are routed
+# through env vars before reaching any `run:` block. All action references
+# are SHA-pinned.
+
+name: Apply sentry infra (cron monitors)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web-platform/infra/sentry/cron-monitors.tf"
+      # Defense-in-depth: re-fire on filter mutations so a PR that mutates
+      # the destroy-guard filter without touching infra still runs the
+      # apply step against `main`'s captured baseline (#4419).
+      - "tests/scripts/lib/destroy-guard-filter-sentry.jq"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you applying? (manual re-run only)"
+        required: true
+        type: string
+
+concurrency:
+  group: terraform-apply-sentry-infra
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra/sentry
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    outputs:
+      skip: ${{ steps.kill_switch.outputs.skip }}
+    steps:
+      - id: kill_switch
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        # Anchor `[skip-sentry-apply]` to its own line so it cannot
+        # fire from a quoted block, code fence, or trailer that happens
+        # to carry the literal substring. Symmetric posture with the
+        # `[ack-destroy]` gate in the apply job.
+        run: |
+          if [[ "$HEAD_MSG" =~ (^|$'\n')\[skip-sentry-apply\]($|$'\n') ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Kill switch detected in commit message — skipping apply."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  apply:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
+    # reviewer click was duplicative friction on top of the PR-merge gate
+    # (CODEOWNERS review + branch protection on main), and was blocking
+    # apply runs for up to 13h (#4204 on 2026-05-20). The PR-merge IS the
+    # human authorization per `hr-menu-option-ack-not-prod-write-auth`.
+    # `apply-github-infra.yml` already omits the gate without incident.
+    # See PR #4218 for the failed App-as-reviewer attempt; GitHub does
+    # not allow Apps in env reviewers (User/Team only).
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify required secrets present
+        env:
+          SENTRY_TOKEN_CHECK: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          if [[ -z "$SENTRY_TOKEN_CHECK" ]]; then
+            echo "::error::SENTRY_IAC_AUTH_TOKEN secret is not configured."
+            exit 1
+          fi
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        # `-lockfile=readonly` refuses to download a provider whose
+        # checksum is not already in `.terraform.lock.hcl`. Combined with
+        # the committed lockfile, this defends against a malicious
+        # republish of the pinned beta provider version (beta tags are
+        # mutable on the Terraform registry by policy).
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Sentry audit-gate (4-gate destination-controllability)
+        # PR-beta §10.6 / Branch-C Arch F1 gate-call-graph closure: the
+        # operator-driven `workflow_dispatch:` path was previously a
+        # gate-bypass surface for stale-credentials terraform apply.
+        # Running the audit script BEFORE `terraform plan` ensures every
+        # operator-triggered apply traverses the 4-gate check. Fail-closed
+        # — non-zero exit halts the workflow before any state mutation.
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          which jq >/dev/null 2>&1 || sudo apt-get install -y jq
+          bash apps/web-platform/scripts/sentry-monitors-audit.sh
+
+      - name: Terraform plan (cron monitors only)
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          # `-e` is intentionally omitted so we can capture terraform plan's
+          # exit code in $rc — plan exits non-zero on legitimate failures we
+          # want to surface, not abort silently. Re-enabled with `set -e`
+          # after the rc-capture window per
+          # `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
+          set -uo pipefail
+          terraform plan \
+            -target=sentry_cron_monitor.scheduled_terraform_drift \
+            -target=sentry_cron_monitor.scheduled_oauth_probe \
+            -target=sentry_cron_monitor.scheduled_github_app_drift_guard \
+            -target=sentry_cron_monitor.scheduled_daily_triage \
+            -target=sentry_cron_monitor.scheduled_realtime_probe \
+            -target=sentry_cron_monitor.scheduled_skill_freshness \
+            -target=sentry_cron_monitor.scheduled_content_vendor_drift \
+            -target=sentry_cron_monitor.scheduled_community_monitor \
+            -target=sentry_cron_monitor.scheduled_gh_pages_cert_state \
+            -target=sentry_cron_monitor.scheduled_follow_through \
+            -target=sentry_cron_monitor.scheduled_strategy_review \
+            -target=sentry_cron_monitor.scheduled_roadmap_review \
+            -target=sentry_cron_monitor.scheduled_legal_audit \
+            -target=sentry_cron_monitor.scheduled_agent_native_audit \
+            -target=sentry_cron_monitor.scheduled_competitive_analysis \
+            -target=sentry_cron_monitor.scheduled_compound_promote \
+            -target=sentry_cron_monitor.scheduled_stale_deferred_scope_outs \
+            -no-color -input=false -out=tfplan
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan failed (exit $rc)"
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          # Authoritative destroy count via the structured plan, not the
+          # `Plan: …` summary line. The summary-line grep is brittle and
+          # can be silently bypassed by Terraform formatting changes;
+          # `terraform show -json` is the documented stable contract.
+          # Sibling of apply-github-infra.yml's destroy-guard (closes #4419
+          # — extends the #4420 widening to apply-sentry-infra). Filter is
+          # path-specific per the #4420 plan-review iteration. Source of
+          # truth: tests/scripts/lib/destroy-guard-filter-sentry.jq (also
+          # exercised by tests/scripts/test-destroy-guard-counter-sentry.sh).
+          counts=$(terraform show -json tfplan | \
+            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-sentry.jq")
+          resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
+          nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
+          # Validate counters parsed correctly — empty values from a jq
+          # failure would silently evaluate false in the `-gt 0` test and
+          # let destructive plans slip past the guard.
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}')."
+            exit 1
+          fi
+          destroy_count=$((resource_deletes + nested_deletes))
+          # Anchor `[ack-destroy]` to its own line (start-of-string OR
+          # preceded by newline; followed by newline OR end-of-string) so
+          # the token cannot fire from a quoted block, code fence, or
+          # `Co-Authored-By:` trailer carrying that literal substring.
+          ack_destroy=false
+          if [[ "$HEAD_MSG" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+            ack_destroy=true
+          fi
+          if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
+            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s))."
+            echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
+            grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
+            exit 1
+          fi
+
+      - name: Terraform apply (cron monitors only)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          terraform apply -auto-approve -input=false tfplan
+
+      - name: Post-apply summary
+        if: always()
+        env:
+          TRIGGER: ${{ github.event_name }}
+          MERGE_SHA: ${{ github.sha }}
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Apply sentry infra (cron monitors)"
+            echo ""
+            echo "**Trigger:** ${TRIGGER}"
+            echo "**Merge SHA:** ${MERGE_SHA}"
+            echo "**Reason (manual only):** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"

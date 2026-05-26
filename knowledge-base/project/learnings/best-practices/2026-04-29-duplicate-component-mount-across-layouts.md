@@ -1,10 +1,12 @@
 ---
-name: duplicate-component-mount-across-layouts
-description: When a Next.js App Router nested layout adds a stateful component that the parent layout (e.g., a mobile drawer) also intends to surface, both mount it unconditionally — opening duplicate Realtime subscriptions, doubling work, and causing fan-out across every dashboard route, not just the segment the component belongs to. Caught only by multi-agent review; unit tests pass because each render site is correct in isolation.
-type: best-practice
-tags: [nextjs, app-router, realtime, supabase, multi-agent-review, performance, layouts]
+title: Duplicate Component Mount Across Nested Layouts
+date: 2026-04-29
 category: best-practices
+tags: [nextjs, app-router, realtime, supabase, multi-agent-review, performance, layouts]
 module: apps/web-platform
+description: When a Next.js App Router nested layout adds a stateful component that the parent layout (e.g., a mobile drawer) also intends to surface, both mount it unconditionally — opening duplicate Realtime subscriptions, doubling work, and causing fan-out across every dashboard route, not just the segment the component belongs to. Caught only by multi-agent review; unit tests pass because each render site is correct in isolation.
+name: duplicate-component-mount-across-layouts
+type: best-practice
 ---
 
 # Duplicate Component Mount Across Nested Layouts

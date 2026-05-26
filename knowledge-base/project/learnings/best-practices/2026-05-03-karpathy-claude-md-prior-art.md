@@ -1,10 +1,12 @@
 ---
-name: karpathy-claude-md-prior-art
-description: Karpathy's 4-rule CLAUDE.md (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution) maps to existing Claude Code system-prompt defaults plus our AGENTS.md/skill enforcement. Recorded as confirmation of posture, not as new rules — adding them verbatim would duplicate upstream guidance and burn the AGENTS.md byte budget without behavior change.
-type: best-practice
-tags: [agents-md, prior-art, byte-budget, placement-gate, prompt-engineering]
+title: Karpathy CLAUDE.md — Prior Art for Our Posture
+date: 2026-05-03
 category: best-practices
+tags: [agents-md, prior-art, byte-budget, placement-gate, prompt-engineering]
 module: AGENTS.md
+description: 'Karpathy''s 4-rule CLAUDE.md (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution) maps to existing Claude Code system-prompt defaults plus our AGENTS.md/skill enforcement. Recorded as confirmation of posture, not as new rules — adding them verbatim would duplicate upstream guidance and burn the AGENTS.md byte budget without behavior change.'
+name: karpathy-claude-md-prior-art
+type: best-practice
 ---
 
 # Karpathy CLAUDE.md — Prior Art for Our Posture
@@ -74,6 +76,40 @@ domain-scoped to our `/work`, `/ship` Phase 7, and TDD gate
   defaults in a future release. At that point, the relevant rule(s) become
   AGENTS.md-eligible — re-evaluate against `cq-agents-md-tier-gate` then,
   not now.
+
+## Audit Direction (pre-merge check)
+
+Added 2026-05-15. The original note above closes the **guidance**
+direction (don't restate Karpathy's rules in AGENTS.md). The remaining
+direction is **audit**: ensure pre-merge that a diff actually honored
+those defaults. Implementation surface is the existing
+`code-simplicity-reviewer` agent body (not a new agent, skill, or
+slash command), extended with:
+
+- A new process bullet `7. Verify Stated Goals Against Diff` that
+  reads acceptance criteria from PR body / linked issue / linked spec
+  and maps each to evidence in the diff.
+- New output sections `### Hidden Assumptions` (unstated invariants,
+  magic numbers, implicit callsite contracts) and `### Goal
+  Verification` (criterion / verdict / evidence).
+- An explicit fallback string (`_N/A — no diff in scope._`) for the
+  ≥3 invocation surfaces that do not pass a diff (CONCUR-gate at
+  `plugins/soleur/skills/review/SKILL.md`, `/soleur:plan-review`
+  3-agent panel, `atdd-developer`, `compound`).
+
+Together with the guidance-direction conclusion above, this
+completes the decision space for the Karpathy posture in this repo:
+guidance is upstream-default + AGENTS.md hard rules, audit is
+`code-simplicity-reviewer`. Adding the rules verbatim to AGENTS.md
+remains a no-op.
+
+Cross-links:
+
+- Issue #2727 (parent #2718)
+- Brainstorm: `knowledge-base/project/brainstorms/2026-05-15-karpathy-check-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-karpathy-check-2727/spec.md`
+- Plan: `knowledge-base/project/plans/2026-05-15-feat-karpathy-check-extend-simplicity-reviewer-plan.md`
+- Companion learning (audit-vs-guidance reframe): `knowledge-base/project/learnings/2026-05-15-brainstorm-audit-vs-guidance-direction-reframe.md`
 
 ## Related
 

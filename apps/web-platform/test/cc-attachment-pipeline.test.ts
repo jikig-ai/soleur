@@ -24,6 +24,28 @@ vi.mock("fs/promises", () => ({
   readFile: vi.fn(),
 }));
 
+// Silence pino's async transport (pino-pretty spawns a worker thread in
+// non-production envs, which can leave unresolved I/O after a test completes
+// and cause non-deterministic call-count assertions in concurrent CI runs).
+vi.mock("@/server/logger", () => ({
+  default: {
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  },
+  createChildLogger: () => ({
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+  }),
+  REDACT_PATHS: [],
+}));
+
 // Build a stateful mock supabase client. Each invocation of `from(table)`
 // returns a chain that records its calls. The helper expects:
 //   - `from("message_attachments").insert(rows)` returns `{ error: null }`.
@@ -100,8 +122,7 @@ function makeAttachment(over: Partial<AttachmentRef> = {}): AttachmentRef {
 const buf = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer as ArrayBuffer;
 
 beforeEach(() => {
-  mkdirMock.mockClear();
-  writeFileMock.mockClear();
+  vi.clearAllMocks();
 });
 
 describe("persistAndDownloadAttachments", () => {

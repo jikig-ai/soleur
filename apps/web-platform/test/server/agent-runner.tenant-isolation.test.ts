@@ -32,6 +32,8 @@ import {
   mintFounderJwt,
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
+import { registerSharedMintCache } from "@/test/helpers/mint-once";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -109,6 +111,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .from("conversations")
           .insert({
             user_id: user.id,
+            workspace_id: user.id, // solo-canary per mig 059 backfill
             session_id: `tenant-isolation-${randomBytes(4).toString("hex")}`,
           })
           .select("id")
@@ -119,8 +122,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
         const { error: msgError } = await service.from("messages").insert({
           conversation_id: convRow!.id,
+          workspace_id: user.id, // solo-canary; mig 059 made this NOT NULL
           role: "user",
           content: `synthesized message for ${user.email}`,
+          // PR-I (#4078, migration 053_template_authorizations.sql) added
+          // messages.template_id NOT NULL with CHECK ^[a-z][a-z0-9_]*$.
+          template_id: "default_legacy",
         });
         expect(msgError, `seed messages for ${user.email}`).toBeNull();
 
@@ -139,7 +146,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         const { error: nameError } = await service.from("team_names").insert({
           user_id: user.id,
           leader_id: "cpo",
-          custom_name: `Synthetic-${user.id.slice(0, 8)}`,
+          custom_name: `Synthetic ${user.id.slice(0, 8)}`,
         });
         expect(nameError, `seed team_names for ${user.email}`).toBeNull();
       }
@@ -148,6 +155,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       _resetTenantCache();
       const aMint = await mintFounderJwt(userA.id);
       const bMint = await mintFounderJwt(userB.id);
+      // Cap suite mint count to 2 (one per founder) — any subsequent
+      // `callMint` in `getFreshTenantClient` returns the cached JWT
+      // instead of burning GoTrue rate-limit budget. See
+      // `test/helpers/mint-once.ts` for the cascade rationale.
+      registerSharedMintCache([
+        [userA.id, aMint],
+        [userB.id, bMint],
+      ]);
 
       // 4. Build raw clients per-JWT (bypassing the cache so each test is
       // unambiguous about which JWT it's exercising). The cache layer is
@@ -179,12 +194,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           );
         }
 
-        const { error } = await service.auth.admin.deleteUser(user.id);
-        if (error && !/not found/i.test(error.message)) {
-          throw new Error(
-            `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-          );
-        }
+        await tearDownTenantUser(service, user);
       }
     }, 30_000);
 
@@ -305,18 +315,22 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     test("audit-row write under tenant client is rejected (write_byok_audit is service-role only)", async () => {
       // The audit-row writer is intentionally NOT exposed to tenantClient;
       // founder JWTs must NOT be able to insert audit rows directly.
+      // Mig 061 6-arg signature — call with all params so the assertion
+      // pins the EXECUTE-deny path (42501) rather than schema-cache
+      // function-not-found (PGRST202) from a stale 5-arg call.
       const { error } = await aClient.rpc("write_byok_audit", {
         p_invocation_id: "00000000-0000-0000-0000-000000000001",
         p_founder_id: userA.id,
+        p_workspace_id: userA.id,
         p_agent_role: "test",
         p_token_count: 1,
         p_unit_cost_cents: 1,
       });
       // PostgREST returns 42501 (insufficient_privilege) when role lacks EXECUTE.
+      // Pin to code only — the message-regex was broad enough to match
+      // "permission denied for schema …" (a different bug class).
       expect(error).not.toBeNull();
-      expect(error!.code === "42501" || /permission/i.test(error!.message)).toBe(
-        true,
-      );
+      expect(error!.code).toBe("42501");
     });
 
     test("precheck_jwt_mint under tenant client is rejected (RPC is service-role only)", async () => {
@@ -325,9 +339,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         p_ttl_sec: 600,
       });
       expect(error).not.toBeNull();
-      expect(error!.code === "42501" || /permission/i.test(error!.message)).toBe(
-        true,
-      );
+      expect(error!.code).toBe("42501");
     });
   },
 );

@@ -1,3 +1,10 @@
+---
+title: Cron-based tmpfs guard for mid-session runaway output
+date: 2026-03-28
+category: engineering
+tags: [runtime-errors, claude-code-infrastructure]
+---
+
 # Learning: Cron-based tmpfs guard for mid-session runaway output
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Cloudflare MCP Integration via Plugin.json
+date: 2026-02-22
+category: infrastructure
+tags: [integration-issues, infra-security-agent, curl-based cloudflare api calls in agent]
+---
+
 # Learning: Cloudflare MCP Integration via Plugin.json
 
 ## Problem

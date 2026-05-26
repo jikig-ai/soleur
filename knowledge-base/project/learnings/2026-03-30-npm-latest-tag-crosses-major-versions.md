@@ -1,3 +1,10 @@
+---
+title: 'npm @latest tag crosses major version boundaries during dependency upgrades'
+date: 2026-03-30
+category: engineering
+tags: [dependency-management, apps/web-platform]
+---
+
 # Learning: npm @latest tag crosses major version boundaries during dependency upgrades
 
 ## Problem

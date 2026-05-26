@@ -1,16 +1,15 @@
 ---
-module: WebSocket Protocol
+title: Check all type consumers when modifying discriminated unions
 date: 2026-04-10
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "TypeScript compile error after adding variant to discriminated union"
-  - "Exhaustive switch in ws-handler.ts not updated for new usage_update type"
-  - "SECURITY DEFINER function callable by any authenticated user via PostgREST"
-root_cause: incomplete_setup
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [typescript, discriminated-union, exhaustive-switch, security-definer, supabase, rpc]
+symptoms: [TypeScript compile error after adding variant to discriminated union, Exhaustive switch in ws-handler.ts not updated for new usage_update type, SECURITY DEFINER function callable by any authenticated user via PostgREST]
+module: WebSocket Protocol
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: incomplete_setup
+severity: high
 ---
 
 # Learning: Check all type consumers when modifying discriminated unions

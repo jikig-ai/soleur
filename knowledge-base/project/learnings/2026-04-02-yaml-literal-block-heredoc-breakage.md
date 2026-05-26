@@ -1,3 +1,10 @@
+---
+title: Heredocs and multi-line strings break YAML literal blocks
+date: 2026-04-02
+category: engineering
+tags: [build-errors, ci]
+---
+
 # Learning: Heredocs and multi-line strings break YAML literal blocks
 
 ## Problem

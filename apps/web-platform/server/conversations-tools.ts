@@ -4,7 +4,7 @@
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
-import { createServiceClient } from "@/lib/supabase/service";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { STATUS_LABELS } from "@/lib/types";
@@ -151,8 +151,13 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         const repoUrl = await getCurrentRepoUrl(userId);
         if (!repoUrl) return disconnectedResponse();
 
-        const supabase = createServiceClient();
-        let query = supabase
+        // PR-C §2.9 (#3244): tenant client. RLS on `conversations`
+        // enforces `auth.uid() = user_id`. The preceding
+        // `getCurrentRepoUrl(userId)` call IS the auth probe (it
+        // reads users via tenant + handles RuntimeAuthError) — a
+        // separate probe here would re-mint the same JWT for no gain.
+        const tenant = await getFreshTenantClient(userId);
+        let query = tenant
           .from("conversations")
           .select(
             "id, status, domain_leader, last_active, created_at, archived_at",
@@ -207,13 +212,18 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         const repoUrl = await getCurrentRepoUrl(userId);
         if (!repoUrl) return disconnectedResponse();
 
-        const supabase = createServiceClient();
+        // PR-C §2.9 (#3244): tenant client. RLS on `conversations`
+        // enforces `auth.uid() = user_id`. The preceding
+        // `getCurrentRepoUrl(userId)` call IS the auth probe (it
+        // reads users via tenant + handles RuntimeAuthError) — a
+        // separate probe here would re-mint the same JWT for no gain.
+        const tenant = await getFreshTenantClient(userId);
         const nowIso = new Date().toISOString();
         // Slot release on archive is handled by the AFTER UPDATE OF archived_at trigger in
         // supabase/migrations/036_release_slot_on_archive.sql (fires public.release_conversation_slot).
         // Do NOT add an explicit releaseSlot call here — it would double-release.
         // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
-        const { data, error } = await supabase
+        const { data, error } = await tenant
           .from("conversations")
           .update({ archived_at: nowIso })
           .eq("id", args.conversationId)
@@ -248,9 +258,14 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         const repoUrl = await getCurrentRepoUrl(userId);
         if (!repoUrl) return disconnectedResponse();
 
-        const supabase = createServiceClient();
+        // PR-C §2.9 (#3244): tenant client. RLS on `conversations`
+        // enforces `auth.uid() = user_id`. The preceding
+        // `getCurrentRepoUrl(userId)` call IS the auth probe (it
+        // reads users via tenant + handles RuntimeAuthError) — a
+        // separate probe here would re-mint the same JWT for no gain.
+        const tenant = await getFreshTenantClient(userId);
         // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
-        const { data, error } = await supabase
+        const { data, error } = await tenant
           .from("conversations")
           .update({ archived_at: null })
           .eq("id", args.conversationId)
@@ -291,9 +306,14 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         const repoUrl = await getCurrentRepoUrl(userId);
         if (!repoUrl) return disconnectedResponse();
 
-        const supabase = createServiceClient();
+        // PR-C §2.9 (#3244): tenant client. RLS on `conversations`
+        // enforces `auth.uid() = user_id`. The preceding
+        // `getCurrentRepoUrl(userId)` call IS the auth probe (it
+        // reads users via tenant + handles RuntimeAuthError) — a
+        // separate probe here would re-mint the same JWT for no gain.
+        const tenant = await getFreshTenantClient(userId);
         // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
-        const { data, error } = await supabase
+        const { data, error } = await tenant
           .from("conversations")
           .update({ status: args.status })
           .eq("id", args.conversationId)

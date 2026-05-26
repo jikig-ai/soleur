@@ -153,12 +153,21 @@ _emit_drop_sentinel() {
   return 0
 }
 
-# --- emit_incident <rule_id> <event_type> <prefix> [command_snippet] -------
+# --- emit_incident <rule_id> <event_type> <prefix> [command_snippet] [hook_event] [kind] -------
 # See `_emit_drop_sentinel` above for the sentinel-line discriminator and
 # aggregator-filter contract. emit_incident itself emits a sentinel via the
 # helper on `jq_fail` (line-build failure) and `rotation_fail` (rotator
 # returned non-zero); the existing per-`$$` rate-limited stderr warn for
 # write failures is preserved for operator visibility.
+#
+# kind (slot 6) — additive-optional discriminator added 2026-05-15 for F2
+# prod-write-defer-gate.sh (would_defer, defer_requested, bypass,
+# hook_self_fault). Defaults to "rule_event" so existing 3-5-arg callers
+# stay shape-compatible. NOT a SCHEMA_VERSION bump — v1 readers ignore
+# unknown fields; aggregators using `(.kind // "rule_event")` see legacy
+# rows correctly. The Python sibling
+# (security_reminder_hook.py) emits no kind field; consumers must treat
+# null-kind as "rule_event".
 # event_type ∈ {deny, bypass, applied, warn}
 #   deny    — PreToolUse hook blocked an operation (prevents a violation).
 #   bypass  — user bypassed the rule with a known escape hatch (LEFTHOOK=0, etc.).
@@ -187,7 +196,7 @@ _emit_drop_sentinel() {
 #         rule_id as the primary join key — but keeps forensic context if
 #         AGENTS.md is ever rebased with new ids).
 emit_incident() {
-  local rule_id="${1:-}" event="${2:-}" prefix="${3:-}" cmd="${4:-}" hook_event="${5:-PreToolUse}"
+  local rule_id="${1:-}" event="${2:-}" prefix="${3:-}" cmd="${4:-}" hook_event="${5:-PreToolUse}" kind="${6:-rule_event}"
   [[ -z "$rule_id" || -z "$event" ]] && return 0
 
   # Cap cmd length so a single JSONL line stays well under a 4KB kernel
@@ -223,8 +232,9 @@ emit_incident() {
     --arg e "$event" \
     --arg p "$prefix" \
     --arg c "$cmd" \
+    --arg k "$kind" \
     --argjson s "$SCHEMA_VERSION" \
-    '{schema:$s, timestamp:$ts, rule_id:$r, event_type:$e, rule_text_prefix:$p, command_snippet:$c}' \
+    '{schema:$s, timestamp:$ts, rule_id:$r, event_type:$e, rule_text_prefix:$p, command_snippet:$c, kind:$k}' \
     2>/dev/null) || {
       _emit_drop_sentinel "$file" "$hook_event" "jq_fail"
       return 0

@@ -1,12 +1,13 @@
 ---
-name: KB share button missing on non-markdown files (PDF, image, CSV)
-description: The share affordance was only wired into the markdown branch of the KB viewer and the server rejected non-.md paths; extending to binaries required a full-stack fix with shared hardening helper.
+title: KB Share Button on Binary Files
 date: 2026-04-15
 category: ui-bugs
-module: kb-sharing
-issue: 2232
-pr: 2282
 tags: [kb, share, pdf, binary, csp, security, refactor, helper-extraction]
+module: kb-sharing
+description: The share affordance was only wired into the markdown branch of the KB viewer and the server rejected non-.md paths; extending to binaries required a full-stack fix with shared hardening helper.
+issue: 2232
+name: KB share button missing on non-markdown files (PDF, image, CSV)
+pr: 2282
 ---
 
 # Learning: KB Share Button on Binary Files

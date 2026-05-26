@@ -1,3 +1,10 @@
+---
+title: CI lint scripts that grep for inline patterns break when you extract to a shared script
+date: 2026-03-20
+category: engineering
+tags: [integration-issues, ci-workflows]
+---
+
 # Learning: CI lint scripts that grep for inline patterns break when you extract to a shared script
 
 ## Problem

@@ -18,6 +18,18 @@ resource "cloudflare_record" "deploy" {
   ttl     = 1
 }
 
+# SSH ingress for CI runner via Cloudflare Tunnel (see #4177).
+# Protected by CF Access service token; CI runs `cloudflared access tcp`
+# to bridge runner→host through this hostname.
+resource "cloudflare_record" "ssh" {
+  zone_id = var.cf_zone_id
+  name    = "ssh"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.web.id}.cfargotunnel.com"
+  type    = "CNAME"
+  proxied = true
+  ttl     = 1
+}
+
 # Email authentication records for Resend SMTP (sends via Amazon SES, eu-west-1)
 
 resource "cloudflare_record" "dkim_resend" {

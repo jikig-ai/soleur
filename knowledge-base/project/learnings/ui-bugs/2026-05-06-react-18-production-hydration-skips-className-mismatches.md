@@ -1,10 +1,17 @@
 ---
+title: React 18 production hydration does NOT patch className/attribute mismatches
 date: 2026-05-06
 category: ui-bugs
-module: theme-toggle
 tags: [react-18, hydration, ssr, theme, mounted-gate, next-themes]
-related_prs: [3309, 3312, 3315, 3318, 3324]
-related_issues: [3325]
+module: theme-toggle
+related_issues:
+  - 3325
+related_prs:
+  - 3309
+  - 3312
+  - 3315
+  - 3318
+  - 3324
 ---
 
 # React 18 production hydration does NOT patch className/attribute mismatches

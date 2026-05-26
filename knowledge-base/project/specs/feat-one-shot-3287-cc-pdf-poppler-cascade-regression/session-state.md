@@ -11,7 +11,7 @@ None. Phase 4.6 (User-Brand Impact halt) passed: section present, threshold = `s
 - Diagnose-then-fix-incrementally, not ship-and-guess. Phase 1 ships Sentry breadcrumb at `ws-handler.ts:594-629` (cold-Query construction) ALONE; Phase 2A or Phase 2B+C is gated on what one production reproduction's breadcrumb data reveals.
 - Three ranked hypotheses, each with its own diagnostic test in the breadcrumb data payload (`hasContextPath`, `documentKindResolved`, `hasActiveCcQuery`). A.1–A.4 sub-hypotheses isolate client-state vs validator-rejection vs resolver-drop vs Map-leak.
 - Hypothesis C (named-tool exclusion list) is a measured exception to the negation-anti-pattern. The exclusion list lives in the GATED directive, not the baseline constant; the existing anti-priming guard remains intact.
-- CPO sign-off required at plan time per `requires_cpo_signoff: true` (single-user-incident brand-survival threshold inherited from #3278).
+- CPO sign-off required at plan time per `requires_cpo_signoff: true` (single-user incident brand-survival threshold inherited from #3278).
 - No LLM-driven evals harness. Production breadcrumbs ARE the eval — the regression is binary (cascade fired / cascade did not). String-shape tests pin directive content; breadcrumb confirms model behavior in prod.
 
 ### Components Invoked

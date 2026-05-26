@@ -116,8 +116,16 @@ const { mockServiceClient } = vi.hoisted(() => ({
   mockServiceClient: vi.fn(),
 }));
 
+// PR-C §2.9 (#3244): conversations-tools.ts now imports from
+// `@/lib/supabase/tenant`. `mockServiceClient` is reused to drive the
+// tenant path; the legacy `service` import is left here for any test
+// still asserting on it (none in this file).
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => mockServiceClient(),
+}));
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: async () => mockServiceClient(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
 async function importBuilder() {

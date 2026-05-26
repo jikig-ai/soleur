@@ -8,13 +8,32 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 //   helper short-circuits to { ok: true, row: null } without issuing a query
 //   (no connected repo means no resumable thread).
 
-const { mockFrom, mockReportSilentFallback } = vi.hoisted(() => ({
-  mockFrom: vi.fn(),
-  mockReportSilentFallback: vi.fn(),
-}));
+const { mockFrom, mockReportSilentFallback, FakeRuntimeAuthError } = vi.hoisted(
+  () => ({
+    mockFrom: vi.fn(),
+    mockReportSilentFallback: vi.fn(),
+    FakeRuntimeAuthError: class FakeRuntimeAuthError extends Error {},
+  }),
+);
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: vi.fn(() => ({ from: mockFrom })),
+// PR-C §2.5 (#3244): tenant-client migration. Route `users` (probe) vs
+// `conversations` (test SUT) in the single from-mock.
+function probeOkChain() {
+  return {
+    select: () => ({
+      eq: () => ({
+        maybeSingle: async () => ({ data: { id: "ok" }, error: null }),
+      }),
+    }),
+  };
+}
+
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: (table: string) =>
+      table === "users" ? probeOkChain() : mockFrom(table),
+  })),
+  RuntimeAuthError: FakeRuntimeAuthError,
 }));
 
 vi.mock("@/server/observability", () => ({

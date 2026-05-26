@@ -1,20 +1,13 @@
 ---
-title: "Multi-agent review of a self-modifying CI loop — LLM-trust gaps, broken-by-design catches, CONCUR/DISSENT validation"
+title: Multi-agent review of a self-modifying CI loop — LLM-trust gaps, broken-by-design catches, CONCUR/DISSENT validation
 date: 2026-05-11
-type: learning
-issue: "#2720"
-pr: "#3559"
-tags:
-  - multi-agent-review
-  - llm-trust-boundary
-  - agent-native
-  - scope-out-gate
-  - code-simplicity-reviewer
+category: agent-design
+tags: [multi-agent-review, llm-trust-boundary, agent-native, scope-out-gate, code-simplicity-reviewer]
 component: scripts/compound-promote.sh, .github/workflows/scheduled-compound-promote.yml
-related:
-  - knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md
-  - knowledge-base/project/learnings/2026-05-03-user-impact-reviewer-catches-runtime-content-tamper-vectors.md
-  - knowledge-base/project/learnings/2026-05-05-agent-native-recommendation-vs-prior-security-removal.md
+issue: '#2720'
+pr: '#3559'
+related: [knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md, knowledge-base/project/learnings/2026-05-03-user-impact-reviewer-catches-runtime-content-tamper-vectors.md, knowledge-base/project/learnings/2026-05-05-agent-native-recommendation-vs-prior-security-removal.md]
+type: learning
 ---
 
 # Multi-agent review of a self-modifying CI loop — LLM-trust gaps, broken-by-design catches, CONCUR/DISSENT validation

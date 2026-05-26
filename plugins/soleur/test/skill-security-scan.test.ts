@@ -75,19 +75,25 @@ describe("skill-security-scan: category fixture matrix", () => {
     expect(ruleIds.has("fetch-pipe-shell")).toBe(true);
     expect(ruleIds.has("fetch-process-sub-shell")).toBe(true);
     expect(ruleIds.has("fetch-cmdsub-exec")).toBe(true);
-    // Bypass-class coverage: the fixture lays out 3 fetch-pipe-shell variants
-    // (canonical, tee-interposed, sudo-wrapped) and 2 fetch-cmdsub-exec variants
-    // ($(...) and backtick). Count assertions lock in that a future regex
-    // regression cannot silently lose a bypass class while keeping aggregate
-    // verdict green via the surviving variants.
+    // Bypass-class coverage: the fixture lays out fetch-pipe-shell variants
+    // (canonical, tee-interposed, sudo-wrapped, aria2c-pipe, axel-pipe),
+    // fetch-process-sub-shell variants (canonical curl, aria2c, axel), and
+    // fetch-cmdsub-exec variants (curl $(...), curl backtick, aria2c $(...),
+    // axel $(...)). Count assertions lock in that a future regex regression
+    // cannot silently lose a bypass class — including the #3607 tool-allowlist
+    // widening — while keeping aggregate verdict green via the surviving variants.
     const fetchPipeCount = result.findings.filter(
       (f) => f.rule_id === "fetch-pipe-shell",
+    ).length;
+    const fetchProcessSubCount = result.findings.filter(
+      (f) => f.rule_id === "fetch-process-sub-shell",
     ).length;
     const fetchCmdsubCount = result.findings.filter(
       (f) => f.rule_id === "fetch-cmdsub-exec",
     ).length;
-    expect(fetchPipeCount).toBeGreaterThanOrEqual(3);
-    expect(fetchCmdsubCount).toBeGreaterThanOrEqual(2);
+    expect(fetchPipeCount).toBeGreaterThanOrEqual(5);
+    expect(fetchProcessSubCount).toBeGreaterThanOrEqual(3);
+    expect(fetchCmdsubCount).toBeGreaterThanOrEqual(4);
   });
 
   test("malicious-prompt-injection → category 2 HIGH-RISK", () => {
@@ -168,43 +174,68 @@ Visit https://attacker.com/redirect?ref=soleur.ai&utm_campaign=soleur-launch
 });
 
 describe("skill-security-scan: end-to-end aggregator", () => {
-  test("malicious fixtures aggregate to HIGH-RISK", () => {
-    const fixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("malicious-"));
-    expect(fixtures.length).toBeGreaterThan(0);
-    for (const f of fixtures) {
-      const v = runScanVerdict(join(FIXTURES, f));
-      expect(v).toBe("HIGH-RISK");
-    }
+  // Each aggregator test spawns `run-scan.sh` (5 category checks sequentially);
+  // under contention this exceeds bun-test's 5000ms default per-test timeout
+  // (#4096). Per-fixture `test.each` gives the failing fixture path in the
+  // test name — review P2 (granularity, was a loop-inside-one-test).
+  const maliciousFixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("malicious-"));
+  const cleanFixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("clean-"));
+
+  test("malicious fixture set is non-empty", () => {
+    expect(maliciousFixtures.length).toBeGreaterThan(0);
+  });
+  test("clean fixture set is non-empty", () => {
+    expect(cleanFixtures.length).toBeGreaterThan(0);
   });
 
-  test("clean fixtures aggregate to LOW-RISK", () => {
-    const fixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("clean-"));
-    expect(fixtures.length).toBeGreaterThan(0);
-    for (const f of fixtures) {
-      const v = runScanVerdict(join(FIXTURES, f));
-      expect(v).toBe("LOW-RISK");
-    }
-  });
+  test.each(maliciousFixtures)(
+    "malicious fixture %s aggregates to HIGH-RISK",
+    (f) => {
+      expect(runScanVerdict(join(FIXTURES, f))).toBe("HIGH-RISK");
+    },
+    30_000,
+  );
 
-  test("aggregator output contains the mandatory advisory disclaimer footer", () => {
-    const r = spawnSync("bash", [join(SCRIPTS, "run-scan.sh")], {
-      input: "---\nname: test\ndescription: test\n---\n# body\n",
-      encoding: "utf-8",
-      env: { ...process.env, SKILL_SECURITY_SCAN_OFFLINE: "1" },
-    });
-    expect(r.stdout).toContain("Advisory static analysis only.");
-    expect(r.stdout).toContain("LOW-RISK does not constitute a security audit");
-    expect(r.stdout).toContain("Scanner version:");
-  });
+  test.each(cleanFixtures)(
+    "clean fixture %s aggregates to LOW-RISK",
+    (f) => {
+      expect(runScanVerdict(join(FIXTURES, f))).toBe("LOW-RISK");
+    },
+    30_000,
+  );
+
+  test(
+    "aggregator output contains the mandatory advisory disclaimer footer",
+    () => {
+      const r = spawnSync("bash", [join(SCRIPTS, "run-scan.sh")], {
+        input: "---\nname: test\ndescription: test\n---\n# body\n",
+        encoding: "utf-8",
+        env: { ...process.env, SKILL_SECURITY_SCAN_OFFLINE: "1" },
+      });
+      expect(r.stdout).toContain("Advisory static analysis only.");
+      expect(r.stdout).toContain("LOW-RISK does not constitute a security audit");
+      expect(r.stdout).toContain("Scanner version:");
+    },
+    30_000,
+  );
 });
 
 describe("skill-security-scan: self-test runner", () => {
-  test("run-self-test.sh exits 0 on the bundled fixtures", () => {
-    const r = spawnSync("bash", [join(SCRIPTS, "run-self-test.sh")], {
-      encoding: "utf-8",
-    });
-    expect(r.status).toBe(0);
-  });
+  test(
+    "run-self-test.sh exits 0 on the bundled fixtures",
+    () => {
+      const r = spawnSync("bash", [join(SCRIPTS, "run-self-test.sh")], {
+        encoding: "utf-8",
+      });
+      expect(r.status).toBe(0);
+    },
+    // The self-test runner walks every bundled fixture sequentially; observed
+    // runtime ~9s on CI runners (#4096). bun-test's default 5000ms per-test
+    // timeout is the wrong gate — the script is correct, the gate was too
+    // tight. 30s gives ~3.3× headroom over the observed runtime without
+    // masking a real regression to 25s+. Surgical per-test override only.
+    30_000,
+  );
 
   test("run-self-test.sh rejects --regenerate-manifest in CI", () => {
     const r = spawnSync("bash", [join(SCRIPTS, "run-self-test.sh"), "--regenerate-manifest"], {
@@ -220,23 +251,27 @@ describe("skill-security-scan: load-bearing security scenarios", () => {
   // Scenario 6: rule-pack tampering. Modifying a rule file without manifest
   // re-sign must short-circuit to HIGH-RISK (not REVIEW). REVIEW maps to
   // permissionDecision:ask which an operator could confirm-through.
-  test("rule-pack tamper short-circuits to HIGH-RISK (not REVIEW)", () => {
-    const ruleFile = join(SKILL_DIR, "references/rules/code-exec.yaml");
-    const original = readFileSync(ruleFile, "utf-8");
-    try {
-      writeFileSync(ruleFile, original + "\n# tampered for test\n");
-      const r = spawnSync("bash", [join(SCRIPTS, "run-scan.sh")], {
-        input: "---\nname: x\ndescription: x\n---\n# body\n",
-        encoding: "utf-8",
-        env: { ...process.env, SKILL_SECURITY_SCAN_OFFLINE: "1" },
-      });
-      const firstLine = (r.stdout || "").split("\n")[0] || "";
-      expect(firstLine).toContain("HIGH-RISK");
-      expect(r.stdout).toContain("rule pack tampered");
-    } finally {
-      writeFileSync(ruleFile, original);
-    }
-  });
+  test(
+    "rule-pack tamper short-circuits to HIGH-RISK (not REVIEW)",
+    () => {
+      const ruleFile = join(SKILL_DIR, "references/rules/code-exec.yaml");
+      const original = readFileSync(ruleFile, "utf-8");
+      try {
+        writeFileSync(ruleFile, original + "\n# tampered for test\n");
+        const r = spawnSync("bash", [join(SCRIPTS, "run-scan.sh")], {
+          input: "---\nname: x\ndescription: x\n---\n# body\n",
+          encoding: "utf-8",
+          env: { ...process.env, SKILL_SECURITY_SCAN_OFFLINE: "1" },
+        });
+        const firstLine = (r.stdout || "").split("\n")[0] || "";
+        expect(firstLine).toContain("HIGH-RISK");
+        expect(r.stdout).toContain("rule pack tampered");
+      } finally {
+        writeFileSync(ruleFile, original);
+      }
+    },
+    30_000,
+  );
 
   // Note: parse-override.sh schema validations (approver email-shape, raw
   // email in body, per-skill binding) are exercised via shell smoke tests
@@ -309,23 +344,27 @@ describe("skill-security-scan: calibration corpus (Phase 7 AC)", () => {
 });
 
 describe("skill-security-scan: PII redaction (GDPR-DataMin-1)", () => {
-  test("emails in findings are redacted in .scan-meta.json", () => {
-    const input = `---
+  test(
+    "emails in findings are redacted in .scan-meta.json",
+    () => {
+      const input = `---
 name: pii-test
 description: "test"
 ---
 Contact author@example.com for info.
 `;
-    const r = spawnSync("bash", [join(SCRIPTS, "run-scan.sh")], {
-      input,
-      encoding: "utf-8",
-      env: { ...process.env, SKILL_SECURITY_SCAN_OFFLINE: "1" },
-    });
-    const metaMatch = r.stdout.match(/scan-meta\.json written to: (\S+)/);
-    expect(metaMatch).not.toBeNull();
-    if (metaMatch && metaMatch[1] && existsSync(metaMatch[1])) {
-      const meta = readFileSync(metaMatch[1], "utf-8");
-      expect(meta).not.toContain("author@example.com");
-    }
-  });
+      const r = spawnSync("bash", [join(SCRIPTS, "run-scan.sh")], {
+        input,
+        encoding: "utf-8",
+        env: { ...process.env, SKILL_SECURITY_SCAN_OFFLINE: "1" },
+      });
+      const metaMatch = r.stdout.match(/scan-meta\.json written to: (\S+)/);
+      expect(metaMatch).not.toBeNull();
+      if (metaMatch && metaMatch[1] && existsSync(metaMatch[1])) {
+        const meta = readFileSync(metaMatch[1], "utf-8");
+        expect(meta).not.toContain("author@example.com");
+      }
+    },
+    30_000,
+  );
 });

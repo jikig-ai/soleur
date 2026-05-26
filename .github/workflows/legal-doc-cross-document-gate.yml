@@ -16,17 +16,13 @@ name: Legal-doc cross-document gate
 
 on:
   pull_request:
-    paths:
-      - "apps/web-platform/server/dsar-export.ts"
-      - "apps/web-platform/server/dsar-export-allowlist.ts"
-      - "apps/web-platform/server/dsar-reauth.ts"
-      - "apps/web-platform/app/api/account/export/**"
-      - "apps/web-platform/supabase/migrations/041_dsar_export_jobs.sql"
-      - "apps/web-platform/supabase/migrations/042_dsar_exports_storage_bucket.sql"
-      - "docs/legal/privacy-policy.md"
-      - "docs/legal/gdpr-policy.md"
-      - "docs/legal/data-protection-disclosure.md"
-      - "knowledge-base/legal/compliance-posture.md"
+    # Triggers on ALL PRs (no `paths:` filter) because the `enforce` job is
+    # a required status check on the `CI Required` ruleset per #4384 — a
+    # path-filter-skipped run leaves the required check `Pending` forever
+    # (same deadlock as `[skip ci]`; see
+    # knowledge-base/project/learnings/2026-03-20-github-required-checks-skip-ci-synthetic-status.md).
+    # The `surface_hit=false` short-circuit at lines 82-85 of the enforce
+    # job exits 0 in O(seconds) for non-DSAR PRs.
 
 permissions:
   contents: read
@@ -48,8 +44,9 @@ jobs:
           set -euo pipefail
 
           # Surfaces whose presence in the diff REQUIRES the four legal
-          # docs to be touched in the same PR. Keep in sync with the
-          # `paths:` filter above.
+          # docs to be touched in the same PR. The `paths:` trigger filter
+          # was removed in PR #4384 (required-check promotion); this list
+          # is now the SOLE source of truth for "is this PR DSAR-adjacent".
           surface_patterns=(
             'apps/web-platform/server/dsar-export\.ts'
             'apps/web-platform/server/dsar-export-allowlist\.ts'

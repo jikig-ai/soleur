@@ -5,7 +5,7 @@ plan: knowledge-base/project/plans/2026-05-05-feat-github-app-drift-guard-plan.m
 spec: knowledge-base/project/specs/feat-3187-gh-app-drift-guard/spec.md
 status: tasks
 date: 2026-05-05
-brand_survival: single-user-incident
+brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 

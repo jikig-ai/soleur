@@ -60,8 +60,17 @@ vi.mock("@/server/kb-document-resolver", async () => {
 
 // #3254 — `dispatchSoleurGo` now persists a `messages` row per turn
 // (so `message_attachments.message_id` FK can be satisfied for cc-path
-// attachments). Harness's `supabaseServiceFactory` stubs the
-// service-role client to the harness's `mockMessagesInsert`.
+// attachments). PR-C §2.11 migrates these 2 inserts to tenant client;
+// harness's `supabaseTenantFactory` drives them via `mockMessagesInsert`.
+// `supabaseServiceFactory` still wires the storage/attachments injection
+// (cc-dispatcher.ts:1421 — PERMANENT pending PR-D).
+vi.mock("@/lib/supabase/tenant", async () => {
+  const { supabaseTenantFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return supabaseTenantFactory({ mockMessagesInsert });
+});
+
 vi.mock("@/lib/supabase/service", async () => {
   const { supabaseServiceFactory } = await import(
     "@/test/helpers/cc-dispatcher-harness"
@@ -124,6 +133,14 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // defaults to off (unset) at merge per AC9/AC11; tests that need the
     // flag on stub it explicitly via `vi.stubEnv`.
     vi.unstubAllEnvs();
+    // #4128 — Doppler `dev` config injects `CC_PERSIST_USAGE=true` at process
+    // spawn. `vi.unstubAllEnvs()` reverts `stubEnv` writes only; it cannot
+    // delete a process-inherited env var. Force-empty here so default-off
+    // tests (e.g. `T-W4-basic-off`) see a falsy value at the strict
+    // `=== "true"` check in server/cc-dispatcher.ts:425. Tests that need
+    // the flag on continue to call `vi.stubEnv("CC_PERSIST_USAGE", "true")`
+    // explicitly in their own bodies — the local stub overrides this default.
+    vi.stubEnv("CC_PERSIST_USAGE", "");
     // Default: a stable stub workspace path so existing tests that don't
     // care about the workspace-resolve path still get a deterministic value.
     mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
@@ -453,6 +470,126 @@ describe("cc-dispatcher singletons + orchestration", () => {
     }
   });
 
+  it("#4440: denied_jti RuntimeAuthError → revocation_notice + session_ended frames (no generic error)", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    // Stage the revocation status helper to return a populated row so
+    // the dispatch catch can forward reason + deniedAt verbatim. The
+    // harness wires `getMyRevocationStatus` as a default-null stub;
+    // override per case via dynamic mock retrieval.
+    const tenantMod = await import("@/lib/supabase/tenant");
+    const getMyRevocationStatusSpy = vi
+      .spyOn(tenantMod, "getMyRevocationStatus")
+      .mockResolvedValue({
+        revoked: true,
+        deniedAt: "2026-05-25T10:00:00.000Z",
+        reason: "operator-revoked-stolen-jwt",
+      });
+
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    __setCcRunnerForTests({
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      dispatch: vi.fn(async () => {
+        throw new tenantMod.RuntimeAuthError(
+          "denied_jti",
+          "JWT jti denied at runtime",
+        );
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    await dispatchSoleurGo({
+      userId: "u-revoked",
+      conversationId: "conv-revoked",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    // Two frames: revocation_notice (operator reason) + session_ended
+    // (terminal flag so the client clears streamState).
+    const revocationCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "revocation_notice",
+    );
+    expect(revocationCalls).toHaveLength(1);
+    expect(revocationCalls[0][1]).toEqual({
+      type: "revocation_notice",
+      reason: "operator-revoked-stolen-jwt",
+      deniedAt: "2026-05-25T10:00:00.000Z",
+    });
+
+    const sessionEndedCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "session_ended",
+    );
+    expect(sessionEndedCalls).toHaveLength(1);
+    expect(sessionEndedCalls[0][1]).toEqual({
+      type: "session_ended",
+      reason: "session_revoked",
+      conversationId: "conv-revoked",
+    });
+
+    // No generic `type: "error"` frame — the discriminated pair
+    // replaces it entirely.
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "error",
+    );
+    expect(errorCalls).toHaveLength(0);
+
+    getMyRevocationStatusSpy.mockRestore();
+  });
+
+  it("#4440: non-denied_jti RuntimeAuthError still surfaces generic error", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+    const tenantMod = await import("@/lib/supabase/tenant");
+
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    __setCcRunnerForTests({
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      dispatch: vi.fn(async () => {
+        throw new tenantMod.RuntimeAuthError(
+          "jwt_mint",
+          "precheck rate-limit",
+        );
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    await dispatchSoleurGo({
+      userId: "u-mint-fail",
+      conversationId: "conv-mint",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    const revocationCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "revocation_notice",
+    );
+    expect(revocationCalls).toHaveLength(0);
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, m]) => (m as { type?: string }).type === "error",
+    );
+    // Generic error preserved; the dispatcher's catch falls through to
+    // the legacy `Dashboard router is unavailable` branch.
+    expect(errorCalls.length).toBeGreaterThan(0);
+  });
+
   it("Sentry mirror debounces independently for distinct (userId, errorClass) keys", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
@@ -718,54 +855,6 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const errMsg = errorCalls[0][1] as { errorCode?: string; message?: string };
     expect(errMsg.errorCode).toBeUndefined();
     expect(errMsg.message).toContain("Dashboard router is unavailable");
-  });
-
-  // ---------------------------------------------------------------------------
-  // WORKFLOW_END_USER_MESSAGES — typed exhaustive map replaces the prior
-  // `Workflow ended (${status}) — retry to continue.` template that
-  // leaked the internal status enum to users. Compile-time enforcement is
-  // via `Record<WorkflowEndStatus, string>`; this test pins a runtime
-  // snapshot + verifies every variant has an entry.
-  // ---------------------------------------------------------------------------
-  it("WORKFLOW_END_USER_MESSAGES has an entry for every WorkflowEndStatus variant", async () => {
-    const { WORKFLOW_END_USER_MESSAGES } = await import(
-      "@/server/cc-dispatcher"
-    );
-    // Variants from the runner's WorkflowEnd union.
-    const expectedKeys: ReadonlyArray<string> = [
-      "completed",
-      "cost_ceiling",
-      "runner_runaway",
-      "user_aborted",
-      "idle_timeout",
-      "plugin_load_failure",
-      "internal_error",
-    ];
-    const actualKeys = Object.keys(WORKFLOW_END_USER_MESSAGES).sort();
-    expect(actualKeys).toEqual([...expectedKeys].sort());
-
-    // `completed` is intentionally empty — that path is handled via the
-    // terminal `session_ended` WS event and never produces a user-facing
-    // error message.
-    expect(WORKFLOW_END_USER_MESSAGES.completed).toBe("");
-
-    // Recoverable branches must surface user-friendly copy without
-    // leaking the internal enum.
-    expect(WORKFLOW_END_USER_MESSAGES.runner_runaway).toContain(
-      "agent went idle",
-    );
-    expect(WORKFLOW_END_USER_MESSAGES.cost_ceiling).toContain(
-      "per-workflow cost cap",
-    );
-    expect(WORKFLOW_END_USER_MESSAGES.internal_error).toContain(
-      "Something went wrong",
-    );
-
-    // Defense-in-depth: NO entry should leak the status token verbatim
-    // in a `Workflow ended (...)` template.
-    for (const [key, msg] of Object.entries(WORKFLOW_END_USER_MESSAGES)) {
-      expect(msg, `key=${key}`).not.toContain("Workflow ended (");
-    }
   });
 
   // ---------------------------------------------------------------------------

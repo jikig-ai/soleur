@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { provisionWorkspace } from "@/server/workspace";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
+import { reportSilentFallback } from "@/server/observability";
+import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
@@ -45,6 +47,11 @@ export async function POST(request: Request) {
     .eq("id", user.id);
 
   try {
+    // Solo provisioning: `user.id` doubles as the workspace_id per migration
+    // 053 §1.1.7 N2 invariant (workspaces.id === owner_user_id for backfilled
+    // and trigger-created solo workspaces). Team-invite flows (Phase 5) will
+    // call `resolveWorkspacePathForUser(userId)` to obtain the target workspace_id
+    // before provisioning.
     const workspacePath = await provisionWorkspace(user.id);
 
     // Update user record with workspace path and ready status
@@ -65,7 +72,15 @@ export async function POST(request: Request) {
       workspace_path: workspacePath,
     });
   } catch (err) {
-    logger.error({ err, userId: user.id }, "Workspace provisioning failed");
+    Sentry.withIsolationScope(() => {
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      reportSilentFallback(err, {
+        feature: "workspace",
+        op: "provisioning",
+        message: "Workspace provisioning failed",
+        extra: { userId: user.id },
+      });
+    });
     return NextResponse.json(
       { error: "Workspace provisioning failed" },
       { status: 500 },

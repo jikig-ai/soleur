@@ -43,6 +43,14 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
+// PR-C §2.8 (#3244): kb-route-helpers (authenticateAndResolveKbPath /
+// resolveUserKbRoot) now mint tenant clients via `getFreshTenantClient`.
+// Reuse `mockFrom` so existing per-test chains continue to drive both.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 vi.mock("@/lib/auth/validate-origin", () => ({
   validateOrigin: vi.fn(() => ({ valid: true, origin: "https://app.soleur.ai" })),
   rejectCsrf: vi.fn(

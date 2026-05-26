@@ -19,3 +19,84 @@ coreyhaines31/marketingskills
   Portions adopted: Prompt patterns, frameworks, and checklists were
     consolidated into 8 focused agents and used to expand 2 existing
     agents (growth-strategist, seo-aeo-analyst).
+
+--------------------------------------------------------------------------------
+
+alirezarezvani/claude-skills (product-team/code-to-prd)
+  License: MIT
+  URL: https://github.com/alirezarezvani/claude-skills
+  Description: Reverse-engineer a Next.js codebase into a PRD-shaped
+    markdown document for buyer/investor/agent handoff.
+  Used in: skills/code-to-prd/ (#2726)
+  Portions adopted: Section ordering pattern, redaction-aware output
+    framing, and the "filesystem-first framework detection" approach.
+    No source code copied verbatim; the Soleur implementation rewrites
+    the walker, extractor, and renderer in bash, swaps redaction for a
+    3-layer fail-closed stack (redact-sentinel + gitleaks), and adds
+    a spec-flow-analyzer Task spawn for closing Gap Analysis.
+
+  MIT License (upstream)
+
+  Copyright (c) Alireza Rezvani and contributors
+
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Nutlope/hallmark
+  License: MIT
+  URL: https://github.com/Nutlope/hallmark
+  Description: A Claude Code plugin (build/redesign/study/audit verbs)
+    that helps Claude generate distinctive, anti-AI-slop interfaces.
+    Authored by Together AI.
+  Used in: skills/frontend-anti-slop/ (#4264)
+  Portions adopted: The Tier 1 subset of Hallmark's slop-test gate
+    list and the named anti-pattern taxonomy were adapted into a
+    React/Next.js-applicable, ripgrep-runnable rule set for the
+    Soleur scanner. No source code was copied verbatim; the
+    Soleur implementation parses a Markdown table of regex rules,
+    runs them line-by-line over `apps/web-platform/(app|components)
+    /**/*.{tsx,jsx,css}`, and emits findings conforming to
+    Soleur's existing `ux-audit` finding schema. The upstream
+    attribution footer and the `build` / `redesign` / `study`
+    verbs are not carried over.
+
+  MIT License (upstream)
+
+  Copyright (c) Together Computer, Inc. and contributors
+
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

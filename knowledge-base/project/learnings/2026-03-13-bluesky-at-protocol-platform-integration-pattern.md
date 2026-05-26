@@ -1,3 +1,10 @@
+---
+title: Bluesky AT Protocol Platform Integration Pattern
+date: 2026-03-13
+category: engineering
+tags: [integration-issues, plugins/soleur/skills/community]
+---
+
 # Learning: Bluesky AT Protocol Platform Integration Pattern
 
 ## Problem

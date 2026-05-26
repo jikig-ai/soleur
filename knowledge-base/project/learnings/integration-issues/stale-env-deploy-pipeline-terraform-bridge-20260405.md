@@ -1,18 +1,16 @@
 ---
-module: System
+title: Deploy pipeline uses stale .env instead of Doppler secrets
 date: 2026-04-05
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "Container has 18 env vars from stale .env while Doppler has 32 secrets"
-  - "SENTRY_DSN missing from container — zero Sentry events since inception"
-  - "Container has STRIPE_PUBLISHABLE_KEY (removed from Doppler) — stale data"
-  - "flock fails with permission denied under ProtectSystem=strict"
-root_cause: config_error
-resolution_type: config_change
-severity: critical
+category: infrastructure
 tags: [terraform, doppler, systemd, cloud-init, provisioner, webhook, env-file]
+symptoms: [Container has 18 env vars from stale .env while Doppler has 32 secrets, SENTRY_DSN missing from container — zero Sentry events since inception, Container has STRIPE_PUBLISHABLE_KEY (removed from Doppler) — stale data, flock fails with permission denied under ProtectSystem=strict]
+module: System
 synced_to: [work]
+component: tooling
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: critical
 ---
 
 # Troubleshooting: Deploy pipeline uses stale .env instead of Doppler secrets

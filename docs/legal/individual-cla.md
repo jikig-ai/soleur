@@ -19,6 +19,12 @@ Thank you for your interest in contributing to the Soleur project ("Project"), m
 
 This Contributor License Agreement ("Agreement") defines the terms under which You submit Contributions to the Project. By signing this Agreement, You accept and agree to the following terms and conditions for Your present and future Contributions submitted to the Project.
 
+## 0. Legal Nature of This Agreement
+
+This Agreement is a copyright license grant, not a contract requiring ongoing consent under GDPR Article 7. Once signed, the grant is irrevocable for the Contributions covered by Your signature. A withdrawal of signature does not retract the license previously granted, but does indicate that future Contributions will not be made.
+
+The lawful basis for processing Your signature record is **legitimate interest** under GDPR Article 6(1)(f) -- maintaining an enforceable record of contributor IP license grants to defend the integrity of the Project's licensing framework. The signature record is retained for ten (10) years from the date of signature, balancing GDPR proportionality against the German and UK statutory limitation periods applicable to copyright disputes. Under Article 17(3)(e), Your right to erasure does not apply to data necessary for the establishment, exercise, or defense of legal claims regarding Your Contributions; see the [Privacy Policy](privacy-policy.md) and [GDPR Policy](gdpr-policy.md) for details.
+
 ## 1. Definitions
 
 - **"You" (or "Your")** means the individual who submits a Contribution to the Project. If Your employer(s) has rights to intellectual property that You create that includes Your Contributions, You represent that You have received permission to make Contributions on behalf of that employer, that Your employer has waived such rights for Your Contributions to the Project, or that Your employer has signed a Corporate Contributor License Agreement with Us.

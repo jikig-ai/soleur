@@ -24,7 +24,9 @@ Present the discovered documents and use the **AskUserQuestion tool** to confirm
 
 "Found N legal documents. Audit all of them, or select specific files?"
 
-If no legal documents are found, report: "No legal documents found in this project. Use `/legal-generate` to create them."
+If no legal documents are found, report: "No legal documents found in this project. Use `/legal-generate` to create them.
+
+> **Or:** If you're handling an inbound MSA, DSAR, AI-vendor terms review, OSS-license question, or breach notice, see `knowledge-base/legal/recommended-tools.md` for downstream specialist tools."
 
 ## Phase 1: Context
 
@@ -74,6 +76,33 @@ After displaying findings, use the **AskUserQuestion tool**:
 - **Done** -- End the audit
 
 If "Fix Critical/High" is selected, present specific text changes the user can apply to address each Critical and High finding. The user applies fixes manually.
+
+### When to escalate (inline-conversation only)
+
+After displaying findings, scan each finding's category against the threshold catalog at [`knowledge-base/legal/recommended-tools.md`](../../../knowledge-base/legal/recommended-tools.md).
+
+For each finding that matches a threshold, append a one-line escalation pointer:
+
+> **When to escalate:** &lt;threshold name&gt;. See `knowledge-base/legal/recommended-tools.md#&lt;anchor&gt;`.
+
+For statutory-deadline thresholds (DSAR, breach), interpolate the deadline into a dedicated `### Escalation required` H3 above the findings list (NOT a trailing blockquote — deadline-sensitive). Format:
+
+---
+
+### Escalation required — 72h deadline (GDPR Art. 33 — breach-notice-triage)
+
+See `knowledge-base/legal/recommended-tools.md#breach-notice-triage`.
+
+---
+
+**Zero-findings + threshold-in-flight catch.** If the audit produces zero findings AND the project contains regulated-data surfaces (privacy policy, ToS mentioning data processing, breach-response doc, anything matching `**/{privacy,terms,gdpr,dpa,disclaimer}*`):
+
+1. **ALWAYS append the full threshold catalog pointer at the bottom of the report.** A clean audit does NOT mean no threshold is in flight — a founder mid-DSAR may have a clean privacy policy.
+2. **Additionally, surface a top-of-report deadline-check banner**: a single inline-prose question asking the user to confirm whether any of the deadline-bearing thresholds (DSAR Art. 12 — 30 days; breach Art. 33 — 72 hours from awareness) is in flight right now. If yes, the founder should treat the corresponding `### Escalation required` H3 (with its statutory deadline interpolated into the heading) as the primary output of this audit — the catalog at the bottom is secondary.
+
+This dual surfacing closes the failure mode where a founder under deadline pressure runs an audit on docs that happen to be clean and never sees the deadline H3 (because no finding triggered it via category-match alone).
+
+**Inline only.** NEVER write the escalation pointer or catalog pointer to a file — Phase 3 `<critical_sequence>` (above) applies to every output of this skill.
 
 ## Important Guidelines
 

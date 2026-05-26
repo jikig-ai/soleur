@@ -1,18 +1,18 @@
 ---
+title: 'A `shouldCreateUser: false`-class flag creates a NEW error surface the mapper must handle in lockstep'
 date: 2026-05-04
 category: integration-issues
-module: apps/web-platform/lib/auth
 tags: [supabase, error-mapping, ux, account-enumeration, referrer-policy]
-issues: ["#1765", "PR #3180"]
-related:
-  - 2026-03-20-supabase-signinwithotp-creates-users.md
+module: apps/web-platform/lib/auth
+issues: [#1765, PR #3180]
+related: [2026-03-20-supabase-signinwithotp-creates-users.md]
 ---
 
 # Learning: A `shouldCreateUser: false`-class flag creates a NEW error surface the mapper must handle in lockstep
 
 ## Problem
 
-The login page called `supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false } })`. When the email had no Soleur account (e.g. `harry@jikigai.com`), Supabase returned an `AuthApiError` with `code: "otp_disabled"` / `message: "Signups not allowed for otp"`. The `mapSupabaseError` mapper at `apps/web-platform/lib/auth/error-messages.ts` had patterns for `email rate limit exceeded`, `invalid otp`, and `token...expired` — but **nothing** for `otp_disabled`. Result: every no-account login submission fell through to the generic `DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again."` — a confused, blame-shifted, dead-end UX. The original "fix" (issue #1765) had added three friendly strings but missed `otp_disabled` because the error class didn't exist *at the time* — it only became reachable when `shouldCreateUser: false` was added later (PR #1344, the magic-link → OTP split).
+The login page called `supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false } })`. When the email had no Soleur account (e.g. `harry@example.com`), Supabase returned an `AuthApiError` with `code: "otp_disabled"` / `message: "Signups not allowed for otp"`. The `mapSupabaseError` mapper at `apps/web-platform/lib/auth/error-messages.ts` had patterns for `email rate limit exceeded`, `invalid otp`, and `token...expired` — but **nothing** for `otp_disabled`. Result: every no-account login submission fell through to the generic `DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again."` — a confused, blame-shifted, dead-end UX. The original "fix" (issue #1765) had added three friendly strings but missed `otp_disabled` because the error class didn't exist *at the time* — it only became reachable when `shouldCreateUser: false` was added later (PR #1344, the magic-link → OTP split).
 
 ## Solution
 

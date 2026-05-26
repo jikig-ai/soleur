@@ -1,12 +1,9 @@
 ---
-category: best-practices
-module: plan-skill
+title: Skill description budget at 1800/1800 means new-skill plans need surgery built-in
 date: 2026-04-21
-tags:
-  - token-budget
-  - skill-descriptions
-  - plan-acceptance-criteria
-  - soleur-plugin
+category: best-practices
+tags: [token-budget, skill-descriptions, plan-acceptance-criteria, soleur-plugin]
+module: plan-skill
 ---
 
 # Learning: Skill description budget at 1800/1800 means new-skill plans need surgery built-in
@@ -30,7 +27,7 @@ A related paper-cut: the test measures `desc.split(/\s+/).filter(Boolean).length
 
 **Work-phase**: re-measure after every description edit. A mid-implementation test failure is a red flag that plan-time measurement was skipped or wrong.
 
-**Measurement one-liner** (portable; avoids awk edge cases):
+**Measurement one-liner** (portable; avoids awk edge cases). **Heads-up (added 2026-05-15 via PR #3808):** the external `claude-plugins-official/security-guidance` plugin's `security_reminder_hook.py` PreToolUse-blocks Write/Edit operations whose content contains literal shell-spawn or dynamic-eval Python/Node API names — including inside markdown. Run the one-liner verbatim as shown below (it uses Node `fs` APIs only — no shell-spawn primitives); do NOT inline-modify it with shell-spawn calls for any reason. If you need to embed it in a plan/spec/tasks document, reference this learning by `path + line 33` rather than re-pasting a modified copy.
 
 ```bash
 node -e "

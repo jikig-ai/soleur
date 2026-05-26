@@ -1,16 +1,13 @@
 ---
+title: Evaluating Vendor-Branded Claude Code Skills for Integration
 date: 2026-05-09
 category: best-practices
-problem_type: integration_issue
-component: brainstorm
-severity: medium
 tags: [skills, integration, mit-licensing, vendor-evaluation, brand-integrity, brainstorm-process]
-related_artifacts:
-  - knowledge-base/project/brainstorms/2026-05-09-gdpr-gate-skill-brainstorm.md
-  - knowledge-base/project/specs/feat-compliance-skills-eval/spec.md
-  - https://github.com/jikig-ai/soleur/issues/3502
-  - https://github.com/jikig-ai/soleur/pull/3501
 synced_to: [brainstorm]
+component: brainstorm
+problem_type: integration_issue
+related_artifacts: [knowledge-base/project/brainstorms/2026-05-09-gdpr-gate-skill-brainstorm.md, knowledge-base/project/specs/feat-compliance-skills-eval/spec.md, https://github.com/jikig-ai/soleur/issues/3502, https://github.com/jikig-ai/soleur/pull/3501]
+severity: medium
 ---
 
 # Evaluating Vendor-Branded Claude Code Skills for Integration

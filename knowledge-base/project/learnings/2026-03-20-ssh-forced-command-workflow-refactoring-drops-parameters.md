@@ -1,3 +1,10 @@
+---
+title: Workflow refactoring silently drops SSH host fingerprint verification
+date: 2026-03-20
+category: plugin-architecture
+tags: [security-issues, ci-deploy]
+---
+
 # Learning: Workflow refactoring silently drops SSH host fingerprint verification
 
 ## Problem

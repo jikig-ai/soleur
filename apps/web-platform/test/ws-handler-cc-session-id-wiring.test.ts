@@ -26,6 +26,13 @@ vi.mock("@/lib/supabase/service", () => ({
   serverUrl: "https://test.supabase.co",
 }));
 
+// PR-C §2.10 (#3244): import-only stub. This test mocks conversation-
+// writer directly so the tenant code path is not exercised.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: vi.fn() })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 vi.mock("../server/cc-dispatcher", async () => {
   const actual = await vi.importActual<
     typeof import("../server/cc-dispatcher")

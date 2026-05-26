@@ -115,8 +115,14 @@ export function SubagentGroup({
   getDisplayName,
   getIconPath,
 }: SubagentGroupProps) {
-  const initialExpanded = subagents.length <= SUBAGENT_GROUP_AUTO_EXPAND_MAX;
-  const [expanded, setExpanded] = useState<boolean>(initialExpanded);
+  // #3949 — `useState(initial)` only evaluates on first mount, so a group that
+  // first renders with N<=2 (auto-expanded) never re-collapses when subsequent
+  // `subagent_spawn` events grow `subagents.length` past the boundary. Derive
+  // `expanded` from props each render; `userExpanded` (null until toggled)
+  // captures user intent so the toggle wins over the policy default.
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
+  const expanded =
+    userExpanded ?? subagents.length <= SUBAGENT_GROUP_AUTO_EXPAND_MAX;
 
   const parentLeader = DOMAIN_LEADERS.find((l) => l.id === parentLeaderId);
   const parentName = getDisplayName?.(parentLeaderId) ?? parentLeader?.name ?? parentLeaderId;
@@ -146,7 +152,7 @@ export function SubagentGroup({
           <button
             type="button"
             data-testid="subagent-group-toggle"
-            onClick={() => setExpanded((v) => !v)}
+            onClick={() => setUserExpanded(!expanded)}
             className="rounded-md border border-soleur-border-default px-2 py-0.5 text-xs text-soleur-text-secondary hover:border-soleur-border-emphasized"
           >
             {expanded ? "Collapse" : `Show ${subagents.length}`}

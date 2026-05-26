@@ -2,8 +2,12 @@
 title: Never use --delete-branch with parallel worktrees
 date: 2026-02-19
 category: workflow-patterns
-tags: [workflow, git-worktrees, "blocked: --delete-branch with active worktrees will orphan them"]
-synced_to: [ship]
+tags:
+- workflow-patterns
+- workflow
+- git-worktrees
+synced_to:
+- ship
 ---
 
 # Learning: Never use --delete-branch with parallel worktrees

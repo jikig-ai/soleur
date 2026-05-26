@@ -3,7 +3,7 @@ title: CodeQL coverage on bot PRs
 audience: operator
 on_page_for: scripts/audit-bot-codeql-coverage.sh
 issues: [3545, 3542, 2719]
-threshold: none
+brand_survival_threshold: none
 last_updated: 2026-05-11
 ---
 

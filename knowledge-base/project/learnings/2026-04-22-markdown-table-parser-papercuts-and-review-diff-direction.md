@@ -1,10 +1,13 @@
 ---
+title: Markdown-table parser papercuts and review-agent diff-direction false-positives
 date: 2026-04-22
 category: best-practices
 tags: [bash-parsing, markdown-tables, github-actions-yaml, multi-agent-review, git-diff]
-issue: 2679
-related_issues: [2615, 2795]
 module: review + runbook-parser
+issue: 2679
+related_issues:
+  - 2615
+  - 2795
 ---
 
 # Learning: Markdown-table parser papercuts and review-agent diff-direction false-positives

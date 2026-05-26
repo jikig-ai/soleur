@@ -52,7 +52,7 @@ const SURFACE_GROUPS: readonly string[] = [
   // Group C — Settings
   "components/settings/connected-services-content.tsx",
   "components/settings/settings-content.tsx",
-  "components/settings/team-settings.tsx",
+  "components/settings/conversation-names-settings.tsx",
   "components/settings/settings-shell.tsx",
   "components/settings/project-setup-card.tsx",
   "components/settings/disconnect-repo-dialog.tsx",

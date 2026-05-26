@@ -533,15 +533,33 @@ export function ChatSurface({
 
       {/* Review F15: WorkflowLifecycleBar is sticky context above the
           scroll region — moving it OUTSIDE the `overflow-y-auto` container
-          keeps it pinned regardless of message-list scroll position. */}
+          keeps it pinned regardless of message-list scroll position.
+
+          #3774: thread the accumulated cost from `usageData` (driven by the
+          legacy `usage_update` setState at `ws-client.ts:791-806`) into the
+          active lifecycle slice so the bar can render the running total.
+          The reducer's `cumulativeCostUsd` field exists on the type but is
+          never written by any arm — this prop-time merge is the minimum
+          fix to expose the existing data without introducing a second
+          source of truth. */}
       <WorkflowLifecycleBar
-        lifecycle={workflow}
+        lifecycle={
+          workflow.state === "active" && usageData
+            ? { ...workflow, cumulativeCostUsd: usageData.totalCostUsd }
+            : workflow
+        }
         onStartNewConversation={() => router.push("/dashboard")}
       />
 
       <div className={`min-w-0 flex-1 overflow-y-auto px-4 py-4 ${isFull ? "md:px-6" : ""}`}>
         {lastError && activeErrorKey !== dismissedErrorKey && (
-          <div className={`mb-4 ${widthWrapper}`}>
+          // `data-rate-limit-exceeded` is a load-bearing canary attribute —
+          // see e2e/cc-soleur-go-security.e2e.ts FR3.4 (Stage 6 PR-C #2939).
+          // Pattern mirrors `data-error-boundary` at error-boundary-view.tsx.
+          <div
+            className={`mb-4 ${widthWrapper}`}
+            data-rate-limit-exceeded={lastError.code === "rate_limited" ? "" : undefined}
+          >
             <ErrorCard
               title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : "Connection Error"}
               message={lastError.message}

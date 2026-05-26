@@ -1,13 +1,15 @@
 ---
+title: Brainstorm Calibration Pattern + Governance-Loop Prevention for Agent-Authored Issues
 date: 2026-04-15
 category: best-practices
-module: brainstorm, agent-native
 tags: [brainstorm, agent-native, ux-review, governance, calibration, askuserquestion]
-related_issues: [2341, 2342, 2343, 2344]
-related_learnings:
-  - 2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md
-  - 2026-03-16-scheduled-skill-wrapping-pattern.md
-  - 2026-04-13-codeql-alert-triage-and-issue-automation.md
+module: brainstorm, agent-native
+related_issues:
+  - 2341
+  - 2342
+  - 2343
+  - 2344
+related_learnings: [2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md, 2026-03-16-scheduled-skill-wrapping-pattern.md, 2026-04-13-codeql-alert-triage-and-issue-automation.md]
 ---
 
 # Learning: Brainstorm Calibration Pattern + Governance-Loop Prevention for Agent-Authored Issues

@@ -21,6 +21,12 @@ vi.mock("@/lib/supabase/service", () => ({
   serverUrl: "https://test.supabase.co",
 }));
 
+// PR-C §2.10 (#3244): ws-handler tenant migration. Stub for import-only.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: vi.fn() })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 // Stub agent-runner so importing ws-handler does not pull in
 // @anthropic-ai/claude-agent-sdk for a pure-function test.
 vi.mock("../server/agent-runner", () => ({

@@ -84,7 +84,7 @@ if [ -z "$content" ]; then
 fi
 
 if [ ! -f "$SCANNER" ]; then
-  # Scanner missing → ask, not allow. At single-user-incident threshold a
+  # Scanner missing → ask, not allow. At single-user incident threshold a
   # silently-removed scanner must surface for operator approval rather than
   # silently disable enforcement. (Architecture review F4.)
   emit skill-security-scan applied "scanner-missing"
@@ -130,7 +130,7 @@ case "$verdict" in
     echo '{"hookSpecificOutput":{"permissionDecision":"allow"}}'
     ;;
   *)
-    # Unknown verdict → ask, not allow. At single-user-incident threshold a
+    # Unknown verdict → ask, not allow. At single-user incident threshold a
     # broken scanner must surface for operator review rather than silently
     # disable enforcement. (Architecture review F8.)
     emit skill-security-scan applied "unknown-verdict"

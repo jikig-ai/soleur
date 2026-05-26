@@ -1,3 +1,10 @@
+---
+title: CI Terraform Plan Workflow Patterns
+date: 2026-03-21
+category: infrastructure
+tags: [integration-issues, github-actions, terraform, doppler]
+---
+
 # Learning: CI Terraform Plan Workflow Patterns
 
 ## Problem

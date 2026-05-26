@@ -1,3 +1,10 @@
+---
+title: canUseTool Does Not Cache — Bridge Auth Is a Separate Code Path
+date: 2026-03-20
+category: engineering
+tags: [security-verification, agent-sdk]
+---
+
 # Learning: canUseTool Does Not Cache — Bridge Auth Is a Separate Code Path
 
 ## Problem

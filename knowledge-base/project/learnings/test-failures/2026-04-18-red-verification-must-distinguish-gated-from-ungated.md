@@ -1,9 +1,12 @@
 ---
-name: RED-verification must distinguish gated from ungated state
-description: A release-discipline test must exercise the gate by force; trivial pass in the no-gate state is a false RED
-type: test-design
+title: RED-verification must distinguish gated from ungated state
+date: 2026-04-18
+category: engineering
 tags: [testing, tdd, concurrency, vitest, red-green-refactor]
-pr: "#2576"
+description: A release-discipline test must exercise the gate by force; trivial pass in the no-gate state is a false RED
+name: RED-verification must distinguish gated from ungated state
+pr: '#2576'
+type: test-design
 ---
 
 # RED-verification must distinguish gated from ungated state

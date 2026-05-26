@@ -1,17 +1,16 @@
 ---
-module: System
+title: Resend subdomain verification requires non-obvious DNS record naming
 date: 2026-04-06
-problem_type: integration_issue
-component: email_processing
-symptoms:
-  - "Resend API returns 403: The soleur.ai domain is not verified"
-  - "Resend API returns 403: The send.soleur.ai domain is not verified"
-  - "Resend domain verification stuck in pending state"
-root_cause: config_error
-resolution_type: config_change
-severity: medium
+category: engineering
 tags: [resend, dns, dkim, spf, cloudflare, terraform, email, domain-verification]
+symptoms: [Resend API returns 403: The soleur.ai domain is not verified, Resend API returns 403: The send.soleur.ai domain is not verified, Resend domain verification stuck in pending state]
+module: System
 synced_to: []
+component: email_processing
+problem_type: integration_issue
+resolution_type: config_change
+root_cause: config_error
+severity: medium
 ---
 
 # Learning: Resend subdomain verification requires non-obvious DNS record naming

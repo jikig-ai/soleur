@@ -1,18 +1,16 @@
 ---
-module: System
+title: CPO Agent Scope Boundaries for Roadmapping
 date: 2026-03-24
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "CPO agent flagged git-backed KB as local-only data loss risk without checking architecture"
-  - "CPO asked implementation-choice questions (persistSession vs history injection) that belong to CTO"
-  - "CPO flagged onboarding flow details as roadmap-level gaps when they are planning-level details"
-  - "CPO dropped billing features from second review after overcorrected scope boundary rule"
-root_cause: inadequate_documentation
-resolution_type: documentation_update
-severity: medium
+category: engineering
 tags: [cpo, domain-leader, scope-boundaries, dogfooding, product-roadmap]
+symptoms: [CPO agent flagged git-backed KB as local-only data loss risk without checking architecture, CPO asked implementation-choice questions (persistSession vs history injection) that belong to CTO, CPO flagged onboarding flow details as roadmap-level gaps when they are planning-level details, CPO dropped billing features from second review after overcorrected scope boundary rule]
+module: System
 synced_to: [product-roadmap, cpo]
+component: tooling
+problem_type: workflow_issue
+resolution_type: documentation_update
+root_cause: inadequate_documentation
+severity: medium
 ---
 
 # Learning: CPO Agent Scope Boundaries for Roadmapping

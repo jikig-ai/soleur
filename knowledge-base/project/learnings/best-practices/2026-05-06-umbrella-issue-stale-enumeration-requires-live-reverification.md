@@ -1,9 +1,15 @@
 ---
+title: Umbrella issues with enumerated findings require live re-verification
 date: 2026-05-06
 category: best-practices
-module: planning
 tags: [github-issues, planning, deepen-plan, gitleaks, stale-enumeration]
-related_issues: [3281, 3268, 3196, 3197, 3319]
+module: planning
+related_issues:
+  - 3281
+  - 3268
+  - 3196
+  - 3197
+  - 3319
 ---
 
 # Umbrella issues with enumerated findings require live re-verification

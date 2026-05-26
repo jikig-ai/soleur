@@ -1,15 +1,15 @@
 ---
-module: System
+title: 'Cross-Language Regex Parity & Terraform Indirect-Reference Tracking in Parity Tests'
 date: 2026-04-29
-problem_type: test_failure
-component: testing_framework
-symptoms:
-  - "JS RegExp.source escaped forward slashes broke string equality with bash regex literal in markdown"
-  - "Terraform triggers_replace assertion failed because one trigger file is referenced indirectly via local.X + templatefile()"
-root_cause: wrong_api
-resolution_type: test_fix
-severity: medium
+category: infrastructure
 tags: [regex, cross-language, terraform, triggers_replace, parity-tests, ship-gate]
+symptoms: [JS RegExp.source escaped forward slashes broke string equality with bash regex literal in markdown, Terraform triggers_replace assertion failed because one trigger file is referenced indirectly via local.X + templatefile()]
+module: System
+component: testing_framework
+problem_type: test_failure
+resolution_type: test_fix
+root_cause: wrong_api
+severity: medium
 ---
 
 # Cross-Language Regex Parity & Terraform Indirect-Reference Tracking in Parity Tests

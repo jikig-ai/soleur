@@ -1,16 +1,23 @@
 ---
-module: cc-soleur-go
+title: typed-optional-field wire-drop survives compile + tests, caught only by user-impact-reviewer
 date: 2026-05-07
-problem_type: integration_issue
+category: engineering
+tags: [typescript, dispatcher, wire-path, multi-agent-review, user-impact-reviewer]
+symptoms: [User would see 'I see 0 pages — too long' on every triggering case instead of the actual page count, tsc --noEmit clean, full vitest suite green, but the user-facing copy is wrong]
+module: cc-soleur-go
 component: server-prompt-builder + dispatcher-wire-path
-symptoms:
-  - "User would see 'I see 0 pages — too long' on every triggering case instead of the actual page count"
-  - "tsc --noEmit clean, full vitest suite green, but the user-facing copy is wrong"
+problem_type: integration_issue
+related_issues:
+  - 3429
+  - 3436
+  - 3437
+  - 3438
+related_prs:
+  - 3430
+  - 3429
+  - 3438
 root_cause: typed_optional_field_wire_drop
 severity: critical
-tags: [typescript, dispatcher, wire-path, multi-agent-review, user-impact-reviewer]
-related_prs: [3430, 3429, 3438]
-related_issues: [3429, 3436, 3437, 3438]
 ---
 
 # Learning: typed-optional-field wire-drop survives compile + tests, caught only by user-impact-reviewer

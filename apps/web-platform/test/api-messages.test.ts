@@ -19,6 +19,31 @@ vi.mock("@/lib/supabase/service", () => ({
   })),
 }));
 
+// PR-C §2.2 (#3244): api-messages now uses `getFreshTenantClient` for
+// the conversations + messages SELECTs. `auth.getUser` stays on the
+// service client (PERMANENT). Route `users` (probe) → OK; pass through
+// other tables to `mockFrom` so existing per-test chains still drive.
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({
+    from: (table: string) => {
+      if (table === "users") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { id: "user-xyz" },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+      return mockFrom(table);
+    },
+  })),
+  RuntimeAuthError: class RuntimeAuthError extends Error {},
+}));
+
 import { handleConversationMessages } from "@/server/api-messages";
 
 // ---------------------------------------------------------------------------

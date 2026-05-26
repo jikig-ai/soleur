@@ -1,15 +1,15 @@
 ---
-module: System
+title: Growth Audit Workflow Missing Issue Tracking and SEO Score
 date: 2026-03-25
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "Growth audit issue #1111 listed 5 findings under 'Open Issues Without GitHub Tracking' but no issues were created"
-  - "SEO audit report produced qualitative findings (Critical/Warnings/Pass) but no numerical score, while AEO audit had a weighted 0-100 score"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: medium
+category: marketing
 tags: [growth-audit, seo-score, aeo-score, github-issues, scheduled-workflow, marketing-pipeline]
+symptoms: [Growth audit issue #1111 listed 5 findings under 'Open Issues Without GitHub Tracking' but no issues were created, SEO audit report produced qualitative findings (Critical/Warnings/Pass) but no numerical score, while AEO audit had a weighted 0-100 score]
+module: System
+component: tooling
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: medium
 ---
 
 # Troubleshooting: Growth Audit Workflow Missing Issue Tracking and SEO Score

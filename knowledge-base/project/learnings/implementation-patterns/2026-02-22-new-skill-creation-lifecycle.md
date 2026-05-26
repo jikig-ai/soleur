@@ -1,3 +1,10 @@
+---
+title: New Skill Creation Lifecycle
+date: 2026-02-22
+category: plugin-architecture
+tags: [implementation-patterns, plugins/soleur/skills, missing skill registration, version mismatch, file cache invalidation]
+---
+
 # Learning: New Skill Creation Lifecycle
 
 ## Problem

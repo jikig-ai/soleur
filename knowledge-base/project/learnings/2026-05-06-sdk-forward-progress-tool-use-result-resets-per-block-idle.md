@@ -1,21 +1,16 @@
 ---
-name: SDK tool_use_result on user-role messages is the load-bearing forward-progress signal
-description: When a streaming-input SDK runner uses a per-block idle reaper, that timer must reset on the SDK's documented forward-progress discriminator — `SDKUserMessage.tool_use_result !== undefined` — not only on assistant or result messages. Detection MUST be field-shape (the SDK's discriminator), not structural inspection of `message.content`.
-type: best-practice
+title: 'SDK forward-progress on user-role messages: tool_use_result is the load-bearing signal'
 date: 2026-05-06
-pr: "#3326"
-parent_pr: "#3225"
-domain: engineering
-tags:
-  - sdk-lifecycle
-  - timer-design
-  - forward-progress
-  - defense-pair
-  - cc-soleur-go
-related_learnings:
-  - 2026-05-05-defense-relaxation-must-name-new-ceiling.md
-  - 2026-05-06-scope-out-criterion-misclassification-adr-not-architectural-pivot.md
+category: engineering
+tags: [sdk-lifecycle, timer-design, forward-progress, defense-pair, cc-soleur-go]
 synced_to: []
+description: 'When a streaming-input SDK runner uses a per-block idle reaper, that timer must reset on the SDK''s documented forward-progress discriminator — `SDKUserMessage.tool_use_result !== undefined` — not only on assistant or result messages. Detection MUST be field-shape (the SDK''s discriminator), not structural inspection of `message.content`.'
+domain: engineering
+name: SDK tool_use_result on user-role messages is the load-bearing forward-progress signal
+parent_pr: '#3225'
+pr: '#3326'
+related_learnings: [2026-05-05-defense-relaxation-must-name-new-ceiling.md, 2026-05-06-scope-out-criterion-misclassification-adr-not-architectural-pivot.md]
+type: best-practice
 ---
 
 # SDK forward-progress on user-role messages: tool_use_result is the load-bearing signal

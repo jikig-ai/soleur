@@ -142,14 +142,18 @@ if [[ -n "${AUDIT_ENUMERATE_ONLY:-}" ]]; then
   exit 0
 fi
 
-# Sanity floor (deferred until after enumeration): require >= 8 workflows
+# Sanity floor (deferred until after enumeration): require >= 1 workflow.
+# Floor lowered from 6 → 1 after TR9 Phase 2 (#3948) migrated 22 scheduled
+# workflows to Inngest cron functions. The remaining GHA bot-pr consumer is
+# rule-metrics-aggregate.yml. The floor exists to catch accidental deletion
+# of the last remaining bot-pr workflow.
 WORKFLOWS=$(enumerate_workflows)
 COUNT=$(printf '%s\n' "$WORKFLOWS" | grep -v '^$' | wc -l)
-if [[ -z "$WORKFLOWS_OVERRIDE" && "$COUNT" -lt 8 ]]; then
-  echo "::error::bot-workflow inventory shrank — verify before proceeding (got $COUNT, expect >=8)" >&2
+if [[ -z "$WORKFLOWS_OVERRIDE" && "$COUNT" -lt 1 ]]; then
+  echo "::error::bot-workflow inventory shrank — verify before proceeding (got $COUNT, expect >=6)" >&2
   exit 1
 fi
-# When --workflows override is used, --workflows is allowed to specify <8 (testing path)
+# When --workflows override is used, --workflows is allowed to specify <7 (testing path)
 if [[ -n "$WORKFLOWS_OVERRIDE" && "$COUNT" -lt 1 ]]; then
   echo "::error::workflow override resolved to zero files" >&2
   exit 1

@@ -33,7 +33,7 @@ export default defineConfig({
     // Public page tests (no auth needed) — uses fake Supabase URL (unreachable)
     {
       name: "chromium",
-      testIgnore: "**/start-fresh-*.e2e.ts",
+      testIgnore: ["**/start-fresh-*.e2e.ts", "**/cc-soleur-go-*.e2e.ts"],
       use: {
         browserName: "chromium",
         baseURL: `http://localhost:${PUBLIC_PORT}`,
@@ -42,7 +42,7 @@ export default defineConfig({
     // Authenticated dashboard tests — uses mock Supabase for server-side auth
     {
       name: "authenticated",
-      testMatch: "**/start-fresh-*.e2e.ts",
+      testMatch: ["**/start-fresh-*.e2e.ts", "**/cc-soleur-go-*.e2e.ts"],
       timeout: 60_000,
       use: {
         browserName: "chromium",

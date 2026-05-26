@@ -1,3 +1,10 @@
+---
+title: 'skill-description word budget uses a different tokenizer than the cross-component `grep | wc -w` survey'
+date: 2026-04-19
+category: plugin-architecture
+tags: [best-practices, plugins/soleur/skills]
+---
+
 # Learning: skill-description word budget uses a different tokenizer than the cross-component `grep | wc -w` survey
 
 ## Problem

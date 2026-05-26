@@ -1,14 +1,12 @@
 ---
+title: Plan-time API-contract verification (and pipeline-via-package.json) kills brainstorm claims
 date: 2026-05-12
 category: best-practices
-module: plan, brainstorm
 tags: [plan-quality, brainstorm-quality, external-api, pseudonymization, gdpr, sentry, better-stack]
+module: plan, brainstorm
 related_issue: 3638
+related_learnings: [2026-04-22-plan-ac-external-state-must-be-api-verified, 2026-05-07-brainstorm-verify-referenced-pr-state-and-leader-infra-claims, 2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites]
 related_pr: 3685
-related_learnings:
-  - 2026-04-22-plan-ac-external-state-must-be-api-verified
-  - 2026-05-07-brainstorm-verify-referenced-pr-state-and-leader-infra-claims
-  - 2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites
 ---
 
 # Learning: Plan-time API-contract verification (and pipeline-via-package.json) kills brainstorm claims

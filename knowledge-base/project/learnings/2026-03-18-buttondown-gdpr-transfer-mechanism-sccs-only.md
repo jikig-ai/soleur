@@ -1,3 +1,10 @@
+---
+title: Buttondown uses SCCs only (not DPF) for international transfers
+date: 2026-03-18
+category: legal
+tags: [legal, gdpr-policy]
+---
+
 # Learning: Buttondown uses SCCs only (not DPF) for international transfers
 
 ## Problem

@@ -1,10 +1,16 @@
 ---
-title: "Centralize public-facing route error messages; avoid regex-literal exec token tripping the shell-injection security hook"
+title: Centralize public-facing route error messages; avoid regex-literal exec token tripping the shell-injection security hook
 date: 2026-04-17
 category: best-practices
+tags: [public, route, error, message, centralization, regex, exec, hook, trip]
 module: apps/web-platform
+issues:
+  - 2321
+  - 2318
+  - 2312
+  - 2306
+  - 2301
 pr: 2516
-issues: [2321, 2318, 2312, 2306, 2301]
 ---
 
 # Learning: Public-route error-message centralization + regex-literal hook trip

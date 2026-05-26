@@ -1,13 +1,16 @@
 ---
+title: 'Scope-out filings must run code-simplicity-reviewer co-sign BEFORE `gh issue create`'
 date: 2026-05-06
 category: best-practices
-module: review
-problem_type: protocol_violation
-severity: medium
 tags: [review, scope-out, code-simplicity-reviewer, protocol-gate]
+module: review
 synced_to: [review]
+problem_type: protocol_violation
+related_issues:
+  - 3350
+  - 3351
 related_pr: 3337
-related_issues: [3350, 3351]
+severity: medium
 ---
 
 # Scope-out filings must run code-simplicity-reviewer co-sign BEFORE `gh issue create`

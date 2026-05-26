@@ -82,4 +82,4 @@ This is not exhaustive — adversaries continue to find new shapes — but it's 
 - AGENTS.md: `cq-when-a-plan-prescribes-a-validator-guard-or` — companion gate that requires plan-time grep of the protected surface; complement is bypass-class enumeration of the attack surface.
 - #3554 (original issue: `curl | bash` rated LOW-RISK).
 - #3600 (this PR; includes the inline bypass-class fix and the per-rule_id count regression test).
-- #3552 (closed smoke PR that demonstrated the gap; the trust-label representation made false-negative single-user-incident-class — see plan's User-Brand Impact section).
+- #3552 (closed smoke PR that demonstrated the gap; the trust-label representation made false-negative single-user incident-class — see plan's User-Brand Impact section).

@@ -1,3 +1,10 @@
+---
+title: Eleventy build fails in worktrees due to relative path in agents.js
+date: 2026-03-10
+category: workflow-patterns
+tags: [build-errors, docs]
+---
+
 # Learning: Eleventy build fails in worktrees due to relative path in agents.js
 
 ## Problem

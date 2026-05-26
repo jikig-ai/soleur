@@ -1,17 +1,15 @@
 ---
-module: Web Platform
+title: GitHub App Install Redirect Loop When App Already Installed
 date: 2026-04-07
-problem_type: integration_issue
-component: authentication
-symptoms:
-  - "Users with GitHub App already installed get redirected to GitHub install page"
-  - "GitHub does not redirect back to Soleur after repo access changes on already-installed app"
-  - "Reloading Soleur in another tab creates infinite loop at /connect-repo"
-  - "github_installation_id is NULL despite app being installed on GitHub"
-root_cause: incomplete_setup
-resolution_type: code_fix
-severity: high
+category: engineering
 tags: [github-app, connect-repo, installation-detection, redirect-loop, onboarding]
+symptoms: [Users with GitHub App already installed get redirected to GitHub install page, GitHub does not redirect back to Soleur after repo access changes on already-installed app, Reloading Soleur in another tab creates infinite loop at /connect-repo, github_installation_id is NULL despite app being installed on GitHub]
+module: Web Platform
+component: authentication
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: incomplete_setup
+severity: high
 ---
 
 # Troubleshooting: GitHub App Install Redirect Loop When App Already Installed

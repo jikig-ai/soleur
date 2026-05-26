@@ -1,3 +1,10 @@
+---
+title: 'Cloudflare DNS `@` symbol causes perpetual Terraform drift'
+date: 2026-04-03
+category: infrastructure
+tags: [integration-issues, infrastructure, terraform, cloudflare, dns]
+---
+
 # Learning: Cloudflare DNS `@` symbol causes perpetual Terraform drift
 
 ## Problem

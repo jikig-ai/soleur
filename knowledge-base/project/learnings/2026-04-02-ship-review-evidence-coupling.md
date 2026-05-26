@@ -1,3 +1,10 @@
+---
+title: Ship review-evidence detection breaks when artifact storage changes
+date: 2026-04-02
+category: workflow-patterns
+tags: [integration-issues, ship-skill, pre-merge-hook]
+---
+
 # Learning: Ship review-evidence detection breaks when artifact storage changes
 
 ## Problem

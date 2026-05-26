@@ -92,6 +92,12 @@ The 6 workflow stages are now **skills** under `skills/`:
 
 **Prefix source:** Both commands and skills get their `soleur:` prefix automatically from the plugin namespace. The `name:` field in frontmatter should NOT include the `soleur:` prefix. Commands live flat in `commands/` (not in a subdirectory) to avoid double-namespacing.
 
+### Primitive Choice: /goal vs. Soleur Skills
+
+Claude Code's `/goal` primitive (v2.1.139+) is a session-scoped completion-condition Stop hook with a Haiku evaluator that reads only the conversation transcript. It is the right tool for **ad-hoc autonomous work outside dedicated Soleur skills** — operator-typed conditions, headless CI, one-off loops not worth building a skill for.
+
+Do NOT propose `/goal` retrofits into existing autonomous Soleur skills (`one-shot`, `test-fix-loop`, `drain-labeled-backlog`, `resolve-todo-parallel`, `resolve-pr-parallel`, `work`). Each already uses a stricter, structurally-verifiable completion mechanism (exit codes, the `<promise>DONE</promise>` marker via `plugins/soleur/hooks/stop-hook.sh`, CLI-output checks). A transcript-only evaluator on top of those would duplicate at higher cost and reintroduce the pseudo-handoff failure class codified by hard rule `hr-when-a-workflow-concludes-with-an`. Operator-facing docs: `/goal-primitive/`.
+
 ## Agent Compliance Checklist
 
 When adding or modifying agents, verify compliance:

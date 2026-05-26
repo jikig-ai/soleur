@@ -209,7 +209,7 @@ def collect_residency_metadata(path: Path) -> tuple[set[str], set[str]]:
     Used by `lint_union` to enforce the invariant that every
     `[compliance-tier]`-tagged rule AND every `hr-*` rule lives in
     `AGENTS.core.md`. Per CPO sign-off on PR #3496, demoting an `hr-*`
-    out of core is a single-user-incident-class regression; until the
+    out of core is a single-user incident-class regression; until the
     workflow is hardened, this linter is the canonical enforcer.
     """
     compliance_ids: set[str] = set()
@@ -365,7 +365,7 @@ def lint_union(
     # 1. Every `[compliance-tier]`-tagged rule MUST live in AGENTS.core.md.
     # 2. Every `hr-*` rule MUST live in AGENTS.core.md.
     # The hook injects `core` on every session regardless of class; demoting
-    # one of these into `docs-only` or `rest` produces a single-user-incident-
+    # one of these into `docs-only` or `rest` produces a single-user incident-
     # class gap (the rule would be absent from sessions whose change-class
     # doesn't fire the sidecar containing it).
     core_path = index_path.parent / "AGENTS.core.md"

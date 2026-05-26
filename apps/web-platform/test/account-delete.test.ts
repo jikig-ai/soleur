@@ -17,7 +17,7 @@ const mockStorageList = vi.fn();
 const mockStorageRemove = vi.fn();
 const mockStorageFrom = vi.fn();
 
-vi.mock("@/lib/supabase/server", () => ({
+vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     from: mockFrom,
     rpc: mockRpc,
@@ -87,6 +87,10 @@ function setupSupabaseMocks(overrides: {
       }),
     }),
     delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+    // mig 068 #4318 step 3.901 ordering-guard probe + Phase 5 storage-purge enum.
+    select: () => ({
+      eq: () => Promise.resolve({ count: 1, data: [], error: null }),
+    }),
   }));
 
   // anonymise_dsar_export_audit_pii RPC default — success.
@@ -156,11 +160,33 @@ describe("deleteAccount", () => {
           }),
         };
       }
-      return { delete: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+      return {
+        delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        // mig 068 #4318 step 3.901 ordering-guard probe on workspace_members.
+        select: () => ({
+          eq: () => Promise.resolve({ count: 1, data: [], error: null }),
+        }),
+      };
     });
     mockRpc.mockImplementation(async (name: string) => {
       if (name === "anonymise_dsar_export_audit_pii") {
         callOrder.push("anonymise-dsar-audit");
+      } else if (name === "anonymise_tc_acceptances") {
+        callOrder.push("anonymise-tc-acceptances");
+      } else if (name === "anonymise_workspace_member_attestations") {
+        callOrder.push("anonymise-workspace-attestations");
+      } else if (name === "anonymise_departed_user_across_workspaces") {
+        callOrder.push("anonymise-departed-user-messages");
+      } else if (name === "anonymise_workspace_member_removals") {
+        callOrder.push("anonymise-workspace-removals");
+      } else if (name === "anonymise_workspace_members") {
+        callOrder.push("anonymise-workspace-members");
+      } else if (name === "anonymise_organization_membership") {
+        callOrder.push("anonymise-org-membership");
+      } else if (name === "anonymise_workspace_member_actions") {
+        callOrder.push("anonymise-workspace-actions");
+      } else if (name === "anonymise_byok_delegations") {
+        callOrder.push("anonymise-byok-delegations");
       }
       return { data: 0, error: null };
     });
@@ -172,14 +198,19 @@ describe("deleteAccount", () => {
     const result = await deleteAccount("user-123", "test@example.com");
 
     expect(result.success).toBe(true);
-    // AC25: ["abort-dsar-jobs", "abort", "workspace", "storage-purge",
-    //        "anonymise-dsar-audit", "auth"]. No storage objects here
-    // so storage-purge is absent from the trace; other steps preserved.
     expect(callOrder).toEqual([
       "abort-dsar-jobs",
       "abort",
       "workspace",
       "anonymise-dsar-audit",
+      "anonymise-tc-acceptances",
+      "anonymise-workspace-attestations",
+      "anonymise-departed-user-messages",
+      "anonymise-workspace-removals",
+      "anonymise-workspace-members",
+      "anonymise-org-membership",
+      "anonymise-workspace-actions",
+      "anonymise-byok-delegations",
       "auth",
     ]);
   });
@@ -318,7 +349,13 @@ describe("deleteAccount", () => {
           }),
         };
       }
-      return { delete: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+      return {
+        delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        // mig 068 #4318 step 3.901 ordering-guard probe on workspace_members.
+        select: () => ({
+          eq: () => Promise.resolve({ count: 1, data: [], error: null }),
+        }),
+      };
     });
     mockStorageList.mockImplementation(async (folder: string) => {
       if (folder === "user-123") {
@@ -339,6 +376,22 @@ describe("deleteAccount", () => {
     mockRpc.mockImplementation(async (name: string) => {
       if (name === "anonymise_dsar_export_audit_pii") {
         callOrder.push("anonymise-dsar-audit");
+      } else if (name === "anonymise_tc_acceptances") {
+        callOrder.push("anonymise-tc-acceptances");
+      } else if (name === "anonymise_workspace_member_attestations") {
+        callOrder.push("anonymise-workspace-attestations");
+      } else if (name === "anonymise_departed_user_across_workspaces") {
+        callOrder.push("anonymise-departed-user-messages");
+      } else if (name === "anonymise_workspace_member_removals") {
+        callOrder.push("anonymise-workspace-removals");
+      } else if (name === "anonymise_workspace_members") {
+        callOrder.push("anonymise-workspace-members");
+      } else if (name === "anonymise_organization_membership") {
+        callOrder.push("anonymise-org-membership");
+      } else if (name === "anonymise_workspace_member_actions") {
+        callOrder.push("anonymise-workspace-actions");
+      } else if (name === "anonymise_byok_delegations") {
+        callOrder.push("anonymise-byok-delegations");
       }
       return { data: 0, error: null };
     });
@@ -362,8 +415,58 @@ describe("deleteAccount", () => {
       "workspace",
       "storage-purge",
       "anonymise-dsar-audit",
+      "anonymise-tc-acceptances",
+      "anonymise-workspace-attestations",
+      "anonymise-departed-user-messages",
+      "anonymise-workspace-removals",
+      "anonymise-workspace-members",
+      "anonymise-org-membership",
+      "anonymise-workspace-actions",
+      "anonymise-byok-delegations",
       "auth",
     ]);
+  });
+
+  test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {
+    setupSupabaseMocks();
+    const callOrder: string[] = [];
+
+    mockRpc.mockImplementation(async (name: string) => {
+      callOrder.push(`rpc:${name}`);
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      callOrder.push("auth.deleteUser");
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    const tcIdx = callOrder.indexOf("rpc:anonymise_tc_acceptances");
+    const authIdx = callOrder.indexOf("auth.deleteUser");
+    expect(tcIdx).toBeGreaterThanOrEqual(0);
+    expect(authIdx).toBeGreaterThanOrEqual(0);
+    expect(tcIdx).toBeLessThan(authIdx);
+  });
+
+  test("Art. 17 — anonymise_tc_acceptances failure aborts cascade BEFORE auth-delete", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_tc_acceptances") {
+        return { data: null, error: { message: "RPC unavailable" } };
+      }
+      return { data: 0, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/failed/i);
+    // FK is ON DELETE RESTRICT — auth-delete must NOT be attempted
+    // because the cascade would abort with a FK violation anyway.
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
   });
 
   test("paginates when folder list returns PAGE_SIZE (1000) items", async () => {

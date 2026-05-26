@@ -49,7 +49,7 @@ git filter-repo --invert-paths --path .claude/settings.local.json --force
 Note: `git filter-repo` removes the `origin` remote as a safety measure. Re-add it after:
 
 ```bash
-git remote add origin git@github.com:org/repo.git
+git remote add origin git@example.com:org/repo.git
 ```
 
 ### Step 5: Rewrite ALL branches, not just main
@@ -65,7 +65,7 @@ git checkout main
 
 # Re-run filter-repo (processes all local branches)
 git filter-repo --invert-paths --path .claude/settings.local.json --force
-git remote add origin git@github.com:org/repo.git
+git remote add origin git@example.com:org/repo.git
 ```
 
 ### Step 6: Force-push all branches

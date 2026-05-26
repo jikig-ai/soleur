@@ -20,7 +20,7 @@ Defer **(c) MCP `get_session_state`** — no `apps/web-platform/server/mcp/` exi
 
 ## Why This Approach
 
-**(a) alone is insufficient.** CPO + CLO both flagged that asymmetric notification (model knows, user doesn't) fails the single-user-incident brand threshold. The model may proactively ask "could you remind me?" but Claude's helpfulness prior makes silent hallucinated continuation likely. The user attributes the resulting tone shift to product brokenness, not a known constraint.
+**(a) alone is insufficient.** CPO + CLO both flagged that asymmetric notification (model knows, user doesn't) fails the single-user incident brand threshold. The model may proactively ask "could you remind me?" but Claude's helpfulness prior makes silent hallucinated continuation likely. The user attributes the resulting tone shift to product brokenness, not a known constraint.
 
 **(b) is cheap given the existing taxonomy.** `WSMessage` in `apps/web-platform/lib/types.ts:189` is already a discriminated union with 27+ variants and Zod drift gates (`fanout_truncated`, `tier_changed`, `session_resumed` are direct precedents). Adding `context_reset` is one variant + parser + client renderer. No new architectural category — this is a lifecycle notice in an established taxonomy.
 
@@ -69,7 +69,7 @@ Defer **(c) MCP `get_session_state`** — no `apps/web-platform/server/mcp/` exi
 
 ### Product (CPO)
 
-**Summary:** (a) alone insufficient at single-user-incident threshold; asymmetric notification fails the brand contract. Recommend (a) tool-aware + (b), defer (c) behind Sentry signal as the issue specifies. Threshold push-back-resistant: paid-trust product, hallucinated continuation = single-user incident even when no data leaks.
+**Summary:** (a) alone insufficient at single-user incident threshold; asymmetric notification fails the brand contract. Recommend (a) tool-aware + (b), defer (c) behind Sentry signal as the issue specifies. Threshold push-back-resistant: paid-trust product, hallucinated continuation = single-user incident even when no data leaks.
 
 ### Engineering (CTO)
 

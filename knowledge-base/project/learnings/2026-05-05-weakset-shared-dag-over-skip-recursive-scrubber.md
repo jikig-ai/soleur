@@ -1,3 +1,10 @@
+---
+title: WeakSet shared-DAG over-skip in recursive transformers leaks the un-transformed payload
+date: 2026-05-05
+category: engineering
+tags: [weakset, shared, dag, over, skip, recursive, scrubber]
+---
+
 # Learning: WeakSet shared-DAG over-skip in recursive transformers leaks the un-transformed payload
 
 ## Problem

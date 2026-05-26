@@ -11,7 +11,7 @@ related_upstream: [supabase/supabase-js#1559]
 
 ## Symptom
 
-Calling `supabase.channel("…").subscribe()` from a local Node shell against either dev (`mlwiodleouzwniehynfz.supabase.co`) or prd (`api.soleur.ai`) returns:
+Calling `supabase.channel("…").subscribe()` from a local Node shell against either dev (`<DEV_REF>.supabase.co`) or prd (`api.soleur.ai`) returns:
 
 ```text
 [probe 10003ms] TIMED_OUT

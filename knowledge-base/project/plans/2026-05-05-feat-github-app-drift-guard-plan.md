@@ -2,7 +2,7 @@
 date: 2026-05-05
 issue: 3187
 related_issues: [3181, 3183, 1784, 2887, 3121, 3160, 3226, 3227, 3228, 3229, 3230]
-brand_survival: single-user-incident
+brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 type: feature
 classification: ci-workflow + secret + content

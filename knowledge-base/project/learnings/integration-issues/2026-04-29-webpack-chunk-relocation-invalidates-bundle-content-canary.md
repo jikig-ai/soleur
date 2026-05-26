@@ -1,18 +1,17 @@
 ---
-module: web-platform / canary
+title: Webpack chunk-relocation silently invalidates bundle-content canary assertions
 date: 2026-04-29
-problem_type: integration_issue
+category: engineering
+tags: [webpack, chunk-splitting, canary, bundle-content-gate, content-hash, ci-cd, supabase, layer-3]
+symptoms: [canary-bundle-claim-check.sh exits 1 with 'no JWT found in login chunk' against a healthy production bundle, Layer 3 canary probe wired into ci-deploy.sh has been silently skipped on every deploy since it was added, Bundle-content assertion false-negatives after a transitive dependency byte-change]
+module: web-platform / canary
+synced_to: []
 component: ci_canary_probe
-symptoms:
-  - "canary-bundle-claim-check.sh exits 1 with 'no JWT found in login chunk' against a healthy production bundle"
-  - "Layer 3 canary probe wired into ci-deploy.sh has been silently skipped on every deploy since it was added"
-  - "Bundle-content assertion false-negatives after a transitive dependency byte-change"
+follow_up_issue: 3033
+problem_type: integration_issue
+related_pr: 3015
 root_cause: hardcoded_chunk_path_invalidated_by_webpack_content_hash
 severity: high
-tags: [webpack, chunk-splitting, canary, bundle-content-gate, content-hash, ci-cd, supabase, layer-3]
-related_pr: 3015
-follow_up_issue: 3033
-synced_to: []
 ---
 
 # Webpack chunk-relocation silently invalidates bundle-content canary assertions
@@ -125,7 +124,7 @@ Filed as **#3033** with three fix components:
 Until #3033 lands, the recovery-verification protocol for #3015-class
 follow-throughs uses **manual JWT extraction from all chunks linked
 from `/login`** as a substitute for the script — see runbook
-`knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md`
+`knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md`
 "Recovery Verification" block for the worked example.
 
 ## Key Insight (generalizable)
@@ -244,5 +243,5 @@ sessions don't re-run them.
 - `bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md` — sibling regression that motivated Layer 3.
 - `implementation-patterns/2026-03-28-canary-rollback-docker-deploy.md` — canary swap mechanics.
 - `security-issues/canary-crash-leaks-env-file-ci-deploy-20260406.md` — separate canary failure mode.
-- Runbook `knowledge-base/engineering/ops/runbooks/dashboard-error-postmortem.md` "Recovery Verification" block — worked example of manual substitution while #3033 is open.
+- Runbook `knowledge-base/engineering/ops/post-mortems/dashboard-error-postmortem.md` "Recovery Verification" block — worked example of manual substitution while #3033 is open.
 - GitHub issue **#3033** — proposed mount + script-broadening fix.

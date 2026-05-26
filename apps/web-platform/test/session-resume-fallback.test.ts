@@ -153,7 +153,12 @@ function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_RO
     data: rows,
     error: null,
     eq: () => createChain(),
-    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
+    // Phase 3 #4229 — byok-lease switched to maybeSingle. Both shapes
+    // supported here for breadth.
+    limit: () => ({
+      single: () => ({ data: rows[0] ?? null, error: null }),
+      maybeSingle: () => ({ data: rows[0] ?? null, error: null }),
+    }),
     then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
   });
   return { select: () => createChain() };

@@ -1,15 +1,15 @@
 ---
-module: community
+title: gh api --paginate output exceeds shell argument limits
 date: 2026-03-28
-problem_type: integration_issue
-component: tooling
-symptoms:
-  - "jq: Argument list too long when passing paginated gh api output via --argjson"
-  - "github-community.sh fetch-interactions fails on repos with many comments"
-root_cause: config_error
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [gh-api, paginate, jq, argument-list, shell-limits, community-monitor]
+symptoms: [jq: Argument list too long when passing paginated gh api output via --argjson, github-community.sh fetch-interactions fails on repos with many comments]
+module: community
+component: tooling
+problem_type: integration_issue
+resolution_type: code_fix
+root_cause: config_error
+severity: medium
 ---
 
 # Troubleshooting: gh api --paginate output exceeds shell argument limits

@@ -1,14 +1,14 @@
 ---
-module: one-shot
+title: one-shot stops after review because the summary block reads like a deliverable
 date: 2026-05-07
-problem_type: workflow_issue
+category: engineering
+tags: [one-shot, review, continuation-gate, workflow]
+symptoms: [one-shot pipeline runs review then stops mid-task, agent treats review's '## Code Review Complete' summary as a turn-ending deliverable]
+module: one-shot
 component: skill_orchestration
-symptoms:
-  - "one-shot pipeline runs review then stops mid-task"
-  - "agent treats review's '## Code Review Complete' summary as a turn-ending deliverable"
+problem_type: workflow_issue
 root_cause: missing_continuation_gate_after_review
 severity: medium
-tags: [one-shot, review, continuation-gate, workflow]
 ---
 
 # Learning: one-shot stops after review because the summary block reads like a deliverable

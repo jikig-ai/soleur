@@ -1,8 +1,9 @@
 ---
-title: "Enumerate full attack surface when fixing security boundaries"
-category: security
+title: Enumerate full attack surface when fixing security boundaries
 date: 2026-03-20
-trigger: "Fixing or tightening a deny-by-default security boundary"
+category: security
+tags: [security, fix, attack, surface, enumeration]
+trigger: Fixing or tightening a deny-by-default security boundary
 ---
 
 ## Problem

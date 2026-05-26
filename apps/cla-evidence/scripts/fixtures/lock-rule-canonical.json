@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {
+      "id": "cla-evidence-10yr-retention",
+      "enabled": true,
+      "prefix": "",
+      "condition": {
+        "type": "Age",
+        "maxAgeSeconds": 315360000
+      }
+    }
+  ]
+}

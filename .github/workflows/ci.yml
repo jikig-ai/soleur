@@ -9,6 +9,19 @@ on:
 permissions:
   contents: read
 
+# Cancel in-progress CI runs for the same PR when a newer commit lands.
+# Scoped to pull_request events only — on `main` we let prior runs finish
+# so the audit trail (post-merge monitors, release-gate evidence) stays
+# intact. Group keys off (workflow, ref) so PR runs don't compete with
+# main-branch runs of the same workflow. github.workflow / github.ref /
+# github.event_name are GitHub-controlled meta-vars, not attacker-
+# controlled — safe to interpolate directly (the security-reminder hook
+# fires for any ${{ … }} in workflow files; the run:-command injection
+# class does not apply here).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   readme-counts:
     runs-on: ubuntu-latest
@@ -85,6 +98,40 @@ jobs:
       - name: Service-role allowlist gate self-test
         run: bash apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
 
+  # Legal-doc SHA-pin guard (all 9 docs) + T&C mirror-drift guard
+  # (feat-oauth-tc-consent-3205, extended #4324). Job name preserved
+  # because infra/github/ruleset-ci-required.tf pins this context per
+  # ADR-032; rename requires a paired terraform apply (out of scope).
+  # Asserts every canonical at docs/legal/*.md has a matching SHA
+  # literal (TC_DOCUMENT_SHA in tc-version.ts for T&C; LEGAL_DOC_SHAS
+  # in legal-doc-shas.ts for the other 8) and, for T&C only, that the
+  # Eleventy mirror prose body is identical after normalisation. The
+  # T&C SHA bypass via TC_VERSION bump is preserved.
+  tc-document-sha-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Verify all 9 legal-doc SHAs pinned
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: bash apps/web-platform/scripts/check-tc-document-sha.sh
+
+  # ADR ordinal + required-content sentinel (PR-B #4379 ADR-040 + ADR-041).
+  # Catches: (a) NEW ordinal collisions in knowledge-base/engineering/
+  # architecture/decisions/ (pre-existing collisions on main allowlisted in
+  # the script); (b) PR-B-required ADR-040 / ADR-041 missing or empty;
+  # (c) ADR file missing ## Status / ## Context / ## Decision /
+  # ## Consequences headings. See AC18 in 2026-05-25-feat-anthropic-leader-
+  # loop-pr-b-plan.md. No user-controlled inputs; static script call.
+  adr-ordinals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Check ADR ordinals + content completeness
+        run: bash scripts/check-adr-ordinals.sh
+
   rule-metrics-shape:
     runs-on: ubuntu-latest
     steps:
@@ -105,6 +152,16 @@ jobs:
           # not enforced here because the committed artifact lags the
           # aggregator until the first post-merge Sunday run.
 
+  # Regenerates apps/web-platform/package-lock.json under a pinned npm
+  # major and diffs against the committed file. Catches the `bun add`
+  # defect class (package.json changes without lockfile sync) AND the
+  # operator/CI npm-major-skew defect class — recurrence history:
+  #   - #4014 (2026-04, libc-arrays shape facet, operator-side `npx npm@10`)
+  #   - #4331 (2026-05, regression — flagsmith bun-add)
+  #   - #4334 (2026-05, hotfix regenerated under npm 11 but CI was on npm 10)
+  #   - #4337 (2026-05, this PR — codified the pin inside the gate)
+  # The pin step below is the durable fix; see
+  # knowledge-base/project/learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md.
   lockfile-sync:
     runs-on: ubuntu-latest
     steps:
@@ -115,6 +172,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Override bundled npm with npm@11
+        # `actions/setup-node@v4.4.0` ships npm 10.9.x with node-version 22 and
+        # has no `npm-version` input — `npm install -g npm@<major>` is the only
+        # available pin mechanism. Operators on Node 23+ or post-`bun add`
+        # flows produce npm 11 lockfiles; pinning here keeps CI and the
+        # committed lockfile on the same major so the regenerate-and-diff
+        # check below is meaningful. The bundled npm 10.x is discarded
+        # (the global install replaces it for the rest of this job only).
+        run: npm install -g npm@11
+
       - name: Regenerate package-lock.json
         working-directory: apps/web-platform
         run: npm install --package-lock-only
@@ -123,7 +190,7 @@ jobs:
         run: |
           if ! git diff --exit-code apps/web-platform/package-lock.json; then
             echo "::error::package-lock.json is out of sync with package.json in apps/web-platform/."
-            echo "::error::Run 'npm install' in apps/web-platform/ and commit the updated package-lock.json."
+            echo "::error::Run 'npx --yes npm@11 install --package-lock-only' in apps/web-platform/ and commit the updated package-lock.json. (CI pins npm@11 — using a different npm version locally will produce a divergent lockfile shape.)"
             exit 1
           fi
 
@@ -266,8 +333,28 @@ jobs:
     # Verified at plan time: `grep -l '^bun ' plugins/soleur/test/*.test.sh`
     # returned zero matches. If a future .test.sh adds a `bun` invocation,
     # add `setup-bun` here (still no install needed).
+    #
+    # gitleaks is installed because plugins/soleur/skills/code-to-prd/test/
+    # (#2726) preflights `command -v gitleaks` and aborts exit 2 if absent.
+    # Version + SHA pinned identically to .github/workflows/secret-scan.yml —
+    # to upgrade, bump both files together. Variables are workflow-internal
+    # literals; no untrusted input is interpolated into the run: block.
+    env:
+      GITLEAKS_VERSION: "8.24.2"
+      GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install gitleaks (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
 
       - name: Run scripts-side tests (bash + python3)
         run: bash scripts/test-all.sh scripts

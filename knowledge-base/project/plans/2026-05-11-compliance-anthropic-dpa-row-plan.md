@@ -97,7 +97,7 @@ Skipped with explicit rationale (each would be ceremony, not signal, on a docume
 - `claude-api` — no Anthropic SDK call, no model invocation, no caching surface. The plan is *about* the Anthropic DPA documentary state; it does not call the API.
 - `web-design-guidelines` — no UI rendering.
 - `security-review`, `simplify`, all engineering review agents (`architecture-strategist`, `security-sentinel`, `data-integrity-guardian`, `type-design-analyzer`, `code-quality-analyst`, `test-design-reviewer`, `agent-native-reviewer`, `git-history-analyzer`, `repo-research-analyst`, `framework-docs-researcher`, `best-practices-researcher`, `spec-flow-analyzer`) — every agent operates on diff content (code, schema, types, tests, contracts) or design surface; this PR's diff is exactly one row (`| Anthropic PBC | … |`) plus optional frontmatter date bump, with no behavior, schema, contract, type, test, security, or design surface. The Pre-merge `git diff --stat` AC (exactly 1 file, ≈1-3 insertions, 0 deletions outside the optional frontmatter date) is the verification a reviewer would perform anyway.
-- `user-impact-reviewer` — `threshold: none` with justified reason; per the `requires_cpo_signoff: false` frontmatter, this is not single-user-incident class. The conditional-agent block in `plugins/soleur/skills/review/SKILL.md` would not fire.
+- `user-impact-reviewer` — `threshold: none` with justified reason; per the `requires_cpo_signoff: false` frontmatter, this is not single-user incident class. The conditional-agent block in `plugins/soleur/skills/review/SKILL.md` would not fire.
 - `copywriter` — table row, not user-facing copy; no brand-voice surface.
 - All learnings under `knowledge-base/project/learnings/` — filtered: the closest semantic matches are the plan-quality learnings (paraphrase-without-verification class, label-verification class, retired-rule-citation class). This deepen pass has *applied* all three classes directly: live PR/issue state grep, live label grep, live rule-citation grep — outputs inlined above.
 
@@ -174,7 +174,7 @@ None. Verified via `gh issue list --label code-review --state open --json number
   - `Signed/Verified`: `2026-05-11`
   - `Transfer Mechanism`: `SCCs Modules 2+3 + UK IDTA + Swiss Addendum (Art. 46 GDPR)`
   - `Data Region`: `US-based`
-  - `Notes`: DPA effective date + Commercial Terms § C anchor + Irish governing law + sub-processor URL + in-repo consumption paths (`claude-code-action`, `gdpr-gate`, #2720) + single-user-incident threshold reference + AC23/AC26 tag.
+  - `Notes`: DPA effective date + Commercial Terms § C anchor + Irish governing law + sub-processor URL + in-repo consumption paths (`claude-code-action`, `gdpr-gate`, #2720) + single-user incident threshold reference + AC23/AC26 tag.
 - [x] `last_updated:` frontmatter unchanged — already `2026-05-11` (today). No bump needed.
 - [x] `git diff --stat` shows exactly 1 file changed in `knowledge-base/legal/compliance-posture.md`, 1 insertion, 0 deletions.
 - [x] No other rows in the table modified — visual diff inspection confirms only the new Anthropic row is added.

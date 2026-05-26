@@ -1,3 +1,10 @@
+---
+title: Reuse existing form patterns instead of duplicating CSS/JS
+date: 2026-03-25
+category: engineering
+tags: [ui-bugs, docs-site]
+---
+
 # Learning: Reuse existing form patterns instead of duplicating CSS/JS
 
 ## Problem

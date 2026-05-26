@@ -1,23 +1,15 @@
 ---
-module: "KB share links"
+title: Migration NOT NULL trap + partial unique index pattern for revoke-and-reissue flows
 date: 2026-04-17
-problem_type: security_issue
+category: engineering
+tags: [migration, supabase, sha256, content-integrity, partial-unique-index, concurrency, code-review]
+symptoms: [Share link token resurrection after file delete/rename/overwrite, Concurrent POST /api/kb/share can create duplicate active rows for the same (user_id, document_path), Migration alter column set not null fails when prior UPDATE did not populate the new column]
+module: KB share links
+synced_to: [data-integrity-guardian]
 component: supabase_migration
-symptoms:
-  - "Share link token resurrection after file delete/rename/overwrite"
-  - "Concurrent POST /api/kb/share can create duplicate active rows for the same (user_id, document_path)"
-  - "Migration alter column set not null fails when prior UPDATE did not populate the new column"
+problem_type: security_issue
 root_cause: missing_backfill_and_missing_unique_constraint
 severity: high
-tags:
-  - migration
-  - supabase
-  - sha256
-  - content-integrity
-  - partial-unique-index
-  - concurrency
-  - code-review
-synced_to: [data-integrity-guardian]
 ---
 
 # Migration NOT NULL trap + partial unique index pattern for revoke-and-reissue flows

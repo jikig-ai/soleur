@@ -97,3 +97,9 @@ Confirm the deploy step completes with HTTP 200 (not 403).
 - **Expected expiry:** ~2027-03-21
 - **Parent issue:** #974
 - **Originating PR:** #971 / #967
+
+## Related: CLA Evidence R2 token rotation
+
+The CLA evidence sidecar uses a separate Doppler config (`prd_cla`) and surfaces an R2 object-write API token to GitHub Actions via `DOPPLER_TOKEN_CLA`. Rotation of that token follows the Cloudflare R2 token rotation procedure (regenerate via Cloudflare dashboard or `terraform apply` against `apps/cla-evidence/infra/`, sync to Doppler `prd_cla`, no GitHub-secret edit required because the workflow reads via Doppler at run-time).
+
+For end-to-end retrieval and inspection of the evidence layer (and the GDPR Art. 17 admin-override + tombstone protocol), see `cla-signature-evidence-retrieval.md`.

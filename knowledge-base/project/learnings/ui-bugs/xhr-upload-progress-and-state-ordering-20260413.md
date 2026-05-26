@@ -1,16 +1,15 @@
 ---
-module: KB Upload
+title: XHR Upload Progress and State Ordering in React
 date: 2026-04-13
-problem_type: ui_bug
-component: frontend_stimulus
-symptoms:
-  - "Upload shows only indeterminate spinning wheel with no progress feedback"
-  - "Invalid form data error on PDF upload with no diagnostic information"
-  - "Processing spinner flashes briefly before error/duplicate state"
-root_cause: logic_error
-resolution_type: code_fix
-severity: medium
+category: engineering
 tags: [xhr-upload, progress-indicator, formdata-error, state-machine, information-disclosure]
+symptoms: [Upload shows only indeterminate spinning wheel with no progress feedback, Invalid form data error on PDF upload with no diagnostic information, Processing spinner flashes briefly before error/duplicate state]
+module: KB Upload
+component: frontend_stimulus
+problem_type: ui_bug
+resolution_type: code_fix
+root_cause: logic_error
+severity: medium
 ---
 
 # Learning: XHR Upload Progress and State Ordering in React

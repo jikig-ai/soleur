@@ -1,3 +1,10 @@
+---
+title: Docker base image digest pinning
+date: 2026-03-19
+category: engineering
+tags: [security-issues, telegram-bridge]
+---
+
 # Learning: Docker base image digest pinning
 
 ## Problem

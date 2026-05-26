@@ -1,17 +1,18 @@
 ---
+title: '`user-impact-reviewer` catches runtime-content-tamper vectors that plan-time review misses'
 date: 2026-05-03
 category: best-practices
+tags: [review, security, single-user-incident, multi-agent-review, comment-mutability, defense-in-depth]
 module: schedule, review
 issue: 3094
 pr: 3067
-tags: [review, security, single-user-incident, multi-agent-review, comment-mutability, defense-in-depth]
 ---
 
 # Learning: `user-impact-reviewer` catches runtime-content-tamper vectors that plan-time review misses
 
 ## Problem
 
-PR #3067 added `soleur:schedule --once` for one-time scheduled agent runs. The plan was simplified by a 3-reviewer panel (DHH / Kieran / Simplicity) and explicitly named four load-bearing defenses (D1-D4) for a single-user-incident threshold:
+PR #3067 added `soleur:schedule --once` for one-time scheduled agent runs. The plan was simplified by a 3-reviewer panel (DHH / Kieran / Simplicity) and explicitly named four load-bearing defenses (D1-D4) for a single-user incident threshold:
 
 - **D1** Issue+comment ID context reference (no inline prompts)
 - **D2** Fire-time stale-context preamble (issue OPEN, repo not archived, comment matches issue)

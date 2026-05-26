@@ -1,24 +1,13 @@
 ---
+title: brainstorm defer decision surfaces three reusable patterns
 date: 2026-05-12
 category: best-practices
+tags: [brainstorm, mcp, skills, issue-body-drift, plugin-json, oauth, cannibalization, tier-2-port]
 module: brainstorm
-tags:
-  - brainstorm
-  - mcp
-  - skills
-  - issue-body-drift
-  - plugin-json
-  - oauth
-  - cannibalization
-  - tier-2-port
 issues:
   - 2724
   - 2718
-related_learnings:
-  - knowledge-base/project/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md
-  - knowledge-base/project/learnings/integration-issues/2026-02-22-oauth-mcp-servers-can-bundle-in-plugin-json.md
-  - knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md
-  - knowledge-base/project/learnings/2026-05-12-brainstorm-write-mostly-artifact-diagnosis-and-lifecycle-prereq.md
+related_learnings: [knowledge-base/project/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md, knowledge-base/project/learnings/integration-issues/2026-02-22-oauth-mcp-servers-can-bundle-in-plugin-json.md, knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md, knowledge-base/project/learnings/2026-05-12-brainstorm-write-mostly-artifact-diagnosis-and-lifecycle-prereq.md]
 ---
 
 # Learning: brainstorm defer decision surfaces three reusable patterns

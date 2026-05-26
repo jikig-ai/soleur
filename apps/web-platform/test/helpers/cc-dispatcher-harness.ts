@@ -125,3 +125,50 @@ export function supabaseServiceFactory(opts: {
     }),
   };
 }
+
+/**
+ * PR-C §2.11 (#3244): cc-dispatcher's user-message + assistant-message
+ * inserts now go through `getFreshTenantClient(userId)` instead of the
+ * module-level `supabase()` service-role lazy singleton. Reuse the
+ * same `mockMessagesInsert` driver so harness consumers don't need to
+ * duplicate setup between service-role (attachments injection at
+ * `:1421` — PERMANENT) and tenant (the 2 migrated inserts).
+ */
+export function supabaseTenantFactory(opts: {
+  mockMessagesInsert: Mock;
+  mockGetMyRevocationStatus?: Mock;
+}): Record<string, unknown> {
+  return {
+    getFreshTenantClient: vi.fn(async () => ({
+      from: (table: string) => {
+        if (table === "messages") {
+          return { insert: opts.mockMessagesInsert };
+        }
+        throw new Error(`unexpected table in cc-dispatcher harness: ${table}`);
+      },
+    })),
+    mintFounderJwt: vi.fn(),
+    // #4440 follow-up to #4418 — mirrors the real RuntimeAuthError surface
+    // (`cause` discriminant) so cc-dispatcher's `denied_jti` branch can
+    // narrow correctly when a test stages it via `mockResolvedValueOnce`
+    // / `mockRejectedValueOnce`. The runtime structure mirrors
+    // `lib/supabase/tenant.ts:RuntimeAuthError` exactly.
+    RuntimeAuthError: class RuntimeAuthError extends Error {
+      public readonly cause: "jwt_mint" | "rotation" | "denied_jti";
+      constructor(
+        cause: "jwt_mint" | "rotation" | "denied_jti",
+        message: string,
+      ) {
+        super(message);
+        this.cause = cause;
+        this.name = "RuntimeAuthError";
+      }
+    },
+    // #4440 follow-up to #4418 — agents/dispatcher catch sites call this
+    // best-effort RPC to populate the discriminated `revocation_notice`
+    // / session_revoked WorkflowEnd reason+deniedAt. Default stub
+    // returns null (fail-open); tests override per case via the opt.
+    getMyRevocationStatus:
+      opts.mockGetMyRevocationStatus ?? vi.fn(async () => null),
+  };
+}

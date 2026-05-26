@@ -1,19 +1,15 @@
 ---
-module: pencil-mcp-adapter
+title: 'Pencil MCP Adapter: Env Var Misregistration, Screenshot Persistence, and Variable Auto-Coercion'
 date: 2026-03-25
-problem_type: integration-debugging
-component:
-  - plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs
-  - plugins/soleur/skills/pencil-setup/SKILL.md
-symptoms:
-  - "MCP adapter times out with: [pencil-adapter] Timed out waiting for prompt after 30000ms"
-  - "PENCIL_CLI_KEY missing from adapter process.env despite -e flag in claude mcp add"
-  - "get_screenshot returns inline base64 but no file saved to disk"
-  - "set_variables rejects bare hex strings with unclear error message"
-root_cause: wrong_flag_ordering
-resolution_type: code_fix
-severity: high
+category: infrastructure
 tags: [pencil, mcp, adapter, env-var, screenshot, auto-coercion, dogfooding, defense-in-depth]
+symptoms: [MCP adapter times out with: [pencil-adapter] Timed out waiting for prompt after 30000ms, PENCIL_CLI_KEY missing from adapter process.env despite -e flag in claude mcp add, get_screenshot returns inline base64 but no file saved to disk, set_variables rejects bare hex strings with unclear error message]
+module: pencil-mcp-adapter
+component: [plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs, plugins/soleur/skills/pencil-setup/SKILL.md]
+problem_type: integration-debugging
+resolution_type: code_fix
+root_cause: wrong_flag_ordering
+severity: high
 ---
 
 # Pencil MCP Adapter: Env Var Misregistration, Screenshot Persistence, and Variable Auto-Coercion

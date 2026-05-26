@@ -104,7 +104,7 @@ Single brand: **Soleur**. Two surfaces (CLI plugin, Web Platform) under one prod
 
 **Artifact:** Command Center server-side agentic runtime hosting long-running per-founder agents that execute against founder-owned credentials (Anthropic, Stripe, GitHub, Supabase, Doppler).
 
-**Vector:** Three confirmed by the founder this session, all single-user-incident threshold:
+**Vector:** Three confirmed by the founder this session, all single-user incident threshold:
 
 1. **Cross-tenant data leak** — Founder A's KB / chat history / agent memory / BYOK keys leak to Founder B due to runtime bug or RLS bypass. Today's `SUPABASE_SERVICE_ROLE_KEY` use in `server/agent-runner.ts` is the live exposure.
 2. **BYOK credential leak** — Long-running agent holds plaintext Anthropic/Stripe/etc keys in heap; runtime bug, log leak, or memory-dump exposes them. Brand-ending; founder financially harmed.

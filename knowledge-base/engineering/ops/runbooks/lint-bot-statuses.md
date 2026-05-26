@@ -3,7 +3,7 @@ title: lint-bot-statuses CI job
 audience: operator
 on_page_for: scripts/lint-bot-synthetic-completeness.sh + scripts/lint-bot-synthetic-statuses.sh
 issues: [3548, 3546, 3542, 2719]
-threshold: none
+brand_survival_threshold: none
 last_updated: 2026-05-11
 ---
 

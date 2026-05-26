@@ -1,3 +1,10 @@
+---
+title: '`gh release view` returns wrong tag in multi-component repos'
+date: 2026-03-19
+category: ci-cd
+tags: [build-errors, ci-release, github-actions, versioning, gh-cli, multi-component-releases, monorepo, high, 2026-03-19]
+---
+
 # Learning: `gh release view` returns wrong tag in multi-component repos
 
 ## Problem

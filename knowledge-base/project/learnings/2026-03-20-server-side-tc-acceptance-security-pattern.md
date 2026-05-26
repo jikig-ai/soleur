@@ -1,3 +1,10 @@
+---
+title: Server-side consent recording prevents client-controlled metadata forgery
+date: 2026-03-20
+category: security
+tags: [security-issues, web-platform/auth]
+---
+
 # Learning: Server-side consent recording prevents client-controlled metadata forgery
 
 ## Problem

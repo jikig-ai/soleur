@@ -20,14 +20,42 @@ function parseSupabaseScheme(url: string): "http" | "https" {
   }
 }
 
+// Whitelist of origins that may be added to `form-action` via the
+// `formActionExtra` option. The committed manifest-POST flow
+// (`/internal/github-app-init`) requires `https://github.com` so the
+// operator can submit the manifest to GitHub's App-create form. Adding
+// other origins requires a whitelist update + reviewer scrutiny — every
+// extra origin widens the cross-origin form-POST surface and undoes the
+// default-deny posture of `form-action 'self'`.
+const FORM_ACTION_ALLOWLIST = new Set(["https://github.com"]);
+
+function buildFormAction(extras: string[] | undefined): string {
+  if (!extras || extras.length === 0) return "form-action 'self'";
+  const uniq = Array.from(new Set(extras));
+  for (const origin of uniq) {
+    if (!FORM_ACTION_ALLOWLIST.has(origin)) {
+      throw new Error(
+        `form-action override '${origin}' is not in the allowlist. ` +
+          `Add to FORM_ACTION_ALLOWLIST in apps/web-platform/lib/csp.ts ` +
+          `with a code-comment rationale before using.`,
+      );
+    }
+  }
+  return `form-action 'self' ${uniq.join(" ")}`;
+}
+
 export function buildCspHeader(options: {
   nonce: string;
   isDev: boolean;
   supabaseUrl: string;
   appHost: string;
   sentryReportUri?: string;
+  // Per-route additions to `form-action`. Each entry must be in
+  // FORM_ACTION_ALLOWLIST; unknown entries throw at build time so a typo
+  // or attacker-controlled value cannot silently widen CSP.
+  formActionExtra?: string[];
 }): string {
-  const { nonce, isDev, supabaseUrl, appHost, sentryReportUri } = options;
+  const { nonce, isDev, supabaseUrl, appHost, sentryReportUri, formActionExtra } = options;
   const supabaseHost = parseSupabaseHost(supabaseUrl);
   const supabaseScheme = parseSupabaseScheme(supabaseUrl);
   const supabaseWsScheme = supabaseScheme === "http" ? "ws" : "wss";
@@ -73,7 +101,7 @@ export function buildCspHeader(options: {
     "frame-src 'none'",
     "worker-src 'self' blob:", // blob: required by pdfjs-dist Web Worker (react-pdf)
     "base-uri 'self'",
-    "form-action 'self'",
+    buildFormAction(formActionExtra),
     "frame-ancestors 'none'",
     "upgrade-insecure-requests",
     ...(sentryReportUri ? [`report-uri ${sentryReportUri}`] : []),

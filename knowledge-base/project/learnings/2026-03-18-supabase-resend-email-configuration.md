@@ -12,7 +12,7 @@ module: apps/web-platform/infra/
 
 GitHub issue #678 -- Signup emails from app.soleur.ai had three distinct failures:
 
-1. **Wrong sender domain.** Emails were sent from Supabase's default domain (e.g., `noreply@mail.supabase.io`) instead of `soleur.ai`.
+1. **Wrong sender domain.** Emails were sent from Supabase's default domain (e.g., `noreply@example.com`) instead of `soleur.ai`.
 2. **No branding.** The email body used Supabase's generic template with no Soleur visual identity.
 3. **Broken magic link.** The confirmation URL redirected to `localhost:3000` instead of `https://app.soleur.ai`, making signup impossible in production.
 
@@ -22,7 +22,7 @@ All three symptoms traced to a single root cause: the Supabase project was still
 
 Five changes, none of which involved application code:
 
-1. **SMTP provider (Resend).** Configured Resend as the custom SMTP sender via Supabase's auth settings. Connection details: `smtp.resend.com:465`, TLS enabled, API key as password. This moved the sender address from Supabase's domain to `noreply@soleur.ai`.
+1. **SMTP provider (Resend).** Configured Resend as the custom SMTP sender via Supabase's auth settings. Connection details: `smtp.resend.com:465`, TLS enabled, API key as password. This moved the sender address from Supabase's domain to `noreply@example.com`.
 
 2. **Branded email template.** Created a custom HTML email template using Supabase's `{{ .ConfirmationURL }}` template variable, which is required for PKCE auth flow. The template includes Soleur branding and renders the magic link as a styled button.
 

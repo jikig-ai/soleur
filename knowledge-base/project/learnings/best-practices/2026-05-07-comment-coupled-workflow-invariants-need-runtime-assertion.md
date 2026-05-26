@@ -1,10 +1,14 @@
 ---
+title: Comment-Coupled Workflow Invariants Need Runtime Assertion + Shared Source
 date: 2026-05-07
 category: best-practices
 tags: [ci, workflows, github-actions, drift-guards, multi-agent-review]
+issues:
+  - 3408
+  - 3409
+prs:
+  - 3421
 related: [2026-04-17-align-ci-poll-windows-with-adjacent-steps.md, 2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md]
-prs: [3421]
-issues: [3408, 3409]
 ---
 
 # Comment-Coupled Workflow Invariants Need Runtime Assertion + Shared Source

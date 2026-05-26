@@ -1,16 +1,15 @@
 ---
-module: System
+title: Domain Leader Agents Assert False Issue Status
 date: 2026-03-23
-problem_type: workflow_issue
-component: tooling
-symptoms:
-  - "CLO agent asserted '#670 not started' when issue was closed 5 days earlier"
-  - "COO agent made identical false assertion about same issue"
-  - "Both agents caused unnecessary urgency and wasted investigation time"
-root_cause: missing_workflow_step
-resolution_type: workflow_improvement
-severity: high
+category: agent-design
 tags: [domain-leaders, issue-verification, false-assertions, agent-accuracy]
+symptoms: [CLO agent asserted '#670 not started' when issue was closed 5 days earlier, COO agent made identical false assertion about same issue, Both agents caused unnecessary urgency and wasted investigation time]
+module: System
+component: tooling
+problem_type: workflow_issue
+resolution_type: workflow_improvement
+root_cause: missing_workflow_step
+severity: high
 ---
 
 # Troubleshooting: Domain Leader Agents Assert False Issue Status

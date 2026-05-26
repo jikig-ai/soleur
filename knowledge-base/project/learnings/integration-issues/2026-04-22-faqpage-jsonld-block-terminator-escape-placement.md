@@ -1,17 +1,15 @@
 ---
-title: "FAQPage JSON-LD block terminator must be literal </script>; in-string escape applies only inside Answer values"
+title: 'FAQPage JSON-LD block terminator must be literal </script>; in-string escape applies only inside Answer values'
 date: 2026-04-22
+category: engineering
+tags: [jsonld, faqpage, copywriter, content-pillar, 2609-class, script-breakout]
+symptoms: [FAQPage JSON-LD parse fails with 'Extra data' error, Content after the JSON-LD block renders as raw markdown instead of HTML, `## Start Building` heading appears as literal text below the script block]
 module: docs/blog
-problem_type: integration_issue
+synced_to: [copywriter]
 component: eleventy_nunjucks
-symptoms:
-  - "FAQPage JSON-LD parse fails with 'Extra data' error"
-  - "Content after the JSON-LD block renders as raw markdown instead of HTML"
-  - "`## Start Building` heading appears as literal text below the script block"
+problem_type: integration_issue
 root_cause: misplaced_escape
 severity: high
-tags: [jsonld, faqpage, copywriter, content-pillar, 2609-class, script-breakout]
-synced_to: [copywriter]
 ---
 
 # FAQPage JSON-LD block terminator must be literal `</script>`; `<\/` escape applies only inside Answer string values

@@ -1,13 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { TC_BUMP_METADATA } from "@/lib/legal/tc-version";
 
 export default function AcceptTermsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [accepted, setAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Middleware redirects here with `?error=db_unavailable` when the
+  // T&C-version SELECT fails open-DB-side (fail-closed redirect). Surface
+  // the outage so the user has a non-form explanation; the form remains
+  // usable in case the outage cleared between redirect and render.
+  const middlewareError = searchParams?.get("error");
+  const outageBanner =
+    middlewareError === "db_unavailable"
+      ? "We're having trouble verifying your account. Please try again in a moment — if the problem persists, we've been alerted."
+      : "";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,6 +51,44 @@ export default function AcceptTermsPage() {
           <h1 className="text-2xl font-semibold">Accept Terms & Conditions</h1>
           <p className="text-sm text-soleur-text-secondary">
             To continue using Soleur, please review and accept our terms.
+          </p>
+        </div>
+
+        {outageBanner && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-200"
+          >
+            {outageBanner}
+          </div>
+        )}
+
+        {/* Art. 13(3) GDPR — informs returning users of the substantive */}
+        {/* change introduced in TC_VERSION 2.2.0 before re-acceptance.   */}
+        {/* Rendered unconditionally because /accept-terms is only        */}
+        {/* reached when the middleware detected a version mismatch       */}
+        {/* (server side, via Supabase tc_accepted_version SELECT).       */}
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="tc-version-update-banner"
+          className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 text-sm text-soleur-text-secondary"
+        >
+          <p className="font-medium text-soleur-text-primary">
+            Updated {TC_BUMP_METADATA.lastUpdated}
+          </p>
+          <p className="mt-1">
+            <strong>{TC_BUMP_METADATA.substantiveChange}.</strong>{" "}
+            <a
+              href={TC_BUMP_METADATA.fullTermsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-soleur-text-link underline-offset-2 hover:underline"
+            >
+              Read the full Terms
+            </a>
+            .
           </p>
         </div>
 

@@ -64,6 +64,13 @@ vi.mock("@/server/kb-document-resolver", async () => {
   return kbDocumentResolverFactory({ mockFetchUserWorkspacePath });
 });
 
+vi.mock("@/lib/supabase/tenant", async () => {
+  const { supabaseTenantFactory } = await import(
+    "@/test/helpers/cc-dispatcher-harness"
+  );
+  return supabaseTenantFactory({ mockMessagesInsert });
+});
+
 vi.mock("@/lib/supabase/service", async () => {
   const { supabaseServiceFactory } = await import(
     "@/test/helpers/cc-dispatcher-harness"
@@ -148,10 +155,14 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
     });
 
     expect(mockPersistTurnCost).toHaveBeenCalledTimes(1);
+    // Phase 3 — workspaceId passed as 4th positional arg under the N2
+    // invariant (workspaces.id = owner_user_id for solo). cc-dispatcher
+    // sources it from `userId` directly.
     expect(mockPersistTurnCost).toHaveBeenCalledWith(
       "u-cost-1",
       "conv-cost-1",
       CC_ROUTER_LEADER_ID,
+      "u-cost-1",
       {
         totalCostUsd: 0.0042,
         usage: {
@@ -161,6 +172,7 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
           cache_creation_input_tokens: 800,
         },
       },
+      undefined,
     );
   });
 

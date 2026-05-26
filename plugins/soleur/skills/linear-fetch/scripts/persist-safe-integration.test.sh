@@ -13,7 +13,7 @@
 #   7. Assert the telemetry wrapper sees zero forbidden patterns when
 #      the rendered prompts are scanned as if they were telemetry.
 #
-# Required by Kieran-Rails review P1.5 — for a single-user-incident
+# Required by Kieran-Rails review P1.5 — for a single-user incident
 # threshold, the load-bearing rail must have automated E2E coverage,
 # not only manual runbook scenarios.
 #

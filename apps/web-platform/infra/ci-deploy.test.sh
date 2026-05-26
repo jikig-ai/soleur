@@ -443,6 +443,61 @@ echo "--- Happy path ---"
 assert_exit "web-platform deploy succeeds" 0 \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
+# PR-F follow-up (#3960): inngest component branch.
+#
+# The inngest branch in ci-deploy.sh now extracts the script + ENV vars from
+# the OCI image and runs the script on the HOST (not in a container), because
+# the Alpine base image lacks `systemctl`. The branch routes through:
+#   docker pull → docker create → docker cp → docker inspect → docker rm → sudo
+# Each of these is exercised below.
+#
+# Image mismatch: an attacker-style image suffix injection should be rejected.
+assert_exit_contains "inngest: wrong image rejected" 1 "invalid image" \
+  "deploy inngest ghcr.io/attacker/soleur-inngest-bootstrap v1.0.0"
+
+# Branch routing in trace mode: verify the inngest branch actually invokes
+# `docker pull` (the first observable docker call). Default mode exits 0
+# unconditionally; trace mode emits DOCKER_TRACE:<subcmd> markers we can
+# assert against. The branch routes pull → create → cp → inspect → rm → sudo,
+# but the mock docker's trace output for `inspect` doesn't contain the ENV
+# vars the script greps for (INNGEST_CLI_VERSION, INNGEST_CLI_SHA256), so
+# the branch exits with "inngest_image_env_missing" after `cp`. The pull
+# marker is reliable; a deeper test would need a richer docker-inspect mock.
+assert_inngest_docker_trace() {
+  local description="$1"
+  local cmd="deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v1.0.0"
+  TOTAL=$((TOTAL + 1))
+
+  local output
+  output=$(
+    export MOCK_DOCKER_MODE="trace"
+    export SSH_ORIGINAL_COMMAND="$cmd"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT" 2>&1 || true
+  )
+
+  # The inngest branch's first observable docker call is `pull`. If we see
+  # the trace marker, the branch routed correctly.
+  if printf '%s' "$output" | grep -qF "DOCKER_TRACE:pull"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (no DOCKER_TRACE:pull found)"
+    echo "        output: $output"
+  fi
+}
+
+assert_inngest_docker_trace "inngest deploy routes through docker pull (trace mode)"
+
 echo ""
 echo "--- Empty/missing command ---"
 assert_exit_contains "empty command rejected" 1 "no command provided" ""

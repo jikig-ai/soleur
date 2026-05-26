@@ -1,3 +1,10 @@
+---
+title: 'AGENTS.md byte budget discipline and `**Why:**` compression'
+date: 2026-04-18
+category: agent-design
+tags: [tooling / workflow-infra, compound, agents.md, lint-rule-ids]
+---
+
 # Learning: AGENTS.md byte budget discipline and `**Why:**` compression
 
 ## Problem

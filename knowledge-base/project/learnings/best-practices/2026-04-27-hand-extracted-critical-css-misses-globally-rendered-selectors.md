@@ -1,10 +1,12 @@
 ---
-name: hand-extracted-critical-css-misses-globally-rendered-selectors
-description: A hand-extracted critical-CSS inline block silently omits selectors for globally-rendered template fragments (e.g., a nav CTA driven by _data/site.json). Static markup checks pass; users see FOUC. The only fix that survives is enumerating every globally-rendered above-fold selector during extraction, not relying on a free-text regenerate comment.
-type: best-practice
-tags: [code-review, critical-css, eleventy, FOUC, drift, multi-agent-review]
+title: Hand-Extracted Critical CSS Misses Globally-Rendered Selectors
+date: 2026-04-27
 category: best-practices
+tags: [code-review, critical-css, eleventy, FOUC, drift, multi-agent-review]
 module: plugins/soleur/docs
+description: A hand-extracted critical-CSS inline block silently omits selectors for globally-rendered template fragments (e.g., a nav CTA driven by _data/site.json). Static markup checks pass; users see FOUC. The only fix that survives is enumerating every globally-rendered above-fold selector during extraction, not relying on a free-text regenerate comment.
+name: hand-extracted-critical-css-misses-globally-rendered-selectors
+type: best-practice
 ---
 
 # Hand-Extracted Critical CSS Misses Globally-Rendered Selectors

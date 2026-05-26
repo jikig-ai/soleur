@@ -1,3 +1,10 @@
+---
+title: Check MCP Tools and APIs Before Using Playwright
+date: 2026-03-25
+category: infrastructure
+tags: [check, mcp, api, before, playwright]
+---
+
 # Check MCP Tools and APIs Before Using Playwright
 
 **Date:** 2026-03-25

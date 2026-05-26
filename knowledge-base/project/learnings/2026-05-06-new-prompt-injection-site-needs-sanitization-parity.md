@@ -1,10 +1,22 @@
 ---
+title: when adding a new path-injection site to a system prompt, audit sanitization parity with existing sites
+date: 2026-05-06
 category: security-issues
-module: cc-concierge / system-prompt builders
 tags: [prompt-injection, sanitization-parity, sdk-read-tool, workspace-paths]
+module: cc-concierge / system-prompt builders
+prior-iterations:
+  - 3253
+  - 3263
+  - 3278
+  - 3287
+  - 3288
+  - 3294
+  - 3338
+  - 3353
+related-issues:
+  - 3376
+  - 3383
 related-pr: 3384
-related-issues: [3376, 3383]
-prior-iterations: [3253, 3263, 3278, 3287, 3288, 3294, 3338, 3353]
 ---
 
 # Learning: when adding a new path-injection site to a system prompt, audit sanitization parity with existing sites
@@ -89,5 +101,5 @@ module: cc-concierge / system-prompt builders
 
 - Plan: `knowledge-base/project/plans/2026-05-06-fix-sidebar-pdf-summarize-out-of-boundary-plan.md`
 - AGENTS.md rule: `cq-regex-unicode-separators-escape-only`
-- Related learning: `2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` (this PR is another instance — multi-agent review caught a single-user-incident-class vector that 3-agent plan-time review missed)
+- Related learning: `2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` (this PR is another instance — multi-agent review caught a single-user incident-class vector that 3-agent plan-time review missed)
 - Prior iterations on same surface: #3253, #3263, #3278, #3287, #3288, #3294, #3338, #3353 (this PR closes the gated-Read fallback that prior fixes left open)

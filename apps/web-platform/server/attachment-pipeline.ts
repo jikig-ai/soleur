@@ -34,11 +34,19 @@ import {
   ERR_UPLOAD_FAILED,
 } from "./error-messages";
 import { createChildLogger } from "./logger";
+import { mirrorWithDebounce } from "./observability";
 
 const log = createChildLogger("attachment-pipeline");
 
 export interface PersistAttachmentsArgs {
-  /** Service-role Supabase client. Caller owns lifetime. */
+  /**
+   * Tenant-scoped Supabase client minted via `getFreshTenantClient(userId)`.
+   * Caller owns lifetime. Storage RLS (migration 019 SELECT + 045 INSERT/
+   * UPDATE/DELETE) and `message_attachments` RLS (019 SELECT + 045 INSERT)
+   * are load-bearing — service-role clients bypass these policies and
+   * MUST NOT be passed here outside structurally-justified admin ops
+   * (e.g., `account-delete`, `dsar-export`).
+   */
   supabase: SupabaseClient;
   userId: string;
   conversationId: string;
@@ -142,7 +150,26 @@ export async function persistAndDownloadAttachments(
         .download(att.storagePath);
 
       if (dlErr || !fileData) {
+        // Preserve the existing pino message string for operator-dashboard
+        // continuity per 2026-05-13 helper-migration learning.
         log.error({ err: dlErr, storagePath: att.storagePath }, "Failed to download attachment");
+        // Mirror to Sentry with debounce. Per-(user, errorClass) 5-min TTL
+        // coalesces high-cardinality storage failures (RLS-deny on orphan
+        // paths, expired signed URLs, storage outages) so a single
+        // misconfigured account does not flood Sentry quota. Raw
+        // reportSilentFallback would emit one event per attachment per
+        // conversation post-PR-D.
+        mirrorWithDebounce(
+          dlErr,
+          {
+            feature: "attachment-pipeline",
+            op: "storage.download",
+            extra: { userId, conversationId, storagePath: att.storagePath, messageId },
+            message: "Failed to download attachment",
+          },
+          userId,
+          "attachment_download_failed",
+        );
         return null;
       }
 

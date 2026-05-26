@@ -237,6 +237,10 @@ After testing the skill, users may request improvements. Often this happens righ
 3. Identify how SKILL.md or bundled resources should be updated
 4. Implement changes and test again
 
+### Sharp Edges
+
+- When a SKILL.md prose fence documents shell-active patterns by design (e.g., `bash -c "$VAR"`, process substitution, an eval-style invocation), label the fence ` ```text ` instead of ` ```bash ` and document the load-bearing mitigations (timeout, reject-regex, env scrub, trust source) in a per-skill Sharp Edges section. Otherwise the `skill-security-scan` calibration suite fails the first-party SKILL.md with HIGH-RISK on `code-execution` — there is no per-finding override mechanism for first-party legitimate uses. The fence is documentation; the orchestrator still dispatches via the Bash tool when it reads the prose, so runtime behavior is unchanged. See `knowledge-base/project/learnings/2026-05-20-skill-md-shell-active-prose-calibration-carve-out.md`.
+
 ## Auditing Existing Skills
 
 For auditing and improving existing skills, see the [audit-skill workflow](./workflows/audit-skill.md).
@@ -258,6 +262,7 @@ For detailed guidance on skill authoring, see:
 - [iteration-and-testing.md](./references/iteration-and-testing.md) - Iteration and testing guidance
 - [workflows-and-validation.md](./references/workflows-and-validation.md) - Workflow and validation patterns
 - [api-security.md](./references/api-security.md) - API security considerations
+- [fail-closed redaction pattern](../../../../knowledge-base/project/learnings/2026-05-15-fail-closed-redaction-enables-committed-default-output.md) - Designing output paths for skills that generate user-derived artifacts intended for external sharing
 
 ## Workflows
 

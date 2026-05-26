@@ -1,3 +1,10 @@
+---
+title: Agent hallucinated author name from org/company name context
+date: 2026-03-24
+category: agent-design
+tags: [content-quality, docs-site, medium]
+---
+
 # Learning: Agent hallucinated author name from org/company name context
 
 ## Problem

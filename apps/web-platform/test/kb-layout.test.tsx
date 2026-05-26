@@ -6,6 +6,11 @@ const mockPush = vi.fn();
 const mockRouter = { push: mockPush, back: vi.fn(), forward: vi.fn(), refresh: vi.fn(), replace: vi.fn(), prefetch: vi.fn() };
 let mockPathname = "/dashboard/kb";
 
+vi.mock("@/components/feature-flags/provider", () => ({
+  FeatureFlagProvider: ({ children }: { children: React.ReactNode }) => children,
+  useFeatureFlag: () => true,
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => mockRouter,
   usePathname: () => mockPathname,

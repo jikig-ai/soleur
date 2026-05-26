@@ -191,6 +191,7 @@ resolve_env_file() {
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
+  [inngest]="ghcr.io/jikig-ai/soleur-inngest-bootstrap"
 )
 
 # Log truncated command to avoid persisting attacker payloads to syslog
@@ -357,6 +358,8 @@ case "$COMPONENT" in
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$ENV_FILE" \
+      --add-host host.docker.internal:host-gateway \
+      -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:3001:3000 \
@@ -519,6 +522,8 @@ case "$COMPONENT" in
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
         --tmpfs /tmp:rw,nosuid,nodev,size=256m \
         --env-file "$ENV_FILE" \
+        --add-host host.docker.internal:host-gateway \
+        -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
         -p 0.0.0.0:80:3000 \
@@ -547,6 +552,135 @@ case "$COMPONENT" in
       final_write_state 1 "$CANARY_FAIL_REASON"
       exit 1
     fi
+    ;;
+  inngest)
+    # Inngest server bootstrap (PR-F follow-up, #3960).
+    #
+    # No canary: inngest-server binds loopback only (127.0.0.1:8288/8289) so
+    # there is no external traffic to shadow. The bootstrap script's
+    # `systemctl is-active` + version-file check at /var/lib/inngest/version
+    # provides idempotency; a second deploy of the same $TAG is a ~50ms no-op.
+    #
+    # Delivery model: the OCI image is a SHA-pinned content carrier. The
+    # bootstrap script + the embedded INNGEST_CLI_VERSION / _SHA256 ENV vars
+    # are extracted from the image and the script is executed ON THE HOST
+    # (NOT inside the container). The container itself is Alpine + bash +
+    # curl + tar + coreutils — it does not have `systemctl`, so running the
+    # script inside it would fail at `systemctl daemon-reload`. The host has
+    # systemd + the deploy user + the systemd unit paths the script writes.
+    echo "Pulling Inngest bootstrap image $IMAGE:$TAG..."
+    docker pull "$IMAGE:$TAG"
+
+    # Extract the script + pinned ENV vars from the image.
+    # Fixed path (not mktemp) so the sudoers entry in
+    # /etc/sudoers.d/deploy-inngest-bootstrap can pin the exact path —
+    # Ubuntu 24.04's sudo-rs rejects wildcards in command arguments.
+    # Webhook serializes deploys; concurrent collisions not possible. (#4144)
+    INNGEST_EXTRACT_DIR=/tmp/inngest-extract
+    # Symlink precondition: refuse to rm -rf a symlink (would follow the
+    # link and clobber unrelated paths); refuse to operate if a hostile
+    # local user pre-created the dir with non-deploy ownership. Defensive
+    # against TOCTOU races on world-writable /tmp.
+    if [[ -L "$INNGEST_EXTRACT_DIR" ]]; then
+      logger -t "$LOG_TAG" "FAILED: $INNGEST_EXTRACT_DIR is a symlink — refusing to extract"
+      final_write_state 1 "inngest_extract_symlink_refused"
+      exit 1
+    fi
+    if [[ -e "$INNGEST_EXTRACT_DIR" && "$(stat -c %U "$INNGEST_EXTRACT_DIR" 2>/dev/null)" != "$(id -un)" ]]; then
+      logger -t "$LOG_TAG" "FAILED: $INNGEST_EXTRACT_DIR owned by unexpected user — refusing to extract"
+      final_write_state 1 "inngest_extract_owner_mismatch"
+      exit 1
+    fi
+    rm -rf "$INNGEST_EXTRACT_DIR"
+    mkdir -m 0700 -p "$INNGEST_EXTRACT_DIR"
+    INNGEST_EXTRACT_CONTAINER="soleur-inngest-extract-$$"
+    docker rm -f "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+    if ! docker create --name "$INNGEST_EXTRACT_CONTAINER" "$IMAGE:$TAG" >/dev/null; then
+      logger -t "$LOG_TAG" "FAILED: docker create for inngest-bootstrap extract"
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_extract_create_failed"
+      exit 1
+    fi
+    if ! docker cp "$INNGEST_EXTRACT_CONTAINER:/inngest-bootstrap.sh" "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"; then
+      docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_extract_copy_failed"
+      exit 1
+    fi
+    # Vector config (TR9 PR-5 observability shipper). Optional — image
+    # built before this feature lands won't have /vector.toml; the script's
+    # downstream `[[ -f /tmp/vector.toml ]]` guard skips Vector install
+    # gracefully when missing.
+    #
+    # Clear /tmp/vector.toml FIRST so a prior deploy's content can't survive
+    # into this one if the docker cp silently fails. Without this rm, a
+    # silent cp failure (e.g., older OCI image missing /vector.toml) made
+    # the bootstrap re-install the stale prior config — surfaced 2026-05-21
+    # during the Better Stack pivot when v1.1.7 deploy left the old
+    # Sentry-sink config running because /tmp/vector.toml hadn't been
+    # replaced.
+    rm -f /tmp/vector.toml
+    docker cp "$INNGEST_EXTRACT_CONTAINER:/vector.toml" /tmp/vector.toml 2>/dev/null || true
+    # Read ENV vars baked into the image at build time (see
+    # .github/workflows/build-inngest-bootstrap-image.yml — ENV
+    # INNGEST_CLI_VERSION=... / INNGEST_CLI_SHA256=...
+    # plus VECTOR_CLI_VERSION / VECTOR_CLI_SHA256 (TR9 PR-5)).
+    image_env=$(docker inspect "$IMAGE:$TAG" -f '{{range .Config.Env}}{{println .}}{{end}}')
+    docker rm "$INNGEST_EXTRACT_CONTAINER" >/dev/null 2>&1 || true
+    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | cut -d= -f2-)
+    INNGEST_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_SHA256=' | cut -d= -f2-)
+    # `|| true` is load-bearing: ci-deploy.sh runs under `set -euo pipefail`;
+    # grep-no-match returns 1, which `pipefail` propagates as the pipeline
+    # exit, which `$(...)` captures as the assignment exit. set -e then exits
+    # the script BEFORE final_write_state runs, and the EXIT trap writes
+    # reason=unhandled. Old inngest-bootstrap images (pre-TR9 PR-5) don't carry
+    # these env vars; rollback to such an image MUST stay functional. Missing
+    # values flow through to the bootstrap's `${VECTOR_CLI_VERSION:-}`
+    # warn-and-skip guard. Hotfix surfaced 2026-05-21 — v1.0.3 baseline rollback
+    # failed with reason=unhandled after TR9 PR-5 introduced this extraction.
+    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | cut -d= -f2- || true)
+    VECTOR_CLI_SHA256=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_SHA256=' | cut -d= -f2- || true)
+    if [[ -z "$INNGEST_CLI_VERSION" || -z "$INNGEST_CLI_SHA256" ]]; then
+      logger -t "$LOG_TAG" "FAILED: image missing INNGEST_CLI_{VERSION,SHA256} ENV"
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      final_write_state 1 "inngest_image_env_missing"
+      exit 1
+    fi
+    chmod +x "$INNGEST_EXTRACT_DIR/inngest-bootstrap.sh"
+
+    echo "Running inngest-bootstrap.sh on host (version=$INNGEST_CLI_VERSION, vector=${VECTOR_CLI_VERSION:-disabled})..."
+    # Execute on host. The script needs root to write /etc/systemd/system,
+    # /usr/local/bin/inngest, /etc/default/inngest-server, and to invoke
+    # systemctl. ci-deploy.sh itself runs as the `deploy` user with sudo
+    # access (see webhook.service hardening). The sudoers entry at
+    # /etc/sudoers.d/deploy-inngest-bootstrap (provisioned by Terraform)
+    # pins the exact command and env_keep's the four version vars (#4144 + TR9 PR-5).
+    export INNGEST_CLI_VERSION INNGEST_CLI_SHA256 VECTOR_CLI_VERSION VECTOR_CLI_SHA256
+    # Capture stderr to a file so a non-zero exit's last lines are surfaced
+    # via cat-deploy-state (no-SSH debugging per hr-no-ssh-fallback-in-runbooks
+    # and the TR9 PR-5 observability stack). The bootstrap script logs to
+    # journald + stdout; stderr captures bash's own diagnostics (set -x,
+    # syntax errors, unbound var traps) which journald wouldn't show.
+    BOOTSTRAP_STDERR=/tmp/inngest-bootstrap-stderr.log
+    rm -f "$BOOTSTRAP_STDERR"
+    if ! sudo --preserve-env=INNGEST_CLI_VERSION,INNGEST_CLI_SHA256,VECTOR_CLI_VERSION,VECTOR_CLI_SHA256 \
+        /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh 2> "$BOOTSTRAP_STDERR"; then
+      # Extract a SHORT (≤400 char) reason suffix from the stderr tail so
+      # cat-deploy-state's JSON reason field carries actionable detail.
+      # Strip control bytes that would break JSON encoding.
+      stderr_tail=$(tail -c 600 "$BOOTSTRAP_STDERR" 2>/dev/null \
+        | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' | tail -c 400)
+      logger -t "$LOG_TAG" "FAILED: inngest-bootstrap.sh non-zero exit; stderr_tail=${stderr_tail}"
+      rm -rf "$INNGEST_EXTRACT_DIR"
+      # Reason field carries the stderr tail so cat-deploy-state surfaces it
+      # via /hooks/deploy-status without requiring SSH to journalctl.
+      final_write_state 1 "inngest_bootstrap_failed:${stderr_tail}"
+      exit 1
+    fi
+
+    rm -rf "$INNGEST_EXTRACT_DIR"
+    logger -t "$LOG_TAG" "SUCCESS: inngest $IMAGE:$TAG deployed"
+    final_write_state 0 "success"
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"

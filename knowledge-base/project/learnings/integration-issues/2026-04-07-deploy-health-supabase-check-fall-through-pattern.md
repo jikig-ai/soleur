@@ -1,3 +1,10 @@
+---
+title: Shell fall-through pattern breaks when adding inner conditions
+date: 2026-04-07
+category: engineering
+tags: [integration-issues, github-actions]
+---
+
 # Learning: Shell fall-through pattern breaks when adding inner conditions
 
 ## Problem

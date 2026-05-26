@@ -1,3 +1,10 @@
+---
+title: Verify external platforms via live fetch before strategizing
+date: 2026-03-10
+category: engineering
+tags: [process-issues, distribution-strategy, medium]
+---
+
 # Learning: Verify external platforms via live fetch before strategizing
 
 ## Problem

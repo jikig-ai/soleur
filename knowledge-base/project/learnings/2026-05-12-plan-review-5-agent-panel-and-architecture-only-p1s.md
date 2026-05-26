@@ -63,7 +63,7 @@ Applied the trim at plan-review-finalisation time. Specific actions:
 
 ## Key Insight
 
-**The architecture-strategist's P1s in a single-user-incident plan are the canonical reason the 5-agent panel exists.** F2 and F3 are not the kind of finding a simplification reviewer produces (they don't reduce LOC); they're not the kind a convention reviewer produces (they don't violate a project rule); they're not the kind a spec-flow reviewer produces (they don't introduce a flow gap). They're architectural: about what happens when a primitive throws under load, about whether a per-request scope is actually per-request. Only an agent prompted to think "where does this break under adversarial conditions / at the layer below the one being designed" surfaces them.
+**The architecture-strategist's P1s in a single-user incident plan are the canonical reason the 5-agent panel exists.** F2 and F3 are not the kind of finding a simplification reviewer produces (they don't reduce LOC); they're not the kind a convention reviewer produces (they don't violate a project rule); they're not the kind a spec-flow reviewer produces (they don't introduce a flow gap). They're architectural: about what happens when a primitive throws under load, about whether a per-request scope is actually per-request. Only an agent prompted to think "where does this break under adversarial conditions / at the layer below the one being designed" surfaces them.
 
 The 3-agent panel (DHH + Kieran + code-simplicity) is enough for routine plans. The 5-agent panel (+ architecture-strategist + spec-flow-analyzer) is load-bearing for **any plan whose User-Brand Impact section declares `single-user incident` or `aggregate pattern`**, because those plans by definition fail in ways the simplification panel does not measure.
 
@@ -97,7 +97,7 @@ The 3-agent panel (DHH + Kieran + code-simplicity) is enough for routine plans. 
 
 5. **Initial Kieran P1.6 was wrong** — claimed `services/route.ts` already uses `reportSilentFallback`; inline `grep` verified false. **Recovery:** rejected the finding with verified evidence. **Prevention:** always ground-truth-verify "your inventory is wrong" review findings before accepting OR rejecting.
 
-6. **Architecture F2 + F3 NOT raised by brainstorm or simplification panel** — only architecture-strategist surfaced both P1s. **Recovery:** F2 folded into PR-A try/catch; F3 deferred to PR-B with scope-isolation gate. **Prevention:** the plan-review skill's "5-agent panel for single-user-incident threshold" rule is load-bearing; never downgrade to 3-panel for brand-survival plans.
+6. **Architecture F2 + F3 NOT raised by brainstorm or simplification panel** — only architecture-strategist surfaced both P1s. **Recovery:** F2 folded into PR-A try/catch; F3 deferred to PR-B with scope-isolation gate. **Prevention:** the plan-review skill's "5-agent panel for single-user incident threshold" rule is load-bearing; never downgrade to 3-panel for brand-survival plans.
 
 ## Cross-References
 

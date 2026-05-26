@@ -57,10 +57,17 @@
 # cluster — acceptable transitional state since the canonical `/legal/<slug>/`
 # paths ARE in the sitemap and indexed.
 resource "cloudflare_ruleset" "seo_page_redirects" {
-  provider    = cloudflare.rulesets
-  zone_id     = var.cf_zone_id
-  name        = "Legacy /pages/*.html → clean URLs (HTTP 301)"
-  description = "Edge 301s replacing _data/pageRedirects.js. See issue #3297."
+  provider = cloudflare.rulesets
+  zone_id  = var.cf_zone_id
+  # 2026-05-18: name + description reflect the consolidation. Cloudflare allows
+  # only ONE user-defined ruleset per (zone, phase) — see PR #3974 apply-fail
+  # transcript. ACME-aware HTTPS upgrade (formerly its own ruleset) is inlined
+  # as the LAST rule (HTTPS catch-all with ACME exclusion baked into the
+  # expression) — `skip` action is not valid on the http_request_dynamic_redirect
+  # phase (CF API error 20016), so the ACME bypass is expressed as a NEGATIVE
+  # match in Rule 10's expression rather than as a sibling skip rule.
+  name        = "Legacy /pages/*.html redirects + ACME-aware HTTPS upgrade"
+  description = "Single phase-owner ruleset. Rules 1-9: SEO 301 redirects. Rule 10: HTTPS catch-all with ACME exclusion (apex+www LE HTTP-01). See 2026-05-18 PIR + issue #3297."
   kind        = "zone"
   phase       = "http_request_dynamic_redirect"
 
@@ -210,17 +217,37 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     }
   }
 
+  # 2026-05-18: /blog/what-is-company-as-a-service/index.html redirect dropped
+  # to make room for the HTTPS catch-all rule (Rule 10 below). Canonical
+  # /company-as-a-service/ is already in the sitemap; Google will recrawl
+  # and drop the old URL from the redirect bucket.
+
+  # Rule 10 (NEW 2026-05-18): HTTPS catch-all with ACME exclusion baked into
+  # the expression. Restores the zone-wide HTTPS-upgrade behavior that the
+  # disabled `always_use_https` toggle used to provide. Positioned LAST so
+  # specific path rules (above) match first and avoid double-redirect chains.
+  # Covers every proxied host in the zone (apex, www, app, deploy, etc.) —
+  # without this, cross-subdomain credentials (Supabase tokens on
+  # app.soleur.ai, CF Access service-token on deploy.soleur.ai) would leak
+  # on the wire (caught by user-impact-reviewer in PR #3974 review).
+  #
+  # ACME exclusion (the inner `and not (...)` clause) carves out plain-HTTP
+  # /.well-known/acme-challenge/* requests on apex+www so Let's Encrypt
+  # HTTP-01 can renew the GitHub Pages cert. Expressed inline because the
+  # `skip` action is not valid on the http_request_dynamic_redirect phase
+  # (CF API error 20016, observed during PR #3974 apply attempts).
+  # preserve_query_string is load-bearing for UTM campaign links.
   rules {
     action      = "redirect"
-    description = "Redirect /blog/what-is-company-as-a-service/index.html → /company-as-a-service/"
+    description = "Force HTTPS on the soleur.ai zone (all hosts, all paths except ACME challenge on apex + www)"
     enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/blog/what-is-company-as-a-service/index.html\")"
+    expression  = "(not ssl) and not (http.host in {\"soleur.ai\" \"www.soleur.ai\"} and starts_with(http.request.uri.path, \"/.well-known/acme-challenge/\"))"
     action_parameters {
       from_value {
         status_code           = 301
-        preserve_query_string = false
+        preserve_query_string = true
         target_url {
-          value = "https://www.soleur.ai/company-as-a-service/"
+          expression = "concat(\"https://\", http.host, http.request.uri.path)"
         }
       }
     }
