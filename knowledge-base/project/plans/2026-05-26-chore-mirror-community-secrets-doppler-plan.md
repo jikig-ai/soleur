@@ -1,11 +1,11 @@
 ---
 title: "chore(ops): mirror community-monitor secrets prd_scheduled to prd Doppler"
-type: fix
+type: chore
 date: 2026-05-26
 classification: ops-only-prod-write
 lane: procedural
 brand_survival_threshold: none
-github_issue: 4466
+issue: 4466
 parent_issue: 3948
 ---
 
@@ -76,7 +76,7 @@ The Doppler CLI mirror approach is the correct IaC-compliant pattern for this cl
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** daily GitHub issues titled `[Scheduled] Community Monitor - FAILED` — the accepted failure mode documented in #4466. No silent data loss.
-- **If this leaks, the user's [data / workflow / money] is exposed via:** no user data exposure — these are operator-owned platform credentials (Discord bot, Bluesky account, LinkedIn page). Leak vector is Doppler config access, already governed by workspace-level RBAC.
+- **If this leaks, the user's [data / workflow / money] is exposed via:** no user data exposure — these are operator-owned platform credentials (Discord bot, Bluesky account, LinkedIn page). Leak vector is Doppler config access, already governed by workplace-level RBAC.
 - **Brand-survival threshold:** `none`
 
 *Scope-out override:* `threshold: none, reason: operator-owned platform API credentials with no user PII; leak blast radius is service disruption, not user data exposure`
@@ -118,6 +118,9 @@ remediation is a post-merge operator action (Doppler CLI commands).
 Run the resolution recipe from #4466 in an operator-authenticated Doppler session:
 
 ```bash
+# Pre-flight: verify Doppler auth and config access
+doppler secrets -p soleur -c prd_scheduled --only-names >/dev/null || { echo "ERROR: cannot read prd_scheduled — check Doppler auth"; exit 1; }
+
 for K in DISCORD_WEBHOOK_URL DISCORD_BOT_TOKEN DISCORD_GUILD_ID BSKY_HANDLE BSKY_APP_PASSWORD LINKEDIN_ACCESS_TOKEN LINKEDIN_PERSON_URN; do
   V=$(doppler secrets get "$K" -p soleur -c prd_scheduled --plain 2>/dev/null)
   if [[ -n "$V" ]]; then
